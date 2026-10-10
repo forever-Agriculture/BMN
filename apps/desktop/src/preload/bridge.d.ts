@@ -16,6 +16,8 @@ import type {
   ResearchLookup,
   ResearchSnapshot,
   SkillsPlan,
+  ToolProposalView,
+  ToolsPlan,
   RulesOutcome,
   RulesMasterPlan,
   RulesPlan,
@@ -382,6 +384,13 @@ export interface AiTerminalBridge {
   installSkills(planHash: string): Promise<RulesOutcome>
   /** Owner-run: asks the app which skills it sees, first in an empty home folder, then with one test skill placed where its skills live. */
   testSkills(harness: RosterHarness): Promise<RulesOutcome>
+  /** Story 60.12: what a tools install would set or remove in each app's settings, then the install itself, bound to that plan. */
+  planToolsInstall(removeUnlisted?: boolean): Promise<ToolsPlan>
+  installTools(planHash: string, removeUnlisted?: boolean): Promise<RulesOutcome>
+  /** Owner-run: starts the app in an empty home folder and asks which tools it sees there. */
+  testTools(harness: RosterHarness): Promise<RulesOutcome>
+  /** The entries the apps already hold, proposed as tools; a value an entry held is never part of a proposal. */
+  proposeTools(): Promise<{ ok: boolean; message?: string; proposals: ToolProposalView[] }>
   /** Story 60.10: what model research has found and who may research. `fresh` asks each agent's app again; a plain read does not. */
   researchSnapshot(fresh: boolean): Promise<ResearchSnapshot>
   chooseResearcher(researcher: string): Promise<ResearchSnapshot>

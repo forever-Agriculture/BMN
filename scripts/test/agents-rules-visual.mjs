@@ -170,7 +170,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     }
     await shot('page-appearance-1280.png')
     await go('Rules')
-    assert.deepEqual(await nav.locator('.nav-sub .nav-item').allTextContents(), ['Editor', 'Skills', 'Health'])
+    assert.deepEqual(await nav.locator('.nav-sub .nav-item').allTextContents(), ['Editor', 'Skills', 'Tools', 'Health'])
     await go('Team')
     passed('Team and Rules head the navigation with their sub-pages; the eight earlier sections are pages; no jump list (60.5 AC1)')
 
@@ -996,6 +996,108 @@ done`)
     stub('codex', 'echo "codex-cli 0.161.0"')
     passed('Skills lists each skill with its apps and state; the owner\'s test finds where Codex reads skills; a scope change is approved first; Install… shows each entry, replaces a folder BMN did not write only then, and Undo puts it back (60.11)')
 
+    phase('60.12: Tools lists what the apps hold; the owner\'s test finds where Codex keeps its tools; a tool is added, approved, installed as one entry and undone, and a value an entry held is never shown')
+    const toolsConfig = join(home, '.codex/config.toml')
+    const TOOL_SECRET = 'sk-SYNTHETIC-SECRET-9f8e7d6c5b4a'
+    const ownTools = `model = "gpt-6.1-sol"\n\n[mcp_servers.search]\ncommand = "search-tool"\nenv = { SEARCH_KEY = "${TOOL_SECRET}" }\n`
+    writeFileSync(toolsConfig, ownTools, { mode: 0o600 })
+    // A stand-in Codex: its list repeats its settings file, and a run told to take only its own tools names only those.
+    stub('codex', ['if [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi', 'alone=""; own=""',
+      'while [ "$1" = "-c" ]; do case "$2" in "mcp_servers={}") alone=1;; mcp_servers.*.command=*) own="${2#mcp_servers.}"; own="${own%%.*}";; esac; shift 2; done',
+      '[ "$1 $2" = "mcp list" ] || exit 4', '[ -n "$alone" ] || cat "$HOME/.codex/config.toml" 2>/dev/null', '[ -z "$own" ] || echo "$own"', 'exit 0'].join('\n'))
+    const toolRow = (id) => main.locator(`.tool-row[data-tool="${id}"]`)
+    const toolsApp = (name) => main.locator('.skills-block', { has: page.locator('.health-row[data-tools] > span:first-child', { hasText: new RegExp(`^${name}$`) }) })
+    await go('Rules', 'Tools')
+    await main.getByRole('button', { name: 'Check now' }).click()
+    await main.getByText('No tools on your list yet.', { exact: true }).waitFor()
+    assert.equal(await main.getByRole('button', { name: 'Install…' }).count(), 0, 'Install… is offered while no tool is on the list')
+    await go('Rules', 'Health')
+    await toolsApp('Codex').getByText('Not tested on 0.161.0').waitFor()
+    await toolsApp('Codex').locator('.path', { hasText: '~/.codex/config.toml' }).waitFor()
+    await main.getByRole('button', { name: 'Tools test for Codex' }).click()
+    const toolsSheet = toolsApp('Codex').locator('.sheet')
+    await toolsSheet.getByText('in an empty home folder with no sign-in, so nothing is sent', { exact: false }).waitFor()
+    await toolsSheet.getByRole('button', { name: 'Run test' }).click()
+    await notice(/^Codex tools test passed: Codex reads its tools from ~\/\.codex\/config\.toml; its own list names the environment variable a tool is given; a run can be given only its own tools/)
+    await toolsApp('Codex').getByText(/^Tested .* · passes variables · a run can have tools of its own$/).waitFor()
+    assert.equal(readFileSync(toolsConfig, 'utf8'), ownTools, 'the test changed the settings file')
+    assert.equal(readdirSync(home).filter((name) => name.startsWith('.bmn-tools-test-')).length, 0, 'the test left its folder behind')
+    await toolsApp('Codex').scrollIntoViewIfNeeded()
+    await shot('health-tools-1280.png')
+
+    await go('Rules', 'Tools')
+    await main.locator('[data-unlisted="search"]').getByText('Codex', { exact: false }).waitFor()
+    // What Codex holds joins the list as a tool kept to Codex, without the value its entry held.
+    await main.getByRole('button', { name: 'From your apps…' }).click()
+    const proposals = main.getByRole('group', { name: 'Add 1 tool from your apps' })
+    await proposals.getByText('Codex · will be added without the value it holds', { exact: true }).waitFor()
+    await proposals.getByText('holds a value inline (Codex env.SEARCH_KEY)', { exact: false }).waitFor()
+    await shot('tools-from-apps-1280.png')
+    const beforeTools = { roster: rosterHash(), state: stateHash() }
+    await proposals.getByRole('button', { name: 'Add to your list' }).click()
+    await ledger.getByText('1 unapproved change', { exact: true }).waitFor()
+    await line.getByText('Tool Search would reach Codex').waitFor()
+    // Add tool: plain rows; what a row cannot take is said under it, and nothing is staged until it reads.
+    await main.getByRole('button', { name: 'Add tool', exact: true }).click()
+    const toolEditor = main.getByRole('group', { name: 'Add a tool' })
+    await toolEditor.getByLabel('Tool name').fill('Docs')
+    assert.equal(await toolEditor.getByLabel('Tool id').inputValue(), 'docs')
+    await toolEditor.getByRole('radio', { name: 'An address' }).click()
+    await toolEditor.getByRole('button', { name: 'Add tool', exact: true }).click()
+    await toolEditor.getByText('An address that starts with https://', { exact: true }).waitFor()
+    await toolEditor.getByLabel('Address').fill('https://docs.example.test/mcp')
+    await toolEditor.getByRole('switch', { name: 'The tool is public' }).click()
+    assert.equal(await toolEditor.locator('select').count(), 0, 'the editor uses a list of the browser\'s own')
+    await toolEditor.scrollIntoViewIfNeeded()
+    await shot('tools-add-1280.png')
+    await toolEditor.getByRole('button', { name: 'Add tool', exact: true }).click()
+    await toolRow('docs').getByText('docs.example.test', { exact: true }).waitFor()
+    await line.getByText(/^Tool Docs would reach /).waitFor()
+    assert.deepEqual({ roster: rosterHash(), state: stateHash() }, beforeTools, 'a tool was written before it was approved')
+    await main.locator('.page-head').scrollIntoViewIfNeeded()
+    await shot('tools-staged-1280.png')
+    await approve()
+    await notice(/^Approved · version \d+/)
+    assert.deepEqual(approved().tools, [{ id: 'docs', name: 'Docs', url: 'https://docs.example.test/mcp', public: true }, { id: 'search', name: 'Search', command: 'search-tool', apps: ['codex'] }])
+    await toolRow('docs').getByRole('button', { name: 'Docs in Codex: Missing' }).waitFor()
+    await toolRow('search').getByRole('button', { name: 'Search in Codex: Differs' }).waitFor()
+    await main.getByText('1 to install', { exact: true }).waitFor()
+    await toolRow('search').getByText('In Codex: it holds a value inline (env.SEARCH_KEY): move it into an environment variable, then name the variable in the tool', { exact: true }).waitFor()
+    await main.getByRole('button', { name: 'Install…' }).click()
+    const toolsInstall = main.getByRole('group', { name: 'Change 1 tool entry' })
+    await toolsInstall.waitFor()
+    assert.match((await toolsInstall.locator('.target > summary').allTextContents())[0], /^Codex.*~\/\.codex\/config\.toml.*docs · adds the tool/)
+    await toolsInstall.locator('.target > summary').first().click()
+    assert.equal(await toolsInstall.locator('.target pre.diff').first().textContent(), '+[mcp_servers.docs]\n+url = "https://docs.example.test/mcp"')
+    await toolsInstall.getByText('Codex, search: it holds a value inline (env.SEARCH_KEY)', { exact: false }).waitFor()
+    assert.equal(readFileSync(toolsConfig, 'utf8'), ownTools, 'an entry was written before Install was pressed')
+    await toolsInstall.scrollIntoViewIfNeeded()
+    await shot('tools-install-1280.png')
+    await toolsInstall.getByRole('button', { name: 'Install', exact: true }).click()
+    await notice(/^Changed 1 tool entry\. Sessions started before this keep the tools they had\. 1 could not be changed\./)
+    // Only the one entry was added: every byte the file held is still there.
+    assert.equal(readFileSync(toolsConfig, 'utf8'), `${ownTools}\n[mcp_servers.docs]\nurl = "https://docs.example.test/mcp"\n`)
+    await toolRow('docs').getByRole('button', { name: 'Docs in Codex: Set up' }).waitFor()
+    assert.equal(await main.getByRole('button', { name: 'Install…' }).count(), 0)
+    await main.locator('.page-head').scrollIntoViewIfNeeded()
+    await shot('tools-1280.png')
+    await main.locator('details.advanced > summary', { hasText: 'Earlier installs' }).click()
+    await main.getByRole('button', { name: /^Undo the tools install of / }).click()
+    const toolsUndo = main.getByRole('group', { name: 'Undo this install' })
+    await toolsUndo.locator('.target > summary').first().waitFor()
+    assert.match((await toolsUndo.locator('.target > summary').allTextContents())[0], /^Codex.*docs · Removed again/)
+    assert.match(readFileSync(toolsConfig, 'utf8'), /\[mcp_servers\.docs\]/, 'Undo wrote before its entries were shown')
+    await toolsUndo.getByRole('button', { name: 'Undo install', exact: true }).click()
+    await notice(/^Put back the tools in Codex/)
+    assert.equal(readFileSync(toolsConfig, 'utf8'), ownTools)
+    await toolRow('docs').getByRole('button', { name: 'Docs in Codex: Missing' }).waitFor()
+    // The value Codex's own entry held was on no page and in no file BMN keeps.
+    assert.equal((await dialog.innerHTML()).includes(TOOL_SECRET), false, 'a value an entry held reached the page')
+    const kept = (folder) => readdirSync(folder, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? kept(join(folder, entry.name)) : [join(folder, entry.name)]))
+    assert.deepEqual(kept(agentsDir).filter((path) => readFileSync(path, 'utf8').includes(TOOL_SECRET)), [], 'a value an entry held is in a file BMN keeps')
+    stub('codex', 'echo "codex-cli 0.161.0"')
+    passed('Tools shows what the apps hold; the owner\'s test finds where Codex keeps its tools; an entry of the app\'s own and a new tool are approved first; Install… shows the one entry it adds and the one it leaves, keeps the file\'s other bytes, and Undo takes the entry out again; a value is never shown or kept (60.12)')
+
     phase('60.10: Models researches the team\'s models through a stand-in app, keeps what a stopped run found, stages verified prices and fills New agent')
     assert.equal(await ledger.count(), 0, 'a change is still staged before the Models phase')
     const today = new Date().toISOString().slice(0, 10)
@@ -1207,6 +1309,8 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
       ['changes', () => go('Team', 'Changes')],
       ['rules', () => go('Rules')],
       ['skills', () => go('Rules', 'Skills')],
+      // With Add tool open, so its rows are measured at each size.
+      ['tools', async () => { await go('Rules', 'Tools'); if (await main.locator('.tool-editor').count() === 0) await main.getByRole('button', { name: 'Add tool', exact: true }).click() }],
       ['health', () => go('Rules', 'Health')],
       // The sheet closes when the owner leaves Health, so each size opens it again.
       ['health-update', async () => { await go('Rules', 'Health'); await main.getByRole('button', { name: 'Update Claude Code' }).click(); await main.getByRole('group', { name: 'Update Claude Code' }).waitFor() }],
@@ -1242,7 +1346,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
         return !name || name.trim() === ''
       }).map((element) => element.outerHTML.slice(0, 120)))
     assert.deepEqual(unnamed, [])
-    passed('no horizontal scroll on eleven pages at 800x500, 1000x700 and 1280x900; every control has a name (60.5 AC8, 60.6 AC5)')
+    passed('no horizontal scroll on twelve pages at 800x500, 1000x700 and 1280x900; every control has a name (60.5 AC8, 60.6 AC5)')
 
     phase('keyboard: the navigation and a card open from the keyboard')
     await resize(1280, 900)

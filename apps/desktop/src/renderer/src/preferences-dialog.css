@@ -1780,6 +1780,30 @@
   margin-top: 10px;
 }
 
+/* Rules › Tools: the rows are the Skills rows; Add tool and Edit are plain rows in a sheet. */
+.preferences-dialog .tool-actions {
+  margin-top: 10px;
+}
+
+.preferences-dialog .skill-row > .tool-why {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+/* The attention mark before a sentence stands clear of its first word. */
+.preferences-dialog :is(.page-note, .preferences-help) > .needs-dot {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.preferences-dialog .tool-editor .preferences-row:last-of-type {
+  border-bottom: 0;
+}
+
+.preferences-dialog .tool-editor .preferences-row-control > .chips {
+  margin-top: 6px;
+}
+
 /* Team › Models: one line per model: its name and provider, then each value with the site it was read on; one action at the far end. */
 .preferences-dialog .model-line {
   display: grid;

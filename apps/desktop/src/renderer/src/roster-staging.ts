@@ -60,7 +60,8 @@ const SECTION_SUBJECTS: Readonly<Record<string, string>> = {
   providers: 'Providers',
   exceptions: 'Allowed workspaces',
   'harness-routes': 'Agent apps',
-  skills: 'Skills'
+  skills: 'Skills',
+  tools: 'Tools'
 }
 
 const FIELD_WORDS: Readonly<Record<string, string>> = {
@@ -68,7 +69,8 @@ const FIELD_WORDS: Readonly<Record<string, string>> = {
   efforts: 'Efforts', roles: 'Roles', aliases: 'Also called', enabled_note: 'Reason it is off', context_window: 'Capacity', context_limit: 'Context limit',
   compact_at: 'Compact at', paid_by: 'Paid by', price: 'Price', description: 'Line', candidates: 'Order', then: 'If all fail', recheck: 'Recheck',
   small_work: 'Small work', hosts: 'Hosts', sites: 'Sites', private_work: 'Private work', folder: 'Workspace', basis: 'Destination', accepted_versions: 'Accepted versions',
-  input: 'In', cached_input: 'Cached in', output: 'Out', source: 'Source', as_of: 'As of', public: 'Public', only: 'Only in'
+  input: 'In', cached_input: 'Cached in', output: 'Out', source: 'Source', as_of: 'As of', public: 'Public', only: 'Only in',
+  command: 'Program', args: 'Arguments', url: 'Address', env: 'Variables', headers: 'Headers', apps: 'Only in', agents: 'Only for the runs of'
 }
 
 const VALUE_WORDS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
@@ -168,12 +170,17 @@ function formatPlain(value: unknown, field: string | undefined, names: Names): s
     if (value.length === 0) return 'none'
     if (field === 'candidates') return value.map((entry) => candidateWords(String(entry), names)).join(', ')
     if (field === 'roles') return value.map((entry) => roleName(String(entry))).join(', ')
-    if (field === 'only') return value.map((entry) => ROSTER_APP_NAMES[entry as RosterHarness] ?? String(entry)).join(', ')
+    if (field === 'only' || field === 'apps') return value.map((entry) => ROSTER_APP_NAMES[entry as RosterHarness] ?? String(entry)).join(', ')
+    if (field === 'agents') return value.map((entry) => names.agents.get(String(entry)) ?? String(entry)).join(', ')
+    // A tool's arguments, as they would be typed; one that comes from a variable shows the variable, never a value.
+    if (field === 'args') return value.map((entry) => (typeof entry === 'object' && entry !== null ? `$${String((entry as { env?: unknown }).env)}` : String(entry))).join(' ')
     return value.map((entry) => formatPlain(entry, undefined, names)).join(', ')
   }
   if (typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>)
     // A recheck names who rechecks and at which effort: `{same_reviewer: true, astra: low}`.
+    // The variables a tool names: each entry it receives, and the variable it comes from when that is named differently.
+    if (field === 'env' || field === 'headers') return entries.map(([key, entry]) => (key === entry ? key : `${key} from ${String(entry)}`)).join(', ')
     if (field === 'recheck') {
       return entries.map(([key, entry]) => key === 'same_reviewer' ? (entry === true ? 'the same reviewer' : 'another reviewer') : `${names.agents.get(key) ?? key} ${String(entry)}`).join(' · ')
     }
@@ -237,6 +244,7 @@ function claimant(sentence: string, groups: DiffGroup[], roleIds: ReadonlySet<st
   const section = (key: string): DiffGroup | undefined => groups.find((group) => group.key === key)
   if (sentence.startsWith('Changing ')) return section('providers')
   if (/^Skills? /.test(sentence)) return section('skills')
+  if (/^Tool /.test(sentence)) return section('tools')
   if (/ could (no longer )?receive private work in /.test(sentence)) return section('exceptions')
   if (/ could (no longer )?carry private work/.test(sentence) || sentence.includes(' would count as sending data ')) return section('harness-routes')
   const roleWord = /^(?:when every |the )?([a-z0-9-]+) /.exec(sentence)?.[1]
@@ -356,7 +364,7 @@ export function diffSummary(diff: string): string {
 
 /** What a file becomes when an install or a rules update is undone. */
 export function undoWords(target: { change: string; diff: string }): string {
-  return target.change === 'link' ? 'Becomes a link again' : target.change === 'missing' ? 'Removed again' : target.change === 'folder' ? 'Put back as it was' : `Put back · ${diffSummary(target.diff)}`
+  return target.change === 'link' ? 'Becomes a link again' : target.change === 'missing' ? 'Removed again' : target.change === 'folder' || target.change === 'entry' ? 'Put back as it was' : `Put back · ${diffSummary(target.diff)}`
 }
 
 /** A group's differences on one line, as the "changed outside BMN" row shows them. */

@@ -1,5 +1,5 @@
 // MODULE: team-rules-preferences.test.ts - Epic 60.5/60.6 markup: shape and plain words carry meaning, every control is named, no schema word reaches the owner
-import type { AgentsPreview, AgentsSnapshot, ResearchModelView, ResearchSnapshot, RosterAgentShape, RosterDataShape, RosterDiffShape, RulesSnapshot, SkillsPlan } from '@bmn/protocol'
+import type { AgentsPreview, AgentsSnapshot, ResearchModelView, ResearchSnapshot, RosterAgentShape, RosterDataShape, RosterDiffShape, RosterToolShape, RulesSnapshot, SkillsPlan, ToolProposalView, ToolsPlan } from '@bmn/protocol'
 import { createElement, createRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
@@ -7,6 +7,8 @@ import {
   INSERTS,
   RulesEditor,
   RulesPreferences,
+  ToolEditor,
+  ToolProposals,
   UpdateSheet,
   changeWords,
   contextStateWords,
@@ -40,6 +42,7 @@ import { researcherHint, researchedModels, type ResearchState } from './models-p
 import { dayWords, fillFrom } from './research-view'
 import { modelSuggestions } from './model-suggestions'
 import { changeModel, groupDifferences, removeException, setSkillPublic, skillMark, toggleSkillApp } from './roster-staging'
+import { EMPTY_DRAFT, draftFrom, type ToolDraft } from './tools-view'
 import { confirmsBeforeCommit, rowHidesDetail, rulesUpdateWords, type TeamState } from './team-state'
 
 const noop = (): void => {}
@@ -557,7 +560,25 @@ const RULES: RulesSnapshot = {
       { harness: 'cursor', version: '2026.09.26', supported: false, reason: 'no test has run on Cursor 2026.09.26', testable: false, location: null, format: null, readsSource: false, kind: 'public', kindReason: '', state: 'Not supported yet', test: null, loading: null }
     ]
   },
+  tools: {
+    pending: 2, exposed: 1, blocked: 1,
+    tools: [
+      { id: 'docs', states: { claude: 'current', codex: 'missing', opencode: 'excluded' }, details: {} },
+      { id: 'notes', states: { claude: 'edited-outside', codex: 'blocked', opencode: 'exposed' }, details: { codex: 'Codex takes a variable only under its own name: NOTES_TOKEN is asked for as TOKEN' } },
+      { id: 'browser', states: {}, details: {} }
+    ],
+    apps: [
+      { harness: 'claude', version: '2.1.295', supported: true, path: '/home/synthetic/.claude.json', readable: true, kind: 'full', kindReason: '', state: 'Differs', variable: true, isolation: true,
+        test: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'Claude Code listed the stand-in tool' }, unlisted: [{ id: 'old-search', state: 'unmanaged', managed: false }] },
+      { harness: 'codex', version: '0.171.0', supported: true, path: '/home/synthetic/.codex/config.toml', readable: true, kind: 'full', kindReason: '', state: 'Missing', variable: false, isolation: false,
+        test: { at: '2026-10-09T20:00:00.000Z', version: '0.171.0', outcome: 'pass', detail: 'Codex listed the stand-in tool' }, unlisted: [] },
+      { harness: 'opencode', version: '1.18.32', supported: true, path: '/home/synthetic/.config/opencode/opencode.jsonc', readable: true, link: '/home/synthetic/dotfiles/opencode.jsonc', kind: 'public', kindReason: 'OpenCode Go gets public work only', state: 'Exposed', variable: true, isolation: false,
+        test: { at: '2026-10-09T20:00:00.000Z', version: '1.18.32', outcome: 'pass', detail: 'OpenCode listed the stand-in tool' }, unlisted: [{ id: 'old-search', state: 'exposed', managed: false }] },
+      { harness: 'cursor', version: '2026.09.26', supported: false, reason: 'no test has run on Cursor 2026.09.26', path: '/home/synthetic/.cursor/mcp.json', readable: true, kind: 'public', kindReason: '', state: 'Not supported yet', variable: false, isolation: false, test: null, unlisted: [] }
+    ]
+  },
   transactions: [
+    { id: 't4', createdAt: '2026-10-09T23:30:00.000Z', state: 'complete', reason: 'tools install', targets: ['claude'], valid: true },
     { id: 't3', createdAt: '2026-10-09T23:00:00.000Z', state: 'complete', reason: 'skills install', targets: ['codex'], valid: true },
     { id: 't2', createdAt: '2026-10-09T22:00:00.000Z', state: 'complete', reason: 'team update', targets: ['claude'], valid: true },
     { id: 't1', createdAt: '2026-10-08T14:02:00.000Z', state: 'complete', reason: 'install', targets: ['claude', 'codex'], valid: true },
@@ -568,9 +589,9 @@ const RULES: RulesSnapshot = {
 
 const rules = (extra: Partial<RulesState> = {}): RulesState => ({
   snapshot: RULES, loadError: null, draft: RULES.master.text ?? '', dirty: false, draftPlan: null, busy: false, notice: null, pending: null, setDraft: noop, setNotice: noop,
-  ensure: noop, refresh: noop, load: later, beginSave: later, beginInstall: later, beginSkillsInstall: later, beginUndo: later, beginRestore: later, beginTest: noop, confirm: later, cancel: noop, run: async () => true, ...extra
+  ensure: noop, refresh: noop, load: later, beginSave: later, beginInstall: later, beginSkillsInstall: later, beginToolsInstall: later, beginUndo: later, beginRestore: later, beginTest: noop, confirm: later, cancel: noop, run: async () => true, ...extra
 })
-const rulesMarkup = (page: 'editor' | 'skills' | 'health', state: RulesState = rules(), teamState: TeamState = team()): string =>
+const rulesMarkup = (page: 'editor' | 'skills' | 'tools' | 'health', state: RulesState = rules(), teamState: TeamState = team()): string =>
   renderToStaticMarkup(createElement(RulesPreferences, { rules: state, team: teamState, page }))
 
 describe('Rules › Editor (60.6 AC1–AC3)', () => {
@@ -671,9 +692,9 @@ describe('Rules › Health (60.6 AC4)', () => {
   const markup = rulesMarkup('health')
 
   it('shows one row per rules file: path, state in words, the kind of rules and the last loading test', () => {
-    expect(markup).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')} · 1 skill entry to install · 1 skill exposed</span>`)
-    // With the skills in order, the header says only when Health was read.
-    expect(rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0, exposed: 0 } } }))).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')}</span>`)
+    expect(markup).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')} · 1 skill entry to install · 1 skill exposed · 2 tool entries to install · 1 tool exposed</span>`)
+    // With the skills and the tools in order, the header says only when Health was read.
+    expect(rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0, exposed: 0 }, tools: { ...RULES.tools, pending: 0, exposed: 0 } } }))).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')}</span>`)
     expect(markup).toContain('>Check now</button>')
     expect(markup).toMatch(/data-state="current"><span>Claude Code<\/span><span class="path mono" title="\/home\/synthetic\/.claude\/CLAUDE.md">~\/.claude\/CLAUDE.md<\/span><span class="health-state"><span>Current <span class="muted">· Full rules<\/span>/)
     expect(markup).toContain(`<span class="faint">Test passed ${shortDate('2026-10-09T20:00:00.000Z')} · stale</span>`)
@@ -833,7 +854,7 @@ describe('universal words (R60-NFR8)', () => {
   it('no Team or Rules page shows a word of the schema or of the earlier design', () => {
     const pages = [
       pageMarkup({ name: 'agents' }), pageMarkup({ name: 'agent', id: 'sol' }), pageMarkup({ name: 'new' }), pageMarkup({ name: 'roles' }), pageMarkup({ name: 'changes' }),
-      rulesMarkup('editor'), rulesMarkup('health'),
+      rulesMarkup('editor'), rulesMarkup('skills'), rulesMarkup('tools'), rulesMarkup('health'),
       ...RULES.apps.map((app) => renderToStaticMarkup(createElement(UpdateSheet, { app, home: RULES.home, sessions: 2, hasTest: true, busy: false, result: 'The program still reports 1.0.0.', onCopied: noop, onCheck: noop, onClose: noop })))
     ]
     for (const page of pages) {
@@ -844,7 +865,7 @@ describe('universal words (R60-NFR8)', () => {
   })
 
   it('every control on the pages has an accessible name', () => {
-    for (const page of [pageMarkup({ name: 'agents' }), pageMarkup({ name: 'agent', id: 'sol' }), pageMarkup({ name: 'new' }), pageMarkup({ name: 'roles' }), pageMarkup({ name: 'changes' }), rulesMarkup('editor'), rulesMarkup('health')]) {
+    for (const page of [pageMarkup({ name: 'agents' }), pageMarkup({ name: 'agent', id: 'sol' }), pageMarkup({ name: 'new' }), pageMarkup({ name: 'roles' }), pageMarkup({ name: 'changes' }), rulesMarkup('editor'), rulesMarkup('skills'), rulesMarkup('tools'), rulesMarkup('health')]) {
       const unnamed = [...page.matchAll(/<(button|input|textarea)\b([^>]*)>([^<]*)/g)]
         .filter((match) => !/aria-label(ledby)?=/.test(match[2] ?? '') && (match[3] ?? '').trim() === '' && !/type="(radio|checkbox)"/.test(match[2] ?? ''))
         .map((match) => match[0])
@@ -1039,6 +1060,7 @@ describe('skills (60.11 AC5)', () => {
     expect(page).toMatch(/<summary>Earlier installs<\/summary><div class="list-line"><div><b>Installed<\/b> <span class="line-detail">[^<]+ · Codex<\/span><\/div><button type="button" class="small" aria-label="Undo the skills install of [^"]+">Undo install…<\/button>/)
     expect(earlierVersions(RULES).some((entry) => entry.kind === 'install' && entry.id === 't3')).toBe(false)
     expect(undoWords({ change: 'folder', diff: '' })).toBe('Put back as it was')
+    expect(undoWords({ change: 'entry', diff: '' })).toBe('Put back as it was')
   })
 
   it('Health shows one row per app: where its skills live, the state in words, Full or Public skills only and the last loading test', () => {
@@ -1069,6 +1091,162 @@ describe('skills (60.11 AC5)', () => {
     expect(skillsTestLine(base)).toBe('Not tested on 0.171.0')
     expect(skillsTestLine({ ...base, test: { at: 'x', version: '0.171.0', outcome: 'inconclusive', detail: 'd' } })).toBe('The test was inconclusive on 0.171.0')
     expect(skillsTestLine({ ...base, test: { at: 'x', version: '0.170.0', outcome: 'fail', detail: 'd' } })).toBe('Not tested on 0.171.0')
+  })
+})
+
+describe('tools (60.12 AC6)', () => {
+  const TOOLS: RosterToolShape[] = [
+    { id: 'browser', name: 'Browser', command: 'npx', args: ['@synthetic/browser-tool'], agents: ['luna'] },
+    { id: 'docs', name: 'Docs', url: 'https://docs.example.test/mcp', public: true },
+    { id: 'notes', name: 'Notes', command: 'notes-tool', args: ['--token', { env: 'NOTES_TOKEN' }], env: { TOKEN: 'NOTES_TOKEN' }, apps: ['claude', 'codex'] }
+  ]
+  const WITH: RosterDataShape = { ...DATA, tools: TOOLS }
+  const page = rulesMarkup('tools', rules(), team({ data: WITH, base: WITH, approved: WITH }))
+
+  it('shows one row per tool: its name, what it runs, the variables it names, Public and its state in each app', () => {
+    expect(page).toContain('<h3 class="page-title">Tools</h3><span class="faint">3 tools</span>')
+    expect(page).toContain('<b>Docs</b><span class="faint mono" title="docs.example.test">docs.example.test</span>')
+    expect(page).toContain('<b>Notes</b><span class="faint mono" title="notes-tool · needs NOTES_TOKEN">notes-tool · needs NOTES_TOKEN</span>')
+    expect([...page.matchAll(/aria-label="Docs in ([A-Za-z ]+): ([^"]+)"/g)].map((match) => `${match[1]}: ${match[2]}`)).toEqual(['Claude Code: Set up', 'Codex: Missing', 'OpenCode: Not public', 'Cursor: Not yet'])
+    expect([...page.matchAll(/aria-label="Notes in ([A-Za-z ]+): ([^"]+)"/g)].map((match) => match[2])).toEqual(['Differs', 'Blocked', 'Exposed', 'Off'])
+    expect([...page.matchAll(/aria-pressed="(true|false)" aria-label="Notes in/g)].map((match) => match[1])).toEqual(['true', 'true', 'false', 'false'])
+    expect(page).toMatch(/role="switch" aria-checked="true" aria-label="Docs is public"/)
+    expect(page).toMatch(/role="switch" aria-checked="false" aria-label="Notes is public"/)
+    // Why Codex cannot take it is the chip's own hint; the exposed and the blocked chip carry the attention mark.
+    expect(page).toMatch(/aria-label="Notes in Codex: Blocked" title="Codex takes a variable only under its own name: NOTES_TOKEN is asked for as TOKEN"><span class="needs-dot"[^>]*><\/span>Codex<span class="chip-state">Blocked<\/span>/)
+    expect(page).toMatch(/aria-label="Notes in OpenCode: Exposed" title="OpenCode holds this tool but may not have it"><span class="needs-dot"/)
+    expect(words(page)).toContain('One tool is in an app that may not have it. Mark the tool Public, or remove its entry in that app.')
+    // The reason is also said under the row, in words.
+    expect(page).toMatch(/<p class="preferences-help tool-why"><span class="needs-dot"[^>]*><\/span>In Codex: Codex takes a variable only under its own name: NOTES_TOKEN is asked for as TOKEN<\/p>/)
+    expect(count(page, 'tool-why')).toBe(1)
+  })
+
+  it('shows a tool kept to agents by their names, in no app\'s settings', () => {
+    expect(page).toMatch(/aria-label="Agents whose runs get Browser"><span class="faint scope-word">Runs of<\/span><button type="button" class="chip on" aria-pressed="true" aria-label="Browser for the runs of Luna" disabled="" title="A tool kept to agents needs at least one">Luna<\/button><span class="faint">in no app&#x27;s settings<\/span>/)
+    expect(page).not.toContain('aria-label="Browser in ')
+  })
+
+  it('offers Install… with the count, Add tool, From your apps… and each tool\'s Edit and Remove', () => {
+    expect(page).toMatch(/<span class="muted">2 to install<\/span><button type="button" class="primary">Install…<\/button>/)
+    expect(rulesMarkup('tools', rules({ snapshot: { ...RULES, tools: { ...RULES.tools, pending: 0 } } }), team({ data: WITH }))).not.toContain('Install…</button>')
+    expect(page).toContain('<button type="button">Add tool</button><button type="button">From your apps…</button>')
+    expect(page).toContain('<button type="button" class="small" aria-label="Edit Notes">Edit</button><button type="button" class="small" aria-label="Remove Notes" title="Takes it off your list; approve to keep that">Remove</button>')
+    // A team with no tools says so and still offers both ways in.
+    const none = rulesMarkup('tools')
+    expect(none).toContain('<span class="faint">0 tools</span>')
+    expect(words(none)).toContain('No tools on your list yet.')
+    expect(none).toContain('>Add tool</button>')
+  })
+
+  it('lists the entries the apps hold that are not on the list, each once, and offers to remove them', () => {
+    expect(page).toContain('<h4 class="group-head">In your apps, not on your list<span class="caption">BMN did not write these and leaves them</span></h4>')
+    expect(count(page, 'data-unlisted="old-search"')).toBe(1)
+    expect(words(page).replace(/\s+/g, ' ')).toContain('old-search Claude Code, OpenCode · in an app that gets public work only')
+    expect(page).toContain('>Remove them from the apps…</button>')
+    const settled = { ...RULES, tools: { ...RULES.tools, apps: RULES.tools.apps.map((app) => ({ ...app, unlisted: [] })) } }
+    expect(rulesMarkup('tools', rules({ snapshot: settled }), team({ data: WITH }))).not.toContain('not on your list')
+  })
+
+  it('Add tool and Edit are plain rows: no list of the browser\'s own, every field named', () => {
+    const editor = (start: ToolDraft): string => renderToStaticMarkup(createElement(ToolEditor, { data: WITH, start, onDone: noop }))
+    const adding = editor(EMPTY_DRAFT)
+    expect(adding).toContain('<div class="sheet tool-editor" role="group" aria-label="Add a tool">')
+    expect(adding).not.toContain('<select')
+    expect([...adding.matchAll(/<(?:input|textarea)[^>]*aria-label="([^"]+)"/g)].map((match) => match[1])).toEqual(['Tool name', 'Tool id', 'Program', 'Arguments', 'Variables'])
+    expect([...adding.matchAll(/role="radio" aria-checked="(?:true|false)"[^>]*>([^<]+)/g)].map((match) => match[1])).toEqual(['A program', 'An address', 'All apps', 'Some apps', 'Some agents'])
+    expect(words(adding)).toContain('Environment variables the program needs, one name per line; NAME=OTHER when yours is named differently. Never a value.')
+    expect(adding).toContain('<button type="button" class="primary">Add tool</button><button type="button">Cancel</button>')
+    // Editing: the id stays, an address shows its own rows, and a tool kept to apps shows them as chips.
+    const address = editor(draftFrom(TOOLS[1]!))
+    expect(address).toContain('aria-label="Edit Docs"')
+    expect(address).toMatch(/aria-label="Tool id"[^>]*disabled=""[^>]*value="docs"/)
+    expect([...address.matchAll(/<(?:input|textarea)[^>]*aria-label="([^"]+)"/g)].map((match) => match[1])).toEqual(['Tool name', 'Tool id', 'Address', 'Headers'])
+    const some = editor(draftFrom(TOOLS[2]!))
+    expect(some).toContain('<textarea class="field wide mono" aria-label="Arguments" aria-invalid="false" rows="3">--token\n$NOTES_TOKEN</textarea>')
+    expect(some).toContain('<textarea class="field wide mono" aria-label="Variables" aria-invalid="false" rows="2">TOKEN=NOTES_TOKEN</textarea>')
+    expect([...some.matchAll(/class="(chip on|chip)" aria-pressed="(?:true|false)">([^<]+)/g)].map((match) => `${match[2]}${match[1] === 'chip on' ? ' on' : ''}`)).toEqual(['Claude Code on', 'Codex on', 'OpenCode', 'Cursor'])
+    const kept = editor(draftFrom(TOOLS[0]!))
+    expect(words(kept)).toContain('Only these agents&#x27; runs get it. No app keeps it in its settings.')
+    expect(kept).toMatch(/aria-label="Agents whose runs get it">.*<button type="button" class="chip on" aria-pressed="true">Luna<\/button>/)
+  })
+
+  it('From your apps… says what each entry would do, and adds only what can join the list', () => {
+    const found: ToolProposalView[] = [
+      { id: 'search', state: 'ready', apps: ['claude'], tool: { id: 'search', name: 'search', command: 'search-tool', apps: ['claude'] }, notes: [] },
+      { id: 'mail', state: 'secret', apps: ['codex'], tool: { id: 'mail', name: 'mail', command: 'mail-tool', env: { MAIL_KEY: 'MAIL_KEY' }, apps: ['codex'] }, notes: ['MAIL_KEY held a value in Codex: it is left out; set the variable where the app starts'] },
+      { id: 'docs', state: 'known', apps: ['claude'], notes: ['already on your list'] },
+      { id: 'maps', state: 'conflict', apps: ['claude', 'cursor'], notes: ['the apps define maps differently: keep one, or give each its own id'] }
+    ]
+    const sheet = renderToStaticMarkup(createElement(ToolProposals, { found, data: WITH, onAdd: noop, onCancel: noop }))
+    expect(sheet).toContain('aria-label="Add 2 tools from your apps"')
+    expect(words(sheet).replace(/\s+/g, ' ')).toContain('search Claude Code · will be added')
+    expect(words(sheet).replace(/\s+/g, ' ')).toContain('mail Codex · will be added without the value it holds MAIL_KEY held a value in Codex: it is left out; set the variable where the app starts')
+    expect(words(sheet).replace(/\s+/g, ' ')).toContain('docs Claude Code · already on your list')
+    expect(words(sheet).replace(/\s+/g, ' ')).toContain('maps Claude Code, Cursor · the apps differ, so it is not added')
+    expect(count(sheet, 'already on your list')).toBe(1)
+    const nothing = renderToStaticMarkup(createElement(ToolProposals, { found: found.slice(2), data: WITH, onAdd: noop, onCancel: noop }))
+    expect(nothing).toMatch(/aria-label="Nothing new in your apps".*<button type="button" class="primary" disabled="">Add to your list<\/button>/s)
+    expect(words(renderToStaticMarkup(createElement(ToolProposals, { found: [], data: WITH, onAdd: noop, onCancel: noop })))).toContain('Your apps hold no tool entries.')
+  })
+
+  it('shows the install entry by entry with what each holds now and would hold, and what stays exposed or blocked', () => {
+    const plan: ToolsPlan = {
+      ok: true, code: 'OK', planHash: 'h'.repeat(64), removeUnlisted: false,
+      targets: [
+        { harness: 'codex', tool: 'docs', path: '/home/synthetic/.codex/config.toml', action: 'set', words: 'adds the tool', before: null, after: '[mcp_servers.docs]\nurl = "https://docs.example.test/mcp"' },
+        { harness: 'claude', tool: 'notes', path: '/home/synthetic/.claude.json', action: 'set', words: 'replaces an entry changed outside BMN', before: '{"command":"old","env":{"TOKEN":"•••"}}', after: '{"type":"stdio","command":"notes-tool"}' }
+      ],
+      exposed: [{ harness: 'opencode', tool: 'notes', fix: 'remove notes from OpenCode, or mark it public' }],
+      blocked: [{ harness: 'codex', tool: 'notes', fix: 'Codex takes a variable only under its own name' }]
+    }
+    const sheet = rulesMarkup('tools', rules({ pending: { kind: 'tools', plan } }), team({ data: WITH }))
+    expect(sheet).toContain('aria-label="Change 2 tool entries"')
+    expect(words(sheet)).toContain('Only these entries change in each file. Undo install, under Earlier installs, puts them back.')
+    expect(sheet).toContain('<span class="muted">docs · adds the tool</span>')
+    expect(sheet).toContain('<pre class="diff">+[mcp_servers.docs]\n+url = &quot;https://docs.example.test/mcp&quot;</pre>')
+    expect(sheet).toContain('<pre class="diff">-{&quot;command&quot;:&quot;old&quot;,&quot;env&quot;:{&quot;TOKEN&quot;:&quot;•••&quot;}}\n+{&quot;type&quot;:&quot;stdio&quot;,&quot;command&quot;:&quot;notes-tool&quot;}</pre>')
+    expect(words(sheet)).toContain('One entry stays exposed whatever is installed:')
+    expect(sheet).toContain('<p class="preferences-help">notes: remove notes from OpenCode, or mark it public</p>')
+    expect(words(sheet)).toContain('One entry is not changed:')
+    expect(sheet).toContain('<p class="preferences-help">Codex, notes: Codex takes a variable only under its own name</p>')
+    const none = rulesMarkup('tools', rules({ pending: { kind: 'tools', plan: { ...plan, targets: [] } } }), team({ data: WITH }))
+    expect(none).toMatch(/aria-label="Every app already has its tools".*<button type="button" class="primary" disabled="">Install<\/button>/s)
+  })
+
+  it('lists its own installs with Undo, and leaves them out of the rules\' earlier versions and install date', () => {
+    expect(page).toMatch(/<summary>Earlier installs<\/summary><div class="list-line"><div><b>Installed<\/b> <span class="line-detail">[^<]+ · Claude Code<\/span><\/div><button type="button" class="small" aria-label="Undo the tools install of [^"]+">Undo install…<\/button>/)
+    expect(earlierVersions(RULES).some((entry) => entry.kind === 'install' && entry.id === 't4')).toBe(false)
+    expect(rulesMarkup('editor')).toContain(`last installed ${shortDate('2026-10-08T14:02:00.000Z')}`)
+  })
+
+  it('Health shows one row per app: its settings file, the state in words, Full or Public tools only and the last test', () => {
+    const health = rulesMarkup('health')
+    expect(health).toContain('<h4 class="group-head">Tools<span class="caption">where each app keeps its tools, and whether it has the ones it may have</span></h4>')
+    expect(words(health)).toMatch(/Checked [^·]+ · 1 skill entry to install · 1 skill exposed · 2 tool entries to install · 1 tool exposed/)
+    expect(health).toMatch(/data-tools="Differs"><span>Claude Code<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.claude.json">~\/.claude.json<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Differs<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code listed the stand-in tool">Tested [^<]+ · passes variables · a run can have tools of its own<\/span>/)
+    expect(health).toMatch(/data-tools="Missing"><span>Codex<\/span>.*?Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Tested [^<]+ · variables not seen<\/span>/)
+    expect(health).toMatch(/data-tools="Exposed"><span>OpenCode<\/span>.*?<span class="faint" title="\/home\/synthetic\/dotfiles\/opencode.jsonc">A link: BMN does not write through it<\/span>.*?Exposed<span class="muted"> · Public tools only<\/span>/)
+    expect(health).toMatch(/data-tools="Not supported yet"><span>Cursor<\/span>.*?<span title="no test has run on Cursor 2026.09.26">Not supported yet<\/span><span class="faint">Not tested on 2026.09.26<\/span>/)
+    expect([...health.matchAll(/(disabled="" )?aria-label="Tools test for ([A-Za-z ]+)"/g)].map((match) => `${match[2]}${match[1] ? ' off' : ''}`)).toEqual(['Claude Code', 'Codex', 'OpenCode', 'Cursor'])
+    expect(health.indexOf('<h4 class="group-head">Skills')).toBeLessThan(health.indexOf('<h4 class="group-head">Tools'))
+    expect(health.indexOf('<h4 class="group-head">Tools')).toBeLessThan(health.indexOf('<h4 class="group-head">Context limits'))
+  })
+
+  it('names in the approval who a tool change reaches, in words', () => {
+    const differences: RosterDiffShape[] = [
+      { scope: 'tools', id: 'notes', field: null, kind: 'added', after: { present: true, value: { name: 'Notes', command: 'notes-tool', args: ['--token', { env: 'NOTES_TOKEN' }], env: { TOKEN: 'NOTES_TOKEN' }, apps: ['claude', 'codex'] } } },
+      { scope: 'tools', id: 'browser', field: 'agents', kind: 'changed', before: { present: true, value: ['luna'] }, after: { present: true, value: ['luna', 'sol'] } }
+    ]
+    const { groups, general } = groupDifferences(differences, DATA, WITH, ['Tool Notes would reach Claude Code and Codex', 'Tool Browser would be given to the runs of Sol'])
+    expect(general).toEqual([])
+    expect(groups).toHaveLength(1)
+    expect(groups[0]).toMatchObject({ key: 'tools', subject: 'Tools', consequences: ['Tool Notes would reach Claude Code and Codex', 'Tool Browser would be given to the runs of Sol'] })
+    expect(groups[0]!.lines.map((line) => `${line.field}: ${line.before} > ${line.after}`)).toEqual([
+      'notes: — > added', 'notes · name: — > Notes', 'notes · program: — > notes-tool', 'notes · arguments: — > --token $NOTES_TOKEN', 'notes · variables: — > TOKEN from NOTES_TOKEN',
+      'notes · only in: — > Claude Code, Codex', 'browser · only for the runs of: Luna > Luna, Sol'
+    ])
+    const lines = groups[0]!.lines.map((line) => `${line.field} ${line.before} ${line.after}`)
+    expect(lines.join('\n')).not.toMatch(SCHEMA_WORDS)
   })
 })
 

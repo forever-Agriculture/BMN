@@ -331,6 +331,86 @@ export interface SkillsPlanTarget extends RulesPlanTarget { skill: string }
 /** What a skills install would do, before it does it (R60-NFR2), and what stays exposed whatever is installed. */
 export interface SkillsPlan { ok: boolean; code: string; message?: string; planHash: string | null; targets: SkillsPlanTarget[]; exposed: { harness: RosterHarness; skill: string; fix: string }[] }
 
+/** One tool's state in one app (60.12 AC4); `excluded` is a tool the app is not meant to have and does not have, `blocked` one it cannot take as it is. */
+export type ToolStateName = 'unreadable' | 'missing' | 'unmanaged' | 'edited-outside' | 'stale' | 'current' | 'exposed' | 'excluded' | 'blocked'
+
+/** One app's tools, as Rules › Health shows them (60.12 AC6). */
+export interface ToolsAppView {
+  harness: RosterHarness
+  version: string | null
+  /** Whether the owner's test showed, on the installed version, that this app reads tools from the file BMN would change. Until then nothing is written for it. */
+  supported: boolean
+  /** Why tools are not supported yet in this app. */
+  reason?: string
+  /** The app's own settings file that holds its tools. */
+  path: string
+  readable: boolean
+  /** Why the file cannot be read, in words. */
+  detail?: string
+  /** The settings file is a link to this: BMN reads through it and never writes there. */
+  link?: string
+  /** Every tool the app may have, or only the public ones. */
+  kind: RulesRenderingKind
+  kindReason: string
+  /** Set up, Missing, Differs, Exposed, None or Not supported yet. */
+  state: string
+  /** Whether the app was seen passing a named environment variable to a tool. */
+  variable: boolean
+  /** Whether a run was seen with only the tools its own command names. */
+  isolation: boolean
+  /** The last test of where the app reads tools, whatever version it ran against. */
+  test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string } | null
+  /** Entries the app holds that are not on the owner's list; `managed` ones BMN wrote for a tool that left the list. */
+  unlisted: { id: string; state: 'unmanaged' | 'exposed'; managed: boolean }[]
+}
+
+/** One approved tool, as Rules › Tools shows its state. */
+export interface ToolView {
+  id: string
+  /** Its state in each app whose tools are supported. */
+  states: Partial<Record<RosterHarness, ToolStateName>>
+  /** Why an app cannot take it, or why its entry there is left alone, where there is something to say. */
+  details: Partial<Record<RosterHarness, string>>
+}
+
+export interface ToolsView {
+  tools: ToolView[]
+  apps: ToolsAppView[]
+  /** Entries an install would add, replace or remove. */
+  pending: number
+  /** Tools an app holds but may not have, which no install removes. */
+  exposed: number
+  /** Tools an app cannot take as they are, and entries that hold a value inline. */
+  blocked: number
+  /** Why the tools could not be checked at all, in words. */
+  error?: string
+}
+
+/** One entry an install would set or remove, with what the file holds there now (values masked) and what it would hold. */
+export interface ToolsPlanTarget { harness: RosterHarness; tool: string; path: string; action: 'set' | 'remove'; words: string; before: string | null; after: string | null }
+/** What a tools install would do, before it does it (R60-NFR2), and what stays exposed or blocked whatever is installed. */
+export interface ToolsPlan {
+  ok: boolean
+  code: string
+  message?: string
+  planHash: string | null
+  /** Whether this plan also removes entries that are not on the list. */
+  removeUnlisted: boolean
+  targets: ToolsPlanTarget[]
+  exposed: { harness: RosterHarness; tool: string; fix: string }[]
+  blocked: { harness: RosterHarness; tool: string; fix: string }[]
+}
+
+/** An entry the apps already hold, proposed as a tool (60.12 AC3). A value an entry held is never part of it. */
+export interface ToolProposalView {
+  id: string
+  /** `ready`; `secret` (ready, with a value left out); `known` (already on the list); `conflict` (the apps differ) or `unreadable`. */
+  state: 'ready' | 'secret' | 'known' | 'conflict' | 'unreadable'
+  apps: RosterHarness[]
+  tool?: RosterToolShape
+  notes: string[]
+}
+
 /** Whether BMN's own read of the cited page shows a researched value beside the model, and which source list the page is on (1 provider pages, 2 other sites). */
 export interface ResearchChecked { rank: 1 | 2; verified: boolean; why?: string }
 export interface ResearchPrice extends ResearchChecked { input: number; output: number; cached_input?: number; source: string; as_of: string }
@@ -393,6 +473,8 @@ export interface RulesSnapshot {
   context: ContextLimitView[]
   /** The skills folder, each skill's state in each app, and where each app reads skills. */
   skills: SkillsView
+  /** Each approved tool's state in each app, and where each app keeps its tools. */
+  tools: ToolsView
   /**
    * Set when BMN could not ask the owner's shell for its settings and inspected with its own
    * environment instead: why, in words. A session may then find other programs than BMN does.
@@ -409,11 +491,13 @@ export interface RulesPlanTarget {
   resolvedPath?: string
   /** What happens, in words (install), or what the target becomes (restore). */
   kind: string
-  /** Install: the target's state before (`link`, `missing`, `unmanaged`, `edited-outside`, `stale`); restore: what it becomes (`link`, `file`, `missing`). */
+  /** Install: the target's state before (`link`, `missing`, `unmanaged`, `edited-outside`, `stale`); restore: what it becomes (`link`, `file`, `folder`, `entry`, `missing`). */
   change: string
   diff: string
   /** Said in place of a diff, where the entry is a folder or a link whose lines BMN never shows. */
   note?: string
+  /** The one entry of the file that changes, where an undo puts back entries and not the whole file (a tool). */
+  entry?: string
   rendering?: RulesRenderingKind
   linkTarget?: string
   fold?: string[]

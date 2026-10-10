@@ -1308,13 +1308,15 @@ export function consequences(before, after) {
       ? HARNESSES.filter((harness) => inApp(prior, was, harness) && inApp(after, now, harness)).map((harness) => APP_NAMES[harness]) : []
     const given = (now?.agents ?? []).filter((agent) => !(was?.agents ?? []).includes(agent)).map(name)
     const taken = (was?.agents ?? []).filter((agent) => !(now?.agents ?? []).includes(agent)).map(name)
+    // The owner knows a tool by its name, as its row shows it.
+    const title = (now ?? was).name
     const said = out.length
-    if (gains.length > 0) out.push(`Tool ${id} would reach ${listed(gains)}`)
-    if (loses.length > 0) out.push(`Tool ${id} would no longer reach ${listed(loses)}`)
-    if (changes.length > 0) out.push(`Tool ${id} would change in ${listed(changes)}`)
-    if (given.length > 0) out.push(`Tool ${id} would be given to the runs of ${listed(given)}`)
-    if (taken.length > 0) out.push(`Tool ${id} would no longer be given to the runs of ${listed(taken)}`)
-    if (out.length === said) out.push(`Tool ${id}: no app gains or loses it`)
+    if (gains.length > 0) out.push(`Tool ${title} would reach ${listed(gains)}`)
+    if (loses.length > 0) out.push(`Tool ${title} would no longer reach ${listed(loses)}`)
+    if (changes.length > 0) out.push(`Tool ${title} would change in ${listed(changes)}`)
+    if (given.length > 0) out.push(`Tool ${title} would be given to the runs of ${listed(given)}`)
+    if (taken.length > 0) out.push(`Tool ${title} would no longer be given to the runs of ${listed(taken)}`)
+    if (out.length === said) out.push(`Tool ${title}: no app gains or loses it`)
   }
   return [...new Set(out)]
 }

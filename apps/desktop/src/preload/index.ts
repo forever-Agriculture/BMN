@@ -24,6 +24,8 @@ import {
   type ResearchLookup,
   type ResearchSnapshot,
   type SkillsPlan,
+  type ToolProposalView,
+  type ToolsPlan,
   type RulesOutcome,
   type RulesMasterPlan,
   type RulesPlan,
@@ -811,6 +813,18 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   testSkills(harness: RosterHarness): Promise<RulesOutcome> {
     return invokeBridge('aiterm:rules:skills-test', { harness })
+  },
+  planToolsInstall(removeUnlisted = false): Promise<ToolsPlan> {
+    return invokeBridge('aiterm:rules:tools-plan', { removeUnlisted })
+  },
+  installTools(planHash: string, removeUnlisted = false): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:tools-install', { planHash, removeUnlisted })
+  },
+  testTools(harness: RosterHarness): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:tools-test', { harness })
+  },
+  proposeTools(): Promise<{ ok: boolean; message?: string; proposals: ToolProposalView[] }> {
+    return invokeBridge('aiterm:rules:tools-proposals', {})
   },
   researchSnapshot(fresh: boolean): Promise<ResearchSnapshot> {
     return invokeBridge('aiterm:research:load', { fresh })

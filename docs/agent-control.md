@@ -1045,6 +1045,16 @@ differ, each kept to the apps that hold it and none Public. A value held inline 
 named ("move this value into an environment variable"), never stored or printed. `--yes` adds
 the proposals to the team file; nothing reaches an app until you approve them in BMN.
 
+**On the Tools page.** **Add tool** and **Edit** are plain rows: a name, a program with its
+arguments (one per line, `$NAME` for a variable) or an address with its headers, who it is for
+and Public. **From your apps…** shows the same proposals as `bmn tools import` and adds the ones
+you confirm. Either is a staged change like any other on Team: the footer names the apps it
+would reach, and nothing is in effect before **Approve**. A reason an app cannot take a tool is
+written under that tool's row. Entries your apps hold that are not on your list are named
+below the list; **Remove them from the apps…** shows each one before it removes any. Health →
+Tools has one row per app: its settings file, its state, Full or Public tools only, and the
+last test.
+
 **A tool kept to some agents** is in no app's settings. `bmn roster role <role> --json` gives each
 candidate a `tools` entry with the items that give a run exactly its agent's tools and shut out
 the app's own: for Codex `-c 'mcp_servers={}'` followed by one `-c mcp_servers.<id>.<setting>=…`

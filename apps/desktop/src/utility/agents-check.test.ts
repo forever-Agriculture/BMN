@@ -1263,14 +1263,14 @@ describe('consequences in words (60.5 AC7; the same sentences `bmn roster status
       ['Sol could no longer receive private work', 'Astra could no longer receive private work', 'Luna could no longer receive private work',
         'Codex would count as sending data to OpenAI on your word, so it gets public work only']],
     ['a tool added for every app: the apps that may have it, never one that gets public work only', EXAMPLE, (text: string) => `${text}\n## tools\n\n\`\`\`yaml\nnotes: {name: Notes, command: notes-tool}\ndocs: {name: Docs, url: "https://docs.example.test/mcp", public: true}\n\`\`\`\n`,
-      ['Tool docs would reach Claude Code, Codex, OpenCode and Cursor', 'Tool notes would reach Claude Code and Codex']],
+      ['Tool Docs would reach Claude Code, Codex, OpenCode and Cursor', 'Tool Notes would reach Claude Code and Codex']],
     ['a tool kept to one app, then to an agent, and its program changed', `${EXAMPLE}\n## tools\n\n\`\`\`yaml\nnotes: {name: Notes, command: notes-tool}\nfiles: {name: Files, command: files-tool}\nbrowser: {name: Browser, command: b, agents: [luna]}\n\`\`\`\n`,
       (text: string) => edit(edit(edit(text, 'notes: {name: Notes, command: notes-tool}', 'notes: {name: Notes, command: notes-tool, apps: [codex]}'), 'files: {name: Files, command: files-tool}', 'files: {name: My files, command: files-tool-2}'),
         'browser: {name: Browser, command: b, agents: [luna]}', 'browser: {name: Browser, command: b, agents: [astra]}'),
-      ['Tool browser would be given to the runs of Astra', 'Tool browser would no longer be given to the runs of Luna', 'Tool files would change in Claude Code and Codex', 'Tool notes would no longer reach Claude Code']],
+      ['Tool Browser would be given to the runs of Astra', 'Tool Browser would no longer be given to the runs of Luna', 'Tool My files would change in Claude Code and Codex', 'Tool Notes would no longer reach Claude Code']],
     ['a tool renamed and one moved from the apps to an agent\'s runs', `${EXAMPLE}\n## tools\n\n\`\`\`yaml\nnotes: {name: Notes, command: notes-tool}\nfiles: {name: Files, command: files-tool}\n\`\`\`\n`,
       (text: string) => edit(edit(text, 'notes: {name: Notes, command: notes-tool}', 'notes: {name: My notes, command: notes-tool}'), 'files: {name: Files, command: files-tool}', 'files: {name: Files, command: files-tool, agents: [luna]}'),
-      ['Tool files would no longer reach Claude Code and Codex', 'Tool files would be given to the runs of Luna', 'Tool notes: no app gains or loses it']],
+      ['Tool Files would no longer reach Claude Code and Codex', 'Tool Files would be given to the runs of Luna', 'Tool My notes: no app gains or loses it']],
     ['a version list kept from the earlier rule, which changes nothing', EXAMPLE, (text: string) => edit(text, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: observed-default, accepted_versions: ["0.170.0"]}'),
       []]
   ])('%s', (_name, from, change, expected) => {

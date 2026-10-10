@@ -29,6 +29,10 @@ import {
   type SkillStateName,
   type SkillsPlan,
   type SkillsView,
+  type ToolProposalView,
+  type ToolStateName,
+  type ToolsPlan,
+  type ToolsView,
   type TeamUpdateTarget
 } from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
@@ -44,6 +48,7 @@ import { decide as decidePrompt } from '../../bin/agents-guard.mjs'
 import { CONTEXT_APPS, ContextError, applyContextDefault, contextDefault, planContextDefault, sharingAgents } from '../../bin/agents-context.mjs'
 import { chooseResearcher, chosenResearcher, fetchPublicPage, readResearch, researchView, researchers, runResearch, type ResearchRunRecord } from '../../bin/agents-research.mjs'
 import { SKILL_APPS, appStateWord, checkSkills, lastLoadingTests, lastSkillsTest, pendingCounts, skillsTests } from '../../bin/agents-skills.mjs'
+import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsTests } from '../../bin/agents-tools.mjs'
 import { allowWorkspace, approveRoster, approveSections, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
 import { findAppProgram } from './app-program'
 import { MainIpcError } from './workspace-ipc'
@@ -494,6 +499,63 @@ function skillsPlanFrom(result: CliResult): SkillsPlan {
   }
 }
 
+/**
+ * Rules › Tools and Health's Tools group (60.12 AC6): each approved tool's state in each app and
+ * where each app keeps its tools. Nothing an app's entry holds is part of it, only names and states.
+ */
+function toolsView(apps: AgentAppView[], generation: Generation | null, context: RulesIpcContext): ToolsView {
+  const versions = Object.fromEntries(apps.map((app) => [app.harness, app.version]))
+  try {
+    const tests = toolsTests()
+    const check = checkTools({ environment: context.env, tests, versions, generation })
+    return {
+      ...toolsPendingCounts(check),
+      tools: check.tools.map((tool) => {
+        const rows = check.apps.filter((app) => app.supported).flatMap((app) => {
+          const row = app.tools.find((entry) => entry.id === tool.id)
+          return row === undefined ? [] : [{ harness: app.harness, row }]
+        })
+        return {
+          id: tool.id,
+          states: Object.fromEntries(rows.map(({ harness, row }) => [harness, row.state as ToolStateName])),
+          details: Object.fromEntries(rows.flatMap(({ harness, row }) => (row.detail === undefined ? [] : [[harness, row.detail]])))
+        }
+      }),
+      apps: check.apps.map((app) => {
+        const test = lastToolsTest(app.harness, tests)
+        return {
+          harness: app.harness, version: app.version, supported: app.supported, ...(app.reason === undefined ? {} : { reason: app.reason }),
+          path: app.path, readable: app.readable, ...(app.detail === undefined ? {} : { detail: app.detail }), ...(app.link === undefined ? {} : { link: app.link }),
+          kind: app.kind, kindReason: app.kind_reason, state: toolsStateWord(app), variable: app.variable, isolation: app.isolation,
+          test: test === null ? null : { at: test.at, version: test.version, outcome: test.outcome, detail: test.detail },
+          unlisted: app.unlisted.map((entry) => ({ id: entry.id, state: entry.state, managed: entry.managed }))
+        }
+      })
+    }
+  } catch (error) {
+    // BMN's own record of what it wrote cannot be read: say so on the page rather than fail every Rules page.
+    return { tools: [], apps: [], pending: 0, exposed: 0, blocked: 0, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+function toolsPlanFrom(result: CliResult, removeUnlisted: boolean): ToolsPlan {
+  const report = parseJson(result.stdout)
+  const refused = (code: string, message: string): ToolsPlan => ({ ok: false, code, message, planHash: null, removeUnlisted, targets: [], exposed: [], blocked: [] })
+  if (result.failed || report === null) return refused('IO_ERROR', `The tools plan could not be read${result.failed ? ` (${result.failed})` : ''}`)
+  if (report.code !== 'OK') return refused(String(report.code ?? 'IO_ERROR'), String(report.message ?? 'The plan was refused'))
+  const rows = (value: unknown): Record<string, unknown>[] => (Array.isArray(value) ? value as Record<string, unknown>[] : [])
+  const open = (value: unknown): ToolsPlan['exposed'] => rows(value).map((row) => ({ harness: row.harness as RosterHarness, tool: String(row.tool), fix: String(row.fix) }))
+  return {
+    ok: true, code: 'OK', planHash: typeof report.plan_hash === 'string' ? report.plan_hash : null, removeUnlisted,
+    // What an entry held is shown as the command line showed it: values already masked there.
+    targets: rows(report.targets).map((row) => ({
+      harness: row.harness as RosterHarness, tool: String(row.tool), path: String(row.path), action: row.action === 'remove' ? 'remove' : 'set', words: String(row.words ?? ''),
+      before: typeof row.before === 'string' ? row.before : null, after: typeof row.after === 'string' ? row.after : null
+    })),
+    exposed: open(report.exposed), blocked: open(report.blocked)
+  }
+}
+
 function contextApp(value: unknown): ContextLimitApp {
   if (typeof value !== 'string' || !(CONTEXT_APPS as readonly string[]).includes(value)) invalid('harness is not one of codex, claude')
   return value as ContextLimitApp
@@ -554,6 +616,7 @@ export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnap
     // The version each limit setting is judged against is the one the row above shows.
     context: (CONTEXT_APPS as ContextLimitApp[]).map((harness) => contextView(harness, apps.find((app) => app.harness === harness)?.version ?? null, generation, context)),
     skills: skillsView(apps, generation, context),
+    tools: toolsView(apps, generation, context),
     ...(context.ownEnvironment === undefined ? {} : { ownEnvironment: context.ownEnvironment }),
     transactions: listTransactions().slice(0, 10).map((entry) => ({
       id: entry.id, valid: entry.valid, ...(entry.created_at ? { createdAt: entry.created_at } : {}),
@@ -573,6 +636,7 @@ function planFrom(result: CliResult, kind: 'install' | 'restore'): RulesPlan {
     ...(row.rendering === 'full' ? { rendering: 'full' as const } : row.rendering === 'public' ? { rendering: 'public' as const } : {}),
     ...(typeof row.link_target === 'string' ? { linkTarget: row.link_target } : {}),
     ...(typeof row.note === 'string' ? { note: row.note } : {}),
+    ...(typeof row.tool === 'string' ? { entry: row.tool } : {}),
     ...(Array.isArray(row.fold) ? { fold: (row.fold as unknown[]).map(String) } : {})
   })) : []
   return { ok: true, code: 'OK', planHash: typeof report.plan_hash === 'string' ? report.plan_hash : null, targets }
@@ -781,7 +845,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const result = await runCli(ctx.script, ['rules', 'restore', '--transaction', id, '--expect-plan', planHash, '--yes', '--json'], ctx.env)
     return rulesOutcome(ctx, result, (report) => {
       const apps = ((report.restored as RosterHarness[] | undefined) ?? []).map((harness) => ROSTER_APP_NAMES[harness] ?? harness)
-      return `Put back the ${report.kind === 'skills' ? 'skills' : 'rules'} in ${apps.length <= 1 ? apps.join('') : `${apps.slice(0, -1).join(', ')} and ${apps.at(-1) as string}`}`
+      return `Put back the ${report.kind === 'skills' ? 'skills' : report.kind === 'tools' ? 'tools' : 'rules'} in ${apps.length <= 1 ? apps.join('') : `${apps.slice(0, -1).join(', ')} and ${apps.at(-1) as string}`}`
     })
   })
   handle('aiterm:rules:plan-revert-master', (params) => {
@@ -858,6 +922,39 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     // Owner-run: the app starts with its own environment, as a loading test does.
     const result = await runCli(ctx.script, ['skills', 'test', harness, '--json'], ctx.probeEnv, PROBE_TIMEOUT_MS)
     return rulesOutcome(ctx, result, (report) => `${ROSTER_APP_NAMES[harness]} skills test ${PROBE_OUTCOME_WORDS[String(report.outcome)] ?? String(report.outcome)}: ${String(report.detail)}`)
+  })
+  handle('aiterm:rules:tools-plan', async (params) => {
+    const removeUnlisted = params.removeUnlisted === true
+    const ctx = context()
+    return toolsPlanFrom(await runCli(ctx.script, ['tools', 'install', '--plan', '--json', ...(removeUnlisted ? ['--remove-unlisted'] : [])], ctx.env), removeUnlisted)
+  })
+  handle('aiterm:rules:tools-install', async (params) => {
+    const planHash = textParam(params, 'planHash', 64)
+    const ctx = context()
+    const result = await runCli(ctx.script, ['tools', 'install', '--expect-plan', planHash, '--yes', '--json', ...(params.removeUnlisted === true ? ['--remove-unlisted'] : [])], ctx.env)
+    return rulesOutcome(ctx, result, (report) => {
+      const changed = Array.isArray(report.written) ? report.written.length : 0
+      const exposed = Array.isArray(report.exposed) ? report.exposed.length : 0
+      const blocked = Array.isArray(report.blocked) ? report.blocked.length : 0
+      const done = changed === 0 ? 'Every app already had its tools.' : `Changed ${changed} tool entr${changed === 1 ? 'y' : 'ies'}. Sessions started before this keep the tools they had.`
+      return [done, ...(exposed === 0 ? [] : [`${exposed} ${exposed === 1 ? 'stays' : 'stay'} exposed.`]), ...(blocked === 0 ? [] : [`${blocked} could not be changed.`])].join(' ')
+    })
+  })
+  handle('aiterm:rules:tools-test', async (params) => {
+    const harness = harnessParam(params.harness)
+    const ctx = context()
+    // Owner-run: the app starts in an empty home folder, found with the owner's own program path.
+    const result = await runCli(ctx.script, ['tools', 'test', harness, '--json'], ctx.probeEnv, PROBE_TIMEOUT_MS)
+    return rulesOutcome(ctx, result, (report) => `${ROSTER_APP_NAMES[harness]} tools test ${PROBE_OUTCOME_WORDS[String(report.outcome)] ?? String(report.outcome)}: ${String(report.detail)}`)
+  })
+  // What the apps already hold, proposed as tools: read only, and never a value an entry held (60.12 AC3).
+  handle('aiterm:rules:tools-proposals', () => {
+    const ctx = context()
+    try {
+      return { ok: true, proposals: proposeTools({ environment: ctx.env, generation: approvedOrProblem().generation }).proposals as ToolProposalView[] }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error), proposals: [] as ToolProposalView[] }
+    }
   })
   handle('aiterm:rules:probe', async (params) => {
     const harness = harnessParam(params.harness)

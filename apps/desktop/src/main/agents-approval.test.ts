@@ -506,6 +506,22 @@ describe('approving one outside section (60.5 AC3)', () => {
     expect(approveSections(shown(), ['roles', 'haiku']).number).toBe(2)
   })
 
+  it('approves the tools written into the file outside BMN as their own section, and leaves them out of another section\'s approval', () => {
+    writeRoster(EXAMPLE)
+    approveRoster(shown())
+    const outside = `${edit(EXAMPLE, FOCUSED, FOCUSED_SWAPPED)}\n## tools\n\n\`\`\`yaml\ndocs: {name: Docs, url: "https://docs.example.test/mcp", public: true}\n\`\`\`\n`
+    writeRoster(outside)
+    // The roles alone: no tool comes with them, so the approved data holds no list.
+    const roles = approveSections(shown(), ['roles'])
+    expect(Object.keys(roles.data)).not.toContain('tools')
+    expect(machineDiff(readApproved().data, readValidRoster().data).map((diff) => `${diff.scope}:${diff.id}`)).toEqual(['tools:docs'])
+    const tools = approveSections(shown(), ['tools'])
+    expect(tools).toMatchObject({ number: 3, parent: 2 })
+    expect(tools.data.tools).toEqual([{ id: 'docs', name: 'Docs', url: 'https://docs.example.test/mcp', public: true }])
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(outside)
+    expect(machineDiff(readApproved().data, readValidRoster().data)).toEqual([])
+  })
+
   it('refuses an unknown section and a stale view', () => {
     writeRoster(EXAMPLE)
     approveRoster(shown())

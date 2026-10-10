@@ -250,9 +250,10 @@ export function mergeSections(approved: RosterData, file: RosterData, scope: rea
   const agents = [...new Set([...file.agents.map((agent) => agent.id), ...approved.agents.map((agent) => agent.id)])]
     .map((id) => (scope.includes(id) ? fromFile.get(id) : fromApproved.get(id)))
     .filter((agent): agent is RosterData['agents'][number] => agent !== undefined)
-  // The skills marks are optional keys: one that is absent stays absent, so the data's hash does not move.
-  const rest = Object.fromEntries(Object.entries(approved).filter(([key]) => key !== 'skills' && key !== 'skills_source')) as Omit<RosterData, 'skills' | 'skills_source'>
+  // The skills marks and the tools are optional keys: one that is absent stays absent, so the data's hash does not move.
+  const rest = Object.fromEntries(Object.entries(approved).filter(([key]) => key !== 'skills' && key !== 'skills_source' && key !== 'tools')) as Omit<RosterData, 'skills' | 'skills_source' | 'tools'>
   const marks = scope.includes('skills') ? file : approved
+  const tools = (scope.includes('tools') ? file : approved).tools
   return {
     ...rest,
     agents,
@@ -261,7 +262,8 @@ export function mergeSections(approved: RosterData, file: RosterData, scope: rea
     exceptions: scope.includes('exceptions') ? file.exceptions : approved.exceptions,
     harness_routes: scope.includes('harness-routes') ? file.harness_routes : approved.harness_routes,
     ...(marks.skills === undefined ? {} : { skills: marks.skills }),
-    ...(marks.skills_source === undefined ? {} : { skills_source: marks.skills_source })
+    ...(marks.skills_source === undefined ? {} : { skills_source: marks.skills_source }),
+    ...(tools === undefined ? {} : { tools })
   }
 }
 

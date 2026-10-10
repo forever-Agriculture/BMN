@@ -1,4 +1,4 @@
-// MODULE: rules-preferences.tsx - Epic 60.6: Preferences › Rules: the master editor with what each app reads, install and earlier versions; Skills with each skill's apps and state; Health with each rules file and agent app
+// MODULE: rules-preferences.tsx - Epic 60.6: Preferences › Rules: the master editor with what each app reads, install and earlier versions; Skills and Tools with each one's apps and state; Health with each rules file and agent app
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import {
   ROSTER_APP_NAMES,
@@ -24,7 +24,12 @@ import {
   type SkillStateName,
   type SkillView,
   type SkillsAppView,
-  type SkillsPlan
+  type SkillsPlan,
+  type RosterToolShape,
+  type ToolProposalView,
+  type ToolView,
+  type ToolsAppView,
+  type ToolsPlan
 } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { Segmented } from './history-preferences'
@@ -32,12 +37,16 @@ import { quoteArgv } from './launch-template'
 import { Dot } from './roster-marks'
 import { diffBody, diffSummary, revokeVersion, setDestination, setSkillPublic, skillForApp, skillMark, thousands, toggleSkillApp, undoWords } from './roster-staging'
 import { displayPath } from './session-presentation'
-import { Issues, NumberField, PageHead, Switch, TargetPath, shortDate } from './team-preferences'
+import { Issues, NumberField, PageHead, Row, Switch, TargetPath, shortDate } from './team-preferences'
 import type { TeamState } from './team-state'
+import {
+  EMPTY_DRAFT, MAX_TOOLS, SCOPE_WORDS, addable, draftFrom, idFromName, removeTool, setTool, setToolPublic, toggleToolAgent, toggleToolApp, toolForApp, toolFrom, toolStateHint, toolStateWords,
+  toolVariables, toolsTestLine, transportWords, withProposals, type ToolDraft, type ToolScope
+} from './tools-view'
 
 export { diffSummary, undoWords }
 
-export type RulesPage = 'editor' | 'skills' | 'health'
+export type RulesPage = 'editor' | 'skills' | 'tools' | 'health'
 
 const PLAN_DELAY_MS = 300
 
@@ -124,6 +133,8 @@ export const VERSION_WORDS: Readonly<Record<AgentAppView['versionState'], string
 
 /** The reason a skills install records, which tells it from a rules install. */
 const SKILLS_INSTALL = 'skills install'
+/** The reason a tools install records. */
+const TOOLS_INSTALL = 'tools install'
 
 /** Installs and saves, newest first, as Earlier versions lists them. */
 export type Earlier =
@@ -131,8 +142,8 @@ export type Earlier =
   | { kind: 'save'; revision: number; at: string; title: string; detail: string; usable: boolean }
 
 export function earlierVersions(snapshot: Pick<RulesSnapshot, 'transactions' | 'history'>): Earlier[] {
-  // A skills install is undone on the Skills page, where it was made.
-  const installs: Earlier[] = snapshot.transactions.filter((entry) => entry.reason !== SKILLS_INSTALL).map((entry) => ({
+  // A skills or tools install is undone on its own page, where it was made.
+  const installs: Earlier[] = snapshot.transactions.filter((entry) => entry.reason !== SKILLS_INSTALL && entry.reason !== TOOLS_INSTALL).map((entry) => ({
     kind: 'install', id: entry.id, at: entry.createdAt, usable: entry.valid && entry.state === 'complete',
     title: !entry.valid ? 'An install that cannot be read' : entry.reason === 'team update' ? 'Team line updated' : 'Installed',
     detail: (entry.targets ?? []).map((harness) => ROSTER_APP_NAMES[harness]).join(', ') + (entry.valid && entry.state !== 'complete' ? ' · did not finish' : '')
@@ -150,6 +161,7 @@ type Pending =
   | { kind: 'restore'; revision: number; plan: RulesRevertPlan }
   | { kind: 'test'; harness: RosterHarness }
   | { kind: 'skills'; plan: SkillsPlan }
+  | { kind: 'tools'; plan: ToolsPlan }
 
 export interface RulesState {
   snapshot: RulesSnapshot | null
@@ -172,6 +184,8 @@ export interface RulesState {
   beginInstall(): Promise<void>
   /** Shows what a skills install would link, copy or remove in each app. */
   beginSkillsInstall(): Promise<void>
+  /** Shows the entries a tools install would set or remove in each app's settings; `removeUnlisted` adds the entries that are not on the list. */
+  beginToolsInstall(removeUnlisted: boolean): Promise<void>
   beginUndo(transaction: string): Promise<void>
   beginRestore(revision: number): Promise<void>
   beginTest(harness: RosterHarness): void
@@ -276,6 +290,10 @@ export function useRulesState(): RulesState {
       const { planHash } = pending.plan
       if (planHash === null) return
       run = () => window.aiTerminal.installSkills(planHash)
+    } else if (pending.kind === 'tools') {
+      const { planHash, removeUnlisted } = pending.plan
+      if (planHash === null) return
+      run = () => window.aiTerminal.installTools(planHash, removeUnlisted)
     } else if (pending.kind === 'undo') {
       const { transaction, plan } = pending
       if (plan.planHash === null) return
@@ -353,6 +371,10 @@ export function useRulesState(): RulesState {
       const plan = await window.aiTerminal.planSkillsInstall()
       return plan.ok ? { kind: 'skills', plan } : plan.message ?? 'The skills cannot be installed now'
     }),
+    beginToolsInstall: (removeUnlisted) => begin(async () => {
+      const plan = await window.aiTerminal.planToolsInstall(removeUnlisted)
+      return plan.ok ? { kind: 'tools', plan } : plan.message ?? 'The tools cannot be installed now'
+    }),
     beginUndo: (transaction) => begin(async () => {
       const plan = await window.aiTerminal.planRulesRestore(transaction)
       return plan.ok ? { kind: 'undo', transaction, plan } : plan.message ?? 'That install cannot be undone'
@@ -389,11 +411,12 @@ function Sheet(props: {
 function Targets(props: { targets: readonly RulesPlanTarget[]; home: string | null; words(target: RulesPlanTarget): string }): React.JSX.Element {
   return (
     <>
-      {props.targets.map((target) => (
-        <details key={target.path} className="target">
+      {props.targets.map((target, index) => (
+        // Several entries of one settings file share its path.
+        <details key={`${target.path}:${index}`} className="target">
           <summary>
             <span>{ROSTER_APP_NAMES[target.harness]}</span>
-            <span className="target-file"><TargetPath target={target} home={props.home} /><span className="muted">{props.words(target)}</span></span>
+            <span className="target-file"><TargetPath target={target} home={props.home} /><span className="muted">{target.entry === undefined ? '' : `${target.entry} · `}{props.words(target)}</span></span>
             <span className="muted">{target.rendering ? KIND_WORDS[target.rendering] : ''}</span>
           </summary>
           {target.note !== undefined && target.diff === '' ? <p className="preferences-help">{target.note}</p> : <pre className="diff">{diffBody(target.diff) || 'No change.'}</pre>}
@@ -450,6 +473,37 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
             <div role="status">
               <p className="preferences-help"><Dot label="Needs you" />{open.length === 1 ? 'One skill stays' : `${open.length} skills stay`} exposed whatever is installed:</p>
               {open.map((entry) => <p key={`${entry.harness}:${entry.skill}`} className="preferences-help">{entry.fix}</p>)}
+            </div>
+          ) : null}
+        </Sheet>
+      )
+    }
+    case 'tools': {
+      const count = pending.plan.targets.length
+      const { exposed, blocked } = pending.plan
+      return (
+        <Sheet {...common} title={count === 0 ? 'Every app already has its tools' : `Change ${count} tool entr${count === 1 ? 'y' : 'ies'}`} action="Install"
+          ready={count > 0 && pending.plan.planHash !== null} note={count === 0 ? undefined : 'Only these entries change in each file. Undo install, under Earlier installs, puts them back.'}>
+          {pending.plan.targets.map((target) => (
+            <details key={`${target.harness}:${target.tool}`} className="target">
+              <summary>
+                <span>{ROSTER_APP_NAMES[target.harness]}</span>
+                <span className="target-file"><TargetPath target={{ path: target.path }} home={home} /><span className="muted">{target.tool} · {target.words}</span></span>
+                <span className="muted" />
+              </summary>
+              <pre className="diff">{[...(target.before?.split('\n').map((line) => `-${line}`) ?? []), ...(target.after?.split('\n').map((line) => `+${line}`) ?? [])].join('\n')}</pre>
+            </details>
+          ))}
+          {exposed.length > 0 ? (
+            <div role="status">
+              <p className="preferences-help"><Dot label="Needs you" />{exposed.length === 1 ? 'One entry stays' : `${exposed.length} entries stay`} exposed whatever is installed:</p>
+              {exposed.map((entry) => <p key={`${entry.harness}:${entry.tool}`} className="preferences-help">{entry.tool}: {entry.fix}</p>)}
+            </div>
+          ) : null}
+          {blocked.length > 0 ? (
+            <div role="status">
+              <p className="preferences-help"><Dot label="Needs you" />{blocked.length === 1 ? 'One entry is' : `${blocked.length} entries are`} not changed:</p>
+              {blocked.map((entry) => <p key={`${entry.harness}:${entry.tool}`} className="preferences-help">{ROSTER_APP_NAMES[entry.harness]}, {entry.tool}: {entry.fix}</p>)}
             </div>
           ) : null}
         </Sheet>
@@ -555,7 +609,7 @@ function EditorPage(props: { rules: RulesState }): React.JSX.Element {
   const pending = rules.pending
   const targets = snapshot.health.state === 'checked' ? snapshot.health.targets : []
   const differ = targets.filter((target) => target.state !== 'current').length
-  const installed = snapshot.transactions.find((entry) => entry.valid && entry.state === 'complete' && entry.reason !== 'team update' && entry.reason !== SKILLS_INSTALL)?.createdAt
+  const installed = snapshot.transactions.find((entry) => entry.valid && entry.state === 'complete' && entry.reason !== 'team update' && entry.reason !== SKILLS_INSTALL && entry.reason !== TOOLS_INSTALL)?.createdAt
   const renderings: readonly RulesRenderingView[] = rules.dirty && rules.draftPlan?.valid ? rules.draftPlan.renderings : snapshot.renderings
   const rendering = renderings.find((entry) => entry.harness === previewApp)
   const errors: readonly RosterIssueShape[] = rules.dirty ? rules.draftPlan?.errors ?? [] : snapshot.master.errors
@@ -632,6 +686,7 @@ function EditorPage(props: { rules: RulesState }): React.JSX.Element {
 
 type AppAction = { kind: 'destination'; harness: RosterHarness } | { kind: 'update'; harness: RosterHarness }
   | { kind: 'context-test'; harness: ContextLimitApp } | { kind: 'context-change'; harness: ContextLimitApp } | { kind: 'skills-test'; harness: RosterHarness }
+  | { kind: 'tools-test'; harness: RosterHarness }
 
 /** How many running sessions BMN recognises as each app. */
 export type RecognisedSessions = Readonly<Partial<Record<RosterHarness, number>>>
@@ -1081,6 +1136,317 @@ function SkillsHealth(props: { rules: RulesState; action: AppAction | null; setA
   )
 }
 
+// ---------------------------------------------------------------------------------------------
+// Tools (60.12 AC6)
+
+const PROPOSAL_WORDS: Readonly<Record<ToolProposalView['state'], string>> = {
+  ready: 'will be added', secret: 'will be added without the value it holds', known: 'already on your list', conflict: 'the apps differ, so it is not added', unreadable: 'cannot be read, so it is not added'
+}
+
+/** Add tool and Edit: plain rows. What they describe is staged like any team change, and reaches no app before it is approved and installed. */
+export function ToolEditor(props: { data: RosterDataShape; start: ToolDraft; onDone(next: RosterDataShape | null): void }): React.JSX.Element {
+  const [draft, setDraft] = useState(props.start)
+  const [tried, setTried] = useState(false)
+  const kindId = useId()
+  const scopeId = useId()
+  const set = (patch: Partial<ToolDraft>): void => setDraft((now) => ({ ...now, ...patch }))
+  const result = toolFrom(draft, props.data)
+  const errors = tried ? result.errors ?? {} : {}
+  const adding = draft.editing === null
+  const title = adding ? 'Add a tool' : `Edit ${props.start.name}`
+  const save = (): void => {
+    if (result.tool === undefined) setTried(true)
+    else props.onDone(setTool(props.data, result.tool))
+  }
+  const toggle = <Value extends string>(list: readonly Value[], value: Value): Value[] => (list.includes(value) ? list.filter((entry) => entry !== value) : [...list, value])
+  return (
+    <div className="sheet tool-editor" role="group" aria-label={title}>
+      <div className="sheet-head"><b>{title}</b><span className="muted">Nothing changes until you approve it.</span></div>
+      <Row label="Name" hint={errors.name}>
+        <input className="field" autoFocus aria-label="Tool name" aria-invalid={errors.name !== undefined} maxLength={40} value={draft.name}
+          onChange={(event) => {
+            const name = event.currentTarget.value
+            // The id follows the name until the owner types one of their own.
+            set(adding && draft.id === idFromName(draft.name) ? { name, id: idFromName(name) } : { name })
+          }} />
+      </Row>
+      <Row label="Id" hint={errors.id ?? (adding ? "The name its entry carries in each app's settings." : 'An id stays as it is: for another, add the tool again and remove this one.')}>
+        <input className="field mono" aria-label="Tool id" aria-invalid={errors.id !== undefined} disabled={!adding} maxLength={40} value={draft.id} onChange={(event) => set({ id: event.currentTarget.value })} />
+      </Row>
+      <Row label="It is" id={kindId}>
+        <Segmented<ToolDraft['kind']> labelledBy={kindId} fit options={['program', 'address']} value={draft.kind} optionLabel={(kind) => (kind === 'program' ? 'A program' : 'An address')} onChange={(kind) => set({ kind })} />
+      </Row>
+      {draft.kind === 'program' ? (
+        <>
+          <Row label="Program" hint={errors.command}>
+            <input className="field mono" aria-label="Program" aria-invalid={errors.command !== undefined} placeholder="npx" maxLength={400} value={draft.command} onChange={(event) => set({ command: event.currentTarget.value })} />
+          </Row>
+          <Row label="Arguments" hint={errors.args ?? 'One per line. $NAME takes the value of that environment variable.'}>
+            <textarea className="field wide mono" aria-label="Arguments" aria-invalid={errors.args !== undefined} rows={3} value={draft.args} onChange={(event) => set({ args: event.currentTarget.value })} />
+          </Row>
+          <Row label="Variables" hint={errors.env ?? 'Environment variables the program needs, one name per line; NAME=OTHER when yours is named differently. Never a value.'}>
+            <textarea className="field wide mono" aria-label="Variables" aria-invalid={errors.env !== undefined} rows={2} value={draft.env} onChange={(event) => set({ env: event.currentTarget.value })} />
+          </Row>
+        </>
+      ) : (
+        <>
+          <Row label="Address" hint={errors.url}>
+            <input className="field mono" aria-label="Address" aria-invalid={errors.url !== undefined} placeholder="https://" maxLength={400} value={draft.url} onChange={(event) => set({ url: event.currentTarget.value })} />
+          </Row>
+          <Row label="Headers" hint={errors.headers ?? 'One per line: Header=VARIABLE, the environment variable that holds it. Never a value.'}>
+            <textarea className="field wide mono" aria-label="Headers" aria-invalid={errors.headers !== undefined} rows={2} value={draft.headers} onChange={(event) => set({ headers: event.currentTarget.value })} />
+          </Row>
+        </>
+      )}
+      <Row label="For" id={scopeId} hint={errors.scope ?? (draft.scope === 'agents' ? "Only these agents' runs get it. No app keeps it in its settings." : undefined)}>
+        <Segmented<ToolScope> labelledBy={scopeId} fit options={['all', 'apps', 'agents']} value={draft.scope} optionLabel={(scope) => SCOPE_WORDS[scope]} onChange={(scope) => set({ scope })} />
+        {draft.scope === 'apps' ? (
+          <span className="chips" role="group" aria-label="Apps that get it">
+            {ROSTER_HARNESSES.map((harness) => (
+              <button key={harness} type="button" className={draft.apps.includes(harness) ? 'chip on' : 'chip'} aria-pressed={draft.apps.includes(harness)} onClick={() => set({ apps: toggle(draft.apps, harness) })}>{ROSTER_APP_NAMES[harness]}</button>
+            ))}
+          </span>
+        ) : null}
+        {draft.scope === 'agents' ? (
+          <span className="chips" role="group" aria-label="Agents whose runs get it">
+            {props.data.agents.map((agent) => (
+              <button key={agent.id} type="button" className={draft.agents.includes(agent.id) ? 'chip on' : 'chip'} aria-pressed={draft.agents.includes(agent.id)} onClick={() => set({ agents: toggle(draft.agents, agent.id) })}>{agent.name}</button>
+            ))}
+          </span>
+        ) : null}
+      </Row>
+      <Row label="Public" hint="An app that gets public work only may have it.">
+        <Switch label="The tool is public" on={draft.public} onChange={(next) => set({ public: next })} />
+      </Row>
+      <div className="inline">
+        <button type="button" className="primary" onClick={save}>{adding ? 'Add tool' : 'Done'}</button>
+        <button type="button" onClick={() => props.onDone(null)}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
+/** From your apps…: the entries the apps already hold, and which of them would join the list. */
+export function ToolProposals(props: { found: readonly ToolProposalView[]; data: RosterDataShape | null; onAdd(tools: RosterToolShape[]): void; onCancel(): void }): React.JSX.Element {
+  const { found } = props
+  const fresh = props.data === null ? [] : addable(found, props.data)
+  return (
+    <Sheet title={fresh.length === 0 ? 'Nothing new in your apps' : `Add ${fresh.length} tool${fresh.length === 1 ? '' : 's'} from your apps`} action="Add to your list" busy={false} ready={fresh.length > 0}
+      note={fresh.length === 0 ? undefined : 'Each is kept to the apps that hold it now. Nothing changes until you approve it.'}
+      onConfirm={() => props.onAdd(fresh)} onCancel={props.onCancel}>
+      {found.length === 0 ? <p className="preferences-help">Your apps hold no tool entries.</p> : null}
+      {found.map((proposal, index) => (
+        <div key={`${proposal.id}:${index}`} className="list-line">
+          <div>
+            <b className="mono">{proposal.id}</b> <span className="line-detail">{proposal.apps.map((harness) => ROSTER_APP_NAMES[harness]).join(', ')} · {PROPOSAL_WORDS[proposal.state]}</span>
+            {proposal.notes.filter((note) => note !== 'already on your list').map((note) => <p key={note} className="preferences-help">{note}</p>)}
+          </div>
+        </div>
+      ))}
+    </Sheet>
+  )
+}
+
+function ToolRow(props: { tool: RosterToolShape; view: ToolView | undefined; apps: readonly ToolsAppView[]; team: TeamState; busy: boolean; onEdit(): void }): React.JSX.Element {
+  const { tool, team, view } = props
+  const data = team.data
+  const scoped = ROSTER_HARNESSES.filter((harness) => toolForApp(tool, harness))
+  const locked = data === null || props.busy
+  const needs = toolVariables(tool)
+  const what = `${transportWords(tool)}${needs.length > 0 ? ` · needs ${needs.join(', ')}` : ''}`
+  return (
+    <div className="skill-row tool-row" data-tool={tool.id}>
+      <div className="skill-name">
+        <b>{tool.name}</b>
+        <span className="faint mono" title={what}>{what}</span>
+      </div>
+      <span className="skill-public">
+        <span className="faint">Public</span>
+        <Switch label={`${tool.name} is public`} on={tool.public === true} disabled={locked} onChange={(next) => { if (data) team.stage(setToolPublic(data, tool.id, next)) }} />
+        <button type="button" className="small" disabled={locked} aria-label={`Edit ${tool.name}`} onClick={props.onEdit}>Edit</button>
+        <button type="button" className="small" disabled={locked} aria-label={`Remove ${tool.name}`} title="Takes it off your list; approve to keep that" onClick={() => { if (data) team.stage(removeTool(data, tool.id)) }}>Remove</button>
+      </span>
+      {tool.agents !== undefined ? (
+        <span className="chips" role="group" aria-label={`Agents whose runs get ${tool.name}`}>
+          <span className="faint scope-word">Runs of</span>
+          {tool.agents.map((id) => {
+            const last = tool.agents?.length === 1
+            const name = data?.agents.find((agent) => agent.id === id)?.name ?? id
+            return (
+              <button key={id} type="button" className="chip on" aria-pressed aria-label={`${tool.name} for the runs of ${name}`} disabled={locked || last}
+                title={last ? 'A tool kept to agents needs at least one' : `Stop giving it to the runs of ${name}`} onClick={() => { if (data) team.stage(toggleToolAgent(data, tool.id, id)) }}>{name}</button>
+            )
+          })}
+          <span className="faint">in no app's settings</span>
+        </span>
+      ) : (
+        <span className="chips" role="group" aria-label={`Apps that get ${tool.name}`}>
+          <span className="faint scope-word">{tool.apps === undefined ? 'All apps' : 'Only'}</span>
+          {ROSTER_HARNESSES.map((harness) => {
+            const app = props.apps.find((entry) => entry.harness === harness)
+            const on = toolForApp(tool, harness)
+            const state = view?.states[harness]
+            const name = ROSTER_APP_NAMES[harness]
+            const words = toolStateWords(state, app, on)
+            const last = on && scoped.length === 1
+            return (
+              <button key={harness} type="button" className={on ? 'chip on' : 'chip'} aria-pressed={on} aria-label={`${tool.name} in ${name}: ${words}`} disabled={locked || last}
+                title={last ? 'A tool needs at least one app' : toolStateHint(state, app, on, name, view?.details[harness])} onClick={() => { if (data) team.stage(toggleToolApp(data, tool.id, harness)) }}>
+                {state === 'exposed' || state === 'blocked' || view?.details[harness] !== undefined ? <Dot label="Needs you" /> : null}{name}<span className="chip-state">{words}</span>
+              </button>
+            )
+          })}
+        </span>
+      )}
+      {/* Why an app cannot take the tool, or why its entry there is left alone: said on the page, not only in a hint. */}
+      {tool.agents === undefined ? ROSTER_HARNESSES.flatMap((harness) => {
+        const detail = view?.details[harness]
+        return detail === undefined ? [] : [<p key={harness} className="preferences-help tool-why"><Dot label="Needs you" />In {ROSTER_APP_NAMES[harness]}: {detail}</p>]
+      }) : null}
+    </div>
+  )
+}
+
+function ToolsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Element {
+  const { rules, team } = props
+  const snapshot = rules.snapshot as RulesSnapshot
+  const view = snapshot.tools
+  const pending = rules.pending
+  const data = team.data
+  const tools = data?.tools ?? []
+  const [editor, setEditor] = useState<ToolDraft | null>(null)
+  const [found, setFound] = useState<ToolProposalView[] | null>(null)
+  const [looking, setLooking] = useState(false)
+  const idle = !rules.busy && pending === null && editor === null && found === null
+  const installs = snapshot.transactions.filter((entry) => entry.reason === TOOLS_INSTALL)
+  const count = tools.length
+  // Entries the apps hold that are not on the list, each id once with the apps that hold it.
+  const others = new Map<string, { apps: RosterHarness[]; exposed: boolean }>()
+  for (const app of view.apps) {
+    // One the owner has just added to the list is no longer "not on it", approved or not.
+    for (const entry of app.unlisted.filter((row) => !row.managed && !tools.some((tool) => tool.id === row.id))) {
+      const row = others.get(entry.id) ?? { apps: [], exposed: false }
+      others.set(entry.id, { apps: [...row.apps, app.harness], exposed: row.exposed || entry.state === 'exposed' })
+    }
+  }
+  const look = async (): Promise<void> => {
+    setLooking(true)
+    try {
+      const result = await window.aiTerminal.proposeTools()
+      if (result.ok) setFound(result.proposals)
+      else rules.setNotice({ ok: false, text: result.message ?? "The apps' settings could not be read" })
+    } catch (error) {
+      rules.setNotice({ ok: false, text: failureDetail(error, "The apps' settings could not be read") })
+    } finally {
+      setLooking(false)
+    }
+  }
+  return (
+    <>
+      <PageHead title="Tools" status={`${count} tool${count === 1 ? '' : 's'}`}>
+        {view.pending > 0 ? (
+          <>
+            <Dot label="Needs you" />
+            <span className="muted">{view.pending} to install</span>
+            <button type="button" className={pending?.kind === 'tools' ? undefined : 'primary'} disabled={!idle} onClick={() => void rules.beginToolsInstall(false)}>Install…</button>
+          </>
+        ) : null}
+        <button type="button" disabled={rules.busy} onClick={() => void rules.load()}>{rules.busy && pending === null ? 'Checking…' : 'Check now'}</button>
+      </PageHead>
+      <Notice rules={rules} />
+      {pending?.kind === 'tools' ? <PendingSheet rules={rules} /> : null}
+      {view.error ? <p className="preferences-error" role="alert">{view.error}</p> : null}
+      {view.exposed > 0 ? (
+        <p className="page-note" role="status"><Dot label="Needs you" />{view.exposed === 1 ? 'One tool is in an app that may not have it.' : `${view.exposed} tools are in apps that may not have them.`} Mark the tool Public, or remove its entry in that app.</p>
+      ) : null}
+      <div className="skill-rows">
+        {tools.map((tool) => (
+          <ToolRow key={tool.id} tool={tool} view={view.tools.find((entry) => entry.id === tool.id)} apps={view.apps} team={team} busy={rules.busy || editor !== null}
+            onEdit={() => setEditor(draftFrom(tool))} />
+        ))}
+      </div>
+      {count === 0 ? <p className="preferences-help">No tools on your list yet.</p> : null}
+      {editor !== null && data !== null ? <ToolEditor key={editor.editing ?? 'new'} data={data} start={editor} onDone={(next) => { setEditor(null); if (next) team.stage(next) }} /> : null}
+      {found !== null ? <ToolProposals found={found} data={data} onAdd={(tools) => { if (data) team.stage(withProposals(data, tools)); setFound(null) }} onCancel={() => setFound(null)} /> : null}
+      {editor === null && found === null ? (
+        <div className="inline tool-actions">
+          <button type="button" disabled={data === null || !idle || count >= MAX_TOOLS} onClick={() => setEditor(EMPTY_DRAFT)}>Add tool</button>
+          <button type="button" disabled={data === null || !idle || looking} onClick={() => void look()}>{looking ? 'Reading…' : 'From your apps…'}</button>
+        </div>
+      ) : null}
+      {others.size > 0 ? (
+        <>
+          <h4 className="group-head">In your apps, not on your list<span className="caption">BMN did not write these and leaves them</span></h4>
+          {[...others.entries()].map(([id, row]) => (
+            <div key={id} className="list-line" data-unlisted={id}>
+              <div><b className="mono">{id}</b> <span className="line-detail">{row.exposed ? <Dot label="Needs you" /> : null}{row.apps.map((harness) => ROSTER_APP_NAMES[harness]).join(', ')}{row.exposed ? ' · in an app that gets public work only' : ''}</span></div>
+            </div>
+          ))}
+          <div className="inline tool-actions">
+            <button type="button" className="small" disabled={!idle} onClick={() => void rules.beginToolsInstall(true)}>Remove them from the apps…</button>
+          </div>
+        </>
+      ) : null}
+      <p className="preferences-help">A tool names environment variables and never holds their values. It reaches every app unless you keep it to some apps, or to the runs of some agents. A change here takes effect once you approve it; Install… then updates each app's settings.</p>
+
+      <details className="advanced">
+        <summary>Earlier installs</summary>
+        {installs.length === 0 ? <p className="preferences-help">Nothing yet. Every tools install is kept here.</p> : null}
+        {installs.map((entry) => (
+          <div key={entry.id} className="list-line">
+            <div><b>{entry.valid ? 'Installed' : 'An install that cannot be read'}</b> <span className="line-detail">{shortDate(entry.createdAt)}{entry.targets?.length ? ` · ${entry.targets.map((harness) => ROSTER_APP_NAMES[harness]).join(', ')}` : ''}{entry.valid && entry.state !== 'complete' ? ' · did not finish' : ''}</span></div>
+            <button type="button" className="small" disabled={!idle || !entry.valid} aria-label={`Undo the tools install of ${shortDate(entry.createdAt)}`} onClick={() => void rules.beginUndo(entry.id)}>Undo install…</button>
+          </div>
+        ))}
+        {pending?.kind === 'undo' ? <PendingSheet rules={rules} /> : null}
+      </details>
+    </>
+  )
+}
+
+/** Rules › Health › Tools: one row per app (60.12 AC6). */
+function ToolsHealth(props: { rules: RulesState; action: AppAction | null; setAction(action: AppAction | null): void }): React.JSX.Element {
+  const { rules, action } = props
+  const snapshot = rules.snapshot as RulesSnapshot
+  const view = snapshot.tools
+  return (
+    <>
+      <h4 className="group-head">Tools<span className="caption">where each app keeps its tools, and whether it has the ones it may have</span></h4>
+      {view.error ? <p className="preferences-error" role="alert">{view.error}</p> : null}
+      {view.apps.map((app) => {
+        const name = ROSTER_APP_NAMES[app.harness]
+        const idle = !rules.busy && action === null && rules.pending === null
+        const needs = app.supported && app.state !== 'Set up' && app.state !== 'None'
+        return (
+          <div key={app.harness} className="skills-block">
+            <div className="health-row" data-tools={app.state}>
+              <span>{name}</span>
+              <span className="health-state">
+                <span className="path mono" title={app.path}>{displayPath(app.path, snapshot.home)}</span>
+                {app.link !== undefined ? <span className="faint" title={app.link}>A link: BMN does not write through it</span>
+                  : app.readable ? null : <span className="faint" title={app.detail}>BMN cannot read it</span>}
+              </span>
+              <span className="health-state">
+                <span title={app.reason}>{needs ? <Dot label="Needs you" /> : null}{app.state}{app.supported ? <span className="muted"> · {app.kind === 'full' ? 'Full' : 'Public tools only'}</span> : null}</span>
+                <span className="faint" title={app.test?.detail}>{toolsTestLine(app, shortDate)}</span>
+              </span>
+              <span className="app-actions">
+                <button type="button" className="small" disabled={!idle || app.version === null} aria-label={`Tools test for ${name}`} onClick={() => props.setAction({ kind: 'tools-test', harness: app.harness })}>Test…</button>
+              </span>
+            </div>
+            {action?.kind === 'tools-test' && action.harness === app.harness ? (
+              <Sheet title={`Test where ${name} keeps its tools`} action="Run test" busy={rules.busy} onCancel={() => props.setAction(null)}
+                note={`Starts ${name} in an empty home folder with no sign-in, so nothing is sent. BMN writes one stand-in tool into its settings file there, asks ${name} which tools it sees, and removes the folder. The result is kept for this version.`}
+                onConfirm={() => void rules.run(() => window.aiTerminal.testTools(app.harness)).then(() => props.setAction(null))} />
+            ) : null}
+          </div>
+        )
+      })}
+      <p className="preferences-help">Nothing is written for an app until its test passed on the installed version. Tools inside a project folder, and sessions already running, are outside what BMN installs.</p>
+    </>
+  )
+}
+
 function HealthPage(props: { rules: RulesState; team: TeamState; recognised: RecognisedSessions; onType?: ((name: string, command: string) => void) | undefined }): React.JSX.Element {
   const { rules, team } = props
   const snapshot = rules.snapshot as RulesSnapshot
@@ -1125,7 +1491,9 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
   const withheld = health.state === 'checked' ? health.targets.filter((target) => target.kind === 'public').map((target) => ROSTER_APP_NAMES[target.harness]) : []
   const skillsCount = [
     ...(snapshot.skills.pending > 0 ? [`${snapshot.skills.pending} skill entr${snapshot.skills.pending === 1 ? 'y' : 'ies'} to install`] : []),
-    ...(snapshot.skills.exposed > 0 ? [`${snapshot.skills.exposed} skill${snapshot.skills.exposed === 1 ? '' : 's'} exposed`] : [])
+    ...(snapshot.skills.exposed > 0 ? [`${snapshot.skills.exposed} skill${snapshot.skills.exposed === 1 ? '' : 's'} exposed`] : []),
+    ...(snapshot.tools.pending > 0 ? [`${snapshot.tools.pending} tool entr${snapshot.tools.pending === 1 ? 'y' : 'ies'} to install`] : []),
+    ...(snapshot.tools.exposed > 0 ? [`${snapshot.tools.exposed} tool${snapshot.tools.exposed === 1 ? '' : 's'} exposed`] : [])
   ].join(' · ')
   return (
     <>
@@ -1213,6 +1581,8 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
 
       <SkillsHealth rules={rules} action={action} setAction={setAction} />
 
+      <ToolsHealth rules={rules} action={action} setAction={setAction} />
+
       <ContextLimits rules={rules} action={action} setAction={setAction} />
     </>
   )
@@ -1233,9 +1603,10 @@ export function RulesPreferences(props: {
     shown.current = props.page
     setNotice(null)
   }, [props.page, setNotice])
-  const title = props.page === 'editor' ? 'Rules' : props.page === 'skills' ? 'Skills' : 'Health'
+  const title = props.page === 'editor' ? 'Rules' : props.page === 'skills' ? 'Skills' : props.page === 'tools' ? 'Tools' : 'Health'
   if (rules.loadError && rules.snapshot === null) return <><PageHead title={title} /><p className="preferences-error" role="alert">{rules.loadError}</p></>
   if (rules.snapshot === null) return <><PageHead title={title} /><p className="page-note">Reading the rules…</p></>
   if (props.page === 'skills') return <SkillsPage rules={rules} team={props.team} />
+  if (props.page === 'tools') return <ToolsPage rules={rules} team={props.team} />
   return props.page === 'editor' ? <EditorPage rules={rules} /> : <HealthPage rules={rules} team={props.team} recognised={props.recognised ?? {}} onType={props.onTypeInSession} />
 }

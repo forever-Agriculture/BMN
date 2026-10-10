@@ -3,7 +3,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, re
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, ResearchLookup, ResearchSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan } from '@bmn/protocol'
+import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, ResearchLookup, ResearchSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan, ToolProposalView, ToolsPlan } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { approveRoster, restoreGeneration, saveAndApprove } from './agents-approval'
 import { fileToApproved, installAgentsIpcHandlers, researchEndedWords } from './agents-ipc'
@@ -670,6 +670,123 @@ describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
     expect(approved).toMatchObject({ ok: true })
     expect(file('.config/bmn/agents/roster.md')).toContain('## skills\n\n```yaml\npublic: [alpha]\nonly: {alpha: [codex, opencode]}\n```')
     expect(((await snapshot()).approved?.data as RosterDataShape).skills).toEqual([{ id: 'alpha', public: true, only: ['codex', 'opencode'] }])
+  })
+})
+
+describe('tools on Rules › Tools and Health (60.12 AC1-AC6)', () => {
+  const SECRET = 'sk-SYNTHETIC-SECRET-9f8e7d6c5b4a'
+  /** A stand-in Codex: its list repeats its settings file, and a run told to take only its own tools names only those. */
+  const codexTools = [
+    'if [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi',
+    'alone=""; own=""',
+    'while [ "$1" = "-c" ]; do case "$2" in "mcp_servers={}") alone=1;; mcp_servers.*.command=*) own="${2#mcp_servers.}"; own="${own%%.*}";; esac; shift 2; done',
+    '[ "$1 $2" = "mcp list" ] || exit 4',
+    '[ -n "$alone" ] || cat "$HOME/.codex/config.toml" 2>/dev/null',
+    '[ -z "$own" ] || echo "$own"',
+    'exit 0'
+  ].join('\n')
+  const OWN = `model = "gpt-6.1-sol"\n\n[mcp_servers.search]\ncommand = "search-tool"\nenv = { SEARCH_KEY = "${SECRET}" }\n`
+  const rulesSnapshot = (): Promise<RulesSnapshot> => call('rules:snapshot')
+
+  it('writes nothing before the owner\'s test, proposes what the apps hold without a value, then installs entry by entry and Undo puts the file back', async () => {
+    await approvedAndInstalled()
+    stub('codex', codexTools)
+    mkdirSync(join(home, '.codex'), { recursive: true })
+    writeFileSync(join(home, '.codex/config.toml'), OWN, { mode: 0o600 })
+    const before = (await rulesSnapshot()).tools
+    expect(before).toMatchObject({ pending: 0, exposed: 0, blocked: 0, tools: [] })
+    expect(before.apps.map((app) => [app.harness, app.supported, app.state, app.reason, app.path.replace(home, '~'), app.kind])).toEqual([
+      ['claude', false, 'Not supported yet', 'no test has run on Claude Code 2.1.295', '~/.claude.json', 'full'],
+      ['codex', false, 'Not supported yet', 'no test has run on Codex 0.161.0', '~/.codex/config.toml', 'full'],
+      ['opencode', false, 'Not supported yet', 'OpenCode is not installed, or its version cannot be read', '~/.config/opencode/opencode.jsonc', 'public'],
+      ['cursor', false, 'Not supported yet', 'Cursor is not installed, or its version cannot be read', '~/.cursor/mcp.json', 'public']
+    ])
+
+    // What Codex already holds is proposed as a tool kept to Codex, without the value its entry held.
+    const found = await call<{ ok: boolean; proposals: ToolProposalView[] }>('rules:tools-proposals')
+    expect(found).toEqual({ ok: true, proposals: [{
+      id: 'search', state: 'secret', apps: ['codex'], tool: { id: 'search', name: 'Search', command: 'search-tool', apps: ['codex'] },
+      notes: ['holds a value inline (Codex env.SEARCH_KEY): move this value into an environment variable; it was left out and the tool cannot be installed until then']
+    }] })
+
+    const data = (await snapshot()).file.data as RosterDataShape
+    const staged: RosterDataShape = { ...data, tools: [{ id: 'docs', name: 'Docs', url: 'https://docs.example.test/mcp', public: true }, found.proposals[0]!.tool!] }
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: staged } })
+    expect(preview.valid).toBe(true)
+    expect(preview.differences.map((diff) => [diff.scope, diff.id, diff.kind])).toEqual([['tools', 'docs', 'added'], ['tools', 'search', 'added']])
+    expect(preview.consequences).toEqual(['Tool Docs would reach Claude Code, Codex, OpenCode and Cursor', 'Tool Search would reach Codex'])
+    expect(await call<AgentsOutcome>('agents:save', { shown: await shown(), data: staged, teamUpdate: bindings(preview) })).toMatchObject({ ok: true })
+    expect(file('.config/bmn/agents/roster.md')).toContain('## tools\n\n```yaml\ndocs: {name: Docs, url: "https://docs.example.test/mcp", public: true}\nsearch: {name: Search, command: search-tool, apps: [codex]}\n```')
+    expect(await call<ToolsPlan>('rules:tools-plan')).toMatchObject({ ok: false, code: 'TOOLS_UNSUPPORTED', planHash: null, targets: [] })
+    expect(file('.codex/config.toml')).toBe(OWN)
+
+    const tested = await call<RulesOutcome>('rules:tools-test', { harness: 'codex' })
+    expect(tested).toMatchObject({ ok: true, message: 'Codex tools test passed: Codex reads its tools from ~/.codex/config.toml; its own list names the environment variable a tool is given; a run can be given only its own tools' })
+    expect(readdirSync(home).filter((name) => name.startsWith('.bmn-tools-test-'))).toEqual([])
+    expect(file('.codex/config.toml')).toBe(OWN)
+    expect(tested.snapshot.tools).toMatchObject({ pending: 1, exposed: 0, blocked: 1 })
+    expect(tested.snapshot.tools.apps[1]).toMatchObject({ supported: true, state: 'Differs', variable: true, isolation: true, test: { outcome: 'pass', version: '0.161.0' }, unlisted: [] })
+    expect(tested.snapshot.tools.tools).toEqual([
+      { id: 'docs', states: { codex: 'missing' }, details: {} },
+      { id: 'search', states: { codex: 'unmanaged' }, details: { codex: 'it holds a value inline (env.SEARCH_KEY): move it into an environment variable, then name the variable in the tool' } }
+    ])
+
+    const plan = await call<ToolsPlan>('rules:tools-plan')
+    expect(plan).toMatchObject({ ok: true, removeUnlisted: false, exposed: [] })
+    expect(plan.targets).toEqual([{ harness: 'codex', tool: 'docs', path: join(home, '.codex/config.toml'), action: 'set', words: 'adds the tool', before: null, after: '[mcp_servers.docs]\nurl = "https://docs.example.test/mcp"' }])
+    // The entry that holds a value is left alone, and the plan says what to do about it.
+    expect(plan.blocked).toEqual([{ harness: 'codex', tool: 'search', fix: 'it holds a value inline (env.SEARCH_KEY): move it into an environment variable, then name the variable in the tool' }])
+    expect(await call<RulesOutcome>('rules:tools-install', { planHash: 'f'.repeat(64) })).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    expect(file('.codex/config.toml')).toBe(OWN)
+    const installed = await call<RulesOutcome>('rules:tools-install', { planHash: plan.planHash })
+    expect(installed).toMatchObject({ ok: true, message: 'Changed 1 tool entry. Sessions started before this keep the tools they had. 1 could not be changed.' })
+    // Only the one entry was added: every byte the file held is still there.
+    expect(file('.codex/config.toml')).toBe(`${OWN}\n[mcp_servers.docs]\nurl = "https://docs.example.test/mcp"\n`)
+    expect(installed.snapshot.tools).toMatchObject({ pending: 0, blocked: 1 })
+    expect(installed.snapshot.tools.tools[0]).toEqual({ id: 'docs', states: { codex: 'current' }, details: {} })
+    // No value an entry held reached the page, in any answer.
+    expect(JSON.stringify([before, found, preview, tested, plan, installed])).not.toContain(SECRET)
+
+    const transaction = installed.snapshot.transactions[0]!
+    expect(transaction).toMatchObject({ reason: 'tools install', targets: ['codex'], state: 'complete' })
+    const undo = await call<RulesPlan>('rules:plan-restore', { transaction: transaction.id })
+    expect(undo.targets).toEqual([{ harness: 'codex', path: join(home, '.codex/config.toml'), kind: 'removed (it was not there)', change: 'missing', diff: '', note: 'Only this entry changes; the rest of the file stays as it is now.', entry: 'docs' }])
+    expect(file('.codex/config.toml')).toContain('[mcp_servers.docs]')
+    expect(await call<RulesOutcome>('rules:restore', { transaction: transaction.id, planHash: undo.planHash })).toMatchObject({ ok: true, message: 'Put back the tools in Codex' })
+    expect(file('.codex/config.toml')).toBe(OWN)
+    await expect(call('rules:tools-test', { harness: 'vim' })).rejects.toThrow()
+  })
+
+  it('removes entries that are not on the list only when asked, each shown first', async () => {
+    await approvedAndInstalled()
+    stub('codex', codexTools)
+    mkdirSync(join(home, '.codex'), { recursive: true })
+    const kept = 'model = "gpt-6.1-sol"\n\n[mcp_servers.old]\ncommand = "old-tool"\n'
+    writeFileSync(join(home, '.codex/config.toml'), kept, { mode: 0o600 })
+    const data = (await snapshot()).file.data as RosterDataShape
+    const staged: RosterDataShape = { ...data, tools: [{ id: 'docs', name: 'Docs', url: 'https://docs.example.test/mcp' }] }
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: staged } })
+    expect(await call<AgentsOutcome>('agents:save', { shown: await shown(), data: staged, teamUpdate: bindings(preview) })).toMatchObject({ ok: true })
+    const tested = await call<RulesOutcome>('rules:tools-test', { harness: 'codex' })
+    expect(tested.snapshot.tools.apps[1]).toMatchObject({ supported: true, unlisted: [{ id: 'old', state: 'unmanaged', managed: false }] })
+    // An ordinary install leaves the entry BMN did not write.
+    expect((await call<ToolsPlan>('rules:tools-plan')).targets.map((target) => [target.tool, target.action])).toEqual([['docs', 'set']])
+    const plan = await call<ToolsPlan>('rules:tools-plan', { removeUnlisted: true })
+    expect(plan).toMatchObject({ ok: true, removeUnlisted: true })
+    expect(plan.targets.map((target) => [target.tool, target.action, target.before, target.after])).toEqual([
+      ['docs', 'set', null, '[mcp_servers.docs]\nurl = "https://docs.example.test/mcp"'], ['old', 'remove', '[mcp_servers.old]\ncommand = "old-tool"', null]
+    ])
+    // The plan that was shown is the one that is installed: the same hash without the removal is refused.
+    expect(await call<RulesOutcome>('rules:tools-install', { planHash: plan.planHash })).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    expect(file('.codex/config.toml')).toBe(kept)
+    expect(await call<RulesOutcome>('rules:tools-install', { planHash: plan.planHash, removeUnlisted: true })).toMatchObject({ ok: true, message: 'Changed 2 tool entries. Sessions started before this keep the tools they had.' })
+    expect(file('.codex/config.toml')).toBe('model = "gpt-6.1-sol"\n\n[mcp_servers.docs]\nurl = "https://docs.example.test/mcp"\n')
+    const state = await rulesSnapshot()
+    expect(state.tools).toMatchObject({ pending: 0, exposed: 0, blocked: 0 })
+    const undo = await call<RulesPlan>('rules:plan-restore', { transaction: state.transactions[0]!.id })
+    expect(undo.targets.map((target) => [target.entry, target.change])).toEqual([['old', 'entry'], ['docs', 'missing']])
+    expect(await call<RulesOutcome>('rules:restore', { transaction: state.transactions[0]!.id, planHash: undo.planHash })).toMatchObject({ ok: true })
+    expect(file('.codex/config.toml')).toBe(kept)
   })
 })
 
