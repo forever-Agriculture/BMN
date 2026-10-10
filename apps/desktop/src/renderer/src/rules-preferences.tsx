@@ -283,8 +283,11 @@ export function useRulesState(): RulesState {
       if (then === 'install' && outcome.ok && pending.kind === 'save') {
         try {
           const plan = await window.aiTerminal.planRulesInstall()
-          if (plan.ok) setPending({ kind: 'install', plan })
-          else setNotice({ ok: false, text: `Saved, not installed. ${plan.message ?? 'Install cannot run now'}` })
+          if (plan.ok) {
+            // The install sheet under it says what is still to do.
+            setNotice({ ok: true, text: 'Saved' })
+            setPending({ kind: 'install', plan })
+          } else setNotice({ ok: false, text: `Saved, not installed. ${plan.message ?? 'Install cannot run now'}` })
         } catch (error) {
           setNotice({ ok: false, text: `Saved, not installed. ${failureDetail(error, 'Could not prepare the install')}` })
         }
@@ -376,7 +379,7 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
     case 'save':
       return (
         <Sheet {...common} title={pending.plan.valid ? `Save the rules · ${diffSummary(pending.plan.diff)}` : 'These rules cannot be saved'} action="Save" ready={pending.plan.valid && pending.plan.diff !== ''}
-          note={pending.plan.valid ? 'The text before this save is kept under Earlier versions. Save installs nothing; Save and install… then shows each app\'s file first.' : 'An app could not read them as written.'}
+          note={pending.plan.valid ? 'The text before this save is kept under Earlier versions.' : 'An app could not read them as written.'}
           also={pending.plan.valid ? { label: 'Save and install…', onClick: () => void rules.confirm('install') } : undefined}>
           <Issues issues={pending.plan.errors} />
           <LinkNote link={pending.plan.expectedLink} home={home} what="The rules file" />
@@ -587,9 +590,36 @@ export function sessionsWords(name: string, count: number): string {
 /** What a check after an update read, said as only that: what the selected program reports now and before. */
 export function recheckWords(before: string | null, after: string | null): string {
   if (after === null) return 'BMN could not read the installed version.'
-  if (before === null) return `The selected program now reports ${after}.`
-  return before === after ? `The selected program still reports ${after}.` : `The selected program now reports ${after}; before it reported ${before}.`
+  if (before === null) return `The program now reports ${after}.`
+  return before === after ? `The program still reports ${after}.` : `The program now reports ${after}; before it reported ${before}.`
 }
+
+/**
+ * What each app's program reported when its update command was copied, or a check was asked from
+ * its sheet, and the check that read it. Kept while BMN runs: the owner runs the command in a
+ * terminal, often with Preferences closed, and the answer is there when he comes back.
+ */
+const updateWatches = new Map<RosterHarness, { before: string | null; checkedAt: string }>()
+
+/** Remembers what `app` reports now, unless an update of it is already being watched. */
+export function watchUpdate(app: Pick<AgentAppView, 'harness' | 'version'>, checkedAt: string): void {
+  if (!updateWatches.has(app.harness)) updateWatches.set(app.harness, { before: app.version, checkedAt })
+}
+
+/** What a later check read for a watched app, in words; null before any later check, and for an app not watched. */
+export function watchedWords(app: Pick<AgentAppView, 'harness' | 'version'>, checkedAt: string): string | null {
+  const watch = updateWatches.get(app.harness)
+  return watch === undefined || watch.checkedAt === checkedAt ? null : recheckWords(watch.before, app.version)
+}
+
+/** Ends the watch of the given apps, or of all of them. */
+export function forgetUpdateWatches(apps?: Iterable<RosterHarness>): void {
+  if (apps === undefined) updateWatches.clear()
+  else for (const harness of apps) updateWatches.delete(harness)
+}
+
+/** Health reads the machine again by itself when it was last read longer ago than this. */
+const HEALTH_STALE_MS = 15_000
 
 /**
  * The app's own updater, shown before anything runs: which program, the exact command, what BMN
@@ -597,9 +627,9 @@ export function recheckWords(before: string | null, after: string | null): strin
  */
 export function UpdateSheet(props: {
   app: AgentAppView; home: string | null; sessions: number; hasTest: boolean; busy: boolean
-  /** What the last Check now from this sheet read, or null before one. */
+  /** What a check after the command was copied read, or null before one. */
   result: string | null
-  onCheck(): void; onClose(): void
+  onCopied(): void; onCheck(): void; onClose(): void
 }): React.JSX.Element {
   const { app } = props
   const name = ROSTER_APP_NAMES[app.harness]
@@ -609,6 +639,7 @@ export function UpdateSheet(props: {
   useEffect(() => sheet.current?.focus(), [])
   const copy = (): void => {
     if (command === null) return
+    props.onCopied()
     window.aiTerminal.writeClipboardText(command).then(() => setCopied('Copied'), () => setCopied('Could not copy the command.'))
   }
   return (
@@ -626,7 +657,7 @@ export function UpdateSheet(props: {
         <span>Command</span><span className="mono wrap">{command ?? 'no program found'}</span>
         <span>Open in BMN</span><span>{sessionsWords(name, props.sessions)}</span>
         <span>Afterwards</span>
-        <span>Run the command in a terminal, then press Check now: BMN reads the version and where {name} sends data again.{props.hasTest ? ' A loading test made before the update needs to be run again.' : ''}</span>
+        <span>Run the command in a terminal. When you come back to Health, BMN reads the version and where {name} sends data again.{props.hasTest ? ' A loading test made before the update needs to be run again.' : ''}</span>
       </div>
       <p className="preferences-help">The updater decides what it downloads and replaces, and may ask questions; BMN does not see that in advance and cannot undo it. BMN does not know whether a newer version exists.</p>
       {props.result ? <p role="status">{props.result}</p> : null}
@@ -662,7 +693,8 @@ function DestinationSheet(props: { app: AgentAppView; data: RosterDataShape; onD
             {inspected.name}'s own servers <span className="choice-line">as BMN inspected it just now; checked again when you approve</span>
           </label>
         ) : <p className="preferences-help">BMN can't confirm where {name} sends data{app.reason ? ` (${app.reason})` : ''}, so only your word can be recorded.</p>}
-        {data.providers.map((provider) => (
+        {/* The inspected provider on the owner's word would only take private work away from the app; it is offered once, as inspected. */}
+        {data.providers.filter((provider) => provider.id !== inspected?.id).map((provider) => (
           <label key={provider.id} className="choice">
             <input type="radio" name={`destination-${app.harness}`} checked={choice === provider.id} onChange={() => setChoice(provider.id)} />
             {provider.name} <span className="choice-line">on your word</span>
@@ -678,8 +710,32 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
   const { rules, team } = props
   const snapshot = rules.snapshot as RulesSnapshot
   const [action, setAction] = useState<AppAction | null>(null)
-  // The version an app read when Check now was pressed on its Update sheet, and the check it was read by.
-  const [watch, setWatch] = useState<{ harness: RosterHarness; before: string | null; checkedAt: string } | null>(null)
+  const [, redraw] = useState(0)
+  // Apps whose before-and-now line was shown on this visit: said once, their watch ends when the owner leaves Health.
+  const told = useRef(new Set<RosterHarness>())
+  useEffect(() => {
+    const shown = told.current
+    return () => forgetUpdateWatches(shown)
+  }, [])
+  const top = useRef<HTMLHeadingElement | null>(null)
+  const { load } = rules
+  const checkedAt = snapshot.health.checkedAt
+  // What Health shows is read from this machine, so BMN reads it again when the owner comes back: on opening
+  // the page after a while and when the window gets the focus. Never under an unsaved draft or an open confirmation.
+  const quiet = !rules.busy && rules.pending === null && !rules.dirty
+  const arrived = useRef(false)
+  useEffect(() => {
+    if (arrived.current) return
+    arrived.current = true
+    if (quiet && Date.now() - Date.parse(checkedAt) > HEALTH_STALE_MS) void load()
+  }, [quiet, checkedAt, load])
+  useEffect(() => {
+    if (!quiet) return
+    // The page stays mounted, hidden, while the owner is elsewhere in Preferences.
+    const onFocus = (): void => { if (top.current !== null && top.current.offsetParent !== null) void load() }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [quiet, load])
   const opener = useRef<HTMLButtonElement | null>(null)
   // Update… is off while its sheet is open, so the focus can go back to it only once the sheet has gone.
   useEffect(() => {
@@ -698,7 +754,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
         <button type="button" disabled={rules.busy} onClick={() => void rules.load()}>{rules.busy && pending === null ? 'Checking…' : 'Check now'}</button>
       </PageHead>
       <Notice rules={rules} />
-      <h4 className="group-head">Rules files</h4>
+      <h4 className="group-head" ref={top}>Rules files</h4>
       {health.state === 'failed' ? <p className="preferences-error" role="alert">{health.reason}</p> : health.targets.map((target) => {
         const test = snapshot.probes.find((entry) => entry.harness === target.harness)
         return (
@@ -725,22 +781,27 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
         const name = ROSTER_APP_NAMES[app.harness]
         const route = data?.harness_routes.find((entry) => entry.harness === app.harness)
         const accepted = route?.accepted_versions ?? []
+        const updating = action?.kind === 'update' && action.harness === app.harness
+        const reports = watchedWords(app, health.checkedAt)
+        if (reports !== null) told.current.add(app.harness)
         return (
           <div key={app.harness} className="app-block">
             <div className="health-row">
               <span>{name}</span>
               <span className="health-state">
-                <span><span className="mono">{app.version ?? 'not found'}</span> <span className="muted" title={app.versionNote}>· {VERSION_WORDS[app.versionState]}</span></span>
-                {app.program ? <span className="path mono" title={app.program}>{displayPath(app.program, snapshot.home)}</span> : <span className="faint">Program not found</span>}
+                {app.version === null
+                  ? <span className="mono" title={app.versionNote}>{app.program ? 'version not read' : 'not found'}</span>
+                  : <span><span className="mono">{app.version}</span> <span className="muted" title={app.versionNote}>· {VERSION_WORDS[app.versionState]}</span></span>}
+                {app.program ? <span className="path mono wrap" title={app.program}>{displayPath(app.program, snapshot.home)}</span> : null}
               </span>
               <span className="health-state">
                 <span>{destinationWords(app, providerName)}</span>
                 <span className="faint">{route ? `Recorded: ${providerName(route.provider)}, ${route.basis === 'observed-default' ? 'as inspected' : 'on your word'}` : 'No destination recorded'}</span>
               </span>
               <span className="app-actions">
-                <button type="button" className="small" disabled={app.program === null || action !== null} aria-label={`Update ${name}`} aria-expanded={action?.kind === 'update' && action.harness === app.harness}
+                <button type="button" className="small" disabled={app.program === null || action !== null} aria-label={`Update ${name}`} aria-expanded={updating}
                   title={app.program === null ? `BMN finds no ${name} program to update` : undefined}
-                  onClick={(event) => { opener.current = event.currentTarget; setWatch(null); setAction({ kind: 'update', harness: app.harness }) }}>Update…</button>
+                  onClick={(event) => { opener.current = event.currentTarget; setAction({ kind: 'update', harness: app.harness }) }}>Update…</button>
                 <button type="button" className="small" disabled={data === null || action !== null} aria-label={`Set the destination of ${name}`} onClick={() => setAction({ kind: 'destination', harness: app.harness })}>Set destination…</button>
               </span>
             </div>
@@ -756,13 +817,13 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
             ) : null}
             {action?.kind === 'destination' && action.harness === app.harness && data
               ? <DestinationSheet app={app} data={data} onDone={(next) => { setAction(null); if (next) team.stage(next) }} /> : null}
-            {action?.kind === 'update' && action.harness === app.harness ? (
+            {updating ? (
               <UpdateSheet app={app} home={snapshot.home} sessions={props.recognised[app.harness] ?? 0} busy={rules.busy}
-                hasTest={snapshot.probes.some((entry) => entry.harness === app.harness && entry.outcome !== null)}
-                result={watch !== null && watch.harness === app.harness && watch.checkedAt !== health.checkedAt ? recheckWords(watch.before, app.version) : null}
-                onCheck={() => { setWatch({ harness: app.harness, before: watch?.harness === app.harness ? watch.before : app.version, checkedAt: health.checkedAt }); void rules.load() }}
-                onClose={() => { setAction(null); setWatch(null) }} />
-            ) : null}
+                hasTest={snapshot.probes.some((entry) => entry.harness === app.harness && entry.outcome !== null)} result={reports}
+                onCopied={() => watchUpdate(app, health.checkedAt)}
+                onCheck={() => { watchUpdate(app, health.checkedAt); redraw((count) => count + 1); void rules.load() }}
+                onClose={() => setAction(null)} />
+            ) : reports !== null ? <p className="app-note" role="status">{reports}</p> : null}
           </div>
         )
       })}
@@ -773,8 +834,15 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
 
 export function RulesPreferences(props: { rules: RulesState; team: TeamState; page: RulesPage; recognised?: RecognisedSessions }): React.JSX.Element {
   const { rules } = props
-  const { ensure } = rules
+  const { ensure, setNotice } = rules
   useEffect(() => ensure(), [ensure])
+  // A notice reports what was done on one page; it does not follow the owner to the other.
+  const shown = useRef(props.page)
+  useEffect(() => {
+    if (shown.current === props.page) return
+    shown.current = props.page
+    setNotice(null)
+  }, [props.page, setNotice])
   const title = props.page === 'editor' ? 'Rules' : 'Health'
   if (rules.loadError && rules.snapshot === null) return <><PageHead title={title} /><p className="preferences-error" role="alert">{rules.loadError}</p></>
   if (rules.snapshot === null) return <><PageHead title={title} /><p className="page-note">Reading the rules…</p></>

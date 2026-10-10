@@ -111,18 +111,19 @@ export function modelSuggestions(data: RosterDataShape, harness: RosterHarness, 
 }
 
 /**
- * Where the name in the field came from, then the one thing BMN cannot promise about any name.
- * `approved` is the model the approved team holds for the agent being edited.
+ * Where the name in the field came from. A name the owner typed or took from another agent also
+ * gets the one thing BMN cannot promise about it; the approved name and a name the app itself
+ * reported need no such note. `approved` is the model the approved team holds for the agent being edited.
  */
 export function modelSourceWords(value: string, data: RosterDataShape, harness: RosterHarness, reported: readonly ReportedModel[], options: { self?: string; approved?: string } = {}): string {
   const name = value.trim()
   if (name === '') return ''
   const app = ROSTER_APP_NAMES[harness]
   const row = modelSuggestions(data, harness, reported, null, options.self).flatMap((group) => group.rows).find((entry) => entry.name === name)
-  const source = options.approved !== undefined && options.approved === name ? 'From the approved team'
-    : row?.source === 'team' && row.agents.length > 0 ? `From your team: ${names(row.agents)} ${row.agents.length === 1 ? 'uses' : 'use'} it`
-      : row?.source === 'reported' || (row?.source === 'team' && reported.some((entry) => entry.harness === harness && entry.model === name)) ? `Reported by ${app} in an open session`
-        : 'Typed by you'
+  if (options.approved !== undefined && options.approved === name) return 'From the approved team.'
+  const used = row?.source === 'team' && row.agents.length > 0
+  if (!used && (row?.source === 'reported' || (row?.source === 'team' && reported.some((entry) => entry.harness === harness && entry.model === name)))) return `Reported by ${app} in an open session.`
+  const source = used ? `From your team: ${names(row.agents)} ${row.agents.length === 1 ? 'uses' : 'use'} it` : 'Typed by you'
   return `${source}. BMN does not check that ${app} takes this name.`
 }
 

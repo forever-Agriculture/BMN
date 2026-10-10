@@ -29,6 +29,7 @@ import {
   addAgent,
   addRole,
   agentGroups,
+  changeModel,
   agentsOnProvider,
   classBar,
   consequenceWords,
@@ -426,6 +427,11 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
   const before = team.approved?.agents.find((entry) => entry.id === agent.id)
   const renamed = before !== undefined && before.model !== agent.model ? before.model : null
   const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+  // Another agent on the new model: what the team recorded for it was taken over with the name.
+  const twin = renamed === null ? undefined : modelTwin({ ...data, agents: data.agents.filter((entry) => entry.id !== agent.id) }, agent.harness, agent.provider, agent.model)
+  const twinPrice = twin?.price !== undefined && same(agent.price, twin.price)
+  const twinCapacity = twin?.context_window !== undefined && agent.context_window === twin.context_window
+  const oldPrice = renamed !== null && agent.price !== undefined && !twinPrice && same(agent.price, before?.price)
   const saved = team.snapshot?.file.prose[agent.id]
   const [notes, setNotes] = useState(team.pendingNotes[agent.id] ?? saved ?? '')
   const [asking, setAsking] = useState(false)
@@ -466,18 +472,19 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
       </Row>
       <Row label="Model">
         <ModelField value={agent.model} hint={modelSourceWords(agent.model, data, agent.harness, props.reported, { self: agent.id, ...(before ? { approved: before.model } : {}) })}
-          suggest={(query) => modelSuggestions(data, agent.harness, props.reported, query, agent.id)} onChange={(model) => patch({ model })} />
+          suggest={(query) => modelSuggestions(data, agent.harness, props.reported, query, agent.id)} onChange={(model) => team.stage(changeModel(data, agent.id, model, before))} />
       </Row>
       <PrivateWorkRow team={team} data={data} agent={agent} />
-      <Row label="Price" hint={renamed !== null && agent.price && same(agent.price, before?.price) ? `Recorded for ${renamed}. Clear it unless the new model costs the same.`
+      <Row label="Price" hint={twinPrice && twin ? `Taken from ${twin.name}, which uses the same model.`
+        : oldPrice ? `Recorded for ${renamed}. Clear it unless the new model costs the same.`
         : agent.price ? [agent.price.source ? hostOf(agent.price.source) : null, agent.price.as_of].filter(Boolean).join(', ') || undefined : 'No price recorded.'}>
         <span className="mono">{price ?? '—'}</span>{price ? <span className="faint"> per M tokens, in / out</span> : null}
-        {renamed !== null && agent.price && same(agent.price, before?.price) ? <button type="button" className="small" aria-label={`Clear the price recorded for ${renamed}`} onClick={() => patch({ price: undefined })}>Clear</button> : null}
+        {oldPrice ? <button type="button" className="small" aria-label={`Clear the price recorded for ${renamed}`} onClick={() => patch({ price: undefined })}>Clear</button> : null}
       </Row>
       <Row label="Context limit" hint="Empty means the app's own default.">
         <div className="inline">
           <NumberField label="Context limit" value={agent.context_limit} placeholder="App default" onChange={(next) => patch({ context_limit: next })} />
-          <span className="faint">{agent.context_window ? `of ${thousands(agent.context_window)} tokens${renamed !== null && agent.context_window === before?.context_window ? `, recorded for ${renamed}` : ''}` : 'capacity unknown'}</span>
+          <span className="faint">{agent.context_window ? `of ${thousands(agent.context_window)} tokens${twinCapacity && twin ? `, taken from ${twin.name}` : renamed !== null && agent.context_window === before?.context_window ? `, recorded for ${renamed}` : ''}` : 'capacity unknown'}</span>
         </div>
       </Row>
 
@@ -535,8 +542,11 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
   const answer: RosterPrivateWork = landing.isNew ? draft.privateWork : known?.private_work ?? 'public_only'
   const declared = landing.host === null
     && (data.harness_routes.find((route) => route.harness === draft.harness)?.basis ?? unrecordedBasis(draft.harness, landing.provider.id, props.apps)) === 'owner-declared'
-  const ready = draft.name.trim() !== '' && draft.model.trim() !== '' && draft.efforts.length > 0
   const twin = modelTwin(data, draft.harness, landing.provider.id, draft.model)
+  // Until the owner picks efforts himself, a new agent takes the ones of an agent on the same model.
+  const [ownEfforts, setOwnEfforts] = useState(false)
+  const efforts = ownEfforts || !twin ? draft.efforts : twin.efforts
+  const ready = draft.name.trim() !== '' && draft.model.trim() !== '' && efforts.length > 0
   return (
     <>
       <PageHead title={<><button type="button" className="crumb" onClick={() => props.go({ name: 'agents' })}>Team</button> <span className="faint">›</span> New agent</>} />
@@ -582,15 +592,18 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
         <RoleChoices data={data} agentClass={draft.class} held={draft.roles}
           onToggle={(role) => set({ roles: draft.roles.includes(role) ? draft.roles.filter((entry) => entry !== role) : [...draft.roles, role] })} />
       </Row>
-      <Row label="Efforts">
-        <EffortChips efforts={draft.efforts} onToggle={(effort) => set({ efforts: ROSTER_EFFORTS.filter((entry) => (entry === effort ? !draft.efforts.includes(entry) : draft.efforts.includes(entry))) })} />
+      <Row label="Efforts" hint={!ownEfforts && twin ? `Taken from ${twin.name}, which uses the same model.` : undefined}>
+        <EffortChips efforts={efforts} onToggle={(effort) => {
+          setOwnEfforts(true)
+          set({ efforts: ROSTER_EFFORTS.filter((entry) => (entry === effort ? !efforts.includes(entry) : efforts.includes(entry))) })
+        }} />
       </Row>
       <div className="page-foot">
         <span className="muted">{newAgentConsequence(draft.name, landing.provider.name, answer, declared)}</span>
         <span className="spacer" />
         <button type="button" onClick={() => props.go({ name: 'agents' })}>Cancel</button>
         <button type="button" className="primary" disabled={!ready} onClick={() => {
-          const added = addAgent(data, draft, props.apps)
+          const added = addAgent(data, { ...draft, efforts }, props.apps)
           team.stage(added.data)
           if (notes.trim() !== '') team.setPendingNote(added.id, notes)
           props.go({ name: 'agents' })
@@ -603,7 +616,6 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
 // ---------------------------------------------------------------------------------------------
 // Team › Roles
 
-/** A chain in words and pieces: who gets the work in order, then what happens when all of them fail. */
 /** A role's candidates in order, each as its piece, name and effort. */
 function Steps(props: { candidates: readonly string[]; data: RosterDataShape }): React.JSX.Element {
   const { candidates, data } = props
@@ -643,7 +655,11 @@ function Difference(props: { line: DiffLine; data: RosterDataShape | null }): Re
   const { line, data } = props
   const side = (candidates: string[] | null | undefined, words: string): ReactNode =>
     candidates && data ? <span className="chain"><Steps candidates={candidates} data={data} /></span> : words
-  return <><span className="muted">{line.field}:</span> {side(line.chain?.before, line.before)} → {side(line.chain?.after, line.after)}</>
+  const field = <span className="muted">{line.field}:</span>
+  // Something that was not there before, or is gone, is said as that: an arrow from or to nothing reads as noise.
+  if (!line.chain && line.before === '—') return <>{field} {line.after}{line.detail === true || line.after === 'added' ? null : <span className="muted"> · new</span>}</>
+  if (!line.chain && (line.after === '—' || (line.before === 'present' && line.after === 'removed'))) return <>{field} {line.after === '—' ? line.before : 'removed'}{line.detail === true || line.after === 'removed' ? null : <span className="muted"> · removed</span>}</>
+  return <>{field} {side(line.chain?.before, line.before)} → {side(line.chain?.after, line.after)}</>
 }
 
 function ChainEditor(props: { team: TeamState; data: RosterDataShape; role: RosterRoleShape }): React.JSX.Element {
@@ -845,7 +861,7 @@ export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?:
     return (
       <>
         <PageHead title="Team" status="The team file needs fixing">
-          <button type="button" onClick={() => void team.reload()}>Check again</button>
+          <button type="button" onClick={() => void team.reload()}>Check now</button>
         </PageHead>
         <p className="page-note">BMN cannot read <span className="mono">{displayPath(snapshot.rosterPath, snapshot.home)}</span>. Nothing in it takes effect until it is fixed and approved.</p>
         <Issues issues={snapshot.file.errors} />

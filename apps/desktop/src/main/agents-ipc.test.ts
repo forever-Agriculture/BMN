@@ -148,7 +148,7 @@ describe('an approval that changes the Team phrase (60.4 AC6)', () => {
     expect(rules.health).toMatchObject({ state: 'checked', ok: true })
     // Undo is the ordinary restore of that one transaction.
     const undo = await call<RulesPlan>('rules:plan-restore', { transaction })
-    expect(await call<RulesOutcome>('rules:restore', { transaction, planHash: undo.planHash })).toMatchObject({ ok: true, message: 'Put back Claude Code, Codex' })
+    expect(await call<RulesOutcome>('rules:restore', { transaction, planHash: undo.planHash })).toMatchObject({ ok: true, message: 'Put back the rules in Claude Code and Codex' })
     expect(file('.claude/CLAUDE.md')).not.toContain('Haiku')
   })
 

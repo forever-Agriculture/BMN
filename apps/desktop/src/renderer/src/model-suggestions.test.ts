@@ -78,13 +78,14 @@ describe('model suggestions (60.5: the Model field)', () => {
     expect(modelSourceWords('anything-typed', DATA, 'claude', REPORTED)).toBe(`Typed by you.${tail}`)
     expect(modelSourceWords(' synthetic-small-5 ', DATA, 'claude', REPORTED)).toBe(`From your team: Haiku and Scout use it.${tail}`)
     expect(modelSourceWords('synthetic-art-5', DATA, 'claude', REPORTED)).toBe(`From your team: Fable uses it.${tail}`)
-    expect(modelSourceWords('synthetic-large-6', DATA, 'claude', REPORTED)).toBe(`Reported by Claude Code in an open session.${tail}`)
+    // What the app itself reported, and the name already approved, carry no caveat: it would say nothing new.
+    expect(modelSourceWords('synthetic-large-6', DATA, 'claude', REPORTED)).toBe('Reported by Claude Code in an open session.')
     // An agent's own approved name is the team's; once it is changed to a reported one, the report is the source.
-    expect(modelSourceWords('synthetic-large-5', DATA, 'claude', REPORTED, { self: 'opus', approved: 'synthetic-large-5' })).toBe(`From the approved team.${tail}`)
-    expect(modelSourceWords('synthetic-large-6', DATA, 'claude', REPORTED, { self: 'opus', approved: 'synthetic-large-5' })).toBe(`Reported by Claude Code in an open session.${tail}`)
+    expect(modelSourceWords('synthetic-large-5', DATA, 'claude', REPORTED, { self: 'opus', approved: 'synthetic-large-5' })).toBe('From the approved team.')
+    expect(modelSourceWords('synthetic-large-6', DATA, 'claude', REPORTED, { self: 'opus', approved: 'synthetic-large-5' })).toBe('Reported by Claude Code in an open session.')
     // A name is matched exactly: another spelling is the owner's own typing.
     expect(modelSourceWords('SYNTHETIC-ART-5', DATA, 'claude', REPORTED)).toBe(`Typed by you.${tail}`)
-    expect(modelSourceWords('synthetic-sol-7', DATA, 'codex', REPORTED)).toBe('Reported by Codex in an open session. BMN does not check that Codex takes this name.')
+    expect(modelSourceWords('synthetic-sol-7', DATA, 'codex', REPORTED)).toBe('Reported by Codex in an open session.')
   })
 
   it('takes a reported name only from the run of a session that is going on now', () => {

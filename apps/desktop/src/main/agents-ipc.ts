@@ -620,7 +620,10 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const planHash = textParam(params, 'planHash', 64)
     const ctx = context()
     const result = await runCli(ctx.script, ['rules', 'restore', '--transaction', id, '--expect-plan', planHash, '--yes', '--json'], ctx.env)
-    return rulesOutcome(ctx, result, (report) => `Put back ${((report.restored as RosterHarness[] | undefined) ?? []).map((harness) => ROSTER_APP_NAMES[harness] ?? harness).join(', ')}`)
+    return rulesOutcome(ctx, result, (report) => {
+      const apps = ((report.restored as RosterHarness[] | undefined) ?? []).map((harness) => ROSTER_APP_NAMES[harness] ?? harness)
+      return `Put back the rules in ${apps.length <= 1 ? apps.join('') : `${apps.slice(0, -1).join(', ')} and ${apps.at(-1) as string}`}`
+    })
   })
   handle('aiterm:rules:plan-revert-master', (params) => {
     const revision = params.revision

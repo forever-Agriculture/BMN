@@ -1716,6 +1716,11 @@
   text-overflow: ellipsis;
 }
 
+/* A program's path is shown whole: its last part is the program's name. */
+.preferences-dialog .path.wrap {
+  white-space: normal;
+}
+
 /* Rules › Health: one row per rules file, then one per agent app. */
 .preferences-dialog .health-row {
   display: grid;
@@ -1757,6 +1762,19 @@
   padding: 6px 0 6px 104px;
 }
 
+/* What a check read after an update, under the app's row and in line with its version; the row's line moves under it. */
+.preferences-dialog .app-note {
+  margin: 0;
+  padding: 0 0 9px 104px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--muted);
+}
+
+.preferences-dialog .health-row:has(+ .app-note) {
+  border-bottom: 0;
+  padding-bottom: 4px;
+}
+
 .preferences-dialog .rules-page .health-row ~ .preferences-help,
 .preferences-dialog .rules-page .app-block ~ .preferences-help,
 .preferences-dialog .team-page .role ~ .preferences-help {
@@ -1790,7 +1808,7 @@
     justify-self: start;
   }
 
-  .preferences-dialog .accepted {
+  .preferences-dialog :is(.accepted, .app-note) {
     padding-left: 94px;
   }
 }
@@ -1877,7 +1895,7 @@
     grid-template-columns: 1fr;
   }
 
-  .preferences-dialog .accepted {
+  .preferences-dialog :is(.accepted, .app-note) {
     padding-left: 0;
   }
 

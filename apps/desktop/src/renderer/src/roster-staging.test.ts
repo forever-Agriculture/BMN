@@ -5,6 +5,7 @@ import {
   activateAgent,
   addAgent,
   addRole,
+  changeModel,
   agentGroups,
   agentsOnProvider,
   changedSections,
@@ -261,6 +262,27 @@ describe('agents (60.5 AC2–AC4)', () => {
     expect(find(second.data, second.id).context_limit).toBeUndefined()
     const other = addAgent(priced, { name: 'Elsewhere', class: 'bishop', harness: 'codex', model: astra.model, host: 'llm.internal.test', privateWork: 'allowed', roles: [], efforts: ['low'] })
     expect(find(other.data, other.id).price).toBeUndefined()
+  })
+
+  it('a new model name takes the price and capacity the team recorded for that model, and gives them back with the old name', () => {
+    const price = { input: 10, output: 40, source: 'https://prices.example.test/astra', as_of: '2026-10-01' }
+    const priced: RosterDataShape = { ...DATA, agents: DATA.agents.map((entry) => (entry.id === 'astra' ? { ...entry, price, context_window: 400000 } : entry)) }
+    const twin: RosterDataShape = { ...priced, agents: [...priced.agents, { ...find(priced, 'astra'), id: 'astra-two', name: 'Astra Two', model: 'model-next', price: { input: 12, output: 48 }, context_window: 500000, context_limit: 100000 }] }
+    const approved = find(twin, 'astra')
+    const moved = changeModel(twin, 'astra', 'model-next', approved)
+    expect(find(moved, 'astra')).toMatchObject({ model: 'model-next', price: { input: 12, output: 48 }, context_window: 500000 })
+    // The limit is the owner's setting for one agent: it neither comes from the other agent nor goes away.
+    expect(find(changeModel({ ...twin, agents: twin.agents.map((entry) => (entry.id === 'astra' ? { ...entry, context_limit: 272000 } : entry)) }, 'astra', 'model-next', approved), 'astra').context_limit).toBe(272000)
+    // A name nobody on the team uses: the recorded values stay, for the page to mark as the earlier model's.
+    expect(find(changeModel(moved, 'astra', 'model-nex', approved), 'astra')).toMatchObject({ model: 'model-nex', price, context_window: 400000 })
+    // Back to the approved name, the approved values are back as well.
+    expect(find(changeModel(moved, 'astra', approved.model, approved), 'astra')).toEqual(approved)
+    // An agent on another app or provider is not the same model as far as price goes.
+    const elsewhere: RosterDataShape = { ...twin, agents: twin.agents.map((entry) => (entry.id === 'astra-two' ? { ...entry, harness: 'claude' as const, provider: 'anthropic' } : entry)) }
+    expect(find(changeModel(elsewhere, 'astra', 'model-next', approved), 'astra').price).toEqual(price)
+    // An agent added in this draft has no approved values to go back to: what it holds stays.
+    expect(find(changeModel(twin, 'astra-two', 'model-other'), 'astra-two')).toMatchObject({ model: 'model-other', price: { input: 12, output: 48 }, context_window: 500000 })
+    expect(changeModel(twin, 'nobody', 'model-next')).toBe(twin)
   })
 
   it('moves an agent to another app or host, onto the provider that reaches', () => {

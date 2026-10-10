@@ -593,7 +593,22 @@ export function modelTwin(data: RosterDataShape, harness: RosterHarness, provide
   const name = model.trim()
   if (name === '') return undefined
   const twins = data.agents.filter((agent) => agent.harness === harness && agent.provider === provider && agent.model === name)
-  return twins.find((agent) => agent.price !== undefined) ?? twins.find((agent) => agent.context_window !== undefined)
+  return twins.find((agent) => agent.price !== undefined) ?? twins.find((agent) => agent.context_window !== undefined) ?? twins[0]
+}
+
+/**
+ * A new model name on an agent. Its price and capacity are facts about a model, so they follow the
+ * name where the team knows it: from an agent on the same app, provider and model, and back to the
+ * approved values when the name is the approved one again or no such agent exists. In that last
+ * case they still describe the earlier model, and the page says so and offers to clear them.
+ */
+export function changeModel(data: RosterDataShape, id: string, model: string, approved?: RosterAgentShape): RosterDataShape {
+  const agent = data.agents.find((entry) => entry.id === id)
+  if (!agent) return data
+  const others = { ...data, agents: data.agents.filter((entry) => entry.id !== id) }
+  const twin = approved?.model === model ? undefined : modelTwin(others, agent.harness, agent.provider, model)
+  const base = approved ?? agent
+  return updateAgent(data, id, { model, price: twin?.price ?? base.price, context_window: twin?.context_window ?? base.context_window })
 }
 
 /**

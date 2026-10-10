@@ -10,6 +10,7 @@ import {
   UpdateSheet,
   changeWords,
   destinationWords,
+  forgetUpdateWatches,
   diffSummary,
   earlierVersions,
   insertAt,
@@ -21,12 +22,14 @@ import {
   testLine,
   undoWords,
   updateCommand,
+  watchUpdate,
+  watchedWords,
   type RulesState
 } from './rules-preferences'
 import { Chain, TeamLedger, TeamPreferences, TeamToast, firstApprovalWords, hostKind, nothingInEffectWords, outsideCountWords, shortDate, type TeamPage } from './team-preferences'
 import { ModelList } from './model-field'
 import { modelSuggestions } from './model-suggestions'
-import { groupDifferences } from './roster-staging'
+import { changeModel, groupDifferences } from './roster-staging'
 import { confirmsBeforeCommit, rowHidesDetail, rulesUpdateWords, type TeamState } from './team-state'
 
 const noop = (): void => {}
@@ -214,7 +217,8 @@ describe('the Model field (60.5: suggestions)', () => {
   it('takes any name, is announced as a list the owner can open, and says where the current name came from', () => {
     const page = pageMarkup({ name: 'agent', id: 'sol' })
     expect(page).toMatch(/<input class="field mono" role="combobox" aria-label="Model" aria-autocomplete="list" aria-expanded="false" aria-controls="[^"]+" aria-describedby="[^"]+"[^>]* value="model-sol"\/>/)
-    expect(page).toContain('aria-live="polite">From the approved team. BMN does not check that Codex takes this name.</p>')
+    // The approved name carries no caveat; a name the owner types does (below).
+    expect(page).toContain('aria-live="polite">From the approved team.</p>')
     // Closed, the panel is not in the page at all: nothing is read or drawn until the owner opens it.
     expect(page).not.toContain('role="listbox"')
     const fresh = pageMarkup({ name: 'new' })
@@ -246,6 +250,21 @@ describe('the Model field (60.5: suggestions)', () => {
     const unchanged = pageMarkup({ name: 'agent', id: 'sol' })
     expect(unchanged).not.toContain('Recorded for')
     expect(unchanged).toContain('prices.example.test, 2026-10-01')
+  })
+
+  it('a model changed to one another agent uses shows that agent\'s price and capacity and says whose they are', () => {
+    const luna = DATA.agents.find((entry) => entry.id === 'luna') as RosterAgentShape
+    const moved = changeModel(DATA, 'luna', 'model-sol', luna)
+    const page = pageMarkup({ name: 'agent', id: 'luna' }, team({ data: moved, base: DATA, approved: DATA }))
+    expect(page).toContain('Taken from Sol, which uses the same model.')
+    expect(page).toContain('<span class="mono">$1.25 / $10.00</span>')
+    expect(page).toContain('of 400 000 tokens, taken from Sol')
+    // Nothing here describes the earlier model, so there is nothing to clear.
+    expect(page).not.toContain('Recorded for')
+    expect(page).not.toContain('>Clear</button>')
+    expect(page).toContain('From your team: Sol uses it. BMN does not check that Codex takes this name.')
+    // Sol's own limit is Sol's: Luna keeps hers (none).
+    expect(page).toMatch(/aria-label="Context limit"[^>]* value=""/)
   })
 
   it('says what Also called is without claiming what the app does with those names', () => {
@@ -391,7 +410,7 @@ describe('the approval footer (60.5 AC7)', () => {
       confirmation: { request: { kind: 'staged', data }, title: 'Approve the team for the first time', action: 'Approve',
         preview: { valid: true, errors: [], differences: [], teamUpdate: [], consequences: ['Sol could be given work', 'Z.ai could receive private work in one more workspace'] } }
     }))
-    expect(words(sheet).replace(/\s+/g, ' ')).toContain('Allowed workspaces Z.ai · workspace: — → /home/synthetic/work Z.ai could receive private work in one more workspace')
+    expect(words(sheet).replace(/\s+/g, ' ')).toContain('Allowed workspaces Z.ai · workspace: /home/synthetic/work · new Z.ai could receive private work in one more workspace')
     expect(sheet.indexOf('Allowed workspaces')).toBeLessThan(sheet.indexOf('>Sol<'))
   })
 
@@ -412,7 +431,10 @@ describe('the approval footer (60.5 AC7)', () => {
       confirmation: { request: { kind: 'sections', scope: ['exceptions'] }, title: 'Keep the change to Allowed workspaces', action: 'Keep',
         preview: { valid: true, errors: [], differences: [added], teamUpdate: [], consequences: [sentence] } }
     }))).replace(/\s+/g, ' ')
-    expect(sheet).toContain('Z.ai · workspace: — → /home/synthetic/work')
+    // An added entry says "added" once; its fields follow as plain values.
+    expect(sheet).toContain('Allowed workspaces Z.ai: added Z.ai · provider: Z.ai Z.ai · workspace: /home/synthetic/work Z.ai could receive private work in one more workspace')
+    // An arrow from nothing is never drawn.
+    expect(sheet).not.toContain('— →')
     expect(sheet).toContain(sentence)
   })
 
@@ -530,7 +552,8 @@ describe('Rules › Editor (60.6 AC1–AC3)', () => {
     const plan = { valid: true, errors: [], diff: '--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new', expectedHash: 'a'.repeat(64), expectedLink: null, expectedDirectory: '/home/synthetic/.config/bmn/agents', renderings: [] }
     const sheet = rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan } }))
     expect(sheet).toContain('<button type="button" class="primary">Save</button><button type="button">Save and install…</button><button type="button">Cancel</button>')
-    expect(sheet).toContain('The text before this save is kept under Earlier versions. Save installs nothing; Save and install… then shows each app&#x27;s file first.')
+    // The two buttons say what each does; the note keeps only what they do not.
+    expect(sheet).toContain('<span class="muted">The text before this save is kept under Earlier versions.</span>')
     // Rules an app could not read are not saved, so there is nothing to install either.
     const refused = rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan: { ...plan, valid: false, errors: [{ code: 'RULES_MARKER', message: 'A public section is not closed.' }] } } }))
     expect(refused).toContain('These rules cannot be saved')
@@ -630,7 +653,10 @@ describe('Rules › Health (60.6 AC4)', () => {
   it('shows each agent app: version, whether it is tested, where it sends data and what is recorded', () => {
     expect(markup).toContain('<span class="mono">2.1.295</span> <span class="muted" title="BMN tested how this version picks where to send data.">· tested</span>')
     expect(markup).toContain('<span class="mono">0.171.0</span> <span class="muted" title="Newer than the version BMN tested (0.161.0). BMN reads where it sends data the same way on every version.">· newer than tested</span>')
-    expect(markup).toContain('<span class="mono">not found</span> <span class="muted" title="BMN does not check Cursor dispatches.">· not checked</span>')
+    // An app that is not there is said once, not as "not found · not checked".
+    expect(markup).toContain('<span class="health-state"><span class="mono" title="BMN does not check Cursor dispatches.">not found</span></span>')
+    const unread = rulesMarkup('health', rules({ snapshot: { ...RULES, apps: RULES.apps.map((app) => (app.harness === 'codex' ? { ...app, version: null, versionState: 'unknown' as const, versionNote: 'Codex is not installed, or its version cannot be read.' } : app)) } }))
+    expect(unread).toContain('<span class="mono" title="Codex is not installed, or its version cannot be read.">version not read</span><span class="path mono wrap" title="/home/synthetic/.npm-global/bin/codex">')
     expect(markup).toContain('<span>Sends data to Anthropic&#x27;s own servers</span><span class="faint">Recorded: Anthropic, as inspected</span>')
     expect(markup).toContain('<span>Where it sends data is unknown</span><span class="faint">Recorded: Z.ai, on your word</span>')
     expect(destinationWords({ basis: 'explicit', provider: null, host: 'proxy.example.com' }, (id) => id)).toBe('Sends data to a custom host, proxy.example.com')
@@ -649,13 +675,14 @@ describe('Rules › Health: Update… (60.6: the app\'s own updater, shown befor
   const markup = rulesMarkup('health')
   const apps = RULES.apps
   const sheet = (index: number, extra: Partial<Parameters<typeof UpdateSheet>[0]> = {}): string =>
-    renderToStaticMarkup(createElement(UpdateSheet, { app: apps[index]!, home: RULES.home, sessions: 0, hasTest: false, busy: false, result: null, onCheck: noop, onClose: noop, ...extra }))
+    renderToStaticMarkup(createElement(UpdateSheet, { app: apps[index]!, home: RULES.home, sessions: 0, hasTest: false, busy: false, result: null, onCopied: noop, onCheck: noop, onClose: noop, ...extra }))
 
   it('shows under each version the program BMN finds, and says when it finds none', () => {
     expect(markup).toContain('Agent apps<span class="caption">the program BMN finds, its version and where it sends data</span>')
-    expect(markup).toContain('· tested</span></span><span class="path mono" title="/home/synthetic/.local/bin/claude">~/.local/bin/claude</span></span>')
-    expect(markup).toContain('· newer than tested</span></span><span class="path mono" title="/home/synthetic/.npm-global/bin/codex">~/.npm-global/bin/codex</span></span>')
-    expect(markup).toContain('· not checked</span></span><span class="faint">Program not found</span></span>')
+    // The path wraps instead of being cut: its last part is the program's name.
+    expect(markup).toContain('· tested</span></span><span class="path mono wrap" title="/home/synthetic/.local/bin/claude">~/.local/bin/claude</span></span>')
+    expect(markup).toContain('· newer than tested</span></span><span class="path mono wrap" title="/home/synthetic/.npm-global/bin/codex">~/.npm-global/bin/codex</span></span>')
+    expect(markup).not.toContain('Program not found')
   })
 
   it('offers Update… on every app, off where there is no program to update, and opens no sheet by itself', () => {
@@ -679,7 +706,7 @@ describe('Rules › Health: Update… (60.6: the app\'s own updater, shown befor
     const read = words(claude).replace(/\s+/g, ' ')
     expect(read).toContain('Installed 2.1.295 Program ~/.local/bin/claude A link to ~/.local/share/claude/versions/2.1.295 Command /home/synthetic/.local/bin/claude update')
     expect(read).toContain('Open in BMN BMN currently recognises 2 Claude Code sessions. Restart them to use the updated installation; their running versions are not checked.')
-    expect(read).toContain('Afterwards Run the command in a terminal, then press Check now: BMN reads the version and where Claude Code sends data again. A loading test made before the update needs to be run again.')
+    expect(read).toContain('Afterwards Run the command in a terminal. When you come back to Health, BMN reads the version and where Claude Code sends data again. A loading test made before the update needs to be run again.')
     expect(read).toContain('The updater decides what it downloads and replaces, and may ask questions; BMN does not see that in advance and cannot undo it. BMN does not know whether a newer version exists.')
     expect([...claude.matchAll(/<button type="button"[^>]*>([^<]+)<\/button>/g)].map((match) => match[1])).toEqual(['Copy command', 'Check now', 'Close'])
     // Nothing on the sheet starts the updater: the only action on the command is a copy.
@@ -708,13 +735,36 @@ describe('Rules › Health: Update… (60.6: the app\'s own updater, shown befor
     expect(sessionsWords('Codex', 3)).toBe('BMN currently recognises 3 Codex sessions. Restart them to use the updated installation; their running versions are not checked.')
   })
 
-  it('after Check now it says only what the selected program reports now and before, never that an update succeeded', () => {
-    expect(recheckWords('0.171.0', '0.172.0')).toBe('The selected program now reports 0.172.0; before it reported 0.171.0.')
-    expect(recheckWords('0.171.0', '0.171.0')).toBe('The selected program still reports 0.171.0.')
-    expect(recheckWords(null, '0.172.0')).toBe('The selected program now reports 0.172.0.')
+  it('after a check it says only what the program reports now and before, never that an update succeeded', () => {
+    expect(recheckWords('0.171.0', '0.172.0')).toBe('The program now reports 0.172.0; before it reported 0.171.0.')
+    expect(recheckWords('0.171.0', '0.171.0')).toBe('The program still reports 0.171.0.')
+    expect(recheckWords(null, '0.172.0')).toBe('The program now reports 0.172.0.')
     expect(recheckWords('0.171.0', null)).toBe('BMN could not read the installed version.')
-    expect(sheet(1, { result: recheckWords('0.171.0', '0.172.0') })).toContain('<p role="status">The selected program now reports 0.172.0; before it reported 0.171.0.</p>')
+    expect(sheet(1, { result: recheckWords('0.171.0', '0.172.0') })).toContain('<p role="status">The program now reports 0.172.0; before it reported 0.171.0.</p>')
     for (const text of [recheckWords('1', '2'), recheckWords('1', '1'), recheckWords(null, '2'), recheckWords('1', null)]) expect(text).not.toMatch(/updated|succeeded|up to date|latest/i)
+  })
+})
+
+describe('Rules › Health: what an app reports after its update command was copied', () => {
+  it('remembers what the program reported then, and says what a later check read, under the app\'s row', () => {
+    forgetUpdateWatches()
+    const codex = RULES.apps[1]!
+    expect(watchedWords(codex, RULES.health.checkedAt)).toBeNull()
+    watchUpdate({ harness: 'codex', version: '0.161.0' }, '2026-10-09T22:00:00.000Z')
+    // Copying again, or asking for a check, does not move the starting point.
+    watchUpdate({ harness: 'codex', version: '0.171.0' }, '2026-10-09T22:05:00.000Z')
+    // Nothing was read since the copy: there is nothing to say yet.
+    expect(watchedWords(codex, '2026-10-09T22:00:00.000Z')).toBeNull()
+    expect(watchedWords(codex, RULES.health.checkedAt)).toBe('The program now reports 0.171.0; before it reported 0.161.0.')
+    expect(watchedWords(RULES.apps[0]!, RULES.health.checkedAt)).toBeNull()
+    const page = rulesMarkup('health')
+    expect(page).toContain('<p class="app-note" role="status">The program now reports 0.171.0; before it reported 0.161.0.</p>')
+    expect(count(page, 'class="app-note"')).toBe(1)
+    forgetUpdateWatches(['codex'])
+    expect(rulesMarkup('health')).not.toContain('app-note')
+    watchUpdate({ harness: 'claude', version: '2.1.295' }, '2026-10-09T22:00:00.000Z')
+    forgetUpdateWatches()
+    expect(watchedWords(RULES.apps[0]!, RULES.health.checkedAt)).toBeNull()
   })
 })
 
@@ -723,7 +773,7 @@ describe('universal words (R60-NFR8)', () => {
     const pages = [
       pageMarkup({ name: 'agents' }), pageMarkup({ name: 'agent', id: 'sol' }), pageMarkup({ name: 'new' }), pageMarkup({ name: 'roles' }), pageMarkup({ name: 'changes' }),
       rulesMarkup('editor'), rulesMarkup('health'),
-      ...RULES.apps.map((app) => renderToStaticMarkup(createElement(UpdateSheet, { app, home: RULES.home, sessions: 2, hasTest: true, busy: false, result: 'The selected program still reports 1.0.0.', onCheck: noop, onClose: noop })))
+      ...RULES.apps.map((app) => renderToStaticMarkup(createElement(UpdateSheet, { app, home: RULES.home, sessions: 2, hasTest: true, busy: false, result: 'The program still reports 1.0.0.', onCopied: noop, onCheck: noop, onClose: noop })))
     ]
     for (const page of pages) {
       // The file names the owner's own apps use are theirs, not BMN's words.

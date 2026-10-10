@@ -69,6 +69,9 @@ const HOOK_CHECK_NAMES: Readonly<Record<HookCheckAgent, string>> = {
 /** Every page of the dialog. Team and Rules head the navigation and open their sub-pages; the rest are grouped. */
 export type PreferencesPage = 'team' | 'roles' | 'changes' | 'rules' | 'health' | 'appearance' | 'terminal' | 'notifications' | 'voice' | 'telegram' | 'control' | 'history' | 'backup'
 
+/** The page Preferences last showed, kept while BMN runs; a new start opens on Team. */
+let lastPage: PreferencesPage = 'team'
+
 export const PREFERENCES_NAVIGATION: ReadonlyArray<
   | { parent: 'team' | 'rules'; label: string; pages: ReadonlyArray<{ page: PreferencesPage; label: string }> }
   | { group: string; pages: ReadonlyArray<{ page: PreferencesPage; label: string }> }
@@ -129,7 +132,9 @@ export function PreferencesDialog(props: {
   onSettings.current = props.onSettings
 
   // --- Pages ---------------------------------------------------------------
-  const [page, setPage] = useState<PreferencesPage>(props.initialSection === 'agent-control' ? 'control' : 'team')
+  // Preferences opens where the owner left it, unless it was opened for one page.
+  const [page, setPage] = useState<PreferencesPage>(props.initialSection === 'agent-control' ? 'control' : lastPage)
+  useEffect(() => { lastPage = page }, [page])
   // An agent and New agent open under Team › Agents, never as navigation items.
   const [teamPage, setTeamPage] = useState<TeamPage>({ name: 'agents' })
   const team = useTeamState()
