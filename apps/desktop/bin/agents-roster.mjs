@@ -15,6 +15,8 @@ export const SCHEMA_VERSION = 2
 export const HARNESSES = ['claude', 'codex', 'opencode', 'cursor']
 /** How BMN names each agent app to the owner, in the order they are always listed. */
 export const APP_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' }
+/** Apps whose requests BMN never checks: no dispatch check reads their command, and the model is picked inside the app. */
+export const UNCHECKED_APPS = ['opencode', 'cursor']
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 /** The five chess classes: a knight leads an epic/project, a queen may hold any role, a rook designs, a bishop reviews and advises, a pawn does jobs a lead hands off. */
 export const CLASSES = ['knight', 'queen', 'rook', 'bishop', 'pawn']
@@ -852,8 +854,10 @@ export function privateWorkOf(data, agent) {
 
 /**
  * Whether an app's approved default destination may receive private work, with the reason in
- * words: only an inspected default whose provider answers `allowed`. Missing, owner-declared and
- * public-only destinations get public work only (60.3 AC4, 60.4 AC1).
+ * words: only an inspected default whose provider answers `allowed`, in an app whose requests BMN
+ * checks. Missing, owner-declared and public-only destinations get public work only (60.3 AC4,
+ * 60.4 AC1), and so does every app in UNCHECKED_APPS, whatever its configuration reads today
+ * (owner decision 2026-10-10, narrowing 60.4 AC3).
  */
 export function harnessPrivateWork(data, harness) {
   const app = APP_NAMES[harness] ?? harness
@@ -862,6 +866,7 @@ export function harnessPrivateWork(data, harness) {
   const provider = data.providers.find((entry) => entry.id === route.provider) ?? null
   if (route.basis === 'owner-declared') return { allowed: false, reason: `BMN can't confirm where ${app} sends data`, route, provider }
   if (provider?.private_work !== 'allowed') return { allowed: false, reason: `${provider?.name ?? route.provider} gets public work only`, route, provider }
+  if (UNCHECKED_APPS.includes(harness)) return { allowed: false, reason: `BMN does not check what ${app} sends`, route, provider }
   return { allowed: true, reason: `${provider.name} may see private work`, route, provider }
 }
 

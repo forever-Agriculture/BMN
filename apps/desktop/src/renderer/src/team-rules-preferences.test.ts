@@ -534,7 +534,7 @@ describe('Rules › Health (60.6 AC4)', () => {
 
   it('offers Test… only where the app may receive private work, and says why not elsewhere', () => {
     expect([...markup.matchAll(/aria-label="Test ([A-Za-z ]+)"/g)].map((match) => match[1])).toEqual(['Claude Code', 'Codex'])
-    expect(markup).toContain("A loading test starts the app once and sends it the rules. It is off for Cursor: BMN can&#x27;t confirm where it sends data.")
+    expect(markup).toContain("A loading test starts the app once and sends it the rules. It is off for Cursor, which gets only the public sections.")
   })
 
   it('shows each agent app: version, whether it is tested, where it sends data and what is recorded', () => {

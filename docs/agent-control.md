@@ -822,7 +822,9 @@ be checked.
 `<!-- bmn:public -->` … `<!-- /bmn:public -->` marks a section a public-only destination may
 receive; one `<!-- bmn:team -->`, which may sit inside a sentence, becomes the approved team's
 names by app (at most 400 bytes). An app whose approved destination may not receive private work
-gets only the public sections. Each rendering starts with a line naming the master and its hash;
+gets only the public sections. So do OpenCode and Cursor, always: BMN checks none of their
+requests and cannot know which model you pick inside them, so no setting gives them the full
+rules. Each rendering starts with a line naming the master and its hash;
 Cursor's file also gets its `.mdc` frontmatter.
 
 **Preferences → Rules** has two pages. **Editor** edits the master with line numbers, dimmed
@@ -834,7 +836,7 @@ every file's difference, including a link, a hand-written file or an outside edi
 and writes them in one step; a file that is a link is replaced by a regular file, and the file it
 pointed to is never written. The full rules are written, updated or sent in a test on any
 installed version of Claude Code or Codex; only one whose version cannot be read (not installed,
-or not on `PATH`) is refused them. BMN never runs OpenCode, so it reads no version for it. Each action confirms against the exact plan it showed, plans again
+or not on `PATH`) is refused them. OpenCode and Cursor never get them, so no version is read for either. Each action confirms against the exact plan it showed, plans again
 once you confirm, and refuses if the files changed since. A plan is bound to the folder that
 really holds each file: when a link on the way to a file leads elsewhere, the confirmation names
 that place too, and a link that moves afterwards makes the plan refuse. **Health** reads each file the way the
@@ -888,7 +890,8 @@ it would replace, and puts nothing back until you confirm.
   BMN does not read would not be noticed. For OpenCode BMN reads only its own configuration
   folder: the model's provider prefix, unknown when `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT`
   is set where BMN runs or the provider entry carries its own address; a project's `opencode.json`
-  and the environment of the shell you start OpenCode in are not read.
+  and the environment of the shell you start OpenCode in are not read. That reading only names
+  OpenCode's destination on Health and in the team file; it never earns OpenCode the full rules.
 - A packet for a public-only destination relies on Claude Code's `--safe-mode` to keep your rules
   file, memory, skills and hooks out of the call. BMN does not test that itself; run one packet
   with a marker line in your rules before you turn on a public-only agent. `accepted_versions` in a team file written under the

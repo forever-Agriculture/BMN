@@ -617,7 +617,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
       })}
       {pending?.kind === 'test' ? <PendingSheet rules={rules} /> : null}
       <p className="preferences-help">
-        A loading test starts the app once and sends it the rules.{withheld.length > 0 ? ` It is off for ${withheld.join(' and ')}: BMN can't confirm where ${withheld.length === 1 ? 'it sends' : 'they send'} data.` : ''}
+        A loading test starts the app once and sends it the rules.{withheld.length > 0 ? ` It is off for ${withheld.join(' and ')}, which ${withheld.length === 1 ? 'gets' : 'get'} only the public sections.` : ''}
       </p>
 
       <h4 className="group-head">Agent apps<span className="caption">where each app sends data</span></h4>

@@ -525,7 +525,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     assert.match(await fileRow('Claude Code').locator('.health-state').textContent(), /Link · Full rules/)
     assert.match(await fileRow('OpenCode').locator('.health-state').textContent(), /Missing · Public sections only/)
     assert.equal(await main.getByRole('button', { name: 'Test OpenCode' }).count(), 0, 'a loading test is offered for a public-only app')
-    await main.getByText("It is off for OpenCode and Cursor: BMN can't confirm where they send data.").waitFor()
+    await main.getByText('It is off for OpenCode and Cursor, which get only the public sections.').waitFor()
     await shot('health-1280.png')
     await main.getByRole('button', { name: 'Test Claude Code' }).click()
     await sheet.getByText('Starts Claude Code once and sends the rules to its provider.', { exact: false }).waitFor()

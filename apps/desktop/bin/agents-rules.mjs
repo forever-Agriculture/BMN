@@ -176,7 +176,8 @@ export function teamPhrase(generation) {
 
 /**
  * Which rendering an app gets and why, from the approved roster: full only when its approved
- * destination may receive private work; public for a public-only, unknown or owner-declared one.
+ * destination may receive private work; public for a public-only, unknown or owner-declared one,
+ * and always for an app whose requests BMN does not check (OpenCode, Cursor).
  */
 export function routeFor(harness, generation) {
   const answer = harnessPrivateWork(generation?.data ?? null, harness)
@@ -896,15 +897,11 @@ export async function probe(harness, { environment = process.env, now = new Date
         ? record('pass', 'the probe run\'s rollout carries the rendered header before any tool ran', version)
         : record('fail', 'the probe run\'s rollout does not carry the rendered header before any tool ran', version)
     }
-    const args = harness === 'claude'
-      ? ['-p', '--tools', '', '--no-session-persistence', '--output-format', 'text']
-      : harness === 'opencode' ? ['run', question] : ['-p', question]
-    const run = spawnSync(command, args, { cwd: folder, env: environment, input: harness === 'claude' ? question : '', encoding: 'utf8', timeout: timeoutMs })
+    // Only Claude Code is left here: OpenCode and Cursor never hold a full rendering (routeFor).
+    const run = spawnSync(command, ['-p', '--tools', '', '--no-session-persistence', '--output-format', 'text'],
+      { cwd: folder, env: environment, input: question, encoding: 'utf8', timeout: timeoutMs })
     if (run.error || run.status !== 0) return record('inconclusive', `${command} did not answer (timeout or error)`, version)
     const answer = /[0-9a-f]{64}/.exec(run.stdout)?.[0] ?? null
-    if (harness !== 'claude') {
-      return record('inconclusive', `answered ${answer === master.hash ? 'the right hash' : answer === null ? 'no hash' : 'another hash'}, but its tools could have read the file`, version)
-    }
     if (answer === null) return record('inconclusive', 'the answer named no sha256', version)
     return answer === master.hash ? record('pass', 'with tools off, Claude quoted the master hash its rules file carries', version) : record('fail', 'Claude quoted a different hash', version)
   } finally {

@@ -303,7 +303,7 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
   })
 
-  it('reads OpenCode as unknown on Health, at approval and at install when the app\'s environment names another OpenCode configuration', async () => {
+  it('reads OpenCode as unknown on Health and at approval when the app\'s environment names another OpenCode configuration, and never plans its full rules', async () => {
     writeFileSync(rosterFile(), FIXTURE.replace('opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}'))
     mkdirSync(join(home, '.config/opencode'), { recursive: true })
     writeFileSync(join(home, '.config/opencode/opencode.json'), '{ "model": "opencode-go/kimi-k3" }')
@@ -319,9 +319,11 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     appEnv = {}
     expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
     expect(await call<RulesOutcome>('rules:save-master', { text: MASTER, expectedHash: null, expectedLink: null })).toMatchObject({ ok: true })
-    expect((await call<RulesPlan>('rules:plan-install')).targets.find((target) => target.harness === 'opencode')).toMatchObject({ rendering: 'full' })
+    // Inspected and allowed private work, and still public: BMN checks no OpenCode request (owner decision 2026-10-10).
+    const planned = async () => (await call<RulesPlan>('rules:plan-install')).targets.find((target) => target.harness === 'opencode')
+    expect(await planned()).toMatchObject({ rendering: 'public' })
     appEnv = { OPENCODE_CONFIG: join(home, 'other.json') }
-    expect(await call<RulesPlan>('rules:plan-install')).toMatchObject({ ok: false, code: 'ROUTE_CHANGED', message: expect.stringContaining('OPENCODE_CONFIG names another OpenCode configuration') })
+    expect(await planned()).toMatchObject({ rendering: 'public' })
     expect(existsSync(join(home, '.config/opencode/AGENTS.md'))).toBe(false)
   })
 

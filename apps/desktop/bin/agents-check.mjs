@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
-import { APP_NAMES, DESIGNER_ROLE, LEAD_ROLE, RosterError, agentState, canonicalJson, classRefusal, resolvedDirectory, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, DESIGNER_ROLE, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, resolvedDirectory, sha256 } from './agents-roster.mjs'
 import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
@@ -1306,7 +1306,7 @@ export function evaluate(inputs, {
     const parsed = parseDispatch(inputs.argv)
     if (parsed.unsupported) refuse('ROUTE_UNSUPPORTED', parsed.unsupported)
     if (agent.harness !== parsed.harness) {
-      refuse('ROUTE_UNSUPPORTED', agent.harness === 'opencode' || agent.harness === 'cursor'
+      refuse('ROUTE_UNSUPPORTED', UNCHECKED_APPS.includes(agent.harness)
         ? `BMN does not check ${APP_NAMES[agent.harness]} dispatches` : `${agent.id} runs on ${agent.harness}, the command is ${parsed.harness}`)
     }
     const cwd = canonicalDirectory(inputs.cwd ?? processCwd, processCwd)

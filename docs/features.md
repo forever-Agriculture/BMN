@@ -277,7 +277,7 @@ agent.
 Preferences → **Rules** keeps one rules text and writes it into each agent app's own rules file
 (Claude Code, Codex, OpenCode and Cursor), shows each file's difference before it writes, and can
 undo an install. An app whose provider may not see private work receives only the sections you
-marked public. Details and limits are in [agent-control.md](agent-control.md#the-team-team-file-check-and-rules).
+marked public, and so do OpenCode and Cursor, whose requests BMN does not check. Details and limits are in [agent-control.md](agent-control.md#the-team-team-file-check-and-rules).
 
 ## Files and file references
 
