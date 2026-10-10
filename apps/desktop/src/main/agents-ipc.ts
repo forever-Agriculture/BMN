@@ -45,6 +45,11 @@ export interface AgentsIpcOptions {
   cliScript(): string
   /** This process's environment; tests replace it. */
   environment?(): NodeJS.ProcessEnv
+  /**
+   * The environment a session's shell ends up with, read again before each call. A session finds
+   * agent apps and their destinations through it, so the app inspects with it rather than its own.
+   */
+  sessionEnvironment?: { current(): { env: NodeJS.ProcessEnv; source: 'shell' | 'app'; reason?: string }; refresh(): Promise<void> }
   /** Opens a file in the owner's own editor; resolves to an error message, or '' when it opened. */
   openPath?(path: string): Promise<string>
   now?(): Date
@@ -327,7 +332,11 @@ function renderAll(path: string, text: string, generation: Generation | null): R
   })
 }
 
-export interface RulesIpcContext { script: string; env: NodeJS.ProcessEnv; probeEnv: NodeJS.ProcessEnv; now: () => Date }
+export interface RulesIpcContext {
+  script: string; env: NodeJS.ProcessEnv; probeEnv: NodeJS.ProcessEnv; now: () => Date
+  /** Why the shell's settings could not be read, when BMN's own environment stands in for them. */
+  ownEnvironment?: string
+}
 
 /** What an inspection resolved: the app's installed version and where it sends data. */
 interface RouteResolution { harness: RosterHarness; version: string | null; provider: string | null; host: string | null; basis: string; sources: string[] }
@@ -417,6 +426,7 @@ export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnap
     health: text === null ? { state: 'failed', checkedAt: context.now().toISOString(), reason: `No rules master at ${path}` } : await rulesHealth(context),
     probes: lastProbes({ inspect: await probeInspector(context.probeEnv) }) as RulesProbeView[],
     apps: (HARNESSES as RosterHarness[]).map((harness) => appView(harness, context)),
+    ...(context.ownEnvironment === undefined ? {} : { ownEnvironment: context.ownEnvironment }),
     transactions: listTransactions().slice(0, 10).map((entry) => ({
       id: entry.id, valid: entry.valid, ...(entry.created_at ? { createdAt: entry.created_at } : {}),
       ...(entry.state ? { state: entry.state } : {}), ...(entry.reason ? { reason: entry.reason } : {}), ...(entry.targets ? { targets: entry.targets } : {})
@@ -456,12 +466,18 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   const handle = (channel: `aiterm:${string}`, listener: (params: Record<string, unknown>) => unknown): void => {
     ipc.handle(channel, (event, params) => {
       if (!options.senderIsAllowed(event)) throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
-      return listener(objectParams(params))
+      const run = (): unknown => listener(objectParams(params))
+      // Every call inspects with the shell's settings as they are now, not as they were when BMN started.
+      return options.sessionEnvironment ? options.sessionEnvironment.refresh().then(run) : run()
     })
   }
   const context = (): RulesIpcContext => {
-    const environment = options.environment?.() ?? process.env
-    return { script: options.cliScript(), env: rulesEnvironment(environment), probeEnv: probeEnvironment(environment), now: options.now ?? (() => new Date()) }
+    const session = options.environment ? undefined : options.sessionEnvironment?.current()
+    const environment = options.environment?.() ?? session?.env ?? process.env
+    return {
+      script: options.cliScript(), env: rulesEnvironment(environment), probeEnv: probeEnvironment(environment), now: options.now ?? (() => new Date()),
+      ...(session?.source === 'app' ? { ownEnvironment: session.reason ?? 'the shell could not be asked' } : {})
+    }
   }
 
   const inspect = (harness: RosterHarness): AppInspection => {

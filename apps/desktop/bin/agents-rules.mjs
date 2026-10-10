@@ -397,7 +397,7 @@ export async function planInstall(harnesses, { environment = process.env } = {})
     const decision = routeFor(harness, generation)
     const route = await routeStillMatches(harness, decision, environment)
     if (!route.ok) {
-      return { code: 'ROUTE_CHANGED', message: `refusing a full rendering for ${harness}: ${route.reason}; ${route.remedy}`, plans: [], planHash: null }
+      return { code: 'ROUTE_CHANGED', message: `${APP_NAMES[harness]} cannot get the full rules: ${route.reason}; ${route.remedy}`, plans: [], planHash: null }
     }
     const path = targetPath(harness, environment)
     const prior = pathState(path)

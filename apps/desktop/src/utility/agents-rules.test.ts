@@ -266,7 +266,7 @@ describe('install transactions and restore (60.4 AC3-AC4)', () => {
   it('writes a full rendering on any installed app version, and refuses it only while the version cannot be read', async () => {
     stub('codex', 'echo "codex-cli"')
     const refused = await installRules(['codex', 'opencode'], { yes: true, environment: env })
-    expect(refused).toMatchObject({ code: 'ROUTE_CHANGED', message: expect.stringContaining('Codex is not installed, or its version cannot be read') })
+    expect(refused).toMatchObject({ code: 'ROUTE_CHANGED', message: expect.stringContaining('Codex cannot get the full rules: Codex is not installed, or its version cannot be read') })
     expect(refused.message).toContain('install the app or put it on PATH, or keep the public sections only')
     expect(existsSync(target.codex())).toBe(false)
     expect(existsSync(target.opencode())).toBe(false)

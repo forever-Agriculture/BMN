@@ -745,6 +745,15 @@ describe('Rules › Health: Update… (60.6: the app\'s own updater, shown befor
   })
 })
 
+describe('Rules › Health: when the shell\'s settings could not be read', () => {
+  it('says so above the apps, with the reason, and says nothing when they were read', () => {
+    const page = rulesMarkup('health', rules({ snapshot: { ...RULES, ownEnvironment: 'bash did not answer in 5 seconds' } }))
+    expect(words(page).replace(/\s+/g, ' ')).toContain('BMN could not read your shell&#x27;s settings (bash did not answer in 5 seconds), so it looked for the apps with its own. A session may find a program that BMN does not.')
+    expect(page).toMatch(/<p class="page-note" role="status"><span[^>]*aria-label="Needs you"/)
+    expect(rulesMarkup('health')).not.toContain('could not read your shell')
+  })
+})
+
 describe('Rules › Health: what an app reports after its update command was copied', () => {
   it('remembers what the program reported then, and says what a later check read, under the app\'s row', () => {
     forgetUpdateWatches()

@@ -777,6 +777,9 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
       </p>
 
       <h4 className="group-head">Agent apps<span className="caption">the program BMN finds, its version and where it sends data</span></h4>
+      {snapshot.ownEnvironment ? (
+        <p className="page-note" role="status"><Dot label="Needs you" />BMN could not read your shell's settings ({snapshot.ownEnvironment}), so it looked for the apps with its own. A session may find a program that BMN does not.</p>
+      ) : null}
       {snapshot.apps.map((app) => {
         const name = ROSTER_APP_NAMES[app.harness]
         const route = data?.harness_routes.find((entry) => entry.harness === app.harness)

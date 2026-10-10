@@ -82,6 +82,7 @@ import { installFileReferenceIpcHandlers } from './file-reference-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
 import { installVoiceIpcHandlers } from './voice-ipc'
 import { installAgentsIpcHandlers } from './agents-ipc'
+import { createSessionEnvironmentReader } from './session-environment'
 import { transcribeRecording } from './voice-engine'
 import {
   attachCreatedSession,
@@ -637,7 +638,10 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
   })
   const defaultVoiceModelFolder = join(resolveApplicationRoots().data, 'voice', 'models')
   const productionVoiceBinary = whisperBinaryPath()
-  installAgentsIpcHandlers(bridgeIpc, { senderIsAllowed, cliScript: bmnCliScript, openPath: (path) => shell.openPath(path) })
+  // Sessions start the owner's shell, whose settings may add to PATH; the Team and Rules pages look where the sessions do.
+  const sessionEnvironment = createSessionEnvironmentReader(() => process.env)
+  void sessionEnvironment.refresh()
+  installAgentsIpcHandlers(bridgeIpc, { senderIsAllowed, cliScript: bmnCliScript, sessionEnvironment, openPath: (path) => shell.openPath(path) })
   installVoiceIpcHandlers(bridgeIpc, {
     senderIsAllowed,
     // Handlers install before the self-test's taps exist, so its stand-ins are read per call.

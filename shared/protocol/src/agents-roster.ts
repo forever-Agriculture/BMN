@@ -229,6 +229,11 @@ export interface RulesSnapshot {
   probes: RulesProbeView[]
   /** Each agent app's version and destination, inspected when the snapshot was taken. */
   apps: AgentAppView[]
+  /**
+   * Set when BMN could not ask the owner's shell for its settings and inspected with its own
+   * environment instead: why, in words. A session may then find other programs than BMN does.
+   */
+  ownEnvironment?: string
   transactions: { id: string; createdAt?: string; state?: string; reason?: string; targets?: RosterHarness[]; valid: boolean }[]
   history: { revision: number; at: string; hash: string; bytes: number; reason: string; intact: boolean }[] | null
 }

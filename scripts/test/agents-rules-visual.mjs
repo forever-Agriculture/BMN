@@ -1,8 +1,9 @@
 /* global document, window */
 // MODULE: agents-rules-visual.mjs - Epic 60.5/60.6: Preferences › Team and Rules on a synthetic roster and master in a temporary HOME
 // HOME points at a scratch folder holding the synthetic roster (the unit-test fixture), a synthetic rules master and stub
-// app files; PATH holds only stub claude/codex binaries and the system folders, so no step reaches a provider or the
-// owner's own rules. Screenshots land in .dev-auto/evidence/epic-60/shots/ (ignored).
+// app files. BMN itself starts with the system folders only, as from the desktop; the stub claude/codex binaries are on
+// the PATH the temporary home's shell settings add, as a version manager would, so every step that finds an app proves
+// BMN looked where a session does. No step reaches a provider or the owner's own rules. Screenshots land in .dev-auto/evidence/epic-60/shots/ (ignored).
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -74,6 +75,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     chmodSync(join(stubs, name), 0o755)
   }
   stub('codex', 'echo "codex-cli 0.161.0"')
+  writeFileSync(join(home, '.bashrc'), `export PATH="${stubs}:$PATH"\n`)
   // A loading test asks the agent which rules it read; this stub has read nothing, so the test fails in words.
   stub('claude', 'case "$1" in --version) echo "2.1.295 (Claude Code)";; *) cat > /dev/null; echo "I cannot tell";; esac')
   // Claude's rules file is a link to a file kept elsewhere; Codex's is hand-written; OpenCode and Cursor have none.
@@ -97,7 +99,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     env: {
       ...process.env,
       HOME: home,
-      PATH: `${stubs}:/usr/bin:/bin`,
+      SHELL: '/bin/bash',
+      PATH: '/usr/bin:/bin',
       XDG_CONFIG_HOME: roots.config,
       XDG_DATA_HOME: roots.data,
       XDG_STATE_HOME: roots.state,
@@ -594,6 +597,9 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     const app = (name) => main.locator('.app-block', { has: page.locator('.health-row > span:first-child', { hasText: new RegExp(`^${name}$`) }) })
     await app('Codex').getByText('· tested').waitFor()
     await app('Codex').getByText("Sends data to OpenAI's own servers").waitFor()
+    // The apps are on the shell's PATH only: finding them means BMN asked the shell, and it says nothing about falling back.
+    await app('Codex').locator('.path', { hasText: join(stubs, 'codex') }).waitFor()
+    assert.equal(await main.getByText("BMN could not read your shell's settings", { exact: false }).count(), 0, 'BMN fell back to its own environment')
     await app('Cursor').getByText('Recorded: Cursor, on your word').waitFor()
     stub('codex', 'echo "codex-cli 0.170.0"')
     await main.getByRole('button', { name: 'Check now' }).click()

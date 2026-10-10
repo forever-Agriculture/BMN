@@ -357,6 +357,33 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     expect((await programs())[3]).toEqual(['cursor', join(stubs, 'cursor-agent'), join(home, 'versions/cursor-1.2.3')])
   })
 
+  it('inspects with the environment a session\'s shell ends up with, read again before each call (60.6/60.7: an app found only through the shell\'s settings)', async () => {
+    // Started from the desktop, BMN's own PATH lacks the folder the owner's shell adds; the app lives there.
+    const shellOnly = join(home, 'shell-only')
+    mkdirSync(shellOnly)
+    writeFileSync(join(shellOnly, 'opencode'), '#!/bin/sh\necho "1.2.3"\n')
+    chmodSync(join(shellOnly, 'opencode'), 0o755)
+    let asked = 0
+    let source: { env: NodeJS.ProcessEnv; source: 'shell' | 'app'; reason?: string } = { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }, source: 'app', reason: 'bash did not answer in 5 seconds' }
+    const own = new Map<string, (event: never, params: Record<string, unknown>) => unknown>()
+    installAgentsIpcHandlers({ handle: (channel, listener) => { own.set(channel, listener) } }, {
+      senderIsAllowed: () => true, cliScript: () => SCRIPT,
+      sessionEnvironment: { current: () => source, refresh: async () => { asked += 1; if (asked > 1) source = { env: { HOME: home, PATH: `${shellOnly}:${stubs}:/usr/bin:/bin` }, source: 'shell' } } }
+    })
+    const read = async (): Promise<RulesSnapshot> => await own.get('aiterm:rules:snapshot')?.(undefined as never, {}) as RulesSnapshot
+    // The shell could not be asked: BMN's own environment stands in, and the page is told why.
+    const first = await read()
+    expect(asked).toBe(1)
+    expect(first.ownEnvironment).toBe('bash did not answer in 5 seconds')
+    expect(first.apps[2]).toMatchObject({ harness: 'opencode', version: null, program: null })
+    // Asked again before the next call, the shell answers: its PATH is the one inspected with.
+    const second = await read()
+    expect(asked).toBe(2)
+    expect(second.ownEnvironment).toBeUndefined()
+    expect(second.apps[2]).toMatchObject({ harness: 'opencode', version: '1.2.3', program: join(shellOnly, 'opencode') })
+    expect(second.apps[0]).toMatchObject({ version: '2.1.295', program: join(stubs, 'claude') })
+  })
+
   it('a version list kept from the earlier rule saves like any other field, with nothing inspected for it', async () => {
     writeFileSync(rosterFile(), EXAMPLE)
     await call<AgentsOutcome>('agents:approve', { shown: await shown() })
