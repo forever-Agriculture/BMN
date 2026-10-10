@@ -11,6 +11,8 @@ import type {
   AgentsTeamUpdateShown,
   RosterDataShape,
   RosterHarness,
+  ContextLimitApp,
+  ContextLimitPlan,
   RulesOutcome,
   RulesMasterPlan,
   RulesPlan,
@@ -367,6 +369,11 @@ export interface AiTerminalBridge {
   planRulesRevertMaster(revision: number): Promise<RulesRevertPlan>
   /** Owner-run: sends the rules to that app's provider, so only where it may receive private work. */
   probeRules(harness: RosterHarness): Promise<RulesOutcome>
+  /** Story 60.9: what changing an app's default context limit would write, then the write itself, bound to that plan. */
+  planContextLimit(harness: ContextLimitApp, limit: number | null, compact: number | null): Promise<ContextLimitPlan>
+  applyContextLimit(harness: ContextLimitApp, limit: number | null, compact: number | null, planHash: string): Promise<RulesOutcome>
+  /** Owner-run: starts the app once in an empty folder to see whether it takes the setting. */
+  testContextLimit(harness: ContextLimitApp): Promise<RulesOutcome>
   readClipboardText(): Promise<{ text: string }>
   writeClipboardText(text: string): Promise<{ written: true }>
   /** Local Whisper dictation: engine and model availability, with progress for running downloads. */

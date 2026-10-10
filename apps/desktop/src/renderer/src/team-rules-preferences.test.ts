@@ -9,6 +9,8 @@ import {
   RulesPreferences,
   UpdateSheet,
   changeWords,
+  contextStateWords,
+  contextValueWords,
   destinationWords,
   forgetUpdateWatches,
   diffSummary,
@@ -26,7 +28,10 @@ import {
   watchedWords,
   type RulesState
 } from './rules-preferences'
-import { Chain, TeamLedger, TeamPreferences, TeamToast, firstApprovalWords, hostKind, nothingInEffectWords, outsideCountWords, shortDate, type TeamPage } from './team-preferences'
+import {
+  Chain, TeamLedger, TeamPreferences, TeamToast, compactHint, compactRefusal, contextLimitHint, firstApprovalWords, hostKind, limitRefusal, nothingInEffectWords, outsideCountWords, shortDate,
+  type TeamPage
+} from './team-preferences'
 import { ModelList } from './model-field'
 import { modelSuggestions } from './model-suggestions'
 import { changeModel, groupDifferences, removeException } from './roster-staging'
@@ -523,6 +528,12 @@ const RULES: RulesSnapshot = {
     { harness: 'codex', version: '0.171.0', program: '/home/synthetic/.npm-global/bin/codex', basis: 'default', provider: 'openai', host: null, sources: [], versionState: 'newer', versionNote: 'Newer than the version BMN tested (0.161.0). BMN reads where it sends data the same way on every version.' },
     { harness: 'cursor', version: null, program: null, basis: 'unknown', provider: null, host: null, sources: [], versionState: 'unknown', versionNote: 'BMN does not check Cursor dispatches.' }
   ],
+  context: [
+    { harness: 'codex', path: '/home/synthetic/.codex/config.toml', exists: true, limit: 380000, compact: 342000, version: '0.171.0', limitProven: false, compactProven: false,
+      test: { at: '2026-10-09T20:00:00.000Z', version: '0.161.0', outcome: 'pass', detail: 'asked for 123000; the session record shows 116850' }, agents: ['Sol', 'Astra', 'Luna'] },
+    { harness: 'claude', path: '/home/synthetic/.claude/settings.json', exists: true, limit: null, compact: null, version: '2.1.295', limitProven: true, compactProven: false, min: 100000, max: 1000000,
+      test: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'asked for 137000; Claude Code reports a window of 137000' }, agents: ['Opus', 'Fable'] }
+  ],
   transactions: [
     { id: 't2', createdAt: '2026-10-09T22:00:00.000Z', state: 'complete', reason: 'team update', targets: ['claude'], valid: true },
     { id: 't1', createdAt: '2026-10-08T14:02:00.000Z', state: 'complete', reason: 'install', targets: ['claude', 'codex'], valid: true },
@@ -533,7 +544,7 @@ const RULES: RulesSnapshot = {
 
 const rules = (extra: Partial<RulesState> = {}): RulesState => ({
   snapshot: RULES, loadError: null, draft: RULES.master.text ?? '', dirty: false, draftPlan: null, busy: false, notice: null, pending: null, setDraft: noop, setNotice: noop,
-  ensure: noop, refresh: noop, load: later, beginSave: later, beginInstall: later, beginUndo: later, beginRestore: later, beginTest: noop, confirm: later, cancel: noop, ...extra
+  ensure: noop, refresh: noop, load: later, beginSave: later, beginInstall: later, beginUndo: later, beginRestore: later, beginTest: noop, confirm: later, cancel: noop, run: async () => true, ...extra
 })
 const rulesMarkup = (page: 'editor' | 'health', state: RulesState = rules(), teamState: TeamState = team()): string =>
   renderToStaticMarkup(createElement(RulesPreferences, { rules: state, team: teamState, page }))
@@ -862,5 +873,61 @@ describe('allowed workspaces (60.8 AC5)', () => {
     const differences: RosterDiffShape[] = [{ scope: 'exceptions', id: 'zai-1a2b3c4d', field: null, kind: 'removed', before: { present: true, value: { provider: 'zai', folder: '/home/synthetic/code/app' } } }]
     const { groups } = groupDifferences(differences, staged, ALLOWED, ['GLM could no longer receive private work in /home/synthetic/code/app'])
     expect(groups.map((group) => [group.subject, group.consequences])).toEqual([['Allowed workspaces', ['GLM could no longer receive private work in /home/synthetic/code/app']]])
+  })
+})
+
+describe('context limits (60.9 AC3, AC4)', () => {
+  const markup = rulesMarkup('health')
+
+  it('shows one row per app: its file, who shares it, the default it holds and whether the setting is tested', () => {
+    expect(markup).toContain('<h4 class="group-head">Context limits<span class="caption">how large a conversation may grow in sessions you start yourself</span></h4>')
+    expect(markup).toMatch(/<span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.codex\/config.toml">~\/.codex\/config.toml<\/span><span class="faint">Shared by Sol, Astra and Luna<\/span><\/span><span class="health-state"><span>380 000 tokens · summarises at 342 000<\/span><span class="faint" title="[^"]*">Not supported yet · not tested on 0.171.0<\/span>/)
+    expect(markup).toMatch(/<span class="faint">Shared by Opus and Fable<\/span><\/span><span class="health-state"><span>App default<\/span><span class="faint" title="[^"]*">Setting tested on 2.1.295<\/span>/)
+  })
+
+  it('offers Change… only where the test passed on the installed version', () => {
+    expect(markup).toContain('disabled="" aria-label="Change the default context limit of Codex" title="Not supported yet: run the test for Codex first"')
+    expect(markup).toMatch(/<button type="button" class="small" aria-label="Change the default context limit of Claude Code">Change…<\/button>/)
+    expect([...markup.matchAll(/aria-label="Context test for ([A-Za-z ]+)"/g)].map((match) => match[1])).toEqual(['Codex', 'Claude Code'])
+  })
+
+  it('says in words what a row holds and why a setting is not supported yet', () => {
+    expect(contextValueWords({ limit: null, compact: null })).toBe('App default')
+    expect(contextValueWords({ limit: 272000, compact: null })).toBe('272 000 tokens')
+    expect(contextValueWords({ limit: 272000, compact: null, unreadable: 'config.toml model_context_window is not a whole number' })).toBe("Can't be read")
+    expect(contextStateWords({ limitProven: false, version: null, test: null })).toBe('Not supported yet · the app is not found')
+    expect(contextStateWords({ limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'fail', detail: 'd' } })).toBe('Not supported yet · the test failed on 0.162.0')
+    expect(contextStateWords({ limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'inconclusive', detail: 'd' } })).toBe('Not supported yet · the test was inconclusive on 0.162.0')
+    expect(contextStateWords({ limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.161.0', outcome: 'pass', detail: 'd' } })).toBe('Not supported yet · not tested on 0.162.0')
+  })
+
+  it('refuses a limit above what the model holds, inline, and a compaction point that is not below the limit', () => {
+    expect(limitRefusal({ context_window: 400000 }, 400001)).toBe("Above the model's 400 000 tokens")
+    expect(limitRefusal({ context_window: 400000 }, 400000)).toBeNull()
+    expect(limitRefusal({}, 9_000_000)).toBeNull()
+    expect(limitRefusal({ compact_at: 200000 }, 200000)).toBe('Must be above Compact at, 200 000')
+    expect(compactRefusal({ context_limit: 272000 }, 272000)).toBe('Must be below the context limit, 272 000')
+    expect(compactRefusal({ context_limit: 272000 }, 200000)).toBeNull()
+  })
+
+  it('shows capacity, and Compact at only once a limit is set', () => {
+    const page = (id: string): string => renderToStaticMarkup(createElement(TeamPreferences, { team: team(), page: { name: 'agent', id }, context: RULES.context, go: noop }))
+    const sol = page('sol')
+    expect(sol).toContain('of 400 000 tokens')
+    expect(sol).toContain('aria-label="Compact at"')
+    expect(sol).toContain('Not supported yet on Codex 0.171.0: kept but not applied until its test passes in Rules › Health.')
+    expect(sol).toContain('Not supported yet on Codex: kept but not applied. The app starts summarising the conversation here.')
+    const luna = page('luna')
+    expect(luna).toContain('capacity unknown')
+    expect(luna).not.toContain('aria-label="Compact at"')
+    expect(luna).toContain("Empty means the app&#x27;s own default.")
+  })
+
+  it('says what a limit does where the setting is tested, and where the app does not take the size', () => {
+    expect(contextLimitHint({ harness: 'claude', context_limit: 200000 }, RULES.context)).toBe("Added to each run BMN or dev-auto starts with this agent, and checked before it leaves. Empty means the app's own default.")
+    expect(contextLimitHint({ harness: 'claude', context_limit: 90000 }, RULES.context)).toBe('Claude Code takes 100 000 to 1 000 000 tokens; a run with this limit is refused.')
+    expect(contextLimitHint({ harness: 'opencode', context_limit: 90000 }, RULES.context)).toBe('Not supported yet: BMN has no context setting for OpenCode. The limit is kept but not applied.')
+    expect(contextLimitHint({ harness: 'codex', context_limit: 90000 }, null)).toBe("Empty means the app's own default.")
+    expect(compactHint({ harness: 'codex' }, RULES.context.map((row) => ({ ...row, compactProven: true })))).toBe('The app starts summarising the conversation here.')
   })
 })

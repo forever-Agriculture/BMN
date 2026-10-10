@@ -312,7 +312,7 @@ async function routeStillMatches(harness, decision, environment) {
 }
 
 /** Shows target, resolved path and diff on stderr every time, then asks (default No) unless --yes. */
-async function confirm(question, details, { yes, asJson }) {
+export async function confirm(question, details, { yes, asJson }) {
   if (!asJson) writeSync(2, `${details}\n`)
   if (yes) return true
   if (asJson || !process.stdin.isTTY || !process.stderr.isTTY) {
@@ -909,7 +909,7 @@ export async function probe(harness, { environment = process.env, now = new Date
   }
 }
 
-function findRollout(root, cwd, since) {
+export function findRollout(root, cwd, since) {
   const found = []
   const walk = (directory, depth) => {
     let entries

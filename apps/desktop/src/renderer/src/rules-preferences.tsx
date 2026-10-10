@@ -5,6 +5,9 @@ import {
   ROSTER_APP_UPDATE_ARGUMENTS,
   ROSTER_HARNESSES,
   type AgentAppView,
+  type ContextLimitApp,
+  type ContextLimitPlan,
+  type ContextLimitView,
   type RosterDataShape,
   type RosterHarness,
   type RosterIssueShape,
@@ -23,9 +26,9 @@ import { failureDetail } from './bridge-error'
 import { Segmented } from './history-preferences'
 import { quoteArgv } from './launch-template'
 import { Dot } from './roster-marks'
-import { diffBody, diffSummary, revokeVersion, setDestination, undoWords } from './roster-staging'
+import { diffBody, diffSummary, revokeVersion, setDestination, thousands, undoWords } from './roster-staging'
 import { displayPath } from './session-presentation'
-import { Issues, PageHead, TargetPath, shortDate } from './team-preferences'
+import { Issues, NumberField, PageHead, TargetPath, shortDate } from './team-preferences'
 import type { TeamState } from './team-state'
 
 export { diffSummary, undoWords }
@@ -164,6 +167,8 @@ export interface RulesState {
   /** Carries out what the sheet shows. With `then: 'install'`, a save is followed by the sheet that shows what each app would get. */
   confirm(then?: 'install'): Promise<void>
   cancel(): void
+  /** Carries out one Health action and shows what came of it; resolves to whether it was done. An unsaved draft stays. */
+  run(task: () => Promise<RulesOutcome>): Promise<boolean>
 }
 
 /** The Rules pages' state, held once by the Preferences dialog so an unsaved draft survives a look at Health. */
@@ -299,8 +304,28 @@ export function useRulesState(): RulesState {
     }
   }
 
+  async function run(task: () => Promise<RulesOutcome>): Promise<boolean> {
+    setNotice(null)
+    setBusy(true)
+    try {
+      const outcome = await task()
+      // Like Check now: what was read again replaces the page, never an unsaved draft.
+      setSnapshot((current) => {
+        setDraft((text) => (current !== null && text !== (current.master.text ?? '') ? text : outcome.snapshot.master.text ?? ''))
+        return outcome.snapshot
+      })
+      setNotice({ ok: outcome.ok, text: outcome.ok || outcome.code !== 'REVISION_CONFLICT' ? outcome.message : 'Something changed since this was shown. Reloaded without writing.' })
+      return outcome.ok
+    } catch (error) {
+      setNotice({ ok: false, text: failureDetail(error, 'That could not be done') })
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return {
-    snapshot, loadError, draft, dirty, draftPlan, busy, notice, pending, setDraft, setNotice, ensure, refresh, load,
+    snapshot, loadError, draft, dirty, draftPlan, busy, notice, pending, setDraft, setNotice, ensure, refresh, load, run,
     beginSave: () => {
       const text = draft
       return begin(async () => ({ kind: 'save', text, plan: await window.aiTerminal.planRulesMaster(text) }))
@@ -571,6 +596,7 @@ function EditorPage(props: { rules: RulesState }): React.JSX.Element {
 // Rules › Health
 
 type AppAction = { kind: 'destination'; harness: RosterHarness } | { kind: 'update'; harness: RosterHarness }
+  | { kind: 'context-test'; harness: ContextLimitApp } | { kind: 'context-change'; harness: ContextLimitApp }
 
 /** How many running sessions BMN recognises as each app. */
 export type RecognisedSessions = Readonly<Partial<Record<RosterHarness, number>>>
@@ -711,6 +737,134 @@ function DestinationSheet(props: { app: AgentAppView; data: RosterDataShape; onD
   )
 }
 
+/** "Opus, Fable and Sonnet". */
+function named(names: readonly string[]): string {
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`
+}
+
+/** An app's default for the owner's own sessions, as its file holds it. */
+export function contextValueWords(row: Pick<ContextLimitView, 'limit' | 'compact' | 'unreadable'>): string {
+  if (row.unreadable) return "Can't be read"
+  if (row.limit === null) return 'App default'
+  return `${thousands(row.limit)} tokens${row.compact === null ? '' : ` · summarises at ${thousands(row.compact)}`}`
+}
+
+/** Whether BMN may use the app's setting on the installed version, and why not when it may not (60.9 AC1). */
+export function contextStateWords(row: Pick<ContextLimitView, 'limitProven' | 'version' | 'test'>): string {
+  if (row.version === null) return 'Not supported yet · the app is not found'
+  if (row.limitProven) return `Setting tested on ${row.version}`
+  const last = row.test !== null && row.test.version === row.version ? row.test.outcome : null
+  return `Not supported yet · ${last === 'fail' ? `the test failed on ${row.version}` : last === 'inconclusive' ? `the test was inconclusive on ${row.version}` : `not tested on ${row.version}`}`
+}
+
+const PLAN_PENDING: ContextLimitPlan = { ok: false, code: 'PENDING', diff: '', planHash: null }
+
+/**
+ * Change… for one app's default: the two sizes, then exactly what would be written to which file,
+ * before the one button that writes it (R60-NFR2). The diff is made again whenever a size changes.
+ */
+function ContextSheet(props: { row: ContextLimitView; home: string | null; busy: boolean; onDone(): void; run: RulesState['run'] }): React.JSX.Element {
+  const { row } = props
+  const name = ROSTER_APP_NAMES[row.harness]
+  const [limit, setLimit] = useState<number | undefined>(row.limit ?? undefined)
+  const [compact, setCompact] = useState<number | undefined>(row.compactProven ? row.compact ?? undefined : undefined)
+  const [plan, setPlan] = useState<{ limit: number | undefined; compact: number | undefined; plan: ContextLimitPlan }>({ limit, compact, plan: PLAN_PENDING })
+  useEffect(() => {
+    let cancelled = false
+    const timer = setTimeout(() => {
+      window.aiTerminal.planContextLimit(row.harness, limit ?? null, limit === undefined ? null : compact ?? null)
+        .then((next) => { if (!cancelled) setPlan({ limit, compact, plan: next }) })
+        .catch((error: unknown) => { if (!cancelled) setPlan({ limit, compact, plan: { ok: false, code: 'IO_ERROR', message: failureDetail(error, 'The change could not be prepared'), diff: '', planHash: null } }) })
+    }, PLAN_DELAY_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [row.harness, limit, compact])
+  const current = plan.limit === limit && plan.compact === compact ? plan.plan : PLAN_PENDING
+  const ready = current.ok && current.planHash !== null && current.diff !== ''
+  return (
+    <Sheet title={`${name}'s default context limit`} note="For sessions you start yourself." action="Change" busy={props.busy} ready={ready} onCancel={props.onDone}
+      onConfirm={() => {
+        const hash = current.planHash
+        if (hash !== null) void props.run(() => window.aiTerminal.applyContextLimit(row.harness, limit ?? null, limit === undefined ? null : compact ?? null, hash)).then((done) => { if (done) props.onDone() })
+      }}>
+      <div className="facts">
+        <span>File</span>
+        <span>
+          <span className="mono wrap">{displayPath(row.path, props.home)}</span>
+          {current.resolvedPath && current.resolvedPath !== row.path ? <span className="preferences-help">Written at <span className="mono wrap">{displayPath(current.resolvedPath, props.home)}</span></span> : null}
+          <LinkNote link={row.linkTarget} home={props.home} what="This file" />
+        </span>
+        <span>Context limit</span>
+        <span>
+          <span className="inline"><NumberField label={`${name} context limit`} value={limit} placeholder="App default" onChange={setLimit}
+            refuse={(value) => (row.min !== undefined && row.max !== undefined && (value < row.min || value > row.max) ? `${name} takes ${thousands(row.min)} to ${thousands(row.max)}` : null)} /><span className="faint">tokens</span></span>
+        </span>
+        {row.compactProven && limit !== undefined ? (
+          <>
+            <span>Compact at</span>
+            <span><span className="inline"><NumberField label={`${name} compact at`} value={compact} placeholder="App default" onChange={setCompact}
+              refuse={(value) => (value >= limit ? `Must be below ${thousands(limit)}` : null)} /><span className="faint">tokens</span></span></span>
+          </>
+        ) : null}
+        {row.agents.length > 0 ? (
+          <>
+            <span>Shared by</span>
+            <span>{named(row.agents)}{row.harness === 'claude' ? <span className="preferences-help">Each of them then runs with this limit. A run BMN checks is refused while an agent's own limit differs from it.</span> : null}</span>
+          </>
+        ) : null}
+      </div>
+      {current.code === 'PENDING' ? null : !current.ok ? <p className="preferences-error" role="alert">{current.message ?? 'This change cannot be made'}</p>
+        : current.diff === '' ? <p className="preferences-help">The file already holds this.</p>
+          : <pre className="diff">{diffBody(current.diff)}</pre>}
+    </Sheet>
+  )
+}
+
+/** Rules › Health › Context limits: one row per app BMN has a setting for (60.9 AC3). */
+function ContextLimits(props: { rules: RulesState; action: AppAction | null; setAction(action: AppAction | null): void }): React.JSX.Element {
+  const { rules, action } = props
+  const snapshot = rules.snapshot as RulesSnapshot
+  return (
+    <>
+      <h4 className="group-head">Context limits<span className="caption">how large a conversation may grow in sessions you start yourself</span></h4>
+      {snapshot.context.map((row) => {
+        const name = ROSTER_APP_NAMES[row.harness]
+        const idle = !rules.busy && action === null && rules.pending === null
+        return (
+          <div key={row.harness} className="limit-block">
+            <div className="health-row">
+              <span>{name}</span>
+              <span className="health-state">
+                <span className="path mono" title={row.path}>{displayPath(row.path, snapshot.home)}</span>
+                {row.agents.length > 0 ? <span className="faint">Shared by {named(row.agents)}</span> : null}
+              </span>
+              <span className="health-state">
+                <span title={row.unreadable}>{row.unreadable ? <Dot label="Needs you" /> : null}{contextValueWords(row)}</span>
+                <span className="faint" title={row.test?.detail}>{contextStateWords(row)}</span>
+              </span>
+              <span className="app-actions">
+                <button type="button" className="small" disabled={!idle || row.version === null} aria-label={`Context test for ${name}`} onClick={() => props.setAction({ kind: 'context-test', harness: row.harness })}>Test…</button>
+                <button type="button" className="small" disabled={!idle || !row.limitProven || row.unreadable !== undefined} aria-label={`Change the default context limit of ${name}`}
+                  title={row.limitProven ? undefined : `Not supported yet: run the test for ${name} first`} onClick={() => props.setAction({ kind: 'context-change', harness: row.harness })}>Change…</button>
+              </span>
+            </div>
+            {action?.kind === 'context-test' && action.harness === row.harness ? (
+              <Sheet title={`Test whether ${name} takes a context limit`} action="Run test" busy={rules.busy} onCancel={() => props.setAction(null)}
+                note={`Starts ${name} once in an empty folder under your home folder and asks it for an unusual size. It may send one short request to its provider; nothing of yours is in it. The result is kept for this version.`}
+                onConfirm={() => void rules.run(() => window.aiTerminal.testContextLimit(row.harness)).then(() => props.setAction(null))} />
+            ) : null}
+            {action?.kind === 'context-change' && action.harness === row.harness
+              ? <ContextSheet row={row} home={snapshot.home} busy={rules.busy} run={rules.run} onDone={() => props.setAction(null)} /> : null}
+          </div>
+        )
+      })}
+      <p className="preferences-help">BMN changes a limit only on an app version whose test passed. An agent's own limit, set on its page, is added to each run BMN or dev-auto starts with it.</p>
+    </>
+  )
+}
+
 function HealthPage(props: { rules: RulesState; team: TeamState; recognised: RecognisedSessions; onType?: ((name: string, command: string) => void) | undefined }): React.JSX.Element {
   const { rules, team } = props
   const snapshot = rules.snapshot as RulesSnapshot
@@ -836,6 +990,8 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
         )
       })}
       <p className="preferences-help">Tested versions are the ones BMN was checked against. Every installed version is supported: BMN works out where an app sends data the same way on each and notes the version with every check.</p>
+
+      <ContextLimits rules={rules} action={action} setAction={setAction} />
     </>
   )
 }

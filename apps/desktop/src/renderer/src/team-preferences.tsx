@@ -7,6 +7,7 @@ import {
   ROSTER_HARNESSES,
   ROSTER_THEN,
   type AgentAppView,
+  type ContextLimitView,
   type AgentsGenerationSummary,
   type RosterAgentShape,
   type RosterClass,
@@ -73,6 +74,8 @@ import type { TeamState } from './team-state'
 
 /** Each agent app as BMN inspected it (Rules › Health), or null while that was not read. */
 type Apps = readonly AgentAppView[] | null
+/** Each app's context-limit setting as Rules › Health reads it; null before the rules were read. */
+type Context = readonly ContextLimitView[] | null
 /** What the apps reported in sessions that are running now. */
 type Reported = readonly ReportedModel[]
 
@@ -166,23 +169,35 @@ function EffortChips(props: { efforts: readonly RosterEffort[]; onToggle(effort:
 }
 
 /** A whole number of tokens from what the owner typed ("272 000"), `undefined` for empty, `null` when it is not one. */
-function tokens(text: string): number | undefined | null {
+export function tokens(text: string): number | undefined | null {
   const digits = text.replace(/[\s,_]/g, '')
   if (digits === '') return undefined
   return /^\d{1,9}$/.test(digits) && Number(digits) > 0 ? Number(digits) : null
 }
 
-function NumberField(props: { label: string; value: number | undefined; placeholder?: string; onChange(next: number | undefined): void }): React.JSX.Element {
+/**
+ * A number of tokens. A value that is not one, or that `refuse` names a reason against, stays in
+ * the field marked invalid with the reason beside it, and is never handed on.
+ */
+export function NumberField(props: {
+  label: string; value: number | undefined; placeholder?: string; onChange(next: number | undefined): void
+  /** Why a number may not be taken, in words, or null when it may. */
+  refuse?: ((value: number) => string | null) | undefined
+}): React.JSX.Element {
   const [text, setText] = useState(props.value === undefined ? '' : thousands(props.value))
   useEffect(() => setText(props.value === undefined ? '' : thousands(props.value)), [props.value])
   const parsed = tokens(text)
+  const refusal = typeof parsed === 'number' ? props.refuse?.(parsed) ?? null : null
   return (
-    <input className="field number mono" inputMode="numeric" aria-label={props.label} aria-invalid={parsed === null} placeholder={props.placeholder} value={text}
-      onChange={(event) => {
-        setText(event.currentTarget.value)
-        const next = tokens(event.currentTarget.value)
-        if (next !== null) props.onChange(next)
-      }} />
+    <>
+      <input className="field number mono" inputMode="numeric" aria-label={props.label} aria-invalid={parsed === null || refusal !== null} placeholder={props.placeholder} value={text}
+        onChange={(event) => {
+          setText(event.currentTarget.value)
+          const next = tokens(event.currentTarget.value)
+          if (next !== null && (next === undefined || (props.refuse?.(next) ?? null) === null)) props.onChange(next)
+        }} />
+      {refusal !== null ? <span className="field-refusal" role="alert">{refusal}</span> : null}
+    </>
   )
 }
 
@@ -445,7 +460,36 @@ function AlsoCalled(props: { team: TeamState; data: RosterDataShape; agent: Rost
   )
 }
 
-function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: RosterAgentShape; apps: Apps; reported: Reported; go(page: TeamPage): void }): React.JSX.Element {
+/** Why a context limit may not be taken: only a size above what the model holds. */
+export function limitRefusal(agent: Pick<RosterAgentShape, 'context_window' | 'compact_at'>, value: number): string | null {
+  if (agent.context_window !== undefined && value > agent.context_window) return `Above the model's ${thousands(agent.context_window)} tokens`
+  return agent.compact_at !== undefined && value <= agent.compact_at ? `Must be above Compact at, ${thousands(agent.compact_at)}` : null
+}
+
+export function compactRefusal(agent: Pick<RosterAgentShape, 'context_limit'>, value: number): string | null {
+  return agent.context_limit !== undefined && value >= agent.context_limit ? `Must be below the context limit, ${thousands(agent.context_limit)}` : null
+}
+
+/** What the limit does on this agent's app today: applied, or not supported yet on the installed version (60.9 AC1). */
+export function contextLimitHint(agent: Pick<RosterAgentShape, 'harness' | 'context_limit'>, context: Context): string {
+  const base = "Empty means the app's own default."
+  if (agent.context_limit === undefined || context === null) return base
+  const app = ROSTER_APP_NAMES[agent.harness]
+  const row = context.find((entry) => entry.harness === agent.harness)
+  if (row === undefined) return `Not supported yet: BMN has no context setting for ${app}. The limit is kept but not applied.`
+  if (!row.limitProven) return `Not supported yet on ${app}${row.version ? ` ${row.version}` : ''}: kept but not applied until its test passes in Rules › Health.`
+  if (row.min !== undefined && row.max !== undefined && (agent.context_limit < row.min || agent.context_limit > row.max)) return `${app} takes ${thousands(row.min)} to ${thousands(row.max)} tokens; a run with this limit is refused.`
+  return `Added to each run BMN or dev-auto starts with this agent, and checked before it leaves. ${base}`
+}
+
+export function compactHint(agent: Pick<RosterAgentShape, 'harness'>, context: Context): string {
+  const base = 'The app starts summarising the conversation here.'
+  if (context === null) return base
+  const row = context.find((entry) => entry.harness === agent.harness)
+  return row?.compactProven ? base : `Not supported yet on ${ROSTER_APP_NAMES[agent.harness]}: kept but not applied. ${base}`
+}
+
+function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: RosterAgentShape; apps: Apps; context: Context; reported: Reported; go(page: TeamPage): void }): React.JSX.Element {
   const { team, data, agent } = props
   // A price and a capacity belong to a model: once the name changes they still describe the old one until the owner says otherwise.
   const before = team.approved?.agents.find((entry) => entry.id === agent.id)
@@ -505,9 +549,11 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
         <span className="mono">{price ?? '—'}</span>{price ? <span className="faint"> per M tokens, in / out</span> : null}
         {oldPrice ? <button type="button" className="small" aria-label={`Clear the price recorded for ${renamed}`} onClick={() => patch({ price: undefined })}>Clear</button> : null}
       </Row>
-      <Row label="Context limit" hint="Empty means the app's own default.">
+      <Row label="Context limit" hint={contextLimitHint(agent, props.context)}>
         <div className="inline">
-          <NumberField label="Context limit" value={agent.context_limit} placeholder="App default" onChange={(next) => patch({ context_limit: next })} />
+          {/* Clearing the limit clears where summarising starts with it: one has no meaning without the other. */}
+          <NumberField label="Context limit" value={agent.context_limit} placeholder="App default" refuse={(value) => limitRefusal(agent, value)}
+            onChange={(next) => patch(next === undefined ? { context_limit: undefined, compact_at: undefined } : { context_limit: next })} />
           <span className="faint">{agent.context_window ? `of ${thousands(agent.context_window)} tokens${twinCapacity && twin ? `, taken from ${twin.name}` : renamed !== null && agent.context_window === before?.context_window ? `, recorded for ${renamed}` : ''}` : 'capacity unknown'}</span>
         </div>
       </Row>
@@ -524,9 +570,11 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
           <Segmented labelledBy={paidId} fit options={['per_token', 'subscription'] as const} value={agent.paid_by ?? 'per_token'}
             optionLabel={(value) => (value === 'per_token' ? 'Per token' : 'Subscription')} onChange={(value) => patch({ paid_by: value })} />
         </Row>
-        <Row label="Compact at" hint="The app starts summarising the conversation here.">
-          <NumberField label="Compact at" value={agent.compact_at} placeholder="App default" onChange={(next) => patch({ compact_at: next })} />
-        </Row>
+        {agent.context_limit !== undefined ? (
+          <Row label="Compact at" hint={compactHint(agent, props.context)}>
+            <NumberField label="Compact at" value={agent.compact_at} placeholder="App default" refuse={(value) => compactRefusal(agent, value)} onChange={(next) => patch({ compact_at: next })} />
+          </Row>
+        ) : null}
         <HostRow key={`${agent.id}-${agent.host}`} team={team} data={data} agent={agent} apps={props.apps} />
         <AlsoCalled team={team} data={data} agent={agent} />
         {publicOnly(data, agent) || data.exceptions.some((entry) => entry.provider === agent.provider) ? (
@@ -875,7 +923,7 @@ function ChangesPage(props: { team: TeamState }): React.JSX.Element {
 // ---------------------------------------------------------------------------------------------
 // The pages and their footer
 
-export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?: Apps; reported?: Reported; go(page: TeamPage): void }): React.JSX.Element {
+export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?: Apps; context?: Context; reported?: Reported; go(page: TeamPage): void }): React.JSX.Element {
   const { team, page } = props
   const snapshot = team.snapshot
   if (team.loadError) return <><PageHead title="Team" /><p className="preferences-error" role="alert">{team.loadError}</p></>
@@ -911,7 +959,7 @@ export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?:
   if (page.name === 'roles') return <RolesPage team={team} data={data} />
   if (page.name === 'changes') return <ChangesPage team={team} />
   const agent = page.name === 'agent' ? data.agents.find((entry) => entry.id === page.id) : undefined
-  if (agent) return <AgentPage key={agent.id} team={team} data={data} agent={agent} apps={apps} reported={reported} go={props.go} />
+  if (agent) return <AgentPage key={agent.id} team={team} data={data} agent={agent} apps={apps} context={props.context ?? null} reported={reported} go={props.go} />
   return <AgentsPage team={team} data={data} go={props.go} />
 }
 

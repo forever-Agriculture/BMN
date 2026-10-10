@@ -3,7 +3,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, re
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot } from '@bmn/protocol'
+import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { approveRoster, restoreGeneration, saveAndApprove } from './agents-approval'
 import { fileToApproved, installAgentsIpcHandlers } from './agents-ipc'
@@ -533,5 +533,61 @@ describe('Allow here on a stopped prompt (60.8 AC3)', () => {
 
   it('refuses a stop that names no session, provider or workspace', async () => {
     await expect(allow({ agent: 'claude' })).rejects.toThrow(/does not name a session, a provider and a workspace/)
+  })
+})
+
+describe('context limits on Rules › Health (60.9 AC1, AC3)', () => {
+  const codexTest = (window: number) => [
+    'if [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi',
+    'dir=""; prev=""', 'for a in "$@"; do [ "$prev" = "-C" ] && dir="$a"; prev="$a"; done', 'cat > /dev/null',
+    'mkdir -p "$HOME/.codex/sessions/2026/10/10"',
+    `printf '{"payload":{"cwd":"%s"}}\\n{"payload":{"type":"task_started","model_context_window":${window}}}\\n' "$dir" > "$HOME/.codex/sessions/2026/10/10/rollout-test.jsonl"`
+  ].join('\n')
+
+  it('shows each app\'s default and who shares its file, and changes nothing before the owner\'s test passed on that version', async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    await call<AgentsOutcome>('agents:approve', { shown: await shown() })
+    mkdirSync(join(home, '.codex'), { recursive: true })
+    writeFileSync(join(home, '.codex/config.toml'), '# mine\nmodel_context_window = 380000\nmodel_auto_compact_token_limit = 342000\n')
+    const before = await call<RulesSnapshot>('rules:snapshot')
+    expect(before.context).toMatchObject([
+      { harness: 'codex', path: join(home, '.codex/config.toml'), exists: true, limit: 380000, compact: 342000, version: '0.161.0', limitProven: false, compactProven: false, test: null, agents: ['Sol', 'Astra', 'Luna'] },
+      { harness: 'claude', path: join(home, '.claude/settings.json'), exists: false, limit: null, version: '2.1.295', limitProven: false, min: 100000, max: 1000000, agents: ['Opus', 'Fable'] }
+    ])
+    const refused = await call<ContextLimitPlan>('rules:context-plan', { harness: 'codex', limit: 272000, compact: null })
+    expect(refused).toMatchObject({ ok: false, code: 'NOT_SUPPORTED_YET', planHash: null })
+    expect(await call<RulesOutcome>('rules:context-apply', { harness: 'codex', limit: 272000, compact: null, planHash: 'f'.repeat(64) })).toMatchObject({ ok: false, code: 'NOT_SUPPORTED_YET' })
+    expect(file('.codex/config.toml')).toContain('380000')
+  })
+
+  it('runs the owner\'s test through the app, then shows the diff and writes exactly what was shown', async () => {
+    mkdirSync(join(home, '.codex'), { recursive: true })
+    writeFileSync(join(home, '.codex/config.toml'), '# mine\nmodel_context_window = 380000\n\n[projects."/x"]\ntrust_level = "trusted"\n')
+    stub('codex', codexTest(116850))
+    const tested = await call<RulesOutcome>('rules:context-test', { harness: 'codex' })
+    expect(tested).toMatchObject({ ok: true, message: 'Codex context test passed: asked for 123000; the session record shows 116850' })
+    expect(tested.snapshot.context[0]).toMatchObject({ limitProven: true, compactProven: false, test: { outcome: 'pass', version: '0.161.0' } })
+    const plan = await call<ContextLimitPlan>('rules:context-plan', { harness: 'codex', limit: 272000, compact: null })
+    expect(plan).toMatchObject({ ok: true, path: join(home, '.codex/config.toml') })
+    expect(plan.diff).toContain('-model_context_window = 380000\n+model_context_window = 272000')
+    expect(file('.codex/config.toml')).toContain('380000')
+    // Another size than the one shown is not what was confirmed.
+    expect(await call<RulesOutcome>('rules:context-apply', { harness: 'codex', limit: 300000, compact: null, planHash: plan.planHash })).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    const done = await call<RulesOutcome>('rules:context-apply', { harness: 'codex', limit: 272000, compact: null, planHash: plan.planHash })
+    expect(done).toMatchObject({ ok: true, message: 'Codex\'s default context limit changed. Sessions started before this keep their old limit.' })
+    expect(done.snapshot.context[0]).toMatchObject({ limit: 272000 })
+    expect(file('.codex/config.toml')).toBe('# mine\nmodel_context_window = 272000\n\n[projects."/x"]\ntrust_level = "trusted"\n')
+    // A failed test on the same version takes the setting away again.
+    stub('codex', codexTest(258400))
+    const failed = await call<RulesOutcome>('rules:context-test', { harness: 'codex' })
+    expect(failed).toMatchObject({ ok: true, message: expect.stringContaining('Codex context test failed') })
+    expect(failed.snapshot.context[0]).toMatchObject({ limitProven: false })
+    expect(await call<ContextLimitPlan>('rules:context-plan', { harness: 'codex', limit: null, compact: null })).toMatchObject({ ok: false, code: 'NOT_SUPPORTED_YET' })
+  })
+
+  it('refuses an app BMN has no setting for and a size that is not a number of tokens', async () => {
+    await expect(call('rules:context-plan', { harness: 'opencode', limit: 1, compact: null })).rejects.toThrow(/codex, claude/)
+    await expect(call('rules:context-plan', { harness: 'codex', limit: -5, compact: null })).rejects.toThrow(/positive whole number/)
+    await expect(call('rules:context-test', { harness: 'cursor' })).rejects.toThrow(/codex, claude/)
   })
 })

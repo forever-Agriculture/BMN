@@ -86,6 +86,8 @@ Commands:
   rules render|check|install|restore|history|revert-master|import|probe
                                             One rules master written into each agent's own rules file
                                             (bmn rules --help)
+  context check|set|test                    Each app's default context limit for your own sessions, and the
+                                            owner-run test of the setting (bmn context --help)
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
@@ -856,6 +858,53 @@ meanwhile, or whose app, app version or deciding setting changed, is skipped, an
 offers **Undo**. Undo first shows what each file would become, including any edit made since that
 it would replace, and puts nothing back until you confirm.
 
+### Context limits
+
+An agent's **Context limit** is how large its conversation may grow; **Compact at**, under
+Advanced once a limit is set, is where the app starts summarising. Each app has its own setting,
+and BMN uses one only on an app version where your own test showed that the app takes it:
+
+| App | Limit | Where summarising starts | Tested on a live app |
+| --- | --- | --- | --- |
+| Codex | `model_context_window`: a `-c` item on a run, a top-level key of `config.toml` for your sessions | `model_auto_compact_token_limit`, the same way | not yet |
+| Claude Code | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100 000 to 1 000 000): an `env -i` entry on a run, an `env` entry of `settings.json` for your sessions | no setting | not yet |
+| OpenCode, Cursor | no setting | no setting | does not apply |
+
+Claude Code 2.1.296 reads `CLAUDE_CODE_MAX_CONTEXT_TOKENS` only for a model it does not know or
+with compaction off, so BMN does not use it.
+
+**The test.** `bmn context test <app>`, or **Test…** under Rules → Health → Context limits, starts
+the app once in an empty folder under your home folder with a short synthetic prompt and asks for
+a size no default equals (Codex 123 000, Claude Code 137 000). It passes when the app's own
+report shows that size: Codex's session record (which holds a little less than was asked, because
+Codex keeps part of the window back), or the Tokens line of Claude Code's `/context`. The result
+is kept for exactly that app version in `state/context-tests.jsonl`; the latest test of a version
+decides, and a new version starts untested. Until a test passed, the limit is **not supported
+yet** on that version: BMN writes nothing, passes nothing and requires nothing. Where summarising
+starts has no test yet, so it stays not supported on every app.
+
+**Runs BMN checks.** `bmn roster role <role> --json` gives each candidate a `context` entry:
+`applied` with the exact `argv` items (Codex) or `env` entries (Claude Code), `app-default`,
+`not-supported-yet` or `out-of-range`. `bmn roster check` then resolves what the run would really
+use and refuses with `CONTEXT_MISMATCH`, after the effort and before the destination, when that
+differs from the agent's limit or cannot be resolved; a PASS records the limit in the receipt's
+`context_limit_applied`. For Codex a `-c` item wins, then the selected profile, then
+`config.toml`; a `.codex/config.toml` in the working folder or above it, or `/etc/codex`, that
+sets a size makes the answer unresolved unless the run carries its own item. For Claude Code BMN
+cannot prove which source wins, so every source that names a size must name the same one: the
+run's environment, `env` in each settings file it loads, and a settings file's own
+`autoCompactWindow`. An agent without a limit is never asked for one.
+
+**Your own sessions.** Rules → Health → Context limits shows one row per app: its file, the agents
+that share it, the default it holds and whether the setting is tested on the installed version.
+**Change…**, offered only after a passed test, shows the file, where the write lands and the
+exact diff, and writes after you confirm: only the named key changes, every other byte stays, the
+file as it was is kept beside it as `<file>.bmn-backup-<time>`, and a file that changed since the
+diff was shown is left alone. A file that is a link is replaced by a regular file; the file it
+pointed to is never written. `bmn context set <app> --limit N|default` does the same in a
+terminal, with Yes/No. Claude Code's file is shared by every Claude Code agent, so a default set
+there reaches the runs BMN starts too: an agent whose own limit differs is refused until they agree.
+
 ### The prompt guard
 
 `bmn roster check` sees only work one agent hands to another. A lead you start yourself is not a
@@ -911,6 +960,10 @@ on Rules → Health: a provider that may see private work passes, any other warn
   `model_providers`, `profile`, `profiles`, `openai_base_url` and `chatgpt_base_url`, is taken
   not to say where work goes.
 
+- A context limit is checked from the run's command and the named settings, like the destination;
+  what the app does with it afterwards is the app's. The test proves the setting on one version
+  in one empty folder with a short prompt; it does not prove where summarising starts, and BMN
+  does not rank a size a project's own Codex configuration sets against yours.
 - Approval is workflow protection against processes running as your user, not an operating-system
   boundary: such a process can edit the state folder as easily as the team file. It makes a
   change take effect only after you saw it in BMN; it does not stop a hostile program.

@@ -922,7 +922,10 @@ export function roleChain(data, roleId) {
 
 export function roleChainText(chain) {
   const lines = [`role ${chain.role}`]
-  const about = (candidate) => `${candidate.eligible ? 'eligible' : `not eligible: ${candidate.state}`}  private-work=${candidate.private_work === 'allowed' ? 'allowed' : 'public-only'}`
+  // A limit BMN applies to the run, or why it does not (60.9 AC2); nothing is said for the app's own default.
+  const limit = (context) => context === undefined || context.state === 'app-default' ? ''
+    : `  context-limit=${context.limit}${context.state === 'applied' ? '' : context.state === 'out-of-range' ? ' (cannot be applied)' : ' (not supported yet)'}`
+  const about = (candidate) => `${candidate.eligible ? 'eligible' : `not eligible: ${candidate.state}`}  private-work=${candidate.private_work === 'allowed' ? 'allowed' : 'public-only'}${limit(candidate.context)}`
   chain.candidates.forEach((candidate, index) => {
     const effort = candidate.effort_choice ? `${candidate.efforts.join('|')} (lead chooses)` : candidate.efforts[0]
     lines.push(`  ${index + 1}. ${candidate.agent}@${effort}  ${about(candidate)}`)

@@ -7,6 +7,7 @@ import { APP_NAMES, DESIGNER_ROLE, LEAD_ROLE, RosterError, UNCHECKED_APPS, agent
 import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
+import { CLAUDE_CONTEXT_KEY, CODEX_CONTEXT_KEYS, checkContext, provenControls, wholeNumber } from './agents-context.mjs'
 
 /**
  * The check answers one question immediately before a dispatch: may this exact command, run from
@@ -328,7 +329,7 @@ function tomlKeyPath(raw) {
  * unknown rather than guessed. Everything else in the file is skipped unread.
  */
 export function readCodexConfig(text) {
-  const out = { top: {}, profiles: {}, providers: {}, unreadable: [] }
+  const out = { top: {}, profiles: {}, providers: {}, unreadable: [], context: { top: {}, profiles: {}, unreadable: null } }
   if (text === null) return out
   let table = []
   let skipUntil = null
@@ -371,7 +372,19 @@ export function readCodexConfig(text) {
       if (text === undefined) out.unreadable.push(path.join('.'))
       else target[key] = text
     }
-    if (path.length === 1 && CODEX_ROUTE_KEYS.includes(path[0])) record(out.top, path[0])
+    // A context limit is a number; one BMN cannot read never makes the destination unknown, only the limit.
+    const size = (target, key) => {
+      const number = value === null ? null : wholeNumber(value)
+      if (number === null) out.context.unreadable ??= `config.toml ${path.join('.')} is not a whole number`
+      else target[key] = number
+    }
+    if (path.length === 1 && CODEX_CONTEXT_KEYS.includes(path[0])) size(out.context.top, path[0])
+    else if (path[0] === 'profiles' && path.length === 3 && CODEX_CONTEXT_KEYS.includes(path[2])) {
+      // The profile exists, whatever else it holds.
+      out.profiles[path[1]] ??= {}
+      out.context.profiles[path[1]] ??= {}
+      size(out.context.profiles[path[1]], path[2])
+    } else if (path.length === 1 && CODEX_ROUTE_KEYS.includes(path[0])) record(out.top, path[0])
     else if (path[0] === 'profiles' && path.length === 3 && CODEX_ROUTE_KEYS.includes(path[2])) {
       out.profiles[path[1]] ??= {}
       record(out.profiles[path[1]], path[2])
@@ -446,15 +459,18 @@ function otherCodexConfig(folders, userConfig) {
     }
   }
   const paths = ['/etc/codex/config.toml', '/etc/codex/managed_config.toml', ...folders.flatMap(foldersAbove).map((dir) => join(dir, '.codex/config.toml'))]
+  const found = { destination: null, context: null }
   for (const path of new Set(paths)) {
     const text = optionalText(path)
     if (text === null || same(path)) continue
     const config = readCodexConfig(text)
     const decides = config.unreadable.length > 0 || CODEX_DESTINATION_KEYS.some((key) => config.top[key] !== undefined) || Object.keys(config.providers).length > 0
       || Object.values(config.profiles).some((profile) => CODEX_DESTINATION_KEYS.some((key) => profile[key] !== undefined))
-    if (decides) return path
+    if (decides) found.destination ??= path
+    const sizes = config.context.unreadable !== null || Object.keys(config.context.top).length > 0 || Object.values(config.context.profiles).some((profile) => Object.keys(profile).length > 0)
+    if (sizes) found.context ??= path
   }
-  return null
+  return found
 }
 
 /**
@@ -473,11 +489,14 @@ export function resolveCodexRoute(parsed, environment, cwd = null) {
   const providerOverrides = {}
   let unresolvable = config.unreadable.length > 0 ? `config.toml ${config.unreadable[0]} cannot be read` : null
   const starts = cwd === null ? [] : [cwd, ...(parsed.cd === undefined ? [] : [isAbsolute(parsed.cd) ? parsed.cd : join(cwd, parsed.cd)])]
-  const other = otherCodexConfig(starts.flatMap(spellings), configPath)
+  const others = otherCodexConfig(starts.flatMap(spellings), configPath)
+  const other = others.destination
   if (other !== null) {
     unresolvable ??= `${other} also says where Codex sends data, and BMN cannot tell which file wins`
     sources.push(other)
   }
+  const sizeOverrides = {}
+  let sizeUnreadable = null
   for (const entry of parsed.config) {
     const equals = entry.indexOf('=')
     if (equals === -1) return { unsupported: `-c ${entry} is not key=value` }
@@ -492,6 +511,10 @@ export function resolveCodexRoute(parsed, environment, cwd = null) {
       if (keys.length === 3 && keys[2] === 'base_url' && value !== undefined) providerOverrides[keys[1]] = value
       else if (keys.length >= 3) continue
       else unresolvable = `-c ${keys.join('.')} cannot be resolved`
+    } else if (keys.length === 1 && CODEX_CONTEXT_KEYS.includes(keys[0])) {
+      const number = wholeNumber(raw)
+      if (number === null) sizeUnreadable ??= `-c ${keys[0]} is not a whole number`
+      else sizeOverrides[keys[0]] = number
     } else if (keys.length === 1 && CODEX_NEUTRAL_KEYS.includes(keys[0])) {
       continue
     } else {
@@ -544,7 +567,19 @@ export function resolveCodexRoute(parsed, environment, cwd = null) {
       route = { basis: 'default', provider, host: `default:${provider}` }
     }
   }
-  return { route: { ...route, sources: [...new Set(sources)] }, model, effort, configHome: codexHome }
+  // A `-c` item wins over every file. Without one, the profile and config.toml decide, unless another file BMN does not rank names a size too.
+  const size = (key) => {
+    if (sizeUnreadable !== null) return { unresolved: sizeUnreadable }
+    if (sizeOverrides[key] !== undefined) return { value: sizeOverrides[key], source: `-c ${key}` }
+    if (config.context.unreadable !== null) return { unresolved: config.context.unreadable }
+    if (others.context !== null) return { unresolved: `${others.context} also sets a context size, and BMN cannot tell which file wins` }
+    const inProfile = profileName === undefined ? undefined : config.context.profiles[profileName]?.[key]
+    if (inProfile !== undefined) return { value: inProfile, source: `config.toml profiles.${profileName}.${key}` }
+    if (config.context.top[key] !== undefined) return { value: config.context.top[key], source: `config.toml ${key}` }
+    return null
+  }
+  const context = { limit: size(CODEX_CONTEXT_KEYS[0]), compact: size(CODEX_CONTEXT_KEYS[1]) }
+  return { route: { ...route, sources: [...new Set(sources)] }, model, effort, configHome: codexHome, context }
 }
 
 const CLAUDE_PROVIDER_SWITCHES = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']
@@ -596,16 +631,38 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
     if (name.endsWith('.json')) files.push([`managed settings ${name}`, `/etc/claude-code/managed-settings.d/${name}`])
   }
   const values = []
+  const sizes = []
+  let sizeUnreadable = null
   let reason = null
+  /** The context size one source names, in its `env` or, for a settings file, as its own autoCompactWindow. */
+  const takeSize = (source, raw) => {
+    if (raw === undefined || raw === '' || raw === 'auto') return
+    const number = typeof raw === 'string' || typeof raw === 'number' ? wholeNumber(raw) : null
+    if (number === null) sizeUnreadable ??= `${source} is not a whole number`
+    else sizes.push({ source, value: number })
+  }
+  const takeFileSize = (name, text) => {
+    if (text === null) return
+    try {
+      const data = JSON.parse(text)
+      if (isObject(data?.env)) takeSize(`${name} env ${CLAUDE_CONTEXT_KEY}`, data.env[CLAUDE_CONTEXT_KEY])
+      takeSize(`${name} autoCompactWindow`, data?.autoCompactWindow)
+    } catch {
+      // The destination reading already reports a settings file that is not JSON.
+    }
+  }
   const take = (source, vars) => {
     if (vars.ANTHROPIC_BASE_URL !== undefined && vars.ANTHROPIC_BASE_URL !== '') values.push({ source, url: vars.ANTHROPIC_BASE_URL })
     for (const key of CLAUDE_PROVIDER_SWITCHES) if (truthy(vars[key])) reason ??= `${key} is set in ${source}`
   }
   take(parsed.envMode === 'clean' ? 'env -i ANTHROPIC_BASE_URL' : 'ANTHROPIC_BASE_URL', env)
+  takeSize(parsed.envMode === 'clean' ? `env -i ${CLAUDE_CONTEXT_KEY}` : CLAUDE_CONTEXT_KEY, env[CLAUDE_CONTEXT_KEY])
   for (const [name, path] of files) {
-    const read = settingsEnv(optionalText(path), name)
+    const text = optionalText(path)
+    const read = settingsEnv(text, name)
     if (read.unreadable) reason ??= read.unreadable
     else take(name, read.env)
+    takeFileSize(name, text)
   }
   if (parsed.settings !== undefined) {
     const inline = parsed.settings.trimStart().startsWith('{')
@@ -614,7 +671,14 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
     const read = text === null ? { unreadable: '--settings cannot be read' } : settingsEnv(text, '--settings')
     if (read.unreadable) reason ??= read.unreadable
     else take('--settings', read.env)
+    takeFileSize('--settings', text)
   }
+  // BMN cannot prove which source Claude Code lets win, so one size everywhere is that size and two sizes are no answer.
+  const distinct = [...new Set(sizes.map((entry) => entry.value))]
+  const limit = sizeUnreadable !== null ? { unresolved: sizeUnreadable }
+    : distinct.length === 0 ? null
+      : distinct.length === 1 ? { value: distinct[0], source: sizes[0].source }
+        : { unresolved: `${sizes[0].source} says ${sizes[0].value} and ${sizes.find((entry) => entry.value !== sizes[0].value).source} says ${sizes.find((entry) => entry.value !== sizes[0].value).value}` }
   const sources = values.map((value) => value.source)
   let route
   if (reason !== null) {
@@ -631,7 +695,8 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
     route: { ...route, sources },
     model: parsed.model === undefined ? null : { value: parsed.model, source: '--model' },
     effort: parsed.effort === undefined ? null : { value: parsed.effort, source: '--effort' },
-    configHome: configDir
+    configHome: configDir,
+    context: { limit, compact: null }
   }
 }
 
@@ -1295,7 +1360,7 @@ function receiptAnswer(answer) {
  */
 export function evaluate(inputs, {
   environment = process.env, cwd: processCwd = process.cwd(), publicRules = null, now = new Date(),
-  testedVersions = TESTED_HARNESS_VERSIONS, resumeVersions = RESUME_TESTED_VERSIONS
+  testedVersions = TESTED_HARNESS_VERSIONS, resumeVersions = RESUME_TESTED_VERSIONS, contextTestLog = undefined
 } = {}) {
   const steps = []
   const note = (text) => steps.push(text)
@@ -1332,6 +1397,11 @@ export function evaluate(inputs, {
     note(`dispatch form: ${parsed.envMode === 'clean' ? 'env -i ' : ''}${parsed.harness === 'codex' ? `codex exec${parsed.resume ? ' resume' : ''}` : 'claude -p'}`)
 
     const { model, effort } = checkModelAndEffort(agent, resolution, note)
+    // Required only where the owner's test proved the setting on this version (60.9 AC1, AC2).
+    // The test log is read only for an agent that has a limit.
+    const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog))
+    if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal)
+    note(context.note)
     const route = resolution.route
     const destination = matchedDestination(data, agent, parsed.harness, route, note)
 
@@ -1455,7 +1525,7 @@ export function evaluate(inputs, {
 
     const body = {
       version: 1, mode: 'dispatch', verdict: 'PASS', agent: agent.id, class: agent.class, harness: parsed.harness, model: model.value,
-      role: role.id, effort: effort.value, context_limit_applied: null,
+      role: role.id, effort: effort.value, context_limit_applied: context.applied,
       workspace, cwd,
       public_status: { public: visibility.public, reason: visibility.reason, ...(visibility.public ? { commit: visibility.record.commit } : {}) },
       data: effectiveData,

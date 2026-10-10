@@ -55,3 +55,5 @@ export declare function lastProbes(options?: { inspect?: ProbeInspector }): (Par
 export declare function probe(harness: RulesHarness, options?: { environment?: NodeJS.ProcessEnv | Record<string, string>; now?: Date; timeoutMs?: number }): Promise<ProbeEntry>
 export declare const RULES_USAGE: string
 export declare function runRulesCommand(argv: string[]): Promise<number>
+export declare function confirm(question: string, details: string, options: { yes: boolean; asJson: boolean }): Promise<boolean>
+export declare function findRollout(root: string, cwd: string, since: number): string | null

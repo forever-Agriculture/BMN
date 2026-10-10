@@ -279,6 +279,12 @@ that may not see private work, the prompt is stopped before it leaves and the se
 card with **Allow here** (that provider, that workspace only) and **Keep blocked**. This works in
 Claude Code and Codex; Cursor only warns, and OpenCode is not covered.
 
+An agent's context limit, set on its page, is added to each run BMN or dev-auto starts with it
+and checked before the run leaves. Rules → **Health** also shows each app's default limit for the
+sessions you start yourself and can change it, one line of the app's own settings file, after
+showing the difference. Both work for Codex and Claude Code, and only on an app version where
+**Test…** there showed that the app takes the setting; until then the limit is kept but not applied.
+
 Preferences → **Rules** keeps one rules text and writes it into each agent app's own rules file
 (Claude Code, Codex, OpenCode and Cursor), shows each file's difference before it writes, and can
 undo an install. An app whose provider may not see private work receives only the sections you

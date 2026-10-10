@@ -1133,7 +1133,7 @@ process.on('exit', () => fs.writeFileSync(${JSON.stringify(join(home, 'reads.log
     expect(result.code, result.stderr).toBe(0)
     const reads = readFileSync(join(home, 'reads.log'), 'utf8').split('\n').map((line) => line.slice(line.indexOf(' ') + 1))
     const allowed = [
-      new RegExp(`^${home}/\\.config/bmn/agents/(roster\\.md|state/current|state/generations/\\d+\\.json|state/generations|state/visibility/[0-9a-f]{64}\\.json)$`),
+      new RegExp(`^${home}/\\.config/bmn/agents/(roster\\.md|state/current|state/generations/\\d+\\.json|state/generations|state/visibility/[0-9a-f]{64}\\.json|state/context-tests\\.jsonl)$`),
       new RegExp(`^${home}/\\.codex/config\\.toml$`),
       // Config files Codex may also load: the machine's, and one in the working folder or a folder above it.
       /^\/etc\/codex\/(config|managed_config)\.toml$/, /^(\/[^/]+)*\/\.codex\/config\.toml$/,

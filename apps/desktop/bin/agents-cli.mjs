@@ -264,7 +264,33 @@ async function rosterStatus(argv) {
   return 0
 }
 
-function rosterRole(argv) {
+/**
+ * Each candidate with the items that apply its agent's context limit to a run (60.9 AC2). An app's
+ * version is asked once, and only when one of its agents has a limit.
+ */
+async function withContext(data, chain) {
+  const { contextItems, contextTests, provenControls, CONTEXT_CONTROLS } = await import('./agents-context.mjs')
+  const byId = new Map(data.agents.map((agent) => [agent.id, agent]))
+  const versions = new Map()
+  let tests
+  let versionOf
+  const describe = async (candidate) => {
+    const agent = byId.get(candidate.agent)
+    if (agent === undefined) return candidate
+    if (agent.context_limit === undefined || CONTEXT_CONTROLS[agent.harness] === undefined) return { ...candidate, context: contextItems(agent, { limit: false, compact: false }) }
+    if (!versions.has(agent.harness)) {
+      versionOf ??= (await import('./agents-check.mjs')).harnessVersion
+      versions.set(agent.harness, versionOf(CONTEXT_CONTROLS[agent.harness].command, process.env))
+    }
+    tests ??= contextTests()
+    return { ...candidate, context: contextItems(agent, provenControls(agent.harness, versions.get(agent.harness), tests)) }
+  }
+  const candidates = []
+  for (const candidate of chain.candidates) candidates.push(await describe(candidate))
+  return { ...chain, candidates, ...(chain.small_work === undefined ? {} : { small_work: await describe(chain.small_work) }) }
+}
+
+async function rosterRole(argv) {
   let parsed
   try {
     parsed = readOptions(argv, { flags: ['json'] })
@@ -278,7 +304,7 @@ function rosterRole(argv) {
     const generation = approvedData()
     let chain
     try {
-      chain = roleChain(generation.data, parsed.positionals[0])
+      chain = await withContext(generation.data, roleChain(generation.data, parsed.positionals[0]))
     } catch (error) {
       if (error instanceof RosterError && error.code === 'ROLE_UNKNOWN') {
         if (asJson) out(JSON.stringify({ ok: false, verdict: 'REFUSED', code: 'ROLE_UNKNOWN', message: error.message }, null, 2))
@@ -298,4 +324,9 @@ function rosterRole(argv) {
 export async function runRules(argv) {
   const { runRulesCommand } = await import('./agents-rules.mjs')
   return runRulesCommand(argv)
+}
+
+export async function runContext(argv) {
+  const { runContextCommand } = await import('./agents-context.mjs')
+  return runContextCommand(argv)
 }

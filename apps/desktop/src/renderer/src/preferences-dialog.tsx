@@ -503,7 +503,7 @@ export function PreferencesDialog(props: {
         ))}
       </nav>
       <main className="preferences-main" ref={main}>
-      {parent === 'team' ? <div className="preferences-page team-page"><TeamPreferences team={team} page={shownTeamPage} apps={rules.snapshot?.apps ?? null} reported={props.reportedModels ?? []} go={goTeam} /></div> : null}
+      {parent === 'team' ? <div className="preferences-page team-page"><TeamPreferences team={team} page={shownTeamPage} apps={rules.snapshot?.apps ?? null} context={rules.snapshot?.context ?? null} reported={props.reportedModels ?? []} go={goTeam} /></div> : null}
       {parent === 'rules' ? <div className="preferences-page rules-page"><RulesPreferences rules={rules} team={team} page={page === 'health' ? 'health' : 'editor'} recognised={props.recognisedSessions ?? {}} onTypeInSession={props.onTypeInSession} /></div> : null}
       {pageOf('appearance', <>
       <section className="preferences-section">

@@ -218,6 +218,48 @@ export interface RulesProbeView {
   stale?: boolean
 }
 
+/** The apps BMN has a context-limit setting for. */
+export const CONTEXT_LIMIT_APPS = ['codex', 'claude'] as const
+export type ContextLimitApp = (typeof CONTEXT_LIMIT_APPS)[number]
+
+/** One app's default context limit for the owner's own sessions, as Rules › Health shows it (60.9 AC3). */
+export interface ContextLimitView {
+  harness: ContextLimitApp
+  /** The app's own settings file that holds the default. */
+  path: string
+  resolvedPath?: string
+  linkTarget?: string
+  exists: boolean
+  limit: number | null
+  /** Where the app starts summarising, when its file names that. */
+  compact: number | null
+  /** Why the file's value cannot be read, in words. */
+  unreadable?: string
+  version: string | null
+  /** Whether the owner's test showed, on the installed version, that the app takes the setting. Until then BMN writes and requires nothing. */
+  limitProven: boolean
+  compactProven: boolean
+  /** The sizes the app takes, where it says. */
+  min?: number
+  max?: number
+  /** The last test of this app, whatever version it ran against. */
+  test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string } | null
+  /** The approved, enabled agents that run on this app: they share this one file. */
+  agents: string[]
+}
+
+/** What changing a default would write, before it is written (R60-NFR2). */
+export interface ContextLimitPlan {
+  ok: boolean
+  code: string
+  message?: string
+  path?: string
+  resolvedPath?: string
+  linkTarget?: string
+  diff: string
+  planHash: string | null
+}
+
 export interface RulesSnapshot {
   masterPath: string
   /** The home directory the agents' files resolve under, for showing them as `~/…` (display only). */
@@ -229,6 +271,8 @@ export interface RulesSnapshot {
   probes: RulesProbeView[]
   /** Each agent app's version and destination, inspected when the snapshot was taken. */
   apps: AgentAppView[]
+  /** Each app's default context limit, and whether its setting is proven on the installed version. */
+  context: ContextLimitView[]
   /**
    * Set when BMN could not ask the owner's shell for its settings and inspected with its own
    * environment instead: why, in words. A session may then find other programs than BMN does.

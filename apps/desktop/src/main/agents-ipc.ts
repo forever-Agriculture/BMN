@@ -12,6 +12,9 @@ import {
   type AgentsRulesUpdate,
   type AgentsShownRevision,
   type AgentsSnapshot,
+  type ContextLimitApp,
+  type ContextLimitPlan,
+  type ContextLimitView,
   type RosterDataShape,
   type RosterHarness,
   type RulesOutcome,
@@ -32,6 +35,7 @@ import {
 import { pathState, replaceFileSafely } from '../../bin/safe-config-write.mjs'
 import { unifiedDiff } from '../../bin/text-diff.mjs'
 import { decide as decidePrompt } from '../../bin/agents-guard.mjs'
+import { CONTEXT_APPS, ContextError, applyContextDefault, contextDefault, planContextDefault, sharingAgents } from '../../bin/agents-context.mjs'
 import { allowWorkspace, approveRoster, approveSections, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
 import { findAppProgram } from './app-program'
 import { MainIpcError } from './workspace-ipc'
@@ -401,6 +405,34 @@ function appView(harness: RosterHarness, context: RulesIpcContext): AgentAppView
   }
 }
 
+/** One row of Rules › Health › Context limits (60.9 AC3): the default the app's file holds, and whether BMN may change it. */
+function contextView(harness: ContextLimitApp, version: string | null, generation: Generation | null, context: RulesIpcContext): ContextLimitView {
+  const row = contextDefault(harness, { environment: context.env, version })
+  return {
+    harness, path: row.path, exists: row.exists, limit: row.limit, compact: row.compact, version,
+    ...(row.resolved_path !== undefined && row.resolved_path !== row.path ? { resolvedPath: row.resolved_path } : {}),
+    ...(row.link_target === undefined ? {} : { linkTarget: row.link_target }),
+    ...(row.unreadable === undefined ? {} : { unreadable: row.unreadable }),
+    limitProven: row.proven.limit, compactProven: row.proven.compact,
+    ...(row.min === undefined || row.max === undefined ? {} : { min: row.min, max: row.max }),
+    test: row.test === null ? null : { at: row.test.at, version: row.test.version, outcome: row.test.limit, detail: row.test.detail },
+    agents: sharingAgents(generation?.data ?? null, harness)
+  }
+}
+
+function contextApp(value: unknown): ContextLimitApp {
+  if (typeof value !== 'string' || !(CONTEXT_APPS as readonly string[]).includes(value)) invalid('harness is not one of codex, claude')
+  return value as ContextLimitApp
+}
+
+/** A number of tokens, or null for the app's own default. */
+function sizeParam(params: Record<string, unknown>, key: string): number | null {
+  const value = params[key]
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0 || value > 999_999_999) invalid(`${key} must be a positive whole number of tokens, or null`)
+  return value
+}
+
 async function rulesHealth(context: RulesIpcContext): Promise<RulesSnapshot['health']> {
   const checkedAt = context.now().toISOString()
   const result = await runCli(context.script, ['rules', 'check', '--json'], context.env)
@@ -430,6 +462,7 @@ export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnap
   const errors = text === null ? [] : parseMaster(text).errors
   const { generation } = approvedOrProblem()
   const renderings = text !== null && errors.length === 0 ? renderAll(path, text, generation) : []
+  const apps = (HARNESSES as RosterHarness[]).map((harness) => appView(harness, context))
   let history: RulesSnapshot['history']
   try {
     history = masterHistory()
@@ -443,7 +476,9 @@ export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnap
     renderings,
     health: text === null ? { state: 'failed', checkedAt: context.now().toISOString(), reason: `No rules master at ${path}` } : await rulesHealth(context),
     probes: lastProbes({ inspect: await probeInspector(context.probeEnv) }) as RulesProbeView[],
-    apps: (HARNESSES as RosterHarness[]).map((harness) => appView(harness, context)),
+    apps,
+    // The version each limit setting is judged against is the one the row above shows.
+    context: (CONTEXT_APPS as ContextLimitApp[]).map((harness) => contextView(harness, apps.find((app) => app.harness === harness)?.version ?? null, generation, context)),
     ...(context.ownEnvironment === undefined ? {} : { ownEnvironment: context.ownEnvironment }),
     transactions: listTransactions().slice(0, 10).map((entry) => ({
       id: entry.id, valid: entry.valid, ...(entry.created_at ? { createdAt: entry.created_at } : {}),
@@ -685,6 +720,46 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       ok: true, diff: unifiedDiff(currentText ?? '', text, masterPath()), expectedHash: currentText === null ? null : sha256(currentText),
       expectedLink: state.kind === 'link' ? state.target : null, expectedDirectory: state.directory, text
     }
+  })
+  const installedVersion = (harness: ContextLimitApp, ctx: RulesIpcContext): string | null => inspectApp(harness, ctx.env, ctx.probeEnv).resolution.version
+  handle('aiterm:rules:context-plan', (params): ContextLimitPlan => {
+    const harness = contextApp(params.harness)
+    const limit = sizeParam(params, 'limit')
+    const compact = sizeParam(params, 'compact')
+    const ctx = context()
+    try {
+      const plan = planContextDefault(harness, { limit, compact }, { environment: ctx.env, version: installedVersion(harness, ctx) })
+      return {
+        ok: true, code: 'OK', path: plan.path, diff: plan.diff, planHash: plan.plan_hash,
+        ...(plan.resolved_path === undefined ? {} : { resolvedPath: plan.resolved_path }), ...(plan.link_target === undefined ? {} : { linkTarget: plan.link_target })
+      }
+    } catch (error) {
+      const code = typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : 'IO_ERROR'
+      return { ok: false, code, message: error instanceof Error ? error.message : String(error), diff: '', planHash: null }
+    }
+  })
+  handle('aiterm:rules:context-apply', async (params) => {
+    const harness = contextApp(params.harness)
+    const limit = sizeParam(params, 'limit')
+    const compact = sizeParam(params, 'compact')
+    const planHash = textParam(params, 'planHash', 64)
+    const ctx = context()
+    try {
+      const done = applyContextDefault(harness, { limit, compact }, planHash, { environment: ctx.env, version: installedVersion(harness, ctx), now: ctx.now() })
+      const message = !done.written ? `${ROSTER_APP_NAMES[harness]} already had that default`
+        : `${ROSTER_APP_NAMES[harness]}'s default context limit changed. Sessions started before this keep their old limit.`
+      return { ok: true, message, snapshot: await rulesSnapshot(ctx) } satisfies RulesOutcome
+    } catch (error) {
+      const code = error instanceof ContextError || typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : 'IO_ERROR'
+      return { ok: false, code, message: error instanceof Error ? error.message : String(error), snapshot: await rulesSnapshot(ctx) } satisfies RulesOutcome
+    }
+  })
+  handle('aiterm:rules:context-test', async (params) => {
+    const harness = contextApp(params.harness)
+    const ctx = context()
+    // Owner-run: the app starts once with its own environment, as a loading test does.
+    const result = await runCli(ctx.script, ['context', 'test', harness, '--json'], ctx.probeEnv, PROBE_TIMEOUT_MS)
+    return rulesOutcome(ctx, result, (report) => `${ROSTER_APP_NAMES[harness]} context test ${PROBE_OUTCOME_WORDS[String(report.outcome)] ?? String(report.outcome)}: ${String(report.detail)}`)
   })
   handle('aiterm:rules:probe', async (params) => {
     const harness = harnessParam(params.harness)

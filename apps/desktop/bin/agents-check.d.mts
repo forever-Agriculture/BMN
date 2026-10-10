@@ -60,6 +60,8 @@ export interface CheckOptions {
   now?: Date
   testedVersions?: Record<string, string[]>
   resumeVersions?: Record<string, string[]>
+  /** The recorded context-setting tests; the tests' seam for 60.9 AC1. */
+  contextTestLog?: import('./agents-context.mjs').ContextTestEntry[]
 }
 export interface ResearchOptions { environment?: Environment; cwd?: string; now?: Date; testedVersions?: Record<string, string[]>; fenceVersions?: Record<string, string[]> }
 export interface VisibilityRecord {
@@ -95,7 +97,8 @@ export declare const VISIBILITY_MAX_AGE_MS: number
 export declare const BINDING_WINDOW_MS: number
 export declare function setReadTracer(tracer: ((path: string) => void) | null): void
 export declare function parseDispatch(argv: string[]): Record<string, unknown>
-export declare function readCodexConfig(text: string | null): { top: Record<string, string>; profiles: Record<string, Record<string, string>>; providers: Record<string, Record<string, unknown>>; unreadable: string[] }
+export declare function readCodexConfig(text: string | null): { top: Record<string, string>; profiles: Record<string, Record<string, string>>; providers: Record<string, Record<string, unknown>>; unreadable: string[]
+  context: { top: Record<string, number>; profiles: Record<string, Record<string, number>>; unreadable: string | null } }
 export declare function evaluate(inputs: CheckInputs, options?: CheckOptions): CheckResult
 export declare function evaluateResearch(inputs: ResearchInputs, options?: ResearchOptions): ResearchResult
 export declare function verifyReceipt(path: string, argv: string[], options?: CheckOptions): { ok: boolean; reason?: string }

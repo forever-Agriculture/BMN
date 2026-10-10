@@ -1647,6 +1647,12 @@
   margin-top: 6px;
 }
 
+/* Why a typed number is not taken, beside its field. */
+.preferences-dialog .field-refusal {
+  color: var(--error);
+  font-size: 12px;
+}
+
 /* A confirmation in place. */
 .preferences-dialog .sheet {
   display: flex;
@@ -1776,7 +1782,7 @@
 }
 
 .preferences-dialog .rules-page .health-row ~ .preferences-help,
-.preferences-dialog .rules-page .app-block ~ .preferences-help,
+.preferences-dialog .rules-page :is(.app-block, .limit-block) ~ .preferences-help,
 .preferences-dialog .team-page .role ~ .preferences-help {
   margin-top: 10px;
 }

@@ -19,6 +19,8 @@ import {
   type AgentsTeamUpdateShown,
   type RosterDataShape,
   type RosterHarness,
+  type ContextLimitApp,
+  type ContextLimitPlan,
   type RulesOutcome,
   type RulesMasterPlan,
   type RulesPlan,
@@ -788,6 +790,15 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   probeRules(harness: RosterHarness): Promise<RulesOutcome> {
     return invokeBridge('aiterm:rules:probe', { harness })
+  },
+  planContextLimit(harness: ContextLimitApp, limit: number | null, compact: number | null): Promise<ContextLimitPlan> {
+    return invokeBridge('aiterm:rules:context-plan', { harness, limit, compact })
+  },
+  applyContextLimit(harness: ContextLimitApp, limit: number | null, compact: number | null, planHash: string): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:context-apply', { harness, limit, compact, planHash })
+  },
+  testContextLimit(harness: ContextLimitApp): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:context-test', { harness })
   },
   readClipboardText(): Promise<{ text: string }> {
     return invokeBridge('aiterm:clipboard:read-text', {})
