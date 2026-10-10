@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { installAgentsIpcHandlers } from './agents-ipc'
+import { approveRoster, restoreGeneration, saveAndApprove } from './agents-approval'
+import { fileToApproved, installAgentsIpcHandlers } from './agents-ipc'
 
 const FIXTURE = readFileSync(fileURLToPath(new URL('../utility/test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 /** BMN cannot inspect where OpenCode sends data, so the team these tests approve records it on the owner's word. */
@@ -16,6 +17,8 @@ const MASTER = '# Rules\n\nThe team: <!-- bmn:team -->.\n\n<!-- bmn:public -->\n
 let home: string
 let stubs: string
 let handlers: Map<string, (event: never, params?: unknown) => unknown>
+/** What the app's own environment holds beside HOME and PATH, for the test that needs more. */
+let appEnv: Record<string, string>
 const saved = { HOME: process.env.HOME, PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
 
 function stub(name: string, body: string): void {
@@ -34,8 +37,9 @@ beforeEach(() => {
   process.env.PATH = `${stubs}:/usr/bin:/bin`
   delete process.env.XDG_CONFIG_HOME
   handlers = new Map()
+  appEnv = {}
   installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
-    senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin` }),
+    senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...appEnv }),
     openPath: async (path) => (existsSync(path) ? '' : 'no such file')
   })
 })
@@ -214,6 +218,60 @@ describe('restoring while the team file holds changes nobody reviewed', () => {
   })
 })
 
+describe('a restore replaces only the file the owner was shown', () => {
+  it('keeps an edit made after the restore was shown, even one that lands while it publishes', async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    await call<AgentsOutcome>('agents:approve', { shown: await shown() })
+    const state = await snapshot()
+    await call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: activate(state.file.data as RosterDataShape, 'haiku') })
+    const before = await shown()
+    // The lock is held and the file was checked: an edit lands before BMN puts the file back.
+    const edited = readFileSync(rosterFile(), 'utf8').replace('browser: {candidates: [luna@max], then: lead}', 'browser: {candidates: [luna@max], then: skip}')
+    const restored = restoreGeneration(before, 1, { checkInspectedRoutes: () => {}, beforePointer: () => writeFileSync(rosterFile(), edited) })
+    expect(restored.number).toBe(3)
+    // What the handler does next: the file is not the one that was shown, so it stays and its differences show.
+    expect(fileToApproved(before)).toBe(true)
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(edited)
+    expect((await snapshot()).differences?.map((diff) => `${diff.scope}:${diff.id}:${diff.field}`)).toContain('roles:browser:then')
+  })
+
+  it('after approved state was lost, restores the version and leaves the file\'s own edits to keep or revert; its sheet lists the restored team', async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    await call<AgentsOutcome>('agents:approve', { shown: await shown() })
+    const edited = readFileSync(rosterFile(), 'utf8').replace('browser: {candidates: [luna@max], then: lead}', 'browser: {candidates: [luna@max], then: skip}')
+    writeFileSync(rosterFile(), edited)
+    writeFileSync(join(home, '.config/bmn/agents/state/current'), '{ not json')
+    expect(await snapshot()).toMatchObject({ approved: null, approvalProblem: { code: 'STATE_CORRUPT', lastGood: 1 }, differences: null })
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'restore', number: 1 } })
+    expect(preview.restored?.roles.find((role) => role.id === 'browser')).toMatchObject({ then: 'lead' })
+    const restored = await call<AgentsOutcome>('agents:restore', { shown: await shown(), number: 1 })
+    expect(restored).toMatchObject({ ok: true, message: 'Version 1 restored as version 2 · the team file still holds later edits; keep or revert each', snapshot: { approved: { generation: 2 } } })
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(edited)
+    expect(restored.snapshot.differences?.map((diff) => `${diff.scope}:${diff.id}:${diff.field}`)).toEqual(['roles:browser:then'])
+  })
+})
+
+describe('a version that was written and never put into effect', () => {
+  it('stays marked after a later approval, and when the first approval never finished', async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    // The first approval stops between its two writes: a version on disk, nothing in effect.
+    const first = await shown()
+    expect(() => approveRoster(first, { checkInspectedRoutes: () => {}, beforePointer: () => { throw new Error('stopped') } })).toThrow('stopped')
+    expect((await snapshot()).history.map((entry) => [entry.number, entry.unfinished === true, entry.summary])).toEqual([[1, true, undefined]])
+    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true, message: 'Approved · version 2' })
+    const state = await snapshot()
+    expect(() => saveAndApprove(shownOf(state), activate(state.file.data as RosterDataShape, 'haiku') as never, { checkInspectedRoutes: () => {}, beforePointer: () => { throw new Error('stopped') } })).toThrow('stopped')
+    // The file holds the unfinished edit as a pending difference; keeping it publishes version 4 after version 2.
+    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true, message: 'Approved · version 4' })
+    expect((await snapshot()).history.map((entry) => [entry.number, entry.unfinished === true])).toEqual([[4, false], [3, true], [2, false], [1, true]])
+    // Approved state lost and approved again: the versions that did take effect keep their place.
+    writeFileSync(join(home, '.config/bmn/agents/state/current'), '{ not json')
+    expect((await snapshot()).history.map((entry) => entry.unfinished === true)).toEqual([false, false, false, false])
+    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true, message: 'Approved · version 5' })
+    expect((await snapshot()).history.map((entry) => [entry.number, entry.unfinished === true])).toEqual([[5, false], [4, false], [3, true], [2, false], [1, true]])
+  })
+})
+
 describe('restoring past an agent that was added since (60.2 AC6)', () => {
   it('approves the earlier version, leaves the team file alone and says what still shows', async () => {
     writeFileSync(rosterFile(), EXAMPLE)
@@ -243,6 +301,28 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: false, code: 'ROUTE_CHANGED', message: expect.stringContaining('Codex sends data to proxy.example.com') })
     rmSync(join(home, '.codex/config.toml'))
     expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
+  })
+
+  it('reads OpenCode as unknown on Health, at approval and at install when the app\'s environment names another OpenCode configuration', async () => {
+    writeFileSync(rosterFile(), FIXTURE.replace('opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}'))
+    mkdirSync(join(home, '.config/opencode'), { recursive: true })
+    writeFileSync(join(home, '.config/opencode/opencode.json'), '{ "model": "opencode-go/kimi-k3" }')
+    const opencode = async () => (await call<RulesSnapshot>('rules:snapshot')).apps[2]
+    expect(await opencode()).toMatchObject({ harness: 'opencode', basis: 'default', provider: 'opencode-go' })
+    for (const [name, value] of [['OPENCODE_CONFIG', join(home, 'other.json')], ['OPENCODE_CONFIG_CONTENT', '{"model":"proxy/x","provider":{"proxy":{"options":{"apiKey":"KEY-SENTINEL"}}}}']] as const) {
+      appEnv = { [name]: value }
+      const view = await opencode()
+      expect(view).toMatchObject({ basis: 'unknown', provider: null })
+      expect(JSON.stringify(view)).not.toContain('KEY-SENTINEL')
+      expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: false, code: 'ROUTE_CHANGED', snapshot: { approved: null } })
+    }
+    appEnv = {}
+    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
+    expect(await call<RulesOutcome>('rules:save-master', { text: MASTER, expectedHash: null, expectedLink: null })).toMatchObject({ ok: true })
+    expect((await call<RulesPlan>('rules:plan-install')).targets.find((target) => target.harness === 'opencode')).toMatchObject({ rendering: 'full' })
+    appEnv = { OPENCODE_CONFIG: join(home, 'other.json') }
+    expect(await call<RulesPlan>('rules:plan-install')).toMatchObject({ ok: false, code: 'ROUTE_CHANGED', message: expect.stringContaining('OPENCODE_CONFIG names another OpenCode configuration') })
+    expect(existsSync(join(home, '.config/opencode/AGENTS.md'))).toBe(false)
   })
 
   it('supports every installed app version and says whether BMN tested it (owner decision 2026-10-10)', async () => {

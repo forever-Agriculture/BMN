@@ -199,11 +199,27 @@ describe('Team › Roles and Changes (60.5 AC5, AC6)', () => {
     expect(markup).toContain('disabled="" aria-expanded="false" aria-label="View version 2"')
   })
 
-  it('marks a version written after the one in effect as never having taken effect', () => {
-    const markup = pageMarkup({ name: 'changes' }, team({ snapshot: { ...SNAPSHOT, history: [{ number: 5, valid: true, created_at: '2026-10-10T08:00:00.000Z', summary: 'Haiku could be given work' }, ...SNAPSHOT.history] } }))
+  it('marks a version that never took effect, whether it sits above or below the one in effect', () => {
+    const history = SNAPSHOT.history.map((entry) => (entry.number === 3 ? { number: 3, valid: true, created_at: '2026-10-08T10:00:00.000Z', unfinished: true } : entry))
+    const markup = pageMarkup({ name: 'changes' }, team({ snapshot: { ...SNAPSHOT, history: [{ number: 5, valid: true, created_at: '2026-10-10T08:00:00.000Z', unfinished: true }, ...history] } }))
     expect(markup).toContain('<b>Never took effect: BMN stopped before this approval finished</b> <span class="line-detail">version 5 ·')
-    expect(markup).not.toContain('Haiku could be given work')
+    expect(markup).toContain('<b>Never took effect: BMN stopped before this approval finished</b> <span class="line-detail">version 3 ·')
     expect(markup).toContain('<b>Opus could no longer be given work</b>')
+    // A higher number alone says nothing: the mark comes from what BMN recorded.
+    expect(pageMarkup({ name: 'changes' }, team({ snapshot: { ...SNAPSHOT, history: [{ number: 5, valid: true, created_at: '2026-10-10T08:00:00.000Z', summary: 'Haiku could be given work' }, ...SNAPSHOT.history] } })))
+      .toContain('<b>Haiku could be given work</b>')
+  })
+
+  it('a restore with nothing approved names the folders the restored version allows, not the team file\'s', () => {
+    const restored = { ...DATA, exceptions: [{ id: 'zai-here', provider: 'zai', folder: '/home/synthetic/restored-work' }] }
+    const data = { ...DATA, exceptions: [{ id: 'zai-here', provider: 'zai', folder: '/home/synthetic/file-work' }] }
+    const sheet = words(ledgerMarkup(team({
+      approved: null, data, snapshot: { ...SNAPSHOT, approved: null, approvalProblem: { code: 'STATE_CORRUPT', message: 'unreadable', lastGood: 3 } },
+      confirmation: { request: { kind: 'restore', number: 3 }, title: 'Restore version 3', action: 'Restore',
+        preview: { valid: true, errors: [], differences: [], teamUpdate: [], consequences: ['Z.ai could receive private work in one more workspace'], restored } }
+    })))
+    expect(sheet).toContain('/home/synthetic/restored-work')
+    expect(sheet).not.toContain('/home/synthetic/file-work')
   })
 
   it('offers no restore while the team file holds changes made outside BMN, and says where to settle them', () => {

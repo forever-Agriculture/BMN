@@ -778,11 +778,13 @@ An edit made outside BMN shows as its own row with **Keep** and **Revert**. The 
 or removed entry one word, so **Keep** then opens a sheet that lists every value it carries (an
 allowed folder, a provider's answer) and what the change would do, and commits from there.
 **Restore…** waits until such edits are kept or reverted, because the team file follows the
-restored version. A team file that is a link is named with where it points: a change saved from
+restored version; only the file you were shown is put back, so an edit that lands meanwhile stays
+and shows as a difference. A team file that is a link is named with where it points: a change saved from
 these pages replaces the link with a regular file and leaves the file it pointed to alone; the
 rules master's Save sheet says the same. When the approved team can no longer be read, the page
-says so and names the last version that still reads; a version written after the one in effect is
-listed as never having taken effect.
+says so and names the last version that still reads; restoring it then lists that version's team
+and leaves the team file as it is, to keep or revert. A version that was written and never put
+into effect (BMN stopped between the two) is listed as never having taken effect.
 
 **Asking the team.** `bmn team` prints the approved team; `bmn roster role <role>` the ordered
 chain with each candidate's eligibility. Neither prints your notes or prices.
@@ -828,8 +830,8 @@ swapped link made meanwhile, including a link on the way to the folder that hold
 every file's difference, including a link, a hand-written file or an outside edit it replaces,
 and writes them in one step; a file that is a link is replaced by a regular file, and the file it
 pointed to is never written. The full rules are written, updated or sent in a test on any
-installed version of the app; only an app whose version cannot be read (not installed, or not on
-`PATH`) is refused them. Each action confirms against the exact plan it showed, plans again
+installed version of Claude Code or Codex; only one whose version cannot be read (not installed,
+or not on `PATH`) is refused them. BMN never runs OpenCode, so it reads no version for it. Each action confirms against the exact plan it showed, plans again
 once you confirm, and refuses if the files changed since. A plan is bound to the folder that
 really holds each file: when a link on the way to a file leads elsewhere, the confirmation names
 that place too, and a link that moves afterwards makes the plan refuse. **Health** reads each file the way the
@@ -881,12 +883,13 @@ it would replace, and puts nothing back until you confirm.
   0.161.0. It reads the same named settings on every later version and refuses a changed or
   unknown destination as before, but a version that starts to take its destination from a setting
   BMN does not read would not be noticed. For OpenCode BMN reads only its own configuration
-  folder: the model's provider prefix, unknown when `OPENCODE_CONFIG` names another file or the
-  provider entry carries its own address; a project's `opencode.json` is not read.
+  folder: the model's provider prefix, unknown when `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT`
+  is set where BMN runs or the provider entry carries its own address; a project's `opencode.json`
+  and the environment of the shell you start OpenCode in are not read.
 - A packet for a public-only destination relies on Claude Code's `--safe-mode` to keep your rules
   file, memory, skills and hooks out of the call. BMN does not test that itself; run one packet
   with a marker line in your rules before you turn on a public-only agent. `accepted_versions` in a team file written under the
-  earlier rule is still valid and no longer read; Rules → Health removes it with its ×.
+  earlier rule is still valid and decides nothing any more; Rules → Health removes it with its ×.
 
 ## A brief for agents
 

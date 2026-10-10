@@ -728,11 +728,9 @@ function ChangesPage(props: { team: TeamState }): React.JSX.Element {
   const history = team.snapshot?.history ?? []
   const current = team.snapshot?.approved?.generation ?? null
   const roleIds = roleIdsOf(team.data, team.approved)
-  // BMN writes a version, then puts it into effect; one written after the version in effect never got that far.
-  const unfinished = (entry: AgentsGenerationSummary): boolean => current !== null && entry.number > current
   const outside = team.outside.groups.length > 0
   const title = (entry: AgentsGenerationSummary): string => !entry.valid ? 'This version cannot be read'
-    : unfinished(entry) ? 'Never took effect: BMN stopped before this approval finished'
+    : entry.unfinished === true ? 'Never took effect: BMN stopped before this approval finished'
     : entry.summary !== undefined ? summaryWords(entry.summary, roleIds) : entry.earlier_schema === undefined ? 'Approved' : 'Approved under an earlier layout'
   return (
     <>
@@ -933,7 +931,9 @@ function firstConsequence(consequences: readonly string[], groups: readonly Diff
 
 /** What a review lists: the grouped differences, or for a first approval what each agent and role could then do. */
 function groupFor(preview: NonNullable<TeamState['preview']>, team: TeamState): { groups: DiffGroup[]; general: string[] } {
-  if (team.snapshot?.approved === null && team.data !== null) return firstApprovalGroups(team.data, preview.consequences)
+  // With nothing approved a review lists the whole team that would take effect: the file's, or for a restore that version's.
+  const whole = preview.restored ?? team.data
+  if (team.snapshot?.approved === null && whole !== null) return firstApprovalGroups(whole, preview.consequences)
   return groupDifferences(preview.differences, team.data, team.approved, preview.consequences)
 }
 

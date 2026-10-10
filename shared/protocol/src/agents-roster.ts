@@ -94,6 +94,8 @@ export interface AgentsGenerationSummary {
   earlier_schema?: number
   /** What that approval changed, in one line. */
   summary?: string
+  /** Set for a version that was written and never put into effect: BMN stopped before the approval finished. */
+  unfinished?: boolean
 }
 
 export interface AgentsSnapshot {
@@ -138,6 +140,8 @@ export interface AgentsPreview {
   consequences: string[]
   /** The rules files this approval would also update; empty when the Team phrase stays as it is. */
   teamUpdate: TeamUpdateTarget[]
+  /** For a restore: the team that would take effect, which is not the one in the team file. */
+  restored?: RosterDataShape
 }
 
 /** The rules files shown beside an approving control, by the binding each was shown with; an approval updates no others. */

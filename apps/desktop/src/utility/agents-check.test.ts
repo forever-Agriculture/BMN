@@ -257,6 +257,38 @@ describe('destination resolution (60.3 AC3-AC4)', () => {
     expect(above.message).toContain('proxy.example.test')
   })
 
+  it('reads a profile written on one line, a -C that passes through a link, and a local settings file beside the user\'s own', () => {
+    // A whole profile on one line cannot be read key by key: the destination is unknown, in a project file or the user's own.
+    for (const folder of [workspace, home]) {
+      mkdirSync(join(folder, '.codex'))
+      writeFileSync(join(folder, '.codex/config.toml'), 'profiles.work = { model_provider = "proxy" }\n')
+      expect(check({ argv: ASTRA_REVIEW(workspace) })).toMatchObject({ verdict: 'REFUSED', code: 'HOST_UNKNOWN' })
+      rmSync(join(folder, '.codex'), { recursive: true })
+    }
+    // -C names a link: the folders above where it really leads count too.
+    mkdirSync(join(workspace, 'area/project'), { recursive: true })
+    mkdirSync(join(workspace, 'area/.codex'))
+    writeFileSync(join(workspace, 'area/.codex/config.toml'), 'model_provider = "proxy"\n')
+    symlinkSync(join(workspace, 'area/project'), join(workspace, 'link'))
+    for (const spelling of [join(workspace, 'link'), 'link']) {
+      const argv = ASTRA_REVIEW(join(workspace, 'link'))
+      argv[argv.indexOf('-C') + 1] = spelling
+      const linked = check({ argv })
+      expect(linked).toMatchObject({ verdict: 'REFUSED', code: 'HOST_UNKNOWN' })
+      expect(linked.message).toContain(`${workspace}/area/.codex/config.toml also says where Codex sends data`)
+    }
+    rmSync(join(workspace, 'link'))
+    rmSync(join(workspace, 'area'), { recursive: true })
+    expect(check({ argv: ASTRA_REVIEW(workspace) }).verdict).toBe('PASS')
+    // Beside the user settings, already read, their folder may hold a local file: one more source.
+    mkdirSync(join(home, '.claude'))
+    writeFileSync(join(home, '.claude/settings.json'), '{}')
+    writeFileSync(join(home, '.claude/settings.local.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://proxy.example.test' } }))
+    const local = check({ agent: 'fable', argv: FABLE_PACKET('rules') })
+    expect(local).toMatchObject({ verdict: 'REFUSED', code: 'HOST_MISMATCH' })
+    expect(local.message).toContain('proxy.example.test')
+  })
+
   it('an explicit host names the provider that lists it, and an approved host must match exactly', () => {
     const glm = check({ agent: 'glm', role: 'helper', argv: GLM() })
     // The destination is known and matches; the provider's answer is what refuses private work.

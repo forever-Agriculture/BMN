@@ -179,12 +179,56 @@ function corrupt(message) {
     { lastGood })
 }
 
+/** The generation `current` names: a number, null when there is no pointer, undefined when it cannot be read. */
+function pointedGeneration() {
+  try {
+    const pointer = JSON.parse(readFileSync(currentPointerPath(), 'utf8'))
+    return isObject(pointer) && Number.isSafeInteger(pointer.generation) ? pointer.generation : undefined
+  } catch (error) {
+    return error.code === 'ENOENT' ? null : undefined
+  }
+}
+
+/** The generations the history log says were put into effect; null when there is no log. */
+function loggedGenerations() {
+  let text
+  try {
+    text = readFileSync(historyLogPath(), 'utf8')
+  } catch {
+    return null
+  }
+  const logged = new Set()
+  for (const line of text.split('\n')) {
+    try {
+      const entry = JSON.parse(line)
+      if (isObject(entry) && (entry.event === 'approval' || entry.event === 'restore') && Number.isSafeInteger(entry.generation)) logged.add(entry.generation)
+    } catch { /* not a line BMN wrote */ }
+  }
+  return logged
+}
+
+/**
+ * Marks the generations that were written and never pointed to (a stop between the two writes of
+ * an approval). One that took effect is `current`, or has its line in the history log, written
+ * once `current` moved, or is recorded by a later generation as the one in effect before it.
+ * With an unreadable pointer, or a pointer and no log, BMN cannot tell and marks nothing.
+ */
+function markUnfinished(entries) {
+  const pointed = pointedGeneration()
+  const logged = loggedGenerations()
+  if (pointed === undefined || (logged === null && pointed !== null)) return entries
+  const parents = new Set(entries.filter((entry) => entry.valid && Number.isSafeInteger(entry.parent)).map((entry) => entry.parent))
+  const tookEffect = (number) => number === pointed || parents.has(number) || (logged !== null && logged.has(number))
+  return entries.map((entry) => (entry.valid && entry.earlier_schema === undefined && !tookEffect(entry.number) ? { ...entry, unfinished: true } : entry))
+}
+
 /**
  * Approval history, newest first: number, time, parent, kind and the roster hash each came from.
- * A generation of an earlier schema is listed with `earlier_schema` and can only be looked at.
+ * A generation of an earlier schema is listed with `earlier_schema` and can only be looked at; one
+ * that never took effect is listed with `unfinished`.
  */
 export function listGenerations() {
-  return generationNumbers().map((number) => {
+  return markUnfinished(generationNumbers().map((number) => {
     const verified = readVerified(number)
     if (verified === null) return { number, valid: false }
     const earlier = isEarlierSchema(verified)
@@ -195,7 +239,7 @@ export function listGenerations() {
       agents: Array.isArray(verified.data.agents) ? verified.data.agents.length : 0, hash: verified.hash,
       ...(earlier ? { earlier_schema: verified.data.schema_version } : {})
     }
-  })
+  }))
 }
 
 /** Why a generation cannot be restored, or null when it can: missing, altered, or approved under an earlier schema. */

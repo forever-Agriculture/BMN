@@ -17,7 +17,7 @@ const repoRoot = resolve(scriptDirectory, '../..')
 const appDirectory = join(repoRoot, 'apps/desktop')
 const evidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-60/shots')
 const electronBinary = createRequire(join(appDirectory, 'package.json'))('electron')
-// BMN cannot inspect where OpenCode sends data, so an approval refuses to record it as inspected; here it is on the owner's word.
+// This temporary home holds no OpenCode configuration, so BMN reads its destination as unknown and an approval refuses to record it as inspected; here it is on the owner's word.
 const EXAMPLE = readFileSync(join(appDirectory, 'src/utility/test-fixtures/agents/roster-example.md'), 'utf8')
   .replace('opencode: {provider: opencode-go, basis: observed-default}', 'opencode: {provider: opencode-go, basis: owner-declared}')
 const MASTER = `# Global rules

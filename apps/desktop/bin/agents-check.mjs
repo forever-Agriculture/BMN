@@ -359,6 +359,9 @@ export function readCodexConfig(text) {
       out.providers[path[1]] ??= {}
       out.providers[path[1]].declared = true
       if (keys.length === 1 && table.length === 1) out.unreadable.push(path.join('.'))
+    } else if (path[0] === 'profiles' && path.length === 2) {
+      // `profiles.work = { … }`: a whole profile on one line, whose keys this reader does not open.
+      out.unreadable.push(path.join('.'))
     } else if ((path[0] === 'model_providers' || path[0] === 'profiles') && path.length < 2) {
       out.unreadable.push(path.join('.'))
     }
@@ -382,6 +385,16 @@ function truthy(value) {
 
 /** The config.toml keys that say where Codex sends data. */
 const CODEX_DESTINATION_KEYS = ['model_provider', 'profile', 'openai_base_url', 'chatgpt_base_url']
+
+/** A folder as it was written and, when a link leads elsewhere, as it really is: an app may walk up from either. */
+function spellings(folder) {
+  try {
+    const real = realpathSync(folder)
+    return real === folder ? [folder] : [folder, real]
+  } catch {
+    return [folder]
+  }
+}
 
 /** Each folder from `start` up to the root. */
 function foldersAbove(start) {
@@ -432,7 +445,8 @@ export function resolveCodexRoute(parsed, environment, cwd = null) {
   const overrides = {}
   const providerOverrides = {}
   let unresolvable = config.unreadable.length > 0 ? `config.toml ${config.unreadable[0]} cannot be read` : null
-  const other = otherCodexConfig(cwd === null ? [] : [cwd, ...(parsed.cd === undefined ? [] : [isAbsolute(parsed.cd) ? parsed.cd : join(cwd, parsed.cd)])], configPath)
+  const starts = cwd === null ? [] : [cwd, ...(parsed.cd === undefined ? [] : [isAbsolute(parsed.cd) ? parsed.cd : join(cwd, parsed.cd)])]
+  const other = otherCodexConfig(starts.flatMap(spellings), configPath)
   if (other !== null) {
     unresolvable ??= `${other} also says where Codex sends data, and BMN cannot tell which file wins`
     sources.push(other)
@@ -539,9 +553,11 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
   const files = [['managed settings', '/etc/claude-code/managed-settings.json']]
   if (configDir !== null) files.push(['user settings', `${configDir}/settings.json`])
   files.push(['project settings', `${cwd}/.claude/settings.json`], ['local settings', `${cwd}/.claude/settings.local.json`])
-  for (const dir of foldersAbove(cwd).slice(1)) {
-    if (configDir !== null && join(dir, '.claude') === configDir) continue
-    files.push([`settings in ${dir}`, `${dir}/.claude/settings.json`], [`local settings in ${dir}`, `${dir}/.claude/settings.local.json`])
+  for (const dir of [...new Set(spellings(cwd).flatMap((folder) => foldersAbove(folder).slice(1)))]) {
+    for (const [label, name] of [['settings', 'settings.json'], ['local settings', 'settings.local.json']]) {
+      // The user settings were read above; every other file here is one more source.
+      if (configDir === null || join(dir, '.claude', name) !== join(configDir, 'settings.json')) files.push([`${label} in ${dir}`, `${dir}/.claude/${name}`])
+    }
   }
   for (const name of optionalNames('/etc/claude-code/managed-settings.d')) {
     if (name.endsWith('.json')) files.push([`managed settings ${name}`, `/etc/claude-code/managed-settings.d/${name}`])

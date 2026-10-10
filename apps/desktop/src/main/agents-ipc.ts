@@ -49,8 +49,10 @@ export interface AgentsIpcOptions {
 }
 
 /** Variables the rules CLI reads to find each app's file and its destination; nothing else of this process's environment. */
-const RULES_ENV = ['HOME', 'PATH', 'XDG_CONFIG_HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR',
+const RULES_ENV = ['HOME', 'PATH', 'XDG_CONFIG_HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG',
   'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'] as const
+/** Variables the rules CLI only needs to know are set; their value may hold a key, so a mark is passed on instead. */
+const RULES_ENV_MARKS = ['OPENCODE_CONFIG_CONTENT'] as const
 const PROBE_OUTCOME_WORDS: Readonly<Record<string, string>> = { pass: 'passed', fail: 'failed', inconclusive: 'was inconclusive', unavailable: 'was unavailable' }
 /** The command whose `--version` names each app's installed version. */
 const APP_COMMANDS: Readonly<Record<RosterHarness, string>> = { claude: 'claude', codex: 'codex', opencode: 'opencode', cursor: 'cursor-agent' }
@@ -120,7 +122,7 @@ function approvedOrProblem(): { generation: Generation | null; problem: AgentsSn
 
 /** One line saying what an approved version changed, from the same sentences the review shows. */
 function versionSummary(entry: AgentsSnapshot['history'][number]): string | undefined {
-  if (!entry.valid || entry.earlier_schema !== undefined) return undefined
+  if (!entry.valid || entry.earlier_schema !== undefined || entry.unfinished === true) return undefined
   if (entry.kind === 'restore' && entry.restored_from !== undefined) return `Restored version ${entry.restored_from}`
   const version = readGeneration(entry.number)
   if (version === null) return undefined
@@ -186,11 +188,12 @@ function outcome(run: () => string): AgentsOutcome {
  * when that changes only yaml blocks; when a section was added since, the file is left alone and
  * its differences show on the Team page to keep or revert. Returns whether the file still differs.
  */
-function fileToApproved(): boolean {
+export function fileToApproved(shown: AgentsShownRevision): boolean {
   const now = agentsSnapshot()
   if (now.approved === null || now.file.hash === null || (now.differences ?? []).length === 0) return false
   try {
-    revertFileToApproved({ generation: now.approved.generation, fileHash: now.file.hash, link: now.file.link, directory: now.file.directory }, null)
+    // Only the file the owner was shown may be replaced: one that changed since then keeps its bytes and shows its differences.
+    revertFileToApproved({ ...shown, generation: now.approved.generation }, null)
     return false
   } catch {
     return true
@@ -228,6 +231,7 @@ export async function previewApproval(request: AgentsApprovalRequest, environmen
   }
   if (next === null) return { valid: false, errors, ...NOT_PREVIEWED }
   return {
+    ...(request.kind === 'restore' ? { restored: next as RosterDataShape } : {}),
     valid: true, errors: [], differences: generation ? machineDiff(generation.data, next, { folders: true }) : [], consequences: consequences(generation?.data ?? null, next),
     teamUpdate: (await planTeamUpdate(next, { environment })).targets.map(({ resolved_path: resolved, ...target }) => (
       { ...target, ...(resolved === target.path ? {} : { resolvedPath: resolved }) }))
@@ -290,6 +294,7 @@ function runCli(script: string, args: string[], env: NodeJS.ProcessEnv, timeoutM
 function rulesEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const name of RULES_ENV) if (source[name] !== undefined) env[name] = source[name]
+  for (const name of RULES_ENV_MARKS) if (source[name]) env[name] = 'set'
   return env
 }
 
@@ -511,9 +516,12 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const number = numberParam(params)
     return approving(params, () => {
       // The team file follows the restored version, so edits nobody reviewed would go with it unseen: its sheet never showed them.
-      if ((agentsSnapshot().differences ?? []).length > 0) throw new RosterError('PENDING_CHANGES', 'Keep or revert the changes made outside BMN first.')
+      const before = agentsSnapshot()
+      if ((before.differences ?? []).length > 0) throw new RosterError('PENDING_CHANGES', 'Keep or revert the changes made outside BMN first.')
       const restored = restoreGeneration(shown, number, seams).number
-      return `Version ${number} restored as version ${restored}${fileToApproved() ? ' · the team file still holds later edits; keep or revert each' : ''}`
+      // With no approved team to compare with, the file's own edits were never shown: it keeps them, and they show as differences.
+      const differs = before.approved === null ? (agentsSnapshot().differences ?? []).length > 0 : fileToApproved(shown)
+      return `Version ${number} restored as version ${restored}${differs ? ' · the team file still holds later edits; keep or revert each' : ''}`
     })
   })
   handle('aiterm:agents:generation', (params) => {
