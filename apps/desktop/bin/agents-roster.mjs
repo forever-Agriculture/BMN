@@ -916,6 +916,21 @@ export function rewriteRoster(text, data, { scope = null } = {}) {
   return out
 }
 
+/**
+ * The file's bytes outside the content of its yaml blocks, as the pieces between them. Revert
+ * (60.2 AC6) may change only what lies between a block's fences, so these pieces must survive it.
+ */
+export function outsideYamlBlocks(text) {
+  const pieces = []
+  let from = 0
+  for (const block of splitSections(text).flatMap((section) => section.blocks).sort((a, b) => a.contentStart - b.contentStart)) {
+    pieces.push(text.slice(from, block.contentStart))
+    from = block.contentEnd
+  }
+  pieces.push(text.slice(from))
+  return pieces
+}
+
 /** The prose of an agent's section: everything after its yaml block, up to the next section. */
 export function proseOf(text, id) {
   const sections = splitSections(text)

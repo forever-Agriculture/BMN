@@ -803,6 +803,16 @@ rendering, the approved route, the harness version or the destination changes.
   the lead's responsibility.
 - A probe proves loading only in the context it ran (that harness version, that folder, that
   route). Sessions started before an install keep the rules they started with.
+- Approvals are serialized by an operating-system advisory lock on `state/approve.lock`, held for
+  the whole approval; a second approval meanwhile is refused (exit-7 semantics) and a holder that
+  dies releases it with its process. The lock binds only programs that take it: another program
+  writing the state folder directly is not stopped.
+- BMN asks a harness for its version afresh at every decision and keeps none. A launcher or an
+  environment that changes between that question and the command starting is not detected.
+- **Revert file to approved** changes only what lies between a section's `yaml` fences, and adds
+  back a section the file lost after the end of the file. A revert that would have to remove or
+  insert text elsewhere (a section the file added, a repeated section, a section without its
+  block) is refused and writes nothing.
 - A harness version you accept in the Agents section is your risk decision, not a version BMN
   tested. The panel offers it only when that version resolves the same route from the same sources
   as the last tested or accepted version it inspected, and approval checks that again, so a version

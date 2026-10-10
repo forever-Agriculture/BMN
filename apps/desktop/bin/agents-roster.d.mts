@@ -55,6 +55,7 @@ export declare const THEN: RosterRole['then'][]
 export declare const AGENT_FIELDS: string[]
 export declare const FREE_TEXT_FIELDS: string[]
 export declare const RESERVED_SECTIONS: string[]
+export declare const ID_PATTERN: RegExp
 export declare function agentsDirectory(): string
 export declare function rosterPath(): string
 export declare class RosterError extends Error {
@@ -77,5 +78,6 @@ export declare function labelsYaml(labels: RosterData['data_labels']): string
 export declare function routesYaml(routes: RosterRoute[]): string
 export declare function headerYaml(): string
 export declare function rewriteRoster(text: string, data: RosterData, options?: { scope?: string[] | null }): string
+export declare function outsideYamlBlocks(text: string): string[]
 export declare function proseOf(text: string, id: string): string | null
 export declare function rewriteProse(text: string, id: string, prose: string): string

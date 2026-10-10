@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { sha256 } from '../../bin/agents-roster.mjs'
 import { readValidRoster } from '../../bin/agents-state.mjs'
 import {
-  TEAM_LIMIT_BYTES, checkTargets, importedMaster, installRules, lastProbes, masterHistory, parseMaster, probe, readMaster, render, restoreTransaction, teamExpansion, writeMaster
+  TEAM_LIMIT_BYTES, checkTargets, importedMaster, installRules, lastProbes, masterHistory, parseMaster, probe, probeInspector, readMaster, render, restoreTransaction, teamExpansion, writeMaster
 } from '../../bin/agents-rules.mjs'
 import { approveRoster } from '../main/agents-approval'
 
@@ -360,6 +360,20 @@ describe('probes (60.4 AC5)', () => {
     expect(claude(() => ({ version: '2.1.295', host }))).toMatchObject({ stale: false })
     expect(claude(() => ({ version: '2.1.296', host }))).toMatchObject({ stale: true })
     expect(claude(() => ({ version: '2.1.295', host: 'proxy.example.test' }))).toMatchObject({ stale: true })
+  })
+
+  it('a probe goes stale through the app\'s own version inspector once the harness that runs is replaced', async () => {
+    const shadow = join(home, 'shadow')
+    mkdirSync(shadow)
+    writeFileSync(join(shadow, 'claude'), 'not a program\n', { mode: 0o644 })
+    const environment = { ...env, PATH: `${shadow}:${env.PATH}` }
+    stub('claude', `case "$1" in --version) echo "2.1.295 (Claude Code)";; *) cat > /dev/null; grep -o 'master sha256 [0-9a-f]*' "$HOME/.claude/CLAUDE.md" | cut -d' ' -f3;; esac`)
+    expect(await probe('claude', { environment })).toMatchObject({ outcome: 'pass' })
+    const claude = async (): Promise<unknown> => lastProbes({ inspect: await probeInspector(environment) }).find((entry: { harness: string }) => entry.harness === 'claude')
+    expect(await claude()).toMatchObject({ stale: false })
+    rmSync(join(stubs, 'claude'))
+    stub('claude', 'case "$1" in --version) echo "2.1.296 (Claude Code)";; esac')
+    expect(await claude()).toMatchObject({ stale: true })
   })
 
   it('is unavailable for a Low route or a missing CLI, and leaves no throwaway folder', async () => {

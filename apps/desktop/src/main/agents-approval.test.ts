@@ -1,6 +1,6 @@
 // MODULE: agents-approval.test.ts - Epic 60.2: crash-safe generations, the approval lock, revert and restore
-import { execFileSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -57,7 +57,8 @@ describe('approved generations (60.2 AC1-AC2)', () => {
     expect(statSync(join(home, '.config/bmn/agents/state')).mode & 0o777).toBe(0o700)
     expect(statSync(generationPath(1)).mode & 0o777).toBe(0o600)
     expect(statSync(currentPointerPath()).mode & 0o777).toBe(0o600)
-    expect(existsSync(approvalLockPath())).toBe(false)
+    // The lock file stays in place (one inode), empty while no approval runs.
+    expect(readFileSync(approvalLockPath(), 'utf8')).toBe('')
   })
 
   it('a file edit raising security changes nothing until approved', () => {
@@ -140,42 +141,109 @@ describe('revision checks and the lock (60.2 AC4)', () => {
     expect(readFileSync(historyLogPath(), 'utf8')).toContain('"event":"lock-broken"')
   })
 
-  it('a lock still being written (unreadable and fresh) is busy; an old unreadable one is broken', () => {
+  it('the lock file stays in place, empty while idle; an unreadable record left behind is logged as broken', () => {
     writeRoster(EXAMPLE)
     mkdirSync(join(home, '.config/bmn/agents/state'), { recursive: true })
     writeFileSync(approvalLockPath(), '')
-    expect(() => approveRoster(shown())).toThrow(expect.objectContaining({ code: 'REVISION_CONFLICT' }))
-    expect(readFileSync(approvalLockPath(), 'utf8')).toBe('')
-    const old = new Date(Date.now() - 60_000)
-    utimesSync(approvalLockPath(), old, old)
+    const inode = statSync(approvalLockPath()).ino
     expect(approveRoster(shown()).number).toBe(1)
-    expect(existsSync(approvalLockPath())).toBe(false)
+    expect(statSync(approvalLockPath()).ino).toBe(inode)
+    expect(readFileSync(approvalLockPath(), 'utf8')).toBe('')
+    expect(existsSync(historyLogPath()) ? readFileSync(historyLogPath(), 'utf8') : '').not.toContain('lock-broken')
+    writeFileSync(approvalLockPath(), '{"pid":')
+    writeRoster(edit(EXAMPLE, LUNA_HIGH, LUNA_LOW))
+    expect(approveRoster(shown()).number).toBe(2)
+    expect(readFileSync(historyLogPath(), 'utf8')).toContain('"holder":{"unreadable":true}')
   })
 
-  it('a breaker racing another breaker puts the other\'s fresh lock back and refuses', () => {
+  it('a holder whose lock file was replaced writes nothing more', () => {
     writeRoster(EXAMPLE)
-    mkdirSync(join(home, '.config/bmn/agents/state'), { recursive: true })
-    writeFileSync(approvalLockPath(), JSON.stringify({ pid: 999_999_999, start: '1' }))
-    const fresh = JSON.stringify({ pid: process.pid, start: 'racer', nonce: 'n' })
-    const racer = () => {
-      // The other breaker removed the dead lock and took its own between our read and our rename.
+    const replaced = () => {
       unlinkSync(approvalLockPath())
-      writeFileSync(approvalLockPath(), fresh)
+      writeFileSync(approvalLockPath(), '')
     }
-    expect(() => approveRoster(shown(), { beforeBreak: racer, startIdentity: (pid) => (pid === process.pid ? 'racer' : null) }))
-      .toThrow(expect.objectContaining({ code: 'REVISION_CONFLICT' }))
-    expect(readFileSync(approvalLockPath(), 'utf8')).toBe(fresh)
-    expect(existsSync(generationPath(1))).toBe(false)
-  })
-
-  it('a holder whose lock was taken from it writes nothing more (fencing)', () => {
-    writeRoster(EXAMPLE)
-    const stolen = () => writeFileSync(approvalLockPath(), JSON.stringify({ pid: 1, start: 'thief', nonce: 'x' }))
-    expect(() => approveRoster(shown(), { afterLock: stolen })).toThrow(expect.objectContaining({ code: 'REVISION_CONFLICT' }))
+    expect(() => approveRoster(shown(), { afterLock: replaced })).toThrow(expect.objectContaining({ code: 'REVISION_CONFLICT' }))
     expect(existsSync(currentPointerPath())).toBe(false)
     expect(existsSync(generationPath(1))).toBe(false)
-    // The thief's lock is left as it is.
-    expect(readFileSync(approvalLockPath(), 'utf8')).toContain('thief')
+  })
+
+  it('fails closed when the OS lock cannot be taken', () => {
+    writeRoster(EXAMPLE)
+    expect(() => approveRoster(shown(), { flockCommand: join(home, 'no-such-flock') })).toThrow(expect.objectContaining({ code: 'REVISION_CONFLICT' }))
+    expect(existsSync(currentPointerPath())).toBe(false)
+    expect(existsSync(generationPath(1))).toBe(false)
+  })
+})
+
+describe('the OS lock across separately scheduled processes (60.2 AC4)', () => {
+  const approvalModule = fileURLToPath(new URL('./agents-approval.ts', import.meta.url))
+  // A real approval in its own process. With a barrier it writes `paused` just before publishing
+  // (generation durable, pointer not yet moved) and waits there until the test creates `go`.
+  const CHILD = `import { existsSync, writeFileSync } from 'node:fs'
+const [modulePath, paused, go, shownJson] = process.argv.slice(2)
+const { approveRoster } = await import(modulePath)
+const wait = new Int32Array(new SharedArrayBuffer(4))
+const seams = go === '' ? {} : { beforePointer: () => { writeFileSync(paused, 'paused'); while (!existsSync(go)) Atomics.wait(wait, 0, 0, 20) } }
+try {
+  process.stdout.write(JSON.stringify({ number: approveRoster(JSON.parse(shownJson), seams).number }))
+} catch (error) {
+  process.stdout.write(JSON.stringify({ code: error.code ?? String(error) }))
+}
+`
+  const barrier = { paused: '', go: '' }
+  let script = ''
+  beforeEach(() => {
+    script = join(home, 'approve-child.mjs')
+    writeFileSync(script, CHILD)
+    barrier.paused = join(home, 'paused')
+    barrier.go = join(home, 'go')
+  })
+
+  function approval(revision: object, withBarrier: boolean): { child: ChildProcess; result: Promise<{ number?: number; code?: string }> } {
+    const child = spawn(process.execPath, ['--no-warnings', script, approvalModule, barrier.paused, withBarrier ? barrier.go : '', JSON.stringify(revision)],
+      { env: { ...process.env, HOME: home }, stdio: ['ignore', 'pipe', 'inherit'] })
+    let out = ''
+    child.stdout!.on('data', (chunk) => { out += chunk })
+    const result = new Promise<{ number?: number; code?: string }>((resolve) => child.on('close', () => resolve(out === '' ? {} : JSON.parse(out))))
+    return { child, result }
+  }
+
+  async function until(test: () => boolean, label: string): Promise<void> {
+    const end = Date.now() + 20_000
+    while (!test()) {
+      if (Date.now() > end) throw new Error(`never saw ${label}`)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+
+  it('a holder paused just before publication refuses contenders here and in another process; then it publishes once', async () => {
+    writeRoster(EXAMPLE)
+    const revision = shown()
+    const holder = approval(revision, true)
+    await until(() => existsSync(barrier.paused), 'the holder paused before publication')
+    expect(() => approveRoster(revision)).toThrow(expect.objectContaining({ code: 'REVISION_CONFLICT' }))
+    expect(await approval(revision, false).result).toEqual({ code: 'REVISION_CONFLICT' })
+    expect(existsSync(currentPointerPath())).toBe(false)
+    expect(readdirSync(join(home, '.config/bmn/agents/state/generations'))).toEqual(['000001.json'])
+    writeFileSync(barrier.go, 'go')
+    expect(await holder.result).toEqual({ number: 1 })
+    expect(readApproved().number).toBe(1)
+    expect(readdirSync(join(home, '.config/bmn/agents/state/generations'))).toEqual(['000001.json'])
+    expect(readFileSync(approvalLockPath(), 'utf8')).toBe('')
+  })
+
+  it('a holder killed mid-approval releases the lock with its process; the next approval logs it broken', async () => {
+    writeRoster(EXAMPLE)
+    const holder = approval(shown(), true)
+    await until(() => existsSync(barrier.paused), 'the holder paused before publication')
+    const pid = holder.child.pid
+    holder.child.kill('SIGKILL')
+    await holder.result
+    // The killed approval's generation is durable but was never pointed to.
+    expect(existsSync(currentPointerPath())).toBe(false)
+    expect(approveRoster(shown()).number).toBe(2)
+    expect(readApproved().number).toBe(2)
+    expect(readFileSync(historyLogPath(), 'utf8')).toContain(`"event":"lock-broken","holder":{"pid":${pid},`)
   })
 
   it('refuses when a linked roster was retargeted to identical bytes after it was shown', () => {
@@ -257,6 +325,55 @@ describe('revert and restore (60.2 AC6)', () => {
     expect(readValidRoster().data.agents.some((agent) => agent.id === 'nova')).toBe(true)
     expect(() => revertFileToApproved(shown(), ['nova'])).toThrow(expect.objectContaining({ code: 'INVALID_VALUE' }))
     expect(readFileSync(rosterFile(), 'utf8')).toBe(added)
+  })
+
+  it('never deletes an added agent\'s section and prose, even when that section does not validate', () => {
+    writeRoster(EXAMPLE)
+    approveRoster(shown())
+    const added = `${EXAMPLE}\n## nova\n\n\`\`\`yaml\nname: Nova\ntitle: squire\nharness: codex\nmodel: m\nprovider: openai\nhost: default\nsecurity: high\ntrust: 1\nauthority: read\nenabled: true\nstatus: proposed\nefforts: null\nroles: []\n\`\`\`\n\nThe owner's notes on Nova.\n`
+    writeRoster(added)
+    expect(() => revertFileToApproved(shown())).toThrow(expect.objectContaining({ code: 'INVALID_VALUE' }))
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(added)
+  })
+
+  it('refuses, byte for byte, a revert that could only remove or insert text outside the yaml blocks', () => {
+    writeRoster(EXAMPLE)
+    approveRoster(shown())
+    const changed = edit(EXAMPLE, LUNA_HIGH, LUNA_LOW)
+    const refused = (text: string, scope: string[] | null = null): void => {
+      writeRoster(text)
+      expect(() => revertFileToApproved(shown(), scope)).toThrow(expect.objectContaining({ code: 'INVALID_VALUE' }))
+      expect(readFileSync(rosterFile(), 'utf8')).toBe(text)
+    }
+    // An added section with a heading and no yaml block at all.
+    refused(`${changed}\n## nova\n\nNotes on an agent that has no block yet.\n`)
+    // A repeated section: the rewriter would drop the second one and its prose.
+    refused(`${changed}\n## luna\n\n\`\`\`yaml\nname: Other\n\`\`\`\n\nProse under the repeated heading.\n`)
+    // An approved agent whose block was deleted: the fence would have to be inserted before its prose.
+    refused(changed.replace(/(## luna\n\n)```yaml\n[\s\S]*?```\n/, '$1'))
+    // Unrelated validation errors elsewhere do not hide the added section.
+    refused(`${edit(changed, 'helper: {candidates: [luna@max], then: lead}', 'helper: {candidates: [nobody@max], then: lead}')}\n## nova\n\n\`\`\`yaml\nname: Nova\n\`\`\`\n\nNotes on Nova.\n`)
+  })
+
+  it('a scoped revert leaves an unrelated added section alone and still reverts its own block', () => {
+    writeRoster(EXAMPLE)
+    approveRoster(shown())
+    const added = `${edit(EXAMPLE, LUNA_HIGH, LUNA_LOW)}\n## nova\n\n\`\`\`yaml\nname: Nova\nefforts: null\n\`\`\`\n\nThe owner's notes on Nova.\n`
+    writeRoster(added)
+    expect(revertFileToApproved(shown(), ['luna'])).toEqual({ changed: true })
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(edit(added, LUNA_LOW, LUNA_HIGH))
+  })
+
+  it('a revert brings back an approved section the file lost, after the end, changing no existing byte', () => {
+    writeRoster(EXAMPLE)
+    approveRoster(shown())
+    const lost = EXAMPLE.replace(/## luna\n[\s\S]*?(?=\n## )/, '')
+    expect(lost).not.toBe(EXAMPLE)
+    writeRoster(lost)
+    expect(revertFileToApproved(shown())).toEqual({ changed: true })
+    const reverted = readFileSync(rosterFile(), 'utf8')
+    expect(reverted.startsWith(lost)).toBe(true)
+    expect(machineDiff(readApproved().data, readValidRoster().data)).toEqual([])
   })
 
   it('revert replaces a linked roster as a regular file and leaves the link target untouched', () => {

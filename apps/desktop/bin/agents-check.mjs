@@ -518,35 +518,19 @@ function inspectOpenCode(environment) {
   return { basis: 'unknown', provider: null, host: null, reason: 'no OpenCode configuration names a model', sources: [] }
 }
 
-const versionCache = new Map()
-
-/** The executable PATH would run, with its change time, so a reinstall is never served from cache. */
-function executableIdentity(command, environment) {
-  for (const directory of (environment.PATH ?? '').split(':')) {
-    if (!directory.startsWith('/')) continue
-    try {
-      const stat = statSync(`${directory}/${command}`)
-      if (stat.isFile()) return `${directory}/${command}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}`
-    } catch {
-      // Not in this directory.
-    }
-  }
-  return null
-}
-
-/** `<harness> --version`, the only thing BMN runs; remembered per executable until it changes. */
+/**
+ * `<harness> --version`, the only thing BMN runs. It is asked afresh for every decision and
+ * resolved through PATH by the same exec the dispatch uses, so the version always belongs to the
+ * program that would run: nothing is remembered, because no file identity can tell that a stable
+ * launcher now starts another program. A failure reads as no version (null).
+ */
 export function harnessVersion(command, environment) {
-  const identity = executableIdentity(command, environment)
-  if (identity !== null && versionCache.has(identity)) return versionCache.get(identity)
-  let version
   try {
     const text = execFileSync(command, ['--version'], { env: environment, encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] })
-    version = /\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/.exec(text)?.[0] ?? null
+    return /\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/.exec(text)?.[0] ?? null
   } catch {
-    version = null
+    return null
   }
-  if (identity !== null && version !== null) versionCache.set(identity, version)
-  return version
 }
 
 // ---------------------------------------------------------------------------------------------

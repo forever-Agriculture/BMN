@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { consequences, evaluate, readCodexConfig, setReadTracer, verifyReceipt } from '../../bin/agents-check.mjs'
+import { consequences, evaluate, harnessVersion, readCodexConfig, setReadTracer, verifyReceipt } from '../../bin/agents-check.mjs'
 import { readValidRoster } from '../../bin/agents-state.mjs'
 import { parseRoster } from '../../bin/agents-roster.mjs'
 import { approveRoster } from '../main/agents-approval'
@@ -309,6 +309,38 @@ describe('harness versions (60.3 AC3)', () => {
     expect(pub.receipt?.harness_version).toEqual({ version: '0.170.0', state: 'untested' })
     approve(roster((text) => edit(text, 'codex: {provider: openai, security: high, basis: observed-default}', 'codex: {provider: openai, security: high, basis: observed-default, accepted_versions: ["0.170.0"]}')))
     expect(check({ argv }).receipt?.harness_version).toEqual({ version: '0.170.0', state: 'owner-accepted, untested' })
+  })
+
+  it('remembers a version against the executable that ran, never an earlier non-executable file of that name', () => {
+    const first = join(home, 'path-a')
+    const second = join(home, 'path-b')
+    mkdirSync(first)
+    mkdirSync(second)
+    writeFileSync(join(first, 'codex'), 'not a program\n', { mode: 0o644 })
+    const install = (version: string) => {
+      rmSync(join(second, 'codex'), { force: true })
+      writeFileSync(join(second, 'codex'), `#!/bin/sh\necho "codex-cli ${version}"\n`, { mode: 0o755 })
+    }
+    const environment = { ...env, PATH: `${first}:${second}:/usr/bin:/bin` }
+    install('0.171.0')
+    expect(harnessVersion('codex', environment)).toBe('0.171.0')
+    install('0.172.0')
+    expect(harnessVersion('codex', environment)).toBe('0.172.0')
+  })
+
+  it('asks the version afresh: a launcher that stays the same file while the program behind it changes', () => {
+    const bin = join(home, 'launcher-bin')
+    const program = join(home, 'real-codex')
+    mkdirSync(bin)
+    writeFileSync(join(bin, 'codex'), `#!/bin/sh\nexec "${program}" "$@"\n`, { mode: 0o755 })
+    const install = (version: string) => writeFileSync(program, `#!/bin/sh\necho "codex-cli ${version}"\n`, { mode: 0o755 })
+    const environment = { ...env, PATH: `${bin}:/usr/bin:/bin` }
+    install('0.171.0')
+    expect(harnessVersion('codex', environment)).toBe('0.171.0')
+    install('0.172.0')
+    expect(harnessVersion('codex', environment)).toBe('0.172.0')
+    rmSync(program)
+    expect(harnessVersion('codex', environment)).toBeNull()
   })
 })
 

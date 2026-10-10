@@ -1,8 +1,12 @@
 // MODULE: agents-approval.ts - Epic 60.2: the only writer of approved roster generations, used by the Agents panel
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, chmodSync, closeSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { appendFileSync, chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { RosterError, agentsDirectory, parseRoster, rewriteRoster, rosterPath, sha256, type RosterData } from '../../bin/agents-roster.mjs'
+import {
+  ID_PATTERN, RESERVED_SECTIONS, RosterError, agentsDirectory, outsideYamlBlocks, parseRoster, rewriteRoster, rosterPath, sha256, splitSections,
+  type RosterData
+} from '../../bin/agents-roster.mjs'
 import {
   approvalLockPath, buildGeneration, currentPointerPath, generationNumbers, generationPath, generationsDirectory, historyLogPath,
   readApproved, readGeneration, stateDirectory, type Generation
@@ -23,10 +27,10 @@ export interface ApprovalSeams {
   beforePointer?: () => void
   /** Runs after the roster file is written and before the generation is published. */
   beforePublish?: () => void
-  /** Process start identity for lock liveness; Linux reads /proc. */
+  /** Process start identity recorded in the lock; Linux reads /proc. */
   startIdentity?: (pid: number) => string | null
-  /** Runs after a stale lock was judged dead and before it is moved aside: the breaker-race seam. */
-  beforeBreak?: () => void
+  /** The flock(1) executable; tests point it at a missing one to see the approval fail closed. */
+  flockCommand?: string
   /**
    * Judges harness versions an approval would newly accept (60.3 AC3): throws to refuse. The app
    * passes one that re-inspects the route; without it every new acceptance is refused.
@@ -101,73 +105,66 @@ function logHistory(entry: Record<string, unknown>, now: Date): void {
   appendFileSync(historyLogPath(), `${JSON.stringify({ at: now.toISOString(), ...entry })}\n`, { mode: 0o600 })
 }
 
-/** The lock text this process wrote while it holds the lock; checked again before every write. */
-let heldLock: string | null = null
-interface LockHolder { pid?: unknown; start?: unknown }
-const UNREADABLE_LOCK_GRACE_MS = 10_000
+/** The lock this process holds: its open file description (which carries the OS lock), inode and record. */
+let heldLock: { fd: number; inode: number; text: string } | null = null
+/** util-linux flock(1), present on every supported Linux (R60-NFR6); tests may point elsewhere. */
+const FLOCK_CANDIDATES = ['/usr/bin/flock', '/bin/flock']
 
-/** Refuses a write when the lock is no longer this process's (fencing against a broken or stolen lock). */
+/**
+ * Refuses a write unless this process still holds the lock on the file at the lock path: the path
+ * replaced by another file (a different inode) would let a second holder lock that one.
+ */
 function assertLockHeld(): void {
-  let text: string | null = null
-  try { text = readFileSync(approvalLockPath(), 'utf8') } catch { /* gone */ }
-  if (heldLock === null || text !== heldLock) throw new RosterError('REVISION_CONFLICT', 'the approval lock was lost; nothing more was written; reload and try again')
+  let inode: number | null = null
+  try { inode = lstatSync(approvalLockPath()).ino } catch { /* gone */ }
+  if (heldLock === null || inode !== heldLock.inode) throw new RosterError('REVISION_CONFLICT', 'the approval lock file was replaced; nothing more was written; reload and try again')
+}
+
+/** Takes the OS advisory lock on `fd` without waiting: flock(1) locks the open file description this process keeps. */
+function takeAdvisoryLock(fd: number, seams: ApprovalSeams): 'held' | 'busy' {
+  const command = seams.flockCommand ?? FLOCK_CANDIDATES.find((candidate) => existsSync(candidate)) ?? 'flock'
+  const result = spawnSync(command, ['--nonblock', '--conflict-exit-code', '75', '3'], { stdio: ['ignore', 'ignore', 'ignore', fd], timeout: 10_000 })
+  if (result.status === 0) return 'held'
+  if (result.status === 75) return 'busy'
+  throw new RosterError('REVISION_CONFLICT', `could not take the approval lock (${result.error?.message ?? `flock exited ${result.status ?? result.signal}`}); nothing was written`)
 }
 
 /**
- * One approval at a time, across processes: `approve.lock` records pid and start time. It appears
- * complete or not at all (written aside, then hard-linked into place). A lock whose process is gone,
- * or whose pid now belongs to a different process, is moved aside and broken with a logged note,
- * but only if what was moved is still the lock judged dead; a fresh lock moved by a racing breaker
- * is put back. A live lock makes this approval a REVISION_CONFLICT (exit-7 semantics).
+ * One approval at a time, across processes (60.2 AC4): `approve.lock` is held with an OS advisory
+ * lock on an open file description this process keeps until the approval ends, so a live holder
+ * is never broken and a holder that dies releases it with its process. The file stays in place
+ * (one inode) and records the holder's pid and start time while held; finding an earlier holder's
+ * record on taking the lock means that holder died mid-approval, which is logged as a broken lock.
+ * A held lock makes this approval a REVISION_CONFLICT (exit-7 semantics).
  */
 function withLock<T>(seams: ApprovalSeams, work: () => T): T {
   const identity = seams.startIdentity ?? linuxStartIdentity
   const now = seams.now ?? (() => new Date())
   ensurePrivateDirectory(stateDirectory())
   const path = approvalLockPath()
-  const mine = JSON.stringify({ pid: process.pid, start: identity(process.pid), nonce: randomBytes(8).toString('hex') })
-  const aside = `${path}.${process.pid}.${randomBytes(4).toString('hex')}`
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    writeFileSync(aside, mine, { mode: 0o600 })
-    try {
-      linkSync(aside, path)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      let found: { text: string; age: number }
-      try {
-        found = { text: readFileSync(path, 'utf8'), age: Date.now() - statSync(path).mtimeMs }
-      } catch { continue /* released meanwhile: try again */ }
-      const { text, age } = found
-      let holder: LockHolder | null
-      try { holder = JSON.parse(text) as LockHolder } catch { holder = null }
-      const live = holder === null ? age < UNREADABLE_LOCK_GRACE_MS
-        : typeof holder.pid === 'number' && identity(holder.pid) !== null && identity(holder.pid) === holder.start
-      if (live) throw new RosterError('REVISION_CONFLICT', 'another approval is in progress; reload and try again')
-      seams.beforeBreak?.()
-      const moved = `${path}.broken.${process.pid}.${randomBytes(4).toString('hex')}`
-      try { renameSync(path, moved) } catch { continue /* another breaker got there first */ }
-      const movedText = readFileSync(moved, 'utf8')
-      if (movedText !== text) {
-        // A racing breaker's fresh lock was moved: put it back unless someone holds the path already.
-        try { linkSync(moved, path) } catch { /* the path is taken; that holder's fencing check decides */ }
-        unlinkSync(moved)
-        throw new RosterError('REVISION_CONFLICT', 'another approval is in progress; reload and try again')
-      }
-      unlinkSync(moved)
-      logHistory({ event: 'lock-broken', holder: holder ?? { unreadable: true } }, now())
-      continue
-    } finally {
-      try { unlinkSync(aside) } catch { /* already gone */ }
+  const fd = openSync(path, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600)
+  try {
+    if (takeAdvisoryLock(fd, seams) === 'busy') throw new RosterError('REVISION_CONFLICT', 'another approval is in progress; reload and try again')
+    const earlier = readFileSync(fd, 'utf8')
+    if (earlier.trim() !== '') {
+      let holder: unknown
+      try { holder = JSON.parse(earlier) } catch { holder = { unreadable: true } }
+      logHistory({ event: 'lock-broken', holder }, now())
     }
-    heldLock = mine
+    const mine = JSON.stringify({ pid: process.pid, start: identity(process.pid), nonce: randomBytes(8).toString('hex') })
+    ftruncateSync(fd, 0)
+    writeSync(fd, mine, 0)
+    fsyncSync(fd)
+    heldLock = { fd, inode: fstatSync(fd).ino, text: mine }
     try {
       return work()
     } finally {
-      try { if (readFileSync(path, 'utf8') === mine) unlinkSync(path) } catch { /* already gone */ }
       heldLock = null
+      try { ftruncateSync(fd, 0) } catch { /* the record only names a holder; the OS lock is what counts */ }
     }
+  } finally {
+    closeSync(fd)
   }
-  throw new RosterError('REVISION_CONFLICT', 'could not take the approval lock; reload and try again')
 }
 
 /**
@@ -320,9 +317,23 @@ export function saveAndApprove(shown: ShownRevision, data: RosterData, seams: Ap
 }
 
 /**
+ * Whether `next` keeps every byte `before` holds outside the content of its yaml blocks. The one
+ * addition allowed is whole new sections after the end of the file, which change no existing byte.
+ */
+function keepsBytesOutsideBlocks(before: string, next: string): boolean {
+  const kept = outsideYamlBlocks(before)
+  const now = outsideYamlBlocks(next)
+  const last = kept.length - 1
+  if (now.length < kept.length) return false
+  return kept.every((piece, index) => (index < last || now.length === kept.length ? now[index] === piece : now[index]?.startsWith(piece) === true))
+}
+
+/**
  * "Revert file to approved": the approved machine data goes back into the affected yaml blocks;
  * every byte outside them is unchanged (60.2 AC6). `scope` limits it to the given sections.
- * No generation is written.
+ * A revert that could only be done by removing or inserting text elsewhere (a section the file
+ * added, a repeated or block-less section) is refused and nothing is written. No generation is
+ * written.
  */
 export function revertFileToApproved(shown: ShownRevision, scope: string[] | null = null, seams: ApprovalSeams = {}): { changed: boolean } {
   return withLock(seams, () => {
@@ -331,14 +342,17 @@ export function revertFileToApproved(shown: ShownRevision, scope: string[] | nul
     if (current === null) throw new RosterError('NOT_APPROVED', 'nothing is approved yet, so there is nothing to revert to')
     const file = readFileState()
     checkShown(shown, current, file.hash, file.state)
-    const fileData = parseRoster(file.text).data
-    const added = (fileData?.agents ?? []).filter((agent) => !current.data.agents.some((entry) => entry.id === agent.id)
-      && (scope === null || scope.includes(agent.id))).map((agent) => agent.id)
+    // By heading, not by parsed data: a section that does not validate is still the owner's text.
+    const added = [...new Set(splitSections(file.text).map((section) => section.heading))].filter((id) => ID_PATTERN.test(id)
+      && !RESERVED_SECTIONS.includes(id) && !current.data.agents.some((entry) => entry.id === id) && (scope === null || scope.includes(id)))
     if (added.length > 0) {
       throw new RosterError('INVALID_VALUE', `${added.join(', ')} ${added.length === 1 ? 'is' : 'are'} new in the file; reverting would delete ${added.length === 1 ? 'its section and prose' : 'their sections and prose'}. Remove ${added.length === 1 ? 'it' : 'them'} in the file, or approve.`)
     }
     const nextText = rewriteRoster(file.text, current.data, { scope })
     if (nextText === file.text) return { changed: false }
+    if (!keepsBytesOutsideBlocks(file.text, nextText)) {
+      throw new RosterError('INVALID_VALUE', 'reverting would remove or insert text outside the yaml blocks (a repeated section, or one without its yaml block); fix that in the file, or approve')
+    }
     if (scope === null) validData(nextText)
     keepPriorState(file.state, (seams.now ?? (() => new Date()))())
     assertLockHeld()
