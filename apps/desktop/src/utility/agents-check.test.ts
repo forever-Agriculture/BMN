@@ -50,7 +50,7 @@ function approve(text: string): void {
   } catch {
     generation = null
   }
-  approveRoster({ generation, fileHash: readValidRoster().hash }, { checkNewlyAccepted: () => {}, checkInspectedRoutes: () => {} })
+  approveRoster({ generation, fileHash: readValidRoster().hash }, { checkInspectedRoutes: () => {} })
 }
 
 function stub(name: string, version: string): void {
@@ -349,12 +349,14 @@ describe('private work, providers and exceptions (60.3 AC4)', () => {
     expect(check({ agent: 'glm', role: 'helper', workspace: other, cwd: other, argv: GLM() })).toMatchObject({ code: 'DATA_FORBIDDEN' })
   })
 
-  it('no exception applies to an owner-declared destination, and none changes host or version checks', () => {
+  it('no exception applies to an owner-declared destination, and none changes the host check or the need for a readable app version', () => {
     approve(roster((text) => edit(edit(text, 'folder: /synthetic/EXCEPTION-SENTINEL-FOLDER', `folder: ${workspace}`),
       'zai-synthetic: {provider: zai', 'cursor-here: {provider: cursor, folder: ' + workspace + '}\nzai-synthetic: {provider: zai')))
     expect(check({ agent: 'glm', role: 'helper', argv: GLM().map((part) => part.replace('api.z.ai', 'api.other.example')) }).code).toBe('HOST_MISMATCH')
     stub('claude', '2.9.0 (Claude Code)')
-    expect(check({ agent: 'glm', role: 'helper', argv: GLM() }).code).toBe('HARNESS_UNTESTED')
+    expect(check({ agent: 'glm', role: 'helper', argv: GLM() }).receipt?.harness_version).toEqual({ version: '2.9.0', state: 'newer than BMN tested' })
+    stub('claude', 'Claude Code')
+    expect(check({ agent: 'glm', role: 'helper', argv: GLM() }).code).toBe('HARNESS_UNKNOWN')
   })
 })
 
@@ -679,19 +681,35 @@ describe('public-only destinations and packet mode (60.3 AC6)', () => {
 })
 
 describe('harness versions (60.3 AC3)', () => {
-  it('refuses private data on an untested version, notes it for public data, and passes an owner-accepted one', () => {
-    stub('codex', 'codex-cli 0.170.0')
+  it('supports every installed version and notes whether BMN tested it (owner decision 2026-10-10)', () => {
     const argv = ASTRA_REVIEW(workspace)
-    expect(check({ argv })).toMatchObject({ code: 'HARNESS_UNTESTED' })
+    expect(check({ argv }).receipt?.harness_version).toEqual({ version: '0.161.0', state: 'tested' })
+    stub('codex', 'codex-cli 0.170.0')
+    expect(check({ argv }).receipt?.harness_version).toEqual({ version: '0.170.0', state: 'newer than BMN tested' })
+    stub('codex', 'codex-cli 0.160.9')
+    expect(check({ argv }).receipt?.harness_version).toEqual({ version: '0.160.9', state: 'not a version BMN tested' })
+    // A list of versions accepted under the earlier rule is still valid in the team file and changes nothing.
+    approve(roster((text) => edit(text, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: observed-default, accepted_versions: ["0.170.0"]}')))
+    expect(check({ argv }).receipt?.harness_version).toEqual({ version: '0.160.9', state: 'not a version BMN tested' })
+  })
+
+  it('still refuses a changed destination on a newer version: the destination is checked at every dispatch', () => {
+    stub('codex', 'codex-cli 0.170.0')
+    mkdirSync(join(home, '.codex'), { recursive: true })
+    writeFileSync(join(home, '.codex/config.toml'), 'model_provider = "proxy"\n[model_providers.proxy]\nbase_url = "https://proxy.example.com/v1"\n')
+    expect(check({ argv: ASTRA_REVIEW(workspace) })).toMatchObject({ verdict: 'REFUSED', code: 'HOST_MISMATCH' })
+  })
+
+  it('refuses private data when the app\'s version cannot be read, and notes it for public data', () => {
+    stub('codex', 'codex-cli')
+    expect(check({ argv: ASTRA_REVIEW(workspace) })).toMatchObject({ code: 'HARNESS_UNKNOWN', message: expect.stringContaining("cannot read this app's version") })
     const repo = join(home, 'public')
     mkdirSync(repo)
     git(repo, 'init', '-q')
     git(repo, 'remote', 'add', 'origin', 'https://github.com/synthetic-owner/synthetic-repo.git')
     recordVisibility(repo)
     const pub = check({ workspace: repo, cwd: repo, data: 'public', argv: ASTRA_REVIEW(repo) })
-    expect(pub.receipt?.harness_version).toEqual({ version: '0.170.0', state: 'untested' })
-    approve(roster((text) => edit(text, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: observed-default, accepted_versions: ["0.170.0"]}')))
-    expect(check({ argv }).receipt?.harness_version).toEqual({ version: '0.170.0', state: 'owner-accepted, untested' })
+    expect(pub.receipt?.harness_version).toEqual({ version: null, state: 'version unreadable' })
   })
 
   it('remembers a version against the executable that ran, never an earlier non-executable file of that name', () => {
@@ -971,8 +989,10 @@ describe('research runs (60.3 AC11)', () => {
     expect(research({ argv: RESEARCH().map((part) => (part === 'medium' ? 'max' : part)) }).code).toBe('EFFORT_UNSUPPORTED')
     expect(research({ argv: ['env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, 'ANTHROPIC_BASE_URL=https://proxy.example.test', ...RESEARCH().slice(4)] }).code).toBe('HOST_MISMATCH')
     stub('claude', '2.9.0 (Claude Code)')
-    expect(research().code).toBe('HARNESS_UNTESTED')
-    expect(research({}, { testedVersions: { claude: ['2.9.0'] } }).verdict).toBe('PASS')
+    expect(research().receipt?.harness_version).toEqual({ version: '2.9.0', state: 'newer than BMN tested' })
+    expect(research({}, { testedVersions: { claude: ['2.9.0'] } }).receipt?.harness_version).toEqual({ version: '2.9.0', state: 'tested' })
+    stub('claude', 'Claude Code')
+    expect(research().code).toBe('HARNESS_UNKNOWN')
   })
 
   it('refuses a folder that is not the empty one BMN made, and a prompt that is not the one BMN wrote', () => {
@@ -1096,15 +1116,15 @@ describe('consequences in words (60.5 AC7; the same sentences `bmn roster status
     ['a destination declared on the owner\'s word', EXAMPLE, (text: string) => edit(text, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: owner-declared}'),
       ['Sol could no longer receive private work', 'Astra could no longer receive private work', 'Luna could no longer receive private work',
         'Codex would count as sending data to OpenAI on your word, so it gets public work only']],
-    ['an accepted version', EXAMPLE, (text: string) => edit(text, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: observed-default, accepted_versions: ["0.170.0"]}'),
-      ['Codex 0.170.0 could carry private work (accepted by you; BMN has not tested how this version picks its destination)']]
+    ['a version list kept from the earlier rule, which changes nothing', EXAMPLE, (text: string) => edit(text, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: observed-default, accepted_versions: ["0.170.0"]}'),
+      []]
   ])('%s', (_name, from, change, expected) => {
     expect(consequences(data(from), data(change(from)))).toEqual(expected)
   })
 
-  it('names an accepted version removed', () => {
+  it('removing a version list kept from the earlier rule changes nothing either', () => {
     const accepted = edit(EXAMPLE, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: observed-default, accepted_versions: ["0.170.0"]}')
-    expect(consequences(data(accepted), data(EXAMPLE))).toEqual(['Codex 0.170.0 could no longer carry private work (acceptance removed)'])
+    expect(consequences(data(accepted), data(EXAMPLE))).toEqual([])
   })
 
   it('uses none of the words the owner never sees', () => {

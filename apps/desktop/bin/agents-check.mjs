@@ -21,9 +21,14 @@ import { publicRendering } from './agents-rules.mjs'
 /** Refusals, checked in this order; the first one found is reported (shared contract). */
 export const REFUSALS = ['UNKNOWN_AGENT', 'PROPOSED', 'DISABLED', 'ROLE_UNKNOWN', 'ROLE_INELIGIBLE', 'CLASS_CANNOT_LEAD', 'CLASS_CANNOT_DESIGN',
   'ROUTE_UNSUPPORTED', 'MODEL_MISMATCH', 'EFFORT_UNSUPPORTED', 'CONTEXT_MISMATCH', 'TOOL_MISMATCH', 'HOST_UNKNOWN', 'HOST_MISMATCH',
-  'WORKSPACE_UNKNOWN', 'WORKSPACE_MISMATCH', 'RESUME_UNBOUND', 'HARNESS_UNTESTED', 'DATA_FORBIDDEN', 'PACKET_INVALID']
+  'WORKSPACE_UNKNOWN', 'WORKSPACE_MISMATCH', 'RESUME_UNBOUND', 'HARNESS_UNKNOWN', 'DATA_FORBIDDEN', 'PACKET_INVALID']
 
-/** Harness versions whose destination precedence BMN's tests were written against (Epic 60 spike, 2026-10-09). */
+/**
+ * Harness versions whose destination precedence BMN's tests were written against (Epic 60 spike,
+ * 2026-10-09). Any installed version is supported (owner decision 2026-10-10: the apps update
+ * faster than BMN can test them); this list only decides the word a receipt and Rules › Health
+ * carry beside the version. The destination itself is resolved and checked at every dispatch.
+ */
 export const TESTED_HARNESS_VERSIONS = { codex: ['0.161.0'], claude: ['2.1.295'] }
 /**
  * Codex versions on which a test showed that `exec resume` talks to the destination the current
@@ -56,7 +61,7 @@ const NEXT_STEP = {
   WORKSPACE_UNKNOWN: 'pass an existing workspace path without ..',
   WORKSPACE_MISMATCH: 'run from, and point -C/--add-dir and --stdin at, a place inside the workspace (or the packet)',
   RESUME_UNBOUND: 'resume only with --resume-of the receipt that started that session and was bound to it, or start a fresh checked dispatch',
-  HARNESS_UNTESTED: 'use a tested app version, or have the owner accept this one in Preferences > Rules > Health',
+  HARNESS_UNKNOWN: 'install the app, or put it on PATH, so that its --version can be read',
   DATA_FORBIDDEN: 'move to the next candidate in the role\'s chain (`bmn roster role <role>`); this provider gets public work only',
   PACKET_INVALID: 'build a packet of files the public repository already serves and dispatch it through env -i claude -p --safe-mode --tools \'\''
 }
@@ -1065,10 +1070,6 @@ export function consequences(before, after) {
         ? `${app} would count as sending data to ${providerName(route.provider)} on your word, so it gets public work only`
         : `${app} would count as sending data to ${providerName(route.provider)}, as inspected`)
     }
-    const added = (route.accepted_versions ?? []).filter((version) => !(previous?.accepted_versions ?? []).includes(version))
-    for (const version of added) out.push(`${app} ${version} could carry private work (accepted by you; BMN has not tested how this version picks its destination)`)
-    const revoked = (previous?.accepted_versions ?? []).filter((version) => !(route.accepted_versions ?? []).includes(version))
-    for (const version of revoked) out.push(`${app} ${version} could no longer carry private work (acceptance removed)`)
   }
   return [...new Set(out)]
 }
@@ -1118,11 +1119,29 @@ function matchedDestination(data, agent, harness, route, note) {
   return destination
 }
 
-function versionStanding(data, harness, version, tested = TESTED_HARNESS_VERSIONS) {
-  const approved = data.harness_routes.find((entry) => entry.harness === harness)
-  const isTested = version !== null && (tested[harness] ?? []).includes(version)
-  const accepted = !isTested && version !== null && (approved?.accepted_versions ?? []).includes(version)
-  return { tested: isTested, accepted, state: isTested ? 'tested' : accepted ? 'owner-accepted, untested' : 'untested' }
+/** Whether dotted version `a` is later than `b`; false when either does not read as numbers. */
+function laterVersion(a, b) {
+  const parts = (text) => text.split(/[-+]/)[0].split('.').map((part) => (/^\d+$/.test(part) ? Number(part) : NaN))
+  const [left, right] = [parts(a), parts(b)]
+  if ([...left, ...right].some(Number.isNaN)) return false
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0)
+    if (difference !== 0) return difference > 0
+  }
+  return false
+}
+
+/**
+ * The word beside an app's version: `tested`, `newer than BMN tested`, `not a version BMN tested`
+ * or `version unreadable`. It refuses nothing; BMN reads where an app sends data the same way on
+ * every version.
+ */
+export function versionStanding(harness, version, tested = TESTED_HARNESS_VERSIONS) {
+  if (version === null) return { tested: false, state: 'version unreadable' }
+  const known = tested[harness] ?? []
+  if (known.includes(version)) return { tested: true, state: 'tested' }
+  const newer = known.length > 0 && known.every((entry) => laterVersion(version, entry))
+  return { tested: false, state: newer ? 'newer than BMN tested' : 'not a version BMN tested' }
 }
 
 function receiptRoute(destination, route) {
@@ -1256,10 +1275,10 @@ export function evaluate(inputs, {
     }
     const effectiveData = resume === null ? dataLabel : stricter(dataLabel, resume.data)
 
-    const standing = versionStanding(data, parsed.harness, version, testedVersions)
-    if (effectiveData === 'private' && !standing.tested && !standing.accepted) {
-      refuse('HARNESS_UNTESTED', `${parsed.harness} ${version ?? '(version unreadable)'}: BMN has not tested how this version picks its destination`)
+    if (effectiveData === 'private' && version === null) {
+      refuse('HARNESS_UNKNOWN', `${parsed.harness}: BMN cannot read this app's version, so it cannot tell which program would run`)
     }
+    const standing = versionStanding(parsed.harness, version, testedVersions)
     note(`${parsed.harness} ${version ?? '(version unreadable)'}: ${standing.state}`)
 
     let manifest = null
@@ -1431,10 +1450,10 @@ export function evaluateResearch(inputs, {
     }
     note(`research run ${basename(run)}: BMN's prompt, an empty folder`)
 
-    const standing = versionStanding(data, parsed.harness, version, testedVersions)
-    if (!standing.tested && !standing.accepted) {
-      refuse('HARNESS_UNTESTED', `${parsed.harness} ${version ?? '(version unreadable)'}: BMN has not tested how this version picks its destination`)
+    if (version === null) {
+      refuse('HARNESS_UNKNOWN', `${parsed.harness}: BMN cannot read this app's version, so it cannot tell which program would run`)
     }
+    const standing = versionStanding(parsed.harness, version, testedVersions)
     note(`${parsed.harness} ${version}: ${standing.state}`)
     const answer = privateWorkAnswer(data, destination, null)
     note(`private work: ${answer.reason}`)
@@ -1530,7 +1549,7 @@ export function inspectRoute(agent, argv, environment, processCwd, data = null) 
     result = {
       harness: parsed.harness, ...resolution.route,
       model: resolution.model?.value ?? null, effort: resolution.effort?.value ?? null,
-      version, version_tested: version !== null && (TESTED_HARNESS_VERSIONS[parsed.harness] ?? []).includes(version)
+      version, version_state: versionStanding(parsed.harness, version).state
     }
   }
   if (data !== null && result.basis !== undefined) {
@@ -1637,7 +1656,7 @@ function routeCommand(options, rest, asJson) {
       lines.push(`  decided by: ${result.sources?.length ? result.sources.join(', ') : 'defaults only'}`)
       if (result.roster_provider) lines.push(`  provider: ${result.roster_provider} (${result.private_work === 'allowed' ? 'may see private work' : 'public work only'})`)
       if (result.model) lines.push(`  model: ${result.model}`)
-      if (result.version !== undefined) lines.push(`  ${result.harness} ${result.version ?? '(version unreadable)'}: ${result.version_tested ? 'tested' : 'BMN has not tested how this version picks its destination'}`)
+      if (result.version !== undefined) lines.push(`  ${result.harness} ${result.version ?? '(version unreadable)'}: ${result.version_state}`)
     }
     out(lines.join('\n'))
   }

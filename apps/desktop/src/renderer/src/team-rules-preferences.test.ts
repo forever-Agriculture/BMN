@@ -347,9 +347,9 @@ const RULES: RulesSnapshot = {
   },
   probes: [{ harness: 'claude', outcome: 'pass', at: '2026-10-09T20:00:00.000Z', stale: true }, { harness: 'codex', outcome: null }],
   apps: [
-    { harness: 'claude', version: '2.1.295', basis: 'default', provider: 'anthropic', host: null, sources: [], versionState: 'tested', acceptable: false, comparison: '' },
-    { harness: 'codex', version: '0.171.0', basis: 'default', provider: 'openai', host: null, sources: [], versionState: 'new', acceptable: true, comparison: 'It sends data where 0.161.0 did.' },
-    { harness: 'cursor', version: null, basis: 'unknown', provider: null, host: null, sources: [], versionState: 'unknown', acceptable: false, comparison: '' }
+    { harness: 'claude', version: '2.1.295', basis: 'default', provider: 'anthropic', host: null, sources: [], versionState: 'tested', versionNote: 'BMN tested how this version picks where to send data.' },
+    { harness: 'codex', version: '0.171.0', basis: 'default', provider: 'openai', host: null, sources: [], versionState: 'newer', versionNote: 'Newer than the version BMN tested (0.161.0). BMN reads where it sends data the same way on every version.' },
+    { harness: 'cursor', version: null, basis: 'unknown', provider: null, host: null, sources: [], versionState: 'unknown', versionNote: 'BMN does not check Cursor dispatches.' }
   ],
   transactions: [
     { id: 't2', createdAt: '2026-10-09T22:00:00.000Z', state: 'complete', reason: 'team update', targets: ['claude'], valid: true },
@@ -458,18 +458,20 @@ describe('Rules › Health (60.6 AC4)', () => {
   })
 
   it('shows each agent app: version, whether it is tested, where it sends data and what is recorded', () => {
-    expect(markup).toContain('<span class="mono">2.1.295</span> <span class="muted">· tested</span>')
-    expect(markup).toContain('<span class="mono">0.171.0</span> <span class="muted">· new</span>')
-    expect(markup).toContain('<span class="mono">not found</span> <span class="muted">· not checked</span>')
+    expect(markup).toContain('<span class="mono">2.1.295</span> <span class="muted" title="BMN tested how this version picks where to send data.">· tested</span>')
+    expect(markup).toContain('<span class="mono">0.171.0</span> <span class="muted" title="Newer than the version BMN tested (0.161.0). BMN reads where it sends data the same way on every version.">· newer than tested</span>')
+    expect(markup).toContain('<span class="mono">not found</span> <span class="muted" title="BMN does not check Cursor dispatches.">· not checked</span>')
     expect(markup).toContain('<span>Sends data to Anthropic&#x27;s own servers</span><span class="faint">Recorded: Anthropic, as inspected</span>')
     expect(markup).toContain('<span>Where it sends data is unknown</span><span class="faint">Recorded: Z.ai, on your word</span>')
     expect(destinationWords({ basis: 'explicit', provider: null, host: 'proxy.example.com' }, (id) => id)).toBe('Sends data to a custom host, proxy.example.com')
   })
 
-  it('offers Accept version… only for a new version that sends data where a tested one did, and names each accepted version to remove', () => {
-    expect([...markup.matchAll(/aria-label="Accept version ([^"]+)"/g)].map((match) => match[1])).toEqual(['0.171.0 of Codex'])
+  it('offers no Accept step: every installed version is supported; a list kept from the earlier rule can only be removed', () => {
+    expect(markup).not.toContain('Accept version')
     expect([...markup.matchAll(/aria-label="Set the destination of ([^"]+)"/g)].map((match) => match[1])).toEqual(['Claude Code', 'Codex', 'Cursor'])
+    expect(markup).toContain('Accepted earlier, no longer needed')
     expect(markup).toContain('aria-label="Remove accepted version 0.170.0 of Codex"')
+    expect(markup).toContain('Every installed version is supported')
   })
 })
 

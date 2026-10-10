@@ -2,7 +2,6 @@
 import type { RosterAgentShape, RosterDataShape, RosterDiffShape } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
 import {
-  acceptVersion,
   activateAgent,
   addAgent,
   addRole,
@@ -238,11 +237,11 @@ describe('agents (60.5 AC2–AC4)', () => {
 })
 
 describe('agent apps (60.6 AC4)', () => {
+  /** A team file that still lists versions accepted under the earlier rule. */
+  const listing = (...versions: string[]): typeof DATA => ({ ...DATA, harness_routes: DATA.harness_routes.map((route) => (route.harness === 'codex' ? { ...route, accepted_versions: versions } : route)) })
+
   it('records a destination as inspected or on the owner\'s word, in app order, dropping versions accepted for the old one', () => {
-    const accepted = acceptVersion(DATA, 'codex', '0.170.0')
-    expect(accepted.harness_routes[1]?.accepted_versions).toEqual(['0.170.0'])
-    expect(acceptVersion(accepted, 'codex', '0.170.0')).toBe(accepted)
-    expect(acceptVersion(DATA, 'cursor', '1.0')).toBe(DATA)
+    const accepted = listing('0.170.0')
     const declared = setDestination(accepted, 'codex', { id: 'zai', name: 'Z.ai' }, 'owner-declared')
     expect(declared.harness_routes).toEqual([{ harness: 'claude', provider: 'anthropic', basis: 'observed-default' }, { harness: 'codex', provider: 'zai', basis: 'owner-declared' }])
     const cursor = setDestination(DATA, 'cursor', { id: 'cursor', name: 'Cursor' }, 'owner-declared')
@@ -251,9 +250,8 @@ describe('agent apps (60.6 AC4)', () => {
   })
 
   it('removing the last accepted version removes the list', () => {
-    const two = acceptVersion(acceptVersion(DATA, 'codex', '0.170.0'), 'codex', '0.171.0')
-    expect(revokeVersion(two, 'codex', '0.170.0').harness_routes[1]?.accepted_versions).toEqual(['0.171.0'])
-    expect(Object.hasOwn(revokeVersion(acceptVersion(DATA, 'codex', '0.170.0'), 'codex', '0.170.0').harness_routes[1] ?? {}, 'accepted_versions')).toBe(false)
+    expect(revokeVersion(listing('0.170.0', '0.171.0'), 'codex', '0.170.0').harness_routes[1]?.accepted_versions).toEqual(['0.171.0'])
+    expect(Object.hasOwn(revokeVersion(listing('0.170.0'), 'codex', '0.170.0').harness_routes[1] ?? {}, 'accepted_versions')).toBe(false)
   })
 })
 

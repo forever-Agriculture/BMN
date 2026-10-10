@@ -32,18 +32,12 @@ export interface ApprovalSeams {
   /** The flock(1) executable; tests point it at a missing one to see the approval fail closed. */
   flockCommand?: string
   /**
-   * Judges harness versions an approval would newly accept (60.3 AC3): throws to refuse. The app
-   * passes one that re-inspects the route; without it every new acceptance is refused.
-   */
-  checkNewlyAccepted?: (versions: AcceptedVersion[]) => void
-  /**
    * Judges app destinations an approval would newly record as inspected (60.6 AC4): throws to
    * refuse. The app passes one that inspects each app again; without it every such change is refused.
    */
   checkInspectedRoutes?: (routes: InspectedRoute[]) => void
 }
 
-export interface AcceptedVersion { harness: string; version: string }
 export interface InspectedRoute { harness: string; provider: string }
 
 /** What the panel showed: the approved generation (null when none), the roster file hash and, when given, what the roster path linked to. */
@@ -56,14 +50,6 @@ export interface ShownRevision {
   directory?: string | null
 }
 
-/** Versions `next` accepts that `previous` did not. */
-export function newlyAccepted(previous: RosterData | null, next: RosterData): AcceptedVersion[] {
-  const before = new Map((previous?.harness_routes ?? []).map((route) => [route.harness, route.accepted_versions ?? []]))
-  return next.harness_routes.flatMap((route) => (route.accepted_versions ?? [])
-    .filter((version) => !(before.get(route.harness) ?? []).includes(version))
-    .map((version) => ({ harness: route.harness, version })))
-}
-
 /** App destinations `next` records as inspected (`observed-default`) that `previous` did not record that way. */
 export function newlyInspected(previous: RosterData | null, next: RosterData): InspectedRoute[] {
   const before = new Map((previous?.harness_routes ?? []).map((route) => [route.harness, route]))
@@ -72,7 +58,7 @@ export function newlyInspected(previous: RosterData | null, next: RosterData): I
     .map((route) => ({ harness: route.harness, provider: route.provider }))
 }
 
-function judgeAccepted(previous: RosterData | null, next: RosterData, seams: ApprovalSeams): void {
+function judgeInspected(previous: RosterData | null, next: RosterData, seams: ApprovalSeams): void {
   const routes = newlyInspected(previous, next)
   if (routes.length > 0) {
     if (seams.checkInspectedRoutes === undefined) {
@@ -80,12 +66,6 @@ function judgeAccepted(previous: RosterData | null, next: RosterData, seams: App
     }
     seams.checkInspectedRoutes(routes)
   }
-  const versions = newlyAccepted(previous, next)
-  if (versions.length === 0) return
-  if (seams.checkNewlyAccepted === undefined) {
-    throw new RosterError('ROUTE_CHANGED', `${versions.map((entry) => `${entry.harness} ${entry.version}`).join(', ')} can be accepted only after BMN inspected where that version sends data, in Preferences > Rules > Health`)
-  }
-  seams.checkNewlyAccepted(versions)
 }
 
 function linuxStartIdentity(pid: number): string | null {
@@ -258,7 +238,7 @@ export function approveRoster(shown: ShownRevision, seams: ApprovalSeams = {}): 
     const file = readFileState()
     checkShown(shown, current, file.hash, file.state)
     const data = validData(file.text)
-    judgeAccepted(current?.data ?? null, data, seams)
+    judgeInspected(current?.data ?? null, data, seams)
     return publish(data, file.hash, current, seams)
   })
 }
@@ -293,7 +273,7 @@ export function approveSections(shown: ShownRevision, scope: string[], seams: Ap
     checkShown(shown, current, file.hash, file.state)
     const fileData = validData(file.text)
     if (current === null) {
-      judgeAccepted(null, fileData, seams)
+      judgeInspected(null, fileData, seams)
       return publish(fileData, file.hash, current, seams)
     }
     const unknown = scope.filter((id) => !SHARED_SECTIONS.includes(id)
@@ -303,7 +283,7 @@ export function approveSections(shown: ShownRevision, scope: string[], seams: Ap
     if (parsed.data === null) {
       throw new RosterError('ROSTER_INVALID', 'this change depends on another pending change; approve them together or revert one', { errors: parsed.errors })
     }
-    judgeAccepted(current.data, parsed.data, seams)
+    judgeInspected(current.data, parsed.data, seams)
     return publish(parsed.data, file.hash, current, seams)
   })
 }
@@ -328,7 +308,7 @@ export function saveAndApprove(shown: ShownRevision, data: RosterData, seams: Ap
     checkShown(shown, current, file.hash, file.state)
     const nextText = rewriteRoster(file.text, data)
     const nextData = validData(nextText)
-    judgeAccepted(current?.data ?? null, nextData, seams)
+    judgeInspected(current?.data ?? null, nextData, seams)
     if (nextText !== file.text) {
       keepPriorState(file.state, (seams.now ?? (() => new Date()))())
       assertLockHeld()
@@ -399,7 +379,7 @@ export function restoreGeneration(shown: ShownRevision, number: number, seams: A
     const problem = restoreProblem(number)
     const earlier = problem === null ? readGeneration(number) : null
     if (earlier === null) throw new RosterError(problem?.includes('earlier roster layout') ? 'INVALID_VALUE' : 'STATE_CORRUPT', problem ?? `version ${number} is missing or does not verify`)
-    judgeAccepted(current?.data ?? null, earlier.data, seams)
+    judgeInspected(current?.data ?? null, earlier.data, seams)
     return publish(earlier.data, earlier.roster_file_hash, current, seams, 'restore', number)
   })
 }

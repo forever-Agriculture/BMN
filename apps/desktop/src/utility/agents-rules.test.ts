@@ -63,7 +63,7 @@ function approve(text = EXAMPLE): void {
   } catch {
     generation = null
   }
-  approveRoster({ generation, fileHash: readValidRoster().hash }, { checkNewlyAccepted: () => {}, checkInspectedRoutes: () => {} })
+  approveRoster({ generation, fileHash: readValidRoster().hash }, { checkInspectedRoutes: () => {} })
 }
 
 function edit(text: string, from: string, to: string): string {
@@ -240,16 +240,17 @@ describe('install transactions and restore (60.4 AC3-AC4)', () => {
     expect(existsSync(target.codex())).toBe(false)
   })
 
-  it('refuses a full rendering on an app version nobody tested or accepted, and writes it once the owner accepted that version', async () => {
-    stub('codex', 'echo "codex-cli 0.170.0"')
+  it('writes a full rendering on any installed app version, and refuses it only while the version cannot be read', async () => {
+    stub('codex', 'echo "codex-cli"')
     const refused = await installRules(['codex', 'opencode'], { yes: true, environment: env })
-    expect(refused).toMatchObject({ code: 'ROUTE_CHANGED', message: expect.stringContaining('Codex 0.170.0 is a version BMN has not tested and you have not accepted') })
-    expect(refused.message).toContain('accept that version in Preferences > Rules > Health')
+    expect(refused).toMatchObject({ code: 'ROUTE_CHANGED', message: expect.stringContaining('Codex is not installed, or its version cannot be read') })
+    expect(refused.message).toContain('install the app or put it on PATH, or keep the public sections only')
     expect(existsSync(target.codex())).toBe(false)
     expect(existsSync(target.opencode())).toBe(false)
-    // A public rendering carries nothing private, so the version does not matter for it.
+    // A public rendering carries nothing private, so the app need not be there for it.
     expect(await installRules(['opencode'], { yes: true, environment: env })).toMatchObject({ code: 'OK', written: [{ harness: 'opencode', kind: 'public' }] })
-    approve(edit(EXAMPLE, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: observed-default, accepted_versions: ["0.170.0"]}'))
+    // A version newer than the ones BMN tested is supported like any other (owner decision 2026-10-10).
+    stub('codex', 'echo "codex-cli 0.170.0"')
     expect(await installRules(['codex'], { yes: true, environment: env })).toMatchObject({ code: 'OK', written: [{ harness: 'codex', kind: 'full' }] })
     expect(readFileSync(target.codex(), 'utf8')).toContain('PRIVATE-SENTINEL')
   })
@@ -525,11 +526,13 @@ describe('probes (60.4 AC5)', () => {
     expect(claude(() => ({ version: '2.1.295', host: 'proxy.example.test' }))).toMatchObject({ stale: true })
   })
 
-  it('sends nothing on an app version nobody tested or accepted', async () => {
+  it('runs the test on an app version newer than the ones BMN tested', async () => {
     await installRules(['claude'], { yes: true, environment: env })
     stub('claude', `case "$1" in --version) echo "2.1.296 (Claude Code)";; *) touch "$HOME/claude-ran";; esac`)
-    expect(await probe('claude', { environment: env })).toMatchObject({ outcome: 'unavailable', version: '2.1.296', detail: expect.stringContaining('BMN has not tested and you have not accepted') })
-    expect(existsSync(join(home, 'claude-ran'))).toBe(false)
+    const result = await probe('claude', { environment: env })
+    expect(result).toMatchObject({ version: '2.1.296' })
+    expect(result.outcome).not.toBe('unavailable')
+    expect(existsSync(join(home, 'claude-ran'))).toBe(true)
   })
 
   it('a probe goes stale through the app\'s own version inspector once the harness that runs is replaced', async () => {
@@ -568,13 +571,13 @@ describe('an approval that changes the Team phrase (60.4 AC6)', () => {
     expect((await installRules([...ALL], { yes: true, environment: env })).code).toBe('OK')
   })
 
-  it('leaves a full rendering alone once its app runs a version nobody tested or accepted', async () => {
-    stub('codex', 'echo "codex-cli 0.170.0"')
+  it("leaves a full rendering alone while its app's version cannot be read", async () => {
+    stub('codex', 'echo "codex-cli"')
     const plan = await planTeamUpdate(dataOf(WITHOUT_LUNA), { environment: env })
     expect(plan.targets.map((entry: { harness: string }) => entry.harness)).toEqual(['claude', 'opencode', 'cursor'])
   })
 
-  it('skips a shown full rendering whose app changed to an untested version before the write', async () => {
+  it('skips a shown full rendering whose app changed version before the write', async () => {
     const plan = await planTeamUpdate(dataOf(WITHOUT_LUNA), { environment: env })
     approve(WITHOUT_LUNA)
     stub('codex', 'echo "codex-cli 0.170.0"')
@@ -652,19 +655,17 @@ describe('an approval that changes the Team phrase (60.4 AC6)', () => {
     for (const store of Object.values(stores)) expect(readFileSync(join(store, 'AGENTS.md'), 'utf8')).toContain(TEAM)
   })
 
-  it('binds the whole inspection: another accepted version or another deciding source skips the target', async () => {
-    const accepting = (text: string): string => edit(text, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: observed-default, accepted_versions: [0.170.0]}')
-    approve(accepting(EXAMPLE))
+  it('binds the whole inspection: another app version or another deciding source skips the target', async () => {
     expect(states().codex).toBe('current')
-    const plan = await planTeamUpdate(dataOf(accepting(WITHOUT_LUNA)), { environment: env })
+    const plan = await planTeamUpdate(dataOf(WITHOUT_LUNA), { environment: env })
     expect(plan.targets.map((entry: { harness: string }) => entry.harness)).toEqual([...ALL])
-    approve(accepting(WITHOUT_LUNA))
+    approve(WITHOUT_LUNA)
     const only = (harness: string) => plan.targets.filter((entry: { harness: string }) => entry.harness === harness)
     // Still Codex's own servers, but a setting now says so where nothing did when the plan was shown.
     writeFileSync(join(home, '.codex/config.toml'), 'model_provider = "openai"\n')
     expect(await applyTeamUpdate(only('codex'), { environment: env })).toMatchObject({ transaction: null, written: [], skipped: ['codex'] })
     rmSync(join(home, '.codex/config.toml'))
-    // A version the owner accepted, but not the one inspected for the plan.
+    // A supported version, but not the one inspected for the plan.
     stub('codex', 'echo "codex-cli 0.170.0"')
     expect(await applyTeamUpdate(only('codex'), { environment: env })).toMatchObject({ transaction: null, written: [], skipped: ['codex'] })
     stub('codex', 'echo "codex-cli 0.161.0"')

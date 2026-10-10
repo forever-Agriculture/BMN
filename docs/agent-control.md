@@ -788,6 +788,8 @@ from named, non-secret settings only (Codex `config.toml` model and provider key
 unknown host when they disagree; settings are read under `--safe-mode` too, because Claude Code
 2.1.295 still applies their `env` there), never opens an auth file, and reads only the first line
 of a Codex session record to bind a resume. Private work goes only to a provider that allows it.
+Any installed version of the app passes; one whose version cannot be read is refused private work
+(`HARNESS_UNKNOWN`).
 A public-only destination may receive only a packet of files that match the public commit the
 visibility record names, through a tools-disabled, safe-mode Claude Code call whose appended
 system prompt is exactly the public rules rendering. The commit's files are read from the
@@ -813,17 +815,17 @@ swapped link made meanwhile, including a link on the way to the folder that hold
 **Earlier versions** lists saves and installs with **Restore…** and **Undo…**. **Install…** shows
 every file's difference, including a link, a hand-written file or an outside edit it replaces,
 and writes them in one step; a file that is a link is replaced by a regular file, and the file it
-pointed to is never written. The full rules are written, updated or sent in a test only while the
-app runs a version BMN tested or you accepted under Health; on any other version Install refuses
-them and names the version. Each action confirms against the exact plan it showed, plans again
+pointed to is never written. The full rules are written, updated or sent in a test on any
+installed version of the app; only an app whose version cannot be read (not installed, or not on
+`PATH`) is refused them. Each action confirms against the exact plan it showed, plans again
 once you confirm, and refuses if the files changed since. A plan is bound to the folder that
 really holds each file: when a link on the way to a file leads elsewhere, the confirmation names
 that place too, and a link that moves afterwards makes the plan refuse. **Health** reads each file the way the
 hooks check is read (current, differs from the rules, edited outside BMN, not installed, a link,
-missing or unreadable) and, under **Agent apps**, where each app sends data and which versions
-you accepted. BMN offers a version it has not tested only when it sends data where a tested or
-accepted version did; while it holds no record of one, only when the app uses its provider's own
-servers and nothing overrides that. **Test…** asks an app which rules it loaded; it sends the rendered rules to that
+missing or unreadable) and, under **Agent apps**, where each app sends data and its installed
+version, marked tested, newer than tested or not tested. Every installed version is supported:
+BMN works out where an app sends data the same way on each, at every check, and writes the
+version and that mark into the receipt. **Test…** asks an app which rules it loaded; it sends the rendered rules to that
 app's provider, so it runs only where private work is allowed, inspects the destination again
 just before sending, and answers passed, failed, inconclusive or unavailable. A Codex test passes
 only when its own session record carries the rendered header before any tool ran. A result turns
@@ -863,12 +865,11 @@ it would replace, and puts nothing back until you confirm.
   file lost after the end of the file. A revert that would have to remove or insert text
   elsewhere (a section the file added, a repeated section, a section without its block) is
   refused and writes nothing, as is one that would leave a valid file invalid.
-- An app version you accept under Rules → Health is your risk decision, not a version BMN tested.
-  The page offers it only when that version sends data to the same place, set by the same
-  sources, as the last tested or accepted version it inspected (or, while BMN holds no record of
-  one, only to its provider's own servers with nothing overriding that), and approval checks that again,
-  so a version added to the file by hand is refused unless it is the installed one and still
-  sends data there. Remove one with its ×.
+- BMN's reading of where an app sends data was tested against Claude Code 2.1.295 and Codex
+  0.161.0. It reads the same named settings on every later version and refuses a changed or
+  unknown destination as before, but a version that starts to take its destination from a setting
+  BMN does not read would not be noticed. `accepted_versions` in a team file written under the
+  earlier rule is still valid and no longer read; Rules → Health removes it with its ×.
 
 ## A brief for agents
 

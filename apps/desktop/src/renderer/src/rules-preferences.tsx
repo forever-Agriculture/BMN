@@ -21,7 +21,7 @@ import {
 import { failureDetail } from './bridge-error'
 import { Segmented } from './history-preferences'
 import { Dot } from './roster-marks'
-import { acceptVersion, diffBody, diffSummary, revokeVersion, setDestination, undoWords } from './roster-staging'
+import { diffBody, diffSummary, revokeVersion, setDestination, undoWords } from './roster-staging'
 import { displayPath } from './session-presentation'
 import { Issues, PageHead, TargetPath, shortDate } from './team-preferences'
 import type { TeamState } from './team-state'
@@ -111,7 +111,7 @@ export function destinationWords(app: Pick<AgentAppView, 'basis' | 'provider' | 
   return 'Where it sends data is unknown'
 }
 
-export const VERSION_WORDS: Readonly<Record<AgentAppView['versionState'], string>> = { tested: 'tested', accepted: 'accepted', new: 'new', unknown: 'not checked' }
+export const VERSION_WORDS: Readonly<Record<AgentAppView['versionState'], string>> = { tested: 'tested', newer: 'newer than tested', other: 'not tested', unknown: 'not checked' }
 
 /** Installs and saves, newest first, as Earlier versions lists them. */
 export type Earlier =
@@ -536,7 +536,7 @@ function EditorPage(props: { rules: RulesState }): React.JSX.Element {
 // ---------------------------------------------------------------------------------------------
 // Rules › Health
 
-type AppAction = { kind: 'destination'; harness: RosterHarness } | { kind: 'accept'; harness: RosterHarness; version: string }
+type AppAction = { kind: 'destination'; harness: RosterHarness }
 
 /** Where an app sends data: its provider's own servers as BMN inspected them, or the owner's word for it. */
 function DestinationSheet(props: { app: AgentAppView; data: RosterDataShape; onDone(next: RosterDataShape | null): void }): React.JSX.Element {
@@ -617,41 +617,31 @@ function HealthPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
           <div key={app.harness} className="app-block">
             <div className="health-row">
               <span>{name}</span>
-              <span><span className="mono">{app.version ?? 'not found'}</span> <span className="muted">· {VERSION_WORDS[app.versionState]}</span></span>
+              <span><span className="mono">{app.version ?? 'not found'}</span> <span className="muted" title={app.versionNote}>· {VERSION_WORDS[app.versionState]}</span></span>
               <span className="health-state">
                 <span>{destinationWords(app, providerName)}</span>
                 <span className="faint">{route ? `Recorded: ${providerName(route.provider)}, ${route.basis === 'observed-default' ? 'as inspected' : 'on your word'}` : 'No destination recorded'}</span>
               </span>
               <span className="app-actions">
                 <button type="button" className="small" disabled={data === null || action !== null} aria-label={`Set the destination of ${name}`} onClick={() => setAction({ kind: 'destination', harness: app.harness })}>Set destination…</button>
-                {app.acceptable && app.version && data ? (
-                  <button type="button" className="small" disabled={action !== null} aria-label={`Accept version ${app.version} of ${name}`}
-                    onClick={() => setAction({ kind: 'accept', harness: app.harness, version: app.version as string })}>Accept version…</button>
-                ) : null}
               </span>
             </div>
             {accepted.length > 0 && data ? (
               <div className="accepted">
-                <span className="muted">Accepted</span>
+                <span className="muted">Accepted earlier, no longer needed</span>
                 {accepted.map((version) => (
                   <span key={version} className="chip on mono">{version}
-                    <button type="button" className="chip-remove" aria-label={`Remove accepted version ${version} of ${name}`} title="Remove accepted version…" onClick={() => team.stage(revokeVersion(data, app.harness, version))}>×</button>
+                    <button type="button" className="chip-remove" aria-label={`Remove accepted version ${version} of ${name}`} title="Remove it from the team file…" onClick={() => team.stage(revokeVersion(data, app.harness, version))}>×</button>
                   </span>
                 ))}
               </div>
             ) : null}
             {action?.kind === 'destination' && action.harness === app.harness && data
               ? <DestinationSheet app={app} data={data} onDone={(next) => { setAction(null); if (next) team.stage(next) }} /> : null}
-            {action?.kind === 'accept' && action.harness === app.harness && data ? (
-              <Sheet title={`Accept version ${action.version} of ${name}`} action="Accept version" busy={false}
-                note={`BMN was not tested with this version. ${app.comparison} Accepting it lets private work go through it; BMN inspects it again when you approve.`}
-                onCancel={() => setAction(null)} onConfirm={() => { setAction(null); team.stage(acceptVersion(data, app.harness, action.version)) }} />
-            ) : null}
-            {app.versionState === 'new' && !app.acceptable ? <p className="preferences-help">{app.comparison}</p> : null}
           </div>
         )
       })}
-      <p className="preferences-help">Tested versions are the ones BMN was checked against. Private work goes only through a tested or accepted version.</p>
+      <p className="preferences-help">Tested versions are the ones BMN was checked against. Every installed version is supported: BMN works out where an app sends data the same way on each and notes the version with every check.</p>
     </>
   )
 }

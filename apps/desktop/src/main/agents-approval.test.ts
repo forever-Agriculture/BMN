@@ -290,23 +290,17 @@ try {
   })
 })
 
-describe('accepting a harness version outside the panel (60.3 AC3)', () => {
+describe('versions accepted under the earlier rule (owner decision 2026-10-10: every installed version is supported)', () => {
   const ACCEPTED = (versions: string) => edit(EXAMPLE, 'codex: {provider: openai, basis: observed-default}',
     `codex: {provider: openai, basis: observed-default, accepted_versions: [${versions}]}`)
 
-  it('a version added to the file is refused unless the app confirms it still resolves the recorded route', () => {
+  it('a team file that still lists accepted versions stays valid and approves like any other field', () => {
     writeRoster(EXAMPLE)
     approveRoster(shown())
-    writeRoster(ACCEPTED('0.170.0'))
-    expect(() => approveRoster(shown())).toThrow(expect.objectContaining({ code: 'ROUTE_CHANGED' }))
-    expect(() => approveSections(shown(), ['harness-routes'])).toThrow(expect.objectContaining({ code: 'ROUTE_CHANGED' }))
-    const refuse = () => { throw Object.assign(new Error('not the installed version'), { code: 'ROUTE_CHANGED' }) }
-    expect(() => approveRoster(shown(), { checkNewlyAccepted: refuse })).toThrow('not the installed version')
-    expect(readApproved().number).toBe(1)
-    const seen: unknown[] = []
-    expect(approveRoster(shown(), { checkNewlyAccepted: (versions) => { seen.push(...versions) } }).number).toBe(2)
-    expect(seen).toEqual([{ harness: 'codex', version: '0.170.0' }])
-    // Revoking needs no check; a version already approved is not checked again.
+    writeRoster(ACCEPTED('"0.170.0"'))
+    expect(approveRoster(shown()).number).toBe(2)
+    expect(readApproved().data.harness_routes.find((route) => route.harness === 'codex')?.accepted_versions).toEqual(['0.170.0'])
+    // Removing the list is an ordinary change too.
     writeRoster(EXAMPLE)
     expect(approveRoster(shown()).number).toBe(3)
   })

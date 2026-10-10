@@ -658,14 +658,7 @@ export function setDestination(data: RosterDataShape, harness: RosterHarness, pr
   }
 }
 
-/** Accepting an inspected app version adds it to the app's accepted list (60.3 AC3). */
-export function acceptVersion(data: RosterDataShape, harness: RosterHarness, version: string): RosterDataShape {
-  const route = data.harness_routes.find((entry) => entry.harness === harness)
-  if (route === undefined || (route.accepted_versions ?? []).includes(version)) return data
-  return updateRoute(data, harness, { accepted_versions: [...(route.accepted_versions ?? []), version] })
-}
-
-/** Removing an accepted version: private work stops on it again until it is accepted anew. */
+/** Removing a version accepted under the earlier rule; the list is no longer read (every installed version is supported). */
 export function revokeVersion(data: RosterDataShape, harness: RosterHarness, version: string): RosterDataShape {
   return {
     ...data,

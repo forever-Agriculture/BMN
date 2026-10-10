@@ -87,6 +87,7 @@ export interface Destination {
 export interface ResearchRun { id: string; folder: string; prompt: string; cwd: string }
 export declare const REFUSALS: string[]
 export declare const TESTED_HARNESS_VERSIONS: Record<string, string[]>
+export declare function versionStanding(harness: string, version: string | null, tested?: Record<string, string[]>): { tested: boolean; state: 'tested' | 'newer than BMN tested' | 'not a version BMN tested' | 'version unreadable' }
 export declare const RESUME_TESTED_VERSIONS: Record<string, string[]>
 export declare const RESEARCH_FENCE_VERSIONS: Record<string, string[]>
 export declare const RESEARCH_TOOLS: string

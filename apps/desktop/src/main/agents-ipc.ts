@@ -24,14 +24,13 @@ import {
 import type { IpcMainInvokeEvent } from 'electron'
 import { HARNESSES, RosterError, agentsDirectory, parseRoster, proseOf, rewriteProse, rewriteRoster, rosterPath, sha256, starterRoster, type RosterData } from '../../bin/agents-roster.mjs'
 import { listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
-import { TESTED_HARNESS_VERSIONS, consequences, harnessVersion, inspectRoute } from '../../bin/agents-check.mjs'
+import { TESTED_HARNESS_VERSIONS, consequences, harnessVersion, inspectRoute, versionStanding } from '../../bin/agents-check.mjs'
 import {
   applyTeamUpdate, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planTeamUpdate, probeInspector, render, writeMaster, type RulesHarness
 } from '../../bin/agents-rules.mjs'
 import { pathState, replaceFileSafely } from '../../bin/safe-config-write.mjs'
 import { unifiedDiff } from '../../bin/text-diff.mjs'
 import { approveRoster, approveSections, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
-import { assertStillAcceptable, judgeInspection, type RouteResolution } from './route-baselines'
 import { MainIpcError } from './workspace-ipc'
 
 interface AgentsIpcRegistrar {
@@ -323,7 +322,9 @@ function renderAll(path: string, text: string, generation: Generation | null): R
 
 export interface RulesIpcContext { script: string; env: NodeJS.ProcessEnv; probeEnv: NodeJS.ProcessEnv; now: () => Date }
 
-interface AppInspection { resolution: RouteResolution; versionTested: boolean; reason?: string }
+/** What an inspection resolved: the app's installed version and where it sends data. */
+interface RouteResolution { harness: RosterHarness; version: string | null; provider: string | null; host: string | null; basis: string; sources: string[] }
+interface AppInspection { resolution: RouteResolution; reason?: string }
 
 /** Where an app sends data as inspected now, and its installed version. Inspection only. */
 function inspectApp(harness: RosterHarness, environment: NodeJS.ProcessEnv, probeEnvironment: NodeJS.ProcessEnv): AppInspection {
@@ -335,25 +336,30 @@ function inspectApp(harness: RosterHarness, environment: NodeJS.ProcessEnv, prob
       harness, basis: String(result.basis ?? 'unknown'), provider: (result.provider as string | null) ?? null, host: (result.host as string | null) ?? null,
       sources: Array.isArray(result.sources) ? result.sources as string[] : [], version
     },
-    versionTested: version !== null && (TESTED_HARNESS_VERSIONS[harness] ?? []).includes(version),
     ...(typeof result.reason === 'string' ? { reason: result.reason } : {})
   }
 }
 
-/** One row of Rules › Health › Agent apps (60.6 AC4). */
-function appView(harness: RosterHarness, context: RulesIpcContext, generation: Generation | null): AgentAppView {
-  const { resolution, versionTested, reason } = inspectApp(harness, context.env, context.probeEnv)
-  const accepted = generation?.data.harness_routes.find((route) => route.harness === harness)?.accepted_versions ?? []
-  const isAccepted = resolution.version !== null && accepted.includes(resolution.version)
+/**
+ * One row of Rules › Health › Agent apps (60.6 AC4). Any installed version is supported (owner
+ * decision 2026-10-10); the row only says whether BMN's tests ran against it.
+ */
+function appView(harness: RosterHarness, context: RulesIpcContext): AgentAppView {
+  const { resolution, reason } = inspectApp(harness, context.env, context.probeEnv)
+  const app = ROSTER_APP_NAMES[harness]
   const checked = harness === 'claude' || harness === 'codex'
-  const verdict = checked
-    ? judgeInspection(resolution, accepted, versionTested || isAccepted, context.now(), (id) => generation?.data.providers.find((provider) => provider.id === id)?.name ?? id)
-    : { acceptable: false, comparison: `BMN does not check ${ROSTER_APP_NAMES[harness]} dispatches, so its versions are neither tested nor accepted.` }
-  return {
-    ...resolution,
-    versionState: !checked || resolution.version === null ? 'unknown' : versionTested ? 'tested' : isAccepted ? 'accepted' : 'new',
-    acceptable: verdict.acceptable, comparison: verdict.comparison, ...(reason === undefined ? {} : { reason })
-  }
+  const tested = (TESTED_HARNESS_VERSIONS[harness] ?? []).join(', ')
+  const same = 'BMN reads where it sends data the same way on every version.'
+  const [versionState, versionNote]: [AgentAppView['versionState'], string] = !checked
+    ? ['unknown', `BMN does not check ${app} dispatches.`]
+    : resolution.version === null
+      ? ['unknown', `${app} is not installed, or its version cannot be read.`]
+      : versionStanding(harness, resolution.version).tested
+        ? ['tested', 'BMN tested how this version picks where to send data.']
+        : versionStanding(harness, resolution.version).state === 'newer than BMN tested'
+          ? ['newer', `Newer than the version BMN tested (${tested}). ${same}`]
+          : ['other', `Not the version BMN tested (${tested}). ${same}`]
+  return { ...resolution, versionState, versionNote, ...(reason === undefined ? {} : { reason }) }
 }
 
 async function rulesHealth(context: RulesIpcContext): Promise<RulesSnapshot['health']> {
@@ -398,7 +404,7 @@ export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnap
     renderings,
     health: text === null ? { state: 'failed', checkedAt: context.now().toISOString(), reason: `No rules master at ${path}` } : await rulesHealth(context),
     probes: lastProbes({ inspect: await probeInspector(context.probeEnv) }) as RulesProbeView[],
-    apps: (HARNESSES as RosterHarness[]).map((harness) => appView(harness, context, generation)),
+    apps: (HARNESSES as RosterHarness[]).map((harness) => appView(harness, context)),
     transactions: listTransactions().slice(0, 10).map((entry) => ({
       id: entry.id, valid: entry.valid, ...(entry.created_at ? { createdAt: entry.created_at } : {}),
       ...(entry.state ? { state: entry.state } : {}), ...(entry.reason ? { reason: entry.reason } : {}), ...(entry.targets ? { targets: entry.targets } : {})
@@ -450,14 +456,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const ctx = context()
     return inspectApp(harness, ctx.env, ctx.probeEnv)
   }
-  /** Approval seams: what an approval newly accepts or records as inspected is inspected again at commit (60.3 AC3, 60.6 AC4). */
+  /** Approval seams: what an approval newly records as inspected is inspected again at commit (60.6 AC4). */
   const seams: ApprovalSeams = {
-    checkNewlyAccepted: (versions) => {
-      for (const entry of versions) {
-        if (entry.harness !== 'claude' && entry.harness !== 'codex') throw new RosterError('ROUTE_CHANGED', `BMN does not check ${entry.harness} dispatches, so it accepts no ${entry.harness} version`)
-        assertStillAcceptable(entry.version, inspect(entry.harness).resolution)
-      }
-    },
     checkInspectedRoutes: (routes) => {
       for (const route of routes) {
         const harness = route.harness as RosterHarness

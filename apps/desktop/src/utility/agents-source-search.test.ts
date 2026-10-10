@@ -13,7 +13,7 @@ const inFolder = (folder: string, pattern: RegExp): string[] => readdirSync(join
 /** Everything that reads, writes, types, shows or tests the team file. */
 const ROSTER_CODE = [
   ...inFolder('apps/desktop/bin', /^agents-.*\.(mjs|d\.mts)$/),
-  ...inFolder('apps/desktop/src/main', /^(agents-.*|route-baselines|visibility-refresh)\.ts$/),
+  ...inFolder('apps/desktop/src/main', /^(agents-.*|visibility-refresh)\.ts$/),
   ...inFolder('apps/desktop/src/utility', /^agents-(?!source-search).*\.ts$/),
   ...inFolder('apps/desktop/src/utility/test-fixtures/agents', /./),
   ...inFolder('apps/desktop/src/renderer/src', /^(team-.*|rules-preferences|roster-.*)\.tsx?$/),
@@ -106,20 +106,20 @@ describe('no schema-1 roster word is left (60.1 AC5)', () => {
 describe('team and rules state has no path into the database, Backup export, Telegram or logs (R60-NFR3)', () => {
   const HOLDERS = [
     ...inFolder('apps/desktop/bin', /^(agents-.*|safe-config-write|text-diff)\.mjs$/),
-    ...inFolder('apps/desktop/src/main', /^(agents-(approval|ipc)|route-baselines|visibility-refresh)\.ts$/)
+    ...inFolder('apps/desktop/src/main', /^(agents-(approval|ipc)|visibility-refresh)\.ts$/)
   ]
   // Static imports and re-exports (their binding lists hold no quotes or brackets), bare imports and dynamic ones.
   const IMPORT = /(?:^|\n)\s*(?:import|export)\s+(?:type\s+)?[\w*\s{},$]+?\s+from\s+['"]([^'"]+)['"]|(?:^|\n)\s*import\s+['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g
   const imports = (file: string): string[] => [...readFileSync(join(REPOSITORY, file), 'utf8').matchAll(IMPORT)].map((match) => (match[1] ?? match[2] ?? match[3]) as string)
 
   it('searches the modules that hold it, and reads their imports', () => {
-    expect(HOLDERS).toHaveLength(11)
+    expect(HOLDERS).toHaveLength(10)
     expect(imports('apps/desktop/src/main/agents-ipc.ts')).toEqual(expect.arrayContaining(['node:fs', '@bmn/protocol', '../../bin/agents-roster.mjs', './agents-approval', './workspace-ipc']))
     expect(imports('apps/desktop/bin/agents-rules.mjs')).toEqual(expect.arrayContaining(['./agents-check.mjs']))
   })
 
   it('they import only Node, the protocol types, each other and the IPC error type', () => {
-    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check|rules|cli|approval)|safe-config-write|text-diff|route-baselines)(\.mjs)?|\.\/workspace-ipc)$/
+    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check|rules|cli|approval)|safe-config-write|text-diff)(\.mjs)?|\.\/workspace-ipc)$/
     const hits = HOLDERS.flatMap((file) => imports(file).filter((name) => !allowed.test(name)).map((name) => `${file}: imports ${name}`))
     expect(hits.length === 0 ? 'PASS' : `FAIL\n${hits.join('\n')}`).toBe('PASS')
     // The one Electron import is a type, and the IPC module takes only its error class from the workspace handlers.
@@ -137,7 +137,7 @@ describe('team and rules state has no path into the database, Backup export, Tel
       ...inFolder('apps/desktop/src/main', /\.ts$/), ...inFolder('apps/desktop/src/utility', /\.ts$/),
       ...inFolder('apps/desktop/src/preload', /\.ts$/), ...inFolder('apps/desktop/src/renderer/src', /\.tsx?$/), 'apps/desktop/bin/bmn'
     ].filter((file) => !/\.test\.tsx?$/.test(file) && !HOLDERS.includes(file))
-    const reaching = sources.filter((file) => imports(file).some((name) => /(^|\/)(agents-(roster|state|check|rules|cli|approval|ipc)|route-baselines|visibility-refresh)(\.mjs)?$/.test(name)))
+    const reaching = sources.filter((file) => imports(file).some((name) => /(^|\/)(agents-(roster|state|check|rules|cli|approval|ipc)|visibility-refresh)(\.mjs)?$/.test(name)))
     expect(reaching.sort()).toEqual(['apps/desktop/bin/bmn', 'apps/desktop/src/main/index.ts'])
   })
 })

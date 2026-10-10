@@ -286,10 +286,10 @@ export function checkTargets(environment = process.env) {
 
 /**
  * Re-inspection before a full rendering leaves BMN: the app must still resolve to the default of
- * the provider the approved roster names, on a version BMN tested or the owner accepted, because
- * an inspection decides nothing on a version whose way of picking a destination nobody checked
- * (60.3 AC3). A public rendering needs none, and an owner-declared destination never gets a full
- * one (routeFor), so nothing here rests on the owner's word. `remedy` says where the owner fixes it.
+ * the provider the approved roster names, and its version must be readable, so that BMN knows a
+ * program is there to inspect. Any installed version is supported (owner decision 2026-10-10).
+ * A public rendering needs none, and an owner-declared destination never gets a full one
+ * (routeFor), so nothing here rests on the owner's word. `remedy` says where the owner fixes it.
  */
 async function routeStillMatches(harness, decision, environment) {
   if (decision.kind !== 'full') return { ok: true, inspected: null }
@@ -301,10 +301,10 @@ async function routeStillMatches(harness, decision, environment) {
       reason: `${APP_NAMES[harness]} now sends data to ${inspected.host ?? 'an unknown destination'}${inspected.reason ? ` (${inspected.reason})` : ''}, not default:${decision.route.provider}`
     }
   }
-  if (inspected.version_tested !== true && !(decision.route.accepted_versions ?? []).includes(inspected.version)) {
+  if (inspected.version === null) {
     return {
-      ok: false, remedy: 'accept that version in Preferences > Rules > Health, or keep the public sections only',
-      reason: `${APP_NAMES[harness]} ${inspected.version ?? '(version unreadable)'} is a version BMN has not tested and you have not accepted, so where it sends data is not established`
+      ok: false, remedy: 'install the app or put it on PATH, or keep the public sections only',
+      reason: `${APP_NAMES[harness]} is not installed, or its version cannot be read, so BMN cannot tell which program would read these rules`
     }
   }
   return { ok: true, inspected }

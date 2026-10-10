@@ -157,7 +157,7 @@ export type AgentsOutcome =
   | { ok: true; snapshot: AgentsSnapshot; message: string; rulesUpdate?: AgentsRulesUpdate }
   | { ok: false; code: string; message: string; errors?: RosterIssueShape[]; snapshot: AgentsSnapshot }
 
-/** One agent app as Rules › Health shows it: its version, where it sends data as inspected, and what the owner may do. */
+/** One agent app as Rules › Health shows it: its version and where it sends data as inspected. */
 export interface AgentAppView {
   harness: RosterHarness
   version: string | null
@@ -166,12 +166,13 @@ export interface AgentAppView {
   provider: string | null
   host: string | null
   sources: string[]
-  /** `tested`, `accepted`, `new` (installed, neither tested nor accepted) or `unknown` (no version read, or an app BMN cannot check). */
-  versionState: 'tested' | 'accepted' | 'new' | 'unknown'
-  /** True only for a new version that resolves the same destination and sources a tested or accepted one did. */
-  acceptable: boolean
-  /** That comparison, or why nothing is offered, in words. */
-  comparison: string
+  /**
+   * `tested`, `newer` (later than every version BMN tested), `other` (any other installed version)
+   * or `unknown` (no version read, or an app BMN does not check). Every installed version is supported.
+   */
+  versionState: 'tested' | 'newer' | 'other' | 'unknown'
+  /** What that state means, in words. */
+  versionNote: string
   reason?: string
 }
 
