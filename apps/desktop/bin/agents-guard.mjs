@@ -1,10 +1,9 @@
 // MODULE: agents-guard.mjs - Epic 60.8: the decision a prompt hook takes, from the approved team on disk, before a prompt leaves a session the owner started
 import { readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs'
-import { access, readdir } from 'node:fs/promises'
 import { basename, isAbsolute } from 'node:path'
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads'
 import { APP_NAMES, RosterError } from './agents-roster.mjs'
-import { currentPointerPath, everApproved, generationsDirectory, historyLogPath, readApproved } from './agents-state.mjs'
+import { everApproved, neverApproved, readApproved } from './agents-state.mjs'
 import { destinationOf, privateWorkAnswer, resolveClaudeRoute, resolveCodexRoute, sessionRecord, sessionRecordAt, workspaceRoot } from './agents-check.mjs'
 
 /**
@@ -265,27 +264,6 @@ function unchecked(input) {
     outcome: 'stop', cause: 'state', allow: false,
     line: 'BMN stopped this prompt: its check failed. Open BMN Preferences › Team; if the team shows no problem, start the session again.'
   }
-}
-
-/**
- * `everApproved`, asked without holding this thread, so the limit covers it as well: true only
- * where nothing of an approval is on disk; anything that cannot be read counts as approved.
- */
-async function neverApproved() {
-  const absent = async (path) => {
-    try {
-      await access(path)
-      return false
-    } catch (error) {
-      return error?.code === 'ENOENT'
-    }
-  }
-  try {
-    if ((await readdir(generationsDirectory())).some((name) => /^\d{6}\.json$/.test(name))) return false
-  } catch (error) {
-    if (error?.code !== 'ENOENT') return false
-  }
-  return await absent(currentPointerPath()) && await absent(historyLogPath())
 }
 
 const decidingThread = (data) => new Worker(new URL(import.meta.url), { workerData: data })

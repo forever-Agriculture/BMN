@@ -1,5 +1,6 @@
 // MODULE: agents-state.mjs - Epic 60.2: read-only access to the owner-approved roster generations; nothing here writes
 import { readdirSync, readFileSync } from 'node:fs'
+import { access, readdir } from 'node:fs/promises'
 import {
   AGENT_FIELDS, FREE_TEXT_FIELDS, RosterError, SCHEMA_VERSION, TOOL_FIELDS, agentsDirectory, canonicalJson, parseRoster, rosterPath, sha256
 } from './agents-roster.mjs'
@@ -108,6 +109,28 @@ function isEarlierSchema(generation) {
  * Whether this installation ever approved a team: a pointer, a history log or any generation file
  * is there. False only on one that never did; a folder that cannot be listed counts as approved.
  */
+/**
+ * `everApproved`, asked without holding the calling thread, for a caller whose time limit must
+ * cover the question too (the prompt guard): true only where nothing of an approval is on disk;
+ * anything that cannot be read counts as approved.
+ */
+export async function neverApproved() {
+  const absent = async (path) => {
+    try {
+      await access(path)
+      return false
+    } catch (error) {
+      return error?.code === 'ENOENT'
+    }
+  }
+  try {
+    if ((await readdir(generationsDirectory())).some((name) => /^\d{6}\.json$/.test(name))) return false
+  } catch (error) {
+    if (error?.code !== 'ENOENT') return false
+  }
+  return await absent(currentPointerPath()) && await absent(historyLogPath())
+}
+
 export function everApproved() {
   try {
     if (generationNumbers().length > 0) return true

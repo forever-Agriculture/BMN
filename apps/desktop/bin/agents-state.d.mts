@@ -35,6 +35,7 @@ export declare function generationNumbers(): number[]
 export declare function lastGoodGeneration(): number | null
 export declare function readApproved(): Generation
 export declare function everApproved(): boolean
+export declare function neverApproved(): Promise<boolean>
 export declare function listGenerations(): Record<string, unknown>[]
 export declare function restoreProblem(number: number): string | null
 export declare function machineDiff(approved: RosterData, file: RosterData, options?: { folders?: boolean }): DiffEntry[]
