@@ -821,7 +821,9 @@ really holds each file: when a link on the way to a file leads elsewhere, the co
 that place too, and a link that moves afterwards makes the plan refuse. **Health** reads each file the way the
 hooks check is read (current, differs from the rules, edited outside BMN, not installed, a link,
 missing or unreadable) and, under **Agent apps**, where each app sends data and which versions
-you accepted. **Test…** asks an app which rules it loaded; it sends the rendered rules to that
+you accepted. BMN offers a version it has not tested only when it sends data where a tested or
+accepted version did; with no earlier version on record, only when the app uses its provider's own
+servers and nothing overrides that. **Test…** asks an app which rules it loaded; it sends the rendered rules to that
 app's provider, so it runs only where private work is allowed, inspects the destination again
 just before sending, and answers passed, failed, inconclusive or unavailable. A Codex test passes
 only when its own session record carries the rendered header before any tool ran. A result turns
@@ -863,7 +865,8 @@ it would replace, and puts nothing back until you confirm.
   refused and writes nothing, as is one that would leave a valid file invalid.
 - An app version you accept under Rules → Health is your risk decision, not a version BMN tested.
   The page offers it only when that version sends data to the same place, set by the same
-  sources, as the last tested or accepted version it inspected, and approval checks that again,
+  sources, as the last tested or accepted version it inspected (or, when BMN never inspected one,
+  only to its provider's own servers with nothing overriding that), and approval checks that again,
   so a version added to the file by hand is refused unless it is the installed one and still
   sends data there. Remove one with its ×.
 

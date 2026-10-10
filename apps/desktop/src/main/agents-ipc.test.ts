@@ -248,6 +248,41 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
   })
 })
 
+describe('an app that moved past every tested version before BMN first looked (owner decision 2026-10-10)', () => {
+  const accepting = (data: RosterDataShape): RosterDataShape => ({ ...data, harness_routes: data.harness_routes.map((route) => (route.harness === 'codex' ? { ...route, accepted_versions: ['0.170.0'] } : route)) })
+
+  it("offers and accepts the installed version while it uses the provider's own servers unchanged", async () => {
+    stub('codex', 'echo "codex-cli 0.170.0"')
+    writeFileSync(rosterFile(), EXAMPLE)
+    await call<AgentsOutcome>('agents:approve', { shown: await shown() })
+    expect((await call<RulesSnapshot>('rules:snapshot')).apps[1]).toMatchObject({
+      version: '0.170.0', versionState: 'new', acceptable: true, comparison: "BMN has no earlier Codex version to compare with. 0.170.0 sends data to OpenAI's own servers (nothing overrides it)."
+    })
+    const state = await snapshot()
+    expect(await call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: accepting(state.file.data as RosterDataShape) })).toMatchObject({ ok: true })
+    expect((await call<RulesSnapshot>('rules:snapshot')).apps[1]).toMatchObject({ version: '0.170.0', versionState: 'accepted' })
+    // The accepted version is now the record: a later version that sends data elsewhere is withheld.
+    stub('codex', 'echo "codex-cli 0.171.0"')
+    mkdirSync(join(home, '.codex'))
+    writeFileSync(join(home, '.codex/config.toml'), 'model_provider = "proxy"\n[model_providers.proxy]\nbase_url = "https://proxy.example.com/v1"\n')
+    expect((await call<RulesSnapshot>('rules:snapshot')).apps[1]).toMatchObject({ version: '0.171.0', versionState: 'new', acceptable: false })
+  })
+
+  it('offers nothing, and accepts nothing, while a setting overrides the destination', async () => {
+    stub('codex', 'echo "codex-cli 0.170.0"')
+    writeFileSync(rosterFile(), EXAMPLE)
+    await call<AgentsOutcome>('agents:approve', { shown: await shown() })
+    mkdirSync(join(home, '.codex'))
+    writeFileSync(join(home, '.codex/config.toml'), 'model_provider = "proxy"\n[model_providers.proxy]\nbase_url = "https://proxy.example.com/v1"\n')
+    const app = (await call<RulesSnapshot>('rules:snapshot')).apps[1]
+    expect(app).toMatchObject({ version: '0.170.0', versionState: 'new', acceptable: false })
+    expect(app?.comparison).toContain("Without a record it accepts only the provider's own servers with nothing overriding them.")
+    const state = await snapshot()
+    expect(await call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: accepting(state.file.data as RosterDataShape) })).toMatchObject({ ok: false, code: 'ROUTE_CHANGED' })
+    expect((await snapshot()).approved?.data.harness_routes.find((route) => route.harness === 'codex')?.accepted_versions).toBeUndefined()
+  })
+})
+
 describe('a link on the way to the team file or the rules (R60-NFR2)', () => {
   const stores = () => ({ a: join(home, 'store-a'), b: join(home, 'store-b') })
   const agents = (): string => join(home, '.config/bmn/agents')

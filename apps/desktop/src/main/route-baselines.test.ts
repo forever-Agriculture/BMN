@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { baselinesPath, judgeInspection, type RouteResolution } from './route-baselines'
+import { assertStillAcceptable, baselinesPath, judgeInspection, type RouteResolution } from './route-baselines'
 
 let home: string
 const savedHome = process.env.HOME
@@ -23,8 +23,40 @@ afterEach(() => {
 })
 
 describe('accepting an untested harness version (60.3 AC3, 60.5 AC2)', () => {
-  it('offers nothing before a tested or accepted version recorded its route', () => {
-    expect(judgeInspection(route({ version: '0.170.0' }), [], false, now)).toMatchObject({ acceptable: false })
+  const OVERRIDES: [string, Partial<RouteResolution>][] = [
+    ['another host', { host: 'proxy.example.com', basis: 'explicit', sources: ['OPENAI_BASE_URL'] }],
+    ['the default host named by a source', { sources: ['config.toml model_provider'] }],
+    ['an unknown route', { host: null, basis: 'unknown' }],
+    ['an unknown provider', { provider: null, host: null }],
+    ["another provider's default", { host: 'default:anthropic' }]
+  ]
+
+  it("with no record, offers a version only on the provider's own destination with nothing overriding it", () => {
+    const verdict = judgeInspection(route({ version: '0.170.0' }), [], false, now, () => 'OpenAI')
+    expect(verdict).toEqual({ acceptable: true, comparison: "BMN has no earlier Codex version to compare with. 0.170.0 sends data to OpenAI's own servers (nothing overrides it)." })
+    expect(() => assertStillAcceptable('0.170.0', route({ version: '0.170.0' }))).not.toThrow()
+    // Judging an untested version writes no record: only a tested or accepted one does.
+    expect(() => statSync(baselinesPath())).toThrow()
+  })
+
+  it.each(OVERRIDES)('with no record, withholds a version on %s', (_name, change) => {
+    const verdict = judgeInspection(route({ version: '0.170.0', ...change }), [], false, now)
+    expect(verdict.acceptable).toBe(false)
+    expect(verdict.comparison).toContain("Without a record it accepts only the provider's own servers with nothing overriding them.")
+    expect(() => assertStillAcceptable('0.170.0', route({ version: '0.170.0', ...change }))).toThrow(/no earlier codex version to compare with/)
+  })
+
+  it('with no record, still refuses a version that is not the installed one', () => {
+    expect(() => assertStillAcceptable('0.170.0', route({ version: '0.171.0' }))).toThrow(/is not the installed version/)
+  })
+
+  it('a version accepted without a record becomes the record: a later override is then withheld', () => {
+    expect(judgeInspection(route({ version: '0.170.0' }), [], false, now).acceptable).toBe(true)
+    judgeInspection(route({ version: '0.170.0' }), ['0.170.0'], true, now)
+    expect(judgeInspection(route({ version: '0.171.0' }), ['0.170.0'], false, now).comparison).toContain('Sends data to the same place as 0.170.0')
+    const moved = route({ version: '0.171.0', host: 'proxy.example.com', basis: 'explicit', sources: ['OPENAI_BASE_URL'] })
+    expect(judgeInspection(moved, ['0.170.0'], false, now).acceptable).toBe(false)
+    expect(() => assertStillAcceptable('0.171.0', moved)).toThrow(/does not send data where a tested or accepted version did/)
   })
 
   it('offers the untested version when it resolves the same route and sources as the tested one', () => {
