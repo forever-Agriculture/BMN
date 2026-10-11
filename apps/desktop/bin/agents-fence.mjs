@@ -26,8 +26,11 @@ import { researchArgv } from './agents-research.mjs'
 export const FENCE_MARKERS = {
   PROMPT: 'the prompt', RULES: 'the Codex rules file', MEMORY: 'Codex memory', HISTORY: 'the prompt history', SESSION: 'an earlier session',
   SKILL: 'a skill in the Codex folder', AGENTSKILL: 'a skill in the home folder', HOME: 'a file in the home folder', HOMEDOC: 'the rules file in the home folder',
-  PARENT: 'a file beside the run\'s folder', PARENTDOC: 'the rules file beside the run\'s folder', HOOK: 'a hook\'s text', CONFIG: 'the Codex settings file'
+  PARENT: 'a file beside the run\'s folder', PARENTDOC: 'the rules file beside the run\'s folder', HOOK: 'a hook\'s text', CONFIG: 'the Codex settings file',
+  LOCAL: 'a page on this computer'
 }
+/** The address on the stand-in that only a tool reaching this computer by itself would ask for. */
+const LOCAL_PAGE = '/fence-local-page'
 /** One run of the test ends after this long, whatever it has shown. */
 const RUN_LIMIT_MS = 120_000
 /** A folder a test left behind is removed by a later test once it is this old: no test runs that long. */
@@ -225,18 +228,25 @@ function attemptsScript(planted, cwd, port) {
     read_file: [{ file_path: target }], list_dir: [{ dir_path: home }], grep_files: [{ pattern: 'FENCE', path: home }],
     create_goal: [{ objective: 'fence test' }],
     // The web tool is asked for an address on this computer and for a planted file: neither may come back.
-    web__run: [{ open: [{ ref_id: `http://127.0.0.1:${port}/fence-local-page` }] }, { open: [{ ref_id: `file://${target}` }] }, { search_query: [{ q: 'fence test' }] }]
+    web__run: [{ open: [{ ref_id: `http://127.0.0.1:${port}${LOCAL_PAGE}` }] }, { open: [{ ref_id: `file://${target}` }] }, { search_query: [{ q: 'fence test' }] }]
   }
+  // The script looks through the whole of each result itself, since only the start of one is printed. It gets
+  // the markers written backwards, and a picture's sign in two halves: written forwards they would be in what
+  // Codex sends on with the script itself, and found there.
+  const backwards = Object.values(planted.markers).map((marker) => [...marker].reverse().join(''))
   return `const inputs = ${JSON.stringify(inputs)};
+const marks = ${JSON.stringify(backwards)}.map((mark) => mark.split('').reverse().join(''));
 const results = {};
+const leaks = [];
+const told = (name, whole) => { if (!leaks.includes(name) && (whole.includes(';base' + '64,') || marks.some((mark) => whole.includes(mark)))) leaks.push(name); return whole; };
 for (const name of Object.keys(tools)) {
   results[name] = [];
   for (const input of inputs[name] ?? [{}]) {
-    try { results[name].push(JSON.stringify(await tools[name](input)).slice(0, 400)); }
-    catch (error) { results[name].push('error: ' + String(error).slice(0, 200)); }
+    try { results[name].push(told(name, String(JSON.stringify(await tools[name](input)))).slice(0, 400)); }
+    catch (error) { results[name].push('error: ' + told(name, String(error)).slice(0, 200)); }
   }
 }
-text('FENCE-RESULTS ' + JSON.stringify(results));`
+text('FENCE-RESULTS ' + JSON.stringify({ leaks, results }));`
 }
 
 /** Calls that can end a turn outright in some versions: each runs alone, in a run of its own. */
@@ -300,14 +310,16 @@ function describe(text, markers) {
 
 /**
  * Starts the stand-in on this computer only, on a port of its own. One run at a time talks to it:
- * `begin(turns, catalog)` starts a run's record, where `turns(number, offered)` gives what the
- * model "says" in each turn, or null once it has no more to try and answers. `catalog` is a model
- * list to serve where the app asks for one; without it the app falls back to the list it was built
- * with. The markers are named with `mark`, once the planted files exist.
+ * `begin(turns, catalog, canary)` starts a run's record, where `turns(number, offered)` gives what
+ * the model "says" in each turn, or null once it has no more to try and answers. `catalog` is a
+ * model list to serve where the app asks for one; without it the app falls back to the list it was
+ * built with. `canary` is a line the caller put into that list: the record says whether the list
+ * was asked for and whether the line came back. The markers are named with `mark`, once the
+ * planted files exist.
  */
 function startStandIn() {
   let markers = {}
-  let session = { seen: [], turn: 0, offered: null, turns: () => null, catalog: null }
+  let session = { seen: [], turn: 0, offered: null, everOffered: new Set(), turns: () => null, catalog: null, canary: null, listed: 0, applied: false, local: 0 }
   const server = createServer((request, response) => {
     const current = session
     const chunks = []
@@ -317,7 +329,10 @@ function startStandIn() {
       const path = (request.url ?? '').split('?')[0]
       const entry = { method: request.method, path, markers: [], image: false }
       try {
-        Object.assign(entry, describe(decode(raw, request.headers['content-encoding'] ?? null).toString('utf8'), markers))
+        const text = decode(raw, request.headers['content-encoding'] ?? null).toString('utf8')
+        Object.assign(entry, describe(text, markers))
+        // The line the test added to the served model list's entry comes back only where Codex used that entry.
+        if (current.canary !== null && text.includes(current.canary)) current.applied = true
       } catch (error) {
         entry.unreadable = error instanceof Error ? error.message : String(error)
       }
@@ -325,6 +340,8 @@ function startStandIn() {
       if (request.method === 'POST' && /\/responses$/u.test(path)) {
         current.turn += 1
         current.offered ??= entry.tools ?? []
+        // Every later request counts too: a tool that shows up only then is offered all the same.
+        for (const tool of entry.tools ?? []) current.everOffered.add(tool)
         const id = `resp-fence-${current.turn}`
         const items = current.turns(current.turn, current.offered) ?? [{ type: 'message', role: 'assistant', id: `msg-fence-${current.turn}`, content: [{ type: 'output_text', text: ANSWER }] }]
         response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
@@ -342,8 +359,16 @@ function startStandIn() {
         return
       }
       if (request.method === 'GET' && /\/models$/u.test(path) && current.catalog !== null) {
+        current.listed += 1
         response.writeHead(200, { 'content-type': 'application/json', etag: '"fence"' })
         response.end(JSON.stringify(current.catalog))
+        return
+      }
+      // Nothing the test sends asks for this page: only a tool that fetches an address on this computer by itself does.
+      if (path === LOCAL_PAGE) {
+        current.local += 1
+        response.writeHead(200, { 'content-type': 'text/html' })
+        response.end(`<html><body><p>${markers.LOCAL ?? ''}</p></body></html>`)
         return
       }
       response.writeHead(404, { 'content-type': 'application/json' })
@@ -361,8 +386,8 @@ function startStandIn() {
       resolve({
         port: server.address().port,
         mark: (planted) => { markers = planted },
-        begin: (turns, catalog = null) => {
-          session = { seen: [], turn: 0, offered: null, turns, catalog }
+        begin: (turns, catalog = null, canary = null) => {
+          session = { seen: [], turn: 0, offered: null, everOffered: new Set(), turns, catalog, canary, listed: 0, applied: false, local: 0 }
           return session
         },
         close: () => new Promise((done) => {
@@ -377,8 +402,9 @@ function startStandIn() {
 // ---------------------------------------------------------------------------------------------
 // One run against the stand-in
 
-function runCommand(argv, run, limitMs) {
+function runCommand(argv, run, limitMs, signal = undefined) {
   return new Promise((resolve) => {
+    if (signal?.aborted) return resolve({ code: null, error: 'stopped', stderr: '' })
     const input = openSync(run.prompt, 'r')
     let child
     try {
@@ -390,21 +416,22 @@ function runCommand(argv, run, limitMs) {
     closeSync(input)
     let stderr = ''
     child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-4000) })
-    const limit = setTimeout(() => {
+    const end = () => {
       try {
         process.kill(-child.pid, 'SIGKILL')
       } catch {
         // Already gone.
       }
-    }, limitMs)
-    child.on('error', (error) => {
+    }
+    const limit = setTimeout(end, limitMs)
+    signal?.addEventListener('abort', end, { once: true })
+    const settle = (result) => {
       clearTimeout(limit)
-      resolve({ code: null, error: error.message, stderr })
-    })
-    child.on('close', (code, signal) => {
-      clearTimeout(limit)
-      resolve({ code, signal, stderr })
-    })
+      signal?.removeEventListener('abort', end)
+      resolve(result)
+    }
+    child.on('error', (error) => settle({ code: null, error: error.message, stderr }))
+    child.on('close', (code, killed) => settle({ code, signal: killed, stderr }))
   })
 }
 
@@ -439,10 +466,31 @@ function listed(names) {
  * stand-in calls every offered tool, three short runs that each try one tool no research run has,
  * and, with `renewal`, one more that starts from a sign-in grown old.
  */
-async function testModel({ agent, root, environment, argvOf, catalog, expected, renewal, limitMs }) {
+async function testModel({ agent, root, environment, argvOf, catalog, expected, renewal, limitMs, signal }) {
   const started = Date.now()
   const standIn = await startStandIn()
   try {
+    // Under a model list: the stand-in serves it with one made-up line added to this model's entry, in the
+    // instructions Codex sends on with every request. The line coming back shows that Codex used that very
+    // entry. Codex 0.162 takes them from `model_messages.instructions_template`, earlier forms from
+    // `base_instructions`; the line goes into each the entry holds.
+    let served = catalog
+    let canary = null
+    let unseeable = null
+    if (catalog !== null) {
+      const own = Array.isArray(catalog.models) ? catalog.models.find((entry) => isRecord(entry) && entry.slug === agent.model) : undefined
+      const messages = isRecord(own) && isRecord(own.model_messages) && typeof own.model_messages.instructions_template === 'string' ? own.model_messages : null
+      if (!isRecord(own) || (typeof own.base_instructions !== 'string' && messages === null)) unseeable = 'the model list gives this model no entry BMN can follow into the run, so nothing was compared under it'
+      else {
+        canary = `FENCE-LIST-${randomBytes(6).toString('hex')}`
+        const marked = {
+          ...own,
+          ...(typeof own.base_instructions === 'string' ? { base_instructions: `${own.base_instructions}\n\n${canary}` } : {}),
+          ...(messages === null ? {} : { model_messages: { ...messages, instructions_template: `${messages.instructions_template}\n\n${canary}` } })
+        }
+        served = { ...catalog, models: catalog.models.map((entry) => (entry === own ? marked : entry)) }
+      }
+    }
     const planted = plant(root, standIn.port)
     standIn.mark(planted.markers)
     const fenced = { HOME: planted.home, PATH: environment.PATH ?? '' }
@@ -452,10 +500,10 @@ async function testModel({ agent, root, environment, argvOf, catalog, expected, 
     const skip = (path) => own.includes(path)
     const before = snapshot(planted.home, skip)
     const start = async (run, turns, extra = []) => {
-      const session = standIn.begin(turns, catalog)
+      const session = standIn.begin(turns, served, canary)
       const base = argvOf(agent, { environment: fenced, run })
       const at = base.findIndex((item) => item.startsWith('PATH=')) + 1
-      const exit = await runCommand(extra.length === 0 ? base : [...base.slice(0, at), ...extra, ...base.slice(at)], run, limitMs)
+      const exit = await runCommand(extra.length === 0 ? base : [...base.slice(0, at), ...extra, ...base.slice(at)], run, limitMs, signal)
       return { session, exit }
     }
 
@@ -471,7 +519,8 @@ async function testModel({ agent, root, environment, argvOf, catalog, expected, 
 
     const requests = sessions.flatMap((session) => session.seen)
     const asked = main.session.seen.filter((entry) => entry.method === 'POST' && /\/responses$/u.test(entry.path))
-    const offered = [...new Set(main.session.offered ?? [])]
+    // Whatever any request of any of these runs offered: a tool that shows up only in a later request is offered all the same.
+    const offered = [...new Set(sessions.flatMap((session) => [...session.everOffered]))]
     const outputs = new Map()
     const raw = []
     for (const entry of requests) {
@@ -481,7 +530,10 @@ async function testModel({ agent, root, environment, argvOf, catalog, expected, 
       }
     }
     const inner = printed(outputs, 'script-names', 'FENCE-NAMES ')
-    const attempts = printed(outputs, 'script-attempts', 'FENCE-RESULTS ')
+    const report = printed(outputs, 'script-attempts', 'FENCE-RESULTS ')
+    // What the script got from each tool it reaches, and which of them gave back a marker anywhere in a result.
+    const attempts = isRecord(report) && isRecord(report.results) && Array.isArray(report.leaks) ? report.results : null
+    const leaked = attempts === null ? [] : report.leaks.filter((name) => typeof name === 'string')
     const tools = [...offered, ...(Array.isArray(inner) ? inner.map((name) => `exec:${name}`) : [])].sort()
 
     // Without these the run shows nothing either way: the stand-in must have read the prompt BMN sent.
@@ -490,6 +542,12 @@ async function testModel({ agent, root, environment, argvOf, catalog, expected, 
     else if (asked.length === 0) blind.push('Codex never asked the stand-in for an answer')
     else if (!asked.some((entry) => entry.markers.includes('PROMPT'))) blind.push('the stand-in did not find the prompt in what Codex sent')
     if (requests.some((entry) => entry.unreadable)) blind.push('the stand-in could not read a request Codex sent')
+    // A comparison under a model list counts only where Codex was seen to use that list in this very run.
+    if (catalog !== null && blind.length === 0) {
+      if (unseeable !== null) blind.push(unseeable)
+      else if (main.session.listed === 0) blind.push('Codex did not ask the stand-in for the model list, so nothing was compared under it')
+      else if (!main.session.applied) blind.push('Codex did not use the model list the stand-in served, so nothing was compared under it')
+    }
 
     const reasons = []
     const reached = [...new Set(requests.flatMap((entry) => entry.markers))].filter((name) => name !== 'PROMPT')
@@ -501,8 +559,9 @@ async function testModel({ agent, root, environment, argvOf, catalog, expected, 
     const uncalled = offered.filter((tool) => (tool === 'custom:functions.exec' ? !Array.isArray(inner) || !isRecord(attempts) : !outputs.has(`offered-${tool}`)))
     if (Array.isArray(inner) && isRecord(attempts)) uncalled.push(...inner.filter((name) => !Array.isArray(attempts[name]) || attempts[name].length === 0).map((name) => `exec:${name}`))
     if (uncalled.length > 0 && blind.length === 0) reasons.push(`offered but not called: ${listed(uncalled)}`)
-    const telling = [...new Set(raw.filter((output) => markersIn(output.text, planted.markers).length > 0 || output.text.includes(';base64,')).map((output) => output.call_id))]
+    const telling = [...new Set([...raw.filter((output) => markersIn(output.text, planted.markers).length > 0 || output.text.includes(';base64,')).map((output) => output.call_id), ...leaked.map((name) => `exec:${name}`)])]
     if (telling.length > 0) reasons.push(`a tool gave back a planted file: ${listed(telling)}`)
+    if (sessions.some((session) => session.local > 0)) reasons.push('a tool fetched an address on this computer')
     const unseen = tools.filter((tool) => !CODEX_RESEARCH_TOOLS_SEEN.includes(tool))
     if (unseen.length > 0) reasons.push(`a tool BMN has not looked at: ${listed(unseen)}`)
     if (Array.isArray(expected)) {
@@ -586,18 +645,20 @@ const RENEWAL_WORDS = {
  * for a comparison under it (`expected`: the tools the earlier test saw, per model); without it the
  * app uses the list it was built with and one run also tries a sign-in renewal. `argvOf` builds
  * another command than a research run's, to try a form before it becomes one: such a test is
- * recorded as another form's and counts for nothing.
+ * recorded as another form's and counts for nothing. `signal` stops the test: every Codex it started
+ * is ended and nothing is recorded.
  */
 export async function runFenceTest({
   agents = undefined, environment = process.env, now = new Date(), catalog = null, expected = {}, entries = {}, renewal = catalog === null,
-  argvOf = undefined, record = true, limitMs = RUN_LIMIT_MS
+  argvOf = undefined, record = true, limitMs = RUN_LIMIT_MS, signal = undefined
 } = {}) {
   const real = { HOME: environment.HOME ?? '', PATH: environment.PATH ?? '' }
   const version = harnessVersion('codex', real)
   const build = argvOf ?? ((agent, options) => researchArgv(agent, { ...options, version }))
   const base = { harness: 'codex', at: now.toISOString(), version, form: 'other', catalog: catalog === null ? 'bundled' : 'live' }
   const keep = (entry) => {
-    if (record) {
+    // A test that was stopped saw nothing to the end, so nothing of it is kept.
+    if (record && !signal?.aborted) {
       mkdirSync(dirname(fenceTestsPath()), { recursive: true, mode: 0o700 })
       appendFileSync(fenceTestsPath(), `${JSON.stringify(entry)}\n`, { mode: 0o600 })
     }
@@ -616,9 +677,10 @@ export async function runFenceTest({
   // Each model has a home folder and a stand-in of its own, so the models are tested side by side.
   const models = await Promise.all(tested.map((agent, index) => testModel({
     agent, root: join(fenceDirectory(), `${id}-${index}`), environment: real, argvOf: build, catalog,
-    expected: expected[agent.model], renewal: renewal && index === 0, limitMs
+    expected: expected[agent.model], renewal: renewal && index === 0, limitMs, signal
   }).then((result) => ({ ...result, ...(entries[agent.model] === undefined ? {} : { catalog_entry: entries[agent.model] }) }),
     (error) => ({ model: agent.model, verdict: 'inconclusive', tools: [], reasons: [`the test could not run: ${error instanceof Error ? error.message : String(error)}`], seconds: 0 }))))
+  if (signal?.aborted) return { ...base, form, verdict: 'inconclusive', stopped: true, seconds: Math.round((Date.now() - started) / 100) / 10, models: [], reasons: ['the test was stopped before it ended'] }
   const renewed = models.find((model) => model.renewal !== undefined)?.renewal
   const reasons = renewed === undefined || renewed === 'through-link' ? [] : [RENEWAL_WORDS[renewed]]
   const failed = models.some((model) => model.verdict === 'fail') || renewed === 'link-replaced' || renewed === 'not-written'
@@ -629,29 +691,31 @@ export async function runFenceTest({
 // ---------------------------------------------------------------------------------------------
 // The provider's own model list (63.3 AC6)
 
-function collect(argv, cwd, limitMs) {
+function collect(argv, cwd, limitMs, signal = undefined) {
   return new Promise((resolve) => {
+    if (signal?.aborted) return resolve(null)
     let child
     try {
       child = spawn(argv[0], argv.slice(1), { cwd, env: {}, stdio: ['ignore', 'ignore', 'ignore'], detached: true })
     } catch {
       return resolve(null)
     }
-    const limit = setTimeout(() => {
+    const end = () => {
       try {
         process.kill(-child.pid, 'SIGKILL')
       } catch {
         // Already gone.
       }
-    }, limitMs)
-    child.on('error', () => {
+    }
+    const limit = setTimeout(end, limitMs)
+    signal?.addEventListener('abort', end, { once: true })
+    const settle = (code) => {
       clearTimeout(limit)
-      resolve(null)
-    })
-    child.on('close', (code) => {
-      clearTimeout(limit)
+      signal?.removeEventListener('abort', end)
       resolve(code)
-    })
+    }
+    child.on('error', () => settle(null))
+    child.on('close', (code) => settle(code))
   })
 }
 
@@ -662,14 +726,14 @@ function collect(argv, cwd, limitMs) {
  * when Codex kept it as fetched: with no answer from the provider Codex falls back to the list it
  * was built with, which is not what this asks for.
  */
-export async function providerModelList({ environment = process.env, limitMs = 60_000 } = {}) {
+export async function providerModelList({ environment = process.env, limitMs = 60_000, signal = undefined } = {}) {
   const folder = join(fenceDirectory(), `list-${randomBytes(6).toString('hex')}`)
   const codex = join(folder, CODEX_RESEARCH_HOME)
   try {
     mkdirSync(join(folder, 'cwd'), { recursive: true, mode: 0o700 })
     mkdirSync(codex, { mode: 0o700 })
     symlinkSync(`${environment.HOME ?? ''}/.codex/${CODEX_SIGN_IN}`, join(codex, CODEX_SIGN_IN))
-    const code = await collect(['/usr/bin/env', '-i', `HOME=${environment.HOME ?? ''}`, `PATH=${environment.PATH ?? ''}`, `CODEX_HOME=${codex}`, 'codex', 'debug', 'models'], join(folder, 'cwd'), limitMs)
+    const code = await collect(['/usr/bin/env', '-i', `HOME=${environment.HOME ?? ''}`, `PATH=${environment.PATH ?? ''}`, `CODEX_HOME=${codex}`, 'codex', 'debug', 'models'], join(folder, 'cwd'), limitMs, signal)
     if (code !== 0) return { ok: false, reason: 'Codex could not be asked for the provider\'s model list' }
     let kept
     try {
@@ -688,20 +752,30 @@ export async function providerModelList({ environment = process.env, limitMs = 6
  * Before a Codex research run's answer may be used: is the tool list under the provider's own
  * model list the one the fence test saw? BMN gets that list, and where the model's entry in it is
  * not the one already compared, repeats the fence test with the stand-in serving it. A difference,
- * or a failed test, is recorded and closes the offer. Nothing here starts a research.
+ * or a failed test, is recorded and closes the offer. Nothing here starts a research. The test
+ * passes under a list only where Codex was seen to use that list in the run. `signal` and `limitMs`
+ * are the research's own Stop and what is left of its time.
  */
-export async function compareUnderProviderList({ agent, environment = process.env, now = new Date(), tests = undefined, modelList = providerModelList, test = runFenceTest } = {}) {
+export async function compareUnderProviderList({ agent, environment = process.env, now = new Date(), tests = undefined, modelList = providerModelList, test = runFenceTest, signal = undefined, limitMs = undefined } = {}) {
+  const begun = Date.now()
   const real = { HOME: environment.HOME ?? '', PATH: environment.PATH ?? '' }
   const version = harnessVersion('codex', real)
   const standing = fenceStanding('codex', version, agent.model, tests)
   if (!standing.passed) return { ok: false, reason: `the fence test of Codex ${version ?? ''} has not passed for ${agent.model}`.replace('  ', ' ') }
-  const list = await modelList({ environment })
+  // Stop, and what is left of the research's time, reach both steps: asking for the list and the test under it.
+  const within = (most) => (limitMs === undefined ? most : Math.max(1, Math.min(most, limitMs - (Date.now() - begun))))
+  const stopped = { ok: false, stopped: true, reason: 'stopped before the tools were compared under the provider\'s own model list' }
+  if (signal?.aborted) return stopped
+  const list = await modelList({ environment, limitMs: within(60_000), ...(signal === undefined ? {} : { signal }) })
+  if (signal?.aborted) return stopped
   if (!list.ok) return { ok: false, reason: `${list.reason}, so its tool list could not be compared with the tested one` }
   const entry = list.models.find((model) => isRecord(model) && model.slug === agent.model)
   if (entry === undefined) return { ok: false, reason: `the provider's model list does not name ${agent.model}, so its tool list could not be compared with the tested one` }
   const hash = sha256(canonicalJson(entry)).slice(0, 16)
   if (standing.live !== null && standing.live.same && standing.live.entry === hash) return { ok: true, compared: false }
-  const result = await test({ agents: [agent], environment, now, catalog: { models: list.models }, expected: { [agent.model]: standing.tools }, entries: { [agent.model]: hash }, renewal: false })
+  const result = await test({ agents: [agent], environment, now, catalog: { models: list.models }, expected: { [agent.model]: standing.tools }, entries: { [agent.model]: hash }, renewal: false,
+    limitMs: within(RUN_LIMIT_MS), ...(signal === undefined ? {} : { signal }) })
+  if (signal?.aborted || result.stopped === true) return stopped
   if (result.verdict === 'pass') return { ok: true, compared: true }
   const why = result.models[0]?.reasons?.[0] ?? result.reasons?.[0] ?? 'the comparison showed nothing'
   return { ok: false, closed: result.verdict === 'fail', reason: `under the provider's own model list the fence test of Codex ${version} did not pass for ${agent.model}: ${why}` }

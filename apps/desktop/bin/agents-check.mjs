@@ -407,7 +407,7 @@ export function readCodexConfig(text) {
     if (path.length === 1 && CODEX_ACCESS_KEYS.includes(path[0])) access(out.access.top, path[0])
     else if (path.length === 2 && CODEX_ACCESS_KEYS.includes(path[0])) out.access.unreadable ??= `config.toml ${path[0]} is a table BMN cannot read`
     else if (path[0] === 'profiles' && path.length === 3 && CODEX_ACCESS_KEYS.includes(path[2])) {
-      out.profiles[path[1]] ??= {}
+      // Kept apart from the profiles the destination is read from: a profile that says only what a run may do is as little known there as before (R63-NFR1).
       out.access.profiles[path[1]] ??= {}
       access(out.access.profiles[path[1]], path[2])
     } else if (path[0] === 'profiles' && path.length === 4 && CODEX_ACCESS_KEYS.includes(path[2])) {
@@ -1367,11 +1367,13 @@ export function consequences(before, after) {
   // Who researches (63.3): naming the first researcher closes the offer to every other agent; after that only the named ones change.
   const researched = namedResearchers(prior)
   const researching = namedResearchers(after)
-  if (researched === null && researching !== null) out.push(`only ${listed(researching.map(name))} would be offered as researchers; a research with any other agent would be refused`)
+  const nobody = 'no agent would be offered as a researcher; every research would be refused'
+  if (researched === null && researching !== null) out.push(researching.length === 0 ? nobody : `only ${listed(researching.map(name))} would be offered as researchers; a research with any other agent would be refused`)
   else if (researched !== null && researching === null) out.push('every agent that can research would be offered as a researcher again')
   else if (researched !== null && researching !== null) {
     for (const id of researching) if (!researched.includes(id)) out.push(`${name(id)} would be offered as a researcher`)
     for (const id of researched) if (!researching.includes(id)) out.push(`${name(id)} would no longer be offered as a researcher`)
+    if (researching.length === 0 && researched.length > 0) out.push(nobody)
   }
   const providerName = (id) => after.providers.find((provider) => provider.id === id)?.name ?? oldProviders.get(id)?.name ?? id
   const exceptionKey = (entry) => `${entry.provider}\n${entry.folder}`
@@ -2070,7 +2072,7 @@ export function evaluateResearch(inputs, {
     // Who researches is part of the approved team (63.3). A team that names no one is one from before the mark.
     const named = namedResearchers(data)
     if (named !== null && !named.includes(agent.id)) {
-      refuse('NOT_A_RESEARCHER', `${agent.id} is not one of the team's researchers (${named.join(', ')})`)
+      refuse('NOT_A_RESEARCHER', `${agent.id} is not one of the team's researchers (${named.length === 0 ? 'the team names none' : named.join(', ')})`)
     }
     const parsed = parseDispatch(inputs.argv, { research: true })
     if (parsed.unsupported) refuse('ROUTE_UNSUPPORTED', parsed.unsupported)

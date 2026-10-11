@@ -214,7 +214,7 @@ describe('a Codex run for a read-only role resolves to a read-only sandbox with 
   })
 
   it('takes read-only from the selected profile or from the owner\'s own file, and from neither when the profile is not selected', () => {
-    config('[profiles.review]\nsandbox_mode = "read-only"\napproval_policy = "never"\n')
+    config('[profiles.review]\nmodel_reasoning_effort = "medium"\nsandbox_mode = "read-only"\napproval_policy = "never"\n\n[profiles.bare]\nsandbox_mode = "read-only"\napproval_policy = "never"\n')
     // Set only in a profile the command does not select: nothing names the sandbox.
     expect(answer('astra', 'epic-reviewer', ASTRA('medium'))).toBe(`READ_ONLY_REQUIRED: epic-reviewer is a read-only role and the command names no sandbox; ${MUST}`)
     const profile = check('astra', 'epic-reviewer', ASTRA('medium', '--profile', 'review'))
@@ -223,6 +223,12 @@ describe('a Codex run for a read-only role resolves to a read-only sandbox with 
     // The command's own flag wins over the profile.
     expect(answer('astra', 'epic-reviewer', ASTRA('medium', '--profile', 'review', '--sandbox', 'workspace-write'))).toMatch(/--sandbox gives the run the workspace-write sandbox/)
     expect(answer('astra', 'epic-reviewer', ASTRA('medium', '--profile', 'gone'))).toMatch(/^ROUTE_UNSUPPORTED|^HOST_UNKNOWN|^READ_ONLY_REQUIRED: .* profile gone is not in config\.toml/)
+    // A profile that says only what a run may do is no profile the destination can be read from: it is refused as it was before this rule, for a reviewer and for a role that may write alike (R63-NFR1).
+    const bare = answer('astra', 'epic-reviewer', ASTRA('medium', '--profile', 'bare'))
+    expect(bare).toBe(answer('astra', 'epic-reviewer', ASTRA('medium', '--profile', 'gone')).replace('gone', 'bare'))
+    expect(bare).not.toBe('PASS')
+    expect(answer('sol', 'lead', codex('gpt-6.1-sol', 'xhigh', '--profile', 'bare'))).toBe(answer('sol', 'lead', codex('gpt-6.1-sol', 'xhigh', '--profile', 'gone')).replace('gone', 'bare'))
+    expect(answer('sol', 'lead', codex('gpt-6.1-sol', 'xhigh', '--profile', 'bare'))).not.toBe('PASS')
     config('sandbox_mode = "read-only"\napproval_policy = "never"\n')
     const own = check('astra', 'epic-reviewer', ASTRA('medium'))
     expect(own.receipt?.sandbox).toEqual({ mode: 'read-only', source: 'config.toml sandbox_mode', approval_policy: 'never', approval_source: 'config.toml approval_policy' })

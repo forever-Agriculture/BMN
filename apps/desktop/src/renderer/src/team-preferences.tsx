@@ -574,7 +574,7 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
         <EffortChips efforts={agent.efforts} onToggle={(effort) => team.stage(toggleAgentEffort(data, agent.id, effort, ROSTER_EFFORTS))} />
       </Row>
       <Row label="Researcher" id={researcherId} hint={researcherWords(data, agent)}>
-        <Switch labelledBy={researcherId} on={agent.researcher === true} onChange={(on) => team.stage(setResearcher(data, agent.id, on))} />
+        <Switch labelledBy={researcherId} on={agent.researcher === true} onChange={(on) => team.stage(setResearcher(data, agent.id, on, team.approved !== null && namedResearchers(team.approved) !== null))} />
       </Row>
 
       <details className="advanced">
@@ -878,7 +878,8 @@ export const READ_ONLY_HELP = 'A run for this role is refused unless it is start
 /** What the Researcher switch on an agent's page means as the team stands (63.3): who researches is part of the team. */
 export function researcherWords(data: Pick<RosterDataShape, 'agents'>, agent: Pick<RosterAgentShape, 'name' | 'researcher'>): string {
   if (namedResearchers(data) === null) return `Your team names no researcher yet, so every agent that can research is offered on Models. Switching this on makes ${agent.name} the only one until you name others; Models proposes whom.`
-  return agent.researcher === true ? 'Offered on Models as a researcher, where its app can research.' : `Not offered on Models: a research with ${agent.name} is refused.`
+  if (agent.researcher === true) return 'Offered on Models as a researcher, where its app can research.'
+  return namedResearchers(data)?.length === 0 ? `Your team names no researcher, so nobody researches: a research with ${agent.name} is refused.` : `Not offered on Models: a research with ${agent.name} is refused.`
 }
 
 /** While no role is held to read-only: what BMN proposes, taken with one press and approved like any other change (63.2 AC4). */

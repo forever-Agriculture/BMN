@@ -963,8 +963,12 @@ For Claude Code a passed version is tested once more when your files have change
 of one of those agents would now meet a source the recorded test did not see lose on that side,
 so the check would answer `conflict`, and a test started now would meet a set of sources (which
 one, and on which side of the size the test asks for) that the recorded test did not. The record
-is the memory, so each such set is tested once for a version, and a source whose size the report
-could not tell from the test's own starts no test. Two looks at once start one test, never two.
+is the memory, so each such set is tested once for a version: a set any recorded test of that
+version already met starts no test, also when you change your files back to it later, and a
+second change during one run of BMN is tested like the first. What a version has shown is read
+from its unbroken run of passed tests, so a source one of them saw lose still counts after a
+later test met other sources. A source whose size the report could not tell from the test's own
+starts no test. Two looks at once start one test, never two.
 
 A test BMN ran is recorded exactly like yours, with `"by": "bmn"` beside it, and the app's row on
 Health then reads "BMN tested 2.1.296 by itself Oct 11 · it takes the setting" (or "the test
@@ -976,7 +980,8 @@ agent with a limit of its own and what becomes of it in a run started now: appli
 judged from where the test runs, a folder of its own under your home folder; a project with
 settings of its own may fare differently, and the check says so for that run.
 
-With the switch off BMN starts no app; Health still names the agents whose limits are not applied
+With the switch off BMN starts no app, and switching it off while BMN is testing one app stops
+the apps still waiting their turn; Health still names the agents whose limits are not applied
 or refused, and **Test…** works as before. `bmn roster check` never starts an app and writes
 nothing either way. For a version without a test its step says who acts next: "BMN tests it by
 itself when it starts, when Rules > Health is read and after an update there", or that BMN's own
@@ -1301,12 +1306,19 @@ team does not name is not shown at all, and `bmn roster check --research` refuse
 with `NOT_A_RESEARCHER`. So where your team holds two agents on one model (Opus the knight and
 Opus the queen), only the one you named is offered.
 
+A team that has made this choice keeps it. Switching the last researcher off leaves the mark on
+that agent as `researcher: false`: your team then names no researcher, nobody is offered, every
+research is refused, and the approval says so before you approve. It never goes back to offering
+everyone by itself. Only a team file in which no agent carries the mark at all counts as a team
+from before the choice; if you delete the last mark by hand, the approval says that every agent
+that can research would be offered again.
+
 A team from before this choice names nobody. It keeps offering what it offered (every agent that
 can research), and Models says the choice waits for you, with BMN's proposal: the active knights
 and pawns on Claude Code and Codex whose provider may see private work, the first of each model.
 **Use proposal** stages it; nothing changes until you approve. A researcher you had picked that
-your team no longer names falls back to none picked, and Models says so once, until you pick
-again.
+your team no longer names falls back to none picked: Models says so, selects nobody in its place,
+and **Research now** waits until you pick again.
 
 Research runs in Claude Code and in Codex. BMN starts the run with a command that names its
 limits (the table below) and checks the command. For Claude Code no test has yet measured on a
@@ -1392,14 +1404,18 @@ when the run ends, and one a crash left behind is removed at the next research.
 is, against a stand-in for the provider on this computer. No provider is called. It builds a
 throwaway home folder and plants thirteen markers where Codex could pick something up: its rules
 file, memory, prompt history, an earlier session, skills in two places, files and rules files in
-the home folder and beside the run's folder, a hook, the settings file and the prompt. The
-stand-in then asks Codex to call every tool it offers, with arguments that try to read the planted
-files, write a file, and reach this computer. The test passes for a model only when
+the home folder and beside the run's folder, a hook, the settings file and the prompt. A
+fourteenth sits on a page the stand-in serves on this computer, which nothing but a tool that
+reaches this computer by itself would ask for. The stand-in then asks Codex to call every tool it
+offers, with arguments that try to read the planted files, write a file, and reach this computer.
+The test passes for a model only when
 
 - no marker but the prompt's reached the stand-in, and no picture was sent;
 - nothing was written in the home folder or beside the run;
 - no hook ran;
-- every tool Codex offered was called and gave back no marker;
+- no tool asked for the page on this computer;
+- every tool Codex offered, in any request of the run and not only the first, was called and gave
+  back no marker anywhere in its result, however long the result is;
 - the tools offered are among the ones BMN's record for Codex names (`CODEX_RESEARCH_TOOLS_SEEN`
   in `apps/desktop/bin/agents-check.mjs`, looked at on Codex 0.162.1); and
 - a renewed sign-in landed in the file behind the link, with the link still a link.
@@ -1427,9 +1443,15 @@ the link: a call to the provider, no question to a model), and where the model's
 from the one already compared, repeats the fence test with the stand-in serving that list and
 compares the tools with the recorded ones exactly. A difference stops the research before any
 answer is used, is recorded, and closes the offer (`ROUTE_UNSUPPORTED`) until a later test under
-the list passes. A comparison that could not be made stops that research and neither opens nor
-closes anything. `bmn roster fence --live` does the same on request. The first research with a
-real Codex agent is yours to start.
+the list passes; Models shows the closed researcher and why as soon as that research ends. A
+comparison counts only where Codex was seen to use the served list in that very run: the
+stand-in adds one made-up line to the model's instructions in the list, and the line has to come
+back in what Codex sends. A Codex that did not ask for the list, or asked and went on with the
+list it was built with, compared nothing. A comparison that could not be made stops that research
+and neither opens nor closes anything. **Stop** and the research's time limit hold during the
+comparison too: Codex is ended, nothing of a stopped comparison is recorded, and no run starts.
+`bmn roster fence --live` does the same comparison on request. The first research with a real
+Codex agent is yours to start.
 
 **What the fence does not cover.**
 

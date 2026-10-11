@@ -307,6 +307,25 @@ describe('who researches is part of the approved team (63.3 AC7, AC8)', () => {
     expect((await research({ researcher: 'opus' })).run.state).not.toBe('failed')
   })
 
+  it('a team that has chosen and names no one offers no one: taking the last researcher away never brings everyone back', async () => {
+    const none = (text: string) => naming(text, 'opus').replace('researcher: true', 'researcher: false')
+    approve(none(TWO_OPUS))
+    expect(namedResearchers(data())).toEqual([])
+    expect(researcherChoice()).toEqual({ named: [], proposed: [] })
+    expect(offered()).toEqual([])
+    plan(FULL)
+    for (const researcher of ['opus', 'opus-2', 'fable', 'astra']) {
+      const result = await research({ researcher, fenceTests: FENCED, compare: SAME })
+      expect(result.run, researcher).toMatchObject({ state: 'failed', models: 0, note: `BMN did not start the run: ${researcher} is not one of the team's researchers (the team names none)` })
+    }
+    expect(calls()).toEqual([])
+    // A pick from before falls back to none picked, as with any agent the team stopped naming.
+    approve(TWO_OPUS)
+    chooseResearcher('opus')
+    approve(none(TWO_OPUS))
+    expect(settledResearcher()).toEqual({ researcher: null, dropped: 'opus' })
+  })
+
   it('a researcher he had picked that is no longer named falls back to none picked, and its name is kept to be said once', () => {
     approve(TWO_OPUS)
     chooseResearcher('opus-2')
@@ -804,6 +823,38 @@ describe('a research run (60.10 AC2-AC5)', () => {
     // A researcher on Claude Code is never compared: its tools are the ones its command names.
     const claude = await research({ compare: async () => { throw new Error('not asked') } })
     expect(claude.run.state).toBe('complete')
+  })
+
+  it('Stop and the time limit reach the comparison: it is handed both, and no run starts after either', async () => {
+    plan(FULL)
+    const controller = new AbortController()
+    const given: { signal: boolean, limitMs: number | undefined }[] = []
+    const stopped = await research({ researcher: 'astra', fenceTests: FENCED, signal: controller.signal, limitMs: 60_000, compare: async ({ signal, limitMs }) => {
+      given.push({ signal: signal === controller.signal, limitMs })
+      // He presses Stop while the comparison is under way; the comparison itself would have passed.
+      controller.abort()
+      return { ok: true, compared: true }
+    } })
+    expect(given).toHaveLength(1)
+    expect(given[0]!.signal).toBe(true)
+    expect(given[0]!.limitMs).toBeGreaterThan(0)
+    expect(given[0]!.limitMs).toBeLessThanOrEqual(60_000)
+    expect(stopped.run).toMatchObject({ state: 'stopped', note: 'Stopped before it finished.', models: 0 })
+    expect(calls()).toEqual([])
+    // A comparison that says it was stopped is a Stop, never a failed research.
+    const second = new AbortController()
+    const told = await research({ researcher: 'astra', fenceTests: FENCED, signal: second.signal, compare: async () => { second.abort(); return { ok: false, stopped: true, reason: 'the comparison was stopped' } } })
+    expect(told.run).toMatchObject({ state: 'stopped', note: 'Stopped before it finished.' })
+    // The time limit: a comparison that outlasts it ends the research at the limit.
+    const late = await research({ researcher: 'astra', fenceTests: FENCED, limitMs: 200, compare: async ({ limitMs }) => {
+      expect(limitMs).toBeLessThanOrEqual(200)
+      await new Promise((done) => setTimeout(done, 300))
+      return { ok: true, compared: true }
+    } })
+    expect(late.run).toMatchObject({ state: 'stopped', note: 'Ended at the 20-minute limit.', models: 0 })
+    expect(calls()).toEqual([])
+    expect(existsSync(researchResultsPath())).toBe(false)
+    for (const name of readdirSync(researchRunsDirectory())) expect(existsSync(join(researchRunsDirectory(), name, 'codex'))).toBe(false)
   })
 
   it('an agent whose context limit the owner\'s test proved researches with that limit in its command', async () => {

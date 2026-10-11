@@ -47,9 +47,10 @@ export function contextAutoNotice(entry: Pick<ContextAutoPlanEntry, 'harness' | 
 
 /**
  * The one place BMN starts a context test by itself. A version is started at most once per reason
- * since BMN started, so a test that records nothing, or keeps showing nothing, is not run again and
- * again; two triggers at once share one test, and the later one only makes BMN look once more
- * when that test has ended.
+ * since BMN started (for other sources: once per set of them), so a test that records nothing, or
+ * keeps showing nothing, is not run again and again; two triggers at once share one test, and the
+ * later one only makes BMN look once more when that test has ended. The switch is asked again
+ * before each app is started, so switching it off stops what was still waiting its turn.
  */
 export function createContextAuto(seams: ContextAutoSeams): ContextAuto {
   const started = new Set<string>()
@@ -80,8 +81,13 @@ export function createContextAuto(seams: ContextAutoSeams): ContextAuto {
     let known = versions
     for (;;) {
       for (const entry of seams.plan(known)) {
-        const id = `${entry.harness} ${entry.version} ${entry.reason}`
+        const id = `${entry.harness} ${entry.version} ${entry.reason}${entry.set === undefined ? '' : `\n${entry.set}`}`
         if (started.has(id)) continue
+        // Switched off while an earlier app's test ran: nothing more is started, and nothing is owed.
+        if (!seams.read().enabled) {
+          owed = null
+          return
+        }
         started.add(id)
         active = entry.harness
         let result: ContextAutoResult | null

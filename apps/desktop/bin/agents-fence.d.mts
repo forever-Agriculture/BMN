@@ -28,11 +28,15 @@ export interface FenceTestOptions {
   argvOf?: (agent: RosterAgent, options: { environment: Environment; run: { folder: string; codex?: string } }) => string[]
   record?: boolean
   limitMs?: number
+  /** Stops the test: every Codex it started is ended and nothing is recorded. */
+  signal?: AbortSignal
 }
 export declare function runFenceTest(options?: FenceTestOptions): Promise<FenceTestEntry>
-export declare function providerModelList(options?: { environment?: Environment; limitMs?: number }): Promise<{ ok: true; models: unknown[] } | { ok: false; reason: string }>
+export declare function providerModelList(options?: { environment?: Environment; limitMs?: number; signal?: AbortSignal }): Promise<{ ok: true; models: unknown[] } | { ok: false; reason: string }>
 export declare function compareUnderProviderList(options: {
   agent: RosterAgent; environment?: Environment; now?: Date; tests?: FenceTestEntry[]
   modelList?: typeof providerModelList; test?: typeof runFenceTest
-}): Promise<{ ok: boolean; reason?: string; compared?: boolean; closed?: boolean }>
+  /** The research's own Stop, and what is left of its time. */
+  signal?: AbortSignal; limitMs?: number
+}): Promise<{ ok: boolean; reason?: string; compared?: boolean; closed?: boolean; stopped?: boolean }>
 export declare function runFenceCommand(argv: string[]): Promise<number>

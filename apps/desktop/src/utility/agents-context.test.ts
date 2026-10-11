@@ -741,6 +741,22 @@ describe('BMN tests a new app version by itself (63.1)', () => {
     expect(plan(passed([]), file(137_500))).toEqual([])
     // A record from before sources were kept is tested once against today's.
     expect(plan(tested('claude', CLAUDE), file(450_000))).toEqual(['sources'])
+    // The entry names the set it is for, so that the caller starts one test per set and no second one for the same.
+    const entries = (tests: ContextTestEntry[], today: ContextSource[]) => contextAutoPlan({ data, versions, tests, enabled: true, sources: { claude: today } })
+    expect(entries([passed([])], file(450_000))).toEqual([{ harness: 'claude', version: CLAUDE, reason: 'sources', agents: ['Opus'], set: `${id} above` }])
+    expect(entries([passed([])], file(110_000))[0]?.set).toBe(`${id} below`)
+    // Each set once for a version, whatever was tested in between: back at the first set there is nothing to test, and the check holds without one.
+    const there = [passed(file(450_000)), passed(file(110_000))]
+    expect(entries(there, file(450_000))).toEqual([])
+    expect(entries(there, file(110_000))).toEqual([])
+    expect(provenPrecedence('claude', CLAUDE, there)).toEqual([{ id, side: 'below' }, { id, side: 'above' }])
+    // A test that did not pass, or one that shows nothing, takes what earlier ones showed away; the set stays on record all the same, so it is the owner's test that is owed.
+    expect(provenPrecedence('claude', CLAUDE, [passed(file(450_000)), tested('claude', CLAUDE, 'fail'), passed(file(110_000))])).toEqual([{ id, side: 'below' }])
+    expect(provenPrecedence('claude', CLAUDE, [passed(file(450_000)), tested('claude', CLAUDE), passed(file(110_000))])).toEqual([{ id, side: 'below' }])
+    expect(provenPrecedence('claude', CLAUDE, [passed(file(450_000)), passed(file(110_000)), tested('claude', CLAUDE, 'fail')])).toEqual([])
+    expect(entries([passed(file(450_000)), tested('claude', CLAUDE), passed(file(110_000))], file(450_000))).toEqual([])
+    // A test of another version is no memory for this one.
+    expect(entries([{ ...passed(file(450_000)), version: '2.1.200' }, passed([])], file(450_000)).map((entry) => entry.reason)).toEqual(['sources'])
   })
 
   it('keeps its switch on until the owner turns it off, and what he was told, in one small file', () => {
@@ -864,6 +880,52 @@ describe('BMN tests a new app version by itself (63.1)', () => {
     await first.runner.trigger()
     await bmn().runner.trigger()
     expect(starts()).toBe(2)
+    // A second change in the same start is another set: it gets its own test, once.
+    writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 110_000 }))
+    expect(verdict(limit(200_000))).toBe('CONTEXT_MISMATCH conflict')
+    await first.runner.trigger()
+    expect([starts(), verdict(limit(200_000))]).toEqual([3, 'PASS 200000'])
+    await first.runner.trigger()
+    expect(starts()).toBe(3)
+    // Back at the first set, in a later start: it is on record for this version, so nothing is started, and the limit holds.
+    writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 450_000 }))
+    await bmn().runner.trigger()
+    await first.runner.trigger()
+    expect([starts(), verdict(limit(200_000))]).toEqual([3, 'PASS 200000'])
+  })
+
+  it('starts no app that was still waiting its turn once the switch is turned off (AC4)', async () => {
+    const begun: string[] = []
+    let release: () => void = () => {}
+    const runner = createContextAuto({
+      plan: () => [{ harness: 'codex', version: CODEX, reason: 'untested', agents: ['Sol'] }, { harness: 'claude', version: CLAUDE, reason: 'untested', agents: ['Opus'] }],
+      test: async (harness) => {
+        begun.push(harness)
+        await new Promise<void>((resolve) => { release = resolve })
+        return { outcome: 'pass', version: harness === 'codex' ? CODEX : CLAUDE, detail: '' }
+      },
+      tell: () => {},
+      read: contextAuto,
+      write: (change) => { setContextAuto(change) },
+      later: () => {}
+    })
+    const sweep = runner.trigger()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(begun).toEqual(['codex'])
+    // Another look is owed, and the switch goes off while the first app's test still runs.
+    void runner.trigger()
+    setContextAuto({ enabled: false })
+    release()
+    await sweep
+    expect(begun).toEqual(['codex'])
+    expect(runner.view()).toEqual({ enabled: false, running: null })
+    // Switched on again, the app that waited is tested.
+    setContextAuto({ enabled: true })
+    const again = runner.trigger()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    release()
+    await again
+    expect(begun).toEqual(['codex', 'claude'])
   })
 
   it('never lets the check start an app or write a file, whatever it says about BMN\'s own testing (AC6)', () => {

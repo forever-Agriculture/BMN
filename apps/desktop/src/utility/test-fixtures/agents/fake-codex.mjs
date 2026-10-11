@@ -116,14 +116,21 @@ if (mode.runsHooks === 'always' || (on('hooks') && mode.runsHooks === true)) {
 const prompt = readFileSync(0, 'utf8')
 messages.push({ role: 'user', text: prompt })
 
-// The provider's model list, where one answers: a model's entry there can name more tools.
+// The provider's model list, where one answers: a model's entry there can name more tools, and its
+// instructions go to the provider with every request, as Codex 0.162 sends them: a developer message
+// taken from the entry's `model_messages.instructions_template`, or from `base_instructions` where the
+// entry has no template. `skipsProviderList` stands for a Codex that never asks,
+// `ignoresProviderList` for one that asks and goes on with the list it was built with.
 let listed = []
+let instructions = 'You are the stand-in Codex.'
 try {
-  const answer = await fetch(`${base}/models`)
+  const answer = mode.skipsProviderList === true ? { ok: false } : await fetch(`${base}/models`)
   if (answer.ok) {
     const models = (await answer.json()).models
     writeFileSync(join(codexHome, 'models_cache.json'), JSON.stringify({ fetched_at: new Date().toISOString(), etag: 'x', models }))
-    listed = models.find((entry) => entry.slug === model)?.experimental_supported_tools ?? []
+    const own = mode.ignoresProviderList === true ? undefined : models.find((entry) => entry.slug === model)
+    listed = own?.experimental_supported_tools ?? []
+    instructions = own?.model_messages?.instructions_template ?? own?.base_instructions ?? instructions
   }
 } catch {
   // No list: the one the app was built with.
@@ -132,6 +139,8 @@ try {
 const fn = (name) => ({ type: 'function', name, parameters: { type: 'object', properties: {} } })
 const functions = [{ type: 'custom', name: 'exec' }, fn('wait'), fn('request_user_input'), fn('request_user_input_async'),
   ...(mode.extraTools ?? []).map(fn), ...listed.filter((name) => !['clock', 'send_user_message_async'].includes(name)).map(fn)]
+// `lateTools` are offered from the second request on: a tool a version adds once the run is under way.
+const late = (mode.lateTools ?? []).map(fn)
 const collaboration = ['followup_task', 'interrupt_agent', 'list_agents', 'send_message', 'spawn_agent', 'wait_agent'].map(fn)
 const offered = [{ type: 'namespace', name: 'functions', tools: functions }, { type: 'namespace', name: 'collaboration', tools: collaboration },
   ...(on('sleep_tool') ? [{ type: 'namespace', name: 'clock', tools: [fn('sleep')] }] : [])]
@@ -155,10 +164,14 @@ const inner = {
   list_mcp_resource_templates: async () => '{"resourceTemplates":[]}',
   list_mcp_resources: async () => '{"resources":[]}',
   read_mcp_resource: async ({ uri }) => {
-    if (mode.resourceReadsFiles === true) return readFileSync(new URL(uri), 'utf8')
+    // `resourceLead` puts that many characters of the tool's own words before the file's.
+    if (mode.resourceReadsFiles === true) return `${'resource metadata '.repeat(Math.ceil((mode.resourceLead ?? 0) / 18)).slice(0, mode.resourceLead ?? 0)}${readFileSync(new URL(uri), 'utf8')}`
     throw new Error('resources/read failed: unknown MCP server \'codex\'')
   },
   web__run: async (input) => {
+    // `webFetchesLocal` stands for a web tool that opens an address on this computer by itself.
+    const address = input?.open?.[0]?.ref_id
+    if (mode.webFetchesLocal === true && typeof address === 'string' && address.startsWith('http://127.0.0.1')) return { page: (await (await fetch(address)).text()).length }
     const answer = await fetch(`${base}/alpha/search`, { method: 'POST', body: JSON.stringify(input) })
     if (!answer.ok) throw new Error(`Fatal error: http ${answer.status}`)
     return answer.json()
@@ -198,8 +211,9 @@ async function called(item) {
   return { type: 'function_call_output', call_id: item.call_id, output }
 }
 
-const input = [...messages.map((message) => ({ type: 'message', role: message.role, content: [{ type: 'input_text', text: message.text }] })), { type: 'additional_tools', tools: offered }]
+const input = [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: instructions }] }, ...messages.map((message) => ({ type: 'message', role: message.role, content: [{ type: 'input_text', text: message.text }] })), { type: 'additional_tools', tools: offered }]
 for (let turn = 0; turn < 20; turn += 1) {
+  if (turn === 1 && late.length > 0) input.push({ type: 'additional_tools', tools: late })
   const answer = await fetch(`${base}/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, input }) })
   const events = (await answer.text()).split('\n').filter((line) => line.startsWith('data: ')).map((line) => JSON.parse(line.slice(6)))
   const items = events.filter((event) => event.type === 'response.output_item.done').map((event) => event.item)
@@ -209,6 +223,7 @@ for (let turn = 0; turn < 20; turn += 1) {
     process.exit(0)
   }
   if (items.length === 0) process.exit(1)
-  for (const item of items) input.push(await called(item))
+  // What the model called goes back with what the call gave, as Codex sends it: the script it wrote among them.
+  for (const item of items) input.push(item, await called(item))
 }
 process.exit(1)

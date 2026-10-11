@@ -28,6 +28,7 @@ let researchFetch: typeof fetchPublicPage | null
 let researchLimitMs: number | undefined
 /** What the fence test started from Models does here; none is expected unless a test sets one. */
 let fenceTest: NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]>['fenceTest'] | null
+let researchCompare: NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]>['researchCompare'] | null
 /** What installing the handlers handed back, and the notices BMN itself showed. */
 let ipc: AgentsIpcHandle
 let notices: { title: string; body: string }[]
@@ -54,6 +55,7 @@ beforeEach(() => {
   researchFetch = null
   researchLimitMs = undefined
   fenceTest = null
+  researchCompare = null
   notices = []
   // BMN's own context testing is off here, as an owner may have it, so no test starts a stand-in app behind another test's back; its own tests switch it on.
   setContextAuto({ enabled: false })
@@ -64,6 +66,10 @@ beforeEach(() => {
     fenceTest: async (options) => {
       if (fenceTest === null || fenceTest === undefined) throw new Error('no fence test is expected here')
       return fenceTest(options)
+    },
+    researchCompare: async (options) => {
+      if (researchCompare === null || researchCompare === undefined) throw new Error('no comparison under a provider list is expected here')
+      return researchCompare(options)
     },
     notifyApp: (notice) => { notices.push(notice) }, contextRetryLater: () => {}
   })
@@ -1146,15 +1152,61 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
       const named = await load(true)
       expect(named.choice).toEqual({ named: ['sol', 'opus', 'luna'], proposed: [] })
       expect(named.researchers.map((agent) => [agent.id, agent.ok])).toEqual([['sol', false], ['opus', true], ['luna', false]])
-      // Fable was his pick and is no longer named: none is picked, so the first that can research stands in, and the page is told whom he lost.
-      expect(named).toMatchObject({ researcher: 'opus', dropped: 'Fable' })
-      expect((await load()).dropped).toBe('Fable')
+      // Fable was his pick and is no longer named: none is picked, no other agent stands in for it, and the page is told whom he lost.
+      expect(named).toMatchObject({ researcher: null, dropped: 'Fable' })
+      expect(await load()).toMatchObject({ researcher: null, dropped: 'Fable' })
       // An agent the team does not name cannot be picked, and a research with it is refused by the check.
-      expect((await call<ResearchSnapshot>('research:choose', { researcher: 'fable' }))).toMatchObject({ researcher: 'opus', dropped: 'Fable' })
+      expect((await call<ResearchSnapshot>('research:choose', { researcher: 'fable' }))).toMatchObject({ researcher: null, dropped: 'Fable' })
       await call<ResearchSnapshot>('research:start', { researcher: 'fable' })
       expect((await ended()).ended).toEqual({ ok: false, text: 'Research failed: BMN did not start the run: fable is not one of the team\'s researchers (sol, opus, luna)', kept: false })
       expect(calls()).toEqual([])
       expect(await call<ResearchSnapshot>('research:choose', { researcher: 'opus' })).toMatchObject({ researcher: 'opus', dropped: null })
+    })
+
+    it('a team that names no researcher offers none, and Models picks none', async () => {
+      await name('opus')
+      expect((await load(true)).researcher).toBe('opus')
+      await call<ResearchSnapshot>('research:choose', { researcher: 'opus' })
+      // The last researcher switched off: the mark stays on the team, as `false`.
+      writeFileSync(rosterFile(), readFileSync(rosterFile(), 'utf8').replace('researcher: true', 'researcher: false'))
+      expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
+      const none = await load(true)
+      expect(none).toMatchObject({ researchers: [], researcher: null, dropped: 'Opus', choice: { named: [], proposed: [] } })
+      await call<ResearchSnapshot>('research:start', { researcher: 'opus' })
+      expect((await ended()).ended).toEqual({ ok: false, text: 'Research failed: BMN did not start the run: opus is not one of the team\'s researchers (the team names none)', kept: false })
+      expect(calls()).toEqual([])
+    })
+
+    it('a comparison under the provider\'s own list that closes a Codex researcher is shown on the open page at once, with why', async () => {
+      await name('sol', 'opus', 'luna')
+      mkdirSync(dirname(fenceTestsPath()), { recursive: true })
+      writeFileSync(fenceTestsPath(), `${JSON.stringify(passed(['gpt-6.1-sol', 'gpt-6-luna']))}\n`)
+      const open = await load(true)
+      expect(open.researchers.map((agent) => [agent.id, agent.ok])).toEqual([['sol', true], ['opus', true], ['luna', true]])
+      // The comparison finds a tool BMN has not looked at, and records it where the check reads it.
+      const why = 'a tool BMN has not looked at: function:functions.shell'
+      researchCompare = async ({ agent }) => {
+        const failed = passed([agent.model], { catalog: 'live', verdict: 'fail', at: '2026-10-11T08:01:00.000Z' })
+        failed.models[0] = { model: agent.model, verdict: 'fail', tools: [...CODEX_RESEARCH_TOOLS_SEEN, 'function:functions.shell'], reasons: [why] }
+        writeFileSync(fenceTestsPath(), `${readFileSync(fenceTestsPath(), 'utf8')}${JSON.stringify(failed)}\n`)
+        return { ok: false, closed: true, reason: `under the provider's own model list the fence test of Codex 0.161.0 did not pass for ${agent.model}: ${why}` }
+      }
+      await call<ResearchSnapshot>('research:start', { researcher: 'luna' })
+      // No fresh read is asked for: the page that was open hears it with the end of the research.
+      const after = await ended()
+      expect(after.ended).toMatchObject({ ok: false, text: expect.stringContaining('under the provider\'s own model list the fence test of Codex 0.161.0 did not pass for gpt-6-luna') })
+      expect(calls()).toEqual([])
+      const luna = after.researchers.find((agent) => agent.id === 'luna')!
+      expect(luna.ok).toBe(false)
+      expect(luna.why).toBe('Codex offers it other tools than the fence test saw')
+      // Luna was his pick and can no longer research: nobody is picked in her place, and the others stand as they stood.
+      expect(after.researcher).not.toBe('luna')
+      expect(after.researchers.filter((agent) => agent.ok).map((agent) => agent.id)).toEqual(['sol', 'opus'])
+      // Look up closes the same way.
+      writeFileSync(fenceTestsPath(), `${JSON.stringify(passed(['gpt-6.1-sol', 'gpt-6-luna']))}\n`)
+      expect((await load(true)).researchers.find((agent) => agent.id === 'sol')?.ok).toBe(true)
+      expect(await call<{ ok: boolean }>('research:lookup', { researcher: 'sol', provider: 'openai', model: 'gpt-6.1-sol' })).toMatchObject({ ok: false })
+      expect((await load()).researchers.find((agent) => agent.id === 'sol')).toMatchObject({ ok: false, why: 'Codex offers it other tools than the fence test saw' })
     })
 
     it('the owner starts the fence test from Models: one at a time, in the background, and its record opens the offer of exactly that Codex version', async () => {

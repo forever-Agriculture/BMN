@@ -78,5 +78,5 @@ export declare function runResearch(options: {
   onProgress?: (progress: { done: number; total: number }) => void; fetchPage?: FetchPage; limitMs?: number; contextTests?: unknown[]; fenceVersions?: Record<string, string[]>
   fenceTests?: FenceTestEntry[]
   /** Compares a Codex researcher's tool list under the provider's own model list with the tested one; the tests' seam. */
-  compare?: (options: { agent: RosterData['agents'][number]; environment?: Environment; now?: Date; tests?: FenceTestEntry[] }) => Promise<{ ok: boolean; reason?: string; compared?: boolean }>
+  compare?: (options: { agent: RosterData['agents'][number]; environment?: Environment; now?: Date; tests?: FenceTestEntry[]; signal?: AbortSignal; limitMs?: number }) => Promise<{ ok: boolean; reason?: string; compared?: boolean; stopped?: boolean; closed?: boolean }>
 }): Promise<{ run: ResearchRunRecord; found: (FoundModel & { provider_id: string })[] }>

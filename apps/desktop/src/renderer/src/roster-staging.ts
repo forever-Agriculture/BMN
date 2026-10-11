@@ -503,21 +503,27 @@ export function holdProposed(data: RosterDataShape): RosterDataShape {
   return readOnlyProposal(data).reduce((next, roleId) => setRoleReadOnly(next, roleId, true), data)
 }
 
-/** The agents a team names as researchers (63.3), or null while it names none: a team from before the mark. The same rule as the CLI's. */
+/** The agents a team names as researchers (63.3): null only for a team from before the mark, in which no agent carries it; otherwise exactly the agents marked yes, none where every mark says no. The same rule as the CLI's. */
 export function namedResearchers(data: Pick<RosterDataShape, 'agents'>): string[] | null {
-  const named = data.agents.filter((agent) => agent.researcher === true).map((agent) => agent.id)
-  return named.length === 0 ? null : named
+  if (!data.agents.some((agent) => typeof agent.researcher === 'boolean')) return null
+  return data.agents.filter((agent) => agent.researcher === true).map((agent) => agent.id)
 }
 
-/** Names an agent a researcher, or takes the mark away; the field is left out where it is not set, as the team file has it. */
-export function setResearcher(data: RosterDataShape, agentId: string, on: boolean): RosterDataShape {
+/**
+ * Names an agent a researcher, or takes that away. A team that has made its choice keeps it: where
+ * the approved team carries the mark (`chosen`) and this was the last one left, switching it off
+ * writes `no` on it, so that taking the last researcher away leaves nobody researching and never
+ * everybody again. Everywhere else switching off leaves the field out, as it was before he switched it on.
+ */
+export function setResearcher(data: RosterDataShape, agentId: string, on: boolean, chosen = false): RosterDataShape {
+  const last = chosen && !data.agents.some((agent) => agent.id !== agentId && typeof agent.researcher === 'boolean')
   return {
     ...data,
     agents: data.agents.map((agent) => {
       if (agent.id !== agentId) return agent
       const rest = { ...agent }
       delete rest.researcher
-      return on ? { ...rest, researcher: true } : rest
+      return on ? { ...rest, researcher: true } : last ? { ...rest, researcher: false } : rest
     })
   }
 }

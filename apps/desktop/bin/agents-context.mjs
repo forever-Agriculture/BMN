@@ -123,15 +123,30 @@ export function provenControls(harness, version, tests = contextTests()) {
  * file playing another part, or a smaller size where a larger one lost, is not shown. A test in
  * which any other source named a size the app's report could not tell from the one asked for shows
  * nothing at all, because that source may be the one the app obeyed; so does a record BMN cannot
- * read in full. The latest test of the version decides.
+ * read in full. The latest test of the version decides whether anything is shown: a test that did
+ * not pass, or one that shows nothing, takes every earlier one away. Passing tests of that version
+ * that follow one another without such a break each add what they saw, so a set of sources tested
+ * once stays shown while the owner's files change and change back (63.1 AC3).
  */
 export function provenPrecedence(harness, version, tests = contextTests()) {
-  const last = latestOf(harness, version, tests)
-  if (last?.limit !== 'pass' || !Array.isArray(last.rivals) || !Number.isSafeInteger(last.asked)) return []
-  if (!Number.isSafeInteger(last.observed) || !reportedAs(last.asked, last.observed)) return []
-  const clear = (rival) => typeof rival?.id === 'string' && Number.isSafeInteger(rival?.value) && !reportedAs(last.asked, rival.value)
-  if (!last.rivals.every(clear)) return []
-  return last.rivals.map((rival) => ({ id: rival.id, side: rival.value > last.asked ? 'above' : 'below' }))
+  if (typeof version !== 'string') return []
+  const proofs = []
+  const all = tests.filter((entry) => entry.harness === harness && entry.version === version)
+  for (let index = all.length - 1; index >= 0; index -= 1) {
+    const shown = shownBy(all[index])
+    if (shown === null) break
+    for (const proof of shown) if (!proofs.some((known) => known.id === proof.id && known.side === proof.side)) proofs.push(proof)
+  }
+  return proofs
+}
+
+/** What one test shows about the sources it met, or null where it shows nothing: it did not pass, or cannot be read in full, or a source's size could not be told from the one asked for. */
+function shownBy(test) {
+  if (test?.limit !== 'pass' || !Array.isArray(test.rivals) || !Number.isSafeInteger(test.asked)) return null
+  if (!Number.isSafeInteger(test.observed) || !reportedAs(test.asked, test.observed)) return null
+  const clear = (rival) => typeof rival?.id === 'string' && Number.isSafeInteger(rival?.value) && !reportedAs(test.asked, rival.value)
+  if (!test.rivals.every(clear)) return null
+  return test.rivals.map((rival) => ({ id: rival.id, side: rival.value > test.asked ? 'above' : 'below' }))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -775,25 +790,30 @@ function sideOf(value, size) {
  * Whether a version that passed should be tested once more (63.1 AC3): a run of one of these agents
  * would meet another source the recorded test did not see lose on that side, so the check answers
  * `conflict`, and a test started now would meet a set of sources (which one, and on which side of the
- * size the test asks for) that the recorded test did not. The record itself is the memory: once a
- * test of this set is on record the answer is no, so each set is tested once for a version. A source
- * the report could not tell from the test's own size would show nothing, so it starts no test.
+ * size the test asks for) that no recorded test of this version met. The record itself is the
+ * memory: once a test of this set is on record the answer is no, so each set is tested once for a
+ * version, whatever was tested in between. A source the report could not tell from the test's own
+ * size would show nothing, so it starts no test. Returns that set, as the text that names it, or null.
  */
-function meetsNewSources(harness, agents, last, tests, today) {
-  if (!Array.isArray(today) || today.length === 0) return false
+function newSourceSet(harness, agents, last, tests, today) {
+  if (!Array.isArray(today) || today.length === 0) return null
   const asked = CONTEXT_TEST_SIZE[harness]
-  if (today.some((rival) => sideOf(rival.value, asked) === 'same')) return false
+  if (today.some((rival) => sideOf(rival.value, asked) === 'same')) return null
   const precedence = provenPrecedence(harness, last.version, tests)
   const refused = agents.some((agent) => today.some((rival) => rival.value !== agent.context_limit
     && !precedence.some((proof) => proof.id === rival.id && proof.side === (rival.value > agent.context_limit ? 'above' : 'below'))))
-  if (!refused) return false
+  if (!refused) return null
   const set = (rivals, size) => rivals.map((rival) => `${rival.id} ${sideOf(rival.value, size)}`).sort().join('\n')
-  return !Array.isArray(last.rivals) || !Number.isSafeInteger(last.asked) || set(today, asked) !== set(last.rivals, last.asked)
+  const now = set(today, asked)
+  const met = tests.some((test) => test.harness === harness && test.version === last.version && Array.isArray(test.rivals) && Number.isSafeInteger(test.asked)
+    && test.rivals.every((rival) => typeof rival?.id === 'string' && Number.isSafeInteger(rival?.value)) && set(test.rivals, test.asked) === now)
+  return met ? null : now
 }
 
 /**
  * Which apps BMN should test by itself now, and why: `untested` (no test of the installed version on
- * record), `retry` (the latest one showed nothing) or `sources` (see meetsNewSources). An app no
+ * record), `retry` (the latest one showed nothing) or `sources` (see newSourceSet; the entry then
+ * names that set, so the caller starts one test for each set and no second one for the same). An app no
  * agent has a limit for is never named, nor is one whose version cannot be read, nor a version whose
  * latest test failed: that one waits for the owner. `versions` holds each app's installed version and
  * `sources` what a test started now would meet besides its own size (contextTestSources). The caller
@@ -807,10 +827,11 @@ export function contextAutoPlan({ data, versions, tests = contextTests(), enable
     const version = versions?.[harness]
     if (agents.length === 0 || typeof version !== 'string') continue
     const last = latestOf(harness, version, tests)
+    const set = last?.limit === 'pass' ? newSourceSet(harness, agents, last, tests, sources[harness]) : null
     const reason = last === null ? 'untested'
       : last.limit === 'inconclusive' || last.limit === 'unavailable' ? 'retry'
-        : last.limit === 'pass' && meetsNewSources(harness, agents, last, tests, sources[harness]) ? 'sources' : null
-    if (reason !== null) plan.push({ harness, version, reason, agents: agents.map((agent) => agent.name) })
+        : set !== null ? 'sources' : null
+    if (reason !== null) plan.push({ harness, version, reason, agents: agents.map((agent) => agent.name), ...(reason === 'sources' ? { set } : {}) })
   }
   return plan
 }

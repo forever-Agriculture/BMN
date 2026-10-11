@@ -84,7 +84,7 @@ describe('the fence test of a Codex research run (63.3 AC2, AC3)', () => {
     const reasons = entry.models[0]!.reasons.join('\n')
     expect(reasons).toContain(`reached the provider: ${FENCE_MARKERS.RULES}, ${FENCE_MARKERS.SKILL} and ${FENCE_MARKERS.AGENTSKILL}`)
     expect(reasons).toContain('a picture was sent to the provider')
-    expect(reasons).toContain('a tool gave back a planted file: unoffered-view_image and script-attempts')
+    expect(reasons).toContain('a tool gave back a planted file: unoffered-view_image, script-attempts and exec:view_image')
     expect(reasons).toContain('a tool BMN has not looked at: ')
     expect(reasons).toContain('exec:view_image')
     expect(reasons).toContain('function:clock.sleep')
@@ -108,7 +108,11 @@ describe('the fence test of a Codex research run (63.3 AC2, AC3)', () => {
 
   it.each([
     ['a tool gives back a planted file', { extraTools: ['read_file'], extraToolReads: 'SENTINEL-HOME.txt' }, 'a tool gave back a planted file: unoffered-read_file and offered-function:functions.read_file'],
-    ['a tool inside the script tool gives back a planted file', { resourceReadsFiles: true }, 'a tool gave back a planted file: script-attempts'],
+    ['a tool inside the script tool gives back a planted file', { resourceReadsFiles: true }, 'a tool gave back a planted file: script-attempts and exec:read_mcp_resource'],
+    // Only the start of each result is printed, so the script looks through the whole of it itself.
+    ['a tool inside the script tool gives back a planted file after words of its own', { resourceReadsFiles: true, resourceLead: 900 }, 'a tool gave back a planted file: exec:read_mcp_resource'],
+    ['the web tool opens an address on this computer by itself', { webFetchesLocal: true }, 'a tool fetched an address on this computer'],
+    ['a tool is offered only once the run is under way', { lateTools: ['read_file'] }, 'offered but not called: function:read_file\na tool BMN has not looked at: function:read_file'],
     ['something is written', { writes: true }, 'written during the run: .local/state/bmn/research/runs/fence-main/cwd/fence-written-script.txt'],
     ['a hook runs whatever the run switches off', { runsHooks: 'always' }, 'a hook ran']
   ])('fails when %s', async (_name, mode, reason) => {
@@ -164,7 +168,7 @@ describe('the fence test of a Codex research run (63.3 AC2, AC3)', () => {
 })
 
 describe('the tool list under the provider\'s own model list (63.3 AC6)', () => {
-  const LISTED = [{ slug: 'gpt-6-luna', experimental_supported_tools: ['clock'] }, { slug: 'gpt-6-astra', experimental_supported_tools: [] }]
+  const LISTED = [{ slug: 'gpt-6-luna', base_instructions: 'You are Luna.', experimental_supported_tools: ['clock'] }, { slug: 'gpt-6-astra', base_instructions: 'You are Astra.', experimental_supported_tools: [] }]
   const compare = (options: Partial<Parameters<typeof compareUnderProviderList>[0]> = {}) =>
     compareUnderProviderList({ agent: agents('luna')[0]!, environment: env, now: NOW, test: (inner) => runFenceTest({ ...inner, limitMs: 20_000 }), ...options })
 
@@ -194,7 +198,7 @@ describe('the tool list under the provider\'s own model list (63.3 AC6)', () => 
 
   it('a tool the provider\'s list adds closes the offer, and no run starts', async () => {
     await test()
-    codex({ providerModels: [{ slug: 'gpt-6-luna', experimental_supported_tools: ['clock', 'read_file'] }] })
+    codex({ providerModels: [{ slug: 'gpt-6-luna', base_instructions: 'You are Luna.', experimental_supported_tools: ['clock', 'read_file'] }] })
     const result = await compare()
     expect(result).toMatchObject({ ok: false, closed: true, reason: expect.stringContaining('under the provider\'s own model list the fence test of Codex 0.161.0 did not pass for gpt-6-luna') })
     expect(fenceStanding('codex', '0.161.0', 'gpt-6-luna')).toMatchObject({ passed: false, why: 'live' })
@@ -204,6 +208,68 @@ describe('the tool list under the provider\'s own model list (63.3 AC6)', () => 
     expect(evaluateResearch({ agent: 'luna', argv, stdin: run.prompt, cwd: run.cwd }, { environment: env, cwd: run.cwd, now: NOW })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', detail: 'fence-live' })
     // Astra's own standing is not touched by Luna's.
     expect(fenceStanding('codex', '0.161.0', 'gpt-6-astra').why).toBe('untested')
+  }, 60_000)
+
+  it.each([
+    ['never asks for the list', { skipsProviderList: true }, 'Codex did not ask the stand-in for the model list, so nothing was compared under it'],
+    ['asks for the list and goes on with the one it was built with', { ignoresProviderList: true }, 'Codex did not use the model list the stand-in served, so nothing was compared under it']
+  ])('a comparison counts only where Codex was seen to use the list: one that %s compares nothing, opens nothing and closes nothing', async (_name, mode, why) => {
+    await test()
+    // The provider's entry names one tool more; a Codex that does not use the entry offers the tested tools all the same.
+    codex({ providerModels: [{ slug: 'gpt-6-luna', base_instructions: 'You are Luna.', experimental_supported_tools: ['clock', 'read_file'] }], ...mode })
+    const result = await compare()
+    expect(result).toEqual({ ok: false, closed: false, reason: `under the provider's own model list the fence test of Codex 0.161.0 did not pass for gpt-6-luna: ${why}` })
+    expect(fenceTests().map((entry) => [entry.catalog, entry.verdict])).toEqual([['bundled', 'pass'], ['live', 'inconclusive']])
+    expect(fenceStanding('codex', '0.161.0', 'gpt-6-luna')).toMatchObject({ passed: true, live: null })
+    expect(researchers({ environment: env, now: NOW }).find((entry) => entry.id === 'luna')?.fence?.compared).toBe(false)
+    // Asked again, it is compared again: nothing was remembered as compared.
+    expect((await compare()).ok).toBe(false)
+    expect(fenceTests()).toHaveLength(3)
+  }, 60_000)
+
+  it('follows the entry by the instructions Codex sends on: the template of Codex 0.162 where the entry has one, the older field where it has not', async () => {
+    await test()
+    // The 0.162 form: Codex sends the template and never the older field, so a line added to the older field alone would not come back.
+    codex({ providerModels: [{ slug: 'gpt-6-luna', base_instructions: 'You are Luna.', model_messages: { instructions_template: 'You are Luna, from the template.' }, experimental_supported_tools: ['clock'] }] })
+    expect(await compare()).toEqual({ ok: true, compared: true })
+    // An entry with the template alone is followed the same way.
+    codex({ providerModels: [{ slug: 'gpt-6-luna', model_messages: { instructions_template: 'You are Luna, from the template.' }, experimental_supported_tools: ['clock'] }] })
+    expect(await compare()).toEqual({ ok: true, compared: true })
+    expect(fenceTests().map((entry) => [entry.catalog, entry.verdict])).toEqual([['bundled', 'pass'], ['live', 'pass'], ['live', 'pass']])
+  }, 60_000)
+
+  it('an entry BMN cannot follow into the run compares nothing either', async () => {
+    await test()
+    codex({ providerModels: [{ slug: 'gpt-6-luna', experimental_supported_tools: ['clock'] }] })
+    expect(await compare()).toEqual({ ok: false, closed: false,
+      reason: 'under the provider\'s own model list the fence test of Codex 0.161.0 did not pass for gpt-6-luna: the model list gives this model no entry BMN can follow into the run, so nothing was compared under it' })
+    expect(fenceStanding('codex', '0.161.0', 'gpt-6-luna')).toMatchObject({ passed: true, live: null })
+  }, 60_000)
+
+  it('Stop reaches the comparison: the list is not waited for, a test under way is ended, and nothing of it is kept', async () => {
+    await test()
+    codex({ providerModels: LISTED })
+    const before = new AbortController()
+    before.abort()
+    expect(await compare({ signal: before.signal })).toMatchObject({ ok: false, stopped: true })
+    // Stopped while the list is asked for.
+    const during = new AbortController()
+    const asking = compare({ signal: during.signal, modelList: (options) => new Promise((resolve) => { options?.signal?.addEventListener('abort', () => resolve({ ok: false, reason: 'stopped' })) }) })
+    during.abort()
+    expect(await asking).toMatchObject({ ok: false, stopped: true })
+    // Stopped while the test under the list runs: its Codex is ended at once and no record is written.
+    const running = new AbortController()
+    const startedAt = Date.now()
+    const tested = compare({ signal: running.signal, test: (inner) => { setTimeout(() => running.abort(), 150); return runFenceTest({ ...inner, limitMs: 20_000 }) } })
+    expect(await tested).toMatchObject({ ok: false, stopped: true })
+    expect(Date.now() - startedAt).toBeLessThan(15_000)
+    expect(fenceTests().map((entry) => entry.catalog)).toEqual(['bundled'])
+    expect(readdirSync(fenceDirectory())).toEqual([])
+    // What is left of the research's time is all the comparison gets.
+    const seen: (number | undefined)[] = []
+    await compare({ limitMs: 5_000, modelList: async (options) => { seen.push(options?.limitMs); return { ok: false, reason: 'no list' } } })
+    expect(seen[0]).toBeGreaterThan(0)
+    expect(seen[0]).toBeLessThanOrEqual(5_000)
   }, 60_000)
 
   it('cannot compare without the list, or for a model the list does not name: no run starts, and nothing is closed', async () => {

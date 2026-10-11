@@ -28,6 +28,8 @@ export interface FenceTestModel { model: string; verdict: 'pass' | 'fail' | 'inc
 export interface FenceTestEntry {
   harness: string; at: string; version: string | null; form: string; catalog: 'bundled' | 'live'; verdict: 'pass' | 'fail' | 'inconclusive'
   models: FenceTestModel[]; reasons?: string[]; seconds?: number; renewal?: 'through-link' | 'not-asked' | 'link-replaced' | 'not-written'
+  /** Set on what a stopped test returns; such a test is never recorded. */
+  stopped?: boolean
 }
 export interface FenceStanding {
   passed: boolean; why?: 'untested' | 'failed' | 'live'; tools: string[]; at?: string; reasons?: string[]

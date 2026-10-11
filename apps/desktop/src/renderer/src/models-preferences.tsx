@@ -142,10 +142,12 @@ export function researcherHint(researcher: Pick<ResearcherView, 'harness' | 'fen
   return `${gets} Runs in an empty folder, with a Codex folder of its own and web search. ${codexToolsLine(researcher.fence?.tools ?? [])}${first}`
 }
 
-/** What research needs, said where no agent on the team can research. */
-export function noResearcherWords(named: boolean): string {
+/** What research needs, said where no agent on the team can research: `named` is who the team names, null for a team that has not chosen yet. */
+export function noResearcherWords(named: readonly string[] | null): string {
   const where = 'on Claude Code, or on Codex where its fence test passed, whose provider may see private work'
-  return named ? `Research needs one of the researchers your team names: an active agent ${where}.` : `Research needs an active agent ${where}.`
+  if (named === null) return `Research needs an active agent ${where}.`
+  if (named.length === 0) return `Your team names no researcher, so nobody researches. Switch Researcher on on an agent's page: an active agent ${where}.`
+  return `Research needs one of the researchers your team names: an active agent ${where}.`
 }
 
 /** The fence test's line on Models: how the installed Codex stands for the team's Codex researchers. */
@@ -303,13 +305,13 @@ export function ModelsPage(props: { team: TeamState; data: RosterDataShape; rese
       <PageHead title="Models" status={researchStatus(snapshot, shortDate)}>
         {running
           ? <button type="button" disabled={research.busy} onClick={() => void research.stop()}>Stop</button>
-          : <button type="button" disabled={research.busy || chosen === undefined || testing} title={chosen === undefined ? 'No agent on your team can research' : testing ? 'The Codex fence test is running' : undefined} onClick={() => void research.start()}>Research now</button>}
+          : <button type="button" disabled={research.busy || chosen === undefined || testing} title={able.length === 0 ? 'No agent on your team can research' : chosen === undefined ? 'Pick a researcher first' : testing ? 'The Codex fence test is running' : undefined} onClick={() => void research.start()}>Research now</button>}
       </PageHead>
       {staged !== null && team.hasStaged ? <p className="preferences-success" role="status">{staged}</p>
         : research.notice ? <p className={research.notice.ok ? 'preferences-success' : 'preferences-error'} role={research.notice.ok ? 'status' : 'alert'}>{research.notice.text}</p> : null}
       {!running && research.notice === null && snapshot.last?.note ? <p className="page-note" role="status">The last research did not finish: {snapshot.last.note}</p> : null}
       {snapshot.dropped !== null ? (
-        <p className="page-note" role="status">{`${snapshot.dropped} is no longer one of your team's researchers, so no researcher is picked${chosen ? `; ${chosen.name} stands in until you pick one` : ''}.`}</p>
+        <p className="page-note" role="status">{`${snapshot.dropped} is no longer one of your team's researchers, so no researcher is picked${able.length > 0 ? '. Pick one below' : ''}.`}</p>
       ) : null}
       {proposed.length > 0 ? (
         <div className="page-note with-action" role="status">
@@ -322,11 +324,11 @@ export function ModelsPage(props: { team: TeamState; data: RosterDataShape; rese
       ) : null}
       <Row label="Researcher" id={researcherId}
         hint={able.length === 0
-          ? `${noResearcherWords(snapshot.choice.named !== null)} A price can still be written in the team file.${notOffered(unable)}`
-          : `${researcherHint(chosen)}${notOffered(unable)}`}>
+          ? `${noResearcherWords(snapshot.choice.named)} A price can still be written in the team file.${notOffered(unable)}`
+          : `${chosen === undefined ? 'Pick who researches.' : researcherHint(chosen)}${notOffered(unable)}`}>
         {able.length === 0
           ? <span className="muted">No agent on your team can research.</span>
-          : <Segmented labelledBy={researcherId} fit options={able.map((entry) => entry.id)} value={chosen?.id ?? able[0]!.id} disabled={running || research.busy}
+          : <Segmented labelledBy={researcherId} fit options={able.map((entry) => entry.id)} value={chosen?.id ?? ''} disabled={running || research.busy}
               optionLabel={researcherLabel} onChange={(id) => research.choose(id)} />}
       </Row>
       {codex.length > 0 ? (

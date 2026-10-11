@@ -29,7 +29,8 @@ export interface ContextProven {
 /** BMN's own testing: the owner's switch, and per app the version and outcome he was last told about. */
 export interface ContextAutoState { enabled: boolean; told: Record<string, string> }
 /** One app BMN should test by itself now, why, and the agents whose limit waits for it. */
-export interface ContextAutoPlanEntry { harness: ContextApp; version: string; reason: 'untested' | 'retry' | 'sources'; agents: string[] }
+/** `set` names the sources a `sources` test would meet, so that each set is tested once. */
+export interface ContextAutoPlanEntry { harness: ContextApp; version: string; reason: 'untested' | 'retry' | 'sources'; agents: string[]; set?: string }
 /** A source the run's own environment was seen to win over, and on which side its size lay. */
 export interface ContextPrecedence { id: string; side: 'above' | 'below' }
 /** Why a context limit is refused: see checkContext. */

@@ -85,12 +85,16 @@ export function readOnlyProposal(data) {
 export const RESEARCH_APPS = ['claude', 'codex']
 
 /**
- * The agents the approved team names as researchers (63.3), or null while it names none: a team
- * from before the mark, which keeps offering every agent that can research.
+ * The agents the approved team names as researchers (63.3). Null only for a team from before the
+ * mark, in which no agent carries it at all: that team keeps offering every agent that can
+ * research. A team that carries the mark has made its choice and names exactly the agents marked
+ * `true`: none at all where every mark is `false`, so taking the last researcher away leaves
+ * nobody researching, never everybody again.
  */
 export function namedResearchers(data) {
-  const named = (data?.agents ?? []).filter((agent) => agent.researcher === true).map((agent) => agent.id)
-  return named.length === 0 ? null : named
+  const agents = data?.agents ?? []
+  if (!agents.some((agent) => typeof agent.researcher === 'boolean')) return null
+  return agents.filter((agent) => agent.researcher === true).map((agent) => agent.id)
 }
 
 /**

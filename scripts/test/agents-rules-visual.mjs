@@ -1644,7 +1644,10 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     assert.deepEqual(await offeredNow(), namedClaude)
     assert.equal(await who.getByRole('radio', { name: 'Knight Opus', exact: true }).count(), 1, 'the Opus the team names is not the one offered')
     assert.equal(await main.getByText(/Astra cannot research|Kimi cannot research/).count(), 0, 'an agent the team does not name is still spoken of')
-    await main.getByText(/^Astra is no longer one of your team's researchers, so no researcher is picked; \w+ stands in until you pick one\.$/).waitFor()
+    await main.getByText(/^Astra is no longer one of your team's researchers, so no researcher is picked\. Pick one below\.$/).waitFor()
+    // Nobody stands in for the pick that fell away: none is selected, and Research now waits for his pick.
+    assert.equal(await who.locator('[role="radio"][aria-checked="true"]').count(), 0, 'another agent was picked in place of the one that fell away')
+    assert.equal(await main.getByRole('button', { name: 'Research now', exact: true }).isDisabled(), true, 'Research now is offered with no researcher picked')
     assert.equal(await proposal.count(), 0, 'the page still says the choice waits for him')
     await fenceRow.getByRole('button', { name: 'Run test', exact: true }).waitFor()
 

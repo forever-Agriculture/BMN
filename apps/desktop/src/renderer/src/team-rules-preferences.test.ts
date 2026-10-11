@@ -1436,9 +1436,33 @@ describe('Team › Models (60.10, first release)', () => {
       expect(namedResearchers(DATA)).toBeNull()
       expect(namedResearchers(taken)).toEqual(['sol', 'luna'])
       expect(setResearcher(taken, 'sol', false).agents.find((entry) => entry.id === 'sol')).toEqual(DATA.agents.find((entry) => entry.id === 'sol'))
+      // Before he approved any name, switching each back off leaves the team as it was: nothing chosen.
+      expect(setResearcher(setResearcher(taken, 'sol', false), 'luna', false)).toEqual(DATA)
       // Once he has staged names, or the team names them, the page no longer asks.
       expect(words(withSnapshot({ choice: { named: null, proposed: ['sol', 'luna'] } }, team({ base: DATA, data: taken, approved: DATA })))).not.toContain('Who researches is your choice')
       expect(words(page)).not.toContain('Who researches is your choice')
+    })
+
+    it('taking the last researcher away from a team that has chosen leaves nobody researching, never everybody again', () => {
+      const chosen = nameResearchers(DATA, ['sol', 'luna'])
+      // One of two switched off: the other still carries the choice, so this one's field just goes.
+      const one = setResearcher(chosen, 'sol', false, true)
+      expect(one.agents.find((entry) => entry.id === 'sol')).toEqual(DATA.agents.find((entry) => entry.id === 'sol'))
+      expect(namedResearchers(one)).toEqual(['luna'])
+      // The last one switched off: the mark stays, as `no`, and the team names none.
+      const none = setResearcher(one, 'luna', false, true)
+      expect(none.agents.find((entry) => entry.id === 'luna')?.researcher).toBe(false)
+      expect(namedResearchers(none)).toEqual([])
+      // Switched on and off again on an agent the team never named, the team is as it was.
+      expect(setResearcher(setResearcher(one, 'fable', true, true), 'fable', false, true)).toEqual(one)
+      const luna = none.agents.find((entry) => entry.id === 'luna')!
+      expect(researcherWords(none, luna)).toBe('Your team names no researcher, so nobody researches: a research with Luna is refused.')
+      expect(researcherWords(one, one.agents.find((entry) => entry.id === 'sol')!)).toBe('Not offered on Models: a research with Sol is refused.')
+      expect(noResearcherWords([])).toBe('Your team names no researcher, so nobody researches. Switch Researcher on on an agent\'s page: an active agent on Claude Code, or on Codex where its fence test passed, whose provider may see private work.')
+      const empty = withSnapshot({ researcher: null, researchers: [], choice: { named: [], proposed: [] } }, team({ base: none, data: none, approved: none }))
+      expect(words(empty)).toContain('Your team names no researcher, so nobody researches.')
+      expect(words(empty)).not.toContain('Who researches is your choice')
+      expect(empty).not.toContain('role="radio"')
     })
 
     it('offers only the researchers the team names: one Opus where the team holds two, and no row for the other (AC7, AC8)', () => {
@@ -1452,7 +1476,12 @@ describe('Team › Models (60.10, first release)', () => {
     })
 
     it('says once whom he had picked when that researcher is no longer named (AC8)', () => {
-      expect(words(withSnapshot({ dropped: 'Opus 2' }))).toContain('Opus 2 is no longer one of your team&#x27;s researchers, so no researcher is picked; Fable stands in until you pick one.')
+      const lost = withSnapshot({ dropped: 'Opus 2', researcher: null })
+      expect(words(lost)).toContain('Opus 2 is no longer one of your team&#x27;s researchers, so no researcher is picked. Pick one below.')
+      // Nobody stands in for the one he lost: none is selected, and Research now waits for his pick.
+      expect(lost).not.toContain('aria-checked="true"')
+      expect(lost).toContain('<button type="button" disabled="" title="Pick a researcher first">Research now</button>')
+      expect(words(lost)).toContain('Pick who researches.')
       expect(words(page)).not.toContain('no longer one of your team')
     })
 
@@ -1532,7 +1561,7 @@ describe('Team › Models (60.10, first release)', () => {
     expect(none).toContain('<span class="faint">Not researched yet</span>')
     expect(none).toContain('<span class="muted">No agent on your team can research.</span>')
     expect(words(none)).toContain('Research needs one of the researchers your team names: an active agent on Claude Code, or on Codex where its fence test passed, whose provider may see private work. A price can still be written in the team file.')
-    expect(noResearcherWords(false)).toBe('Research needs an active agent on Claude Code, or on Codex where its fence test passed, whose provider may see private work.')
+    expect(noResearcherWords(null)).toBe('Research needs an active agent on Claude Code, or on Codex where its fence test passed, whose provider may see private work.')
     expect(none).toContain('<button type="button" disabled="" title="No agent on your team can research">Research now</button>')
     expect(none).not.toContain('role="radio"')
     expect(lines(none)).toEqual(['model-sol', 'model-fable', 'model-luna', 'model-haiku', 'model-glm'])

@@ -959,9 +959,17 @@ export async function runResearch({
       // Once per research, after the check and before the first run: the fence test knew only the model list Codex was built with.
       let same
       try {
-        same = await (compare ?? (await import('./agents-fence.mjs')).compareUnderProviderList)({ agent, environment, now: now(), ...(fenceTests === undefined ? {} : { tests: fenceTests }) })
+        same = await (compare ?? (await import('./agents-fence.mjs')).compareUnderProviderList)({
+          agent, environment, now: now(), ...(fenceTests === undefined ? {} : { tests: fenceTests }), ...(signal === undefined ? {} : { signal }), limitMs: Math.max(1, deadline - Date.now())
+        })
       } catch (error) {
         same = { ok: false, reason: error instanceof Error ? error.message : String(error) }
+      }
+      // Stop and the time limit hold during the comparison too: no run is started after either.
+      if (signal?.aborted || Date.now() >= deadline) {
+        removeResearchCodexFolders(run)
+        ended = signal?.aborted ? 'stopped' : 'limit'
+        break
       }
       if (!same.ok) {
         removeResearchCodexFolders(run)

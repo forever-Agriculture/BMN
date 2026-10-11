@@ -11,7 +11,7 @@ import {
   readCodexConfig, refreshVisibility, removeResearchCodexFolders, researchFormHash, setReadTracer, verifyReceipt, visibilityPath, workspaceRoot, workspaceVisibility, type FenceTestEntry
 } from '../../bin/agents-check.mjs'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
-import { canonicalJson, parseRoster, sha256 } from '../../bin/agents-roster.mjs'
+import { canonicalJson, namedResearchers, parseRoster, sha256 } from '../../bin/agents-roster.mjs'
 import { approveRoster } from '../main/agents-approval'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
@@ -1325,11 +1325,28 @@ describe('research runs (60.3 AC11)', () => {
       expect(check({ argv: ASTRA_REVIEW(workspace) }).verdict).toBe('PASS')
     })
 
-    it('the mark is true or false and nothing else, and `researcher: false` names no one', () => {
+    it('the mark is true or false and nothing else', () => {
       const wrong = parseRoster(roster((text) => name('opus')(text).replace('researcher: true', 'researcher: yes-please')))
       expect(wrong.data).toBeNull()
       expect(wrong.errors.map((error) => error.message).join('\n')).toContain('researcher')
+    })
+
+    it('a team that has made its choice and takes the last researcher away names none: nobody researches, never everybody again', () => {
+      approve(roster(name('opus')))
+      expect(research().code).toBe('NOT_A_RESEARCHER')
+      // The last researcher is switched off: the mark stays on the team, as `false`.
       approve(roster((text) => name('opus')(text).replace('researcher: true', 'researcher: false')))
+      expect(namedResearchers(readApproved().data)).toEqual([])
+      const opus = research({ agent: 'opus', argv: RESEARCH([], 'claude-opus-5-5').map((part) => (part === 'low' ? 'xhigh' : part)) })
+      expect(opus).toMatchObject({ verdict: 'REFUSED', code: 'NOT_A_RESEARCHER', message: 'opus is not one of the team\'s researchers (the team names none)' })
+      // Every agent that can otherwise research is refused, the ones the team never named among them.
+      for (const agent of readApproved().data.agents) {
+        expect(evaluateResearch({ agent: agent.id, argv: RESEARCH(), dry: true }, { environment: env, cwd: workspace, now: NOW }).verdict, agent.id).toBe('REFUSED')
+      }
+      expect(research().code).toBe('NOT_A_RESEARCHER')
+      // A team from before the mark carries it nowhere, and reads as before.
+      approve(EXAMPLE)
+      expect(namedResearchers(readApproved().data)).toBeNull()
       expect(research().verdict).toBe('PASS')
     })
   })
@@ -1484,6 +1501,12 @@ describe('consequences in words (60.5 AC7; the same sentences `bmn roster status
     expect(consequences(data(both), data(opus))).toEqual(['Luna would no longer be offered as a researcher'])
     expect(consequences(data(opus), data(other))).toEqual(['Luna would be offered as a researcher', 'Opus would no longer be offered as a researcher'])
     expect(consequences(data(both), data(EXAMPLE))).toEqual(['every agent that can research would be offered as a researcher again'])
+    // The last researcher switched off leaves the mark on the team: nobody researches, and the owner is told so before he approves.
+    const none = edit(opus, 'researcher: true\n', 'researcher: false\n')
+    expect(consequences(data(opus), data(none))).toEqual(['Opus would no longer be offered as a researcher', 'no agent would be offered as a researcher; every research would be refused'])
+    expect(consequences(data(EXAMPLE), data(none))).toEqual(['no agent would be offered as a researcher; every research would be refused'])
+    expect(consequences(data(none), data(opus))).toEqual(['Opus would be offered as a researcher'])
+    expect(consequences(data(none), data(EXAMPLE))).toEqual(['every agent that can research would be offered as a researcher again'])
     expect(consequences(data(both), data(both))).toEqual([])
   })
 

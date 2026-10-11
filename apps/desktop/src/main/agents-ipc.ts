@@ -89,6 +89,8 @@ export interface AgentsIpcOptions {
   researchLimitMs?(): number | undefined
   /** Runs the fence test of the installed Codex; tests replace it. */
   fenceTest?: typeof runFenceTest
+  /** Compares a Codex researcher's tools under the provider's own model list before its first run; tests replace it. */
+  researchCompare?: NonNullable<Parameters<typeof runResearch>[0]['compare']>
   /** Shows the owner a notice from BMN itself; absent in tests that have nobody to tell. */
   notifyApp?(notice: { title: string; body: string }): void
   /** The timer BMN's own context testing waits on before it tries once more; tests replace it. */
@@ -1111,9 +1113,9 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   }
   // Stop and what is left of the research's time reach the page read itself, so neither waits for a slow site.
   const readPage: typeof fetchPublicPage = (address, limits) => (options.researchFetch ?? fetchPublicPage)(address, { ...limits, selfTestPages: options.researchPages?.() ?? null })
-  const researchLimit = (): { limitMs?: number } => {
+  const researchLimit = (): { limitMs?: number; compare?: NonNullable<AgentsIpcOptions['researchCompare']> } => {
     const limitMs = options.researchLimitMs?.()
-    return limitMs === undefined ? {} : { limitMs }
+    return { ...(limitMs === undefined ? {} : { limitMs }), ...(options.researchCompare === undefined ? {} : { compare: options.researchCompare }) }
   }
   const researchSnapshot = (fresh: boolean): ResearchSnapshot => {
     const ctx = context()
@@ -1125,12 +1127,26 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     return {
       ...researchView(readResearch()) as Pick<ResearchSnapshot, 'last' | 'previousAt' | 'models'>,
       researchers: researcherList ?? [],
-      researcher: able.some((entry) => entry.id === chosen) ? chosen : able[0]?.id ?? null,
+      // With no pick yet the first one offered stands; after a pick fell away nobody does, until the owner picks again (63.3 AC8).
+      researcher: able.some((entry) => entry.id === chosen) ? chosen : dropped !== null ? null : able[0]?.id ?? null,
       choice: researcherChoice(),
       dropped: dropped === null ? null : approvedIfAny()?.data.agents.find((agent) => agent.id === dropped)?.name ?? dropped,
       fenceTest,
       running: research === null ? null : { researcher: research.researcher, done: research.done, total: research.total, lookup: research.lookup },
       ended: researchEnded
+    }
+  }
+  /**
+   * A research with a Codex agent may have closed that agent's offer: the comparison under the
+   * provider's own model list is recorded where the check reads it. So who can research is read
+   * again before the page hears that the research ended, and the page shows the refusal at once.
+   */
+  const rereadAfter = (researcher: string, ctx: RulesIpcContext): void => {
+    if (researcherList?.find((entry) => entry.id === researcher)?.harness !== 'codex') return
+    try {
+      researcherList = researchers({ environment: researchEnvironment(ctx), now: ctx.now() }) as ResearcherView[]
+    } catch {
+      // The list as last read stays; the next look at Models reads it again.
     }
   }
   const begin = (researcher: string, lookup: boolean): NonNullable<typeof research> => {
@@ -1176,6 +1192,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     }, (error: unknown) => {
       researchEnded = { ok: false, text: `Research failed: ${error instanceof Error ? error.message : String(error)}`, kept: false }
     }).finally(() => {
+      rereadAfter(researcher, ctx)
       if (research === state) research = null
     })
     return researchSnapshot(false)
@@ -1203,6 +1220,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     } catch (error) {
       return { ok: false, message: `Look up failed: ${error instanceof Error ? error.message : String(error)}`, model: null }
     } finally {
+      rereadAfter(researcher, ctx)
       if (research === state) research = null
     }
   })
