@@ -278,7 +278,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await main.locator('details.advanced > summary').click()
     assert.deepEqual(await main.locator('details.advanced .preferences-row-label').allTextContents(), ['Paid by', 'Compact at', 'Host', 'Also called', 'Team file'])
     assert.deepEqual(await main.locator('[role="radiogroup"][aria-label="Class"] .choice').allTextContents().then((lines) => lines.map((line) => line.replace(/\s+/g, ' ').trim())),
-      ['Knight leads an epic/project', 'Queen does what she wants, in any role', 'Rook the Artist: designs what is not there yet', 'Bishop reviews and advises', 'Pawn does jobs a lead hands off'])
+      ['Knight leads an epic/project', 'Queen does whatever she wants', 'Rook the Artist: designs what is not there yet', 'Bishop reviews and advises', 'Pawn does jobs a lead hands off'])
     assert.equal(await main.getByRole('checkbox', { name: /^Designer/ }).isDisabled(), true, 'a knight is offered the designer role')
     passed('an agent lists Identity, Model and Work rows; Advanced is closed and holds Paid by, Compact at, Host, Also called and the team file')
     await go('Team')

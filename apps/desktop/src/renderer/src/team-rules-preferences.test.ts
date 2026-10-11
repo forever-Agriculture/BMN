@@ -211,7 +211,7 @@ describe('Team › an agent, New agent (60.5 AC3, AC4)', () => {
   it('offers five classes with their piece and line, and bars the roles a class may not hold', () => {
     const markup = pageMarkup({ name: 'agent', id: 'luna' })
     expect([...markup.matchAll(/<\/svg>([A-Za-z]+) <span class="choice-line">([^<]+)<\/span>/g)].map((match) => `${match[1]}: ${match[2]}`)).toEqual(
-      ['Knight: leads an epic/project', 'Queen: does what she wants, in any role', 'Rook: the Artist: designs what is not there yet', 'Bishop: reviews and advises', 'Pawn: does jobs a lead hands off'])
+      ['Knight: leads an epic/project', 'Queen: does whatever she wants', 'Rook: the Artist: designs what is not there yet', 'Bishop: reviews and advises', 'Pawn: does jobs a lead hands off'])
     expect(markup).toContain('<label class="choice disabled"><input type="checkbox" disabled=""/>Lead <span class="choice-line">Only a Knight or a Queen leads</span></label>')
     expect(markup).toContain('<label class="choice disabled"><input type="checkbox" disabled=""/>Designer <span class="choice-line">Only a Rook or a Queen designs</span></label>')
     expect(markup).toContain('<label class="choice"><input type="checkbox" checked=""/>Helper <span class="choice-line"></span></label>')

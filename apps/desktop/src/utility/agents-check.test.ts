@@ -179,7 +179,7 @@ describe('dispatch forms dev-auto documents (60.3 AC1-AC2)', () => {
     expect(check({ agent: 'fable', role: 'consultant', argv: FABLE_PACKET('rules') }).verdict).toBe('PASS')
   })
 
-  it('a queen does what she wants: she leads, designs and reviews', () => {
+  it('a queen does whatever she wants: she leads, designs and reviews', () => {
     approve(roster((text) => edit(edit(text, 'name: Fable\nclass: rook', 'name: Fable\nclass: queen'),
       'roles: [designer, epic-reviewer, final-reviewer, consultant]', 'roles: [lead, designer, epic-reviewer, final-reviewer, consultant]')))
     for (const role of ['lead', 'designer', 'epic-reviewer']) {

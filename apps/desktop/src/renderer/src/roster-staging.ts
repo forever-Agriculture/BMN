@@ -44,7 +44,7 @@ export interface DiffGroup {
 
 export const CLASS_WORDS: Readonly<Record<RosterClass, { name: string; line: string }>> = {
   knight: { name: 'Knight', line: 'leads an epic/project' },
-  queen: { name: 'Queen', line: 'does what she wants, in any role' },
+  queen: { name: 'Queen', line: 'does whatever she wants' },
   rook: { name: 'Rook', line: 'the Artist: designs what is not there yet' },
   bishop: { name: 'Bishop', line: 'reviews and advises' },
   pawn: { name: 'Pawn', line: 'does jobs a lead hands off' }
