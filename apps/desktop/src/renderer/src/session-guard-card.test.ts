@@ -57,8 +57,9 @@ describe('the card a stopped prompt raises (60.8 AC3)', () => {
     expect(guardTitle(stop)).toBe(title)
     expect(buttons(html)).toEqual(['×', 'Close'])
     expect(html).toContain('Send the prompt again once this is fixed.')
-    // The card says what BMN did; nothing shows yet that this version of the app obeys, and the card says that too.
-    expect(html).toContain('BMN told Claude Code to stop this prompt. No test has yet shown that this version of Claude Code obeys, so check that the agent did not answer.')
+    // The card says what BMN did and on which version a live test showed the app obeys; another version is still the owner's to check.
+    expect(html).toContain('BMN told Claude Code to stop this prompt. A live test showed Claude Code 2.1.296 obeys; on another version, check that the agent did not answer.')
+    expect(markup({ ...stop, agent: 'codex' })).toContain('A live test showed Codex 0.162.1 obeys; on another version, check that the agent did not answer.')
     expect(html).not.toMatch(/went nowhere|Prompt stopped/)
   })
 

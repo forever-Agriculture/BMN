@@ -58,6 +58,12 @@ function stub(name: string, version: string): void {
   chmodSync(join(stubs, name), 0o755)
 }
 
+/** A folder Git would call a repository's top-level: `.git` holds a HEAD. */
+function repository(folder: string): void {
+  mkdirSync(join(folder, '.git'), { recursive: true })
+  writeFileSync(join(folder, '.git/HEAD'), 'ref: refs/heads/main\n')
+}
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', '-c', 'init.defaultBranch=main', ...args],
     { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
@@ -365,11 +371,24 @@ describe('private work, providers and exceptions (60.3 AC4)', () => {
     expect(check({ agent: 'glm', role: 'helper', workspace: join(home, 'sibling'), cwd: join(home, 'sibling'), argv: GLM() }).code).toBe('DATA_FORBIDDEN')
   })
 
+  it('reads past a stray `.git` folder that holds no repository, as Git does', () => {
+    // An empty ~/.git made every plain folder under home one workspace, so one exception would have covered them all.
+    mkdirSync(join(home, 'stray/.git'), { recursive: true })
+    mkdirSync(join(home, 'stray/plain/deep'), { recursive: true })
+    expect(workspaceRoot(join(home, 'stray/plain/deep'))).toBe(join(home, 'stray/plain/deep'))
+    repository(join(home, 'stray/plain'))
+    expect(workspaceRoot(join(home, 'stray/plain/deep'))).toBe(join(home, 'stray/plain'))
+    // A linked worktree and a submodule have a `.git` file.
+    mkdirSync(join(home, 'stray/linked/src'), { recursive: true })
+    writeFileSync(join(home, 'stray/linked/.git'), 'gitdir: /elsewhere/.git/worktrees/linked\n')
+    expect(workspaceRoot(join(home, 'stray/linked/src'))).toBe(join(home, 'stray/linked'))
+  })
+
   it('an exception covers a workspace root: folders inside it, never a nested repository with its own top-level', () => {
     const outer = join(home, 'outer')
-    mkdirSync(join(outer, '.git'), { recursive: true })
+    repository(outer)
     mkdirSync(join(outer, 'sub/deep'), { recursive: true })
-    mkdirSync(join(outer, 'nested/.git'), { recursive: true })
+    repository(join(outer, 'nested'))
     expect(workspaceRoot(join(outer, 'sub/deep'))).toBe(outer)
     expect(workspaceRoot(join(outer, 'nested'))).toBe(join(outer, 'nested'))
     expect(workspaceRoot(workspace)).toBe(workspace)
@@ -381,9 +400,9 @@ describe('private work, providers and exceptions (60.3 AC4)', () => {
 
   it('an exception for the outer workspace never covers a dispatch that works in a repository nested in it, or in a packet elsewhere', () => {
     const outer = join(home, 'outer')
-    mkdirSync(join(outer, '.git'), { recursive: true })
+    repository(outer)
     mkdirSync(join(outer, 'sub'), { recursive: true })
-    mkdirSync(join(outer, 'nested/.git'), { recursive: true })
+    repository(join(outer, 'nested'))
     mkdirSync(join(home, 'elsewhere'))
     approve(withException(outer))
     const from = (overrides: Partial<Inputs>, argv = GLM()) => check({ agent: 'glm', role: 'helper', workspace: outer, cwd: outer, argv, ...overrides })
@@ -398,7 +417,7 @@ describe('private work, providers and exceptions (60.3 AC4)', () => {
 
   it('work in a repository nested in a public workspace is private', () => {
     const outer = join(home, 'outer')
-    mkdirSync(join(outer, 'nested/.git'), { recursive: true })
+    repository(join(outer, 'nested'))
     execFileSync('git', ['init', '-q', outer])
     execFileSync('git', ['-C', outer, 'remote', 'add', 'origin', 'https://github.com/synthetic-owner/synthetic-repo.git'])
     recordVisibility(outer)

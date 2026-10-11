@@ -1252,7 +1252,7 @@ describe('bmn hook prompt guard (Story 60.8)', () => {
     const withoutTeam = await runHooks(['check', 'claude'])
     const asJson = JSON.parse((await runHooks(['check', '--json'], { HOME: session.home })).stdout) as { agents: Array<{ agent: string; guard?: string }> }
 
-    expect(withTeam.stdout).toContain('  prompt guard: active, stops a prompt that would send private work to a provider that may not see it (not yet measured on a live Claude Code)')
+    expect(withTeam.stdout).toContain('  prompt guard: active, stops a prompt that would send private work to a provider that may not see it (measured on Claude Code 2.1.296)')
     expect(withTeam.stdout).toContain('  prompt guard: active, only warns in Cursor')
     expect(withTeam.stdout).toContain('  prompt guard: not available in OpenCode (it has no prompt event BMN can answer)')
     expect(withoutTeam.stdout).toContain('  prompt guard: inactive (no team has been approved, so no prompt is checked)')

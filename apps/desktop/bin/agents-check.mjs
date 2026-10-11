@@ -1,6 +1,6 @@
 // MODULE: agents-check.mjs - Epic 60.3: `bmn roster check|explain|route|visibility|bind`, the fail-closed check before work leaves for another agent
 import { execFileSync } from 'node:child_process'
-import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, writeSync } from 'node:fs'
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, harnessPrivateWork, publicOnlyReasons, resolvedDirectory, sha256 } from './agents-roster.mjs'
@@ -778,21 +778,33 @@ function inside(child, parent) {
 }
 
 /**
- * The workspace a directory belongs to: its Git top-level (the nearest folder holding `.git`), or
- * the directory itself outside Git. A nested repository has its own top-level, so an exception for
- * the outer one never covers it (60.8 AC6). `directory` is canonical already.
+ * Whether `marker` is what Git leaves at a top-level: a `.git` folder that holds a HEAD, or the
+ * `.git` file a linked worktree or a submodule has. A stray empty `.git` folder is neither, and
+ * Git itself reads past it.
+ */
+function repositoryMarker(marker) {
+  traceRead?.(marker)
+  try {
+    if (!statSync(marker).isDirectory()) return true
+    const head = join(marker, 'HEAD')
+    traceRead?.(head)
+    statSync(head)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The workspace a directory belongs to: its Git top-level (the nearest folder holding a
+ * repository's `.git`), or the directory itself outside Git. A nested repository has its own
+ * top-level, so an exception for the outer one never covers it (60.8 AC6). `directory` is
+ * canonical already.
  */
 export function workspaceRoot(directory) {
   let current = directory
   for (;;) {
-    const marker = join(current, '.git')
-    traceRead?.(marker)
-    try {
-      lstatSync(marker)
-      return current
-    } catch {
-      // Not a repository top-level; look one folder up.
-    }
+    if (repositoryMarker(join(current, '.git'))) return current
     const parent = dirname(current)
     if (parent === current) return directory
     current = parent

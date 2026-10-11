@@ -1288,13 +1288,16 @@ session send work, and may that provider see private work in this workspace?
 
 | App | What a stop does | Measured on a live app |
 | --- | --- | --- |
-| Claude Code | The hook answers `{"decision":"block","reason":…}`, which tells the app not to send the prompt and to show the line | not yet |
-| Codex | The same answer | not yet |
+| Claude Code | The hook answers `{"decision":"block","reason":…}`, which tells the app not to send the prompt and to show the line | 2.1.296 (2026-10-11) |
+| Codex | The same answer | 0.162.0 and 0.162.1 (2026-10-11) |
 | Cursor | Nothing stops: the prompt goes on, BMN shows the card as a warning and marks the session "Public-only provider on private work" | does not apply |
 | OpenCode | Not covered: its plugin reports events after the fact and has no prompt event to answer | does not apply |
 
-Until a stop was measured on a live app, the card is headed **Told to stop** and says that no
-test has yet shown this version of the app obeys, so check that the agent did not answer.
+The measurement is a live test in an empty folder with the app pointed at an address on this
+computer that must receive nothing: the app showed the line and sent no prompt. BMN does not know
+which version a session runs, so the card is always headed **Told to stop**; it names the version
+the test ran on and asks you to check that the agent did not answer on another one. A new Codex
+session's first prompt was not stopped for want of its saved record in that test (one observation).
 
 Cursor reports nothing about where it sends work, so the guard goes by what you recorded for it
 on Rules → Health: a provider that may see private work passes, any other warns.

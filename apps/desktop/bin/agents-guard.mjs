@@ -34,8 +34,10 @@ export const GUARD_APPS = {
 /**
  * The app version on which a live test (a synthetic folder, the app pointed at a loopback address
  * that must receive nothing) showed the hook's answer stops the prompt. null: not measured yet.
+ * Measured 2026-10-11 on the installed build. The card reads the same record from the protocol
+ * package (`GUARD_MEASURED` in shared/protocol/src/companion.ts); a test holds the two together.
  */
-export const GUARD_MEASURED = { claude: null, codex: null }
+export const GUARD_MEASURED = { claude: '2.1.296', codex: '0.162.1' }
 
 /** Codex `-c` keys that can say where work goes; any other key is left to Codex and decides nothing here. */
 const CODEX_DESTINATION_KEYS = ['model_provider', 'model_providers', 'profile', 'profiles', 'openai_base_url', 'chatgpt_base_url']

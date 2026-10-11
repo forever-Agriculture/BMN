@@ -504,6 +504,7 @@ describe('Allow here on a stopped prompt (60.8 AC3)', () => {
     proc = join(home, 'proc')
     workspace = join(home, 'code/app')
     mkdirSync(join(workspace, '.git'), { recursive: true })
+    writeFileSync(join(workspace, '.git/HEAD'), 'ref: refs/heads/main\n')
     installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
       senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin` }), procRoot: proc
     })
@@ -529,7 +530,7 @@ describe('Allow here on a stopped prompt (60.8 AC3)', () => {
     ['the process is gone', (): void => rmSync(join(proc, '7001'), { recursive: true, force: true }), {}],
     // Same destination, and a folder the card's own workspace would still cover: only the process tells that the session moved.
     ['the session moved to another folder', (): void => { mkdirSync(join(workspace, 'sub')); agentProcess({ ANTHROPIC_BASE_URL: 'https://api.moonshot.ai/anthropic' }, '777', join(workspace, 'sub')) }, {}],
-    ['the session moved to another workspace', (): void => { mkdirSync(join(home, 'code/other/.git'), { recursive: true }); agentProcess({ ANTHROPIC_BASE_URL: 'https://api.moonshot.ai/anthropic' }, '777', join(home, 'code/other')) }, {}],
+    ['the session moved to another workspace', (): void => { mkdirSync(join(home, 'code/other/.git'), { recursive: true }); writeFileSync(join(home, 'code/other/.git/HEAD'), 'ref: refs/heads/main\n'); agentProcess({ ANTHROPIC_BASE_URL: 'https://api.moonshot.ai/anthropic' }, '777', join(home, 'code/other')) }, {}],
     ['the card says the process was somewhere else', (): void => undefined, { processFolder: '/synthetic/elsewhere' }],
     ['the card named another provider', (): void => undefined, { providerId: 'zai' }],
     ['the card named another workspace', (): void => undefined, { workspace: '/synthetic/elsewhere' }]

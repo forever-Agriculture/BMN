@@ -1,6 +1,6 @@
 // MODULE: session-guard-card.tsx - Story 60.8: the card a stopped prompt raises on its own session, with Allow here and Keep blocked
 import { useEffect, useRef } from 'react'
-import { ROSTER_APP_NAMES, stripFormatCharacters, type GuardStop } from '@bmn/protocol'
+import { GUARD_MEASURED, ROSTER_APP_NAMES, stripFormatCharacters, type GuardStop } from '@bmn/protocol'
 import { relativeAge } from './session-presentation'
 import type { SessionPlace } from './session-request-card'
 
@@ -30,9 +30,9 @@ export function guardTitle(stop: GuardStop): string {
 }
 
 /**
- * What BMN did, in two words. BMN answers the app's prompt hook with "stop"; that the installed
- * version of the app obeys has not been shown by a live test yet (60.8, R60-NFR4), so the card
- * and the mark say what BMN did, never that the prompt went nowhere.
+ * What BMN did, in two words. BMN answers the app's prompt hook with "stop"; a live test showed
+ * the app obeys on the versions in `GUARD_MEASURED` only (60.8, R60-NFR4), and BMN does not know
+ * the session's version, so the card and the mark say what BMN did, never that the prompt went nowhere.
  */
 export const GUARD_STOP_WORDS = 'Told to stop'
 
@@ -50,10 +50,14 @@ export function guardNote(stop: GuardStop): string {
   return 'Send the prompt again once this is fixed.'
 }
 
-/** What a stop is, and what is not yet known about it; nothing for a warning, whose note already says the prompt went on. */
+/** What a stop is, and what is known about it; nothing for a warning, whose note already says the prompt went on. */
 export function guardCaveat(stop: GuardStop): string | null {
+  if (stop.outcome !== 'stop') return null
   const app = ROSTER_APP_NAMES[stop.agent]
-  return stop.outcome === 'stop' ? `BMN told ${app} to stop this prompt. No test has yet shown that this version of ${app} obeys, so check that the agent did not answer.` : null
+  const measured = GUARD_MEASURED[stop.agent]
+  return measured === undefined
+    ? `BMN told ${app} to stop this prompt. No test has yet shown that this version of ${app} obeys, so check that the agent did not answer.`
+    : `BMN told ${app} to stop this prompt. A live test showed ${app} ${measured} obeys; on another version, check that the agent did not answer.`
 }
 
 export function SessionGuardCard(props: {

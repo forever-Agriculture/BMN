@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { GUARD_APPS, decide, decideWithin, guardStanding, guardState, parseLaunch, stopAnswer } from '../../bin/agents-guard.mjs'
+import { GUARD_MEASURED as PROTOCOL_GUARD_MEASURED } from '@bmn/protocol'
+import { GUARD_APPS, GUARD_MEASURED, decide, decideWithin, guardStanding, guardState, parseLaunch, stopAnswer } from '../../bin/agents-guard.mjs'
 import { visibilityPath } from '../../bin/agents-check.mjs'
 import { buildGeneration, currentPointerPath, generationPath, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
@@ -75,12 +76,18 @@ const prompt = (agent: string, pid: number, event: Record<string, unknown> = {})
 const exception = (folder: string) => (text: string) => edit(text, 'zai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}',
   `zai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}\nkimi-here: {provider: moonshot, folder: ${folder}}`)
 
+/** A folder Git would call a repository's top-level: `.git` holds a HEAD. */
+function repository(folder: string): void {
+  mkdirSync(join(folder, '.git'), { recursive: true })
+  writeFileSync(join(folder, '.git/HEAD'), 'ref: refs/heads/main\n')
+}
+
 beforeEach(() => {
   home = realpathSync(mkdtempSync(join(tmpdir(), 'bmn-guard-')))
   process.env.HOME = home
   proc = join(home, 'proc')
   workspace = join(home, 'code/app')
-  mkdirSync(join(workspace, '.git'), { recursive: true })
+  repository(workspace)
   mkdirSync(join(workspace, 'src'), { recursive: true })
 })
 
@@ -197,8 +204,8 @@ describe('an allowed workspace (60.8 AC2, AC6)', () => {
   it('does not pass for a sibling workspace, nor for a repository nested inside the allowed one', () => {
     const sibling = join(home, 'code/other')
     const nested = join(workspace, 'vendor/inner')
-    mkdirSync(join(sibling, '.git'), { recursive: true })
-    mkdirSync(join(nested, '.git'), { recursive: true })
+    repository(sibling)
+    repository(nested)
     approve(team(exception(workspace)))
     const pid = session(['claude'], { env: MOONSHOT_ENV })
 
@@ -384,6 +391,10 @@ describe('a destination that is only the owner\'s word (60.8 AC2)', () => {
     expect(GUARD_APPS.cursor).toEqual({ event: 'beforeSubmitPrompt', stops: false })
     expect(stopAnswer('cursor', 'anything')).toBeNull()
     expect(guardStanding('cursor')).toBe('prompt guard: active, only warns in Cursor')
+    // The live stop test of 2026-10-11; the card reads the same record from the protocol package.
+    expect(guardStanding('claude')).toBe('prompt guard: active, stops a prompt that would send private work to a provider that may not see it (measured on Claude Code 2.1.296)')
+    expect(guardStanding('codex')).toBe('prompt guard: active, stops a prompt that would send private work to a provider that may not see it (measured on Codex 0.162.1)')
+    expect(GUARD_MEASURED).toEqual(PROTOCOL_GUARD_MEASURED)
     expect(guardStanding('opencode')).toMatch(/not available in OpenCode/)
 
     approve(team((text) => edit(text, 'cursor: {name: Cursor, hosts: [], private_work: public_only}', 'cursor: {name: Cursor, hosts: [], private_work: allowed}')))

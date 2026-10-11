@@ -258,6 +258,13 @@ export const GUARD_AGENTS = Object.freeze(['claude', 'codex', 'cursor'] as const
 export type GuardAgent = (typeof GUARD_AGENTS)[number]
 
 /**
+ * The app version on which a live test showed the app obeys a stop: a synthetic folder, the app
+ * pointed at a loopback address that received nothing (2026-10-11). The packaged CLI cannot read
+ * this package, so apps/desktop/bin/agents-guard.mjs keeps the same record; a test holds the two together.
+ */
+export const GUARD_MEASURED: Readonly<Partial<Record<GuardAgent, string>>> = Object.freeze({ claude: '2.1.296', codex: '0.162.1' })
+
+/**
  * Why a prompt was stopped: the provider may not see private work (`public-only`), where the app
  * sends work is only the owner's word (`declared`) or cannot be told (`unknown`), the approved
  * team cannot be read (`state`), the session's process cannot be read (`process`), or the
