@@ -1,7 +1,8 @@
 // MODULE: agents-research.mjs - Story 60.10, first release: BMN writes the research prompt, runs one checked run per provider, accepts only a typed answer, reads each cited page itself and keeps what was found
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { lookup as dnsLookup } from 'node:dns'
-import { closeSync, openSync, readFileSync, realpathSync } from 'node:fs'
+import { closeSync, lstatSync, openSync, readFileSync, realpathSync } from 'node:fs'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
 import { APP_NAMES, EFFORTS, agentState } from './agents-roster.mjs'
@@ -170,6 +171,18 @@ function whyNot(agent, code, detail = undefined) {
   return `BMN cannot check ${app}'s research command`
 }
 
+/** A name in `folder` under which nothing lies, not even a link. */
+function absentFolder(folder) {
+  for (;;) {
+    const path = `${folder}/offer-${randomBytes(8).toString('hex')}`
+    try {
+      lstatSync(path)
+    } catch {
+      return path
+    }
+  }
+}
+
 /**
  * The approved, active agents and whether each could research now: the same check a run must
  * pass, without a folder or a prompt. `reason` says why not, in the check's own words.
@@ -183,15 +196,16 @@ export function researchers({ environment = process.env, now = new Date(), fence
   }
   // A run starts in <runs>/<its id>/cwd, an empty folder BMN makes for it, and the settings files in
   // and above a folder count for the app, each by where it lies from the run. So the question is asked
-  // from a folder of that very shape (it need not exist: a run's own two folders start empty), and the
-  // offer and the run's own check read the same files in the same parts.
+  // from a folder of that very shape, and the offer and the run's own check read the same files in the
+  // same parts. The folder is one that is not there, as a run's own is not before BMN makes it: a
+  // name of its own could hold files no run would ever read.
   let runs = researchRunsDirectory()
   try {
     runs = realpathSync(runs)
   } catch {
     // No research has run yet: the folder's name is all there is.
   }
-  const from = `${runs}/offer/cwd`
+  const from = `${absentFolder(runs)}/cwd`
   const found = []
   for (const agent of generation.data.agents) {
     if (agentState(agent) !== 'active') continue

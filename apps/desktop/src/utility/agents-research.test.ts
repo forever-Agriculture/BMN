@@ -205,6 +205,13 @@ describe('who may research (60.10 AC1)', () => {
     expect(opus()).toMatchObject({ ok: false })
     proof(user, `settings above at ${join(runs, '.claude/settings.json')}: autoCompactWindow`)
     expect(opus()).toEqual({ id: 'opus', name: 'Opus', harness: 'claude', ok: true })
+    // Nothing counts that no run would read: a settings file in a folder beside the runs' own, under a name no run gets,
+    // or in a folder inside it, changes nothing about the offer.
+    for (const beside of ['offer', 'offer/cwd']) {
+      mkdirSync(join(runs, beside, '.claude'), { recursive: true })
+      writeFileSync(join(runs, beside, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 300000 }))
+    }
+    expect(opus()).toEqual({ id: 'opus', name: 'Opus', harness: 'claude', ok: true })
     // A size BMN cannot read is said as that, not as two sizes.
     writeFileSync(join(runs, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 'lots' }))
     expect(opus()).toMatchObject({ ok: false, why: 'BMN cannot read which context size Claude Code would use', reason: expect.stringContaining('is not a whole number') })

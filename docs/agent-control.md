@@ -893,7 +893,8 @@ user settings' `autoCompactWindow` at 450 000). A pass then shows one more thing
 the run's own value wins over that very source, on that side (the file's size above or below the
 run's). Where one of your files names a size within one percent of the size the test asks for,
 Claude Code's rounded report would read the same whichever source it obeyed; the test then answers
-inconclusive, names the file, and does not start the app.
+inconclusive, names the file, and starts no run of the app: it has only asked the app for its
+version.
 
 **Runs BMN checks.** `bmn roster role <role> --json` gives each candidate a `context` entry:
 `applied` with the exact `argv` items (Codex) or `env` entries (Claude Code), `app-default`,
