@@ -205,12 +205,10 @@ type SidePanel = 'files' | 'details' | 'new' | null
 const APP_EVENT_REFRESH_MS = 15_000
 /** How long a new session's shell gets to read its first command line before BMN types nothing into it. */
 const SHELL_READY_WAIT_MS = 10_000
-/** How long BMN waits to hear that a command it typed has ended. */
-const COMMAND_WATCH_MS = 30 * 60_000
 
 function App(): React.JSX.Element {
   const controllers = useRef(new Map<string, TerminalController>())
-  // Commands BMN is typing into a new session, or whose end it waits for; each reads the sessions' output for its own.
+  // Commands BMN is typing into a new session, or typed into one that still runs; each reads the sessions' output for its own.
   const commandRuns = useRef(new Set<SessionCommandRun>())
   const liveRef = useRef(new Map<string, LiveStartup>())
   const sessionsRef = useRef<SessionRecord[]>([])
@@ -2621,7 +2619,7 @@ function App(): React.JSX.Element {
           recognisedSessions={sessionsByApp(hookOrigins, sessions, live)}
           onRunInSession={activeWorkspaceId ? async (name, command, onEnded, left) => {
             // Listening from before the session exists: its shell may write its first prompt before the answer that names it arrives.
-            const run = sessionCommandRun(command, { readyWithinMs: SHELL_READY_WAIT_MS, watchForMs: COMMAND_WATCH_MS })
+            const run = sessionCommandRun(command, { readyWithinMs: SHELL_READY_WAIT_MS }, onEnded)
             commandRuns.current.add(run)
             // The owner closed the sheet he pressed on while BMN waited for the shell: nothing is typed behind his back.
             if (left.aborted) run.leave()
@@ -2634,8 +2632,8 @@ function App(): React.JSX.Element {
               setLive((current) => ({ ...current, [created.session.sessionId]: created.startup }))
               applyTreeSessionAction(selectTreeSession([...sessions, created.session], created.session.sessionId))
               // Typed with its Enter: the owner's press on the sheet, which showed this exact command, is the go-ahead, and he
-              // watches it run in the session. Only once the shell reads a command line: typed earlier, a start-up file that
-              // asks a question would take the command for its answer, and nothing would run.
+              // watches it run in the session. Only once the shell reads a line with its line editor: typed earlier, a
+              // start-up file that asks a question would take the command for its answer, and nothing would run.
               const typed = await run.typeInto(created.startup.attachmentId, (bytes) => window.aiTerminal.sendTerminalInput(created.startup.attachmentId, bytes))
               if (!typed) {
                 commandRuns.current.delete(run)
@@ -2643,12 +2641,11 @@ function App(): React.JSX.Element {
                 brief(left.aborted ? `Nothing was typed in ${created.session.name}: you closed the sheet first.` : `Nothing was typed in ${created.session.name}: its shell did not get ready.`)
                 return 'not-reading'
               }
-              void run.ended.then(() => {
-                commandRuns.current.delete(run)
-                onEnded()
-              })
+              // The run stays for as long as its session does: every later prompt there may be the updater's end.
+              void run.gone.then(() => { commandRuns.current.delete(run) })
               setDialog(null)
-              brief(`Running the command in ${created.session.name}.`)
+              // Said as what BMN did: what the shell makes of the line is for the owner to see in the session.
+              brief(`Typed the command in ${created.session.name} and pressed Enter.`)
               return 'typed'
             } catch (error) {
               commandRuns.current.delete(run)

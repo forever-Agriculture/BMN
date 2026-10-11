@@ -1,17 +1,21 @@
-// MODULE: session-command.ts - Story 60.13: types one command into a new shell session only once its shell reads a command line, and says when it reads one again; kept pure for tests
+// MODULE: session-command.ts - Story 60.13: types one command into a new shell session only once its shell reads a line with its line editor, and says each time it reads one again; kept pure for tests
 
 /** How a press that runs a command in a new session went: typed with its Enter, nothing typed because the shell never read a command line, or no session at all. */
 export type CommandStart = 'typed' | 'not-reading' | 'failed'
 
 /**
- * Opens a new shell session and runs `command` there; `onEnded` is told once that shell reads a command line
- * again. `left` ends the wait for the shell: the owner went away from where he pressed, so nothing is typed after it.
+ * Opens a new shell session and types `command` there with its Enter. `onEnded` is told each time that shell
+ * reads a line again afterwards, and when its session ends: whatever the command did is over then, as far as BMN
+ * can tell. `left` ends the wait for the shell: the owner went away from where he pressed, so nothing is typed after it.
  */
 export type RunInSession = (name: string, command: string, onEnded: () => void, left: AbortSignal) => Promise<CommandStart>
 
 /**
- * What bash writes around every command line it reads: its line editor turns bracketed paste on when it starts
- * to read one and off once it has it. A start-up file that reads the terminal itself writes neither.
+ * What bash writes around every line its line editor reads: it turns bracketed paste on when it starts to read
+ * one and off once it has it. That is the prompt, and it is all BMN can see of it. A start-up file that reads the
+ * terminal plainly (`read`) writes neither, so nothing is typed into its question; one that asks with the line
+ * editor (`read -e`) writes the same as the prompt and cannot be told from it: it would get the command as its
+ * answer. The sheet that offers the press says so.
  */
 const PASTE_MODE = [0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x30, 0x34] // ESC [ ? 2 0 0 4
 const ON = 0x68 // h
@@ -49,28 +53,33 @@ export interface SessionCommandRun {
   typeInto(attachmentId: string, send: (bytes: Uint8Array) => void): Promise<boolean>
   /** The owner went away before the command was typed: it will not be. Changes nothing once it was typed. */
   leave(): void
-  /** Settles once that shell reads a command line again after the command, its session ended or the watch ran out; never where nothing was typed. */
-  ended: Promise<void>
+  /** Settles once the session the command was typed into has ended, when there is nothing more to hear; never where nothing was typed. */
+  gone: Promise<void>
 }
 
 interface Clock { set(run: () => void, ms: number): unknown; clear(timer: unknown): void }
 
 const REAL_CLOCK: Clock = { set: (run, ms) => setTimeout(run, ms), clear: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>) }
 
-/** One command for one new session. Nothing here opens the session or decides the command: it is typed as given, with its Enter. */
-export function sessionCommandRun(command: string, limits: { readyWithinMs: number; watchForMs: number }, clock: Clock = REAL_CLOCK): SessionCommandRun {
+/**
+ * One command for one new session. Nothing here opens the session or decides the command: it is typed as given,
+ * with its Enter. Once typed, `heard` is told each time the shell reads a line again, and once more when the
+ * session ends. Each time, not only the first: an updater that draws an input line of its own writes the same
+ * sign while it still runs, and the shell's own prompt follows it. There is no time limit: an update may take long.
+ */
+export function sessionCommandRun(command: string, limits: { readyWithinMs: number }, heard: () => void, clock: Clock = REAL_CLOCK): SessionCommandRun {
   const followers = new Map<string, (bytes: Uint8Array) => boolean[]>()
   const reading = new Map<string, boolean>()
-  const gone = new Set<string>()
+  const exited = new Set<string>()
   let own: string | null = null
   let onReading: (() => void) | null = null
   let onGone: (() => void) | null = null
   let onLeft: (() => void) | null = null
   let left = false
   let finish = (): void => {}
-  const ended = new Promise<void>((resolve) => { finish = resolve })
+  const gone = new Promise<void>((resolve) => { finish = resolve })
   return {
-    ended,
+    gone,
     output(attachmentId, bytes) {
       if (own !== null && attachmentId !== own) return
       let follow = followers.get(attachmentId)
@@ -81,7 +90,7 @@ export function sessionCommandRun(command: string, limits: { readyWithinMs: numb
       }
     },
     exit(attachmentId) {
-      gone.add(attachmentId)
+      exited.add(attachmentId)
       if (attachmentId === own) onGone?.()
     },
     leave() {
@@ -101,13 +110,12 @@ export function sessionCommandRun(command: string, limits: { readyWithinMs: numb
             return
           }
           clock.clear(waiting)
-          const over = (): void => {
-            clock.clear(watching)
+          onReading = heard
+          onGone = (): void => {
             onReading = onGone = null
+            heard()
             finish()
           }
-          const watching = clock.set(over, limits.watchForMs)
-          onReading = onGone = over
           onLeft = null
           resolve(true)
         }
@@ -117,7 +125,7 @@ export function sessionCommandRun(command: string, limits: { readyWithinMs: numb
           resolve(false)
         }
         const waiting = clock.set(leave, limits.readyWithinMs)
-        if (left || gone.has(attachmentId)) leave()
+        if (left || exited.has(attachmentId)) leave()
         else if (reading.get(attachmentId) === true) type()
         else {
           onReading = type

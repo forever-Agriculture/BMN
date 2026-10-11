@@ -739,7 +739,7 @@ export function forgetUpdateWatches(apps?: Iterable<RosterHarness>): void {
 let updateEndedAt: number | null = null
 const updateEndListeners = new Set<() => void>()
 
-/** The shell an update command was typed into reads a command line again: Health, open now or later, reads the machine after it. */
+/** The shell an update command was typed into reads a line again, or its session ended: Health, open now or later, reads the machine after it. */
 export function updateEnded(at: number = Date.now()): void {
   updateEndedAt = at
   for (const listener of [...updateEndListeners]) listener()
@@ -822,10 +822,10 @@ export function UpdateSheet(props: {
         <span>Open in BMN</span><span>{sessionsWords(name, props.sessions)}</span>
         <span>Afterwards</span>
         <span>{props.onRun
-          ? `Update now opens a new session and, once its shell is ready, runs the command there, where you see what the updater does and answer what it asks. Or run it in any terminal. BMN reads the version and where ${name} sends data again when the command ends in that session, and whenever you come back to Health.`
+          ? `Update now opens a new session and, once its shell shows its prompt, types the command there and presses Enter; you see what the updater does and answer what it asks. Or run it in any terminal. BMN reads the version and where ${name} sends data again each time that session's shell is back at its prompt, and whenever you come back to Health.`
           : `Run the command in a terminal. When you come back to Health, BMN reads the version and where ${name} sends data again.`}{props.hasTest ? ' A loading test made before the update needs to be run again.' : ''}</span>
       </div>
-      <p className="preferences-help">The updater decides what it downloads and replaces, and may ask questions; BMN does not see that in advance and cannot undo it. BMN does not know whether a newer version exists.</p>
+      <p className="preferences-help">The updater decides what it downloads and replaces, and may ask questions; BMN does not see that in advance and cannot undo it. BMN does not know whether a newer version exists.{props.onRun ? ' BMN knows the prompt by the sign the shell\'s line editor gives; a question that one of your shell\'s start-up files asks with line editing gives the same sign and would get the command as its answer.' : ''}</p>
       {props.result ? <p role="status">{props.result}</p> : null}
       {said ? <p role="status">{said}</p> : null}
       <div className="inline">

@@ -696,13 +696,15 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
 
     phase('60.13: Update now runs the command in a new session on that one press')
     rmSync(calls, { force: true })
-    // A stand-in updater that takes its time, and a program that reports a newer version only once it has ended.
+    // A stand-in updater that takes its time, and a program that reports a newer version only once it has ended. Like an
+    // updater that draws an input line of its own, it first writes the very sign a shell gives at its prompt, while it still runs.
     const updaterDone = join(root, 'codex-updated')
-    stub('codex', [`echo "$*" >> '${calls}'`, `if [ "$1" = "update" ]; then sleep 12; touch '${updaterDone}'; echo "updated"; exit 0; fi`,
+    stub('codex', [`echo "$*" >> '${calls}'`, `if [ "$1" = "update" ]; then printf '\\033[?2004h'; sleep 12; printf '\\033[?2004l'; touch '${updaterDone}'; echo "updated"; exit 0; fi`,
       `if [ -f '${updaterDone}' ]; then echo "codex-cli 0.174.0"; else echo "codex-cli 0.161.0"; fi`].join('\n'))
     const updateRuns = () => existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter((entry) => entry === 'update').length : 0
     await updateButton.click()
-    await update.getByText('Update now opens a new session and, once its shell is ready, runs the command there, where you see what the updater does and answer what it asks.', { exact: false }).waitFor()
+    await update.getByText('Update now opens a new session and, once its shell shows its prompt, types the command there and presses Enter; you see what the updater does and answer what it asks.', { exact: false }).waitFor()
+    await update.getByText("a question that one of your shell's start-up files asks with line editing gives the same sign and would get the command as its answer.", { exact: false }).waitFor()
     await shot('health-update-type-1280.png')
     // Opening the sheet starts nothing: only the press does.
     await sleep(500)
@@ -712,7 +714,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     // Preferences steps aside for the session the command runs in.
     await dialog.waitFor({ state: 'detached' })
     await page.locator('.session-row', { hasText: 'Update Codex' }).waitFor()
-    await page.getByTitle('Running the command in Update Codex.').waitFor()
+    await page.getByTitle('Typed the command in Update Codex and pressed Enter.').waitFor()
     await until(() => updateRuns() > 0, 'the stand-in program run with its update word after the press, with no key from the owner')
     await sleep(1500)
     assert.equal(updateRuns(), 1, 'the updater ran more than once')
@@ -728,7 +730,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     })
     assert.deepEqual([updateSession.executable, updateSession.argv], ['/bin/bash', []])
     // Back on Health while the updater still runs: what is read now is the old version. The window keeps the focus and
-    // nothing is pressed; when the command ends in its session, Health reads again by itself and says what changed.
+    // nothing is pressed; when the shell is back at its prompt, Health reads again by itself and says what changed. The
+    // updater's own sign, written when it started, was heard too and is not taken for the end of it all.
     await openPreferences()
     await main.locator('.page-title', { hasText: /^Health$/ }).waitFor()
     await app('Codex').locator('.app-note').getByText('The program still reports 0.161.0.', { exact: true }).waitFor()
@@ -783,6 +786,26 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await update.waitFor({ state: 'detached' })
     assert.equal(await dialog.isVisible(), true, 'Escape on the Update sheet closed Preferences')
     passed('Update now types nothing into a shell whose start-up file asks a question, says so and leaves the copy as the main action; closing the sheet during the wait takes the press back (60.13)')
+
+    phase('60.13: a start-up question asked with line editing gets the command, and BMN claims no more than it did')
+    // The limit the sheet names: such a question gives the sign of a prompt. BMN types the command into it, says that it
+    // typed it, no updater runs, and Health, reading again at the shell's own prompt, reports the version as it is.
+    writeFileSync(bashrc, `${plainBashrc}[ -t 0 ] && { read -e -p "startup asks: " answer; echo "answer:$answer" >> '${answers}'; }\n`)
+    rmSync(answers, { force: true })
+    rmSync(calls, { force: true })
+    await updateButton.click()
+    await update.getByRole('button', { name: 'Update now' }).click()
+    await dialog.waitFor({ state: 'detached' })
+    await page.getByTitle('Typed the command in Update Codex and pressed Enter.').waitFor()
+    await until(() => existsSync(answers), 'the start-up question to take its answer')
+    assert.equal(readFileSync(answers, 'utf8'), `answer:${program} update\n`, 'the start-up question was answered with something other than the command shown')
+    writeFileSync(bashrc, plainBashrc)
+    await sleep(1500)
+    assert.equal(updateRuns(), 0, 'the updater ran although a start-up question took the command')
+    await openPreferences()
+    await main.locator('.page-title', { hasText: /^Health$/ }).waitFor()
+    await app('Codex').locator('.app-note').getByText('The program still reports 0.161.0.', { exact: true }).waitFor()
+    passed('a start-up question asked with line editing gets the command, as the sheet says it would; BMN says only that it typed it, and Health reports the version unchanged (60.13)')
 
     phase('60.9: Health lists each app\'s default context limit; the owner\'s test proves the setting, then Change… shows the diff and writes only that line')
     const limitRow = (name) => main.locator('.limit-block', { has: page.locator('.health-row > span:first-child', { hasText: new RegExp(`^${name}$`) }) })

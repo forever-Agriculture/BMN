@@ -779,7 +779,11 @@ describe('Rules › Health: Update… (60.6: the app\'s own updater, shown befor
     const offered = sheet(1, { onRun: async (name, command) => { typed.push([name, command]); return 'typed' } })
     expect([...offered.matchAll(/<button type="button"( class="primary")?[^>]*>([^<]+)<\/button>/g)].map((match) => [match[2], match[1] !== undefined]))
       .toEqual([['Update now', true], ['Copy command', false], ['Check now', false], ['Close', false]])
-    expect(words(offered).replace(/\s+/g, ' ')).toContain('Afterwards Update now opens a new session and, once its shell is ready, runs the command there, where you see what the updater does and answer what it asks. Or run it in any terminal. BMN reads the version and where Codex sends data again when the command ends in that session, and whenever you come back to Health.')
+    expect(words(offered).replace(/\s+/g, ' ')).toContain('Afterwards Update now opens a new session and, once its shell shows its prompt, types the command there and presses Enter; you see what the updater does and answer what it asks. Or run it in any terminal. BMN reads the version and where Codex sends data again each time that session&#x27;s shell is back at its prompt, and whenever you come back to Health.')
+    // What BMN takes for the prompt, and the one case where that is not the prompt, are said before the press.
+    const limit = 'BMN knows the prompt by the sign the shell&#x27;s line editor gives; a question that one of your shell&#x27;s start-up files asks with line editing gives the same sign and would get the command as its answer.'
+    expect(words(offered).replace(/\s+/g, ' ')).toContain(`BMN does not know whether a newer version exists. ${limit}`)
+    expect(sheet(1)).not.toContain('line editor')
     // Rendering offers; nothing runs until the press.
     expect(typed).toEqual([])
     expect(offered).not.toContain('role="status"')
