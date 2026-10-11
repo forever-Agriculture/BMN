@@ -31,6 +31,8 @@ export interface RosterRole {
   then: 'lead' | 'skip' | 'blocked' | 'owner-chooses'
   recheck?: Record<string, boolean | string>
   small_work?: string
+  /** A run for this role must not be able to write (63.2); absent or false for a role that may. */
+  read_only?: boolean
 }
 export interface RosterProvider {
   id: string
@@ -129,6 +131,14 @@ export declare function teamEntry(data: RosterData, agent: RosterAgent): TeamEnt
 export declare function teamLine(entry: TeamEntry): string
 export declare function team(data: RosterData, all: boolean): TeamEntry[]
 export declare function roleChain(data: RosterData, roleId: string): Record<string, unknown>
+export declare function roleChainText(chain: Record<string, unknown>): string
+export declare const ROLE_FIELDS: string[]
+/** Whether BMN proposes to hold a role to read-only: every role whose name ends in `reviewer`, and the consultant. */
+export declare function readOnlyProposed(roleId: string): boolean
+/** The roles of a team that BMN proposes to hold to read-only and that are not held yet. */
+export declare function readOnlyProposal(data: Pick<RosterData, 'roles'> | null | undefined): string[]
+/** The efforts a role names for an agent; empty where it does not name the agent. */
+export declare function roleEfforts(role: RosterRole, agentId: string): string[]
 export declare function agentYaml(agent: RosterAgent): string
 export declare function rolesYaml(roles: RosterRole[]): string
 export declare function providersYaml(providers: RosterProvider[]): string

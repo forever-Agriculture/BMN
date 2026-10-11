@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { access, readdir } from 'node:fs/promises'
 import {
-  AGENT_FIELDS, FREE_TEXT_FIELDS, RosterError, SCHEMA_VERSION, TOOL_FIELDS, agentsDirectory, canonicalJson, parseRoster, rosterPath, sha256
+  AGENT_FIELDS, FREE_TEXT_FIELDS, ROLE_FIELDS, RosterError, SCHEMA_VERSION, TOOL_FIELDS, agentsDirectory, canonicalJson, parseRoster, rosterPath, sha256
 } from './agents-roster.mjs'
 
 /**
@@ -332,7 +332,7 @@ export const SKILLS_SOURCE_ID = '.source'
 /** The keyed lists machine data is made of: the scope a difference names, the key and the fields compared. */
 const DIFF_SCOPES = [
   { scope: 'agent', list: 'agents', key: 'id', fields: AGENT_FIELDS },
-  { scope: 'roles', list: 'roles', key: 'id', fields: ['description', 'candidates', 'then', 'recheck', 'small_work'] },
+  { scope: 'roles', list: 'roles', key: 'id', fields: ROLE_FIELDS },
   { scope: 'providers', list: 'providers', key: 'id', fields: ['name', 'hosts', 'sites', 'private_work'] },
   { scope: 'exceptions', list: 'exceptions', key: 'id', fields: ['provider', 'folder'] },
   { scope: 'harness-routes', list: 'harness_routes', key: 'harness', fields: ['provider', 'basis', 'accepted_versions'] },

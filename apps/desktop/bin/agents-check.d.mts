@@ -33,6 +33,11 @@ interface ReceiptBase {
   context_limit_applied: number | null
   /** Why the agent's own limit is not applied to this run; absent where it is applied or the agent has none. */
   context_limit_note?: string
+  /**
+   * What the check saw of a run for a read-only role (63.2): Codex's sandbox and approvals with the sources that
+   * named them, or Claude Code's tool list. Absent for a role that may write.
+   */
+  sandbox?: { mode: 'read-only'; source: string; approval_policy?: 'never'; approval_source?: string; tools?: string[]; form_tested_on?: string }
   /** The tools this run was given and a hash of their definitions; absent when it was given none. */
   /** The tools the run was kept to, with a hash of their definitions; or `checked: false` for a run whose tools BMN did not judge (Codex) while the team lists tools. */
   tools?: { applied: string[]; sha256: string; checked?: undefined } | { checked: false; applied?: undefined; sha256?: undefined }
@@ -117,7 +122,9 @@ export declare const BINDING_WINDOW_MS: number
 export declare function setReadTracer(tracer: ((path: string) => void) | null): void
 export declare function parseDispatch(argv: string[]): Record<string, unknown>
 export declare function readCodexConfig(text: string | null): { top: Record<string, string>; profiles: Record<string, Record<string, string>>; providers: Record<string, Record<string, unknown>>; unreadable: string[]
-  context: { top: Record<string, number>; profiles: Record<string, Record<string, number>>; unreadable: string | null } }
+  context: { top: Record<string, number>; profiles: Record<string, Record<string, number>>; unreadable: string | null }
+  /** What a run may do, as the file says it: `sandbox_mode` and `approval_policy`, at the top and per profile. */
+  access: { top: Record<string, string>; profiles: Record<string, Record<string, string>>; unreadable: string | null } }
 export declare function evaluate(inputs: CheckInputs, options?: CheckOptions): CheckResult
 export declare function evaluateResearch(inputs: ResearchInputs, options?: ResearchOptions): ResearchResult
 export declare function verifyReceipt(path: string, argv: string[], options?: CheckOptions): { ok: boolean; reason?: string }
@@ -146,3 +153,9 @@ export declare function limitStanding(agent: RosterAgent, version: string | null
 export declare function receiptHash(body: Record<string, unknown>): string
 export declare function runCheckCommand(action: string, argv: string[]): Promise<number>
 export declare function consequences(before: RosterData | null, after: RosterData): string[]
+/** The Claude Code tools that cannot change a file: the only ones a run for a read-only role may be given. */
+export declare const CLAUDE_READ_ONLY_TOOLS: string[]
+/** The write-attempt test that showed the Claude Code form, and the version it ran on. */
+export declare const CLAUDE_READ_ONLY_TESTED: { version: string; on: string }
+/** What a command for a read-only role must carry, per app. */
+export declare const READ_ONLY_ITEMS: { codex: string[]; claude: string[] }

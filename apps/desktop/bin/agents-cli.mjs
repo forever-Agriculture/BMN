@@ -298,9 +298,16 @@ async function withContext(data, chain) {
     tests ??= contextTests()
     return withTools(agent, { ...candidate, context: contextItems(agent, provenControls(agent.harness, await version(agent.harness, CONTEXT_CONTROLS[agent.harness].command), tests)) })
   }
+  // For a read-only role each candidate carries what its command must hold, by its app (63.2).
+  const READ_ONLY_ITEMS = chain.read_only === true ? (await import('./agents-check.mjs')).READ_ONLY_ITEMS : {}
+  const held = async (candidate) => {
+    const described = await describe(candidate)
+    const items = chain.read_only === true ? READ_ONLY_ITEMS[byId.get(candidate.agent)?.harness] : undefined
+    return items === undefined ? described : { ...described, read_only: { argv: items } }
+  }
   const candidates = []
-  for (const candidate of chain.candidates) candidates.push(await describe(candidate))
-  return { ...chain, candidates, ...(chain.small_work === undefined ? {} : { small_work: await describe(chain.small_work) }) }
+  for (const candidate of chain.candidates) candidates.push(await held(candidate))
+  return { ...chain, candidates, ...(chain.small_work === undefined ? {} : { small_work: await held(chain.small_work) }) }
 }
 
 async function rosterRole(argv) {

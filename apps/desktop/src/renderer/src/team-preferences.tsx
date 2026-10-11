@@ -56,11 +56,15 @@ import {
   setAgentClass,
   setAgentOn,
   setProviderAnswer,
+  setRoleReadOnly,
   setRoleThen,
   summarize,
   summaryWords,
   teamUpdateWords,
   thousands,
+  holdProposed,
+  listedRoles,
+  readOnlyProposal,
   toggleAgentEffort,
   toggleAgentRole,
   undoWords,
@@ -809,6 +813,7 @@ function Difference(props: { line: DiffLine; data: RosterDataShape | null }): Re
 function ChainEditor(props: { team: TeamState; data: RosterDataShape; role: RosterRoleShape }): React.JSX.Element {
   const { team, data, role } = props
   const thenId = useId()
+  const readOnlyId = useId()
   const inChain = new Set(role.candidates.map((text) => parseCandidate(text).agent))
   const addable = data.agents.filter((agent) => !inChain.has(agent.id) && agent.efforts.length > 0 && classBar(agent.class, role.id) === null)
   return (
@@ -851,6 +856,31 @@ function ChainEditor(props: { team: TeamState; data: RosterDataShape; role: Rost
       <div className="candidate">
         <span className="muted" id={thenId}>If all of them fail</span>
         <Segmented labelledBy={thenId} fit options={ROSTER_THEN} value={role.then} optionLabel={(then) => THEN_WORDS[then]} onChange={(then) => team.stage(setRoleThen(data, role.id, then))} />
+      </div>
+      <div className="candidate">
+        <span className="muted" id={readOnlyId}>Read-only</span>
+        <Switch labelledBy={readOnlyId} on={role.read_only === true} onChange={(on) => team.stage(setRoleReadOnly(data, role.id, on))} />
+        <span className="faint">{READ_ONLY_HELP}</span>
+      </div>
+    </div>
+  )
+}
+
+/** What holding a role to read-only means, wherever a page says it. */
+export const READ_ONLY_HELP = 'A run for this role is refused unless it is started so that it cannot write.'
+
+/** While no role is held to read-only: what BMN proposes, taken with one press and approved like any other change (63.2 AC4). */
+function ReadOnlyProposal(props: { team: TeamState; data: RosterDataShape }): React.JSX.Element | null {
+  const proposed = readOnlyProposal(props.data)
+  if (proposed.length === 0) return null
+  return (
+    <div className="role">
+      <div className="list-line">
+        <div>
+          <b>No role is held to read-only yet</b>
+          <div className="line-detail">BMN proposes {listedRoles(proposed)}: a run for one of them would be refused unless it is started so that it cannot write. The other roles keep write access.</div>
+        </div>
+        <button type="button" className="small" onClick={() => props.team.stage(holdProposed(props.data))}>Use proposal</button>
       </div>
     </div>
   )
@@ -898,11 +928,12 @@ function RolesPage(props: { team: TeamState; data: RosterDataShape }): React.JSX
         <button type="button" onClick={() => setAdding(true)}>New role</button>
       </PageHead>
       {adding ? <NewRole team={team} data={data} done={() => setAdding(false)} /> : null}
+      <ReadOnlyProposal team={team} data={data} />
       {data.roles.map((role) => (
         <div key={role.id} className="role">
           <div className="list-line">
             <div>
-              <b>{roleName(role.id)}</b>{role.description ? <span className="line-detail"> {role.description}</span> : null}
+              <b>{roleName(role.id)}</b>{role.read_only === true ? <span className="role-mark" title={READ_ONLY_HELP}>Read-only</span> : null}{role.description ? <span className="line-detail"> {role.description}</span> : null}
               <Chain role={role} data={data} />
             </div>
             <button type="button" className="small" aria-expanded={editing === role.id} aria-label={`${editing === role.id ? 'Done editing' : 'Edit'} ${roleName(role.id)}`}

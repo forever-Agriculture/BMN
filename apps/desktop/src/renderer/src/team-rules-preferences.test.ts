@@ -13,6 +13,7 @@ import {
   UpdateSheet,
   changeWords,
   agentLimitWords,
+  notHeldWords,
   contextStateWords,
   contextValueWords,
   destinationWords,
@@ -46,7 +47,8 @@ import { ModelList } from './model-field'
 import { researcherHint, researchedModels, type ResearchState } from './models-preferences'
 import { dayWords, fillFrom } from './research-view'
 import { modelSuggestions } from './model-suggestions'
-import { changeModel, groupDifferences, removeException, setSkillPublic, skillMark, toggleSkillApp } from './roster-staging'
+import { changeModel, consequenceWords, formatValue, groupDifferences, holdProposed, listedRoles, readOnlyProposal, readOnlyProposed, removeException, setRoleReadOnly, setSkillPublic, skillMark, toggleSkillApp } from './roster-staging'
+import { readOnlyProposed as cliProposed } from '../../../bin/agents-roster.mjs'
 import { EMPTY_DRAFT, draftFrom, type ToolDraft } from './tools-view'
 import { confirmsBeforeCommit, rowHidesDetail, rulesUpdateWords, type TeamState } from './team-state'
 
@@ -549,6 +551,7 @@ const RULES: RulesSnapshot = {
       test: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'asked for 137000; Claude Code reports a window of 137000' }, agents: ['Opus', 'Fable'], limits: [] }
   ],
   contextAuto: { enabled: true, running: null },
+  readOnlyRoles: { held: ['epic-reviewer'], proposed: [] },
   skills: {
     source: { path: '/home/synthetic/.claude/skills', readable: true }, markedMissing: [], pending: 1, exposed: 1,
     skills: [
@@ -1489,5 +1492,69 @@ describe('Team › Models (60.10, first release)', () => {
     expect(researchedModels({ ...RESEARCH, models: [] })).toBeUndefined()
     expect(researchedModels(RESEARCH)).toEqual({ models: RESEARCH.models, day: dayWords('2026-10-10T09:40:00.000Z') })
     expect(researchedModels({ ...RESEARCH, last: null })!.day).toBeNull()
+  })
+})
+
+describe('read-only roles on Team and Health (63.2 AC4)', () => {
+  /** The team of these tests with two reviewer roles and a consultant, none held yet. */
+  const REVIEWED: RosterDataShape = {
+    ...DATA,
+    roles: [
+      ...DATA.roles,
+      { id: 'epic-reviewer', candidates: ['sol@xhigh'], then: 'blocked' },
+      { id: 'focused-reviewer', candidates: ['luna@max'], then: 'lead' },
+      { id: 'consultant', candidates: ['sol@xhigh'], then: 'blocked' }
+    ]
+  }
+  const roles = (data: RosterDataShape): string => pageMarkup({ name: 'roles' }, team({ data, snapshot: { ...SNAPSHOT, file: { ...SNAPSHOT.file, data } } }))
+
+  it('proposes the reviewers and the consultant while no role is held, by the same rule as the command line', () => {
+    const ids = ['lead', 'designer', 'helper', 'browser', 'epic-reviewer', 'pre-reviewer', 'reviewer', 'consultant', 'consultants', 'reviewers']
+    expect(ids.map(readOnlyProposed)).toEqual(ids.map(cliProposed))
+    expect(ids.filter(readOnlyProposed)).toEqual(['epic-reviewer', 'pre-reviewer', 'reviewer', 'consultant'])
+    expect(readOnlyProposal(DATA)).toEqual([])
+    expect(readOnlyProposal(REVIEWED)).toEqual(['epic-reviewer', 'focused-reviewer', 'consultant'])
+    expect(listedRoles(['epic-reviewer', 'focused-reviewer', 'consultant'])).toBe('Epic reviewer, Focused reviewer and Consultant')
+    const page = words(roles(REVIEWED)).replace(/\s+/g, ' ')
+    expect(page).toContain('No role is held to read-only yet BMN proposes Epic reviewer, Focused reviewer and Consultant: a run for one of them would be refused unless it is started so that it cannot write. The other roles keep write access. Use proposal')
+    expect(roles(REVIEWED)).not.toContain('class="role-mark"')
+    // A team without such roles is offered nothing.
+    expect(roles(DATA)).not.toContain('Use proposal')
+  })
+
+  it('takes the proposal as a staged change, marks each held role, and leaves the choice to the owner from then on', () => {
+    const taken = holdProposed(REVIEWED)
+    expect(taken.roles.filter((role) => role.read_only === true).map((role) => role.id)).toEqual(['epic-reviewer', 'focused-reviewer', 'consultant'])
+    expect(taken.roles.find((role) => role.id === 'lead')).not.toHaveProperty('read_only')
+    const page = roles(taken)
+    expect(page.split('class="role-mark"')).toHaveLength(4)
+    expect(page).toContain('<b>Epic reviewer</b><span class="role-mark" title="A run for this role is refused unless it is started so that it cannot write.">Read-only</span>')
+    expect(page).not.toContain('Use proposal')
+    // One role let write again: no mark is left in the data, and BMN does not propose it back while another is held.
+    const freed = setRoleReadOnly(taken, 'consultant', false)
+    expect(freed.roles.find((role) => role.id === 'consultant')).toEqual({ id: 'consultant', candidates: ['sol@xhigh'], then: 'blocked' })
+    expect(readOnlyProposal(freed)).toEqual([])
+    expect(setRoleReadOnly(DATA, 'helper', true).roles.find((role) => role.id === 'helper')).toMatchObject({ read_only: true })
+  })
+
+  it('words the change and what it means for the review', () => {
+    const ids = new Set(['epic-reviewer', 'lead'])
+    expect(consequenceWords('epic-reviewer runs would be refused unless they are started so that they cannot write', ids)).toBe('Epic reviewer runs would be refused unless they are started so that they cannot write')
+    expect(consequenceWords('epic-reviewer runs could be started with write access again', ids)).toBe('Epic reviewer runs could be started with write access again')
+    expect([formatValue({ present: true, value: true }, 'read_only'), formatValue({ present: true, value: false }, 'read_only')]).toEqual(['yes', 'no'])
+    const diff: RosterDiffShape = { scope: 'roles', id: 'epic-reviewer', field: 'read_only', kind: 'changed', before: { present: false }, after: { present: true, value: true } }
+    const { groups } = groupDifferences([diff], holdProposed(REVIEWED), REVIEWED, ['epic-reviewer runs would be refused unless they are started so that they cannot write'])
+    expect(groups.map((group) => [group.key, group.lines.map((line) => `${line.field}: ${line.before} → ${line.after}`), group.consequences]))
+      .toEqual([['roles', ['Epic reviewer · read-only: — → yes'], ['Epic reviewer runs would be refused unless they are started so that they cannot write']]])
+  })
+
+  it('says on Health that no role is held yet, and nothing once one is or where BMN proposes none', () => {
+    expect(notHeldWords(null)).toBeNull()
+    expect(notHeldWords({ held: [], proposed: [] })).toBeNull()
+    expect(notHeldWords({ held: ['consultant'], proposed: ['epic-reviewer'] })).toBeNull()
+    const said = 'No role is held to read-only yet, so the check passes a reviewer started with write access. Team › Roles proposes Epic reviewer and Consultant.'
+    expect(notHeldWords({ held: [], proposed: ['epic-reviewer', 'consultant'] })).toBe(said)
+    expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, readOnlyRoles: { held: [], proposed: ['epic-reviewer', 'consultant'] } } })))).toContain(said)
+    expect(words(rulesMarkup('health'))).not.toContain('held to read-only')
   })
 })

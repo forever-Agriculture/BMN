@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
-import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, harnessPrivateWork, publicOnlyReasons, resolvedDirectory, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, harnessPrivateWork, publicOnlyReasons, resolvedDirectory, roleEfforts, sha256 } from './agents-roster.mjs'
 import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
@@ -24,7 +24,7 @@ export { publicOnlyReasons }
 
 /** Refusals, checked in this order; the first one found is reported (shared contract). */
 export const REFUSALS = ['UNKNOWN_AGENT', 'PROPOSED', 'DISABLED', 'ROLE_UNKNOWN', 'ROLE_INELIGIBLE', 'CLASS_CANNOT_LEAD', 'CLASS_CANNOT_DESIGN',
-  'ROUTE_UNSUPPORTED', 'MODEL_MISMATCH', 'EFFORT_UNSUPPORTED', 'CONTEXT_MISMATCH', 'TOOL_MISMATCH', 'HOST_UNKNOWN', 'HOST_MISMATCH',
+  'ROUTE_UNSUPPORTED', 'MODEL_MISMATCH', 'EFFORT_UNSUPPORTED', 'READ_ONLY_REQUIRED', 'CONTEXT_MISMATCH', 'TOOL_MISMATCH', 'HOST_UNKNOWN', 'HOST_MISMATCH',
   'WORKSPACE_UNKNOWN', 'WORKSPACE_MISMATCH', 'RESUME_UNBOUND', 'HARNESS_UNKNOWN', 'DATA_FORBIDDEN', 'PACKET_INVALID']
 
 /**
@@ -61,7 +61,8 @@ const NEXT_STEP = {
   CLASS_CANNOT_DESIGN: 'only a rook or a queen designs; pick one',
   ROUTE_UNSUPPORTED: 'use a dispatch form BMN checks (`codex exec … -` or `claude -p`), exactly as documented',
   MODEL_MISMATCH: 'pass the agent\'s own model or an approved alias',
-  EFFORT_UNSUPPORTED: 'pass an effort the agent lists',
+  EFFORT_UNSUPPORTED: 'pass an effort the agent lists and its role names (`bmn roster role <role>`)',
+  READ_ONLY_REQUIRED: 'start the run so that it cannot write, with the items `bmn roster role <role> --json` gives; only the owner changes which roles are read-only (Preferences > Team > Roles)',
   CONTEXT_MISMATCH: 'pass the context limit `bmn roster role --json` gives for this agent',
   TOOL_MISMATCH: 'pass exactly the tools `bmn roster role --json` gives for this agent',
   HOST_UNKNOWN: 'make the destination knowable (no unresolved base URL) or record the host in the roster',
@@ -171,6 +172,8 @@ const CLAUDE_FLAGS = { '-p': 'print', '--print': 'print', '--safe-mode': 'safeMo
 const CODEX_NEUTRAL_KEYS = ['approval_policy', 'mcp_servers', 'model_reasoning_summary', 'model_verbosity', 'hide_agent_reasoning',
   'show_raw_agent_reasoning', 'sandbox_mode']
 const CODEX_ROUTE_KEYS = ['model', 'model_provider', 'model_reasoning_effort', 'profile', 'openai_base_url', 'chatgpt_base_url']
+/** The settings that say how much a Codex run may do on the machine: its sandbox, and whether it may ask for more (63.2). */
+const CODEX_ACCESS_KEYS = ['sandbox_mode', 'approval_policy']
 
 function harnessOf(command) {
   const name = basename(command)
@@ -338,7 +341,7 @@ function tomlKeyPath(raw) {
  * unknown rather than guessed. Everything else in the file is skipped unread.
  */
 export function readCodexConfig(text) {
-  const out = { top: {}, profiles: {}, providers: {}, unreadable: [], context: { top: {}, profiles: {}, unreadable: null } }
+  const out = { top: {}, profiles: {}, providers: {}, unreadable: [], context: { top: {}, profiles: {}, unreadable: null }, access: { top: {}, profiles: {}, unreadable: null } }
   if (text === null) return out
   let table = []
   let skipUntil = null
@@ -387,7 +390,21 @@ export function readCodexConfig(text) {
       if (number === null) out.context.unreadable ??= `config.toml ${path.join('.')} is not a whole number`
       else target[key] = number
     }
-    if (path.length === 1 && CODEX_CONTEXT_KEYS.includes(path[0])) size(out.context.top, path[0])
+    // What a run may do is a word; one BMN cannot read, such as a table of its own, leaves it unresolved for a read-only role and nothing else.
+    const access = (target, key) => {
+      const word = value === null ? undefined : unquoteToml(value)
+      if (word === undefined) out.access.unreadable ??= `config.toml ${path.join('.')} has a value BMN cannot read`
+      else target[key] = word
+    }
+    if (path.length === 1 && CODEX_ACCESS_KEYS.includes(path[0])) access(out.access.top, path[0])
+    else if (path.length === 2 && CODEX_ACCESS_KEYS.includes(path[0])) out.access.unreadable ??= `config.toml ${path[0]} is a table BMN cannot read`
+    else if (path[0] === 'profiles' && path.length === 3 && CODEX_ACCESS_KEYS.includes(path[2])) {
+      out.profiles[path[1]] ??= {}
+      out.access.profiles[path[1]] ??= {}
+      access(out.access.profiles[path[1]], path[2])
+    } else if (path[0] === 'profiles' && path.length === 4 && CODEX_ACCESS_KEYS.includes(path[2])) {
+      out.access.unreadable ??= `config.toml profiles.${path[1]}.${path[2]} is a table BMN cannot read`
+    } else if (path.length === 1 && CODEX_CONTEXT_KEYS.includes(path[0])) size(out.context.top, path[0])
     else if (path[0] === 'profiles' && path.length === 3 && CODEX_CONTEXT_KEYS.includes(path[2])) {
       // The profile exists, whatever else it holds.
       out.profiles[path[1]] ??= {}
@@ -468,7 +485,7 @@ function otherCodexConfig(folders, userConfig) {
     }
   }
   const paths = ['/etc/codex/config.toml', '/etc/codex/managed_config.toml', ...folders.flatMap(foldersAbove).map((dir) => join(dir, '.codex/config.toml'))]
-  const found = { destination: null, context: null }
+  const found = { destination: null, context: null, access: null }
   for (const path of new Set(paths)) {
     const text = optionalText(path)
     if (text === null || same(path)) continue
@@ -478,6 +495,8 @@ function otherCodexConfig(folders, userConfig) {
     if (decides) found.destination ??= path
     const sizes = config.context.unreadable !== null || Object.keys(config.context.top).length > 0 || Object.values(config.context.profiles).some((profile) => Object.keys(profile).length > 0)
     if (sizes) found.context ??= path
+    const does = config.access.unreadable !== null || Object.keys(config.access.top).length > 0 || Object.values(config.access.profiles).some((profile) => Object.keys(profile).length > 0)
+    if (does) found.access ??= path
   }
   return found
 }
@@ -506,6 +525,8 @@ export function resolveCodexRoute(parsed, environment, cwd = null) {
   }
   const sizeOverrides = {}
   let sizeUnreadable = null
+  const accessOverrides = {}
+  const accessUnreadable = {}
   for (const entry of parsed.config) {
     const equals = entry.indexOf('=')
     if (equals === -1) return { unsupported: `-c ${entry} is not key=value` }
@@ -524,6 +545,13 @@ export function resolveCodexRoute(parsed, environment, cwd = null) {
       const number = wholeNumber(raw)
       if (number === null) sizeUnreadable ??= `-c ${keys[0]} is not a whole number`
       else sizeOverrides[keys[0]] = number
+    } else if (keys.length === 1 && CODEX_ACCESS_KEYS.includes(keys[0])) {
+      // Neutral for where the run goes; read for what it may do, which only a read-only role asks about (63.2).
+      if (value === undefined) accessUnreadable[keys[0]] = `-c ${keys[0]} has a value BMN cannot read`
+      else {
+        delete accessUnreadable[keys[0]]
+        accessOverrides[keys[0]] = value
+      }
     } else if (keys.length === 1 && CODEX_NEUTRAL_KEYS.includes(keys[0])) {
       continue
     } else if (keys[0] === 'mcp_servers') {
@@ -591,7 +619,27 @@ export function resolveCodexRoute(parsed, environment, cwd = null) {
     return null
   }
   const context = { limit: size(CODEX_CONTEXT_KEYS[0]), compact: size(CODEX_CONTEXT_KEYS[1]) }
-  return { route: { ...route, sources: [...new Set(sources)] }, model, effort, configHome: codexHome, context, profile: profileName ?? null }
+  // What the run may do: the command's own flag or item wins over every file; without one the selected profile and
+  // config.toml decide, unless another file BMN does not rank names it too. Null where nothing names it.
+  const may = (key) => {
+    if (key === 'sandbox_mode' && parsed.sandbox !== undefined) {
+      if (accessUnreadable[key] !== undefined || (accessOverrides[key] !== undefined && accessOverrides[key] !== parsed.sandbox)) {
+        return { unresolved: `--sandbox ${parsed.sandbox} and a -c sandbox_mode item name the sandbox twice` }
+      }
+      return { value: parsed.sandbox, source: '--sandbox' }
+    }
+    if (accessUnreadable[key] !== undefined) return { unresolved: accessUnreadable[key] }
+    if (accessOverrides[key] !== undefined) return { value: accessOverrides[key], source: `-c ${key}` }
+    if (config.access.unreadable !== null) return { unresolved: config.access.unreadable }
+    if (others.access !== null) return { unresolved: `${others.access} also says what a run may do, and BMN cannot tell which file wins` }
+    if (profileName !== undefined && !Object.hasOwn(config.profiles, profileName)) return { unresolved: `profile ${profileName} is not in config.toml` }
+    const inProfile = profileName === undefined ? undefined : config.access.profiles[profileName]?.[key]
+    if (inProfile !== undefined) return { value: inProfile, source: `config.toml profiles.${profileName}.${key}` }
+    if (config.access.top[key] !== undefined) return { value: config.access.top[key], source: `config.toml ${key}` }
+    return null
+  }
+  const access = { sandbox: may(CODEX_ACCESS_KEYS[0]), approvals: may(CODEX_ACCESS_KEYS[1]) }
+  return { route: { ...route, sources: [...new Set(sources)] }, model, effort, configHome: codexHome, context, access, profile: profileName ?? null }
 }
 
 const CLAUDE_PROVIDER_SWITCHES = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']
@@ -1302,6 +1350,10 @@ export function consequences(before, after) {
       out.push(first === null ? `${role.id} would have no agent to start with (then ${role.then})` : `${role.id} would start with ${name(first)}${was === null ? '' : ` instead of ${name(was)}`}`)
     }
     if (previous !== undefined && previous.then !== role.then) out.push(`when every ${role.id} candidate fails: ${role.then} instead of ${previous.then}`)
+    // What the check asks of a run for the role (63.2): a role new to read-only refuses more, one freed of it refuses less.
+    const heldBefore = previous?.read_only === true
+    if (role.read_only === true && !heldBefore) out.push(`${role.id} runs would be refused unless they are started so that they cannot write`)
+    if (role.read_only !== true && heldBefore) out.push(`${role.id} runs could be started with write access again`)
   }
   for (const role of prior.roles) if (!after.roles.some((entry) => entry.id === role.id)) out.push(`the ${role.id} role would be removed`)
   const providerName = (id) => after.providers.find((provider) => provider.id === id)?.name ?? oldProviders.get(id)?.name ?? id
@@ -1408,6 +1460,65 @@ function checkModelAndEffort(agent, resolution, note) {
   if (!agent.efforts.includes(effort.value)) refuse('EFFORT_UNSUPPORTED', `${effort.source} ${effort.value} is not among ${agent.id}'s efforts (${agent.efforts.join(', ')})`)
   note(`effort ${effort.value} (${effort.source})`)
   return { model, effort }
+}
+
+/** A role that names efforts for the agent allows no other, also where the agent itself lists it (63.2 AC1). */
+function checkRoleEffort(role, agent, effort, note) {
+  const named = roleEfforts(role, agent.id)
+  if (named.length === 0) return
+  if (!named.includes(effort.value)) {
+    refuse('EFFORT_UNSUPPORTED', `${effort.source} ${effort.value} is not an effort the role ${role.id} names for ${agent.id} (${named.join(', ')})`, `role ${role.id} allows ${named.join(', ')}`)
+  }
+  note(`role ${role.id} names ${named.join(', ')} for ${agent.id}`)
+}
+
+/** The Claude Code tools that cannot change a file: the only ones a run for a read-only role may be given (63.2 AC3). */
+export const CLAUDE_READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob']
+/**
+ * The owner-authorized write-attempt test behind the Claude Code form (2026-10-11, Haiku, empty
+ * throwaway folders; `scripts/test/claude-write-attempt.sh`, results in docs/agent-control.md). With a
+ * tool list of Read, Grep and Glob and no MCP server the run is offered exactly those three tools,
+ * with or without --safe-mode. The tool list alone is not enough: the owner's MCP tools stay offered.
+ * `--permission-mode plan` is not accepted: the app refused the Write tool, but no shell command was
+ * attempted under it, and with the owner's settings his MCP tools stay offered there too.
+ */
+export const CLAUDE_READ_ONLY_TESTED = { version: '2.1.296', on: '2026-10-11' }
+/** What a command for a read-only role must carry, per app, as `bmn roster role --json` hands it out. */
+export const READ_ONLY_ITEMS = {
+  codex: ['--sandbox', 'read-only', '-c', 'approval_policy="never"'],
+  claude: ['--tools', CLAUDE_READ_ONLY_TOOLS.join(','), '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}']
+}
+
+/**
+ * A run for a role the approved team marks read-only must not be able to write (63.2 AC2, AC3).
+ * Codex: the sandbox resolves to read-only and approvals to never, from the command, the selected
+ * profile or the owner's own file. Claude Code: the one form the write-attempt test showed. Returns
+ * what the receipt records, or refuses with READ_ONLY_REQUIRED and says what the command must carry.
+ */
+function checkReadOnly(role, parsed, resolution, version, note) {
+  const stop = (why, must) => refuse('READ_ONLY_REQUIRED', `${role.id} is a read-only role and ${why}; the command must carry ${must}`)
+  if (parsed.harness === 'codex') {
+    const must = '--sandbox read-only and -c approval_policy="never"'
+    const { sandbox, approvals } = resolution.access
+    if (sandbox === null) stop('the command names no sandbox', must)
+    if (sandbox.unresolved) stop(`its sandbox cannot be resolved: ${sandbox.unresolved}`, must)
+    if (sandbox.value !== 'read-only') stop(`${sandbox.source} gives the run the ${sandbox.value} sandbox`, must)
+    if (approvals === null) stop('nothing says the run may never ask for more access', must)
+    if (approvals.unresolved) stop(`whether it may ask for more access cannot be resolved: ${approvals.unresolved}`, must)
+    if (approvals.value !== 'never') stop(`${approvals.source} lets the run ask for more access (${approvals.value})`, must)
+    note(`read-only role: sandbox read-only (${sandbox.source}), approvals never (${approvals.source})`)
+    return { mode: 'read-only', source: sandbox.source, approval_policy: 'never', approval_source: approvals.source }
+  }
+  const must = `--tools naming only ${CLAUDE_READ_ONLY_TOOLS.join(', ')} (or '' for none), --strict-mcp-config and no MCP server`
+  if (parsed.tools === undefined) stop('the command names no tool list, so the run gets the tools that write', must)
+  const names = parsed.tools.split(/[,\s]+/).filter((name) => name !== '')
+  const writing = names.filter((name) => !CLAUDE_READ_ONLY_TOOLS.includes(name))
+  if (writing.length > 0) stop(`--tools gives the run ${writing.join(', ')}`, must)
+  if (!parsed.strictMcp) stop('without --strict-mcp-config the run is offered your MCP tools, which BMN cannot hold to reading', must)
+  if (parsed.mcpConfig !== undefined && !emptyMcpConfig(parsed.mcpConfig)) stop('--mcp-config gives the run an MCP server, which BMN cannot hold to reading', must)
+  if (parsed.permissionMode === 'bypassPermissions') stop('--permission-mode bypassPermissions switches every permission check off', must)
+  note(`read-only role: tools ${names.join(', ') || 'none'}, no MCP server (the form shown on Claude Code ${CLAUDE_READ_ONLY_TESTED.version}${version === CLAUDE_READ_ONLY_TESTED.version ? '' : `; this is ${version ?? 'a version BMN cannot read'}`})`)
+  return { mode: 'read-only', source: '--tools', tools: names, form_tested_on: CLAUDE_READ_ONLY_TESTED.version }
 }
 
 /** The destination the command reaches, matched against the agent's approved host (60.3 AC4). */
@@ -1518,6 +1629,9 @@ export function evaluate(inputs, {
     if (tools.refusal?.code === 'ROUTE_UNSUPPORTED') refuse('ROUTE_UNSUPPORTED', tools.refusal.message)
 
     const { model, effort } = checkModelAndEffort(agent, resolution, note)
+    checkRoleEffort(role, agent, effort, note)
+    // A role that may write is judged as before and its receipt carries nothing more (63.2 AC5).
+    const readOnly = role.read_only === true ? checkReadOnly(role, parsed, resolution, version, note) : null
     // Required only where the owner's test proved the setting on this version (60.9 AC1, AC2).
     // The test log is read only for an agent that has a limit.
     const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog),
@@ -1652,6 +1766,8 @@ export function evaluate(inputs, {
       role: role.id, effort: effort.value, context_limit_applied: context.applied,
       // A limit of the agent's own that this run does not get, with the reason: whether BMN will test the version by itself or its own testing is switched off (63.1).
       ...(agent.context_limit !== undefined && context.applied === null ? { context_limit_note: context.note } : {}),
+      // What the check saw of a read-only role's run: its sandbox and approvals (Codex) or its tool list (Claude Code).
+      ...(readOnly === null ? {} : { sandbox: readOnly }),
       // The tools this run was given and a hash of their definitions: variable names, never a value.
       // Bound whenever the run was kept to a set, an empty one too; a run of a team without tools carries no such entry.
       // A run whose tools BMN could not judge (Codex) says so, so no receipt reads as kept to a set that was not checked.

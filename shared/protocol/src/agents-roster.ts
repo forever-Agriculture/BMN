@@ -47,6 +47,8 @@ export interface RosterRoleShape {
   then: RosterThen
   recheck?: Record<string, boolean | string>
   small_work?: string
+  /** A run for this role must not be able to write (63.2); absent or false for a role that may. */
+  read_only?: boolean
 }
 
 export interface RosterProviderShape { id: string; name: string; hosts: string[]; sites?: string[]; private_work: RosterPrivateWork }
@@ -486,6 +488,11 @@ export interface RulesSnapshot {
   context: ContextLimitView[]
   /** Whether BMN tests a new app version's context setting by itself, and the app it is testing right now (63.1). */
   contextAuto: { enabled: boolean; running: ContextLimitApp | null }
+  /**
+   * The roles the approved team holds to read-only, and the ones BMN proposes that it does not hold yet (63.2):
+   * while it holds none, the check lets a reviewer be started with write access. Null where no team is approved.
+   */
+  readOnlyRoles: { held: string[]; proposed: string[] } | null
   /** The skills folder, each skill's state in each app, and where each app reads skills. */
   skills: SkillsView
   /** Each approved tool's state in each app, and where each app keeps its tools. */

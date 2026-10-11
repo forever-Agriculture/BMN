@@ -66,7 +66,34 @@ const OPTIONAL_AGENT_FIELDS = ['aliases', 'enabled_note', 'context_window', 'con
 export const AGENT_FIELDS = [...REQUIRED_AGENT_FIELDS, ...OPTIONAL_AGENT_FIELDS]
 const PRICE_FIELDS = ['input', 'cached_input', 'output', 'source', 'as_of']
 const PROVIDER_FIELDS = ['name', 'hosts', 'sites', 'private_work']
-const ROLE_FIELDS = ['description', 'candidates', 'then', 'recheck', 'small_work']
+export const ROLE_FIELDS = ['description', 'candidates', 'then', 'recheck', 'small_work', 'read_only']
+
+/**
+ * Whether BMN proposes to hold a role to read-only (63.2): every role whose name ends in `reviewer`,
+ * and the consultant. A proposal only: a role is held once the approved team marks it `read_only`.
+ */
+export function readOnlyProposed(roleId) {
+  return /reviewer$/.test(roleId) || roleId === 'consultant'
+}
+
+/** The roles of a team that BMN proposes to hold to read-only and that are not held yet. */
+export function readOnlyProposal(data) {
+  return (data?.roles ?? []).filter((role) => role.read_only !== true && readOnlyProposed(role.id)).map((role) => role.id)
+}
+
+/** The efforts a role names for an agent: its candidate entry, its effort for a recheck and the one for small work. Empty where the role does not name the agent. */
+export function roleEfforts(role, agentId) {
+  const efforts = []
+  const add = (effort) => { if (typeof effort === 'string' && !efforts.includes(effort)) efforts.push(effort) }
+  for (const text of role.candidates ?? []) {
+    const candidate = parseCandidate(text)
+    if (candidate?.agent === agentId) candidate.efforts.forEach(add)
+  }
+  if (role.recheck !== undefined && Object.hasOwn(role.recheck, agentId) && agentId !== 'same_reviewer') add(role.recheck[agentId])
+  const small = role.small_work === undefined ? null : parseCandidate(role.small_work)
+  if (small?.agent === agentId) small.efforts.forEach(add)
+  return efforts
+}
 const ROUTE_FIELDS = ['provider', 'basis', 'accepted_versions']
 /** What schema 1 called things, for the refusal that tells its owner what changed. */
 const SCHEMA_1_CHANGES = 'schema 1 is the earlier layout: title became class (knight | queen | rook | bishop | pawn); trust, authority, security, cost, quota, tags and ## data-labels are gone; small_epic became small_work and max_context_tokens became context_limit; privacy is now ## providers with private_work: allowed | public_only'
@@ -772,6 +799,7 @@ function validateRoles(entry, agentById, agentIds, add, warnings) {
       if (role.small_work === null || typeof role.small_work !== 'string') fail('INVALID_VALUE', { key: 'small_work', text: 'small_work must be agent@effort' })
       else checkCandidate(role.small_work, 'small_work', true)
     }
+    if (Object.hasOwn(role, 'read_only') && typeof role.read_only !== 'boolean') fail('INVALID_VALUE', { key: 'read_only', text: 'read_only must be true or false' })
     if (ok) {
       const out = { id }
       for (const key of ROLE_FIELDS) if (Object.hasOwn(role, key)) out[key] = role[key]
@@ -941,6 +969,8 @@ export function roleChain(data, roleId) {
     chain.recheck = { same_reviewer: sameReviewer, efforts }
   }
   if (role.small_work !== undefined) chain.small_work = describe(role.small_work)
+  // A role the check holds to read-only (63.2): a run for it must not be able to write.
+  if (role.read_only === true) chain.read_only = true
   return chain
 }
 
@@ -960,6 +990,11 @@ export function roleChainText(chain) {
     lines.push(`  recheck: ${chain.recheck.same_reviewer ? 'same reviewer' : 'any candidate'}${overrides.length ? `, ${overrides.join(', ')}` : ''}`)
   }
   if (chain.small_work) lines.push(`  small work: ${chain.small_work.agent}@${chain.small_work.efforts[0]}  ${about(chain.small_work)}`)
+  if (chain.read_only === true) {
+    lines.push('  read-only: a run for this role is refused unless it is started so that it cannot write')
+    const forms = new Map(chain.candidates.filter((candidate) => candidate.read_only !== undefined).map((candidate) => [candidate.read_only.argv.join(' '), candidate.read_only.argv]))
+    for (const argv of forms.values()) lines.push(`    ${argv[0] === '--sandbox' ? 'codex exec' : 'claude -p'} must carry: ${argv.map((item) => (/^[A-Za-z0-9_=,.:/-]+$/.test(item) ? item : `'${item}'`)).join(' ')}`)
+  }
   return lines.join('\n')
 }
 

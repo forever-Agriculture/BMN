@@ -750,11 +750,20 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     // Check now starts a read that is still asking the program its version when the updater ends, and that answers the
     // old version a moment later. It began before the end, so it is the older reading however late it answers: Health
     // reads once more and shows what the program reports now (63.4).
+    // First no read is under way any more: the page has stopped asking the program its version.
+    const versionReads = () => (existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter((entry) => entry === '--version').length : 0)
+    await until(async () => {
+      const seen = versionReads()
+      await sleep(1500)
+      return versionReads() === seen
+    }, 'Health to stop reading the machine')
     writeFileSync(readHold, '')
-    await main.getByRole('button', { name: 'Check now' }).click()
+    // While BMN waits for the program it answers nothing, this script's own press included, so the press is awaited only afterwards.
+    const pressed = main.getByRole('button', { name: 'Check now' }).click()
     await until(() => existsSync(readHeld), 'a read of Health held open while the updater still runs')
     writeFileSync(updaterRelease, '')
     await until(() => existsSync(updaterDone), 'the stand-in updater to end while that read is still open')
+    await pressed
     await app('Codex').locator('.app-note').getByText('The program now reports 0.174.0; before it reported 0.161.0.', { exact: true }).waitFor({ timeout: 30_000 })
     assert.equal(updateRuns(), 1, 'the updater ran more than once')
     await shot('health-update-ended-1280.png')
@@ -1070,6 +1079,56 @@ done`)
     await notice(/^Put back the rules in Claude Code and Codex/)
     assert.doesNotMatch(readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8'), /Haiku|added outside BMN/)
     passed('Approve first lists each rules file with its path and diff, commits from there, updates exactly those files; Undo shows what it puts back and waits for the owner')
+
+    phase('63.2: Team › Roles proposes the read-only roles; approved, each shows its mark and the check holds a reviewer to it')
+    // The check as a lead runs it for Astra as epic reviewer, with what the command says of the sandbox.
+    const reviewCheck = (...access) => {
+      const run = spawnSync(process.execPath, [join(appDirectory, 'bin/bmn'), 'roster', 'check', '--agent', 'astra', '--role', 'epic-reviewer', '--workspace', solWork, '--data', 'private', '--cwd', solWork, '--json', '--',
+        'codex', 'exec', '--skip-git-repo-check', '-C', solWork, '-m', 'gpt-6-astra', '-c', 'model_reasoning_effort=medium', ...access, '-'], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }, encoding: 'utf8' })
+      const answer = JSON.parse(run.stdout)
+      return answer.verdict === 'PASS' ? { verdict: 'PASS', seen: answer.sandbox ?? 'nothing' } : { verdict: answer.code, message: answer.message }
+    }
+    const READ_ONLY_ACCESS = ['--sandbox', 'read-only', '-c', 'approval_policy="never"']
+    const PROPOSED = ['Focused reviewer', 'Pre reviewer', 'Epic reviewer', 'Project pre reviewer', 'Final reviewer', 'Consultant']
+    // A team from before the mark: nothing is held, Health says so, and a reviewer started with write access passes as it did.
+    await go('Rules', 'Health')
+    await main.locator('.page-note').getByText('No role is held to read-only yet, so the check passes a reviewer started with write access. Team › Roles proposes Focused reviewer, Pre reviewer, Epic reviewer, Project pre reviewer, Final reviewer and Consultant.', { exact: true }).waitFor()
+    assert.deepEqual(reviewCheck('--sandbox', 'workspace-write'), { verdict: 'PASS', seen: 'nothing' })
+    await go('Team', 'Roles')
+    await main.getByText('No role is held to read-only yet', { exact: true }).waitFor()
+    assert.equal(await main.locator('.role-mark').count(), 0)
+    await shot('roles-read-only-proposal-1280.png')
+    const beforeHeld = { roster: rosterHash(), state: stateHash() }
+    await main.getByRole('button', { name: 'Use proposal' }).click()
+    // Staged, not approved: each proposed role carries the mark on the page, and nothing is written or held yet.
+    assert.deepEqual(await main.locator('.role', { has: page.locator('.role-mark') }).locator('.list-line b').allTextContents(), PROPOSED)
+    assert.equal(await main.getByRole('button', { name: 'Use proposal' }).count(), 0)
+    await ledger.getByRole('button', { name: 'Review' }).click()
+    await ledger.locator('.ledger-sheet').getByText('Epic reviewer runs would be refused unless they are started so that they cannot write').waitFor()
+    await ledger.locator('.ledger-sheet').getByText('Lead runs', { exact: false }).waitFor({ state: 'detached' })
+    await shot('roles-read-only-review-1280.png')
+    assert.deepEqual({ roster: rosterHash(), state: stateHash() }, beforeHeld, 'the proposal was written before the owner approved it')
+    assert.equal(reviewCheck('--sandbox', 'workspace-write').verdict, 'PASS', 'a staged mark was held before its approval')
+    await approve()
+    await notice(/^Approved · version \d+/)
+    assert.deepEqual(approved().roles.filter((entry) => entry.read_only === true).map((entry) => entry.id), ['focused-reviewer', 'pre-reviewer', 'epic-reviewer', 'project-pre-reviewer', 'final-reviewer', 'consultant'])
+    assert.equal(approved().roles.some((entry) => entry.read_only !== undefined && entry.read_only !== true), false)
+    assert.equal(await main.locator('.role-mark').count(), 6)
+    // The mark can be taken off one role again, by the same staged change.
+    await main.getByRole('button', { name: 'Edit Consultant' }).click()
+    assert.equal(await main.getByRole('switch', { name: 'Read-only' }).getAttribute('aria-checked'), 'true')
+    await shot('roles-read-only-1280.png')
+    await main.getByRole('button', { name: 'Done editing Consultant' }).click()
+    // Approved, the check holds the reviewer to it: write access and a missing sandbox are refused, the read-only form passes and its receipt says what was seen.
+    assert.equal(reviewCheck('--sandbox', 'workspace-write', '-c', 'approval_policy="never"').verdict, 'READ_ONLY_REQUIRED')
+    assert.match(reviewCheck().message, /^epic-reviewer is a read-only role and the command names no sandbox; the command must carry --sandbox read-only and -c approval_policy="never"$/)
+    assert.deepEqual(reviewCheck(...READ_ONLY_ACCESS), { verdict: 'PASS', seen: { mode: 'read-only', source: '--sandbox', approval_policy: 'never', approval_source: '-c approval_policy' } })
+    assert.equal(solCheck().verdict === 'READ_ONLY_REQUIRED', false, 'a lead, which may write, was held to read-only')
+    await go('Rules', 'Health')
+    await main.getByRole('button', { name: 'Check now' }).click()
+    await main.locator('.page-note').getByText('No role is held to read-only yet', { exact: false }).waitFor({ state: 'detached' })
+    await go('Team')
+    passed('Team › Roles proposes the reviewers and the consultant; taken and approved, each shows Read-only, Health stops saying none is held, and the check refuses a reviewer write access (63.2)')
 
     phase('60.11: Skills lists each skill with its apps and state; the owner\'s test finds where Codex reads skills; Install… links them after showing the list, and Undo puts the folder back')
     const skillsDir = join(home, '.claude/skills')

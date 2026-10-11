@@ -1111,3 +1111,32 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     expect(researchEndedWords({ state: 'failed', models: 0, note: 'BMN did not start the run: sonnet is proposed, not approved as active' })).toBe('Research failed: BMN did not start the run: sonnet is proposed, not approved as active')
   })
 })
+
+describe('read-only roles through Team and Health (63.2 AC4)', () => {
+  it('holds none in a team from before the mark, says so on Health, and holds them once the owner approves the proposal', async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    await call<AgentsOutcome>('agents:approve', { shown: await shown() })
+    const proposed = ['focused-reviewer', 'pre-reviewer', 'epic-reviewer', 'project-pre-reviewer', 'final-reviewer', 'consultant']
+    expect((await call<RulesSnapshot>('rules:snapshot')).readOnlyRoles).toEqual({ held: [], proposed })
+    // The proposal as Team stages it: the mark on each proposed role, previewed with what it would change, then approved.
+    const state = await snapshot()
+    const data = state.file.data as RosterDataShape
+    const staged: RosterDataShape = { ...data, roles: data.roles.map((role) => (proposed.includes(role.id) ? { ...role, read_only: true } : role)) }
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: staged } })
+    expect(preview.valid).toBe(true)
+    expect(preview.differences.map((diff) => `${diff.scope}:${diff.id}:${diff.field}`)).toEqual(proposed.map((id) => `roles:${id}:read_only`))
+    expect(preview.consequences).toEqual(proposed.map((id) => `${id} runs would be refused unless they are started so that they cannot write`))
+    expect((await call<RulesSnapshot>('rules:snapshot')).readOnlyRoles?.held).toEqual([])
+    expect(await call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: staged, teamUpdate: bindings(preview) })).toMatchObject({ ok: true })
+    expect(readFileSync(rosterFile(), 'utf8')).toContain('consultant: {candidates: [astra@medium|high, fable@medium|high], then: blocked, read_only: true}')
+    expect((await call<RulesSnapshot>('rules:snapshot')).readOnlyRoles).toEqual({ held: proposed, proposed: [] })
+    // One role freed again: the file loses the mark, and the consequence says what the check then lets through.
+    const held = (await snapshot()).file.data as RosterDataShape
+    const freed: RosterDataShape = { ...held, roles: held.roles.map(({ read_only: was, ...role }) => (role.id === 'consultant' || was !== true ? role : { ...role, read_only: true })) }
+    expect((await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: freed } })).consequences).toEqual(['consultant runs could be started with write access again'])
+  })
+
+  it('reports no roles where no team is approved', async () => {
+    expect((await call<RulesSnapshot>('rules:snapshot')).readOnlyRoles).toBeNull()
+  })
+})

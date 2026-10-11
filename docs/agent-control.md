@@ -734,7 +734,8 @@ and BMN's own data, so updates and uninstall never touch them:
   roles; optionally `context_window`, `context_limit`, `compact_at`, `paid_by`, `price`, `aliases`
   and `enabled_note`) followed by free prose, your notes on that agent. `## roles` gives each role
   an optional description, its ordered candidates as `agent@effort` (`agent@low|high` for an effort
-  the lead chooses) and what happens when every candidate fails. `## exceptions` lists a
+  the lead chooses), what happens when every candidate fails, and `read_only: true` where a run
+  for the role must not be able to write. `## exceptions` lists a
   public-only provider you allowed in one named folder, and `## harness-routes` records where each
   agent app sends data and whether BMN observed that or you declared it.
 - `global-rules.md`, the rules master BMN renders into each agent app's own rules file.
@@ -822,6 +823,50 @@ evaluation in words; `--verify <receipt>` recomputes it as of now and exits 11 o
 including a public record that went stale since and approved state or a team file that has gone
 missing or corrupt. `bmn roster bind` ties a started session to its receipt so a later resume can
 be checked.
+
+**The check holds a run to its role.** Two things, both of which only refuse more than before:
+
+- *Efforts.* Where a role names an agent (`astra@medium`, `opus-2@medium|high|xhigh`), a command
+  for that agent under that role may use only those efforts, plus the role's `recheck` effort for
+  the agent and its `small_work` effort. Any other is refused with `EFFORT_UNSUPPORTED`, also where
+  the agent itself lists it; the message names the role and the efforts it allows. An agent that
+  holds a role without being one of its candidates is judged by its own efforts, as before.
+- *Read-only roles.* A role the approved team marks `read_only: true` passes only a run that
+  cannot write; anything else is refused with `READ_ONLY_REQUIRED`, and the message says what the
+  command must carry. For Codex the sandbox must resolve to `read-only` and approvals to `never`:
+  from `--sandbox`, a `-c sandbox_mode=…` or `-c approval_policy=…` item, the selected profile or
+  your own `config.toml`, in that order. Nothing named anywhere is refused, as are two items that
+  disagree, a value BMN cannot read (an approval policy written as a table), and a
+  `.codex/config.toml` in the working folder or above it, or `/etc/codex`, that names either
+  setting, unless the command carries its own. For Claude Code the command must carry `--tools`
+  naming only `Read`, `Grep` and `Glob` (or `''` for none), `--strict-mcp-config`, and no MCP
+  server in `--mcp-config`; `--permission-mode bypassPermissions` is refused. A PASS for a
+  read-only role records what the check saw in the receipt's `sandbox` (mode, the source that
+  named it, the approval policy and its source, or the tool list) beside `effort`, so
+  `bmn roster bind` and a later reader can tell. `bmn roster role <role>` says that a role is
+  read-only, and with `--json` gives each candidate the items its command must carry
+  (`read_only.argv`). A role that may write is judged as before and its receipt carries no
+  `sandbox`.
+
+Which roles are read-only is part of the team and yours to approve. BMN proposes every role whose
+name ends in `reviewer`, and `consultant`; lead, designer, helper and browser keep write access.
+A team file from before the mark holds no role: every command passes as it did, **Rules →
+Health** says that no role is held to read-only yet, and **Team → Roles** shows the proposal
+with **Use proposal**, which stages the mark for you to approve like any other change. Each
+held role shows **Read-only** beside its name; **Edit** has the switch for one role.
+
+The Claude Code form rests on a write-attempt test you authorized (2026-10-11, Claude Code
+2.1.296, Haiku, each run in its own empty throwaway folder, the model asked to write with every
+tool it had). With `--permission-mode acceptEdits`, the control, it wrote three files. With
+`--tools 'Read,Grep,Glob'` alone it was offered those three tools and 82 MCP tools from your own
+settings, among them ones that create files elsewhere, so the tool list alone is not enough. With
+`--strict-mcp-config` and an empty `--mcp-config` added it was offered exactly `Glob`, `Grep` and
+`Read`, with and without `--safe-mode`, and wrote nothing. `--permission-mode plan` is not
+accepted: the app refused the Write tool there, but the model tried no shell command under it,
+and your MCP tools stay offered. `scripts/test/claude-write-attempt.sh` runs the test again on
+another version; BMN records the version the form was shown on in the receipt
+(`sandbox.form_tested_on`) and requires the form on every version. An agent whose approved
+tools include an MCP server therefore cannot take a read-only role through Claude Code.
 
 **Rules.** The master is ordinary Markdown. Untagged text reaches every agent app;
 `<!-- bmn:apps codex opencode -->` … `<!-- /bmn:apps -->` limits a section to those apps;

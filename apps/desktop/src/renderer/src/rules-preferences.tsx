@@ -38,7 +38,7 @@ import { createMachineReads, endedSince, type MachineReads } from './machine-rea
 import { Segmented } from './history-preferences'
 import { quoteArgv } from './launch-template'
 import { Dot } from './roster-marks'
-import { diffBody, diffSummary, revokeVersion, setDestination, setSkillPublic, skillForApp, skillMark, thousands, toggleSkillApp, undoWords } from './roster-staging'
+import { diffBody, diffSummary, listedRoles, revokeVersion, setDestination, setSkillPublic, skillForApp, skillMark, thousands, toggleSkillApp, undoWords } from './roster-staging'
 import { displayPath } from './session-presentation'
 import { Issues, NumberField, PageHead, Row, Switch, TargetPath, shortDate } from './team-preferences'
 import type { TeamState } from './team-state'
@@ -940,6 +940,15 @@ export function contextStateWords(row: Pick<ContextLimitView, 'limitProven' | 'v
   return `Not supported yet · ${last?.outcome === 'fail' ? `the test failed on ${row.version}` : last?.outcome === 'inconclusive' ? `the test was inconclusive on ${row.version}` : `not tested on ${row.version}`}`
 }
 
+/**
+ * What Health says while the approved team holds no role to read-only although BMN proposes some (63.2 AC4):
+ * a team from before the mark reads as before, and the owner is told what that leaves open. Null otherwise.
+ */
+export function notHeldWords(roles: RulesSnapshot['readOnlyRoles']): string | null {
+  if (roles === null || roles.held.length > 0 || roles.proposed.length === 0) return null
+  return `No role is held to read-only yet, so the check passes a reviewer started with write access. Team › Roles proposes ${listedRoles(roles.proposed)}.`
+}
+
 /** What becomes of an agent's own limit in a run BMN checks, in one line (63.1 AC4). */
 export function agentLimitWords(entry: ContextAgentLimit): string {
   const size = thousands(entry.limit)
@@ -1647,6 +1656,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
         <button type="button" disabled={rules.busy} onClick={() => void rules.load()}>{rules.busy && pending === null ? 'Checking…' : 'Check now'}</button>
       </PageHead>
       <Notice rules={rules} />
+      {notHeldWords(snapshot.readOnlyRoles) === null ? null : <p className="page-note" role="status"><Dot label="Needs you" />{notHeldWords(snapshot.readOnlyRoles)}</p>}
       <h4 className="group-head" ref={top}>Rules files</h4>
       {health.state === 'failed' ? <p className="preferences-error" role="alert">{health.reason}</p> : health.targets.map((target) => {
         const test = snapshot.probes.find((entry) => entry.harness === target.harness)

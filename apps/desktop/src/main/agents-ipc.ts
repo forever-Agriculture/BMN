@@ -36,7 +36,7 @@ import {
   type TeamUpdateTarget
 } from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
-import { HARNESSES, RosterError, agentsDirectory, parseRoster, proseOf, rewriteProse, rewriteRoster, rosterPath, sha256, starterRoster, type RosterData } from '../../bin/agents-roster.mjs'
+import { HARNESSES, RosterError, agentsDirectory, parseRoster, proseOf, readOnlyProposal, rewriteProse, rewriteRoster, rosterPath, sha256, starterRoster, type RosterData } from '../../bin/agents-roster.mjs'
 import { approvedIfAny, listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
 import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, harnessVersion, inspectRoute, limitStanding, versionStanding } from '../../bin/agents-check.mjs'
 import {
@@ -671,6 +671,7 @@ export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnap
     // The version each limit setting is judged against is the one the row above shows.
     context: (CONTEXT_APPS as ContextLimitApp[]).map((harness) => contextView(harness, apps.find((app) => app.harness === harness)?.version ?? null, generation, context)),
     contextAuto: context.contextAuto?.() ?? { enabled: contextAuto().enabled, running: null },
+    readOnlyRoles: generation === null ? null : { held: generation.data.roles.filter((role) => role.read_only === true).map((role) => role.id), proposed: readOnlyProposal(generation.data) },
     skills: skillsView(apps, pages, context),
     tools: toolsView(apps, pages, context),
     ...(context.ownEnvironment === undefined ? {} : { ownEnvironment: context.ownEnvironment }),

@@ -68,7 +68,7 @@ const FIELD_WORDS: Readonly<Record<string, string>> = {
   name: 'Name', class: 'Class', harness: 'Agent app', model: 'Model', provider: 'Provider', host: 'Host', enabled: 'On', status: 'Status',
   efforts: 'Efforts', roles: 'Roles', aliases: 'Also called', enabled_note: 'Reason it is off', context_window: 'Capacity', context_limit: 'Context limit',
   compact_at: 'Compact at', paid_by: 'Paid by', price: 'Price', description: 'Line', candidates: 'Order', then: 'If all fail', recheck: 'Recheck',
-  small_work: 'Small work', hosts: 'Hosts', sites: 'Sites', private_work: 'Private work', folder: 'Workspace', basis: 'Destination', accepted_versions: 'Accepted versions',
+  small_work: 'Small work', read_only: 'Read-only', hosts: 'Hosts', sites: 'Sites', private_work: 'Private work', folder: 'Workspace', basis: 'Destination', accepted_versions: 'Accepted versions',
   input: 'In', cached_input: 'Cached in', output: 'Out', source: 'Source', as_of: 'As of', public: 'Public', only: 'Only in',
   command: 'Program', args: 'Arguments', url: 'Address', env: 'Variables', headers: 'Headers', apps: 'Only in', agents: 'Only for the runs of'
 }
@@ -187,6 +187,7 @@ function formatPlain(value: unknown, field: string | undefined, names: Names): s
     return entries.map(([key, entry]) => `${(FIELD_WORDS[key] ?? key).toLowerCase()} ${formatPlain(entry, key, names)}`).join(' · ')
   }
   if (field === 'small_work') return candidateWords(String(value), names)
+  if (field === 'read_only') return value === true ? 'yes' : 'no'
   if (field === 'provider') return names.providers.get(String(value)) ?? String(value)
   const word = field === undefined ? undefined : VALUE_WORDS[field]?.[String(value)]
   if (word !== undefined) return word
@@ -265,6 +266,8 @@ export function consequenceWords(sentence: string, roleIds: ReadonlySet<string>)
   if (starts && known(starts[1])) return `${roleName(starts[1])} would ${starts[2]}${starts[3] ? ` (then: ${thenWords(starts[3])})` : ''}`
   const fails = /^when every ([a-z0-9-]+) candidate fails: ([a-z-]+) instead of ([a-z-]+)$/.exec(sentence)
   if (fails && known(fails[1])) return `When every ${spaced(fails[1])} candidate fails: ${thenWords(fails[2] as string)} instead of ${thenWords(fails[3] as string)}`
+  const runs = /^([a-z0-9-]+) runs (would be refused unless they are started so that they cannot write|could be started with write access again)$/.exec(sentence)
+  if (runs && known(runs[1])) return `${roleName(runs[1])} runs ${runs[2] as string}`
   const removed = /^the ([a-z0-9-]+) role would be removed$/.exec(sentence)
   if (removed && known(removed[1])) return `The ${spaced(removed[1])} role would be removed`
   return sentence.replace(/ take the ([a-z0-9-]+) role$/, (whole, id: string) => (roleIds.has(id) ? ` take the ${spaced(id)} role` : whole))
@@ -473,6 +476,37 @@ export function toggleCandidateEffort(data: RosterDataShape, roleId: string, age
 
 export function setRoleThen(data: RosterDataShape, roleId: string, then: RosterThen): RosterDataShape {
   return updateRole(data, roleId, (role) => ({ ...role, then }))
+}
+
+/** Holds a role to read-only, or lets it write again; a role that may write carries no mark at all, as in a team from before the mark. */
+export function setRoleReadOnly(data: RosterDataShape, roleId: string, on: boolean): RosterDataShape {
+  return updateRole(data, roleId, (role) => {
+    const rest = { ...role }
+    delete rest.read_only
+    return on ? { ...rest, read_only: true } : rest
+  })
+}
+
+/** BMN's proposal for read-only roles (63.2): every role whose name ends in "reviewer", and the consultant. The same rule as the CLI's. */
+export function readOnlyProposed(roleId: string): boolean {
+  return /reviewer$/.test(roleId) || roleId === 'consultant'
+}
+
+/** The roles BMN proposes to hold to read-only, while the team holds none yet; empty once any role is held, since the choice is the owner's from then on. */
+export function readOnlyProposal(data: Pick<RosterDataShape, 'roles'>): string[] {
+  if (data.roles.some((role) => role.read_only === true)) return []
+  return data.roles.filter((role) => readOnlyProposed(role.id)).map((role) => role.id)
+}
+
+/** The proposal taken as it stands, for the owner to approve like any other change. */
+export function holdProposed(data: RosterDataShape): RosterDataShape {
+  return readOnlyProposal(data).reduce((next, roleId) => setRoleReadOnly(next, roleId, true), data)
+}
+
+/** "Epic reviewer", "Epic reviewer and Consultant", "Epic reviewer, Final reviewer and Consultant". */
+export function listedRoles(ids: readonly string[]): string {
+  const names = ids.map(roleName)
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`
 }
 
 function withoutAgent(role: RosterRoleShape, agentId: string): RosterRoleShape {
