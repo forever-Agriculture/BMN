@@ -295,7 +295,8 @@ as one step. A tool names environment variables and never holds their values. It
 app, some apps, or only the runs of some agents. Once a tool is on the list, the check before a
 hand-off passes a Claude Code run only when it is kept to exactly its own tools, which BMN can do
 after its tools test. It does not judge the tools of a Codex run, and the receipt says so: no
-test of BMN's can show which tools a Codex run starts with.
+test of BMN's can show which tools a Codex run starts with. For the same reason it refuses a
+Codex run checked with `--packet`, which must carry none.
 `bmn tools import` proposes what your apps already hold.
 
 Team → **Models** has one of your own agents look up your models' published prices and context

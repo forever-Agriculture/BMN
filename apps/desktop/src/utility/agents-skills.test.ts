@@ -601,6 +601,13 @@ describe('whether the app hands a skill to its model: the owner-run loading test
     expect(codexLoadingVerdict(turn([{ type: 'response_item', payload: { type: 'message', role: 'user', content: [], note: TOKEN } }], [], 'done'), TOKEN)[0]).toBe('inconclusive')
     expect(codexLoadingVerdict(turn([{ type: 'response_item', payload: { type: 'message', role: 'user', content: TOKEN } }], [], 'done'), TOKEN)[0]).toBe('inconclusive')
     expect(codexLoadingVerdict(turn([{ ...WORLD, payload: { full: true, state: { skills: TOKEN } } }], [], 'done'), TOKEN)[0]).toBe('inconclusive')
+    // Only a part of the kind Codex writes for what it gives the model (`input_text`) is that; a part of another kind, or of none, is a place BMN does not know.
+    const part = (role: string, content: unknown) => ({ type: 'response_item', payload: { type: 'message', role, content } })
+    for (const odd of [{ type: 'unknown_metadata', text: TOKEN }, { text: TOKEN }, { type: 'output_text', text: TOKEN }, { type: 7, text: TOKEN }]) {
+      expect(codexLoadingVerdict(turn([part('user', [odd])], [], 'done'), TOKEN), JSON.stringify(odd))
+        .toEqual(['inconclusive', "the test skill's words reached the run only after a tool ran or in a place BMN does not know, which does not show that Codex hands a skill to the model"])
+    }
+    expect(codexLoadingVerdict(turn([part('developer', [{ type: 'unknown_metadata', text: 'x' }, { type: 'input_text', text: TOKEN }])], [], TOKEN), TOKEN)[0]).toBe('pass')
     // A tool, by an event named like one or by a turn's item that is anything but words.
     expect(codexLoadingVerdict(turn([{ type: 'event_msg', payload: { type: 'exec_command_begin' } }, message('user', TOKEN)], [], TOKEN), TOKEN)[0]).toBe('inconclusive')
     for (const kind of ['CommandExecution', 'McpToolCall', 'FileChange', 'WebSearch', 'command_execution', 'SomethingNew']) {
@@ -619,7 +626,13 @@ describe('whether the app hands a skill to its model: the owner-run loading test
     expect(codexLoadingVerdict(record(META, message('user', 'Use the skill'), message('assistant', 'I know no such skill.')), TOKEN)).toEqual(UNENDED)
     expect(codexLoadingVerdict(record(META, message('user', `<skill>reply with exactly ${TOKEN}</skill>`), message('assistant', TOKEN)), TOKEN)).toEqual(UNENDED)
     expect(codexLoadingVerdict('', TOKEN)).toEqual(UNENDED)
-    expect(codexLoadingVerdict(record(META, STARTED, message('user', 'Use the skill'), DONE()), TOKEN)).toEqual(['inconclusive', 'the record Codex saved for the run holds no answer of the model'])
+    const NO_ANSWER = ['inconclusive', 'the record Codex saved for the run holds no answer of the model']
+    expect(codexLoadingVerdict(record(META, STARTED, message('user', 'Use the skill'), DONE()), TOKEN)).toEqual(NO_ANSWER)
+    // An answer is words of the model in a part of the kind Codex writes for them (`output_text`): a message without such words is none.
+    for (const content of [[], undefined, 'I know no such skill.', [{ type: 'output_text', text: '' }], [{ type: 'output_text', text: ' \n' }], [{ type: 'output_text' }], [{ type: 'unknown', text: 'I know no such skill.' }], [{ type: 'input_text', text: 'I know no such skill.' }], [null]]) {
+      expect(codexLoadingVerdict(record(META, STARTED, message('user', 'Use the skill'), part('assistant', content), DONE()), TOKEN), JSON.stringify(content)).toEqual(NO_ANSWER)
+    }
+    expect(codexLoadingVerdict(record(META, STARTED, message('user', 'Use the skill'), part('assistant', [{ type: 'unknown', text: '' }, { type: 'output_text', text: 'I know no such skill.' }]), DONE()), TOKEN)[0]).toBe('fail')
     expect(codexLoadingVerdict(record(META, { type: 'new_kind', payload: {} }, message('user', TOKEN), DONE()), TOKEN)[0]).toBe('inconclusive')
     expect(codexLoadingVerdict(`${line(META)}\n{ torn ${TOKEN}\n${line(DONE())}\n`, TOKEN)).toEqual(['inconclusive', 'the record Codex saved for the run holds a line BMN cannot read'])
   })
@@ -651,6 +664,8 @@ if (${JSON.stringify(name)} === 'claude') {
     { type: 'world_state', payload: { full: true, state: {} } }, { type: 'turn_context', payload: {} }, message('user', prompt)]
   if (mode === 'tool') records.push({ type: 'response_item', payload: { type: 'function_call', name: 'shell' } }, { type: 'response_item', payload: { type: 'function_call_output', output: text } }, message('assistant', token))
   else if (mode === 'absent') records.push(message('assistant', 'I know no such skill.'))
+  else if (mode === 'odd-part') records.push({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'unknown_metadata', text: '<skill>' + text + '</skill>' }] } }, message('assistant', 'done'))
+  else if (mode === 'empty-answer') records.push({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [] } })
   else records.push(message('user', '<skill>' + text + '</skill>'), message('assistant', token))
   records.push({ type: 'token_usage_record', payload: {} })
   if (mode !== 'unended') records.push({ type: 'event_msg', payload: { type: 'task_complete' } })
@@ -704,12 +719,19 @@ if (${JSON.stringify(name)} === 'claude') {
     prompter('codex', CODEX, 'unended')
     expect(await loading('codex')).toMatchObject({ outcome: 'inconclusive', detail: 'the record Codex saved for the run does not show that the run came to its end' })
     rmSync(join(home, '.codex'), { recursive: true })
+    // The skill's words in a part of a kind Codex does not write, and an answer that holds no words, show nothing either way.
+    prompter('codex', CODEX, 'odd-part')
+    expect(await loading('codex')).toMatchObject({ outcome: 'inconclusive', detail: expect.stringContaining('in a place BMN does not know') })
+    rmSync(join(home, '.codex'), { recursive: true })
+    prompter('codex', CODEX, 'empty-answer')
+    expect(await loading('codex')).toMatchObject({ outcome: 'inconclusive', detail: 'the record Codex saved for the run holds no answer of the model' })
+    rmSync(join(home, '.codex'), { recursive: true })
     prompter('codex', CODEX, 'exit')
     expect(await loading('codex')).toMatchObject({ outcome: 'inconclusive', detail: 'codex did not answer (timeout or error)' })
     prompter('codex', CODEX, 'no-record')
     expect(await loading('codex')).toMatchObject({ outcome: 'inconclusive', detail: 'the record Codex saves for a run was not found' })
     expect(readdirSync(codexFolder())).toEqual([])
-    expect(skillsTests().filter((entry) => entry.kind === 'loading').map((entry) => entry.basis)).toEqual(['prompt', 'prompt', 'prompt', 'prompt', 'prompt'])
+    expect(skillsTests().filter((entry) => entry.kind === 'loading').map((entry) => entry.basis)).toEqual(['prompt', 'prompt', 'prompt', 'prompt', 'prompt', 'prompt', 'prompt'])
   })
 
   it('Claude Code is started with every tool off and asked for the skill by name', async () => {

@@ -954,7 +954,10 @@ BMN cannot read what the run reported or the report stops before the run's end, 
 shows only somewhere other than the words of a message the app gave the model, when a tool ran
 (the model may have read the file itself), or when the test skill could not be removed; that last
 one names the folder to delete. The kinds of line a Codex record holds were read from one record
-of Codex 0.162.0 (2026-10-11); a record with a kind BMN does not know is inconclusive. The two tests are kept as
+of Codex 0.162.0 (2026-10-11); a record with a kind BMN does not know is inconclusive. Within a
+message only the kinds of part that version writes count: `input_text` as words Codex gave the
+model, `output_text` with words in it as the model's answer; the token in a part of another kind
+is "somewhere else", and a message of the model without such words is no answer. The two tests are kept as
 separate records and Health names each: a listing, also one recorded before the loading test
 existed, never counts as a loading test.
 
@@ -1161,7 +1164,9 @@ candidate a `tools` entry with the items for exactly that set, also when the set
   carries `"tools": {"checked": false}`, so it never reads as a run kept to a set. `bmn roster
   role` gives a Codex candidate no items (`not-supported-yet`, with the reason), and a tool kept
   to a Codex agent waits: BMN does not hand it out. Whoever starts the run decides its tools, as
-  dev-auto does today with `-c 'mcp_servers={}'`.
+  dev-auto does today with `-c 'mcp_servers={}'`. One Codex run is refused: a run checked with
+  `--packet`. A packet run carries no tools, BMN cannot show that of a Codex run, and so, once
+  your team lists a tool, the check answers `ROUTE_UNSUPPORTED` whatever the command names.
 - **OpenCode, Cursor.** BMN does not check their dispatches at all.
 - **Places the test did not cover.** A Claude Code run is refused when it could take tools from a
   place the test did not see shut out: a `.mcp.json` in a folder above the run's; a plug-in
@@ -1313,7 +1318,8 @@ on Rules → Health: a provider that may see private work passes, any other warn
   reads, but BMN has no test for it, so treat every skill in the folder as visible to Cursor.
 - The tools of a Codex run are not judged. Listing a tool keeps Claude Code runs to their own
   set; a Codex run starts with whatever its command and Codex's own settings, apps and plug-ins
-  give it, and its receipt says its tools were not checked.
+  give it, and its receipt says its tools were not checked. A Codex run checked with `--packet`
+  is refused instead, since nothing shows it carries none.
 - A new Codex session is known to the guard only by the record Codex saves for it. Whether that
   record exists by the time the first prompt is sent has not been measured on a live app; where
   it does not, that prompt is stopped and the line says so.

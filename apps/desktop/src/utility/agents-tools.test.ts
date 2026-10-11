@@ -1046,13 +1046,24 @@ describe('the tools of one agent\'s run (60.12 AC5)', () => {
       }
     }
     expect(run('sol', 'lead', SOL()).receipt!.tools).toEqual({ checked: false })
-    expect(checkRunTools(agent('luna'), data(), { harness: 'codex', config: [], resume: 'last', profile: 'work' }, proven, { packet: true, profile: true })).toEqual({ unchecked: true, note: CODEX_UNCHECKED })
+    expect(checkRunTools(agent('luna'), data(), { harness: 'codex', config: [], resume: 'last', profile: 'work' }, proven, { profile: true })).toEqual({ unchecked: true, note: CODEX_UNCHECKED })
+    // A run started with --packet carries no tools (60.12 AC5), and BMN cannot show that of a Codex run: refused, whatever its command names or leaves out.
+    const CODEX_PACKET = { verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED', message: 'a packet run carries no tools, and BMN has no test that shows which tools a run of Codex starts with' }
+    const packet = join(home, 'luna-packet')
+    mkdirSync(packet)
+    writeFileSync(join(packet, 'prompt.md'), 'synthetic\n')
+    const packetRun = (argv: string[]) => evaluate({ agent: 'luna', role: 'browser', workspace, data: 'private', cwd: workspace, packet, argv } as Inputs, { environment: env, cwd: workspace, now: NOW, toolsPolicyRoot: noPolicy() })
+    for (const argv of commands) expect(packetRun(argv), JSON.stringify(argv)).toMatchObject(CODEX_PACKET)
+    expect(checkRunTools(agent('luna'), data(), { harness: 'codex', config: [] }, proven, { packet: true })).toEqual({ refusal: { code: 'ROUTE_UNSUPPORTED', message: CODEX_PACKET.message } })
     // No items are given for a Codex run, and the answer says why.
     expect(toolItems(agent('luna'), data(), proven)).toEqual({ state: 'not-supported-yet', tools: ['browser', 'docs', 'files', 'notes'], reason: NO_CODEX_TEST })
     // A receipt of a kept run never reads as unchecked, and a team without tools carries no entry at all.
     expect(run('fable', 'designer', FABLE(...itemsOf('fable').argv)).receipt!.tools).not.toHaveProperty('checked')
     approve(EXAMPLE)
     expect(run('luna', 'browser', LUNA()).receipt).not.toHaveProperty('tools')
+    // The packet refusal belongs to a team that lists tools: without any, a Codex packet run passes as before.
+    expect(packetRun(LUNA())).toMatchObject({ verdict: 'PASS' })
+    expect(packetRun(LUNA()).receipt).not.toHaveProperty('tools')
   })
 
   it('refuses a run that could take tools from a place the test did not cover, by what is there and not by what it holds', () => {

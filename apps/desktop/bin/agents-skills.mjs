@@ -918,21 +918,27 @@ function codexToolRecord(entry) {
   return /call|begin|tool|exec|patch|mcp|search/i.test(type)
 }
 
-/** The words of a message in a Codex record: its own text parts and nothing else the line carries. */
-function codexMessageText(payload) {
+/**
+ * The words of a message in a Codex record: its text parts of the one kind Codex writes for that
+ * side, `input_text` for what Codex gave the model and `output_text` for the model's own answer
+ * (the kinds a record of Codex 0.162.0 holds), and nothing else the line carries. A part of
+ * another kind, or of none, is not words BMN knows.
+ */
+function codexMessageText(payload, kind) {
   if (!Array.isArray(payload?.content)) return ''
-  return payload.content.map((part) => (part !== null && typeof part === 'object' && typeof part.text === 'string' ? part.text : '')).join('\n')
+  return payload.content.map((part) => (part !== null && typeof part === 'object' && part.type === kind && typeof part.text === 'string' ? part.text : '')).join('\n')
 }
 
 /**
  * What a Codex loading run showed, from the record Codex saved for it. A pass needs the token in
- * the words of a message Codex itself gave the model (a user, developer or system message), before
- * any tool was called, in a record that shows the run came to its end. The token anywhere else in
- * a line (a field beside the message's words, the model's own answer, a tool's output) is not
- * that. A token that shows up only after a tool ran proves nothing: the model may have read the
- * file. A fail needs the same finished record with an answer of the model, no tool and no token.
- * A record BMN cannot read line by line, one that does not show the run's end, and one without an
- * answer are inconclusive.
+ * the words of a message Codex itself gave the model (an `input_text` part of a user, developer
+ * or system message), before any tool was called, in a record that shows the run came to its
+ * end. The token anywhere else in a line (a field beside the message's words, a part of another
+ * kind, the model's own answer, a tool's output) is not that. A token that shows up only after a
+ * tool ran proves nothing: the model may have read the file. A fail needs the same finished
+ * record with an answer of the model (words in an `output_text` part of its message), no tool
+ * and no token. A record BMN cannot read line by line, one that does not show the run's end, and
+ * one without such an answer are inconclusive.
  */
 export function codexLoadingVerdict(rollout, token) {
   let toolSeen = false
@@ -952,8 +958,8 @@ export function codexLoadingVerdict(rollout, token) {
     if (codexToolRecord(entry)) toolSeen = true
     if (entry.type === 'event_msg' && entry.payload?.type === 'task_complete') finished = true
     const message = entry.type === 'response_item' && entry.payload?.type === 'message'
-    if (message && entry.payload.role === 'assistant') answered = true
-    const fromCodex = message && ['user', 'developer', 'system'].includes(entry.payload.role) && codexMessageText(entry.payload).includes(token)
+    if (message && entry.payload.role === 'assistant' && codexMessageText(entry.payload, 'output_text').trim() !== '') answered = true
+    const fromCodex = message && ['user', 'developer', 'system'].includes(entry.payload.role) && codexMessageText(entry.payload, 'input_text').includes(token)
     if (fromCodex && !toolSeen) given = true
     else if (line.includes(token)) elsewhere = true
   }
