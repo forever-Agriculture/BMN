@@ -1,4 +1,4 @@
-// MODULE: agents-context.d.mts - types for the context-limit settings, their owner-run test and the default for the owner's own sessions
+// MODULE: agents-context.d.mts - types for the context-limit settings, their test (the owner's, or BMN's own for a new version) and the default for the owner's own sessions
 export type ContextApp = 'codex' | 'claude'
 export type ContextTestOutcome = 'pass' | 'fail' | 'inconclusive' | 'unavailable'
 export interface ContextTestEntry {
@@ -11,9 +11,25 @@ export interface ContextTestEntry {
   observed: number | null
   detail: string
   /** Claude Code only: every other source that named a size for the test run, by its identity. */
-  rivals?: { source: string; id: string; value: number }[]
+  rivals?: ContextSource[]
+  /** Set where BMN started the test by itself (63.1); the owner's own test carries none. */
+  by?: 'bmn'
 }
-export interface ContextProven { limit: boolean; compact: boolean }
+/** Another source that names a context size for a run, by its identity (a file's part, path and key). */
+export interface ContextSource { source: string; id: string; value: number }
+/** How an app's setting stands on one version: the latest test's outcome, `untested` with none, `unknown` where the version cannot be read. */
+export type ContextStanding = ContextTestOutcome | 'untested' | 'unknown'
+export interface ContextProven {
+  limit: boolean
+  compact: boolean
+  standing?: ContextStanding
+  /** Whether BMN tests by itself; read from its own state when absent. */
+  auto?: boolean
+}
+/** BMN's own testing: the owner's switch, and per app the version and outcome he was last told about. */
+export interface ContextAutoState { enabled: boolean; told: Record<string, string> }
+/** One app BMN should test by itself now, why, and the agents whose limit waits for it. */
+export interface ContextAutoPlanEntry { harness: ContextApp; version: string; reason: 'untested' | 'retry' | 'sources'; agents: string[] }
 /** A source the run's own environment was seen to win over, and on which side its size lay. */
 export interface ContextPrecedence { id: string; side: 'above' | 'below' }
 /** Why a context limit is refused: see checkContext. */
@@ -93,5 +109,18 @@ export declare function applyContextDefault(harness: string, values: { limit: nu
   { harness: ContextApp; path: string; written: boolean; backup: string | null }
 export declare function claudeReportedWindow(output: string): number | null
 export declare function codexRecordedWindow(rollout: string): number | null
-export declare function testContext(harness: string, options?: { environment?: NodeJS.ProcessEnv; now?: Date; timeoutMs?: number }): Promise<ContextTestEntry>
+export declare function testContext(harness: string, options?: { environment?: NodeJS.ProcessEnv; now?: Date; timeoutMs?: number; by?: 'bmn' }): Promise<ContextTestEntry>
+export declare const CLAUDE_TEST_ARGUMENTS: string[]
+export declare function contextTestFolder(environment?: NodeJS.ProcessEnv | Record<string, string>): string
+export declare function contextAutoPath(): string
+export declare function contextAuto(): ContextAutoState
+export declare function setContextAuto(change: Partial<ContextAutoState>): ContextAutoState
+export declare function limitedAgents(data: import('./agents-roster.mjs').RosterData | null, harness: string): import('./agents-roster.mjs').RosterAgent[]
+export declare function contextAutoPlan(input: {
+  data: import('./agents-roster.mjs').RosterData | null
+  versions: Partial<Record<ContextApp, string | null>>
+  tests?: ContextTestEntry[]
+  enabled?: boolean
+  sources?: Partial<Record<ContextApp, ContextSource[]>>
+}): ContextAutoPlanEntry[]
 export declare function runContextCommand(argv: string[]): Promise<number>

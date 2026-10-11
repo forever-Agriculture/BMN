@@ -111,10 +111,10 @@ export function Row(props: { label: string; id?: string; hint?: ReactNode; child
   )
 }
 
-/** A neutral switch: the thumb's position carries the state. */
-export function Switch(props: { label: string; on: boolean; disabled?: boolean; onChange(next: boolean): void }): React.JSX.Element {
+/** A neutral switch: the thumb's position carries the state. `labelledBy` names it by the words shown beside it instead of `label`. */
+export function Switch(props: { label?: string; labelledBy?: string; on: boolean; disabled?: boolean; onChange(next: boolean): void }): React.JSX.Element {
   return (
-    <button type="button" className={props.on ? 'switch on' : 'switch'} role="switch" aria-checked={props.on} aria-label={props.label} disabled={props.disabled}
+    <button type="button" className={props.on ? 'switch on' : 'switch'} role="switch" aria-checked={props.on} aria-label={props.label} aria-labelledby={props.labelledBy} disabled={props.disabled}
       onClick={(event) => { event.stopPropagation(); props.onChange(!props.on) }} />
   )
 }

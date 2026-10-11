@@ -12,6 +12,7 @@ import {
   ToolProposals,
   UpdateSheet,
   changeWords,
+  agentLimitWords,
   contextStateWords,
   contextValueWords,
   destinationWords,
@@ -19,6 +20,8 @@ import {
   diffSummary,
   earlierVersions,
   endedSince,
+  onUpdateEnded,
+  updateEnded,
   insertAt,
   kilobytes,
   lineCount,
@@ -540,10 +543,12 @@ const RULES: RulesSnapshot = {
   ],
   context: [
     { harness: 'codex', path: '/home/synthetic/.codex/config.toml', exists: true, limit: 380000, compact: 342000, version: '0.171.0', limitProven: false, compactProven: false,
-      test: { at: '2026-10-09T20:00:00.000Z', version: '0.161.0', outcome: 'pass', detail: 'asked for 123000; the session record shows 116850' }, agents: ['Sol', 'Astra', 'Luna'] },
+      test: { at: '2026-10-09T20:00:00.000Z', version: '0.161.0', outcome: 'pass', detail: 'asked for 123000; the session record shows 116850' }, agents: ['Sol', 'Astra', 'Luna'],
+      limits: [{ agent: 'Sol', limit: 272000, state: 'not-applied', reason: 'the context setting is not tested on this Codex version yet; BMN tests it by itself when it starts' }] },
     { harness: 'claude', path: '/home/synthetic/.claude/settings.json', exists: true, limit: null, compact: null, version: '2.1.295', limitProven: true, compactProven: false, min: 100000, max: 1000000,
-      test: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'asked for 137000; Claude Code reports a window of 137000' }, agents: ['Opus', 'Fable'] }
+      test: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'asked for 137000; Claude Code reports a window of 137000' }, agents: ['Opus', 'Fable'], limits: [] }
   ],
+  contextAuto: { enabled: true, running: null },
   skills: {
     source: { path: '/home/synthetic/.claude/skills', readable: true }, markedMissing: [], pending: 1, exposed: 1,
     skills: [
@@ -590,7 +595,7 @@ const RULES: RulesSnapshot = {
 }
 
 const rules = (extra: Partial<RulesState> = {}): RulesState => ({
-  snapshot: RULES, loadError: null, draft: RULES.master.text ?? '', dirty: false, draftPlan: null, busy: false, notice: null, pending: null, setDraft: noop, setNotice: noop,
+  snapshot: RULES, began: Date.parse('2026-10-09T22:13:00.000Z'), loadError: null, draft: RULES.master.text ?? '', dirty: false, draftPlan: null, busy: false, notice: null, pending: null, setDraft: noop, setNotice: noop,
   ensure: noop, refresh: noop, load: later, beginSave: later, beginInstall: later, beginSkillsInstall: later, beginToolsInstall: later, beginUndo: later, beginRestore: later, beginTest: noop, confirm: later, cancel: noop, run: async () => true, ...extra
 })
 const rulesMarkup = (page: 'editor' | 'skills' | 'tools' | 'health', state: RulesState = rules(), teamState: TeamState = team()): string =>
@@ -817,10 +822,21 @@ describe('Rules › Health: Update… (60.6: the app\'s own updater, shown befor
     expect(watchedWords({ harness: 'codex', version: '0.161.0' }, '2026-10-09T22:01:00.000Z')).toBeNull()
     expect(watchedWords({ harness: 'codex', version: '0.172.0' }, '2026-10-09T22:03:00.000Z')).toBe('The program now reports 0.172.0; before it reported 0.161.0.')
     forgetUpdateWatches()
-    const read = '2026-10-09T22:01:00.000Z'
-    expect([endedSince(read, null), endedSince(read, Date.parse(read) - 1), endedSince(read, Date.parse(read)), endedSince(read, Date.parse(read) + 1)]).toEqual([false, false, true, true])
-    // A reading whose time cannot be told is taken as the older one.
-    expect(endedSince('unreadable', 5)).toBe(true)
+    // Judged by when the read began (63.4 AC2): one begun before the end, or at it, may hold what was there before the update.
+    const began = Date.parse('2026-10-09T22:01:00.000Z')
+    expect([endedSince(began, null), endedSince(began, began - 1), endedSince(began, began), endedSince(began, began + 1)]).toEqual([false, false, true, true])
+    // A reading whose beginning cannot be told is taken as the older one.
+    expect(endedSince(null, 5)).toBe(true)
+  })
+
+  it('lets every listener hear that an update ended, also when one of them throws (63.4 AC4)', () => {
+    const heard: string[] = []
+    const stops = [onUpdateEnded(() => heard.push('first')), onUpdateEnded(() => { throw new Error('synthetic') }), onUpdateEnded(() => heard.push('third'))]
+    expect(() => updateEnded(5)).not.toThrow()
+    expect(heard).toEqual(['first', 'third'])
+    for (const stop of stops) stop()
+    updateEnded(6)
+    expect(heard).toEqual(['first', 'third'])
   })
 
   it('says for Codex which program is meant, since BMN\'s sessions start its own command of that name', () => {
@@ -982,6 +998,38 @@ describe('context limits (60.9 AC3, AC4)', () => {
     expect(contextStateWords({ limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'fail', detail: 'd' } })).toBe('Not supported yet · the test failed on 0.162.0')
     expect(contextStateWords({ limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'inconclusive', detail: 'd' } })).toBe('Not supported yet · the test was inconclusive on 0.162.0')
     expect(contextStateWords({ limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.161.0', outcome: 'pass', detail: 'd' } })).toBe('Not supported yet · not tested on 0.162.0')
+  })
+
+  it('has one switch for BMN\'s own testing, named by the words beside it, with what a test starts and costs (63.1 AC4)', () => {
+    expect(markup).toContain('<span id="context-auto-test">Test context limits after an app update</span>')
+    expect(markup).toMatch(/Claude Code is asked for its context report, Codex gets one short request to its provider\. Nothing of yours is in it\.<\/span><button type="button" class="switch on" role="switch" aria-checked="true" aria-labelledby="context-auto-test"><\/button>/)
+    const off = rulesMarkup('health', rules({ snapshot: { ...RULES, contextAuto: { enabled: false, running: null } } }))
+    expect(off).toContain('Off: BMN starts no app. After an update an agent&#x27;s own limit waits until you run Test… for that app.')
+    expect(off).toContain('<button type="button" class="switch" role="switch" aria-checked="false" aria-labelledby="context-auto-test"></button>')
+    // The Test… button stays as it was, with the switch on or off.
+    expect([...off.matchAll(/aria-label="Context test for ([A-Za-z ]+)"/g)].map((match) => match[1])).toEqual(['Codex', 'Claude Code'])
+  })
+
+  it('says which agents\' own limits are applied, not applied or refused, with the check\'s reason behind each (63.1 AC4)', () => {
+    expect(markup).toContain('<p class="limit-note" title="the context setting is not tested on this Codex version yet; BMN tests it by itself when it starts" role="status"><span class="needs-dot" role="img" aria-label="Needs you" title="Needs you"></span>Sol: its own limit of 272 000 is not applied, so a run gets the app&#x27;s own size.</p>')
+    expect(agentLimitWords({ agent: 'Haiku', limit: 100000, state: 'applied' })).toBe('Haiku: its own limit of 100 000 is applied to each run.')
+    expect(agentLimitWords({ agent: 'Haiku', limit: 100000, state: 'refused', reason: 'r' })).toBe('Haiku: runs are refused, because its own limit of 100 000 cannot be applied.')
+    const applied = rulesMarkup('health', rules({ snapshot: { ...RULES, context: RULES.context.map((row) => ({ ...row, limits: [{ agent: 'Haiku', limit: 100000, state: 'applied' as const }] })) } }))
+    expect(applied).toContain('<p class="limit-note">Haiku: its own limit of 100 000 is applied to each run.</p>')
+  })
+
+  it('says of a test BMN ran by itself that it did, with its day, the version and what came of it, and while one runs (63.1 AC5)', () => {
+    const at = '2026-10-09T20:00:00.000Z'
+    const own = (outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'): string => contextStateWords({ limitProven: outcome === 'pass', version: '2.1.296', test: { at, version: '2.1.296', outcome, detail: 'd', by: 'bmn' } })
+    expect(own('pass')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · it takes the setting`)
+    expect(own('fail')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test failed`)
+    expect(own('inconclusive')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test showed nothing`)
+    // A test of another version is not this version's, whoever ran it; the owner's own test reads as before.
+    expect(contextStateWords({ limitProven: false, version: '2.1.297', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd', by: 'bmn' } })).toBe('Not supported yet · not tested on 2.1.297')
+    expect(contextStateWords({ limitProven: true, version: '2.1.296', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd' } })).toBe('Setting tested on 2.1.296')
+    const running = rulesMarkup('health', rules({ snapshot: { ...RULES, contextAuto: { enabled: true, running: 'claude' } } }))
+    expect(running).toMatch(/<span class="faint" title="[^"]*">BMN is testing Claude Code by itself now…<\/span>/)
+    expect(running).not.toContain('BMN is testing Codex')
   })
 
   it('refuses a limit above what the model holds, inline, and a compaction point that is not below the limit', () => {

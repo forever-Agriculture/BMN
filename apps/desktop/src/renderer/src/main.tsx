@@ -516,6 +516,9 @@ function App(): React.JSX.Element {
     writer.reset(next.layouts)
     setLayouts(writer.layouts())
     setLive(Object.fromEntries(next.liveSessions.map((item) => [item.sessionId, item])))
+    // A command typed into a session that is not listed any more has nothing left to hear: its run ends here.
+    const listed = new Set(next.liveSessions.map((item) => item.attachmentId))
+    for (const run of [...commandRuns.current]) run.listed(listed)
     setTree(initialWorkspaceTree(next.workspaces, next.activeWorkspaceId))
     // A rebuilt view keeps the process but not this pane's earlier output; the owner is told once.
     const notices = next.liveSessions.some((item) => item.viewRestored)
@@ -2632,8 +2635,9 @@ function App(): React.JSX.Element {
               setLive((current) => ({ ...current, [created.session.sessionId]: created.startup }))
               applyTreeSessionAction(selectTreeSession([...sessions, created.session], created.session.sessionId))
               // Typed with its Enter: the owner's press on the sheet, which showed this exact command, is the go-ahead, and he
-              // watches it run in the session. Only once the shell reads a line with its line editor: typed earlier, a
-              // start-up file that asks a question would take the command for its answer, and nothing would run.
+              // watches it run in the session. Only once the shell reads a line with its line editor, so a start-up file
+              // that reads the terminal plainly gets nothing typed into its question. Only a question asked with line
+              // editing cannot be told from the prompt: that one would get the command as its answer.
               const typed = await run.typeInto(created.startup.attachmentId, (bytes) => window.aiTerminal.sendTerminalInput(created.startup.attachmentId, bytes))
               if (!typed) {
                 commandRuns.current.delete(run)

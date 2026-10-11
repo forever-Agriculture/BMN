@@ -47,6 +47,11 @@ export interface SessionCommandRun {
   /** A session ended. */
   exit(attachmentId: string): void
   /**
+   * The sessions that run were listed anew. A run whose own session is not among them ended without its end
+   * reaching here (its host went away): it is told so now, and nothing is kept for a session that is not there.
+   */
+  listed(attachmentIds: ReadonlySet<string>): void
+  /**
    * Names the session that was made. Answers true once the command was typed with its Enter, which happens only
    * while its shell reads a command line; false when it did not within the wait, or ended first: nothing is typed then.
    */
@@ -92,6 +97,9 @@ export function sessionCommandRun(command: string, limits: { readyWithinMs: numb
     exit(attachmentId) {
       exited.add(attachmentId)
       if (attachmentId === own) onGone?.()
+    },
+    listed(attachmentIds) {
+      if (own !== null && !attachmentIds.has(own)) this.exit(own)
     },
     leave() {
       left = true

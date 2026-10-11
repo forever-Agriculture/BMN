@@ -6,6 +6,7 @@ import {
   ROSTER_APP_UPDATE_ARGUMENTS,
   ROSTER_HARNESSES,
   type AgentAppView,
+  type ContextAgentLimit,
   type ContextLimitApp,
   type ContextLimitPlan,
   type ContextLimitView,
@@ -33,6 +34,7 @@ import {
   type ToolsPlan
 } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
+import { createMachineReads, endedSince, type MachineReads } from './machine-reads'
 import { Segmented } from './history-preferences'
 import { quoteArgv } from './launch-template'
 import { Dot } from './roster-marks'
@@ -45,7 +47,7 @@ import {
   toolVariables, toolsTestLine, transportWords, withProposals, type ToolDraft, type ToolScope
 } from './tools-view'
 
-export { diffSummary, undoWords }
+export { diffSummary, endedSince, undoWords }
 
 export type RulesPage = 'editor' | 'skills' | 'tools' | 'health'
 
@@ -166,6 +168,8 @@ type Pending =
 
 export interface RulesState {
   snapshot: RulesSnapshot | null
+  /** When the read whose answer is shown was asked for; what is shown is judged fresh by this, not by a time inside it (63.4). */
+  began: number | null
   loadError: string | null
   draft: string
   dirty: boolean
@@ -205,31 +209,43 @@ export function useRulesState(): RulesState {
   const [draftPlan, setDraftPlan] = useState<RulesMasterPlan | null>(null)
   const [pending, setPending] = useState<Pending | null>(null)
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [began, setBegan] = useState<number | null>(null)
+  // A read of the machine and an action are told apart, so the end of one never says the other is over.
+  const [reading, setReading] = useState(false)
+  const [acting, setBusy] = useState(false)
+  const busy = reading || acting
   const asked = useRef(false)
 
+  /** What was read replaces the page, never an unsaved draft. */
+  const show = useCallback((next: RulesSnapshot): void => {
+    setSnapshot((current) => {
+      setDraft((text) => (current !== null && text !== (current.master.text ?? '') ? text : next.master.text ?? ''))
+      return next
+    })
+  }, [])
+
+  // Reads go one at a time and only the answer of the one begun last is shown (63.4 AC1, AC3).
+  const reads = useRef<MachineReads | null>(null)
+  reads.current ??= createMachineReads<RulesSnapshot>({
+    fetch: () => window.aiTerminal.rulesSnapshot(),
+    adopt: (next, at) => {
+      show(next)
+      setBegan(at)
+      setLoadError(null)
+    },
+    failed: (error) => setLoadError(failureDetail(error, 'Could not read the rules')),
+    reading: setReading
+  })
+
   const adopt = useCallback((next: RulesSnapshot): void => {
+    // What an action left behind is newer than a read begun while it ran.
+    setBegan((reads.current as MachineReads).shownElsewhere())
     setSnapshot(next)
     setDraft(next.master.text ?? '')
     setDraftPlan(null)
   }, [])
 
-  const load = useCallback(async (): Promise<void> => {
-    setBusy(true)
-    try {
-      const next = await window.aiTerminal.rulesSnapshot()
-      // Check now never throws away an unsaved draft.
-      setSnapshot((current) => {
-        setDraft((text) => (current !== null && text !== (current.master.text ?? '') ? text : next.master.text ?? ''))
-        return next
-      })
-      setLoadError(null)
-    } catch (error) {
-      setLoadError(failureDetail(error, 'Could not read the rules'))
-    } finally {
-      setBusy(false)
-    }
-  }, [])
+  const load = useCallback((): Promise<void> => (reads.current as MachineReads).read(), [])
 
   const ensure = useCallback((): void => {
     if (asked.current) return
@@ -344,10 +360,8 @@ export function useRulesState(): RulesState {
     try {
       const outcome = await task()
       // Like Check now: what was read again replaces the page, never an unsaved draft.
-      setSnapshot((current) => {
-        setDraft((text) => (current !== null && text !== (current.master.text ?? '') ? text : outcome.snapshot.master.text ?? ''))
-        return outcome.snapshot
-      })
+      setBegan((reads.current as MachineReads).shownElsewhere())
+      show(outcome.snapshot)
       setNotice({ ok: outcome.ok, text: outcome.ok || outcome.code !== 'REVISION_CONFLICT' ? outcome.message : 'Something changed since this was shown. Reloaded without writing.' })
       return outcome.ok
     } catch (error) {
@@ -358,8 +372,18 @@ export function useRulesState(): RulesState {
     }
   }
 
+  // BMN is running a context test by itself (63.1): what it found is read once it has ended, never under an open confirmation.
+  const testing = snapshot !== null && snapshot.contextAuto.running !== null ? snapshot : null
+  const confirming = pending !== null
+  useEffect(() => {
+    if (testing === null || confirming) return
+    let cancelled = false
+    window.aiTerminal.contextAuto(false).then(() => { if (!cancelled) void load() }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [testing, confirming, load])
+
   return {
-    snapshot, loadError, draft, dirty, draftPlan, busy, notice, pending, setDraft, setNotice, ensure, refresh, load, run,
+    snapshot, began, loadError, draft, dirty, draftPlan, busy, notice, pending, setDraft, setNotice, ensure, refresh, load, run,
     beginSave: () => {
       const text = draft
       return begin(async () => ({ kind: 'save', text, plan: await window.aiTerminal.planRulesMaster(text) }))
@@ -742,12 +766,25 @@ const updateEndListeners = new Set<() => void>()
 /** The shell an update command was typed into reads a line again, or its session ended: Health, open now or later, reads the machine after it. */
 export function updateEnded(at: number = Date.now()): void {
   updateEndedAt = at
-  for (const listener of [...updateEndListeners]) listener()
+  for (const listener of [...updateEndListeners]) {
+    try {
+      listener()
+    } catch {
+      // One listener that fails does not keep the others from hearing of the end.
+    }
+  }
 }
 
-/** Whether an update command ended after the machine was read at `checkedAt`, so what Health shows may be from before it. */
-export function endedSince(checkedAt: string, endedAt: number | null = updateEndedAt): boolean {
-  return endedAt !== null && !(Date.parse(checkedAt) > endedAt)
+/** Hears of each end of an update command; returns how to stop listening. */
+export function onUpdateEnded(listener: () => void): () => void {
+  updateEndListeners.add(listener)
+  return () => { updateEndListeners.delete(listener) }
+}
+
+/** An update command BMN typed has ended: Health reads the machine after it, and BMN looks for a new app version to test (63.1 AC1). */
+function updateRunEnded(): void {
+  updateEnded()
+  void window.aiTerminal.contextAuto(true).catch(() => undefined)
 }
 
 /** What the sheet says about a press on Update now that did not run the command; null while there is nothing to say. */
@@ -889,13 +926,29 @@ export function contextValueWords(row: Pick<ContextLimitView, 'limit' | 'compact
   return `${thousands(row.limit)} tokens${row.compact === null ? '' : ` · summarises at ${thousands(row.compact)}`}`
 }
 
-/** Whether BMN may use the app's setting on the installed version, and why not when it may not (60.9 AC1). */
+/**
+ * Whether BMN may use the app's setting on the installed version, and why not when it may not (60.9 AC1).
+ * A test BMN ran by itself says so, with its day, the version and what came of it (63.1 AC5).
+ */
 export function contextStateWords(row: Pick<ContextLimitView, 'limitProven' | 'version' | 'test'>): string {
   if (row.version === null) return 'Not supported yet · the app is not found'
+  const last = row.test !== null && row.test.version === row.version ? row.test : null
+  if (last?.by === 'bmn') {
+    return `BMN tested ${row.version} by itself ${shortDate(last.at)} · ${last.outcome === 'pass' ? 'it takes the setting' : last.outcome === 'fail' ? 'the test failed' : 'the test showed nothing'}`
+  }
   if (row.limitProven) return `Setting tested on ${row.version}`
-  const last = row.test !== null && row.test.version === row.version ? row.test.outcome : null
-  return `Not supported yet · ${last === 'fail' ? `the test failed on ${row.version}` : last === 'inconclusive' ? `the test was inconclusive on ${row.version}` : `not tested on ${row.version}`}`
+  return `Not supported yet · ${last?.outcome === 'fail' ? `the test failed on ${row.version}` : last?.outcome === 'inconclusive' ? `the test was inconclusive on ${row.version}` : `not tested on ${row.version}`}`
 }
+
+/** What becomes of an agent's own limit in a run BMN checks, in one line (63.1 AC4). */
+export function agentLimitWords(entry: ContextAgentLimit): string {
+  const size = thousands(entry.limit)
+  if (entry.state === 'applied') return `${entry.agent}: its own limit of ${size} is applied to each run.`
+  if (entry.state === 'refused') return `${entry.agent}: runs are refused, because its own limit of ${size} cannot be applied.`
+  return `${entry.agent}: its own limit of ${size} is not applied, so a run gets the app's own size.`
+}
+
+const AUTO_TEST = 'Test context limits after an app update'
 
 const PLAN_PENDING: ContextLimitPlan = { ok: false, code: 'PENDING', diff: '', planHash: null }
 
@@ -966,12 +1019,20 @@ function ContextSheet(props: { row: ContextLimitView; home: string | null; busy:
 function ContextLimits(props: { rules: RulesState; action: AppAction | null; setAction(action: AppAction | null): void }): React.JSX.Element {
   const { rules, action } = props
   const snapshot = rules.snapshot as RulesSnapshot
+  const auto = snapshot.contextAuto
+  const idle = !rules.busy && action === null && rules.pending === null
   return (
     <>
       <h4 className="group-head">Context limits<span className="caption">how large a conversation may grow in sessions you start yourself</span></h4>
+      <div className="health-row auto-test">
+        <span id="context-auto-test">{AUTO_TEST}</span>
+        <span className="faint">{auto.enabled
+          ? 'When an app has a new version and an agent on it has a limit of its own, BMN starts that app once in an empty folder: Claude Code is asked for its context report, Codex gets one short request to its provider. Nothing of yours is in it.'
+          : 'Off: BMN starts no app. After an update an agent\'s own limit waits until you run Test… for that app.'}</span>
+        <Switch labelledBy="context-auto-test" on={auto.enabled} disabled={!idle} onChange={(next) => void rules.run(() => window.aiTerminal.setContextAuto(next))} />
+      </div>
       {snapshot.context.map((row) => {
         const name = ROSTER_APP_NAMES[row.harness]
-        const idle = !rules.busy && action === null && rules.pending === null
         return (
           <div key={row.harness} className="limit-block">
             <div className="health-row">
@@ -982,7 +1043,7 @@ function ContextLimits(props: { rules: RulesState; action: AppAction | null; set
               </span>
               <span className="health-state">
                 <span title={row.unreadable}>{row.unreadable ? <Dot label="Needs you" /> : null}{contextValueWords(row)}</span>
-                <span className="faint" title={row.test?.detail}>{contextStateWords(row)}</span>
+                <span className="faint" title={row.test?.detail}>{auto.running === row.harness ? `BMN is testing ${name} by itself now…` : contextStateWords(row)}</span>
               </span>
               <span className="app-actions">
                 <button type="button" className="small" disabled={!idle || row.version === null} aria-label={`Context test for ${name}`} onClick={() => props.setAction({ kind: 'context-test', harness: row.harness })}>Test…</button>
@@ -990,6 +1051,11 @@ function ContextLimits(props: { rules: RulesState; action: AppAction | null; set
                   title={row.limitProven ? undefined : `Not supported yet: run the test for ${name} first`} onClick={() => props.setAction({ kind: 'context-change', harness: row.harness })}>Change…</button>
               </span>
             </div>
+            {row.limits.map((entry) => (
+              <p key={entry.agent} className="limit-note" title={entry.reason} role={entry.state === 'applied' ? undefined : 'status'}>
+                {entry.state === 'applied' ? null : <Dot label="Needs you" />}{agentLimitWords(entry)}
+              </p>
+            ))}
             {action?.kind === 'context-test' && action.harness === row.harness ? (
               <Sheet title={`Test whether ${name} takes a context limit`} action="Run test" busy={rules.busy} onCancel={() => props.setAction(null)}
                 note={`Starts ${name} once in an empty folder under your home folder and asks it for an unusual size. It may send one short request to its provider; nothing of yours is in it. The result is kept for this version.`}
@@ -1000,7 +1066,7 @@ function ContextLimits(props: { rules: RulesState; action: AppAction | null; set
           </div>
         )
       })}
-      <p className="preferences-help">BMN changes a limit only on an app version whose test passed. An agent's own limit, set on its page, is added to each run BMN or dev-auto starts with it.</p>
+      <p className="preferences-help">BMN changes a limit only on an app version whose test passed. An agent's own limit, set on its page, is added to each run BMN or dev-auto starts with it, on a version whose test passed.</p>
     </>
   )
 }
@@ -1521,11 +1587,12 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
     return () => forgetUpdateWatches(shown)
   }, [])
   const top = useRef<HTMLHeadingElement | null>(null)
-  const { load } = rules
+  const { load, began } = rules
   const checkedAt = snapshot.health.checkedAt
   // What Health shows is read from this machine, so BMN reads it again when the owner comes back: on opening
   // the page after a while and when the window gets the focus. Never under an unsaved draft or an open confirmation.
-  const quiet = !rules.busy && rules.pending === null && !rules.dirty
+  const calm = rules.pending === null && !rules.dirty
+  const quiet = !rules.busy && calm
   const arrived = useRef(false)
   useEffect(() => {
     if (arrived.current) return
@@ -1540,20 +1607,22 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
     return () => window.removeEventListener('focus', onFocus)
   }, [quiet, load])
   // And once a command BMN typed for an update has ended: what is shown was read before that, perhaps while it still ran.
+  // Judged by when the read shown began, so one that began before the end and came back after it is read again (63.4 AC2);
+  // asked for also while a read is under way, whose answer is then dropped for the one begun after the end.
   // Once for each end, so a read that fails is not asked for again and again.
   const [endedAt, setEndedAt] = useState(updateEndedAt)
   useEffect(() => {
     const heard = (): void => setEndedAt(updateEndedAt)
-    updateEndListeners.add(heard)
+    const stop = onUpdateEnded(heard)
     heard()
-    return () => { updateEndListeners.delete(heard) }
+    return stop
   }, [])
   const readAfter = useRef<number | null>(null)
   useEffect(() => {
-    if (!quiet || endedAt === readAfter.current || !endedSince(checkedAt, endedAt)) return
+    if (!calm || endedAt === readAfter.current || !endedSince(began, endedAt)) return
     readAfter.current = endedAt
     void load()
-  }, [quiet, endedAt, checkedAt, load])
+  }, [calm, endedAt, began, load])
   const opener = useRef<HTMLButtonElement | null>(null)
   // Update… is off while its sheet is open, so the focus can go back to it only once the sheet has gone.
   useEffect(() => {
@@ -1652,7 +1721,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
                 onRun={runInSession ? (session, command, left) => {
                   watchUpdate(app, health.checkedAt, true)
                   told.current.delete(app.harness)
-                  return runInSession(session, command, updateEnded, left)
+                  return runInSession(session, command, updateRunEnded, left)
                 } : undefined}
                 onCheck={() => { watchUpdate(app, health.checkedAt); redraw((count) => count + 1); void rules.load() }}
                 onClose={() => setAction(null)} />

@@ -896,12 +896,55 @@ Claude Code's rounded report would read the same whichever source it obeyed; the
 inconclusive, names the file, and starts no run of the app: it has only asked the app for its
 version.
 
+**BMN runs the test by itself.** A new app version starts untested, so without anything more an
+agent's own limit would stop holding at every app update. BMN therefore runs that same test
+itself, with **Test context limits after an app update** under Rules → Health → Context limits
+switched on, as it is from the start. It looks at three moments: when BMN starts, when Health
+reads the machine, and when an Update now session ends. It starts an app only where an approved,
+enabled agent on that app has a limit of its own; an app no agent has a limit for is never
+started, and at start it is not even asked for its version. What it does then follows the latest
+test of exactly the installed version:
+
+| Latest test of the installed version | What BMN does |
+| --- | --- |
+| none | runs the test once |
+| passed | nothing, unless a run today would meet a source the test did not (below) |
+| failed | nothing: that version waits for your own **Test…** |
+| showed nothing (`inconclusive`, `unavailable`) | tries once more, at most once per start of BMN: ten minutes later, or sooner if one of the three moments comes first |
+
+For Claude Code a passed version is tested once more when your files have changed since: a run
+of one of those agents would now meet a source the recorded test did not see lose on that side,
+so the check would answer `conflict`, and a test started now would meet a set of sources (which
+one, and on which side of the size the test asks for) that the recorded test did not. The record
+is the memory, so each such set is tested once for a version, and a source whose size the report
+could not tell from the test's own starts no test. Two looks at once start one test, never two.
+
+A test BMN ran is recorded exactly like yours, with `"by": "bmn"` beside it, and the app's row on
+Health then reads "BMN tested 2.1.296 by itself Oct 11 · it takes the setting" (or "the test
+failed", "the test showed nothing"). A failure, or a test that showed nothing twice, is told once
+as a notice that names the agents whose limit does not hold; BMN keeps which version and outcome
+it told in `state/context-auto.json`, beside the switch. Under each app's row Health names every
+agent with a limit of its own and what becomes of it in a run started now: applied, not applied
+(the run gets the app's own size) or refused, with the check's reason behind the line. That is
+judged from where the test runs, a folder of its own under your home folder; a project with
+settings of its own may fare differently, and the check says so for that run.
+
+With the switch off BMN starts no app; Health still names the agents whose limits are not applied
+or refused, and **Test…** works as before. `bmn roster check` never starts an app and writes
+nothing either way. For a version without a test its step says who acts next: "BMN tests it by
+itself when it starts, when Rules > Health is read and after an update there", or that BMN's own
+test is switched off and which command runs it. What a test costs: Claude Code is asked for its
+`/context` report; Codex gets one short synthetic request to its provider, so one per new Codex
+version.
+
 **Runs BMN checks.** `bmn roster role <role> --json` gives each candidate a `context` entry:
 `applied` with the exact `argv` items (Codex) or `env` entries (Claude Code), `app-default`,
 `not-supported-yet` or `out-of-range`. `bmn roster check` then resolves what the run would really
 use and refuses with `CONTEXT_MISMATCH`, after the effort and before the destination, when that
 differs from the agent's limit or cannot be resolved; a PASS records the limit in the receipt's
-`context_limit_applied`. For Codex a `-c` item wins, then the selected profile, then
+`context_limit_applied`, and where an agent's own limit is not applied the receipt's
+`context_limit_note` says why: that BMN tests the version by itself, or that its own testing is
+switched off. For Codex a `-c` item wins, then the selected profile, then
 `config.toml`; a `.codex/config.toml` in the working folder or above it, or `/etc/codex`, that
 sets a size makes the answer unresolved unless the run carries its own item. For Claude Code BMN
 cannot tell from the files which source wins, so every source that names a size must name the

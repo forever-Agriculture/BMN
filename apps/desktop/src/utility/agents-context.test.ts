@@ -1,4 +1,4 @@
-// MODULE: agents-context.test.ts - Story 60.9: context limits over synthetic teams, config files and stub apps; no real app is started
+// MODULE: agents-context.test.ts - Stories 60.9 and 63.1: context limits over synthetic teams, config files and stub apps, and BMN's own test of a new app version; no real app is started
 import { execFile } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -6,12 +6,14 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-  CONTEXT_TEST_SIZE, applyContextDefault, claudeReportedWindow, codexRecordedWindow, contextDefault, contextItems, contextTests, contextTestsPath,
-  planContextDefault, provenControls, provenPrecedence, readClaudeContext, readCodexContext, setJsonEnvEntry, setTomlTopLevelKey, testContext, type ContextTestEntry
+  CONTEXT_TEST_SIZE, applyContextDefault, claudeReportedWindow, codexRecordedWindow, contextAuto, contextAutoPath, contextAutoPlan, contextDefault, contextItems, contextTestFolder, contextTests, contextTestsPath,
+  limitedAgents, planContextDefault, provenControls, provenPrecedence, readClaudeContext, readCodexContext, setContextAuto, setJsonEnvEntry, setTomlTopLevelKey, testContext,
+  type ContextSource, type ContextTestEntry
 } from '../../bin/agents-context.mjs'
-import { evaluate } from '../../bin/agents-check.mjs'
-import { readValidRoster } from '../../bin/agents-state.mjs'
+import { contextTestSources, evaluate, harnessVersion, limitStanding } from '../../bin/agents-check.mjs'
+import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
+import { CONTEXT_RETRY_AFTER_MS, createContextAuto } from '../main/context-auto'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
@@ -59,6 +61,8 @@ function tested(harness: string, version: string, limit: ContextTestEntry['limit
 
 const CODEX = '0.161.0'
 const CLAUDE = '2.1.295'
+/** How the check says that BMN's own test of an untested version is still to come (63.1 AC6). */
+const BY_ITSELF = 'BMN tests it by itself when it starts, when Rules > Health is read and after an update there'
 
 beforeEach(() => {
   home = realpathSync(mkdtempSync(join(tmpdir(), 'bmn-context-')))
@@ -89,16 +93,16 @@ function check(agent: string, argv: string[], log: ContextTestEntry[], environme
 
 describe('which settings are proven for a version (60.9 AC1)', () => {
   it('counts a setting only where the latest test of exactly that version passed', () => {
-    expect(provenControls('codex', CODEX, [])).toEqual({ limit: false, compact: false })
-    expect(provenControls('codex', CODEX, [tested('codex', CODEX)])).toEqual({ limit: true, compact: false })
-    expect(provenControls('codex', '0.162.0', [tested('codex', CODEX)])).toEqual({ limit: false, compact: false })
-    expect(provenControls('codex', CODEX, [tested('codex', CODEX), tested('codex', CODEX, 'fail')])).toEqual({ limit: false, compact: false })
-    expect(provenControls('codex', CODEX, [tested('codex', CODEX, 'pass', 'pass')])).toEqual({ limit: true, compact: true })
-    expect(provenControls('codex', CODEX, [tested('codex', CODEX, 'inconclusive')]).limit).toBe(false)
-    expect(provenControls('codex', null, [tested('codex', CODEX)]).limit).toBe(false)
+    expect(provenControls('codex', CODEX, [])).toEqual({ limit: false, compact: false, standing: 'untested' })
+    expect(provenControls('codex', CODEX, [tested('codex', CODEX)])).toEqual({ limit: true, compact: false, standing: 'pass' })
+    expect(provenControls('codex', '0.162.0', [tested('codex', CODEX)])).toEqual({ limit: false, compact: false, standing: 'untested' })
+    expect(provenControls('codex', CODEX, [tested('codex', CODEX), tested('codex', CODEX, 'fail')])).toEqual({ limit: false, compact: false, standing: 'fail' })
+    expect(provenControls('codex', CODEX, [tested('codex', CODEX, 'pass', 'pass')])).toEqual({ limit: true, compact: true, standing: 'pass' })
+    expect(provenControls('codex', CODEX, [tested('codex', CODEX, 'inconclusive')])).toEqual({ limit: false, compact: false, standing: 'inconclusive' })
+    expect(provenControls('codex', null, [tested('codex', CODEX)])).toEqual({ limit: false, compact: false, standing: 'unknown' })
     // Claude Code has no setting for where summarising starts, whatever a record says.
-    expect(provenControls('claude', CLAUDE, [tested('claude', CLAUDE, 'pass', 'pass')])).toEqual({ limit: true, compact: false })
-    expect(provenControls('opencode', '1.0.0', [tested('opencode', '1.0.0')])).toEqual({ limit: false, compact: false })
+    expect(provenControls('claude', CLAUDE, [tested('claude', CLAUDE, 'pass', 'pass')])).toEqual({ limit: true, compact: false, standing: 'pass' })
+    expect(provenControls('opencode', '1.0.0', [tested('opencode', '1.0.0')])).toEqual({ limit: false, compact: false, standing: 'unknown' })
   })
 
   it('keeps what a test saw about sources that disagree: the very source and the side, for that version only', () => {
@@ -152,7 +156,7 @@ describe('the check compares what a run would really use with the agent\'s limit
     const result = check('sol', SOL(), [])
     expect(result.verdict, JSON.stringify(result)).toBe('PASS')
     expect(result.receipt?.context_limit_applied).toBeNull()
-    expect(result.steps.join('\n')).toMatch(/context limit 272000: not applied, the context setting is not tested on this Codex version/)
+    expect(result.steps.join('\n')).toMatch(/context limit 272000: not applied, the context setting is not tested on this Codex version yet; BMN tests it by itself/)
     // A test of another version proves nothing about this one.
     expect(check('sol', SOL(), [tested('codex', '0.150.0')]).verdict).toBe('PASS')
   })
@@ -310,8 +314,8 @@ describe('bmn roster role lists the items per candidate (60.9 AC2)', () => {
     approve(roster({ opus: 200_000 }))
     const before = JSON.parse((await runCli(['roster', 'role', 'lead', '--json'])).stdout)
     expect(before.candidates.map((candidate: { agent: string; context: unknown }) => [candidate.agent, candidate.context])).toEqual([
-      ['sol', { state: 'not-supported-yet', limit: 272_000, reason: 'the context setting is not tested on this Codex version (bmn context test codex)' }],
-      ['opus', { state: 'not-supported-yet', limit: 200_000, reason: 'the context setting is not tested on this Claude Code version (bmn context test claude)' }]
+      ['sol', { state: 'not-supported-yet', limit: 272_000, reason: `the context setting is not tested on this Codex version yet; ${BY_ITSELF}` }],
+      ['opus', { state: 'not-supported-yet', limit: 200_000, reason: `the context setting is not tested on this Claude Code version yet; ${BY_ITSELF}` }]
     ])
     record(tested('codex', CODEX), tested('claude', CLAUDE))
     const after = JSON.parse((await runCli(['roster', 'role', 'lead', '--json'])).stdout)
@@ -570,7 +574,7 @@ describe('the owner-run test, against stub apps (60.9 AC1)', () => {
     expect(existsSync(folder)).toBe(false)
     expect(contextTests()).toEqual([result])
     expect(statSync(contextTestsPath()).mode & 0o777).toBe(0o600)
-    expect(provenControls('codex', CODEX)).toEqual({ limit: true, compact: false })
+    expect(provenControls('codex', CODEX)).toEqual({ limit: true, compact: false, standing: 'pass' })
   })
 
   it('records fail, inconclusive or unavailable when the proof is not there', async () => {
@@ -613,7 +617,7 @@ describe('the owner-run test, against stub apps (60.9 AC1)', () => {
     expect(seen).toMatchObject({ limit: 'pass', observed: 137_000, rivals: [{ source: 'user settings autoCompactWindow', id, value: 450_000 }],
       detail: 'asked for 137000 while user settings autoCompactWindow says 450000; Claude Code reports a window of 137000, so the run\'s own value wins' })
     expect(provenPrecedence('claude', CLAUDE)).toEqual([{ id, side: 'above' }])
-    expect(provenControls('claude', CLAUDE)).toEqual({ limit: true, compact: false })
+    expect(provenControls('claude', CLAUDE)).toEqual({ limit: true, compact: false, standing: 'pass' })
     // The app took the file's size instead: a fail, and no proof.
     stub('claude', claudeStub('**Tokens:** 12.4k / 450k (3%)'))
     expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'fail', observed: 450_000, rivals: [{ source: 'user settings autoCompactWindow', id, value: 450_000 }],
@@ -645,5 +649,241 @@ describe('the owner-run test, against stub apps (60.9 AC1)', () => {
     expect(claudeReportedWindow('Tokens: 1 / 2')).toBeNull()
     expect(codexRecordedWindow('{"model_context_window":100}\n{"a":{"model_context_window": 116850}}')).toBe(116_850)
     expect(codexRecordedWindow('{}')).toBeNull()
+  })
+})
+
+describe('BMN tests a new app version by itself (63.1)', () => {
+  /** A team in which only Opus (Claude Code) may have a limit of its own: the Haiku-like agent of these tests. */
+  const team = (opus?: number): string => edit(roster(opus === undefined ? {} : { opus }), 'context_limit: 272000\n', '')
+  /** A stand-in Claude Code of one version whose context report names `window`; each start but `--version` leaves a line. */
+  const claude = (version: string, window: string | null): void => stub('claude', [
+    `if [ "$1" = "--version" ]; then echo "${version} (Claude Code)"; exit 0; fi`, 'echo started >> "$HOME/claude-starts"', 'cat > /dev/null',
+    ...(window === null ? [] : [`printf '%s\\n' '**Tokens:** 12.4k / ${window} (9%)'`])
+  ].join('\n'))
+  const starts = (): number => (existsSync(join(home, 'claude-starts')) ? readFileSync(join(home, 'claude-starts'), 'utf8').trim().split('\n').length : 0)
+  const sources = (): ContextSource[] => contextTestSources('claude', env, contextTestFolder(env))
+
+  /** BMN's own testing as the app wires it, over the stand-in apps: what to test from the approved team, the test the owner's own. */
+  function bmn(): { runner: ReturnType<typeof createContextAuto>; told: { title: string; body: string }[]; timers: { run(): void; ms: number }[] } {
+    const told: { title: string; body: string }[] = []
+    const timers: { run(): void; ms: number }[] = []
+    const runner = createContextAuto({
+      plan: () => contextAutoPlan({ data: readApproved().data, versions: { claude: harnessVersion('claude', env), codex: harnessVersion('codex', env) }, sources: { claude: sources() } }),
+      test: async (harness) => {
+        const entry = await testContext(harness, { environment: env, now: NOW, by: 'bmn' })
+        return { outcome: entry.limit, version: entry.version, detail: entry.detail }
+      },
+      tell: (notice) => { told.push(notice) },
+      read: contextAuto,
+      write: (change) => { setContextAuto(change) },
+      later: (run, ms) => { timers.push({ run, ms }) }
+    })
+    return { runner, told, timers }
+  }
+  const limit = (size: number): string => `CLAUDE_CODE_AUTO_COMPACT_WINDOW=${size}`
+  const verdict = (...entries: string[]): string => {
+    const result = check('opus', OPUS(...entries), contextTests())
+    return result.verdict === 'PASS' ? `PASS ${result.receipt?.context_limit_applied ?? 'not applied'}` : `${result.code} ${result.detail ?? ''}`.trim()
+  }
+
+  it('names only apps an agent has a limit on, on a version it can read, and follows what the last test of that version said (AC1, AC2)', () => {
+    const data = (text: string) => { approve(text); return readApproved().data }
+    const none = data(team())
+    const one = data(team(100_000))
+    const versions = { claude: CLAUDE, codex: CODEX }
+    expect(limitedAgents(none, 'claude')).toEqual([])
+    expect(contextAutoPlan({ data: none, versions, tests: [], enabled: true })).toEqual([])
+    expect(contextAutoPlan({ data: null, versions, tests: [], enabled: true })).toEqual([])
+    expect(contextAutoPlan({ data: one, versions, tests: [], enabled: true })).toEqual([{ harness: 'claude', version: CLAUDE, reason: 'untested', agents: ['Opus'] }])
+    // A test of another version, or of another app, says nothing about this one.
+    expect(contextAutoPlan({ data: one, versions, tests: [tested('claude', '2.1.200'), tested('codex', CLAUDE)], enabled: true })).toHaveLength(1)
+    expect(contextAutoPlan({ data: one, versions, tests: [tested('claude', CLAUDE)], enabled: true })).toEqual([])
+    expect(contextAutoPlan({ data: one, versions, tests: [tested('claude', CLAUDE, 'fail')], enabled: true })).toEqual([])
+    for (const nothing of ['inconclusive', 'unavailable'] as const) {
+      expect(contextAutoPlan({ data: one, versions, tests: [tested('claude', CLAUDE, nothing)], enabled: true })).toEqual([{ harness: 'claude', version: CLAUDE, reason: 'retry', agents: ['Opus'] }])
+    }
+    // The latest test of the version decides, as it does for the check.
+    expect(contextAutoPlan({ data: one, versions, tests: [tested('claude', CLAUDE, 'inconclusive'), tested('claude', CLAUDE, 'fail')], enabled: true })).toEqual([])
+    expect(contextAutoPlan({ data: one, versions: { claude: null, codex: CODEX }, tests: [], enabled: true })).toEqual([])
+    expect(contextAutoPlan({ data: one, versions, tests: [], enabled: false })).toEqual([])
+    // An agent that is switched off or only proposed waits for nothing.
+    const off = data(edit(team(100_000), 'harness: claude\nmodel: claude-opus-5-5\ncontext_limit: 100000\nprovider: anthropic\nhost: default\nenabled: true', 'harness: claude\nmodel: claude-opus-5-5\ncontext_limit: 100000\nprovider: anthropic\nhost: default\nenabled: false'))
+    expect(contextAutoPlan({ data: off, versions, tests: [], enabled: true })).toEqual([])
+    // Both apps where both have such an agent, Codex first as everywhere.
+    const both = data(roster({ opus: 100_000 }))
+    expect(contextAutoPlan({ data: both, versions, tests: [], enabled: true }).map((entry) => [entry.harness, entry.agents])).toEqual([['codex', ['Sol']], ['claude', ['Opus']]])
+  })
+
+  it('tests a passed version once more only for sources its test did not meet, and once for each such set (AC3)', () => {
+    approve(team(200_000))
+    const data = readApproved().data
+    const versions = { claude: CLAUDE }
+    const id = 'user settings at /home/synthetic/.claude/settings.json: autoCompactWindow'
+    const file = (value: number): ContextSource[] => [{ source: 'user settings autoCompactWindow', id, value }]
+    const passed = (rivals: ContextSource[]): ContextTestEntry => ({ ...tested('claude', CLAUDE), asked: 137_000, observed: 137_000, rivals })
+    const plan = (last: ContextTestEntry, today: ContextSource[]) => contextAutoPlan({ data, versions, tests: [last], enabled: true, sources: { claude: today } }).map((entry) => entry.reason)
+    // The test met no other source; now a file names a size, so the check would answer conflict.
+    expect(plan(passed([]), file(450_000))).toEqual(['sources'])
+    // That set is on record: not again, whatever the size, while it stays on the same side of the test's own.
+    expect(plan(passed(file(450_000)), file(450_000))).toEqual([])
+    expect(plan(passed(file(450_000)), file(300_000))).toEqual([])
+    // Still above the test's 137 000 but below the agent's 200 000: the check refuses, and another test would meet the same set and show nothing new.
+    expect(plan(passed(file(450_000)), file(150_000))).toEqual([])
+    // Below the test's own size too: a set the test did not meet.
+    expect(plan(passed(file(450_000)), file(110_000))).toEqual(['sources'])
+    expect(plan(passed(file(110_000)), file(110_000))).toEqual([])
+    // Another file is another source.
+    expect(plan(passed(file(450_000)), [...file(450_000), { source: 'local settings above autoCompactWindow', id: 'local settings above at /home/synthetic/.claude/settings.local.json: autoCompactWindow', value: 110_000 }])).toEqual(['sources'])
+    // A source naming the agent's own size disagrees with nothing; with none today there is nothing to meet.
+    expect(plan(passed([]), file(200_000))).toEqual([])
+    expect(plan(passed(file(450_000)), [])).toEqual([])
+    // A size the report could not tell from the test's own would show nothing: no test is started for it.
+    expect(plan(passed([]), file(137_500))).toEqual([])
+    // A record from before sources were kept is tested once against today's.
+    expect(plan(tested('claude', CLAUDE), file(450_000))).toEqual(['sources'])
+  })
+
+  it('keeps its switch on until the owner turns it off, and what he was told, in one small file', () => {
+    expect(contextAuto()).toEqual({ enabled: true, told: {} })
+    expect(existsSync(contextAutoPath())).toBe(false)
+    expect(setContextAuto({ enabled: false })).toEqual({ enabled: false, told: {} })
+    expect(setContextAuto({ told: { claude: '2.1.295 fail' } })).toEqual({ enabled: false, told: { claude: '2.1.295 fail' } })
+    expect(contextAuto()).toEqual({ enabled: false, told: { claude: '2.1.295 fail' } })
+    expect(statSync(contextAutoPath()).mode & 0o777).toBe(0o600)
+    expect(setContextAuto({ enabled: true }).told).toEqual({ claude: '2.1.295 fail' })
+    // A file BMN cannot read is the default, never a guess.
+    writeFileSync(contextAutoPath(), '{"enabled": fal')
+    expect(contextAuto()).toEqual({ enabled: true, told: {} })
+    writeFileSync(contextAutoPath(), '{"enabled":"no","told":{"claude":5,"codex":"0.161.0 fail"}}')
+    expect(contextAuto()).toEqual({ enabled: true, told: { codex: '0.161.0 fail' } })
+  })
+
+  it('starts no app while no agent has a limit, and none with the switch off (AC1, AC4)', async () => {
+    claude(CLAUDE, '137k')
+    approve(team())
+    await bmn().runner.trigger()
+    approve(team(100_000))
+    setContextAuto({ enabled: false })
+    const off = bmn()
+    await off.runner.trigger()
+    expect([starts(), contextTests(), off.runner.view()]).toEqual([0, [], { enabled: false, running: null }])
+  })
+
+  it('tests a new version once, records it as the owner\'s own test is recorded, and the check then passes only the agent\'s exact limit, before and after an update (AC1, AC2, AC5)', async () => {
+    claude(CLAUDE, '137k')
+    approve(team(100_000))
+    // Before any test the limit is not applied, and the check says who acts next.
+    expect([verdict(limit(100_000)), verdict()]).toEqual(['PASS not applied', 'PASS not applied'])
+    expect(check('opus', OPUS(), contextTests()).steps.join('\n')).toContain(`context limit 100000: not applied, the context setting is not tested on this Claude Code version yet; ${BY_ITSELF}`)
+    // The receipt a lead keeps says it too, so `bmn roster check --json` names who acts next.
+    expect(check('opus', OPUS(), contextTests()).receipt?.context_limit_note).toBe(`context limit 100000: not applied, the context setting is not tested on this Claude Code version yet; ${BY_ITSELF}`)
+    const first = bmn()
+    // Two triggers at once start one test.
+    const both = [first.runner.trigger(), first.runner.trigger()]
+    expect(first.runner.view()).toEqual({ enabled: true, running: 'claude' })
+    await Promise.all(both)
+    expect(starts()).toBe(1)
+    expect(first.runner.view().running).toBeNull()
+    expect(contextTests()).toEqual([{ harness: 'claude', at: NOW.toISOString(), version: CLAUDE, limit: 'pass', compact: 'untested', asked: 137_000, observed: 137_000,
+      detail: 'asked for 137000; Claude Code reports a window of 137000', rivals: [], by: 'bmn' }])
+    expect([verdict(limit(100_000)), verdict(), verdict(limit(137_000))]).toEqual(['PASS 100000', 'CONTEXT_MISMATCH missing', 'CONTEXT_MISMATCH differs'])
+    // A pass is not tested again, by this start or the next.
+    await first.runner.trigger()
+    await bmn().runner.trigger()
+    expect([starts(), first.told]).toEqual([1, []])
+    // The app is updated: its new version is untested, and BMN tests it at the next look.
+    claude('2.1.296', '137k')
+    expect(verdict()).toBe('PASS not applied')
+    await first.runner.trigger()
+    expect([starts(), contextTests().map((entry) => [entry.version, entry.limit, entry.by])]).toEqual([2, [[CLAUDE, 'pass', 'bmn'], ['2.1.296', 'pass', 'bmn']]])
+    expect([verdict(limit(100_000)), verdict(), verdict(limit(137_000))]).toEqual(['PASS 100000', 'CONTEXT_MISMATCH missing', 'CONTEXT_MISMATCH differs'])
+    await first.runner.trigger()
+    expect(starts()).toBe(2)
+  })
+
+  it('tells a failed test once, naming the agents, and leaves that version to the owner (AC2, AC5)', async () => {
+    claude(CLAUDE, '200k')
+    approve(team(100_000))
+    const first = bmn()
+    await first.runner.trigger()
+    await first.runner.trigger()
+    expect(starts()).toBe(1)
+    expect(first.told).toEqual([{ title: 'Claude Code context test failed',
+      body: `Opus's own context limit does not hold on Claude Code ${CLAUDE}: the test BMN ran by itself failed. Rules › Health has the details.` }])
+    expect(contextAuto().told).toEqual({ claude: `${CLAUDE} fail` })
+    expect(check('opus', OPUS(), contextTests()).steps.join('\n')).toContain('not applied, the context test failed on this Claude Code version, so the setting is not used (bmn context test claude runs it again)')
+    // The next start neither tests that version again nor says it again.
+    const next = bmn()
+    await next.runner.trigger()
+    expect([starts(), next.told, first.timers]).toEqual([1, [], []])
+  })
+
+  it('tries a test that showed nothing once more per start, and tells it only when it stays so (AC2, AC5)', async () => {
+    claude(CLAUDE, null)
+    approve(team(100_000))
+    const first = bmn()
+    await first.runner.trigger()
+    expect([starts(), first.told]).toEqual([1, []])
+    // One later try is set up, whether or not anything else makes BMN look before then.
+    expect(first.timers.map((timer) => timer.ms)).toEqual([CONTEXT_RETRY_AFTER_MS])
+    expect(check('opus', OPUS(), contextTests()).steps.join('\n')).toContain('not applied, the context test showed nothing on this Claude Code version; BMN tries it once more when it next starts')
+    first.timers[0]?.run()
+    await first.runner.settled()
+    expect(starts()).toBe(2)
+    expect(first.told).toEqual([{ title: 'Claude Code context test showed nothing',
+      body: `Opus's own context limit does not hold on Claude Code ${CLAUDE}: the test BMN ran by itself showed nothing, twice. Rules › Health has the details.` }])
+    // No third time since this start, however often BMN looks.
+    await first.runner.trigger()
+    await first.runner.trigger()
+    expect([starts(), first.timers.length]).toEqual([2, 1])
+    // The next start tries once more and has nothing new to tell.
+    const next = bmn()
+    await next.runner.trigger()
+    await next.runner.trigger()
+    expect([starts(), next.told, next.timers]).toEqual([3, [], []])
+    // Once it answers, the version is proven like any other.
+    claude(CLAUDE, '137k')
+    await bmn().runner.trigger()
+    expect([starts(), verdict(limit(100_000))]).toEqual([4, 'PASS 100000'])
+  })
+
+  it('tests a passed version once more when the owner\'s files name a size its test did not meet (AC3)', async () => {
+    claude(CLAUDE, '137k')
+    approve(team(200_000))
+    const first = bmn()
+    await first.runner.trigger()
+    expect([starts(), verdict(limit(200_000))]).toEqual([1, 'PASS 200000'])
+    mkdirSync(join(home, '.claude'))
+    writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 450_000 }))
+    expect(verdict(limit(200_000))).toBe('CONTEXT_MISMATCH conflict')
+    expect(limitStanding(readApproved().data.agents.find((agent) => agent.id === 'opus') as never, CLAUDE, { environment: env })).toMatchObject({ state: 'refused' })
+    await first.runner.trigger()
+    expect([starts(), verdict(limit(200_000))]).toEqual([2, 'PASS 200000'])
+    expect(limitStanding(readApproved().data.agents.find((agent) => agent.id === 'opus') as never, CLAUDE, { environment: env })).toEqual({ state: 'applied' })
+    // The same set of sources is not tested twice, by this start or the next.
+    await first.runner.trigger()
+    await bmn().runner.trigger()
+    expect(starts()).toBe(2)
+  })
+
+  it('never lets the check start an app or write a file, whatever it says about BMN\'s own testing (AC6)', () => {
+    claude(CLAUDE, '137k')
+    approve(team(100_000))
+    const before = readdirSync(join(home, '.config/bmn/agents/state')).sort()
+    setContextAuto({ enabled: false })
+    const state = readdirSync(join(home, '.config/bmn/agents/state')).sort()
+    const result = check('opus', OPUS(), contextTests())
+    expect(result.steps.join('\n')).toContain("not applied, the context setting is not tested on this Claude Code version and BMN's own test is switched off in Rules > Health (bmn context test claude)")
+    expect(result.receipt?.context_limit_note).toBe("context limit 100000: not applied, the context setting is not tested on this Claude Code version and BMN's own test is switched off in Rules > Health (bmn context test claude)")
+    expect([starts(), readdirSync(join(home, '.config/bmn/agents/state')).sort()]).toEqual([0, state])
+    expect(state).toEqual([...before, 'context-auto.json'].sort())
+  })
+
+  it('marks a test started with --auto as BMN\'s own, and leaves the owner\'s unmarked', async () => {
+    claude(CLAUDE, '137k')
+    const own = JSON.parse((await runCli(['context', 'test', 'claude', '--json'])).stdout)
+    const auto = JSON.parse((await runCli(['context', 'test', 'claude', '--json', '--auto'])).stdout)
+    expect([own.by, auto.by, auto.outcome]).toEqual([undefined, 'bmn', 'pass'])
+    expect(contextTests().map((entry) => entry.by)).toEqual([undefined, 'bmn'])
   })
 })

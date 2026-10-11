@@ -5,6 +5,7 @@
 // the PATH the temporary home's shell settings add, as a version manager would, so every step that finds an app proves
 // BMN looked where a session does. No step reaches a provider or the owner's own rules. Screenshots land in .dev-auto/evidence/epic-60/shots/ (ignored).
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -68,6 +69,9 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const stubs = join(root, 'stubs')
   mkdirSync(agentsDir, { recursive: true })
   mkdirSync(stubs)
+  // BMN's own context testing starts switched off here, so no step before 63.1's own has a test running behind it.
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  writeFileSync(join(stateDir, 'context-auto.json'), '{"version":1,"enabled":false,"told":{}}\n')
   writeFileSync(rosterFile, EXAMPLE)
   writeFileSync(masterFile, MASTER)
   const stub = (name, body) => {
@@ -696,10 +700,17 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
 
     phase('60.13: Update now runs the command in a new session on that one press')
     rmSync(calls, { force: true })
-    // A stand-in updater that takes its time, and a program that reports a newer version only once it has ended. Like an
-    // updater that draws an input line of its own, it first writes the very sign a shell gives at its prompt, while it still runs.
+    // A stand-in updater that runs until this script lets it end, and a program that reports a newer version only once it
+    // has ended. Like an updater that draws an input line of its own, it first writes the very sign a shell gives at its
+    // prompt, while it still runs. A question about the version asked while `held` is wanted waits past the updater's end
+    // and still answers what it saw first: the read of Health that began before the end and answers after it (63.4).
     const updaterDone = join(root, 'codex-updated')
-    stub('codex', [`echo "$*" >> '${calls}'`, `if [ "$1" = "update" ]; then printf '\\033[?2004h'; sleep 12; printf '\\033[?2004l'; touch '${updaterDone}'; echo "updated"; exit 0; fi`,
+    const updaterRelease = join(root, 'codex-update-release')
+    const readHold = join(root, 'codex-version-hold')
+    const readHeld = join(root, 'codex-version-held')
+    stub('codex', [`echo "$*" >> '${calls}'`,
+      `if [ "$1" = "update" ]; then printf '\\033[?2004h'; i=0; while [ ! -f '${updaterRelease}' ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done; printf '\\033[?2004l'; touch '${updaterDone}'; echo "updated"; exit 0; fi`,
+      `if [ -f '${readHold}' ] && [ ! -f '${updaterDone}' ]; then touch '${readHeld}'; i=0; while [ ! -f '${updaterDone}' ] && [ $i -lt 60 ]; do sleep 0.1; i=$((i+1)); done; sleep 1.5; echo "codex-cli 0.161.0"; exit 0; fi`,
       `if [ -f '${updaterDone}' ]; then echo "codex-cli 0.174.0"; else echo "codex-cli 0.161.0"; fi`].join('\n'))
     const updateRuns = () => existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter((entry) => entry === 'update').length : 0
     await updateButton.click()
@@ -736,14 +747,22 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await main.locator('.page-title', { hasText: /^Health$/ }).waitFor()
     await app('Codex').locator('.app-note').getByText('The program still reports 0.161.0.', { exact: true }).waitFor()
     assert.equal(existsSync(updaterDone), false, 'the stand-in updater ended before Health was opened again, so this run shows nothing about a reading made while it ran')
+    // Check now starts a read that is still asking the program its version when the updater ends, and that answers the
+    // old version a moment later. It began before the end, so it is the older reading however late it answers: Health
+    // reads once more and shows what the program reports now (63.4).
+    writeFileSync(readHold, '')
+    await main.getByRole('button', { name: 'Check now' }).click()
+    await until(() => existsSync(readHeld), 'a read of Health held open while the updater still runs')
+    writeFileSync(updaterRelease, '')
+    await until(() => existsSync(updaterDone), 'the stand-in updater to end while that read is still open')
     await app('Codex').locator('.app-note').getByText('The program now reports 0.174.0; before it reported 0.161.0.', { exact: true }).waitFor({ timeout: 30_000 })
     assert.equal(updateRuns(), 1, 'the updater ran more than once')
     await shot('health-update-ended-1280.png')
-    rmSync(updaterDone, { force: true })
+    for (const file of [updaterDone, updaterRelease, readHold, readHeld]) rmSync(file, { force: true })
     stub('codex', `echo "$*" >> '${calls}'\necho "codex-cli 0.161.0"`)
     await main.getByRole('button', { name: 'Check now' }).click()
     await app('Codex').getByText('· tested').waitFor()
-    passed('Update now runs the exact command once in a new plain shell session on the owner\'s one press, and Health reads again by itself when the command ends there and says what the program reports (60.13)')
+    passed('Update now runs the exact command once in a new plain shell session on the owner\'s one press, and Health reads again by itself when the command ends there and says what the program reports, also when a read begun before the end answers after it (60.13, 63.4)')
 
     phase('60.13: Update now types nothing into a shell that is not at its prompt')
     // A start-up file that asks a question holds the shell before its first prompt. Typed then, the command would be
@@ -848,6 +867,68 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await main.getByRole('button', { name: 'Check now' }).click()
     await limitRow('Codex').getByText('App default', { exact: true }).waitFor()
     passed('Health shows each app\'s default context limit; Change… is off until the owner\'s test passed on the installed version, then shows the diff and writes only that line (60.9)')
+
+    phase('63.1: BMN tests a new app version by itself; one switch turns that off, and the check holds an agent to exactly its limit')
+    // Sol has a context limit of its own (272 000). A stand-in Codex of one version: any start but the question about
+    // its version leaves a line and, after a moment, the session record a real run writes.
+    const contextStarts = join(root, 'codex-context-starts')
+    const codexOf = (version) => stub('codex', [`if [ "$1" = "--version" ]; then echo "codex-cli ${version}"; exit 0; fi`, `echo started >> '${contextStarts}'`,
+      'dir=""; prev=""', 'for a in "$@"; do [ "$prev" = "-C" ] && dir="$a"; prev="$a"; done', 'cat > /dev/null', 'sleep 2', 'mkdir -p "$HOME/.codex/sessions/2026/10/10"',
+      `printf '{"payload":{"cwd":"%s"}}\\n{"payload":{"type":"task_started","model_context_window":116850}}\\n' "$dir" > "$HOME/.codex/sessions/2026/10/10/rollout-context-test.jsonl"`].join('\n'))
+    const contextRuns = () => (existsSync(contextStarts) ? readFileSync(contextStarts, 'utf8').trim().split('\n').length : 0)
+    // The check as a lead runs it before a dispatch: BMN's command with the session's PATH, in a folder of the temporary home.
+    const solWork = join(home, 'sol-work')
+    mkdirSync(solWork, { recursive: true })
+    const solCheck = (...limit) => {
+      const run = spawnSync(process.execPath, [join(appDirectory, 'bin/bmn'), 'roster', 'check', '--agent', 'sol', '--role', 'lead', '--workspace', solWork, '--data', 'private', '--cwd', solWork, '--json', '--',
+        'codex', 'exec', '--skip-git-repo-check', '-C', solWork, '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort=xhigh', ...limit, '-'], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }, encoding: 'utf8' })
+      const answer = JSON.parse(run.stdout)
+      return { verdict: answer.verdict === 'PASS' ? 'PASS' : answer.code, text: run.stdout }
+    }
+    const SOL_LIMIT = ['-c', 'model_context_window=272000']
+    const heldToItsLimit = (when) => {
+      const [exact, none, other] = [solCheck(...SOL_LIMIT), solCheck(), solCheck('-c', 'model_context_window=271000')]
+      assert.deepEqual([exact.verdict, none.verdict, other.verdict], ['PASS', 'CONTEXT_MISMATCH', 'CONTEXT_MISMATCH'], `${when}: ${exact.text}\n${none.text}\n${other.text}`)
+    }
+    const autoSwitch = main.getByRole('switch', { name: 'Test context limits after an app update' })
+    assert.equal(await autoSwitch.getAttribute('aria-checked'), 'false')
+    await limitRow('Codex').locator('.limit-note').getByText('Sol: its own limit of 272 000 is applied to each run.', { exact: true }).waitFor()
+    heldToItsLimit('on the version the owner tested')
+    // The app is updated. With the switch off BMN starts nothing: Health and the check both say the limit is not applied and why.
+    codexOf('0.162.0')
+    await main.getByRole('button', { name: 'Check now' }).click()
+    await limitRow('Codex').getByText('Not supported yet · not tested on 0.162.0').waitFor()
+    await limitRow('Codex').locator('.limit-note').getByText("Sol: its own limit of 272 000 is not applied, so a run gets the app's own size.", { exact: true }).waitFor()
+    await sleep(1500)
+    assert.equal(contextRuns(), 0, 'BMN started the app although its own testing is switched off')
+    const unapplied = solCheck()
+    assert.equal(unapplied.verdict, 'PASS', unapplied.text)
+    assert.match(unapplied.text, /BMN's own test is switched off in Rules > Health/)
+    assert.equal(contextRuns(), 0, 'bmn roster check started the app')
+    await limitRow('Codex').scrollIntoViewIfNeeded()
+    await shot('health-context-auto-off-1280.png')
+    // Switched on, BMN runs the owner's own test for the version it finds, once, and says on Health that it did.
+    await autoSwitch.click()
+    await limitRow('Codex').getByText('BMN is testing Codex by itself now…', { exact: false }).waitFor()
+    await limitRow('Codex').getByText(/^BMN tested 0\.162\.0 by itself .+ · it takes the setting$/).waitFor({ timeout: 30_000 })
+    await limitRow('Codex').locator('.limit-note').getByText('Sol: its own limit of 272 000 is applied to each run.', { exact: true }).waitFor()
+    assert.equal(await autoSwitch.getAttribute('aria-checked'), 'true')
+    assert.equal(contextRuns(), 1)
+    assert.equal(readdirSync(home).filter((name) => name.startsWith('.bmn-context-test-')).length, 0, 'the test BMN ran left its folder behind')
+    heldToItsLimit('on the new version, after the test BMN ran')
+    await limitRow('Codex').scrollIntoViewIfNeeded()
+    await shot('health-context-auto-1280.png')
+    // A test that passed is not run again, however often Health is read.
+    await main.getByRole('button', { name: 'Check now' }).click()
+    await limitRow('Codex').getByText(/^BMN tested 0\.162\.0 by itself/).waitFor()
+    await sleep(1500)
+    assert.equal(contextRuns(), 1, 'a version whose test passed was tested again')
+    await autoSwitch.click()
+    await notice(/^BMN no longer tests context limits by itself/)
+    stub('codex', 'echo "codex-cli 0.161.0"')
+    await main.getByRole('button', { name: 'Check now' }).click()
+    await limitRow('Codex').getByText('Setting tested on 0.161.0').waitFor()
+    passed('with the switch off a new app version starts no test and the limit is said not to be applied; switched on, BMN tests the version once and Health names its test; the check passes Sol only with exactly its limit, before and after (63.1)')
 
     phase('60.8: a prompt bound for a provider that may not see private work is stopped; Allow here records that workspace')
     // A stand-in agent app: each line typed into it is a prompt, and BMN's prompt hook answers before it "leaves".

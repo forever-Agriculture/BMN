@@ -1,10 +1,10 @@
-// MODULE: agents-context.mjs - Story 60.9: context limits that reach the agent: each app's settings, the owner-run test that proves them for a version, the items a dispatch carries, and the default for the owner's own sessions
+// MODULE: agents-context.mjs - Stories 60.9 and 63.1: context limits that reach the agent: each app's settings, the test that proves them for a version (run by the owner, or by BMN for a new version), the items a dispatch carries, and the default for the owner's own sessions
 import { spawnSync } from 'node:child_process'
 import { appendFileSync, chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 import { APP_NAMES, RosterError, agentState, agentsDirectory, sha256 } from './agents-roster.mjs'
-import { absoluteUncollapsed, jsonIndent, pathState, replaceFileSafely, resolvedPath } from './safe-config-write.mjs'
+import { absoluteUncollapsed, jsonIndent, pathState, replaceFileSafely, resolvedPath, writeAtomically } from './safe-config-write.mjs'
 import { unifiedDiff } from './text-diff.mjs'
 
 /**
@@ -96,16 +96,24 @@ export function lastContextTest(harness, tests = contextTests()) {
   return last
 }
 
+/** The latest test of exactly this version of an app, or null. */
+function latestOf(harness, version, tests) {
+  if (typeof version !== 'string') return null
+  let last = null
+  for (const entry of tests) if (entry.harness === harness && entry.version === version) last = entry
+  return last
+}
+
 /**
- * Which of an app's settings the owner's test proved on exactly this version. The latest test of
- * that version decides, so a later failure takes an earlier pass away.
+ * Which of an app's settings a test proved on exactly this version. The latest test of that version
+ * decides, so a later failure takes an earlier pass away. `standing` says how that version stands:
+ * the latest test's outcome, `untested` with none, or `unknown` where the version could not be read.
  */
 export function provenControls(harness, version, tests = contextTests()) {
   const controls = CONTEXT_CONTROLS[harness]
-  if (controls === undefined || typeof version !== 'string') return { limit: false, compact: false }
-  let last = null
-  for (const entry of tests) if (entry.harness === harness && entry.version === version) last = entry
-  return { limit: last?.limit === 'pass', compact: controls.compact !== null && last?.compact === 'pass' }
+  if (controls === undefined || typeof version !== 'string') return { limit: false, compact: false, standing: 'unknown' }
+  const last = latestOf(harness, version, tests)
+  return { limit: last?.limit === 'pass', compact: controls.compact !== null && last?.compact === 'pass', standing: last?.limit ?? 'untested' }
 }
 
 /**
@@ -118,9 +126,7 @@ export function provenControls(harness, version, tests = contextTests()) {
  * read in full. The latest test of the version decides.
  */
 export function provenPrecedence(harness, version, tests = contextTests()) {
-  if (typeof version !== 'string') return []
-  let last = null
-  for (const entry of tests) if (entry.harness === harness && entry.version === version) last = entry
+  const last = latestOf(harness, version, tests)
   if (last?.limit !== 'pass' || !Array.isArray(last.rivals) || !Number.isSafeInteger(last.asked)) return []
   if (!Number.isSafeInteger(last.observed) || !reportedAs(last.asked, last.observed)) return []
   const clear = (rival) => typeof rival?.id === 'string' && Number.isSafeInteger(rival?.value) && !reportedAs(last.asked, rival.value)
@@ -130,6 +136,21 @@ export function provenPrecedence(harness, version, tests = contextTests()) {
 
 // ---------------------------------------------------------------------------------------------
 // What a dispatch carries (60.9 AC2)
+
+/**
+ * Why an app's setting is not used on a version, said so that the reader knows who acts next (63.1 AC6):
+ * BMN by itself, or the owner because BMN's own testing is switched off or its test did not pass.
+ */
+function untestedReason(app, harness, standing, auto) {
+  const command = `bmn context test ${harness}`
+  if (standing === 'fail') return `the context test failed on this ${app} version, so the setting is not used (${command} runs it again)`
+  if (standing === 'inconclusive' || standing === 'unavailable') {
+    return `the context test showed nothing on this ${app} version${auto ? '; BMN tries it once more when it next starts' : ` (${command})`}`
+  }
+  if (standing === 'unknown') return `the ${app} version cannot be read, so its context setting counts as not tested`
+  return auto ? `the context setting is not tested on this ${app} version yet; BMN tests it by itself when it starts, when Rules > Health is read and after an update there`
+    : `the context setting is not tested on this ${app} version and BMN's own test is switched off in Rules > Health (${command})`
+}
 
 /**
  * The items that apply an agent's context limit to one run: `-c key=value` pairs for Codex, or
@@ -143,7 +164,7 @@ export function contextItems(agent, proven) {
   const app = APP_NAMES[agent.harness] ?? agent.harness
   const base = { limit: agent.context_limit, ...(agent.compact_at === undefined ? {} : { compact_at: agent.compact_at }) }
   if (controls === undefined) return { state: 'not-supported-yet', ...base, reason: `BMN has no context setting for ${app}` }
-  if (!proven.limit) return { state: 'not-supported-yet', ...base, reason: `the context setting is not tested on this ${app} version (bmn context test ${agent.harness})` }
+  if (!proven.limit) return { state: 'not-supported-yet', ...base, reason: untestedReason(app, agent.harness, proven.standing, proven.auto ?? contextAuto().enabled) }
   const { min, max } = controls.limit
   if ((min !== undefined && agent.context_limit < min) || (max !== undefined && agent.context_limit > max)) {
     return { state: 'out-of-range', ...base, reason: `${app} takes ${thousands(min)} to ${thousands(max)} tokens` }
@@ -637,26 +658,39 @@ export function codexRecordedWindow(rollout) {
 }
 
 /**
+ * Where a test runs: a folder of its own directly under the home folder, named from this. BMN also
+ * judges from here what a run would meet (63.1), so the home folder's own settings count once, as
+ * the user's, and not a second time as a project's.
+ */
+export function contextTestFolder(environment = process.env) {
+  return `${environment.HOME || homedir()}/.bmn-context-test-`
+}
+
+/** What the test passes Claude Code: one answer to `/context`, kept nowhere. */
+export const CLAUDE_TEST_ARGUMENTS = ['-p', '--no-session-persistence', '--output-format', 'text']
+
+/**
  * Starts the app once in an empty throwaway folder under the home folder, asks it for a context
  * size no default equals, and records whether the app's own report shows that size: `pass`,
  * `fail`, `inconclusive` or `unavailable`, against the app's version. The prompt is synthetic and
  * names nothing of the owner's. Where summarising starts is not tested yet, so it stays unproven.
  */
-export async function testContext(harness, { environment = process.env, now = new Date(), timeoutMs = 180_000 } = {}) {
+export async function testContext(harness, { environment = process.env, now = new Date(), timeoutMs = 180_000, by = undefined } = {}) {
   const controls = CONTEXT_CONTROLS[harness]
   if (controls === undefined) throw new ContextError('APP_UNSUPPORTED', `BMN has no context setting for ${APP_NAMES[harness] ?? harness}`)
   const asked = CONTEXT_TEST_SIZE[harness]
   const record = (limit, detail, version = null, observed = null, rivals = undefined) => {
-    const entry = { harness, at: now.toISOString(), version, limit, compact: 'untested', asked, observed, detail, ...(rivals === undefined ? {} : { rivals }) }
+    // `by` is set where BMN started the test by itself (63.1); the owner's own test carries none.
+    const entry = { harness, at: now.toISOString(), version, limit, compact: 'untested', asked, observed, detail, ...(rivals === undefined ? {} : { rivals }), ...(by === undefined ? {} : { by }) }
     mkdirSync(dirname(contextTestsPath()), { recursive: true, mode: 0o700 })
     appendFileSync(contextTestsPath(), `${JSON.stringify(entry)}\n`, { mode: 0o600 })
     return entry
   }
-  const { harnessVersion, parseDispatch, resolveClaudeRoute } = await import('./agents-check.mjs')
+  const { harnessVersion, contextTestSources } = await import('./agents-check.mjs')
   const version = harnessVersion(controls.command, environment)
   if (version === null) return record('unavailable', `${controls.command} is not installed or did not answer --version`)
   const home = environment.HOME || homedir()
-  const folder = mkdtempSync(`${home}/.bmn-context-test-`)
+  const folder = mkdtempSync(contextTestFolder(environment))
   try {
     if (harness === 'codex') {
       const { findRollout } = await import('./agents-rules.mjs')
@@ -673,12 +707,11 @@ export async function testContext(harness, { environment = process.env, now = ne
         ? record('pass', `asked for ${asked}; the session record shows ${observed}`, version, observed)
         : record('fail', `asked for ${asked}, but the session record shows ${observed}`, version, observed)
     }
-    const command = ['-p', '--no-session-persistence', '--output-format', 'text']
+    const command = CLAUDE_TEST_ARGUMENTS
     const tested = { ...environment, [controls.limit.key]: String(asked) }
     // The owner's own files may name another size for this very run. Which ones do is kept with the
     // result: a pass then also shows that the run's own value wins over each of them on this version.
-    const sizes = resolveClaudeRoute(parseDispatch([controls.command, ...command]), tested, folder).context?.sizes ?? []
-    const rivals = sizes.filter((entry) => entry.id !== 'environment').map((entry) => ({ source: entry.source, id: entry.id, value: entry.value }))
+    const rivals = contextTestSources(harness, environment, folder)
     // One that names a size the report cannot tell from the one asked for would make the report show
     // nothing: whichever source the app obeyed, it would read the same. The app is not started for that.
     const unclear = rivals.filter((rival) => reportedAs(asked, rival.value))
@@ -699,6 +732,90 @@ export async function testContext(harness, { environment = process.env, now = ne
 }
 
 // ---------------------------------------------------------------------------------------------
+// BMN tests a new app version by itself (63.1)
+
+export function contextAutoPath() {
+  return `${agentsDirectory()}/state/context-auto.json`
+}
+
+/**
+ * BMN's own testing: `enabled` is the owner's one switch for all apps, on until he turns it off;
+ * `told` holds, per app, the version and outcome of the self-run test he was last told about, so a
+ * failure is said once. A file that is missing or cannot be read is the default, never a guess.
+ */
+export function contextAuto() {
+  try {
+    const data = JSON.parse(readFileSync(contextAutoPath(), 'utf8'))
+    const told = data?.told !== null && typeof data?.told === 'object' && !Array.isArray(data.told) ? data.told : {}
+    return { enabled: data?.enabled !== false, told: Object.fromEntries(Object.entries(told).filter(([, value]) => typeof value === 'string')) }
+  } catch {
+    return { enabled: true, told: {} }
+  }
+}
+
+/** Keeps a change to BMN's own testing: the switch, or what the owner was told. */
+export function setContextAuto(change) {
+  const next = { version: 1, ...contextAuto(), ...change }
+  mkdirSync(dirname(contextAutoPath()), { recursive: true, mode: 0o700 })
+  writeAtomically(contextAutoPath(), `${JSON.stringify(next)}\n`)
+  return { enabled: next.enabled, told: next.told }
+}
+
+/** The approved, enabled agents on an app that have a context limit of their own: the ones a test of that app is for. */
+export function limitedAgents(data, harness) {
+  return (data?.agents ?? []).filter((agent) => agent.harness === harness && agentState(agent) === 'active' && agent.context_limit !== undefined)
+}
+
+/** Which side of `size` a source's own size is on; `same` where the app's report could not tell the two apart. */
+function sideOf(value, size) {
+  return reportedAs(size, value) ? 'same' : value > size ? 'above' : 'below'
+}
+
+/**
+ * Whether a version that passed should be tested once more (63.1 AC3): a run of one of these agents
+ * would meet another source the recorded test did not see lose on that side, so the check answers
+ * `conflict`, and a test started now would meet a set of sources (which one, and on which side of the
+ * size the test asks for) that the recorded test did not. The record itself is the memory: once a
+ * test of this set is on record the answer is no, so each set is tested once for a version. A source
+ * the report could not tell from the test's own size would show nothing, so it starts no test.
+ */
+function meetsNewSources(harness, agents, last, tests, today) {
+  if (!Array.isArray(today) || today.length === 0) return false
+  const asked = CONTEXT_TEST_SIZE[harness]
+  if (today.some((rival) => sideOf(rival.value, asked) === 'same')) return false
+  const precedence = provenPrecedence(harness, last.version, tests)
+  const refused = agents.some((agent) => today.some((rival) => rival.value !== agent.context_limit
+    && !precedence.some((proof) => proof.id === rival.id && proof.side === (rival.value > agent.context_limit ? 'above' : 'below'))))
+  if (!refused) return false
+  const set = (rivals, size) => rivals.map((rival) => `${rival.id} ${sideOf(rival.value, size)}`).sort().join('\n')
+  return !Array.isArray(last.rivals) || !Number.isSafeInteger(last.asked) || set(today, asked) !== set(last.rivals, last.asked)
+}
+
+/**
+ * Which apps BMN should test by itself now, and why: `untested` (no test of the installed version on
+ * record), `retry` (the latest one showed nothing) or `sources` (see meetsNewSources). An app no
+ * agent has a limit for is never named, nor is one whose version cannot be read, nor a version whose
+ * latest test failed: that one waits for the owner. `versions` holds each app's installed version and
+ * `sources` what a test started now would meet besides its own size (contextTestSources). The caller
+ * sees to it that a retry happens once per start of BMN.
+ */
+export function contextAutoPlan({ data, versions, tests = contextTests(), enabled = contextAuto().enabled, sources = {} }) {
+  if (!enabled) return []
+  const plan = []
+  for (const harness of CONTEXT_APPS) {
+    const agents = limitedAgents(data, harness)
+    const version = versions?.[harness]
+    if (agents.length === 0 || typeof version !== 'string') continue
+    const last = latestOf(harness, version, tests)
+    const reason = last === null ? 'untested'
+      : last.limit === 'inconclusive' || last.limit === 'unavailable' ? 'retry'
+        : last.limit === 'pass' && meetsNewSources(harness, agents, last, tests, sources[harness]) ? 'sources' : null
+    if (reason !== null) plan.push({ harness, version, reason, agents: agents.map((agent) => agent.name) })
+  }
+  return plan
+}
+
+// ---------------------------------------------------------------------------------------------
 // CLI
 
 export const CONTEXT_USAGE = `Usage: bmn context check [--json]            Each app's default context limit for your own sessions, and whether
@@ -706,8 +823,10 @@ export const CONTEXT_USAGE = `Usage: bmn context check [--json]            Each 
        bmn context set <app> [--limit N|default] [--compact-at N|default] [--plan] [--expect-plan <hash>] [--yes] [--json]
                                              Change that default: only the named keys of the app's file, shown
                                              as a diff and written after Yes
-       bmn context test <app> [--json]       Owner-run: start the app once in an empty folder and see whether it
-                                             takes the setting; the result is kept for that version
+       bmn context test <app> [--json]       Start the app once in an empty folder and see whether it takes the
+                                             setting; the result is kept for that version. BMN runs it by itself
+                                             for a new version of an app an agent has a limit on, unless that is
+                                             switched off in Rules > Health (--auto marks such a run)
 
 Apps: codex (config.toml: model_context_window, model_auto_compact_token_limit) and claude
 (settings.json env: CLAUDE_CODE_AUTO_COMPACT_WINDOW). An agent's own limit is applied to a dispatch by the
@@ -787,10 +906,10 @@ export async function runContextCommand(argv) {
       return 0
     }
     if (action === 'test') {
-      const { options, positionals } = readOptions(rest, { flags: ['json'] })
+      const { options, positionals } = readOptions(rest, { flags: ['json', 'auto'] })
       asJson = options.json === true
       if (positionals.length !== 1 || !CONTEXT_APPS.includes(positionals[0])) return usage(`context test expects one app: ${CONTEXT_APPS.join(', ')}`)
-      const result = await testContext(positionals[0])
+      const result = await testContext(positionals[0], options.auto === true ? { by: 'bmn' } : {})
       // `outcome` repeats the limit's result under the name the app's reader shares with the rules loading test.
       out(asJson ? JSON.stringify({ ...result, outcome: result.limit }, null, 2) : `${result.harness}: ${result.limit} - ${result.detail}${result.version ? ` (${result.version})` : ''}`)
       return result.limit === 'pass' ? 0 : 1

@@ -199,6 +199,26 @@ describe('typing a command into a new session (60.13)', () => {
     expect(heard()).toBe(1)
   })
 
+  it('ends a run whose session is not listed any more, and keeps one whose session still is (63.4 AC5)', async () => {
+    const kept = start()
+    kept.run.output('a1', bytes(READS))
+    await kept.run.typeInto('a1', kept.type)
+    kept.run.listed(new Set(['a1', 'a2']))
+    await settle()
+    expect([kept.heard(), kept.gone()]).toEqual([0, false])
+    // The host went away: no exit came, and the next list of sessions has none for this run.
+    kept.run.listed(new Set(['a2']))
+    await settle()
+    expect([kept.heard(), kept.gone()]).toEqual([1, true])
+    kept.run.listed(new Set())
+    expect(kept.heard()).toBe(1)
+    // A run that has not been given its session yet is not judged by a list made before it.
+    const unnamed = start()
+    unnamed.run.listed(new Set())
+    unnamed.run.output('b1', bytes(READS))
+    expect(await unnamed.run.typeInto('b1', unnamed.type)).toBe(true)
+  })
+
   it('lets the button be pressed once, and again only where no session could be opened', () => {
     const presses: CommandPress[] = ['idle', 'opening', 'typed', 'not-reading', 'failed']
     expect(presses.filter(takesPress)).toEqual(['idle', 'failed'])

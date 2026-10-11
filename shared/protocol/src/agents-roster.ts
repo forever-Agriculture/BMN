@@ -250,6 +250,13 @@ export interface RulesProbeView {
 export const CONTEXT_LIMIT_APPS = ['codex', 'claude'] as const
 export type ContextLimitApp = (typeof CONTEXT_LIMIT_APPS)[number]
 
+/**
+ * An agent's own context limit and what becomes of it in a run BMN checks: `applied`, `not-applied`
+ * (no test of the installed version passed, so the run gets the app's own size) or `refused` (the
+ * check stops the run), each but the first with the check's reason.
+ */
+export interface ContextAgentLimit { agent: string; limit: number; state: 'applied' | 'not-applied' | 'refused'; reason?: string }
+
 /** One app's default context limit for the owner's own sessions, as Rules › Health shows it (60.9 AC3). */
 export interface ContextLimitView {
   harness: ContextLimitApp
@@ -270,8 +277,10 @@ export interface ContextLimitView {
   /** The sizes the app takes, where it says. */
   min?: number
   max?: number
-  /** The last test of this app, whatever version it ran against. */
-  test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string } | null
+  /** The last test of this app, whatever version it ran against; `by` is set where BMN ran it by itself (63.1). */
+  test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; by?: 'bmn' } | null
+  /** Each approved, enabled agent on this app that has a limit of its own, and how that limit fares for a run started now (63.1 AC4). */
+  limits: ContextAgentLimit[]
   /** The approved, enabled agents that run on this app: they share this one file. */
   agents: string[]
 }
@@ -475,6 +484,8 @@ export interface RulesSnapshot {
   apps: AgentAppView[]
   /** Each app's default context limit, and whether its setting is proven on the installed version. */
   context: ContextLimitView[]
+  /** Whether BMN tests a new app version's context setting by itself, and the app it is testing right now (63.1). */
+  contextAuto: { enabled: boolean; running: ContextLimitApp | null }
   /** The skills folder, each skill's state in each app, and where each app reads skills. */
   skills: SkillsView
   /** Each approved tool's state in each app, and where each app keeps its tools. */

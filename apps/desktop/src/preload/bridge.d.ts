@@ -379,6 +379,9 @@ export interface AiTerminalBridge {
   applyContextLimit(harness: ContextLimitApp, limit: number | null, compact: number | null, planHash: string): Promise<RulesOutcome>
   /** Owner-run: starts the app once in an empty folder to see whether it takes the setting. */
   testContextLimit(harness: ContextLimitApp): Promise<RulesOutcome>
+  /** BMN's own context testing: `fresh` makes it look now, without it the call waits for a test under way. */
+  contextAuto(fresh: boolean): Promise<RulesSnapshot['contextAuto']>
+  setContextAuto(enabled: boolean): Promise<RulesOutcome>
   /** Story 60.11: what a skills install would link, copy or remove in each app, then the install itself, bound to that plan. */
   planSkillsInstall(): Promise<SkillsPlan>
   installSkills(planHash: string): Promise<RulesOutcome>

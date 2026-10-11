@@ -1958,17 +1958,33 @@
   padding: 6px 0 6px 104px;
 }
 
-/* What a check read after an update, under the app's row and in line with its version; the row's line moves under it. */
-.preferences-dialog .app-note {
+/* What a check read after an update, or what becomes of an agent's own limit: under the app's row and in line with its version; the row's line moves under it. */
+.preferences-dialog :is(.app-note, .limit-note) {
   margin: 0;
   padding: 0 0 9px 104px;
   border-bottom: 1px solid var(--hairline);
   color: var(--muted);
 }
 
-.preferences-dialog .health-row:has(+ .app-note) {
+.preferences-dialog .health-row:has(+ :is(.app-note, .limit-note)) {
   border-bottom: 0;
   padding-bottom: 4px;
+}
+
+/* Several notes under one row: only the last one carries the row's line. */
+.preferences-dialog .limit-note:has(+ .limit-note) {
+  border-bottom: 0;
+  padding-bottom: 4px;
+}
+
+.preferences-dialog .limit-note > .needs-dot {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* The one switch above the apps' rows: its name, what it starts, and the switch at the row's end. */
+.preferences-dialog .health-row.auto-test {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto;
 }
 
 .preferences-dialog .rules-page .health-row ~ .preferences-help,

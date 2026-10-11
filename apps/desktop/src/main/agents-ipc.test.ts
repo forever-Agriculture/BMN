@@ -5,9 +5,10 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, ResearchLookup, ResearchSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan, ToolProposalView, ToolsPlan } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { contextAuto, contextTests, setContextAuto } from '../../bin/agents-context.mjs'
 import { fetchPublicPage } from '../../bin/agents-research.mjs'
 import { approveRoster, restoreGeneration, saveAndApprove } from './agents-approval'
-import { fileToApproved, installAgentsIpcHandlers, researchEndedWords } from './agents-ipc'
+import { fileToApproved, installAgentsIpcHandlers, researchEndedWords, type AgentsIpcHandle } from './agents-ipc'
 
 const FIXTURE = readFileSync(fileURLToPath(new URL('../utility/test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 /** BMN cannot inspect where OpenCode sends data, so the team these tests approve records it on the owner's word. */
@@ -24,6 +25,9 @@ let appEnv: Record<string, string>
 let researchPages: string | null
 let researchFetch: typeof fetchPublicPage | null
 let researchLimitMs: number | undefined
+/** What installing the handlers handed back, and the notices BMN itself showed. */
+let ipc: AgentsIpcHandle
+let notices: { title: string; body: string }[]
 const saved = { HOME: process.env.HOME, PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
 
 function stub(name: string, body: string): void {
@@ -46,10 +50,14 @@ beforeEach(() => {
   researchPages = null
   researchFetch = null
   researchLimitMs = undefined
-  installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
+  notices = []
+  // BMN's own context testing is off here, as an owner may have it, so no test starts a stand-in app behind another test's back; its own tests switch it on.
+  setContextAuto({ enabled: false })
+  ipc = installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
     senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...appEnv }),
     openPath: async (path) => (existsSync(path) ? '' : 'no such file'), researchPages: () => researchPages,
-    researchFetch: (address, limits) => (researchFetch ?? fetchPublicPage)(address, limits), researchLimitMs: () => researchLimitMs
+    researchFetch: (address, limits) => (researchFetch ?? fetchPublicPage)(address, limits), researchLimitMs: () => researchLimitMs,
+    notifyApp: (notice) => { notices.push(notice) }, contextRetryLater: () => {}
   })
 })
 
@@ -603,6 +611,103 @@ describe('context limits on Rules › Health (60.9 AC1, AC3)', () => {
     await expect(call('rules:context-plan', { harness: 'opencode', limit: 1, compact: null })).rejects.toThrow(/codex, claude/)
     await expect(call('rules:context-plan', { harness: 'codex', limit: -5, compact: null })).rejects.toThrow(/positive whole number/)
     await expect(call('rules:context-test', { harness: 'cursor' })).rejects.toThrow(/codex, claude/)
+  })
+})
+
+describe('BMN\'s own context testing on Rules › Health (63.1)', () => {
+  /** A stand-in Codex whose session record shows `window`; every start, also for its version, leaves a line. */
+  const codex = (version: string, window: number): void => stub('codex', [
+    'echo "$1" >> "$HOME/codex-calls"',
+    `if [ "$1" = "--version" ]; then echo "codex-cli ${version}"; exit 0; fi`,
+    'dir=""; prev=""', 'for a in "$@"; do [ "$prev" = "-C" ] && dir="$a"; prev="$a"; done', 'cat > /dev/null',
+    'mkdir -p "$HOME/.codex/sessions/2026/10/10"',
+    `printf '{"payload":{"cwd":"%s"}}\\n{"payload":{"type":"task_started","model_context_window":${window}}}\\n' "$dir" > "$HOME/.codex/sessions/2026/10/10/rollout-test.jsonl"`
+  ].join('\n'))
+  const calls = (name: string): string[] => (existsSync(join(home, `${name}-calls`)) ? file(`${name}-calls`).trim().split('\n') : [])
+  const tests = (): number => calls('codex').filter((first) => first === 'exec').length
+  /** The example team, in which only Sol (Codex) has a limit of its own, approved; the switch as a new install has it. */
+  const approved = async (): Promise<void> => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    await call<AgentsOutcome>('agents:approve', { shown: await shown() })
+    setContextAuto({ enabled: true })
+  }
+  const settled = (): Promise<RulesSnapshot['contextAuto']> => call('rules:context-auto', { fresh: false })
+
+  it('tests a new version when Health reads the machine, says that it is, and then shows the test as its own and the limit as applied (AC1, AC5)', async () => {
+    codex('0.161.0', 116850)
+    stub('claude', 'echo "$1" >> "$HOME/claude-calls"\necho "2.1.295 (Claude Code)"')
+    await approved()
+    const first = await call<RulesSnapshot>('rules:snapshot')
+    expect(first.contextAuto).toEqual({ enabled: true, running: 'codex' })
+    expect(first.context[0]).toMatchObject({ limitProven: false, test: null, limits: [{ agent: 'Sol', limit: 272000, state: 'not-applied', reason: expect.stringContaining('BMN tests it by itself') }] })
+    expect(first.context[1]).toMatchObject({ harness: 'claude', limits: [] })
+    // A second read while the test runs starts no second one.
+    await call<RulesSnapshot>('rules:snapshot')
+    expect(await settled()).toEqual({ enabled: true, running: null })
+    const after = await call<RulesSnapshot>('rules:snapshot')
+    expect(after.contextAuto).toEqual({ enabled: true, running: null })
+    expect(after.context[0]).toMatchObject({ limitProven: true, test: { outcome: 'pass', version: '0.161.0', by: 'bmn' }, limits: [{ agent: 'Sol', limit: 272000, state: 'applied' }] })
+    expect(after.context[0]?.limits[0]).not.toHaveProperty('reason')
+    await settled()
+    expect([tests(), notices]).toEqual([1, []])
+    // The app is updated: the next read tests the new version, once.
+    codex('0.162.0', 116850)
+    expect((await call<RulesSnapshot>('rules:snapshot')).contextAuto.running).toBe('codex')
+    await settled()
+    await call<RulesSnapshot>('rules:snapshot')
+    await settled()
+    expect([tests(), contextTests().map((entry) => [entry.version, entry.limit, entry.by])]).toEqual([2, [['0.161.0', 'pass', 'bmn'], ['0.162.0', 'pass', 'bmn']]])
+    // Claude Code has no agent with a limit: it was asked for its version by Health, and never started.
+    expect(calls('claude').every((first) => first === '--version')).toBe(true)
+  })
+
+  it('tests at the start of BMN and when an update ended, without Health, and asks no app for its version that no agent has a limit on (AC1)', async () => {
+    codex('0.161.0', 116850)
+    stub('claude', 'echo "$1" >> "$HOME/claude-calls"\necho "2.1.295 (Claude Code)"')
+    await approved()
+    rmSync(join(home, 'claude-calls'), { force: true })
+    await ipc.contextAutoAtStart()
+    expect([tests(), calls('claude'), contextTests().map((entry) => entry.by)]).toEqual([1, [], ['bmn']])
+    codex('0.162.0', 116850)
+    expect(await call('rules:context-auto', { fresh: true })).toEqual({ enabled: true, running: null })
+    expect([tests(), calls('claude'), contextTests().map((entry) => entry.version)]).toEqual([2, [], ['0.161.0', '0.162.0']])
+    // Nothing new: nothing started.
+    await call('rules:context-auto', { fresh: true })
+    await ipc.contextAutoAtStart()
+    expect(tests()).toBe(2)
+  })
+
+  it('starts nothing with the switch off, says so, and tests once it is switched on (AC4)', async () => {
+    codex('0.161.0', 116850)
+    await approved()
+    const off = await call<RulesOutcome>('rules:context-auto-set', { enabled: false })
+    expect(off).toMatchObject({ ok: true, message: 'BMN no longer tests context limits by itself', snapshot: { contextAuto: { enabled: false, running: null } } })
+    expect(off.snapshot.context[0]?.limits).toMatchObject([{ agent: 'Sol', state: 'not-applied', reason: expect.stringContaining("BMN's own test is switched off in Rules > Health") }])
+    await ipc.contextAutoAtStart()
+    await call<RulesSnapshot>('rules:snapshot')
+    await call('rules:context-auto', { fresh: true })
+    expect([tests(), contextAuto().enabled]).toEqual([0, false])
+    // The owner's own test still runs, and is recorded as his.
+    expect(await call<RulesOutcome>('rules:context-test', { harness: 'codex' })).toMatchObject({ ok: true, snapshot: { context: [{ test: { outcome: 'pass' } }, {}] } })
+    expect(contextTests().map((entry) => entry.by)).toEqual([undefined])
+    codex('0.162.0', 116850)
+    const on = await call<RulesOutcome>('rules:context-auto-set', { enabled: true })
+    expect(on).toMatchObject({ ok: true, message: 'BMN tests context limits by itself after an app update', snapshot: { contextAuto: { enabled: true, running: 'codex' } } })
+    await settled()
+    expect(contextTests().map((entry) => [entry.version, entry.by])).toEqual([['0.161.0', undefined], ['0.162.0', 'bmn']])
+    await expect(call('rules:context-auto-set', { enabled: 'yes' })).rejects.toThrow(/true or false/)
+  })
+
+  it('tells the owner once when the test it ran failed, naming the agent (AC5)', async () => {
+    codex('0.161.0', 258400)
+    await approved()
+    await ipc.contextAutoAtStart()
+    await call<RulesSnapshot>('rules:snapshot')
+    await settled()
+    expect(tests()).toBe(1)
+    expect(notices).toEqual([{ title: 'Codex context test failed', body: "Sol's own context limit does not hold on Codex 0.161.0: the test BMN ran by itself failed. Rules › Health has the details." }])
+    const shownNow = await call<RulesSnapshot>('rules:snapshot')
+    expect(shownNow.context[0]).toMatchObject({ limitProven: false, test: { outcome: 'fail', by: 'bmn' }, limits: [{ agent: 'Sol', state: 'not-applied', reason: expect.stringContaining('the context test failed on this Codex version') }] })
   })
 })
 

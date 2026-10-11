@@ -38,19 +38,23 @@ import {
 import type { IpcMainInvokeEvent } from 'electron'
 import { HARNESSES, RosterError, agentsDirectory, parseRoster, proseOf, rewriteProse, rewriteRoster, rosterPath, sha256, starterRoster, type RosterData } from '../../bin/agents-roster.mjs'
 import { approvedIfAny, listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
-import { TESTED_HARNESS_VERSIONS, consequences, harnessVersion, inspectRoute, versionStanding } from '../../bin/agents-check.mjs'
+import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, harnessVersion, inspectRoute, limitStanding, versionStanding } from '../../bin/agents-check.mjs'
 import {
   applyTeamUpdate, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planTeamUpdate, probeInspector, render, writeMaster, type RulesHarness
 } from '../../bin/agents-rules.mjs'
 import { pathState, replaceFileSafely } from '../../bin/safe-config-write.mjs'
 import { unifiedDiff } from '../../bin/text-diff.mjs'
 import { decide as decidePrompt } from '../../bin/agents-guard.mjs'
-import { CONTEXT_APPS, ContextError, applyContextDefault, contextDefault, planContextDefault, sharingAgents } from '../../bin/agents-context.mjs'
+import {
+  CONTEXT_APPS, ContextError, applyContextDefault, contextAuto, contextAutoPlan, contextDefault, contextTestFolder, limitedAgents, planContextDefault, setContextAuto, sharingAgents,
+  type ContextAutoPlanEntry, type ContextTestOutcome
+} from '../../bin/agents-context.mjs'
 import { chooseResearcher, chosenResearcher, fetchPublicPage, readResearch, researchView, researchers, runResearch, type ResearchRunRecord } from '../../bin/agents-research.mjs'
 import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsTests } from '../../bin/agents-skills.mjs'
 import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsTests } from '../../bin/agents-tools.mjs'
 import { allowWorkspace, approveRoster, approveSections, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
 import { findAppProgram } from './app-program'
+import { createContextAuto, type ContextAutoSeams } from './context-auto'
 import { MainIpcError } from './workspace-ipc'
 
 interface AgentsIpcRegistrar {
@@ -82,6 +86,16 @@ export interface AgentsIpcOptions {
   researchFetch?: typeof fetchPublicPage
   /** How long one research may take in all; tests shorten it. */
   researchLimitMs?(): number | undefined
+  /** Shows the owner a notice from BMN itself; absent in tests that have nobody to tell. */
+  notifyApp?(notice: { title: string; body: string }): void
+  /** The timer BMN's own context testing waits on before it tries once more; tests replace it. */
+  contextRetryLater?: ContextAutoSeams['later']
+}
+
+/** What installing the handlers hands back to the app. */
+export interface AgentsIpcHandle {
+  /** BMN has started: a new app version an agent has a context limit on is tested now (63.1 AC1). Resolves when that is done. */
+  contextAutoAtStart(): Promise<void>
 }
 
 /** Variables the rules CLI reads to find each app's file and its destination; nothing else of this process's environment. */
@@ -394,6 +408,8 @@ export interface RulesIpcContext {
   script: string; env: NodeJS.ProcessEnv; probeEnv: NodeJS.ProcessEnv; now: () => Date
   /** Why the shell's settings could not be read, when BMN's own environment stands in for them. */
   ownEnvironment?: string
+  /** BMN's own context testing as it stands now; absent where nothing can start a test. */
+  contextAuto?(): RulesSnapshot['contextAuto']
 }
 
 /** What an inspection resolved: the app's installed version and where it sends data. */
@@ -451,7 +467,17 @@ function contextView(harness: ContextLimitApp, version: string | null, generatio
     ...(row.unreadable === undefined ? {} : { unreadable: row.unreadable }),
     limitProven: row.proven.limit, compactProven: row.proven.compact,
     ...(row.min === undefined || row.max === undefined ? {} : { min: row.min, max: row.max }),
-    test: row.test === null ? null : { at: row.test.at, version: row.test.version, outcome: row.test.limit, detail: row.test.detail },
+    test: row.test === null ? null : { at: row.test.at, version: row.test.version, outcome: row.test.limit, detail: row.test.detail, ...(row.test.by === 'bmn' ? { by: 'bmn' as const } : {}) },
+    limits: limitedAgents(generation?.data ?? null, harness).map((agent) => {
+      const limit = agent.context_limit as number
+      try {
+        const standing = limitStanding(agent, version, { environment: context.env })
+        return { agent: agent.name, limit, state: standing?.state ?? 'applied', ...(standing === null || standing.state === 'applied' ? {} : { reason: standing.reason }) }
+      } catch (error) {
+        // A file the check cannot read stops the run it would judge, so it is said as a refusal.
+        return { agent: agent.name, limit, state: 'refused' as const, reason: error instanceof Error ? error.message : String(error) }
+      }
+    }),
     agents: sharingAgents(generation?.data ?? null, harness)
   }
 }
@@ -644,6 +670,7 @@ export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnap
     apps,
     // The version each limit setting is judged against is the one the row above shows.
     context: (CONTEXT_APPS as ContextLimitApp[]).map((harness) => contextView(harness, apps.find((app) => app.harness === harness)?.version ?? null, generation, context)),
+    contextAuto: context.contextAuto?.() ?? { enabled: contextAuto().enabled, running: null },
     skills: skillsView(apps, pages, context),
     tools: toolsView(apps, pages, context),
     ...(context.ownEnvironment === undefined ? {} : { ownEnvironment: context.ownEnvironment }),
@@ -684,7 +711,7 @@ async function rulesOutcome(context: RulesIpcContext, result: CliResult, success
 
 // ---------------------------------------------------------------------------------------------
 
-export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: AgentsIpcOptions): void {
+export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: AgentsIpcOptions): AgentsIpcHandle {
   const handle = (channel: `aiterm:${string}`, listener: (params: Record<string, unknown>) => unknown): void => {
     ipc.handle(channel, (event, params) => {
       if (!options.senderIsAllowed(event)) throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
@@ -698,9 +725,53 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const environment = options.environment?.() ?? session?.env ?? process.env
     return {
       script: options.cliScript(), env: rulesEnvironment(environment), probeEnv: probeEnvironment(environment), now: options.now ?? (() => new Date()),
-      ...(session?.source === 'app' ? { ownEnvironment: session.reason ?? 'the shell could not be asked' } : {})
+      ...(session?.source === 'app' ? { ownEnvironment: session.reason ?? 'the shell could not be asked' } : {}),
+      contextAuto: () => auto.view()
     }
   }
+  const installedVersion = (harness: ContextLimitApp, ctx: RulesIpcContext): string | null => inspectApp(harness, ctx.env, ctx.probeEnv).resolution.version
+  /**
+   * BMN's own context testing (63.1). What to test is decided from the approved team, the installed
+   * versions and the sources a test would meet today; the test itself is the owner's own, `bmn context
+   * test`, started with his environment and marked as BMN's.
+   */
+  const auto = createContextAuto({
+    plan: (known): ContextAutoPlanEntry[] => {
+      if (!contextAuto().enabled) return []
+      let data: RosterData | null
+      try {
+        data = approvedIfAny()?.data ?? null
+      } catch {
+        data = null
+      }
+      // An app no agent has a limit for is not even asked for its version.
+      const apps = (CONTEXT_APPS as ContextLimitApp[]).filter((harness) => limitedAgents(data, harness).length > 0)
+      if (apps.length === 0) return []
+      const ctx = context()
+      const versions = Object.fromEntries(apps.map((harness) => [harness, known !== undefined && harness in known ? known[harness] ?? null : installedVersion(harness, ctx)]))
+      const folder = contextTestFolder(ctx.probeEnv)
+      const sources = Object.fromEntries(apps.map((harness) => {
+        try {
+          return [harness, contextTestSources(harness, ctx.probeEnv, folder)]
+        } catch {
+          // A source that cannot be read is not a new one to test against.
+          return [harness, []]
+        }
+      }))
+      return contextAutoPlan({ data, versions, sources })
+    },
+    test: async (harness) => {
+      const ctx = context()
+      const result = await runCli(ctx.script, ['context', 'test', harness, '--json', '--auto'], ctx.probeEnv, PROBE_TIMEOUT_MS)
+      const report = parseJson(result.stdout)
+      if (result.failed || report === null || typeof report.outcome !== 'string') return null
+      return { outcome: report.outcome as ContextTestOutcome, version: typeof report.version === 'string' ? report.version : null, detail: String(report.detail ?? '') }
+    },
+    tell: (notice) => options.notifyApp?.(notice),
+    read: contextAuto,
+    write: (change) => { setContextAuto(change) },
+    ...(options.contextRetryLater === undefined ? {} : { later: options.contextRetryLater })
+  })
 
   const inspect = (harness: RosterHarness): AppInspection => {
     const ctx = context()
@@ -819,7 +890,12 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     })
   })
 
-  handle('aiterm:rules:snapshot', () => rulesSnapshot(context()))
+  handle('aiterm:rules:snapshot', async () => {
+    const snapshot = await rulesSnapshot(context())
+    // Health has read the machine: a new app version is tested from here, with the versions this read found.
+    void auto.trigger(Object.fromEntries(snapshot.context.map((row) => [row.harness, row.version])))
+    return { ...snapshot, contextAuto: auto.view() }
+  })
   handle('aiterm:rules:plan-master', (params) => {
     const text = textParam(params, 'text')
     const state = pathState(masterPath())
@@ -892,7 +968,6 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       expectedLink: state.kind === 'link' ? state.target : null, expectedDirectory: state.directory, text
     }
   })
-  const installedVersion = (harness: ContextLimitApp, ctx: RulesIpcContext): string | null => inspectApp(harness, ctx.env, ctx.probeEnv).resolution.version
   handle('aiterm:rules:context-plan', (params): ContextLimitPlan => {
     const harness = contextApp(params.harness)
     const limit = sizeParam(params, 'limit')
@@ -931,6 +1006,24 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     // Owner-run: the app starts once with its own environment, as a loading test does.
     const result = await runCli(ctx.script, ['context', 'test', harness, '--json'], ctx.probeEnv, PROBE_TIMEOUT_MS)
     return rulesOutcome(ctx, result, (report) => `${ROSTER_APP_NAMES[harness]} context test ${PROBE_OUTCOME_WORDS[String(report.outcome)] ?? String(report.outcome)}: ${String(report.detail)}`)
+  })
+  // `fresh` makes BMN look now (an update command ended); without it the call only waits for a test under way.
+  handle('aiterm:rules:context-auto', async (params) => {
+    await (params.fresh === true ? auto.trigger() : auto.settled())
+    return auto.view()
+  })
+  handle('aiterm:rules:context-auto-set', async (params) => {
+    if (typeof params.enabled !== 'boolean') invalid('enabled must be true or false')
+    const ctx = context()
+    try {
+      setContextAuto({ enabled: params.enabled })
+    } catch (error) {
+      return { ok: false, code: 'IO_ERROR', message: error instanceof Error ? error.message : String(error), snapshot: await rulesSnapshot(ctx) } satisfies RulesOutcome
+    }
+    const snapshot = await rulesSnapshot(ctx)
+    if (params.enabled) void auto.trigger(Object.fromEntries(snapshot.context.map((row) => [row.harness, row.version])))
+    const message = params.enabled ? 'BMN tests context limits by itself after an app update' : 'BMN no longer tests context limits by itself'
+    return { ok: true, message, snapshot: { ...snapshot, contextAuto: auto.view() } } satisfies RulesOutcome
   })
   handle('aiterm:rules:skills-plan', async () => {
     const ctx = context()
@@ -1085,6 +1178,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       if (research === state) research = null
     }
   })
+  return { contextAutoAtStart: () => auto.trigger() }
 }
 
 /** How a research ended, for the page's notice. */

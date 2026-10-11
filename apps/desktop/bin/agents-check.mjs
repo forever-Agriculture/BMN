@@ -7,7 +7,7 @@ import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_
 import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
-import { CLAUDE_CONTEXT_KEY, CODEX_CONTEXT_KEYS, checkContext, provenControls, provenPrecedence, wholeNumber } from './agents-context.mjs'
+import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, CONTEXT_TEST_SIZE, checkContext, contextItems, contextTestFolder, provenControls, provenPrecedence, wholeNumber } from './agents-context.mjs'
 import { RUN_TEST_APPS, appTools, checkRunTools } from './agents-tools.mjs'
 
 export { publicOnlyReasons }
@@ -720,6 +720,37 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
     configHome: configDir,
     context: { limit, compact: null, sizes }
   }
+}
+
+/**
+ * The other sources that would name a context size for a test of this app run from `folder`, each by
+ * its identity and its size (60.9 AC2, 63.1 AC3). Only Claude Code reads a size from more than one place.
+ */
+export function contextTestSources(harness, environment, folder) {
+  if (harness !== 'claude') return []
+  const tested = { ...environment, [CLAUDE_CONTEXT_KEY]: String(CONTEXT_TEST_SIZE.claude) }
+  const sizes = resolveClaudeRoute(parseDispatch(['claude', ...CLAUDE_TEST_ARGUMENTS]), tested, folder).context?.sizes ?? []
+  return sizes.filter((entry) => entry.id !== 'environment').map((entry) => ({ source: entry.source, id: entry.id, value: entry.value }))
+}
+
+/**
+ * How an agent's own context limit fares for a run started now with exactly the items `bmn roster
+ * role --json` gives for it (63.1 AC4): `applied`, `not-applied` (no proven setting on this version,
+ * so the run gets the app's own default) or `refused` (the check would stop the run), each but the
+ * first with its reason in the check's words. Null for an agent without a limit. Judged from where
+ * the test runs, a folder of its own under the home folder: a run from a project that has settings
+ * of its own may fare differently, and the check says so then.
+ */
+export function limitStanding(agent, version, { environment = process.env, cwd = contextTestFolder(environment), tests = undefined, auto = undefined } = {}) {
+  const proven = { ...provenControls(agent.harness, version, tests), ...(auto === undefined ? {} : { auto }) }
+  const items = contextItems(agent, proven)
+  if (items.state === 'app-default') return null
+  if (items.state !== 'applied') return { state: items.state === 'out-of-range' ? 'refused' : 'not-applied', reason: items.reason }
+  const argv = agent.harness === 'codex' ? ['codex', 'exec', ...items.argv, '-'] : ['env', '-i', `HOME=${environment.HOME ?? homedir()}`, ...items.env, 'claude', '-p']
+  const parsed = parseDispatch(argv)
+  const resolution = agent.harness === 'codex' ? resolveCodexRoute(parsed, environment, cwd) : resolveClaudeRoute(parsed, environment, cwd)
+  const result = checkContext(agent, resolution.context, proven, provenPrecedence(agent.harness, version, tests))
+  return result.refusal ? { state: 'refused', reason: result.refusal } : { state: 'applied' }
 }
 
 /**
@@ -1619,6 +1650,8 @@ export function evaluate(inputs, {
     const body = {
       version: 1, mode: 'dispatch', verdict: 'PASS', agent: agent.id, class: agent.class, harness: parsed.harness, model: model.value,
       role: role.id, effort: effort.value, context_limit_applied: context.applied,
+      // A limit of the agent's own that this run does not get, with the reason: whether BMN will test the version by itself or its own testing is switched off (63.1).
+      ...(agent.context_limit !== undefined && context.applied === null ? { context_limit_note: context.note } : {}),
       // The tools this run was given and a hash of their definitions: variable names, never a value.
       // Bound whenever the run was kept to a set, an empty one too; a run of a team without tools carries no such entry.
       // A run whose tools BMN could not judge (Codex) says so, so no receipt reads as kept to a set that was not checked.
@@ -1809,7 +1842,9 @@ export function evaluateResearch(inputs, {
     if (inputs.dry === true) return { verdict: 'PASS', dry: true, version, steps }
     const body = {
       version: 1, mode: 'research', verdict: 'PASS', agent: agent.id, class: agent.class, harness: parsed.harness, model: model.value,
-      effort: effort.value, context_limit_applied: context.applied, cwd,
+      effort: effort.value, context_limit_applied: context.applied,
+      ...(agent.context_limit !== undefined && context.applied === null ? { context_limit_note: context.note } : {}),
+      cwd,
       argv_sha256: sha256(canonicalJson(inputs.argv)),
       harness_version: { version, state: standing.state },
       route: receiptRoute(destination, route),
@@ -1975,7 +2010,7 @@ export async function runCheckCommand(action, argv) {
     if (result.verdict === 'PASS') {
       const receipt = result.receipt
       out(asJson ? JSON.stringify(receipt, null, 2)
-        : `PASS ${receipt.agent} ${receipt.role ?? 'research'} -> ${receipt.route.host} (${receipt.data ?? 'research'}, private work ${receipt.private_work.allowed ? 'allowed' : 'not allowed'}); receipt ${receipt.receipt_hash.slice(0, 12)}`)
+        : `PASS ${receipt.agent} ${receipt.role ?? 'research'} -> ${receipt.route.host} (${receipt.data ?? 'research'}, private work ${receipt.private_work.allowed ? 'allowed' : 'not allowed'}); receipt ${receipt.receipt_hash.slice(0, 12)}${receipt.context_limit_note === undefined ? '' : `\n${receipt.context_limit_note}`}`)
       return 0
     }
     if (asJson) out(JSON.stringify({ verdict: 'REFUSED', code: result.code, message: result.message, next: result.next, ...(result.detail === undefined ? {} : { detail: result.detail }) }, null, 2))

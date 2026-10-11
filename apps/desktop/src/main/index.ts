@@ -249,6 +249,20 @@ const presence = createPresenceMonitor({
     return () => clearTimeout(timer)
   }
 })
+/** A notice from BMN itself, not from a session: a click brings the window forward. */
+function showAppNotice(notice: { title: string; body: string }): void {
+  if (selfTestTaps) {
+    selfTestTaps.appNotice(notice)
+    return
+  }
+  if (!Notification.isSupported()) return
+  const notification = new Notification({ ...notice, silent: false })
+  notification.on('click', () => {
+    notification.close()
+    focusExistingWindow(applicationWindow)
+  })
+  notification.show()
+}
 const appEvents = createAppEventForwarder({
   client: () => hostClient,
   targets: allowedTargets,
@@ -274,19 +288,7 @@ const appEvents = createAppEventForwarder({
     notification.show()
   },
   notificationsEnabled: () => !selfTestTaps?.headless || selfTestTaps.captureAttentionNotifications,
-  notifyApp: (notice) => {
-    if (selfTestTaps) {
-      selfTestTaps.appNotice(notice)
-      return
-    }
-    if (!Notification.isSupported()) return
-    const notification = new Notification({ ...notice, silent: false })
-    notification.on('click', () => {
-      notification.close()
-      focusExistingWindow(applicationWindow)
-    })
-    notification.show()
-  },
+  notifyApp: showAppNotice,
   appNotificationsEnabled: () => true,
   place: async (sessionId) => {
     const client = hostClient
@@ -640,12 +642,13 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
   const productionVoiceBinary = whisperBinaryPath()
   // Sessions start the owner's shell, whose settings may add to PATH; the Team and Rules pages look where the sessions do.
   const sessionEnvironment = createSessionEnvironmentReader(() => process.env)
-  void sessionEnvironment.refresh()
-  installAgentsIpcHandlers(bridgeIpc, {
-    senderIsAllowed, cliScript: bmnCliScript, sessionEnvironment, openPath: (path) => shell.openPath(path),
+  const agentsIpc = installAgentsIpcHandlers(bridgeIpc, {
+    senderIsAllowed, cliScript: bmnCliScript, sessionEnvironment, openPath: (path) => shell.openPath(path), notifyApp: showAppNotice,
     // Only the app's own self-test, started in test mode, serves made-up pages, and only for site names ending in `.test`.
     researchPages: () => (rendererTestMode ? process.env.BMN_SELF_TEST_PAGES ?? null : null)
   })
+  // Once the shell's own program path is known, so a new app version is tested with the program a session would start (63.1).
+  void sessionEnvironment.refresh().finally(() => agentsIpc.contextAutoAtStart())
   installVoiceIpcHandlers(bridgeIpc, {
     senderIsAllowed,
     // Handlers install before the self-test's taps exist, so its stand-ins are read per call.

@@ -31,6 +31,8 @@ interface ReceiptBase {
   model: string
   effort: string
   context_limit_applied: number | null
+  /** Why the agent's own limit is not applied to this run; absent where it is applied or the agent has none. */
+  context_limit_note?: string
   /** The tools this run was given and a hash of their definitions; absent when it was given none. */
   /** The tools the run was kept to, with a hash of their definitions; or `checked: false` for a run whose tools BMN did not judge (Codex) while the team lists tools. */
   tools?: { applied: string[]; sha256: string; checked?: undefined } | { checked: false; applied?: undefined; sha256?: undefined }
@@ -138,6 +140,9 @@ export declare function researchRunsDirectory(): string
 export declare function prepareResearchRun(prompt: string, options?: { now?: Date; id?: string }): ResearchRun
 export declare function inspectRoute(agent: RosterAgent, argv: string[] | null, environment: NodeJS.ProcessEnv, cwd: string, data?: RosterData | null): Record<string, unknown>
 export declare function harnessVersion(command: string, environment: Environment): string | null
+export declare function contextTestSources(harness: string, environment: Environment, folder: string): import('./agents-context.mjs').ContextSource[]
+export declare function limitStanding(agent: RosterAgent, version: string | null, options?: { environment?: Environment; cwd?: string; tests?: import('./agents-context.mjs').ContextTestEntry[]; auto?: boolean }):
+  { state: 'applied' } | { state: 'not-applied' | 'refused'; reason: string } | null
 export declare function receiptHash(body: Record<string, unknown>): string
 export declare function runCheckCommand(action: string, argv: string[]): Promise<number>
 export declare function consequences(before: RosterData | null, after: RosterData): string[]

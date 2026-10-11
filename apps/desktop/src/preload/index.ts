@@ -805,6 +805,13 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   testContextLimit(harness: ContextLimitApp): Promise<RulesOutcome> {
     return invokeBridge('aiterm:rules:context-test', { harness })
   },
+  /** BMN's own context testing: `fresh` makes it look now, without it the call waits for a test under way. Resolves when none is. */
+  contextAuto(fresh: boolean): Promise<RulesSnapshot['contextAuto']> {
+    return invokeBridge('aiterm:rules:context-auto', { fresh })
+  },
+  setContextAuto(enabled: boolean): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:context-auto-set', { enabled })
+  },
   planSkillsInstall(): Promise<SkillsPlan> {
     return invokeBridge('aiterm:rules:skills-plan', {})
   },
