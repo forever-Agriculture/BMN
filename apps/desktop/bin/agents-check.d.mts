@@ -55,7 +55,9 @@ export interface CheckReceipt extends ReceiptBase {
   packet?: { path: string; manifest: { name: string; sha256: string }[]; prompt: string }
 }
 export interface ResearchReceipt extends ReceiptBase { mode: 'research'; stdin: { path: string; sha256: string } }
-interface Refused { verdict: 'REFUSED'; code: string; message: string; next: string; steps: string[]; receipt?: undefined }
+interface Refused { verdict: 'REFUSED'; code: string; message: string; next: string; steps: string[]; receipt?: undefined
+  /** The reason within the code where a caller words it for the owner: for CONTEXT_MISMATCH, checkContext's `why`. */
+  detail?: string }
 export type CheckResult = { verdict: 'PASS'; receipt: CheckReceipt; steps: string[]; code?: undefined; message?: undefined; next?: undefined } | Refused
 export type ResearchResult =
   | { verdict: 'PASS'; receipt: ResearchReceipt; steps: string[]; dry?: undefined; version?: undefined; code?: undefined; message?: undefined; next?: undefined }

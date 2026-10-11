@@ -888,11 +888,12 @@ yet** on that version: BMN writes nothing, passes nothing and requires nothing. 
 starts has no test yet, so it stays not supported on every app.
 
 The Claude Code test also keeps which of your own files named another size for that very run
-(`rivals`: the kind of source and its size, for example `user settings autoCompactWindow` at
-450 000). A pass then shows one more thing for that version: the run's own value wins over that
-kind of source, on that side (the file's size above or below the run's). A file whose size is
-within one percent of the size the test asks for is left out, because Claude Code's rounded report
-could not tell the two apart.
+(`rivals`: each source by the part it plays, its file and key, with its size; for example your
+user settings' `autoCompactWindow` at 450 000). A pass then shows one more thing for that version:
+the run's own value wins over that very source, on that side (the file's size above or below the
+run's). Where one of your files names a size within one percent of the size the test asks for,
+Claude Code's rounded report would read the same whichever source it obeyed; the test then answers
+inconclusive, names the file, and does not start the app.
 
 **Runs BMN checks.** `bmn roster role <role> --json` gives each candidate a `context` entry:
 `applied` with the exact `argv` items (Codex) or `env` entries (Claude Code), `app-default`,
@@ -905,12 +906,15 @@ sets a size makes the answer unresolved unless the run carries its own item. For
 cannot tell from the files which source wins, so every source that names a size must name the
 same one: the run's environment, `env` in each settings file it loads, and a settings file's own
 `autoCompactWindow`. The one exception is what the test of the installed version saw: where the
-run's environment names the agent's limit and every other size comes from a kind of source the
-test saw it win over, on the same side, the run's size is the answer and the check's step names
-both ("which the test of this version showed wins over user settings autoCompactWindow
-(450000)"). So an agent may keep its own limit while your sessions' default is larger. Any other
-disagreement stays unresolved: a smaller size where the test saw a larger one, another kind of
-source, or a version without that test. An agent without a limit is never asked for one.
+run's environment names the agent's limit and every other size comes from a source the test saw
+it win over, on the same side, the run's size is the answer and the check's step names both
+("which the test of this version showed wins over user settings autoCompactWindow (450000)"). So
+an agent may keep its own limit while your sessions' default is larger. Any other disagreement
+stays unresolved: a smaller size where the test saw a larger one, another file or key, the same
+file playing another part (a run started in your home folder reads your user settings a second
+time as that folder's own), or a version without that test. A refusal carries its reason as
+`detail` beside the code: `conflict`, `unresolved`, `missing`, `differs` or `out-of-range`. An
+agent without a limit is never asked for one.
 
 **Your own sessions.** Rules → Health → Context limits shows one row per app: its file, the agents
 that share it, the default it holds and whether the setting is tested on the installed version.

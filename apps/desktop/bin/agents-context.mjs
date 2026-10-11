@@ -110,19 +110,22 @@ export function provenControls(harness, version, tests = contextTests()) {
 
 /**
  * What the owner's test showed, on exactly this version, about two sources naming different sizes:
- * each kind of other source the run's own environment value won over, and whether that source's size
- * was above or below it (60.9 AC2). Only what was seen counts: a smaller value winning over a larger
- * one says nothing about the opposite case, and a source whose size the app's report could not tell
- * from the one asked for showed nothing. The latest test of the version decides.
+ * each other source the run's own environment value won over, by its identity, and whether that
+ * source's size was above or below it (60.9 AC2). Only what was seen counts: another file, the same
+ * file playing another part, or a smaller size where a larger one lost, is not shown. A test in
+ * which any other source named a size the app's report could not tell from the one asked for shows
+ * nothing at all, because that source may be the one the app obeyed; so does a record BMN cannot
+ * read in full. The latest test of the version decides.
  */
 export function provenPrecedence(harness, version, tests = contextTests()) {
   if (typeof version !== 'string') return []
   let last = null
   for (const entry of tests) if (entry.harness === harness && entry.version === version) last = entry
   if (last?.limit !== 'pass' || !Array.isArray(last.rivals) || !Number.isSafeInteger(last.asked)) return []
-  return last.rivals
-    .filter((rival) => typeof rival?.kind === 'string' && Number.isSafeInteger(rival?.value) && !reportedAs(last.asked, rival.value))
-    .map((rival) => ({ kind: rival.kind, side: rival.value > last.asked ? 'above' : 'below' }))
+  if (!Number.isSafeInteger(last.observed) || !reportedAs(last.asked, last.observed)) return []
+  const clear = (rival) => typeof rival?.id === 'string' && Number.isSafeInteger(rival?.value) && !reportedAs(last.asked, rival.value)
+  if (!last.rivals.every(clear)) return []
+  return last.rivals.map((rival) => ({ id: rival.id, side: rival.value > last.asked ? 'above' : 'below' }))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -160,40 +163,42 @@ export function contextItems(agent, proven) {
 
 /**
  * The size a run gets when its own environment names one and other sources name another: the
- * environment's, but only where the owner's test of this version saw it win over every such source,
- * on the same side. Otherwise null: two sizes stay no answer.
+ * environment's, but only where the owner's test of this version saw it win over each of those very
+ * sources, on the same side. Otherwise null: two sizes stay no answer.
  */
 function settledByTest(resolved, precedence) {
   if (resolved?.limit?.conflict !== true || !Array.isArray(resolved.sizes)) return null
-  const own = resolved.sizes.filter((entry) => entry.kind === 'environment')
+  const own = resolved.sizes.filter((entry) => entry.id === 'environment')
   if (own.length !== 1) return null
-  const rivals = resolved.sizes.filter((entry) => entry.kind !== 'environment' && entry.value !== own[0].value)
-  const seen = (rival) => precedence.some((proof) => proof.kind === rival.kind && proof.side === (rival.value > own[0].value ? 'above' : 'below'))
+  const rivals = resolved.sizes.filter((entry) => entry.id !== 'environment' && entry.value !== own[0].value)
+  const seen = (rival) => precedence.some((proof) => proof.id === rival.id && proof.side === (rival.value > own[0].value ? 'above' : 'below'))
   if (rivals.length === 0 || !rivals.every(seen)) return null
   return { value: own[0].value, source: `${own[0].source}, which the test of this version showed wins over ${rivals.map((rival) => `${rival.source} (${rival.value})`).join(' and ')}` }
 }
 
 /**
  * Compares what a dispatch would really run with (`resolved`, from the route resolvers) with the
- * agent's limit. Returns `{ applied, note }` or `{ refusal }` for CONTEXT_MISMATCH. Nothing is
- * required where the limit is not supported yet. `precedence` is what the owner's test showed about
- * sources that disagree (provenPrecedence).
+ * agent's limit. Returns `{ applied, note }` or, for CONTEXT_MISMATCH, `{ refusal, why }`: `why` is
+ * `out-of-range` (the app does not take that size), `conflict` (two sources name different sizes),
+ * `unresolved` (BMN cannot read what the app would use), `missing` or `differs`. Nothing is required
+ * where the limit is not supported yet. `precedence` is what the owner's test showed about sources
+ * that disagree (provenPrecedence).
  */
 export function checkContext(agent, resolved, proven, precedence = []) {
   const items = contextItems(agent, proven)
   if (items.state === 'app-default') return { applied: null, note: 'context limit: the app\'s default' }
   if (items.state === 'not-supported-yet') return { applied: null, note: `context limit ${items.limit}: not applied, ${items.reason}` }
-  if (items.state === 'out-of-range') return { refusal: `${agent.id}'s context limit ${items.limit} cannot be applied: ${items.reason}` }
+  if (items.state === 'out-of-range') return { refusal: `${agent.id}'s context limit ${items.limit} cannot be applied: ${items.reason}`, why: 'out-of-range' }
   const app = APP_NAMES[agent.harness]
   const compare = (found, wanted, what) => {
-    if (found?.unresolved) return `the ${what} ${app} would use cannot be resolved: ${found.unresolved}`
-    if (found === null || found === undefined) return `no ${what} reaches ${app}; ${agent.id}'s is ${wanted}`
-    return found.value === wanted ? null : `${found.source} gives a ${what} of ${found.value}; ${agent.id}'s is ${wanted}`
+    if (found?.unresolved) return { refusal: `the ${what} ${app} would use cannot be resolved: ${found.unresolved}`, why: found.conflict === true ? 'conflict' : 'unresolved' }
+    if (found === null || found === undefined) return { refusal: `no ${what} reaches ${app}; ${agent.id}'s is ${wanted}`, why: 'missing' }
+    return found.value === wanted ? null : { refusal: `${found.source} gives a ${what} of ${found.value}; ${agent.id}'s is ${wanted}`, why: 'differs' }
   }
   const limit = settledByTest(resolved, precedence) ?? resolved?.limit
-  const refusal = compare(limit, items.limit, 'context limit')
+  const refused = compare(limit, items.limit, 'context limit')
     ?? (items.compact === 'applied' ? compare(resolved?.compact, items.compact_at, 'compaction point') : null)
-  if (refusal !== null) return { refusal }
+  if (refused !== null) return refused
   return { applied: items.limit, note: `context limit ${items.limit}${items.compact === 'applied' ? `, compacting at ${items.compact_at}` : ''}: ${limit.source}` }
 }
 
@@ -671,11 +676,16 @@ export async function testContext(harness, { environment = process.env, now = ne
     const command = ['-p', '--no-session-persistence', '--output-format', 'text']
     const tested = { ...environment, [controls.limit.key]: String(asked) }
     // The owner's own files may name another size for this very run. Which ones do is kept with the
-    // result: a pass then also shows that the run's own value wins over them on this version. A size
-    // the report could not tell from the one asked for is left out: a pass would show nothing about it.
+    // result: a pass then also shows that the run's own value wins over each of them on this version.
     const sizes = resolveClaudeRoute(parseDispatch([controls.command, ...command]), tested, folder).context?.sizes ?? []
-    const rivals = sizes.filter((entry) => entry.kind !== 'environment' && !reportedAs(asked, entry.value)).map((entry) => ({ kind: entry.kind, value: entry.value }))
-    const others = rivals.length === 0 ? '' : ` while ${rivals.map((rival) => `${rival.kind} says ${rival.value}`).join(' and ')}`
+    const rivals = sizes.filter((entry) => entry.id !== 'environment').map((entry) => ({ source: entry.source, id: entry.id, value: entry.value }))
+    // One that names a size the report cannot tell from the one asked for would make the report show
+    // nothing: whichever source the app obeyed, it would read the same. The app is not started for that.
+    const unclear = rivals.filter((rival) => reportedAs(asked, rival.value))
+    if (unclear.length > 0) {
+      return record('inconclusive', `${unclear.map((rival) => `${rival.source} says ${rival.value}`).join(' and ')}, which the app's report could not tell from the ${asked} this test asks for; the test can show nothing while that is so`, version)
+    }
+    const others = rivals.length === 0 ? '' : ` while ${rivals.map((rival) => `${rival.source} says ${rival.value}`).join(' and ')}`
     const run = spawnSync(controls.command, command, { cwd: folder, env: tested, input: '/context', encoding: 'utf8', timeout: timeoutMs })
     if (run.error || run.status !== 0) return record('inconclusive', 'Claude Code did not answer (timeout or error)', version)
     const observed = claudeReportedWindow(run.stdout)

@@ -187,8 +187,27 @@ describe('who may research (60.10 AC1)', () => {
     writeFileSync(log, `${JSON.stringify(tested)}\n`)
     expect(researchers({ environment: env, now: NOW }).find((entry) => entry.id === 'opus')).toMatchObject({ ok: false, why: 'two settings name different context sizes for it',
       reason: expect.stringContaining('env -i CLAUDE_CODE_AUTO_COMPACT_WINDOW says 100000 and user settings autoCompactWindow says 450000') })
+    const opus = () => researchers({ environment: env, now: NOW }).find((entry) => entry.id === 'opus')
+    const proof = (...ids: string[]) => writeFileSync(log, `${JSON.stringify({ ...tested, rivals: ids.map((id) => ({ source: 'a settings file', id, value: 450_000 })) })}\n`)
+    const user = `user settings at ${join(home, '.claude/settings.json')}: autoCompactWindow`
+    // The first form of the record named only a kind of source: it proves nothing.
     writeFileSync(log, `${JSON.stringify({ ...tested, rivals: [{ kind: 'user settings autoCompactWindow', value: 450_000 }] })}\n`)
-    expect(researchers({ environment: env, now: NOW }).find((entry) => entry.id === 'opus')).toEqual({ id: 'opus', name: 'Opus', harness: 'claude', ok: true })
+    expect(opus()).toMatchObject({ ok: false, why: 'two settings name different context sizes for it' })
+    proof(user)
+    expect(opus()).toEqual({ id: 'opus', name: 'Opus', harness: 'claude', ok: true })
+    // The offer reads the files a run would, in the parts they play for a run: a settings file in BMN's runs folder lies
+    // above a run's folder, so the proof that counts is the one for a file above, not for a folder's own.
+    const runs = join(home, '.config/bmn/agents/state/research/runs')
+    mkdirSync(join(runs, '.claude'), { recursive: true })
+    writeFileSync(join(runs, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 450000 }))
+    expect(opus()).toMatchObject({ ok: false, why: 'two settings name different context sizes for it' })
+    proof(user, `project settings at ${join(runs, '.claude/settings.json')}: autoCompactWindow`)
+    expect(opus()).toMatchObject({ ok: false })
+    proof(user, `settings above at ${join(runs, '.claude/settings.json')}: autoCompactWindow`)
+    expect(opus()).toEqual({ id: 'opus', name: 'Opus', harness: 'claude', ok: true })
+    // A size BMN cannot read is said as that, not as two sizes.
+    writeFileSync(join(runs, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 'lots' }))
+    expect(opus()).toMatchObject({ ok: false, why: 'BMN cannot read which context size Claude Code would use', reason: expect.stringContaining('is not a whole number') })
   })
 
   it('remembers the researcher the owner picked', () => {

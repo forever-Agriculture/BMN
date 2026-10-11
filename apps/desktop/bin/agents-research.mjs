@@ -1,7 +1,7 @@
 // MODULE: agents-research.mjs - Story 60.10, first release: BMN writes the research prompt, runs one checked run per provider, accepts only a typed answer, reads each cited page itself and keeps what was found
 import { spawn } from 'node:child_process'
 import { lookup as dnsLookup } from 'node:dns'
-import { closeSync, existsSync, openSync, readFileSync } from 'node:fs'
+import { closeSync, openSync, readFileSync, realpathSync } from 'node:fs'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
 import { APP_NAMES, EFFORTS, agentState } from './agents-roster.mjs'
@@ -156,13 +156,14 @@ function appVersion(agent, environment) {
 }
 
 /** Why an agent is not offered as the researcher, in a few plain words; the check's own message stays beside it. */
-function whyNot(agent, code, message = '') {
+function whyNot(agent, code, detail = undefined) {
   const app = APP_NAMES[agent.harness] ?? agent.harness
   if (code === 'PACKET_INVALID') return 'its provider gets public work only'
   if (code === 'CONTEXT_MISMATCH') {
     // Not "not supported yet": an untested limit is simply left out. What stops a run is a limit that cannot be what the app gets.
-    if (/cannot be resolved/u.test(message)) return 'two settings name different context sizes for it'
-    return /cannot be applied/u.test(message) ? `${app} does not take its context limit` : 'its context limit does not reach its command'
+    if (detail === 'conflict') return 'two settings name different context sizes for it'
+    if (detail === 'unresolved') return `BMN cannot read which context size ${app} would use`
+    return detail === 'out-of-range' ? `${app} does not take its context limit` : 'its context limit does not reach its command'
   }
   if (code === 'HARNESS_UNKNOWN') return `${app} was not found`
   if (code === 'ROUTE_UNSUPPORTED') return `BMN has not yet tested that ${app} keeps a research run to the web`
@@ -180,10 +181,17 @@ export function researchers({ environment = process.env, now = new Date(), fence
   } catch {
     return []
   }
-  // A run starts in a folder BMN makes under its own state folder, and the settings files above a
-  // folder count for the app. So the question is asked from there, not from the home folder, which
-  // would read the owner's own settings a second time as a project's.
-  const from = [researchRunsDirectory(), stateDirectory()].find((folder) => existsSync(folder)) ?? environment.HOME ?? '/'
+  // A run starts in <runs>/<its id>/cwd, an empty folder BMN makes for it, and the settings files in
+  // and above a folder count for the app, each by where it lies from the run. So the question is asked
+  // from a folder of that very shape (it need not exist: a run's own two folders start empty), and the
+  // offer and the run's own check read the same files in the same parts.
+  let runs = researchRunsDirectory()
+  try {
+    runs = realpathSync(runs)
+  } catch {
+    // No research has run yet: the folder's name is all there is.
+  }
+  const from = `${runs}/offer/cwd`
   const found = []
   for (const agent of generation.data.agents) {
     if (agentState(agent) !== 'active') continue
@@ -197,7 +205,7 @@ export function researchers({ environment = process.env, now = new Date(), fence
     } catch (error) {
       result = { verdict: 'REFUSED', message: error instanceof Error ? error.message : String(error) }
     }
-    found.push({ id: agent.id, name: agent.name, harness: agent.harness, ok: result.verdict === 'PASS', ...(result.verdict === 'PASS' ? {} : { why: whyNot(agent, result.code, result.message), reason: result.message }) })
+    found.push({ id: agent.id, name: agent.name, harness: agent.harness, ok: result.verdict === 'PASS', ...(result.verdict === 'PASS' ? {} : { why: whyNot(agent, result.code, result.detail), reason: result.message }) })
   }
   return found
 }

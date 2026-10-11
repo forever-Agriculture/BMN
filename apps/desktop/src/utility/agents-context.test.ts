@@ -101,17 +101,26 @@ describe('which settings are proven for a version (60.9 AC1)', () => {
     expect(provenControls('opencode', '1.0.0', [tested('opencode', '1.0.0')])).toEqual({ limit: false, compact: false })
   })
 
-  it('keeps what a test saw about sources that disagree: the kind and the side, for that version only', () => {
-    const kind = 'user settings autoCompactWindow'
-    const seen: ContextTestEntry = { ...tested('claude', CLAUDE), asked: 137_000, observed: 137_000, rivals: [{ kind, value: 450_000 }] }
-    expect(provenPrecedence('claude', CLAUDE, [seen])).toEqual([{ kind, side: 'above' }])
-    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ kind, value: 100_000 }] }])).toEqual([{ kind, side: 'below' }])
-    // A source that named the very size asked for showed nothing; nor did one the app's rounded report cannot tell from it.
-    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ kind, value: 137_000 }] }])).toEqual([])
-    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ kind, value: 138_000 }, { kind, value: 136_000 }] }])).toEqual([])
-    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ kind, value: 138_371 }] }])).toEqual([{ kind, side: 'above' }])
-    // A record without the size it asked for proves nothing.
+  it('keeps what a test saw about sources that disagree: the very source and the side, for that version only', () => {
+    const source = 'user settings autoCompactWindow'
+    const id = 'user settings at /home/synthetic/.claude/settings.json: autoCompactWindow'
+    const other = 'managed settings at /etc/claude-code/managed-settings.d/a.json: autoCompactWindow'
+    const seen: ContextTestEntry = { ...tested('claude', CLAUDE), asked: 137_000, observed: 137_000, rivals: [{ source, id, value: 450_000 }] }
+    expect(provenPrecedence('claude', CLAUDE, [seen])).toEqual([{ id, side: 'above' }])
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ source, id, value: 100_000 }] }])).toEqual([{ id, side: 'below' }])
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ source, id, value: 138_371 }] }])).toEqual([{ id, side: 'above' }])
+    // A source that named the size asked for, or one the app's rounded report cannot tell from it, may be the one the app
+    // obeyed. So the whole test shows nothing, also about a second source that named a clearly different size.
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ source, id, value: 137_000 }] }])).toEqual([])
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ source, id: other, value: 138_000 }, { source, id, value: 450_000 }] }])).toEqual([])
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ source, id: other, value: 136_000 }, { source, id, value: 450_000 }] }])).toEqual([])
+    // A record BMN cannot read in full proves nothing: no size asked for, a report that is not that size, a source without
+    // its identity (the first form of this record named only a kind of source).
     expect(provenPrecedence('claude', CLAUDE, [{ ...seen, asked: undefined as unknown as number }])).toEqual([])
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, observed: 450_000 }])).toEqual([])
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, observed: null }])).toEqual([])
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ kind: 'user settings autoCompactWindow', value: 450_000 }] as unknown as NonNullable<ContextTestEntry['rivals']> }])).toEqual([])
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ source, id, value: 450_000 }, { source, value: 300_000 }] as unknown as NonNullable<ContextTestEntry['rivals']> }])).toEqual([])
     expect(provenPrecedence('claude', '2.1.300', [seen])).toEqual([])
     expect(provenPrecedence('claude', null, [seen])).toEqual([])
     expect(provenPrecedence('claude', CLAUDE, [{ ...seen, limit: 'fail' }])).toEqual([])
@@ -224,9 +233,10 @@ describe('the check compares what a run would really use with the agent\'s limit
   it('lets the run\'s own size win over another source only where the test of this version saw exactly that', () => {
     approve(roster({ opus: 200_000 }))
     const settings = join(home, '.claude/settings.json')
-    const kind = 'user settings autoCompactWindow'
+    const source = 'user settings autoCompactWindow'
+    const id = `user settings at ${settings}: autoCompactWindow`
     const argv = OPUS('CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000')
-    const seen = (version = CLAUDE): ContextTestEntry[] => [{ ...tested('claude', version), asked: 137_000, observed: 137_000, rivals: [{ kind, value: 450_000 }] }]
+    const seen = (version = CLAUDE, rival = id): ContextTestEntry[] => [{ ...tested('claude', version), asked: 137_000, observed: 137_000, rivals: [{ source, id: rival, value: 450_000 }] }]
     mkdirSync(join(home, '.claude'))
     writeFileSync(settings, JSON.stringify({ autoCompactWindow: 450000 }))
     // Without that proof two sizes stay no answer.
@@ -244,17 +254,30 @@ describe('the check compares what a run would really use with the agent\'s limit
     // The test saw a larger size lose. A smaller one in the same file is another case.
     writeFileSync(settings, JSON.stringify({ autoCompactWindow: 150000 }))
     expect(check('opus', argv, seen())).toMatchObject({ code: 'CONTEXT_MISMATCH', message: expect.stringContaining('cannot be resolved') })
-    // So is another kind of source: the same file's env entry, or a project's settings.
+    // So is another source: the same file's env entry, or another file, also one that plays the same part.
     writeFileSync(settings, JSON.stringify({ env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '450000' } }))
-    expect(check('opus', argv, seen())).toMatchObject({ code: 'CONTEXT_MISMATCH', message: expect.stringContaining('cannot be resolved') })
+    expect(check('opus', argv, seen())).toMatchObject({ code: 'CONTEXT_MISMATCH', detail: 'conflict', message: expect.stringContaining('cannot be resolved') })
     writeFileSync(settings, JSON.stringify({ autoCompactWindow: 450000 }))
     mkdirSync(join(workspace, '.claude'))
     writeFileSync(join(workspace, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 450000 }))
     expect(check('opus', argv, seen())).toMatchObject({ code: 'CONTEXT_MISMATCH', message: expect.stringContaining('cannot be resolved') })
-    // A size that is not a number is never settled by a test.
     rmSync(join(workspace, '.claude'), { recursive: true })
+    expect(check('opus', argv, seen(CLAUDE, `user settings at ${join(home, 'elsewhere/settings.json')}: autoCompactWindow`))).toMatchObject({ code: 'CONTEXT_MISMATCH', message: expect.stringContaining('cannot be resolved') })
+    // And the same file playing another part: started in the home folder, a run reads the owner's settings a second time
+    // as the folder's own, which no test saw.
+    const fromHome = evaluate({ agent: 'opus', role: 'lead', workspace, data: 'private', cwd: home, argv } as Inputs, { environment: env, cwd: home, now: NOW, contextTestLog: seen() })
+    expect(fromHome).toMatchObject({ code: 'CONTEXT_MISMATCH', detail: 'conflict' })
+    // A test in which another source named a size the report could not tell from the one asked for settles nothing,
+    // although the larger size was seen beside it: that other source may be the one the app obeyed.
+    const blurred: ContextTestEntry[] = [{ ...seen()[0]!, rivals: [...seen()[0]!.rivals!, { source: 'settings above', id: 'settings above at /x/.claude/settings.json: autoCompactWindow', value: 138_000 }] }]
+    expect(check('opus', argv, blurred)).toMatchObject({ code: 'CONTEXT_MISMATCH', detail: 'conflict' })
+    // A size that is not a number is never settled by a test, and the refusal says it is that, not two sizes.
     writeFileSync(settings, JSON.stringify({ autoCompactWindow: 'lots' }))
-    expect(check('opus', argv, seen())).toMatchObject({ code: 'CONTEXT_MISMATCH', message: expect.stringContaining('is not a whole number') })
+    expect(check('opus', argv, seen())).toMatchObject({ code: 'CONTEXT_MISMATCH', detail: 'unresolved', message: expect.stringContaining('is not a whole number') })
+    // The other reasons a limit is refused carry their own word too.
+    rmSync(settings)
+    expect(check('opus', OPUS(), seen())).toMatchObject({ code: 'CONTEXT_MISMATCH', detail: 'missing' })
+    expect(check('opus', OPUS('CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000'), seen())).toMatchObject({ code: 'CONTEXT_MISMATCH', detail: 'differs' })
   })
 
   it('refuses a limit the app does not take, and keeps the refusal order', () => {
@@ -586,24 +609,34 @@ describe('the owner-run test, against stub apps (60.9 AC1)', () => {
     mkdirSync(join(home, '.claude'))
     writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 450000, env: { OTHER: 'kept' } }))
     const seen = await testContext('claude', { environment: env, now: NOW })
-    expect(seen).toMatchObject({ limit: 'pass', observed: 137_000, rivals: [{ kind: 'user settings autoCompactWindow', value: 450_000 }],
+    const id = `user settings at ${join(home, '.claude/settings.json')}: autoCompactWindow`
+    expect(seen).toMatchObject({ limit: 'pass', observed: 137_000, rivals: [{ source: 'user settings autoCompactWindow', id, value: 450_000 }],
       detail: 'asked for 137000 while user settings autoCompactWindow says 450000; Claude Code reports a window of 137000, so the run\'s own value wins' })
-    expect(provenPrecedence('claude', CLAUDE)).toEqual([{ kind: 'user settings autoCompactWindow', side: 'above' }])
+    expect(provenPrecedence('claude', CLAUDE)).toEqual([{ id, side: 'above' }])
     expect(provenControls('claude', CLAUDE)).toEqual({ limit: true, compact: false })
     // The app took the file's size instead: a fail, and no proof.
     stub('claude', claudeStub('**Tokens:** 12.4k / 450k (3%)'))
-    expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'fail', observed: 450_000, rivals: [{ kind: 'user settings autoCompactWindow', value: 450_000 }],
+    expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'fail', observed: 450_000, rivals: [{ source: 'user settings autoCompactWindow', id, value: 450_000 }],
       detail: 'asked for 137000 while user settings autoCompactWindow says 450000, but Claude Code reports a window of 450000' })
     expect(provenPrecedence('claude', CLAUDE)).toEqual([])
-    // A file that names the size asked for is no rival.
-    writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 137000 }))
-    stub('claude', claudeStub('**Tokens:** 12.4k / 137k (9%)'))
-    expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'pass', rivals: [] })
-    // Nor is one whose size the rounded report cannot tell from it: "138k" passes as the size asked for, whoever won.
-    writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 138000 }))
-    stub('claude', claudeStub('**Tokens:** 12.4k / 138k (9%)'))
-    expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'pass', rivals: [], detail: 'asked for 137000; Claude Code reports a window of 138000' })
+    // A file that names the size asked for, or one the rounded report cannot tell from it, would make the report read
+    // the same whichever source the app obeyed. The test says so and does not start the app.
+    const started = join(home, 'claude-started')
+    stub('claude', `if [ "$1" = "--version" ]; then echo "2.1.295 (Claude Code)"; exit 0; fi\ntouch '${started}'\ncat > /dev/null\nprintf '%s\\n' '**Tokens:** 12.4k / 138k (9%)'`)
+    for (const size of [137_000, 138_000, 136_000]) {
+      writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: size }))
+      const unclear = await testContext('claude', { environment: env, now: NOW })
+      expect(unclear).toMatchObject({ limit: 'inconclusive', observed: null,
+        detail: `user settings autoCompactWindow says ${size}, which the app's report could not tell from the 137000 this test asks for; the test can show nothing while that is so` })
+      expect(unclear).not.toHaveProperty('rivals')
+    }
+    expect(existsSync(started)).toBe(false)
     expect(provenPrecedence('claude', CLAUDE)).toEqual([])
+    expect(provenControls('claude', CLAUDE).limit).toBe(false)
+    // So with a second, clearly different source beside it: nothing is shown about either.
+    writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 450000, env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '138000' } }))
+    expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'inconclusive' })
+    expect(existsSync(started)).toBe(false)
   })
 
   it('reads the two reports it relies on', () => {

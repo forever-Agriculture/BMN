@@ -75,14 +75,16 @@ const NEXT_STEP = {
 }
 
 class Refusal extends Error {
-  constructor(code, message) {
+  constructor(code, message, detail = undefined) {
     super(message)
     this.code = code
+    this.detail = detail
   }
 }
 
-function refuse(code, message) {
-  throw new Refusal(code, message)
+/** `detail` names the reason within a code, for a caller that words it for the owner without reading the message. */
+function refuse(code, message, detail = undefined) {
+  throw new Refusal(code, message, detail)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -646,22 +648,24 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
   let reason = null
   /**
    * The context size one source names, in its `env` or, for a settings file, as its own autoCompactWindow.
-   * `kind` names the source without its folder, so the owner's test of one version can say which kinds
-   * the run's own environment wins over.
+   * `id` says which very source it is: the run's environment, or a file by the part it plays for this run
+   * (the user's, the working folder's, one above it, the machine's, `--settings`), its path and the key.
+   * The owner's test of one version can then say which sources the run's own environment wins over, and
+   * the same file playing another part is another source.
    */
-  const takeSize = (source, raw, kind) => {
+  const takeSize = (source, raw, id) => {
     if (raw === undefined || raw === '' || raw === 'auto') return
     const number = typeof raw === 'string' || typeof raw === 'number' ? wholeNumber(raw) : null
     if (number === null) sizeUnreadable ??= `${source} is not a whole number`
-    else sizes.push({ source, value: number, kind })
+    else sizes.push({ source, value: number, id })
   }
-  const takeFileSize = (name, text) => {
+  const takeFileSize = (name, text, path) => {
     if (text === null) return
-    const kind = name.replace(/ in .*$/u, ' above the working folder').replace(/^managed settings .+$/u, 'managed settings')
+    const part = name.replace(/ in .*$/u, ' above').replace(/^managed settings .+$/u, 'managed settings')
     try {
       const data = JSON.parse(text)
-      if (isObject(data?.env)) takeSize(`${name} env ${CLAUDE_CONTEXT_KEY}`, data.env[CLAUDE_CONTEXT_KEY], `${kind} env`)
-      takeSize(`${name} autoCompactWindow`, data?.autoCompactWindow, `${kind} autoCompactWindow`)
+      if (isObject(data?.env)) takeSize(`${name} env ${CLAUDE_CONTEXT_KEY}`, data.env[CLAUDE_CONTEXT_KEY], `${part} at ${path}: env`)
+      takeSize(`${name} autoCompactWindow`, data?.autoCompactWindow, `${part} at ${path}: autoCompactWindow`)
     } catch {
       // The destination reading already reports a settings file that is not JSON.
     }
@@ -677,20 +681,21 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
     const read = settingsEnv(text, name)
     if (read.unreadable) reason ??= read.unreadable
     else take(name, read.env)
-    takeFileSize(name, text)
+    takeFileSize(name, text, path)
   }
   if (parsed.settings !== undefined) {
     const inline = parsed.settings.trimStart().startsWith('{')
     // A file that is not there is not an empty one: what the app would do with it is not BMN's to guess.
-    const text = inline ? parsed.settings : optionalText(isAbsolute(parsed.settings) ? parsed.settings : `${cwd}/${parsed.settings}`)
+    const file = inline ? null : isAbsolute(parsed.settings) ? parsed.settings : `${cwd}/${parsed.settings}`
+    const text = file === null ? parsed.settings : optionalText(file)
     const read = text === null ? { unreadable: '--settings cannot be read' } : settingsEnv(text, '--settings')
     if (read.unreadable) reason ??= read.unreadable
     else take('--settings', read.env)
-    takeFileSize('--settings', text)
+    takeFileSize('--settings', text, file ?? 'the command line')
   }
   // BMN cannot tell from the files which source Claude Code lets win, so one size everywhere is that size and
   // two sizes are no answer here. `sizes` goes along: the owner's test of a version may have shown that the
-  // run's own environment wins over the other source, and checkContext settles it from that (60.9 AC2).
+  // run's own environment wins over that very source, and checkContext settles it from that (60.9 AC2).
   const distinct = [...new Set(sizes.map((entry) => entry.value))]
   const limit = sizeUnreadable !== null ? { unresolved: sizeUnreadable }
     : distinct.length === 0 ? null
@@ -1486,7 +1491,7 @@ export function evaluate(inputs, {
     // The test log is read only for an agent that has a limit.
     const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog),
       agent.context_limit === undefined ? [] : provenPrecedence(parsed.harness, version, contextTestLog))
-    if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal)
+    if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal, context.why)
     note(context.note)
     if (tools.refusal) refuse(tools.refusal.code, tools.refusal.message)
     note(tools.note)
@@ -1635,7 +1640,7 @@ export function evaluate(inputs, {
     return { verdict: 'PASS', receipt: { ...body, receipt_hash: receiptHash(body) }, steps }
   } catch (error) {
     if (error instanceof Refusal) {
-      return { verdict: 'REFUSED', code: error.code, message: error.message, next: NEXT_STEP[error.code], steps }
+      return { verdict: 'REFUSED', code: error.code, message: error.message, next: NEXT_STEP[error.code], steps, ...(error.detail === undefined ? {} : { detail: error.detail }) }
     }
     throw error
   }
@@ -1737,7 +1742,9 @@ export function evaluateResearch(inputs, {
     if (agent.harness !== parsed.harness) refuse('ROUTE_UNSUPPORTED', `${agent.id} runs on ${agent.harness}, the command is ${parsed.harness}`)
     const form = researchFormProblem(parsed)
     if (form !== null) refuse('ROUTE_UNSUPPORTED', form)
+    // A dry question may name a folder that is not there yet, shaped like a run's own: it is read as named.
     const cwd = canonicalDirectory(inputs.cwd ?? processCwd, processCwd)
+      ?? (inputs.dry === true && typeof inputs.cwd === 'string' && isAbsolute(inputs.cwd) && !inputs.cwd.split('/').includes('..') ? inputs.cwd : null)
     // The fixed research switches are not part of where Codex sends data; the route reader sees the rest.
     const resolution = parsed.harness === 'codex'
       ? resolveCodexRoute({ ...parsed, config: parsed.config.filter((entry) => !CODEX_RESEARCH_CONFIG.includes(entry)) }, environment, cwd ?? processCwd)
@@ -1748,7 +1755,7 @@ export function evaluateResearch(inputs, {
     const { model, effort } = checkModelAndEffort(agent, resolution, note)
     const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog),
       agent.context_limit === undefined ? [] : provenPrecedence(parsed.harness, version, contextTestLog))
-    if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal)
+    if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal, context.why)
     note(context.note)
     const route = resolution.route
     const destination = matchedDestination(data, agent, parsed.harness, route, note)
@@ -1815,7 +1822,7 @@ export function evaluateResearch(inputs, {
     return { verdict: 'PASS', receipt: { ...body, receipt_hash: receiptHash(body) }, steps }
   } catch (error) {
     if (error instanceof Refusal) {
-      return { verdict: 'REFUSED', code: error.code, message: error.message, next: error.code === 'WORKSPACE_MISMATCH' ? 'start the research from BMN (Team, Models), which writes the prompt and the folder' : NEXT_STEP[error.code], steps }
+      return { verdict: 'REFUSED', code: error.code, message: error.message, next: error.code === 'WORKSPACE_MISMATCH' ? 'start the research from BMN (Team, Models), which writes the prompt and the folder' : NEXT_STEP[error.code], steps, ...(error.detail === undefined ? {} : { detail: error.detail }) }
     }
     throw error
   }
@@ -1971,7 +1978,7 @@ export async function runCheckCommand(action, argv) {
         : `PASS ${receipt.agent} ${receipt.role ?? 'research'} -> ${receipt.route.host} (${receipt.data ?? 'research'}, private work ${receipt.private_work.allowed ? 'allowed' : 'not allowed'}); receipt ${receipt.receipt_hash.slice(0, 12)}`)
       return 0
     }
-    if (asJson) out(JSON.stringify({ verdict: 'REFUSED', code: result.code, message: result.message, next: result.next }, null, 2))
+    if (asJson) out(JSON.stringify({ verdict: 'REFUSED', code: result.code, message: result.message, next: result.next, ...(result.detail === undefined ? {} : { detail: result.detail }) }, null, 2))
     else out(`REFUSED ${result.code}: ${result.message}\nNext: ${result.next}`)
     return EXIT.refusal
   } catch (error) {
