@@ -1,12 +1,12 @@
 // MODULE: agents-research.mjs - Story 60.10, first release: BMN writes the research prompt, runs one checked run per provider, accepts only a typed answer, reads each cited page itself and keeps what was found
 import { spawn } from 'node:child_process'
 import { lookup as dnsLookup } from 'node:dns'
-import { closeSync, openSync, readFileSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync } from 'node:fs'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
 import { APP_NAMES, EFFORTS, agentState } from './agents-roster.mjs'
 import { readApproved, stateDirectory } from './agents-state.mjs'
-import { CODEX_RESEARCH_ANSWER, CODEX_RESEARCH_CONFIG, RESEARCH_TOOLS, evaluateResearch, harnessVersion, prepareResearchRun } from './agents-check.mjs'
+import { CODEX_RESEARCH_ANSWER, CODEX_RESEARCH_CONFIG, RESEARCH_TOOLS, evaluateResearch, harnessVersion, prepareResearchRun, researchRunsDirectory } from './agents-check.mjs'
 import { contextItems, provenControls } from './agents-context.mjs'
 import { writePrivate } from './agents-rules.mjs'
 
@@ -156,10 +156,14 @@ function appVersion(agent, environment) {
 }
 
 /** Why an agent is not offered as the researcher, in a few plain words; the check's own message stays beside it. */
-function whyNot(agent, code) {
+function whyNot(agent, code, message = '') {
   const app = APP_NAMES[agent.harness] ?? agent.harness
   if (code === 'PACKET_INVALID') return 'its provider gets public work only'
-  if (code === 'CONTEXT_MISMATCH') return 'its context limit is not supported yet'
+  if (code === 'CONTEXT_MISMATCH') {
+    // Not "not supported yet": an untested limit is simply left out. What stops a run is a limit that cannot be what the app gets.
+    if (/cannot be resolved/u.test(message)) return 'two settings name different context sizes for it'
+    return /cannot be applied/u.test(message) ? `${app} does not take its context limit` : 'its context limit does not reach its command'
+  }
   if (code === 'HARNESS_UNKNOWN') return `${app} was not found`
   if (code === 'ROUTE_UNSUPPORTED') return `BMN has not yet tested that ${app} keeps a research run to the web`
   return `BMN cannot check ${app}'s research command`
@@ -176,6 +180,10 @@ export function researchers({ environment = process.env, now = new Date(), fence
   } catch {
     return []
   }
+  // A run starts in a folder BMN makes under its own state folder, and the settings files above a
+  // folder count for the app. So the question is asked from there, not from the home folder, which
+  // would read the owner's own settings a second time as a project's.
+  const from = [researchRunsDirectory(), stateDirectory()].find((folder) => existsSync(folder)) ?? environment.HOME ?? '/'
   const found = []
   for (const agent of generation.data.agents) {
     if (agentState(agent) !== 'active') continue
@@ -185,11 +193,11 @@ export function researchers({ environment = process.env, now = new Date(), fence
     }
     let result
     try {
-      result = evaluateResearch({ agent: agent.id, argv: researchArgv(agent, { environment, version: appVersion(agent, environment) }), dry: true }, { environment, cwd: environment.HOME ?? '/', now, ...(fenceVersions === undefined ? {} : { fenceVersions }) })
+      result = evaluateResearch({ agent: agent.id, argv: researchArgv(agent, { environment, version: appVersion(agent, environment) }), dry: true }, { environment, cwd: from, now, ...(fenceVersions === undefined ? {} : { fenceVersions }) })
     } catch (error) {
       result = { verdict: 'REFUSED', message: error instanceof Error ? error.message : String(error) }
     }
-    found.push({ id: agent.id, name: agent.name, harness: agent.harness, ok: result.verdict === 'PASS', ...(result.verdict === 'PASS' ? {} : { why: whyNot(agent, result.code), reason: result.message }) })
+    found.push({ id: agent.id, name: agent.name, harness: agent.harness, ok: result.verdict === 'PASS', ...(result.verdict === 'PASS' ? {} : { why: whyNot(agent, result.code, result.message), reason: result.message }) })
   }
   return found
 }
@@ -625,6 +633,9 @@ export function sourceRank(address, sites) {
   return sites.some((site) => host === site.toLowerCase() || host.endsWith(`.${site.toLowerCase()}`)) ? 1 : 2
 }
 
+/** How close to the research's time limit a page read counts as having run into it. */
+const CLOCK_SLACK_MS = 5
+
 /**
  * Reads each cited page once and marks every value: verified when BMN's own read shows it beside
  * the model, else unverified with the reason. A cached-input price the page does not show is dropped,
@@ -644,8 +655,10 @@ export async function verifyModels(models, sites, { fetchPage = fetchPublicPage,
       }
       const page = await fetchPage(address, { signal, timeoutMs: Math.min(PAGE_LIMIT_MS, left) })
       // A read that ran to the end of the research's time is the limit, also when it was the last page.
+      // A timer may fire a millisecond before the clock shows its time, so "the end" is the last few
+      // milliseconds: nothing more could be read in them anyway.
       if (signal?.aborted) report.cut ??= 'stopped'
-      else if (Date.now() >= deadline) report.cut ??= 'limit'
+      else if (Date.now() >= deadline - CLOCK_SLACK_MS) report.cut ??= 'limit'
       pages.set(address, page.ok ? { ok: true, text: pageText(page.text) } : page)
     }
     return pages.get(address)

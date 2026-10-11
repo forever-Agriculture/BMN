@@ -1191,8 +1191,13 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
       assert.ok(agent.harness === 'claude' && agent.enabled && agent.status === 'active', `${name} is offered although it is not an active Claude Code agent`)
     }
     await main.getByText(/Kimi cannot research: its provider gets public work only\./).waitFor()
-    await who.getByRole('radio', { name: researcher.name, exact: true }).click()
-    await who.getByRole('radio', { name: researcher.name, exact: true }).and(main.locator('[aria-checked="true"]')).waitFor()
+    // Two agents may share a name, so each button carries its class's piece and is named by it: "Knight Opus", "Queen Opus".
+    assert.equal(await who.locator('[role="radio"] svg.piece[role="img"]').count(), able.length, 'a researcher is offered without its class piece')
+    const classWord = (agent) => `${agent.class[0].toUpperCase()}${agent.class.slice(1)}`
+    const radioOf = (agent) => who.getByRole('radio', { name: new RegExp(`^${classWord(agent)} ?${agent.name}$`) })
+    assert.equal(await radioOf(researcher).locator('svg.piece').getAttribute('aria-label'), classWord(researcher))
+    await radioOf(researcher).click()
+    await radioOf(researcher).and(main.locator('[aria-checked="true"]')).waitFor()
     if (researcher.name !== able[0]) assert.equal(JSON.parse(readFileSync(join(stateDir, 'research/settings.json'), 'utf8')).researcher, researcher.id)
     await main.getByText('Gets only your model names and the source list, never your files. Runs in an empty folder with web tools only.', { exact: false }).waitFor()
     assert.deepEqual(await main.locator('.sources li').allTextContents(), ['Provider pages', 'Other sites'])

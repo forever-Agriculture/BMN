@@ -106,6 +106,22 @@ export function provenControls(harness, version, tests = contextTests()) {
   return { limit: last?.limit === 'pass', compact: controls.compact !== null && last?.compact === 'pass' }
 }
 
+/**
+ * What the owner's test showed, on exactly this version, about two sources naming different sizes:
+ * each kind of other source the run's own environment value won over, and whether that source's size
+ * was above or below it (60.9 AC2). Only what was seen counts: a smaller value winning over a larger
+ * one says nothing about the opposite case. The latest test of the version decides.
+ */
+export function provenPrecedence(harness, version, tests = contextTests()) {
+  if (typeof version !== 'string') return []
+  let last = null
+  for (const entry of tests) if (entry.harness === harness && entry.version === version) last = entry
+  if (last?.limit !== 'pass' || !Array.isArray(last.rivals)) return []
+  return last.rivals
+    .filter((rival) => typeof rival?.kind === 'string' && Number.isSafeInteger(rival?.value) && rival.value !== last.asked)
+    .map((rival) => ({ kind: rival.kind, side: rival.value > last.asked ? 'above' : 'below' }))
+}
+
 // ---------------------------------------------------------------------------------------------
 // What a dispatch carries (60.9 AC2)
 
@@ -140,11 +156,27 @@ export function contextItems(agent, proven) {
 }
 
 /**
+ * The size a run gets when its own environment names one and other sources name another: the
+ * environment's, but only where the owner's test of this version saw it win over every such source,
+ * on the same side. Otherwise null: two sizes stay no answer.
+ */
+function settledByTest(resolved, precedence) {
+  if (resolved?.limit?.conflict !== true || !Array.isArray(resolved.sizes)) return null
+  const own = resolved.sizes.filter((entry) => entry.kind === 'environment')
+  if (own.length !== 1) return null
+  const rivals = resolved.sizes.filter((entry) => entry.kind !== 'environment' && entry.value !== own[0].value)
+  const seen = (rival) => precedence.some((proof) => proof.kind === rival.kind && proof.side === (rival.value > own[0].value ? 'above' : 'below'))
+  if (rivals.length === 0 || !rivals.every(seen)) return null
+  return { value: own[0].value, source: `${own[0].source}, which the test of this version showed wins over ${rivals.map((rival) => `${rival.source} (${rival.value})`).join(' and ')}` }
+}
+
+/**
  * Compares what a dispatch would really run with (`resolved`, from the route resolvers) with the
  * agent's limit. Returns `{ applied, note }` or `{ refusal }` for CONTEXT_MISMATCH. Nothing is
- * required where the limit is not supported yet.
+ * required where the limit is not supported yet. `precedence` is what the owner's test showed about
+ * sources that disagree (provenPrecedence).
  */
-export function checkContext(agent, resolved, proven) {
+export function checkContext(agent, resolved, proven, precedence = []) {
   const items = contextItems(agent, proven)
   if (items.state === 'app-default') return { applied: null, note: 'context limit: the app\'s default' }
   if (items.state === 'not-supported-yet') return { applied: null, note: `context limit ${items.limit}: not applied, ${items.reason}` }
@@ -155,10 +187,11 @@ export function checkContext(agent, resolved, proven) {
     if (found === null || found === undefined) return `no ${what} reaches ${app}; ${agent.id}'s is ${wanted}`
     return found.value === wanted ? null : `${found.source} gives a ${what} of ${found.value}; ${agent.id}'s is ${wanted}`
   }
-  const refusal = compare(resolved?.limit, items.limit, 'context limit')
+  const limit = settledByTest(resolved, precedence) ?? resolved?.limit
+  const refusal = compare(limit, items.limit, 'context limit')
     ?? (items.compact === 'applied' ? compare(resolved?.compact, items.compact_at, 'compaction point') : null)
   if (refusal !== null) return { refusal }
-  return { applied: items.limit, note: `context limit ${items.limit}${items.compact === 'applied' ? `, compacting at ${items.compact_at}` : ''}: ${resolved.limit.source}` }
+  return { applied: items.limit, note: `context limit ${items.limit}${items.compact === 'applied' ? `, compacting at ${items.compact_at}` : ''}: ${limit.source}` }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -605,13 +638,13 @@ export async function testContext(harness, { environment = process.env, now = ne
   const controls = CONTEXT_CONTROLS[harness]
   if (controls === undefined) throw new ContextError('APP_UNSUPPORTED', `BMN has no context setting for ${APP_NAMES[harness] ?? harness}`)
   const asked = CONTEXT_TEST_SIZE[harness]
-  const record = (limit, detail, version = null, observed = null) => {
-    const entry = { harness, at: now.toISOString(), version, limit, compact: 'untested', asked, observed, detail }
+  const record = (limit, detail, version = null, observed = null, rivals = undefined) => {
+    const entry = { harness, at: now.toISOString(), version, limit, compact: 'untested', asked, observed, detail, ...(rivals === undefined ? {} : { rivals }) }
     mkdirSync(dirname(contextTestsPath()), { recursive: true, mode: 0o700 })
     appendFileSync(contextTestsPath(), `${JSON.stringify(entry)}\n`, { mode: 0o600 })
     return entry
   }
-  const { harnessVersion } = await import('./agents-check.mjs')
+  const { harnessVersion, parseDispatch, resolveClaudeRoute } = await import('./agents-check.mjs')
   const version = harnessVersion(controls.command, environment)
   if (version === null) return record('unavailable', `${controls.command} is not installed or did not answer --version`)
   const home = environment.HOME || homedir()
@@ -632,14 +665,20 @@ export async function testContext(harness, { environment = process.env, now = ne
         ? record('pass', `asked for ${asked}; the session record shows ${observed}`, version, observed)
         : record('fail', `asked for ${asked}, but the session record shows ${observed}`, version, observed)
     }
-    const run = spawnSync(controls.command, ['-p', '--no-session-persistence', '--output-format', 'text'],
-      { cwd: folder, env: { ...environment, [controls.limit.key]: String(asked) }, input: '/context', encoding: 'utf8', timeout: timeoutMs })
+    const command = ['-p', '--no-session-persistence', '--output-format', 'text']
+    const tested = { ...environment, [controls.limit.key]: String(asked) }
+    // The owner's own files may name another size for this very run. Which ones do is kept with the
+    // result: a pass then also shows that the run's own value wins over them on this version.
+    const sizes = resolveClaudeRoute(parseDispatch([controls.command, ...command]), tested, folder).context?.sizes ?? []
+    const rivals = sizes.filter((entry) => entry.kind !== 'environment' && entry.value !== asked).map((entry) => ({ kind: entry.kind, value: entry.value }))
+    const others = rivals.length === 0 ? '' : ` while ${rivals.map((rival) => `${rival.kind} says ${rival.value}`).join(' and ')}`
+    const run = spawnSync(controls.command, command, { cwd: folder, env: tested, input: '/context', encoding: 'utf8', timeout: timeoutMs })
     if (run.error || run.status !== 0) return record('inconclusive', 'Claude Code did not answer (timeout or error)', version)
     const observed = claudeReportedWindow(run.stdout)
     if (observed === null) return record('inconclusive', 'Claude Code\'s context report names no window', version)
     return Math.abs(observed - asked) <= asked * 0.01
-      ? record('pass', `asked for ${asked}; Claude Code reports a window of ${observed}`, version, observed)
-      : record('fail', `asked for ${asked}, but Claude Code reports a window of ${observed}`, version, observed)
+      ? record('pass', `asked for ${asked}${others}; Claude Code reports a window of ${observed}${rivals.length === 0 ? '' : ', so the run\'s own value wins'}`, version, observed, rivals)
+      : record('fail', `asked for ${asked}${others}, but Claude Code reports a window of ${observed}`, version, observed, rivals)
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }

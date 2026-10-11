@@ -7,7 +7,7 @@ import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_
 import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
-import { CLAUDE_CONTEXT_KEY, CODEX_CONTEXT_KEYS, checkContext, provenControls, wholeNumber } from './agents-context.mjs'
+import { CLAUDE_CONTEXT_KEY, CODEX_CONTEXT_KEYS, checkContext, provenControls, provenPrecedence, wholeNumber } from './agents-context.mjs'
 import { RUN_TEST_APPS, appTools, checkRunTools } from './agents-tools.mjs'
 
 export { publicOnlyReasons }
@@ -644,19 +644,24 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
   const sizes = []
   let sizeUnreadable = null
   let reason = null
-  /** The context size one source names, in its `env` or, for a settings file, as its own autoCompactWindow. */
-  const takeSize = (source, raw) => {
+  /**
+   * The context size one source names, in its `env` or, for a settings file, as its own autoCompactWindow.
+   * `kind` names the source without its folder, so the owner's test of one version can say which kinds
+   * the run's own environment wins over.
+   */
+  const takeSize = (source, raw, kind) => {
     if (raw === undefined || raw === '' || raw === 'auto') return
     const number = typeof raw === 'string' || typeof raw === 'number' ? wholeNumber(raw) : null
     if (number === null) sizeUnreadable ??= `${source} is not a whole number`
-    else sizes.push({ source, value: number })
+    else sizes.push({ source, value: number, kind })
   }
   const takeFileSize = (name, text) => {
     if (text === null) return
+    const kind = name.replace(/ in .*$/u, ' above the working folder').replace(/^managed settings .+$/u, 'managed settings')
     try {
       const data = JSON.parse(text)
-      if (isObject(data?.env)) takeSize(`${name} env ${CLAUDE_CONTEXT_KEY}`, data.env[CLAUDE_CONTEXT_KEY])
-      takeSize(`${name} autoCompactWindow`, data?.autoCompactWindow)
+      if (isObject(data?.env)) takeSize(`${name} env ${CLAUDE_CONTEXT_KEY}`, data.env[CLAUDE_CONTEXT_KEY], `${kind} env`)
+      takeSize(`${name} autoCompactWindow`, data?.autoCompactWindow, `${kind} autoCompactWindow`)
     } catch {
       // The destination reading already reports a settings file that is not JSON.
     }
@@ -666,7 +671,7 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
     for (const key of CLAUDE_PROVIDER_SWITCHES) if (truthy(vars[key])) reason ??= `${key} is set in ${source}`
   }
   take(parsed.envMode === 'clean' ? 'env -i ANTHROPIC_BASE_URL' : 'ANTHROPIC_BASE_URL', env)
-  takeSize(parsed.envMode === 'clean' ? `env -i ${CLAUDE_CONTEXT_KEY}` : CLAUDE_CONTEXT_KEY, env[CLAUDE_CONTEXT_KEY])
+  takeSize(parsed.envMode === 'clean' ? `env -i ${CLAUDE_CONTEXT_KEY}` : CLAUDE_CONTEXT_KEY, env[CLAUDE_CONTEXT_KEY], 'environment')
   for (const [name, path] of files) {
     const text = optionalText(path)
     const read = settingsEnv(text, name)
@@ -683,12 +688,14 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
     else take('--settings', read.env)
     takeFileSize('--settings', text)
   }
-  // BMN cannot prove which source Claude Code lets win, so one size everywhere is that size and two sizes are no answer.
+  // BMN cannot tell from the files which source Claude Code lets win, so one size everywhere is that size and
+  // two sizes are no answer here. `sizes` goes along: the owner's test of a version may have shown that the
+  // run's own environment wins over the other source, and checkContext settles it from that (60.9 AC2).
   const distinct = [...new Set(sizes.map((entry) => entry.value))]
   const limit = sizeUnreadable !== null ? { unresolved: sizeUnreadable }
     : distinct.length === 0 ? null
       : distinct.length === 1 ? { value: distinct[0], source: sizes[0].source }
-        : { unresolved: `${sizes[0].source} says ${sizes[0].value} and ${sizes.find((entry) => entry.value !== sizes[0].value).source} says ${sizes.find((entry) => entry.value !== sizes[0].value).value}` }
+        : { unresolved: `${sizes[0].source} says ${sizes[0].value} and ${sizes.find((entry) => entry.value !== sizes[0].value).source} says ${sizes.find((entry) => entry.value !== sizes[0].value).value}`, conflict: true }
   const sources = values.map((value) => value.source)
   let route
   if (reason !== null) {
@@ -706,7 +713,7 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
     model: parsed.model === undefined ? null : { value: parsed.model, source: '--model' },
     effort: parsed.effort === undefined ? null : { value: parsed.effort, source: '--effort' },
     configHome: configDir,
-    context: { limit, compact: null }
+    context: { limit, compact: null, sizes }
   }
 }
 
@@ -1477,7 +1484,8 @@ export function evaluate(inputs, {
     const { model, effort } = checkModelAndEffort(agent, resolution, note)
     // Required only where the owner's test proved the setting on this version (60.9 AC1, AC2).
     // The test log is read only for an agent that has a limit.
-    const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog))
+    const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog),
+      agent.context_limit === undefined ? [] : provenPrecedence(parsed.harness, version, contextTestLog))
     if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal)
     note(context.note)
     if (tools.refusal) refuse(tools.refusal.code, tools.refusal.message)
@@ -1738,7 +1746,8 @@ export function evaluateResearch(inputs, {
     const version = harnessVersion(parsed.command, dispatchEnvironment(parsed, environment))
     note(parsed.harness === 'codex' ? 'dispatch form: env -i codex exec, read-only, web search, no command or app tools' : 'dispatch form: env -i claude -p, web tools only')
     const { model, effort } = checkModelAndEffort(agent, resolution, note)
-    const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog))
+    const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog),
+      agent.context_limit === undefined ? [] : provenPrecedence(parsed.harness, version, contextTestLog))
     if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal)
     note(context.note)
     const route = resolution.route

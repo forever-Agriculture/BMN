@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   CONTEXT_TEST_SIZE, applyContextDefault, claudeReportedWindow, codexRecordedWindow, contextDefault, contextItems, contextTests, contextTestsPath,
-  planContextDefault, provenControls, readClaudeContext, readCodexContext, setJsonEnvEntry, setTomlTopLevelKey, testContext, type ContextTestEntry
+  planContextDefault, provenControls, provenPrecedence, readClaudeContext, readCodexContext, setJsonEnvEntry, setTomlTopLevelKey, testContext, type ContextTestEntry
 } from '../../bin/agents-context.mjs'
 import { evaluate } from '../../bin/agents-check.mjs'
 import { readValidRoster } from '../../bin/agents-state.mjs'
@@ -99,6 +99,21 @@ describe('which settings are proven for a version (60.9 AC1)', () => {
     // Claude Code has no setting for where summarising starts, whatever a record says.
     expect(provenControls('claude', CLAUDE, [tested('claude', CLAUDE, 'pass', 'pass')])).toEqual({ limit: true, compact: false })
     expect(provenControls('opencode', '1.0.0', [tested('opencode', '1.0.0')])).toEqual({ limit: false, compact: false })
+  })
+
+  it('keeps what a test saw about sources that disagree: the kind and the side, for that version only', () => {
+    const kind = 'user settings autoCompactWindow'
+    const seen: ContextTestEntry = { ...tested('claude', CLAUDE), asked: 137_000, observed: 137_000, rivals: [{ kind, value: 450_000 }] }
+    expect(provenPrecedence('claude', CLAUDE, [seen])).toEqual([{ kind, side: 'above' }])
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ kind, value: 100_000 }] }])).toEqual([{ kind, side: 'below' }])
+    // A source that named the very size asked for showed nothing.
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ kind, value: 137_000 }] }])).toEqual([])
+    expect(provenPrecedence('claude', '2.1.300', [seen])).toEqual([])
+    expect(provenPrecedence('claude', null, [seen])).toEqual([])
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, limit: 'fail' }])).toEqual([])
+    // The latest test of the version decides: one that met no other source takes the earlier proof away.
+    expect(provenPrecedence('claude', CLAUDE, [seen, tested('claude', CLAUDE)])).toEqual([])
+    expect(provenPrecedence('claude', CLAUDE, [])).toEqual([])
   })
 
   it('gives a dispatch no items for a setting that is not proven, and never both an argv and an env form', () => {
@@ -200,6 +215,42 @@ describe('the check compares what a run would really use with the agent\'s limit
     expect(check('opus', OPUS('CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000'), log)).toMatchObject({ code: 'CONTEXT_MISMATCH' })
     writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 'auto', env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: 200000 } }))
     expect(check('opus', OPUS(), log).verdict).toBe('PASS')
+  })
+
+  it('lets the run\'s own size win over another source only where the test of this version saw exactly that', () => {
+    approve(roster({ opus: 200_000 }))
+    const settings = join(home, '.claude/settings.json')
+    const kind = 'user settings autoCompactWindow'
+    const argv = OPUS('CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000')
+    const seen = (version = CLAUDE): ContextTestEntry[] => [{ ...tested('claude', version), asked: 137_000, observed: 137_000, rivals: [{ kind, value: 450_000 }] }]
+    mkdirSync(join(home, '.claude'))
+    writeFileSync(settings, JSON.stringify({ autoCompactWindow: 450000 }))
+    // Without that proof two sizes stay no answer.
+    expect(check('opus', argv, [tested('claude', CLAUDE)])).toMatchObject({ code: 'CONTEXT_MISMATCH',
+      message: expect.stringContaining('cannot be resolved: env -i CLAUDE_CODE_AUTO_COMPACT_WINDOW says 200000 and user settings autoCompactWindow says 450000') })
+    // Nor does a proof from another version settle them here.
+    expect(check('opus', argv, [...seen('2.1.300'), tested('claude', CLAUDE)])).toMatchObject({ code: 'CONTEXT_MISMATCH', message: expect.stringContaining('cannot be resolved') })
+    const right = check('opus', argv, seen())
+    expect(right.verdict, JSON.stringify(right)).toBe('PASS')
+    expect(right.receipt?.context_limit_applied).toBe(200_000)
+    expect(right.steps.join('\n')).toMatch(/context limit 200000: env -i CLAUDE_CODE_AUTO_COMPACT_WINDOW, which the test of this version showed wins over user settings autoCompactWindow \(450000\)/)
+    // The run must still carry the agent's own size: the owner's default alone is not it.
+    expect(check('opus', OPUS(), seen())).toMatchObject({ code: 'CONTEXT_MISMATCH', message: 'user settings autoCompactWindow gives a context limit of 450000; opus\'s is 200000' })
+    expect(check('opus', OPUS('CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000'), seen())).toMatchObject({ code: 'CONTEXT_MISMATCH', message: expect.stringContaining('gives a context limit of 300000; opus\'s is 200000') })
+    // The test saw a larger size lose. A smaller one in the same file is another case.
+    writeFileSync(settings, JSON.stringify({ autoCompactWindow: 150000 }))
+    expect(check('opus', argv, seen())).toMatchObject({ code: 'CONTEXT_MISMATCH', message: expect.stringContaining('cannot be resolved') })
+    // So is another kind of source: the same file's env entry, or a project's settings.
+    writeFileSync(settings, JSON.stringify({ env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '450000' } }))
+    expect(check('opus', argv, seen())).toMatchObject({ code: 'CONTEXT_MISMATCH', message: expect.stringContaining('cannot be resolved') })
+    writeFileSync(settings, JSON.stringify({ autoCompactWindow: 450000 }))
+    mkdirSync(join(workspace, '.claude'))
+    writeFileSync(join(workspace, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 450000 }))
+    expect(check('opus', argv, seen())).toMatchObject({ code: 'CONTEXT_MISMATCH', message: expect.stringContaining('cannot be resolved') })
+    // A size that is not a number is never settled by a test.
+    rmSync(join(workspace, '.claude'), { recursive: true })
+    writeFileSync(settings, JSON.stringify({ autoCompactWindow: 'lots' }))
+    expect(check('opus', argv, seen())).toMatchObject({ code: 'CONTEXT_MISMATCH', message: expect.stringContaining('is not a whole number') })
   })
 
   it('refuses a limit the app does not take, and keeps the refusal order', () => {
@@ -518,6 +569,30 @@ describe('the owner-run test, against stub apps (60.9 AC1)', () => {
     stub('claude', claudeStub('nothing to see'))
     expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'inconclusive' })
     expect(provenControls('claude', CLAUDE).limit).toBe(false)
+  })
+
+  it('keeps which of the owner\'s files named another size for the test run, so a pass shows the run\'s own value wins', async () => {
+    const claudeStub = (line: string) => `if [ "$1" = "--version" ]; then echo "2.1.295 (Claude Code)"; exit 0; fi\ncat > /dev/null\nprintf '%s\\n' '${line}'`
+    stub('claude', claudeStub('**Tokens:** 12.4k / 137k (9%)'))
+    // No file names a size: nothing to win over.
+    expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'pass', rivals: [], detail: 'asked for 137000; Claude Code reports a window of 137000' })
+    expect(provenPrecedence('claude', CLAUDE)).toEqual([])
+    mkdirSync(join(home, '.claude'))
+    writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 450000, env: { OTHER: 'kept' } }))
+    const seen = await testContext('claude', { environment: env, now: NOW })
+    expect(seen).toMatchObject({ limit: 'pass', observed: 137_000, rivals: [{ kind: 'user settings autoCompactWindow', value: 450_000 }],
+      detail: 'asked for 137000 while user settings autoCompactWindow says 450000; Claude Code reports a window of 137000, so the run\'s own value wins' })
+    expect(provenPrecedence('claude', CLAUDE)).toEqual([{ kind: 'user settings autoCompactWindow', side: 'above' }])
+    expect(provenControls('claude', CLAUDE)).toEqual({ limit: true, compact: false })
+    // The app took the file's size instead: a fail, and no proof.
+    stub('claude', claudeStub('**Tokens:** 12.4k / 450k (3%)'))
+    expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'fail', observed: 450_000, rivals: [{ kind: 'user settings autoCompactWindow', value: 450_000 }],
+      detail: 'asked for 137000 while user settings autoCompactWindow says 450000, but Claude Code reports a window of 450000' })
+    expect(provenPrecedence('claude', CLAUDE)).toEqual([])
+    // A file that names the size asked for is no rival, and a Codex test keeps none.
+    writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 137000 }))
+    stub('claude', claudeStub('**Tokens:** 12.4k / 137k (9%)'))
+    expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'pass', rivals: [] })
   })
 
   it('reads the two reports it relies on', () => {

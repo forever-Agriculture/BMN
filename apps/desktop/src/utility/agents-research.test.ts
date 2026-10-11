@@ -175,6 +175,22 @@ describe('who may research (60.10 AC1)', () => {
     expect(found.find((entry) => entry.id === 'kimi')).toMatchObject({ ok: false, reason: 'OpenCode has no research form BMN can check' })
   })
 
+  it('offers an agent with its own context limit once the owner\'s test showed that limit wins over his default', () => {
+    // The owner's case: an agent capped at 100 000 while his own sessions' default says 450 000.
+    const capped = EXAMPLE.replace('model: claude-opus-5-5', 'model: claude-opus-5-5\ncontext_limit: 100000')
+    expect(capped).not.toBe(EXAMPLE)
+    approve(capped)
+    mkdirSync(join(home, '.claude'), { recursive: true })
+    writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 450000 }))
+    const log = join(home, '.config/bmn/agents/state/context-tests.jsonl')
+    const tested = { harness: 'claude', version: '2.1.295', limit: 'pass', compact: 'untested', asked: 137_000, observed: 137_000 }
+    writeFileSync(log, `${JSON.stringify(tested)}\n`)
+    expect(researchers({ environment: env, now: NOW }).find((entry) => entry.id === 'opus')).toMatchObject({ ok: false, why: 'two settings name different context sizes for it',
+      reason: expect.stringContaining('env -i CLAUDE_CODE_AUTO_COMPACT_WINDOW says 100000 and user settings autoCompactWindow says 450000') })
+    writeFileSync(log, `${JSON.stringify({ ...tested, rivals: [{ kind: 'user settings autoCompactWindow', value: 450_000 }] })}\n`)
+    expect(researchers({ environment: env, now: NOW }).find((entry) => entry.id === 'opus')).toEqual({ id: 'opus', name: 'Opus', harness: 'claude', ok: true })
+  })
+
   it('remembers the researcher the owner picked', () => {
     expect(chosenResearcher()).toBeNull()
     chooseResearcher('luna')

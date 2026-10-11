@@ -1293,12 +1293,25 @@ describe('Team › Models (60.10, first release)', () => {
     renderToStaticMarkup(createElement(TeamPreferences, { team: teamState, page: { name: 'models' }, research: state, go: noop }))
   const page = modelsMarkup()
   const lines = (markup: string): string[] => [...markup.matchAll(/<div class="model-line" data-model="([^"]+)">/g)].map((match) => match[1]!)
+  /** The researchers offered, each as its piece's name, its own name and whether it is the chosen one. */
+  const offered = (markup: string): string[] =>
+    [...markup.matchAll(/role="radio" aria-checked="(true|false)"[^>]*><svg class="piece"[^>]*role="img" aria-label="([^"]+)"[^>]*>.*?<\/svg>([^<]+)</g)].map((match) => `${match[2]} ${match[3]}:${match[1]}`)
+
+  it('tells two researchers of one name apart by their pieces', () => {
+    const twins = { ...DATA, agents: [...DATA.agents,
+      { ...agent('opus', { class: 'knight', harness: 'claude', provider: 'anthropic', roles: ['lead'] }), name: 'Opus' },
+      { ...agent('opus-2', { class: 'queen', harness: 'claude', provider: 'anthropic' }), name: 'Opus' }] }
+    const both: ResearchSnapshot = { ...RESEARCH, researcher: 'opus-2', researchers: [
+      { id: 'opus', name: 'Opus', harness: 'claude', ok: true }, { id: 'opus-2', name: 'Opus', harness: 'claude', ok: true }] }
+    expect(offered(modelsMarkup(research({ snapshot: both }), team({ base: twins, data: twins, approved: twins })))).toEqual(['Knight Opus:false', 'Queen Opus:true'])
+  })
 
   it('heads the page with the last research, who did it and Research now (AC1)', () => {
     expect(page).toContain(`<h3 class="page-title">Models</h3><span class="faint">Researched ${shortDate('2026-10-10T09:40:00.000Z')} by Fable · 6 models</span>`)
     expect(page).toContain('<button type="button">Research now</button>')
     // The researcher is one of the agents that may research; the others are named with why in plain words, never the check's own.
-    expect([...page.matchAll(/role="radio" aria-checked="(true|false)"[^>]*>([^<]+)</g)].map((match) => `${match[2]}:${match[1]}`)).toEqual(['Sol:false', 'Fable:true', 'Luna:false'])
+    // Each is offered with its class's piece before its name, as on the Team pages.
+    expect(offered(page)).toEqual(['Knight Sol:false', 'Rook Fable:true', 'Pawn Luna:false'])
     expect(words(page)).toContain('Gets only your model names and the source list, never your files. Runs in an empty folder with web tools only. Glm cannot research: its provider gets public work only. Kimi cannot research: its app is OpenCode.')
     expect(page).not.toContain('synthetic')
     expect(researcherHint('codex')).toBe('Gets only your model names and the source list, never your files. Runs in an empty folder, read-only, with web search and no command tools.')

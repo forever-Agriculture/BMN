@@ -5,7 +5,7 @@ import { Segmented } from './history-preferences'
 import {
   applyPrices, dayWords, fillFrom, priceChanges, priceText, researchGroups, researchStatus, siteOf, unverifiedWords, type PriceChange, type ResearchFill, type TeamModelRow
 } from './research-view'
-import { Dot } from './roster-marks'
+import { Dot, Piece } from './roster-marks'
 import { thousands } from './roster-staging'
 import { PageHead, Row, shortDate } from './team-preferences'
 import type { TeamState } from './team-state'
@@ -249,6 +249,12 @@ export function ModelsPage(props: { team: TeamState; data: RosterDataShape; rese
   const changes = priceChanges(snapshot.models, data)
   const running = snapshot.running !== null
   const lastDay = snapshot.last ? dayWords(snapshot.last.at) : null
+  // Two agents may share a name (Opus the knight, Opus the queen): the class's piece tells them apart, as on the Team pages.
+  const researcherLabel = (id: string): React.ReactNode => {
+    const agent = data.agents.find((entry) => entry.id === id)
+    const name = able.find((entry) => entry.id === id)?.name ?? id
+    return agent ? <><Piece agentClass={agent.class} named />{name}</> : name
+  }
   // The provider is the team's own, by the name the team gives it; the researcher's wording of it is not shown.
   const providerName = (model: ResearchModelView): string => data.providers.find((provider) => provider.id === model.providerId)?.name ?? model.provider
   return (
@@ -268,7 +274,7 @@ export function ModelsPage(props: { team: TeamState; data: RosterDataShape; rese
         {able.length === 0
           ? <span className="muted">No agent on your team can research.</span>
           : <Segmented labelledBy={researcherId} fit options={able.map((entry) => entry.id)} value={chosen?.id ?? able[0]!.id} disabled={running || research.busy}
-              optionLabel={(id) => able.find((entry) => entry.id === id)?.name ?? id} onChange={(id) => research.choose(id)} />}
+              optionLabel={researcherLabel} onChange={(id) => research.choose(id)} />}
       </Row>
       <Row label="Sources" hint="Prices come from provider pages first; other sites are cited and never override. BMN reads each cited page itself and marks what it cannot confirm.">
         <ol className="sources"><li>Provider pages</li><li>Other sites</li></ol>

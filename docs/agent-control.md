@@ -887,6 +887,11 @@ decides, and a new version starts untested. Until a test passed, the limit is **
 yet** on that version: BMN writes nothing, passes nothing and requires nothing. Where summarising
 starts has no test yet, so it stays not supported on every app.
 
+The Claude Code test also keeps which of your own files named another size for that very run
+(`rivals`: the kind of source and its size, for example `user settings autoCompactWindow` at
+450 000). A pass then shows one more thing for that version: the run's own value wins over that
+kind of source, on that side (the file's size above or below the run's).
+
 **Runs BMN checks.** `bmn roster role <role> --json` gives each candidate a `context` entry:
 `applied` with the exact `argv` items (Codex) or `env` entries (Claude Code), `app-default`,
 `not-supported-yet` or `out-of-range`. `bmn roster check` then resolves what the run would really
@@ -895,9 +900,15 @@ differs from the agent's limit or cannot be resolved; a PASS records the limit i
 `context_limit_applied`. For Codex a `-c` item wins, then the selected profile, then
 `config.toml`; a `.codex/config.toml` in the working folder or above it, or `/etc/codex`, that
 sets a size makes the answer unresolved unless the run carries its own item. For Claude Code BMN
-cannot prove which source wins, so every source that names a size must name the same one: the
-run's environment, `env` in each settings file it loads, and a settings file's own
-`autoCompactWindow`. An agent without a limit is never asked for one.
+cannot tell from the files which source wins, so every source that names a size must name the
+same one: the run's environment, `env` in each settings file it loads, and a settings file's own
+`autoCompactWindow`. The one exception is what the test of the installed version saw: where the
+run's environment names the agent's limit and every other size comes from a kind of source the
+test saw it win over, on the same side, the run's size is the answer and the check's step names
+both ("which the test of this version showed wins over user settings autoCompactWindow
+(450000)"). So an agent may keep its own limit while your sessions' default is larger. Any other
+disagreement stays unresolved: a smaller size where the test saw a larger one, another kind of
+source, or a version without that test. An agent without a limit is never asked for one.
 
 **Your own sessions.** Rules → Health → Context limits shows one row per app: its file, the agents
 that share it, the default it holds and whether the setting is tested on the installed version.
