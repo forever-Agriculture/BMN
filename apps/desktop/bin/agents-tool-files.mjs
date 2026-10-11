@@ -151,7 +151,10 @@ function containerOf(text, path) {
   let spans = rootOf(text)
   for (const step of path) {
     if (spans === null) return null
-    const member = spans.members.find((entry) => entry.key === step)
+    const members = spans.members.filter((entry) => entry.key === step)
+    // Which of two would the app take? BMN does not guess: the file is not one it can place an entry in.
+    if (members.length > 1) fail(`"${step}" is there twice`)
+    const member = members[0]
     if (member === undefined) return null
     if (text[member.valueStart] !== '{') fail(`"${step}" is not an object`)
     spans = objectSpans(text, member.valueStart)
@@ -446,6 +449,8 @@ export function readTomlEntries(text, root = 'mcp_servers') {
     if (/^[ \t]*(?:#.*)?$/.test(line.body)) continue
     const equals = line.body.indexOf('=')
     const parts = equals === -1 ? null : keyParts(line.body.slice(0, equals))
+    // Every tool written as one value at the top of the file: BMN reads none of them, so it cannot say which are there.
+    if (table.length === 0 && parts !== null && parts[0] === root && parts.length === 1) fail(`${root} is written as one inline value, which BMN does not read or change`)
     // Entries written inline or with dotted keys, under `[mcp_servers]` or at the top of the file.
     if (table.length === 0 && parts !== null && parts[0] === root && parts.length > 1) mark(parts[1], 'it is written with dotted keys')
     if (table.length === 1 && table[0] === root && parts !== null) mark(parts[0], 'it is written inline under [mcp_servers]')

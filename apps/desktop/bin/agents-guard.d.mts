@@ -18,6 +18,8 @@ export interface GuardVerdict {
   pid: number | null
   start: string | null
   folder: string | null
+  /** The folder the agent's own process is in, as the system reports it. */
+  processFolder: string | null
   workspace: string | null
   provider: { id: string; name: string } | null
   host: string | null

@@ -1157,7 +1157,7 @@ export class ControlServer {
       }
       case 'guard.report': {
         // Only a session's own prompt hook reports, and only for the run it belongs to.
-        const params = closedParams(rawParams, ['sessionId', 'agent', 'outcome', 'cause', 'line', 'allow', 'workspace', 'folder',
+        const params = closedParams(rawParams, ['sessionId', 'agent', 'outcome', 'cause', 'line', 'allow', 'workspace', 'folder', 'processFolder',
           'providerId', 'providerName', 'agentName', 'host', 'pid', 'start', 'conversation'])
         if (scope.kind !== 'session') throw unauthorized('Only a session credential may report its prompt guard')
         const agent = params.agent
@@ -1193,7 +1193,7 @@ export class ControlServer {
         }
         return handlers.reportGuard({
           sessionId, incarnationId: scope.incarnationId, agent: agent as GuardAgent, outcome, cause: cause as GuardCause, line, allow,
-          workspace, folder: folderPath('folder'), providerId,
+          workspace, folder: folderPath('folder'), processFolder: folderPath('processFolder'), providerId,
           providerName: readText(params, 'providerName', RULES.label) ?? null,
           agentName: readText(params, 'agentName', RULES.label) ?? null,
           host: readText(params, 'host', RULES.apiHost) ?? null,

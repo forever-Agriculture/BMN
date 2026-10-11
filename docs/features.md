@@ -275,9 +275,11 @@ approved team with `bmn team`, and a lead runs `bmn roster check` before it hand
 agent.
 
 A lead you start yourself is checked too, at each prompt: when its app sends work to a provider
-that may not see private work, the prompt is stopped before it leaves and the session shows a
-card with **Allow here** (that provider, that workspace only) and **Keep blocked**. This works in
-Claude Code and Codex; Cursor only warns, and OpenCode is not covered.
+that may not see private work, BMN tells the app to stop the prompt before it leaves and the
+session shows a card with **Allow here** (that provider, that workspace only) and **Keep
+blocked**. Claude Code and Codex take that answer through their prompt hook; that your installed
+versions obey has not been tested live yet, and the card says so. Cursor only warns, and OpenCode
+is not covered.
 
 Rules → **Skills** gives every agent app the skills you keep in one folder: a link, or a copy
 where the app does not follow links, installed and undone as one step after you saw the list. A

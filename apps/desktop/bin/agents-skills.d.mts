@@ -41,6 +41,8 @@ export interface SkillsTestEntry {
   route?: string
   discovery?: string
   skills_hash?: string
+  /** What a loading result rests on: the app's own listing, with no prompt sent. */
+  basis?: 'listing'
 }
 export declare function skillsTests(): SkillsTestEntry[]
 export declare function lastSkillsTest(harness: string, kind: 'capability' | 'loading', tests?: SkillsTestEntry[]): SkillsTestEntry | null
@@ -89,6 +91,7 @@ export interface SkillsInstallResult {
 export declare function installSkills(harnesses?: string[], options?: {
   yes?: boolean; asJson?: boolean; environment?: Environment; versions?: SkillsVersions; now?: Date; expectedPlanHash?: string
   afterConfirm?: () => void; beforeTarget?: (target: { harness: string; skill: string; path: string }, index: number) => void
+  afterTarget?: (target: { harness: string; skill: string; path: string }, index: number) => void
 }): Promise<SkillsInstallResult>
 export declare function restoreSkillsTransaction(manifest: unknown, folder: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string }): Promise<{ code: string; restored?: string[]; message?: string; plan_hash?: string; targets?: { harness: string; path: string; resolved_path: string; becomes: string; diff: string }[] }>
 

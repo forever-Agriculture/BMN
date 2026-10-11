@@ -116,6 +116,7 @@ export declare function evaluateResearch(inputs: ResearchInputs, options?: Resea
 export declare function verifyReceipt(path: string, argv: string[], options?: CheckOptions): { ok: boolean; reason?: string }
 export declare function workspaceRoot(directory: string): string
 export declare function sessionRecord(codexHome: string | null, id: string): { id?: unknown; cwd?: unknown; provider?: unknown; cli_version?: unknown } | null
+export declare function sessionRecordFiles(codexHome: string | null, id: string): string[]
 export declare function sessionRecordAt(path: string): { id?: unknown; cwd?: unknown; provider?: unknown; cli_version?: unknown } | null
 export declare function workspaceOrigin(workspace: string): { origin: string; reason?: undefined } | { reason: string; origin?: undefined }
 export declare function normalizedGithubOrigin(url: string): string | null

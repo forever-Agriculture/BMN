@@ -481,17 +481,17 @@ describe('Allow here on a stopped prompt (60.8 AC3)', () => {
   let workspace: string
 
   /** One agent process as Linux reports it, in a process table the handlers read instead of /proc. */
-  function agentProcess(env: Record<string, string>, start = '777'): void {
+  function agentProcess(env: Record<string, string>, start = '777', cwd = workspace): void {
     const folder = join(proc, '7001')
     rmSync(folder, { recursive: true, force: true })
     mkdirSync(folder, { recursive: true })
     writeFileSync(join(folder, 'cmdline'), 'claude\0--resume\0')
     writeFileSync(join(folder, 'environ'), `${Object.entries({ HOME: home, PATH: '/usr/bin:/bin', ...env }).map(([key, value]) => `${key}=${value}`).join('\0')}\0`)
     writeFileSync(join(folder, 'stat'), `7001 (claude) S ${[1, 7001, 7001, 34817, 7001, ...Array(13).fill(0), start].join(' ')}\n`)
-    symlinkSync(workspace, join(folder, 'cwd'))
+    symlinkSync(cwd, join(folder, 'cwd'))
   }
 
-  const stop = (): Record<string, unknown> => ({ agent: 'claude', pid: 7001, start: '777', folder: workspace, workspace, providerId: 'moonshot', host: 'api.moonshot.ai', conversation: null })
+  const stop = (): Record<string, unknown> => ({ agent: 'claude', pid: 7001, start: '777', folder: workspace, processFolder: workspace, workspace, providerId: 'moonshot', host: 'api.moonshot.ai', conversation: null })
   const allow = (shownStop: Record<string, unknown> = stop()): Promise<AgentsOutcome> => call('agents:guard-allow', { stop: shownStop })
 
   beforeEach(async () => {
@@ -521,6 +521,10 @@ describe('Allow here on a stopped prompt (60.8 AC3)', () => {
     ['the session now sends work elsewhere', (): void => agentProcess({}), {}],
     ['another process took the pid', (): void => agentProcess({ ANTHROPIC_BASE_URL: 'https://api.moonshot.ai/anthropic' }, '999'), {}],
     ['the process is gone', (): void => rmSync(join(proc, '7001'), { recursive: true, force: true }), {}],
+    // Same destination, and a folder the card's own workspace would still cover: only the process tells that the session moved.
+    ['the session moved to another folder', (): void => { mkdirSync(join(workspace, 'sub')); agentProcess({ ANTHROPIC_BASE_URL: 'https://api.moonshot.ai/anthropic' }, '777', join(workspace, 'sub')) }, {}],
+    ['the session moved to another workspace', (): void => { mkdirSync(join(home, 'code/other/.git'), { recursive: true }); agentProcess({ ANTHROPIC_BASE_URL: 'https://api.moonshot.ai/anthropic' }, '777', join(home, 'code/other')) }, {}],
+    ['the card says the process was somewhere else', (): void => undefined, { processFolder: '/synthetic/elsewhere' }],
     ['the card named another provider', (): void => undefined, { providerId: 'zai' }],
     ['the card named another workspace', (): void => undefined, { workspace: '/synthetic/elsewhere' }]
   ])('refuses and approves nothing when %s', async (_label, change, shownChange) => {
@@ -623,7 +627,7 @@ describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
     expect(await call<SkillsPlan>('rules:skills-plan')).toMatchObject({ ok: false, code: 'SKILLS_UNSUPPORTED', targets: [] })
 
     const tested = await call<RulesOutcome>('rules:skills-test', { harness: 'codex' })
-    expect(tested).toMatchObject({ ok: true, message: `Codex skills test passed: Codex reads skills from ~/.agents/skills; Codex named a test skill placed in ${join(home, '.agents/skills')}` })
+    expect(tested).toMatchObject({ ok: true, message: `Codex skills test passed: Codex reads skills from ~/.agents/skills; Codex lists a test skill placed in ${join(home, '.agents/skills')}; no prompt was sent, so this shows the app finds a skill there, not that a model uses it` })
     expect(readdirSync(join(home, '.agents/skills'))).toEqual([])
     const codex = tested.snapshot.skills.apps[1]!
     expect(codex).toMatchObject({ supported: true, location: join(home, '.agents/skills'), format: 'link', readsSource: false, kind: 'full', state: 'Missing', test: { outcome: 'pass', version: '0.161.0' }, loading: { outcome: 'pass', stale: false } })
@@ -721,7 +725,7 @@ describe('tools on Rules › Tools and Health (60.12 AC1-AC6)', () => {
     expect(file('.codex/config.toml')).toBe(OWN)
 
     const tested = await call<RulesOutcome>('rules:tools-test', { harness: 'codex' })
-    expect(tested).toMatchObject({ ok: true, message: 'Codex tools test passed: Codex reads its tools from ~/.codex/config.toml; its own list names the environment variable a tool is given; a run can be given only its own tools' })
+    expect(tested).toMatchObject({ ok: true, message: 'Codex tools test passed: Codex reads its tools from ~/.codex/config.toml; its own list names the environment variable a tool is given (the tool was not started); a command told to take only its own tools (its own list, not a run) left out the one in its settings; whether it also leaves out tools a folder names was not seen' })
     expect(readdirSync(home).filter((name) => name.startsWith('.bmn-tools-test-'))).toEqual([])
     expect(file('.codex/config.toml')).toBe(OWN)
     expect(tested.snapshot.tools).toMatchObject({ pending: 1, exposed: 0, blocked: 1 })
@@ -790,6 +794,21 @@ describe('tools on Rules › Tools and Health (60.12 AC1-AC6)', () => {
   })
 })
 
+describe('Skills and Tools when the approved team cannot be read (R60-NFR1)', () => {
+  it('say so on both pages and propose nothing, instead of judging a team without marks or tools', async () => {
+    await approvedAndInstalled()
+    writeFileSync(join(home, '.config/bmn/agents/state/current'), '{ not json')
+    const rules = await call<RulesSnapshot>('rules:snapshot')
+    expect(rules.skills).toMatchObject({ source: { readable: false }, skills: [], apps: [] })
+    expect(rules.skills.source.detail).toMatch(/approved/i)
+    expect(rules.tools).toMatchObject({ tools: [], apps: [] })
+    expect(rules.tools.error).toBe(rules.skills.source.detail)
+    const found = await call<{ ok: boolean; message?: string; proposals: ToolProposalView[] }>('rules:tools-proposals')
+    expect(found).toMatchObject({ ok: false, proposals: [] })
+    expect(found.message).toBe(rules.tools.error)
+  })
+})
+
 describe('research on Team › Models (60.10)', () => {
   const PAGE = 'https://prices.example.test/anthropic'
   const price = (input: number, output: number) => ({ input, output, source: PAGE, as_of: '2026-10-10' })
@@ -845,11 +864,14 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     const plain = await load()
     expect(plain).toMatchObject({ last: null, previousAt: null, models: [], researchers: [], researcher: null, running: null, ended: null })
     const fresh = await load(true)
-    expect(fresh.researchers.map((agent) => [agent.id, agent.harness, agent.ok])).toEqual([['sol', 'codex', true], ['opus', 'claude', true], ['astra', 'codex', true], ['fable', 'claude', true], ['luna', 'codex', true]])
-    expect(fresh.researcher).toBe('sol')
+    expect(fresh.researchers.map((agent) => [agent.id, agent.harness, agent.ok])).toEqual([['sol', 'codex', false], ['opus', 'claude', true], ['astra', 'codex', false], ['fable', 'claude', true], ['luna', 'codex', false]])
+    // Research runs in Claude Code only until another app's fence is verified on its installed version.
+    expect(fresh.researchers.find((agent) => agent.id === 'sol')?.reason).toContain('research runs in Codex only on a version whose fence BMN verified')
+    expect(fresh.researcher).toBe('opus')
     expect((await call<ResearchSnapshot>('research:choose', { researcher: 'fable' })).researcher).toBe('fable')
     // A pick that can no longer research falls back to one that can.
-    expect((await call<ResearchSnapshot>('research:choose', { researcher: 'sonnet' })).researcher).toBe('sol')
+    expect((await call<ResearchSnapshot>('research:choose', { researcher: 'sonnet' })).researcher).toBe('opus')
+    expect((await call<ResearchSnapshot>('research:choose', { researcher: 'astra' })).researcher).toBe('opus')
     expect(calls()).toEqual([])
   })
 

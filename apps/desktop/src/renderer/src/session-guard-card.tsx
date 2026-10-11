@@ -29,9 +29,16 @@ export function guardTitle(stop: GuardStop): string {
   }
 }
 
+/**
+ * What BMN did, in two words. BMN answers the app's prompt hook with "stop"; that the installed
+ * version of the app obeys has not been shown by a live test yet (60.8, R60-NFR4), so the card
+ * and the mark say what BMN did, never that the prompt went nowhere.
+ */
+export const GUARD_STOP_WORDS = 'Told to stop'
+
 /** The words on the session's own mark, in its pane header. */
 export function guardMark(stop: GuardStop): string {
-  if (stop.outcome === 'stop') return 'Prompt stopped'
+  if (stop.outcome === 'stop') return GUARD_STOP_WORDS
   return stop.cause === 'public-only' || stop.cause === 'declared' ? 'Public-only provider on private work' : 'Unknown destination on private work'
 }
 
@@ -40,7 +47,13 @@ export function guardNote(stop: GuardStop): string {
   const app = ROSTER_APP_NAMES[stop.agent]
   if (stop.outcome === 'warn') return `${app} cannot be told to stop a prompt, so this one went on. BMN only warns in ${app}.`
   if (stop.allow) return `Allow here adds this one workspace for ${stop.providerName ?? 'this provider'} to your team as a new version. Then send the prompt again.`
-  return 'The prompt went nowhere. Send it again once this is fixed.'
+  return 'Send the prompt again once this is fixed.'
+}
+
+/** What a stop is, and what is not yet known about it; nothing for a warning, whose note already says the prompt went on. */
+export function guardCaveat(stop: GuardStop): string | null {
+  const app = ROSTER_APP_NAMES[stop.agent]
+  return stop.outcome === 'stop' ? `BMN told ${app} to stop this prompt. No test has yet shown that this version of ${app} obeys, so check that the agent did not answer.` : null
 }
 
 export function SessionGuardCard(props: {
@@ -79,7 +92,7 @@ export function SessionGuardCard(props: {
     onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); props.onClose(true) }
     }}>
-    <header><strong>{stop.outcome === 'stop' ? 'Prompt stopped' : 'Prompt went on'}</strong><span>stays on this computer</span>
+    <header><strong>{stop.outcome === 'stop' ? GUARD_STOP_WORDS : 'Prompt went on'}</strong><span>stays on this computer</span>
       <button type="button" aria-label="Close prompt guard" onClick={() => props.onClose(true)}>×</button></header>
     <article className={`attention-item ${stop.kept ? 'update' : 'request'}`} aria-label={`${title} · ${props.place.workspace} › ${props.place.session}`}>
       <div className="where">
@@ -94,6 +107,7 @@ export function SessionGuardCard(props: {
         <dt>Workspace</dt><dd className="mono" title={stop.workspace}>{guardPath(stop.workspace, props.home)}</dd>
         {stop.host && !stop.host.startsWith('default:') ? <><dt>Address</dt><dd className="mono">{stop.host}</dd></> : null}
       </dl> : null}
+      {guardCaveat(stop) ? <p className="seen">{guardCaveat(stop)}</p> : null}
       <p className="seen">{guardNote(stop)}</p>
       {props.refusal ? <p className="guard-refusal" role="alert">{props.refusal}</p> : null}
       <div className="actions">

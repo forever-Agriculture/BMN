@@ -665,8 +665,8 @@ contextBridge.exposeInMainWorld('aiTerminal', {
     return invokeBridge('aiterm:guard:clear', { sessionId })
   },
   allowGuardStop(stop: GuardStop): Promise<AgentsOutcome> {
-    const { agent, pid, start, folder, workspace, providerId, host, conversation } = stop
-    return invokeBridge('aiterm:agents:guard-allow', { stop: { agent, pid, start, folder, workspace, providerId, host, conversation } })
+    const { agent, pid, start, folder, processFolder, workspace, providerId, host, conversation } = stop
+    return invokeBridge('aiterm:agents:guard-allow', { stop: { agent, pid, start, folder, processFolder, workspace, providerId, host, conversation } })
   },
   listPorts(): Promise<SessionPorts[]> {
     return invokeBridge('aiterm:ports:list', {})

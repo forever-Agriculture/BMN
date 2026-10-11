@@ -8,7 +8,7 @@ import { SessionGuardCard, guardMark, guardNote, guardPath, guardTitle } from '.
 const STOP: GuardStop = {
   sessionId: 's1', incarnationId: 'incarnation-1', agent: 'claude', outcome: 'stop', cause: 'public-only',
   line: "Moonshot AI can't see private work in ~/code/app. Allow it in BMN.", allow: true,
-  workspace: '/home/synthetic/code/app', folder: '/home/synthetic/code/app/src', providerId: 'moonshot', providerName: 'Moonshot AI', agentName: 'Kimi',
+  workspace: '/home/synthetic/code/app', folder: '/home/synthetic/code/app/src', processFolder: '/home/synthetic/code/app/src', providerId: 'moonshot', providerName: 'Moonshot AI', agentName: 'Kimi',
   host: 'api.moonshot.ai', pid: 7001, start: '777', conversation: null, at: '2026-10-10T12:00:00.000Z', kept: false
 }
 const NOW = Date.parse('2026-10-10T12:00:30.000Z')
@@ -56,7 +56,10 @@ describe('the card a stopped prompt raises (60.8 AC3)', () => {
 
     expect(guardTitle(stop)).toBe(title)
     expect(buttons(html)).toEqual(['×', 'Close'])
-    expect(html).toContain('The prompt went nowhere. Send it again once this is fixed.')
+    expect(html).toContain('Send the prompt again once this is fixed.')
+    // The card says what BMN did; nothing shows yet that this version of the app obeys, and the card says that too.
+    expect(html).toContain('BMN told Claude Code to stop this prompt. No test has yet shown that this version of Claude Code obeys, so check that the agent did not answer.')
+    expect(html).not.toMatch(/went nowhere|Prompt stopped/)
   })
 
   it('keeps only the mark once the owner chose Keep blocked', () => {
@@ -75,7 +78,7 @@ describe('an app BMN can only warn in (60.8 AC4)', () => {
 
     expect(guardMark(WARNING)).toBe('Public-only provider on private work')
     expect(guardMark({ ...WARNING, cause: 'unknown' })).toBe('Unknown destination on private work')
-    expect(guardMark(STOP)).toBe('Prompt stopped')
+    expect(guardMark(STOP)).toBe('Told to stop')
     expect(guardNote(WARNING)).toBe('Cursor cannot be told to stop a prompt, so this one went on. BMN only warns in Cursor.')
     expect(html).toContain('<strong>Prompt went on</strong>')
     expect(html).not.toContain('<dt>Address</dt>')

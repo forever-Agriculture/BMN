@@ -998,9 +998,10 @@ export function skillsTestLine(app: Pick<SkillsAppView, 'supported' | 'version' 
     const last = app.test !== null && app.test.version === app.version ? app.test.outcome : null
     return last === 'fail' ? `The test failed on ${app.version}` : last === 'inconclusive' ? `The test was inconclusive on ${app.version}` : `Not tested on ${app.version}`
   }
-  if (app.kind !== 'full') return 'No loading test'
-  if (app.loading === null) return 'Loading never tested'
-  return `Loading test ${TEST_WORDS[app.loading.outcome].toLowerCase()} ${shortDate(app.loading.at)}${app.loading.stale ? ' · stale' : ''}`
+  // The test asks the app which skills it lists and sends no prompt: it is named for what it shows.
+  if (app.kind !== 'full') return 'No listing test'
+  if (app.loading === null) return 'Listing never tested'
+  return `Listing test ${TEST_WORDS[app.loading.outcome].toLowerCase()} ${shortDate(app.loading.at)}${app.loading.stale ? ' · stale' : ''}`
 }
 
 function SkillRow(props: { skill: SkillView; apps: readonly SkillsAppView[]; team: TeamState; busy: boolean }): React.JSX.Element {

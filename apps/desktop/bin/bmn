@@ -2036,6 +2036,7 @@ function guardReport(agent, event, verdict, stopped) {
       ...(verdict.host === null ? {} : { host: verdict.host }),
       ...(verdict.pid === null || verdict.start === null ? {} : { pid: verdict.pid, start: verdict.start }),
       ...(verdict.folder === null ? {} : { folder: verdict.folder }),
+      ...(verdict.processFolder === null || verdict.processFolder === undefined ? {} : { processFolder: verdict.processFolder }),
       ...(typeof event.session_id === 'string' && CONVERSATION_REFERENCE.test(event.session_id) ? { conversation: event.session_id.toLowerCase() } : {})
     }
   }

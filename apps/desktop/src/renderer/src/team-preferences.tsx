@@ -1,5 +1,5 @@
 // MODULE: team-preferences.tsx - Epic 60.5: Preferences › Team: agents as solid cards, an agent's rows, New agent, role chains, approved versions and the approval footer
-import { useEffect, useId, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   ROSTER_APP_NAMES,
   ROSTER_CLASSES,
@@ -22,7 +22,7 @@ import { Segmented } from './history-preferences'
 import { ModelField } from './model-field'
 import { modelSourceWords, modelSuggestions, type ReportedModel } from './model-suggestions'
 import { ModelsPage, researchedModels, type ResearchState } from './models-preferences'
-import { dayWords, fillFrom, fillWords, priceText, type ResearchFill } from './research-view'
+import { dayWords, fillFrom, fillWords, lookupFits, priceText, type ResearchFill } from './research-view'
 import { Dot, Piece } from './roster-marks'
 import {
   CLASS_WORDS,
@@ -651,17 +651,26 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
   const ready = draft.name.trim() !== '' && draft.model.trim() !== '' && efforts.length > 0
   const price = draft.price ?? twin?.price
   const capacity = draft.contextWindow ?? twin?.context_window
+  // The form as it is at this moment, for an answer that arrives later than the render that asked.
+  const latest = useRef(draft)
+  latest.current = draft
   const lookUp = async (): Promise<void> => {
     if (research === null) return
-    const name = draft.model.trim()
+    const asked = { model: draft.model.trim(), provider: landing.provider.id }
+    const name = asked.model
     setLooking(true)
     setLookup(null)
-    const result = await research.lookUp(landing.provider.id, name)
+    const result = await research.lookUp(asked.provider, name)
     setLooking(false)
     if (!result.ok || result.model === null) return setLookup({ ok: false, text: result.message })
+    // The fields stayed open meanwhile: an answer about one model never fills the form of another.
+    const now = latest.current
+    if (!lookupFits(asked, { model: now.model.trim(), provider: landingFor(data, now.harness, now.host).provider.id }, result.model.id)) {
+      return setLookup({ ok: false, text: `Research answered for ${name}, but the model, app or host changed meanwhile. Nothing was filled in; look it up again.` })
+    }
     const fill = fillFrom(result.model, data)
     if (fill.price === undefined && fill.contextWindow === undefined) return setLookup({ ok: false, text: `Research answered for ${name}, but BMN could not confirm a price or a capacity on the pages it cited.` })
-    setFilled({ words: fillWords(fill, true), before: draft })
+    setFilled({ words: fillWords(fill, true), before: now })
     setDraft((current) => ({ ...current, ...(fill.price ? { price: fill.price } : {}), ...(fill.contextWindow ? { contextWindow: fill.contextWindow } : {}) }))
   }
   return (

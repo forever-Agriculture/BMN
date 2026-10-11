@@ -286,6 +286,48 @@ describe('check and install with links (60.11 AC2-AC4)', () => {
     expect(states('codex')).toEqual({ alpha: 'unmanaged', beta: 'missing', gamma: 'missing' })
   })
 
+  it('undoes an entry it wrote but never got to record, and leaves one it never reached or that changed since', async () => {
+    // BMN ends between linking the second skill and recording that it did.
+    const ended = { afterTarget: (_target: unknown, index: number) => { if (index === 1) throw new Error('ended here') } }
+    const failed = await install(['codex'], ended)
+    expect(failed).toMatchObject({ code: 'INSTALL_FAILED', written: [{ skill: 'alpha' }] })
+    expect(states('codex')).toEqual({ alpha: 'current', beta: 'unmanaged', gamma: 'missing' })
+    const plan = await restoreTransaction(failed.transaction!, { planOnly: true })
+    expect(plan.targets!.map((target) => target.path)).toEqual([join(codexFolder(), 'alpha'), join(codexFolder(), 'beta')])
+    expect((await restoreTransaction(failed.transaction!, { yes: true })).code).toBe('OK')
+    expect(readdirSync(codexFolder())).toEqual([])
+    expect(states('codex')).toEqual({ alpha: 'missing', beta: 'missing', gamma: 'missing' })
+    // The same end, but the owner replaced that entry before undoing: it is his, and stays.
+    const again = await install(['codex'], ended)
+    rmSync(join(codexFolder(), 'beta'))
+    skill('beta', { at: codexFolder(), extra: { 'own.md': 'own\n' } })
+    expect((await restoreTransaction(again.transaction!, { planOnly: true })).targets!.map((target) => target.path)).toEqual([join(codexFolder(), 'alpha')])
+    expect((await restoreTransaction(again.transaction!, { yes: true })).code).toBe('OK')
+    expect(readdirSync(codexFolder())).toEqual(['beta'])
+    expect(readFileSync(join(codexFolder(), 'beta/own.md'), 'utf8')).toBe('own\n')
+  })
+
+  it('treats approval state it cannot read as an error, never as a team without skills marks', async () => {
+    await install(['codex'])
+    const pointer = join(home, '.config/bmn/agents/state/current')
+    const good = readFileSync(pointer, 'utf8')
+    for (const damage of [() => writeFileSync(pointer, '{ not json'), () => rmSync(pointer)]) {
+      damage()
+      expect(() => check()).toThrow()
+      await expect(install(['codex'])).rejects.toThrow()
+      const cli = await run(['skills', 'check', '--json'])
+      expect(cli.code).not.toBe(0)
+      expect(cli.stdout).not.toContain('"skills"')
+      expect((await run(['skills', 'install', '--yes'])).code).not.toBe(0)
+      expect(readdirSync(codexFolder()).sort()).toEqual(['alpha', 'beta', 'gamma'])
+      writeFileSync(pointer, good)
+    }
+    expect(checkExit(check())).toBe(0)
+    // An installation that never approved a team has no marks, and that is not an error.
+    rmSync(join(home, '.config/bmn/agents/state'), { recursive: true })
+    expect(check().source).toMatchObject({ path: source, readable: true })
+  })
+
   it('follows the source: an edit flows through the link, a new skill is missing, a removed one stays tracked until its removal is confirmed', async () => {
     const own = skill('codex-own', { at: codexFolder() })
     await install()
@@ -451,7 +493,8 @@ describe('whether a skill placed there loads: the owner-run test (60.11 AC5)', (
     const result = await testSkills('codex', { environment: env, now: NOW })
     expect(result).toMatchObject({ outcome: 'pass', version: CODEX })
     expect(result.loading).toMatchObject({ kind: 'loading', outcome: 'pass', route: 'openai/observed-default/full' })
-    expect(result.loading!.detail).toBe(`Codex named a test skill placed in ${codexFolder()}`)
+    expect(result.loading!.detail).toBe(`Codex lists a test skill placed in ${codexFolder()}; no prompt was sent, so this shows the app finds a skill there, not that a model uses it`)
+    expect(result.loading).toMatchObject({ kind: 'loading', basis: 'listing' })
     expect(readdirSync(codexFolder())).toEqual([])
     expect(readdirSync(home).filter((name) => name.startsWith('.bmn-skills-test-'))).toEqual([])
     const last = () => lastLoadingTests({ environment: env, versions: VERSIONS }).find((entry) => entry.harness === 'codex')!
@@ -467,7 +510,7 @@ describe('whether a skill placed there loads: the owner-run test (60.11 AC5)', (
     expect(existsSync(opencodeFolder())).toBe(false)
     // An app whose real folder is elsewhere than the test showed.
     lister('codex', CODEX, 'debug prompt-input', ['.nowhere'])
-    expect(await testSkillsLoading('codex', { environment: env, now: NOW })).toMatchObject({ outcome: 'fail', detail: `Codex did not name a test skill placed in ${codexFolder()}` })
+    expect(await testSkillsLoading('codex', { environment: env, now: NOW })).toMatchObject({ outcome: 'fail', detail: `Codex did not list a test skill placed in ${codexFolder()}` })
     expect(skillsTests().filter((entry) => entry.kind === 'loading')).toHaveLength(2)
   })
 })

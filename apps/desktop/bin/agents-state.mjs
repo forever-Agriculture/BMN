@@ -147,6 +147,20 @@ export function everApproved() {
   }
 }
 
+/**
+ * The approved team, or null only on an installation that never approved one. Once anything was
+ * approved, state that is missing or cannot be read throws its error: a caller that treated it as
+ * "no team" would judge, install or remove against an empty one (R60-NFR1).
+ */
+export function approvedIfAny() {
+  try {
+    return readApproved()
+  } catch (error) {
+    if (error instanceof RosterError && error.code === 'NOT_APPROVED' && !everApproved()) return null
+    throw error
+  }
+}
+
 /** One generation file of the current schema, verified; null when it is missing, unreadable, malformed, altered or of an earlier schema. */
 export function readGeneration(number) {
   const generation = readVerified(number)

@@ -1152,7 +1152,7 @@ describe('bmn hook prompt guard (Story 60.8)', () => {
     expect(fixture.handlers.reportGuard).toHaveBeenCalledTimes(1)
     expect(fixture.handlers.reportGuard).toHaveBeenCalledWith({
       sessionId: 'session-1', incarnationId: 'incarnation-1', agent: 'claude', outcome: 'stop', cause: 'public-only', line, allow: true,
-      workspace: session.workspace, folder: session.workspace, providerId: 'moonshot', providerName: 'Moonshot AI', agentName: null,
+      workspace: session.workspace, folder: session.workspace, processFolder: session.workspace, providerId: 'moonshot', providerName: 'Moonshot AI', agentName: null,
       host: 'api.moonshot.ai', pid: 7001, start: '777', conversation: OBSERVED_REFERENCE
     })
     // The prompt went nowhere, so nothing else about the turn is reported.

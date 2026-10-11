@@ -531,8 +531,9 @@ export function planContextDefault(harness, { limit, compact = null }, { environ
       throw new ContextError('INVALID_VALUE', `config.toml starts summarising at ${thousands(held.compact)}, which is not below ${thousands(limit)}; BMN cannot change that key yet, so change it by hand first`)
     }
     next = setTomlTopLevelKey(next, CODEX_CONTEXT_KEYS[0], limit)
-    // Without a limit a compaction point has nothing to stand on: both go back to Codex's own.
-    if (proven.compact || limit === null) next = setTomlTopLevelKey(next, CODEX_CONTEXT_KEYS[1], limit === null ? null : compact)
+    // The compaction key is BMN's to write, or to take out with the limit, only where its test proved it (60.9 AC1:
+    // an unverified control is never written). Until then a compaction point in the file stays exactly as it is.
+    if (proven.compact) next = setTomlTopLevelKey(next, CODEX_CONTEXT_KEYS[1], limit === null ? null : compact)
   } else {
     next = setJsonEnvEntry(next, CLAUDE_CONTEXT_KEY, limit)
   }

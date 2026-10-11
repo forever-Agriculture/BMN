@@ -8,7 +8,7 @@ import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } f
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
 import { CLAUDE_CONTEXT_KEY, CODEX_CONTEXT_KEYS, checkContext, provenControls, wholeNumber } from './agents-context.mjs'
-import { agentTools, appTools, checkRunTools } from './agents-tools.mjs'
+import { appTools, checkRunTools } from './agents-tools.mjs'
 
 /**
  * The check answers one question immediately before a dispatch: may this exact command, run from
@@ -38,8 +38,12 @@ export const TESTED_HARNESS_VERSIONS = { codex: ['0.161.0'], claude: ['2.1.295']
  * version is ROUTE_UNSUPPORTED.
  */
 export const RESUME_TESTED_VERSIONS = { codex: [] }
-/** Claude Code versions whose research fence an owner-authorized test verified (60.10 AC2): none yet. */
-export const RESEARCH_FENCE_VERSIONS = { claude: [] }
+/**
+ * App versions whose research fence an owner-authorized test verified (60.10 AC2): none yet. Claude
+ * Code's research form runs without one for a provider that may see private work; a public-only
+ * researcher, and any research in another app, runs only on a version listed here.
+ */
+export const RESEARCH_FENCE_VERSIONS = { claude: [], codex: [] }
 /** A visibility record older than this proves nothing (60.3 AC5). */
 export const VISIBILITY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 /** A session is bound to its receipt only this soon after the check (60.3 AC8). */
@@ -1065,9 +1069,9 @@ export function receiptHash(body) {
   return sha256(canonicalJson(body))
 }
 
-/** Finds `<sessions>/YYYY/MM/DD/rollout-*-<id>.jsonl` and returns its first-line metadata. */
-export function sessionRecord(codexHome, id) {
-  if (!SESSION_ID.test(id) || codexHome === null) return null
+/** Every `<sessions>/YYYY/MM/DD/rollout-*-<id>.jsonl` under a Codex home: none when the session was never saved there, more than one when the id is not one session's. */
+export function sessionRecordFiles(codexHome, id) {
+  if (typeof id !== 'string' || !SESSION_ID.test(id) || codexHome === null) return []
   const root = `${codexHome}/sessions`
   const found = []
   const walk = (directory, depth) => {
@@ -1083,6 +1087,12 @@ export function sessionRecord(codexHome, id) {
     }
   }
   walk(root, 0)
+  return found
+}
+
+/** Finds `<sessions>/YYYY/MM/DD/rollout-*-<id>.jsonl` and returns its first-line metadata. */
+export function sessionRecord(codexHome, id) {
+  const found = sessionRecordFiles(codexHome, id)
   return found.length === 1 ? sessionRecordAt(found[0]) : null
 }
 
@@ -1443,13 +1453,14 @@ export function evaluate(inputs, {
       refuse('ROUTE_UNSUPPORTED', `resume is not checked on ${parsed.harness} ${version ?? '(version unreadable)'}: BMN has not tested that a resume on this version talks to the current configuration's destination; start a fresh checked dispatch`)
     }
     note(`dispatch form: ${parsed.envMode === 'clean' ? 'env -i ' : ''}${parsed.harness === 'codex' ? `codex exec${parsed.resume ? ' resume' : ''}` : 'claude -p'}`)
-    // The tools of this run (60.12 AC5). The test log is read only for an agent that has tools of its own;
-    // a packet run carries none. A version without a proven way to shut out inherited tools is refused here,
-    // a wrong set further down, each in its place in the order.
+    // The tools of this run (60.12 AC5): what its command names and what the app's own settings would add, read
+    // with the run's own environment and folder. The test log is read only once the team lists tools. A version
+    // without a proven way to shut out inherited tools is refused here, a wrong set further down, each in its
+    // place in the order.
     const packetRun = inputs.packet !== undefined
     const tools = checkRunTools(agent, data, parsed,
-      !packetRun && agentTools(data, agent.id).length > 0 ? appTools(parsed.harness, { version, tests: toolsTestLog }) : { isolation: false, variable: false },
-      { packet: packetRun, profile: typeof resolution.profile === 'string' })
+      (data.tools ?? []).length > 0 ? appTools(parsed.harness, { version, tests: toolsTestLog }) : { isolation: false, variable: false },
+      { packet: packetRun, profile: typeof resolution.profile === 'string', environment: dispatchEnvironment(parsed, environment), cwd: cwd ?? processCwd })
     if (tools.refusal?.code === 'ROUTE_UNSUPPORTED') refuse('ROUTE_UNSUPPORTED', tools.refusal.message)
 
     const { model, effort } = checkModelAndEffort(agent, resolution, note)
@@ -1756,7 +1767,14 @@ export function evaluateResearch(inputs, {
     note(`${parsed.harness} ${version}: ${standing.state}`)
     const answer = privateWorkAnswer(data, destination, null)
     note(`private work: ${answer.reason}`)
-    if (!answer.allowed && !(fenceVersions[parsed.harness] ?? []).includes(version)) {
+    const fenced = (fenceVersions[parsed.harness] ?? []).includes(version)
+    // Claude Code's research form is the one 60.10 names; another app researches only on a version whose own fence
+    // was verified by the owner's test (60.10 AC2). That its provider may see private work is another question:
+    // research must send only what BMN wrote, and nothing has shown that for this app yet.
+    if (parsed.harness !== 'claude' && !fenced) {
+      refuse('ROUTE_UNSUPPORTED', `research runs in ${APP_NAMES[parsed.harness]} only on a version whose fence BMN verified, and ${parsed.harness} ${version} is not one: pick a researcher on Claude Code`)
+    }
+    if (!answer.allowed && !fenced) {
       refuse('PACKET_INVALID', `a public-only researcher runs only on an app version whose fence BMN verified; ${parsed.harness} ${version} is not one`)
     }
     if (inputs.dry === true) return { verdict: 'PASS', dry: true, version, steps }

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CODEX_RESEARCH_CONFIG, researchRunsDirectory } from '../../bin/agents-check.mjs'
 import {
-  MAX_LISTED, answerText, chooseResearcher, chosenResearcher, fetchPublicPage, isPublicAddress, mergeResearch, pageText, parseAnswer, priceShown, readResearch,
+  MAX_LISTED, answerText, chooseResearcher, chosenResearcher, fetchPublicPage, isPublicAddress, mergeResearch, ownNames, pageText, parseAnswer, priceShown, readResearch,
   researchArgv, researchBatches, researchEffort, researchPrompt, researchResultsPath, researchSubjects, researchView, researchers, runResearch, sourceRank,
   verifyModels, windowShown, type AnsweredModel, type PageRead, type ResearchBatch
 } from '../../bin/agents-research.mjs'
@@ -101,6 +101,8 @@ const FULL: Record<string, Plan> = { 'claude-fable-5-1': { text: ANTHROPIC_ANSWE
 
 const research = (options: Partial<Parameters<typeof runResearch>[0]> = {}) => runResearch({ researcher: 'fable', environment: env, now: () => NOW, fetchPage, ...options })
 const data = () => readApproved().data
+/** As on a Codex version whose research fence the owner's test verified; none is recorded yet. */
+const FENCED = { codex: ['0.161.0'] }
 
 beforeEach(() => {
   home = realpathSync(mkdtempSync(join(tmpdir(), 'bmn-research-')))
@@ -163,7 +165,10 @@ describe('who may research (60.10 AC1)', () => {
     expect(edited).not.toBe(EXAMPLE)
     approve(edited)
     const found = researchers({ environment: env, now: NOW })
-    expect(found.filter((entry) => entry.ok).map((entry) => entry.id)).toEqual(['sol', 'opus', 'astra', 'fable', 'luna'])
+    // Only Claude Code's research form runs today: another app researches once the fence of its installed version is verified.
+    expect(found.filter((entry) => entry.ok).map((entry) => entry.id)).toEqual(['opus', 'fable'])
+    expect(found.find((entry) => entry.id === 'astra')).toMatchObject({ ok: false, reason: expect.stringContaining('research runs in Codex only on a version whose fence BMN verified') })
+    expect(researchers({ environment: env, now: NOW, fenceVersions: FENCED }).filter((entry) => entry.ok).map((entry) => entry.id)).toEqual(['sol', 'opus', 'astra', 'fable', 'luna'])
     // Proposed agents are not offered at all; a public-only provider needs a verified fence; OpenCode has no research form.
     expect(found.map((entry) => entry.id)).not.toContain('sonnet')
     expect(found.find((entry) => entry.id === 'glm')).toMatchObject({ ok: false, reason: expect.stringContaining('fence') })
@@ -253,6 +258,51 @@ describe('BMN reads each cited page itself (60.10 AC3)', () => {
     expect(windowShown('gpt-6-luna: 1400,000 tokens of context', ['gpt-6-luna'], [], 400_000).shown).toBe(false)
   })
 
+  it('ties each amount to the word beside it: a price under the other word, or in the other order, is not this price', () => {
+    const per = 'Prices per 1M tokens. '
+    // The page says input $2, output $8; the claim swaps them.
+    for (const page of ['gpt-6.1-sol Input: $2.00 Output: $8.00', 'gpt-6.1-sol $2.00 input, $8.00 output', 'gpt-6.1-sol Prompt $2 Completion $8', 'Model Input Output gpt-6.1-sol $2.00 $8.00 gpt-6-astra $10 $40']) {
+      expect(priceShown(per + page, ['gpt-6.1-sol'], ['gpt-6-astra'], { input: 2, output: 8 }), page).toMatchObject({ shown: true })
+      expect(priceShown(per + page, ['gpt-6.1-sol'], ['gpt-6-astra'], { input: 8, output: 2 }), page).toEqual({ shown: false, why: 'the page does not show this price beside the model' })
+    }
+    // A cached price counts only under its own word; the output amount is not the input because it stands nearby.
+    const cached = `${per}claude-opus-5-5 Input $15 Cached input $1.50 Output $75`
+    expect(priceShown(cached, ['claude-opus-5-5'], [], { input: 15, output: 75, cached_input: 1.5 })).toEqual({ shown: true, cached: true })
+    expect(priceShown(cached, ['claude-opus-5-5'], [], { input: 15, output: 75, cached_input: 75 })).toEqual({ shown: true, cached: false })
+    expect(priceShown(cached, ['claude-opus-5-5'], [], { input: 1.5, output: 75 }).shown).toBe(false)
+    expect(priceShown(cached, ['claude-opus-5-5'], [], { input: 75, output: 75 }).shown).toBe(false)
+    // One amount for both, where the page gives one.
+    expect(priceShown(`${per}flat-1 $5 for input and output alike, input $5, output $5`, ['flat-1'], [], { input: 5, output: 5 }).shown).toBe(true)
+  })
+
+  it('counts a number as the context window only beside the word context, never an output limit', () => {
+    const page = 'gpt-6-luna Context window 400,000 tokens Max output 128,000 tokens gpt-6-astra 1M context, 128K max output tokens'
+    expect(windowShown(page, ['gpt-6-luna'], ['gpt-6-astra'], 400_000).shown).toBe(true)
+    expect(windowShown(page, ['gpt-6-luna'], ['gpt-6-astra'], 128_000)).toEqual({ shown: false, why: 'the page does not show this context window beside the model' })
+    expect(windowShown(page, ['gpt-6-astra'], ['gpt-6-luna'], 1_000_000).shown).toBe(true)
+    expect(windowShown(page, ['gpt-6-astra'], ['gpt-6-luna'], 128_000).shown).toBe(false)
+    // A number of tokens with no word saying what it counts proves nothing.
+    expect(windowShown('gpt-6-luna handles 400,000 tokens', ['gpt-6-luna'], [], 400_000).shown).toBe(false)
+    expect(windowShown('gpt-6-luna Output tokens 128,000 · Context 400K', ['gpt-6-luna'], [], 128_000).shown).toBe(false)
+  })
+
+  it('takes a published name only when it is the id\'s own words, so the researcher cannot point at another model\'s row', async () => {
+    expect(ownNames({ id: 'claude-opus-5-5', published_name: 'Claude Opus 5.5' })).toEqual(['claude-opus-5-5', 'Claude Opus 5.5'])
+    expect(ownNames({ id: 'openai/gpt-6.1-sol-20261001', published_name: 'GPT-6.1 Sol' })).toEqual(['openai/gpt-6.1-sol-20261001', 'GPT-6.1 Sol'])
+    for (const published of ['Claude Fable 5.1', 'Claude Opus 5.6', 'Claude Opus', 'Opus 5.5', 'Claude Opus 5.5 Fast']) expect(ownNames({ id: 'claude-opus-5-5', published_name: published }), published).toEqual(['claude-opus-5-5'])
+    expect(ownNames({ id: 'claude-opus-5-5' })).toEqual(['claude-opus-5-5'])
+    // "synthetic-9" is on no page; the researcher says it is published as Claude Fable 5.1, whose price the page does show.
+    const parsed = parseAnswer(answer([
+      model('claude-opus-5-5', 'Anthropic', { published_name: 'Claude Fable 5.1', price: price(20, 100, ANTHROPIC_PAGE), context_window: { tokens: 200_000, source: ANTHROPIC_PAGE, as_of: '2026-10-10' } }),
+      model('claude-fable-5-1', 'Anthropic', { published_name: 'Claude Fable 5.1', price: price(20, 100, ANTHROPIC_PAGE) })
+    ]), ANTHROPIC, { now: NOW })
+    if (!parsed.ok) throw new Error(parsed.reason)
+    const checked = await verifyModels(parsed.models, ANTHROPIC.sites, { fetchPage })
+    expect(checked[0]).toMatchObject({ id: 'claude-opus-5-5', price: { verified: false, why: 'the page does not show this price beside the model' }, context_window: { verified: false } })
+    expect(checked[0]).not.toHaveProperty('published_name')
+    expect(checked[1]).toMatchObject({ id: 'claude-fable-5-1', published_name: 'Claude Fable 5.1', price: { verified: true } })
+  })
+
   it('drops scripts and markup before it looks', () => {
     expect(pageText('<p>a&nbsp;&amp;&#36;5</p><script>var price = "$99"</script><style>.x{}</style><!-- $77 -->b')).toBe(' a &$5 b')
   })
@@ -279,6 +329,35 @@ describe('BMN reads each cited page itself (60.10 AC3)', () => {
     // A wrong number on a real page, a page that cannot be read, and a made-up address on the provider's own site.
     expect(checked[1]).toMatchObject({ price: { verified: false, why: 'the page does not show this price beside the model' }, context_window: { rank: 2, verified: false, why: 'the site answered 404' } })
     expect(checked[2]).toMatchObject({ price: { rank: 1, verified: false, why: 'the site answered 404' } })
+  })
+
+  it('reads no page after Stop or past the research\'s time limit, and says which ended it', async () => {
+    const three = ['a', 'b', 'c'].map((name) => ({ id: `m-${name}`, provider: 'P', listed: true, price: price(1, 2, `https://prices.example.test/${name}`), context_window: null }))
+    const controller = new AbortController()
+    const asked: unknown[] = []
+    const stopped: { cut?: 'stopped' | 'limit' } = {}
+    const afterStop = await verifyModels(three, [], { signal: controller.signal, report: stopped, fetchPage: async (address, limits) => {
+      asked.push([address, limits?.signal === controller.signal, limits?.timeoutMs])
+      controller.abort()
+      return { ok: false, reason: 'the research was stopped' }
+    } })
+    expect(asked).toEqual([['https://prices.example.test/a', true, 10_000]])
+    expect(stopped.cut).toBe('stopped')
+    expect(afterStop.map((entry) => entry.price!.why)).toEqual(['the research was stopped', 'the research was stopped before BMN read this page', 'the research was stopped before BMN read this page'])
+    // The limit: a page read takes no longer than what is left of the research, and none starts once nothing is left.
+    const late: { cut?: 'stopped' | 'limit' } = {}
+    const limits: unknown[] = []
+    const deadline = Date.now() + 3000
+    const slow = await verifyModels(three, [], { deadline, report: late, fetchPage: async (_address, given) => {
+      limits.push(given?.timeoutMs)
+      await new Promise((resolve) => setTimeout(resolve, 3100))
+      return { ok: false, reason: 'the page did not answer in time' }
+    } })
+    expect(limits).toHaveLength(1)
+    expect(limits[0]).toBeGreaterThan(2000)
+    expect(limits[0]).toBeLessThanOrEqual(3000)
+    expect(late.cut).toBe('limit')
+    expect(slow[2]!.price).toMatchObject({ verified: false, why: 'the research reached its time limit before BMN read this page' })
   })
 
   it('reads no more pages than its limit for one run', async () => {
@@ -346,6 +425,25 @@ describe('a cited address never reaches this machine or a private network', () =
     hops.length = 0
     expect(await fetchPublicPage('https://www.example.com/a', { ...open, transport: async (url) => { hops.push(url.href); return { status: 301, location: `/hop-${hops.length}` } } })).toEqual({ ok: false, reason: 'the page moved too many times' })
     expect(hops).toHaveLength(4)
+  })
+
+  it('gives up a name lookup that never answers within the page\'s own time, and at Stop', async () => {
+    let sent = 0
+    const never = { resolve: () => new Promise<never>(() => {}), transport: async () => { sent += 1; return page } }
+    const started = Date.now()
+    expect(await fetchPublicPage('https://slow.example.com/', { ...never, timeoutMs: 150 })).toEqual({ ok: false, reason: 'the page did not answer in time' })
+    expect(Date.now() - started).toBeLessThan(2000)
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 50)
+    expect(await fetchPublicPage('https://slow.example.com/', { ...never, signal: controller.signal })).toEqual({ ok: false, reason: 'the research was stopped' })
+    // Already stopped: nothing is asked at all.
+    let asked = 0
+    expect(await fetchPublicPage('https://www.example.com/', { ...open, signal: controller.signal, resolve: async () => { asked += 1; return [{ address: '93.184.216.34', family: 4 }] } })).toEqual({ ok: false, reason: 'the research was stopped' })
+    expect([asked, sent]).toEqual([0, 0])
+    // The lookup's time counts against the page's: what is left goes to the request, with the Stop signal.
+    const given: unknown[] = []
+    await fetchPublicPage('https://www.example.com/', { ...open, timeoutMs: 5000, signal: new AbortController().signal, transport: async (_url, _address, limits) => { given.push(limits.timeoutMs <= 5000, limits.signal instanceof AbortSignal); return page } })
+    expect(given).toEqual([true, true])
   })
 
   it('takes only a text page that arrived whole and in time', async () => {
@@ -441,6 +539,22 @@ describe('a research run (60.10 AC2-AC5)', () => {
     expect(researchView(readResearch()).last).toMatchObject({ state: 'partial', note: 'Stopped before it finished.' })
   })
 
+  it('Stop while the cited pages are being read ends the research there, even on its last run', async () => {
+    plan({ 'claude-opus-5-6': { text: answer([model('claude-opus-5-6', 'Anthropic', { price: price(15, 75, ANTHROPIC_PAGE), context_window: { tokens: 1_000_000, source: 'https://blog.example.test/windows', as_of: '2026-10-10' } })]) } })
+    const controller = new AbortController()
+    const read: string[] = []
+    const result = await research({ only: { provider: 'anthropic', model: 'claude-opus-5-6' }, signal: controller.signal, fetchPage: async (address, limits) => {
+      read.push(address)
+      expect(limits?.signal).toBe(controller.signal)
+      controller.abort()
+      return { ok: false, reason: 'the research was stopped' }
+    } })
+    expect(read).toHaveLength(1)
+    // What the run answered is kept, marked: none of its values was read on its page, and the research did not finish.
+    expect(result.run).toMatchObject({ kind: 'lookup', state: 'partial', note: 'Stopped before it finished.', models: 1 })
+    expect(result.found[0]).toMatchObject({ price: { verified: false, why: 'the research was stopped' }, context_window: { verified: false, why: 'the research was stopped before BMN read this page' } })
+  })
+
   it('the time limit ends it the same way, and a research that found nothing is not kept', async () => {
     plan({ 'claude-fable-5-1': { text: ANTHROPIC_ANSWER, delay: 60_000 } })
     const result = await research({ limitMs: 400 })
@@ -468,9 +582,13 @@ describe('a research run (60.10 AC2-AC5)', () => {
     expect(existsSync(researchResultsPath())).toBe(false)
   })
 
-  it('a Codex agent researches through its own form and writes the answer beside the prompt', async () => {
+  it('a Codex agent researches through its own form, once its version\'s fence is verified, and writes the answer beside the prompt', async () => {
     plan(FULL)
-    const result = await research({ researcher: 'astra' })
+    // Without that record no run is started.
+    const refused = await research({ researcher: 'astra' })
+    expect(refused.run).toMatchObject({ state: 'failed', models: 0, note: expect.stringContaining('BMN did not start the run: research runs in Codex only on a version whose fence BMN verified') })
+    expect(calls()).toEqual([])
+    const result = await research({ researcher: 'astra', fenceVersions: FENCED })
     expect(result.run).toMatchObject({ state: 'complete', researcher_name: 'Astra', models: 9 })
     const first = calls()[0]!
     expect(first.app).toBe('codex')
@@ -485,9 +603,9 @@ describe('a research run (60.10 AC2-AC5)', () => {
   it('an agent whose context limit the owner\'s test proved researches with that limit in its command', async () => {
     // Sol has a context limit; once its setting is proven on this Codex version, every run of Sol must carry it.
     writeFileSync(join(home, '.config/bmn/agents/state/context-tests.jsonl'), `${JSON.stringify({ harness: 'codex', version: '0.161.0', limit: 'pass', compact: 'pass' })}\n`)
-    expect(researchers({ environment: env, now: NOW }).find((entry) => entry.id === 'sol')).toEqual({ id: 'sol', name: 'Sol', harness: 'codex', ok: true })
+    expect(researchers({ environment: env, now: NOW, fenceVersions: FENCED }).find((entry) => entry.id === 'sol')).toEqual({ id: 'sol', name: 'Sol', harness: 'codex', ok: true })
     plan(FULL)
-    const result = await research({ researcher: 'sol' })
+    const result = await research({ researcher: 'sol', fenceVersions: FENCED })
     expect(result.run).toMatchObject({ state: 'complete', models: 9 })
     const first = calls()[0]!
     expect(first.argv).toEqual(expect.arrayContaining(['model_context_window=272000']))

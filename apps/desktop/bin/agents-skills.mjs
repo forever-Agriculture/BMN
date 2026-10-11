@@ -8,7 +8,7 @@ import {
 import { homedir } from 'node:os'
 import { basename, dirname } from 'node:path'
 import { APP_NAMES, HARNESSES, RosterError, SKILL_PATTERN, agentsDirectory, canonicalJson, harnessPrivateWork, sha256 } from './agents-roster.mjs'
-import { readApproved } from './agents-state.mjs'
+import { approvedIfAny } from './agents-state.mjs'
 import { linkTarget } from './safe-config-write.mjs'
 
 /**
@@ -207,15 +207,6 @@ export function sourceSkills(source) {
   return { path: source, readable: true, skills }
 }
 
-function approvedOrNull() {
-  try {
-    return readApproved()
-  } catch (error) {
-    if (error instanceof RosterError && (error.code === 'NOT_APPROVED' || error.code === 'STATE_CORRUPT')) return null
-    throw error
-  }
-}
-
 function marksOf(data) {
   return new Map((data?.skills ?? []).map((entry) => [entry.id, entry]))
 }
@@ -345,7 +336,7 @@ function installedState(app, skill, records, wanted) {
  * `generation` is the approved team, which alone decides the source, the marks and each app's
  * destination. An app without a passed test is `supported: false` and none of its skills is judged.
  */
-export function checkSkills({ environment = process.env, tests = skillsTests(), versions, generation = approvedOrNull(), descriptions = false } = {}) {
+export function checkSkills({ environment = process.env, tests = skillsTests(), versions, generation = approvedIfAny(), descriptions = false } = {}) {
   const data = generation?.data ?? null
   const marks = marksOf(data)
   const source = sourceSkills(skillsSource(data, environment))
@@ -461,7 +452,7 @@ const CHANGE_WORDS = {
  * hash of all of it that a confirmed install must match. `harnesses` empty means every supported app.
  */
 export async function planSkillsInstall(harnesses = [], { environment = process.env, versions, tests = skillsTests() } = {}) {
-  const generation = approvedOrNull()
+  const generation = approvedIfAny()
   const { routeFor, routeStillMatches } = await import('./agents-rules.mjs')
   const check = checkSkills({ environment, tests, versions, generation })
   if (!check.source.readable) return { code: 'SOURCE_UNREADABLE', message: `${check.source.path}: ${check.source.detail}; nothing was written`, targets: [], exposed: [], planHash: null }
@@ -607,7 +598,7 @@ function recordOf(target) {
  * a complete private copy with its modes and its own links kept as links. A failure part-way stops
  * and keeps the manifest, so `bmn rules restore --transaction` can undo what changed.
  */
-export async function installSkills(harnesses = [], { yes = false, asJson = false, environment = process.env, versions, now = new Date(), expectedPlanHash, afterConfirm, beforeTarget } = {}) {
+export async function installSkills(harnesses = [], { yes = false, asJson = false, environment = process.env, versions, now = new Date(), expectedPlanHash, afterConfirm, beforeTarget, afterTarget } = {}) {
   const { confirm } = await import('./agents-rules.mjs')
   const planned = await planSkillsInstall(harnesses, { environment, versions })
   if (planned.code !== 'OK') return { code: planned.code, message: planned.message, transaction: null, written: [], exposed: [] }
@@ -625,10 +616,10 @@ export async function installSkills(harnesses = [], { yes = false, asJson = fals
   if (confirmed.planHash !== planned.planHash) {
     return { code: 'REVISION_CONFLICT', message: 'the skills or the folders changed while the confirmation was open; nothing was written', transaction: null, written: [], exposed: confirmed.exposed }
   }
-  return writeSkillsTransaction(confirmed, { now, beforeTarget })
+  return writeSkillsTransaction(confirmed, { now, beforeTarget, afterTarget })
 }
 
-async function writeSkillsTransaction(planned, { now, beforeTarget }) {
+async function writeSkillsTransaction(planned, { now, beforeTarget, afterTarget }) {
   const { newTransaction, writePrivate } = await import('./agents-rules.mjs')
   const { id, folder } = newTransaction(now)
   const records = written()
@@ -651,6 +642,7 @@ async function writeSkillsTransaction(planned, { now, beforeTarget }) {
     try {
       beforeTarget?.(target, index)
       writeTarget(target, byName.get(target.skill))
+      afterTarget?.(target, index)
     } catch (error) {
       manifest.state = 'failed'
       save()
@@ -670,14 +662,28 @@ async function writeSkillsTransaction(planned, { now, beforeTarget }) {
   return { code: 'OK', transaction: id, written: done, exposed: planned.exposed }
 }
 
+/** Whether an entry holds exactly what an install meant to leave there. */
+function holdsWritten(current, wanted) {
+  if (wanted?.kind === 'link') return current.kind === 'link' && current.target === wanted.target
+  if (wanted?.kind === 'copy') return current.kind === 'tree' && current.hash === wanted.hash
+  return wanted?.kind === 'removed' && current.kind === 'missing'
+}
+
 /**
  * Undoes one skills transaction (called by `bmn rules restore --transaction`): every entry it
  * changed goes back to what it was, a link as a link and a folder from its private copy, and BMN's
  * records with it. Shown and confirmed like the install, and refused when an entry moved meanwhile.
+ * An entry the install wrote without getting to record it (BMN ended between the two) is known by
+ * holding exactly what the install meant to leave and not what was there before: it is undone too.
+ * One the install never reached, or that changed since, is left.
  */
 export async function restoreSkillsTransaction(manifest, folder, { yes = false, asJson = false, planOnly = false, expectedPlanHash } = {}) {
   const { confirm, writePrivate } = await import('./agents-rules.mjs')
-  const plans = manifest.targets.filter((target) => target.done === true).map((target) => ({ ...target, current: entryOf(target.path) }))
+  const plans = manifest.targets.map((target) => ({ ...target, current: entryOf(target.path) })).filter((plan) => {
+    if (plan.done === true) return true
+    const asBefore = plan.current.kind === (plan.prior.kind === 'tree' ? 'tree' : plan.prior.kind) && plan.current.target === plan.prior.target && plan.current.hash === plan.prior.hash
+    return holdsWritten(plan.current, plan.written) && !asBefore
+  })
   const becomes = (prior) => (prior.kind === 'link' ? `link to ${prior.target}` : prior.kind === 'missing' ? 'removed (it did not exist)' : 'the folder as it was')
   const targets = plans.map((plan) => ({ harness: plan.harness, skill: plan.skill, path: plan.path, resolved_path: `${plan.current.directory}/${basename(plan.path)}`, change: plan.prior.kind === 'tree' ? 'folder' : plan.prior.kind, becomes: becomes(plan.prior), diff: '', note: 'A skill is put back whole; its lines are not shown.' }))
   const hash = sha256(canonicalJson(plans.map((plan) => ({ path: plan.path, current: plan.current, prior: plan.prior }))))
@@ -783,25 +789,28 @@ function loadingBinding(app, decision, source) {
 }
 
 /**
- * Whether the app picks up a skill placed where its skills live (60.11 AC5). One empty test skill
+ * Whether the app finds a skill placed where its skills live (60.11 AC5). One empty test skill
  * goes into that folder, the app is asked once, in a throwaway folder under the home folder, which
  * skills it sees, and the test skill is removed and checked to be gone. Offered only where the
  * app's approved destination may receive private work, and bound to the app version, that
  * destination, where the app reads skills and the skills' hashes.
+ *
+ * No prompt is sent: a pass is the app's own listing naming the skill (`basis: 'listing'`). It
+ * shows the app finds a skill there; it does not show a model using one, and is worded so.
  */
 export async function testSkillsLoading(harness, { environment = process.env, now = new Date(), timeoutMs = 120_000 } = {}) {
   const spec = SKILL_APPS[harness]
-  const generation = approvedOrNull()
+  const generation = approvedIfAny()
   const { harnessVersion } = await import('./agents-check.mjs')
   const { routeFor, routeStillMatches } = await import('./agents-rules.mjs')
   const version = harnessVersion(spec.command, environment)
   const decision = routeFor(harness, generation)
   const source = sourceSkills(skillsSource(generation?.data ?? null, environment))
   const app = appSkills(harness, { environment, version, source: source.path })
-  const done = (outcome, detail) => record({ harness, kind: 'loading', at: now.toISOString(), version, outcome, detail, ...loadingBinding(app, decision, source) })
+  const done = (outcome, detail) => record({ harness, kind: 'loading', basis: 'listing', at: now.toISOString(), version, outcome, detail, ...loadingBinding(app, decision, source) })
   if (version === null) return done('unavailable', `${spec.command} is not installed or did not answer --version`)
   if (!app.supported) return done('unavailable', `skills not supported yet: ${app.reason}`)
-  if (decision.kind !== 'full') return done('unavailable', `${decision.reason}; a loading test is offered only where the app may receive private work`)
+  if (decision.kind !== 'full') return done('unavailable', `${decision.reason}; a listing test is offered only where the app may receive private work`)
   const route = await routeStillMatches(harness, decision, environment)
   if (!route.ok) return done('unavailable', `refused: ${route.reason}; ${route.remedy}`)
   const location = app.location ?? source.path
@@ -813,9 +822,9 @@ export async function testSkillsLoading(harness, { environment = process.env, no
     mkdirSync(path, { recursive: true })
     writeFileSync(`${path}/SKILL.md`, SENTINEL_TEXT(name))
     const listed = listOutput(spec, work, environment, timeoutMs)
-    outcome = listed.text.includes(name) ? ['pass', `${APP_NAMES[harness]} named a test skill placed in ${location}`]
+    outcome = listed.text.includes(name) ? ['pass', `${APP_NAMES[harness]} lists a test skill placed in ${location}; no prompt was sent, so this shows the app finds a skill there, not that a model uses it`]
       : !listed.ok ? ['inconclusive', `${spec.command} did not answer (timeout or error)`]
-        : ['fail', `${APP_NAMES[harness]} did not name a test skill placed in ${location}`]
+        : ['fail', `${APP_NAMES[harness]} did not list a test skill placed in ${location}`]
   } finally {
     rmSync(path, { recursive: true, force: true })
     rmSync(work, { recursive: true, force: true })
@@ -825,7 +834,7 @@ export async function testSkillsLoading(harness, { environment = process.env, no
 }
 
 /** The latest loading test per app; stale when the app version, its destination, where it reads skills or any skill changed since. */
-export function lastLoadingTests({ environment = process.env, tests = skillsTests(), versions, generation = approvedOrNull() } = {}) {
+export function lastLoadingTests({ environment = process.env, tests = skillsTests(), versions, generation = approvedIfAny() } = {}) {
   const source = sourceSkills(skillsSource(generation?.data ?? null, environment))
   const answerFor = (harness) => {
     const answer = harnessPrivateWork(generation?.data ?? null, harness)

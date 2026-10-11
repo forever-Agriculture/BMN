@@ -161,6 +161,7 @@ function whyNot(agent, code) {
   if (code === 'PACKET_INVALID') return 'its provider gets public work only'
   if (code === 'CONTEXT_MISMATCH') return 'its context limit is not supported yet'
   if (code === 'HARNESS_UNKNOWN') return `${app} was not found`
+  if (code === 'ROUTE_UNSUPPORTED') return `BMN has not yet tested that ${app} keeps a research run to the web`
   return `BMN cannot check ${app}'s research command`
 }
 
@@ -168,7 +169,7 @@ function whyNot(agent, code) {
  * The approved, active agents and whether each could research now: the same check a run must
  * pass, without a folder or a prompt. `reason` says why not, in the check's own words.
  */
-export function researchers({ environment = process.env, now = new Date() } = {}) {
+export function researchers({ environment = process.env, now = new Date(), fenceVersions = undefined } = {}) {
   let generation
   try {
     generation = readApproved()
@@ -184,7 +185,7 @@ export function researchers({ environment = process.env, now = new Date() } = {}
     }
     let result
     try {
-      result = evaluateResearch({ agent: agent.id, argv: researchArgv(agent, { environment, version: appVersion(agent, environment) }), dry: true }, { environment, cwd: environment.HOME ?? '/', now })
+      result = evaluateResearch({ agent: agent.id, argv: researchArgv(agent, { environment, version: appVersion(agent, environment) }), dry: true }, { environment, cwd: environment.HOME ?? '/', now, ...(fenceVersions === undefined ? {} : { fenceVersions }) })
     } catch (error) {
       result = { verdict: 'REFUSED', message: error instanceof Error ? error.message : String(error) }
     }
@@ -339,11 +340,35 @@ function resolveHost(host) {
   })
 }
 
+/** The longest BMN waits for one cited page, the name lookup and every redirect included. */
+const PAGE_LIMIT_MS = 10_000
+
+/** `work`, given up after `ms` or at Stop: a name server that never answers must not hold a research open. */
+function within(work, ms, signal) {
+  return new Promise((resolve, reject) => {
+    const stop = () => end(reject, Object.assign(new Error('stopped'), { code: 'STOPPED' }))
+    const timer = setTimeout(() => end(reject, Object.assign(new Error('timed out'), { code: 'TIMEOUT' })), ms)
+    const end = (settle, value) => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', stop)
+      settle(value)
+    }
+    if (signal?.aborted) return stop()
+    signal?.addEventListener('abort', stop, { once: true })
+    work.then((value) => end(resolve, value), (error) => end(reject, error))
+  })
+}
+
 /** One GET to an address BMN already checked: the name is resolved once, so the answer cannot move between the check and the read. */
-function getOnce(url, { address, family }, { timeoutMs, maxBytes }) {
+function getOnce(url, { address, family }, { timeoutMs, maxBytes, signal }) {
   return new Promise((resolve) => {
+    const stop = () => {
+      call.destroy()
+      done({ failed: 'the research was stopped' })
+    }
     const done = (value) => {
       clearTimeout(timer)
+      signal?.removeEventListener('abort', stop)
       resolve(value)
     }
     const call = httpsRequest({
@@ -374,6 +399,7 @@ function getOnce(url, { address, family }, { timeoutMs, maxBytes }) {
       done({ failed: 'the page did not answer in time' })
     }, timeoutMs)
     call.on('error', () => done({ failed: 'the page could not be reached' }))
+    signal?.addEventListener('abort', stop, { once: true })
     call.end()
   })
 }
@@ -381,13 +407,15 @@ function getOnce(url, { address, family }, { timeoutMs, maxBytes }) {
 /**
  * Reads one cited page the way anyone could: https only, the default port, no sign-in in the
  * address, no cookies, at most three redirects each checked the same way, ten seconds and two
- * megabytes in all. A name that resolves to this machine or a private network is never asked.
+ * megabytes in all, the name lookups counted in those ten seconds. A name that resolves to this
+ * machine or a private network is never asked. `signal` (Stop) ends the read at once.
  * `selfTestPages` serves names under `.test` from a folder; such a name can never be a real site.
  */
-export async function fetchPublicPage(address, { timeoutMs = 10_000, maxBytes = 2 * 1024 * 1024, redirects = 3, resolve = resolveHost, transport = getOnce, selfTestPages = null } = {}) {
+export async function fetchPublicPage(address, { timeoutMs = PAGE_LIMIT_MS, maxBytes = 2 * 1024 * 1024, redirects = 3, resolve = resolveHost, transport = getOnce, selfTestPages = null, signal = undefined } = {}) {
   const deadline = Date.now() + timeoutMs
   let current = address
   for (let hop = 0; hop <= redirects; hop += 1) {
+    if (signal?.aborted) return { ok: false, reason: 'the research was stopped' }
     let url
     try {
       url = new URL(current)
@@ -411,14 +439,16 @@ export async function fetchPublicPage(address, { timeoutMs = 10_000, maxBytes = 
     }
     let addresses
     try {
-      addresses = await resolve(host)
-    } catch {
-      return { ok: false, reason: 'the site could not be found' }
+      const wait = deadline - Date.now()
+      if (wait <= 0) return { ok: false, reason: 'the page did not answer in time' }
+      addresses = await within(Promise.resolve(resolve(host)), wait, signal)
+    } catch (error) {
+      return { ok: false, reason: error?.code === 'STOPPED' ? 'the research was stopped' : error?.code === 'TIMEOUT' ? 'the page did not answer in time' : 'the site could not be found' }
     }
     if (!Array.isArray(addresses) || addresses.length === 0 || !addresses.every((entry) => isPublicAddress(entry.address))) return { ok: false, reason: 'not a public address' }
     const left = deadline - Date.now()
     if (left <= 0) return { ok: false, reason: 'the page did not answer in time' }
-    const answer = await transport(url, addresses[0], { timeoutMs: left, maxBytes })
+    const answer = await transport(url, addresses[0], { timeoutMs: left, maxBytes, signal })
     if (answer.failed) return { ok: false, reason: answer.failed }
     if (answer.tooLarge) return { ok: false, reason: 'the page is too large to read' }
     if (answer.status >= 300 && answer.status < 400) {
@@ -454,7 +484,6 @@ export function pageText(html) {
     .replace(/\s+/g, ' ')
 }
 
-const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 /** How far after a model's name its own numbers may stand. */
 const NEAR = 600
 
@@ -480,26 +509,67 @@ function stretches(text, names, others) {
   return found
 }
 
-function dollars(value) {
-  const [whole, fraction = ''] = String(value).split('.')
-  const digits = fraction.replace(/0+$/, '')
-  return new RegExp(`\\$\\s?${escape(whole)}${digits === '' ? '(?:\\.0+)?' : `\\.${digits}0*`}(?!\\d)(?![.,]\\d)`)
+/**
+ * Each value in a stretch with the word that says what it is. A value takes the word that stands
+ * next to it: within `reach` characters, with no other value in between. Where a word stands on
+ * both sides ("Input $2 Output $8": is "Output" the $2's or the $8's?) the stretch's own order
+ * decides: one that leads with a word reads word-then-value, one that leads with a value reads
+ * value-then-word. `kind` is null where no word stands there; `style` is `none` where the
+ * stretch has no such words at all.
+ */
+function labelled(place, valuePattern, wordPattern, kindOf, reach = 60) {
+  const tokens = [
+    ...[...place.matchAll(valuePattern)].map((match) => ({ at: match.index, end: match.index + match[0].length, value: match[1] ?? match[0] })),
+    ...[...place.matchAll(wordPattern)].map((match) => ({ at: match.index, end: match.index + match[0].length, kind: kindOf(match[0]) }))
+  ].sort((one, other) => one.at - other.at)
+  const style = !tokens.some((token) => token.kind !== undefined) ? 'none' : tokens[0].kind !== undefined ? 'before' : 'after'
+  const values = tokens.flatMap((token, index) => {
+    if (token.kind !== undefined) return []
+    const before = tokens[index - 1]?.kind !== undefined && token.at - tokens[index - 1].end <= reach ? tokens[index - 1] : undefined
+    const after = tokens[index + 1]?.kind !== undefined && tokens[index + 1].at - token.end <= reach ? tokens[index + 1] : undefined
+    const word = before !== undefined && after !== undefined ? (style === 'before' ? before : after) : before ?? after
+    return [{ value: token.value, kind: word?.kind ?? null }]
+  })
+  return { style, values }
 }
+
+const DOLLARS = /\$\s?(\d[\d,]*(?:\.\d+)?)(?![\d])/g
+const PRICE_WORDS = /\b(?:cach(?:ed?|ing)(?:[\s-]+(?:input|read|write|hit)s?)?|input|prompt|output|completion)\b/gi
+const priceKind = (word) => (/^cach/i.test(word) ? 'cached' : /^(?:input|prompt)$/i.test(word) ? 'input' : 'output')
+const amountIs = (text, wanted) => Math.abs(Number(text.replace(/,/g, '')) - wanted) < 1e-9
 
 const PER_MILLION = /(?:\/|per)\s*(?:1\s*)?(?:m\b|mtok|million)|1m tokens|million tokens/i
 
+/** Whether one stretch shows this price: `{ cached }` when it does, null when it does not. */
+function priceIn(place, price) {
+  const { style, values } = labelled(place, DOLLARS, PRICE_WORDS, priceKind)
+  if (style === 'none') {
+    // A row of bare amounts: a price list gives the input before the output, so the claim must stand in that order.
+    const input = values.findIndex((entry) => amountIs(entry.value, price.input))
+    if (input === -1 || !values.slice(price.input === price.output ? input : input + 1).some((entry) => amountIs(entry.value, price.output))) return null
+    return { cached: price.cached_input === undefined ? undefined : values.some((entry) => amountIs(entry.value, price.cached_input)) }
+  }
+  const shows = (kind, wanted) => values.some((entry) => entry.kind === kind && amountIs(entry.value, wanted))
+  if (!shows('input', price.input) || !shows('output', price.output)) return null
+  return { cached: price.cached_input === undefined ? undefined : shows('cached', price.cached_input) }
+}
+
 /**
- * Whether the page shows this price beside this model: the input and the output amount, in
- * dollars, in the stretch after one of the model's names, with the page saying the unit is a
- * million tokens. A number that stands beside another model, or without the unit, proves nothing.
+ * Whether the page shows this price beside this model: in the stretch after one of the model's
+ * names, the input amount standing as the input price and the output amount as the output price
+ * (by the words beside them, or by their order in a row without words), with the page saying the
+ * unit is a million tokens. A number that stands beside another model, under the other word, or
+ * without the unit, proves nothing.
  */
 export function priceShown(text, names, others, price) {
   if (!PER_MILLION.test(text)) return { shown: false, why: 'the page does not say the price is per million tokens' }
   const places = stretches(text, names, others)
   if (places.length === 0) return { shown: false, why: 'the page does not name this model' }
-  const hit = places.find((place) => dollars(price.input).test(place) && dollars(price.output).test(place))
-  if (hit === undefined) return { shown: false, why: 'the page does not show this price beside the model' }
-  return { shown: true, cached: price.cached_input === undefined ? undefined : dollars(price.cached_input).test(hit) }
+  for (const place of places) {
+    const hit = priceIn(place, price)
+    if (hit !== null) return { shown: true, cached: hit.cached }
+  }
+  return { shown: false, why: 'the page does not show this price beside the model' }
 }
 
 function tokenForms(tokens) {
@@ -510,13 +580,41 @@ function tokenForms(tokens) {
   return forms
 }
 
-/** Whether the page shows this context window beside this model, in a stretch that speaks of context or tokens. */
+const WINDOW_WORDS = /\b(?:context(?:\s+(?:window|length|size))?|max(?:imum)?\s+output(?:\s+tokens)?|output\s+(?:tokens|limit|length)|max(?:imum)?\s+(?:completion\s+)?tokens|completion\s+tokens)\b/gi
+/** A count of tokens as pages write one: four digits or more, grouped or not, or a number with K, M or million. Never an amount of money. */
+const TOKEN_COUNTS = /(?<![\d.,$\w])(?:\d{1,3}(?:[, ]\d{3})+|\d+(?:\.\d+)?\s?(?:K|M|million)\b|\d{4,})(?![\d])/gi
+
+/**
+ * Whether the page shows this context window beside this model: the number standing with the
+ * word "context" in a stretch after one of the model's names. The same number as an output limit
+ * ("max output 128,000 tokens"), or with no word saying what it counts, proves nothing.
+ */
 export function windowShown(text, names, others, tokens) {
   const places = stretches(text, names, others)
   if (places.length === 0) return { shown: false, why: 'the page does not name this model' }
-  const pattern = new RegExp(`(?<![\\d.,])(?:${tokenForms(tokens).map(escape).join('|')})(?![\\d])`, 'i')
-  const hit = places.some((place) => pattern.test(place) && /context|tokens/i.test(place))
+  const forms = tokenForms(tokens).map((form) => form.toLowerCase())
+  const isIt = (value) => forms.includes(value.toLowerCase().replace(/\s+(?=k$|m$)/, ''))
+  const hit = places.some((place) => labelled(place, TOKEN_COUNTS, WINDOW_WORDS, (word) => (/^context/i.test(word) ? 'context' : 'output')).values.some((entry) => entry.kind === 'context' && isIt(entry.value)))
   return hit ? { shown: true } : { shown: false, why: 'the page does not show this context window beside the model' }
+}
+
+/**
+ * The words of a model's name: its letters and digits in order, without a provider in front
+ * ("openai/…") or a date at the end.
+ */
+function nameWords(name) {
+  const bare = name.includes('/') ? name.slice(name.lastIndexOf('/') + 1) : name
+  return (bare.toLowerCase().match(/[a-z]+|\d+/g) ?? []).filter((word) => !/^\d{6,}$/.test(word)).join(' ')
+}
+
+/**
+ * The names a page may show a model under: its id and, where the researcher gave one, a published
+ * name made of the id's own words ("Claude Opus 5.5" for `claude-opus-5-5`). Any other name is the
+ * researcher's word for which row is this model's, and BMN does not take it.
+ */
+export function ownNames(model) {
+  const published = typeof model.published_name === 'string' && nameWords(model.published_name) === nameWords(model.id) ? [model.published_name] : []
+  return [model.id, ...published]
 }
 
 /** Which source list a page belongs to: the provider's own sites first, anything else second. Decided from the address, never from the answer. */
@@ -532,22 +630,37 @@ export function sourceRank(address, sites) {
 
 /**
  * Reads each cited page once and marks every value: verified when BMN's own read shows it beside
- * the model, else unverified with the reason. A cached-input price the page does not show is dropped.
+ * the model, else unverified with the reason. A cached-input price the page does not show is dropped,
+ * and so is a published name that is not the id's own words. `signal` (Stop) and `deadline` (the
+ * research's own limit, on the machine's clock) end the reading: a page not read by then leaves its
+ * values unverified, and `report.cut` says which of the two ended it.
  */
-export async function verifyModels(models, sites, { fetchPage = fetchPublicPage } = {}) {
+export async function verifyModels(models, sites, { fetchPage = fetchPublicPage, signal = undefined, deadline = Infinity, report = {} } = {}) {
   const pages = new Map()
   const read = async (address) => {
     if (!pages.has(address)) {
       if (pages.size >= MAX_PAGES) return { ok: false, reason: 'the answer cites more pages than BMN reads for one run' }
-      const page = await fetchPage(address)
+      const left = deadline - Date.now()
+      if (signal?.aborted || left <= 0) {
+        report.cut ??= signal?.aborted ? 'stopped' : 'limit'
+        return { ok: false, reason: signal?.aborted ? 'the research was stopped before BMN read this page' : 'the research reached its time limit before BMN read this page' }
+      }
+      const page = await fetchPage(address, { signal, timeoutMs: Math.min(PAGE_LIMIT_MS, left) })
+      if (signal?.aborted) report.cut ??= 'stopped'
       pages.set(address, page.ok ? { ok: true, text: pageText(page.text) } : page)
     }
     return pages.get(address)
   }
-  const allNames = models.flatMap((model) => [model.id, ...(model.published_name ? [model.published_name] : [])])
+  const named = models.map((model) => {
+    const names = ownNames(model)
+    if (names.length > 1) return { model, names }
+    const rest = { ...model }
+    delete rest.published_name
+    return { model: rest, names }
+  })
+  const allNames = named.flatMap((entry) => entry.names)
   const checked = []
-  for (const model of models) {
-    const names = [model.id, ...(model.published_name ? [model.published_name] : [])]
+  for (const { model, names } of named) {
     const others = allNames.filter((name) => !names.some((own) => own.toLowerCase() === name.toLowerCase()))
     let price = model.price
     if (price !== null) {
@@ -698,7 +811,7 @@ function runOnce(argv, run, { signal, deadline }) {
  */
 export async function runResearch({
   researcher, only = null, environment = process.env, now = () => new Date(), signal = undefined, onProgress = () => {},
-  fetchPage = fetchPublicPage, limitMs = RESEARCH_LIMIT_MS, contextTests = undefined
+  fetchPage = fetchPublicPage, limitMs = RESEARCH_LIMIT_MS, contextTests = undefined, fenceVersions = undefined
 } = {}) {
   const started = now()
   const generation = readApproved()
@@ -736,7 +849,7 @@ export async function runResearch({
     const prompt = researchPrompt(batch)
     const run = prepareResearchRun(prompt, { now: now() })
     const argv = researchArgv(agent, { environment, run, version: appVersion(agent, environment), contextTests })
-    const verdict = evaluateResearch({ agent: agent.id, argv, stdin: run.prompt, cwd: run.cwd }, { environment, cwd: run.cwd, now: now(), ...(contextTests === undefined ? {} : { contextTestLog: contextTests }) })
+    const verdict = evaluateResearch({ agent: agent.id, argv, stdin: run.prompt, cwd: run.cwd }, { environment, cwd: run.cwd, now: now(), ...(contextTests === undefined ? {} : { contextTestLog: contextTests }), ...(fenceVersions === undefined ? {} : { fenceVersions }) })
     if (verdict.verdict !== 'PASS') {
       // The same refusal would meet every later run: nothing more is started.
       failures.push(`BMN did not start the run: ${verdict.message}`)
@@ -756,8 +869,16 @@ export async function runResearch({
       const answer = text.ok ? parseAnswer(text.text, batch, { now: now() }) : text
       if (!answer.ok) failures.push(`${batch.name}: ${answer.reason}`)
       else {
-        const checked = await verifyModels(answer.models, batch.sites, { fetchPage })
+        // Stop and the time limit hold while the cited pages are read too: what was read by then is kept, marked.
+        const report = {}
+        const checked = await verifyModels(answer.models, batch.sites, { fetchPage, signal, deadline, report })
         found.push(...checked.map((model) => ({ ...model, provider_id: batch.provider })))
+        if (report.cut !== undefined) {
+          ended = report.cut
+          done += batch.models.length
+          onProgress({ done, total })
+          break
+        }
       }
     }
     done += batch.models.length

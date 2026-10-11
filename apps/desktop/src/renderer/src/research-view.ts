@@ -107,6 +107,19 @@ export function fillFrom(model: ResearchModelView, data: RosterDataShape): Resea
  * What research brought to New agent, in words. Add to team brings the name too; a Look up brings
  * only what was found for the name the owner typed.
  */
+/** What a Look up was asked about: the model name as typed and the provider it would run on. */
+export interface LookupAsk { model: string; provider: string }
+
+/**
+ * Whether a Look up's answer may fill the form as it is now (60.10 AC6). The fields stay open
+ * while the researcher works, so by the time it answers the form may name another model, app or
+ * host: a price and a capacity belong to the name they were found for and to nothing else.
+ * `answered` is the model the answer is about.
+ */
+export function lookupFits(asked: LookupAsk, now: LookupAsk, answered: string): boolean {
+  return now.model === asked.model && now.provider === asked.provider && answered === asked.model
+}
+
 export function fillWords(fill: ResearchFill, typed = false): string {
   const parts = [typed ? null : 'name', fill.price ? 'price' : null, fill.contextWindow ? 'capacity' : null].filter((part): part is string => part !== null)
   const list = parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`

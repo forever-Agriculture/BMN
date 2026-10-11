@@ -814,7 +814,7 @@ done`)
     // Keep blocked closes the card and leaves the session's own mark, which opens it again.
     await guardCard.getByRole('button', { name: 'Keep blocked' }).click()
     await guardCard.waitFor({ state: 'detached' })
-    assert.equal(await guardMark.textContent(), 'Prompt stopped')
+    assert.equal(await guardMark.textContent(), 'Told to stop')
     // The mark turns quiet once the app has recorded that the card was kept, a moment after the card goes.
     await guardMark.and(page.locator('[data-cleared="true"]')).waitFor()
     await guardMark.click()
@@ -943,10 +943,10 @@ done`)
     const skillsSheet = skillsApp('Codex').locator('.sheet')
     await skillsSheet.getByText('no sign-in is there, so nothing is sent', { exact: false }).waitFor()
     await skillsSheet.getByRole('button', { name: 'Run test' }).click()
-    await notice(/^Codex skills test passed: Codex reads skills from ~\/\.agents\/skills; Codex named a test skill placed in /)
+    await notice(/^Codex skills test passed: Codex reads skills from ~\/\.agents\/skills; Codex lists a test skill placed in /)
     await skillsApp('Codex').locator('.path', { hasText: '~/.agents/skills' }).waitFor()
     await skillsApp('Codex').getByText('Differs').waitFor()
-    await skillsApp('Codex').getByText(/^Loading test passed /).waitFor()
+    await skillsApp('Codex').getByText(/^Listing test passed /).waitFor()
     assert.deepEqual(readdirSync(codexSkills), ['small-steps'], 'the test left a test skill behind')
     assert.equal(readdirSync(home).filter((name) => name.startsWith('.bmn-skills-test-')).length, 0, 'the test left its folder behind')
     await skillsApp('Codex').scrollIntoViewIfNeeded()
@@ -1150,7 +1150,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     await go('Team', 'Models')
     await head.getByText('Not researched yet').waitFor()
     assert.equal(await main.getByText('Not researched yet').count(), 1, 'before any research the page says so more than once')
-    // Who may research: active agents on Claude Code or Codex whose provider may see private work; the others are named, not offered.
+    // Who may research: active agents on Claude Code whose provider may see private work (Codex only once its research limits were tested); the others are named, not offered.
     const who = main.getByRole('radiogroup', { name: 'Researcher' })
     await who.waitFor()
     const able = await who.getByRole('radio').allTextContents()
@@ -1159,7 +1159,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     for (const name of able) {
       const agent = teamBefore.agents.find((entry) => entry.name === name)
       assert.equal(teamBefore.providers.find((provider) => provider.id === agent.provider).private_work, 'allowed', `${name} is offered although its provider gets public work only`)
-      assert.ok(['claude', 'codex'].includes(agent.harness) && agent.enabled && agent.status === 'active', `${name} is offered although it is not an active Claude Code or Codex agent`)
+      assert.ok(agent.harness === 'claude' && agent.enabled && agent.status === 'active', `${name} is offered although it is not an active Claude Code agent`)
     }
     await main.getByText(/Kimi cannot research: its provider gets public work only\./).waitFor()
     await who.getByRole('radio', { name: researcher.name, exact: true }).click()

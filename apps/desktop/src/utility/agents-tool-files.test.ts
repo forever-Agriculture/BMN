@@ -101,6 +101,11 @@ describe('a JSON settings file (Claude Code, Cursor, OpenCode)', () => {
       expect(() => readJsonEntries(text, ['mcpServers']), text).toThrow(ToolFileError)
     }
     expect(() => editJsonEntry('{ "mcpServers": 3 }', ['mcpServers'], 'a', {})).toThrow(ToolFileError)
+    // The key that holds the tools is there twice: which would the app take? Neither is read, and nothing is added.
+    const twice = '{ "mcpServers": { "a": { "command": "first" } }, "numStartups": 1, "mcpServers": { "b": { "command": "second" } } }'
+    expect(() => readJsonEntries(twice, ['mcpServers'])).toThrow('"mcpServers" is there twice')
+    expect(() => editJsonEntry(twice, ['mcpServers'], 'c', { command: 'c' })).toThrow(ToolFileError)
+    expect(() => readJsonEntries('{ "projects": { "/w": {}, "/w": { "mcpServers": {} } } }', ['projects', '/w', 'mcpServers'])).toThrow('"/w" is there twice')
   })
 })
 
@@ -154,6 +159,13 @@ describe('Codex\'s settings file', () => {
     expect(() => editTomlEntry(inline, 'alpha', undefined)).toThrow(ToolFileError)
     // Another entry in the same file is still BMN's to add.
     expect(readTomlEntries(editTomlEntry(inline, 'beta', { command: 'b' })).get('beta')!.value).toEqual({ command: 'b' })
+    // Every tool as one value at the top of the file: none is read, so nothing is added beside them.
+    const whole = 'model = "gpt-synthetic"\nmcp_servers = { alpha = { command = "a" } }\n'
+    expect(() => readTomlEntries(whole)).toThrow('mcp_servers is written as one inline value, which BMN does not read or change')
+    expect(() => editTomlEntry(whole, 'alpha', { command: 'b' })).toThrow(ToolFileError)
+    expect(() => editTomlEntry(whole, 'beta', { command: 'b' })).toThrow(ToolFileError)
+    // The same key under a table of its own is not the tools.
+    expect(readTomlEntries('[profiles.deep]\nmcp_servers = { alpha = { command = "a" } }\n').size).toBe(0)
   })
 
   it('writes an entry as Codex\'s own tables', () => {

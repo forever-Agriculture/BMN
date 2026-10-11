@@ -37,7 +37,7 @@ import {
 } from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
 import { HARNESSES, RosterError, agentsDirectory, parseRoster, proseOf, rewriteProse, rewriteRoster, rosterPath, sha256, starterRoster, type RosterData } from '../../bin/agents-roster.mjs'
-import { listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
+import { approvedIfAny, listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
 import { TESTED_HARNESS_VERSIONS, consequences, harnessVersion, inspectRoute, versionStanding } from '../../bin/agents-check.mjs'
 import {
   applyTeamUpdate, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planTeamUpdate, probeInspector, render, writeMaster, type RulesHarness
@@ -152,6 +152,20 @@ function approvedOrProblem(): { generation: Generation | null; problem: AgentsSn
   }
 }
 
+/**
+ * The approved team for the Skills and Tools pages, or the reason it cannot be read. "No team"
+ * is an answer only where none was ever approved: state that went missing or unreadable afterwards
+ * is said on those pages, never judged as a team without skills marks or tools (R60-NFR1).
+ */
+function approvedForPages(): { generation: Generation | null; broken: string | null } {
+  try {
+    return { generation: approvedIfAny(), broken: null }
+  } catch (error) {
+    if (!(error instanceof RosterError)) throw error
+    return { generation: null, broken: error.message }
+  }
+}
+
 /** One line saying what an approved version changed, from the same sentences the review shows. */
 function versionSummary(entry: AgentsSnapshot['history'][number]): string | undefined {
   if (!entry.valid || entry.earlier_schema !== undefined || entry.unfinished === true) return undefined
@@ -204,19 +218,19 @@ export function agentsSnapshot(): AgentsSnapshot {
   }
 }
 
-interface ShownGuardStop { agent: string; pid: number; start: string; folder: string; workspace: string; providerId: string; host: string | null; conversation: string | null }
+interface ShownGuardStop { agent: string; pid: number; start: string; folder: string; processFolder: string | null; workspace: string; providerId: string; host: string | null; conversation: string | null }
 
 /** What the card showed when Allow here was pressed; every part is checked again against the live process. */
 function guardStopParam(params: Record<string, unknown>): ShownGuardStop {
   const stop = params.stop
   const text = (value: unknown): value is string => typeof value === 'string' && value !== ''
   if (stop === null || typeof stop !== 'object' || Array.isArray(stop)) throw new MainIpcError(ERROR_CODES.invalidArgument, 'stop must be an object')
-  const { agent, pid, start, folder, workspace, providerId, host, conversation } = stop as Record<string, unknown>
+  const { agent, pid, start, folder, processFolder, workspace, providerId, host, conversation } = stop as Record<string, unknown>
   if (!text(agent) || typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 2 || !text(start) || !text(folder) || !text(workspace) || !text(providerId)
-    || !(host === null || text(host)) || !(conversation === null || text(conversation))) {
+    || !(host === null || text(host)) || !(conversation === null || text(conversation)) || !(processFolder === null || processFolder === undefined || text(processFolder))) {
     throw new MainIpcError(ERROR_CODES.invalidArgument, 'stop does not name a session, a provider and a workspace')
   }
-  return { agent, pid, start, folder, workspace, providerId, host, conversation }
+  return { agent, pid, start, folder, processFolder: processFolder ?? null, workspace, providerId, host, conversation }
 }
 
 function outcome(run: () => string): AgentsOutcome {
@@ -443,9 +457,11 @@ function contextView(harness: ContextLimitApp, version: string | null, generatio
  * each app, and where each app reads skills. A skill's description is its first line only, and
  * never its text; the versions are the ones Health's Agent apps rows show.
  */
-function skillsView(apps: AgentAppView[], generation: Generation | null, context: RulesIpcContext): SkillsView {
+function skillsView(apps: AgentAppView[], team: ReturnType<typeof approvedForPages>, context: RulesIpcContext): SkillsView {
   const versions = Object.fromEntries(apps.map((app) => [app.harness, app.version]))
+  const { generation } = team
   try {
+    if (team.broken !== null) throw new Error(team.broken)
     const tests = skillsTests()
     const check = checkSkills({ environment: context.env, tests, versions, generation, descriptions: true })
     const loading = lastLoadingTests({ environment: context.env, tests, versions, generation })
@@ -474,7 +490,7 @@ function skillsView(apps: AgentAppView[], generation: Generation | null, context
       })
     }
   } catch (error) {
-    // BMN's own record of what it wrote cannot be read: say so on the page rather than fail every Rules page.
+    // The approved team, or BMN's own record of what it wrote, cannot be read: say so on the page rather than fail every Rules page.
     return { source: { path: '', readable: false, detail: error instanceof Error ? error.message : String(error) }, skills: [], markedMissing: [], apps: [], pending: 0, exposed: 0 }
   }
 }
@@ -503,9 +519,11 @@ function skillsPlanFrom(result: CliResult): SkillsPlan {
  * Rules › Tools and Health's Tools group (60.12 AC6): each approved tool's state in each app and
  * where each app keeps its tools. Nothing an app's entry holds is part of it, only names and states.
  */
-function toolsView(apps: AgentAppView[], generation: Generation | null, context: RulesIpcContext): ToolsView {
+function toolsView(apps: AgentAppView[], team: ReturnType<typeof approvedForPages>, context: RulesIpcContext): ToolsView {
   const versions = Object.fromEntries(apps.map((app) => [app.harness, app.version]))
+  const { generation } = team
   try {
+    if (team.broken !== null) throw new Error(team.broken)
     const tests = toolsTests()
     const check = checkTools({ environment: context.env, tests, versions, generation })
     return {
@@ -597,6 +615,7 @@ export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnap
   }
   const errors = text === null ? [] : parseMaster(text).errors
   const { generation } = approvedOrProblem()
+  const pages = approvedForPages()
   const renderings = text !== null && errors.length === 0 ? renderAll(path, text, generation) : []
   const apps = (HARNESSES as RosterHarness[]).map((harness) => appView(harness, context))
   let history: RulesSnapshot['history']
@@ -615,8 +634,8 @@ export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnap
     apps,
     // The version each limit setting is judged against is the one the row above shows.
     context: (CONTEXT_APPS as ContextLimitApp[]).map((harness) => contextView(harness, apps.find((app) => app.harness === harness)?.version ?? null, generation, context)),
-    skills: skillsView(apps, generation, context),
-    tools: toolsView(apps, generation, context),
+    skills: skillsView(apps, pages, context),
+    tools: toolsView(apps, pages, context),
     ...(context.ownEnvironment === undefined ? {} : { ownEnvironment: context.ownEnvironment }),
     transactions: listTransactions().slice(0, 10).map((entry) => ({
       id: entry.id, valid: entry.valid, ...(entry.created_at ? { createdAt: entry.created_at } : {}),
@@ -726,10 +745,12 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const shown = guardStopParam(params)
     return outcome(() => {
       // The same process, asked again now: Allow here records what is true at the press, not what was true at the stop.
+      // The folder the card showed came from the app's own event, which nothing repeats here; whether the session is
+      // still where it was is told by the process itself: it must be in the folder it was in when the prompt stopped.
       const again = decidePrompt({ agent: shown.agent, pid: shown.pid, ...(options.procRoot === undefined ? {} : { procRoot: options.procRoot }),
         event: { cwd: shown.folder, ...(shown.conversation === null ? {} : { session_id: shown.conversation }) } })
       if (again.start !== shown.start || again.outcome !== 'stop' || again.allow !== true || again.provider?.id !== shown.providerId
-        || again.workspace !== shown.workspace || again.host !== shown.host) {
+        || again.workspace !== shown.workspace || again.host !== shown.host || again.processFolder !== shown.processFolder) {
         throw new RosterError('REVISION_CONFLICT', 'This session changed since the prompt was stopped. Send the prompt again.')
       }
       const generation = allowWorkspace(shown.providerId, shown.workspace, seams)
@@ -951,7 +972,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   handle('aiterm:rules:tools-proposals', () => {
     const ctx = context()
     try {
-      return { ok: true, proposals: proposeTools({ environment: ctx.env, generation: approvedOrProblem().generation }).proposals as ToolProposalView[] }
+      return { ok: true, proposals: proposeTools({ environment: ctx.env, generation: approvedIfAny() }).proposals as ToolProposalView[] }
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error), proposals: [] as ToolProposalView[] }
     }

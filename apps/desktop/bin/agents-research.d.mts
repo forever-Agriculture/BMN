@@ -18,7 +18,7 @@ export declare function researchEffort(agent: { efforts: string[] }): string
 export declare function researchArgv(agent: RosterData['agents'][number], options?: { environment?: Environment; run?: { folder: string } | null; version?: string | null; contextTests?: unknown[] }): string[]
 
 export interface Researcher { id: string; name: string; harness: string; ok: boolean; why?: string; reason?: string }
-export declare function researchers(options?: { environment?: Environment; now?: Date }): Researcher[]
+export declare function researchers(options?: { environment?: Environment; now?: Date; fenceVersions?: Record<string, string[]> }): Researcher[]
 export declare function chosenResearcher(): string | null
 export declare function chooseResearcher(id: string): void
 
@@ -29,20 +29,22 @@ export declare function parseAnswer(text: unknown, batch: ResearchBatch, options
 export declare function answerText(harness: string, stdout: string, run: { folder: string }): { ok: true; text: string } | { ok: false; reason: string }
 
 export type PageRead = { ok: true; text: string } | { ok: false; reason: string }
+export type FetchPage = (address: string, limits?: { signal?: AbortSignal; timeoutMs?: number }) => Promise<PageRead>
 export declare function isPublicAddress(address: string): boolean
 export declare function fetchPublicPage(address: string, options?: {
-  timeoutMs?: number; maxBytes?: number; redirects?: number; selfTestPages?: string | null
+  timeoutMs?: number; maxBytes?: number; redirects?: number; selfTestPages?: string | null; signal?: AbortSignal
   resolve?: (host: string) => Promise<{ address: string; family: number }[]>
-  transport?: (url: URL, address: { address: string; family: number }, limits: { timeoutMs: number; maxBytes: number }) => Promise<{ status?: number; location?: string | null; type?: string; body?: string; failed?: string; tooLarge?: boolean }>
+  transport?: (url: URL, address: { address: string; family: number }, limits: { timeoutMs: number; maxBytes: number; signal?: AbortSignal }) => Promise<{ status?: number; location?: string | null; type?: string; body?: string; failed?: string; tooLarge?: boolean }>
 }): Promise<PageRead>
 export declare function pageText(html: string): string
 export declare function priceShown(text: string, names: string[], others: string[], price: { input: number; output: number; cached_input?: number }): { shown: boolean; why?: string; cached?: boolean }
 export declare function windowShown(text: string, names: string[], others: string[], tokens: number): { shown: boolean; why?: string }
+export declare function ownNames(model: Pick<AnsweredModel, 'id' | 'published_name'>): string[]
 export declare function sourceRank(address: string, sites: string[]): 1 | 2
 
 export interface Checked { rank: 1 | 2; verified: boolean; why?: string }
 export interface FoundModel extends Omit<AnsweredModel, 'price' | 'context_window'> { price: (AnsweredPrice & Checked) | null; context_window: (AnsweredWindow & Checked) | null }
-export declare function verifyModels(models: AnsweredModel[], sites: string[], options?: { fetchPage?: (address: string) => Promise<PageRead> }): Promise<FoundModel[]>
+export declare function verifyModels(models: AnsweredModel[], sites: string[], options?: { fetchPage?: FetchPage; signal?: AbortSignal; deadline?: number; report?: { cut?: 'stopped' | 'limit' } }): Promise<FoundModel[]>
 
 export interface ResearchRunRecord { id: string; kind: 'research' | 'lookup'; at: string; researcher: string; researcher_name: string; state: 'complete' | 'partial' | 'stopped' | 'failed'; models: number; note?: string }
 export interface KeptModel extends FoundModel { provider_id: string; first_seen: string; first_run: string; last_seen: string; last_run: string }
@@ -65,5 +67,5 @@ export declare function researchView(store: ResearchStore): ResearchViewShape
 
 export declare function runResearch(options: {
   researcher: string; only?: { provider: string; model: string } | null; environment?: Environment; now?: () => Date; signal?: AbortSignal
-  onProgress?: (progress: { done: number; total: number }) => void; fetchPage?: (address: string) => Promise<PageRead>; limitMs?: number; contextTests?: unknown[]
+  onProgress?: (progress: { done: number; total: number }) => void; fetchPage?: FetchPage; limitMs?: number; contextTests?: unknown[]; fenceVersions?: Record<string, string[]>
 }): Promise<{ run: ResearchRunRecord; found: (FoundModel & { provider_id: string })[] }>

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ResearchModelView, ResearchPrice, RosterAgentShape, RosterDataShape } from '@bmn/protocol'
 import {
-  appFor, applyPrices, dayWords, fillFrom, fillWords, priceChanges, priceText, recordedPrice, researchGroups, researchStatus, siteOf, unverifiedWords
+  appFor, applyPrices, dayWords, fillFrom, fillWords, lookupFits, priceChanges, priceText, recordedPrice, researchGroups, researchStatus, siteOf, unverifiedWords
 } from './research-view'
 
 const agent = (id: string, fields: Partial<RosterAgentShape>): RosterAgentShape => ({
@@ -106,6 +106,17 @@ describe('Add to team and Look up (60.10 AC6)', () => {
     // A Look up brings only what was found for the name the owner typed.
     expect(fillWords(fill, true)).toBe(`Price and capacity from research on ${fill.day}.`)
     expect(fillWords(fillFrom(MODELS[4]!, DATA), true)).toBe(`Price from research on ${fill.day}.`)
+  })
+
+  it('a Look up\'s answer fills the form only while the form still names what was asked', () => {
+    const asked = { model: 'claude-opus-5-5', provider: 'anthropic' }
+    expect(lookupFits(asked, { model: 'claude-opus-5-5', provider: 'anthropic' }, 'claude-opus-5-5')).toBe(true)
+    // The owner typed another name, or changed the app or the host so the model would run elsewhere, while the researcher worked.
+    expect(lookupFits(asked, { model: 'claude-fable-5-1', provider: 'anthropic' }, 'claude-opus-5-5')).toBe(false)
+    expect(lookupFits(asked, { model: 'claude-opus-5-5', provider: 'moonshot' }, 'claude-opus-5-5')).toBe(false)
+    expect(lookupFits(asked, { model: '', provider: 'anthropic' }, 'claude-opus-5-5')).toBe(false)
+    // An answer about another model than the one asked fills nothing.
+    expect(lookupFits(asked, { model: 'claude-opus-5-5', provider: 'anthropic' }, 'claude-opus-5-6')).toBe(false)
   })
 })
 

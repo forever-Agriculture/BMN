@@ -132,9 +132,15 @@ describe('a provider that may or may not see private work (60.8 AC2, AC3)', () =
     for (const argv of [['claude'], ['claude', '--continue'], ['claude', '--resume', '01a0b657-21a8-7f00-addd-b73646828f5b'], ['claude', '--model', 'opus', 'fix the tests']]) {
       expect(prompt('claude', session(argv)), argv.join(' ')).toMatchObject({ outcome: 'pass', cause: 'allowed', provider: { id: 'anthropic', name: 'Anthropic' } })
     }
-    for (const argv of [['codex'], ['codex', 'resume', '--last'], ['node', '/synthetic/lib/codex.js', '-m', 'gpt-6-sol', '-c', 'model_reasoning_effort=xhigh', '-c', 'tui.theme="dark"']]) {
+    for (const argv of [['codex'], ['node', '/synthetic/lib/codex.js', '-m', 'gpt-6-sol', '-c', 'model_reasoning_effort=xhigh', '-c', 'tui.theme="dark"']]) {
       expect(prompt('codex', session(argv)), argv.join(' ')).toMatchObject({ outcome: 'pass', cause: 'allowed', provider: { id: 'openai', name: 'OpenAI' } })
     }
+    // A resumed Codex session is the one its saved record says it is.
+    const id = '01a0b657-21a8-7f00-addd-b73646828f5b'
+    const record = join(home, `.codex/sessions/2026/10/10/rollout-2026-10-10T10-00-00-${id}.jsonl`)
+    mkdirSync(dirname(record), { recursive: true })
+    writeFileSync(record, `${JSON.stringify({ type: 'session_meta', payload: { id, cwd: workspace, model_provider: 'openai', cli_version: '0.162.0' } })}\n`)
+    expect(prompt('codex', session(['codex', 'resume', '--last']), { session_id: id })).toMatchObject({ outcome: 'pass', cause: 'allowed', provider: { id: 'openai', name: 'OpenAI' } })
   })
 
   it('stops a Moonshot AI lead in a private workspace with one line and offers to allow that workspace', () => {
@@ -252,7 +258,43 @@ describe('a destination BMN cannot tell (60.8 AC1, AC3)', () => {
 
     expect(prompt('codex', pid, { session_id: id }).line).toMatch(/this session was saved with the provider moonshot and the settings now name openai/)
     expect(prompt('codex', pid, { transcript_path: record })).toMatchObject({ outcome: 'stop', cause: 'unknown' })
-    expect(prompt('codex', pid, { session_id: '11111111-2222-3333-4444-555555555555' })).toMatchObject({ outcome: 'pass' })
+    // The same saved session picked from inside a Codex that was started plainly.
+    expect(prompt('codex', session(['codex']), { session_id: id })).toMatchObject({ outcome: 'stop', cause: 'unknown', allow: false })
+  })
+
+  it('stops a continued Codex session whose saved record it cannot resolve, and offers no Allow (60.8 AC1)', () => {
+    const id = '01a0b657-21a8-7f00-addd-b73646828f5b'
+    const missing = '11111111-2222-3333-4444-555555555555'
+    const folder = join(home, '.codex/sessions/2026/10/10')
+    const record = join(folder, `rollout-2026-10-10T10-00-00-${id}.jsonl`)
+    mkdirSync(folder, { recursive: true })
+    const meta = (payload: Record<string, unknown>): string => `${JSON.stringify({ type: 'session_meta', payload: { id, cwd: workspace, cli_version: '0.162.0', ...payload } })}\n`
+    const unknown = { outcome: 'stop', cause: 'unknown', allow: false, provider: null }
+    // Started as a resume or a fork, and no record of that session is found: where it sends work is not known.
+    for (const argv of [['codex', 'resume', missing], ['codex', 'resume', '--last'], ['codex', 'fork', missing], ['codex', '-m', 'gpt-6-astra', 'resume']]) {
+      const verdict = prompt('codex', session(argv), { session_id: missing })
+      expect(verdict, argv.join(' ')).toMatchObject(unknown)
+      expect(verdict.line).toBe('BMN stopped this prompt: it cannot tell where this Codex session sends work (this session continues a saved one, and BMN cannot find its saved record). Start a new Codex session.')
+    }
+    expect(prompt('codex', session(['codex', 'resume', missing]), { transcript_path: join(folder, `rollout-2026-10-10T11-00-00-${missing}.jsonl`) })).toMatchObject(unknown)
+    // A record that is there and cannot be read, or names no provider, is not a reason to trust the current settings.
+    for (const text of ['', 'not json\n', `${JSON.stringify({ type: 'event' })}\n`, meta({}), meta({ model_provider: '' }), meta({ model_provider: 7 })]) {
+      writeFileSync(record, text)
+      for (const argv of [['codex', 'resume', id], ['codex']]) {
+        expect(prompt('codex', session(argv), { session_id: id }), `${JSON.stringify(text)} ${argv.join(' ')}`).toMatchObject(unknown)
+        expect(prompt('codex', session(argv), { transcript_path: record }).line).toMatch(/the saved record of this session cannot be read/)
+      }
+    }
+    // Two records under one id are not one session's.
+    writeFileSync(record, meta({ model_provider: 'openai' }))
+    writeFileSync(join(folder, `rollout-2026-10-10T12-00-00-${id}.jsonl`), meta({ model_provider: 'openai' }))
+    expect(prompt('codex', session(['codex', 'resume', id]), { session_id: id }).line).toMatch(/more than one saved record carries this session's id/)
+    rmSync(join(folder, `rollout-2026-10-10T12-00-00-${id}.jsonl`))
+    // Resolved, and saved with the provider the settings name: the prompt goes on.
+    expect(prompt('codex', session(['codex', 'resume', id]), { session_id: id })).toMatchObject({ outcome: 'pass' })
+    // A session just started has no saved record yet, and nothing says it continues one: the settings decide.
+    expect(prompt('codex', session(['codex']), { session_id: missing })).toMatchObject({ outcome: 'pass' })
+    expect(prompt('codex', session(['codex']), {})).toMatchObject({ outcome: 'pass' })
   })
 
   it('stops when the folder the app started in and the folder it works in name different destinations', () => {

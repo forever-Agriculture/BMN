@@ -5,7 +5,7 @@ import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync
 import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 import { APP_NAMES, HARNESSES, RosterError, TOOL_PATTERN, agentsDirectory, canonicalJson, harnessPrivateWork, sha256 } from './agents-roster.mjs'
-import { readApproved } from './agents-state.mjs'
+import { approvedIfAny } from './agents-state.mjs'
 import { ToolFileError, editJsonEntry, editTomlEntry, readJsonEntries, readTomlEntries, renderTomlEntry } from './agents-tool-files.mjs'
 import { ConfigWriteError, pathState, replaceFileSafely } from './safe-config-write.mjs'
 
@@ -74,15 +74,6 @@ function writtenPath() {
   return `${agentsDirectory()}/state/rules/tools-written.json`
 }
 
-function approvedOrNull() {
-  try {
-    return readApproved()
-  } catch (error) {
-    if (error instanceof RosterError && (error.code === 'NOT_APPROVED' || error.code === 'STATE_CORRUPT')) return null
-    throw error
-  }
-}
-
 // ---------------------------------------------------------------------------------------------
 // What the owner's test proved, per app version (60.12 AC1)
 
@@ -122,18 +113,21 @@ export function lastToolsTest(harness, tests = toolsTests()) {
 
 /**
  * What the owner's test showed about an app's tools on exactly this version; the latest test of
- * that version decides. `variable` is whether the app was seen passing a named environment
- * variable to a tool, `isolation` whether a run was seen with only the tools its command names.
+ * that version decides. Each is true only for what that test saw: `variable` an environment entry
+ * a tool is given by name, `argument` an argument given from a variable, `isolation` a command
+ * that takes only the tools it names and none from the app's settings, `project` the same for the
+ * tools a folder's own settings name, `header` a request header sent from a variable. The test
+ * BMN has today starts no remote tool, so it never records a header: such a tool stays blocked.
  */
 export function appTools(harness, { version, tests = toolsTests() }) {
-  const base = { harness, version: version ?? null, supported: false, variable: false, isolation: false, own_command: null }
+  const base = { harness, version: version ?? null, supported: false, variable: false, argument: false, header: false, isolation: false, project: false, own_command: null }
   if (TOOL_APPS[harness] === undefined) return { ...base, reason: 'BMN does not know this app' }
   if (typeof version !== 'string') return { ...base, reason: `${APP_NAMES[harness]} is not installed, or its version cannot be read` }
   let last = null
   for (const entry of tests) if (entry.harness === harness && entry.version === version) last = entry
   if (last === null) return { ...base, reason: `no test has run on ${APP_NAMES[harness]} ${version}` }
   if (last.outcome !== 'pass') return { ...base, reason: `the test on ${APP_NAMES[harness]} ${version} did not pass: ${last.detail ?? last.outcome}` }
-  return { ...base, supported: true, variable: last.variable === 'pass', isolation: last.isolation === 'pass', own_command: last.own_command ?? null }
+  return { ...base, supported: true, variable: last.variable === 'pass', argument: last.argument === 'pass', header: last.header === 'pass', isolation: last.isolation === 'pass', project: last.project_isolation === 'pass', own_command: last.own_command ?? null }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -149,16 +143,19 @@ export function definitionOf(tool) {
 }
 
 /**
- * The settings entry an app takes for a tool, or why that app cannot take it. `variable` is
- * whether the app was seen passing a named variable on its installed version: without it a tool
- * that names one is not written, since the tool would start without what it needs.
+ * The settings entry an app takes for a tool, or why that app cannot take it. A tool that names a
+ * variable is written only in the form the owner's test saw work on the installed version
+ * (`variable` for an environment entry, `argument` for an argument, `header` for a request
+ * header): without that the tool would start without what it needs, or BMN would claim more than
+ * it saw.
  */
-export function renderTool(tool, harness, { variable = false } = {}) {
+export function renderTool(tool, harness, { variable = false, argument = false, header = false } = {}) {
   const spec = TOOL_APPS[harness]
   const app = APP_NAMES[harness]
   const definition = definitionOf(tool)
-  const bound = Object.keys(definition.env ?? {}).length + Object.keys(definition.headers ?? {}).length + (definition.args ?? []).filter(isMap).length
-  if (bound > 0 && !variable) return { blocked: `BMN has not seen ${app} pass an environment variable to a tool on this version` }
+  if (Object.keys(definition.env ?? {}).length > 0 && !variable) return { blocked: `BMN has not seen ${app} pass an environment variable to a tool on this version` }
+  if (harness !== 'codex' && (definition.args ?? []).some(isMap) && !argument) return { blocked: `BMN has not seen ${app} give a tool an argument from an environment variable on this version` }
+  if (Object.keys(definition.headers ?? {}).length > 0 && !header) return { blocked: `BMN has no test yet that shows ${app} sending a header from an environment variable` }
   if (harness === 'codex') {
     if ((definition.args ?? []).some(isMap)) return { blocked: 'Codex has no way to pass an environment variable as an argument' }
     const renamed = Object.entries(definition.env ?? {}).find(([name, from]) => name !== from)
@@ -187,6 +184,8 @@ export function renderTool(tool, harness, { variable = false } = {}) {
 }
 
 const SECRET_NAME = /(?:key|token|secret|passw|credential|auth|bearer|session)/i
+/** A flag whose next argument is a value to keep private, whatever it looks like. */
+const SECRET_FLAG = /(?:key|token|secret|passw|credential|auth|bearer|session|header|cookie)/i
 
 /** Whether a text of an argument or an address looks as if it held a secret: BMN then never prints or keeps it. */
 export function looksSecret(text) {
@@ -196,6 +195,58 @@ export function looksSecret(text) {
   if (/(?:key|token|secret|passw|credential|bearer)[A-Za-z0-9_-]*[=:]\s*\S+/i.test(text)) return true
   if (/\b(?:sk|pk|ghp|gho|ghu|xox[abp]|AKIA)[-_A-Za-z0-9]{12,}/.test(text)) return true
   return /^[A-Za-z0-9+_=-]{32,}$/.test(text) && /\d/.test(text) && /[A-Za-z]/.test(text)
+}
+
+/** An http(s) address with no sign-in in it and nothing in its query but short plain words. */
+function plainAddress(text) {
+  let url
+  try {
+    url = new URL(text)
+  } catch {
+    return false
+  }
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username !== '' || url.password !== '') return false
+  for (const [name, value] of url.searchParams) {
+    if (SECRET_NAME.test(name) || value.length > 32 || !plainWord(value)) return false
+  }
+  try {
+    return plainWord(decodeURIComponent(url.pathname).replace(/^\/+/, ''))
+  } catch {
+    return false
+  }
+}
+
+/** A name, a package or a path: letters, digits and . _ @ + ~ / -, with no long run that mixes letters and digits. */
+function plainWord(text) {
+  if (text === '') return true
+  if (!/^[A-Za-z0-9._@+~/-]+$/.test(text) || text.length > 160) return false
+  if (/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(text)) return false
+  if ((text.match(/[A-Za-z0-9]+/g) ?? []).some((part) => part.length >= 16 && /\d/.test(part) && /[A-Za-z]/.test(part))) return false
+  return !(text.length >= 24 && !/[/.]/.test(text) && /\d/.test(text) && /[a-z]/.test(text) && /[A-Z]/.test(text))
+}
+
+/**
+ * Whether an argument is plainly not a value to keep private: a flag, a number, a name, a package,
+ * a path, a plain address, or several of those with blanks between. BMN cannot tell a secret by
+ * its look, so it goes the other way: whatever is not plainly one of these counts as holding a
+ * value, and so does anything that follows a flag named like a key, a header or a cookie.
+ */
+export function plainArgument(text, previous) {
+  if (typeof text !== 'string' || text.length > 200 || looksSecret(text)) return false
+  if (typeof previous === 'string' && /^--?[A-Za-z]/.test(previous) && !previous.includes('=') && (SECRET_FLAG.test(previous) || previous === '-H') && !text.startsWith('-')) return false
+  const parts = text.split(/\s+/).filter((part) => part !== '')
+  if (parts.length > 1) return !SECRET_NAME.test(text) && parts.every((part) => plainArgument(part))
+  if (/^--?[A-Za-z][A-Za-z0-9_-]*$/.test(text) || /^-?\d+(?:\.\d+)?$/.test(text) || text === '--' || text === '-') return true
+  const assigned = /^(--?[A-Za-z][A-Za-z0-9_-]*|[A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(text)
+  if (assigned !== null) return !SECRET_FLAG.test(assigned[1]) && (assigned[2] === '' || plainArgument(assigned[2]))
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text)) return plainAddress(text)
+  if (/^[A-Za-z0-9.-]+:\d{1,5}$/.test(text)) return plainWord(text.slice(0, text.lastIndexOf(':')))
+  return plainWord(text)
+}
+
+/** Whether an address holds something to keep private: a sign-in, or a query that is not short plain words. */
+function addressHoldsValue(text) {
+  return looksSecret(text) || !plainAddress(text)
 }
 
 /**
@@ -219,8 +270,9 @@ export function neutralOf(value, harness) {
     for (const [name, text] of Object.entries(map)) {
       const from = reference(text)
       if (from !== null) out[name] = from
-      // Text around a variable is not a value of its own, but a tool cannot say it either.
-      else if (typeof text === 'string' && /\$\{|\{env:/.test(text)) extras.push(`${field}.${name}`)
+      // A scheme word around a variable ("Bearer ${X}") is not a value of its own, but a tool cannot say it
+      // either; any other text beside a variable may be one, and counts as one.
+      else if (typeof text === 'string' && /\$\{|\{env:/.test(text) && /^(?:|bearer|basic|token)$/i.test(text.replace(/\$\{(?:env:)?[A-Za-z_][A-Za-z0-9_]*\}|\{env:[A-Za-z_][A-Za-z0-9_]*\}/g, '').trim())) extras.push(`${field}.${name}`)
       else secrets.push(`${field}.${name}`)
     }
     return out
@@ -234,7 +286,7 @@ export function neutralOf(value, harness) {
     return list.map((arg, index) => {
       const from = reference(arg)
       if (from !== null) return { env: from }
-      if (looksSecret(arg) || (index > 0 && /^--?[A-Za-z0-9-]*$/.test(list[index - 1]) && SECRET_NAME.test(list[index - 1]) && !arg.startsWith('-'))) secrets.push(`${field}[${index}]`)
+      if (!plainArgument(arg, list[index - 1])) secrets.push(`${field}[${index}]`)
       return arg
     })
   }
@@ -266,7 +318,7 @@ export function neutralOf(value, harness) {
     else if (typeof value.command === 'string') definition = { command: value.command, args: literalArgs(value.args, 'args'), env: bindings(value.env, 'env') }
     else return null
   }
-  if (definition.url !== undefined && looksSecret(definition.url)) secrets.push('url')
+  if (definition.url !== undefined && addressHoldsValue(definition.url)) secrets.push('url')
   for (const key of Object.keys(value)) if (!known.includes(key)) extras.push(key)
   const sorted = (map) => Object.fromEntries(Object.entries(map).sort(([a], [b]) => (a < b ? -1 : 1)))
   const clean = definition.url !== undefined
@@ -276,6 +328,7 @@ export function neutralOf(value, harness) {
 }
 
 const MASK = '•••'
+const NAMED_VARIABLE = /^(?:(?:bearer|basic|token)\s+)?(?:\$\{(?:env:)?[A-Za-z_][A-Za-z0-9_]*\}|\{env:[A-Za-z_][A-Za-z0-9_]*\})$/i
 
 /** An entry BMN did not write, for showing: every inline value and anything that looks like a secret masked, nothing else changed. */
 export function maskedEntry(value, harness) {
@@ -285,8 +338,9 @@ export function maskedEntry(value, harness) {
     if (hidden.has(path)) return MASK
     if (Array.isArray(item)) return item.map((entry, index) => walk(entry, `${path}[${index}]`))
     if (isMap(item)) return Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, walk(entry, path === '' ? key : `${path}.${key}`)]))
-    // An inline value under another name than the definition's (Codex http_headers, OpenCode command) is masked by its look.
-    return typeof item === 'string' && looksSecret(item) ? MASK : item
+    // An inline value under another name than the definition's (Codex http_headers, a setting BMN does not write) is
+    // masked unless it is plainly not one; a variable's name, with or without its scheme word, is shown.
+    return typeof item === 'string' && !plainArgument(item) && !NAMED_VARIABLE.test(item) ? MASK : item
   }
   const masked = walk(value, '')
   if (isMap(masked) && harness === 'codex') {
@@ -307,7 +361,7 @@ function entryText(harness, id, value) {
  * The tools an app's settings file holds now. `link` is set when the file is a link: BMN reads
  * through it and never writes there. An unreadable file reports why and holds no entries.
  */
-export function readAppTools(harness, environment = process.env, { path = TOOL_APPS[harness].file(environment) } = {}) {
+export function readAppTools(harness, environment = process.env, { path = TOOL_APPS[harness].file(environment), at = TOOL_APPS[harness].path } = {}) {
   const spec = TOOL_APPS[harness]
   let state
   try {
@@ -325,16 +379,16 @@ export function readAppTools(harness, environment = process.env, { path = TOOL_A
     }
   }
   try {
-    const raw = spec.format === 'toml' ? readTomlEntries(text) : readJsonEntries(text, spec.path)
+    const raw = spec.format === 'toml' ? readTomlEntries(text) : readJsonEntries(text, at)
     const entries = new Map()
     for (const [id, entry] of raw) {
       if (entry.unreadable !== undefined) entries.set(id, { unreadable: entry.unreadable })
       else {
         const neutral = neutralOf(entry.value, harness)
-        entries.set(id, neutral === null ? { unreadable: 'it is not a tool entry BMN recognises' } : { value: entry.value, raw: entry.raw, hash: sha256(canonicalJson(entry.value)), ...neutral })
+        entries.set(id, neutral === null ? { unreadable: 'it is not a tool entry BMN recognises' } : { value: entry.value, raw: entry.raw, hash: sha256(canonicalJson(entry.value)), text_hash: sha256(entry.raw), ...neutral })
       }
     }
-    return { harness, path, readable: true, entries, state, text, ...(state.kind === 'link' ? { link: state.target } : {}) }
+    return { harness, path, readable: true, entries, state, text, directory: state.directory, ...(state.kind === 'link' ? { link: state.target } : {}) }
   } catch (error) {
     if (!(error instanceof ToolFileError)) throw error
     return { harness, path, readable: false, detail: error.message, entries: new Map(), state }
@@ -378,7 +432,7 @@ export function transportWords(tool) {
     }
   }
   const first = (tool.args ?? []).find((arg) => typeof arg === 'string' && !arg.startsWith('-'))
-  return first !== undefined && !looksSecret(first) && first.length <= 60 ? `${tool.command} ${first}` : tool.command
+  return first !== undefined && plainArgument(first) && first.length <= 60 ? `${tool.command} ${first}` : tool.command
 }
 
 /** One state for one tool in one app (60.12 AC4, by the precedence of 60.11 AC2). */
@@ -390,7 +444,7 @@ function toolState(app, file, tool, records, wanted) {
     if (found === undefined) return { state: 'excluded' }
     return { state: 'exposed', managed: known !== undefined && known.hash === found.hash, ...(found.secrets.length > 0 ? { secret: true } : {}) }
   }
-  const rendered = renderTool(tool, app.harness, { variable: app.variable })
+  const rendered = renderTool(tool, app.harness, app)
   if (rendered.blocked !== undefined) return { state: 'blocked', detail: rendered.blocked }
   if (found === undefined) return { state: 'missing' }
   const secret = found.secrets.length > 0 ? { secret: true, detail: `it holds a value inline (${found.secrets.join(', ')}): move it into an environment variable, then name the variable in the tool` } : {}
@@ -406,7 +460,7 @@ function toolState(app, file, tool, records, wanted) {
  * app holds that are not on the list are `unlisted`: BMN did not write them and leaves them, and
  * on a destination that gets public work only they count as exposed.
  */
-export function checkTools({ environment = process.env, tests = toolsTests(), versions, generation = approvedOrNull() } = {}) {
+export function checkTools({ environment = process.env, tests = toolsTests(), versions, generation = approvedIfAny() } = {}) {
   const data = generation?.data ?? null
   const tools = data?.tools ?? []
   const records = written()
@@ -482,8 +536,12 @@ const CHANGE_WORDS = {
   stale: 'updates BMN\'s entry'
 }
 
+/** A plan is one hash over every target: the file and the real folder that holds it, the entry's exact text as shown, and what it becomes. */
 function planHash(targets) {
-  return sha256(canonicalJson(targets.map((target) => ({ harness: target.harness, tool: target.tool, path: target.path, action: target.action, prior: target.prior_hash, wanted: target.wanted_hash, unlisted: target.unlisted === true }))))
+  return sha256(canonicalJson(targets.map((target) => ({
+    harness: target.harness, tool: target.tool, path: target.path, directory: target.directory, action: target.action,
+    prior: target.prior_hash, prior_text: target.prior_text, wanted: target.wanted_hash, unlisted: target.unlisted === true
+  }))))
 }
 
 /**
@@ -493,7 +551,7 @@ function planHash(targets) {
  * means every supported app. `removeUnlisted` also removes entries that are not on the list.
  */
 export async function planToolsInstall(harnesses = [], { environment = process.env, versions, tests = toolsTests(), removeUnlisted = false } = {}) {
-  const generation = approvedOrNull()
+  const generation = approvedIfAny()
   const { routeFor, routeStillMatches } = await import('./agents-rules.mjs')
   const stop = (code, message) => ({ code, message, targets: [], exposed: [], blocked: [], planHash: null })
   const check = checkTools({ environment, tests, versions, generation })
@@ -524,7 +582,7 @@ export async function planToolsInstall(harnesses = [], { environment = process.e
         if (row.managed === true) changes.push({ ...base, action: 'remove', change: 'exposed', words: `removes BMN's entry: ${name} may no longer have this tool`, found })
         else exposed.push({ ...base, fix: `BMN did not write this entry in ${app.path}: remove it there, or let ${name} have the tool` })
       } else if (!SETTLED_STATES.includes(row.state) && row.state !== 'unreadable') {
-        changes.push({ ...base, action: 'set', change: row.state, words: CHANGE_WORDS[row.state], found, entry: renderTool(tools.get(row.id), harness, { variable: app.variable }).entry })
+        changes.push({ ...base, action: 'set', change: row.state, words: CHANGE_WORDS[row.state], found, entry: renderTool(tools.get(row.id), harness, app).entry })
       }
     }
     for (const row of app.unlisted) {
@@ -542,7 +600,8 @@ export async function planToolsInstall(harnesses = [], { environment = process.e
         ...rest, ...(entry === undefined ? {} : { entry }),
         before: found === undefined ? null : entryText(harness, change.tool, maskedEntry(found.value, harness)),
         after: entry === undefined ? null : entryText(harness, change.tool, entry),
-        prior: found === undefined ? null : found.raw, prior_hash: found === undefined ? null : found.hash, wanted_hash: entry === undefined ? null : sha256(canonicalJson(entry))
+        prior: found === undefined ? null : found.raw, prior_hash: found === undefined ? null : found.hash, prior_text: found === undefined ? null : found.text_hash,
+        directory: file.directory, wanted_hash: entry === undefined ? null : sha256(canonicalJson(entry))
       })
     }
   }
@@ -569,20 +628,25 @@ function planDetails(planned) {
 }
 
 /**
- * Changes one entry in the file as it is at this moment: refused when the entry is no longer what
- * the plan showed, or the file became a link. An app rewrites its own settings file at any time;
- * when it does so in the instant of the write, the file is read again and the write is made only
- * if this entry is still what was shown, so nothing the app wrote is lost. `raw` puts back an
- * entry's earlier text.
+ * Changes one entry in the file as it is at this moment: refused when the entry's text is no
+ * longer exactly what the plan showed (`expected.text`, the hash of that text; a changed comment
+ * counts), when the path now leads into another folder than the one shown (`expected.directory`),
+ * or when the file became a link. An app rewrites its own settings file at any time; when it does
+ * so in the instant of the write, the file is read again and the write is made only if this entry
+ * is still what was shown, so nothing the app wrote is lost. `raw` puts back an entry's earlier
+ * text. Returns the entry as read back: its value's hash and its text's hash, or nulls when removed.
  */
-function writeEntry(harness, path, id, expectedHash, value, raw, { beforeCommit } = {}) {
+function writeEntry(harness, path, id, expected, value, raw, { beforeCommit } = {}) {
   const read = () => readAppTools(harness, undefined, { path })
   for (let attempt = 0; ; attempt += 1) {
     const file = read()
     if (!file.readable) throw new ToolsError('TOOL_FILE_UNREADABLE', `${path}: ${file.detail}`)
     if (file.link !== undefined) throw new ToolsError('TOOL_FILE_LINK', `${path} became a link; nothing was written there`)
+    if (expected.directory !== undefined && file.directory !== expected.directory) throw new ToolsError('REVISION_CONFLICT', `${path} now leads to another folder than the one shown; nothing was written there`)
     const found = file.entries.get(id)
-    if ((found?.hash ?? null) !== expectedHash) throw new ToolsError('REVISION_CONFLICT', `${id} in ${path} changed while BMN was reading it; nothing was written there`)
+    if ((found?.hash ?? null) !== expected.hash || (expected.text !== undefined && (found?.text_hash ?? null) !== expected.text)) {
+      throw new ToolsError('REVISION_CONFLICT', `${id} in ${path} changed while BMN was reading it; nothing was written there`)
+    }
     try {
       replaceFileSafely(path, file.state, edited(harness, file.text ?? '', id, value, raw), attempt === 0 ? { beforeCommit } : {})
       break
@@ -593,7 +657,7 @@ function writeEntry(harness, path, id, expectedHash, value, raw, { beforeCommit 
   const after = read().entries.get(id)
   const good = value === undefined && raw === undefined ? after === undefined : after !== undefined && after.unreadable === undefined && (raw !== undefined || after.hash === sha256(canonicalJson(value)))
   if (!good) throw new ToolsError('READBACK_FAILED', `${path} does not hold what BMN wrote for ${id}; check it by hand`)
-  return after?.hash ?? null
+  return { hash: after?.hash ?? null, text: after?.text_hash ?? null }
 }
 
 /**
@@ -602,7 +666,7 @@ function writeEntry(harness, path, id, expectedHash, value, raw, { beforeCommit 
  * what an entry held is kept as its own text, never the file. A failure part-way stops and keeps
  * the manifest, so `bmn rules restore --transaction` can undo what changed.
  */
-export async function installTools(harnesses = [], { yes = false, asJson = false, environment = process.env, versions, now = new Date(), expectedPlanHash, removeUnlisted = false, afterConfirm, beforeTarget, beforeCommit } = {}) {
+export async function installTools(harnesses = [], { yes = false, asJson = false, environment = process.env, versions, now = new Date(), expectedPlanHash, removeUnlisted = false, afterConfirm, beforeTarget, beforeCommit, afterTarget } = {}) {
   const { confirm } = await import('./agents-rules.mjs')
   const options = { environment, versions, removeUnlisted }
   const planned = await planToolsInstall(harnesses, options)
@@ -629,18 +693,21 @@ export async function installTools(harnesses = [], { yes = false, asJson = false
   const manifest = {
     id, created_at: now.toISOString(), kind: 'tools', reason: 'tools install', state: 'started',
     targets: confirmed.targets.map((target) => ({
-      harness: target.harness, tool: target.tool, path: target.path, action: target.action,
+      harness: target.harness, tool: target.tool, path: target.path, directory: target.directory, action: target.action,
       // What the entry held, as its own text: the plan refuses to touch one that holds a value inline, so none is kept here.
-      prior: target.prior, prior_hash: target.prior_hash, prior_record: records[recordKey(target.harness, target.tool)] ?? null, written_hash: target.wanted_hash, done: false
+      prior: target.prior, prior_hash: target.prior_hash, prior_record: records[recordKey(target.harness, target.tool)] ?? null, written_hash: target.wanted_hash, written_text: null, done: false
     }))
   }
   const save = () => writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
   save()
   const done = []
   for (const [index, target] of confirmed.targets.entries()) {
+    let wrote
     try {
       beforeTarget?.(target, index)
-      writeEntry(target.harness, target.path, target.tool, target.prior_hash, target.entry, undefined, { beforeCommit: beforeCommit === undefined ? undefined : () => beforeCommit(target, index) })
+      wrote = writeEntry(target.harness, target.path, target.tool, { hash: target.prior_hash, text: target.prior_text, directory: target.directory }, target.entry, undefined,
+        { beforeCommit: beforeCommit === undefined ? undefined : () => beforeCommit(target, index) })
+      afterTarget?.(target, index)
     } catch (error) {
       manifest.state = 'failed'
       save()
@@ -651,6 +718,7 @@ export async function installTools(harnesses = [], { yes = false, asJson = false
     if (target.action === 'remove') delete next[recordKey(target.harness, target.tool)]
     else next[recordKey(target.harness, target.tool)] = { harness: target.harness, tool: target.tool, hash: target.wanted_hash }
     writePrivate(writtenPath(), JSON.stringify(next, null, 2))
+    manifest.targets[index].written_text = wrote.text
     manifest.targets[index].done = true
     save()
     done.push({ harness: target.harness, tool: target.tool, path: target.path, action: target.action })
@@ -663,35 +731,46 @@ export async function installTools(harnesses = [], { yes = false, asJson = false
 /**
  * Undoes one tools transaction (called by `bmn rules restore --transaction`): each entry it
  * changed goes back to the text it had, or is removed where there was none, in the file as it is
- * now. Shown and confirmed like the install, and refused for an entry that changed meanwhile.
+ * now. Shown and confirmed like the install, and refused for an entry that changed meanwhile. An
+ * entry the install wrote without getting to record it is undone too; one it never reached is left.
  */
 export async function restoreToolsTransaction(manifest, _folder, { yes = false, asJson = false, planOnly = false, expectedPlanHash } = {}) {
   const { confirm, writePrivate } = await import('./agents-rules.mjs')
   // Each entry is looked for in the file the install changed, wherever the apps' settings are now.
-  const plans = manifest.targets.filter((target) => target.done === true).reverse().map((target) => {
-    const found = readAppTools(target.harness, undefined, { path: target.path }).entries.get(target.tool)
-    return { ...target, current_hash: found?.hash ?? null }
+  const plans = [...manifest.targets].reverse().flatMap((target) => {
+    const file = readAppTools(target.harness, undefined, { path: target.path })
+    const found = file.entries.get(target.tool)
+    const current = found?.hash ?? null
+    // A write that was made but never recorded (BMN ended between the two) is known by what the entry
+    // holds: exactly what the install would have written, and not what was there before.
+    const unrecorded = target.done !== true && current === target.written_hash && target.written_hash !== target.prior_hash
+    if (target.done !== true && !unrecorded) return []
+    return [{ ...target, current_hash: current, current_text: found?.text_hash ?? null, current_directory: file.directory ?? null }]
   })
   const targets = plans.map((plan) => ({
     harness: plan.harness, tool: plan.tool, path: plan.path, resolved_path: plan.path, change: plan.prior === null ? 'missing' : 'entry',
     becomes: plan.prior === null ? 'removed (it was not there)' : 'the entry as it was', diff: '', note: 'Only this entry changes; the rest of the file stays as it is now.'
   }))
-  const hash = sha256(canonicalJson(plans.map((plan) => ({ harness: plan.harness, tool: plan.tool, current: plan.current_hash, prior: plan.prior_hash }))))
+  const hash = sha256(canonicalJson(plans.map((plan) => ({ harness: plan.harness, tool: plan.tool, current: plan.current_hash, current_text: plan.current_text, directory: plan.current_directory, prior: plan.prior_hash }))))
   if (planOnly) return { code: 'OK', plan_hash: hash, targets }
   if (expectedPlanHash !== undefined && expectedPlanHash !== hash) return { code: 'REVISION_CONFLICT', message: 'the entries changed since the restore was shown; review it again' }
   const details = targets.map((target) => `${target.harness}: ${target.tool} in ${target.path} -> ${target.becomes}`).join('\n')
   if (!await confirm(`Restore transaction ${manifest.id}?`, details, { yes, asJson })) return { code: 'NOT_CONFIRMED' }
   const restored = []
   for (const plan of plans) {
-    // What BMN wrote must still be there: an entry changed since is the owner's, and stays.
-    if (plan.current_hash !== plan.written_hash) {
-      return { code: 'REVISION_CONFLICT', message: `${plan.tool} in ${plan.path} changed since BMN wrote it; ${restored.length} entr${restored.length === 1 ? 'y' : 'ies'} restored`, restored }
+    const count = `${restored.length} entr${restored.length === 1 ? 'y' : 'ies'} restored`
+    // What BMN wrote must still be there, to the letter: an entry changed since is the owner's, and stays.
+    if (plan.current_hash !== plan.written_hash || (typeof plan.written_text === 'string' && plan.current_text !== plan.written_text)) {
+      return { code: 'REVISION_CONFLICT', message: `${plan.tool} in ${plan.path} changed since BMN wrote it; ${count}`, restored }
+    }
+    if (typeof plan.directory === 'string' && plan.current_directory !== plan.directory) {
+      return { code: 'REVISION_CONFLICT', message: `${plan.path} now leads to another folder than the one BMN wrote in; ${count}`, restored }
     }
     try {
-      writeEntry(plan.harness, plan.path, plan.tool, plan.current_hash, undefined, plan.prior ?? undefined)
+      writeEntry(plan.harness, plan.path, plan.tool, { hash: plan.current_hash, text: plan.current_text, ...(plan.current_directory === null ? {} : { directory: plan.current_directory }) }, undefined, plan.prior ?? undefined)
     } catch (error) {
       if (!(error instanceof ToolsError) && !(error instanceof ConfigWriteError) && !(error instanceof ToolFileError)) throw error
-      return { code: error.code, message: `${error.message}; ${restored.length} entr${restored.length === 1 ? 'y' : 'ies'} restored`, restored }
+      return { code: error.code, message: `${error.message}; ${count}`, restored }
     }
     const records = written()
     if (plan.prior_record === null) delete records[recordKey(plan.harness, plan.tool)]
@@ -715,7 +794,7 @@ const titled = (id) => id.split(/[-_]/).filter(Boolean).map((word) => word.charA
  * environment variable. `state`: `ready`, `secret` (ready, with a value left out), `known` (already
  * on the list), `conflict` or `unreadable`.
  */
-export function proposeTools({ environment = process.env, generation = approvedOrNull() } = {}) {
+export function proposeTools({ environment = process.env, generation = approvedIfAny() } = {}) {
   const listed = new Set((generation?.data.tools ?? []).map((tool) => tool.id))
   const found = new Map()
   const files = []
@@ -747,7 +826,7 @@ export function proposeTools({ environment = process.env, generation = approvedO
       const definition = group[0].entry.definition
       // An argument or an address that looks like a secret is left out too: the proposal never carries it.
       const clean = definition.url !== undefined
-        ? (looksSecret(definition.url) ? null : definition)
+        ? (addressHoldsValue(definition.url) ? null : definition)
         : { ...definition, ...(definition.args ? { args: definition.args.filter((arg, index) => !group.some((holder) => holder.entry.secrets.some((field) => field.endsWith(`[${index}]`)))) } : {}) }
       const notes = [
         ...(secrets.length > 0 ? [`holds a value inline (${secrets.join(', ')}): move this value into an environment variable; it was left out and the tool cannot be installed until then`] : []),
@@ -792,7 +871,7 @@ export function toolItems(agent, data, proven) {
   if (!proven.isolation) return { state: 'not-supported-yet', tools: tools.map((tool) => tool.id), reason: `no test on this ${app} version showed a run with only its own tools (bmn tools test ${agent.harness})` }
   const entries = {}
   for (const tool of tools) {
-    const rendered = renderTool(tool, agent.harness, { variable: proven.variable })
+    const rendered = renderTool(tool, agent.harness, proven)
     if (rendered.blocked !== undefined) return { state: 'blocked', tools: tools.map((entry) => entry.id), reason: `${tool.id}: ${rendered.blocked}` }
     entries[tool.id] = rendered.entry
   }
@@ -804,21 +883,17 @@ export function toolItems(agent, data, proven) {
 
 /**
  * The MCP entries a Codex command defines with `-c`: null when it names none, `reset` when it first
- * replaces the inherited ones, either with nothing (`mcp_servers={}`, then one item per setting) or
- * with the whole set written inline.
+ * empties the inherited ones with `mcp_servers={}` and then gives one item per setting. That is the
+ * form `bmn roster role` writes and the owner's test runs; the whole set written inline after
+ * `mcp_servers=` is not a form any test has seen shut the app's own settings out, so it is unresolved.
  */
 function codexArgvTools(config) {
   const mentions = config.filter((entry) => /^mcp_servers(?:[.=\s]|$)/.test(entry))
   if (mentions.length === 0) return null
   const whole = /^mcp_servers\s*=([\s\S]*)$/.exec(mentions[0])
-  const reset = whole !== null
+  const reset = whole !== null && /^\s*\{\s*\}\s*$/.test(whole[1])
+  if (whole !== null && !reset) return { reset: false, unresolved: "tools written inline after mcp_servers= are not a form BMN has tested: write -c 'mcp_servers={}' first, then one -c per setting" }
   const entries = {}
-  if (whole !== null) {
-    const parsed = readTomlEntries(`[mcp_servers.x]\nv = ${whole[1]}\n`).get('x')
-    const set = parsed?.unreadable === undefined ? parsed?.value?.v : undefined
-    if (!isMap(set) || !Object.values(set).every(isMap)) return { reset, unresolved: 'BMN cannot read the tools written after mcp_servers=' }
-    Object.assign(entries, set)
-  }
   for (const entry of reset ? mentions.slice(1) : mentions) {
     const match = /^mcp_servers\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_]+)=([\s\S]*)$/.exec(entry)
     if (match === null) return { reset, unresolved: `BMN cannot read "${entry.length > 60 ? `${entry.slice(0, 60)}…` : entry}"` }
@@ -843,37 +918,94 @@ function claudeArgvTools(parsed) {
 }
 
 /**
- * Whether a run's command carries exactly its agent's tools (60.12 AC5). While the approved team
- * lists no tools at all the owner has not taken them up, and a command's own tools pass unjudged as
- * they did before this check existed. Once it lists any: a run of an agent with no tools of its
- * own, whose command names none, is as it always was, and a command that names any for such an
- * agent is refused. Otherwise the app version must have shown a run with only its
- * own tools, the command must shut out the app's own settings, and the tools it names must be the
- * agent's, each exactly as approved. A packet run carries no tools at all (`packet`); `profile`
- * says the run takes a Codex profile, from wherever. Returns `{ applied, note }` or
+ * The tools a run would take when its command does not shut them out: the entries of the app's own
+ * settings and of the folder it runs in (Claude Code: its settings for that folder and the folder's
+ * `.mcp.json`; Codex: the folder's `.codex/config.toml`). `unresolved` names what cannot be read
+ * with certainty, a Codex profile that names tools among it. Tools an app gets from a plug-in, a
+ * managed policy or a folder above this one are not read here.
+ */
+export function inheritedTools(harness, { environment = process.env, cwd = null, profile = false } = {}) {
+  const app = APP_NAMES[harness]
+  const places = [{ where: `${app}'s settings`, folder: false, file: readAppTools(harness, environment) }]
+  if (cwd !== null && harness === 'claude') {
+    places.push({ where: `${app}'s settings for this folder`, folder: true, file: readAppTools(harness, environment, { at: ['projects', cwd, 'mcpServers'] }) })
+    places.push({ where: `${cwd}/.mcp.json`, folder: true, file: readAppTools(harness, environment, { path: `${cwd}/.mcp.json` }) })
+  } else if (cwd !== null && harness === 'codex') {
+    places.push({ where: `${cwd}/.codex/config.toml`, folder: true, file: readAppTools(harness, environment, { path: `${cwd}/.codex/config.toml` }) })
+  }
+  const entries = []
+  const unresolved = []
+  for (const place of places) {
+    if (!place.file.readable) unresolved.push(`${place.where}: ${place.file.detail}`)
+    else for (const [id, entry] of place.file.entries) entries.push({ id, where: place.where, folder: place.folder, entry })
+  }
+  if (harness === 'codex' && profile && /^[ \t]*\[?[ \t]*profiles[ \t]*\.[^\n=\]]*mcp_servers/m.test(places[0].file.text ?? '')) unresolved.push('a Codex profile names tools of its own')
+  return { entries, unresolved }
+}
+
+/** Why a run may not have an entry its app's settings hold, or null when it is an approved tool for that app, as approved. */
+function inheritedProblem(found, data, harness, kind) {
+  if (kind === null) return `${found.id} (a packet run carries no tools)`
+  if (found.entry.unreadable !== undefined) return `${found.id} cannot be read (${found.entry.unreadable})`
+  const tool = (data.tools ?? []).find((entry) => entry.id === found.id)
+  if (tool === undefined) return `${found.id} is not on your list`
+  if (!eligible(tool, harness, kind)) return `${found.id} is not for ${APP_NAMES[harness]}`
+  return found.entry.secrets.length === 0 && canonicalJson(found.entry.definition) === canonicalJson(definitionOf(tool)) ? null : `${found.id} differs from the approved tool`
+}
+
+/**
+ * Whether a run gets exactly the tools it may have (60.12 AC5). While the approved team lists no
+ * tools at all the owner has not taken them up, and a command's own tools pass unjudged as they did
+ * before this check existed. Once it lists any, the run's whole set is resolved: what the command
+ * names, and what the app's own settings and the folder's would add.
+ *
+ * A run of an agent with no tools of its own names none. Either its command shuts the settings out
+ * (on a version whose test saw that work), or everything the settings hold must be a tool the app
+ * may have, exactly as approved; anything else, or anything BMN cannot read, is refused. A run of
+ * an agent with tools of its own must shut the settings out and name exactly its tools, each as
+ * approved. A packet run carries no tools at all (`packet`); `profile` says the run takes a Codex
+ * profile. `environment` and `cwd` are the run's own. Returns `{ applied, note }` or
  * `{ refusal: { code, message } }`.
  */
-export function checkRunTools(agent, data, parsed, proven, { packet = false, profile = false } = {}) {
+export function checkRunTools(agent, data, parsed, proven, { packet = false, profile = false, environment = process.env, cwd = null } = {}) {
   if ((data?.tools ?? []).length === 0) return { applied: [], note: 'tools: not checked (your team lists no tools)' }
   const wanted = packet ? [] : agentTools(data, agent.id)
   const given = parsed.harness === 'codex' ? codexArgvTools(parsed.config ?? []) : claudeArgvTools(parsed)
   const names = given?.entries ? Object.keys(given.entries) : []
   const refuse = (code, message) => ({ refusal: { code, message } })
   const app = APP_NAMES[parsed.harness]
+  const flag = parsed.harness === 'codex' ? "-c 'mcp_servers={}'" : '--strict-mcp-config'
+  const inherited = inheritedTools(parsed.harness, { environment, cwd, profile: profile || parsed.profile !== undefined })
+  const inFolder = inherited.entries.filter((entry) => entry.folder).map((entry) => entry.id)
+  const folderRefusal = () => refuse('ROUTE_UNSUPPORTED', `no test on this ${app} version showed a command shutting out the tools this folder's own settings name (${inFolder.join(', ')}); remove them there, or run bmn tools test ${parsed.harness}`)
   if (wanted.length === 0) {
-    if (given === null || (given.unresolved === undefined && names.length === 0)) return { applied: [], note: packet ? 'tools: none in a packet run' : 'tools: none of its own' }
-    if (given.unresolved !== undefined) return refuse('TOOL_MISMATCH', `the tools this command gives cannot be resolved: ${given.unresolved}`)
-    return refuse('TOOL_MISMATCH', `${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} not among ${agent.id}'s tools: ${packet ? 'a packet run carries none' : 'it has none of its own'}`)
+    if (given?.unresolved !== undefined) return refuse('TOOL_MISMATCH', `the tools this command gives cannot be resolved: ${given.unresolved}`)
+    if (names.length > 0) return refuse('TOOL_MISMATCH', `${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} not among ${agent.id}'s tools: ${packet ? 'a packet run carries none' : 'it has none of its own'}`)
+    if (given?.reset === true && proven.isolation) {
+      if (inFolder.length > 0 && !proven.project) return folderRefusal()
+      return { applied: [], note: `tools: none, and none from ${app}'s own settings` }
+    }
+    // Nothing shuts the settings out (or no test saw the flag do so): the run takes what they hold.
+    const untested = given?.reset === true ? `; ${flag} is in the command, but no test on this ${app} version showed it shut them out (bmn tools test ${parsed.harness})` : ''
+    if (inherited.unresolved.length > 0) return refuse('TOOL_MISMATCH', `the tools this run would take from ${app}'s own settings cannot be resolved: ${inherited.unresolved.join('; ')}${untested}`)
+    const kind = packet ? null : harnessPrivateWork(data, parsed.harness).allowed ? 'full' : 'public'
+    const problems = inherited.entries.map((entry) => inheritedProblem(entry, data, parsed.harness, kind)).filter((problem) => problem !== null)
+    if (problems.length > 0) {
+      return refuse('TOOL_MISMATCH', `${app}'s own settings would give this run tools it may not have: ${problems.join('; ')}. Remove them there, or shut them out in the command (${flag})${untested}`)
+    }
+    const held = [...new Set(inherited.entries.map((entry) => entry.id))].sort()
+    return { applied: [], note: packet ? 'tools: none in a packet run' : held.length === 0 ? 'tools: none of its own, and none in its app\'s settings' : `tools: none of its own; ${app}'s settings hold only tools it may have (${held.join(', ')})` }
   }
   if (parsed.resume) return refuse('ROUTE_UNSUPPORTED', `a resumed ${app} run with tools of its own is not something BMN has seen keep to them`)
   if (profile || parsed.profile !== undefined) return refuse('ROUTE_UNSUPPORTED', `a ${app} profile may add tools of its own; a run of an agent with tools takes none`)
   if (!proven.isolation) return refuse('ROUTE_UNSUPPORTED', `no test on this ${app} version showed a run with only its own tools (bmn tools test ${parsed.harness})`)
+  if (inFolder.length > 0 && !proven.project) return folderRefusal()
   if (given === null) return refuse('TOOL_MISMATCH', `${agent.id}'s tools are missing from the command: ${wanted.map((tool) => tool.id).join(', ')}`)
   if (given.unresolved !== undefined) return refuse('TOOL_MISMATCH', `the tools this command gives cannot be resolved: ${given.unresolved}`)
   if (!given.reset) return refuse('TOOL_MISMATCH', `the command does not shut out the tools in ${app}'s own settings (${parsed.harness === 'codex' ? "-c 'mcp_servers={}' first" : '--strict-mcp-config'})`)
   const expected = new Map()
   for (const tool of wanted) {
-    const rendered = renderTool(tool, parsed.harness, { variable: proven.variable })
+    const rendered = renderTool(tool, parsed.harness, proven)
     if (rendered.blocked !== undefined) return refuse('TOOL_MISMATCH', `${tool.id} cannot be given to ${app}: ${rendered.blocked}`)
     expected.set(tool.id, rendered.entry)
   }
@@ -894,20 +1026,37 @@ function run(command, argv, { cwd, env, input = '', timeoutMs }) {
   return { finished: !result.error && result.status !== null, ok: !result.error && result.status === 0, text: `${result.stdout ?? ''}\n${result.stderr ?? ''}` }
 }
 
+/** The tools a Claude Code run says it started with, from its start-up line, or null when it printed none. */
+function startedWith(text) {
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('{')) continue
+    try {
+      const event = JSON.parse(line)
+      if (event?.type === 'system' && event.subtype === 'init' && Array.isArray(event.mcp_servers)) return new Set(event.mcp_servers.map((server) => server?.name))
+    } catch {
+      // Not a line of the run's own events.
+    }
+  }
+  return null
+}
+
 /**
  * Where an app reads its tools, and what it does with them (60.12 AC1). In a throwaway home
  * folder that holds nothing of the owner's, BMN writes one stand-in tool into the app's settings
- * file the way it would for a real one, asks the app which tools it sees, and records whether the
- * app named it, whether the stand-in was started with the value of the variable its entry names,
- * whether a run told to take only its own tools left that entry out, and whether the app's own
- * add and remove commands change the same file. No sign-in is there, so nothing can be sent to a
- * provider; an app that needs one to answer is recorded as inconclusive.
+ * file the way it would for a real one, and one more into the test folder's own settings, then
+ * asks the app which tools it sees. It records only what it saw: whether the app named the tool
+ * and ended without an error; whether the stand-in was started with the value of the variable its
+ * entry names, as an environment entry and as an argument; whether a command told to take only
+ * its own tools left out the settings' entry, and the folder's; and whether the app's own add and
+ * remove commands change the same file. No sign-in is there, so nothing can be sent to a provider;
+ * an app that needs one to answer is recorded as inconclusive. No remote tool is started, so a
+ * header sent from a variable is never seen here.
  */
 export async function testTools(harness, { environment = process.env, now = new Date(), timeoutMs = 120_000 } = {}) {
   const spec = TOOL_APPS[harness]
   const { harnessVersion } = await import('./agents-check.mjs')
   const version = harnessVersion(spec.command, environment)
-  const done = (outcome, detail, extra = {}) => record({ harness, kind: 'capability', at: now.toISOString(), version, outcome, variable: 'unproven', isolation: 'unproven', own_command: 'none', ...extra, detail })
+  const done = (outcome, detail, extra = {}) => record({ harness, kind: 'capability', at: now.toISOString(), version, outcome, variable: 'unproven', argument: 'unproven', isolation: 'unproven', project_isolation: 'unproven', own_command: 'none', ...extra, detail })
   if (version === null) return done('unavailable', `${spec.command} is not installed or did not answer --version`)
   const folder = mkdtempSync(`${home(environment)}/.bmn-tools-test-`)
   try {
@@ -920,23 +1069,33 @@ export async function testTools(harness, { environment = process.env, now = new 
     const nonce = randomBytes(12).toString('hex')
     const program = `${folder}/tool.sh`
     // The stand-in tool notes that it was started and what it was given, then ends; it speaks to no one.
-    writeFileSync(program, `#!/bin/sh\nprintf '%s\\n' "started $BMN_TOOL_TEST_GIVEN" >> '${folder}/started'\nexit 0\n`)
+    writeFileSync(program, `#!/bin/sh\nprintf '%s\\n' "started env=$BMN_TOOL_TEST_GIVEN arg=$1" >> '${folder}/started'\nexit 0\n`)
     chmodSync(program, 0o755)
     const testEnvironment = Object.fromEntries(Object.entries(environment).filter(([key]) => !/^(XDG_|CLAUDE_|CODEX_|OPENCODE_|CURSOR_|ANTHROPIC_|OPENAI_)/.test(key)))
     testEnvironment.HOME = testHome
-    // Codex passes a variable only under its own name; the other apps are asked to pass it under another.
+    // Codex passes a variable only under its own name, and never as an argument; the other apps are asked for both.
     const from = harness === 'codex' ? 'BMN_TOOL_TEST_GIVEN' : 'BMN_TOOL_TEST_VALUE'
     testEnvironment[from] = nonce
-    const tool = { id, name: 'BMN test', command: program, env: { BMN_TOOL_TEST_GIVEN: from } }
+    const tool = { id, name: 'BMN test', command: program, ...(harness === 'codex' ? {} : { args: [{ env: from }] }), env: { BMN_TOOL_TEST_GIVEN: from } }
     const path = spec.file(testEnvironment)
     mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, edited(harness, '', id, renderTool(tool, harness, { variable: true }).entry))
+    writeFileSync(path, edited(harness, '', id, renderTool(tool, harness, { variable: true, argument: true }).entry))
+    // A tool the folder itself names, where the app has such a file: a run told to take only its own tools must leave it out too.
+    const inFolder = harness === 'codex' ? { id: `bmn-folder-${tag}`, path: `${work}/.codex/config.toml`, entry: { command: program } }
+      : harness === 'claude' ? { id: `bmn-folder-${tag}`, path: `${work}/.mcp.json`, entry: { type: 'stdio', command: program, args: [] } }
+        : null
+    if (inFolder !== null) {
+      mkdirSync(dirname(inFolder.path), { recursive: true })
+      writeFileSync(inFolder.path, edited(harness, '', inFolder.id, inFolder.entry))
+    }
     const listed = run(spec.command, spec.list, { cwd: work, env: testEnvironment, timeoutMs })
     if (!listed.text.includes(id)) {
       if (!listed.finished) return done('inconclusive', `${spec.command} did not finish`)
       if (!listed.ok) return done('inconclusive', `${spec.command} did not answer in a home folder without its sign-in`)
       return done('fail', `${APP_NAMES[harness]} did not name a tool written to ${path.replace(testHome, '~')}, so it reads its tools somewhere BMN does not know`)
     }
+    if (!listed.ok) return done('inconclusive', `${spec.command} named the tool but ended with an error, so its answer proves nothing`)
+    const folderSeen = inFolder !== null && listed.text.includes(inFolder.id)
     let started = ''
     try {
       started = readFileSync(`${folder}/started`, 'utf8')
@@ -945,17 +1104,26 @@ export async function testTools(harness, { environment = process.env, now = new 
     }
     // Seen for certain when the stand-in was started with the value; an app that lists a tool without
     // starting it shows only that this version reads the entry's variable name, which its listing repeats.
-    const basis = started.includes(nonce) ? 'started' : listed.text.includes(from) ? 'listed' : null
+    const basis = started.includes(`env=${nonce}`) ? 'started' : listed.text.includes(from) ? 'listed' : null
     const variable = basis === null ? 'unproven' : 'pass'
-    // A run told to take only its own tools: the entry in the settings file must not be among them.
+    const argument = started.includes(`arg=${nonce}`) ? 'pass' : 'unproven'
+    // A command told to take only its own tools: the entries in the settings file and in the folder must not be among them.
     let isolation = 'unproven'
+    let projectIsolation = 'unproven'
     const own = `bmn-run-${tag}`
-    const only = harness === 'codex' ? { argv: ['-c', 'mcp_servers={}', '-c', `mcp_servers.${own}.command=${JSON.stringify(program)}`, 'mcp', 'list'], input: '' }
-      : harness === 'claude' ? { argv: ['-p', '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: { [own]: { type: 'stdio', command: program, args: [] } } }), '--output-format', 'stream-json', '--verbose', '--no-session-persistence'], input: '/context\n' }
+    const only = harness === 'codex' ? { basis: 'list', argv: ['-c', 'mcp_servers={}', '-c', `mcp_servers.${own}.command=${JSON.stringify(program)}`, 'mcp', 'list'], input: '' }
+      : harness === 'claude' ? { basis: 'run', argv: ['-p', '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: { [own]: { type: 'stdio', command: program, args: [] } } }), '--output-format', 'stream-json', '--verbose', '--no-session-persistence'], input: '/context\n' }
         : null
     if (only !== null) {
       const alone = run(spec.command, only.argv, { cwd: work, env: testEnvironment, input: only.input, timeoutMs })
-      if (alone.text.includes(own)) isolation = alone.text.includes(id) ? 'fail' : 'pass'
+      // What the command had: for a run, the tools its own start-up line names (a run without a sign-in ends with an
+      // error after that line, which is expected); for a listing, its words, and only when it ended without an error.
+      const had = only.basis === 'run' ? startedWith(alone.text) : alone.ok ? { has: (name) => alone.text.includes(name) } : null
+      // An answer that does not name the command's own tool shows nothing either way.
+      if (had !== null && had.has(own)) {
+        isolation = had.has(id) ? 'fail' : 'pass'
+        if (folderSeen) projectIsolation = had.has(inFolder.id) ? 'fail' : 'pass'
+      }
     }
     // The app's own commands: whether they change the same file.
     let ownCommand = 'none'
@@ -967,12 +1135,18 @@ export async function testTools(harness, { environment = process.env, now = new 
       run(spec.command, spec.remove(added), { cwd: work, env: testEnvironment, timeoutMs })
       ownCommand = wasAdded && !holds() ? 'pass' : 'fail'
     }
+    const alone = only === null ? null : only.basis === 'run' ? 'a run told to take only its own tools' : 'a command told to take only its own tools (its own list, not a run)'
     const words = [
       `${APP_NAMES[harness]} reads its tools from ${path.replace(testHome, '~')}`,
-      basis === 'started' ? 'it passes a named environment variable to a tool' : basis === 'listed' ? 'its own list names the environment variable a tool is given' : 'BMN did not see it pass an environment variable to a tool',
-      ...(only === null ? [] : [isolation === 'pass' ? 'a run can be given only its own tools' : isolation === 'fail' ? 'a run told to take only its own tools still had the one in its settings' : 'BMN could not see which tools a run gets'])
+      basis === 'started' ? 'it passes a named environment variable to a tool' : basis === 'listed' ? 'its own list names the environment variable a tool is given (the tool was not started)' : 'BMN did not see it pass an environment variable to a tool',
+      ...(harness === 'codex' ? [] : [argument === 'pass' ? 'it gives a tool an argument from a variable' : 'BMN did not see it give a tool an argument from a variable']),
+      ...(only === null ? [] : [isolation === 'pass' ? `${alone} left out the one in its settings` : isolation === 'fail' ? `${alone} still had the one in its settings` : 'BMN could not see which tools a run gets']),
+      ...(only === null || isolation !== 'pass' ? [] : [projectIsolation === 'pass' ? 'and the one the folder names' : projectIsolation === 'fail' ? 'but kept the one the folder names' : 'whether it also leaves out tools a folder names was not seen'])
     ]
-    return done('pass', words.join('; '), { file: path.replace(testHome, '~'), variable, ...(basis === null ? {} : { variable_basis: basis }), isolation, own_command: ownCommand })
+    return done('pass', words.join('; '), {
+      file: path.replace(testHome, '~'), variable, ...(basis === null ? {} : { variable_basis: basis }), argument, isolation, ...(only === null ? {} : { isolation_basis: only.basis }),
+      project_isolation: projectIsolation, own_command: ownCommand
+    })
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }

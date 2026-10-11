@@ -31,7 +31,15 @@ export interface ToolsTestEntry {
   file?: string
   variable: 'pass' | 'unproven'
   variable_basis?: 'started' | 'listed'
+  /** Whether a tool was seen started with an argument taken from an environment variable. */
+  argument?: 'pass' | 'unproven'
+  /** Whether a header taken from an environment variable was seen sent; no test writes this yet. */
+  header?: 'pass' | 'unproven'
   isolation: 'pass' | 'fail' | 'unproven'
+  /** What the isolation result rests on: a run that named its tools, or the app's own listing. */
+  isolation_basis?: 'run' | 'list'
+  /** Whether a tool set in the folder's own settings stayed out of a run that shut them out. */
+  project_isolation?: 'pass' | 'fail' | 'unproven'
   own_command: 'pass' | 'fail' | 'none'
 }
 export declare function toolsTests(): ToolsTestEntry[]
@@ -42,8 +50,14 @@ export interface AppTools {
   supported: boolean
   /** Whether the app was seen passing a named environment variable to a tool on this version. */
   variable: boolean
+  /** Whether a tool was seen started with an argument taken from an environment variable. */
+  argument: boolean
+  /** Whether a header taken from an environment variable was seen sent. */
+  header: boolean
   /** Whether a run was seen with only the tools its own command names. */
   isolation: boolean
+  /** Whether a tool set in the folder's own settings stayed out of such a run. */
+  project: boolean
   own_command: string | null
   /** Why tools are not supported yet in this app, when they are not. */
   reason?: string
@@ -52,8 +66,10 @@ export declare function appTools(harness: string, options: { version: string | n
 
 export type ToolDefinition = { url: string; headers?: Record<string, string> } | { command: string; args?: (string | { env: string })[]; env?: Record<string, string> }
 export declare function definitionOf(tool: RosterTool): ToolDefinition
-export declare function renderTool(tool: RosterTool, harness: string, options?: { variable?: boolean }): { entry: Record<string, unknown>; blocked?: undefined } | { blocked: string; entry?: undefined }
+export declare function renderTool(tool: RosterTool, harness: string, options?: { variable?: boolean; argument?: boolean; header?: boolean }): { entry: Record<string, unknown>; blocked?: undefined } | { blocked: string; entry?: undefined }
 export declare function looksSecret(text: unknown): boolean
+/** Whether an argument is plainly not a value: a flag, number, name, package, path or plain address. */
+export declare function plainArgument(text: unknown, previous?: unknown): boolean
 export declare function neutralOf(value: unknown, harness: string): { definition: ToolDefinition; secrets: string[]; extras: string[] } | null
 export declare function maskedEntry(value: unknown, harness: string): unknown
 
@@ -61,7 +77,7 @@ export type AppToolEntry =
   | { unreadable: string; value?: undefined }
   | { value: Record<string, unknown>; raw: string; hash: string; definition: ToolDefinition; secrets: string[]; extras: string[]; unreadable?: undefined }
 export interface AppToolsFile { harness: string; path: string; readable: boolean; detail?: string; entries: Map<string, AppToolEntry>; text?: string; link?: string }
-export declare function readAppTools(harness: string, environment?: Environment, options?: { path?: string }): AppToolsFile
+export declare function readAppTools(harness: string, environment?: Environment, options?: { path?: string; at?: string[] }): AppToolsFile
 export declare function eligible(tool: RosterTool, harness: string, kind: 'full' | 'public'): boolean
 export declare function transportWords(tool: Pick<RosterTool, 'command' | 'args' | 'url'>): string
 
@@ -103,6 +119,7 @@ export interface ToolsInstallResult {
 export declare function installTools(harnesses?: string[], options?: InstallOptions & {
   yes?: boolean; asJson?: boolean; now?: Date; expectedPlanHash?: string; afterConfirm?: () => void
   beforeTarget?: (target: ToolsTarget, index: number) => void; beforeCommit?: (target: ToolsTarget, index: number) => void
+  afterTarget?: (target: ToolsTarget, index: number) => void
 }): Promise<ToolsInstallResult>
 export declare function restoreToolsTransaction(manifest: unknown, folder: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string }): Promise<Record<string, unknown>>
 
@@ -110,12 +127,16 @@ export interface ToolProposal { id: string; state: 'ready' | 'secret' | 'known' 
 export declare function proposeTools(options?: { environment?: Environment; generation?: Generation | null }): { files: { harness: ToolsHarness; path: string; readable: boolean; detail?: string }[]; proposals: ToolProposal[] }
 
 export declare function agentTools(data: Pick<RosterData, 'tools'> | null, agentId: string): RosterTool[]
+export interface ToolsProven { isolation: boolean; variable: boolean; argument?: boolean; header?: boolean; project?: boolean }
+export interface InheritedTool { id: string; where: string; folder: boolean; entry: AppToolEntry }
+/** What the app's own settings would give a run in this folder that does not shut them out. */
+export declare function inheritedTools(harness: string, options?: { environment?: Environment; cwd?: string | null; profile?: boolean }): { entries: InheritedTool[]; unresolved: string[] }
 export type ToolItems =
   | { state: 'none' }
   | { state: 'not-supported-yet' | 'blocked'; tools: string[]; reason: string }
   | { state: 'applied'; tools: string[]; argv: string[]; hash: string }
-export declare function toolItems(agent: RosterAgent, data: Pick<RosterData, 'tools'>, proven: { isolation: boolean; variable: boolean }): ToolItems
-export declare function checkRunTools(agent: RosterAgent, data: Pick<RosterData, 'tools'>, parsed: Record<string, unknown>, proven: { isolation: boolean; variable: boolean }, options?: { packet?: boolean; profile?: boolean }):
+export declare function toolItems(agent: RosterAgent, data: Pick<RosterData, 'tools'>, proven: ToolsProven): ToolItems
+export declare function checkRunTools(agent: RosterAgent, data: Pick<RosterData, 'tools'>, parsed: Record<string, unknown>, proven: ToolsProven, options?: { packet?: boolean; profile?: boolean; environment?: Environment; cwd?: string }):
   | { applied: string[]; note: string; hash?: string; refusal?: undefined }
   | { refusal: { code: 'TOOL_MISMATCH' | 'ROUTE_UNSUPPORTED'; message: string }; applied?: undefined; note?: undefined; hash?: undefined }
 

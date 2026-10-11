@@ -286,6 +286,8 @@ export interface GuardStop {
   workspace: string | null
   /** The folder the session was working in when it was stopped. */
   folder: string | null
+  /** The folder the agent process itself was in at that moment: Allow here refuses once the process is somewhere else. */
+  processFolder: string | null
   providerId: string | null
   providerName: string | null
   /** The team's agent on that app and provider, when there is one. */

@@ -732,7 +732,7 @@ describe('control server validation', () => {
     const client = await authenticated(fixture, sessionToken(fixture))
     const stop = {
       agent: 'claude', outcome: 'stop', cause: 'public-only', line: "Moonshot AI can't see private work in ~/code/app. Allow it in BMN.", allow: true,
-      workspace: '/synthetic/code/app', folder: '/synthetic/code/app/src', providerId: 'moonshot', providerName: 'Moonshot AI', agentName: 'Kimi',
+      workspace: '/synthetic/code/app', folder: '/synthetic/code/app/src', processFolder: '/synthetic/code/app/src', providerId: 'moonshot', providerName: 'Moonshot AI', agentName: 'Kimi',
       host: 'api.moonshot.ai', pid: 7001, start: '777', conversation: '01a0b657-21a8-7f00-addd-b73646828f5b'
     }
 
@@ -742,7 +742,7 @@ describe('control server validation', () => {
     expect(fixture.handlers.reportGuard).toHaveBeenNthCalledWith(1, { sessionId: 'session-1', incarnationId: 'incarnation-1', ...stop })
     expect(fixture.handlers.reportGuard).toHaveBeenNthCalledWith(2, {
       sessionId: 'session-1', incarnationId: 'incarnation-1', agent: 'cursor', outcome: 'warn', cause: 'unknown', line: 'BMN cannot tell where Cursor sends work.', allow: false,
-      workspace: null, folder: null, providerId: null, providerName: null, agentName: null, host: null, pid: null, start: null, conversation: null
+      workspace: null, folder: null, processFolder: null, providerId: null, providerName: null, agentName: null, host: null, pid: null, start: null, conversation: null
     })
     expect(fixture.handlers.reportGuard).toHaveBeenNthCalledWith(3, { sessionId: 'session-1', incarnationId: 'incarnation-1', agent: 'codex', outcome: 'pass' })
 

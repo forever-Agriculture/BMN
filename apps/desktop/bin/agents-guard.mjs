@@ -1,10 +1,10 @@
 // MODULE: agents-guard.mjs - Epic 60.8: the decision a prompt hook takes, from the approved team on disk, before a prompt leaves a session the owner started
-import { readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs'
 import { basename, isAbsolute } from 'node:path'
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads'
 import { APP_NAMES, RosterError } from './agents-roster.mjs'
 import { everApproved, neverApproved, readApproved } from './agents-state.mjs'
-import { destinationOf, privateWorkAnswer, resolveClaudeRoute, resolveCodexRoute, sessionRecord, sessionRecordAt, workspaceRoot } from './agents-check.mjs'
+import { destinationOf, privateWorkAnswer, resolveClaudeRoute, resolveCodexRoute, sessionRecordAt, sessionRecordFiles, workspaceRoot } from './agents-check.mjs'
 
 /**
  * A lead the owner starts himself is not a dispatch, so `bmn roster check` never sees it. This is
@@ -99,16 +99,21 @@ function programArguments(argv) {
 /**
  * What in an interactive start can say where work goes. For Claude Code that is `--settings`; for
  * Codex `-c` destination keys, `--profile`, `--cd` and the local-model switches. Everything else
- * (a model, a resume, a prompt) decides nothing here. `{ unknown }` when an override cannot be read.
+ * (a model, a prompt) decides nothing here. `{ unknown }` when an override cannot be read.
+ * `resumed` says the start names `resume` or `fork`: the session continues one saved earlier, whose
+ * own record says where it sent work. A prompt that happens to be that one word reads as resumed
+ * too, which only asks more of the session's record.
  */
 export function parseLaunch(agent, argv) {
   const args = programArguments(argv)
   const parsed = agent === 'codex'
     ? { harness: 'codex', command: 'codex', envMode: 'inherit', assignments: {}, config: [] }
     : { harness: 'claude', command: 'claude', envMode: 'inherit', assignments: {}, addDir: [] }
+  if (agent === 'codex') parsed.resumed = false
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]
     if (argument === '--') break
+    if (agent === 'codex' && (argument === 'resume' || argument === 'fork')) parsed.resumed = true
     const equals = argument.startsWith('--') ? argument.indexOf('=') : -1
     const flag = equals === -1 ? argument : argument.slice(0, equals)
     const key = agent === 'codex'
@@ -143,11 +148,24 @@ function canonicalFolder(path) {
   }
 }
 
-/** The saved Codex session this prompt belongs to, when the event names one BMN can read. */
-function codexSession(event, codexHome) {
+/**
+ * The saved Codex session this prompt belongs to (60.8 AC1): `{ record }` when its record reads
+ * and names a provider; `{ fresh: true }` when no record is there and nothing says the session
+ * continues a saved one, so the current settings are all there is; `{ unresolved }` with the
+ * reason otherwise. A record that is there and cannot be read, or a continued session whose
+ * record is not found, never falls back to the current settings: the session may be sending
+ * work where it was saved to send it.
+ */
+function codexSession(event, codexHome, resumed) {
   const transcript = event.transcript_path
-  if (typeof transcript === 'string' && isAbsolute(transcript) && transcript.startsWith(`${codexHome}/sessions/`)) return sessionRecordAt(transcript)
-  return typeof event.session_id === 'string' ? sessionRecord(codexHome, event.session_id) : null
+  const files = typeof transcript === 'string' && isAbsolute(transcript) && transcript.startsWith(`${codexHome}/sessions/`)
+    ? (existsSync(transcript) ? [transcript] : [])
+    : sessionRecordFiles(codexHome, event.session_id)
+  if (files.length === 0) return resumed ? { unresolved: 'this session continues a saved one, and BMN cannot find its saved record' } : { fresh: true }
+  if (files.length > 1) return { unresolved: 'more than one saved record carries this session\'s id' }
+  const record = sessionRecordAt(files[0])
+  if (record === null || typeof record.provider !== 'string' || record.provider === '') return { unresolved: 'the saved record of this session cannot be read' }
+  return { record }
 }
 
 /** Where the session sends work: `{ destination }`, or `{ unknown }` with the reason in the owner's words. */
@@ -174,9 +192,10 @@ function sessionDestination(agent, data, event, agentProcess, folders) {
     configHome = resolution.configHome
   }
   if (agent === 'codex') {
-    const saved = codexSession(event, configHome)
-    if (saved !== null && typeof saved.provider === 'string' && saved.provider !== route.provider) {
-      return { unknown: `this session was saved with the provider ${saved.provider} and the settings now name ${route.provider}` }
+    const saved = codexSession(event, configHome, parsed.resumed === true)
+    if (saved.unresolved !== undefined) return { unknown: saved.unresolved, fix: 'Start a new Codex session.' }
+    if (saved.record !== undefined && saved.record.provider !== route.provider) {
+      return { unknown: `this session was saved with the provider ${saved.record.provider} and the settings now name ${route.provider}` }
     }
   }
   const destination = destinationOf(data, agent, route)
@@ -207,7 +226,7 @@ function stop(base, cause, line, more = {}) {
 export function decide(input) {
   const { agent, event, pid, procRoot = '/proc' } = input
   const app = APP_NAMES[agent] ?? agent
-  const base = { agent, app, pid: pid || null, start: null, folder: null, workspace: null, provider: null, host: null, name: null }
+  const base = { agent, app, pid: pid || null, start: null, folder: null, processFolder: null, workspace: null, provider: null, host: null, name: null }
   const state = guardState()
   if (state.state === 'inactive') return { ...base, outcome: 'pass', cause: 'inactive' }
   if (state.state === 'broken') return stop(base, 'state', `BMN stopped this prompt: ${state.fix}`)
@@ -224,6 +243,8 @@ export function decide(input) {
   if (folder === null) return stop(base, 'process', `BMN stopped this prompt: it cannot read which folder this ${app} session works in. Start ${app} again in a BMN session.`)
   const workspace = workspaceRoot(folder)
   base.folder = folder
+  // Where the process itself stands: Allow here compares it with where it stands at the press.
+  base.processFolder = startFolder
   base.workspace = workspace
   const where = tilde(workspace, home)
   const found = sessionDestination(agent, data, event, agentProcess, [...new Set([startFolder, eventFolder].filter((entry) => entry !== null))])
@@ -302,7 +323,7 @@ export function decideWithin(input, limitMs = GUARD_LIMIT_MS, { startThread = de
     neverApproved().then((never) => {
       if (!never) return onThread()
       const app = APP_NAMES[input.agent] ?? input.agent
-      return finish({ agent: input.agent, app, pid: input.pid || null, start: null, folder: null, workspace: null, provider: null, host: null, name: null, outcome: 'pass', cause: 'inactive' })
+      return finish({ agent: input.agent, app, pid: input.pid || null, start: null, folder: null, processFolder: null, workspace: null, provider: null, host: null, name: null, outcome: 'pass', cause: 'inactive' })
     }, onThread)
   })
 }

@@ -371,6 +371,28 @@ describe('changing the default for the owner\'s own sessions (60.9 AC3)', () => 
     expect(readFileSync(path, 'utf8')).toBe('# mine\n\n[projects."/x"]\ntrust_level = "trusted"\n')
   })
 
+  it('never writes or removes the compaction key while compaction is unproven, even when the limit is cleared (60.9 AC1)', () => {
+    mkdirSync(join(home, '.codex'))
+    const path = join(home, '.codex/config.toml')
+    writeFileSync(path, '# mine\nmodel_context_window = 380000\nmodel_auto_compact_token_limit = 200000\n')
+    // The limit is proven on this version; where Codex starts summarising is not.
+    const off = planContextDefault('codex', { limit: null }, options('codex', CODEX))
+    expect(off.diff).toContain('-model_context_window = 380000')
+    expect(off.diff).not.toContain('-model_auto_compact_token_limit')
+    applyContextDefault('codex', { limit: null }, off.plan_hash, options('codex', CODEX))
+    expect(readFileSync(path, 'utf8')).toBe('# mine\nmodel_auto_compact_token_limit = 200000\n')
+    // A new limit leaves it too.
+    const on = planContextDefault('codex', { limit: 272_000 }, options('codex', CODEX))
+    applyContextDefault('codex', { limit: 272_000 }, on.plan_hash, { ...options('codex', CODEX), now: new Date(NOW.getTime() + 1000) })
+    expect(readFileSync(path, 'utf8')).toContain('model_auto_compact_token_limit = 200000\n')
+    expect(readFileSync(path, 'utf8')).toContain('model_context_window = 272000')
+    // Once its own test passed, the key is BMN's to write and to take out with the limit.
+    const both = { environment: env, version: CODEX, tests: [{ ...tested('codex', CODEX), compact: 'pass' as const }], now: new Date(NOW.getTime() + 2000) }
+    const cleared = planContextDefault('codex', { limit: null }, both)
+    applyContextDefault('codex', { limit: null }, cleared.plan_hash, both)
+    expect(readFileSync(path, 'utf8')).toBe('# mine\n')
+  })
+
   it('refuses when the file changed after the diff was shown, or the request is not the one shown', () => {
     mkdirSync(join(home, '.claude'))
     const path = join(home, '.claude/settings.json')

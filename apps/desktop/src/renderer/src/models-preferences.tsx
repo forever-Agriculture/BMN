@@ -263,7 +263,7 @@ export function ModelsPage(props: { team: TeamState; data: RosterDataShape; rese
       {!running && research.notice === null && snapshot.last?.note ? <p className="page-note" role="status">The last research did not finish: {snapshot.last.note}</p> : null}
       <Row label="Researcher" id={researcherId}
         hint={able.length === 0
-          ? 'Research needs an active agent on Claude Code or Codex whose provider may see private work. A price can still be written in the team file.'
+          ? 'Research needs an active agent on Claude Code whose provider may see private work. A price can still be written in the team file.'
           : `${researcherHint(chosen?.harness)}${notOffered(unable)}`}>
         {able.length === 0
           ? <span className="muted">No agent on your team can research.</span>

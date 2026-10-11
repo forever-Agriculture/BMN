@@ -1094,6 +1094,8 @@ describe('research runs (60.3 AC11)', () => {
   })
 
   describe('through Codex (60.10)', () => {
+    /** As on a Codex version whose research fence the owner's test verified; none is recorded yet. */
+    const FENCED = { fenceVersions: { codex: ['0.161.0'] } }
     const CODEX_RESEARCH = (extra: string[] = [], effort = 'medium') => ['env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, 'codex', 'exec', '--skip-git-repo-check', '--ephemeral',
       '--sandbox', 'read-only', ...CODEX_RESEARCH_CONFIG.flatMap((entry) => ['-c', entry]), '-m', 'gpt-6-astra', '-c', `model_reasoning_effort="${effort}"`,
       '-o', join(run.folder, 'answer.md'), ...extra, '-']
@@ -1103,8 +1105,18 @@ describe('research runs (60.3 AC11)', () => {
       return argv
     }
 
+    it('is refused on every version until that version\'s fence is verified, whatever its provider may see (60.10 AC2)', () => {
+      const refused = research({ agent: 'astra', argv: CODEX_RESEARCH() })
+      expect(refused).toMatchObject({ verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED',
+        message: 'research runs in Codex only on a version whose fence BMN verified, and codex 0.161.0 is not one: pick a researcher on Claude Code' })
+      expect(research({ agent: 'astra', argv: CODEX_RESEARCH() }, { fenceVersions: { codex: ['0.160.0'] } }).code).toBe('ROUTE_UNSUPPORTED')
+      expect(research({ agent: 'astra', argv: CODEX_RESEARCH() }, { fenceVersions: { claude: ['0.161.0'] } }).code).toBe('ROUTE_UNSUPPORTED')
+      // Claude Code's own form needs no such record for a provider that may see private work.
+      expect(research().verdict).toBe('PASS')
+    })
+
     it('passes the exact form: read-only, web search on, no command, agent or app tools, the answer beside the prompt', () => {
-      const pass = research({ agent: 'astra', argv: CODEX_RESEARCH() })
+      const pass = research({ agent: 'astra', argv: CODEX_RESEARCH() }, FENCED)
       expect(pass.verdict, JSON.stringify(pass)).toBe('PASS')
       expect(pass.receipt).toMatchObject({ mode: 'research', agent: 'astra', harness: 'codex', model: 'gpt-6-astra', effort: 'medium', cwd: run.cwd,
         route: { provider: 'openai' }, private_work: { allowed: true }, context_limit_applied: null })
@@ -1127,14 +1139,14 @@ describe('research runs (60.3 AC11)', () => {
       ['no env -i', () => CODEX_RESEARCH().slice(4)],
       ['a resume', () => { const argv = CODEX_RESEARCH(); argv.splice(argv.indexOf('exec') + 1, 0, 'resume', '019a0000-0000-7000-8000-000000000001'); return argv }]
     ])('refuses the form with %s: ROUTE_UNSUPPORTED', (_name, argv) => {
-      expect(research({ agent: 'astra', argv: argv() })).toMatchObject({ verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED' })
+      expect(research({ agent: 'astra', argv: argv() }, FENCED)).toMatchObject({ verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED' })
     })
 
     it('keeps every agent-level check, and the answer goes nowhere but the run folder', () => {
-      expect(research({ agent: 'astra', argv: CODEX_RESEARCH().map((part) => (part === 'gpt-6-astra' ? 'gpt-6-luna' : part)) }).code).toBe('MODEL_MISMATCH')
-      expect(research({ agent: 'astra', argv: CODEX_RESEARCH([], 'max') }).code).toBe('EFFORT_UNSUPPORTED')
-      expect(research({ agent: 'fable', argv: CODEX_RESEARCH() }).code).toBe('ROUTE_UNSUPPORTED')
-      expect(research({ agent: 'astra', argv: CODEX_RESEARCH().map((part) => (part === join(run.folder, 'answer.md') ? join(home, 'answer.md') : part)) }))
+      expect(research({ agent: 'astra', argv: CODEX_RESEARCH().map((part) => (part === 'gpt-6-astra' ? 'gpt-6-luna' : part)) }, FENCED).code).toBe('MODEL_MISMATCH')
+      expect(research({ agent: 'astra', argv: CODEX_RESEARCH([], 'max') }, FENCED).code).toBe('EFFORT_UNSUPPORTED')
+      expect(research({ agent: 'fable', argv: CODEX_RESEARCH() }, FENCED).code).toBe('ROUTE_UNSUPPORTED')
+      expect(research({ agent: 'astra', argv: CODEX_RESEARCH().map((part) => (part === join(run.folder, 'answer.md') ? join(home, 'answer.md') : part)) }, FENCED))
         .toMatchObject({ code: 'WORKSPACE_MISMATCH', message: expect.stringContaining('answer.md') })
     })
 
