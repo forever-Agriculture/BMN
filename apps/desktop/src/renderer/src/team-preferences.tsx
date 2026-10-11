@@ -56,6 +56,8 @@ import {
   setAgentClass,
   setAgentOn,
   setProviderAnswer,
+  setResearcher,
+  namedResearchers,
   setRoleReadOnly,
   setRoleThen,
   summarize,
@@ -513,6 +515,7 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
   const [fileMessage, setFileMessage] = useState<string | null>(null)
   const appId = useId()
   const paidId = useId()
+  const researcherId = useId()
   useEffect(() => setNotes(team.pendingNotes[agent.id] ?? saved ?? ''), [agent.id, saved])
   const off = agent.status === 'active' && !agent.enabled
   const price = priceWords(agent)
@@ -569,6 +572,9 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
       <Row label="Roles"><RoleChoices data={data} agentClass={agent.class} held={agent.roles} onToggle={(role) => team.stage(toggleAgentRole(data, agent.id, role))} /></Row>
       <Row label="Efforts" hint="Effort levels its roles may ask for.">
         <EffortChips efforts={agent.efforts} onToggle={(effort) => team.stage(toggleAgentEffort(data, agent.id, effort, ROSTER_EFFORTS))} />
+      </Row>
+      <Row label="Researcher" id={researcherId} hint={researcherWords(data, agent)}>
+        <Switch labelledBy={researcherId} on={agent.researcher === true} onChange={(on) => team.stage(setResearcher(data, agent.id, on))} />
       </Row>
 
       <details className="advanced">
@@ -868,6 +874,12 @@ function ChainEditor(props: { team: TeamState; data: RosterDataShape; role: Rost
 
 /** What holding a role to read-only means, wherever a page says it. */
 export const READ_ONLY_HELP = 'A run for this role is refused unless it is started so that it cannot write.'
+
+/** What the Researcher switch on an agent's page means as the team stands (63.3): who researches is part of the team. */
+export function researcherWords(data: Pick<RosterDataShape, 'agents'>, agent: Pick<RosterAgentShape, 'name' | 'researcher'>): string {
+  if (namedResearchers(data) === null) return `Your team names no researcher yet, so every agent that can research is offered on Models. Switching this on makes ${agent.name} the only one until you name others; Models proposes whom.`
+  return agent.researcher === true ? 'Offered on Models as a researcher, where its app can research.' : `Not offered on Models: a research with ${agent.name} is refused.`
+}
 
 /** While no role is held to read-only: what BMN proposes, taken with one press and approved like any other change (63.2 AC4). */
 function ReadOnlyProposal(props: { team: TeamState; data: RosterDataShape }): React.JSX.Element | null {

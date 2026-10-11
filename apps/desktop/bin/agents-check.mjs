@@ -1,9 +1,9 @@
 // MODULE: agents-check.mjs - Epic 60.3: `bmn roster check|explain|route|visibility|bind`, the fail-closed check before work leaves for another agent
 import { execFileSync } from 'node:child_process'
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, writeSync } from 'node:fs'
+import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
-import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, harnessPrivateWork, publicOnlyReasons, resolvedDirectory, roleEfforts, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, harnessPrivateWork, namedResearchers, publicOnlyReasons, resolvedDirectory, roleEfforts, sha256 } from './agents-roster.mjs'
 import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
@@ -23,7 +23,7 @@ export { publicOnlyReasons }
  */
 
 /** Refusals, checked in this order; the first one found is reported (shared contract). */
-export const REFUSALS = ['UNKNOWN_AGENT', 'PROPOSED', 'DISABLED', 'ROLE_UNKNOWN', 'ROLE_INELIGIBLE', 'CLASS_CANNOT_LEAD', 'CLASS_CANNOT_DESIGN',
+export const REFUSALS = ['UNKNOWN_AGENT', 'PROPOSED', 'DISABLED', 'NOT_A_RESEARCHER', 'ROLE_UNKNOWN', 'ROLE_INELIGIBLE', 'CLASS_CANNOT_LEAD', 'CLASS_CANNOT_DESIGN',
   'ROUTE_UNSUPPORTED', 'MODEL_MISMATCH', 'EFFORT_UNSUPPORTED', 'READ_ONLY_REQUIRED', 'CONTEXT_MISMATCH', 'TOOL_MISMATCH', 'HOST_UNKNOWN', 'HOST_MISMATCH',
   'WORKSPACE_UNKNOWN', 'WORKSPACE_MISMATCH', 'RESUME_UNBOUND', 'HARNESS_UNKNOWN', 'DATA_FORBIDDEN', 'PACKET_INVALID']
 
@@ -41,9 +41,10 @@ export const TESTED_HARNESS_VERSIONS = { codex: ['0.161.0'], claude: ['2.1.295']
  */
 export const RESUME_TESTED_VERSIONS = { codex: [] }
 /**
- * App versions whose research fence an owner-authorized test verified (60.10 AC2): none yet. Claude
- * Code's research form runs without one for a provider that may see private work; a public-only
- * researcher, and any research in another app, runs only on a version listed here.
+ * App versions whose research fence is verified in BMN's own code (60.10 AC2): none. Claude Code's
+ * research form runs without one for a provider that may see private work; a public-only researcher
+ * runs only on a version listed here. Codex is not listed by version here at all: its fence is shown
+ * by the owner's test of exactly the installed version, kept on record (63.3, `fenceStanding`).
  */
 export const RESEARCH_FENCE_VERSIONS = { claude: [], codex: [] }
 /** A visibility record older than this proves nothing (60.3 AC5). */
@@ -55,6 +56,7 @@ const NEXT_STEP = {
   UNKNOWN_AGENT: 'name an agent from `bmn team --all`',
   PROPOSED: 'the owner activates this agent in Preferences > Team first',
   DISABLED: 'pick the next candidate from `bmn roster role <role>`',
+  NOT_A_RESEARCHER: 'pick a researcher the team names (Preferences > Team > Models); only the owner names one, on the agent\'s own page',
   ROLE_UNKNOWN: 'name a role from the roster\'s ## roles',
   ROLE_INELIGIBLE: 'pick a candidate that holds this role (`bmn roster role <role>`)',
   CLASS_CANNOT_LEAD: 'only a knight or a queen leads; pick one',
@@ -163,6 +165,9 @@ function firstLine(path, limit = 8 * 1024 * 1024) {
 const CODEX_VALUE_FLAGS = { '-C': 'cd', '--cd': 'cd', '-m': 'model', '--model': 'model', '-c': 'config', '--config': 'config',
   '-p': 'profile', '--profile': 'profile', '-s': 'sandbox', '--sandbox': 'sandbox', '-o': 'output', '--output-last-message': 'output' }
 const CODEX_FLAGS = { '--skip-git-repo-check': 'skipGit', '--json': 'json', '--ephemeral': 'ephemeral' }
+/** Arguments only a research run carries (63.3); any other dispatch that names one is refused, as before. */
+const CODEX_RESEARCH_FLAGS = { '--strict-config': 'strictConfig' }
+const CODEX_RESEARCH_VALUE_FLAGS = { '--disable': 'disable' }
 const CLAUDE_VALUE_FLAGS = { '--model': 'model', '--effort': 'effort', '--output-format': 'outputFormat', '--tools': 'tools',
   '--permission-mode': 'permissionMode', '--mcp-config': 'mcpConfig', '--settings': 'settings', '--add-dir': 'addDir',
   '--append-system-prompt': 'appendSystemPrompt' }
@@ -185,8 +190,9 @@ function harnessOf(command) {
 /**
  * Parses exactly the dispatch forms dev-auto documents and nothing else: `codex exec [resume <id>]`
  * and `claude -p`, each optionally behind `env -i NAME=value …`. Returns null for anything else.
+ * `research` also admits the arguments only a research run carries.
  */
-export function parseDispatch(argv) {
+export function parseDispatch(argv, { research = false } = {}) {
   let index = 0
   let envMode = 'inherit'
   const assignments = {}
@@ -205,12 +211,14 @@ export function parseDispatch(argv) {
   if (harness === null) return { unsupported: `${command ?? 'nothing'} is not a supported dispatch command (codex exec or claude -p)` }
   const rest = argv.slice(index + 1)
   const base = { harness, command, envMode, assignments }
-  return harness === 'codex' ? parseCodex(rest, base) : parseClaude(rest, base)
+  return harness === 'codex' ? parseCodex(rest, base, research) : parseClaude(rest, base)
 }
 
-function parseCodex(args, base) {
+function parseCodex(args, base, research = false) {
   if (args[0] !== 'exec') return { unsupported: 'only `codex exec` is a supported Codex dispatch' }
-  const parsed = { ...base, config: [], stdin: false, resume: null }
+  const parsed = { ...base, config: [], disable: [], stdin: false, resume: null }
+  const flags = research ? { ...CODEX_FLAGS, ...CODEX_RESEARCH_FLAGS } : CODEX_FLAGS
+  const valueFlags = research ? { ...CODEX_VALUE_FLAGS, ...CODEX_RESEARCH_VALUE_FLAGS } : CODEX_VALUE_FLAGS
   for (let index = 1; index < args.length; index += 1) {
     const argument = args[index]
     if (argument === 'resume' && parsed.resume === null && !parsed.stdin) {
@@ -227,17 +235,17 @@ function parseCodex(args, base) {
     }
     const equals = argument.startsWith('--') ? argument.indexOf('=') : -1
     const flag = equals === -1 ? argument : argument.slice(0, equals)
-    if (Object.hasOwn(CODEX_FLAGS, flag) && equals === -1) {
-      parsed[CODEX_FLAGS[flag]] = true
+    if (Object.hasOwn(flags, flag) && equals === -1) {
+      parsed[flags[flag]] = true
       continue
     }
-    if (Object.hasOwn(CODEX_VALUE_FLAGS, flag)) {
+    if (Object.hasOwn(valueFlags, flag)) {
       const value = equals !== -1 ? argument.slice(equals + 1) : args[index + 1]
       if (value === undefined) return { unsupported: `${flag} needs a value` }
       if (equals === -1) index += 1
-      const key = CODEX_VALUE_FLAGS[flag]
-      if (key === 'config') {
-        parsed.config.push(value)
+      const key = valueFlags[flag]
+      if (key === 'config' || key === 'disable') {
+        parsed[key].push(value)
       } else {
         if (parsed[key] !== undefined) return { unsupported: `${flag} given twice` }
         parsed[key] = value
@@ -1356,6 +1364,15 @@ export function consequences(before, after) {
     if (role.read_only !== true && heldBefore) out.push(`${role.id} runs could be started with write access again`)
   }
   for (const role of prior.roles) if (!after.roles.some((entry) => entry.id === role.id)) out.push(`the ${role.id} role would be removed`)
+  // Who researches (63.3): naming the first researcher closes the offer to every other agent; after that only the named ones change.
+  const researched = namedResearchers(prior)
+  const researching = namedResearchers(after)
+  if (researched === null && researching !== null) out.push(`only ${listed(researching.map(name))} would be offered as researchers; a research with any other agent would be refused`)
+  else if (researched !== null && researching === null) out.push('every agent that can research would be offered as a researcher again')
+  else if (researched !== null && researching !== null) {
+    for (const id of researching) if (!researched.includes(id)) out.push(`${name(id)} would be offered as a researcher`)
+    for (const id of researched) if (!researching.includes(id)) out.push(`${name(id)} would no longer be offered as a researcher`)
+  }
   const providerName = (id) => after.providers.find((provider) => provider.id === id)?.name ?? oldProviders.get(id)?.name ?? id
   const exceptionKey = (entry) => `${entry.provider}\n${entry.folder}`
   const oldExceptions = new Set(prior.exceptions.map(exceptionKey))
@@ -1809,35 +1826,179 @@ function emptyMcpConfig(text) {
 
 export const RESEARCH_TOOLS = 'WebSearch,WebFetch'
 /** What a research run's `env -i` may carry: where the app lives, how to find it, its destination and the agent's context limit. */
-const RESEARCH_ENVIRONMENT = { claude: ['HOME', 'PATH', 'ANTHROPIC_BASE_URL', CLAUDE_CONTEXT_KEY], codex: ['HOME', 'PATH'] }
+const RESEARCH_ENVIRONMENT = { claude: ['HOME', 'PATH', 'ANTHROPIC_BASE_URL', CLAUDE_CONTEXT_KEY], codex: ['HOME', 'PATH', 'CODEX_HOME'] }
 /**
- * The `-c` items every Codex research run carries: no MCP server, live web search, and none of the
- * tools that run a command, start another agent or reach a connected app. Codex has no list of
- * allowed tools, so its research form is these switches plus a read-only sandbox.
+ * The `-c` items every Codex research run carries: no MCP server, live web search, none of the
+ * tools that run a command, start another agent or reach a connected app, and none of the texts
+ * Codex adds by itself (skills, connected apps, how to work with other agents, the machine and
+ * folder it runs in, a project's rules file). Codex has no list of allowed tools, so its research
+ * form is these switches, the features below switched off by name, a read-only sandbox and a Codex
+ * folder of the run's own: no setting keeps Codex from sending the rules file of the folder it is
+ * signed in from (63.3, the fence test of 2026-10-11).
  */
 export const CODEX_RESEARCH_CONFIG = ['mcp_servers={}', 'web_search="live"', 'features.shell_tool=false', 'features.unified_exec=false',
-  'features.multi_agent=false', 'features.apps=false', 'features.plugins=false']
+  'features.multi_agent=false', 'features.apps=false', 'features.plugins=false', 'skills.include_instructions=false', 'skills.bundled.enabled=false',
+  'include_apps_instructions=false', 'include_collaboration_mode_instructions=false', 'include_environment_context=false', 'project_doc_max_bytes=0']
+/** The features a Codex research run switches off by name: reading a picture, goals, drawing, sleeping and hooks. */
+export const CODEX_RESEARCH_DISABLED = ['view_image', 'goals', 'image_generation', 'sleep_tool', 'hooks']
 /** The file a Codex research run writes its answer to, beside the prompt and outside the empty folder. */
 export const CODEX_RESEARCH_ANSWER = 'answer.md'
+/** The Codex folder of one research run, inside the run's own folder, and the one thing in it: a link to the owner's sign-in file. */
+export const CODEX_RESEARCH_HOME = 'codex'
+export const CODEX_SIGN_IN = 'auth.json'
+/**
+ * The tools Codex keeps offering under the research form, each looked at on Codex 0.162.1
+ * (2026-10-11) with the fence test: none reads or writes a file of the owner's. `exec` runs a
+ * script that reaches only the `exec:` tools below it (a patch is refused by the read-only sandbox,
+ * the MCP listings have no server, `web__run` asks the provider's own search service); `wait`
+ * waits for such a script; the two `request_user_input` tools ask a question no one answers in a
+ * run without a person; the `collaboration` tools find no other agent, and starting one fails in a
+ * run that keeps no session. A tool that is not here fails the fence test, so the offer of a Codex
+ * version that adds one stays closed until that tool is looked at and added here.
+ */
+export const CODEX_RESEARCH_TOOLS_SEEN = ['custom:functions.exec', 'exec:apply_patch', 'exec:clock__curr_time', 'exec:list_mcp_resource_templates',
+  'exec:list_mcp_resources', 'exec:read_mcp_resource', 'exec:web__run', 'function:collaboration.followup_task', 'function:collaboration.interrupt_agent',
+  'function:collaboration.list_agents', 'function:collaboration.send_message', 'function:collaboration.spawn_agent', 'function:collaboration.wait_agent',
+  'function:functions.request_user_input', 'function:functions.request_user_input_async', 'function:functions.wait']
+
+/** Names the research form of an app as it is built now: a fence test counts only for the form it tested. */
+export function researchFormHash(harness) {
+  return sha256(canonicalJson(harness === 'codex'
+    ? { environment: RESEARCH_ENVIRONMENT.codex, config: CODEX_RESEARCH_CONFIG, disabled: CODEX_RESEARCH_DISABLED, sandbox: 'read-only', strict: true }
+    : { environment: RESEARCH_ENVIRONMENT[harness] ?? [], tools: RESEARCH_TOOLS })).slice(0, 16)
+}
 
 export function researchRunsDirectory() {
   return `${stateDirectory()}/research/runs`
 }
 
+/** The owner's own Codex sign-in file as a research run links to it. BMN names it and never reads it. */
+export function codexSignInFile(environment = process.env) {
+  return `${environment.HOME ?? ''}/.codex/${CODEX_SIGN_IN}`
+}
+
+/** Removes the Codex folder of every research run: the one a run just ended with, and any a crash left behind. */
+export function removeResearchCodexFolders(only = null) {
+  let names
+  try {
+    names = only === null ? readdirSync(researchRunsDirectory()) : [basename(only.folder)]
+  } catch {
+    return
+  }
+  // A link is removed as a link; what it points at is never touched.
+  for (const name of names) rmSync(`${researchRunsDirectory()}/${name}/${CODEX_RESEARCH_HOME}`, { recursive: true, force: true })
+}
+
 /**
  * The folder BMN makes for one research run: the prompt it wrote, its hash, and an empty folder
  * the app runs in. The check passes a research dispatch only from here with exactly this prompt.
+ * For Codex (`harness`) it also holds the run's own Codex folder with one link in it, to the
+ * owner's sign-in file. A Codex folder an earlier run left behind is removed first, whatever app this run uses.
  */
-export function prepareResearchRun(prompt, { now = new Date(), id = `${now.toISOString().replace(/[-:.]/g, '').slice(0, 15)}-${sha256(`${prompt}\n${process.pid}\n${now.getTime()}`).slice(0, 8)}` } = {}) {
+export function prepareResearchRun(prompt, { now = new Date(), id = `${now.toISOString().replace(/[-:.]/g, '').slice(0, 15)}-${sha256(`${prompt}\n${process.pid}\n${now.getTime()}`).slice(0, 8)}`, harness = undefined, environment = process.env } = {}) {
   const folder = `${researchRunsDirectory()}/${id}`
+  // One research runs at a time, so a Codex folder that is still there was left by a run that never ended.
+  removeResearchCodexFolders()
   ensurePrivateDirectory(`${folder}/cwd`)
   writeState(`${folder}/prompt.md`, prompt)
   writeState(`${folder}/run.json`, `${JSON.stringify({ version: 1, id, prompt_sha256: sha256(prompt), created_at: now.toISOString() })}\n`)
-  return { id, folder, prompt: `${folder}/prompt.md`, cwd: `${folder}/cwd` }
+  const run = { id, folder, prompt: `${folder}/prompt.md`, cwd: `${folder}/cwd` }
+  if (harness !== 'codex') return run
+  ensurePrivateDirectory(`${folder}/${CODEX_RESEARCH_HOME}`)
+  symlinkSync(codexSignInFile(environment), `${folder}/${CODEX_RESEARCH_HOME}/${CODEX_SIGN_IN}`)
+  return { ...run, codex: `${folder}/${CODEX_RESEARCH_HOME}` }
+}
+
+/**
+ * Why a run's Codex folder is not the one BMN makes, or null: a real folder that holds one thing,
+ * a link to the owner's sign-in file. Only names are read; the sign-in file never is.
+ */
+function codexFolderProblem(folder, signIn) {
+  const only = `a Codex research run's own Codex folder holds only a link to the owner's sign-in file (${signIn})`
+  let names
+  try {
+    if (!lstatSync(folder).isDirectory()) return only
+    names = listDirectory(folder).map((entry) => entry.name)
+  } catch {
+    return `${only}, and ${folder} is not there`
+  }
+  if (names.length !== 1 || names[0] !== CODEX_SIGN_IN) return `${only}; ${folder} holds ${names.length === 0 ? 'nothing' : names.join(', ')}`
+  try {
+    const link = `${folder}/${CODEX_SIGN_IN}`
+    if (!lstatSync(link).isSymbolicLink() || readlinkSync(link) !== signIn) return `${only}; ${link} is not that link`
+  } catch {
+    return only
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------------------------
+// The fence test's record (63.3)
+
+export function fenceTestsPath() {
+  return `${stateDirectory()}/fence-tests.jsonl`
+}
+
+/** Every recorded fence test, oldest first; a line BMN cannot read is skipped, never guessed. */
+export function fenceTests() {
+  let text
+  try {
+    text = readText(fenceTestsPath())
+  } catch {
+    return []
+  }
+  const entries = []
+  for (const line of text.split('\n')) {
+    if (line === '') continue
+    try {
+      const entry = JSON.parse(line)
+      if (isObject(entry) && isString(entry.harness) && Array.isArray(entry.models)) entries.push(entry)
+    } catch {
+      // A torn line proves nothing.
+    }
+  }
+  return entries
+}
+
+/**
+ * How an app version stands for research with one model: `passed` only where the latest fence test
+ * of exactly this version and of the research form as it is built now passed for that model, named
+ * no tool BMN has not looked at, and no later comparison under the provider's own model list
+ * found another tool list. `why` is `untested`, `failed` or `live` otherwise; `tools` is what the
+ * test saw offered. `live` is the last comparison under the provider's model list, or null.
+ */
+export function fenceStanding(harness, version, model, tests = fenceTests()) {
+  const form = researchFormHash(harness)
+  const last = (catalog) => {
+    let found = null
+    for (const entry of tests) {
+      if (entry.harness !== harness || entry.version !== version || entry.form !== form || (entry.catalog ?? 'bundled') !== catalog) continue
+      // A comparison that showed nothing neither opens nor closes anything.
+      if (catalog === 'live' && entry.verdict !== 'pass' && entry.verdict !== 'fail') continue
+      const one = entry.models.find((candidate) => isObject(candidate) && candidate.model === model)
+      if (one !== undefined) found = { entry, model: one }
+    }
+    return found
+  }
+  if (typeof version !== 'string') return { passed: false, why: 'untested', tools: [], live: null }
+  const test = last('bundled')
+  if (test === null) return { passed: false, why: 'untested', tools: [], live: null }
+  const tools = Array.isArray(test.model.tools) ? test.model.tools.filter(isString) : []
+  const unseen = tools.filter((tool) => !CODEX_RESEARCH_TOOLS_SEEN.includes(tool))
+  if (test.entry.verdict !== 'pass' || test.model.verdict !== 'pass' || unseen.length > 0) {
+    const reasons = [...(Array.isArray(test.model.reasons) ? test.model.reasons : []), ...(Array.isArray(test.entry.reasons) ? test.entry.reasons : []), ...unseen.map((tool) => `a tool BMN has not looked at: ${tool}`)]
+    return { passed: false, why: 'failed', tools, live: null, at: test.entry.at, reasons: reasons.filter(isString) }
+  }
+  const compared = last('live')
+  const live = compared === null ? null : { at: compared.entry.at, same: compared.entry.verdict === 'pass' && compared.model.verdict === 'pass', entry: compared.model.catalog_entry ?? null }
+  if (live !== null && !live.same) {
+    return { passed: false, why: 'live', tools, live, at: test.entry.at, reasons: (Array.isArray(compared.model.reasons) ? compared.model.reasons : []).filter(isString) }
+  }
+  return { passed: true, tools, live, at: test.entry.at }
 }
 
 /** Why `argv` is not exactly the research form, or null when it is. */
-function researchFormProblem(parsed) {
+export function researchFormProblem(parsed) {
   if (parsed.envMode !== 'clean') return 'a research run needs env -i'
   const carried = RESEARCH_ENVIRONMENT[parsed.harness]
   const extra = Object.keys(parsed.assignments).filter((key) => !carried.includes(key))
@@ -1851,6 +2012,14 @@ function researchFormProblem(parsed) {
     const fixed = parsed.config.filter((entry) => CODEX_RESEARCH_CONFIG.includes(entry))
     if (fixed.length !== CODEX_RESEARCH_CONFIG.length || new Set(fixed).size !== fixed.length) {
       return `a research run carries exactly ${CODEX_RESEARCH_CONFIG.map((entry) => `-c ${entry}`).join(' ')}`
+    }
+    if (parsed.strictConfig !== true) return 'a research run needs --strict-config, so that a setting Codex does not know stops the run'
+    if (parsed.disable.length !== CODEX_RESEARCH_DISABLED.length || !CODEX_RESEARCH_DISABLED.every((feature) => parsed.disable.includes(feature))) {
+      return `a research run carries exactly ${CODEX_RESEARCH_DISABLED.map((feature) => `--disable ${feature}`).join(' ')}`
+    }
+    const home = parsed.assignments.CODEX_HOME
+    if (home === undefined || !isAbsolute(home) || home.split('/').includes('..') || basename(home) !== CODEX_RESEARCH_HOME) {
+      return 'a research run names the Codex folder BMN made for it (CODEX_HOME), so that Codex reads nothing from the owner\'s own'
     }
     return null
   }
@@ -1866,15 +2035,18 @@ function researchFormProblem(parsed) {
 }
 
 /**
- * Evaluates a research run: an approved, active agent on a known destination and a tested or
- * accepted app version, the exact fenced argv, run from the empty folder BMN made, fed the prompt
- * BMN wrote. A public-only destination passes only on an app version whose fence was verified.
+ * Evaluates a research run: an approved, active agent the team names a researcher, on a known
+ * destination and a tested or accepted app version, the exact fenced argv, run from the empty
+ * folder BMN made, fed the prompt BMN wrote. A Codex run passes only on a version whose fence test
+ * is on record as passed (`fenceTestLog`, read from the record by default); a public-only
+ * destination passes only on an app version whose fence was verified.
  * `inputs.dry` asks only whether this agent could research with this argv: everything but the
- * folder and the prompt, and no receipt.
+ * folder and the prompt, and no receipt. `inputs.settled` is a receipt checked again after its run,
+ * whose Codex folder is gone by then.
  */
 export function evaluateResearch(inputs, {
   environment = process.env, cwd: processCwd = process.cwd(), now = new Date(),
-  testedVersions = TESTED_HARNESS_VERSIONS, fenceVersions = RESEARCH_FENCE_VERSIONS, contextTestLog = undefined
+  testedVersions = TESTED_HARNESS_VERSIONS, fenceVersions = RESEARCH_FENCE_VERSIONS, contextTestLog = undefined, fenceTestLog = undefined
 } = {}) {
   const steps = []
   const note = (text) => steps.push(text)
@@ -1886,7 +2058,12 @@ export function evaluateResearch(inputs, {
     note(`approved version ${generation.number}`)
     const agent = activeAgent(generation, inputs.agent)
     note(`agent ${agent.id}: ${agent.class}, ${agent.harness} ${agent.model}, provider ${agent.provider}`)
-    const parsed = parseDispatch(inputs.argv)
+    // Who researches is part of the approved team (63.3). A team that names no one is one from before the mark.
+    const named = namedResearchers(data)
+    if (named !== null && !named.includes(agent.id)) {
+      refuse('NOT_A_RESEARCHER', `${agent.id} is not one of the team's researchers (${named.join(', ')})`)
+    }
+    const parsed = parseDispatch(inputs.argv, { research: true })
     if (parsed.unsupported) refuse('ROUTE_UNSUPPORTED', parsed.unsupported)
     if (agent.harness !== parsed.harness) refuse('ROUTE_UNSUPPORTED', `${agent.id} runs on ${agent.harness}, the command is ${parsed.harness}`)
     const form = researchFormProblem(parsed)
@@ -1900,7 +2077,7 @@ export function evaluateResearch(inputs, {
       : resolveClaudeRoute(parsed, environment, cwd ?? processCwd)
     if (resolution.unsupported) refuse('ROUTE_UNSUPPORTED', resolution.unsupported)
     const version = harnessVersion(parsed.command, dispatchEnvironment(parsed, environment))
-    note(parsed.harness === 'codex' ? 'dispatch form: env -i codex exec, read-only, web search, no command or app tools' : 'dispatch form: env -i claude -p, web tools only')
+    note(parsed.harness === 'codex' ? 'dispatch form: env -i codex exec from a Codex folder of its own, read-only, web search, no command or app tools' : 'dispatch form: env -i claude -p, web tools only')
     const { model, effort } = checkModelAndEffort(agent, resolution, note)
     const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog),
       agent.context_limit === undefined ? [] : provenPrecedence(parsed.harness, version, contextTestLog))
@@ -1909,6 +2086,10 @@ export function evaluateResearch(inputs, {
     const route = resolution.route
     const destination = matchedDestination(data, agent, parsed.harness, route, note)
 
+    // The run's Codex folder lies beside the empty folder it starts in; a dry question names both as they will be.
+    if (parsed.harness === 'codex' && cwd !== null && parsed.assignments.CODEX_HOME !== `${dirname(cwd)}/${CODEX_RESEARCH_HOME}` && (inputs.dry !== true || basename(cwd) === 'cwd')) {
+      refuse('WORKSPACE_MISMATCH', `a Codex research run uses the Codex folder BMN made for it, ${dirname(cwd)}/${CODEX_RESEARCH_HOME}`)
+    }
     let stdin = null
     if (inputs.dry !== true) {
       const runs = canonicalDirectory(researchRunsDirectory(), processCwd)
@@ -1935,34 +2116,45 @@ export function evaluateResearch(inputs, {
       if (parsed.harness === 'codex' && (isAbsolute(parsed.output) ? parsed.output : `${cwd}/${parsed.output}`) !== `${run}/${CODEX_RESEARCH_ANSWER}`) {
         refuse('WORKSPACE_MISMATCH', `a research run writes its answer to ${CODEX_RESEARCH_ANSWER} beside BMN's prompt`)
       }
+      if (parsed.harness === 'codex' && inputs.settled !== true) {
+        const problem = codexFolderProblem(`${run}/${CODEX_RESEARCH_HOME}`, codexSignInFile(parsed.assignments))
+        if (problem !== null) refuse('WORKSPACE_MISMATCH', problem)
+      }
       note(`research run ${basename(run)}: BMN's prompt, an empty folder`)
     }
 
     if (version === null) {
       refuse('HARNESS_UNKNOWN', `${parsed.harness}: BMN cannot read this app's version, so it cannot tell which program would run`)
     }
-    const standing = versionStanding(parsed.harness, version, testedVersions)
-    note(`${parsed.harness} ${version}: ${standing.state}`)
+    const tested = versionStanding(parsed.harness, version, testedVersions)
+    note(`${parsed.harness} ${version}: ${tested.state}`)
     const answer = privateWorkAnswer(data, destination, null)
     note(`private work: ${answer.reason}`)
-    const fenced = (fenceVersions[parsed.harness] ?? []).includes(version)
-    // Claude Code's research form is the one 60.10 names; another app researches only on a version whose own fence
-    // was verified by the owner's test (60.10 AC2). That its provider may see private work is another question:
-    // research must send only what BMN wrote, and nothing has shown that for this app yet.
+    // Claude Code's research form is the one 60.10 names; Codex researches only on a version whose fence the owner's
+    // test showed, for this model and for the form as it is built now (63.3). That its provider may see private work
+    // is another question: research must send only what BMN wrote, and only that test shows it.
+    const standing = parsed.harness === 'codex' ? fenceStanding('codex', version, model.value, fenceTestLog) : null
+    const fenced = standing === null ? (fenceVersions[parsed.harness] ?? []).includes(version) : standing.passed
+    if (standing !== null) note(`fence test of codex ${version} with ${model.value}: ${standing.passed ? `passed${standing.live === null ? ', not yet compared under the provider\'s own model list' : ''}` : standing.why}`)
     if (parsed.harness !== 'claude' && !fenced) {
-      refuse('ROUTE_UNSUPPORTED', `research runs in ${APP_NAMES[parsed.harness]} only on a version whose fence BMN verified, and ${parsed.harness} ${version} is not one: pick a researcher on Claude Code`)
+      const app = APP_NAMES[parsed.harness]
+      const reason = standing?.reasons?.[0]
+      if (standing?.why === 'failed') refuse('ROUTE_UNSUPPORTED', `the fence test of ${parsed.harness} ${version} with ${model.value} did not pass${reason === undefined ? '' : ` (${reason})`}, so no research runs there: pick another researcher`, 'fence-failed')
+      if (standing?.why === 'live') refuse('ROUTE_UNSUPPORTED', `under the provider's own model list ${app} ${version} offers ${model.value} other tools than the fence test saw${reason === undefined ? '' : ` (${reason})`}, so no research runs there until that is looked at`, 'fence-live')
+      refuse('ROUTE_UNSUPPORTED', `research runs in ${app} only on a version whose fence test passed, and none is on record for ${parsed.harness} ${version} with ${model.value}: the owner runs \`bmn roster fence\`, or picks a researcher on Claude Code`, 'fence-untested')
     }
     if (!answer.allowed && !fenced) {
       refuse('PACKET_INVALID', `a public-only researcher runs only on an app version whose fence BMN verified; ${parsed.harness} ${version} is not one`)
     }
-    if (inputs.dry === true) return { verdict: 'PASS', dry: true, version, steps }
+    if (inputs.dry === true) return { verdict: 'PASS', dry: true, version, steps, ...(standing === null ? {} : { fence: { tools: standing.tools, compared: standing.live !== null } }) }
     const body = {
       version: 1, mode: 'research', verdict: 'PASS', agent: agent.id, class: agent.class, harness: parsed.harness, model: model.value,
       effort: effort.value, context_limit_applied: context.applied,
       ...(agent.context_limit !== undefined && context.applied === null ? { context_limit_note: context.note } : {}),
       cwd,
       argv_sha256: sha256(canonicalJson(inputs.argv)),
-      harness_version: { version, state: standing.state },
+      harness_version: { version, state: tested.state },
+      ...(standing === null ? {} : { fence: { form: researchFormHash('codex'), tested_at: standing.at, tools: standing.tools } }),
       route: receiptRoute(destination, route),
       private_work: receiptAnswer(answer),
       generation: { number: generation.number, hash: generation.hash },
@@ -1997,7 +2189,7 @@ export function verifyReceipt(path, argv, options = {}) {
 
 /** The receipt's dispatch, evaluated as of now: a public record that went stale since issuance no longer reproduces it. */
 function evaluateReceipt(receipt, argv, options) {
-  if (receipt.mode === 'research') return evaluateResearch({ agent: receipt.agent, cwd: receipt.cwd, stdin: receipt.stdin?.path, argv }, options)
+  if (receipt.mode === 'research') return evaluateResearch({ agent: receipt.agent, cwd: receipt.cwd, stdin: receipt.stdin?.path, argv, settled: true }, options)
   return evaluate({
     agent: receipt.agent, role: receipt.role, workspace: receipt.workspace, data: receipt.data, cwd: receipt.cwd, argv,
     ...(receipt.stdin ? { stdin: receipt.stdin.path } : {}),

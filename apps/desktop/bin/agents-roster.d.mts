@@ -23,6 +23,8 @@ export interface RosterAgent {
   compact_at?: number
   paid_by?: 'per_token' | 'subscription'
   price?: RosterPrice
+  /** The team names this agent a researcher (63.3). */
+  researcher?: boolean
 }
 export interface RosterRole {
   id: string
@@ -133,6 +135,12 @@ export declare function team(data: RosterData, all: boolean): TeamEntry[]
 export declare function roleChain(data: RosterData, roleId: string): Record<string, unknown>
 export declare function roleChainText(chain: Record<string, unknown>): string
 export declare const ROLE_FIELDS: string[]
+/** The agent apps that have a research form the check admits. */
+export declare const RESEARCH_APPS: string[]
+/** The agents the approved team names as researchers, or null while it names none (a team from before the mark). */
+export declare function namedResearchers(data: Pick<RosterData, 'agents'> | null | undefined): string[] | null
+/** Who BMN proposes as researchers while the team names none: knights and pawns on an app that can research, one per model. */
+export declare function researcherProposal(data: (Pick<RosterData, 'agents'> & Partial<Pick<RosterData, 'providers'>>) | null | undefined): string[]
 /** Whether BMN proposes to hold a role to read-only: every role whose name ends in `reviewer`, and the consultant. */
 export declare function readOnlyProposed(roleId: string): boolean
 /** The roles of a team that BMN proposes to hold to read-only and that are not held yet. */

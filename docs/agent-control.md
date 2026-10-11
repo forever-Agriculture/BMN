@@ -79,7 +79,7 @@ Commands:
                                             Put one line in front of Claude Code's own status-line command so
                                             its plan use reaches BMN; the command itself is kept unchanged
   team [--all] [--json]                     The owner-approved team: one line per enabled active agent
-  roster validate|status|role|route|visibility|check|explain|bind
+  roster validate|status|role|route|visibility|check|explain|bind|fence
                                             The team file in ~/.config/bmn/agents: validate it, list pending
                                             differences, print a role's chain, and check a dispatch
                                             before work leaves for another agent (bmn roster --help)
@@ -1291,14 +1291,26 @@ candidate a `tools` entry with the items for exactly that set, also when the set
 Team → **Models** asks one of your own agents to look up what your team's models cost and how much
 they hold, and shows each value with the page it was read on. Research changes nothing by itself.
 
-**Who researches.** The **Researcher** row offers the approved, active agents on Claude Code
-whose provider may see private work and whose research run the check would pass; the others are
-named with why. Research is offered in Claude Code only. BMN starts that run with a command that
-names its limits (the table below) and checks the command, but no test has yet measured on a
-live run that Claude Code keeps to them. A Codex agent is offered once its own limits were
-tested, and `bmn roster check --research` refuses its command with `ROUTE_UNSUPPORTED` until
-then. An agent whose provider gets public work only researches only on an app version whose
-limits were tested, so none is offered today; neither is an OpenCode or Cursor agent. When
+**Who researches.** Who researches is part of your team: an agent's page has a **Researcher**
+switch (`researcher: true` in the team file), staged and approved like any other change. The
+**Researcher** row on Models offers the approved, active agents your team names a researcher
+whose provider may see private work and whose research run the check would pass. An agent your
+team does not name is not shown at all, and `bmn roster check --research` refuses its command
+with `NOT_A_RESEARCHER`. So where your team holds two agents on one model (Opus the knight and
+Opus the queen), only the one you named is offered.
+
+A team from before this choice names nobody. It keeps offering what it offered (every agent that
+can research), and Models says the choice waits for you, with BMN's proposal: the active knights
+and pawns on Claude Code and Codex whose provider may see private work, the first of each model.
+**Use proposal** stages it; nothing changes until you approve. A researcher you had picked that
+your team no longer names falls back to none picked, and Models says so once, until you pick
+again.
+
+Research runs in Claude Code and in Codex. BMN starts the run with a command that names its
+limits (the table below) and checks the command. For Claude Code no test has yet measured on a
+live run that the app keeps to them. For Codex one has to, per version: see **Codex behind its
+fence** below. An agent whose provider gets public work only researches only on an app version
+whose limits were tested, so none is offered today; neither is an OpenCode or Cursor agent. When
 no agent can research the page says so, and a price can still be written in the team file.
 
 **What leaves BMN.** BMN writes the prompt itself: your team's model names, grouped by provider,
@@ -1311,7 +1323,7 @@ only the home folder and the program path in its environment, at the lowest effo
 | App | The run |
 | --- | --- |
 | Claude Code | `claude -p --safe-mode --tools WebSearch,WebFetch`, no MCP servers, no saved session |
-| Codex (not offered yet) | `codex exec --ephemeral --sandbox read-only`, web search on, its command, app, plugin and sub-agent tools off, no MCP servers |
+| Codex | `codex exec --ephemeral --sandbox read-only --strict-config` with a Codex folder of its own (`CODEX_HOME`), web search on, no MCP servers, and every switch of the fence below |
 
 The page shows how far it is ("3 of 9 models") and **Stop**. Stop, or the 20-minute limit, ends
 the run that is going with everything it started, and the reading of cited pages too; what the
@@ -1352,6 +1364,82 @@ answer.
 
 Scores, cost per task and a suggested effort are not part of this page yet. The run against a
 live app is the owner's to start: BMN's own tests use a stand-in app and pages in a test folder.
+
+#### Codex behind its fence
+
+Codex has no setting that keeps a run to web tools, and none that stops it sending the rules file
+of its own folder (`~/.codex/AGENTS.md`) to its provider. So BMN does not rely on a setting: it
+builds the run a fence and tests, for each Codex version, that the fence holds.
+
+**The fence.** For each research run BMN makes a Codex folder inside the run's own folder
+(`…/research/<run>/codex`) that holds one thing: a link named `auth.json` to your sign-in file.
+BMN never reads that file; it only makes the link. The run is pointed at the folder with
+`CODEX_HOME`, so Codex finds no rules file, memory, history, skills, hooks or settings of yours.
+The command also carries `--strict-config` (a setting this Codex does not know stops the run
+instead of being skipped), `--disable` for `view_image`, `goals`, `image_generation`,
+`sleep_tool` and `hooks`, and thirteen `-c` settings: the seven a research run had before (no MCP
+servers, web search live, no shell, command, sub-agent, app or plugin tools) and six more that
+keep skills, app and collaboration instructions, the description of your machine and any project
+rules file out of what is sent. `bmn roster check --research` passes a Codex command only in
+exactly that form: another Codex folder, a folder that holds anything but the link, a missing
+switch or an extra one is refused. When Codex renews your sign-in during a run, the renewal goes
+through the link into your real file and the link stays a link. The run's Codex folder is removed
+when the run ends, and one a crash left behind is removed at the next research.
+
+**The test.** `bmn roster fence`, or **Run test** on Models, runs the very command a research run
+is, against a stand-in for the provider on this computer. No provider is called. It builds a
+throwaway home folder and plants thirteen markers where Codex could pick something up: its rules
+file, memory, prompt history, an earlier session, skills in two places, files and rules files in
+the home folder and beside the run's folder, a hook, the settings file and the prompt. The
+stand-in then asks Codex to call every tool it offers, with arguments that try to read the planted
+files, write a file, and reach this computer. The test passes for a model only when
+
+- no marker but the prompt's reached the stand-in, and no picture was sent;
+- nothing was written in the home folder or beside the run;
+- no hook ran;
+- every tool Codex offered was called and gave back no marker;
+- the tools offered are among the ones BMN's record for Codex names (`CODEX_RESEARCH_TOOLS_SEEN`
+  in `apps/desktop/bin/agents-check.mjs`, looked at on Codex 0.162.1); and
+- a renewed sign-in landed in the file behind the link, with the link still a link.
+
+A tool that is new since the record fails the test, so a Codex update that adds one closes the
+offer until someone has looked at the tool and the record is changed in BMN's code. A test that
+could not finish says it showed nothing and opens nothing. Each test is appended to
+`state/fence-tests.jsonl` with the Codex version, the model, the tools seen and a mark of the
+research form it tested. A Codex agent is offered, and its research passes the check, only where
+the latest test of exactly the installed version, that model and today's form passed. A new
+Codex version, or a change of the form in BMN, therefore starts closed. The test takes about a
+minute and runs only when you start it.
+
+**What the tools are.** On Codex 0.162.1 the form still offers `exec` (a script tool through
+which `apply_patch`, `web__run`, a clock and three MCP resource tools are reached), `wait`,
+`request_user_input`, and six tools for sub-agents. The test showed that none of them reads or
+writes your files under the fence: writing is refused by the read-only sandbox, there is no MCP
+server to read from, and a sub-agent gets the same fence. Models names them on a Codex
+researcher's row.
+
+**Under the provider's own model list.** Which tools Codex offers a model also depends on the
+model list its provider sends, and the test above uses the list Codex was built with. So before
+a Codex agent's first research BMN asks the provider for that list (through Codex, signed in by
+the link: a call to the provider, no question to a model), and where the model's entry differs
+from the one already compared, repeats the fence test with the stand-in serving that list and
+compares the tools with the recorded ones exactly. A difference stops the research before any
+answer is used, is recorded, and closes the offer (`ROUTE_UNSUPPORTED`) until a later test under
+the list passes. A comparison that could not be made stops that research and neither opens nor
+closes anything. `bmn roster fence --live` does the same on request. The first research with a
+real Codex agent is yours to start.
+
+**What the fence does not cover.**
+
+- Another Codex version than the tested one: it is closed, not assumed alike.
+- What the provider's servers do with the prompt, and tools a provider could switch on for your
+  account between the comparison and the run: the comparison is made once per changed list entry,
+  not before every run.
+- The web: a researcher can open any public page, and what it reads there is not trusted. BMN
+  reads each cited page itself before a value counts.
+- The sign-in itself: Codex needs it to reach its provider, so the run can use it as Codex does.
+- Claude Code researchers: their limits are in the command and checked, and not yet tested this
+  way on a live run.
 
 ### The prompt guard
 

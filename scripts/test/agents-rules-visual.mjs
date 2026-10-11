@@ -13,6 +13,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
+import { researcherProposal } from '../../apps/desktop/bin/agents-roster.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDirectory, '../..')
@@ -275,7 +276,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await card('Sol').locator('.agent-open').click()
     assert.deepEqual(await main.locator('.group-head').allTextContents(), ['Identity', 'Model', 'Work'])
     assert.deepEqual(await main.locator(':scope > .preferences-row .preferences-row-label').allTextContents(),
-      ['Name', 'Class', 'Notes', 'Agent app', 'Model', 'Private work', 'Price', 'Context limit', 'Roles', 'Efforts'])
+      ['Name', 'Class', 'Notes', 'Agent app', 'Model', 'Private work', 'Price', 'Context limit', 'Roles', 'Efforts', 'Researcher'])
     await main.getByText('of 400 000 tokens').waitFor()
     await main.getByText('prices.example.test, 2026-10-01').waitFor()
     assert.equal(await main.locator('details.advanced').evaluate((element) => element.open), false)
@@ -1548,6 +1549,138 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     // The earlier stand-in comes back for the pages that follow.
     stub('claude', 'case "$1" in --version) echo "2.1.295 (Claude Code)";; *) cat > /dev/null; echo "I cannot tell";; esac')
     passed('Models offers only agents that may research, shows progress, keeps a stopped run\'s finished providers, marks a price its page does not show, stages verified prices behind a review and approval, and fills New agent from Add to team… and Look up (60.10 first release)')
+
+    phase('63.3: Codex researchers only where the fence test passed for exactly the installed version, and only the researchers the team names')
+    assert.equal(await ledger.count(), 0, 'a change is still staged before the researchers phase')
+    // The team holds two agents on one model: a second Opus is added and approved like any other agent.
+    await go('Team')
+    const opusAgents = () => approved().agents.filter((agent) => agent.name === 'Opus' && agent.model === 'claude-opus-5-5' && agent.enabled && agent.status === 'active')
+    // The Opus an earlier step switched off is given work again, and the second one is added beside it.
+    if (opusAgents().length === 0) await card('Opus').getByRole('switch', { name: 'Opus on' }).click()
+    await main.getByRole('button', { name: 'New agent' }).click()
+    await main.getByRole('combobox', { name: 'Model', exact: true }).fill('claude-opus-5-5')
+    await main.getByLabel('Name').fill('Opus')
+    await main.getByRole('button', { name: 'Add to team' }).click()
+    await until(async () => (await card('Opus').count()) === 2, 'two cards named Opus')
+    // An approval that changes the Team line of the rules files shows those files first and is approved from there.
+    const approveThrough = async (done, label) => {
+      await approve()
+      await until(async () => {
+        const again = ledger.locator('.ledger-sheet[role="group"]').getByRole('button', { name: 'Approve', exact: true })
+        if (!done() && await again.count() === 1 && await again.isEnabled()) await again.click().catch(() => {})
+        return done()
+      }, label)
+    }
+    await approveThrough(() => opusAgents().length === 2, 'two active agents named Opus on one model in the approved team')
+    await ledger.waitFor({ state: 'detached' })
+    assert.equal(approved().agents.some((agent) => agent.researcher === true), false, 'the team already names a researcher')
+
+    // A stand-in Codex that behaves as a Codex does behind the fence: BMN's own fence test runs against it, with no provider anywhere.
+    const fakeCodex = readFileSync(join(appDirectory, 'src/utility/test-fixtures/agents/fake-codex.mjs'), 'utf8').replace(/^#!.*\n/, `#!${process.execPath}\n`)
+    const codexMode = join(stubs, 'codex-mode.json')
+    const installedCodex = (version) => {
+      writeFileSync(join(stubs, 'codex'), fakeCodex)
+      chmodSync(join(stubs, 'codex'), 0o755)
+      writeFileSync(codexMode, JSON.stringify({ version }))
+    }
+    installedCodex('0.161.0')
+    const fenceRecord = () => (existsSync(join(stateDir, 'fence-tests.jsonl')) ? readFileSync(join(stateDir, 'fence-tests.jsonl'), 'utf8').trim().split('\n').map((entry) => JSON.parse(entry)) : [])
+    const offeredNow = async () => (await who.getByRole('radio').allTextContents()).sort()
+    const fenceRow = main.locator('.preferences-row', { hasText: 'Codex fence test' })
+    const untested = 'the fence test has not run for this version of Codex yet'
+    const inWords = (names) => (names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`)
+    const teamWithTwo = approved()
+    const nameOf = (id) => teamWithTwo.agents.find((agent) => agent.id === id).name
+    // Whom BMN proposes: the active knights and pawns on Claude Code and Codex, the first of each model.
+    const proposedIds = researcherProposal(teamWithTwo)
+    const proposedNames = proposedIds.map(nameOf)
+    assert.deepEqual(proposedIds, ['sol', 'opus', 'luna', 'haiku'], 'the proposal is not the first knight or pawn of each model on an app that can research')
+    const codexNames = teamWithTwo.agents.filter((agent) => agent.harness === 'codex' && agent.enabled && agent.status === 'active').map((agent) => agent.name)
+    assert.ok(['Sol', 'Luna', 'Astra'].every((name) => codexNames.includes(name)), `the team's Codex agents are ${codexNames.join(', ')}`)
+
+    await go('Team', 'Models')
+    await who.waitFor()
+    // Nothing is on record for this Codex: no Codex agent is offered, each is named with why, and the page offers the test.
+    assert.deepEqual(fenceRecord(), [])
+    for (const name of codexNames) await main.getByText(new RegExp(`${name} cannot research: ${untested}\\.`)).waitFor()
+    assert.equal((await offeredNow()).some((name) => codexNames.includes(name)), false, 'a Codex agent is offered with no fence test on record')
+    await fenceRow.getByText(`${inWords(codexNames)} research only where this test passed for exactly the installed Codex: ${untested}.`, { exact: false }).waitFor()
+    // A team from before the choice: it offers what it offered, both Opus among them, and the page says the choice waits for him.
+    assert.equal(await who.getByRole('radio', { name: /Opus$/ }).count(), 2, 'a team that names no researcher does not offer both of its Opus agents')
+    const proposal = main.locator('.page-note.with-action', { hasText: 'Who researches is your choice' })
+    await proposal.getByText(`Who researches is your choice and you have not made it yet, so every agent that can research is offered. BMN proposes ${inWords(proposedNames)}: one agent per model.`, { exact: true }).waitFor()
+    await shot('models-researchers-before-1280.png')
+
+    // The owner runs the test from the page. It runs the very research command against the stand-in and records what it saw.
+    await fenceRow.getByRole('button', { name: 'Run test', exact: true }).click()
+    await notice(/^The fence test of Codex 0\.161\.0 passed: a research run sends its provider nothing of yours\.$/)
+    const firstTest = fenceRecord()
+    assert.equal(firstTest.length, 1)
+    assert.deepEqual([firstTest[0].verdict, firstTest[0].version, firstTest[0].catalog, firstTest[0].models.map((model) => model.model).sort()], ['pass', '0.161.0', 'bundled', teamWithTwo.agents.filter((agent) => codexNames.includes(agent.name)).map((agent) => agent.model).sort()])
+    assert.notEqual(firstTest[0].form, 'other', 'the test was not of the research form')
+    assert.deepEqual(readdirSync(join(stateDir, 'research/fence')), [], 'the fence test left a folder behind')
+    for (const name of codexNames) await who.getByRole('radio', { name: new RegExp(`${name}$`) }).waitFor()
+    await fenceRow.getByText(/^Passed for the installed Codex\./).waitFor()
+    await fenceRow.getByRole('button', { name: 'Run again', exact: true }).waitFor()
+    // A Codex researcher has the words of the others and one line naming the tools Codex keeps offering.
+    await who.getByRole('radio', { name: /Astra$/ }).click()
+    await who.getByRole('radio', { name: /Astra$/ }).and(main.locator('[aria-checked="true"]')).waitFor()
+    await main.getByText(/Gets only your model names and the source list, never your files\. Runs in an empty folder, with a Codex folder of its own and web search\. Codex also keeps offering exec \(a script tool that reaches [^)]*web__run[^)]*\), .*spawn_agent.*\. None of them reads or writes your files: the fence test of this Codex version showed it\./).waitFor()
+    await shot('models-codex-researcher-1280.png')
+
+    // An update of Codex: no test is on record for the new version, so the offer closes by itself. He takes BMN's proposal and approves it.
+    installedCodex('0.170.0')
+    await proposal.getByRole('button', { name: 'Use proposal', exact: true }).click()
+    await notice(new RegExp(`^${inWords(proposedNames)} named as researchers\\. Approve below to keep it\\.$`))
+    await ledger.getByRole('button', { name: 'Review', exact: true }).click()
+    await ledger.locator('.consequence', { hasText: `only ${inWords(proposedNames)} would be offered as researchers; a research with any other agent would be refused` }).waitFor()
+    await ledger.getByRole('button', { name: 'Review', exact: true }).click()
+    await approveThrough(() => approved().agents.some((agent) => agent.researcher === true), 'the named researchers in the approved team')
+    assert.deepEqual(approved().agents.filter((agent) => agent.researcher === true).map((agent) => agent.id), proposedIds)
+    const namedClaude = proposedIds.filter((id) => teamWithTwo.agents.find((agent) => agent.id === id).harness === 'claude').map(nameOf).sort()
+    // Only the named agents are spoken of at all: one Opus, and no line for Astra or the second Opus; the pick that fell away is said once.
+    await main.getByText(new RegExp(`Sol cannot research: ${untested}\\.`)).waitFor()
+    await main.getByText(new RegExp(`Luna cannot research: ${untested}\\.`)).waitFor()
+    assert.deepEqual(await offeredNow(), namedClaude)
+    assert.equal(await who.getByRole('radio', { name: 'Knight Opus', exact: true }).count(), 1, 'the Opus the team names is not the one offered')
+    assert.equal(await main.getByText(/Astra cannot research|Kimi cannot research/).count(), 0, 'an agent the team does not name is still spoken of')
+    await main.getByText(/^Astra is no longer one of your team's researchers, so no researcher is picked; \w+ stands in until you pick one\.$/).waitFor()
+    assert.equal(await proposal.count(), 0, 'the page still says the choice waits for him')
+    await fenceRow.getByRole('button', { name: 'Run test', exact: true }).waitFor()
+
+    // The check refuses a research with an agent the team does not name, with a code of its own, whatever the command is.
+    const researchWork = join(root, 'research-check')
+    mkdirSync(join(researchWork, 'cwd'), { recursive: true })
+    writeFileSync(join(researchWork, 'prompt.md'), 'synthetic\n')
+    const researchCheck = (agent) => {
+      const run = spawnSync(process.execPath, [join(appDirectory, 'bin/bmn'), 'roster', 'check', '--research', '--agent', agent, '--stdin', join(researchWork, 'prompt.md'), '--cwd', join(researchWork, 'cwd'), '--json', '--',
+        'codex', 'exec', '-'], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }, encoding: 'utf8' })
+      return { code: JSON.parse(run.stdout).code, text: run.stdout }
+    }
+    const [notNamed, namedOne] = [researchCheck('astra'), researchCheck('sol')]
+    assert.equal(notNamed.code, 'NOT_A_RESEARCHER', notNamed.text)
+    assert.notEqual(namedOne.code, 'NOT_A_RESEARCHER', namedOne.text)
+
+    // The test passes for the new version too: the two Codex researchers the team names are offered, and nobody else.
+    await fenceRow.getByRole('button', { name: 'Run test', exact: true }).click()
+    await notice(/^The fence test of Codex 0\.170\.0 passed: a research run sends its provider nothing of yours\.$/)
+    assert.deepEqual(fenceRecord().map((entry) => `${entry.version} ${entry.verdict}`), ['0.161.0 pass', '0.170.0 pass'])
+    await until(async () => (await offeredNow()).join(' ') === [...proposedNames].sort().join(' '), 'exactly the named researchers offered')
+    assert.equal(await main.getByText(/cannot research/).count(), 0, 'a named researcher is still closed after the test passed')
+    // Picking one ends the note about the pick that fell away.
+    await who.getByRole('radio', { name: /Luna$/ }).click()
+    await who.getByRole('radio', { name: /Luna$/ }).and(main.locator('[aria-checked="true"]')).waitFor()
+    assert.equal(await main.getByText(/is no longer one of your team's researchers/).count(), 0, 'the fallen-back pick is said again after he picked')
+    await shot('models-named-researchers-1280.png')
+    // An agent's own page carries the switch.
+    await go('Team')
+    await card('Astra').locator('.agent-open').click()
+    await main.getByText('Not offered on Models: a research with Astra is refused.', { exact: true }).waitFor()
+    assert.equal(await main.getByRole('switch', { name: 'Researcher' }).getAttribute('aria-checked'), 'false')
+    // The earlier stand-in comes back for the pages that follow.
+    rmSync(codexMode)
+    stub('codex', 'echo "codex-cli 0.161.0"')
+    passed('Models offers a Codex researcher only where the fence test passed for exactly the installed Codex, names the tools Codex keeps offering, takes BMN\'s proposal through an approval, then offers one Opus where the team holds two and no agent the team does not name; the check refuses such an agent with NOT_A_RESEARCHER (63.3 AC2, AC4, AC7, AC8)')
 
     phase('three sizes: no horizontal scrollbar, every control named')
     const pages = [

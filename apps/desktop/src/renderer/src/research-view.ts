@@ -128,6 +128,23 @@ export function fillWords(fill: ResearchFill, typed = false): string {
   return typed ? what : `${what} Check Agent app and Host.`
 }
 
+/**
+ * The one line that names the tools Codex keeps offering in a research run (63.3 AC4), from the
+ * record of the fence test: Codex has no list of allowed tools, so these stay, and the test of the
+ * installed version is what showed that none of them reads or writes the owner's files. The tools
+ * its script tool reaches are named inside it.
+ */
+export function codexToolsLine(tools: readonly string[]): string {
+  const list = (names: readonly string[]): string => (names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`)
+  const inner = tools.filter((tool) => tool.startsWith('exec:')).map((tool) => tool.slice(5))
+  const named = tools.filter((tool) => !tool.startsWith('exec:')).map((tool) => {
+    const name = tool.slice(Math.max(tool.lastIndexOf('.'), tool.indexOf(':')) + 1)
+    return tool === 'custom:functions.exec' && inner.length > 0 ? `${name} (a script tool that reaches ${list(inner)})` : name
+  })
+  if (named.length === 0) return 'The fence test of this Codex version saw no other tool offered.'
+  return `Codex also keeps offering ${list(named)}. None of them reads or writes your files: the fence test of this Codex version showed it.`
+}
+
 /** The page's status line: when it was last researched, by whom, and how it ended. */
 export function researchStatus(snapshot: Pick<ResearchSnapshot, 'last' | 'running' | 'researchers'>, shortDate: (iso: string) => string): string {
   if (snapshot.running !== null) {

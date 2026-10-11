@@ -38,6 +38,8 @@ export interface RosterAgentShape {
   compact_at?: number
   paid_by?: 'per_token' | 'subscription'
   price?: RosterPriceShape
+  /** The team names this agent a researcher (63.3). */
+  researcher?: boolean
 }
 
 export interface RosterRoleShape {
@@ -445,7 +447,9 @@ export interface ResearchModelView {
 }
 export type ResearchRunState = 'complete' | 'partial' | 'stopped' | 'failed'
 /** An active agent and whether it could research now; `why` says why not in a few words, `reason` in the check's own. */
-export interface ResearcherView { id: string; name: string; harness: RosterHarness; ok: boolean; why?: string; reason?: string }
+export interface ResearcherView { id: string; name: string; harness: RosterHarness; ok: boolean; why?: string; reason?: string
+  /** For a Codex researcher: the tools its fence test saw offered, and whether they were compared under the provider's own model list yet. */
+  fence?: { tools: string[]; compared: boolean } }
 /** Team › Models: what research has found, who may research, and the run that is going. */
 export interface ResearchSnapshot {
   last: { at: string; researcher: string; state: ResearchRunState; models: number; note?: string } | null
@@ -454,6 +458,12 @@ export interface ResearchSnapshot {
   researchers: ResearcherView[]
   /** The researcher the owner last picked, when it may still research. */
   researcher: string | null
+  /** Who researches, as the approved team says it: `named` is null for a team from before the mark, and `proposed` is who BMN would name then. */
+  choice: { named: string[] | null; proposed: string[] }
+  /** The name of a researcher the owner had picked that the team no longer names, until he picks again or researches. */
+  dropped: string | null
+  /** The fence test of the installed Codex as started from this window: whether one is going, and how the last one ended. */
+  fenceTest: { running: boolean; ended: { ok: boolean; text: string } | null }
   running: { researcher: string; done: number; total: number; lookup: boolean } | null
   /** How the last run started from this window ended, in words; `kept` when it found something, which the page then shows. Null when none has. */
   ended: { ok: boolean; text: string; kept: boolean } | null

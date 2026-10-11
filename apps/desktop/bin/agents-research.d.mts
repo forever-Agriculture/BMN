@@ -15,12 +15,20 @@ export declare function researchSubjects(data: RosterData): Omit<ResearchBatch, 
 export declare function researchBatches(data: RosterData): ResearchBatch[]
 export declare function researchPrompt(batch: ResearchBatch): string
 export declare function researchEffort(agent: { efforts: string[] }): string
-export declare function researchArgv(agent: RosterData['agents'][number], options?: { environment?: Environment; run?: { folder: string } | null; version?: string | null; contextTests?: unknown[] }): string[]
+export declare function researchArgv(agent: RosterData['agents'][number], options?: { environment?: Environment; run?: { folder: string; codex?: string } | null; version?: string | null; contextTests?: unknown[]; codexHome?: string }): string[]
 
-export interface Researcher { id: string; name: string; harness: string; ok: boolean; why?: string; reason?: string }
-export declare function researchers(options?: { environment?: Environment; now?: Date; fenceVersions?: Record<string, string[]> }): Researcher[]
+export interface Researcher { id: string; name: string; harness: string; ok: boolean; why?: string; reason?: string
+  /** For a Codex researcher: the tools the fence test saw, and whether they were compared under the provider's own model list yet. */
+  fence?: { tools: string[]; compared: boolean } }
+type FenceTestEntry = import('./agents-check.mjs').FenceTestEntry
+export declare function researchers(options?: { environment?: Environment; now?: Date; fenceVersions?: Record<string, string[]>; fenceTests?: FenceTestEntry[] }): Researcher[]
+/** Who researches, as the team says it: `named` is null for a team from before the mark; `proposed` is who BMN would name then. */
+export declare function researcherChoice(): { named: string[] | null; proposed: string[] }
 export declare function chosenResearcher(): string | null
 export declare function chooseResearcher(id: string): void
+/** The owner's pick against the team: one the team no longer names falls back to none, and `dropped` names it. */
+export declare function settledResearcher(): { researcher: string | null; dropped: string | null }
+export declare function forgetDroppedResearcher(): void
 
 export interface AnsweredPrice { input: number; output: number; cached_input?: number; source: string; as_of: string }
 export interface AnsweredWindow { tokens: number; source: string; as_of: string }
@@ -68,4 +76,7 @@ export declare function researchView(store: ResearchStore): ResearchViewShape
 export declare function runResearch(options: {
   researcher: string; only?: { provider: string; model: string } | null; environment?: Environment; now?: () => Date; signal?: AbortSignal
   onProgress?: (progress: { done: number; total: number }) => void; fetchPage?: FetchPage; limitMs?: number; contextTests?: unknown[]; fenceVersions?: Record<string, string[]>
+  fenceTests?: FenceTestEntry[]
+  /** Compares a Codex researcher's tool list under the provider's own model list with the tested one; the tests' seam. */
+  compare?: (options: { agent: RosterData['agents'][number]; environment?: Environment; now?: Date; tests?: FenceTestEntry[] }) => Promise<{ ok: boolean; reason?: string; compared?: boolean }>
 }): Promise<{ run: ResearchRunRecord; found: (FoundModel & { provider_id: string })[] }>

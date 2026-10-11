@@ -38,7 +38,7 @@ import {
 import type { IpcMainInvokeEvent } from 'electron'
 import { HARNESSES, RosterError, agentsDirectory, parseRoster, proseOf, readOnlyProposal, rewriteProse, rewriteRoster, rosterPath, sha256, starterRoster, type RosterData } from '../../bin/agents-roster.mjs'
 import { approvedIfAny, listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
-import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, harnessVersion, inspectRoute, limitStanding, versionStanding } from '../../bin/agents-check.mjs'
+import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, harnessVersion, inspectRoute, limitStanding, versionStanding, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import {
   applyTeamUpdate, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planTeamUpdate, probeInspector, render, writeMaster, type RulesHarness
 } from '../../bin/agents-rules.mjs'
@@ -49,7 +49,8 @@ import {
   CONTEXT_APPS, ContextError, applyContextDefault, contextAuto, contextAutoPlan, contextDefault, contextTestFolder, limitedAgents, planContextDefault, setContextAuto, sharingAgents,
   type ContextAutoPlanEntry, type ContextTestOutcome
 } from '../../bin/agents-context.mjs'
-import { chooseResearcher, chosenResearcher, fetchPublicPage, readResearch, researchView, researchers, runResearch, type ResearchRunRecord } from '../../bin/agents-research.mjs'
+import { chooseResearcher, fetchPublicPage, readResearch, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
+import { runFenceTest } from '../../bin/agents-fence.mjs'
 import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsTests } from '../../bin/agents-skills.mjs'
 import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsTests } from '../../bin/agents-tools.mjs'
 import { allowWorkspace, approveRoster, approveSections, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
@@ -86,6 +87,8 @@ export interface AgentsIpcOptions {
   researchFetch?: typeof fetchPublicPage
   /** How long one research may take in all; tests shorten it. */
   researchLimitMs?(): number | undefined
+  /** Runs the fence test of the installed Codex; tests replace it. */
+  fenceTest?: typeof runFenceTest
   /** Shows the owner a notice from BMN itself; absent in tests that have nobody to tell. */
   notifyApp?(notice: { title: string; body: string }): void
   /** The timer BMN's own context testing waits on before it tries once more; tests replace it. */
@@ -1099,6 +1102,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   let research: { researcher: string; done: number; total: number; lookup: boolean; controller: AbortController } | null = null
   let researchEnded: ResearchSnapshot['ended'] = null
   let researcherList: ResearcherView[] | null = null
+  // The fence test of the installed Codex (63.3): the owner starts it here, one at a time; it calls no provider.
+  let fenceTest: ResearchSnapshot['fenceTest'] = { running: false, ended: null }
   /** A research run starts the owner's own app: his environment, without BMN's stand-in commands on the program path. */
   const researchEnvironment = (ctx: RulesIpcContext): NodeJS.ProcessEnv => {
     const own = dirname(ctx.script)
@@ -1115,11 +1120,15 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     // Asking each agent's app for its version takes a moment, so it happens when Models or New agent opens, not on every look at a run.
     if (fresh) researcherList = researchers({ environment: researchEnvironment(ctx), now: ctx.now() }) as ResearcherView[]
     const able = (researcherList ?? []).filter((entry) => entry.ok)
-    const chosen = chosenResearcher()
+    // A pick the team no longer names falls back to none picked here, and the page says so (63.3 AC8).
+    const { researcher: chosen, dropped } = settledResearcher()
     return {
       ...researchView(readResearch()) as Pick<ResearchSnapshot, 'last' | 'previousAt' | 'models'>,
       researchers: researcherList ?? [],
       researcher: able.some((entry) => entry.id === chosen) ? chosen : able[0]?.id ?? null,
+      choice: researcherChoice(),
+      dropped: dropped === null ? null : approvedIfAny()?.data.agents.find((agent) => agent.id === dropped)?.name ?? dropped,
+      fenceTest,
       running: research === null ? null : { researcher: research.researcher, done: research.done, total: research.total, lookup: research.lookup },
       ended: researchEnded
     }
@@ -1132,7 +1141,23 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   }
   handle('aiterm:research:load', (params) => researchSnapshot(params.fresh === true))
   handle('aiterm:research:choose', (params) => {
-    chooseResearcher(textParam(params, 'researcher', 64))
+    const researcher = textParam(params, 'researcher', 64)
+    // Only one of the listed researchers can be picked: an agent the team does not name is not among them.
+    if ((researcherList ?? []).some((entry) => entry.id === researcher)) chooseResearcher(researcher)
+    return researchSnapshot(false)
+  })
+  handle('aiterm:research:fence-test', () => {
+    if (fenceTest.running || research !== null) return researchSnapshot(false)
+    const ctx = context()
+    fenceTest = { running: true, ended: null }
+    const finish = (ended: NonNullable<ResearchSnapshot['fenceTest']['ended']>): void => {
+      // Who is offered depends on the record the test just wrote, so the list is read again before the page hears of the end.
+      researcherList = researchers({ environment: researchEnvironment(ctx), now: ctx.now() }) as ResearcherView[]
+      fenceTest = { running: false, ended }
+    }
+    void (options.fenceTest ?? runFenceTest)({ environment: researchEnvironment(ctx), now: ctx.now() }).then(
+      (entry) => finish({ ok: entry.verdict === 'pass', text: fenceEndedWords(entry) }),
+      (error: unknown) => finish({ ok: false, text: `The fence test could not run: ${error instanceof Error ? error.message : String(error)}` }))
     return researchSnapshot(false)
   })
   handle('aiterm:research:start', (params) => {
@@ -1180,6 +1205,14 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     }
   })
   return { contextAutoAtStart: () => auto.trigger() }
+}
+
+/** How a fence test ended, for the page's notice. */
+export function fenceEndedWords(entry: Pick<FenceTestEntry, 'verdict' | 'version' | 'models' | 'reasons'>): string {
+  const app = `${ROSTER_APP_NAMES.codex}${entry.version === null ? '' : ` ${entry.version}`}`
+  if (entry.verdict === 'pass') return `The fence test of ${app} passed: a research run sends its provider nothing of yours.`
+  const why = [...entry.models.flatMap((model) => model.reasons.map((reason) => `${model.model}: ${reason}`)), ...(entry.reasons ?? [])]
+  return `The fence test of ${app} ${entry.verdict === 'fail' ? 'failed' : 'showed nothing'}${why.length === 0 ? '.' : `: ${why.slice(0, 3).join('; ')}.`} No Codex agent is offered as a researcher.`
 }
 
 /** How a research ended, for the page's notice. */

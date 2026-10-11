@@ -68,7 +68,7 @@ const FIELD_WORDS: Readonly<Record<string, string>> = {
   name: 'Name', class: 'Class', harness: 'Agent app', model: 'Model', provider: 'Provider', host: 'Host', enabled: 'On', status: 'Status',
   efforts: 'Efforts', roles: 'Roles', aliases: 'Also called', enabled_note: 'Reason it is off', context_window: 'Capacity', context_limit: 'Context limit',
   compact_at: 'Compact at', paid_by: 'Paid by', price: 'Price', description: 'Line', candidates: 'Order', then: 'If all fail', recheck: 'Recheck',
-  small_work: 'Small work', read_only: 'Read-only', hosts: 'Hosts', sites: 'Sites', private_work: 'Private work', folder: 'Workspace', basis: 'Destination', accepted_versions: 'Accepted versions',
+  small_work: 'Small work', read_only: 'Read-only', researcher: 'Researcher', hosts: 'Hosts', sites: 'Sites', private_work: 'Private work', folder: 'Workspace', basis: 'Destination', accepted_versions: 'Accepted versions',
   input: 'In', cached_input: 'Cached in', output: 'Out', source: 'Source', as_of: 'As of', public: 'Public', only: 'Only in',
   command: 'Program', args: 'Arguments', url: 'Address', env: 'Variables', headers: 'Headers', apps: 'Only in', agents: 'Only for the runs of'
 }
@@ -187,7 +187,7 @@ function formatPlain(value: unknown, field: string | undefined, names: Names): s
     return entries.map(([key, entry]) => `${(FIELD_WORDS[key] ?? key).toLowerCase()} ${formatPlain(entry, key, names)}`).join(' · ')
   }
   if (field === 'small_work') return candidateWords(String(value), names)
-  if (field === 'read_only') return value === true ? 'yes' : 'no'
+  if (field === 'read_only' || field === 'researcher') return value === true ? 'yes' : 'no'
   if (field === 'provider') return names.providers.get(String(value)) ?? String(value)
   const word = field === undefined ? undefined : VALUE_WORDS[field]?.[String(value)]
   if (word !== undefined) return word
@@ -501,6 +501,36 @@ export function readOnlyProposal(data: Pick<RosterDataShape, 'roles'>): string[]
 /** The proposal taken as it stands, for the owner to approve like any other change. */
 export function holdProposed(data: RosterDataShape): RosterDataShape {
   return readOnlyProposal(data).reduce((next, roleId) => setRoleReadOnly(next, roleId, true), data)
+}
+
+/** The agents a team names as researchers (63.3), or null while it names none: a team from before the mark. The same rule as the CLI's. */
+export function namedResearchers(data: Pick<RosterDataShape, 'agents'>): string[] | null {
+  const named = data.agents.filter((agent) => agent.researcher === true).map((agent) => agent.id)
+  return named.length === 0 ? null : named
+}
+
+/** Names an agent a researcher, or takes the mark away; the field is left out where it is not set, as the team file has it. */
+export function setResearcher(data: RosterDataShape, agentId: string, on: boolean): RosterDataShape {
+  return {
+    ...data,
+    agents: data.agents.map((agent) => {
+      if (agent.id !== agentId) return agent
+      const rest = { ...agent }
+      delete rest.researcher
+      return on ? { ...rest, researcher: true } : rest
+    })
+  }
+}
+
+/** BMN's proposal of who researches, taken as it stands, for the owner to approve like any other change. */
+export function nameResearchers(data: RosterDataShape, ids: readonly string[]): RosterDataShape {
+  return ids.reduce((next, id) => setResearcher(next, id, true), data)
+}
+
+/** "Opus", "Opus and Haiku", "Opus, Haiku and Sol": agents by the names the team gives them. */
+export function listedAgents(data: Pick<RosterDataShape, 'agents'>, ids: readonly string[]): string {
+  const names = ids.map((id) => data.agents.find((agent) => agent.id === id)?.name ?? id)
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`
 }
 
 /** "Epic reviewer", "Epic reviewer and Consultant", "Epic reviewer, Final reviewer and Consultant". */

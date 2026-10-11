@@ -173,7 +173,7 @@ export function PreferencesDialog(props: {
   const ensureResearch = research.ensure
   const startsAgent = parent === 'team' && shownTeamPage.name === 'new'
   // New agent offers Look up, which needs to know who may research.
-  useEffect(() => { if (startsAgent) ensureResearch(); else if (stagesDestination) peekResearch() }, [startsAgent, stagesDestination, ensureResearch, peekResearch])
+  useEffect(() => { if (startsAgent) ensureResearch(approvedVersion); else if (stagesDestination) peekResearch() }, [startsAgent, stagesDestination, ensureResearch, peekResearch, approvedVersion])
   const rulesNeedOwner = (rules.snapshot?.health.state === 'checked' && rules.snapshot.master.exists && rules.snapshot.health.targets.some((target) => target.state !== 'current'))
     || (rules.snapshot?.skills.pending ?? 0) > 0 || (rules.snapshot?.skills.exposed ?? 0) > 0
     || (rules.snapshot?.tools.pending ?? 0) > 0 || (rules.snapshot?.tools.exposed ?? 0) > 0

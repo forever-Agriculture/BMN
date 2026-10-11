@@ -62,7 +62,7 @@ const DOMAIN_PATTERN = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[
 export const FREE_TEXT_FIELDS = ['enabled_note', 'description']
 
 const REQUIRED_AGENT_FIELDS = ['name', 'class', 'harness', 'model', 'provider', 'host', 'enabled', 'status', 'efforts', 'roles']
-const OPTIONAL_AGENT_FIELDS = ['aliases', 'enabled_note', 'context_window', 'context_limit', 'compact_at', 'paid_by', 'price']
+const OPTIONAL_AGENT_FIELDS = ['aliases', 'enabled_note', 'context_window', 'context_limit', 'compact_at', 'paid_by', 'price', 'researcher']
 export const AGENT_FIELDS = [...REQUIRED_AGENT_FIELDS, ...OPTIONAL_AGENT_FIELDS]
 const PRICE_FIELDS = ['input', 'cached_input', 'output', 'source', 'as_of']
 const PROVIDER_FIELDS = ['name', 'hosts', 'sites', 'private_work']
@@ -79,6 +79,39 @@ export function readOnlyProposed(roleId) {
 /** The roles of a team that BMN proposes to hold to read-only and that are not held yet. */
 export function readOnlyProposal(data) {
   return (data?.roles ?? []).filter((role) => role.read_only !== true && readOnlyProposed(role.id)).map((role) => role.id)
+}
+
+/** The agent apps that have a research form the check admits. */
+export const RESEARCH_APPS = ['claude', 'codex']
+
+/**
+ * The agents the approved team names as researchers (63.3), or null while it names none: a team
+ * from before the mark, which keeps offering every agent that can research.
+ */
+export function namedResearchers(data) {
+  const named = (data?.agents ?? []).filter((agent) => agent.researcher === true).map((agent) => agent.id)
+  return named.length === 0 ? null : named
+}
+
+/**
+ * Who BMN proposes as researchers while the team names none: the knights and the pawns among the
+ * active agents on an app that can research, one per model, the first in the team's order. A lead
+ * and a helper of each model, never the same model twice, and never an agent whose provider gets
+ * public work only: it could not research. A proposal only: the owner approves it.
+ */
+export function researcherProposal(data) {
+  if (namedResearchers(data) !== null) return []
+  const seen = new Set()
+  const proposed = []
+  for (const agent of data?.agents ?? []) {
+    if (agentState(agent) !== 'active' || !RESEARCH_APPS.includes(agent.harness) || !['knight', 'pawn'].includes(agent.class)) continue
+    if (data.providers?.find((provider) => provider.id === agent.provider)?.private_work === 'public_only') continue
+    const model = `${agent.harness}\n${agent.model}`
+    if (seen.has(model)) continue
+    seen.add(model)
+    proposed.push(agent.id)
+  }
+  return proposed
 }
 
 /** The efforts a role names for an agent: its candidate entry, its effort for a recheck and the one for small work. Empty where the role does not name the agent. */
@@ -593,6 +626,7 @@ function validateAgent(id, entry, providerIds, add) {
   check('context_limit', positive, 'a positive whole number')
   check('compact_at', positive, 'a positive whole number')
   check('paid_by', enumOf(PAID_BY), PAID_BY.join(' | '))
+  check('researcher', (v) => typeof v === 'boolean', 'true | false')
   if (Object.hasOwn(value, 'price') && value.price !== null) {
     const problem = priceProblem(value.price)
     if (problem !== null) {

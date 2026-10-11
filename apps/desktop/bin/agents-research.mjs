@@ -3,11 +3,12 @@ import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { lookup as dnsLookup } from 'node:dns'
 import { closeSync, lstatSync, openSync, readFileSync, realpathSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
-import { APP_NAMES, EFFORTS, agentState } from './agents-roster.mjs'
+import { APP_NAMES, EFFORTS, RESEARCH_APPS, agentState, namedResearchers, researcherProposal } from './agents-roster.mjs'
 import { readApproved, stateDirectory } from './agents-state.mjs'
-import { CODEX_RESEARCH_ANSWER, CODEX_RESEARCH_CONFIG, RESEARCH_TOOLS, evaluateResearch, harnessVersion, prepareResearchRun, researchRunsDirectory } from './agents-check.mjs'
+import { CODEX_RESEARCH_ANSWER, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_HOME, RESEARCH_TOOLS, evaluateResearch, harnessVersion, prepareResearchRun, removeResearchCodexFolders, researchRunsDirectory } from './agents-check.mjs'
 import { contextItems, provenControls } from './agents-context.mjs'
 import { writePrivate } from './agents-rules.mjs'
 
@@ -21,8 +22,7 @@ import { writePrivate } from './agents-rules.mjs'
  * Scores, cost per task and recommendations are a later release.
  */
 
-/** The agent apps that have a research form the check admits. */
-export const RESEARCH_APPS = ['claude', 'codex']
+export { RESEARCH_APPS }
 /** One research ends after this long, whatever it has found. */
 export const RESEARCH_LIMIT_MS = 20 * 60 * 1000
 /** How many models that are not on the team one research may list. */
@@ -128,15 +128,18 @@ export function researchEffort(agent) {
 /**
  * The one command a research run is: `env -i` with the home folder and the program path, then the
  * app's research form (60.3 AC11). `run` is the folder BMN made for it, or null for the question
- * "could this agent research at all".
+ * "could this agent research at all". A Codex run is also pointed at a Codex folder of its own
+ * (63.3): the one in `run`, or `codexHome` where there is no run yet.
  */
-export function researchArgv(agent, { environment = process.env, run = null, version = null, contextTests = undefined } = {}) {
+export function researchArgv(agent, { environment = process.env, run = null, version = null, contextTests = undefined, codexHome = undefined } = {}) {
   const effort = researchEffort(agent)
   const proven = agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(agent.harness, version, contextTests)
   const context = contextItems(agent, proven)
   const head = ['/usr/bin/env', '-i', `HOME=${environment.HOME ?? ''}`, `PATH=${environment.PATH ?? ''}`]
   if (agent.harness === 'codex') {
-    return [...head, 'codex', 'exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only',
+    const home = run?.codex ?? codexHome ?? (run === null ? CODEX_RESEARCH_HOME : `${run.folder}/${CODEX_RESEARCH_HOME}`)
+    return [...head, `CODEX_HOME=${home}`, 'codex', 'exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '--strict-config',
+      ...CODEX_RESEARCH_DISABLED.flatMap((feature) => ['--disable', feature]),
       ...CODEX_RESEARCH_CONFIG.flatMap((entry) => ['-c', entry]), '-m', agent.model, '-c', `model_reasoning_effort="${effort}"`,
       ...(context.argv ?? []), '-o', run === null ? CODEX_RESEARCH_ANSWER : `${run.folder}/${CODEX_RESEARCH_ANSWER}`, '-']
   }
@@ -167,6 +170,10 @@ function whyNot(agent, code, detail = undefined) {
     return detail === 'out-of-range' ? `${app} does not take its context limit` : 'its context limit does not reach its command'
   }
   if (code === 'HARNESS_UNKNOWN') return `${app} was not found`
+  // The fence test is of exactly the installed version (63.3): each of its three standings has words of its own.
+  if (code === 'ROUTE_UNSUPPORTED' && detail === 'fence-untested') return `the fence test has not run for this version of ${app} yet`
+  if (code === 'ROUTE_UNSUPPORTED' && detail === 'fence-failed') return `the fence test of this version of ${app} did not pass`
+  if (code === 'ROUTE_UNSUPPORTED' && detail === 'fence-live') return `${app} offers it other tools than the fence test saw`
   if (code === 'ROUTE_UNSUPPORTED') return `BMN has not yet tested that ${app} keeps a research run to the web`
   return `BMN cannot check ${app}'s research command`
 }
@@ -184,10 +191,13 @@ function absentFolder(folder) {
 }
 
 /**
- * The approved, active agents and whether each could research now: the same check a run must
- * pass, without a folder or a prompt. `reason` says why not, in the check's own words.
+ * The team's researchers and whether each could research now: the same check a run must pass,
+ * without a folder or a prompt. `reason` says why not, in the check's own words. Who researches is
+ * part of the approved team (63.3): only the agents it names are listed, and an agent it does not
+ * name is not here at all. A team that names none is one from before the mark and lists every
+ * active agent, as it did.
  */
-export function researchers({ environment = process.env, now = new Date(), fenceVersions = undefined } = {}) {
+export function researchers({ environment = process.env, now = new Date(), fenceVersions = undefined, fenceTests = undefined } = {}) {
   let generation
   try {
     generation = readApproved()
@@ -207,35 +217,82 @@ export function researchers({ environment = process.env, now = new Date(), fence
   }
   const from = `${absentFolder(runs)}/cwd`
   const found = []
+  const named = namedResearchers(generation.data)
   for (const agent of generation.data.agents) {
-    if (agentState(agent) !== 'active') continue
+    if (agentState(agent) !== 'active' || (named !== null && !named.includes(agent.id))) continue
     if (!RESEARCH_APPS.includes(agent.harness)) {
       found.push({ id: agent.id, name: agent.name, harness: agent.harness, ok: false, why: `its app is ${APP_NAMES[agent.harness] ?? agent.harness}`, reason: `${APP_NAMES[agent.harness] ?? agent.harness} has no research form BMN can check` })
       continue
     }
     let result
     try {
-      result = evaluateResearch({ agent: agent.id, argv: researchArgv(agent, { environment, version: appVersion(agent, environment) }), dry: true }, { environment, cwd: from, now, ...(fenceVersions === undefined ? {} : { fenceVersions }) })
+      result = evaluateResearch({ agent: agent.id, argv: researchArgv(agent, { environment, version: appVersion(agent, environment), codexHome: `${dirname(from)}/${CODEX_RESEARCH_HOME}` }), dry: true },
+        { environment, cwd: from, now, ...(fenceVersions === undefined ? {} : { fenceVersions }), ...(fenceTests === undefined ? {} : { fenceTestLog: fenceTests }) })
     } catch (error) {
       result = { verdict: 'REFUSED', message: error instanceof Error ? error.message : String(error) }
     }
-    found.push({ id: agent.id, name: agent.name, harness: agent.harness, ok: result.verdict === 'PASS', ...(result.verdict === 'PASS' ? {} : { why: whyNot(agent, result.code, result.detail), reason: result.message }) })
+    found.push({
+      id: agent.id, name: agent.name, harness: agent.harness, ok: result.verdict === 'PASS',
+      ...(result.verdict === 'PASS' ? (result.fence === undefined ? {} : { fence: result.fence }) : { why: whyNot(agent, result.code, result.detail), reason: result.message })
+    })
   }
   return found
 }
 
-/** The researcher the owner last picked, or null. */
-export function chosenResearcher() {
+/**
+ * Who researches, as the team says it: `named` are the agents it names (null for a team from before
+ * the mark, where the choice still waits for the owner), `proposed` is who BMN would name then.
+ */
+export function researcherChoice() {
+  try {
+    const data = readApproved().data
+    return { named: namedResearchers(data), proposed: researcherProposal(data) }
+  } catch {
+    return { named: null, proposed: [] }
+  }
+}
+
+function researchSettings() {
   try {
     const value = JSON.parse(readFileSync(researchSettingsPath(), 'utf8'))
-    return typeof value?.researcher === 'string' ? value.researcher : null
+    return { researcher: typeof value?.researcher === 'string' ? value.researcher : null, dropped: typeof value?.dropped === 'string' ? value.dropped : null }
   } catch {
-    return null
+    return { researcher: null, dropped: null }
   }
+}
+
+/** The researcher the owner last picked, or null. */
+export function chosenResearcher() {
+  return researchSettings().researcher
 }
 
 export function chooseResearcher(id) {
   writePrivate(researchSettingsPath(), `${JSON.stringify({ version: 1, researcher: id })}\n`)
+}
+
+/**
+ * The owner's pick as it stands against the team (63.3 AC8): a researcher he picked that the team
+ * no longer names falls back to none picked. `dropped` names that agent until he picks again or a
+ * research starts, so Models can say it once; it is written only the one time the pick falls back.
+ */
+export function settledResearcher() {
+  const settings = researchSettings()
+  let named
+  try {
+    named = namedResearchers(readApproved().data)
+  } catch {
+    return settings
+  }
+  if (settings.researcher === null || named === null || named.includes(settings.researcher)) return settings
+  const fallen = { researcher: null, dropped: settings.researcher }
+  writePrivate(researchSettingsPath(), `${JSON.stringify({ version: 1, ...fallen })}\n`)
+  return fallen
+}
+
+/** The note about a fallen-back pick has been said, or acted on. */
+export function forgetDroppedResearcher() {
+  const settings = researchSettings()
+  if (settings.dropped !== null) writePrivate(researchSettingsPath(), `${JSON.stringify({ version: 1, researcher: settings.researcher })}\n`)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -842,10 +899,13 @@ function runOnce(argv, run, { signal, deadline }) {
  * kept as soon as it ends, so Stop, the time limit or a failed run keeps what the earlier runs
  * found; the research is then marked partial. `only` researches one name on one provider (Look up).
  * Returns the run record and what it found; nothing is thrown for a refusal or a failed run.
+ * With a Codex researcher BMN first compares the tool list under the provider's own model list with
+ * the one the fence test saw (`compare`, 63.3 AC6): no run starts, and no answer is used, where
+ * they differ or cannot be compared.
  */
 export async function runResearch({
   researcher, only = null, environment = process.env, now = () => new Date(), signal = undefined, onProgress = () => {},
-  fetchPage = fetchPublicPage, limitMs = RESEARCH_LIMIT_MS, contextTests = undefined, fenceVersions = undefined
+  fetchPage = fetchPublicPage, limitMs = RESEARCH_LIMIT_MS, contextTests = undefined, fenceVersions = undefined, fenceTests = undefined, compare = undefined
 } = {}) {
   const started = now()
   const generation = readApproved()
@@ -875,23 +935,50 @@ export async function runResearch({
   const failures = []
   let done = 0
   let ended = null
+  let compared = agent.harness !== 'codex'
   onProgress({ done, total })
   for (const batch of batches) {
     if (signal?.aborted) ended = 'stopped'
     else if (Date.now() >= deadline) ended = 'limit'
     if (ended !== null) break
     const prompt = researchPrompt(batch)
-    const run = prepareResearchRun(prompt, { now: now() })
+    const run = prepareResearchRun(prompt, { now: now(), harness: agent.harness, environment })
     const argv = researchArgv(agent, { environment, run, version: appVersion(agent, environment), contextTests })
-    const verdict = evaluateResearch({ agent: agent.id, argv, stdin: run.prompt, cwd: run.cwd }, { environment, cwd: run.cwd, now: now(), ...(contextTests === undefined ? {} : { contextTestLog: contextTests }), ...(fenceVersions === undefined ? {} : { fenceVersions }) })
+    const verdict = evaluateResearch({ agent: agent.id, argv, stdin: run.prompt, cwd: run.cwd }, {
+      environment, cwd: run.cwd, now: now(), ...(contextTests === undefined ? {} : { contextTestLog: contextTests }),
+      ...(fenceVersions === undefined ? {} : { fenceVersions }), ...(fenceTests === undefined ? {} : { fenceTestLog: fenceTests })
+    })
     if (verdict.verdict !== 'PASS') {
       // The same refusal would meet every later run: nothing more is started.
+      removeResearchCodexFolders(run)
       failures.push(`BMN did not start the run: ${verdict.message}`)
       ended = 'refused'
       break
     }
+    if (!compared) {
+      // Once per research, after the check and before the first run: the fence test knew only the model list Codex was built with.
+      let same
+      try {
+        same = await (compare ?? (await import('./agents-fence.mjs')).compareUnderProviderList)({ agent, environment, now: now(), ...(fenceTests === undefined ? {} : { tests: fenceTests }) })
+      } catch (error) {
+        same = { ok: false, reason: error instanceof Error ? error.message : String(error) }
+      }
+      if (!same.ok) {
+        removeResearchCodexFolders(run)
+        failures.push(`BMN did not start the run: ${same.reason}`)
+        ended = 'refused'
+        break
+      }
+      compared = true
+    }
     writePrivate(`${run.folder}/receipt.json`, `${JSON.stringify(verdict.receipt)}\n`)
-    const result = await runOnce(argv, run, { signal, deadline })
+    let result
+    try {
+      result = await runOnce(argv, run, { signal, deadline })
+    } finally {
+      // The run's own Codex folder goes with the run: the link is removed, never the sign-in file it points at.
+      removeResearchCodexFolders(run)
+    }
     if (result.ended === 'stopped' || result.ended === 'limit') {
       ended = result.ended
       break

@@ -1,16 +1,16 @@
 // MODULE: agents-research.test.ts - Story 60.10 (first release): model research over a synthetic team, stub researchers and made-up pages; no provider and no real site is reached
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { CODEX_RESEARCH_CONFIG, researchRunsDirectory } from '../../bin/agents-check.mjs'
+import { CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_TOOLS_SEEN, researchFormHash, researchRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import {
-  MAX_LISTED, answerText, chooseResearcher, chosenResearcher, fetchPublicPage, isPublicAddress, mergeResearch, ownNames, pageText, parseAnswer, priceShown, readResearch,
-  researchArgv, researchBatches, researchEffort, researchPrompt, researchResultsPath, researchSubjects, researchView, researchers, runResearch, sourceRank,
+  MAX_LISTED, answerText, chooseResearcher, chosenResearcher, fetchPublicPage, forgetDroppedResearcher, isPublicAddress, mergeResearch, ownNames, pageText, parseAnswer, priceShown, readResearch,
+  researchArgv, researchBatches, researchEffort, researchPrompt, researchResultsPath, researchSubjects, researchView, researcherChoice, researchers, runResearch, settledResearcher, sourceRank,
   verifyModels, windowShown, type AnsweredModel, type PageRead, type ResearchBatch
 } from '../../bin/agents-research.mjs'
-import { parseRoster } from '../../bin/agents-roster.mjs'
+import { namedResearchers, parseRoster, researcherProposal } from '../../bin/agents-roster.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
 
@@ -46,7 +46,10 @@ const fs = require('node:fs')
 const home = process.env.HOME
 if (process.argv[2] === '--version') { console.log(${JSON.stringify(version)}); process.exit(0) }
 const prompt = fs.readFileSync(0, 'utf8')
-fs.appendFileSync(home + '/calls.log', JSON.stringify({ app: ${JSON.stringify(name)}, argv: process.argv.slice(2), env: process.env, cwd: process.cwd(), files: fs.readdirSync('.'), prompt }) + '\\n')
+const own = process.env.CODEX_HOME
+const codex = own === undefined ? undefined : fs.readdirSync(own).map((entry) => entry + (fs.lstatSync(own + '/' + entry).isSymbolicLink() ? ' -> ' + fs.readlinkSync(own + '/' + entry) : ''))
+fs.appendFileSync(home + '/calls.log', JSON.stringify({ app: ${JSON.stringify(name)}, argv: process.argv.slice(2), env: process.env, cwd: process.cwd(), files: fs.readdirSync('.'), codex, prompt }) + '\\n')
+if (own !== undefined) fs.writeFileSync(own + '/state_5.sqlite', 'the app keeps its own state in its folder')
 const plan = JSON.parse(fs.readFileSync(home + '/plan.json', 'utf8'))
 const key = Object.keys(plan).find((model) => prompt.includes('- ' + model + '\\n'))
 const entry = plan[key] ?? { text: 'no plan for this prompt' }
@@ -61,7 +64,7 @@ setTimeout(() => {
 
 interface Plan { text?: string; delay?: number; exit?: number; error?: boolean }
 const plan = (entries: Record<string, Plan>): void => writeFileSync(join(home, 'plan.json'), JSON.stringify(entries))
-const calls = (): { app: string; argv: string[]; env: Record<string, string>; cwd: string; files: string[]; prompt: string }[] =>
+const calls = (): { app: string; argv: string[]; env: Record<string, string>; cwd: string; files: string[]; codex?: string[]; prompt: string }[] =>
   (existsSync(join(home, 'calls.log')) ? readFileSync(join(home, 'calls.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [])
 
 const price = (input: number, output: number, source: string, cached?: number) => ({ input, output, ...(cached === undefined ? {} : { cached_input: cached }), source, as_of: '2026-10-10' })
@@ -101,8 +104,13 @@ const FULL: Record<string, Plan> = { 'claude-fable-5-1': { text: ANTHROPIC_ANSWE
 
 const research = (options: Partial<Parameters<typeof runResearch>[0]> = {}) => runResearch({ researcher: 'fable', environment: env, now: () => NOW, fetchPage, ...options })
 const data = () => readApproved().data
-/** As on a Codex version whose research fence the owner's test verified; none is recorded yet. */
-const FENCED = { codex: ['0.161.0'] }
+/** A fence test on record as passed for the stub Codex's version and each of the team's Codex models (63.3). */
+const FENCED: FenceTestEntry[] = [{
+  harness: 'codex', at: '2026-10-10T11:00:00.000Z', version: '0.161.0', form: researchFormHash('codex'), catalog: 'bundled', verdict: 'pass', reasons: [],
+  models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna'].map((id) => ({ model: id, verdict: 'pass' as const, tools: [...CODEX_RESEARCH_TOOLS_SEEN], reasons: [] }))
+}]
+/** The comparison under the provider's own model list, as one that found the same tools. */
+const SAME = async () => ({ ok: true, compared: true })
 
 beforeEach(() => {
   home = realpathSync(mkdtempSync(join(tmpdir(), 'bmn-research-')))
@@ -153,8 +161,16 @@ describe('what BMN asks (60.10 AC2)', () => {
     expect(researchEffort(luna)).toBe('max')
     expect(researchArgv(fable, { environment: env })).toEqual(['/usr/bin/env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, 'claude', '-p', '--model', 'claude-fable-5-1', '--effort', 'low',
       '--safe-mode', '--tools', 'WebSearch,WebFetch', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-session-persistence', '--output-format', 'json'])
-    expect(researchArgv(luna, { environment: env, run: { folder: '/run' } })).toEqual(['/usr/bin/env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, 'codex', 'exec', '--skip-git-repo-check', '--ephemeral',
-      '--sandbox', 'read-only', ...CODEX_RESEARCH_CONFIG.flatMap((entry) => ['-c', entry]), '-m', 'gpt-6-luna', '-c', 'model_reasoning_effort="max"', '-o', '/run/answer.md', '-'])
+    // A Codex run is pointed at a Codex folder of its own and carries the switches of the form that held in the fence test (63.3 AC1).
+    expect(researchArgv(luna, { environment: env, run: { folder: '/run', codex: '/run/codex' } })).toEqual(['/usr/bin/env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, 'CODEX_HOME=/run/codex',
+      'codex', 'exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '--strict-config', '--disable', 'view_image', '--disable', 'goals', '--disable', 'image_generation',
+      '--disable', 'sleep_tool', '--disable', 'hooks', '-c', 'mcp_servers={}', '-c', 'web_search="live"', '-c', 'features.shell_tool=false', '-c', 'features.unified_exec=false',
+      '-c', 'features.multi_agent=false', '-c', 'features.apps=false', '-c', 'features.plugins=false', '-c', 'skills.include_instructions=false', '-c', 'skills.bundled.enabled=false',
+      '-c', 'include_apps_instructions=false', '-c', 'include_collaboration_mode_instructions=false', '-c', 'include_environment_context=false', '-c', 'project_doc_max_bytes=0',
+      '-m', 'gpt-6-luna', '-c', 'model_reasoning_effort="max"', '-o', '/run/answer.md', '-'])
+    expect(CODEX_RESEARCH_CONFIG.slice(0, 7)).toEqual(['mcp_servers={}', 'web_search="live"', 'features.shell_tool=false', 'features.unified_exec=false', 'features.multi_agent=false', 'features.apps=false', 'features.plugins=false'])
+    expect(CODEX_RESEARCH_DISABLED).toEqual(['view_image', 'goals', 'image_generation', 'sleep_tool', 'hooks'])
+    expect(researchArgv(luna, { environment: env, run: { folder: '/run' } })[4]).toBe('CODEX_HOME=/run/codex')
   })
 })
 
@@ -165,10 +181,17 @@ describe('who may research (60.10 AC1)', () => {
     expect(edited).not.toBe(EXAMPLE)
     approve(edited)
     const found = researchers({ environment: env, now: NOW })
-    // Only Claude Code's research form runs today: another app researches once the fence of its installed version is verified.
+    // Claude Code's research form runs as it is; Codex researches once the fence test of its installed version is on record as passed.
     expect(found.filter((entry) => entry.ok).map((entry) => entry.id)).toEqual(['opus', 'fable'])
-    expect(found.find((entry) => entry.id === 'astra')).toMatchObject({ ok: false, reason: expect.stringContaining('research runs in Codex only on a version whose fence BMN verified') })
-    expect(researchers({ environment: env, now: NOW, fenceVersions: FENCED }).filter((entry) => entry.ok).map((entry) => entry.id)).toEqual(['sol', 'opus', 'astra', 'fable', 'luna'])
+    expect(found.find((entry) => entry.id === 'astra')).toMatchObject({ ok: false, why: 'the fence test has not run for this version of Codex yet',
+      reason: expect.stringContaining('research runs in Codex only on a version whose fence test passed') })
+    const fenced = researchers({ environment: env, now: NOW, fenceTests: FENCED })
+    expect(fenced.filter((entry) => entry.ok).map((entry) => entry.id)).toEqual(['sol', 'opus', 'astra', 'fable', 'luna'])
+    expect(fenced.find((entry) => entry.id === 'luna')).toEqual({ id: 'luna', name: 'Luna', harness: 'codex', ok: true, fence: { tools: CODEX_RESEARCH_TOOLS_SEEN, compared: false } })
+    // A version the record does not name stays closed.
+    stubApp('codex', 'codex-cli 0.162.0')
+    expect(researchers({ environment: env, now: NOW, fenceTests: FENCED }).filter((entry) => entry.ok).map((entry) => entry.id)).toEqual(['opus', 'fable'])
+    stubApp('codex', 'codex-cli 0.161.0')
     // Proposed agents are not offered at all; a public-only provider needs a verified fence; OpenCode has no research form.
     expect(found.map((entry) => entry.id)).not.toContain('sonnet')
     expect(found.find((entry) => entry.id === 'glm')).toMatchObject({ ok: false, reason: expect.stringContaining('fence') })
@@ -221,6 +244,85 @@ describe('who may research (60.10 AC1)', () => {
     expect(chosenResearcher()).toBeNull()
     chooseResearcher('luna')
     expect(chosenResearcher()).toBe('luna')
+  })
+})
+
+describe('who researches is part of the approved team (63.3 AC7, AC8)', () => {
+  /** The owner's team as it stood: a second Opus (a queen) beside the knight, and Haiku active. */
+  const TWO_OPUS = EXAMPLE
+    .replace('## astra', '## opus-2\n\n```yaml\nname: Opus 2\nclass: queen\nharness: claude\nmodel: claude-opus-5-5\nprovider: anthropic\nhost: default\nenabled: true\nstatus: active\nefforts: [medium, high, xhigh]\nroles: [lead]\n```\n\n## astra')
+    .replace('status: proposed\nefforts: [low, medium, high]\nroles: []\ncontext_window: 200000', 'status: active\nefforts: [low, medium, high]\nroles: [helper]\ncontext_window: 200000')
+  /** The same file with `researcher: true` on each named agent's own entry. */
+  const naming = (text: string, ...ids: string[]) => ids.reduce((all, id) => {
+    const roles = all.indexOf('\nroles:', all.indexOf(`## ${id}\n`))
+    const end = all.indexOf('\n', roles + 1)
+    return `${all.slice(0, end)}\nresearcher: true${all.slice(end)}`
+  }, text)
+  const offered = () => researchers({ environment: env, now: NOW, fenceTests: FENCED })
+
+  it('BMN proposes the knights and the pawns on an app that can research, one per model: the first Opus, Haiku, Sol and Luna', () => {
+    approve(TWO_OPUS)
+    expect(namedResearchers(data())).toBeNull()
+    expect(researcherProposal(data())).toEqual(['sol', 'opus', 'luna', 'haiku'])
+    expect(researcherChoice()).toEqual({ named: null, proposed: ['sol', 'opus', 'luna', 'haiku'] })
+    // Never the same model twice, whatever class the second agent of that model has; never a proposed or switched-off agent.
+    const team = data()
+    const second = { ...team.agents.find((agent) => agent.id === 'opus')!, id: 'opus-3' }
+    expect(researcherProposal({ agents: [...team.agents, second] })).toEqual(['sol', 'opus', 'luna', 'haiku'])
+    expect(researcherProposal({ agents: team.agents.map((agent) => (agent.id === 'haiku' ? { ...agent, enabled: false } : agent)) })).toEqual(['sol', 'opus', 'luna'])
+    expect(researcherProposal(parseRoster(EXAMPLE).data)).toEqual(['sol', 'opus', 'luna'])
+    // An agent whose provider gets public work only could not research, so it is not proposed.
+    const closed = { ...team, providers: team.providers.map((provider) => (provider.id === 'openai' ? { ...provider, private_work: 'public_only' as const } : provider)) }
+    expect(researcherProposal(closed)).toEqual(['opus', 'haiku'])
+    // Once the team names anyone there is nothing left to propose.
+    approve(naming(TWO_OPUS, 'opus'))
+    expect(researcherChoice()).toEqual({ named: ['opus'], proposed: [] })
+  })
+
+  it('a team from before the mark keeps offering what it offered, both agents of one model among them', () => {
+    approve(TWO_OPUS)
+    expect(offered().map((entry) => [entry.id, entry.ok])).toEqual([['sol', true], ['opus', true], ['opus-2', true], ['astra', true], ['fable', true], ['luna', true], ['haiku', true]])
+  })
+
+  it('once the team names its researchers only those are offered: one Opus where the team holds two, and no row for anyone else', () => {
+    approve(naming(TWO_OPUS, 'sol', 'opus', 'luna', 'haiku'))
+    expect(namedResearchers(data())).toEqual(['sol', 'opus', 'luna', 'haiku'])
+    const found = offered()
+    expect(found.map((entry) => entry.id)).toEqual(['sol', 'opus', 'luna', 'haiku'])
+    // Not a greyed row with a reason: an agent the team does not name is not listed at all.
+    for (const id of ['opus-2', 'astra', 'fable', 'glm', 'sonnet']) expect(found.find((entry) => entry.id === id)).toBeUndefined()
+    expect(found.every((entry) => entry.ok)).toBe(true)
+    // A named agent that cannot research now is still listed, with why: here Sol and Luna, on a Codex version with no fence test on record.
+    expect(researchers({ environment: env, now: NOW }).map((entry) => [entry.id, entry.ok, entry.why])).toEqual([['sol', false, 'the fence test has not run for this version of Codex yet'],
+      ['opus', true, undefined], ['luna', false, 'the fence test has not run for this version of Codex yet'], ['haiku', true, undefined]])
+  })
+
+  it('a research with an agent the team does not name is refused by the check and starts nothing', async () => {
+    approve(naming(TWO_OPUS, 'opus'))
+    plan(FULL)
+    const result = await research({ researcher: 'opus-2' })
+    expect(result.run).toMatchObject({ state: 'failed', models: 0, note: 'BMN did not start the run: opus-2 is not one of the team\'s researchers (opus)' })
+    expect((await research({ researcher: 'astra', fenceTests: FENCED, compare: SAME })).run.note).toContain('astra is not one of the team\'s researchers')
+    expect(calls()).toEqual([])
+    expect((await research({ researcher: 'opus' })).run.state).not.toBe('failed')
+  })
+
+  it('a researcher he had picked that is no longer named falls back to none picked, and its name is kept to be said once', () => {
+    approve(TWO_OPUS)
+    chooseResearcher('opus-2')
+    // The team names no one yet: his pick stands.
+    expect(settledResearcher()).toEqual({ researcher: 'opus-2', dropped: null })
+    approve(naming(TWO_OPUS, 'sol', 'opus', 'luna', 'haiku'))
+    expect(settledResearcher()).toEqual({ researcher: null, dropped: 'opus-2' })
+    expect(chosenResearcher()).toBeNull()
+    expect(settledResearcher()).toEqual({ researcher: null, dropped: 'opus-2' })
+    // Said, or acted on: picking again or the note being read ends it.
+    forgetDroppedResearcher()
+    expect(settledResearcher()).toEqual({ researcher: null, dropped: null })
+    chooseResearcher('opus-2')
+    expect(settledResearcher().dropped).toBe('opus-2')
+    chooseResearcher('opus')
+    expect(settledResearcher()).toEqual({ researcher: 'opus', dropped: null })
   })
 })
 
@@ -657,30 +759,59 @@ describe('a research run (60.10 AC2-AC5)', () => {
     expect(existsSync(researchResultsPath())).toBe(false)
   })
 
-  it('a Codex agent researches through its own form, once its version\'s fence is verified, and writes the answer beside the prompt', async () => {
+  it('a Codex agent researches through its own form, once the fence test of its version is on record, and writes the answer beside the prompt', async () => {
     plan(FULL)
+    mkdirSync(join(home, '.codex'))
+    writeFileSync(join(home, '.codex/auth.json'), '{"synthetic":"sign-in"}\n')
     // Without that record no run is started.
-    const refused = await research({ researcher: 'astra' })
-    expect(refused.run).toMatchObject({ state: 'failed', models: 0, note: expect.stringContaining('BMN did not start the run: research runs in Codex only on a version whose fence BMN verified') })
+    const refused = await research({ researcher: 'astra', compare: SAME })
+    expect(refused.run).toMatchObject({ state: 'failed', models: 0, note: expect.stringContaining('BMN did not start the run: research runs in Codex only on a version whose fence test passed') })
     expect(calls()).toEqual([])
-    const result = await research({ researcher: 'astra', fenceVersions: FENCED })
+    const compared: string[] = []
+    const result = await research({ researcher: 'astra', fenceTests: FENCED, compare: async ({ agent }) => { compared.push(agent.id); return { ok: true } } })
     expect(result.run).toMatchObject({ state: 'complete', researcher_name: 'Astra', models: 9 })
+    // Once per research, before its first run: is the tool list under the provider's own model list the tested one (63.3 AC6)?
+    expect(compared).toEqual(['astra'])
+    expect(calls()).toHaveLength(3)
     const first = calls()[0]!
     expect(first.app).toBe('codex')
-    expect(first.argv.slice(0, 5)).toEqual(['exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only'])
-    expect(first.argv).toEqual(expect.arrayContaining(['web_search="live"', 'features.shell_tool=false', 'mcp_servers={}', 'gpt-6-astra', 'model_reasoning_effort="low"']))
+    expect(first.argv.slice(0, 6)).toEqual(['exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '--strict-config'])
+    expect(first.argv).toEqual(expect.arrayContaining(['web_search="live"', 'features.shell_tool=false', 'mcp_servers={}', 'project_doc_max_bytes=0', 'hooks', 'gpt-6-astra', 'model_reasoning_effort="low"']))
     expect(first.argv.at(-1)).toBe('-')
     expect(first.files).toEqual([])
-    expect(Object.keys(first.env).filter((name) => !['HOME', 'PATH'].includes(name) && !name.startsWith('__'))).toEqual([])
+    expect(Object.keys(first.env).filter((name) => !['HOME', 'PATH', 'CODEX_HOME'].includes(name) && !name.startsWith('__'))).toEqual([])
     expect(first.argv[first.argv.indexOf('-o') + 1]).toBe(join(first.cwd, '..', 'answer.md'))
+    // The run saw a Codex folder of its own that held only the link to the sign-in file (63.3 AC1) ...
+    expect(first.env.CODEX_HOME).toBe(join(first.cwd, '..', 'codex'))
+    for (const call of calls()) expect(call.codex).toEqual([`auth.json -> ${join(home, '.codex/auth.json')}`])
+    // ... and that folder went with the run, whatever the app left in it; the sign-in file is as it was (63.3 AC5).
+    for (const call of calls()) expect(existsSync(join(call.cwd, '..', 'codex'))).toBe(false)
+    expect(existsSync(join(first.cwd, '..', 'receipt.json'))).toBe(true)
+    expect(readFileSync(join(home, '.codex/auth.json'), 'utf8')).toBe('{"synthetic":"sign-in"}\n')
+    expect(lstatSync(join(home, '.codex/auth.json')).isSymbolicLink()).toBe(false)
+  })
+
+  it('no Codex run starts, and no answer is used, where the tool list under the provider\'s own model list is not the tested one (63.3 AC6)', async () => {
+    plan(FULL)
+    const differs = await research({ researcher: 'astra', fenceTests: FENCED, compare: async () => ({ ok: false, reason: 'under the provider\'s own model list the fence test of Codex 0.161.0 did not pass for gpt-6-astra: a tool BMN has not looked at: function:functions.shell' }) })
+    expect(differs.run).toMatchObject({ state: 'failed', models: 0, note: expect.stringContaining('BMN did not start the run: under the provider\'s own model list') })
+    const broken = await research({ researcher: 'astra', fenceTests: FENCED, compare: async () => { throw new Error('the comparison broke') } })
+    expect(broken.run).toMatchObject({ state: 'failed', note: 'BMN did not start the run: the comparison broke' })
+    expect(calls()).toEqual([])
+    expect(existsSync(researchResultsPath())).toBe(false)
+    // The folder BMN made for the run that never started is gone too.
+    for (const name of readdirSync(researchRunsDirectory())) expect(existsSync(join(researchRunsDirectory(), name, 'codex'))).toBe(false)
+    // A researcher on Claude Code is never compared: its tools are the ones its command names.
+    const claude = await research({ compare: async () => { throw new Error('not asked') } })
+    expect(claude.run.state).toBe('complete')
   })
 
   it('an agent whose context limit the owner\'s test proved researches with that limit in its command', async () => {
     // Sol has a context limit; once its setting is proven on this Codex version, every run of Sol must carry it.
     writeFileSync(join(home, '.config/bmn/agents/state/context-tests.jsonl'), `${JSON.stringify({ harness: 'codex', version: '0.161.0', limit: 'pass', compact: 'pass' })}\n`)
-    expect(researchers({ environment: env, now: NOW, fenceVersions: FENCED }).find((entry) => entry.id === 'sol')).toEqual({ id: 'sol', name: 'Sol', harness: 'codex', ok: true })
+    expect(researchers({ environment: env, now: NOW, fenceTests: FENCED }).find((entry) => entry.id === 'sol')).toMatchObject({ id: 'sol', name: 'Sol', harness: 'codex', ok: true })
     plan(FULL)
-    const result = await research({ researcher: 'sol', fenceVersions: FENCED })
+    const result = await research({ researcher: 'sol', fenceTests: FENCED, compare: SAME })
     expect(result.run).toMatchObject({ state: 'complete', models: 9 })
     const first = calls()[0]!
     expect(first.argv).toEqual(expect.arrayContaining(['model_context_window=272000']))

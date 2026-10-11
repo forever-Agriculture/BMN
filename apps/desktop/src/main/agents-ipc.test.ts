@@ -5,10 +5,11 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, ResearchLookup, ResearchSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan, ToolProposalView, ToolsPlan } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { CODEX_RESEARCH_TOOLS_SEEN, fenceTestsPath, researchFormHash, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import { contextAuto, contextTests, setContextAuto } from '../../bin/agents-context.mjs'
 import { fetchPublicPage } from '../../bin/agents-research.mjs'
 import { approveRoster, restoreGeneration, saveAndApprove } from './agents-approval'
-import { fileToApproved, installAgentsIpcHandlers, researchEndedWords, type AgentsIpcHandle } from './agents-ipc'
+import { fenceEndedWords, fileToApproved, installAgentsIpcHandlers, researchEndedWords, type AgentsIpcHandle } from './agents-ipc'
 
 const FIXTURE = readFileSync(fileURLToPath(new URL('../utility/test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 /** BMN cannot inspect where OpenCode sends data, so the team these tests approve records it on the owner's word. */
@@ -25,6 +26,8 @@ let appEnv: Record<string, string>
 let researchPages: string | null
 let researchFetch: typeof fetchPublicPage | null
 let researchLimitMs: number | undefined
+/** What the fence test started from Models does here; none is expected unless a test sets one. */
+let fenceTest: NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]>['fenceTest'] | null
 /** What installing the handlers handed back, and the notices BMN itself showed. */
 let ipc: AgentsIpcHandle
 let notices: { title: string; body: string }[]
@@ -50,6 +53,7 @@ beforeEach(() => {
   researchPages = null
   researchFetch = null
   researchLimitMs = undefined
+  fenceTest = null
   notices = []
   // BMN's own context testing is off here, as an owner may have it, so no test starts a stand-in app behind another test's back; its own tests switch it on.
   setContextAuto({ enabled: false })
@@ -57,6 +61,10 @@ beforeEach(() => {
     senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...appEnv }),
     openPath: async (path) => (existsSync(path) ? '' : 'no such file'), researchPages: () => researchPages,
     researchFetch: (address, limits) => (researchFetch ?? fetchPublicPage)(address, limits), researchLimitMs: () => researchLimitMs,
+    fenceTest: async (options) => {
+      if (fenceTest === null || fenceTest === undefined) throw new Error('no fence test is expected here')
+      return fenceTest(options)
+    },
     notifyApp: (notice) => { notices.push(notice) }, contextRetryLater: () => {}
   })
 })
@@ -984,12 +992,16 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     expect(plain).toMatchObject({ last: null, previousAt: null, models: [], researchers: [], researcher: null, running: null, ended: null })
     const fresh = await load(true)
     expect(fresh.researchers.map((agent) => [agent.id, agent.harness, agent.ok])).toEqual([['sol', 'codex', false], ['opus', 'claude', true], ['astra', 'codex', false], ['fable', 'claude', true], ['luna', 'codex', false]])
-    // Research runs in Claude Code only until another app's fence is verified on its installed version.
-    expect(fresh.researchers.find((agent) => agent.id === 'sol')?.reason).toContain('research runs in Codex only on a version whose fence BMN verified')
+    // Codex researches only where the fence test of its installed version is on record as passed (63.3).
+    expect(fresh.researchers.find((agent) => agent.id === 'sol')).toMatchObject({ why: 'the fence test has not run for this version of Codex yet',
+      reason: expect.stringContaining('research runs in Codex only on a version whose fence test passed') })
     expect(fresh.researcher).toBe('opus')
+    // A team from before the mark: the choice of who researches waits for the owner, and BMN says whom it would name.
+    expect(fresh).toMatchObject({ choice: { named: null, proposed: ['sol', 'opus', 'luna'] }, dropped: null, fenceTest: { running: false, ended: null } })
     expect((await call<ResearchSnapshot>('research:choose', { researcher: 'fable' })).researcher).toBe('fable')
-    // A pick that can no longer research falls back to one that can.
-    expect((await call<ResearchSnapshot>('research:choose', { researcher: 'sonnet' })).researcher).toBe('opus')
+    // Only a listed researcher can be picked: Sonnet is proposed, so it is not among them and the pick stands.
+    expect((await call<ResearchSnapshot>('research:choose', { researcher: 'sonnet' })).researcher).toBe('fable')
+    // A pick that cannot research now falls back to one that can.
     expect((await call<ResearchSnapshot>('research:choose', { researcher: 'astra' })).researcher).toBe('opus')
     expect(calls()).toEqual([])
   })
@@ -1102,6 +1114,88 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     await call<ResearchSnapshot>('research:start', { researcher: 'fable' })
     const state = await ended()
     expect(state.models.find((model) => model.id === 'claude-opus-5-5')!.price).toMatchObject({ verified: false, why: 'not a public address' })
+  })
+
+  describe('who researches, and Codex behind its fence (63.3)', () => {
+    /** The team file with `researcher: true` on each named agent's own entry, approved as the owner would. */
+    const name = async (...ids: string[]): Promise<void> => {
+      const text = ids.reduce((all, id) => {
+        const end = all.indexOf('\n', all.indexOf('\nroles:', all.indexOf(`## ${id}\n`)) + 1)
+        return `${all.slice(0, end)}\nresearcher: true${all.slice(end)}`
+      }, readFileSync(rosterFile(), 'utf8'))
+      writeFileSync(rosterFile(), text)
+      expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
+    }
+    const passed = (models: string[], fields: Partial<FenceTestEntry> = {}): FenceTestEntry => ({
+      harness: 'codex', at: '2026-10-10T11:00:00.000Z', version: '0.161.0', form: researchFormHash('codex'), catalog: 'bundled', verdict: 'pass', reasons: [],
+      models: models.map((model) => ({ model, verdict: 'pass', tools: [...CODEX_RESEARCH_TOOLS_SEEN], reasons: [] })), ...fields
+    })
+    const tested = async (): Promise<ResearchSnapshot> => {
+      for (let tries = 0; tries < 400; tries += 1) {
+        const state = await load()
+        if (!state.fenceTest.running) return state
+        await pause(10)
+      }
+      throw new Error('the fence test did not end')
+    }
+
+    it('once the team names its researchers Models offers only those, and a pick that is no longer named falls back, said until he picks again', async () => {
+      await load(true)
+      await call<ResearchSnapshot>('research:choose', { researcher: 'fable' })
+      await name('sol', 'opus', 'luna')
+      const named = await load(true)
+      expect(named.choice).toEqual({ named: ['sol', 'opus', 'luna'], proposed: [] })
+      expect(named.researchers.map((agent) => [agent.id, agent.ok])).toEqual([['sol', false], ['opus', true], ['luna', false]])
+      // Fable was his pick and is no longer named: none is picked, so the first that can research stands in, and the page is told whom he lost.
+      expect(named).toMatchObject({ researcher: 'opus', dropped: 'Fable' })
+      expect((await load()).dropped).toBe('Fable')
+      // An agent the team does not name cannot be picked, and a research with it is refused by the check.
+      expect((await call<ResearchSnapshot>('research:choose', { researcher: 'fable' }))).toMatchObject({ researcher: 'opus', dropped: 'Fable' })
+      await call<ResearchSnapshot>('research:start', { researcher: 'fable' })
+      expect((await ended()).ended).toEqual({ ok: false, text: 'Research failed: BMN did not start the run: fable is not one of the team\'s researchers (sol, opus, luna)', kept: false })
+      expect(calls()).toEqual([])
+      expect(await call<ResearchSnapshot>('research:choose', { researcher: 'opus' })).toMatchObject({ researcher: 'opus', dropped: null })
+    })
+
+    it('the owner starts the fence test from Models: one at a time, in the background, and its record opens the offer of exactly that Codex version', async () => {
+      await name('sol', 'opus', 'luna')
+      expect((await load(true)).researchers.filter((agent) => agent.ok).map((agent) => agent.id)).toEqual(['opus'])
+      let release: () => void = () => {}
+      let started = 0
+      fenceTest = async (options) => {
+        started += 1
+        expect(options?.environment?.PATH).toBe(`${stubs}:/usr/bin:/bin`)
+        await new Promise<void>((resolve) => { release = resolve })
+        const entry = passed(['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna'])
+        mkdirSync(dirname(fenceTestsPath()), { recursive: true })
+        writeFileSync(fenceTestsPath(), `${JSON.stringify(entry)}\n`)
+        return entry
+      }
+      expect((await call<ResearchSnapshot>('research:fence-test')).fenceTest).toEqual({ running: true, ended: null })
+      // Pressed again while it runs, it starts nothing more.
+      expect((await call<ResearchSnapshot>('research:fence-test')).fenceTest.running).toBe(true)
+      await pause(20)
+      expect(started).toBe(1)
+      release()
+      const done = await tested()
+      expect(done.fenceTest).toEqual({ running: false, ended: { ok: true, text: 'The fence test of Codex 0.161.0 passed: a research run sends its provider nothing of yours.' } })
+      expect(done.researchers.map((agent) => [agent.id, agent.ok, agent.fence?.compared])).toEqual([['sol', true, false], ['opus', true, undefined], ['luna', true, false]])
+      expect(done.researchers.find((agent) => agent.id === 'luna')?.fence?.tools).toEqual(CODEX_RESEARCH_TOOLS_SEEN)
+      // The record is of 0.161.0 alone: the next Codex version is closed again until its own test.
+      stub('codex', 'echo "codex-cli 0.162.0"')
+      expect((await load(true)).researchers.filter((agent) => agent.ok).map((agent) => agent.id)).toEqual(['opus'])
+    })
+
+    it('says in words how a fence test that failed, showed nothing or could not run ended', async () => {
+      const failed = passed(['gpt-6-luna'], { verdict: 'fail' })
+      failed.models[0] = { model: 'gpt-6-luna', verdict: 'fail', tools: [], reasons: ['reached the provider: the Codex rules file'] }
+      expect(fenceEndedWords(failed)).toBe('The fence test of Codex 0.161.0 failed: gpt-6-luna: reached the provider: the Codex rules file. No Codex agent is offered as a researcher.')
+      expect(fenceEndedWords({ verdict: 'inconclusive', version: null, models: [], reasons: ['codex is not installed or did not answer --version'] }))
+        .toBe('The fence test of Codex showed nothing: codex is not installed or did not answer --version. No Codex agent is offered as a researcher.')
+      fenceTest = async () => { throw new Error('no folder to test in') }
+      await call<ResearchSnapshot>('research:fence-test')
+      expect((await tested()).fenceTest.ended).toEqual({ ok: false, text: 'The fence test could not run: no folder to test in' })
+    })
   })
 
   it('says how a research ended in words', () => {

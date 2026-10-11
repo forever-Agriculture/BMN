@@ -106,7 +106,7 @@ Commands:
                                             Put one line in front of Claude Code's own status-line command so
                                             its plan use reaches BMN; the command itself is kept unchanged
   team [--all] [--json]                     The owner-approved team: one line per enabled active agent
-  roster validate|status|role|route|visibility|check|explain|bind
+  roster validate|status|role|route|visibility|check|explain|bind|fence
                                             The team file in ~/.config/bmn/agents: validate it, list pending
                                             differences, print a role's chain, and check a dispatch
                                             before work leaves for another agent (bmn roster --help)

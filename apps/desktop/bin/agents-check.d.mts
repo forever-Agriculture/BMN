@@ -19,6 +19,20 @@ export interface ResearchInputs {
   cwd?: string | undefined
   /** Ask only whether this agent could research with this argv: no folder, no prompt, no receipt. */
   dry?: boolean
+  /** A receipt checked again after its run: the run's own Codex folder is gone by then. */
+  settled?: boolean
+}
+/** One model's result in a fence test (63.3). */
+export interface FenceTestModel { model: string; verdict: 'pass' | 'fail' | 'inconclusive'; tools: string[]; reasons: string[]; seconds?: number; catalog_entry?: string }
+/** One recorded fence test: `form` names the research form it tested, `catalog` the model list it ran under. */
+export interface FenceTestEntry {
+  harness: string; at: string; version: string | null; form: string; catalog: 'bundled' | 'live'; verdict: 'pass' | 'fail' | 'inconclusive'
+  models: FenceTestModel[]; reasons?: string[]; seconds?: number; renewal?: 'through-link' | 'not-asked' | 'link-replaced' | 'not-written'
+}
+export interface FenceStanding {
+  passed: boolean; why?: 'untested' | 'failed' | 'live'; tools: string[]; at?: string; reasons?: string[]
+  /** The last comparison under the provider's own model list, or null where none was made. */
+  live: { at: string; same: boolean; entry: string | null } | null
 }
 export interface PrivateWorkReceipt { answer: PrivateWork; allowed: boolean; exception?: { id: string; scope: 'this workspace' } }
 export interface ReceiptRoute { provider: string | null; host: string; basis: string; sources: string[]; harness_provider: string | null }
@@ -67,8 +81,8 @@ interface Refused { verdict: 'REFUSED'; code: string; message: string; next: str
   detail?: string }
 export type CheckResult = { verdict: 'PASS'; receipt: CheckReceipt; steps: string[]; code?: undefined; message?: undefined; next?: undefined } | Refused
 export type ResearchResult =
-  | { verdict: 'PASS'; receipt: ResearchReceipt; steps: string[]; dry?: undefined; version?: undefined; code?: undefined; message?: undefined; next?: undefined }
-  | { verdict: 'PASS'; dry: true; version: string | null; steps: string[]; receipt?: undefined; code?: undefined; message?: undefined; next?: undefined }
+  | { verdict: 'PASS'; receipt: ResearchReceipt; steps: string[]; dry?: undefined; version?: undefined; code?: undefined; message?: undefined; next?: undefined; detail?: undefined }
+  | { verdict: 'PASS'; dry: true; version: string | null; steps: string[]; fence?: { tools: string[]; compared: boolean }; receipt?: undefined; code?: undefined; message?: undefined; next?: undefined; detail?: undefined }
   | Refused
 type Environment = NodeJS.ProcessEnv | Record<string, string>
 export interface CheckOptions {
@@ -85,7 +99,9 @@ export interface CheckOptions {
   /** The tests' seam for where an organisation's policy files for Claude Code would be. */
   toolsPolicyRoot?: string
 }
-export interface ResearchOptions { environment?: Environment; cwd?: string; now?: Date; testedVersions?: Record<string, string[]>; fenceVersions?: Record<string, string[]>; contextTestLog?: import('./agents-context.mjs').ContextTestEntry[] }
+export interface ResearchOptions { environment?: Environment; cwd?: string; now?: Date; testedVersions?: Record<string, string[]>; fenceVersions?: Record<string, string[]>; contextTestLog?: import('./agents-context.mjs').ContextTestEntry[]
+  /** The recorded fence tests; the tests' seam for 63.3. */
+  fenceTestLog?: FenceTestEntry[] }
 export interface VisibilityRecord {
   version: 1
   workspace: string
@@ -108,7 +124,7 @@ export interface Destination {
   harness_provider?: string | null
   unapproved?: string
 }
-export interface ResearchRun { id: string; folder: string; prompt: string; cwd: string }
+export interface ResearchRun { id: string; folder: string; prompt: string; cwd: string; /** The run's own Codex folder, for a Codex run. */ codex?: string }
 export declare const REFUSALS: string[]
 export declare const TESTED_HARNESS_VERSIONS: Record<string, string[]>
 export declare function versionStanding(harness: string, version: string | null, tested?: Record<string, string[]>): { tested: boolean; state: 'tested' | 'newer than BMN tested' | 'not a version BMN tested' | 'version unreadable' }
@@ -117,10 +133,22 @@ export declare const RESEARCH_FENCE_VERSIONS: Record<string, string[]>
 export declare const RESEARCH_TOOLS: string
 export declare const CODEX_RESEARCH_CONFIG: string[]
 export declare const CODEX_RESEARCH_ANSWER: string
+export declare const CODEX_RESEARCH_DISABLED: string[]
+export declare const CODEX_RESEARCH_HOME: string
+export declare const CODEX_SIGN_IN: string
+/** The tools Codex keeps offering under the research form, each looked at; any other fails the fence test. */
+export declare const CODEX_RESEARCH_TOOLS_SEEN: string[]
+export declare function researchFormHash(harness: string): string
+export declare function researchFormProblem(parsed: Record<string, unknown>): string | null
+export declare function codexSignInFile(environment?: Environment): string
+export declare function removeResearchCodexFolders(only?: { folder: string } | null): void
+export declare function fenceTestsPath(): string
+export declare function fenceTests(): FenceTestEntry[]
+export declare function fenceStanding(harness: string, version: string | null, model: string, tests?: FenceTestEntry[]): FenceStanding
 export declare const VISIBILITY_MAX_AGE_MS: number
 export declare const BINDING_WINDOW_MS: number
 export declare function setReadTracer(tracer: ((path: string) => void) | null): void
-export declare function parseDispatch(argv: string[]): Record<string, unknown>
+export declare function parseDispatch(argv: string[], options?: { research?: boolean }): Record<string, unknown>
 export declare function readCodexConfig(text: string | null): { top: Record<string, string>; profiles: Record<string, Record<string, string>>; providers: Record<string, Record<string, unknown>>; unreadable: string[]
   context: { top: Record<string, number>; profiles: Record<string, Record<string, number>>; unreadable: string | null }
   /** What a run may do, as the file says it: `sandbox_mode` and `approval_policy`, at the top and per profile. */
@@ -144,7 +172,7 @@ export declare function publicOnlyReasons(agent: RosterAgent, data: RosterData):
 export declare function bindingPath(receiptHash: string): string
 export declare function bindSession(receiptFile: string, sessionId: string, options?: { now?: Date }): { receipt_hash: string; session_id: string }
 export declare function researchRunsDirectory(): string
-export declare function prepareResearchRun(prompt: string, options?: { now?: Date; id?: string }): ResearchRun
+export declare function prepareResearchRun(prompt: string, options?: { now?: Date; id?: string; harness?: string; environment?: Environment }): ResearchRun
 export declare function inspectRoute(agent: RosterAgent, argv: string[] | null, environment: NodeJS.ProcessEnv, cwd: string, data?: RosterData | null): Record<string, unknown>
 export declare function harnessVersion(command: string, environment: Environment): string | null
 export declare function contextTestSources(harness: string, environment: Environment, folder: string): import('./agents-context.mjs').ContextSource[]

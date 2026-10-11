@@ -100,9 +100,11 @@ export const ROSTER_USAGE = `Usage: bmn roster validate [--json]          Check 
                                              Check a research run
        bmn roster bind --receipt <file> --session <id>
                                              Bind a started session to its receipt, for a later resume
+       bmn roster fence [--live] [--json]    Owner-run: test that the installed Codex keeps a research run fenced
+                                             (a stand-in provider on this computer; bmn roster fence --help)
 
 Machine fields take effect only after the owner approves them in BMN (Preferences > Team); no
-command approves (exit 12). Works with BMN closed; only visibility --refresh uses the network.
+command approves (exit 12). Works with BMN closed; only visibility --refresh and fence --live use the network.
 Exit: 0 PASS, 2 usage, 3 roster missing, 4 invalid, 5 nothing approved, 6 state corrupt,
 10 refusal, 11 receipt stale or invalid.`
 
@@ -163,7 +165,11 @@ export async function runRoster(argv) {
     const { runCheckCommand } = await import('./agents-check.mjs')
     return runCheckCommand(action, rest)
   }
-  return usage(`roster expects validate, status, role, route, visibility, check, explain or bind, not ${action}`)
+  if (action === 'fence') {
+    const { runFenceCommand } = await import('./agents-fence.mjs')
+    return runFenceCommand(rest)
+  }
+  return usage(`roster expects validate, status, role, route, visibility, check, explain, bind or fence, not ${action}`)
 }
 
 function rosterValidate(argv) {

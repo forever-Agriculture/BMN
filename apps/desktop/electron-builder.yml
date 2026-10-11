@@ -55,6 +55,11 @@ extraResources:
     to: bin/agents-tools.mjs
   - from: bin/agents-tool-files.mjs
     to: bin/agents-tool-files.mjs
+  # `bmn roster fence` runs the very command a research run is, so it loads the research module too.
+  - from: bin/agents-research.mjs
+    to: bin/agents-research.mjs
+  - from: bin/agents-fence.mjs
+    to: bin/agents-fence.mjs
   # The --self-test stand-in agents draw these recorded dialogs; the packaged smoke runs that phase too.
   - from: src/utility/test-fixtures/remote-answers
     to: self-test/remote-answers

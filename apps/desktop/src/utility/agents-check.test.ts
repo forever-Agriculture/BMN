@@ -1,14 +1,14 @@
 // MODULE: agents-check.test.ts - Epic 60.3: `bmn roster check` over synthetic rosters, configs, stub harnesses, visibility records and argv
 import { execFile, execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-  bindSession, CODEX_RESEARCH_CONFIG, consequences, evaluate, evaluateResearch, harnessVersion, normalizedGithubOrigin, prepareResearchRun, readCodexConfig, refreshVisibility,
-  setReadTracer, verifyReceipt, visibilityPath, workspaceRoot, workspaceVisibility
+  bindSession, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_TOOLS_SEEN, consequences, evaluate, evaluateResearch, harnessVersion, normalizedGithubOrigin, prepareResearchRun,
+  readCodexConfig, refreshVisibility, removeResearchCodexFolders, researchFormHash, setReadTracer, verifyReceipt, visibilityPath, workspaceRoot, workspaceVisibility, type FenceTestEntry
 } from '../../bin/agents-check.mjs'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { canonicalJson, parseRoster, sha256 } from '../../bin/agents-roster.mjs'
@@ -1112,34 +1112,109 @@ describe('research runs (60.3 AC11)', () => {
     expect(research().code).toBe('WORKSPACE_MISMATCH')
   })
 
-  describe('through Codex (60.10)', () => {
-    /** As on a Codex version whose research fence the owner's test verified; none is recorded yet. */
-    const FENCED = { fenceVersions: { codex: ['0.161.0'] } }
-    const CODEX_RESEARCH = (extra: string[] = [], effort = 'medium') => ['env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, 'codex', 'exec', '--skip-git-repo-check', '--ephemeral',
-      '--sandbox', 'read-only', ...CODEX_RESEARCH_CONFIG.flatMap((entry) => ['-c', entry]), '-m', 'gpt-6-astra', '-c', `model_reasoning_effort="${effort}"`,
-      '-o', join(run.folder, 'answer.md'), ...extra, '-']
+  describe('through Codex (60.10, 63.3)', () => {
+    /** A fence test on record for Codex 0.161.0, as `bmn roster fence` writes it. */
+    const tested = (fields: Record<string, unknown> = {}, model: Record<string, unknown> = {}): FenceTestEntry => ({
+      harness: 'codex', at: '2026-10-10T11:00:00.000Z', version: '0.161.0', form: researchFormHash('codex'), catalog: 'bundled', verdict: 'pass',
+      models: [{ model: 'gpt-6-astra', verdict: 'pass', tools: [...CODEX_RESEARCH_TOOLS_SEEN], reasons: [], ...model }], reasons: [], ...fields
+    } as FenceTestEntry)
+    const FENCED = { fenceTestLog: [tested()] }
+    let codexRun: ReturnType<typeof prepareResearchRun>
+    const CODEX_RESEARCH = (extra: string[] = [], effort = 'medium', codexHome = codexRun.codex as string) => ['env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, `CODEX_HOME=${codexHome}`,
+      'codex', 'exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '--strict-config', ...CODEX_RESEARCH_DISABLED.flatMap((feature) => ['--disable', feature]),
+      ...CODEX_RESEARCH_CONFIG.flatMap((entry) => ['-c', entry]), '-m', 'gpt-6-astra', '-c', `model_reasoning_effort="${effort}"`,
+      '-o', join(codexRun.folder, 'answer.md'), ...extra, '-']
     const without = (flag: string, values = 0) => {
       const argv = CODEX_RESEARCH()
       argv.splice(argv.indexOf(flag), 1 + values)
       return argv
     }
+    const codexResearch = (inputs: { agent?: string; argv?: string[] } = {}, options: ResearchOptions = FENCED) =>
+      research({ agent: 'astra', argv: CODEX_RESEARCH(), stdin: codexRun.prompt, cwd: codexRun.cwd, ...inputs }, { cwd: codexRun.cwd, ...options })
 
-    it('is refused on every version until that version\'s fence is verified, whatever its provider may see (60.10 AC2)', () => {
-      const refused = research({ agent: 'astra', argv: CODEX_RESEARCH() })
-      expect(refused).toMatchObject({ verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED',
-        message: 'research runs in Codex only on a version whose fence BMN verified, and codex 0.161.0 is not one: pick a researcher on Claude Code' })
-      expect(research({ agent: 'astra', argv: CODEX_RESEARCH() }, { fenceVersions: { codex: ['0.160.0'] } }).code).toBe('ROUTE_UNSUPPORTED')
-      expect(research({ agent: 'astra', argv: CODEX_RESEARCH() }, { fenceVersions: { claude: ['0.161.0'] } }).code).toBe('ROUTE_UNSUPPORTED')
+    beforeEach(() => {
+      codexRun = prepareResearchRun('Research these models: gpt-6-astra.\n', { now: new Date(NOW.getTime() + 5000), harness: 'codex', environment: env })
+    })
+
+    it('BMN makes the run a Codex folder of its own that holds only a link to the sign-in file, which it never reads (63.3 AC1)', () => {
+      mkdirSync(join(home, '.codex'))
+      writeFileSync(join(home, '.codex/auth.json'), '{"synthetic":"sign-in"}\n')
+      const read: string[] = []
+      setReadTracer((path) => read.push(path))
+      const made = prepareResearchRun('Another prompt.\n', { now: new Date(NOW.getTime() + 9000), harness: 'codex', environment: env })
+      expect(made.codex).toBe(join(made.folder, 'codex'))
+      expect(readdirSync(made.codex as string)).toEqual(['auth.json'])
+      expect(lstatSync(join(made.codex as string, 'auth.json')).isSymbolicLink()).toBe(true)
+      expect(readlinkSync(join(made.codex as string, 'auth.json'))).toBe(join(home, '.codex/auth.json'))
+      codexRun = made
+      expect(codexResearch().verdict).toBe('PASS')
+      expect(read.filter((path) => path.endsWith('auth.json'))).toEqual([])
+      // A run in another app gets no Codex folder.
+      expect(run.codex).toBeUndefined()
+      expect(existsSync(join(run.folder, 'codex'))).toBe(false)
+    })
+
+    it('a Codex folder an earlier run left behind is removed at the next run, the sign-in file it linked to is not (63.3 AC5)', () => {
+      mkdirSync(join(home, '.codex'))
+      writeFileSync(join(home, '.codex/auth.json'), '{"synthetic":"sign-in"}\n')
+      writeFileSync(join(codexRun.codex as string, 'state_5.sqlite'), 'left by a run that never ended')
+      const next = prepareResearchRun('A later prompt.\n', { now: new Date(NOW.getTime() + 20_000) })
+      expect(existsSync(codexRun.codex as string)).toBe(false)
+      expect(existsSync(join(codexRun.folder, 'prompt.md'))).toBe(true)
+      expect(readFileSync(join(home, '.codex/auth.json'), 'utf8')).toBe('{"synthetic":"sign-in"}\n')
+      expect(next.codex).toBeUndefined()
+      removeResearchCodexFolders()
+    })
+
+    it('is refused on a version with no fence test on record, whatever its provider may see (63.3 AC2)', () => {
+      const refused = codexResearch({}, {})
+      expect(refused).toMatchObject({ verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED', detail: 'fence-untested',
+        message: 'research runs in Codex only on a version whose fence test passed, and none is on record for codex 0.161.0 with gpt-6-astra: the owner runs `bmn roster fence`, or picks a researcher on Claude Code' })
+      // A record of another version, another model or another form of the command counts for nothing.
+      expect(codexResearch({}, { fenceTestLog: [tested({ version: '0.160.0' })] }).detail).toBe('fence-untested')
+      expect(codexResearch({}, { fenceTestLog: [tested({}, { model: 'gpt-6-luna' })] }).detail).toBe('fence-untested')
+      expect(codexResearch({}, { fenceTestLog: [tested({ form: 'other' })] }).detail).toBe('fence-untested')
+      expect(codexResearch({}, { fenceTestLog: [tested({ harness: 'claude' })] }).detail).toBe('fence-untested')
+      expect(codexResearch({}, { fenceVersions: { claude: ['0.161.0'] } }).code).toBe('ROUTE_UNSUPPORTED')
       // Claude Code's own form needs no such record for a provider that may see private work.
       expect(research().verdict).toBe('PASS')
     })
 
-    it('passes the exact form: read-only, web search on, no command, agent or app tools, the answer beside the prompt', () => {
-      const pass = research({ agent: 'astra', argv: CODEX_RESEARCH() }, FENCED)
+    it('the latest test of that version decides: a failure, a test that showed nothing or a tool BMN has not looked at closes it (63.3 AC3)', () => {
+      const failed = tested({ at: '2026-10-10T11:30:00.000Z', verdict: 'fail' }, { verdict: 'fail', reasons: ['reached the provider: the Codex rules file'] })
+      expect(codexResearch({}, { fenceTestLog: [tested(), failed] })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', detail: 'fence-failed', message: expect.stringContaining('reached the provider: the Codex rules file') })
+      expect(codexResearch({}, { fenceTestLog: [failed, tested({ at: '2026-10-10T11:40:00.000Z' })] }).verdict).toBe('PASS')
+      expect(codexResearch({}, { fenceTestLog: [tested(), tested({ verdict: 'inconclusive' }, { verdict: 'inconclusive', reasons: ['Codex did not finish the run in time'] })] }).detail).toBe('fence-failed')
+      // A record cannot name a tool into the offer: one BMN has not looked at fails it, whatever verdict stands beside it.
+      const unseen = codexResearch({}, { fenceTestLog: [tested({}, { tools: [...CODEX_RESEARCH_TOOLS_SEEN, 'function:functions.shell'] })] })
+      expect(unseen).toMatchObject({ detail: 'fence-failed', message: expect.stringContaining('a tool BMN has not looked at: function:functions.shell') })
+    })
+
+    it('a comparison under the provider\'s own model list that found other tools closes it; one that showed nothing changes nothing (63.3 AC6)', () => {
+      const live = (verdict: string, reasons: string[] = []): FenceTestEntry => tested({ at: '2026-10-10T11:50:00.000Z', catalog: 'live', verdict }, { verdict, reasons, catalog_entry: 'abc' })
+      const differs = live('fail', ['under the provider\'s own model list the tools differ from the tested ones; new: function:functions.shell'])
+      expect(codexResearch({}, { fenceTestLog: [tested(), differs] })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', detail: 'fence-live', message: expect.stringContaining('new: function:functions.shell') })
+      expect(codexResearch({}, { fenceTestLog: [tested(), live('inconclusive')] }).verdict).toBe('PASS')
+      const same = codexResearch({}, { fenceTestLog: [tested(), differs, live('pass')] })
+      expect(same.verdict).toBe('PASS')
+      expect(same.steps).toContain('fence test of codex 0.161.0 with gpt-6-astra: passed')
+      expect(codexResearch().steps).toContain('fence test of codex 0.161.0 with gpt-6-astra: passed, not yet compared under the provider\'s own model list')
+    })
+
+    it('passes the exact form: its own Codex folder, read-only, web search on, no command, agent or app tools, the answer beside the prompt (63.3 AC1)', () => {
+      const pass = codexResearch()
       expect(pass.verdict, JSON.stringify(pass)).toBe('PASS')
-      expect(pass.receipt).toMatchObject({ mode: 'research', agent: 'astra', harness: 'codex', model: 'gpt-6-astra', effort: 'medium', cwd: run.cwd,
-        route: { provider: 'openai' }, private_work: { allowed: true }, context_limit_applied: null })
-      expect(pass.steps).toContain('dispatch form: env -i codex exec, read-only, web search, no command or app tools')
+      expect(pass.receipt).toMatchObject({ mode: 'research', agent: 'astra', harness: 'codex', model: 'gpt-6-astra', effort: 'medium', cwd: codexRun.cwd,
+        route: { provider: 'openai' }, private_work: { allowed: true }, context_limit_applied: null,
+        fence: { form: researchFormHash('codex'), tested_at: '2026-10-10T11:00:00.000Z', tools: CODEX_RESEARCH_TOOLS_SEEN } })
+      expect(pass.steps).toContain('dispatch form: env -i codex exec from a Codex folder of its own, read-only, web search, no command or app tools')
+      expect(CODEX_RESEARCH_CONFIG).toHaveLength(13)
+      // The receipt still verifies once the run has ended and its Codex folder is gone.
+      writeFileSync(join(home, 'research.json'), JSON.stringify(pass.receipt))
+      removeResearchCodexFolders(codexRun)
+      expect(existsSync(codexRun.codex as string)).toBe(false)
+      expect(verifyReceipt(join(home, 'research.json'), CODEX_RESEARCH(), { environment: env, cwd: codexRun.cwd, ...FENCED } as never)).toEqual({ ok: true })
+      expect(codexResearch()).toMatchObject({ code: 'WORKSPACE_MISMATCH', message: expect.stringContaining('is not there') })
     })
 
     it.each([
@@ -1147,30 +1222,111 @@ describe('research runs (60.3 AC11)', () => {
       ['no --ephemeral', () => without('--ephemeral')],
       ['no --skip-git-repo-check', () => without('--skip-git-repo-check')],
       ['the command tool left on', () => CODEX_RESEARCH().filter((part) => part !== 'features.shell_tool=false')],
+      ['a rules file of the folder let in', () => CODEX_RESEARCH().filter((part) => part !== 'project_doc_max_bytes=0')],
+      ['the skills text left on', () => CODEX_RESEARCH().map((part) => (part === 'skills.include_instructions=false' ? 'skills.include_instructions=true' : part))],
       ['web search off', () => CODEX_RESEARCH().map((part) => (part === 'web_search="live"' ? 'web_search="disabled"' : part))],
       ['an MCP server', () => CODEX_RESEARCH().map((part) => (part === 'mcp_servers={}' ? 'mcp_servers.x.command="y"' : part))],
       ['a switch given twice', () => CODEX_RESEARCH(['-c', 'features.apps=false'])],
+      ['no --strict-config', () => without('--strict-config')],
+      ['a feature left on', () => without('--disable', 1)],
+      ['hooks left on', () => { const argv = CODEX_RESEARCH(); argv.splice(argv.indexOf('hooks') - 1, 2); return argv }],
+      ['another feature switched off', () => CODEX_RESEARCH(['--disable', 'web_search'])],
+      ['a feature switched on', () => CODEX_RESEARCH(['--enable', 'view_image'])],
       ['--json', () => CODEX_RESEARCH(['--json'])],
       ['--profile', () => CODEX_RESEARCH(['--profile', 'work'])],
       ['a folder', () => CODEX_RESEARCH(['-C', home])],
       ['no answer file', () => without('-o', 1)],
-      ['an extra environment value', () => ['env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, 'OPENAI_BASE_URL=https://proxy.example.test', ...CODEX_RESEARCH().slice(4)]],
-      ['no env -i', () => CODEX_RESEARCH().slice(4)],
+      ['an extra environment value', () => { const argv = CODEX_RESEARCH(); argv.splice(5, 0, 'OPENAI_BASE_URL=https://proxy.example.test'); return argv }],
+      ['no Codex folder of its own', () => CODEX_RESEARCH().filter((part) => !part.startsWith('CODEX_HOME='))],
+      ['the owner\'s own Codex folder', () => CODEX_RESEARCH([], 'medium', join(home, '.codex'))],
+      ['a Codex folder named by a path that climbs', () => CODEX_RESEARCH([], 'medium', `${codexRun.folder}/cwd/../codex`)],
+      ['no env -i', () => CODEX_RESEARCH().slice(5)],
       ['a resume', () => { const argv = CODEX_RESEARCH(); argv.splice(argv.indexOf('exec') + 1, 0, 'resume', '019a0000-0000-7000-8000-000000000001'); return argv }]
     ])('refuses the form with %s: ROUTE_UNSUPPORTED', (_name, argv) => {
-      expect(research({ agent: 'astra', argv: argv() }, FENCED)).toMatchObject({ verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED' })
+      expect(codexResearch({ argv: argv() })).toMatchObject({ verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED' })
+    })
+
+    it('refuses any Codex folder but the one BMN made for this run, holding only the link (63.3 AC1)', () => {
+      const other = prepareResearchRun('Another run.\n', { now: new Date(NOW.getTime() + 30_000), harness: 'codex', environment: env })
+      const mine = prepareResearchRun('This run.\n', { now: new Date(NOW.getTime() + 40_000), harness: 'codex', environment: env })
+      mkdirSync(other.codex as string, { recursive: true })
+      symlinkSync(join(home, '.codex/auth.json'), join(other.codex as string, 'auth.json'))
+      codexRun = mine
+      expect(codexResearch().verdict).toBe('PASS')
+      expect(codexResearch({ argv: CODEX_RESEARCH([], 'medium', other.codex as string) })).toMatchObject({ code: 'WORKSPACE_MISMATCH', message: expect.stringContaining(`${mine.folder}/codex`) })
+      const link = join(mine.codex as string, 'auth.json')
+      // A settings file beside the link would decide where the run goes and what it reads.
+      writeFileSync(join(mine.codex as string, 'config.toml'), 'model_provider = "elsewhere"\n')
+      expect(codexResearch().verdict).toBe('REFUSED')
+      rmSync(join(mine.codex as string, 'config.toml'))
+      writeFileSync(join(mine.codex as string, 'AGENTS.md'), 'rules\n')
+      expect(codexResearch()).toMatchObject({ code: 'WORKSPACE_MISMATCH', message: expect.stringContaining('AGENTS.md') })
+      rmSync(join(mine.codex as string, 'AGENTS.md'))
+      // A copy of the sign-in file in place of the link, or a link to another file.
+      rmSync(link)
+      writeFileSync(link, '{}')
+      expect(codexResearch()).toMatchObject({ code: 'WORKSPACE_MISMATCH', message: expect.stringContaining('is not that link') })
+      rmSync(link)
+      symlinkSync(join(home, 'elsewhere.json'), link)
+      expect(codexResearch().code).toBe('WORKSPACE_MISMATCH')
+      rmSync(link)
+      expect(codexResearch()).toMatchObject({ code: 'WORKSPACE_MISMATCH', message: expect.stringContaining('holds nothing') })
+      // The folder itself replaced by a link to the owner's own Codex folder.
+      rmSync(mine.codex as string, { recursive: true })
+      mkdirSync(join(home, '.codex'), { recursive: true })
+      symlinkSync(join(home, '.codex'), mine.codex as string)
+      expect(codexResearch().code).toBe('WORKSPACE_MISMATCH')
     })
 
     it('keeps every agent-level check, and the answer goes nowhere but the run folder', () => {
-      expect(research({ agent: 'astra', argv: CODEX_RESEARCH().map((part) => (part === 'gpt-6-astra' ? 'gpt-6-luna' : part)) }, FENCED).code).toBe('MODEL_MISMATCH')
-      expect(research({ agent: 'astra', argv: CODEX_RESEARCH([], 'max') }, FENCED).code).toBe('EFFORT_UNSUPPORTED')
-      expect(research({ agent: 'fable', argv: CODEX_RESEARCH() }, FENCED).code).toBe('ROUTE_UNSUPPORTED')
-      expect(research({ agent: 'astra', argv: CODEX_RESEARCH().map((part) => (part === join(run.folder, 'answer.md') ? join(home, 'answer.md') : part)) }, FENCED))
+      expect(codexResearch({ argv: CODEX_RESEARCH().map((part) => (part === 'gpt-6-astra' ? 'gpt-6-luna' : part)) }).code).toBe('MODEL_MISMATCH')
+      expect(codexResearch({ argv: CODEX_RESEARCH([], 'max') }).code).toBe('EFFORT_UNSUPPORTED')
+      expect(codexResearch({ agent: 'fable' }).code).toBe('ROUTE_UNSUPPORTED')
+      expect(codexResearch({ argv: CODEX_RESEARCH().map((part) => (part === join(codexRun.folder, 'answer.md') ? join(home, 'answer.md') : part)) }))
         .toMatchObject({ code: 'WORKSPACE_MISMATCH', message: expect.stringContaining('answer.md') })
     })
 
-    it('an ordinary dispatch never takes --ephemeral', () => {
-      expect(check({ argv: [...ASTRA_REVIEW(workspace).slice(0, 2), '--ephemeral', ...ASTRA_REVIEW(workspace).slice(2)] })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: expect.stringContaining('research run') })
+    it('an ordinary dispatch never takes --ephemeral, --strict-config or --disable (R63-NFR1)', () => {
+      const withArguments = (...extra: string[]) => check({ argv: [...ASTRA_REVIEW(workspace).slice(0, 2), ...extra, ...ASTRA_REVIEW(workspace).slice(2)] })
+      expect(withArguments('--ephemeral')).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: expect.stringContaining('research run') })
+      expect(withArguments('--strict-config')).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: expect.stringContaining('--strict-config is not a supported argument') })
+      expect(withArguments('--disable', 'hooks')).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: expect.stringContaining('--disable is not a supported argument') })
+      expect(check({ argv: ASTRA_REVIEW(workspace) }).verdict).toBe('PASS')
+    })
+  })
+
+  describe('who researches is part of the approved team (63.3 AC7, AC8)', () => {
+    const name = (...ids: string[]) => (text: string) => ids.reduce((all, id) => {
+      const at = all.indexOf(`## ${id}\n`)
+      const roles = all.indexOf('\nroles:', at)
+      return `${all.slice(0, all.indexOf('\n', roles + 1))}\nresearcher: true${all.slice(all.indexOf('\n', roles + 1))}`
+    }, text)
+
+    it('a team that names no one is one from before the mark: every active agent on a research app still passes', () => {
+      expect(research().verdict).toBe('PASS')
+      expect(research({ agent: 'opus', argv: RESEARCH([], 'claude-opus-5-5').map((part) => (part === 'low' ? 'xhigh' : part)) }).verdict).toBe('PASS')
+    })
+
+    it('once the team names researchers, an agent it does not name is refused with a code of its own, first of all', () => {
+      approve(roster(name('opus')))
+      expect(readApproved().data.agents.find((agent) => agent.id === 'opus')?.researcher).toBe(true)
+      expect(research({ agent: 'opus', argv: RESEARCH([], 'claude-opus-5-5').map((part) => (part === 'low' ? 'xhigh' : part)) }).verdict).toBe('PASS')
+      const refused = research()
+      expect(refused).toMatchObject({ verdict: 'REFUSED', code: 'NOT_A_RESEARCHER', message: 'fable is not one of the team\'s researchers (opus)',
+        next: expect.stringContaining('only the owner names one') })
+      // Named or not is asked before the command is read at all.
+      expect(research({ argv: ['rm', '-rf', '/'] }).code).toBe('NOT_A_RESEARCHER')
+      expect(evaluateResearch({ agent: 'fable', argv: RESEARCH(), dry: true }, { environment: env, cwd: workspace, now: NOW }).code).toBe('NOT_A_RESEARCHER')
+      // An ordinary dispatch does not ask who researches.
+      expect(check({ argv: ASTRA_REVIEW(workspace) }).verdict).toBe('PASS')
+    })
+
+    it('the mark is true or false and nothing else, and `researcher: false` names no one', () => {
+      const wrong = parseRoster(roster((text) => name('opus')(text).replace('researcher: true', 'researcher: yes-please')))
+      expect(wrong.data).toBeNull()
+      expect(wrong.errors.map((error) => error.message).join('\n')).toContain('researcher')
+      approve(roster((text) => name('opus')(text).replace('researcher: true', 'researcher: false')))
+      expect(research().verdict).toBe('PASS')
     })
   })
 
@@ -1314,6 +1470,17 @@ describe('consequences in words (60.5 AC7; the same sentences `bmn roster status
   it('removing a version list kept from the earlier rule changes nothing either', () => {
     const accepted = edit(EXAMPLE, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: observed-default, accepted_versions: ["0.170.0"]}')
     expect(consequences(data(accepted), data(EXAMPLE))).toEqual([])
+  })
+
+  it('says who would research before a change of the team\'s researchers is approved (63.3 AC7)', () => {
+    const named = (text: string, ...names: string[]) => names.reduce((all, name) => edit(all, `name: ${name}\n`, `name: ${name}\nresearcher: true\n`), text)
+    const [opus, both, other] = [named(EXAMPLE, 'Opus'), named(EXAMPLE, 'Opus', 'Luna'), named(EXAMPLE, 'Luna')]
+    expect(consequences(data(EXAMPLE), data(both))).toEqual(['only Opus and Luna would be offered as researchers; a research with any other agent would be refused'])
+    expect(consequences(data(opus), data(both))).toEqual(['Luna would be offered as a researcher'])
+    expect(consequences(data(both), data(opus))).toEqual(['Luna would no longer be offered as a researcher'])
+    expect(consequences(data(opus), data(other))).toEqual(['Luna would be offered as a researcher', 'Opus would no longer be offered as a researcher'])
+    expect(consequences(data(both), data(EXAMPLE))).toEqual(['every agent that can research would be offered as a researcher again'])
+    expect(consequences(data(both), data(both))).toEqual([])
   })
 
   it('uses none of the words the owner never sees', () => {

@@ -299,9 +299,13 @@ test of BMN's can show which tools a Codex run starts with. For the same reason 
 Codex run checked with `--packet`, which must carry none.
 `bmn tools import` proposes what your apps already hold.
 
-Team → **Models** has one of your own agents look up your models' published prices and context
-windows, in an empty folder with web tools only, sent nothing but the model names and the source
-list. BMN reads each cited page itself and marks what it cannot confirm there. **Apply prices…**
+Team → **Models** has one of the agents your team names a researcher look up your models'
+published prices and context windows, in an empty folder, sent nothing but the model names and the
+source list. A Claude Code researcher runs with web tools only. A Codex researcher runs with a
+Codex folder of its own that holds nothing of yours, and is offered only where BMN's fence test
+(`bmn roster fence`, or **Run test** on Models) passed for exactly the installed Codex version;
+Models names the tools Codex keeps offering there. BMN reads each cited page itself and marks what
+it cannot confirm there. **Apply prices…**
 stages the verified prices that differ from your team's, **Add to team…** and **Look up** fill a
 new agent with them, and the Model field offers the names research found. Nothing changes until
 you approve it.

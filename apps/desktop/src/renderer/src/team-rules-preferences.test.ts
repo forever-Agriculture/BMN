@@ -40,14 +40,14 @@ import {
   type RulesState
 } from './rules-preferences'
 import {
-  Chain, TeamLedger, TeamPreferences, TeamToast, compactHint, compactRefusal, contextLimitHint, firstApprovalWords, hostKind, limitRefusal, nothingInEffectWords, outsideCountWords, shortDate,
+  Chain, TeamLedger, TeamPreferences, TeamToast, compactHint, compactRefusal, contextLimitHint, firstApprovalWords, researcherWords, hostKind, limitRefusal, nothingInEffectWords, outsideCountWords, shortDate,
   type TeamPage
 } from './team-preferences'
 import { ModelList } from './model-field'
-import { researcherHint, researchedModels, type ResearchState } from './models-preferences'
-import { dayWords, fillFrom } from './research-view'
+import { fenceWords, noResearcherWords, researcherHint, researchedModels, type ResearchState } from './models-preferences'
+import { codexToolsLine, dayWords, fillFrom } from './research-view'
 import { modelSuggestions } from './model-suggestions'
-import { changeModel, consequenceWords, formatValue, groupDifferences, holdProposed, listedRoles, readOnlyProposal, readOnlyProposed, removeException, setRoleReadOnly, setSkillPublic, skillMark, toggleSkillApp } from './roster-staging'
+import { changeModel, consequenceWords, formatValue, groupDifferences, holdProposed, listedRoles, nameResearchers, namedResearchers, readOnlyProposal, readOnlyProposed, removeException, setResearcher, setRoleReadOnly, setSkillPublic, skillMark, toggleSkillApp } from './roster-staging'
 import { readOnlyProposed as cliProposed } from '../../../bin/agents-roster.mjs'
 import { EMPTY_DRAFT, draftFrom, type ToolDraft } from './tools-view'
 import { confirmsBeforeCommit, rowHidesDetail, rulesUpdateWords, type TeamState } from './team-state'
@@ -204,7 +204,7 @@ describe('Team › an agent, New agent (60.5 AC3, AC4)', () => {
     expect(markup).toMatch(/<button type="button" class="crumb">Team<\/button> <span class="faint">›<\/span> Sol/)
     expect([...markup.matchAll(/<h4 class="group-head">([A-Za-z]+)<\/h4>/g)].map((match) => match[1])).toEqual(['Identity', 'Model', 'Work'])
     expect([...markup.matchAll(/<div class="preferences-row-label"><span[^>]*>([^<]+)<\/span>/g)].map((match) => match[1])).toEqual(
-      ['Name', 'Class', 'Notes', 'Agent app', 'Model', 'Private work', 'Price', 'Context limit', 'Roles', 'Efforts', 'Paid by', 'Compact at', 'Host', 'Also called', 'Team file'])
+      ['Name', 'Class', 'Notes', 'Agent app', 'Model', 'Private work', 'Price', 'Context limit', 'Roles', 'Efforts', 'Researcher', 'Paid by', 'Compact at', 'Host', 'Also called', 'Team file'])
     expect(markup).toContain('<details class="advanced"><summary>Advanced</summary>')
     expect(markup).toContain('Only you see this. The first line shows on the card.')
     expect(markup).toContain('Set once for OpenAI; it covers every agent there: Sol, Luna.')
@@ -1353,6 +1353,8 @@ describe('Team › Models (60.10, first release)', () => {
     id, provider: providerId === 'openai' ? 'OpenAI' : 'Anthropic', providerId, price: null, contextWindow: null,
     firstSeen: '2026-10-10T09:40:00.000Z', lastSeen: '2026-10-10T09:40:00.000Z', fresh: false, foundLast: true, ...extra
   })
+  /** The tools the fence test saw Codex keep offering, as its record names them. */
+  const FENCE_TOOLS = ['custom:functions.exec', 'exec:apply_patch', 'exec:web__run', 'function:collaboration.spawn_agent', 'function:functions.request_user_input', 'function:functions.wait']
   const RESEARCH: ResearchSnapshot = {
     last: { at: '2026-10-10T09:40:00.000Z', researcher: 'Fable', state: 'complete', models: 6 },
     previousAt: '2026-10-03T09:00:00.000Z',
@@ -1366,15 +1368,16 @@ describe('Team › Models (60.10, first release)', () => {
       found('model-old', 'openai', { firstSeen: '2026-10-03T09:00:00.000Z' })
     ],
     researchers: [
-      { id: 'sol', name: 'Sol', harness: 'codex', ok: true }, { id: 'fable', name: 'Fable', harness: 'claude', ok: true }, { id: 'luna', name: 'Luna', harness: 'codex', ok: true },
+      { id: 'sol', name: 'Sol', harness: 'codex', ok: true, fence: { tools: FENCE_TOOLS, compared: true } }, { id: 'fable', name: 'Fable', harness: 'claude', ok: true },
+      { id: 'luna', name: 'Luna', harness: 'codex', ok: true, fence: { tools: FENCE_TOOLS, compared: true } },
       { id: 'glm', name: 'Glm', harness: 'claude', ok: false, why: 'its provider gets public work only', reason: 'synthetic reason with the word roster in it' },
       { id: 'kimi', name: 'Kimi', harness: 'opencode', ok: false, why: 'its app is OpenCode', reason: 'synthetic' }
     ],
-    researcher: 'fable', running: null, ended: null
+    researcher: 'fable', choice: { named: ['sol', 'fable', 'luna', 'glm', 'kimi'], proposed: [] }, dropped: null, fenceTest: { running: false, ended: null }, running: null, ended: null
   }
   const lookup = async () => ({ ok: false, message: '', model: null })
   const research = (extra: Partial<ResearchState> = {}): ResearchState => ({
-    snapshot: RESEARCH, loadError: null, busy: false, notice: null, setNotice: noop, ensure: noop, peek: noop, choose: noop, start: later, stop: later, lookUp: lookup, ...extra
+    snapshot: RESEARCH, loadError: null, busy: false, notice: null, setNotice: noop, ensure: noop, peek: noop, testFence: later, choose: noop, start: later, stop: later, lookUp: lookup, ...extra
   })
   const modelsMarkup = (state: ResearchState = research(), teamState: TeamState = team()): string =>
     renderToStaticMarkup(createElement(TeamPreferences, { team: teamState, page: { name: 'models' }, research: state, go: noop }))
@@ -1401,9 +1404,82 @@ describe('Team › Models (60.10, first release)', () => {
     expect(offered(page)).toEqual(['Knight Sol:false', 'Rook Fable:true', 'Pawn Luna:false'])
     expect(words(page)).toContain('Gets only your model names and the source list, never your files. Runs in an empty folder with web tools only. Glm cannot research: its provider gets public work only. Kimi cannot research: its app is OpenCode.')
     expect(page).not.toContain('synthetic')
-    expect(researcherHint('codex')).toBe('Gets only your model names and the source list, never your files. Runs in an empty folder, read-only, with web search and no command tools.')
+    expect(researcherHint({ harness: 'claude' })).toBe('Gets only your model names and the source list, never your files. Runs in an empty folder with web tools only.')
     expect(page).toContain('<ol class="sources"><li>Provider pages</li><li>Other sites</li></ol>')
     expect(words(page)).not.toMatch(SCHEMA_WORDS)
+  })
+
+  describe('who researches, and Codex behind its fence (63.3)', () => {
+    const sol = RESEARCH.researchers.find((entry) => entry.id === 'sol')!
+    const withSnapshot = (extra: Partial<ResearchSnapshot>, teamState: TeamState = team()): string => modelsMarkup(research({ snapshot: { ...RESEARCH, ...extra } }), teamState)
+
+    it('a Codex researcher has the words of one on Claude Code plus one line that names the tools Codex keeps offering (AC4)', () => {
+      const hint = researcherHint(sol)
+      expect(hint).toBe('Gets only your model names and the source list, never your files. Runs in an empty folder, with a Codex folder of its own and web search. '
+        + 'Codex also keeps offering exec (a script tool that reaches apply_patch and web__run), spawn_agent, request_user_input and wait. '
+        + 'None of them reads or writes your files: the fence test of this Codex version showed it.')
+      expect(hint.startsWith('Gets only your model names and the source list, never your files. Runs in an empty folder')).toBe(true)
+      expect(words(withSnapshot({ researcher: 'sol' }))).toContain(hint)
+      // Until the tools were compared under the provider's own model list, the first research says what it does first (AC6).
+      expect(researcherHint({ ...sol, fence: { tools: FENCE_TOOLS, compared: false } })).toContain('Its first research starts by asking its provider for the model list and repeating the fence test under that list; a different tool list stops it before any answer is used.')
+      expect(researcherHint(sol)).not.toContain('Its first research')
+      expect(codexToolsLine([])).toBe('The fence test of this Codex version saw no other tool offered.')
+    })
+
+    it('says that the choice waits for him while the team names no researcher, and takes BMN\'s proposal with one press (AC7)', () => {
+      const waiting = withSnapshot({ choice: { named: null, proposed: ['sol', 'luna', 'gone'] } })
+      expect(words(waiting)).toContain('Who researches is your choice and you have not made it yet, so every agent that can research is offered. BMN proposes Sol and Luna: one agent per model.')
+      expect(waiting).toContain('<button type="button" class="small">Use proposal</button>')
+      // The proposal is staged like any other change: the mark on each proposed agent, nothing else touched.
+      const taken = nameResearchers(DATA, ['sol', 'luna'])
+      expect(taken.agents.filter((entry) => entry.researcher === true).map((entry) => entry.id)).toEqual(['sol', 'luna'])
+      expect(namedResearchers(DATA)).toBeNull()
+      expect(namedResearchers(taken)).toEqual(['sol', 'luna'])
+      expect(setResearcher(taken, 'sol', false).agents.find((entry) => entry.id === 'sol')).toEqual(DATA.agents.find((entry) => entry.id === 'sol'))
+      // Once he has staged names, or the team names them, the page no longer asks.
+      expect(words(withSnapshot({ choice: { named: null, proposed: ['sol', 'luna'] } }, team({ base: DATA, data: taken, approved: DATA })))).not.toContain('Who researches is your choice')
+      expect(words(page)).not.toContain('Who researches is your choice')
+    })
+
+    it('offers only the researchers the team names: one Opus where the team holds two, and no row for the other (AC7, AC8)', () => {
+      const twins = { ...DATA, agents: [...DATA.agents,
+        { ...agent('opus', { class: 'knight', harness: 'claude', provider: 'anthropic', roles: ['lead'] }), name: 'Opus', researcher: true },
+        { ...agent('opus-2', { class: 'queen', harness: 'claude', provider: 'anthropic' }), name: 'Opus' }] }
+      const named = withSnapshot({ researcher: 'opus', choice: { named: ['opus'], proposed: [] }, researchers: [{ id: 'opus', name: 'Opus', harness: 'claude', ok: true }] }, team({ base: twins, data: twins, approved: twins }))
+      expect(offered(named)).toEqual(['Knight Opus:true'])
+      expect(words(named)).not.toContain('cannot research')
+      expect(named).not.toContain('Codex fence test')
+    })
+
+    it('says once whom he had picked when that researcher is no longer named (AC8)', () => {
+      expect(words(withSnapshot({ dropped: 'Opus 2' }))).toContain('Opus 2 is no longer one of your team&#x27;s researchers, so no researcher is picked; Fable stands in until you pick one.')
+      expect(words(page)).not.toContain('no longer one of your team')
+    })
+
+    it('shows how the installed Codex stands for the fence test and lets him run it (AC2)', () => {
+      expect(words(page)).toContain('Codex fence test')
+      expect(page).toContain('<button type="button" class="small">Run again</button>')
+      expect(fenceWords(RESEARCH.researchers.filter((entry) => entry.harness === 'codex'))).toBe('Passed for the installed Codex. It runs Codex against a stand-in on this computer with made-up files: no provider is called and none of your files is read. About a minute.')
+      const closed: ResearchSnapshot['researchers'] = RESEARCH.researchers.map((entry) => (entry.harness === 'codex'
+        ? { id: entry.id, name: entry.name, harness: entry.harness, ok: false, why: 'the fence test has not run for this version of Codex yet', reason: 'synthetic' } : entry))
+      const untested = withSnapshot({ researchers: closed })
+      expect(untested).toContain('<button type="button" class="small">Run test</button>')
+      expect(words(untested)).toContain('Sol and Luna research only where this test passed for exactly the installed Codex: the fence test has not run for this version of Codex yet.')
+      expect(words(untested)).toContain('Sol cannot research: the fence test has not run for this version of Codex yet.')
+      expect(offered(untested)).toEqual(['Rook Fable:true'])
+      expect(withSnapshot({ researchers: closed, fenceTest: { running: true, ended: null } })).toContain('<button type="button" class="small" disabled="">Testing…</button>')
+    })
+
+    it('an agent\'s own page says what its Researcher switch means as the team stands', () => {
+      const luna = DATA.agents.find((entry) => entry.id === 'luna')!
+      expect(researcherWords(DATA, luna)).toBe('Your team names no researcher yet, so every agent that can research is offered on Models. Switching this on makes Luna the only one until you name others; Models proposes whom.')
+      const named = nameResearchers(DATA, ['sol'])
+      expect(researcherWords(named, named.agents.find((entry) => entry.id === 'sol')!)).toBe('Offered on Models as a researcher, where its app can research.')
+      expect(researcherWords(named, luna)).toBe('Not offered on Models: a research with Luna is refused.')
+      const own = pageMarkup({ name: 'agent', id: 'sol' }, team({ base: named, data: named, approved: named }))
+      expect(own).toMatch(/<span id="[^"]+">Researcher<\/span>/)
+      expect(own).toMatch(/class="switch on" role="switch" aria-checked="true" aria-labelledby="[^"]+"/)
+    })
   })
 
   it('lists what is new, the team as found and what was found earlier, each value with its site (AC3, AC4)', () => {
@@ -1455,7 +1531,8 @@ describe('Team › Models (60.10, first release)', () => {
     const none = modelsMarkup(research({ snapshot: { ...RESEARCH, last: null, previousAt: null, models: [], researcher: null, researchers: RESEARCH.researchers.filter((entry) => !entry.ok) } }))
     expect(none).toContain('<span class="faint">Not researched yet</span>')
     expect(none).toContain('<span class="muted">No agent on your team can research.</span>')
-    expect(words(none)).toContain('Research needs an active agent on Claude Code whose provider may see private work. A price can still be written in the team file.')
+    expect(words(none)).toContain('Research needs one of the researchers your team names: an active agent on Claude Code, or on Codex where its fence test passed, whose provider may see private work. A price can still be written in the team file.')
+    expect(noResearcherWords(false)).toBe('Research needs an active agent on Claude Code, or on Codex where its fence test passed, whose provider may see private work.')
     expect(none).toContain('<button type="button" disabled="" title="No agent on your team can research">Research now</button>')
     expect(none).not.toContain('role="radio"')
     expect(lines(none)).toEqual(['model-sol', 'model-fable', 'model-luna', 'model-haiku', 'model-glm'])

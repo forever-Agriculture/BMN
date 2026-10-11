@@ -848,6 +848,9 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   stopResearch(): Promise<ResearchSnapshot> {
     return invokeBridge('aiterm:research:stop', {})
   },
+  testCodexFence(): Promise<ResearchSnapshot> {
+    return invokeBridge('aiterm:research:fence-test', {})
+  },
   lookUpModel(researcher: string, provider: string, model: string): Promise<ResearchLookup> {
     return invokeBridge('aiterm:research:lookup', { researcher, provider, model })
   },

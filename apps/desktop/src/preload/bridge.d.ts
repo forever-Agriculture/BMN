@@ -402,6 +402,8 @@ export interface AiTerminalBridge {
   /** Owner-run: starts the research with that agent. It runs in the background; the snapshot says how far it is. */
   startResearch(researcher: string): Promise<ResearchSnapshot>
   stopResearch(): Promise<ResearchSnapshot>
+  /** Owner-run: starts the fence test of the installed Codex. It calls no provider and runs in the background; the snapshot says when it has ended. */
+  testCodexFence(): Promise<ResearchSnapshot>
   /** Owner-run: researches one model name on one provider and resolves when that run ends. */
   lookUpModel(researcher: string, provider: string, model: string): Promise<ResearchLookup>
   readClipboardText(): Promise<{ text: string }>
