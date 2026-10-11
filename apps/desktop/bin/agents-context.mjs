@@ -38,6 +38,8 @@ export const CODEX_CONTEXT_KEYS = [CONTEXT_CONTROLS.codex.limit.key, CONTEXT_CON
 export const CLAUDE_CONTEXT_KEY = CONTEXT_CONTROLS.claude.limit.key
 /** What the owner-run test asks each app for: a size no default equals, so seeing it back proves the setting. */
 export const CONTEXT_TEST_SIZE = { codex: 123_000, claude: 137_000 }
+/** Claude Code's report rounds its window, so the test takes a size within one percent of the one asked for as that size. */
+const reportedAs = (asked, size) => Math.abs(size - asked) <= asked * 0.01
 
 export class ContextError extends Error {
   constructor(code, message) {
@@ -110,15 +112,16 @@ export function provenControls(harness, version, tests = contextTests()) {
  * What the owner's test showed, on exactly this version, about two sources naming different sizes:
  * each kind of other source the run's own environment value won over, and whether that source's size
  * was above or below it (60.9 AC2). Only what was seen counts: a smaller value winning over a larger
- * one says nothing about the opposite case. The latest test of the version decides.
+ * one says nothing about the opposite case, and a source whose size the app's report could not tell
+ * from the one asked for showed nothing. The latest test of the version decides.
  */
 export function provenPrecedence(harness, version, tests = contextTests()) {
   if (typeof version !== 'string') return []
   let last = null
   for (const entry of tests) if (entry.harness === harness && entry.version === version) last = entry
-  if (last?.limit !== 'pass' || !Array.isArray(last.rivals)) return []
+  if (last?.limit !== 'pass' || !Array.isArray(last.rivals) || !Number.isSafeInteger(last.asked)) return []
   return last.rivals
-    .filter((rival) => typeof rival?.kind === 'string' && Number.isSafeInteger(rival?.value) && rival.value !== last.asked)
+    .filter((rival) => typeof rival?.kind === 'string' && Number.isSafeInteger(rival?.value) && !reportedAs(last.asked, rival.value))
     .map((rival) => ({ kind: rival.kind, side: rival.value > last.asked ? 'above' : 'below' }))
 }
 
@@ -668,15 +671,16 @@ export async function testContext(harness, { environment = process.env, now = ne
     const command = ['-p', '--no-session-persistence', '--output-format', 'text']
     const tested = { ...environment, [controls.limit.key]: String(asked) }
     // The owner's own files may name another size for this very run. Which ones do is kept with the
-    // result: a pass then also shows that the run's own value wins over them on this version.
+    // result: a pass then also shows that the run's own value wins over them on this version. A size
+    // the report could not tell from the one asked for is left out: a pass would show nothing about it.
     const sizes = resolveClaudeRoute(parseDispatch([controls.command, ...command]), tested, folder).context?.sizes ?? []
-    const rivals = sizes.filter((entry) => entry.kind !== 'environment' && entry.value !== asked).map((entry) => ({ kind: entry.kind, value: entry.value }))
+    const rivals = sizes.filter((entry) => entry.kind !== 'environment' && !reportedAs(asked, entry.value)).map((entry) => ({ kind: entry.kind, value: entry.value }))
     const others = rivals.length === 0 ? '' : ` while ${rivals.map((rival) => `${rival.kind} says ${rival.value}`).join(' and ')}`
     const run = spawnSync(controls.command, command, { cwd: folder, env: tested, input: '/context', encoding: 'utf8', timeout: timeoutMs })
     if (run.error || run.status !== 0) return record('inconclusive', 'Claude Code did not answer (timeout or error)', version)
     const observed = claudeReportedWindow(run.stdout)
     if (observed === null) return record('inconclusive', 'Claude Code\'s context report names no window', version)
-    return Math.abs(observed - asked) <= asked * 0.01
+    return reportedAs(asked, observed)
       ? record('pass', `asked for ${asked}${others}; Claude Code reports a window of ${observed}${rivals.length === 0 ? '' : ', so the run\'s own value wins'}`, version, observed, rivals)
       : record('fail', `asked for ${asked}${others}, but Claude Code reports a window of ${observed}`, version, observed, rivals)
   } finally {

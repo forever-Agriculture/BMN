@@ -890,7 +890,9 @@ starts has no test yet, so it stays not supported on every app.
 The Claude Code test also keeps which of your own files named another size for that very run
 (`rivals`: the kind of source and its size, for example `user settings autoCompactWindow` at
 450 000). A pass then shows one more thing for that version: the run's own value wins over that
-kind of source, on that side (the file's size above or below the run's).
+kind of source, on that side (the file's size above or below the run's). A file whose size is
+within one percent of the size the test asks for is left out, because Claude Code's rounded report
+could not tell the two apart.
 
 **Runs BMN checks.** `bmn roster role <role> --json` gives each candidate a `context` entry:
 `applied` with the exact `argv` items (Codex) or `env` entries (Claude Code), `app-default`,

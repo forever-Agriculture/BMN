@@ -106,8 +106,12 @@ describe('which settings are proven for a version (60.9 AC1)', () => {
     const seen: ContextTestEntry = { ...tested('claude', CLAUDE), asked: 137_000, observed: 137_000, rivals: [{ kind, value: 450_000 }] }
     expect(provenPrecedence('claude', CLAUDE, [seen])).toEqual([{ kind, side: 'above' }])
     expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ kind, value: 100_000 }] }])).toEqual([{ kind, side: 'below' }])
-    // A source that named the very size asked for showed nothing.
+    // A source that named the very size asked for showed nothing; nor did one the app's rounded report cannot tell from it.
     expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ kind, value: 137_000 }] }])).toEqual([])
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ kind, value: 138_000 }, { kind, value: 136_000 }] }])).toEqual([])
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, rivals: [{ kind, value: 138_371 }] }])).toEqual([{ kind, side: 'above' }])
+    // A record without the size it asked for proves nothing.
+    expect(provenPrecedence('claude', CLAUDE, [{ ...seen, asked: undefined as unknown as number }])).toEqual([])
     expect(provenPrecedence('claude', '2.1.300', [seen])).toEqual([])
     expect(provenPrecedence('claude', null, [seen])).toEqual([])
     expect(provenPrecedence('claude', CLAUDE, [{ ...seen, limit: 'fail' }])).toEqual([])
@@ -530,6 +534,8 @@ describe('the owner-run test, against stub apps (60.9 AC1)', () => {
     stub('codex', codexStub(Math.floor(CONTEXT_TEST_SIZE.codex * 0.95)))
     const result = await testContext('codex', { environment: env, now: NOW })
     expect(result).toMatchObject({ harness: 'codex', version: CODEX, limit: 'pass', compact: 'untested', asked: 123_000, observed: 116_850 })
+    // Which other source named a size is kept for Claude Code only: Codex's order is known from its own rules.
+    expect(result).not.toHaveProperty('rivals')
     const args = readFileSync(join(home, 'codex-args'), 'utf8').split('\n')
     expect(args).toContain('model_context_window=123000')
     expect(args).toContain('read-only')
@@ -589,10 +595,15 @@ describe('the owner-run test, against stub apps (60.9 AC1)', () => {
     expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'fail', observed: 450_000, rivals: [{ kind: 'user settings autoCompactWindow', value: 450_000 }],
       detail: 'asked for 137000 while user settings autoCompactWindow says 450000, but Claude Code reports a window of 450000' })
     expect(provenPrecedence('claude', CLAUDE)).toEqual([])
-    // A file that names the size asked for is no rival, and a Codex test keeps none.
+    // A file that names the size asked for is no rival.
     writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 137000 }))
     stub('claude', claudeStub('**Tokens:** 12.4k / 137k (9%)'))
     expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'pass', rivals: [] })
+    // Nor is one whose size the rounded report cannot tell from it: "138k" passes as the size asked for, whoever won.
+    writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 138000 }))
+    stub('claude', claudeStub('**Tokens:** 12.4k / 138k (9%)'))
+    expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'pass', rivals: [], detail: 'asked for 137000; Claude Code reports a window of 138000' })
+    expect(provenPrecedence('claude', CLAUDE)).toEqual([])
   })
 
   it('reads the two reports it relies on', () => {
