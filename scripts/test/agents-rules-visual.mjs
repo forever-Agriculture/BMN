@@ -1018,7 +1018,7 @@ done`)
     const toolsSheet = toolsApp('Codex').locator('.sheet')
     await toolsSheet.getByText('in an empty home folder with no sign-in, so nothing is sent', { exact: false }).waitFor()
     await toolsSheet.getByRole('button', { name: 'Run test' }).click()
-    await notice(/^Codex tools test passed: Codex reads its tools from ~\/\.codex\/config\.toml; its own list names the environment variable a tool is given; a run can be given only its own tools/)
+    await notice(/^Codex tools test passed: Codex reads its tools from ~\/\.codex\/config\.toml; its own list names the environment variable a tool is given \(the tool was not started\); a command told to take only its own tools \(its own list, not a run\) left out the one in its settings; whether it also leaves out tools a folder names was not seen/)
     await toolsApp('Codex').getByText(/^Tested .* · passes variables · a run can have tools of its own$/).waitFor()
     assert.equal(readFileSync(toolsConfig, 'utf8'), ownTools, 'the test changed the settings file')
     assert.equal(readdirSync(home).filter((name) => name.startsWith('.bmn-tools-test-')).length, 0, 'the test left its folder behind')
@@ -1154,7 +1154,9 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     const who = main.getByRole('radiogroup', { name: 'Researcher' })
     await who.waitFor()
     const able = await who.getByRole('radio').allTextContents()
-    const researcher = teamBefore.agents.find((agent) => agent.harness === 'claude' && able.includes(agent.name))
+    // The first one offered is chosen until the owner picks: pick another where there is one, so the choice is seen kept.
+    const mayResearch = teamBefore.agents.filter((agent) => agent.harness === 'claude' && able.includes(agent.name))
+    const researcher = mayResearch.find((agent) => agent.name !== able[0]) ?? mayResearch[0]
     assert.ok(researcher, `no Claude Code agent is offered as the researcher: ${able.join(', ')}`)
     for (const name of able) {
       const agent = teamBefore.agents.find((entry) => entry.name === name)
@@ -1164,7 +1166,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     await main.getByText(/Kimi cannot research: its provider gets public work only\./).waitFor()
     await who.getByRole('radio', { name: researcher.name, exact: true }).click()
     await who.getByRole('radio', { name: researcher.name, exact: true }).and(main.locator('[aria-checked="true"]')).waitFor()
-    assert.equal(JSON.parse(readFileSync(join(stateDir, 'research/settings.json'), 'utf8')).researcher, researcher.id)
+    if (researcher.name !== able[0]) assert.equal(JSON.parse(readFileSync(join(stateDir, 'research/settings.json'), 'utf8')).researcher, researcher.id)
     await main.getByText('Gets only your model names and the source list, never your files. Runs in an empty folder with web tools only.', { exact: false }).waitFor()
     assert.deepEqual(await main.locator('.sources li').allTextContents(), ['Provider pages', 'Other sites'])
     await shot('models-empty-1280.png')
