@@ -1162,7 +1162,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   })
   handle('aiterm:research:start', (params) => {
     const researcher = textParam(params, 'researcher', 64)
-    if (research !== null) return researchSnapshot(false)
+    // One at a time, the fence test included: a research asks how that test stands.
+    if (research !== null || fenceTest.running) return researchSnapshot(false)
     const ctx = context()
     chooseResearcher(researcher)
     const state = begin(researcher, false)
@@ -1188,6 +1189,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const provider = textParam(params, 'provider', 64)
     const model = textParam(params, 'model', 100)
     if (research !== null) return { ok: false, message: 'A research is going. Wait for it to end, or stop it.', model: null }
+    if (fenceTest.running) return { ok: false, message: 'The Codex fence test is running. Wait for it to end.', model: null }
     const ctx = context()
     const state = begin(researcher, true)
     try {

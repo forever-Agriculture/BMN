@@ -839,8 +839,10 @@ be checked.
   disagree, a value BMN cannot read (an approval policy written as a table), and a
   `.codex/config.toml` in the working folder or above it, or `/etc/codex`, that names either
   setting, unless the command carries its own. For Claude Code the command must carry `--tools`
-  naming only `Read`, `Grep` and `Glob` (or `''` for none), `--strict-mcp-config`, and no MCP
-  server in `--mcp-config`; `--permission-mode bypassPermissions` is refused. A PASS for a
+  naming only `Read`, `Grep` and `Glob` (or `''` for none), `--strict-mcp-config`, and
+  `--mcp-config` with an empty server list (`'{"mcpServers":{}}'`): that is the form the write
+  test showed, and the same command without the empty list was not tried, so it is refused;
+  `--permission-mode bypassPermissions` is refused. A PASS for a
   read-only role records what the check saw in the receipt's `sandbox` (mode, the source that
   named it, the approval policy and its source, or the tool list) beside `effort`, so
   `bmn roster bind` and a later reader can tell. `bmn roster role <role>` says that a role is

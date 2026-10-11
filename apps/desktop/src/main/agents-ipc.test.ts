@@ -1176,6 +1176,10 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
       expect((await call<ResearchSnapshot>('research:fence-test')).fenceTest.running).toBe(true)
       await pause(20)
       expect(started).toBe(1)
+      // While the test runs no research starts either: a research asks how that test stands.
+      expect((await call<ResearchSnapshot>('research:start', { researcher: 'opus' })).running).toBeNull()
+      expect(await call<{ ok: boolean; message: string }>('research:lookup', { researcher: 'opus', provider: 'anthropic', model: 'claude-opus-5-5' }))
+        .toMatchObject({ ok: false, message: 'The Codex fence test is running. Wait for it to end.' })
       release()
       const done = await tested()
       expect(done.fenceTest).toEqual({ running: false, ended: { ok: true, text: 'The fence test of Codex 0.161.0 passed: a research run sends its provider nothing of yours.' } })

@@ -246,7 +246,7 @@ describe('a Codex run for a read-only role resolves to a read-only sandbox with 
 })
 
 describe('a Claude Code run for a read-only role carries the form the write-attempt test showed (63.2 AC3)', () => {
-  const MUST = "the command must carry --tools naming only Read, Grep, Glob (or '' for none), --strict-mcp-config and no MCP server"
+  const MUST = "the command must carry --tools naming only Read, Grep, Glob (or '' for none), --strict-mcp-config and --mcp-config '{\"mcpServers\":{}}'"
   beforeEach(() => approve(held()))
 
   it('records the test with the version it ran on', () => {
@@ -262,7 +262,9 @@ describe('a Claude Code run for a read-only role carries the form the write-atte
     expect(reads.receipt?.sandbox).toEqual({ mode: 'read-only', source: '--tools', tools: ['Read', 'Grep', 'Glob'], form_tested_on: '2.1.296' })
     // The form was shown on another version than the stand-in's, and the check says so without refusing.
     expect(reads.steps.join('\n')).toContain('read-only role: tools Read, Grep, Glob, no MCP server (the form shown on Claude Code 2.1.296; this is 2.1.295)')
-    expect(answer('fable', 'epic-reviewer', FABLE('--tools', 'Read Glob', '--strict-mcp-config'))).toBe('PASS')
+    expect(answer('fable', 'epic-reviewer', FABLE('--tools', 'Read Glob', ...NO_MCP))).toBe('PASS')
+    // The empty server list is part of the form the write test showed: without it the command is not that form.
+    expect(answer('fable', 'epic-reviewer', FABLE('--tools', 'Read Glob', '--strict-mcp-config'))).toBe(`READ_ONLY_REQUIRED: epic-reviewer is a read-only role and the command names no empty MCP server list, which is part of the form the write test showed; ${MUST}`)
   })
 
   it('refuses every form that leaves a way to write', () => {

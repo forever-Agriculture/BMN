@@ -1526,13 +1526,15 @@ function checkReadOnly(role, parsed, resolution, version, note) {
     note(`read-only role: sandbox read-only (${sandbox.source}), approvals never (${approvals.source})`)
     return { mode: 'read-only', source: sandbox.source, approval_policy: 'never', approval_source: approvals.source }
   }
-  const must = `--tools naming only ${CLAUDE_READ_ONLY_TOOLS.join(', ')} (or '' for none), --strict-mcp-config and no MCP server`
+  const must = `--tools naming only ${CLAUDE_READ_ONLY_TOOLS.join(', ')} (or '' for none), --strict-mcp-config and --mcp-config '{"mcpServers":{}}'`
   if (parsed.tools === undefined) stop('the command names no tool list, so the run gets the tools that write', must)
   const names = parsed.tools.split(/[,\s]+/).filter((name) => name !== '')
   const writing = names.filter((name) => !CLAUDE_READ_ONLY_TOOLS.includes(name))
   if (writing.length > 0) stop(`--tools gives the run ${writing.join(', ')}`, must)
   if (!parsed.strictMcp) stop('without --strict-mcp-config the run is offered your MCP tools, which BMN cannot hold to reading', must)
-  if (parsed.mcpConfig !== undefined && !emptyMcpConfig(parsed.mcpConfig)) stop('--mcp-config gives the run an MCP server, which BMN cannot hold to reading', must)
+  // The form the write-attempt test showed names an empty server list; the same command without one was not tried, so it is not accepted.
+  if (parsed.mcpConfig === undefined) stop('the command names no empty MCP server list, which is part of the form the write test showed', must)
+  if (!emptyMcpConfig(parsed.mcpConfig)) stop('--mcp-config gives the run an MCP server, which BMN cannot hold to reading', must)
   if (parsed.permissionMode === 'bypassPermissions') stop('--permission-mode bypassPermissions switches every permission check off', must)
   note(`read-only role: tools ${names.join(', ') || 'none'}, no MCP server (the form shown on Claude Code ${CLAUDE_READ_ONLY_TESTED.version}${version === CLAUDE_READ_ONLY_TESTED.version ? '' : `; this is ${version ?? 'a version BMN cannot read'}`})`)
   return { mode: 'read-only', source: '--tools', tools: names, form_tested_on: CLAUDE_READ_ONLY_TESTED.version }
@@ -1840,6 +1842,8 @@ export const CODEX_RESEARCH_CONFIG = ['mcp_servers={}', 'web_search="live"', 'fe
   'features.multi_agent=false', 'features.apps=false', 'features.plugins=false', 'skills.include_instructions=false', 'skills.bundled.enabled=false',
   'include_apps_instructions=false', 'include_collaboration_mode_instructions=false', 'include_environment_context=false', 'project_doc_max_bytes=0']
 /** The features a Codex research run switches off by name: reading a picture, goals, drawing, sleeping and hooks. */
+/** The settings a research command names for itself beside the fixed ones: the agent's effort and its context limit. */
+const CODEX_RESEARCH_OWN_KEYS = ['model_reasoning_effort', 'model_context_window', 'model_auto_compact_token_limit']
 export const CODEX_RESEARCH_DISABLED = ['view_image', 'goals', 'image_generation', 'sleep_tool', 'hooks']
 /** The file a Codex research run writes its answer to, beside the prompt and outside the empty folder. */
 export const CODEX_RESEARCH_ANSWER = 'answer.md'
@@ -2013,6 +2017,11 @@ export function researchFormProblem(parsed) {
     if (fixed.length !== CODEX_RESEARCH_CONFIG.length || new Set(fixed).size !== fixed.length) {
       return `a research run carries exactly ${CODEX_RESEARCH_CONFIG.map((entry) => `-c ${entry}`).join(' ')}`
     }
+    // Beside the fixed settings a research command names its effort and, where the agent has one, its context limit: nothing else, each once.
+    const own = parsed.config.filter((entry) => !CODEX_RESEARCH_CONFIG.includes(entry)).map((entry) => entry.split('=')[0])
+    const stray = own.find((key) => !CODEX_RESEARCH_OWN_KEYS.includes(key))
+    if (stray !== undefined) return `a research run carries no setting beside its fixed ones, its effort and its context limit, not -c ${stray}`
+    if (new Set(own).size !== own.length) return 'a research run names its effort and its context limit once each'
     if (parsed.strictConfig !== true) return 'a research run needs --strict-config, so that a setting Codex does not know stops the run'
     if (parsed.disable.length !== CODEX_RESEARCH_DISABLED.length || !CODEX_RESEARCH_DISABLED.every((feature) => parsed.disable.includes(feature))) {
       return `a research run carries exactly ${CODEX_RESEARCH_DISABLED.map((feature) => `--disable ${feature}`).join(' ')}`

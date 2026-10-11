@@ -303,7 +303,7 @@ export function ModelsPage(props: { team: TeamState; data: RosterDataShape; rese
       <PageHead title="Models" status={researchStatus(snapshot, shortDate)}>
         {running
           ? <button type="button" disabled={research.busy} onClick={() => void research.stop()}>Stop</button>
-          : <button type="button" disabled={research.busy || chosen === undefined} title={chosen === undefined ? 'No agent on your team can research' : undefined} onClick={() => void research.start()}>Research now</button>}
+          : <button type="button" disabled={research.busy || chosen === undefined || testing} title={chosen === undefined ? 'No agent on your team can research' : testing ? 'The Codex fence test is running' : undefined} onClick={() => void research.start()}>Research now</button>}
       </PageHead>
       {staged !== null && team.hasStaged ? <p className="preferences-success" role="status">{staged}</p>
         : research.notice ? <p className={research.notice.ok ? 'preferences-success' : 'preferences-error'} role={research.notice.ok ? 'status' : 'alert'}>{research.notice.text}</p> : null}
