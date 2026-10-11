@@ -1136,6 +1136,33 @@ describe('research runs (60.3 AC11)', () => {
       codexRun = prepareResearchRun('Research these models: gpt-6-astra.\n', { now: new Date(NOW.getTime() + 5000), harness: 'codex', environment: env })
     })
 
+    it.each(['normal', 'dry', 'settled'] as const)('a native-like version query keeps the research folder untouched (%s)', (mode) => {
+      const calls = join(home, 'version-calls.txt')
+      writeFileSync(join(stubs, 'codex'), `#!/bin/sh
+[ "$1" = "--version" ] || exit 9
+printf '%s\\n' "\${CODEX_HOME-unset}" > '${calls}'
+mkdir -p "\${CODEX_HOME:-$HOME/.codex}/tmp"
+echo "codex-cli 0.161.0"
+`)
+      const read: string[] = []
+      setReadTracer((path) => read.push(path))
+      if (mode === 'settled') removeResearchCodexFolders(codexRun)
+      const result = research({ agent: 'astra', argv: CODEX_RESEARCH(), stdin: codexRun.prompt, cwd: codexRun.cwd,
+        ...(mode === 'dry' ? { dry: true } : mode === 'settled' ? { settled: true } : {}) }, { ...FENCED, cwd: codexRun.cwd })
+      expect(result.verdict).toBe('PASS')
+      expect(readFileSync(calls, 'utf8')).toBe('unset\n')
+      if (mode === 'settled') expect(existsSync(codexRun.codex as string)).toBe(false)
+      else expect(readdirSync(codexRun.codex as string)).toEqual(['auth.json'])
+      expect(read.filter((path) => path.endsWith('auth.json'))).toEqual([])
+    })
+
+    it('keeps refusing pre-existing research-folder contents when the version query has startup side effects', () => {
+      writeFileSync(join(stubs, 'codex'), '#!/bin/sh\n[ "$1" = "--version" ] || exit 9\nmkdir -p "${CODEX_HOME:-$HOME/.codex}/tmp"\necho "codex-cli 0.161.0"\n')
+      mkdirSync(join(codexRun.codex as string, 'tmp'))
+      expect(codexResearch()).toMatchObject({ verdict: 'REFUSED', code: 'WORKSPACE_MISMATCH', message: expect.stringContaining('auth.json, tmp') })
+      expect(readdirSync(codexRun.codex as string)).toEqual(['auth.json', 'tmp'])
+    })
+
     it('BMN makes the run a Codex folder of its own that holds only a link to the sign-in file, which it never reads (63.3 AC1)', () => {
       mkdirSync(join(home, '.codex'))
       writeFileSync(join(home, '.codex/auth.json'), '{"synthetic":"sign-in"}\n')
