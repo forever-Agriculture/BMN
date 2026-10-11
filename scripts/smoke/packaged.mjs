@@ -4,6 +4,7 @@ import { existsSync, lstatSync, mkdtempSync, readdirSync, rmSync, statSync, writ
 import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { cliModules } from '../lib/cli-modules.mjs'
 import { assertOwnerRootsUnchanged, fingerprintOwnerRoots } from '../lib/owner-root-guard.mjs'
 import { packagedApp } from '../lib/packaged-app.mjs'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
@@ -73,6 +74,18 @@ try {
   rmSync(silenceFolder, { recursive: true, force: true })
 }
 const ownerRootsBefore = ownerFingerprint()
+// The bmn CLI loads its parts by relative path on BMN's own runtime. A part the build left out breaks
+// its command, and the prompt guard reads its own missing file as "no guard": load every one here.
+const packagedCli = cliModules(join(repoRoot, 'apps/desktop/bin')).map(name => join(packagedResources, 'bin', name))
+const missingCli = packagedCli.filter(file => !existsSync(file))
+if (missingCli.length > 0) throw new Error(`packaged bmn CLI files are missing: ${missingCli.join(', ')}`)
+const cliLoad = spawnSync(packagedBinary, [
+  '-e', 'Promise.all(process.argv.slice(1).map(file => import(file))).catch(error => { console.error(error.message); process.exit(1) })',
+  ...packagedCli
+], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } })
+if (cliLoad.status !== 0) {
+  throw new Error(`packaged bmn CLI does not load: ${(cliLoad.stderr || cliLoad.error?.message || `exit ${cliLoad.status}`).slice(-1_000)}`)
+}
 
 const originalRuntime = process.env.XDG_RUNTIME_DIR
 const originalWaylandDisplay = process.env.WAYLAND_DISPLAY

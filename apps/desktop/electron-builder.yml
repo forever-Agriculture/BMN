@@ -43,6 +43,18 @@ extraResources:
     to: bin/agents-check.mjs
   - from: bin/agents-rules.mjs
     to: bin/agents-rules.mjs
+  # The prompt guard and the context, skills and tools commands; agents-check.mjs imports two of them,
+  # so without these the dispatch check does not load either. scripts/lib/cli-modules.mjs finds the set.
+  - from: bin/agents-guard.mjs
+    to: bin/agents-guard.mjs
+  - from: bin/agents-context.mjs
+    to: bin/agents-context.mjs
+  - from: bin/agents-skills.mjs
+    to: bin/agents-skills.mjs
+  - from: bin/agents-tools.mjs
+    to: bin/agents-tools.mjs
+  - from: bin/agents-tool-files.mjs
+    to: bin/agents-tool-files.mjs
   # The --self-test stand-in agents draw these recorded dialogs; the packaged smoke runs that phase too.
   - from: src/utility/test-fixtures/remote-answers
     to: self-test/remote-answers
