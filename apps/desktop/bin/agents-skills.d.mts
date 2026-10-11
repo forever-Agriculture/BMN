@@ -11,7 +11,7 @@ export declare class SkillsError extends Error {
   constructor(code: string, message: string)
 }
 
-export declare const SKILL_APPS: Record<SkillsHarness, { command: string; roots: string[]; list: { argv: string[]; input: string } | null }>
+export declare const SKILL_APPS: Record<SkillsHarness, { command: string; roots: string[]; list: { argv: string[]; input: string } | null; prompt: boolean }>
 export declare const SETTLED_STATES: SkillState[]
 export declare function rootPath(root: string, environment?: Environment): string
 export declare function skillsTestsPath(): string
@@ -32,7 +32,8 @@ export declare function eligible(mark: { public?: true; only?: string[] } | unde
 export interface SkillsRoot { root: string; folder: boolean; link: boolean }
 export interface SkillsTestEntry {
   harness: string
-  kind: 'capability' | 'loading'
+  /** `capability`: where the app reads skills. `listing`: the app lists a skill placed there. `loading`: a run with a prompt (an older record of this kind without `basis: 'prompt'` is a listing). */
+  kind: 'capability' | 'listing' | 'loading'
   at: string
   version: string | null
   outcome: SkillsOutcome
@@ -41,11 +42,11 @@ export interface SkillsTestEntry {
   route?: string
   discovery?: string
   skills_hash?: string
-  /** What a loading result rests on: the app's own listing, with no prompt sent. */
-  basis?: 'listing'
+  /** What a loading result rests on: `prompt` is a run with one prompt; `listing` marks an older record that sent none. */
+  basis?: 'listing' | 'prompt'
 }
 export declare function skillsTests(): SkillsTestEntry[]
-export declare function lastSkillsTest(harness: string, kind: 'capability' | 'loading', tests?: SkillsTestEntry[]): SkillsTestEntry | null
+export declare function lastSkillsTest(harness: string, kind: SkillsTestEntry['kind'], tests?: SkillsTestEntry[]): SkillsTestEntry | null
 
 export interface AppSkills {
   harness: SkillsHarness
@@ -96,8 +97,15 @@ export declare function installSkills(harnesses?: string[], options?: {
 export declare function restoreSkillsTransaction(manifest: unknown, folder: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string }): Promise<{ code: string; restored?: string[]; message?: string; plan_hash?: string; targets?: { harness: string; path: string; resolved_path: string; becomes: string; diff: string }[] }>
 
 export declare function testSkillsFolders(harness: string, options?: { environment?: Environment; now?: Date; timeoutMs?: number }): Promise<SkillsTestEntry>
-export declare function testSkillsLoading(harness: string, options?: { environment?: Environment; now?: Date; timeoutMs?: number }): Promise<SkillsTestEntry>
-export declare function lastLoadingTests(options?: { environment?: Environment; tests?: SkillsTestEntry[]; versions?: SkillsVersions; generation?: Generation | null }): (Partial<SkillsTestEntry> & { harness: SkillsHarness; outcome: SkillsOutcome | null; stale?: boolean })[]
-export declare function testSkills(harness: string, options?: { environment?: Environment; now?: Date; timeoutMs?: number }): Promise<{ harness: string; version: string | null; outcome: SkillsOutcome; detail: string; folders: SkillsTestEntry; loading: SkillsTestEntry | null }>
+type SkillsTestOptions = { environment?: Environment; now?: Date; timeoutMs?: number }
+type LastSkillsTests = (Partial<SkillsTestEntry> & { harness: SkillsHarness; outcome: SkillsOutcome | null; stale?: boolean })[]
+type LastSkillsOptions = { environment?: Environment; tests?: SkillsTestEntry[]; versions?: SkillsVersions; generation?: Generation | null }
+export declare function testSkillsListing(harness: string, options?: SkillsTestOptions): Promise<SkillsTestEntry>
+export declare function claudeLoadingVerdict(stdout: string, token: string): [SkillsOutcome, string]
+export declare function codexLoadingVerdict(rollout: string, token: string): [SkillsOutcome, string]
+export declare function testSkillsLoading(harness: string, options?: SkillsTestOptions): Promise<SkillsTestEntry>
+export declare function lastLoadingTests(options?: LastSkillsOptions): LastSkillsTests
+export declare function lastListingTests(options?: LastSkillsOptions): LastSkillsTests
+export declare function testSkills(harness: string, options?: SkillsTestOptions): Promise<{ harness: string; version: string | null; outcome: SkillsOutcome; detail: string; folders: SkillsTestEntry; listing: SkillsTestEntry | null }>
 export declare const SKILLS_USAGE: string
 export declare function runSkillsCommand(argv: string[]): Promise<number>

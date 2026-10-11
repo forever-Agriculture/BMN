@@ -814,6 +814,9 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   testSkills(harness: RosterHarness): Promise<RulesOutcome> {
     return invokeBridge('aiterm:rules:skills-test', { harness })
   },
+  testSkillsLoading(harness: RosterHarness): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:skills-loading-test', { harness })
+  },
   planToolsInstall(removeUnlisted = false): Promise<ToolsPlan> {
     return invokeBridge('aiterm:rules:tools-plan', { removeUnlisted })
   },

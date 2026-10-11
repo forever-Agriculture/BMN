@@ -11,7 +11,8 @@ import { parseRoster, rewriteRoster } from '../../bin/agents-roster.mjs'
 import { listTransactions, restoreTransaction } from '../../bin/agents-rules.mjs'
 import {
   appSkills, appStateWord, checkExit, checkSkills, installSkills, lastLoadingTests, planSkillsInstall, skillDescription, skillsPlanView, skillsTests,
-  skillsTestsPath, testSkills, testSkillsFolders, testSkillsLoading, treeHash, withHeader, type SkillsRoot, type SkillState
+  claudeLoadingVerdict, codexLoadingVerdict, lastListingTests, skillsTestsPath, testSkills, testSkillsFolders, testSkillsListing, testSkillsLoading, treeHash, withHeader,
+  type SkillsRoot, type SkillState
 } from '../../bin/agents-skills.mjs'
 import { machineDiff, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
@@ -297,14 +298,33 @@ describe('check and install with links (60.11 AC2-AC4)', () => {
     expect((await restoreTransaction(failed.transaction!, { yes: true })).code).toBe('OK')
     expect(readdirSync(codexFolder())).toEqual([])
     expect(states('codex')).toEqual({ alpha: 'missing', beta: 'missing', gamma: 'missing' })
-    // The same end, but the owner replaced that entry before undoing: it is his, and stays.
+    // The same end, but the owner replaced that entry before undoing: it is shown, the restore stops there, and it stays his.
     const again = await install(['codex'], ended)
     rmSync(join(codexFolder(), 'beta'))
     skill('beta', { at: codexFolder(), extra: { 'own.md': 'own\n' } })
-    expect((await restoreTransaction(again.transaction!, { planOnly: true })).targets!.map((target) => target.path)).toEqual([join(codexFolder(), 'alpha')])
-    expect((await restoreTransaction(again.transaction!, { yes: true })).code).toBe('OK')
-    expect(readdirSync(codexFolder())).toEqual(['beta'])
+    expect((await restoreTransaction(again.transaction!, { planOnly: true })).targets!.map((target) => target.path)).toEqual([join(codexFolder(), 'alpha'), join(codexFolder(), 'beta')])
+    const stopped = await restoreTransaction(again.transaction!, { yes: true })
+    expect(stopped.code).toBe('REVISION_CONFLICT')
+    expect(stopped.message).toContain(`${join(codexFolder(), 'beta')} changed since BMN wrote it`)
     expect(readFileSync(join(codexFolder(), 'beta/own.md'), 'utf8')).toBe('own\n')
+  })
+
+  it('puts back only what still holds what the install left, also after an install that finished', async () => {
+    // BMN ends after it noted that it began the second skill and before it touched it: nothing there to undo.
+    const early = await install(['codex'], { beforeTarget: (_target: unknown, index: number) => { if (index === 1) throw new Error('ended here') } })
+    expect(early).toMatchObject({ code: 'INSTALL_FAILED', written: [{ skill: 'alpha' }] })
+    expect((await restoreTransaction(early.transaction!, { planOnly: true })).targets!.map((target) => target.path)).toEqual([join(codexFolder(), 'alpha')])
+    expect((await restoreTransaction(early.transaction!, { yes: true })).code).toBe('OK')
+    expect(readdirSync(codexFolder())).toEqual([])
+    // A finished install, then the owner puts a folder of his own where BMN's link was: Undo does not take it away.
+    const whole = await install(['codex'])
+    expect(whole.code).toBe('OK')
+    rmSync(join(codexFolder(), 'alpha'))
+    skill('alpha', { at: codexFolder(), extra: { 'own.md': 'own\n' } })
+    const stopped = await restoreTransaction(whole.transaction!, { yes: true })
+    expect(stopped.code).toBe('REVISION_CONFLICT')
+    expect(stopped.message).toContain(`${join(codexFolder(), 'alpha')} changed since BMN wrote it`)
+    expect(readFileSync(join(codexFolder(), 'alpha/own.md'), 'utf8')).toBe('own\n')
   })
 
   it('treats approval state it cannot read as an error, never as a team without skills marks', async () => {
@@ -488,30 +508,222 @@ describe('which skills an app may have (60.11 AC2, AC3)', () => {
   })
 })
 
-describe('whether a skill placed there loads: the owner-run test (60.11 AC5)', () => {
+describe('whether the app lists a skill placed there: a listing, never a loading test', () => {
   it('places one empty test skill, asks the app once, removes it, and binds the result to the version, the destination and the skills', async () => {
     const result = await testSkills('codex', { environment: env, now: NOW })
     expect(result).toMatchObject({ outcome: 'pass', version: CODEX })
-    expect(result.loading).toMatchObject({ kind: 'loading', outcome: 'pass', route: 'openai/observed-default/full' })
-    expect(result.loading!.detail).toBe(`Codex lists a test skill placed in ${codexFolder()}; no prompt was sent, so this shows the app finds a skill there, not that a model uses it`)
-    expect(result.loading).toMatchObject({ kind: 'loading', basis: 'listing' })
+    expect(result.listing).toMatchObject({ kind: 'listing', outcome: 'pass', route: 'openai/observed-default/full' })
+    expect(result.listing!.detail).toBe(`Codex lists a test skill placed in ${codexFolder()}; no prompt was sent, so this shows the app finds a skill there, not that a model uses it`)
     expect(readdirSync(codexFolder())).toEqual([])
     expect(readdirSync(home).filter((name) => name.startsWith('.bmn-skills-test-'))).toEqual([])
-    const last = () => lastLoadingTests({ environment: env, versions: VERSIONS }).find((entry) => entry.harness === 'codex')!
+    const last = () => lastListingTests({ environment: env, versions: VERSIONS }).find((entry) => entry.harness === 'codex')!
     expect(last()).toMatchObject({ outcome: 'pass', stale: false })
+    // A listing passed; nothing was loaded, and no loading test is on record.
+    expect(lastLoadingTests({ environment: env, versions: VERSIONS }).find((entry) => entry.harness === 'codex')).toEqual({ harness: 'codex', outcome: null })
+    appendFileSync(join(source, 'alpha/SKILL.md'), 'changed\n')
+    expect(last().stale).toBe(true)
+    expect(lastListingTests({ environment: env, versions: { ...VERSIONS, codex: '0.162.0' } })[1]!.stale).toBe(true)
+  })
+
+  it('is not offered where the app may not receive private work, and says when the app did not show the skill', async () => {
+    tested('opencode', OPENCODE, [{ root: '.config/opencode/skills', folder: true, link: true }])
+    expect(await testSkillsListing('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'unavailable' })
+    expect(existsSync(opencodeFolder())).toBe(false)
+    // An app whose real folder is elsewhere than the test showed.
+    lister('codex', CODEX, 'debug prompt-input', ['.nowhere'])
+    expect(await testSkillsListing('codex', { environment: env, now: NOW })).toMatchObject({ outcome: 'fail', detail: `Codex did not list a test skill placed in ${codexFolder()}` })
+    expect(skillsTests().filter((entry) => entry.kind === 'listing')).toHaveLength(2)
+  })
+
+  it('a record made before the loading test existed stays a listing, whatever it called itself', () => {
+    const old = { harness: 'codex', at: NOW.toISOString(), version: CODEX, outcome: 'pass', detail: 'Codex named a test skill', route: 'openai/observed-default/full', discovery: 'x', skills_hash: 'y' }
+    appendFileSync(skillsTestsPath(), `${JSON.stringify({ ...old, kind: 'loading' })}\n${JSON.stringify({ ...old, kind: 'loading', basis: 'listing' })}\n`)
+    expect(lastLoadingTests({ environment: env, versions: VERSIONS })[1]).toEqual({ harness: 'codex', outcome: null })
+    expect(lastListingTests({ environment: env, versions: VERSIONS })[1]).toMatchObject({ outcome: 'pass', basis: 'listing' })
+  })
+})
+
+describe('whether the app hands a skill to its model: the owner-run loading test (60.11 AC5)', () => {
+  const TOKEN = 'BMN-0123456789abcdef01234567'
+  const line = (value: unknown): string => JSON.stringify(value)
+  const START = { type: 'system', subtype: 'init', tools: [] as string[] }
+  const answer = (result: string, extra: Record<string, unknown> = {}) => ({ type: 'result', is_error: false, result, ...extra })
+  const said = (text: string) => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } })
+
+  it('Claude Code passes only with every tool off by its own word, no tool part anywhere, and the token in its one answer', () => {
+    const out = (...events: unknown[]): string => `${events.map(line).join('\n')}\n`
+    expect(claudeLoadingVerdict(out(START, said(TOKEN), answer(TOKEN)), TOKEN)).toEqual(['pass', 'with every tool off, Claude Code answered with words only the test skill holds'])
+    expect(claudeLoadingVerdict(out(START, answer('Unknown skill: bmn-loading-test')), TOKEN)).toEqual(['fail', 'with every tool off, Claude Code was asked for the test skill by name and did not answer with its words'])
+    expect(claudeLoadingVerdict(out(START, answer('BMN-ffffffffffffffffffffffff')), TOKEN)[0]).toBe('fail')
+    // The token came back, but a tool was there to read the file: that shows nothing.
+    expect(claudeLoadingVerdict(out({ ...START, tools: ['Read'] }, answer(TOKEN)), TOKEN)).toEqual(['inconclusive', 'the run still had 1 tool, so one may have read the skill'])
+    expect(claudeLoadingVerdict(out(START, { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Skill', input: {} }] } }, { type: 'user', message: { content: [{ type: 'tool_result', content: TOKEN }] } }, answer(TOKEN)), TOKEN))
+      .toEqual(['inconclusive', 'a tool ran in the run, so it may have read the skill'])
+    // Saying in words that no tool ran is not the app's own word.
+    expect(claudeLoadingVerdict(out(said('I used no tools.'), answer(TOKEN)), TOKEN)).toEqual(['inconclusive', 'the run did not say which tools it had, so BMN cannot tell whether one read the skill'])
+    expect(claudeLoadingVerdict(out({ type: 'system', subtype: 'init' }, answer(TOKEN)), TOKEN)[0]).toBe('inconclusive')
+    expect(claudeLoadingVerdict(out(START, { type: 'something_new', text: TOKEN }, answer(TOKEN)), TOKEN)).toEqual(['inconclusive', 'Claude Code reported something BMN does not know, so it cannot tell whether a tool read the skill'])
+    expect(claudeLoadingVerdict(`${line(START)}\nnot json ${TOKEN}\n`, TOKEN)).toEqual(['inconclusive', 'Claude Code answered in a form BMN cannot read'])
+    expect(claudeLoadingVerdict(out(START, answer(TOKEN, { is_error: true })), TOKEN)).toEqual(['inconclusive', 'Claude Code gave no answer BMN can read (an error, or none)'])
+    expect(claudeLoadingVerdict(out(START), TOKEN)[0]).toBe('inconclusive')
+    expect(claudeLoadingVerdict(out(START, answer(TOKEN), answer(TOKEN)), TOKEN)[0]).toBe('inconclusive')
+    expect(claudeLoadingVerdict('', TOKEN)[0]).toBe('inconclusive')
+  })
+
+  const META = { type: 'session_meta', payload: { id: 's', cwd: '/synthetic' } }
+  const message = (role: string, text: string) => ({ type: 'response_item', payload: { type: 'message', role, content: [{ type: 'input_text', text }] } })
+  const CALL = { type: 'response_item', payload: { type: 'function_call', name: 'shell', arguments: '{"command":["cat","SKILL.md"]}' } }
+  const OUTPUT = { type: 'response_item', payload: { type: 'function_call_output', output: `reply with exactly ${TOKEN}` } }
+
+  it('Codex passes only when its own record shows the skill given to the model before any tool was called', () => {
+    const record = (...entries: unknown[]): string => `${entries.map(line).join('\n')}\n`
+    expect(codexLoadingVerdict(record(META, message('user', 'Use the skill'), message('user', `<skill>reply with exactly ${TOKEN}</skill>`), message('assistant', TOKEN)), TOKEN))
+      .toEqual(['pass', "Codex gave the model the test skill's words itself, before any tool ran"])
+    expect(codexLoadingVerdict(record(META, message('developer', TOKEN), CALL, OUTPUT), TOKEN)[0]).toBe('pass')
+    // The model read the file with a tool: the token is there, and it shows nothing about loading.
+    expect(codexLoadingVerdict(record(META, message('user', 'Use the skill'), CALL, OUTPUT, message('assistant', TOKEN)), TOKEN))
+      .toEqual(['inconclusive', "the test skill's words reached the run only after a tool ran or in a place BMN does not know, which does not show that Codex hands a skill to the model"])
+    expect(codexLoadingVerdict(record(META, CALL, message('user', TOKEN)), TOKEN)[0]).toBe('inconclusive')
+    // The model's own message is not something Codex gave it.
+    expect(codexLoadingVerdict(record(META, message('assistant', TOKEN)), TOKEN)[0]).toBe('inconclusive')
+    expect(codexLoadingVerdict(record(META, { type: 'event_msg', payload: { type: 'exec_command_begin' } }, message('user', TOKEN)), TOKEN)[0]).toBe('inconclusive')
+    expect(codexLoadingVerdict(record(META, { type: 'response_item', payload: { type: 'web_search_call' } }, message('assistant', 'nothing')), TOKEN))
+      .toEqual(['inconclusive', "a tool ran and the test skill's words never appeared, so BMN cannot tell what Codex itself gave the model"])
+    expect(codexLoadingVerdict(record(META, message('user', 'Use the skill'), { type: 'event_msg', payload: { type: 'agent_message', message: 'I know no such skill.' } }, message('assistant', 'I know no such skill.')), TOKEN))
+      .toEqual(['fail', "Codex ran no tool and never gave the model the test skill's words"])
+    expect(codexLoadingVerdict(record(META, { type: 'new_kind', payload: {} }, message('user', TOKEN)), TOKEN)[0]).toBe('inconclusive')
+    expect(codexLoadingVerdict(`${line(META)}\n{ torn ${TOKEN}\n`, TOKEN)).toEqual(['inconclusive', 'the record Codex saved for the run holds a line BMN cannot read'])
+  })
+
+  /** A stand-in app for the prompt run: it notes how it was started and answers as `mode` says. */
+  function prompter(name: 'codex' | 'claude', version: string, mode: string): void {
+    writeFileSync(join(stubs, name), `#!${process.execPath}
+const fs = require('node:fs')
+const home = process.env.HOME
+const argv = process.argv.slice(2)
+if (argv[0] === '--version') { console.log('${name} ${version}'); process.exit(0) }
+const prompt = fs.readFileSync(0, 'utf8')
+fs.appendFileSync(home + '/prompt-${name}.log', JSON.stringify({ argv, prompt, cwd: process.cwd() }) + '\\n')
+const mode = ${JSON.stringify(mode)}
+const skill = /bmn-loading-test-[0-9a-f]+/.exec(prompt)[0]
+const folder = home + '/${name === 'codex' ? '.agents/skills' : '.claude/skills'}/' + skill
+const text = fs.readFileSync(folder + '/SKILL.md', 'utf8')
+fs.writeFileSync(home + '/seen-skill.md', text)
+const token = /BMN-[0-9a-f]+/.exec(text)[0]
+if (mode === 'exit') process.exit(3)
+if (mode === 'stay') fs.chmodSync(home + '/${name === 'codex' ? '.agents/skills' : '.claude/skills'}', 0o555)
+const line = (value) => JSON.stringify(value)
+if (${JSON.stringify(name)} === 'claude') {
+  const out = [{ type: 'system', subtype: 'init', tools: mode === 'tools' ? ['Read'] : [] }, { type: 'result', is_error: false, result: mode === 'absent' ? 'Unknown skill' : token }]
+  console.log(out.map(line).join('\\n'))
+} else if (mode !== 'no-record') {
+  const message = (role, said) => ({ type: 'response_item', payload: { type: 'message', role, content: [{ type: 'input_text', text: said }] } })
+  const records = [{ type: 'session_meta', payload: { id: 's', cwd: argv[argv.indexOf('-C') + 1] } }, message('user', prompt)]
+  if (mode === 'tool') records.push({ type: 'response_item', payload: { type: 'function_call', name: 'shell' } }, { type: 'response_item', payload: { type: 'function_call_output', output: text } }, message('assistant', token))
+  else if (mode === 'absent') records.push(message('assistant', 'I know no such skill.'))
+  else records.push(message('user', '<skill>' + text + '</skill>'), message('assistant', token))
+  fs.mkdirSync(home + '/.codex/sessions/2026/10/10', { recursive: true })
+  fs.writeFileSync(home + '/.codex/sessions/2026/10/10/rollout-2026-10-10T12-00-00-s.jsonl', records.map(line).join('\\n') + '\\n')
+}
+`)
+    chmodSync(join(stubs, name), 0o755)
+  }
+  const started = (name: string): { argv: string[]; prompt: string; cwd: string }[] =>
+    (existsSync(join(home, `prompt-${name}.log`)) ? readFileSync(join(home, `prompt-${name}.log`), 'utf8').trim().split('\n').map((entry) => JSON.parse(entry)) : [])
+  const loading = (harness: string) => testSkillsLoading(harness, { environment: env, now: NOW })
+
+  it('puts one test skill in place, sends one prompt that names it and nothing of its token, removes it, and binds the result', async () => {
+    prompter('codex', CODEX, 'native')
+    const result = await loading('codex')
+    expect(result).toMatchObject({ harness: 'codex', kind: 'loading', basis: 'prompt', outcome: 'pass', version: CODEX, route: 'openai/observed-default/full',
+      detail: "Codex gave the model the test skill's words itself, before any tool ran" })
+    const [run] = started('codex')
+    expect(started('codex')).toHaveLength(1)
+    expect(run!.argv).toEqual(['exec', '--skip-git-repo-check', '-C', run!.cwd, '--sandbox', 'read-only', '-c', 'approval_policy="never"', '-'])
+    expect(run!.cwd).toMatch(new RegExp(`^${home}/\\.bmn-skills-test-[^/]+$`))
+    // Only the skill's body holds the token: not the prompt, the skill's name or its description.
+    const seen = readFileSync(join(home, 'seen-skill.md'), 'utf8')
+    const token = /BMN-[0-9a-f]{24}/.exec(seen)![0]
+    const [head, body] = [seen.slice(0, seen.lastIndexOf('---')), seen.slice(seen.lastIndexOf('---'))]
+    expect(body).toContain(token)
+    expect(head).not.toContain(token)
+    expect(run!.prompt).not.toContain(token)
+    expect(run!.prompt).toMatch(/^Use the skill \$bmn-loading-test-[0-9a-f]{8} now and do exactly what it says\.\n$/)
+    expect(run!.prompt).not.toContain(BODY)
+    expect(readdirSync(codexFolder())).toEqual([])
+    expect(readdirSync(home).filter((name) => name.startsWith('.bmn-skills-test-'))).toEqual([])
+    const last = () => lastLoadingTests({ environment: env, versions: VERSIONS })[1]!
+    expect(last()).toMatchObject({ outcome: 'pass', basis: 'prompt', stale: false })
+    // No listing was made, and a loading pass does not become one.
+    expect(lastListingTests({ environment: env, versions: VERSIONS })[1]).toEqual({ harness: 'codex', outcome: null })
     appendFileSync(join(source, 'alpha/SKILL.md'), 'changed\n')
     expect(last().stale).toBe(true)
     expect(lastLoadingTests({ environment: env, versions: { ...VERSIONS, codex: '0.162.0' } })[1]!.stale).toBe(true)
   })
 
-  it('is not offered where the app may not receive private work, and says when the app did not show the skill', async () => {
+  it('a token a tool read is inconclusive, a run without it fails, and a run that ended badly or left no record is inconclusive', async () => {
+    prompter('codex', CODEX, 'tool')
+    expect(await loading('codex')).toMatchObject({ outcome: 'inconclusive', detail: expect.stringContaining('only after a tool ran') })
+    rmSync(join(home, '.codex'), { recursive: true })
+    prompter('codex', CODEX, 'absent')
+    expect(await loading('codex')).toMatchObject({ outcome: 'fail', detail: "Codex ran no tool and never gave the model the test skill's words" })
+    rmSync(join(home, '.codex'), { recursive: true })
+    prompter('codex', CODEX, 'exit')
+    expect(await loading('codex')).toMatchObject({ outcome: 'inconclusive', detail: 'codex did not answer (timeout or error)' })
+    prompter('codex', CODEX, 'no-record')
+    expect(await loading('codex')).toMatchObject({ outcome: 'inconclusive', detail: 'the record Codex saves for a run was not found' })
+    expect(readdirSync(codexFolder())).toEqual([])
+    expect(skillsTests().filter((entry) => entry.kind === 'loading').map((entry) => entry.basis)).toEqual(['prompt', 'prompt', 'prompt', 'prompt'])
+  })
+
+  it('Claude Code is started with every tool off and asked for the skill by name', async () => {
+    tested('claude', CLAUDE, [{ root: '.claude/skills', folder: true, link: true }])
+    prompter('claude', CLAUDE, 'native')
+    expect(await loading('claude')).toMatchObject({ outcome: 'pass', basis: 'prompt', detail: 'with every tool off, Claude Code answered with words only the test skill holds' })
+    const [run] = started('claude')
+    expect(run!.argv).toEqual(['-p', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-session-persistence', '--output-format', 'stream-json', '--verbose'])
+    expect(run!.prompt).toMatch(/^\/bmn-loading-test-[0-9a-f]{8}\n$/)
+    expect(readdirSync(source).sort()).toEqual(['alpha', 'beta', 'gamma'])
+    prompter('claude', CLAUDE, 'tools')
+    expect(await loading('claude')).toMatchObject({ outcome: 'inconclusive', detail: 'the run still had 1 tool, so one may have read the skill' })
+    prompter('claude', CLAUDE, 'absent')
+    expect(await loading('claude')).toMatchObject({ outcome: 'fail' })
+    expect(readdirSync(source).sort()).toEqual(['alpha', 'beta', 'gamma'])
+  })
+
+  it('a test skill that could not be removed is never a pass', async () => {
+    prompter('codex', CODEX, 'stay')
+    const result = await loading('codex')
+    chmodSync(codexFolder(), 0o755)
+    const left = readdirSync(codexFolder())
+    expect(left).toHaveLength(1)
+    expect(result).toMatchObject({ outcome: 'inconclusive', detail: `the test skill could not be removed: delete ${join(codexFolder(), left[0]!)} by hand` })
+    expect(lastLoadingTests({ environment: env, versions: VERSIONS })[1]).toMatchObject({ outcome: 'inconclusive' })
+  })
+
+  it('sends no prompt where it could show nothing or may not: an app BMN cannot read that way, a public-only destination, an untested app', async () => {
     tested('opencode', OPENCODE, [{ root: '.config/opencode/skills', folder: true, link: true }])
-    expect(await testSkillsLoading('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'unavailable' })
+    expect(await loading('opencode')).toMatchObject({ outcome: 'unavailable', detail: expect.stringContaining('a loading test sends a prompt to that provider') })
+    expect(await loading('claude')).toMatchObject({ outcome: 'unavailable', detail: expect.stringContaining('skills not supported yet') })
+    expect(await loading('cursor')).toMatchObject({ outcome: 'unavailable' })
     expect(existsSync(opencodeFolder())).toBe(false)
-    // An app whose real folder is elsewhere than the test showed.
-    lister('codex', CODEX, 'debug prompt-input', ['.nowhere'])
-    expect(await testSkillsLoading('codex', { environment: env, now: NOW })).toMatchObject({ outcome: 'fail', detail: `Codex did not list a test skill placed in ${codexFolder()}` })
-    expect(skillsTests().filter((entry) => entry.kind === 'loading')).toHaveLength(2)
+    expect(existsSync(join(home, 'calls-opencode.log'))).toBe(false)
+    // BMN does not check what OpenCode sends, whatever its provider is allowed: no prompt goes there.
+    approve(EXAMPLE.replace('opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}'))
+    expect(await loading('opencode')).toMatchObject({ outcome: 'unavailable', detail: 'BMN does not check what OpenCode sends; a loading test sends a prompt to that provider' })
+    expect(existsSync(opencodeFolder())).toBe(false)
+    expect(existsSync(join(home, 'calls-opencode.log'))).toBe(false)
+  })
+
+  it('bmn skills test <app> --prompt runs the loading test; without it only the listing', async () => {
+    prompter('codex', CODEX, 'native')
+    const result = await run(['skills', 'test', 'codex', '--prompt', '--json'])
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout)).toMatchObject({ harness: 'codex', kind: 'loading', basis: 'prompt', outcome: 'pass' })
+    expect(started('codex')).toHaveLength(1)
+    lister('codex', CODEX, 'debug prompt-input', ['.agents/skills'])
+    expect(JSON.parse((await run(['skills', 'test', 'codex', '--json'])).stdout)).toMatchObject({ outcome: 'pass', listing: { kind: 'listing', outcome: 'pass' } })
+    expect(started('codex')).toHaveLength(1)
   })
 })
 

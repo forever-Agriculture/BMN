@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, ResearchLookup, ResearchSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan, ToolProposalView, ToolsPlan } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { fetchPublicPage } from '../../bin/agents-research.mjs'
 import { approveRoster, restoreGeneration, saveAndApprove } from './agents-approval'
 import { fileToApproved, installAgentsIpcHandlers, researchEndedWords } from './agents-ipc'
 
@@ -21,6 +22,8 @@ let handlers: Map<string, (event: never, params?: unknown) => unknown>
 let appEnv: Record<string, string>
 /** The folder the self-test serves cited `.test` pages from; null as in the real app. */
 let researchPages: string | null
+let researchFetch: typeof fetchPublicPage | null
+let researchLimitMs: number | undefined
 const saved = { HOME: process.env.HOME, PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
 
 function stub(name: string, body: string): void {
@@ -41,9 +44,12 @@ beforeEach(() => {
   handlers = new Map()
   appEnv = {}
   researchPages = null
+  researchFetch = null
+  researchLimitMs = undefined
   installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
     senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...appEnv }),
-    openPath: async (path) => (existsSync(path) ? '' : 'no such file'), researchPages: () => researchPages
+    openPath: async (path) => (existsSync(path) ? '' : 'no such file'), researchPages: () => researchPages,
+    researchFetch: (address, limits) => (researchFetch ?? fetchPublicPage)(address, limits), researchLimitMs: () => researchLimitMs
   })
 })
 
@@ -630,7 +636,7 @@ describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
     expect(tested).toMatchObject({ ok: true, message: `Codex skills test passed: Codex reads skills from ~/.agents/skills; Codex lists a test skill placed in ${join(home, '.agents/skills')}; no prompt was sent, so this shows the app finds a skill there, not that a model uses it` })
     expect(readdirSync(join(home, '.agents/skills'))).toEqual([])
     const codex = tested.snapshot.skills.apps[1]!
-    expect(codex).toMatchObject({ supported: true, location: join(home, '.agents/skills'), format: 'link', readsSource: false, kind: 'full', state: 'Missing', test: { outcome: 'pass', version: '0.161.0' }, loading: { outcome: 'pass', stale: false } })
+    expect(codex).toMatchObject({ supported: true, location: join(home, '.agents/skills'), format: 'link', readsSource: false, kind: 'full', state: 'Missing', test: { outcome: 'pass', version: '0.161.0' }, loadTestable: true, listing: { outcome: 'pass', stale: false }, loading: null })
     expect(tested.snapshot.skills).toMatchObject({ pending: 2, exposed: 0 })
     expect(tested.snapshot.skills.skills.map((entry) => entry.states)).toEqual([{ codex: 'missing' }, { codex: 'missing' }])
 
@@ -646,9 +652,14 @@ describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
     expect(readlinkSync(join(home, '.agents/skills/alpha'))).toBe(join(home, '.claude/skills/alpha'))
     expect(installed.snapshot.skills).toMatchObject({ pending: 0, exposed: 0 })
     expect(installed.snapshot.skills.apps[1]).toMatchObject({ state: 'Linked' })
-    // The skills changed since the loading test: it reads stale.
+    // The loading test is its own record: a stand-in that answers no prompt leaves it inconclusive, and the listing pass does not stand in for it.
+    const loaded = await call<RulesOutcome>('rules:skills-loading-test', { harness: 'codex' })
+    expect(loaded).toMatchObject({ ok: true, message: 'Codex skill loading test was inconclusive: codex did not answer (timeout or error)' })
+    expect(loaded.snapshot.skills.apps[1]).toMatchObject({ listing: { outcome: 'pass' }, loading: { outcome: 'inconclusive', stale: false } })
+    expect(readdirSync(join(home, '.agents/skills')).sort()).toEqual(['alpha', 'beta'])
+    // The skills changed since the tests: both read stale.
     skill('gamma')
-    expect((await rulesSnapshot()).skills.apps[1]).toMatchObject({ state: 'Missing', loading: { stale: true } })
+    expect((await rulesSnapshot()).skills.apps[1]).toMatchObject({ state: 'Missing', listing: { stale: true }, loading: { stale: true } })
 
     const transaction = installed.snapshot.transactions[0]!
     expect(transaction).toMatchObject({ reason: 'skills install', targets: ['codex'], state: 'complete' })
@@ -659,6 +670,7 @@ describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
     expect(await call<RulesOutcome>('rules:restore', { transaction: transaction.id, planHash: undo.planHash })).toMatchObject({ ok: true, message: 'Put back the skills in Codex' })
     expect(readdirSync(join(home, '.agents/skills'))).toEqual([])
     await expect(call('rules:skills-test', { harness: 'vim' })).rejects.toThrow()
+    await expect(call('rules:skills-loading-test', { harness: 'vim' })).rejects.toThrow()
   })
 
   it('previews which apps a staged skills change reaches, and approves it with the team', async () => {
@@ -718,18 +730,19 @@ describe('tools on Rules › Tools and Health (60.12 AC1-AC6)', () => {
     const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: staged } })
     expect(preview.valid).toBe(true)
     expect(preview.differences.map((diff) => [diff.scope, diff.id, diff.kind])).toEqual([['tools', 'docs', 'added'], ['tools', 'search', 'added']])
-    expect(preview.consequences).toEqual(['Tool Docs would reach Claude Code, Codex, OpenCode and Cursor', 'Tool Search would reach Codex'])
+    expect(preview.consequences).toEqual(['Tool Docs would reach Claude Code, Codex, OpenCode and Cursor', 'Tool Search would reach Codex',
+      'With a tool on the list, the check passes a run only in Claude Code, once its tools test passed there; a Codex run is refused until BMN has such a test for Codex'])
     expect(await call<AgentsOutcome>('agents:save', { shown: await shown(), data: staged, teamUpdate: bindings(preview) })).toMatchObject({ ok: true })
     expect(file('.config/bmn/agents/roster.md')).toContain('## tools\n\n```yaml\ndocs: {name: Docs, url: "https://docs.example.test/mcp", public: true}\nsearch: {name: Search, command: search-tool, apps: [codex]}\n```')
     expect(await call<ToolsPlan>('rules:tools-plan')).toMatchObject({ ok: false, code: 'TOOLS_UNSUPPORTED', planHash: null, targets: [] })
     expect(file('.codex/config.toml')).toBe(OWN)
 
     const tested = await call<RulesOutcome>('rules:tools-test', { harness: 'codex' })
-    expect(tested).toMatchObject({ ok: true, message: 'Codex tools test passed: Codex reads its tools from ~/.codex/config.toml; its own list names the environment variable a tool is given (the tool was not started); a command told to take only its own tools (its own list, not a run) left out the one in its settings; whether it also leaves out tools a folder names was not seen' })
+    expect(tested).toMatchObject({ ok: true, message: 'Codex tools test passed: Codex reads its tools from ~/.codex/config.toml; its own list names the environment variable a tool is given (the tool was not started); BMN has no test yet that shows which tools a run of Codex starts with, so a run cannot be kept to its own tools' })
     expect(readdirSync(home).filter((name) => name.startsWith('.bmn-tools-test-'))).toEqual([])
     expect(file('.codex/config.toml')).toBe(OWN)
     expect(tested.snapshot.tools).toMatchObject({ pending: 1, exposed: 0, blocked: 1 })
-    expect(tested.snapshot.tools.apps[1]).toMatchObject({ supported: true, state: 'Differs', variable: true, isolation: true, test: { outcome: 'pass', version: '0.161.0' }, unlisted: [] })
+    expect(tested.snapshot.tools.apps[1]).toMatchObject({ supported: true, state: 'Differs', variable: true, isolation: false, test: { outcome: 'pass', version: '0.161.0' }, unlisted: [] })
     expect(tested.snapshot.tools.tools).toEqual([
       { id: 'docs', states: { codex: 'missing' }, details: {} },
       { id: 'search', states: { codex: 'unmanaged' }, details: { codex: 'it holds a value inline (env.SEARCH_KEY): move it into an environment variable, then name the variable in the tool' } }
@@ -927,6 +940,55 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     expect(await call<ResearchLookup>('research:lookup', { researcher: 'fable', provider: 'anthropic', model: 'claude-nova-9' })).toEqual({ ok: false, message: 'Look up found nothing: Anthropic: the answer is not one JSON object', model: null })
     expect(await call<ResearchLookup>('research:lookup', { researcher: 'sonnet', provider: 'anthropic', model: 'claude-nova-9' })).toMatchObject({ ok: false, message: expect.stringContaining('BMN did not start the run: sonnet is proposed') })
   })
+
+  it('Stop reaches a page that is being read, for a research and for a look up', async () => {
+    const asked: { address: string; timeoutMs: number | undefined }[] = []
+    // A site that never answers: the read ends only when Stop reaches it.
+    researchFetch = (address, limits) => new Promise((resolve) => {
+      asked.push({ address, timeoutMs: limits?.timeoutMs })
+      limits?.signal?.addEventListener('abort', () => resolve({ ok: false, reason: 'the research was stopped' }), { once: true })
+    })
+    plan(FULL)
+    await call<ResearchSnapshot>('research:start', { researcher: 'fable' })
+    for (let tries = 0; tries < 400 && asked.length === 0; tries += 1) await pause(25)
+    expect(asked).toEqual([{ address: PAGE, timeoutMs: 10_000 }])
+    await call<ResearchSnapshot>('research:stop')
+    const state = await ended()
+    expect(state.ended).toEqual({ ok: true, text: 'Research kept 5 models. Stopped before it finished.', kept: true })
+    expect(state.models.find((model) => model.id === 'claude-opus-5-5')!.price).toMatchObject({ verified: false, why: 'the research was stopped' })
+    expect(calls()).toHaveLength(1)
+    asked.length = 0
+    plan({ 'claude-opus-5-6': { text: JSON.stringify({ version: 1, models: [entry('claude-opus-5-6', { price: price(15, 75) })] }) } })
+    const looking = call<ResearchLookup>('research:lookup', { researcher: 'fable', provider: 'anthropic', model: 'claude-opus-5-6' })
+    for (let tries = 0; tries < 400 && asked.length === 0; tries += 1) await pause(25)
+    expect(asked).toHaveLength(1)
+    await call<ResearchSnapshot>('research:stop')
+    expect(await looking).toMatchObject({ ok: true, model: { id: 'claude-opus-5-6', price: { verified: false, why: 'the research was stopped' } } })
+    expect((await load()).running).toBeNull()
+  })
+
+  it('the time limit reaches the last page too: what it could not read is kept unconfirmed and the research is not called finished', async () => {
+    researchLimitMs = 4000
+    const given: number[] = []
+    // A site that answers nothing for as long as it is given.
+    researchFetch = (_address, limits) => new Promise((resolve) => {
+      given.push(limits?.timeoutMs ?? -1)
+      setTimeout(() => resolve({ ok: false, reason: 'the page did not answer in time' }), limits?.timeoutMs ?? 60_000)
+    })
+    plan({ 'claude-opus-5-6': { text: JSON.stringify({ version: 1, models: [entry('claude-opus-5-6', { price: price(15, 75) })] }) } })
+    const found = await call<ResearchLookup>('research:lookup', { researcher: 'fable', provider: 'anthropic', model: 'claude-opus-5-6' })
+    expect(given).toHaveLength(1)
+    expect(given[0]).toBeGreaterThan(0)
+    expect(given[0]).toBeLessThanOrEqual(4000)
+    expect(found).toMatchObject({ ok: true, model: { price: { verified: false, why: 'the page did not answer in time' } } })
+    plan(FULL)
+    const started = Date.now()
+    await call<ResearchSnapshot>('research:start', { researcher: 'fable' })
+    const state = await ended()
+    expect(Date.now() - started).toBeLessThan(8000)
+    expect(state.last).toMatchObject({ state: 'partial', note: 'Ended at the 20-minute limit.' })
+    expect(state.ended).toMatchObject({ ok: false, kept: true })
+  }, 20_000)
 
   it('outside the self-test a reserved test address is never read, so nothing it shows counts', async () => {
     researchPages = null

@@ -552,12 +552,12 @@ const RULES: RulesSnapshot = {
     apps: [
       { harness: 'claude', version: '2.1.295', supported: true, testable: true, location: null, format: null, readsSource: true, kind: 'full', kindReason: '', state: 'Reads the source',
         test: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'Claude Code reads skills from ~/.claude/skills' },
-        loading: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'Claude Code named a test skill', stale: true } },
+        loadTestable: true, listing: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'Claude Code named a test skill', stale: true }, loading: null },
       { harness: 'codex', version: '0.171.0', supported: true, testable: true, location: '/home/synthetic/.agents/skills', format: 'link', readsSource: false, kind: 'full', kindReason: '', state: 'Missing',
-        test: { at: '2026-10-09T20:00:00.000Z', version: '0.171.0', outcome: 'pass', detail: 'Codex reads skills from ~/.agents/skills' }, loading: null },
+        test: { at: '2026-10-09T20:00:00.000Z', version: '0.171.0', outcome: 'pass', detail: 'Codex reads skills from ~/.agents/skills' }, loadTestable: true, listing: null, loading: null },
       { harness: 'opencode', version: '1.18.32', supported: true, testable: true, location: null, format: null, readsSource: true, kind: 'public', kindReason: 'OpenCode Go gets public work only', state: 'Exposed',
-        test: { at: '2026-10-09T20:00:00.000Z', version: '1.18.32', outcome: 'pass', detail: 'OpenCode reads skills from ~/.claude/skills' }, loading: null },
-      { harness: 'cursor', version: '2026.09.26', supported: false, reason: 'no test has run on Cursor 2026.09.26', testable: false, location: null, format: null, readsSource: false, kind: 'public', kindReason: '', state: 'Not supported yet', test: null, loading: null }
+        test: { at: '2026-10-09T20:00:00.000Z', version: '1.18.32', outcome: 'pass', detail: 'OpenCode reads skills from ~/.claude/skills' }, loadTestable: false, listing: null, loading: null },
+      { harness: 'cursor', version: '2026.09.26', supported: false, reason: 'no test has run on Cursor 2026.09.26', testable: false, location: null, format: null, readsSource: false, kind: 'public', kindReason: '', state: 'Not supported yet', test: null, loadTestable: false, listing: null, loading: null }
     ]
   },
   tools: {
@@ -1067,11 +1067,13 @@ describe('skills (60.11 AC5)', () => {
     const health = rulesMarkup('health')
     expect(health).toContain('<h4 class="group-head">Skills<span class="caption">where each app reads skills, and whether it has the ones it may have</span></h4>')
     expect(words(health)).toMatch(/Checked [^·]+ · 1 skill entry to install · 1 skill exposed/)
-    expect(health).toMatch(/data-skills="Reads the source"><span>Claude Code<\/span><span class="health-state"><span>The skills folder itself<\/span><\/span><span class="health-state"><span>Reads the source<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code named a test skill">Listing test passed [^<]+ · stale<\/span>/)
-    expect(health).toMatch(/data-skills="Missing"><span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.agents\/skills">~\/.agents\/skills<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Listing never tested<\/span>/)
-    expect(health).toMatch(/data-skills="Exposed"><span>OpenCode<\/span>.*?Exposed<span class="muted"> · Public skills only<\/span><\/span><span class="faint" title="[^"]*">No listing test<\/span>/)
+    expect(health).toMatch(/data-skills="Reads the source"><span>Claude Code<\/span><span class="health-state"><span>The skills folder itself<\/span><\/span><span class="health-state"><span>Reads the source<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code named a test skill">Listing test passed [^<]+ · stale · loading never tested<\/span>/)
+    expect(health).toMatch(/data-skills="Missing"><span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.agents\/skills">~\/.agents\/skills<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Loading never tested<\/span>/)
+    expect(health).toMatch(/data-skills="Exposed"><span>OpenCode<\/span>.*?Exposed<span class="muted"> · Public skills only<\/span><\/span><span class="faint" title="[^"]*">No loading test<\/span>/)
     expect(health).toMatch(/data-skills="Not supported yet"><span>Cursor<\/span><span class="health-state"><span class="faint">Not known yet<\/span><\/span><span class="health-state"><span title="no test has run on Cursor 2026.09.26">Not supported yet<\/span><span class="faint">BMN has no test for this app<\/span>/)
     expect([...health.matchAll(/(disabled="" )?aria-label="Skills test for ([A-Za-z ]+)"/g)].map((match) => `${match[2]}${match[1] ? ' off' : ''}`)).toEqual(['Claude Code', 'Codex', 'OpenCode', 'Cursor off'])
+    // The loading test, which sends a prompt, is its own button, only where the app may receive private work.
+    expect([...health.matchAll(/(disabled="" )?aria-label="Skill loading test for ([A-Za-z ]+)"/g)].map((match) => `${match[2]}${match[1] ? ' off' : ''}`)).toEqual(['Claude Code', 'Codex'])
   })
 
   it('says each state and test in plain words', () => {
@@ -1086,11 +1088,18 @@ describe('skills (60.11 AC5)', () => {
     expect(skillStateHint('excluded', { ...app, kind: 'public' }, true, 'OpenCode')).toBe('OpenCode gets public skills only')
     expect(skillStateHint('missing', app, true, 'Codex')).toBe('Not in Codex yet: Install… adds it')
     expect(skillStateHint(undefined, { ...app, supported: false }, true, 'Cursor')).toBe('Skills are not supported yet in Cursor: run its test on Health')
-    const base = { supported: false, version: '0.171.0', test: null, loading: null, kind: 'full' as const, testable: true }
+    const base = { supported: false, version: '0.171.0', test: null, listing: null, loading: null, kind: 'full' as const, testable: true }
     expect(skillsTestLine({ ...base, version: null })).toBe('The app is not found')
     expect(skillsTestLine(base)).toBe('Not tested on 0.171.0')
     expect(skillsTestLine({ ...base, test: { at: 'x', version: '0.171.0', outcome: 'inconclusive', detail: 'd' } })).toBe('The test was inconclusive on 0.171.0')
     expect(skillsTestLine({ ...base, test: { at: 'x', version: '0.170.0', outcome: 'fail', detail: 'd' } })).toBe('Not tested on 0.171.0')
+    // A listing is named a listing, and never reads as a loading test; the loading test, once run, is the line.
+    const seen = { at: '2026-10-09T20:00:00.000Z', version: '0.171.0', detail: 'd', stale: false }
+    const there = { ...base, supported: true }
+    expect(skillsTestLine(there)).toBe('Loading never tested')
+    expect(skillsTestLine({ ...there, listing: { ...seen, outcome: 'pass' } })).toMatch(/^Listing test passed [^·]+ · loading never tested$/)
+    expect(skillsTestLine({ ...there, listing: { ...seen, outcome: 'pass' }, loading: { ...seen, outcome: 'inconclusive', stale: true } })).toMatch(/^Loading test inconclusive [^·]+ · stale$/)
+    expect(skillsTestLine({ ...there, kind: 'public' })).toBe('No loading test')
   })
 })
 
@@ -1223,8 +1232,8 @@ describe('tools (60.12 AC6)', () => {
     const health = rulesMarkup('health')
     expect(health).toContain('<h4 class="group-head">Tools<span class="caption">where each app keeps its tools, and whether it has the ones it may have</span></h4>')
     expect(words(health)).toMatch(/Checked [^·]+ · 1 skill entry to install · 1 skill exposed · 2 tool entries to install · 1 tool exposed/)
-    expect(health).toMatch(/data-tools="Differs"><span>Claude Code<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.claude.json">~\/.claude.json<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Differs<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code listed the stand-in tool">Tested [^<]+ · passes variables · a run can have tools of its own<\/span>/)
-    expect(health).toMatch(/data-tools="Missing"><span>Codex<\/span>.*?Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Tested [^<]+ · variables not seen<\/span>/)
+    expect(health).toMatch(/data-tools="Differs"><span>Claude Code<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.claude.json">~\/.claude.json<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Differs<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code listed the stand-in tool">Tested [^<]+ · passes variables · a run keeps to its own tools<\/span>/)
+    expect(health).toMatch(/data-tools="Missing"><span>Codex<\/span>.*?Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Tested [^<]+ · variables not seen · no run seen kept to its tools<\/span>/)
     expect(health).toMatch(/data-tools="Exposed"><span>OpenCode<\/span>.*?<span class="faint" title="\/home\/synthetic\/dotfiles\/opencode.jsonc">A link: BMN does not write through it<\/span>.*?Exposed<span class="muted"> · Public tools only<\/span>/)
     expect(health).toMatch(/data-tools="Not supported yet"><span>Cursor<\/span>.*?<span title="no test has run on Cursor 2026.09.26">Not supported yet<\/span><span class="faint">Not tested on 2026.09.26<\/span>/)
     expect([...health.matchAll(/(disabled="" )?aria-label="Tools test for ([A-Za-z ]+)"/g)].map((match) => `${match[2]}${match[1] ? ' off' : ''}`)).toEqual(['Claude Code', 'Codex', 'OpenCode', 'Cursor'])
@@ -1237,10 +1246,11 @@ describe('tools (60.12 AC6)', () => {
       { scope: 'tools', id: 'notes', field: null, kind: 'added', after: { present: true, value: { name: 'Notes', command: 'notes-tool', args: ['--token', { env: 'NOTES_TOKEN' }], env: { TOKEN: 'NOTES_TOKEN' }, apps: ['claude', 'codex'] } } },
       { scope: 'tools', id: 'browser', field: 'agents', kind: 'changed', before: { present: true, value: ['luna'] }, after: { present: true, value: ['luna', 'sol'] } }
     ]
-    const { groups, general } = groupDifferences(differences, DATA, WITH, ['Tool Notes would reach Claude Code and Codex', 'Tool Browser would be given to the runs of Sol'])
+    const first = 'With a tool on the list, the check passes a run only in Claude Code, once its tools test passed there; a Codex run is refused until BMN has such a test for Codex'
+    const { groups, general } = groupDifferences(differences, DATA, WITH, ['Tool Notes would reach Claude Code and Codex', 'Tool Browser is for the runs of Sol, and BMN cannot give a Codex run a tool yet', first])
     expect(general).toEqual([])
     expect(groups).toHaveLength(1)
-    expect(groups[0]).toMatchObject({ key: 'tools', subject: 'Tools', consequences: ['Tool Notes would reach Claude Code and Codex', 'Tool Browser would be given to the runs of Sol'] })
+    expect(groups[0]).toMatchObject({ key: 'tools', subject: 'Tools', consequences: ['Tool Notes would reach Claude Code and Codex', 'Tool Browser is for the runs of Sol, and BMN cannot give a Codex run a tool yet', first] })
     expect(groups[0]!.lines.map((line) => `${line.field}: ${line.before} > ${line.after}`)).toEqual([
       'notes: — > added', 'notes · name: — > Notes', 'notes · program: — > notes-tool', 'notes · arguments: — > --token $NOTES_TOKEN', 'notes · variables: — > TOKEN from NOTES_TOKEN',
       'notes · only in: — > Claude Code, Codex', 'browser · only for the runs of: Luna > Luna, Sol'

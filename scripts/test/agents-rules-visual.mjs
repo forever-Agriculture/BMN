@@ -941,7 +941,7 @@ done`)
     assert.equal(await main.getByRole('button', { name: 'Skills test for Cursor' }).isDisabled(), true, 'a test is offered for an app BMN cannot ask')
     await main.getByRole('button', { name: 'Skills test for Codex' }).click()
     const skillsSheet = skillsApp('Codex').locator('.sheet')
-    await skillsSheet.getByText('no sign-in is there, so nothing is sent', { exact: false }).waitFor()
+    await skillsSheet.getByText('BMN sends no prompt and no sign-in is there', { exact: false }).waitFor()
     await skillsSheet.getByRole('button', { name: 'Run test' }).click()
     await notice(/^Codex skills test passed: Codex reads skills from ~\/\.agents\/skills; Codex lists a test skill placed in /)
     await skillsApp('Codex').locator('.path', { hasText: '~/.agents/skills' }).waitFor()
@@ -949,6 +949,26 @@ done`)
     await skillsApp('Codex').getByText(/^Listing test passed /).waitFor()
     assert.deepEqual(readdirSync(codexSkills), ['small-steps'], 'the test left a test skill behind')
     assert.equal(readdirSync(home).filter((name) => name.startsWith('.bmn-skills-test-')).length, 0, 'the test left its folder behind')
+    // The loading test is another test: it sends one prompt, and passes only when Codex's own record shows the skill's
+    // words given to the model before any tool ran. The stand-in answers the way such a run would be recorded.
+    await skillsApp('Codex').getByText(/ · loading never tested$/).waitFor()
+    assert.equal(await main.getByRole('button', { name: 'Skill loading test for Cursor' }).count(), 0, 'a loading test is offered where no prompt may go')
+    stub('codex', ['if [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi', '[ "$1" = "exec" ] || exit 4', 'cat > /dev/null',
+      'token=$(grep -ho "BMN-[0-9a-f]*" "$HOME"/.agents/skills/bmn-loading-test-*/SKILL.md | head -n 1)', 'mkdir -p "$HOME/.codex/sessions/2026/10/11"',
+      `printf '%s\\n' "{\\"type\\":\\"session_meta\\",\\"payload\\":{\\"id\\":\\"s\\",\\"cwd\\":\\"$4\\"}}" "{\\"type\\":\\"response_item\\",\\"payload\\":{\\"type\\":\\"message\\",\\"role\\":\\"user\\",\\"content\\":[{\\"type\\":\\"input_text\\",\\"text\\":\\"$token\\"}]}}" > "$HOME/.codex/sessions/2026/10/11/rollout-2026-10-11T00-00-00-s.jsonl"`,
+      'exit 0'].join('\n'))
+    await main.getByRole('button', { name: 'Skill loading test for Codex' }).click()
+    const loadingSheet = skillsApp('Codex').locator('.sheet')
+    await loadingSheet.getByText('sends one prompt that calls the skill by name', { exact: false }).waitFor()
+    await loadingSheet.scrollIntoViewIfNeeded()
+    await shot('health-skills-loading-sheet-1280.png')
+    await loadingSheet.getByRole('button', { name: 'Run test' }).click()
+    await notice(/^Codex skill loading test passed: Codex gave the model the test skill's words itself, before any tool ran$/)
+    await skillsApp('Codex').getByText(/^Loading test passed /).waitFor()
+    assert.deepEqual(readdirSync(codexSkills), ['small-steps'], 'the loading test left a test skill behind')
+    rmSync(join(home, '.codex/sessions'), { recursive: true, force: true })
+    stub('codex', ['if [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi', '[ "$1 $2" = "debug prompt-input" ] || exit 4',
+      'for d in "$HOME"/.agents/skills/*/; do [ -f "${d}SKILL.md" ] && echo "skill $(basename "$d")"; done', 'exit 0'].join('\n'))
     await skillsApp('Codex').scrollIntoViewIfNeeded()
     await shot('health-skills-1280.png')
 
@@ -1001,7 +1021,7 @@ done`)
     const TOOL_SECRET = 'sk-SYNTHETIC-SECRET-9f8e7d6c5b4a'
     const ownTools = `model = "gpt-6.1-sol"\n\n[mcp_servers.search]\ncommand = "search-tool"\nenv = { SEARCH_KEY = "${TOOL_SECRET}" }\n`
     writeFileSync(toolsConfig, ownTools, { mode: 0o600 })
-    // A stand-in Codex: its list repeats its settings file, and a run told to take only its own tools names only those.
+    // A stand-in Codex: its list repeats its settings file. BMN has no test of a Codex run, so none is asked of it.
     stub('codex', ['if [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi', 'alone=""; own=""',
       'while [ "$1" = "-c" ]; do case "$2" in "mcp_servers={}") alone=1;; mcp_servers.*.command=*) own="${2#mcp_servers.}"; own="${own%%.*}";; esac; shift 2; done',
       '[ "$1 $2" = "mcp list" ] || exit 4', '[ -n "$alone" ] || cat "$HOME/.codex/config.toml" 2>/dev/null', '[ -z "$own" ] || echo "$own"', 'exit 0'].join('\n'))
@@ -1016,10 +1036,10 @@ done`)
     await toolsApp('Codex').locator('.path', { hasText: '~/.codex/config.toml' }).waitFor()
     await main.getByRole('button', { name: 'Tools test for Codex' }).click()
     const toolsSheet = toolsApp('Codex').locator('.sheet')
-    await toolsSheet.getByText('in an empty home folder with no sign-in, so nothing is sent', { exact: false }).waitFor()
+    await toolsSheet.getByText('in an empty home folder with no sign-in, so no prompt can be answered there', { exact: false }).waitFor()
     await toolsSheet.getByRole('button', { name: 'Run test' }).click()
-    await notice(/^Codex tools test passed: Codex reads its tools from ~\/\.codex\/config\.toml; its own list names the environment variable a tool is given \(the tool was not started\); a command told to take only its own tools \(its own list, not a run\) left out the one in its settings; whether it also leaves out tools a folder names was not seen/)
-    await toolsApp('Codex').getByText(/^Tested .* · passes variables · a run can have tools of its own$/).waitFor()
+    await notice(/^Codex tools test passed: Codex reads its tools from ~\/\.codex\/config\.toml; its own list names the environment variable a tool is given \(the tool was not started\); BMN has no test yet that shows which tools a run of Codex starts with, so a run cannot be kept to its own tools$/)
+    await toolsApp('Codex').getByText(/^Tested .* · passes variables · no run seen kept to its tools$/).waitFor()
     assert.equal(readFileSync(toolsConfig, 'utf8'), ownTools, 'the test changed the settings file')
     assert.equal(readdirSync(home).filter((name) => name.startsWith('.bmn-tools-test-')).length, 0, 'the test left its folder behind')
     await toolsApp('Codex').scrollIntoViewIfNeeded()
@@ -1056,6 +1076,11 @@ done`)
     assert.deepEqual({ roster: rosterHash(), state: stateHash() }, beforeTools, 'a tool was written before it was approved')
     await main.locator('.page-head').scrollIntoViewIfNeeded()
     await shot('tools-staged-1280.png')
+    // The first tool on a list changes what the check asks of every run: Review says so before it is approved.
+    await ledger.getByRole('button', { name: 'Review', exact: true }).click()
+    await ledger.getByText('With a tool on the list, the check passes a run only in Claude Code, once its tools test passed there', { exact: false }).waitFor()
+    await shot('tools-first-consequence-1280.png')
+    await ledger.getByRole('button', { name: 'Review', exact: true }).click()
     await approve()
     await notice(/^Approved · version \d+/)
     assert.deepEqual(approved().tools, [{ id: 'docs', name: 'Docs', url: 'https://docs.example.test/mcp', public: true }, { id: 'search', name: 'Search', command: 'search-tool', apps: ['codex'] }])
@@ -1106,10 +1131,11 @@ done`)
     const openaiPage = 'https://prices.openai.test/api/pricing'
     mkdirSync(join(root, 'pages/prices.anthropic.test'), { recursive: true })
     mkdirSync(join(root, 'pages/prices.openai.test/api'), { recursive: true })
+    // Each amount stands with its own word: a bare row of a table is never counted, whatever its order.
     writeFileSync(join(root, 'pages/prices.anthropic.test/pricing'), ['<h1>Pricing</h1><p>Prices are in US dollars per million tokens.</p><table>',
-      '<tr><td>claude-opus-5-5</td><td>$15.00</td><td>$1.50</td><td>$75.00</td></tr>',
-      '<tr><td>claude-opus-5-6</td><td>$15</td><td>$75</td></tr>',
-      '<tr><td>claude-sonnet-5-9</td><td>$3</td><td>$15</td></tr></table>'].join('\n'))
+      '<tr><td>claude-opus-5-5</td><td>Input $15.00</td><td>Cached input $1.50</td><td>Output $75.00</td></tr>',
+      '<tr><td>claude-opus-5-6</td><td>Input $15</td><td>Output $75</td></tr>',
+      '<tr><td>claude-sonnet-5-9</td><td>Input $3</td><td>Output $15</td></tr></table>'].join('\n'))
     writeFileSync(join(root, 'pages/prices.anthropic.test/models'), '<h1>Models</h1><p>claude-opus-5-5: context window 1,000,000 tokens.</p><p>claude-opus-5-6: context window 1,000,000 tokens.</p>')
     writeFileSync(join(root, 'pages/prices.openai.test/api/pricing'), '<h1>API pricing</h1><p>Per 1M tokens.</p><p>gpt-6.1-sol input $2.00 output $8.00</p><p>gpt-6.1-nova input $0.50 output $4.00</p><p>gpt-6-astra input $5.00 output $25.00</p>')
     const priced = (input, output, source, cached) => ({ input, output, ...(cached === undefined ? {} : { cached_input: cached }), source, as_of: today })

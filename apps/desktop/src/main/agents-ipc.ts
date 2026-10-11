@@ -47,7 +47,7 @@ import { unifiedDiff } from '../../bin/text-diff.mjs'
 import { decide as decidePrompt } from '../../bin/agents-guard.mjs'
 import { CONTEXT_APPS, ContextError, applyContextDefault, contextDefault, planContextDefault, sharingAgents } from '../../bin/agents-context.mjs'
 import { chooseResearcher, chosenResearcher, fetchPublicPage, readResearch, researchView, researchers, runResearch, type ResearchRunRecord } from '../../bin/agents-research.mjs'
-import { SKILL_APPS, appStateWord, checkSkills, lastLoadingTests, lastSkillsTest, pendingCounts, skillsTests } from '../../bin/agents-skills.mjs'
+import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsTests } from '../../bin/agents-skills.mjs'
 import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsTests } from '../../bin/agents-tools.mjs'
 import { allowWorkspace, approveRoster, approveSections, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
 import { findAppProgram } from './app-program'
@@ -78,6 +78,10 @@ export interface AgentsIpcOptions {
    * a name no real site can have. Null everywhere else, where every cited page is read from its site.
    */
   researchPages?(): string | null
+  /** Reads one cited page for a research; tests replace it to hold a page open. */
+  researchFetch?: typeof fetchPublicPage
+  /** How long one research may take in all; tests shorten it. */
+  researchLimitMs?(): number | undefined
 }
 
 /** Variables the rules CLI reads to find each app's file and its destination; nothing else of this process's environment. */
@@ -464,7 +468,15 @@ function skillsView(apps: AgentAppView[], team: ReturnType<typeof approvedForPag
     if (team.broken !== null) throw new Error(team.broken)
     const tests = skillsTests()
     const check = checkSkills({ environment: context.env, tests, versions, generation, descriptions: true })
-    const loading = lastLoadingTests({ environment: context.env, tests, versions, generation })
+    const bound = { environment: context.env, tests, versions, generation }
+    const last = (found: ReturnType<typeof lastLoadingTests>, harness: RosterHarness): SkillsView['apps'][number]['loading'] => {
+      const entry = found.find((one) => one.harness === harness)
+      return entry === undefined || entry.outcome === null || entry.outcome === 'unavailable' ? null
+        : { at: String(entry.at), version: entry.version ?? null, outcome: entry.outcome, detail: String(entry.detail ?? ''), stale: entry.stale === true }
+    }
+    // Two records kept apart: a listing (no prompt) never stands in for a loading test (one prompt).
+    const listing = lastListingTests(bound)
+    const loading = lastLoadingTests(bound)
     return {
       source: check.source,
       markedMissing: check.marked_missing,
@@ -478,14 +490,12 @@ function skillsView(apps: AgentAppView[], team: ReturnType<typeof approvedForPag
       })),
       apps: check.apps.map((app) => {
         const test = lastSkillsTest(app.harness, 'capability', tests)
-        const loaded = loading.find((entry) => entry.harness === app.harness)
         return {
           harness: app.harness, version: app.version, supported: app.supported, ...(app.reason === undefined ? {} : { reason: app.reason }),
           testable: SKILL_APPS[app.harness].list !== null, location: app.location, format: app.format, readsSource: app.reads_source,
           kind: app.kind, kindReason: app.kind_reason, state: appStateWord(app, check.source.readable),
           test: test === null ? null : { at: test.at, version: test.version, outcome: test.outcome, detail: test.detail },
-          loading: loaded === undefined || loaded.outcome === null || loaded.outcome === 'unavailable' ? null
-            : { at: String(loaded.at), version: loaded.version ?? null, outcome: loaded.outcome, detail: String(loaded.detail ?? ''), stale: loaded.stale === true }
+          loadTestable: SKILL_APPS[app.harness].prompt, listing: last(listing, app.harness), loading: last(loading, app.harness)
         }
       })
     }
@@ -944,6 +954,13 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const result = await runCli(ctx.script, ['skills', 'test', harness, '--json'], ctx.probeEnv, PROBE_TIMEOUT_MS)
     return rulesOutcome(ctx, result, (report) => `${ROSTER_APP_NAMES[harness]} skills test ${PROBE_OUTCOME_WORDS[String(report.outcome)] ?? String(report.outcome)}: ${String(report.detail)}`)
   })
+  handle('aiterm:rules:skills-loading-test', async (params) => {
+    const harness = harnessParam(params.harness)
+    const ctx = context()
+    // Owner-run: one prompt goes to that app's provider, from the app's own environment.
+    const result = await runCli(ctx.script, ['skills', 'test', harness, '--prompt', '--json'], ctx.probeEnv, PROBE_TIMEOUT_MS)
+    return rulesOutcome(ctx, result, (report) => `${ROSTER_APP_NAMES[harness]} skill loading test ${PROBE_OUTCOME_WORDS[String(report.outcome)] ?? String(report.outcome)}: ${String(report.detail)}`)
+  })
   handle('aiterm:rules:tools-plan', async (params) => {
     const removeUnlisted = params.removeUnlisted === true
     const ctx = context()
@@ -993,7 +1010,12 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const own = dirname(ctx.script)
     return { ...ctx.probeEnv, PATH: (ctx.probeEnv.PATH ?? '').split(':').filter((entry) => entry !== own).join(':') }
   }
-  const readPage = (address: string): ReturnType<typeof fetchPublicPage> => fetchPublicPage(address, { selfTestPages: options.researchPages?.() ?? null })
+  // Stop and what is left of the research's time reach the page read itself, so neither waits for a slow site.
+  const readPage: typeof fetchPublicPage = (address, limits) => (options.researchFetch ?? fetchPublicPage)(address, { ...limits, selfTestPages: options.researchPages?.() ?? null })
+  const researchLimit = (): { limitMs?: number } => {
+    const limitMs = options.researchLimitMs?.()
+    return limitMs === undefined ? {} : { limitMs }
+  }
   const researchSnapshot = (fresh: boolean): ResearchSnapshot => {
     const ctx = context()
     // Asking each agent's app for its version takes a moment, so it happens when Models or New agent opens, not on every look at a run.
@@ -1026,7 +1048,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     chooseResearcher(researcher)
     const state = begin(researcher, false)
     void runResearch({
-      researcher, environment: researchEnvironment(ctx), now: ctx.now, signal: state.controller.signal, fetchPage: readPage,
+      researcher, environment: researchEnvironment(ctx), now: ctx.now, signal: state.controller.signal, fetchPage: readPage, ...researchLimit(),
       onProgress: ({ done, total }) => Object.assign(state, { done, total })
     }).then(({ run }) => {
       // A run the owner stopped ended as he asked; only a run that failed or ran out of time reads as a problem.
@@ -1051,7 +1073,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const state = begin(researcher, true)
     try {
       const { run, found } = await runResearch({
-        researcher, only: { provider, model }, environment: researchEnvironment(ctx), now: ctx.now, signal: state.controller.signal, fetchPage: readPage,
+        researcher, only: { provider, model }, environment: researchEnvironment(ctx), now: ctx.now, signal: state.controller.signal, fetchPage: readPage, ...researchLimit(),
         onProgress: ({ done, total }) => Object.assign(state, { done, total })
       })
       const view = (researchView(readResearch()).models as ResearchSnapshot['models']).find((entry) => entry.providerId === provider && entry.id === model) ?? null

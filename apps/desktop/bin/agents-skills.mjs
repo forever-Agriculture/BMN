@@ -38,13 +38,15 @@ export class SkillsError extends Error {
  * Per app: its program, the folders (under the home folder) it may read user-level skills from,
  * in the order BMN prefers to install into, and the command that lists the skills it sees
  * without sending a prompt. Cursor has no such command, so its skills stay "not supported yet".
+ * `prompt` says whether BMN can tell, in a run of that app, the app handing a skill's text to the
+ * model from the model reading the file itself; only there does a loading test say pass or fail.
  * These are what BMN asks; what an app answers is recorded by the owner's test, per version.
  */
 export const SKILL_APPS = {
-  claude: { command: 'claude', roots: ['.claude/skills'], list: { argv: ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence'], input: '/context\n' } },
-  codex: { command: 'codex', roots: ['.agents/skills', '.codex/skills', '.claude/skills'], list: { argv: ['debug', 'prompt-input'], input: '' } },
-  opencode: { command: 'opencode', roots: ['.config/opencode/skills', '.config/opencode/skill', '.agents/skills', '.claude/skills'], list: { argv: ['debug', 'skill'], input: '' } },
-  cursor: { command: 'cursor-agent', roots: ['.cursor/skills', '.agents/skills', '.claude/skills', '.codex/skills'], list: null }
+  claude: { command: 'claude', roots: ['.claude/skills'], list: { argv: ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence'], input: '/context\n' }, prompt: true },
+  codex: { command: 'codex', roots: ['.agents/skills', '.codex/skills', '.claude/skills'], list: { argv: ['debug', 'prompt-input'], input: '' }, prompt: true },
+  opencode: { command: 'opencode', roots: ['.config/opencode/skills', '.config/opencode/skill', '.agents/skills', '.claude/skills'], list: { argv: ['debug', 'skill'], input: '' }, prompt: false },
+  cursor: { command: 'cursor-agent', roots: ['.cursor/skills', '.agents/skills', '.claude/skills', '.codex/skills'], list: null, prompt: false }
 }
 
 /** States that need nothing done: the skill is where it should be, or is rightly absent. */
@@ -629,7 +631,8 @@ async function writeSkillsTransaction(planned, { now, beforeTarget, afterTarget 
     targets: planned.targets.map((target, index) => ({
       harness: target.harness, skill: target.skill, path: target.path, action: target.action,
       prior: target.prior.kind === 'tree' ? { kind: 'tree', backup: `${index}.tree`, hash: target.prior.hash } : { kind: target.prior.kind, ...(target.prior.kind === 'link' ? { target: target.prior.target } : {}) },
-      prior_record: records[target.path] ?? null, written: target.wanted, done: false
+      // `written` is what the entry will hold; `started` is set, and kept on disk, before the entry is touched.
+      prior_record: records[target.path] ?? null, written: target.wanted, started: false, done: false
     }))
   }
   const save = () => writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
@@ -641,6 +644,8 @@ async function writeSkillsTransaction(planned, { now, beforeTarget, afterTarget 
   for (const [index, target] of planned.targets.entries()) {
     try {
       beforeTarget?.(target, index)
+      manifest.targets[index].started = true
+      save()
       writeTarget(target, byName.get(target.skill))
       afterTarget?.(target, index)
     } catch (error) {
@@ -672,17 +677,19 @@ function holdsWritten(current, wanted) {
 /**
  * Undoes one skills transaction (called by `bmn rules restore --transaction`): every entry it
  * changed goes back to what it was, a link as a link and a folder from its private copy, and BMN's
- * records with it. Shown and confirmed like the install, and refused when an entry moved meanwhile.
- * An entry the install wrote without getting to record it (BMN ended between the two) is known by
- * holding exactly what the install meant to leave and not what was there before: it is undone too.
- * One the install never reached, or that changed since, is left.
+ * records with it. Shown and confirmed like the install. An entry is put back only while it still
+ * holds exactly what the install left there (the link it made, the copy with that content and
+ * those modes, or nothing where it removed one): one changed since is the owner's, stops the
+ * restore there and stays. An entry the install changed without getting to record it as done is
+ * undone too, known the same way; one it never began, or began and did not change, is left out.
  */
 export async function restoreSkillsTransaction(manifest, folder, { yes = false, asJson = false, planOnly = false, expectedPlanHash } = {}) {
   const { confirm, writePrivate } = await import('./agents-rules.mjs')
   const plans = manifest.targets.map((target) => ({ ...target, current: entryOf(target.path) })).filter((plan) => {
     if (plan.done === true) return true
+    if (plan.started !== true) return false
     const asBefore = plan.current.kind === (plan.prior.kind === 'tree' ? 'tree' : plan.prior.kind) && plan.current.target === plan.prior.target && plan.current.hash === plan.prior.hash
-    return holdsWritten(plan.current, plan.written) && !asBefore
+    return !asBefore
   })
   const becomes = (prior) => (prior.kind === 'link' ? `link to ${prior.target}` : prior.kind === 'missing' ? 'removed (it did not exist)' : 'the folder as it was')
   const targets = plans.map((plan) => ({ harness: plan.harness, skill: plan.skill, path: plan.path, resolved_path: `${plan.current.directory}/${basename(plan.path)}`, change: plan.prior.kind === 'tree' ? 'folder' : plan.prior.kind, becomes: becomes(plan.prior), diff: '', note: 'A skill is put back whole; its lines are not shown.' }))
@@ -695,6 +702,9 @@ export async function restoreSkillsTransaction(manifest, folder, { yes = false, 
   for (const plan of plans) {
     if (!sameEntry(entryOf(plan.path), plan.current)) {
       return { code: 'REVISION_CONFLICT', message: `${plan.path} changed while BMN was reading it; ${restored.length} entr${restored.length === 1 ? 'y' : 'ies'} restored`, restored }
+    }
+    if (!holdsWritten(plan.current, plan.written)) {
+      return { code: 'REVISION_CONFLICT', message: `${plan.path} changed since BMN wrote it; ${restored.length} entr${restored.length === 1 ? 'y' : 'ies'} restored`, restored }
     }
     if (plan.prior.kind === 'missing') {
       rmSync(plan.path, { recursive: true, force: true })
@@ -724,6 +734,18 @@ export async function restoreSkillsTransaction(manifest, folder, { yes = false, 
 // The owner's tests
 
 const SENTINEL_TEXT = (name) => `---\nname: ${name}\ndescription: BMN test skill ${name}. It does nothing.\n---\n\nThis skill is a test and holds no instructions.\n`
+
+/** Removes a test's own skill and folder; true only when the skill is seen to be gone. */
+function testSkillGone(path, work) {
+  for (const target of [path, work]) {
+    try {
+      rmSync(target, { recursive: true, force: true })
+    } catch {
+      // Said by the caller: a test skill that stays is never passed over.
+    }
+  }
+  return entryOf(path).kind === 'missing'
+}
 
 function listOutput(spec, cwd, environment, timeoutMs) {
   const run = spawnSync(spec.command, spec.list.argv, { cwd, env: environment, input: spec.list.input, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 })
@@ -789,16 +811,16 @@ function loadingBinding(app, decision, source) {
 }
 
 /**
- * Whether the app finds a skill placed where its skills live (60.11 AC5). One empty test skill
- * goes into that folder, the app is asked once, in a throwaway folder under the home folder, which
- * skills it sees, and the test skill is removed and checked to be gone. Offered only where the
- * app's approved destination may receive private work, and bound to the app version, that
- * destination, where the app reads skills and the skills' hashes.
+ * Whether the app lists a skill placed where its skills live. One empty test skill goes into that
+ * folder, the app is asked once, in a throwaway folder under the home folder, which skills it
+ * sees, and the test skill is removed and checked to be gone. Offered only where the app's
+ * approved destination may receive private work, and bound to the app version, that destination,
+ * where the app reads skills and the skills' hashes.
  *
- * No prompt is sent: a pass is the app's own listing naming the skill (`basis: 'listing'`). It
- * shows the app finds a skill there; it does not show a model using one, and is worded so.
+ * No prompt is sent, so this is a listing and nothing more (`kind: 'listing'`): it shows the app
+ * finds a skill there. It is never read as a loading test, which is `testSkillsLoading`.
  */
-export async function testSkillsLoading(harness, { environment = process.env, now = new Date(), timeoutMs = 120_000 } = {}) {
+export async function testSkillsListing(harness, { environment = process.env, now = new Date(), timeoutMs = 120_000 } = {}) {
   const spec = SKILL_APPS[harness]
   const generation = approvedIfAny()
   const { harnessVersion } = await import('./agents-check.mjs')
@@ -807,14 +829,14 @@ export async function testSkillsLoading(harness, { environment = process.env, no
   const decision = routeFor(harness, generation)
   const source = sourceSkills(skillsSource(generation?.data ?? null, environment))
   const app = appSkills(harness, { environment, version, source: source.path })
-  const done = (outcome, detail) => record({ harness, kind: 'loading', basis: 'listing', at: now.toISOString(), version, outcome, detail, ...loadingBinding(app, decision, source) })
+  const done = (outcome, detail) => record({ harness, kind: 'listing', at: now.toISOString(), version, outcome, detail, ...loadingBinding(app, decision, source) })
   if (version === null) return done('unavailable', `${spec.command} is not installed or did not answer --version`)
   if (!app.supported) return done('unavailable', `skills not supported yet: ${app.reason}`)
   if (decision.kind !== 'full') return done('unavailable', `${decision.reason}; a listing test is offered only where the app may receive private work`)
   const route = await routeStillMatches(harness, decision, environment)
   if (!route.ok) return done('unavailable', `refused: ${route.reason}; ${route.remedy}`)
   const location = app.location ?? source.path
-  const name = `bmn-loading-test-${randomBytes(4).toString('hex')}`
+  const name = `bmn-listing-test-${randomBytes(4).toString('hex')}`
   const path = `${location}/${name}`
   const work = mkdtempSync(`${home(environment)}/.bmn-skills-test-`)
   let outcome
@@ -825,23 +847,172 @@ export async function testSkillsLoading(harness, { environment = process.env, no
     outcome = listed.text.includes(name) ? ['pass', `${APP_NAMES[harness]} lists a test skill placed in ${location}; no prompt was sent, so this shows the app finds a skill there, not that a model uses it`]
       : !listed.ok ? ['inconclusive', `${spec.command} did not answer (timeout or error)`]
         : ['fail', `${APP_NAMES[harness]} did not list a test skill placed in ${location}`]
-  } finally {
-    rmSync(path, { recursive: true, force: true })
-    rmSync(work, { recursive: true, force: true })
+  } catch (error) {
+    outcome = ['inconclusive', `the test could not run: ${error instanceof Error ? error.message : String(error)}`]
   }
-  if (entryOf(path).kind !== 'missing') return done('fail', `the test skill could not be removed: delete ${path} by hand`)
+  if (!testSkillGone(path, work)) return done('fail', `the test skill could not be removed: delete ${path} by hand`)
   return done(outcome[0], outcome[1])
 }
 
-/** The latest loading test per app; stale when the app version, its destination, where it reads skills or any skill changed since. */
-export function lastLoadingTests({ environment = process.env, tests = skillsTests(), versions, generation = approvedIfAny() } = {}) {
+// What a run of Claude Code reports, one JSON object a line (`--output-format stream-json`).
+const CLAUDE_EVENTS = ['system', 'assistant', 'user', 'result', 'stream_event', 'rate_limit_event']
+
+/** Whether a reported event carries a tool being called or answering, judged from its typed parts and never from its words. */
+function holdsToolPart(value) {
+  if (Array.isArray(value)) return value.some(holdsToolPart)
+  if (value === null || typeof value !== 'object') return false
+  if (typeof value.type === 'string' && /tool/i.test(value.type)) return true
+  return Object.values(value).some(holdsToolPart)
+}
+
+/**
+ * What a Claude Code loading run showed. A pass needs the run's own word that it had no tools, no
+ * tool part in anything it reported, and the token in its one answer: then only Claude Code itself
+ * can have put the skill's text before the model. Anything BMN cannot read that way is inconclusive.
+ */
+export function claudeLoadingVerdict(stdout, token) {
+  const events = []
+  for (const line of stdout.split('\n')) {
+    if (line.trim() === '') continue
+    let event
+    try {
+      event = JSON.parse(line)
+    } catch {
+      return ['inconclusive', 'Claude Code answered in a form BMN cannot read']
+    }
+    if (event === null || typeof event !== 'object' || !CLAUDE_EVENTS.includes(event.type)) return ['inconclusive', 'Claude Code reported something BMN does not know, so it cannot tell whether a tool read the skill']
+    events.push(event)
+  }
+  const start = events.find((event) => event.type === 'system' && event.subtype === 'init')
+  if (start === undefined || !Array.isArray(start.tools)) return ['inconclusive', 'the run did not say which tools it had, so BMN cannot tell whether one read the skill']
+  if (start.tools.length > 0) return ['inconclusive', `the run still had ${start.tools.length} tool${start.tools.length === 1 ? '' : 's'}, so one may have read the skill`]
+  if (events.some(holdsToolPart)) return ['inconclusive', 'a tool ran in the run, so it may have read the skill']
+  const answers = events.filter((event) => event.type === 'result')
+  if (answers.length !== 1 || answers[0].is_error !== false || typeof answers[0].result !== 'string') return ['inconclusive', 'Claude Code gave no answer BMN can read (an error, or none)']
+  return answers[0].result.includes(token)
+    ? ['pass', 'with every tool off, Claude Code answered with words only the test skill holds']
+    : ['fail', 'with every tool off, Claude Code was asked for the test skill by name and did not answer with its words']
+}
+
+const CODEX_RECORDS = ['session_meta', 'turn_context', 'response_item', 'event_msg', 'compacted']
+
+/** Whether a line of a Codex session record is a tool being called or answering: any item that is not a message or reasoning, and any event named like one. */
+function codexToolRecord(entry) {
+  const type = entry.payload?.type
+  if (entry.type === 'response_item') return type !== 'message' && type !== 'reasoning'
+  if (entry.type === 'event_msg') return typeof type !== 'string' || /call|begin|tool|exec|patch|mcp|search/i.test(type)
+  return false
+}
+
+/**
+ * What a Codex loading run showed, from the record Codex saved for it. A pass needs the token in a
+ * message Codex itself gave the model (a user, developer or system message) before any tool was
+ * called. A token that shows up only after a tool ran proves nothing: the model may have read the
+ * file. A record BMN cannot read line by line is inconclusive.
+ */
+export function codexLoadingVerdict(rollout, token) {
+  let toolSeen = false
+  let given = false
+  let elsewhere = false
+  for (const line of rollout.split('\n')) {
+    if (line.trim() === '') continue
+    let entry
+    try {
+      entry = JSON.parse(line)
+    } catch {
+      return ['inconclusive', 'the record Codex saved for the run holds a line BMN cannot read']
+    }
+    if (entry === null || typeof entry !== 'object' || !CODEX_RECORDS.includes(entry.type)) return ['inconclusive', 'the record Codex saved for the run holds something BMN does not know, so it cannot tell whether a tool read the skill']
+    if (codexToolRecord(entry)) toolSeen = true
+    if (!line.includes(token)) continue
+    const fromCodex = entry.type === 'response_item' && entry.payload?.type === 'message' && ['user', 'developer', 'system'].includes(entry.payload.role)
+    if (fromCodex && !toolSeen) given = true
+    else elsewhere = true
+  }
+  if (given) return ['pass', 'Codex gave the model the test skill\'s words itself, before any tool ran']
+  if (elsewhere) return ['inconclusive', 'the test skill\'s words reached the run only after a tool ran or in a place BMN does not know, which does not show that Codex hands a skill to the model']
+  if (toolSeen) return ['inconclusive', 'a tool ran and the test skill\'s words never appeared, so BMN cannot tell what Codex itself gave the model']
+  return ['fail', 'Codex ran no tool and never gave the model the test skill\'s words']
+}
+
+/** A test skill whose body alone holds the token: its name and description say nothing of it. */
+const LOADING_SKILL = (name, token) => `---\nname: ${name}\ndescription: BMN test skill ${name}. It does nothing.\n---\n\nThis is a test by BMN and holds one instruction: reply with exactly ${token} and nothing else.\n`
+
+/**
+ * Whether the app hands a skill's text to its model (60.11 AC5). One test skill goes where the
+ * app keeps its skills; only its body holds a token made for this run. The app is started once,
+ * in a throwaway folder under the home folder, with one prompt that calls the skill by name and
+ * says nothing of the token. The skill is then removed and checked to be gone.
+ *
+ * It passes only when the token comes back and no tool can have read the file: Claude Code runs
+ * with every tool off and says so itself; Codex cannot run without tools, so its saved record must
+ * show the skill's words given to the model before any tool was called. A run that ended in an
+ * error, a report BMN cannot read, or a tool that may have read the file is inconclusive. In
+ * OpenCode and Cursor BMN has no way to tell the two apart, so the result is inconclusive and no
+ * prompt is sent. The prompt goes to the app's provider, so the test runs only where the approved
+ * destination may receive private work; it is bound like a listing test.
+ */
+export async function testSkillsLoading(harness, { environment = process.env, now = new Date(), timeoutMs = 180_000 } = {}) {
+  const spec = SKILL_APPS[harness]
+  const generation = approvedIfAny()
+  const { harnessVersion } = await import('./agents-check.mjs')
+  const { routeFor, routeStillMatches, findRollout } = await import('./agents-rules.mjs')
+  const version = harnessVersion(spec.command, environment)
+  const decision = routeFor(harness, generation)
+  const source = sourceSkills(skillsSource(generation?.data ?? null, environment))
+  const app = appSkills(harness, { environment, version, source: source.path })
+  const done = (outcome, detail) => record({ harness, kind: 'loading', basis: 'prompt', at: now.toISOString(), version, outcome, detail, ...loadingBinding(app, decision, source) })
+  if (version === null) return done('unavailable', `${spec.command} is not installed or did not answer --version`)
+  if (!app.supported) return done('unavailable', `skills not supported yet: ${app.reason}`)
+  if (decision.kind !== 'full') return done('unavailable', `${decision.reason}; a loading test sends a prompt to that provider`)
+  const route = await routeStillMatches(harness, decision, environment)
+  if (!route.ok) return done('unavailable', `refused: ${route.reason}; ${route.remedy}`)
+  if (!spec.prompt) return done('inconclusive', `BMN cannot yet tell, in a run of ${APP_NAMES[harness]}, the app handing a skill to the model from the model reading the file itself; no prompt was sent`)
+  const location = app.location ?? source.path
+  const name = `bmn-loading-test-${randomBytes(4).toString('hex')}`
+  const token = `BMN-${randomBytes(12).toString('hex')}`
+  const path = `${location}/${name}`
+  const work = mkdtempSync(`${home(environment)}/.bmn-skills-test-`)
+  let outcome
+  try {
+    mkdirSync(path, { recursive: true })
+    writeFileSync(`${path}/SKILL.md`, LOADING_SKILL(name, token))
+    if (harness === 'codex') {
+      const codexHome = environment.CODEX_HOME || `${home(environment)}/.codex`
+      const started = Date.now()
+      const run = spawnSync(spec.command, ['exec', '--skip-git-repo-check', '-C', work, '--sandbox', 'read-only', '-c', 'approval_policy="never"', '-'],
+        { cwd: work, env: environment, input: `Use the skill $${name} now and do exactly what it says.\n`, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 })
+      if (run.error || run.status !== 0) outcome = ['inconclusive', 'codex did not answer (timeout or error)']
+      else {
+        const rollout = findRollout(`${codexHome}/sessions`, work, started)
+        outcome = rollout === null ? ['inconclusive', 'the record Codex saves for a run was not found'] : codexLoadingVerdict(rollout, token)
+      }
+    } else {
+      const run = spawnSync(spec.command, ['-p', '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-session-persistence', '--output-format', 'stream-json', '--verbose'],
+        { cwd: work, env: environment, input: `/${name}\n`, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 })
+      outcome = run.error || run.status !== 0 ? ['inconclusive', 'claude did not answer (timeout or error)'] : claudeLoadingVerdict(run.stdout ?? '', token)
+    }
+  } catch (error) {
+    outcome = ['inconclusive', `the test could not run: ${error instanceof Error ? error.message : String(error)}`]
+  }
+  // A test that leaves its skill behind never passes: the skill would stay with the app.
+  if (!testSkillGone(path, work)) return done('inconclusive', `the test skill could not be removed: delete ${path} by hand`)
+  return done(outcome[0], outcome[1])
+}
+
+const isLoading = (entry) => entry.kind === 'loading' && entry.basis === 'prompt'
+// A record from before the prompt test existed is a listing whatever it called itself: it sent no prompt.
+const isListing = (entry) => entry.kind === 'listing' || (entry.kind === 'loading' && entry.basis !== 'prompt')
+
+function lastBound(pick, { environment = process.env, tests = skillsTests(), versions, generation = approvedIfAny() } = {}) {
   const source = sourceSkills(skillsSource(generation?.data ?? null, environment))
   const answerFor = (harness) => {
     const answer = harnessPrivateWork(generation?.data ?? null, harness)
     return { kind: answer.allowed ? 'full' : 'public', reason: answer.reason, route: answer.route }
   }
   return HARNESSES.map((harness) => {
-    const entry = lastSkillsTest(harness, 'loading', tests)
+    let entry = null
+    for (const one of tests) if (one.harness === harness && pick(one)) entry = one
     if (entry === null) return { harness, outcome: null }
     const version = versions?.[harness] ?? null
     const now = loadingBinding(appSkills(harness, { environment, version, tests, source: source.path }), answerFor(harness), source)
@@ -849,14 +1020,27 @@ export function lastLoadingTests({ environment = process.env, tests = skillsTest
   })
 }
 
-/** The owner's Test…: where the app reads skills, then, where it may receive private work, whether a skill placed there loads. */
+/**
+ * The latest loading test per app: a run with a prompt, and nothing else. Stale when the app
+ * version, its destination, where it reads skills or any skill changed since.
+ */
+export function lastLoadingTests(options = {}) {
+  return lastBound(isLoading, options)
+}
+
+/** The latest listing test per app, stale the same way. A listing never counts as a loading test. */
+export function lastListingTests(options = {}) {
+  return lastBound(isListing, options)
+}
+
+/** The owner's Test…: where the app reads skills, then, where it may receive private work, whether it lists a skill placed there. No prompt is sent. */
 export async function testSkills(harness, options = {}) {
   const folders = await testSkillsFolders(harness, options)
-  if (folders.outcome !== 'pass') return { harness, version: folders.version, outcome: folders.outcome, detail: folders.detail, folders, loading: null }
-  const loading = await testSkillsLoading(harness, options)
-  // A destination that may not receive private work has no loading test; the folders alone are the result.
-  if (loading.outcome === 'unavailable') return { harness, version: folders.version, outcome: 'pass', detail: folders.detail, folders, loading }
-  return { harness, version: folders.version, outcome: loading.outcome, detail: `${folders.detail}; ${loading.detail}`, folders, loading }
+  if (folders.outcome !== 'pass') return { harness, version: folders.version, outcome: folders.outcome, detail: folders.detail, folders, listing: null }
+  const listing = await testSkillsListing(harness, options)
+  // A destination that may not receive private work has no listing test; the folders alone are the result.
+  if (listing.outcome === 'unavailable') return { harness, version: folders.version, outcome: 'pass', detail: folders.detail, folders, listing }
+  return { harness, version: folders.version, outcome: listing.outcome, detail: `${folders.detail}; ${listing.detail}`, folders, listing }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -864,7 +1048,8 @@ export async function testSkills(harness, options = {}) {
 
 export const SKILLS_USAGE = `Usage: bmn skills check [--json]                    One state per app and per skill; exit 0 only when every supported app has its skills
        bmn skills install [app…] [--plan] [--yes]   Link or copy each app's skills, and remove what an app may no longer have, as one transaction
-       bmn skills test <app> [--json]               Owner-run: find where the app reads skills, then whether a skill placed there loads
+       bmn skills test <app> [--json]               Owner-run: find where the app reads skills, then whether it lists a skill placed there (no prompt)
+       bmn skills test <app> --prompt [--json]      Owner-run: one prompt to that app's provider, to see whether the app hands a test skill to its model
 
 Apps: ${HARNESSES.join(', ')}. The skills come from ~/.claude/skills unless the approved team names another folder.
 Undo an install with: bmn rules restore --transaction <id>`
@@ -935,10 +1120,10 @@ export async function runSkillsCommand(argv) {
       return result.exposed.length > 0 ? 1 : 0
     }
     if (action === 'test') {
-      const { options, positionals } = readOptions(rest, { flags: ['json'] })
+      const { options, positionals } = readOptions(rest, { flags: ['json', 'prompt'] })
       asJson = options.json === true
       if (positionals.length !== 1 || !HARNESSES.includes(positionals[0])) return usage(`skills test expects one app: ${HARNESSES.join(', ')}`)
-      const result = await testSkills(positionals[0])
+      const result = options.prompt === true ? await testSkillsLoading(positionals[0]) : await testSkills(positionals[0])
       out(asJson ? JSON.stringify(result, null, 2) : `${result.harness}: ${result.outcome} - ${result.detail}${result.version ? ` (${result.version})` : ''}`)
       return result.outcome === 'pass' ? 0 : 1
     }

@@ -300,7 +300,11 @@ export interface SkillsAppView {
   state: string
   /** The last test of where the app reads skills, whatever version it ran against. */
   test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string } | null
-  /** The last loading test; stale when the app, its destination or a skill changed since. */
+  /** Whether BMN can tell, in a run of this app, the app handing a skill to its model from the model reading the file itself. */
+  loadTestable: boolean
+  /** The last listing test (no prompt): the app lists a skill placed where its skills live. Stale when the app, its destination or a skill changed since. */
+  listing: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; stale: boolean } | null
+  /** The last loading test (one prompt): the app hands a skill's text to its model. Never filled from a listing. Stale the same way. */
   loading: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; stale: boolean } | null
 }
 

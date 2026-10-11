@@ -244,7 +244,7 @@ function claimant(sentence: string, groups: DiffGroup[], roleIds: ReadonlySet<st
   const section = (key: string): DiffGroup | undefined => groups.find((group) => group.key === key)
   if (sentence.startsWith('Changing ')) return section('providers')
   if (/^Skills? /.test(sentence)) return section('skills')
-  if (/^Tool /.test(sentence)) return section('tools')
+  if (/^(Tool |With (a|no) tool on the list)/.test(sentence)) return section('tools')
   if (/ could (no longer )?receive private work in /.test(sentence)) return section('exceptions')
   if (/ could (no longer )?carry private work/.test(sentence) || sentence.includes(' would count as sending data ')) return section('harness-routes')
   const roleWord = /^(?:when every |the )?([a-z0-9-]+) /.exec(sentence)?.[1]

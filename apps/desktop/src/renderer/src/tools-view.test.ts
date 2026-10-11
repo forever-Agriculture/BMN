@@ -82,8 +82,8 @@ describe('a tool\'s state in words', () => {
   it('says when an app was tested and what the test saw', () => {
     const day = (iso: string): string => `<${iso.slice(0, 10)}>`
     const test = { at: '2026-10-10T12:00:00.000Z', version: '0.161.0', outcome: 'pass' as const, detail: '' }
-    expect(toolsTestLine({ supported: true, version: '0.161.0', test, variable: true, isolation: true }, day)).toBe('Tested <2026-10-10> · passes variables · a run can have tools of its own')
-    expect(toolsTestLine({ supported: true, version: '0.161.0', test, variable: false, isolation: false }, day)).toBe('Tested <2026-10-10> · variables not seen')
+    expect(toolsTestLine({ supported: true, version: '0.161.0', test, variable: true, isolation: true }, day)).toBe('Tested <2026-10-10> · passes variables · a run keeps to its own tools')
+    expect(toolsTestLine({ supported: true, version: '0.161.0', test, variable: false, isolation: false }, day)).toBe('Tested <2026-10-10> · variables not seen · no run seen kept to its tools')
     expect(toolsTestLine({ supported: false, version: '0.162.0', test, variable: false, isolation: false }, day)).toBe('Not tested on 0.162.0')
     expect(toolsTestLine({ supported: false, version: '0.161.0', test: { ...test, outcome: 'fail' }, variable: false, isolation: false }, day)).toBe('The test failed on 0.161.0')
     expect(toolsTestLine({ supported: false, version: '0.161.0', test: { ...test, outcome: 'inconclusive' }, variable: false, isolation: false }, day)).toBe('The test was inconclusive on 0.161.0')

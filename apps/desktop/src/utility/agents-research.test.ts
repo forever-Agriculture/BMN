@@ -261,7 +261,7 @@ describe('BMN reads each cited page itself (60.10 AC3)', () => {
   it('ties each amount to the word beside it: a price under the other word, or in the other order, is not this price', () => {
     const per = 'Prices per 1M tokens. '
     // The page says input $2, output $8; the claim swaps them.
-    for (const page of ['gpt-6.1-sol Input: $2.00 Output: $8.00', 'gpt-6.1-sol $2.00 input, $8.00 output', 'gpt-6.1-sol Prompt $2 Completion $8', 'Model Input Output gpt-6.1-sol $2.00 $8.00 gpt-6-astra $10 $40']) {
+    for (const page of ['gpt-6.1-sol Input: $2.00 Output: $8.00', 'gpt-6.1-sol $2.00 input, $8.00 output', 'gpt-6.1-sol Prompt $2 Completion $8', 'gpt-6.1-sol Output $8.00 Input $2.00 gpt-6-astra Input $10 Output $40']) {
       expect(priceShown(per + page, ['gpt-6.1-sol'], ['gpt-6-astra'], { input: 2, output: 8 }), page).toMatchObject({ shown: true })
       expect(priceShown(per + page, ['gpt-6.1-sol'], ['gpt-6-astra'], { input: 8, output: 2 }), page).toEqual({ shown: false, why: 'the page does not show this price beside the model' })
     }
@@ -273,6 +273,24 @@ describe('BMN reads each cited page itself (60.10 AC3)', () => {
     expect(priceShown(cached, ['claude-opus-5-5'], [], { input: 75, output: 75 }).shown).toBe(false)
     // One amount for both, where the page gives one.
     expect(priceShown(`${per}flat-1 $5 for input and output alike, input $5, output $5`, ['flat-1'], [], { input: 5, output: 5 }).shown).toBe(true)
+  })
+
+  it('never counts a bare row of a table: nothing in a page read as text ties a header to it', () => {
+    const per = 'Prices per 1M tokens. '
+    const bare = { shown: false, why: 'the page does not show this price beside the model' }
+    // The header may give the input first or the output first, or belong to another table: the row says neither.
+    for (const page of ['Model Input Output gpt-6.1-sol $2.00 $8.00 gpt-6-astra $10 $40', 'Model Output Input gpt-6.1-sol $8 $2 gpt-6.1-nova $4 $0.50', 'Input Output. Other table: gpt-6.1-sol $2 $8', 'gpt-6.1-sol $2 $8']) {
+      expect(priceShown(per + page, ['gpt-6.1-sol'], ['gpt-6-astra', 'gpt-6.1-nova'], { input: 2, output: 8 }), page).toEqual(bare)
+      expect(priceShown(per + page, ['gpt-6.1-sol'], ['gpt-6-astra', 'gpt-6.1-nova'], { input: 8, output: 2 }), page).toEqual(bare)
+    }
+    // A cached column, wherever it stands, and one amount for both.
+    for (const row of ['$15 $1.50 $75', '$1.50 $15 $75', '$15 $75 $1.50']) {
+      expect(priceShown(`${per}Model Input Cached Output claude-opus-5-5 ${row}`, ['claude-opus-5-5'], [], { input: 15, output: 75, cached_input: 1.5 }), row).toEqual(bare)
+    }
+    expect(priceShown(`${per}flat-1 $5 $5`, ['flat-1'], [], { input: 5, output: 5 })).toEqual(bare)
+    // The same amounts with their own words count, and a cached price only under its own.
+    expect(priceShown(`${per}claude-opus-5-5 Output $75 Cached input $1.50 Input $15`, ['claude-opus-5-5'], [], { input: 15, output: 75, cached_input: 1.5 })).toEqual({ shown: true, cached: true })
+    expect(priceShown(`${per}claude-opus-5-5 Input $15 Output $75 and $1.50`, ['claude-opus-5-5'], [], { input: 15, output: 75, cached_input: 1.5 })).toEqual({ shown: true, cached: false })
   })
 
   it('counts a number as the context window only beside the word context, never an output limit', () => {
@@ -358,6 +376,21 @@ describe('BMN reads each cited page itself (60.10 AC3)', () => {
     expect(limits[0]).toBeLessThanOrEqual(3000)
     expect(late.cut).toBe('limit')
     expect(slow[2]!.price).toMatchObject({ verified: false, why: 'the research reached its time limit before BMN read this page' })
+  })
+
+  it('a last page that ran to the end of the research\'s time is the limit too', async () => {
+    const one = [{ id: 'm-a', provider: 'P', listed: true, price: price(1, 2, 'https://prices.example.test/a'), context_window: null }]
+    const late: { cut?: 'stopped' | 'limit' } = {}
+    const checked = await verifyModels(one, [], { deadline: Date.now() + 300, report: late, fetchPage: async (_address, given) => {
+      await new Promise((resolve) => setTimeout(resolve, given?.timeoutMs ?? 5000))
+      return { ok: false, reason: 'the page did not answer in time' }
+    } })
+    expect(late.cut).toBe('limit')
+    expect(checked[0]!.price).toMatchObject({ verified: false, why: 'the page did not answer in time' })
+    // A page read in good time leaves nothing cut.
+    const fine: { cut?: 'stopped' | 'limit' } = {}
+    await verifyModels(one, [], { deadline: Date.now() + 60_000, report: fine, fetchPage: async () => ({ ok: true, text: 'm-a: input $1, output $2 per 1M tokens' }) })
+    expect(fine.cut).toBeUndefined()
   })
 
   it('reads no more pages than its limit for one run', async () => {

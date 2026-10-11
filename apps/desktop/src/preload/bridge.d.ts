@@ -384,6 +384,8 @@ export interface AiTerminalBridge {
   installSkills(planHash: string): Promise<RulesOutcome>
   /** Owner-run: asks the app which skills it sees, first in an empty home folder, then with one test skill placed where its skills live. */
   testSkills(harness: RosterHarness): Promise<RulesOutcome>
+  /** Owner-run: one prompt to that app's provider, to see whether the app hands a test skill to its model. */
+  testSkillsLoading(harness: RosterHarness): Promise<RulesOutcome>
   /** Story 60.12: what a tools install would set or remove in each app's settings, then the install itself, bound to that plan. */
   planToolsInstall(removeUnlisted?: boolean): Promise<ToolsPlan>
   installTools(planHash: string, removeUnlisted?: boolean): Promise<RulesOutcome>

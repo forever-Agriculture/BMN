@@ -36,10 +36,12 @@ export interface ToolsTestEntry {
   /** Whether a header taken from an environment variable was seen sent; no test writes this yet. */
   header?: 'pass' | 'unproven'
   isolation: 'pass' | 'fail' | 'unproven'
-  /** What the isolation result rests on: a run that named its tools, or the app's own listing. */
+  /** What the isolation result rests on. Only a run grants anything; `list` is an earlier record's and grants nothing. */
   isolation_basis?: 'run' | 'list'
-  /** Whether a tool set in the folder's own settings stayed out of a run that shut them out. */
-  project_isolation?: 'pass' | 'fail' | 'unproven'
+  /** The places a run was seen first taking a tool from and then, told to keep to its own, without it. */
+  isolation_covers?: string[]
+  /** Whether a run told to take no tools was seen starting with none. */
+  isolation_empty?: 'pass' | 'fail' | 'unproven'
   own_command: 'pass' | 'fail' | 'none'
 }
 export declare function toolsTests(): ToolsTestEntry[]
@@ -54,10 +56,12 @@ export interface AppTools {
   argument: boolean
   /** Whether a header taken from an environment variable was seen sent. */
   header: boolean
-  /** Whether a run was seen with only the tools its own command names. */
+  /** Whether an actual run was seen with only the tools its own command names. */
   isolation: boolean
-  /** Whether a tool set in the folder's own settings stayed out of such a run. */
-  project: boolean
+  /** Whether a run told to take no tools was seen starting with none. */
+  empty: boolean
+  /** The places that run was seen shut off from. */
+  covers: string[]
   own_command: string | null
   /** Why tools are not supported yet in this app, when they are not. */
   reason?: string
@@ -75,7 +79,7 @@ export declare function maskedEntry(value: unknown, harness: string): unknown
 
 export type AppToolEntry =
   | { unreadable: string; value?: undefined }
-  | { value: Record<string, unknown>; raw: string; hash: string; definition: ToolDefinition; secrets: string[]; extras: string[]; unreadable?: undefined }
+  | { value: Record<string, unknown>; raw: string; hash: string; text_hash: string; definition: ToolDefinition; secrets: string[]; extras: string[]; unreadable?: undefined }
 export interface AppToolsFile { harness: string; path: string; readable: boolean; detail?: string; entries: Map<string, AppToolEntry>; text?: string; link?: string }
 export declare function readAppTools(harness: string, environment?: Environment, options?: { path?: string; at?: string[] }): AppToolsFile
 export declare function eligible(tool: RosterTool, harness: string, kind: 'full' | 'public'): boolean
@@ -127,16 +131,19 @@ export interface ToolProposal { id: string; state: 'ready' | 'secret' | 'known' 
 export declare function proposeTools(options?: { environment?: Environment; generation?: Generation | null }): { files: { harness: ToolsHarness; path: string; readable: boolean; detail?: string }[]; proposals: ToolProposal[] }
 
 export declare function agentTools(data: Pick<RosterData, 'tools'> | null, agentId: string): RosterTool[]
-export interface ToolsProven { isolation: boolean; variable: boolean; argument?: boolean; header?: boolean; project?: boolean }
-export interface InheritedTool { id: string; where: string; folder: boolean; entry: AppToolEntry }
-/** What the app's own settings would give a run in this folder that does not shut them out. */
-export declare function inheritedTools(harness: string, options?: { environment?: Environment; cwd?: string | null; profile?: boolean }): { entries: InheritedTool[]; unresolved: string[] }
+export interface ToolsProven { isolation: boolean; variable: boolean; argument?: boolean; header?: boolean; empty?: boolean; covers?: string[] }
+/** Every tool a run of this agent may carry: the tools for all apps or its app, and its own. */
+/** The apps for which BMN has a test that shows which tools a run starts with. */
+export declare const RUN_TEST_APPS: string[]
+export declare function runTools(data: Pick<RosterData, 'tools' | 'providers' | 'harness_routes'> | null, agent: RosterAgent): RosterTool[]
+/** The places a run could take tools from that the owner's test did not see shut out. */
+export declare function uncoveredSources(harness: string, options?: { environment?: Environment; cwd?: string | null; covers?: string[]; policyRoot?: string }): string[]
 export type ToolItems =
   | { state: 'none' }
   | { state: 'not-supported-yet' | 'blocked'; tools: string[]; reason: string }
   | { state: 'applied'; tools: string[]; argv: string[]; hash: string }
-export declare function toolItems(agent: RosterAgent, data: Pick<RosterData, 'tools'>, proven: ToolsProven): ToolItems
-export declare function checkRunTools(agent: RosterAgent, data: Pick<RosterData, 'tools'>, parsed: Record<string, unknown>, proven: ToolsProven, options?: { packet?: boolean; profile?: boolean; environment?: Environment; cwd?: string }):
+export declare function toolItems(agent: RosterAgent, data: Pick<RosterData, 'tools' | 'providers' | 'harness_routes'>, proven: ToolsProven): ToolItems
+export declare function checkRunTools(agent: RosterAgent, data: Pick<RosterData, 'tools' | 'providers' | 'harness_routes'>, parsed: Record<string, unknown>, proven: ToolsProven, options?: { packet?: boolean; profile?: boolean; environment?: Environment; cwd?: string | null; policyRoot?: string }):
   | { applied: string[]; note: string; hash?: string; refusal?: undefined }
   | { refusal: { code: 'TOOL_MISMATCH' | 'ROUTE_UNSUPPORTED'; message: string }; applied?: undefined; note?: undefined; hash?: undefined }
 

@@ -122,7 +122,7 @@ export function toolsTestLine(app: Pick<ToolsAppView, 'supported' | 'version' | 
     const last = app.test !== null && app.test.version === app.version ? app.test.outcome : null
     return last === 'fail' ? `The test failed on ${app.version}` : last === 'inconclusive' ? `The test was inconclusive on ${app.version}` : `Not tested on ${app.version}`
   }
-  const seen = [app.variable ? 'passes variables' : 'variables not seen', app.isolation ? 'a run can have tools of its own' : null].filter(Boolean).join(' · ')
+  const seen = [app.variable ? 'passes variables' : 'variables not seen', app.isolation ? 'a run keeps to its own tools' : 'no run seen kept to its tools'].join(' · ')
   return `Tested ${app.test ? day(app.test.at) : ''} · ${seen}`.replace('  ', ' ')
 }
 

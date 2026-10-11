@@ -271,7 +271,7 @@ async function rosterStatus(argv) {
  */
 async function withContext(data, chain) {
   const { contextItems, contextTests, provenControls, CONTEXT_CONTROLS } = await import('./agents-context.mjs')
-  const { TOOL_APPS, agentTools, appTools, toolItems, toolsTests } = await import('./agents-tools.mjs')
+  const { TOOL_APPS, appTools, toolItems, toolsTests } = await import('./agents-tools.mjs')
   const byId = new Map(data.agents.map((agent) => [agent.id, agent]))
   const versions = new Map()
   let tests
@@ -285,7 +285,8 @@ async function withContext(data, chain) {
     return versions.get(harness)
   }
   const withTools = async (agent, candidate) => {
-    if (agentTools(data, agent.id).length === 0) return { ...candidate, tools: toolItems(agent, data, { isolation: false, variable: false }) }
+    // Once the team lists any tool, every candidate's run is kept to its own set, an empty one too.
+    if ((data.tools ?? []).length === 0) return { ...candidate, tools: toolItems(agent, data, { isolation: false, variable: false }) }
     toolTests ??= toolsTests()
     const proven = TOOL_APPS[agent.harness] === undefined ? { isolation: false, variable: false } : appTools(agent.harness, { version: await version(agent.harness, TOOL_APPS[agent.harness].command), tests: toolTests })
     return { ...candidate, tools: toolItems(agent, data, proven) }

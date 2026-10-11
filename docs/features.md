@@ -285,13 +285,17 @@ Rules → **Skills** gives every agent app the skills you keep in one folder: a 
 where the app does not follow links, installed and undone as one step after you saw the list. A
 skill can be kept to some apps, and an app that gets public work only receives just the skills
 you mark Public; a skill an app can see but may not have is shown as exposed. Nothing is written
-for an app until its own test, on the installed version, showed where it reads skills.
+for an app until its own test, on the installed version, showed where it reads skills. A second
+test you run yourself sends one prompt and shows whether the app hands a skill to its model; it
+has not run on a live app yet.
 
 Rules → **Tools** keeps one list of MCP tools and sets each up in every agent app's own settings:
 only the tool's entry changes there, every other byte of the file stays, and an install is undone
 as one step. A tool names environment variables and never holds their values. It reaches every
-app, some apps, or only the runs of some agents, where the check before a hand-off refuses any
-other set of tools. `bmn tools import` proposes what your apps already hold.
+app, some apps, or only the runs of some agents. Once a tool is on the list, the check before a
+hand-off passes a run only when it is kept to exactly its own tools: BMN can do that in Claude
+Code after its tools test, and refuses a Codex run until it has such a test for Codex.
+`bmn tools import` proposes what your apps already hold.
 
 Team → **Models** has one of your own agents look up your models' published prices and context
 windows, in an empty folder with web tools only, sent nothing but the model names and the source

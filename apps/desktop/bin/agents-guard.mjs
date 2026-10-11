@@ -1,5 +1,5 @@
 // MODULE: agents-guard.mjs - Epic 60.8: the decision a prompt hook takes, from the approved team on disk, before a prompt leaves a session the owner started
-import { existsSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs'
+import { readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs'
 import { basename, isAbsolute } from 'node:path'
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads'
 import { APP_NAMES, RosterError } from './agents-roster.mjs'
@@ -100,20 +100,15 @@ function programArguments(argv) {
  * What in an interactive start can say where work goes. For Claude Code that is `--settings`; for
  * Codex `-c` destination keys, `--profile`, `--cd` and the local-model switches. Everything else
  * (a model, a prompt) decides nothing here. `{ unknown }` when an override cannot be read.
- * `resumed` says the start names `resume` or `fork`: the session continues one saved earlier, whose
- * own record says where it sent work. A prompt that happens to be that one word reads as resumed
- * too, which only asks more of the session's record.
  */
 export function parseLaunch(agent, argv) {
   const args = programArguments(argv)
   const parsed = agent === 'codex'
     ? { harness: 'codex', command: 'codex', envMode: 'inherit', assignments: {}, config: [] }
     : { harness: 'claude', command: 'claude', envMode: 'inherit', assignments: {}, addDir: [] }
-  if (agent === 'codex') parsed.resumed = false
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]
     if (argument === '--') break
-    if (agent === 'codex' && (argument === 'resume' || argument === 'fork')) parsed.resumed = true
     const equals = argument.startsWith('--') ? argument.indexOf('=') : -1
     const flag = equals === -1 ? argument : argument.slice(0, equals)
     const key = agent === 'codex'
@@ -149,22 +144,40 @@ function canonicalFolder(path) {
 }
 
 /**
- * The saved Codex session this prompt belongs to (60.8 AC1): `{ record }` when its record reads
- * and names a provider; `{ fresh: true }` when no record is there and nothing says the session
- * continues a saved one, so the current settings are all there is; `{ unresolved }` with the
- * reason otherwise. A record that is there and cannot be read, or a continued session whose
- * record is not found, never falls back to the current settings: the session may be sending
- * work where it was saved to send it.
+ * The saved Codex session this prompt belongs to (60.8 AC1): `{ record }` when exactly one record
+ * is found, reads, belongs to this session and names a provider; `{ unresolved }` with the reason
+ * otherwise. Nothing here falls back to the current settings. A session with no record BMN can
+ * read may be a new one or one that continues a saved one, and BMN cannot tell which from what it
+ * sees, so it does not guess: the session may be sending work where it was saved to send it.
+ *
+ * A record the app names is the only one looked at, and only when it really lies under Codex's
+ * own sessions folder (links followed); a path anywhere else is never opened. Without a named
+ * record the one that carries the session's id is taken. Of a record only its first line is read.
  */
-function codexSession(event, codexHome, resumed) {
-  const transcript = event.transcript_path
-  const files = typeof transcript === 'string' && isAbsolute(transcript) && transcript.startsWith(`${codexHome}/sessions/`)
-    ? (existsSync(transcript) ? [transcript] : [])
-    : sessionRecordFiles(codexHome, event.session_id)
-  if (files.length === 0) return resumed ? { unresolved: 'this session continues a saved one, and BMN cannot find its saved record' } : { fresh: true }
-  if (files.length > 1) return { unresolved: 'more than one saved record carries this session\'s id' }
-  const record = sessionRecordAt(files[0])
+function codexSession(event, codexHome) {
+  const named = event.transcript_path
+  let file
+  if (named !== undefined && named !== null && named !== '') {
+    if (typeof named !== 'string' || !isAbsolute(named)) return { unresolved: 'the saved record the app names for this session is not a place BMN can read' }
+    let root
+    let real
+    try {
+      root = realpathSync(`${codexHome}/sessions`)
+      real = realpathSync(named)
+    } catch {
+      return { unresolved: 'the saved record the app names for this session is not there' }
+    }
+    if (!real.startsWith(`${root}/`)) return { unresolved: "the saved record the app names for this session is outside Codex's own sessions folder" }
+    file = real
+  } else {
+    const files = sessionRecordFiles(codexHome, event.session_id)
+    if (files.length === 0) return { unresolved: 'no saved record of this session was found' }
+    if (files.length > 1) return { unresolved: 'more than one saved record carries this session\'s id' }
+    file = files[0]
+  }
+  const record = sessionRecordAt(file)
   if (record === null || typeof record.provider !== 'string' || record.provider === '') return { unresolved: 'the saved record of this session cannot be read' }
+  if (typeof event.session_id === 'string' && event.session_id !== '' && record.id !== event.session_id) return { unresolved: 'the saved record the app names belongs to another session' }
   return { record }
 }
 
@@ -192,9 +205,10 @@ function sessionDestination(agent, data, event, agentProcess, folders) {
     configHome = resolution.configHome
   }
   if (agent === 'codex') {
-    const saved = codexSession(event, configHome, parsed.resumed === true)
-    if (saved.unresolved !== undefined) return { unknown: saved.unresolved, fix: 'Start a new Codex session.' }
-    if (saved.record !== undefined && saved.record.provider !== route.provider) {
+    const saved = codexSession(event, configHome)
+    // No remedy is promised: whether a new session's first prompt already has a record is not something BMN has measured.
+    if (saved.unresolved !== undefined) return { unknown: saved.unresolved, fix: 'BMN tells a Codex session\'s destination from the record Codex saves for it, and does not guess without one.' }
+    if (saved.record.provider !== route.provider) {
       return { unknown: `this session was saved with the provider ${saved.record.provider} and the settings now name ${route.provider}` }
     }
   }

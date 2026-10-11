@@ -1167,7 +1167,12 @@ describe('bmn hook prompt guard (Story 60.8)', () => {
   it('stops the prompt the same way when BMN is closed or cannot be reached', async () => {
     const fixture = await cliFixture()
     const session = await guardedSession(fixture.root, ['codex', '-c', 'model_provider="moonshot"', '-c', 'model_providers.moonshot.base_url="https://api.moonshot.ai/v1"'], {}, 'codex')
-    const input = JSON.stringify({ hook_event_name: 'UserPromptSubmit', cwd: session.workspace, prompt: PROMPT_SENTINEL })
+    // Codex saves a record for each session; the guard reads the session's destination from it.
+    const id = '0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e'
+    const record = join(session.home, `.codex/sessions/2026/10/10/rollout-2026-10-10T09-00-00-${id}.jsonl`)
+    await mkdir(dirname(record), { recursive: true })
+    writeFileSync(record, `${JSON.stringify({ type: 'session_meta', payload: { id, cwd: session.workspace, model_provider: 'moonshot', cli_version: '0.162.0' } })}\n`)
+    const input = JSON.stringify({ hook_event_name: 'UserPromptSubmit', cwd: session.workspace, session_id: id, prompt: PROMPT_SENTINEL })
     const answer = JSON.stringify({ decision: 'block', reason: "Moonshot AI can't see private work in ~/code/app. Allow it in BMN." })
 
     const closed = await runCli(['hook', 'codex'], { env: { BMN_PROC_ROOT: session.proc, HOME: session.home }, input })
@@ -1178,6 +1183,10 @@ describe('bmn hook prompt guard (Story 60.8)', () => {
     expect(closed).toEqual({ code: 0, stdout: answer, stderr: '' })
     expect(unreachable).toEqual({ code: 0, stdout: answer, stderr: '' })
     expect(fixture.handlers.reportGuard).not.toHaveBeenCalled()
+    // A session with no saved record is stopped too: BMN does not guess where it sends work.
+    const unknown = await runCli(['hook', 'codex'], { env: { BMN_PROC_ROOT: session.proc, HOME: session.home },
+      input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', cwd: session.workspace, session_id: '9f9f9f9f-1b1b-2c2c-3d3d-4e4e4e4e4e4e', prompt: PROMPT_SENTINEL }) })
+    expect(JSON.parse(unknown.stdout)).toEqual({ decision: 'block', reason: "BMN stopped this prompt: it cannot tell where this Codex session sends work (no saved record of this session was found). BMN tells a Codex session's destination from the record Codex saves for it, and does not guess without one." })
   })
 
   it('lets a prompt for a provider that may see private work through untouched, and says so to BMN before the usual report', async () => {

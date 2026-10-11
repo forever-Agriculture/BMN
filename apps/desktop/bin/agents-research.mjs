@@ -543,12 +543,9 @@ const PER_MILLION = /(?:\/|per)\s*(?:1\s*)?(?:m\b|mtok|million)|1m tokens|millio
 /** Whether one stretch shows this price: `{ cached }` when it does, null when it does not. */
 function priceIn(place, price) {
   const { style, values } = labelled(place, DOLLARS, PRICE_WORDS, priceKind)
-  if (style === 'none') {
-    // A row of bare amounts: a price list gives the input before the output, so the claim must stand in that order.
-    const input = values.findIndex((entry) => amountIs(entry.value, price.input))
-    if (input === -1 || !values.slice(price.input === price.output ? input : input + 1).some((entry) => amountIs(entry.value, price.output))) return null
-    return { cached: price.cached_input === undefined ? undefined : values.some((entry) => amountIs(entry.value, price.cached_input)) }
-  }
+  // A row of bare amounts says nothing about which is which: a table's own header may give the output first, and
+  // in a page read as plain text nothing ties a header to this row. Such a price is never counted as shown.
+  if (style === 'none') return null
   const shows = (kind, wanted) => values.some((entry) => entry.kind === kind && amountIs(entry.value, wanted))
   if (!shows('input', price.input) || !shows('output', price.output)) return null
   return { cached: price.cached_input === undefined ? undefined : shows('cached', price.cached_input) }
@@ -556,10 +553,10 @@ function priceIn(place, price) {
 
 /**
  * Whether the page shows this price beside this model: in the stretch after one of the model's
- * names, the input amount standing as the input price and the output amount as the output price
- * (by the words beside them, or by their order in a row without words), with the page saying the
- * unit is a million tokens. A number that stands beside another model, under the other word, or
- * without the unit, proves nothing.
+ * names, the input amount standing beside the word for an input price and the output amount
+ * beside the word for an output price (a cached price beside its own word), with the page saying
+ * the unit is a million tokens. A number that stands beside another model, under the other word,
+ * without a word of its own (a bare row of a table) or without the unit proves nothing.
  */
 export function priceShown(text, names, others, price) {
   if (!PER_MILLION.test(text)) return { shown: false, why: 'the page does not say the price is per million tokens' }
@@ -646,7 +643,9 @@ export async function verifyModels(models, sites, { fetchPage = fetchPublicPage,
         return { ok: false, reason: signal?.aborted ? 'the research was stopped before BMN read this page' : 'the research reached its time limit before BMN read this page' }
       }
       const page = await fetchPage(address, { signal, timeoutMs: Math.min(PAGE_LIMIT_MS, left) })
+      // A read that ran to the end of the research's time is the limit, also when it was the last page.
       if (signal?.aborted) report.cut ??= 'stopped'
+      else if (Date.now() >= deadline) report.cut ??= 'limit'
       pages.set(address, page.ok ? { ok: true, text: pageText(page.text) } : page)
     }
     return pages.get(address)

@@ -72,6 +72,8 @@ export interface CheckOptions {
   contextTestLog?: import('./agents-context.mjs').ContextTestEntry[]
   /** The recorded tools tests; the tests' seam for 60.12 AC5. */
   toolsTestLog?: import('./agents-tools.mjs').ToolsTestEntry[]
+  /** The tests' seam for where an organisation's policy files for Claude Code would be. */
+  toolsPolicyRoot?: string
 }
 export interface ResearchOptions { environment?: Environment; cwd?: string; now?: Date; testedVersions?: Record<string, string[]>; fenceVersions?: Record<string, string[]>; contextTestLog?: import('./agents-context.mjs').ContextTestEntry[] }
 export interface VisibilityRecord {

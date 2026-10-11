@@ -61,7 +61,17 @@ function session(argv: string[], options: { env?: Record<string, string>; cwd?: 
 }
 
 const MOONSHOT_ENV = { ANTHROPIC_BASE_URL: 'https://api.moonshot.ai/anthropic' }
-const prompt = (agent: string, pid: number, event: Record<string, unknown> = {}) => decide({ agent, pid, procRoot: proc, event: { cwd: workspace, ...event } })
+const SESSION = '0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e'
+/** The record Codex saves for a session, written the way Codex writes its first line; returns what the prompt event says of it. */
+function codexRecord(provider = 'openai', id = SESSION): { session_id: string } {
+  const record = join(home, `.codex/sessions/2026/10/10/rollout-2026-10-10T09-00-00-${id}.jsonl`)
+  mkdirSync(dirname(record), { recursive: true })
+  writeFileSync(record, `${JSON.stringify({ type: 'session_meta', payload: { id, cwd: workspace, model_provider: provider, cli_version: '0.162.0' } })}\n`)
+  return { session_id: id }
+}
+/** One prompt event. A Codex session comes with its saved record unless the event says which session it is. */
+const prompt = (agent: string, pid: number, event: Record<string, unknown> = {}) => decide({ agent, pid, procRoot: proc,
+  event: { cwd: workspace, ...(agent === 'codex' && !('session_id' in event) && !('transcript_path' in event) ? codexRecord() : {}), ...event } })
 const exception = (folder: string) => (text: string) => edit(text, 'zai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}',
   `zai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}\nkimi-here: {provider: moonshot, folder: ${folder}}`)
 
@@ -244,7 +254,7 @@ describe('a destination BMN cannot tell (60.8 AC1, AC3)', () => {
   })
 
   it('resolves a Codex provider override whose address a provider lists, and stops it as public-only', () => {
-    const verdict = prompt('codex', session(['codex', '-c', 'model_provider="moonshot"', '-c', 'model_providers.moonshot.base_url="https://api.moonshot.ai/v1"']))
+    const verdict = prompt('codex', session(['codex', '-c', 'model_provider="moonshot"', '-c', 'model_providers.moonshot.base_url="https://api.moonshot.ai/v1"']), codexRecord('moonshot'))
 
     expect(verdict).toMatchObject({ outcome: 'stop', cause: 'public-only', allow: true, provider: { id: 'moonshot' }, host: 'api.moonshot.ai' })
   })
@@ -262,7 +272,7 @@ describe('a destination BMN cannot tell (60.8 AC1, AC3)', () => {
     expect(prompt('codex', session(['codex']), { session_id: id })).toMatchObject({ outcome: 'stop', cause: 'unknown', allow: false })
   })
 
-  it('stops a continued Codex session whose saved record it cannot resolve, and offers no Allow (60.8 AC1)', () => {
+  it('stops every Codex session whose saved record it cannot resolve, however it was started, and offers no Allow (60.8 AC1)', () => {
     const id = '01a0b657-21a8-7f00-addd-b73646828f5b'
     const missing = '11111111-2222-3333-4444-555555555555'
     const folder = join(home, '.codex/sessions/2026/10/10')
@@ -270,31 +280,58 @@ describe('a destination BMN cannot tell (60.8 AC1, AC3)', () => {
     mkdirSync(folder, { recursive: true })
     const meta = (payload: Record<string, unknown>): string => `${JSON.stringify({ type: 'session_meta', payload: { id, cwd: workspace, cli_version: '0.162.0', ...payload } })}\n`
     const unknown = { outcome: 'stop', cause: 'unknown', allow: false, provider: null }
-    // Started as a resume or a fork, and no record of that session is found: where it sends work is not known.
-    for (const argv of [['codex', 'resume', missing], ['codex', 'resume', '--last'], ['codex', 'fork', missing], ['codex', '-m', 'gpt-6-astra', 'resume']]) {
+    const line = (reason: string): string => `BMN stopped this prompt: it cannot tell where this Codex session sends work (${reason}). BMN tells a Codex session's destination from the record Codex saves for it, and does not guess without one.`
+    const starts = [['codex'], ['codex', 'resume', missing], ['codex', 'resume', '--last'], ['codex', 'fork', missing], ['codex', '-m', 'gpt-6-astra', 'resume']]
+    // No record carries the session's id, or the event names no session at all: a new session and one that
+    // continues a saved one look the same from here, so neither is taken on the current settings.
+    for (const argv of starts) {
       const verdict = prompt('codex', session(argv), { session_id: missing })
       expect(verdict, argv.join(' ')).toMatchObject(unknown)
-      expect(verdict.line).toBe('BMN stopped this prompt: it cannot tell where this Codex session sends work (this session continues a saved one, and BMN cannot find its saved record). Start a new Codex session.')
+      expect(verdict.line).toBe(line('no saved record of this session was found'))
+      expect(prompt('codex', session(argv), { session_id: undefined }), argv.join(' ')).toMatchObject(unknown)
     }
-    expect(prompt('codex', session(['codex', 'resume', missing]), { transcript_path: join(folder, `rollout-2026-10-10T11-00-00-${missing}.jsonl`) })).toMatchObject(unknown)
-    // A record that is there and cannot be read, or names no provider, is not a reason to trust the current settings.
+    // The record the app names is the only one looked at: missing, it is not searched for elsewhere.
+    writeFileSync(record, meta({ model_provider: 'openai' }))
+    for (const argv of starts) {
+      const verdict = prompt('codex', session(argv), { session_id: id, transcript_path: join(folder, `rollout-2026-10-10T11-00-00-${id}.jsonl`) })
+      expect(verdict, argv.join(' ')).toMatchObject(unknown)
+      expect(verdict.line).toBe(line('the saved record the app names for this session is not there'))
+    }
+    // A record anywhere but under Codex's own sessions folder is never opened: by its path, or through a link.
+    const outside = join(home, 'elsewhere/rollout.jsonl')
+    mkdirSync(dirname(outside), { recursive: true })
+    writeFileSync(outside, meta({ model_provider: 'openai' }))
+    const escaped = join(folder, `rollout-2026-10-10T13-00-00-${id}.jsonl`)
+    symlinkSync(outside, escaped)
+    for (const named of [outside, escaped]) {
+      expect(prompt('codex', session(['codex']), { session_id: id, transcript_path: named }).line).toBe(line("the saved record the app names for this session is outside Codex's own sessions folder"))
+    }
+    rmSync(escaped)
+    for (const named of ['sessions/rollout.jsonl', 7, {}]) {
+      expect(prompt('codex', session(['codex']), { session_id: id, transcript_path: named }).line).toBe(line('the saved record the app names for this session is not a place BMN can read'))
+    }
+    // A record that is there and cannot be read, names no provider, or is another session's.
     for (const text of ['', 'not json\n', `${JSON.stringify({ type: 'event' })}\n`, meta({}), meta({ model_provider: '' }), meta({ model_provider: 7 })]) {
       writeFileSync(record, text)
       for (const argv of [['codex', 'resume', id], ['codex']]) {
         expect(prompt('codex', session(argv), { session_id: id }), `${JSON.stringify(text)} ${argv.join(' ')}`).toMatchObject(unknown)
-        expect(prompt('codex', session(argv), { transcript_path: record }).line).toMatch(/the saved record of this session cannot be read/)
+        expect(prompt('codex', session(argv), { transcript_path: record }).line).toBe(line('the saved record of this session cannot be read'))
       }
     }
-    // Two records under one id are not one session's.
     writeFileSync(record, meta({ model_provider: 'openai' }))
+    expect(prompt('codex', session(['codex']), { session_id: missing, transcript_path: record }).line).toBe(line('the saved record the app names belongs to another session'))
+    // Two records under one id are not one session's.
     writeFileSync(join(folder, `rollout-2026-10-10T12-00-00-${id}.jsonl`), meta({ model_provider: 'openai' }))
-    expect(prompt('codex', session(['codex', 'resume', id]), { session_id: id }).line).toMatch(/more than one saved record carries this session's id/)
+    expect(prompt('codex', session(['codex', 'resume', id]), { session_id: id }).line).toBe(line("more than one saved record carries this session's id"))
     rmSync(join(folder, `rollout-2026-10-10T12-00-00-${id}.jsonl`))
-    // Resolved, and saved with the provider the settings name: the prompt goes on.
-    expect(prompt('codex', session(['codex', 'resume', id]), { session_id: id })).toMatchObject({ outcome: 'pass' })
-    // A session just started has no saved record yet, and nothing says it continues one: the settings decide.
-    expect(prompt('codex', session(['codex']), { session_id: missing })).toMatchObject({ outcome: 'pass' })
-    expect(prompt('codex', session(['codex']), {})).toMatchObject({ outcome: 'pass' })
+    // Resolved, and saved with the provider the settings name: the prompt goes on, by its id or by the record the app names.
+    for (const argv of [['codex'], ['codex', 'resume', id]]) {
+      expect(prompt('codex', session(argv), { session_id: id })).toMatchObject({ outcome: 'pass' })
+      expect(prompt('codex', session(argv), { session_id: id, transcript_path: record })).toMatchObject({ outcome: 'pass' })
+    }
+    // Only the record's first line is read: what follows it, however much, decides nothing.
+    writeFileSync(record, `${meta({ model_provider: 'openai' })}${JSON.stringify({ type: 'session_meta', payload: { id, model_provider: 'moonshot' } })}\n${'x'.repeat(200_000)}\n`)
+    expect(prompt('codex', session(['codex']), { session_id: id })).toMatchObject({ outcome: 'pass', provider: { id: 'openai' } })
   })
 
   it('stops when the folder the app started in and the folder it works in name different destinations', () => {

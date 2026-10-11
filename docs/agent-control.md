@@ -921,11 +921,11 @@ in each; `bmn skills check` prints the same.
 `bmn skills test <app>`) passed on exactly the installed version, an app's skills are "not
 supported yet" and nothing is written for it. The test starts the app in an empty home folder
 that holds only test skills, one real folder and one link in each folder the app may read, and
-asks which it sees; no sign-in is there, so nothing is sent. It records the folders the app named
-and whether it follows links. Where the app may receive private work, the test then puts one
-empty test skill where the app keeps its skills, asks again, and removes it. That second part is
-a **listing test**: no prompt is sent, so it shows that the app finds a skill placed there, not
-that a model uses it. A test that sends a prompt is not part of BMN yet.
+asks which it sees; BMN sends no prompt and no sign-in is there. It records the folders the app
+named and whether it follows links. Where the app may receive private work, the test then puts
+one empty test skill where the app keeps its skills, asks again, and removes it. That second
+part is a **listing test**: no prompt is sent, so it shows that the app finds a skill placed
+there, not that a model gets it.
 
 | App | What BMN asks | Folders it looks in | Tested on a live app |
 | --- | --- | --- | --- |
@@ -933,6 +933,27 @@ that a model uses it. A test that sends a prompt is not part of BMN yet.
 | Codex | `codex debug prompt-input` | `~/.agents/skills`, `~/.codex/skills`, `~/.claude/skills` | not yet |
 | OpenCode | `opencode debug skill` | `~/.config/opencode/skills`, `~/.config/opencode/skill`, `~/.agents/skills`, `~/.claude/skills` | not yet |
 | Cursor | nothing: it has no way to list skills without a prompt | - | not supported yet |
+
+**Whether a model gets a skill is a second test.** **Loading test…** on the same row, or
+`bmn skills test <app> --prompt`, sends one prompt to the app's provider, so it is offered only
+where the app may receive private work. BMN puts one test skill where the app keeps its skills;
+only the skill's body holds a token made for that run, not its name, its description or the
+prompt. The app is started once in an empty folder and asked for the skill by name, and the
+skill is removed and checked to be gone. The test passes only when the token comes back and no
+tool can have read the file:
+
+| App | The run | It passes when | Tested on a live app |
+| --- | --- | --- | --- |
+| Claude Code | `claude -p --tools "" --strict-mcp-config`, asked `/<skill>` | the run itself reports that it had no tools, nothing it reports is a tool being used, and its answer holds the token | not yet |
+| Codex | `codex exec --sandbox read-only`, asked to use `$<skill>` | the record Codex saved for the run shows the token in a message Codex gave the model before any tool was called | not yet |
+| OpenCode, Cursor | none | never yet: BMN cannot tell the app handing over a skill from the model reading the file | does not apply |
+
+It **fails** when a run BMN could read, with no tool in it, came back without the token. It is
+**inconclusive** when the run ended in an error or took too long, when BMN cannot read what the
+run reported, when a tool ran (the model may have read the file itself), or when the test skill
+could not be removed; that last one names the folder to delete. The two tests are kept as
+separate records and Health names each: a listing, also one recorded before the loading test
+existed, never counts as a loading test.
 
 **Which skills an app may have.** Every skill reaches every app, with two limits you set on the
 Skills page and approve like any team change: a skill kept to some apps (`only`) reaches only
@@ -965,8 +986,9 @@ and what it points at is never written. Entries an app may no longer have, and e
 that left the folder, are removed in the same install. It is one transaction: every entry's prior
 state is kept under BMN's own private state, a folder as a complete copy with its modes and its
 own links, and **Undo install…** (or `bmn rules restore --transaction <id>`) puts all of it back.
-An install that ended part-way is undone too: an entry that was written but never recorded is put
-back when it still holds exactly what the install meant to leave, and left alone when it changed.
+An install that ended part-way is undone too: BMN notes each entry before it writes it, puts back
+one that still holds exactly what the install meant to leave, and stops at one that changed
+since, naming it. That holds for every entry of the install, finished or not.
 A skill's lines are never printed: a plan names files, not their text.
 
 **Exposed cannot be installed away.** An app that reads the skills folder itself sees every skill
@@ -1004,18 +1026,28 @@ unless it is plainly not one: a flag, a number, a name, a package, a path, `host
 like a key, token, password, header or cookie is a value, and so is a variable written together
 with other text, except after `Bearer`, `Basic` or `Token`. BMN errs on this side: a harmless
 argument it takes for a value only makes the entry read `blocked` until you move it into an
-environment variable.
+environment variable. An entry that is exactly the tool you approved, as BMN writes it, is never
+taken to hold a value.
 
 **Where an app reads tools is tested, not assumed.** Until `bmn tools test <app>` (Rules → Health
 → Tools → **Test…**) passed on exactly the installed version, an app's tools are "not supported
 yet" and nothing is written for it. The test starts the app in an empty home folder with no
-sign-in, so nothing is sent: it writes one stand-in tool into the app's settings file there the
-way BMN would and one into the test folder's own settings, asks the app which tools it sees, and
-records whether the app named the tool, whether it passed the named variable and an argument
-taken from a variable, whether a run told to take only its own tools left both entries out, and
-whether the app's own add and remove commands change the same file. Each result says what it
-rests on: a tool the app was seen starting, or only the app's own listing. A listing that ends
-with an error proves nothing and the test is inconclusive.
+sign-in, so no prompt can be answered there; BMN does not watch what the app itself sends when
+it starts. It writes one stand-in tool into the app's settings file the way BMN would, asks the
+app which tools it sees, and records whether the app named the tool, whether it passed the named
+variable and an argument taken from a variable, and whether the app's own add and remove
+commands change the same file. Each result says what it rests on: a tool the app was seen
+starting, or only the app's own listing. A listing that ends with an error proves nothing and
+the test is inconclusive.
+
+Whether a run can be kept to its own tools is taken only from a run, never from a listing. For
+Claude Code the test starts three short runs and reads, from the line each prints once it has
+started its tools, which ones it began with: one run with nothing shut out, which must show the
+stand-ins from its settings (and, where Claude Code takes them up, from its settings for the
+folder and the folder's `.mcp.json`); one told to take only its own, which must show that one
+alone; one told to take none, which must show none. The record names the places that were seen
+shut out. BMN knows no such line for a Codex, OpenCode or Cursor run, so none of them is ever
+recorded as keeping a run to its tools.
 
 | App | Settings file | Entries under | A variable is written as | Tested on a live app |
 | --- | --- | --- | --- | --- |
@@ -1062,9 +1094,11 @@ comments included. It refuses when an entry's exact text changed since you saw i
 inside it counts), when the file now sits in another folder than the one shown, and when the
 settings file is a link. Entries that are not on your list stay until you ask for their removal
 (`--remove-unlisted`). It is one transaction; what each entry held is kept as that entry's own
-text, never the file, and **Undo install…** (or `bmn rules restore --transaction <id>`) puts the
-entries back in the file as it is then, including an entry an interrupted install wrote but never
-recorded, as long as it still holds exactly what the install wrote. An entry that holds a value inline is never replaced or
+text, never the file. Before each write BMN notes the exact text it is about to leave, so
+**Undo install…** (or `bmn rules restore --transaction <id>`) knows an entry the install wrote
+even when the install ended right after. Undo puts an entry back, in the file as it is then,
+only while the entry still reads exactly as the install left it; a comment changed inside it
+counts, and Undo then stops and names the entry. An entry that holds a value inline is never replaced or
 removed, because putting it back would need the value: move the value into an environment
 variable first. Whatever BMN shows of an entry it did not write has such values masked.
 
@@ -1084,28 +1118,29 @@ below the list; **Remove them from the apps…** shows each one before it remove
 Tools has one row per app: its settings file, its state, Full or Public tools only, and the
 last test.
 
-**A tool kept to some agents** is in no app's settings. `bmn roster role <role> --json` gives each
-candidate a `tools` entry with the items that give a run exactly its agent's tools and shut out
-the app's own: for Codex `-c 'mcp_servers={}'` followed by one `-c mcp_servers.<id>.<setting>=…`
-per setting, for Claude Code `--strict-mcp-config --mcp-config '<json>'`. Tools written as one
-inline value after `mcp_servers=` are not a form BMN has tested and are refused. `bmn roster
-check` then compares what the command names with the agent's approved tools and refuses a
-missing, additional, altered or unreadable one with `TOOL_MISMATCH`; the receipt binds the tools
-and a hash of their definitions. It refuses with `ROUTE_UNSUPPORTED` where the installed app
-version was never seen keeping a run to its own tools, where the run's folder names tools of its
-own and no test saw them shut out, on a resume, and with a Codex profile.
+**Which tools a run starts with.** While your team lists no tools, the check leaves a run's
+tools unjudged, as it did before. From the first tool on the list, every checked run must be
+kept to exactly its own set: the tools for every app, the tools for its app and the tools kept to
+its agent (`agents`), or only the Public ones where its provider gets public work only. The
+approval says so when the first tool is added. `bmn roster role <role> --json` gives each
+candidate a `tools` entry with the items for exactly that set, also when the set is empty.
 
-**A run of an agent with no tools of its own is checked too.** Either its command shuts the app's
-settings out (on a version whose test saw that work), or the check reads what the run would take
-from them: the app's settings file, for Claude Code its entries for the run's folder and that
-folder's `.mcp.json`, for Codex that folder's `.codex/config.toml`. Every entry there must be a
-tool on your list, for that app, exactly as approved; one that is not, one that holds a value, a
-file BMN cannot read or a Codex profile that names tools refuses the run with `TOOL_MISMATCH` and
-names the entry. BMN does not read tools an app takes from elsewhere (a plug-in, a policy file
-your organisation manages, a settings file in a folder above the run's), so a run that must have
-none of those shuts the settings out in its command. A packet run carries no tools at all, and a
-research run none either. While your team lists no tools at all, the check leaves a command's
-own tools unjudged, as it did before.
+- **Claude Code.** The items are `--strict-mcp-config --mcp-config '<json>'`: the first shuts out
+  what Claude Code would take from its settings, the second names the run's own tools. The check
+  passes only on a version whose tools test saw a run kept to the tools its command names (and,
+  for an agent with none, a run that started with none); otherwise `ROUTE_UNSUPPORTED`. It then
+  compares what the command names with the approved set and refuses a missing, additional,
+  altered or unreadable tool, or a command without those two items, with `TOOL_MISMATCH`. The
+  receipt binds the tools and a hash of their definitions.
+- **Codex, OpenCode, Cursor.** BMN has no test that shows which tools a run of these apps starts
+  with, so it cannot keep one to its tools: while a tool is on your list, a checked run in them
+  is refused with `ROUTE_UNSUPPORTED`, and a tool kept to one of their agents waits.
+- **Places the test did not cover.** A Claude Code run is refused when it could take tools from a
+  place the test did not see shut out: a `.mcp.json` in a folder above the run's, a plug-in
+  switched on in a settings file (`enabledPlugins`), a policy file under `/etc/claude-code`, or
+  the folder's own entries where the test did not cover them. The refusal names the place.
+- A resumed run and a run with a profile are refused: BMN has not seen either kept to its tools.
+  A packet run carries no tools at all, and a research run none either.
 
 ### Models: what research found
 
@@ -1114,10 +1149,12 @@ they hold, and shows each value with the page it was read on. Research changes n
 
 **Who researches.** The **Researcher** row offers the approved, active agents on Claude Code
 whose provider may see private work and whose research run the check would pass; the others are
-named with why. Research runs only in an app version whose limits for such a run BMN verified:
-that is Claude Code today. A Codex agent is not offered until its own limits were tested, and
-`bmn roster check --research` refuses its command with `ROUTE_UNSUPPORTED`. An agent whose
-provider gets public work only is not offered, and neither is an OpenCode or Cursor agent. When
+named with why. Research is offered in Claude Code only. BMN starts that run with a command that
+names its limits (the table below) and checks the command, but no test has yet measured on a
+live run that Claude Code keeps to them. A Codex agent is offered once its own limits were
+tested, and `bmn roster check --research` refuses its command with `ROUTE_UNSUPPORTED` until
+then. An agent whose provider gets public work only researches only on an app version whose
+limits were tested, so none is offered today; neither is an OpenCode or Cursor agent. When
 no agent can research the page says so, and a price can still be written in the team file.
 
 **What leaves BMN.** BMN writes the prompt itself: your team's model names, grouped by provider,
@@ -1148,8 +1185,8 @@ cookies and no sign-in, to a public address only (never this machine or a privat
 after a redirect), ten seconds and two megabytes at most, 24 pages per run; finding the address
 has the same ten seconds. A price is counted when the page shows both amounts in dollars after
 that model's name, before the next model's name, says the unit is a million tokens, and each
-amount stands with its own word (input, output, cached) or, in a row without those words, input
-comes before output. A context window is counted when the number stands there beside the word
+amount stands with its own word (input, output, cached). Two amounts in a row without those
+words are not counted, whatever their order. A context window is counted when the number stands there beside the word
 context; a number beside "output" or "max tokens" is not one. The model is found on the page by
 its id, or by a published name only when that name is the id's own words. Anything else is shown
 as **unverified** with the reason on it, is never offered by Apply prices and is never filled
@@ -1191,10 +1228,11 @@ session send work, and may that provider see private work in this workspace?
   A workspace is the Git top-level with links resolved, or the folder itself outside Git; a
   repository nested in an allowed one is its own workspace.
 - **What stops.** Anything else: a provider that may see public work only; a destination BMN
-  cannot tell (an address no provider lists, a setting it cannot resolve, `--oss`, a Codex session
-  saved with another provider than the settings now name, a continued Codex session
-  (`resume`, `fork`) whose saved record is missing, unreadable or names no provider, two settings
-  that disagree); a
+  cannot tell (an address no provider lists, a setting it cannot resolve, `--oss`, two settings
+  that disagree); a Codex session BMN cannot tie to the record Codex saved for it (no record with
+  that session's id, more than one, a record it cannot read or that names no provider, one
+  outside Codex's own sessions folder, or one that belongs to another session), whether the
+  session is new or continued, and one saved with another provider than the settings now name; a
   destination that is only your word and whose provider may see public work only; an approved team
   that is missing, damaged or from an earlier BMN; a process BMN cannot read; a decision that
   took longer than 2 seconds. The agent shows one line that names the fix, for example
@@ -1235,9 +1273,13 @@ on Rules → Health: a provider that may see private work passes, any other warn
 
 - Skills are checked only in the user-level folders the test found. Skills inside a project
   folder, plugins, and sessions already running are outside what BMN installs or checks. The
-  test asks the app which skills it lists; whether a model then uses one is not tested. Cursor's
-  program names `~/.cursor/skills` and `~/.claude/skills` among the folders it reads, but BMN has
-  no test for it, so treat every skill in the folder as visible to Cursor.
+  listing test asks the app which skills it lists; the loading test shows, for one test skill in
+  one run, that the app put its text before the model. Neither shows that a model follows a
+  skill. Cursor's program names `~/.cursor/skills` and `~/.claude/skills` among the folders it
+  reads, but BMN has no test for it, so treat every skill in the folder as visible to Cursor.
+- A new Codex session is known to the guard only by the record Codex saves for it. Whether that
+  record exists by the time the first prompt is sent has not been measured on a live app; where
+  it does not, that prompt is stopped and the line says so.
 - A context limit is checked from the run's command and the named settings, like the destination;
   what the app does with it afterwards is the app's. The test proves the setting on one version
   in one empty folder with a short prompt; it does not prove where summarising starts, and BMN

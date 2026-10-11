@@ -685,7 +685,7 @@ function EditorPage(props: { rules: RulesState }): React.JSX.Element {
 // Rules › Health
 
 type AppAction = { kind: 'destination'; harness: RosterHarness } | { kind: 'update'; harness: RosterHarness }
-  | { kind: 'context-test'; harness: ContextLimitApp } | { kind: 'context-change'; harness: ContextLimitApp } | { kind: 'skills-test'; harness: RosterHarness }
+  | { kind: 'context-test'; harness: ContextLimitApp } | { kind: 'context-change'; harness: ContextLimitApp } | { kind: 'skills-test'; harness: RosterHarness } | { kind: 'skills-loading-test'; harness: RosterHarness }
   | { kind: 'tools-test'; harness: RosterHarness }
 
 /** How many running sessions BMN recognises as each app. */
@@ -991,17 +991,18 @@ export function skillStateHint(state: SkillStateName | undefined, app: Pick<Skil
 }
 
 /** An app's last skills test, or why its skills are not supported yet. */
-export function skillsTestLine(app: Pick<SkillsAppView, 'supported' | 'version' | 'test' | 'loading' | 'kind' | 'testable'>): string {
+export function skillsTestLine(app: Pick<SkillsAppView, 'supported' | 'version' | 'test' | 'listing' | 'loading' | 'kind' | 'testable'>): string {
   if (!app.supported) {
     if (app.version === null) return 'The app is not found'
     if (!app.testable) return 'BMN has no test for this app'
     const last = app.test !== null && app.test.version === app.version ? app.test.outcome : null
     return last === 'fail' ? `The test failed on ${app.version}` : last === 'inconclusive' ? `The test was inconclusive on ${app.version}` : `Not tested on ${app.version}`
   }
-  // The test asks the app which skills it lists and sends no prompt: it is named for what it shows.
-  if (app.kind !== 'full') return 'No listing test'
-  if (app.loading === null) return 'Listing never tested'
-  return `Listing test ${TEST_WORDS[app.loading.outcome].toLowerCase()} ${shortDate(app.loading.at)}${app.loading.stale ? ' · stale' : ''}`
+  // Two tests, each named for what it shows: a listing sends no prompt, a loading test sends one. A listing never reads as loading.
+  if (app.kind !== 'full') return 'No loading test'
+  const words = (label: string, test: NonNullable<SkillsAppView['loading']>): string => `${label} ${TEST_WORDS[test.outcome].toLowerCase()} ${shortDate(test.at)}${test.stale ? ' · stale' : ''}`
+  if (app.loading !== null) return words('Loading test', app.loading)
+  return app.listing === null ? 'Loading never tested' : `${words('Listing test', app.listing)} · loading never tested`
 }
 
 function SkillRow(props: { skill: SkillView; apps: readonly SkillsAppView[]; team: TeamState; busy: boolean }): React.JSX.Element {
@@ -1117,17 +1118,27 @@ function SkillsHealth(props: { rules: RulesState; action: AppAction | null; setA
               </span>
               <span className="health-state">
                 <span title={app.reason}>{needs ? <Dot label="Needs you" /> : null}{app.state}{app.supported ? <span className="muted"> · {app.kind === 'full' ? 'Full' : 'Public skills only'}</span> : null}</span>
-                <span className="faint" title={app.loading?.detail ?? app.test?.detail}>{skillsTestLine(app)}</span>
+                <span className="faint" title={app.loading?.detail ?? app.listing?.detail ?? app.test?.detail}>{skillsTestLine(app)}</span>
               </span>
               <span className="app-actions">
                 <button type="button" className="small" disabled={!idle || !app.testable || app.version === null} aria-label={`Skills test for ${name}`}
                   title={app.testable ? undefined : `BMN has no way to ask ${name} which skills it sees`} onClick={() => props.setAction({ kind: 'skills-test', harness: app.harness })}>Test…</button>
+                {app.supported && app.kind === 'full' ? (
+                  <button type="button" className="small" disabled={!idle || !app.loadTestable} aria-label={`Skill loading test for ${name}`}
+                    title={app.loadTestable ? undefined : `BMN cannot yet tell ${name} handing a skill to its model from the model reading the file itself`}
+                    onClick={() => props.setAction({ kind: 'skills-loading-test', harness: app.harness })}>Loading test…</button>
+                ) : null}
               </span>
             </div>
             {action?.kind === 'skills-test' && action.harness === app.harness ? (
               <Sheet title={`Test where ${name} reads skills`} action="Run test" busy={rules.busy} onCancel={() => props.setAction(null)}
-                note={`Starts ${name} in an empty home folder that holds only test skills and asks which it sees; no sign-in is there, so nothing is sent.${app.kind === 'full' ? ` Then puts one empty test skill where ${name} keeps its skills, asks again, and removes it.` : ''} The result is kept for this version.`}
+                note={`Starts ${name} in an empty home folder that holds only test skills and asks which it sees; BMN sends no prompt and no sign-in is there.${app.kind === 'full' ? ` Then puts one empty test skill where ${name} keeps its skills, asks again, and removes it.` : ''} The result is kept for this version.`}
                 onConfirm={() => void rules.run(() => window.aiTerminal.testSkills(app.harness)).then(() => props.setAction(null))} />
+            ) : null}
+            {action?.kind === 'skills-loading-test' && action.harness === app.harness ? (
+              <Sheet title={`Test whether ${name} loads a skill`} action="Run test" busy={rules.busy} onCancel={() => props.setAction(null)}
+                note={`Puts one test skill where ${name} keeps its skills, starts ${name} once in an empty folder and sends one prompt that calls the skill by name. The prompt goes to ${name}'s provider with whatever ${name} adds to every prompt; the test skill holds nothing of yours and is removed afterwards. It passes only when the skill's own words come back and no tool can have read the file.`}
+                onConfirm={() => void rules.run(() => window.aiTerminal.testSkillsLoading(app.harness)).then(() => props.setAction(null))} />
             ) : null}
           </div>
         )
@@ -1437,7 +1448,7 @@ function ToolsHealth(props: { rules: RulesState; action: AppAction | null; setAc
             </div>
             {action?.kind === 'tools-test' && action.harness === app.harness ? (
               <Sheet title={`Test where ${name} keeps its tools`} action="Run test" busy={rules.busy} onCancel={() => props.setAction(null)}
-                note={`Starts ${name} in an empty home folder with no sign-in, so nothing is sent. BMN writes one stand-in tool into its settings file there, asks ${name} which tools it sees, and removes the folder. The result is kept for this version.`}
+                note={`Starts ${name} in an empty home folder with no sign-in, so no prompt can be answered there. BMN writes one stand-in tool into its settings file, asks ${name} which tools it sees${app.harness === 'claude' ? ', starts it three more times to see which tools a run begins with' : ''}, and removes the folder. The result is kept for this version.`}
                 onConfirm={() => void rules.run(() => window.aiTerminal.testTools(app.harness)).then(() => props.setAction(null))} />
             ) : null}
           </div>

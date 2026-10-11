@@ -8,7 +8,7 @@ import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } f
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
 import { CLAUDE_CONTEXT_KEY, CODEX_CONTEXT_KEYS, checkContext, provenControls, wholeNumber } from './agents-context.mjs'
-import { appTools, checkRunTools } from './agents-tools.mjs'
+import { RUN_TEST_APPS, appTools, checkRunTools } from './agents-tools.mjs'
 
 /**
  * The check answers one question immediately before a dispatch: may this exact command, run from
@@ -1316,7 +1316,11 @@ export function consequences(before, after) {
     const loses = HARNESSES.filter((harness) => inApp(prior, was, harness) && !inApp(after, now, harness)).map((harness) => APP_NAMES[harness])
     const changes = was !== undefined && now !== undefined && what(was) !== what(now)
       ? HARNESSES.filter((harness) => inApp(prior, was, harness) && inApp(after, now, harness)).map((harness) => APP_NAMES[harness]) : []
-    const given = (now?.agents ?? []).filter((agent) => !(was?.agents ?? []).includes(agent)).map(name)
+    const gained = (now?.agents ?? []).filter((agent) => !(was?.agents ?? []).includes(agent))
+    // A run gets a tool of its own only in an app BMN can keep to its tools; elsewhere the tool is listed and waits.
+    const appOf = (agent) => after.agents.find((entry) => entry.id === agent)?.harness
+    const given = gained.filter((agent) => RUN_TEST_APPS.includes(appOf(agent))).map(name)
+    const waiting = gained.filter((agent) => !RUN_TEST_APPS.includes(appOf(agent)))
     const taken = (was?.agents ?? []).filter((agent) => !(now?.agents ?? []).includes(agent)).map(name)
     // The owner knows a tool by its name, as its row shows it.
     const title = (now ?? was).name
@@ -1325,9 +1329,13 @@ export function consequences(before, after) {
     if (loses.length > 0) out.push(`Tool ${title} would no longer reach ${listed(loses)}`)
     if (changes.length > 0) out.push(`Tool ${title} would change in ${listed(changes)}`)
     if (given.length > 0) out.push(`Tool ${title} would be given to the runs of ${listed(given)}`)
+    for (const agent of waiting) out.push(`Tool ${title} is for the runs of ${name(agent)}, and BMN cannot give a ${APP_NAMES[appOf(agent)] ?? appOf(agent)} run a tool yet`)
     if (taken.length > 0) out.push(`Tool ${title} would no longer be given to the runs of ${listed(taken)}`)
     if (out.length === said) out.push(`Tool ${title}: no app gains or loses it`)
   }
+  // The first tool on the list changes what the check asks of every run, also of an agent that has none.
+  if (oldTools.size === 0 && newTools.size > 0) out.push('With a tool on the list, the check passes a run only in Claude Code, once its tools test passed there; a Codex run is refused until BMN has such a test for Codex')
+  if (oldTools.size > 0 && newTools.size === 0) out.push('With no tool on the list, the check no longer looks at which tools a run has')
   return [...new Set(out)]
 }
 
@@ -1417,7 +1425,7 @@ function receiptAnswer(answer) {
  */
 export function evaluate(inputs, {
   environment = process.env, cwd: processCwd = process.cwd(), publicRules = null, now = new Date(),
-  testedVersions = TESTED_HARNESS_VERSIONS, resumeVersions = RESUME_TESTED_VERSIONS, contextTestLog = undefined, toolsTestLog = undefined
+  testedVersions = TESTED_HARNESS_VERSIONS, resumeVersions = RESUME_TESTED_VERSIONS, contextTestLog = undefined, toolsTestLog = undefined, toolsPolicyRoot = undefined
 } = {}) {
   const steps = []
   const note = (text) => steps.push(text)
@@ -1453,14 +1461,16 @@ export function evaluate(inputs, {
       refuse('ROUTE_UNSUPPORTED', `resume is not checked on ${parsed.harness} ${version ?? '(version unreadable)'}: BMN has not tested that a resume on this version talks to the current configuration's destination; start a fresh checked dispatch`)
     }
     note(`dispatch form: ${parsed.envMode === 'clean' ? 'env -i ' : ''}${parsed.harness === 'codex' ? `codex exec${parsed.resume ? ' resume' : ''}` : 'claude -p'}`)
-    // The tools of this run (60.12 AC5): what its command names and what the app's own settings would add, read
-    // with the run's own environment and folder. The test log is read only once the team lists tools. A version
-    // without a proven way to shut out inherited tools is refused here, a wrong set further down, each in its
-    // place in the order.
+    // The tools of this run (60.12 AC5): once the team lists any, the run is kept to exactly its agent's set and
+    // shut off from everything else, judged with the run's own environment and the folder it works in (Codex's
+    // `-C` where it gives one). The test log is read only then. A version without a run seen kept to its tools,
+    // or a place its test did not cover, is refused here; a wrong set further down, each in its place in the order.
     const packetRun = inputs.packet !== undefined
+    const runFolder = cwd ?? processCwd
     const tools = checkRunTools(agent, data, parsed,
       (data.tools ?? []).length > 0 ? appTools(parsed.harness, { version, tests: toolsTestLog }) : { isolation: false, variable: false },
-      { packet: packetRun, profile: typeof resolution.profile === 'string', environment: dispatchEnvironment(parsed, environment), cwd: cwd ?? processCwd })
+      { packet: packetRun, profile: typeof resolution.profile === 'string', environment: dispatchEnvironment(parsed, environment),
+        cwd: parsed.cd === undefined ? runFolder : (canonicalDirectory(parsed.cd, runFolder) ?? null), ...(toolsPolicyRoot === undefined ? {} : { policyRoot: toolsPolicyRoot }) })
     if (tools.refusal?.code === 'ROUTE_UNSUPPORTED') refuse('ROUTE_UNSUPPORTED', tools.refusal.message)
 
     const { model, effort } = checkModelAndEffort(agent, resolution, note)
@@ -1596,7 +1606,8 @@ export function evaluate(inputs, {
       version: 1, mode: 'dispatch', verdict: 'PASS', agent: agent.id, class: agent.class, harness: parsed.harness, model: model.value,
       role: role.id, effort: effort.value, context_limit_applied: context.applied,
       // The tools this run was given and a hash of their definitions: variable names, never a value.
-      ...(tools.applied.length > 0 ? { tools: { applied: tools.applied, sha256: tools.hash } } : {}),
+      // Bound whenever the run was kept to a set, an empty one too; a run of a team without tools carries no such entry.
+      ...(tools.hash !== undefined ? { tools: { applied: tools.applied, sha256: tools.hash } } : {}),
       workspace, cwd,
       public_status: { public: visibility.public, reason: visibility.reason, ...(visibility.public ? { commit: visibility.record.commit } : {}) },
       data: effectiveData,
