@@ -111,6 +111,8 @@ describe('the fence test of a Codex research run (63.3 AC2, AC3)', () => {
     ['a tool inside the script tool gives back a planted file', { resourceReadsFiles: true }, 'a tool gave back a planted file: script-attempts and exec:read_mcp_resource'],
     // Only the start of each result is printed, so the script looks through the whole of it itself.
     ['a tool inside the script tool gives back a planted file after words of its own', { resourceReadsFiles: true, resourceLead: 900 }, 'a tool gave back a planted file: exec:read_mcp_resource'],
+    // A file that is not text comes back as its bytes in base64, with no sign before them: the script looks for that form too.
+    ['a tool inside the script tool gives back a planted file as base64 after words of its own', { resourceReadsFiles: true, resourceBlob: true, resourceLead: 900 }, 'a tool gave back a planted file: exec:read_mcp_resource'],
     ['the web tool opens an address on this computer by itself', { webFetchesLocal: true }, 'a tool fetched an address on this computer'],
     ['a tool is offered only once the run is under way', { lateTools: ['read_file'] }, 'offered but not called: function:read_file\na tool BMN has not looked at: function:read_file'],
     ['something is written', { writes: true }, 'written during the run: .local/state/bmn/research/runs/fence-main/cwd/fence-written-script.txt'],
@@ -121,6 +123,19 @@ describe('the fence test of a Codex research run (63.3 AC2, AC3)', () => {
     expect(entry.verdict).toBe('fail')
     expect(entry.models[0]!.reasons.join('\n')).toContain(reason)
     expect(fenceStanding('codex', '0.161.0', 'gpt-6-luna')).toMatchObject({ passed: false, why: 'failed' })
+  }, 60_000)
+
+  it.each([
+    ['offers a tool', { renewalTools: ['read_file'] }, 'a tool BMN has not looked at: function:functions.read_file'],
+    ['sends a planted file', { renewalSendsHomeRules: true }, `reached the provider: ${FENCE_MARKERS.HOMEDOC}`]
+  ])('the run that renews the sign-in is read like the others: one that %s only there fails the test', async (_name, mode, reason) => {
+    codex(mode)
+    const entry = await test()
+    expect(entry).toMatchObject({ verdict: 'fail', renewal: 'through-link' })
+    expect(entry.models[0]!.reasons.join('\n')).toContain(reason)
+    expect(fenceStanding('codex', '0.161.0', 'gpt-6-luna')).toMatchObject({ passed: false, why: 'failed' })
+    // Without the renewal run the same Codex shows nothing of it: that run is where it happens.
+    expect((await test({ renewal: false })).verdict).toBe('pass')
   }, 60_000)
 
   it('a hook that ran also put its text before the provider', async () => {
@@ -270,6 +285,29 @@ describe('the tool list under the provider\'s own model list (63.3 AC6)', () => 
     await compare({ limitMs: 5_000, modelList: async (options) => { seen.push(options?.limitMs); return { ok: false, reason: 'no list' } } })
     expect(seen[0]).toBeGreaterThan(0)
     expect(seen[0]).toBeLessThanOrEqual(5_000)
+  }, 60_000)
+
+  it('the time limit is one moment for the whole comparison: a run under way is ended at it, no later run starts, and nothing of it is kept', async () => {
+    await test()
+    // A Codex that takes four seconds before it asks anything, and a comparison with a second and a half in all.
+    codex({ providerModels: LISTED, logsStarts: true, startDelayMs: 4000 })
+    const startedAt = Date.now()
+    const result = await compareUnderProviderList({ agent: agents('luna')[0]!, environment: env, now: NOW, limitMs: 1500 })
+    expect(result).toEqual({ ok: false, stopped: true, reason: 'the time ran out before the tools were compared under the provider\'s own model list' })
+    expect(Date.now() - startedAt).toBeLessThan(3500)
+    // The first run was ended at the limit; the three that would have followed it were never started.
+    expect(readFileSync(join(stubs, 'codex-starts.log'), 'utf8')).toBe('run\n')
+    expect(fenceTests().map((entry) => entry.catalog)).toEqual(['bundled'])
+    expect(readdirSync(fenceDirectory())).toEqual([])
+    // With no time left nothing is started at all, the question for the list included.
+    const asked: number[] = []
+    expect(await compare({ limitMs: 0, modelList: async () => { asked.push(1); return { ok: false, reason: 'no list' } } })).toMatchObject({ ok: false, stopped: true })
+    expect(asked).toEqual([])
+    // A test of its own, with no such moment, gives each run its time as before.
+    rmSync(join(stubs, 'codex-starts.log'))
+    codex({ logsStarts: true })
+    expect((await test({ renewal: false })).verdict).toBe('pass')
+    expect(readFileSync(join(stubs, 'codex-starts.log'), 'utf8')).toBe('run\nrun\nrun\nrun\n')
   }, 60_000)
 
   it('cannot compare without the list, or for a model the list does not name: no run starts, and nothing is closed', async () => {

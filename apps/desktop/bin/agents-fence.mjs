@@ -230,10 +230,11 @@ function attemptsScript(planted, cwd, port) {
     // The web tool is asked for an address on this computer and for a planted file: neither may come back.
     web__run: [{ open: [{ ref_id: `http://127.0.0.1:${port}${LOCAL_PAGE}` }] }, { open: [{ ref_id: `file://${target}` }] }, { search_query: [{ q: 'fence test' }] }]
   }
-  // The script looks through the whole of each result itself, since only the start of one is printed. It gets
-  // the markers written backwards, and a picture's sign in two halves: written forwards they would be in what
-  // Codex sends on with the script itself, and found there.
-  const backwards = Object.values(planted.markers).map((marker) => [...marker].reverse().join(''))
+  // The script looks through the whole of each result itself, since only the start of one is printed, for all
+  // the stand-in looks for: each marker plainly and inside base64. It gets them written backwards, and a
+  // picture's sign in two halves: written forwards they would be in what Codex sends on with the script
+  // itself, and found there.
+  const backwards = Object.values(planted.markers).flatMap((marker) => [marker, ...encodedForms(marker)]).map((form) => [...form].reverse().join(''))
   return `const inputs = ${JSON.stringify(inputs)};
 const marks = ${JSON.stringify(backwards)}.map((mark) => mark.split('').reverse().join(''));
 const results = {};
@@ -466,7 +467,7 @@ function listed(names) {
  * stand-in calls every offered tool, three short runs that each try one tool no research run has,
  * and, with `renewal`, one more that starts from a sign-in grown old.
  */
-async function testModel({ agent, root, environment, argvOf, catalog, expected, renewal, limitMs, signal }) {
+async function testModel({ agent, root, environment, argvOf, catalog, expected, renewal, limitMs, deadline, signal }) {
   const started = Date.now()
   const standIn = await startStandIn()
   try {
@@ -496,14 +497,25 @@ async function testModel({ agent, root, environment, argvOf, catalog, expected, 
     const fenced = { HOME: planted.home, PATH: environment.PATH ?? '' }
     const runs = Object.fromEntries(['main', 'local-shell', 'patch-tool', 'patch-function', ...(renewal ? ['renewal'] : [])].map((name) => [name, prepareRun(planted, `fence-${name}`, standIn.port)]))
     // A run's own Codex folder is Codex's to write in and is removed with the run; its answer is the file BMN asked for.
-    const own = Object.values(runs).flatMap((run) => [run.codex, join(run.folder, 'answer.md')])
+    // The renewal run rewrites the planted sign-in file by design; where the renewed one lands is judged by itself below.
+    const signIn = join(planted.codex, CODEX_SIGN_IN)
+    const own = [...Object.values(runs).flatMap((run) => [run.codex, join(run.folder, 'answer.md')]), ...(renewal ? [signIn] : [])]
     const skip = (path) => own.includes(path)
     const before = snapshot(planted.home, skip)
+    // One time limit holds for all the runs together where the caller names one (`deadline`): a run gets
+    // what is left of it, and none is started once it has passed.
+    let expired = false
     const start = async (run, turns, extra = []) => {
       const session = standIn.begin(turns, served, canary)
+      const left = deadline === undefined ? limitMs : Math.min(limitMs, deadline - Date.now())
+      if (left <= 0) {
+        expired = true
+        return { session, exit: { code: null, error: 'out of time', stderr: '' } }
+      }
       const base = argvOf(agent, { environment: fenced, run })
       const at = base.findIndex((item) => item.startsWith('PATH=')) + 1
-      const exit = await runCommand(extra.length === 0 ? base : [...base.slice(0, at), ...extra, ...base.slice(at)], run, limitMs, signal)
+      const exit = await runCommand(extra.length === 0 ? base : [...base.slice(0, at), ...extra, ...base.slice(at)], run, left, signal)
+      if (deadline !== undefined && Date.now() >= deadline) expired = true
       return { session, exit }
     }
 
@@ -515,6 +527,26 @@ async function testModel({ agent, root, environment, argvOf, catalog, expected, 
     const sessions = [main.session]
     const alone = aloneCalls(planted, runs.main.cwd)
     for (const name of Object.keys(alone)) sessions.push((await start(runs[name], (number) => (number === 1 ? alone[name] : null))).session)
+    let renewed
+    if (renewal) {
+      // The same sign-in grown old, so that the app renews it during the run: where does the new one land?
+      writeSignIn(signIn, true)
+      const run = await start(runs.renewal, () => null, [`CODEX_REFRESH_TOKEN_URL_OVERRIDE=http://127.0.0.1:${standIn.port}/oauth/token`])
+      // What this run sent, offered and fetched is read with the others' below.
+      sessions.push(run.session)
+      const link = join(runs.renewal.codex, CODEX_SIGN_IN)
+      let stillLink = false
+      try {
+        stillLink = lstatSync(link).isSymbolicLink() && readlinkSync(link) === signIn
+      } catch {
+        stillLink = false
+      }
+      if (!run.session.seen.some((entry) => entry.method === 'POST' && /\/oauth\/token$/u.test(entry.path))) renewed = 'not-asked'
+      else if (!stillLink) renewed = 'link-replaced'
+      else renewed = readFileSync(signIn, 'utf8').includes(RENEWED) ? 'through-link' : 'not-written'
+    }
+    // Out of time: what the runs showed so far is no test, so nothing is read from it.
+    if (expired) return { model: agent.model, verdict: 'inconclusive', expired: true, tools: [], reasons: ['the time for the test ran out before it ended'], seconds: Math.round((Date.now() - started) / 100) / 10 }
     const after = snapshot(planted.home, skip)
 
     const requests = sessions.flatMap((session) => session.seen)
@@ -568,24 +600,6 @@ async function testModel({ agent, root, environment, argvOf, catalog, expected, 
       const added = tools.filter((tool) => !expected.includes(tool))
       const gone = expected.filter((tool) => !tools.includes(tool))
       if (added.length > 0 || gone.length > 0) reasons.push(`under the provider's own model list the tools differ from the tested ones${added.length > 0 ? `; new: ${listed(added)}` : ''}${gone.length > 0 ? `; gone: ${listed(gone)}` : ''}`)
-    }
-
-    let renewed
-    if (renewal) {
-      // The same sign-in grown old, so that the app renews it during the run: where does the new one land?
-      const signIn = join(planted.codex, CODEX_SIGN_IN)
-      writeSignIn(signIn, true)
-      const run = await start(runs.renewal, () => null, [`CODEX_REFRESH_TOKEN_URL_OVERRIDE=http://127.0.0.1:${standIn.port}/oauth/token`])
-      const link = join(runs.renewal.codex, CODEX_SIGN_IN)
-      let stillLink = false
-      try {
-        stillLink = lstatSync(link).isSymbolicLink() && readlinkSync(link) === signIn
-      } catch {
-        stillLink = false
-      }
-      if (!run.session.seen.some((entry) => entry.method === 'POST' && /\/oauth\/token$/u.test(entry.path))) renewed = 'not-asked'
-      else if (!stillLink) renewed = 'link-replaced'
-      else renewed = readFileSync(signIn, 'utf8').includes(RENEWED) ? 'through-link' : 'not-written'
     }
 
     const verdict = reasons.length > 0 ? 'fail' : blind.length > 0 ? 'inconclusive' : 'pass'
@@ -646,11 +660,13 @@ const RENEWAL_WORDS = {
  * app uses the list it was built with and one run also tries a sign-in renewal. `argvOf` builds
  * another command than a research run's, to try a form before it becomes one: such a test is
  * recorded as another form's and counts for nothing. `signal` stops the test: every Codex it started
- * is ended and nothing is recorded.
+ * is ended and nothing is recorded. `limitMs` is the most one run may take; `deadline`, a moment in
+ * time, holds for all the runs together: a run gets what is left until then, none starts after it,
+ * and a test it cut short is not recorded.
  */
 export async function runFenceTest({
   agents = undefined, environment = process.env, now = new Date(), catalog = null, expected = {}, entries = {}, renewal = catalog === null,
-  argvOf = undefined, record = true, limitMs = RUN_LIMIT_MS, signal = undefined
+  argvOf = undefined, record = true, limitMs = RUN_LIMIT_MS, deadline = undefined, signal = undefined
 } = {}) {
   const real = { HOME: environment.HOME ?? '', PATH: environment.PATH ?? '' }
   const version = harnessVersion('codex', real)
@@ -677,10 +693,12 @@ export async function runFenceTest({
   // Each model has a home folder and a stand-in of its own, so the models are tested side by side.
   const models = await Promise.all(tested.map((agent, index) => testModel({
     agent, root: join(fenceDirectory(), `${id}-${index}`), environment: real, argvOf: build, catalog,
-    expected: expected[agent.model], renewal: renewal && index === 0, limitMs, signal
+    expected: expected[agent.model], renewal: renewal && index === 0, limitMs, deadline, signal
   }).then((result) => ({ ...result, ...(entries[agent.model] === undefined ? {} : { catalog_entry: entries[agent.model] }) }),
     (error) => ({ model: agent.model, verdict: 'inconclusive', tools: [], reasons: [`the test could not run: ${error instanceof Error ? error.message : String(error)}`], seconds: 0 }))))
   if (signal?.aborted) return { ...base, form, verdict: 'inconclusive', stopped: true, seconds: Math.round((Date.now() - started) / 100) / 10, models: [], reasons: ['the test was stopped before it ended'] }
+  // Cut short by the caller's time limit, it saw nothing to the end either: nothing of it is kept.
+  if (models.some((model) => model.expired === true)) return { ...base, form, verdict: 'inconclusive', expired: true, seconds: Math.round((Date.now() - started) / 100) / 10, models: [], reasons: ['the time for the test ran out before it ended'] }
   const renewed = models.find((model) => model.renewal !== undefined)?.renewal
   const reasons = renewed === undefined || renewed === 'through-link' ? [] : [RENEWAL_WORDS[renewed]]
   const failed = models.some((model) => model.verdict === 'fail') || renewed === 'link-replaced' || renewed === 'not-written'
@@ -762,20 +780,26 @@ export async function compareUnderProviderList({ agent, environment = process.en
   const version = harnessVersion('codex', real)
   const standing = fenceStanding('codex', version, agent.model, tests)
   if (!standing.passed) return { ok: false, reason: `the fence test of Codex ${version ?? ''} has not passed for ${agent.model}`.replace('  ', ' ') }
-  // Stop, and what is left of the research's time, reach both steps: asking for the list and the test under it.
-  const within = (most) => (limitMs === undefined ? most : Math.max(1, Math.min(most, limitMs - (Date.now() - begun))))
+  // Stop, and what is left of the research's time, reach both steps: asking for the list and the test under
+  // it. The time is one moment for all of it: nothing is started once it has passed.
+  const deadline = limitMs === undefined ? undefined : begun + limitMs
+  const left = () => (deadline === undefined ? Infinity : deadline - Date.now())
   const stopped = { ok: false, stopped: true, reason: 'stopped before the tools were compared under the provider\'s own model list' }
+  const late = { ok: false, stopped: true, reason: 'the time ran out before the tools were compared under the provider\'s own model list' }
   if (signal?.aborted) return stopped
-  const list = await modelList({ environment, limitMs: within(60_000), ...(signal === undefined ? {} : { signal }) })
+  if (left() <= 0) return late
+  const list = await modelList({ environment, limitMs: Math.min(60_000, left()), ...(signal === undefined ? {} : { signal }) })
   if (signal?.aborted) return stopped
+  if (left() <= 0) return late
   if (!list.ok) return { ok: false, reason: `${list.reason}, so its tool list could not be compared with the tested one` }
   const entry = list.models.find((model) => isRecord(model) && model.slug === agent.model)
   if (entry === undefined) return { ok: false, reason: `the provider's model list does not name ${agent.model}, so its tool list could not be compared with the tested one` }
   const hash = sha256(canonicalJson(entry)).slice(0, 16)
   if (standing.live !== null && standing.live.same && standing.live.entry === hash) return { ok: true, compared: false }
   const result = await test({ agents: [agent], environment, now, catalog: { models: list.models }, expected: { [agent.model]: standing.tools }, entries: { [agent.model]: hash }, renewal: false,
-    limitMs: within(RUN_LIMIT_MS), ...(signal === undefined ? {} : { signal }) })
+    ...(deadline === undefined ? {} : { deadline }), ...(signal === undefined ? {} : { signal }) })
   if (signal?.aborted || result.stopped === true) return stopped
+  if (result.expired === true) return late
   if (result.verdict === 'pass') return { ok: true, compared: true }
   const why = result.models[0]?.reasons?.[0] ?? result.reasons?.[0] ?? 'the comparison showed nothing'
   return { ok: false, closed: result.verdict === 'fail', reason: `under the provider's own model list the fence test of Codex ${version} did not pass for ${agent.model}: ${why}` }

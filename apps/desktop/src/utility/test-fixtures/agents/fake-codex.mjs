@@ -6,7 +6,7 @@
 // goes to the provider, skills and pictures do unless they are switched off, and a renewed sign-in
 // is written through to the file a link points at.
 import { execSync } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -43,6 +43,10 @@ if (args[0] === 'debug' && args[1] === 'models') {
   process.exit(mode.listFails === true ? 1 : 0)
 }
 if (args[0] !== 'exec') process.exit(2)
+// `logsStarts` keeps one line for each run that was started, so a test can count them; `startDelayMs`
+// stands for a Codex that takes its time before it asks the provider anything.
+if (mode.logsStarts === true) appendFileSync(join(here, 'codex-starts.log'), `${process.env.CODEX_REFRESH_TOKEN_URL_OVERRIDE === undefined ? 'run' : 'renewal'}\n`)
+if (typeof mode.startDelayMs === 'number') await new Promise((resolve) => setTimeout(resolve, mode.startDelayMs))
 
 const settings = []
 const disabled = []
@@ -113,6 +117,8 @@ if (mode.runsHooks === 'always' || (on('hooks') && mode.runsHooks === true)) {
     for (const hook of group.hooks) messages.push({ role: 'developer', text: execSync(hook.command, { encoding: 'utf8' }) })
   }
 }
+// `renewalSendsHomeRules` stands for a version that sends the home folder's rules file in the run that renews the sign-in, and in no other.
+if (renewAt !== undefined && mode.renewalSendsHomeRules === true) messages.push({ role: 'developer', text: text(join(home, 'AGENTS.md')) ?? '' })
 const prompt = readFileSync(0, 'utf8')
 messages.push({ role: 'user', text: prompt })
 
@@ -137,8 +143,9 @@ try {
 }
 
 const fn = (name) => ({ type: 'function', name, parameters: { type: 'object', properties: {} } })
+// `renewalTools` are offered only in the run that renews the sign-in: a tool a version adds in that run alone.
 const functions = [{ type: 'custom', name: 'exec' }, fn('wait'), fn('request_user_input'), fn('request_user_input_async'),
-  ...(mode.extraTools ?? []).map(fn), ...listed.filter((name) => !['clock', 'send_user_message_async'].includes(name)).map(fn)]
+  ...(mode.extraTools ?? []).map(fn), ...(renewAt === undefined ? [] : mode.renewalTools ?? []).map(fn), ...listed.filter((name) => !['clock', 'send_user_message_async'].includes(name)).map(fn)]
 // `lateTools` are offered from the second request on: a tool a version adds once the run is under way.
 const late = (mode.lateTools ?? []).map(fn)
 const collaboration = ['followup_task', 'interrupt_agent', 'list_agents', 'send_message', 'spawn_agent', 'wait_agent'].map(fn)
@@ -164,8 +171,11 @@ const inner = {
   list_mcp_resource_templates: async () => '{"resourceTemplates":[]}',
   list_mcp_resources: async () => '{"resources":[]}',
   read_mcp_resource: async ({ uri }) => {
-    // `resourceLead` puts that many characters of the tool's own words before the file's.
-    if (mode.resourceReadsFiles === true) return `${'resource metadata '.repeat(Math.ceil((mode.resourceLead ?? 0) / 18)).slice(0, mode.resourceLead ?? 0)}${readFileSync(new URL(uri), 'utf8')}`
+    // `resourceLead` puts that many characters of the tool's own words before the file's; `resourceBlob`
+    // gives the file the way a resource tool gives one that is not text: its bytes in base64, with no sign before them.
+    const lead = 'resource metadata '.repeat(Math.ceil((mode.resourceLead ?? 0) / 18)).slice(0, mode.resourceLead ?? 0)
+    if (mode.resourceReadsFiles === true && mode.resourceBlob === true) return { contents: [{ uri, note: lead, mimeType: 'application/octet-stream', blob: readFileSync(new URL(uri)).toString('base64') }] }
+    if (mode.resourceReadsFiles === true) return `${lead}${readFileSync(new URL(uri), 'utf8')}`
     throw new Error('resources/read failed: unknown MCP server \'codex\'')
   },
   web__run: async (input) => {

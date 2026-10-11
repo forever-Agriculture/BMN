@@ -1414,8 +1414,9 @@ The test passes for a model only when
 - nothing was written in the home folder or beside the run;
 - no hook ran;
 - no tool asked for the page on this computer;
-- every tool Codex offered, in any request of the run and not only the first, was called and gave
-  back no marker anywhere in its result, however long the result is;
+- every tool Codex offered, in any request of any of the test's runs (the one that renews the
+  sign-in among them) and not only the first, was called and gave back no marker anywhere in its
+  result, however long the result is, plainly or inside base64;
 - the tools offered are among the ones BMN's record for Codex names (`CODEX_RESEARCH_TOOLS_SEEN`
   in `apps/desktop/bin/agents-check.mjs`, looked at on Codex 0.162.1); and
 - a renewed sign-in landed in the file behind the link, with the link still a link.
@@ -1449,7 +1450,9 @@ stand-in adds one made-up line to the model's instructions in the list, and the 
 back in what Codex sends. A Codex that did not ask for the list, or asked and went on with the
 list it was built with, compared nothing. A comparison that could not be made stops that research
 and neither opens nor closes anything. **Stop** and the research's time limit hold during the
-comparison too: Codex is ended, nothing of a stopped comparison is recorded, and no run starts.
+comparison too. The limit is one moment for the whole comparison: a Codex run under way is ended
+at it, none is started after it, nothing of a comparison cut short is recorded, and no research
+run starts.
 `bmn roster fence --live` does the same comparison on request. The first research with a real
 Codex agent is yours to start.
 

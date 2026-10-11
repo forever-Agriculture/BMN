@@ -966,7 +966,7 @@ export async function runResearch({
         same = { ok: false, reason: error instanceof Error ? error.message : String(error) }
       }
       // Stop and the time limit hold during the comparison too: no run is started after either.
-      if (signal?.aborted || Date.now() >= deadline) {
+      if (signal?.aborted || Date.now() >= deadline || same.stopped === true) {
         removeResearchCodexFolders(run)
         ended = signal?.aborted ? 'stopped' : 'limit'
         break

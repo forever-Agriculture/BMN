@@ -845,6 +845,10 @@ describe('a research run (60.10 AC2-AC5)', () => {
     const second = new AbortController()
     const told = await research({ researcher: 'astra', fenceTests: FENCED, signal: second.signal, compare: async () => { second.abort(); return { ok: false, stopped: true, reason: 'the comparison was stopped' } } })
     expect(told.run).toMatchObject({ state: 'stopped', note: 'Stopped before it finished.' })
+    // A comparison that ran out of the research's time says so, and the research ends at its limit with no run started.
+    const out = await research({ researcher: 'astra', fenceTests: FENCED, compare: async () => ({ ok: false, stopped: true, reason: 'the time ran out before the tools were compared under the provider\'s own model list' }) })
+    expect(out.run).toMatchObject({ state: 'stopped', note: 'Ended at the 20-minute limit.', models: 0 })
+    expect(calls()).toEqual([])
     // The time limit: a comparison that outlasts it ends the research at the limit.
     const late = await research({ researcher: 'astra', fenceTests: FENCED, limitMs: 200, compare: async ({ limitMs }) => {
       expect(limitMs).toBeLessThanOrEqual(200)

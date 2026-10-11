@@ -27,7 +27,10 @@ export interface FenceTestOptions {
   /** Builds another command than a research run's; such a test counts for nothing. */
   argvOf?: (agent: RosterAgent, options: { environment: Environment; run: { folder: string; codex?: string } }) => string[]
   record?: boolean
+  /** The most one run of the test may take. */
   limitMs?: number
+  /** A moment in time that holds for all the runs together: none starts after it, and a test it cut short is not recorded. */
+  deadline?: number
   /** Stops the test: every Codex it started is ended and nothing is recorded. */
   signal?: AbortSignal
 }

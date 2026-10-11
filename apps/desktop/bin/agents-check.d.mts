@@ -30,6 +30,8 @@ export interface FenceTestEntry {
   models: FenceTestModel[]; reasons?: string[]; seconds?: number; renewal?: 'through-link' | 'not-asked' | 'link-replaced' | 'not-written'
   /** Set on what a stopped test returns; such a test is never recorded. */
   stopped?: boolean
+  /** Set on what a test cut short by its caller's time limit returns; such a test is never recorded. */
+  expired?: boolean
 }
 export interface FenceStanding {
   passed: boolean; why?: 'untested' | 'failed' | 'live'; tools: string[]; at?: string; reasons?: string[]
