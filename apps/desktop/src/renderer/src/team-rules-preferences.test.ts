@@ -3,6 +3,7 @@ import type { AgentsPreview, AgentsSnapshot, ResearchModelView, ResearchSnapshot
 import { createElement, createRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import type { CommandPress } from './session-command'
 import {
   INSERTS,
   RulesEditor,
@@ -17,6 +18,7 @@ import {
   forgetUpdateWatches,
   diffSummary,
   earlierVersions,
+  endedSince,
   insertAt,
   kilobytes,
   lineCount,
@@ -774,17 +776,47 @@ describe('Rules › Health: Update… (60.6: the app\'s own updater, shown befor
 
   it('where a session can be opened, offers to run the command there on one press', () => {
     const typed: string[][] = []
-    const offered = sheet(1, { onRun: (name, command) => { typed.push([name, command]) } })
+    const offered = sheet(1, { onRun: async (name, command) => { typed.push([name, command]); return 'typed' } })
     expect([...offered.matchAll(/<button type="button"( class="primary")?[^>]*>([^<]+)<\/button>/g)].map((match) => [match[2], match[1] !== undefined]))
       .toEqual([['Update now', true], ['Copy command', false], ['Check now', false], ['Close', false]])
-    expect(words(offered).replace(/\s+/g, ' ')).toContain('Afterwards Update now opens a new session and runs the command there, where you see what the updater does and answer what it asks. Or run it in any terminal. When you come back to Health, BMN reads the version and where Codex sends data again.')
+    expect(words(offered).replace(/\s+/g, ' ')).toContain('Afterwards Update now opens a new session and, once its shell is ready, runs the command there, where you see what the updater does and answer what it asks. Or run it in any terminal. BMN reads the version and where Codex sends data again when the command ends in that session, and whenever you come back to Health.')
     // Rendering offers; nothing runs until the press.
     expect(typed).toEqual([])
+    expect(offered).not.toContain('role="status"')
     // With no program there is nothing to run.
-    expect(sheet(2, { onRun: () => {} })).toContain('<button type="button" class="primary" disabled="">Update now</button>')
+    expect(sheet(2, { onRun: async () => 'typed' })).toContain('<button type="button" class="primary" disabled="">Update now</button>')
     // Without a way to open a session the sheet is as before: the copy is the main action.
     expect(sheet(1)).not.toContain('Update now')
     expect(sheet(1)).toContain('<button type="button" class="primary">Copy command</button>')
+  })
+
+  it('says where a press on Update now stands, takes a second press only where no session opened, and makes the copy the main action where the shell never got ready', () => {
+    const at = (press: CommandPress): string => sheet(1, { onRun: async () => 'typed', press })
+    // Each of the first two buttons: its words, whether it is the main action, whether it is off.
+    const buttons = (markup: string): unknown[][] => [...markup.matchAll(/<button type="button"( class="primary")?( disabled="")?>([^<]+)<\/button>/g)].slice(0, 2).map((match) => [match[3], match[1] !== undefined, match[2] !== undefined])
+    expect(buttons(at('idle'))).toEqual([['Update now', true, false], ['Copy command', false, false]])
+    expect(buttons(at('opening'))).toEqual([['Update now', true, true], ['Copy command', false, false]])
+    expect(at('opening')).toContain('<p role="status">Opening Update Codex and waiting for its shell…</p>')
+    expect(buttons(at('typed'))).toEqual([['Update now', true, true], ['Copy command', false, false]])
+    expect(buttons(at('failed'))).toEqual([['Update now', true, false], ['Copy command', false, false]])
+    expect(at('failed')).toContain('<p role="status">BMN could not open a session, so nothing ran. Press Update now again, or copy the command.</p>')
+    expect(buttons(at('not-reading'))).toEqual([['Update now', false, true], ['Copy command', true, false]])
+    expect(at('not-reading')).toContain('<p role="status">The shell in Update Codex did not get ready for a command, so BMN typed nothing there. Copy the command and run it yourself.</p>')
+  })
+
+  it('watches an update BMN starts afresh, and knows a reading made before an update command ended', () => {
+    forgetUpdateWatches()
+    watchUpdate({ harness: 'codex', version: '0.161.0' }, '2026-10-09T22:00:00.000Z')
+    expect(watchedWords({ harness: 'codex', version: '0.161.0' }, '2026-10-09T22:01:00.000Z')).toBe('The program still reports 0.161.0.')
+    // Update now pressed after that line was shown: the watch starts again from this reading, so the line after the update is still owed.
+    watchUpdate({ harness: 'codex', version: '0.161.0' }, '2026-10-09T22:01:00.000Z', true)
+    expect(watchedWords({ harness: 'codex', version: '0.161.0' }, '2026-10-09T22:01:00.000Z')).toBeNull()
+    expect(watchedWords({ harness: 'codex', version: '0.172.0' }, '2026-10-09T22:03:00.000Z')).toBe('The program now reports 0.172.0; before it reported 0.161.0.')
+    forgetUpdateWatches()
+    const read = '2026-10-09T22:01:00.000Z'
+    expect([endedSince(read, null), endedSince(read, Date.parse(read) - 1), endedSince(read, Date.parse(read)), endedSince(read, Date.parse(read) + 1)]).toEqual([false, false, true, true])
+    // A reading whose time cannot be told is taken as the older one.
+    expect(endedSince('unreadable', 5)).toBe(true)
   })
 
   it('says for Codex which program is meant, since BMN\'s sessions start its own command of that name', () => {

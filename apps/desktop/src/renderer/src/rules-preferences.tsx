@@ -1,5 +1,6 @@
 // MODULE: rules-preferences.tsx - Epic 60.6: Preferences › Rules: the master editor with what each app reads, install and earlier versions; Skills and Tools with each one's apps and state; Health with each rules file and agent app
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { takesPress, type CommandPress, type CommandStart, type RunInSession } from './session-command'
 import {
   ROSTER_APP_NAMES,
   ROSTER_APP_UPDATE_ARGUMENTS,
@@ -717,9 +718,9 @@ export function recheckWords(before: string | null, after: string | null): strin
  */
 const updateWatches = new Map<RosterHarness, { before: string | null; checkedAt: string }>()
 
-/** Remembers what `app` reports now, unless an update of it is already being watched. */
-export function watchUpdate(app: Pick<AgentAppView, 'harness' | 'version'>, checkedAt: string): void {
-  if (!updateWatches.has(app.harness)) updateWatches.set(app.harness, { before: app.version, checkedAt })
+/** Remembers what `app` reports now, unless an update of it is already being watched; `afresh` for an update BMN starts now. */
+export function watchUpdate(app: Pick<AgentAppView, 'harness' | 'version'>, checkedAt: string, afresh = false): void {
+  if (afresh || !updateWatches.has(app.harness)) updateWatches.set(app.harness, { before: app.version, checkedAt })
 }
 
 /** What a later check read for a watched app, in words; null before any later check, and for an app not watched. */
@@ -732,6 +733,28 @@ export function watchedWords(app: Pick<AgentAppView, 'harness' | 'version'>, che
 export function forgetUpdateWatches(apps?: Iterable<RosterHarness>): void {
   if (apps === undefined) updateWatches.clear()
   else for (const harness of apps) updateWatches.delete(harness)
+}
+
+/** When a command BMN typed for an update last ended in its session, and who wants to hear of the next. */
+let updateEndedAt: number | null = null
+const updateEndListeners = new Set<() => void>()
+
+/** The shell an update command was typed into reads a command line again: Health, open now or later, reads the machine after it. */
+export function updateEnded(at: number = Date.now()): void {
+  updateEndedAt = at
+  for (const listener of [...updateEndListeners]) listener()
+}
+
+/** Whether an update command ended after the machine was read at `checkedAt`, so what Health shows may be from before it. */
+export function endedSince(checkedAt: string, endedAt: number | null = updateEndedAt): boolean {
+  return endedAt !== null && !(Date.parse(checkedAt) > endedAt)
+}
+
+/** What the sheet says about a press on Update now that did not run the command; null while there is nothing to say. */
+export function pressWords(press: CommandPress, session: string): string | null {
+  if (press === 'opening') return `Opening ${session} and waiting for its shell…`
+  if (press === 'not-reading') return `The shell in ${session} did not get ready for a command, so BMN typed nothing there. Copy the command and run it yourself.`
+  return press === 'failed' ? 'BMN could not open a session, so nothing ran. Press Update now again, or copy the command.' : null
 }
 
 /** Health reads the machine again by itself when it was last read longer ago than this. */
@@ -747,25 +770,37 @@ export function UpdateSheet(props: {
   /** What a check after the command was copied read, or null before one. */
   result: string | null
   onCopied(): void; onCheck(): void; onClose(): void
-  /** Runs the command in a new shell session and shows it; absent where no session can be opened. */
-  onRun?: ((name: string, command: string) => void) | undefined
+  /** Runs the command in a new shell session and shows it, answering how that went; `left` tells it the sheet was closed. Absent where no session can be opened. */
+  onRun?: ((name: string, command: string, left: AbortSignal) => Promise<CommandStart>) | undefined
+  /** Where a press on Update now stands when the sheet opens; `idle` unless a test says otherwise. */
+  press?: CommandPress | undefined
 }): React.JSX.Element {
   const { app } = props
   const name = ROSTER_APP_NAMES[app.harness]
   const command = updateCommand(app)
   const [copied, setCopied] = useState<string | null>(null)
   // One press, one run: a second press while the session opens would start a second updater beside the first.
-  const pressed = useRef(false)
-  const [started, setStarted] = useState(false)
+  // The ref answers the second press of a double click, which comes before the sheet is drawn again.
+  const pressed = useRef<CommandPress>(props.press ?? 'idle')
+  const [press, setPress] = useState<CommandPress>(pressed.current)
   const sheet = useRef<HTMLDivElement | null>(null)
   useEffect(() => sheet.current?.focus(), [])
-  const run = (): void => {
-    if (command === null || pressed.current) return
-    pressed.current = true
-    setStarted(true)
-    props.onCopied()
-    props.onRun?.(`Update ${name}`, command)
+  // Closing the sheet while BMN still waits for the new session's shell takes the press back: nothing is typed afterwards.
+  const leaving = useRef<AbortController | null>(null)
+  useEffect(() => () => leaving.current?.abort(), [])
+  const stands = (next: CommandPress): void => {
+    pressed.current = next
+    setPress(next)
   }
+  const run = (): void => {
+    if (command === null || props.onRun === undefined || !takesPress(pressed.current)) return
+    // The button turns off with the press and would drop the focus with it; the sheet keeps it, so Escape still closes only the sheet.
+    sheet.current?.focus()
+    stands('opening')
+    leaving.current = new AbortController()
+    void props.onRun(`Update ${name}`, command, leaving.current.signal).then(stands, () => stands('failed'))
+  }
+  const said = pressWords(press, `Update ${name}`)
   const copy = (): void => {
     if (command === null) return
     props.onCopied()
@@ -786,15 +821,19 @@ export function UpdateSheet(props: {
         <span>Command</span><span className="mono wrap">{command ?? 'no program found'}</span>
         <span>Open in BMN</span><span>{sessionsWords(name, props.sessions)}</span>
         <span>Afterwards</span>
-        <span>{props.onRun ? 'Update now opens a new session and runs the command there, where you see what the updater does and answer what it asks. Or run it in any terminal.' : 'Run the command in a terminal.'} When you come back to Health, BMN reads the version and where {name} sends data again.{props.hasTest ? ' A loading test made before the update needs to be run again.' : ''}</span>
+        <span>{props.onRun
+          ? `Update now opens a new session and, once its shell is ready, runs the command there, where you see what the updater does and answer what it asks. Or run it in any terminal. BMN reads the version and where ${name} sends data again when the command ends in that session, and whenever you come back to Health.`
+          : `Run the command in a terminal. When you come back to Health, BMN reads the version and where ${name} sends data again.`}{props.hasTest ? ' A loading test made before the update needs to be run again.' : ''}</span>
       </div>
       <p className="preferences-help">The updater decides what it downloads and replaces, and may ask questions; BMN does not see that in advance and cannot undo it. BMN does not know whether a newer version exists.</p>
       {props.result ? <p role="status">{props.result}</p> : null}
+      {said ? <p role="status">{said}</p> : null}
       <div className="inline">
+        {/* Where the shell never got ready, copying is what is left to do, so it becomes the main action. */}
         {props.onRun ? (
-          <button type="button" className="primary" disabled={command === null || started} onClick={run}>Update now</button>
+          <button type="button" className={press === 'not-reading' ? undefined : 'primary'} disabled={command === null || !takesPress(press)} onClick={run}>Update now</button>
         ) : null}
-        <button type="button" className={props.onRun ? undefined : 'primary'} disabled={command === null} onClick={copy}>Copy command</button>
+        <button type="button" className={props.onRun && press !== 'not-reading' ? undefined : 'primary'} disabled={command === null} onClick={copy}>Copy command</button>
         {/* The button turns off while BMN checks and would drop the focus with it; the sheet keeps it, so Escape still closes only the sheet. */}
         <button type="button" disabled={props.busy} onClick={() => { sheet.current?.focus(); props.onCheck() }}>{props.busy ? 'Checking…' : 'Check now'}</button>
         <button type="button" onClick={props.onClose}>Close</button>
@@ -1470,8 +1509,8 @@ function ToolsHealth(props: { rules: RulesState; action: AppAction | null; setAc
   )
 }
 
-function HealthPage(props: { rules: RulesState; team: TeamState; recognised: RecognisedSessions; onRun?: ((name: string, command: string) => void) | undefined }): React.JSX.Element {
-  const { rules, team } = props
+function HealthPage(props: { rules: RulesState; team: TeamState; recognised: RecognisedSessions; onRun?: RunInSession | undefined }): React.JSX.Element {
+  const { rules, team, onRun: runInSession } = props
   const snapshot = rules.snapshot as RulesSnapshot
   const [action, setAction] = useState<AppAction | null>(null)
   const [, redraw] = useState(0)
@@ -1500,6 +1539,21 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [quiet, load])
+  // And once a command BMN typed for an update has ended: what is shown was read before that, perhaps while it still ran.
+  // Once for each end, so a read that fails is not asked for again and again.
+  const [endedAt, setEndedAt] = useState(updateEndedAt)
+  useEffect(() => {
+    const heard = (): void => setEndedAt(updateEndedAt)
+    updateEndListeners.add(heard)
+    heard()
+    return () => { updateEndListeners.delete(heard) }
+  }, [])
+  const readAfter = useRef<number | null>(null)
+  useEffect(() => {
+    if (!quiet || endedAt === readAfter.current || !endedSince(checkedAt, endedAt)) return
+    readAfter.current = endedAt
+    void load()
+  }, [quiet, endedAt, checkedAt, load])
   const opener = useRef<HTMLButtonElement | null>(null)
   // Update… is off while its sheet is open, so the focus can go back to it only once the sheet has gone.
   useEffect(() => {
@@ -1593,7 +1647,13 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
             {updating ? (
               <UpdateSheet app={app} home={snapshot.home} sessions={props.recognised[app.harness] ?? 0} busy={rules.busy}
                 hasTest={snapshot.probes.some((entry) => entry.harness === app.harness && entry.outcome !== null)} result={reports}
-                onCopied={() => watchUpdate(app, health.checkedAt)} onRun={props.onRun}
+                onCopied={() => watchUpdate(app, health.checkedAt)}
+                // An update BMN starts is watched afresh, and what it reports afterwards is said even where an earlier line was shown on this visit.
+                onRun={runInSession ? (session, command, left) => {
+                  watchUpdate(app, health.checkedAt, true)
+                  told.current.delete(app.harness)
+                  return runInSession(session, command, updateEnded, left)
+                } : undefined}
                 onCheck={() => { watchUpdate(app, health.checkedAt); redraw((count) => count + 1); void rules.load() }}
                 onClose={() => setAction(null)} />
             ) : reports !== null ? <p className="app-note" role="status">{reports}</p> : null}
@@ -1614,7 +1674,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
 export function RulesPreferences(props: {
   rules: RulesState; team: TeamState; page: RulesPage; recognised?: RecognisedSessions
   /** Opens a new shell session and runs `command` there; Health offers it for an app's update command. */
-  onRunInSession?: ((name: string, command: string) => void) | undefined
+  onRunInSession?: RunInSession | undefined
 }): React.JSX.Element {
   const { rules } = props
   const { ensure, setNotice } = rules

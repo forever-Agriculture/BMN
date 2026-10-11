@@ -122,6 +122,7 @@ import {
   workspaceAttention,
   type ProgressPresentation
 } from './session-presentation'
+import { sessionCommandRun, type SessionCommandRun } from './session-command'
 import { sessionProcessLabel } from './session-status'
 import {
   SessionTerminal,
@@ -202,9 +203,15 @@ type ShellDialog =
 type SidePanel = 'files' | 'details' | 'new' | null
 
 const APP_EVENT_REFRESH_MS = 15_000
+/** How long a new session's shell gets to read its first command line before BMN types nothing into it. */
+const SHELL_READY_WAIT_MS = 10_000
+/** How long BMN waits to hear that a command it typed has ended. */
+const COMMAND_WATCH_MS = 30 * 60_000
 
 function App(): React.JSX.Element {
   const controllers = useRef(new Map<string, TerminalController>())
+  // Commands BMN is typing into a new session, or whose end it waits for; each reads the sessions' output for its own.
+  const commandRuns = useRef(new Set<SessionCommandRun>())
   const liveRef = useRef(new Map<string, LiveStartup>())
   const sessionsRef = useRef<SessionRecord[]>([])
   const workspacesRef = useRef<WorkspaceRecord[]>([])
@@ -596,6 +603,7 @@ function App(): React.JSX.Element {
         .catch(fail('Companion data is unavailable'))
     })
     const stopOutput = window.aiTerminal.onTerminalOutput((message) => {
+      for (const run of commandRuns.current) run.output(message.attachmentId, message.bytes)
       const sessionId = sessionFor(message.attachmentId)
       if (!sessionId) return
       controllers.current.get(sessionId)?.output(message)
@@ -610,6 +618,7 @@ function App(): React.JSX.Element {
       }
     })
     const stopExit = window.aiTerminal.onTerminalExit((message) => {
+      for (const run of commandRuns.current) run.exit(message.attachmentId)
       const sessionId = sessionFor(message.attachmentId)
       if (!sessionId) return
       controllers.current.get(sessionId)?.exit(message)
@@ -2610,25 +2619,42 @@ function App(): React.JSX.Element {
           telegramCue={telegramCue}
           reportedModels={reportedModels(hookOrigins, sessions, live)}
           recognisedSessions={sessionsByApp(hookOrigins, sessions, live)}
-          onRunInSession={activeWorkspaceId ? (name, command) => {
-            void (async () => {
-              try {
-                // A plain shell in a folder of no project. The command is typed into it, never part of how the session starts, so a restart of BMN cannot run it again.
-                const form = { ...INITIAL_SESSION_FORM, name, cwd: home ?? INITIAL_SESSION_FORM.cwd }
-                const created = await window.aiTerminal.createSession(sessionCreateParams(activeWorkspaceId, form, { cols: 80, rows: 24 }))
-                setSessions((current) => [...current, created.session])
-                setLive((current) => ({ ...current, [created.session.sessionId]: created.startup }))
-                applyTreeSessionAction(selectTreeSession([...sessions, created.session], created.session.sessionId))
-                // Typed with its Enter: the owner's press on the sheet, which showed this exact command, is the go-ahead, and he
-                // watches it run in the session. A moment later, so the shell usually shows its prompt first; typed earlier it
-                // would still arrive, only echoed once more above the prompt.
-                setTimeout(() => window.aiTerminal.sendTerminalInput(created.startup.attachmentId, new TextEncoder().encode(`${command}\r`)), 600)
-                setDialog(null)
-                brief(`Running the command in ${created.session.name}.`)
-              } catch (error) {
-                setFailure(failureDetail(error, 'Session request failed'))
+          onRunInSession={activeWorkspaceId ? async (name, command, onEnded, left) => {
+            // Listening from before the session exists: its shell may write its first prompt before the answer that names it arrives.
+            const run = sessionCommandRun(command, { readyWithinMs: SHELL_READY_WAIT_MS, watchForMs: COMMAND_WATCH_MS })
+            commandRuns.current.add(run)
+            // The owner closed the sheet he pressed on while BMN waited for the shell: nothing is typed behind his back.
+            if (left.aborted) run.leave()
+            else left.addEventListener('abort', () => run.leave(), { once: true })
+            try {
+              // A plain shell in a folder of no project. The command is typed into it, never part of how the session starts, so a restart of BMN cannot run it again.
+              const form = { ...INITIAL_SESSION_FORM, name, cwd: home ?? INITIAL_SESSION_FORM.cwd }
+              const created = await window.aiTerminal.createSession(sessionCreateParams(activeWorkspaceId, form, { cols: 80, rows: 24 }))
+              setSessions((current) => [...current, created.session])
+              setLive((current) => ({ ...current, [created.session.sessionId]: created.startup }))
+              applyTreeSessionAction(selectTreeSession([...sessions, created.session], created.session.sessionId))
+              // Typed with its Enter: the owner's press on the sheet, which showed this exact command, is the go-ahead, and he
+              // watches it run in the session. Only once the shell reads a command line: typed earlier, a start-up file that
+              // asks a question would take the command for its answer, and nothing would run.
+              const typed = await run.typeInto(created.startup.attachmentId, (bytes) => window.aiTerminal.sendTerminalInput(created.startup.attachmentId, bytes))
+              if (!typed) {
+                commandRuns.current.delete(run)
+                // The sheet says so too; this line is for an owner who closed it meanwhile.
+                brief(left.aborted ? `Nothing was typed in ${created.session.name}: you closed the sheet first.` : `Nothing was typed in ${created.session.name}: its shell did not get ready.`)
+                return 'not-reading'
               }
-            })()
+              void run.ended.then(() => {
+                commandRuns.current.delete(run)
+                onEnded()
+              })
+              setDialog(null)
+              brief(`Running the command in ${created.session.name}.`)
+              return 'typed'
+            } catch (error) {
+              commandRuns.current.delete(run)
+              setFailure(failureDetail(error, 'Session request failed'))
+              return 'failed'
+            }
           } : undefined}
         />
       ) : null}

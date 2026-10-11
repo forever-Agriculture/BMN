@@ -24,6 +24,7 @@ import { useResearchState } from './models-preferences'
 import { TeamLedger, TeamPreferences, TeamToast, type TeamPage } from './team-preferences'
 import { useTeamState } from './team-state'
 import { RulesPreferences, useRulesState, type RecognisedSessions } from './rules-preferences'
+import type { RunInSession } from './session-command'
 import type { ReportedModel } from './model-suggestions'
 import { Dot, RulesIcon, TeamIcon } from './roster-marks'
 import { createHookCheckRunner } from './hook-check-runner'
@@ -129,7 +130,7 @@ export function PreferencesDialog(props: {
   /** How many running sessions BMN recognises as each app; Rules › Health says it beside an update. */
   recognisedSessions?: RecognisedSessions
   /** Opens a new shell session and runs a command there; Rules › Health offers it for an app's update command. */
-  onRunInSession?: ((name: string, command: string) => void) | undefined
+  onRunInSession?: RunInSession | undefined
 }): React.JSX.Element {
   const onSettings = useRef(props.onSettings)
   onSettings.current = props.onSettings

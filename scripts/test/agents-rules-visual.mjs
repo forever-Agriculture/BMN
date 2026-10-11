@@ -696,10 +696,13 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
 
     phase('60.13: Update now runs the command in a new session on that one press')
     rmSync(calls, { force: true })
-    stub('codex', `echo "$*" >> '${calls}'\necho "codex-cli 0.161.0"`)
+    // A stand-in updater that takes its time, and a program that reports a newer version only once it has ended.
+    const updaterDone = join(root, 'codex-updated')
+    stub('codex', [`echo "$*" >> '${calls}'`, `if [ "$1" = "update" ]; then sleep 12; touch '${updaterDone}'; echo "updated"; exit 0; fi`,
+      `if [ -f '${updaterDone}' ]; then echo "codex-cli 0.174.0"; else echo "codex-cli 0.161.0"; fi`].join('\n'))
     const updateRuns = () => existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter((entry) => entry === 'update').length : 0
     await updateButton.click()
-    await update.getByText('Update now opens a new session and runs the command there, where you see what the updater does and answer what it asks.', { exact: false }).waitFor()
+    await update.getByText('Update now opens a new session and, once its shell is ready, runs the command there, where you see what the updater does and answer what it asks.', { exact: false }).waitFor()
     await shot('health-update-type-1280.png')
     // Opening the sheet starts nothing: only the press does.
     await sleep(500)
@@ -724,15 +727,62 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       return null
     })
     assert.deepEqual([updateSession.executable, updateSession.argv], ['/bin/bash', []])
-    // Back on Health, which Preferences reopens on, the answer is under the app's row without a press.
-    stub('codex', 'echo "codex-cli 0.174.0"')
+    // Back on Health while the updater still runs: what is read now is the old version. The window keeps the focus and
+    // nothing is pressed; when the command ends in its session, Health reads again by itself and says what changed.
     await openPreferences()
     await main.locator('.page-title', { hasText: /^Health$/ }).waitFor()
-    await app('Codex').locator('.app-note').getByText('The program now reports 0.174.0; before it reported 0.161.0.', { exact: true }).waitFor()
-    stub('codex', 'echo "codex-cli 0.161.0"')
+    await app('Codex').locator('.app-note').getByText('The program still reports 0.161.0.', { exact: true }).waitFor()
+    assert.equal(existsSync(updaterDone), false, 'the stand-in updater ended before Health was opened again, so this run shows nothing about a reading made while it ran')
+    await app('Codex').locator('.app-note').getByText('The program now reports 0.174.0; before it reported 0.161.0.', { exact: true }).waitFor({ timeout: 30_000 })
+    assert.equal(updateRuns(), 1, 'the updater ran more than once')
+    await shot('health-update-ended-1280.png')
+    rmSync(updaterDone, { force: true })
+    stub('codex', `echo "$*" >> '${calls}'\necho "codex-cli 0.161.0"`)
     await main.getByRole('button', { name: 'Check now' }).click()
     await app('Codex').getByText('· tested').waitFor()
-    passed('Update now runs the exact command once in a new plain shell session on the owner\'s one press, and Health says what the program reports afterwards (60.13)')
+    passed('Update now runs the exact command once in a new plain shell session on the owner\'s one press, and Health reads again by itself when the command ends there and says what the program reports (60.13)')
+
+    phase('60.13: Update now types nothing into a shell that is not at its prompt')
+    // A start-up file that asks a question holds the shell before its first prompt. Typed then, the command would be
+    // taken for the answer and no updater would run. (BMN's own questions to the shell have no terminal, so they pass it.)
+    // The question gives up after 20 seconds and writes down what it was answered, so the shell this step leaves
+    // selected is at its prompt for the steps that follow.
+    const bashrc = join(home, '.bashrc')
+    const plainBashrc = readFileSync(bashrc, 'utf8')
+    const answers = join(root, 'startup-answers.txt')
+    writeFileSync(bashrc, `${plainBashrc}[ -t 0 ] && { read -t 20 -r -p "startup asks: " answer; echo "answer:$answer" >> '${answers}'; }\n`)
+    rmSync(calls, { force: true })
+    // Closing the sheet while BMN waits takes the press back: BMN says at once that nothing was typed, and nothing is later.
+    await updateButton.click()
+    await update.getByRole('button', { name: 'Update now' }).click()
+    await update.getByText('Opening Update Codex and waiting for its shell…', { exact: true }).waitFor()
+    assert.equal(await update.evaluate((node) => node === document.activeElement), true, 'the Update sheet lost the focus when its button turned off')
+    await page.keyboard.press('Escape')
+    await update.waitFor({ state: 'detached' })
+    assert.equal(await dialog.isVisible(), true, 'Escape on the Update sheet closed Preferences')
+    await page.getByTitle('Nothing was typed in Update Codex: you closed the sheet first.').waitFor({ timeout: 5_000 })
+    // And where the owner stays: BMN waits ten seconds for the shell, then says so on the sheet.
+    await updateButton.click()
+    await update.getByRole('button', { name: 'Update now' }).click()
+    await update.getByText('Opening Update Codex and waiting for its shell…', { exact: true }).waitFor()
+    await update.getByText('The shell in Update Codex did not get ready for a command, so BMN typed nothing there. Copy the command and run it yourself.', { exact: true }).waitFor({ timeout: 30_000 })
+    assert.equal(await dialog.isVisible(), true, 'Preferences stepped aside though nothing runs')
+    assert.equal(await update.getByRole('button', { name: 'Update now' }).isDisabled(), true, 'Update now can be pressed again into a shell that is not ready')
+    assert.deepEqual(await update.locator('button.primary').allTextContents(), ['Copy command'], 'the copy is not the main action where nothing was typed')
+    await sleep(1500)
+    assert.equal(updateRuns(), 0, 'the updater ran in a shell that was not at its prompt')
+    assert.equal(existsSync(answers), false, 'the command was typed into the question a start-up file asked')
+    await shot('health-update-not-ready-1280.png')
+    // Both questions time out unanswered, the shells reach their prompts, and still nothing was typed: no updater runs later either.
+    await until(() => existsSync(answers) && readFileSync(answers, 'utf8').split('\n').length > 2, 'both start-up questions to give up', 40_000)
+    assert.equal(readFileSync(answers, 'utf8'), 'answer:\nanswer:\n', 'something BMN typed was taken for an answer')
+    await sleep(1500)
+    assert.equal(updateRuns(), 0, 'the updater ran once the shell reached its prompt, after the owner was told nothing was typed')
+    writeFileSync(bashrc, plainBashrc)
+    await page.keyboard.press('Escape')
+    await update.waitFor({ state: 'detached' })
+    assert.equal(await dialog.isVisible(), true, 'Escape on the Update sheet closed Preferences')
+    passed('Update now types nothing into a shell whose start-up file asks a question, says so and leaves the copy as the main action; closing the sheet during the wait takes the press back (60.13)')
 
     phase('60.9: Health lists each app\'s default context limit; the owner\'s test proves the setting, then Change… shows the diff and writes only that line')
     const limitRow = (name) => main.locator('.limit-block', { has: page.locator('.health-row > span:first-child', { hasText: new RegExp(`^${name}$`) }) })
