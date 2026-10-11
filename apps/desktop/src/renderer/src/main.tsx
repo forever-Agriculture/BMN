@@ -2610,20 +2610,21 @@ function App(): React.JSX.Element {
           telegramCue={telegramCue}
           reportedModels={reportedModels(hookOrigins, sessions, live)}
           recognisedSessions={sessionsByApp(hookOrigins, sessions, live)}
-          onTypeInSession={activeWorkspaceId ? (name, command) => {
+          onRunInSession={activeWorkspaceId ? (name, command) => {
             void (async () => {
               try {
-                // A plain shell in a folder of no project. The command is typed, never part of how the session starts, so a restart of BMN cannot run it again.
+                // A plain shell in a folder of no project. The command is typed into it, never part of how the session starts, so a restart of BMN cannot run it again.
                 const form = { ...INITIAL_SESSION_FORM, name, cwd: home ?? INITIAL_SESSION_FORM.cwd }
                 const created = await window.aiTerminal.createSession(sessionCreateParams(activeWorkspaceId, form, { cols: 80, rows: 24 }))
                 setSessions((current) => [...current, created.session])
                 setLive((current) => ({ ...current, [created.session.sessionId]: created.startup }))
                 applyTreeSessionAction(selectTreeSession([...sessions, created.session], created.session.sessionId))
-                // Typed and not run: the owner presses Enter in the session, where he sees the command. A moment later, so the
-                // shell usually shows its prompt first; typed earlier it would still arrive, only echoed once more above the prompt.
-                setTimeout(() => window.aiTerminal.sendTerminalInput(created.startup.attachmentId, new TextEncoder().encode(command)), 600)
+                // Typed with its Enter: the owner's press on the sheet, which showed this exact command, is the go-ahead, and he
+                // watches it run in the session. A moment later, so the shell usually shows its prompt first; typed earlier it
+                // would still arrive, only echoed once more above the prompt.
+                setTimeout(() => window.aiTerminal.sendTerminalInput(created.startup.attachmentId, new TextEncoder().encode(`${command}\r`)), 600)
                 setDialog(null)
-                brief(`Typed the command into ${created.session.name}. Press Enter there to run it.`)
+                brief(`Running the command in ${created.session.name}.`)
               } catch (error) {
                 setFailure(failureDetail(error, 'Session request failed'))
               }

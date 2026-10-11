@@ -739,22 +739,33 @@ const HEALTH_STALE_MS = 15_000
 
 /**
  * The app's own updater, shown before anything runs: which program, the exact command, what BMN
- * knows about open sessions and what it reads again afterwards. BMN runs nothing here.
+ * knows about open sessions and what it reads again afterwards. Nothing starts before the owner
+ * presses Update now, which runs that exact command in a new session he can see.
  */
 export function UpdateSheet(props: {
   app: AgentAppView; home: string | null; sessions: number; hasTest: boolean; busy: boolean
   /** What a check after the command was copied read, or null before one. */
   result: string | null
   onCopied(): void; onCheck(): void; onClose(): void
-  /** Types the command into a new shell session and shows it; absent where no session can be opened. */
-  onType?: ((name: string, command: string) => void) | undefined
+  /** Runs the command in a new shell session and shows it; absent where no session can be opened. */
+  onRun?: ((name: string, command: string) => void) | undefined
 }): React.JSX.Element {
   const { app } = props
   const name = ROSTER_APP_NAMES[app.harness]
   const command = updateCommand(app)
   const [copied, setCopied] = useState<string | null>(null)
+  // One press, one run: a second press while the session opens would start a second updater beside the first.
+  const pressed = useRef(false)
+  const [started, setStarted] = useState(false)
   const sheet = useRef<HTMLDivElement | null>(null)
   useEffect(() => sheet.current?.focus(), [])
+  const run = (): void => {
+    if (command === null || pressed.current) return
+    pressed.current = true
+    setStarted(true)
+    props.onCopied()
+    props.onRun?.(`Update ${name}`, command)
+  }
   const copy = (): void => {
     if (command === null) return
     props.onCopied()
@@ -775,15 +786,15 @@ export function UpdateSheet(props: {
         <span>Command</span><span className="mono wrap">{command ?? 'no program found'}</span>
         <span>Open in BMN</span><span>{sessionsWords(name, props.sessions)}</span>
         <span>Afterwards</span>
-        <span>{props.onType ? 'BMN can type the command into a new session; you press Enter there to run it. Or run it in any terminal.' : 'Run the command in a terminal.'} When you come back to Health, BMN reads the version and where {name} sends data again.{props.hasTest ? ' A loading test made before the update needs to be run again.' : ''}</span>
+        <span>{props.onRun ? 'Update now opens a new session and runs the command there, where you see what the updater does and answer what it asks. Or run it in any terminal.' : 'Run the command in a terminal.'} When you come back to Health, BMN reads the version and where {name} sends data again.{props.hasTest ? ' A loading test made before the update needs to be run again.' : ''}</span>
       </div>
       <p className="preferences-help">The updater decides what it downloads and replaces, and may ask questions; BMN does not see that in advance and cannot undo it. BMN does not know whether a newer version exists.</p>
       {props.result ? <p role="status">{props.result}</p> : null}
       <div className="inline">
-        {props.onType ? (
-          <button type="button" className="primary" disabled={command === null} onClick={() => { if (command !== null) { props.onCopied(); props.onType?.(`Update ${name}`, command) } }}>Type in a new session</button>
+        {props.onRun ? (
+          <button type="button" className="primary" disabled={command === null || started} onClick={run}>Update now</button>
         ) : null}
-        <button type="button" className={props.onType ? undefined : 'primary'} disabled={command === null} onClick={copy}>Copy command</button>
+        <button type="button" className={props.onRun ? undefined : 'primary'} disabled={command === null} onClick={copy}>Copy command</button>
         {/* The button turns off while BMN checks and would drop the focus with it; the sheet keeps it, so Escape still closes only the sheet. */}
         <button type="button" disabled={props.busy} onClick={() => { sheet.current?.focus(); props.onCheck() }}>{props.busy ? 'Checking…' : 'Check now'}</button>
         <button type="button" onClick={props.onClose}>Close</button>
@@ -1459,7 +1470,7 @@ function ToolsHealth(props: { rules: RulesState; action: AppAction | null; setAc
   )
 }
 
-function HealthPage(props: { rules: RulesState; team: TeamState; recognised: RecognisedSessions; onType?: ((name: string, command: string) => void) | undefined }): React.JSX.Element {
+function HealthPage(props: { rules: RulesState; team: TeamState; recognised: RecognisedSessions; onRun?: ((name: string, command: string) => void) | undefined }): React.JSX.Element {
   const { rules, team } = props
   const snapshot = rules.snapshot as RulesSnapshot
   const [action, setAction] = useState<AppAction | null>(null)
@@ -1582,7 +1593,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
             {updating ? (
               <UpdateSheet app={app} home={snapshot.home} sessions={props.recognised[app.harness] ?? 0} busy={rules.busy}
                 hasTest={snapshot.probes.some((entry) => entry.harness === app.harness && entry.outcome !== null)} result={reports}
-                onCopied={() => watchUpdate(app, health.checkedAt)} onType={props.onType}
+                onCopied={() => watchUpdate(app, health.checkedAt)} onRun={props.onRun}
                 onCheck={() => { watchUpdate(app, health.checkedAt); redraw((count) => count + 1); void rules.load() }}
                 onClose={() => setAction(null)} />
             ) : reports !== null ? <p className="app-note" role="status">{reports}</p> : null}
@@ -1602,8 +1613,8 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
 
 export function RulesPreferences(props: {
   rules: RulesState; team: TeamState; page: RulesPage; recognised?: RecognisedSessions
-  /** Opens a new shell session with `command` typed and not run; Health offers it beside an app's update command. */
-  onTypeInSession?: ((name: string, command: string) => void) | undefined
+  /** Opens a new shell session and runs `command` there; Health offers it for an app's update command. */
+  onRunInSession?: ((name: string, command: string) => void) | undefined
 }): React.JSX.Element {
   const { rules } = props
   const { ensure, setNotice } = rules
@@ -1620,5 +1631,5 @@ export function RulesPreferences(props: {
   if (rules.snapshot === null) return <><PageHead title={title} /><p className="page-note">Reading the rules…</p></>
   if (props.page === 'skills') return <SkillsPage rules={rules} team={props.team} />
   if (props.page === 'tools') return <ToolsPage rules={rules} team={props.team} />
-  return props.page === 'editor' ? <EditorPage rules={rules} /> : <HealthPage rules={rules} team={props.team} recognised={props.recognised ?? {}} onType={props.onTypeInSession} />
+  return props.page === 'editor' ? <EditorPage rules={rules} /> : <HealthPage rules={rules} team={props.team} recognised={props.recognised ?? {}} onRun={props.onRunInSession} />
 }

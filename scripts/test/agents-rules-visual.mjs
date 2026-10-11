@@ -658,7 +658,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await update.getByText(`${program} update`, { exact: true }).waitFor()
     await update.getByText('BMN recognises no Codex session right now.', { exact: false }).waitFor()
     await update.getByText("it hands over to this program, and this is the one updated.", { exact: false }).waitFor()
-    assert.deepEqual(await update.getByRole('button').allTextContents(), ['Type in a new session', 'Copy command', 'Check now', 'Close'])
+    assert.deepEqual(await update.getByRole('button').allTextContents(), ['Update now', 'Copy command', 'Check now', 'Close'])
     await shot('health-update-1280.png')
     await update.getByRole('button', { name: 'Copy command' }).click()
     await update.getByText('Copied', { exact: true }).waitFor()
@@ -692,26 +692,29 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     stub('codex', 'echo "codex-cli 0.161.0"')
     await main.getByRole('button', { name: 'Check now' }).click()
     await app('Codex').getByText('· tested').waitFor()
-    passed('Update… names the program past BMN\'s own command, copies the exact command, starts no updater, says what the program reports after a check, and Health reads again when the window comes back')
+    passed('Update… names the program past BMN\'s own command, copies the exact command, starts no updater without a press on Update now, says what the program reports after a check, and Health reads again when the window comes back')
 
-    phase('60.13: Update… types the command into a new session; the owner\'s Enter runs it')
+    phase('60.13: Update now runs the command in a new session on that one press')
     rmSync(calls, { force: true })
     stub('codex', `echo "$*" >> '${calls}'\necho "codex-cli 0.161.0"`)
-    const ranUpdate = () => existsSync(calls) && readFileSync(calls, 'utf8').split('\n').includes('update')
+    const updateRuns = () => existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter((entry) => entry === 'update').length : 0
     await updateButton.click()
-    await update.getByText('BMN can type the command into a new session; you press Enter there to run it.', { exact: false }).waitFor()
+    await update.getByText('Update now opens a new session and runs the command there, where you see what the updater does and answer what it asks.', { exact: false }).waitFor()
     await shot('health-update-type-1280.png')
-    await update.getByRole('button', { name: 'Type in a new session' }).click()
-    // Preferences steps aside for the session that now holds the command.
+    // Opening the sheet starts nothing: only the press does.
+    await sleep(500)
+    assert.equal(updateRuns(), 0, 'the updater ran before the owner pressed Update now')
+    // Pressed twice in a row, as a hurried hand does: one press counts, so one session opens and one updater runs.
+    await update.getByRole('button', { name: 'Update now' }).dblclick()
+    // Preferences steps aside for the session the command runs in.
     await dialog.waitFor({ state: 'detached' })
     await page.locator('.session-row', { hasText: 'Update Codex' }).waitFor()
-    await page.getByTitle('Typed the command into Update Codex. Press Enter there to run it.').waitFor()
+    await page.getByTitle('Running the command in Update Codex.').waitFor()
+    await until(() => updateRuns() > 0, 'the stand-in program run with its update word after the press, with no key from the owner')
     await sleep(1500)
-    assert.equal(ranUpdate(), false, 'the updater ran before the owner pressed Enter')
+    assert.equal(updateRuns(), 1, 'the updater ran more than once')
+    assert.equal(await page.locator('.session-row', { hasText: 'Update Codex' }).count(), 1, 'a second press opened a second update session')
     await shot('update-session-typed-1280.png')
-    await page.locator('.session-terminal.selected .terminal-surface').click()
-    await page.keyboard.press('Enter')
-    await until(ranUpdate, 'the stand-in program run with its update word after Enter')
     // The session is a plain shell: nothing about the update is part of how it starts, so a restart of BMN cannot run it again.
     const updateSession = await page.evaluate(async () => {
       for (const workspace of await window.aiTerminal.listWorkspaces()) {
@@ -729,7 +732,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     stub('codex', 'echo "codex-cli 0.161.0"')
     await main.getByRole('button', { name: 'Check now' }).click()
     await app('Codex').getByText('· tested').waitFor()
-    passed('Update… types the exact command into a new plain shell session and runs nothing; the owner\'s Enter runs it, and Health says what the program reports afterwards (60.13)')
+    passed('Update now runs the exact command once in a new plain shell session on the owner\'s one press, and Health says what the program reports afterwards (60.13)')
 
     phase('60.9: Health lists each app\'s default context limit; the owner\'s test proves the setting, then Change… shows the diff and writes only that line')
     const limitRow = (name) => main.locator('.limit-block', { has: page.locator('.health-row > span:first-child', { hasText: new RegExp(`^${name}$`) }) })
