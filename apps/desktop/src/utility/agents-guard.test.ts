@@ -315,11 +315,29 @@ describe('a destination BMN cannot tell (60.8 AC1, AC3)', () => {
       writeFileSync(record, text)
       for (const argv of [['codex', 'resume', id], ['codex']]) {
         expect(prompt('codex', session(argv), { session_id: id }), `${JSON.stringify(text)} ${argv.join(' ')}`).toMatchObject(unknown)
-        expect(prompt('codex', session(argv), { transcript_path: record }).line).toBe(line('the saved record of this session cannot be read'))
+        expect(prompt('codex', session(argv), { session_id: id, transcript_path: record }).line).toBe(line('the saved record of this session cannot be read'))
       }
     }
     writeFileSync(record, meta({ model_provider: 'openai' }))
     expect(prompt('codex', session(['codex']), { session_id: missing, transcript_path: record }).line).toBe(line('the saved record the app names belongs to another session'))
+    // A good record the app names, and no word from the app on which session this is: nothing ties the record to it.
+    for (const said of [undefined, null, '', 7, {}, [id]]) {
+      for (const argv of [['codex'], ['codex', 'resume', id]]) {
+        const verdict = prompt('codex', session(argv), { session_id: said, transcript_path: record })
+        expect(verdict, `${JSON.stringify(said)} ${argv.join(' ')}`).toMatchObject(unknown)
+        expect(verdict.line).toBe(line('the app did not say which session this prompt belongs to'))
+      }
+    }
+    // A record that does not say which session it is ties nothing either, named or found by its file name.
+    for (const own of [undefined, null, '', 7]) {
+      writeFileSync(record, meta({ model_provider: 'openai', id: own }))
+      for (const event of [{ session_id: id }, { session_id: id, transcript_path: record }]) {
+        const verdict = prompt('codex', session(['codex']), event)
+        expect(verdict, JSON.stringify(own)).toMatchObject(unknown)
+        expect(verdict.line).toBe(line('the saved record of this session does not say which session it is'))
+      }
+    }
+    writeFileSync(record, meta({ model_provider: 'openai' }))
     // Two records under one id are not one session's.
     writeFileSync(join(folder, `rollout-2026-10-10T12-00-00-${id}.jsonl`), meta({ model_provider: 'openai' }))
     expect(prompt('codex', session(['codex', 'resume', id]), { session_id: id }).line).toBe(line("more than one saved record carries this session's id"))

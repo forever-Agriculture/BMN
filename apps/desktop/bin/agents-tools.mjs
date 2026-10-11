@@ -1,10 +1,10 @@
 // MODULE: agents-tools.mjs - Story 60.12: one list of MCP tools for every agent app: each app's own settings entry, one state per app and tool, install and undo as one transaction, import of what the apps already hold, and the tools of one agent's run
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname } from 'node:path'
-import { APP_NAMES, HARNESSES, RosterError, TOOL_PATTERN, agentsDirectory, canonicalJson, harnessPrivateWork, sha256 } from './agents-roster.mjs'
+import { dirname, isAbsolute } from 'node:path'
+import { APP_NAMES, HARNESSES, RosterError, TOOL_PATTERN, agentsDirectory, canonicalJson, harnessPrivateWork, publicOnlyReasons, sha256 } from './agents-roster.mjs'
 import { approvedIfAny } from './agents-state.mjs'
 import { ToolFileError, editJsonEntry, editTomlEntry, readJsonEntries, readTomlEntries, renderTomlEntry } from './agents-tool-files.mjs'
 import { ConfigWriteError, pathState, replaceFileSafely } from './safe-config-write.mjs'
@@ -119,10 +119,11 @@ export function lastToolsTest(harness, tests = toolsTests()) {
  * such a tool stays blocked).
  *
  * `isolation` is a run kept to the tools its command names. Only an actual run counts
- * (`isolation_basis: 'run'`), and only one whose record says which places it saw shut out
- * (`isolation_covers`, the app's settings among them): a listing, or a record from before that
- * was written down, grants nothing. `empty` is the same for a run that names no tools; `covers`
- * are the places seen shut out.
+ * (`isolation_basis: 'run'`), only one judged by both signs BMN goes by (`isolation_signs`: the
+ * run's own start line and the tools' own note of being started), and only one whose record says
+ * which places it saw shut out (`isolation_covers`, the app's settings among them): a listing, or
+ * a record from before any of that was written down, grants nothing. `empty` is the same for a
+ * run that names no tools; `covers` are the places seen shut out.
  */
 export function appTools(harness, { version, tests = toolsTests() }) {
   const base = { harness, version: version ?? null, supported: false, variable: false, argument: false, header: false, isolation: false, empty: false, covers: [], own_command: null }
@@ -133,7 +134,8 @@ export function appTools(harness, { version, tests = toolsTests() }) {
   if (last === null) return { ...base, reason: `no test has run on ${APP_NAMES[harness]} ${version}` }
   if (last.outcome !== 'pass') return { ...base, reason: `the test on ${APP_NAMES[harness]} ${version} did not pass: ${last.detail ?? last.outcome}` }
   const covers = Array.isArray(last.isolation_covers) ? last.isolation_covers.filter((entry) => typeof entry === 'string') : []
-  const isolation = harness === 'claude' && last.isolation === 'pass' && last.isolation_basis === 'run' && covers.includes('settings')
+  const signs = Array.isArray(last.isolation_signs) ? last.isolation_signs : []
+  const isolation = RUN_TEST_APPS.includes(harness) && last.isolation === 'pass' && last.isolation_basis === 'run' && RUN_SIGNS.every((sign) => signs.includes(sign)) && covers.includes('settings')
   return {
     ...base, supported: true, variable: last.variable === 'pass', argument: last.argument === 'pass', header: last.header === 'pass',
     isolation, empty: isolation && last.isolation_empty === 'pass', covers: isolation ? covers : [], own_command: last.own_command ?? null
@@ -905,11 +907,13 @@ export function agentTools(data, agentId) {
 /**
  * Every tool a run of this agent may carry, the one set that the role answer, the check and the
  * receipt share: the tools for all apps or for its app, and the tools kept to this agent. Where
- * the agent's provider, or its app's destination, gets public work only, only the Public ones.
+ * the run's own destination gets public work only, only the Public ones. That destination is the
+ * agent's: its provider at its approved host, which the check holds every run of it to. The
+ * app's default destination decides only for an agent that uses it (`host: default`); what an
+ * app's settings may hold is another question (`checkTools`).
  */
 export function runTools(data, agent) {
-  const provider = (data?.providers ?? []).find((entry) => entry.id === agent.provider)
-  const full = provider?.private_work === 'allowed' && harnessPrivateWork(data, agent.harness).allowed
+  const full = data !== null && data !== undefined && publicOnlyReasons(agent, data).length === 0
   return (data?.tools ?? []).filter((tool) => {
     if (!full && tool.public !== true) return false
     if (tool.agents !== undefined) return tool.agents.includes(agent.id)
@@ -923,6 +927,8 @@ export function runTools(data, agent) {
  * its tools, whatever a record says.
  */
 export const RUN_TEST_APPS = ['claude']
+/** The two signs a run test goes by; a record that lacks either was judged by less and grants nothing. */
+export const RUN_SIGNS = ['start-line', 'tool-start']
 const noRunTest = (app) => `BMN has no test yet that shows which tools a run of ${app} starts with, so it cannot keep one to its own tools`
 
 /** The app's entries for a run's tools, or the first tool the app cannot take. */
@@ -982,6 +988,16 @@ function present(path) {
   }
 }
 
+/** A folder as it is named and as it really is, where the two differ: the check reads a run's settings under both. */
+function spellings(folder) {
+  try {
+    const real = realpathSync(folder)
+    return real === folder ? [folder] : [folder, real]
+  } catch {
+    return [folder]
+  }
+}
+
 /** A folder and every folder above it, nearest first. */
 function foldersUp(folder) {
   const found = []
@@ -992,49 +1008,95 @@ function foldersUp(folder) {
 }
 
 /**
+ * What one settings text says of plug-ins, in words, or null when it switches none on. Claude Code
+ * keeps them as a map of name to on or off; only one that is on can bring a tool. A text BMN
+ * cannot read, and a map it cannot read as on or off, are named: neither is taken as "none".
+ */
+function pluginsIn(text) {
+  let data
+  try {
+    data = JSON.parse(text)
+  } catch {
+    return 'cannot be read'
+  }
+  if (!isMap(data)) return 'cannot be read'
+  const plugins = data.enabledPlugins
+  if (plugins === undefined) return null
+  if (!isMap(plugins) || Object.values(plugins).some((value) => typeof value !== 'boolean')) return 'plug-ins BMN cannot read as on or off'
+  return Object.values(plugins).some((value) => value) ? 'plug-ins switched on' : null
+}
+
+/**
  * The places a run could take tools from that the owner's test did not see shut out, in words.
  * The test covers what it could stage in its own home folder (`covers`): the app's settings, its
  * settings for the run's folder (`local`) and the folder's own `.mcp.json` (`folder`), each only
  * when the test saw a tool from there active and then left out. It cannot stage a plug-in, a
  * policy file an organisation manages or a `.mcp.json` in a folder above, so where one of those
- * is present the run is not something BMN has seen kept to its tools. This looks only at whether
- * such a place holds anything, never at what a tool there is. Only Claude Code has a run test.
+ * is present the run is not something BMN has seen kept to its tools. Plug-ins are looked for in
+ * every settings source the check reads for a run: the app's own file, the files of the run's
+ * folder and the folders above (under the folder's name and, where it is a link, under where it
+ * really is), and the command's own `--settings` (`settings`: the text, or the path of a file). A plug-in that is switched off brings nothing and refuses nothing. Of a policy
+ * folder only whether it holds anything is looked at, never what. Only Claude Code has a run test.
  */
-export function uncoveredSources(harness, { environment = process.env, cwd = null, covers = [], policyRoot = CLAUDE_POLICY_ROOT } = {}) {
+export function uncoveredSources(harness, { environment = process.env, cwd = null, covers = [], policyRoot = CLAUDE_POLICY_ROOT, settings } = {}) {
   if (harness !== 'claude') return [`the places ${APP_NAMES[harness] ?? harness} takes tools from besides its settings`]
   const found = []
-  const folders = cwd === null ? [] : foldersUp(cwd)
+  // The run's folder under each of its spellings, each with the folders above it.
+  const chains = cwd === null ? [] : spellings(cwd).map(foldersUp)
+  const folders = [...new Set(chains.flat())]
   if (cwd === null) found.push('the folder of this run (unknown)')
-  if (cwd !== null && !covers.includes('local')) {
-    const local = readAppTools('claude', environment, { at: ['projects', cwd, 'mcpServers'] })
-    if (!local.readable) found.push(`Claude Code's settings for this folder (${local.detail})`)
-    else if (local.entries.size > 0) found.push("tools in Claude Code's settings for this folder")
-  }
-  for (const [index, folder] of folders.entries()) {
-    if (!present(`${folder}/.mcp.json`)) continue
-    if (index > 0 || !covers.includes('folder')) found.push(`${folder}/.mcp.json`)
-  }
-  const settings = new Set([`${environment.CLAUDE_CONFIG_DIR || `${home(environment)}/.claude`}/settings.json`, ...folders.flatMap((folder) => [`${folder}/.claude/settings.json`, `${folder}/.claude/settings.local.json`])])
-  for (const file of settings) {
-    let text
-    try {
-      text = readFileSync(file, 'utf8')
-    } catch (error) {
-      if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') continue
-      found.push(`${file} (cannot be read)`)
-      continue
+  if (!covers.includes('local')) {
+    for (const [index, chain] of chains.entries()) {
+      const local = readAppTools('claude', environment, { at: ['projects', chain[0], 'mcpServers'] })
+      if (!local.readable) {
+        if (index === 0) found.push(`Claude Code's settings for this folder (${local.detail})`)
+      } else if (local.entries.size > 0) found.push("tools in Claude Code's settings for this folder")
     }
+  }
+  for (const chain of chains) {
+    for (const [index, folder] of chain.entries()) {
+      if (!present(`${folder}/.mcp.json`)) continue
+      if (index > 0 || !covers.includes('folder')) found.push(`${folder}/.mcp.json`)
+    }
+  }
+  const plugins = (name, text) => {
+    const said = pluginsIn(text)
+    if (said !== null) found.push(said === 'cannot be read' ? `${name} (cannot be read)` : `${said} in ${name}`)
+  }
+  const files = new Set([`${environment.CLAUDE_CONFIG_DIR || `${home(environment)}/.claude`}/settings.json`, ...folders.flatMap((folder) => [`${folder}/.claude/settings.json`, `${folder}/.claude/settings.local.json`])])
+  for (const file of files) {
     try {
-      const plugins = JSON.parse(text)?.enabledPlugins
-      if (plugins !== undefined && plugins !== null && (typeof plugins !== 'object' || Object.keys(plugins).length > 0)) found.push(`plug-ins switched on in ${file}`)
-    } catch {
-      found.push(`${file} (cannot be read)`)
+      plugins(file, readFileSync(file, 'utf8'))
+    } catch (error) {
+      if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') found.push(`${file} (cannot be read)`)
+    }
+  }
+  if (settings !== undefined) {
+    const own = "the command's own --settings"
+    if (typeof settings !== 'string') found.push(`${own} (cannot be read)`)
+    else if (settings.trimStart().startsWith('{')) plugins(own, settings)
+    else if (!isAbsolute(settings) && cwd === null) found.push(`${own} (cannot be read)`)
+    else {
+      // A file that is not there is not an empty one: what the app would do with it is not BMN's to guess.
+      try {
+        plugins(own, readFileSync(isAbsolute(settings) ? settings : `${cwd}/${settings}`, 'utf8'))
+      } catch {
+        found.push(`${own} (cannot be read)`)
+      }
     }
   }
   for (const name of ['managed-mcp.json', 'managed-settings.json']) {
     if (present(`${policyRoot}/${name}`)) found.push(`${policyRoot}/${name}`)
   }
-  return found
+  const more = `${policyRoot}/managed-settings.d`
+  if (present(more)) {
+    try {
+      if (readdirSync(more).length > 0) found.push(more)
+    } catch {
+      found.push(`${more} (cannot be read)`)
+    }
+  }
+  return [...new Set(found)]
 }
 
 /**
@@ -1045,7 +1107,8 @@ export function uncoveredSources(harness, { environment = process.env, cwd = nul
  * a run do that, and name exactly the tools its agent may have (`runTools`), each as approved; a
  * packet run names none. BMN does not read what the app's own settings hold to decide this: the
  * run is shut off from them, or it is refused. A resume, a Codex profile and a place the test
- * did not cover (`uncoveredSources`) are refused, since nothing BMN saw says they keep to it;
+ * did not cover (`uncoveredSources`, the command's own `--settings` among them) are refused,
+ * since nothing BMN saw says they keep to it;
  * so is every run of an app BMN has no run test for, which today is every app but Claude Code.
  * `environment` and `cwd` are the run's own. Returns `{ applied, hash, note }` or
  * `{ refusal: { code, message } }`.
@@ -1061,7 +1124,7 @@ export function checkRunTools(agent, data, parsed, proven, { packet = false, pro
   if (profile || parsed.profile !== undefined) return refuse('ROUTE_UNSUPPORTED', `a ${app} profile may add tools of its own, and BMN has not seen a run with a profile kept to its tools`)
   if (!proven.isolation) return refuse('ROUTE_UNSUPPORTED', `no test on this ${app} version showed a run kept to the tools its command names (bmn tools test ${parsed.harness})`)
   if (wanted.length === 0 && !proven.empty) return refuse('ROUTE_UNSUPPORTED', `no test on this ${app} version showed a run kept to no tools at all (bmn tools test ${parsed.harness})`)
-  const uncovered = uncoveredSources(parsed.harness, { environment, cwd, covers: proven.covers ?? [], policyRoot })
+  const uncovered = uncoveredSources(parsed.harness, { environment, cwd, covers: proven.covers ?? [], policyRoot, settings: parsed.settings })
   if (uncovered.length > 0) return refuse('ROUTE_UNSUPPORTED', `the test on this ${app} version did not cover every place this run could take tools from: ${uncovered.join('; ')}`)
   const given = claudeArgvTools(parsed)
   if (given === null || (given.unresolved === undefined && (!given.reset || given.listed === false))) {
@@ -1091,21 +1154,98 @@ export function checkRunTools(agent, data, parsed, proven, { packet = false, pro
 
 function run(command, argv, { cwd, env, input = '', timeoutMs }) {
   const result = spawnSync(command, argv, { cwd, env, input, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 })
-  return { finished: !result.error && result.status !== null, ok: !result.error && result.status === 0, text: `${result.stdout ?? ''}\n${result.stderr ?? ''}` }
+  return { finished: !result.error && result.status !== null, ok: !result.error && result.status === 0, stdout: result.stdout ?? '', text: `${result.stdout ?? ''}\n${result.stderr ?? ''}` }
 }
 
-/** The tools a Claude Code run says it started with, from its start-up line, or null when it printed none. */
-function startedWith(text) {
+/**
+ * The stand-in tool the owner's test places. It notes that it was started, under which name and
+ * with what it was given; it answers the few questions an app asks a tool it starts, offers no
+ * tools and speaks to no one else. Its own note does not depend on how an app words its report.
+ */
+const STAND_IN = `const fs = require('node:fs')
+const [log, id, given] = process.argv.slice(2)
+fs.appendFileSync(log, JSON.stringify({ id: id ?? null, env: process.env.BMN_TOOL_TEST_GIVEN ?? null, arg: given ?? null }) + '\\n')
+let buffer = ''
+process.stdin.on('data', (chunk) => {
+  buffer += chunk
+  let end
+  while ((end = buffer.indexOf('\\n')) >= 0) {
+    const line = buffer.slice(0, end)
+    buffer = buffer.slice(end + 1)
+    let message
+    try { message = JSON.parse(line) } catch { continue }
+    if (message === null || typeof message !== 'object' || message.id === undefined) continue
+    const reply = (body) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, ...body }) + '\\n')
+    if (message.method === 'initialize') reply({ result: { protocolVersion: message.params?.protocolVersion ?? '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'bmn-test', version: '0.0.1' } } })
+    else if (message.method === 'tools/list') reply({ result: { tools: [] } })
+    else if (message.method === 'ping') reply({ result: {} })
+    else reply({ error: { code: -32601, message: 'no such method' } })
+  }
+})
+`
+
+const shellWord = (text) => `'${text.replaceAll("'", "'\\''")}'`
+
+/** What the stand-ins noted since their note was last emptied; a line that does not read is no note. */
+function standInNotes(log) {
+  let text
+  try {
+    text = readFileSync(log, 'utf8')
+  } catch {
+    return []
+  }
+  const notes = []
   for (const line of text.split('\n')) {
-    if (!line.startsWith('{')) continue
     try {
-      const event = JSON.parse(line)
-      if (event?.type === 'system' && event.subtype === 'init' && Array.isArray(event.mcp_servers)) return new Set(event.mcp_servers.map((server) => server?.name))
+      const note = JSON.parse(line)
+      if (isMap(note)) notes.push(note)
     } catch {
-      // Not a line of the run's own events.
+      // A torn line is no note.
     }
   }
-  return null
+  return notes
+}
+
+/**
+ * What one run of Claude Code showed of its tools, by two signs. `named` is every tool the run's
+ * start line names and `connected` those it reports as connected; `started` is the stand-ins
+ * that noted their own start. `ended` is true only for a run that came to its own end: the app
+ * finished by itself, every line of its report reads, it printed exactly one start line that says
+ * of each tool whether it connected, and it reported its end once after that. A run cut short by
+ * the time limit, or whose report is cut off, has not ended: what it shows of a tool left out
+ * counts for nothing.
+ */
+export function claudeRunSeen(result, notes) {
+  const seen = { ended: false, line: false, named: new Set(), connected: new Set(), started: new Set(notes.map((note) => note.id).filter((id) => typeof id === 'string')) }
+  let whole = result.finished === true
+  let ends = 0
+  for (const line of result.stdout.split('\n')) {
+    if (!line.trimStart().startsWith('{')) continue
+    let event
+    try {
+      event = JSON.parse(line)
+    } catch {
+      whole = false
+      continue
+    }
+    if (event?.type === 'system' && event.subtype === 'init') {
+      const servers = event.mcp_servers
+      const reads = Array.isArray(servers) && servers.every((server) => isMap(server) && typeof server.name === 'string' && typeof server.status === 'string')
+      // A name counts against the run even on a line that does not say what became of it.
+      for (const server of Array.isArray(servers) ? servers : []) if (typeof server?.name === 'string') seen.named.add(server.name)
+      if (seen.line || !reads) {
+        whole = false
+        continue
+      }
+      seen.line = true
+      for (const server of servers) if (server.status === 'connected') seen.connected.add(server.name)
+    } else if (event?.type === 'result') {
+      if (seen.line) ends += 1
+      else whole = false
+    }
+  }
+  seen.ended = whole && seen.line && ends === 1
+  return seen
 }
 
 /**
@@ -1116,12 +1256,17 @@ function startedWith(text) {
  * started with the value of the variable its entry names, as an environment entry and as an
  * argument; and whether the app's own add and remove commands change the same file.
  *
- * Whether a run can be kept to its own tools is taken only from a run. For Claude Code that is
- * the line a run prints once it has started its tools: one run with nothing shut out, which must
- * show the stand-ins from the settings (and, where Claude Code takes them up, from its settings
- * for the folder and the folder's `.mcp.json`); one told to take only its own, which must show
- * that one alone; one told to take none, which must show none. BMN knows no such line for a
- * Codex run, so a Codex run is never recorded as kept to its tools.
+ * Whether a run can be kept to its own tools is taken only from a run, and by two signs that
+ * must agree: the line a Claude Code run prints once it has started its tools, which says of each
+ * whether it connected, and each stand-in's own note that it was started. A place counts only
+ * when a tool from there was seen active (connected, and started by its own note) in a run that
+ * came to its end. Three runs: one with nothing shut out, which must show the stand-ins from the
+ * settings (and, where Claude Code takes them up, from its settings for the folder and the
+ * folder's `.mcp.json`); one told to take only its own, which must name and start that one
+ * alone; one told to take none, which must name and start none. A run that did not end, or a
+ * tool the app named and did not start, shows nothing. A Codex run says nothing of its tools,
+ * and Codex takes tools from places BMN cannot stage, so Codex is never recorded as keeping a
+ * run to its tools.
  *
  * The home folder holds no sign-in, so no prompt gets an answer; BMN does not watch what the app
  * itself sends when it starts. An app that needs a sign-in to answer is recorded as inconclusive.
@@ -1143,15 +1288,17 @@ export async function testTools(harness, { environment = process.env, now = new 
     const id = `bmn-test-${tag}`
     const nonce = randomBytes(12).toString('hex')
     const program = `${folder}/tool.sh`
-    // The stand-in tool notes that it was started and what it was given, then ends; it speaks to no one.
-    writeFileSync(program, `#!/bin/sh\nprintf '%s\\n' "started env=$BMN_TOOL_TEST_GIVEN arg=$1" >> '${folder}/started'\nexit 0\n`)
+    const log = `${folder}/started`
+    // The stand-in runs on the program BMN itself runs on, whichever that is.
+    writeFileSync(`${folder}/tool.cjs`, STAND_IN)
+    writeFileSync(program, `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec ${shellWord(process.execPath)} ${shellWord(`${folder}/tool.cjs`)} ${shellWord(log)} "$@"\n`)
     chmodSync(program, 0o755)
     const testEnvironment = Object.fromEntries(Object.entries(environment).filter(([key]) => !/^(XDG_|CLAUDE_|CODEX_|OPENCODE_|CURSOR_|ANTHROPIC_|OPENAI_)/.test(key)))
     testEnvironment.HOME = testHome
     // Codex passes a variable only under its own name, and never as an argument; the other apps are asked for both.
     const from = harness === 'codex' ? 'BMN_TOOL_TEST_GIVEN' : 'BMN_TOOL_TEST_VALUE'
     testEnvironment[from] = nonce
-    const tool = { id, name: 'BMN test', command: program, ...(harness === 'codex' ? {} : { args: [{ env: from }] }), env: { BMN_TOOL_TEST_GIVEN: from } }
+    const tool = { id, name: 'BMN test', command: program, args: harness === 'codex' ? [id] : [id, { env: from }], env: { BMN_TOOL_TEST_GIVEN: from } }
     const path = spec.file(testEnvironment)
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, edited(harness, '', id, renderTool(tool, harness, { variable: true, argument: true }).entry))
@@ -1162,11 +1309,11 @@ export async function testTools(harness, { environment = process.env, now = new 
       { source: 'folder', id: `bmn-folder-${tag}`, words: "the folder's .mcp.json" }
     ]
     if (harness === 'claude') {
-      const standIn = { type: 'stdio', command: program, args: [] }
+      const standIn = (name) => ({ type: 'stdio', command: program, args: [name] })
       const settings = JSON.parse(readFileSync(path, 'utf8'))
-      settings.projects = { [work]: { mcpServers: { [elsewhere[0].id]: standIn } } }
+      settings.projects = { [work]: { mcpServers: { [elsewhere[0].id]: standIn(elsewhere[0].id) } } }
       writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`)
-      writeFileSync(`${work}/.mcp.json`, `${JSON.stringify({ mcpServers: { [elsewhere[1].id]: standIn } }, null, 2)}\n`)
+      writeFileSync(`${work}/.mcp.json`, `${JSON.stringify({ mcpServers: { [elsewhere[1].id]: standIn(elsewhere[1].id) } }, null, 2)}\n`)
     }
     const listed = run(spec.command, spec.list, { cwd: work, env: testEnvironment, timeoutMs })
     if (!listed.text.includes(id)) {
@@ -1175,42 +1322,48 @@ export async function testTools(harness, { environment = process.env, now = new 
       return done('fail', `${APP_NAMES[harness]} did not name a tool written to ${path.replace(testHome, '~')}, so it reads its tools somewhere BMN does not know`)
     }
     if (!listed.ok) return done('inconclusive', `${spec.command} named the tool but ended with an error, so its answer proves nothing`)
-    let started = ''
-    try {
-      started = readFileSync(`${folder}/started`, 'utf8')
-    } catch {
-      // The app listed the tool without starting it.
-    }
     // Seen for certain when the stand-in was started with the value; an app that lists a tool without
     // starting it shows only that this version reads the entry's variable name, which its listing repeats.
-    const basis = started.includes(`env=${nonce}`) ? 'started' : listed.text.includes(from) ? 'listed' : null
+    const listing = standInNotes(log)
+    const basis = listing.some((note) => note.env === nonce) ? 'started' : listed.text.includes(from) ? 'listed' : null
     const variable = basis === null ? 'unproven' : 'pass'
-    const argument = started.includes(`arg=${nonce}`) ? 'pass' : 'unproven'
-    // A run kept to its own tools (60.12 AC5). Only a run counts, read from the line it prints once it has
-    // started its tools (a run without a sign-in ends with an error after that line, which is expected); an
-    // app's listing is not a run. First a run that is NOT told to keep to its own: a place counts only when a
-    // tool from there was seen in that run, or leaving it out later would show nothing. Then the same run told
-    // to keep to its own, and one told to take none. BMN knows no such line for a Codex run, so Codex has no
-    // run test and stays unproven.
+    const argument = listing.some((note) => note.arg === nonce) ? 'pass' : 'unproven'
+    // A run kept to its own tools (60.12 AC5). Only a run counts, and only one that came to its end (a run
+    // without a sign-in ends with an error after it has started its tools, which is expected); an app's
+    // listing is not a run. First a run that is NOT told to keep to its own: a place counts only when a tool
+    // from there was active in that run, or leaving it out later would show nothing. Then the same run told to
+    // keep to its own, and one told to take none. A tool counts as active when the run's start line reports it
+    // connected AND its own note says it was started; as left out when neither sign shows it.
     let isolation = 'unproven'
     let isolationEmpty = 'unproven'
     let covers = []
+    let unseen = 'BMN could not see a run start first with the tools in its settings and then without them'
     const own = `bmn-run-${tag}`
-    const runTest = harness === 'claude'
+    const runTest = RUN_TEST_APPS.includes(harness)
     if (runTest) {
-      const ownSet = JSON.stringify({ mcpServers: { [own]: { type: 'stdio', command: program, args: [] } } })
+      const ownSet = JSON.stringify({ mcpServers: { [own]: { type: 'stdio', command: program, args: [own] } } })
       const output = ['--output-format', 'stream-json', '--verbose', '--no-session-persistence']
-      const startOf = (argv) => startedWith(run(spec.command, ['-p', ...argv, ...output], { cwd: work, env: testEnvironment, input: 'Answer with the one word: ready', timeoutMs }).text)
-      const open = startOf(['--mcp-config', ownSet])
-      const kept = startOf(['--strict-mcp-config', '--mcp-config', ownSet])
+      const runOf = (argv) => {
+        writeFileSync(log, '')
+        const result = run(spec.command, ['-p', ...argv, ...output], { cwd: work, env: testEnvironment, input: 'Answer with the one word: ready', timeoutMs })
+        return claudeRunSeen(result, standInNotes(log))
+      }
+      const active = (seen, name) => seen.connected.has(name) && seen.started.has(name)
+      const leaked = (seen, allowed) => [...seen.named, ...seen.started].some((name) => !allowed.includes(name))
+      // Each next run is made only when the one before showed what it had to: a run that did not end is not repeated.
+      const open = runOf(['--mcp-config', ownSet])
       const places = [{ source: 'settings', id, words: 'its settings' }, ...elsewhere]
-      const active = open === null || !open.has(own) ? [] : places.filter((place) => open.has(place.id))
-      if (kept !== null && kept.has(own) && active.some((place) => place.source === 'settings')) {
-        isolation = active.some((place) => kept.has(place.id)) || kept.size !== 1 ? 'fail' : 'pass'
-        if (isolation === 'pass') {
-          covers = active
-          const none = startOf(['--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: {} })])
-          isolationEmpty = none === null ? 'unproven' : none.size === 0 ? 'pass' : 'fail'
+      const seenActive = open.ended && active(open, own) ? places.filter((place) => active(open, place.id)) : []
+      if (!open.ended) unseen = 'a run with nothing shut out did not come to its end, so what it showed counts for nothing'
+      else if (seenActive.some((place) => place.source === 'settings')) {
+        const kept = runOf(['--strict-mcp-config', '--mcp-config', ownSet])
+        if (leaked(kept, [own])) isolation = 'fail'
+        else if (!kept.ended || !active(kept, own)) unseen = 'a run told to take only its own tools did not come to its end with that tool started, so what it showed counts for nothing'
+        else {
+          isolation = 'pass'
+          covers = seenActive
+          const none = runOf(['--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: {} })])
+          isolationEmpty = leaked(none, []) ? 'fail' : none.ended ? 'pass' : 'unproven'
         }
       }
     }
@@ -1231,12 +1384,12 @@ export async function testTools(harness, { environment = process.env, now = new 
       !runTest ? `BMN has no test yet that shows which tools a run of ${APP_NAMES[harness]} starts with, so a run cannot be kept to its own tools`
         : isolation === 'pass' ? `a run told to take only its own tools started with those alone, without the ones in ${covers.map((place) => place.words).join(', ')}`
           : isolation === 'fail' ? 'a run told to take only its own tools still started with one from elsewhere'
-            : 'BMN could not see a run start first with the tools in its settings and then without them',
-      ...(isolation !== 'pass' ? [] : [isolationEmpty === 'pass' ? 'a run told to take none started with none' : isolationEmpty === 'fail' ? 'but a run told to take none still started with one' : 'whether a run told to take none starts with none was not seen'])
+            : unseen,
+      ...(isolation !== 'pass' ? [] : [isolationEmpty === 'pass' ? 'a run told to take none started with none' : isolationEmpty === 'fail' ? 'but a run told to take none still started with one' : 'whether a run told to take none starts with none was not seen (that run did not come to its end)'])
     ]
     return done('pass', words.join('; '), {
       file: path.replace(testHome, '~'), variable, ...(basis === null ? {} : { variable_basis: basis }), argument, isolation,
-      ...(runTest ? { isolation_basis: 'run', isolation_covers: covers.map((place) => place.source), isolation_empty: isolationEmpty } : {}), own_command: ownCommand
+      ...(runTest ? { isolation_basis: 'run', isolation_signs: RUN_SIGNS, isolation_covers: covers.map((place) => place.source), isolation_empty: isolationEmpty } : {}), own_command: ownCommand
     })
   } finally {
     rmSync(folder, { recursive: true, force: true })

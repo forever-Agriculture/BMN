@@ -150,11 +150,16 @@ function canonicalFolder(path) {
  * read may be a new one or one that continues a saved one, and BMN cannot tell which from what it
  * sees, so it does not guess: the session may be sending work where it was saved to send it.
  *
- * A record the app names is the only one looked at, and only when it really lies under Codex's
- * own sessions folder (links followed); a path anywhere else is never opened. Without a named
- * record the one that carries the session's id is taken. Of a record only its first line is read.
+ * The app must say which session the prompt belongs to, and the record must carry that same id:
+ * a record the app names without an id, or a record that carries none, ties nothing to this
+ * session. A record the app names is the only one looked at, and only when it really lies under
+ * Codex's own sessions folder (links followed); a path anywhere else is never opened. Without a
+ * named record the one that carries the session's id is taken. Of a record only its first line
+ * is read.
  */
 function codexSession(event, codexHome) {
+  const id = event.session_id
+  if (typeof id !== 'string' || id === '') return { unresolved: 'the app did not say which session this prompt belongs to' }
   const named = event.transcript_path
   let file
   if (named !== undefined && named !== null && named !== '') {
@@ -170,14 +175,15 @@ function codexSession(event, codexHome) {
     if (!real.startsWith(`${root}/`)) return { unresolved: "the saved record the app names for this session is outside Codex's own sessions folder" }
     file = real
   } else {
-    const files = sessionRecordFiles(codexHome, event.session_id)
+    const files = sessionRecordFiles(codexHome, id)
     if (files.length === 0) return { unresolved: 'no saved record of this session was found' }
     if (files.length > 1) return { unresolved: 'more than one saved record carries this session\'s id' }
     file = files[0]
   }
   const record = sessionRecordAt(file)
   if (record === null || typeof record.provider !== 'string' || record.provider === '') return { unresolved: 'the saved record of this session cannot be read' }
-  if (typeof event.session_id === 'string' && event.session_id !== '' && record.id !== event.session_id) return { unresolved: 'the saved record the app names belongs to another session' }
+  if (typeof record.id !== 'string' || record.id === '') return { unresolved: 'the saved record of this session does not say which session it is' }
+  if (record.id !== id) return { unresolved: 'the saved record the app names belongs to another session' }
   return { record }
 }
 

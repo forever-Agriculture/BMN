@@ -950,12 +950,13 @@ done`)
     assert.deepEqual(readdirSync(codexSkills), ['small-steps'], 'the test left a test skill behind')
     assert.equal(readdirSync(home).filter((name) => name.startsWith('.bmn-skills-test-')).length, 0, 'the test left its folder behind')
     // The loading test is another test: it sends one prompt, and passes only when Codex's own record shows the skill's
-    // words given to the model before any tool ran. The stand-in answers the way such a run would be recorded.
+    // words given to the model before any tool ran, in a run that came to its end. The stand-in answers the way such a
+    // run would be recorded.
     await skillsApp('Codex').getByText(/ · loading never tested$/).waitFor()
     assert.equal(await main.getByRole('button', { name: 'Skill loading test for Cursor' }).count(), 0, 'a loading test is offered where no prompt may go')
     stub('codex', ['if [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi', '[ "$1" = "exec" ] || exit 4', 'cat > /dev/null',
       'token=$(grep -ho "BMN-[0-9a-f]*" "$HOME"/.agents/skills/bmn-loading-test-*/SKILL.md | head -n 1)', 'mkdir -p "$HOME/.codex/sessions/2026/10/11"',
-      `printf '%s\\n' "{\\"type\\":\\"session_meta\\",\\"payload\\":{\\"id\\":\\"s\\",\\"cwd\\":\\"$4\\"}}" "{\\"type\\":\\"response_item\\",\\"payload\\":{\\"type\\":\\"message\\",\\"role\\":\\"user\\",\\"content\\":[{\\"type\\":\\"input_text\\",\\"text\\":\\"$token\\"}]}}" > "$HOME/.codex/sessions/2026/10/11/rollout-2026-10-11T00-00-00-s.jsonl"`,
+      `printf '%s\\n' "{\\"type\\":\\"session_meta\\",\\"payload\\":{\\"id\\":\\"s\\",\\"cwd\\":\\"$4\\"}}" "{\\"type\\":\\"response_item\\",\\"payload\\":{\\"type\\":\\"message\\",\\"role\\":\\"user\\",\\"content\\":[{\\"type\\":\\"input_text\\",\\"text\\":\\"$token\\"}]}}" "{\\"type\\":\\"response_item\\",\\"payload\\":{\\"type\\":\\"message\\",\\"role\\":\\"assistant\\",\\"content\\":[{\\"type\\":\\"output_text\\",\\"text\\":\\"$token\\"}]}}" "{\\"type\\":\\"event_msg\\",\\"payload\\":{\\"type\\":\\"task_complete\\"}}" > "$HOME/.codex/sessions/2026/10/11/rollout-2026-10-11T00-00-00-s.jsonl"`,
       'exit 0'].join('\n'))
     await main.getByRole('button', { name: 'Skill loading test for Codex' }).click()
     const loadingSheet = skillsApp('Codex').locator('.sheet')

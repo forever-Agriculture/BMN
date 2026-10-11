@@ -878,6 +878,23 @@ export function harnessPrivateWork(data, harness) {
 }
 
 /**
+ * Why an agent could not receive private work in a workspace without an exception (empty when it
+ * could). It is judged by the agent's own destination: its provider, at its approved host. The
+ * app's default destination counts only for an agent that uses it (`host: default`).
+ */
+export function publicOnlyReasons(agent, data) {
+  const reasons = []
+  const provider = data.providers.find((entry) => entry.id === agent.provider)
+  const route = data.harness_routes.find((entry) => entry.harness === agent.harness)
+  if (agent.harness !== 'claude' && agent.harness !== 'codex') reasons.push(`BMN cannot check ${APP_NAMES[agent.harness] ?? agent.harness} dispatches`)
+  if (agent.host === null) reasons.push(`${agent.id}'s host is unknown`)
+  if (agent.host === 'default' && route === undefined) reasons.push(`no approved destination for ${APP_NAMES[agent.harness] ?? agent.harness}`)
+  if (agent.host === 'default' && route?.basis === 'owner-declared') reasons.push(`the ${APP_NAMES[agent.harness] ?? agent.harness} destination is owner-declared`)
+  if (provider?.private_work !== 'allowed') reasons.push(`${provider?.name ?? agent.provider} gets public work only`)
+  return reasons
+}
+
+/**
  * One unabridged team line: never prose, notes, prices, paid_by or exception folders. A context
  * limit is the configured one; whether BMN applied it to a run is on that run's receipt.
  */

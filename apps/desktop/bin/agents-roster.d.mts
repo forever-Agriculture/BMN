@@ -124,6 +124,7 @@ export interface TeamEntry {
 export declare const APP_NAMES: Record<'claude' | 'codex' | 'opencode' | 'cursor', string>
 export declare const UNCHECKED_APPS: Harness[]
 export declare function harnessPrivateWork(data: RosterData | null, harness: string): { allowed: boolean; reason: string; route: RosterRoute | null; provider: RosterProvider | null }
+export declare function publicOnlyReasons(agent: RosterAgent, data: RosterData): string[]
 export declare function teamEntry(data: RosterData, agent: RosterAgent): TeamEntry
 export declare function teamLine(entry: TeamEntry): string
 export declare function team(data: RosterData, all: boolean): TeamEntry[]

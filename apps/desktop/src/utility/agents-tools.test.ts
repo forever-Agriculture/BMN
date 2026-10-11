@@ -10,7 +10,7 @@ import { parseRoster, rewriteRoster, type RosterTool } from '../../bin/agents-ro
 import { listTransactions, restoreTransaction } from '../../bin/agents-rules.mjs'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import {
-  appStateWord, appTools, checkExit, checkRunTools, checkTools, installTools, looksSecret, maskedEntry, neutralOf, pendingCounts, plainArgument, planToolsInstall, proposeTools,
+  appStateWord, appTools, checkExit, checkRunTools, checkTools, claudeRunSeen, installTools, looksSecret, maskedEntry, neutralOf, pendingCounts, plainArgument, planToolsInstall, proposeTools,
   readAppTools, renderTool, runTools, testTools, toolItems, toolsPlanView, toolsTestsPath, transportWords, uncoveredSources, type ToolState, type ToolsTestEntry
 } from '../../bin/agents-tools.mjs'
 import { approveRoster } from '../main/agents-approval'
@@ -64,10 +64,12 @@ function approve(text: string): void {
  * settings file under the home folder it is given (starting each program the way the real app
  * does when `starts` is set), and runs its own add and remove commands. `reads` false makes it an
  * app that keeps its tools somewhere else; `listFails` one whose listing names the tools and ends
- * with an error. A run (`-p`) prints the line a real run prints once it has started its tools:
- * its own, and, unless told to take only those, the ones in its settings; with `folders` also the
- * ones in its settings for the folder and in the folder's `.mcp.json`. `leaky` is an app whose
- * run keeps the settings' tools whatever it is told, `leakyFolder` one that keeps the folder's.
+ * with an error. A run (`-p`) starts its tools the way a real run does, asks each the first
+ * question an app asks a tool, and prints the line a real run prints then, which says of each
+ * whether it connected, and after it the line a run without a sign-in ends with: its own tools,
+ * and, unless told to take only those, the ones in its settings; with `folders` also the ones in
+ * its settings for the folder and in the folder's `.mcp.json`. `leaky` is an app whose run keeps
+ * the settings' tools whatever it is told, `leakyFolder` one that keeps the folder's.
  */
 function app(name: string, version: string, { reads = true, starts = false, leaky = false, signIn = false, folders = false, leakyFolder = false, listFails = false } = {}): void {
   const kind = name === 'cursor-agent' ? 'cursor' : name
@@ -105,7 +107,14 @@ if (argv.includes('-p')) {
   const own = JSON.parse(argv[argv.indexOf('--mcp-config') + 1]).mcpServers
   const kept = argv.includes('--strict-mcp-config')
   const seen = { ...(!kept || ${leaky} ? servers : {}), ...(!kept || ${leakyFolder} ? inFolder : {}), ...own }
-  console.log(JSON.stringify({ type: 'system', subtype: 'init', mcp_servers: Object.keys(seen).map((name) => ({ name })) }))
+  const hello = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } }) + '\\n'
+  const start = (entry) => {
+    const given = Object.fromEntries(Object.entries(entry.env || {}).map(([key, value]) => [key, fromEnv(value)]))
+    const answer = cp.spawnSync(entry.command, (entry.args || []).map(fromEnv), { env: { ...process.env, ...given }, input: hello, encoding: 'utf8' })
+    return (answer.stdout || '').includes('"protocolVersion"') ? 'connected' : 'failed'
+  }
+  console.log(JSON.stringify({ type: 'system', subtype: 'init', mcp_servers: Object.entries(seen).map(([name, entry]) => ({ name, status: start(entry) })) }))
+  console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in' }))
   process.exit(1)
 }
 if (sub === -1) process.exit(4)
@@ -146,7 +155,7 @@ process.exit(4)
 }
 
 const passed = (harness: string, version: string, fields: Partial<ToolsTestEntry> = {}): ToolsTestEntry =>
-  ({ harness, kind: 'capability', at: NOW.toISOString(), version, outcome: 'pass', variable: 'pass', argument: 'pass', header: 'pass', isolation: 'pass', isolation_basis: 'run', isolation_covers: ['settings', 'local', 'folder'], isolation_empty: 'pass', own_command: 'pass', detail: 'synthetic', ...fields }) as ToolsTestEntry
+  ({ harness, kind: 'capability', at: NOW.toISOString(), version, outcome: 'pass', variable: 'pass', argument: 'pass', header: 'pass', isolation: 'pass', isolation_basis: 'run', isolation_signs: ['start-line', 'tool-start'], isolation_covers: ['settings', 'local', 'folder'], isolation_empty: 'pass', own_command: 'pass', detail: 'synthetic', ...fields }) as ToolsTestEntry
 
 /** Records a test as the owner's test would. */
 function tested(harness: string, version: string, fields: Partial<ToolsTestEntry> = {}): ToolsTestEntry {
@@ -295,6 +304,10 @@ describe('what the owner\'s test proved for a version (60.12 AC1)', () => {
     delete legacy.isolation_covers
     expect(appTools('claude', { version: CLAUDE, tests: [legacy as unknown as ToolsTestEntry] })).toMatchObject({ isolation: false })
     expect(appTools('claude', { version: CLAUDE, tests: [{ ...run, isolation_covers: ['folder'] }] })).toMatchObject({ isolation: false })
+    // Nor is a record judged by the run's start line alone, as it was before the tools noted their own start.
+    for (const signs of [undefined, [], ['start-line'], ['tool-start'], 'start-line,tool-start']) {
+      expect(appTools('claude', { version: CLAUDE, tests: [{ ...run, isolation_signs: signs } as unknown as ToolsTestEntry] }), JSON.stringify(signs)).toMatchObject({ supported: true, isolation: false, empty: false, covers: [] })
+    }
     expect(appTools('claude', { version: CLAUDE, tests: [{ ...run, isolation: 'fail' }] })).toMatchObject({ isolation: false, empty: false })
     expect(appTools('claude', { version: CLAUDE, tests: [{ ...run, isolation_empty: 'unproven' }] })).toMatchObject({ isolation: true, empty: false })
     // BMN has no run test for Codex: no record makes a Codex run one that is kept to its tools.
@@ -924,6 +937,33 @@ describe('the tools of one agent\'s run (60.12 AC5)', () => {
     evaluate({ agent: id, role, workspace, data: 'private', cwd: options.cwd ?? workspace, argv } as Inputs,
       { environment: env, cwd: workspace, now: NOW, toolsPolicyRoot: options.policyRoot ?? noPolicy(), ...(log === undefined ? {} : { toolsTestLog: log }) })
 
+  it('decides a run\'s tools by the agent\'s own destination, not by its app\'s default one', () => {
+    // Claude Code's default destination gets public work only; Fable has a destination of its own that may see private work.
+    const mixed = withTools().replace('claude: {provider: anthropic, basis: observed-default}', 'claude: {provider: zai, basis: observed-default}')
+      .replace(/(## fable\n[\s\S]*?\nhost: )default/, '$1api.anthropic.com')
+      .replace(/provider: anthropic\nhost: default/g, 'provider: zai\nhost: default')
+    expect(mixed).not.toBe(withTools())
+    approve(mixed)
+    expect(agent('fable')).toMatchObject({ provider: 'anthropic', host: 'api.anthropic.com' })
+    expect(runTools(data(), agent('fable')).map((tool) => tool.id)).toEqual(['docs', 'files', 'notes', 'review'])
+    expect(itemsOf('fable')).toMatchObject({ state: 'applied', tools: ['docs', 'files', 'notes', 'review'] })
+    expect(setOf('fable').review).toEqual(REVIEW)
+    const own = ['env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, 'ANTHROPIC_BASE_URL=https://api.anthropic.com', 'claude', '-p', '--model', 'fable', '--effort', 'medium']
+    const passedRun = run('fable', 'designer', [...own, ...itemsOf('fable').argv])
+    expect(passedRun.verdict, JSON.stringify(passedRun)).toBe('PASS')
+    expect(passedRun.receipt!.tools!.applied).toEqual(['docs', 'files', 'notes', 'review'])
+    expect(run('fable', 'designer', [...own, ...only({ docs: setOf('fable').docs })])).toMatchObject({ code: 'TOOL_MISMATCH', message: "fable's tools are missing from the command: files, notes, review" })
+    // An agent that uses the app's default destination, which gets public work only, carries the Public ones alone.
+    expect(runTools(data(), agent('opus')).map((tool) => tool.id)).toEqual(['docs'])
+    expect(itemsOf('opus').tools).toEqual(['docs'])
+    // So does one whose own destination is unknown, or whose app's destination only the owner vouches for.
+    expect(runTools(data(), { ...agent('fable'), host: null }).map((tool) => tool.id)).toEqual(['docs'])
+    const declared = { ...data(), harness_routes: data().harness_routes.map((route) => (route.harness === 'claude' ? { ...route, provider: 'anthropic', basis: 'owner-declared' as const } : route)) }
+    expect(runTools(declared, { ...agent('fable'), host: 'default' }).map((tool) => tool.id)).toEqual(['docs'])
+    expect(runTools(declared, agent('fable')).map((tool) => tool.id)).toEqual(['docs', 'files', 'notes', 'review'])
+    expect(runTools(null, agent('fable'))).toEqual([])
+  })
+
   it('passes a run that names exactly its set, and binds the set in the receipt', () => {
     const fable = run('fable', 'designer', FABLE(...itemsOf('fable').argv))
     expect(fable.verdict, JSON.stringify(fable)).toBe('PASS')
@@ -1028,17 +1068,67 @@ describe('the tools of one agent\'s run (60.12 AC5)', () => {
     // Plug-ins and an organisation's policy file: BMN's test cannot stage either, so their presence alone refuses.
     put(join(home, '.claude/settings.json'), JSON.stringify({ enabledPlugins: { 'synthetic@market': true } }))
     expect(run('fable', 'designer', argv())).toMatchObject(refusal(`plug-ins switched on in ${join(home, '.claude/settings.json')}`))
-    put(join(home, '.claude/settings.json'), JSON.stringify({ enabledPlugins: {}, model: 'x' }))
-    expect(run('fable', 'designer', argv()).verdict).toBe('PASS')
+    // A plug-in that is switched off brings nothing, so it refuses nothing; a map BMN cannot read as on or off does.
+    for (const off of [{}, { 'synthetic@market': false }, { 'synthetic@market': false, 'other@market': false }]) {
+      put(join(home, '.claude/settings.json'), JSON.stringify({ enabledPlugins: off, model: 'x' }))
+      expect(run('fable', 'designer', argv()).verdict, JSON.stringify(off)).toBe('PASS')
+    }
+    put(join(home, '.claude/settings.json'), JSON.stringify({ enabledPlugins: { 'off@market': false, 'synthetic@market': true } }))
+    expect(run('fable', 'designer', argv())).toMatchObject(refusal(`plug-ins switched on in ${join(home, '.claude/settings.json')}`))
+    for (const odd of [null, [], ['synthetic@market'], 'synthetic@market', true, { 'synthetic@market': 'yes' }, { 'synthetic@market': 1 }, { 'synthetic@market': ['part'] }, { 'synthetic@market': null }]) {
+      put(join(home, '.claude/settings.json'), JSON.stringify({ enabledPlugins: odd }))
+      expect(run('fable', 'designer', argv()), JSON.stringify(odd)).toMatchObject(refusal(`plug-ins BMN cannot read as on or off in ${join(home, '.claude/settings.json')}`))
+    }
+    put(join(home, '.claude/settings.json'), '[]')
+    expect(run('fable', 'designer', argv())).toMatchObject(refusal(`${join(home, '.claude/settings.json')} (cannot be read)`))
     put(join(home, '.claude/settings.json'), '{ not json')
     expect(run('fable', 'designer', argv())).toMatchObject(refusal(`${join(home, '.claude/settings.json')} (cannot be read)`))
     rmSync(join(home, '.claude/settings.json'))
     put(join(workspace, '.claude/settings.local.json'), JSON.stringify({ enabledPlugins: { 'synthetic@market': true } }))
     expect(run('fable', 'designer', argv())).toMatchObject(refusal(`plug-ins switched on in ${join(workspace, '.claude/settings.local.json')}`))
     rmSync(join(workspace, '.claude'), { recursive: true })
+    // The command's own --settings is one more place the check reads for a run: as text, or as a file.
+    const withSettings = (value: string, options: { cwd?: string } = {}) => run('fable', 'designer', FABLE('--settings', value, ...itemsOf('fable').argv), undefined, options)
+    const OWN = "the command's own --settings"
+    expect(withSettings(JSON.stringify({ enabledPlugins: { 'synthetic@market': true } }))).toMatchObject(refusal(`plug-ins switched on in ${OWN}`))
+    expect(withSettings(`  ${JSON.stringify({ enabledPlugins: { 'synthetic@market': 'yes' } })}`)).toMatchObject(refusal(`plug-ins BMN cannot read as on or off in ${OWN}`))
+    expect(withSettings(JSON.stringify({ enabledPlugins: { 'synthetic@market': false }, model: 'x' })).verdict).toBe('PASS')
+    expect(withSettings('{}').verdict).toBe('PASS')
+    expect(withSettings('{ not json')).toMatchObject({ verdict: 'REFUSED' })
+    put(join(workspace, 'run-settings.json'), JSON.stringify({ enabledPlugins: { 'synthetic@market': true } }))
+    for (const named of [join(workspace, 'run-settings.json'), 'run-settings.json']) expect(withSettings(named), named).toMatchObject(refusal(`plug-ins switched on in ${OWN}`))
+    put(join(workspace, 'run-settings.json'), JSON.stringify({ enabledPlugins: { 'synthetic@market': false } }))
+    expect(withSettings('run-settings.json').verdict).toBe('PASS')
+    rmSync(join(workspace, 'run-settings.json'))
+    expect(uncoveredSources('claude', { environment: env, cwd: workspace, covers: ['settings', 'local', 'folder'], policyRoot: noPolicy(), settings: 'run-settings.json' })).toEqual([`${OWN} (cannot be read)`])
+    expect(uncoveredSources('claude', { environment: env, cwd: workspace, covers: ['settings', 'local', 'folder'], policyRoot: noPolicy(), settings: '{ not json' })).toEqual([`${OWN} (cannot be read)`])
+    // An organisation's policy: a file, or anything in its folder of more files.
     put(join(home, 'policy/managed-mcp.json'), '{}')
     expect(run('fable', 'designer', argv(), undefined, { policyRoot: join(home, 'policy') })).toMatchObject(refusal(join(home, 'policy/managed-mcp.json')))
+    rmSync(join(home, 'policy/managed-mcp.json'))
+    mkdirSync(join(home, 'policy/managed-settings.d'))
+    expect(run('fable', 'designer', argv(), undefined, { policyRoot: join(home, 'policy') }).verdict).toBe('PASS')
+    put(join(home, 'policy/managed-settings.d/10-synthetic.json'), JSON.stringify({ enabledPlugins: { 'synthetic@market': true } }))
+    expect(run('fable', 'designer', argv(), undefined, { policyRoot: join(home, 'policy') })).toMatchObject(refusal(join(home, 'policy/managed-settings.d')))
+    rmSync(join(home, 'policy/managed-settings.d'), { recursive: true })
+    put(join(home, 'policy/managed-settings.d'), 'not a folder')
+    expect(run('fable', 'designer', argv(), undefined, { policyRoot: join(home, 'policy') })).toMatchObject(refusal(`${join(home, 'policy/managed-settings.d')} (cannot be read)`))
     expect(run('fable', 'designer', argv()).verdict).toBe('PASS')
+    // A folder reached through a link is looked at under its name and where it really is: both lines of folders above it count.
+    const real = join(home, 'elsewhere/real')
+    mkdirSync(real, { recursive: true })
+    symlinkSync(real, join(workspace, 'linked'))
+    const cover = { environment: env, covers: ['settings', 'local', 'folder'], policyRoot: noPolicy() }
+    expect(uncoveredSources('claude', { ...cover, cwd: join(workspace, 'linked') })).toEqual([])
+    put(join(home, 'elsewhere/.mcp.json'), JSON.stringify(stray))
+    put(join(home, 'elsewhere/.claude/settings.json'), JSON.stringify({ enabledPlugins: { 'synthetic@market': true } }))
+    expect(uncoveredSources('claude', { ...cover, cwd: join(workspace, 'linked') })).toEqual([join(home, 'elsewhere/.mcp.json'), `plug-ins switched on in ${join(home, 'elsewhere/.claude/settings.json')}`])
+    expect(uncoveredSources('claude', { ...cover, cwd: workspace })).toEqual([])
+    put(claudeFile(), JSON.stringify({ projects: { [real]: stray } }))
+    expect(uncoveredSources('claude', { ...cover, covers: ['settings'], cwd: join(workspace, 'linked') })).toContain("tools in Claude Code's settings for this folder")
+    rmSync(claudeFile())
+    rmSync(join(home, 'elsewhere'), { recursive: true })
+    rmSync(join(workspace, 'linked'))
     // Another app, or a run whose folder is not known, is never covered.
     expect(uncoveredSources('codex', { environment: env, cwd: workspace, covers: ['settings', 'local', 'folder'], policyRoot: noPolicy() })).toEqual(['the places Codex takes tools from besides its settings'])
     expect(uncoveredSources('claude', { environment: env, cwd: null, covers: ['settings', 'local', 'folder'], policyRoot: noPolicy() })).toEqual(['the folder of this run (unknown)'])
@@ -1072,7 +1162,7 @@ describe('the owner\'s test of where an app reads its tools (60.12 AC1)', () => 
     rmSync(toolsTestsPath())
     const result = await testTools('claude', { environment: { ...env, ANTHROPIC_API_KEY: SECRET, CLAUDE_CONFIG_DIR: join(home, 'real-claude'), OWNER_VALUE: 'kept' }, now: NOW })
     expect(result).toMatchObject({ harness: 'claude', kind: 'capability', version: CLAUDE, outcome: 'pass', file: '~/.claude.json', variable: 'pass', variable_basis: 'started', own_command: 'pass', at: NOW.toISOString() })
-    expect(result).toMatchObject({ argument: 'pass', isolation: 'pass', isolation_basis: 'run', isolation_covers: ['settings'], isolation_empty: 'pass' })
+    expect(result).toMatchObject({ argument: 'pass', isolation: 'pass', isolation_basis: 'run', isolation_signs: ['start-line', 'tool-start'], isolation_covers: ['settings'], isolation_empty: 'pass' })
     expect(result.detail).toBe(`${CLAUDE_READS}; a run told to take only its own tools started with those alone, without the ones in its settings; a run told to take none started with none`)
     // Nothing shows a header sent from a variable, or a folder's tools shut out: neither is claimed.
     expect(appTools('claude', { version: CLAUDE })).toMatchObject({ supported: true, variable: true, argument: true, header: false, isolation: true, empty: true, covers: ['settings'] })
@@ -1091,6 +1181,19 @@ describe('the owner\'s test of where an app reads its tools (60.12 AC1)', () => 
     expect(readFileSync(toolsTestsPath(), 'utf8')).not.toContain(SECRET)
   })
 
+  /** The stand-in Claude Code with one piece of its text changed. */
+  const stub = (from: string, to: string, options: Parameters<typeof app>[2] = { starts: true }): void => {
+    app('claude', CLAUDE, options)
+    const text = readFileSync(join(stubs, 'claude'), 'utf8')
+    expect(text).toContain(from)
+    writeFileSync(join(stubs, 'claude'), text.replace(from, to))
+  }
+  const START_LINE = "console.log(JSON.stringify({ type: 'system', subtype: 'init', mcp_servers: Object.entries(seen).map(([name, entry]) => ({ name, status: start(entry) })) }))"
+  const END_LINE = "console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in' }))"
+  const NOT_SEEN = 'BMN could not see a run start first with the tools in its settings and then without them'
+  const OPEN_UNENDED = 'a run with nothing shut out did not come to its end, so what it showed counts for nothing'
+  const KEPT_UNENDED = 'a run told to take only its own tools did not come to its end with that tool started, so what it showed counts for nothing'
+
   it('counts a place as shut out only when the run was first seen with a tool from there', async () => {
     rmSync(toolsTestsPath())
     // An app that also takes tools from its settings for the folder and from the folder's own file.
@@ -1104,24 +1207,86 @@ describe('the owner\'s test of where an app reads its tools (60.12 AC1)', () => 
     expect(appTools('claude', { version: CLAUDE })).toMatchObject({ supported: true, isolation: false, empty: false })
     app('claude', CLAUDE, { starts: true, leaky: true })
     expect(await testTools('claude', { environment: env, now: NOW })).toMatchObject({ isolation: 'fail' })
-    // A run that never showed the settings' tool, shut out or not, shows nothing about shutting it out.
-    const stub = (from: string, to: string): void => {
-      app('claude', CLAUDE, { starts: true })
-      const text = readFileSync(join(stubs, 'claude'), 'utf8')
-      expect(text).toContain(from)
-      writeFileSync(join(stubs, 'claude'), text.replace(from, to))
-    }
-    stub('...(!kept || false ? servers : {})', '...{}')
-    expect(await testTools('claude', { environment: env, now: NOW })).toMatchObject({ outcome: 'pass', isolation: 'unproven', isolation_covers: [], isolation_empty: 'unproven',
-      detail: expect.stringContaining('BMN could not see a run start first with the tools in its settings and then without them') })
-    expect(appTools('claude', { version: CLAUDE })).toMatchObject({ isolation: false })
-    // A run that printed no start-up line shows nothing, even when its words name the tools.
-    stub("console.log(JSON.stringify({ type: 'system', subtype: 'init', mcp_servers: Object.keys(seen).map((name) => ({ name })) }))", "console.log('tools: ' + Object.keys(own).join(', '))")
-    expect(await testTools('claude', { environment: env, now: NOW })).toMatchObject({ outcome: 'pass', isolation: 'unproven' })
+    // One that starts the settings' tool in a run told to keep to its own and does not name it: the tool's own note shows it.
+    stub('const hello = ', 'if (kept && Object.keys(own).length > 0) for (const entry of Object.values(servers)) cp.spawnSync(entry.command, (entry.args || []).map(fromEnv), { input: \'\' })\n  const hello = ')
+    expect(await testTools('claude', { environment: env, now: NOW })).toMatchObject({ isolation: 'fail', isolation_covers: [] })
     // A run told to take none that still starts one: its own tools are kept to, an empty set is not.
     stub('const seen = {', 'const seen = (kept && Object.keys(own).length === 0) ? servers : {')
     expect(await testTools('claude', { environment: env, now: NOW })).toMatchObject({ isolation: 'pass', isolation_empty: 'fail', detail: expect.stringContaining('but a run told to take none still started with one') })
     expect(appTools('claude', { version: CLAUDE })).toMatchObject({ isolation: true, empty: false })
+  })
+
+  it.each([
+    // The settings' tool never shows, shut out or not: leaving it out later shows nothing.
+    ['never takes up the tool in its settings', '...(!kept || false ? servers : {})', '...{}', NOT_SEEN],
+    // The start line names tools that never started, or that started and did not connect: neither was active.
+    ['names its tools as connected without starting one', 'status: start(entry)', "status: 'connected'", NOT_SEEN],
+    ['names tools that failed to start', 'status: start(entry)', "status: 'failed'", NOT_SEEN],
+    ['starts its tools and reports them as failed', 'status: start(entry)', "status: (start(entry), 'failed')", NOT_SEEN],
+    // A report BMN cannot read as a run that came to its end.
+    ['prints no start line, though its words name the tools', START_LINE, "console.log('tools: ' + Object.keys(own).join(', '))", OPEN_UNENDED],
+    ['names its tools without saying what became of each', '({ name, status: start(entry) })', '({ name: (start(entry), name) })', OPEN_UNENDED],
+    ['prints its start line twice', START_LINE, `${START_LINE}; ${START_LINE}`, OPEN_UNENDED],
+    ['never reports its end', END_LINE, '', OPEN_UNENDED],
+    ['is cut off in the middle of reporting its end', END_LINE, 'process.stdout.write(\'{"type":"result","is_err\')', OPEN_UNENDED]
+  ])('grants nothing from a run that %s', async (_name, from, to, why) => {
+    rmSync(toolsTestsPath())
+    stub(from, to)
+    const result = await testTools('claude', { environment: env, now: NOW })
+    expect(result).toMatchObject({ outcome: 'pass', isolation: 'unproven', isolation_covers: [], isolation_empty: 'unproven' })
+    expect(result.detail).toContain(why)
+    expect(appTools('claude', { version: CLAUDE })).toMatchObject({ supported: true, isolation: false, empty: false, covers: [] })
+    // A run that showed nothing is not followed by more of them.
+    expect(calls('claude').filter((call) => call.argv[0] === '-p')).toHaveLength(1)
+  })
+
+  it('grants nothing from a run cut short by the time limit, whatever it had printed by then', async () => {
+    rmSync(toolsTestsPath())
+    stub(END_LINE, 'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000)')
+    const result = await testTools('claude', { environment: env, now: NOW, timeoutMs: 2500 })
+    expect(result).toMatchObject({ outcome: 'pass', isolation: 'unproven', isolation_covers: [], isolation_empty: 'unproven' })
+    expect(result.detail).toContain(OPEN_UNENDED)
+    expect(appTools('claude', { version: CLAUDE })).toMatchObject({ isolation: false, empty: false })
+  }, 30_000)
+
+  it('grants nothing from a kept run whose own tool did not start, and nothing for an empty set from a run that did not end', async () => {
+    rmSync(toolsTestsPath())
+    stub('status: start(entry)', "status: kept ? 'failed' : start(entry)")
+    const kept = await testTools('claude', { environment: env, now: NOW })
+    expect(kept).toMatchObject({ outcome: 'pass', isolation: 'unproven', isolation_covers: [], isolation_empty: 'unproven' })
+    expect(kept.detail).toContain(KEPT_UNENDED)
+    stub(END_LINE, `if (!kept) ${END_LINE}`)
+    expect((await testTools('claude', { environment: env, now: NOW })).detail).toContain(KEPT_UNENDED)
+    // The run told to take none names none and starts none, and never says it ended: its own tools are kept to, an empty set is not shown.
+    stub(END_LINE, `if (!(kept && Object.keys(own).length === 0)) ${END_LINE}`)
+    const none = await testTools('claude', { environment: env, now: NOW })
+    expect(none).toMatchObject({ isolation: 'pass', isolation_covers: ['settings'], isolation_empty: 'unproven' })
+    expect(none.detail).toContain('whether a run told to take none starts with none was not seen (that run did not come to its end)')
+    expect(appTools('claude', { version: CLAUDE })).toMatchObject({ isolation: true, empty: false })
+  })
+
+  it('reads a run by its start line and the tools\' own notes, and takes it as ended only when everything it printed reads', () => {
+    const line = (servers: unknown) => JSON.stringify({ type: 'system', subtype: 'init', mcp_servers: servers })
+    const end = JSON.stringify({ type: 'result', is_error: true, result: 'Not logged in' })
+    const tools = [{ name: 'a', status: 'connected', source: 'user' }, { name: 'b', status: 'failed', source: 'project' }]
+    const seen = claudeRunSeen({ finished: true, stdout: `warning: not signed in\n${line(tools)}\n${JSON.stringify({ type: 'assistant', message: {} })}\n${end}\n` }, [{ id: 'a' }, { id: 'c' }, { id: null }, {}])
+    expect(seen).toEqual({ ended: true, line: true, named: new Set(['a', 'b']), connected: new Set(['a']), started: new Set(['a', 'c']) })
+    expect(claudeRunSeen({ finished: true, stdout: `${line([])}\n${end}\n` }, [])).toEqual({ ended: true, line: true, named: new Set(), connected: new Set(), started: new Set() })
+    const unended: [string, boolean, string][] = [
+      ['the app was stopped', false, `${line(tools)}\n${end}\n`],
+      ['no end', true, `${line(tools)}\n`],
+      ['two ends', true, `${line(tools)}\n${end}\n${end}\n`],
+      ['an end before the start line', true, `${end}\n${line(tools)}\n${end}\n`],
+      ['two start lines', true, `${line(tools)}\n${line([])}\n${end}\n`],
+      ['a torn line', true, `${line(tools)}\n${end}\n{"type":"res`],
+      ['no start line', true, `${end}\n`],
+      ['a tool without a status', true, `${line([{ name: 'a' }])}\n${end}\n`],
+      ['a tool without a name', true, `${line([{ status: 'connected' }])}\n${end}\n`],
+      ['tools that are not a list', true, `${line({ a: 'connected' })}\n${end}\n`]
+    ]
+    for (const [name, finished, stdout] of unended) expect(claudeRunSeen({ finished, stdout }, []).ended, name).toBe(false)
+    // A name on a line BMN cannot read still counts against the run.
+    expect(claudeRunSeen({ finished: true, stdout: `${line([{ name: 'stray' }])}\n${end}\n` }, []).named).toEqual(new Set(['stray']))
   })
 
   it('takes an app\'s own list naming the variable as its way to pass one, and never a list as a run kept to its tools', async () => {

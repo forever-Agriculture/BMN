@@ -894,26 +894,52 @@ export function claudeLoadingVerdict(stdout, token) {
     : ['fail', 'with every tool off, Claude Code was asked for the test skill by name and did not answer with its words']
 }
 
-const CODEX_RECORDS = ['session_meta', 'turn_context', 'response_item', 'event_msg', 'compacted']
+// The kinds of line a Codex session record holds (seen in a record Codex 0.162.0 saved, 2026-10-11).
+// BMN reads a record only when it knows the kind of every line in it.
+const CODEX_RECORDS = ['session_meta', 'turn_context', 'response_item', 'event_msg', 'compacted', 'world_state', 'token_usage_record']
+// An item of a turn that is words and not a tool: what the user said, what the model said, its reasoning.
+const CODEX_WORD_ITEMS = ['usermessage', 'agentmessage', 'reasoning']
 
-/** Whether a line of a Codex session record is a tool being called or answering: any item that is not a message or reasoning, and any event named like one. */
+/**
+ * Whether a line of a Codex session record is a tool being called or answering: any model item
+ * that is not a message or reasoning; an event about a turn's item (`item_started`,
+ * `item_completed`) whose item is anything but words, or does not say what it is; and any other
+ * event named like a tool.
+ */
 function codexToolRecord(entry) {
   const type = entry.payload?.type
   if (entry.type === 'response_item') return type !== 'message' && type !== 'reasoning'
-  if (entry.type === 'event_msg') return typeof type !== 'string' || /call|begin|tool|exec|patch|mcp|search/i.test(type)
-  return false
+  if (entry.type !== 'event_msg') return false
+  if (typeof type !== 'string') return true
+  if (type.startsWith('item_')) {
+    const item = entry.payload.item?.type
+    return typeof item !== 'string' || !CODEX_WORD_ITEMS.includes(item.replaceAll('_', '').toLowerCase())
+  }
+  return /call|begin|tool|exec|patch|mcp|search/i.test(type)
+}
+
+/** The words of a message in a Codex record: its own text parts and nothing else the line carries. */
+function codexMessageText(payload) {
+  if (!Array.isArray(payload?.content)) return ''
+  return payload.content.map((part) => (part !== null && typeof part === 'object' && typeof part.text === 'string' ? part.text : '')).join('\n')
 }
 
 /**
- * What a Codex loading run showed, from the record Codex saved for it. A pass needs the token in a
- * message Codex itself gave the model (a user, developer or system message) before any tool was
- * called. A token that shows up only after a tool ran proves nothing: the model may have read the
- * file. A record BMN cannot read line by line is inconclusive.
+ * What a Codex loading run showed, from the record Codex saved for it. A pass needs the token in
+ * the words of a message Codex itself gave the model (a user, developer or system message), before
+ * any tool was called, in a record that shows the run came to its end. The token anywhere else in
+ * a line (a field beside the message's words, the model's own answer, a tool's output) is not
+ * that. A token that shows up only after a tool ran proves nothing: the model may have read the
+ * file. A fail needs the same finished record with an answer of the model, no tool and no token.
+ * A record BMN cannot read line by line, one that does not show the run's end, and one without an
+ * answer are inconclusive.
  */
 export function codexLoadingVerdict(rollout, token) {
   let toolSeen = false
   let given = false
   let elsewhere = false
+  let finished = false
+  let answered = false
   for (const line of rollout.split('\n')) {
     if (line.trim() === '') continue
     let entry
@@ -924,14 +950,18 @@ export function codexLoadingVerdict(rollout, token) {
     }
     if (entry === null || typeof entry !== 'object' || !CODEX_RECORDS.includes(entry.type)) return ['inconclusive', 'the record Codex saved for the run holds something BMN does not know, so it cannot tell whether a tool read the skill']
     if (codexToolRecord(entry)) toolSeen = true
-    if (!line.includes(token)) continue
-    const fromCodex = entry.type === 'response_item' && entry.payload?.type === 'message' && ['user', 'developer', 'system'].includes(entry.payload.role)
+    if (entry.type === 'event_msg' && entry.payload?.type === 'task_complete') finished = true
+    const message = entry.type === 'response_item' && entry.payload?.type === 'message'
+    if (message && entry.payload.role === 'assistant') answered = true
+    const fromCodex = message && ['user', 'developer', 'system'].includes(entry.payload.role) && codexMessageText(entry.payload).includes(token)
     if (fromCodex && !toolSeen) given = true
-    else elsewhere = true
+    else if (line.includes(token)) elsewhere = true
   }
+  if (!finished) return ['inconclusive', 'the record Codex saved for the run does not show that the run came to its end']
   if (given) return ['pass', 'Codex gave the model the test skill\'s words itself, before any tool ran']
   if (elsewhere) return ['inconclusive', 'the test skill\'s words reached the run only after a tool ran or in a place BMN does not know, which does not show that Codex hands a skill to the model']
   if (toolSeen) return ['inconclusive', 'a tool ran and the test skill\'s words never appeared, so BMN cannot tell what Codex itself gave the model']
+  if (!answered) return ['inconclusive', 'the record Codex saved for the run holds no answer of the model']
   return ['fail', 'Codex ran no tool and never gave the model the test skill\'s words']
 }
 
@@ -946,8 +976,9 @@ const LOADING_SKILL = (name, token) => `---\nname: ${name}\ndescription: BMN tes
  *
  * It passes only when the token comes back and no tool can have read the file: Claude Code runs
  * with every tool off and says so itself; Codex cannot run without tools, so its saved record must
- * show the skill's words given to the model before any tool was called. A run that ended in an
- * error, a report BMN cannot read, or a tool that may have read the file is inconclusive. In
+ * show the skill's words in a message given to the model before any tool was called, and the run
+ * come to its end. A run that ended in an error, a report BMN cannot read or that stops before the
+ * run's end, or a tool that may have read the file is inconclusive. In
  * OpenCode and Cursor BMN has no way to tell the two apart, so the result is inconclusive and no
  * prompt is sent. The prompt goes to the app's provider, so the test runs only where the approved
  * destination may receive private work; it is bound like a listing test.

@@ -3,12 +3,14 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
-import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, harnessPrivateWork, resolvedDirectory, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, harnessPrivateWork, publicOnlyReasons, resolvedDirectory, sha256 } from './agents-roster.mjs'
 import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
 import { CLAUDE_CONTEXT_KEY, CODEX_CONTEXT_KEYS, checkContext, provenControls, wholeNumber } from './agents-context.mjs'
 import { RUN_TEST_APPS, appTools, checkRunTools } from './agents-tools.mjs'
+
+export { publicOnlyReasons }
 
 /**
  * The check answers one question immediately before a dispatch: may this exact command, run from
@@ -997,19 +999,6 @@ export function privateWorkAnswer(data, destination, root) {
   const linked = root === null ? undefined
     : data.exceptions.find((entry) => entry.provider === destination.provider && resolvedDirectory(entry.folder) === root)
   return { allowed: false, answer, reason: `${name} gets public work only${linked === undefined ? '' : ` (exception ${linked.id} names this workspace through a link, not by its real path, and counts for nothing)`}` }
-}
-
-/** Why an agent could not receive private work in a workspace without an exception (empty when it could). */
-export function publicOnlyReasons(agent, data) {
-  const reasons = []
-  const provider = data.providers.find((entry) => entry.id === agent.provider)
-  const route = data.harness_routes.find((entry) => entry.harness === agent.harness)
-  if (agent.harness !== 'claude' && agent.harness !== 'codex') reasons.push(`BMN cannot check ${APP_NAMES[agent.harness] ?? agent.harness} dispatches`)
-  if (agent.host === null) reasons.push(`${agent.id}'s host is unknown`)
-  if (agent.host === 'default' && route === undefined) reasons.push(`no approved destination for ${APP_NAMES[agent.harness] ?? agent.harness}`)
-  if (agent.host === 'default' && route?.basis === 'owner-declared') reasons.push(`the ${APP_NAMES[agent.harness] ?? agent.harness} destination is owner-declared`)
-  if (provider?.private_work !== 'allowed') reasons.push(`${provider?.name ?? agent.provider} gets public work only`)
-  return reasons
 }
 
 // ---------------------------------------------------------------------------------------------

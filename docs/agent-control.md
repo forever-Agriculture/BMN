@@ -945,13 +945,16 @@ tool can have read the file:
 | App | The run | It passes when | Tested on a live app |
 | --- | --- | --- | --- |
 | Claude Code | `claude -p --tools "" --strict-mcp-config`, asked `/<skill>` | the run itself reports that it had no tools, nothing it reports is a tool being used, and its answer holds the token | not yet |
-| Codex | `codex exec --sandbox read-only`, asked to use `$<skill>` | the record Codex saved for the run shows the token in a message Codex gave the model before any tool was called | not yet |
+| Codex | `codex exec --sandbox read-only`, asked to use `$<skill>` | the record Codex saved for the run shows the token in the words of a message Codex gave the model before any tool was called, and shows that the run came to its end | not yet |
 | OpenCode, Cursor | none | never yet: BMN cannot tell the app handing over a skill from the model reading the file | does not apply |
 
-It **fails** when a run BMN could read, with no tool in it, came back without the token. It is
-**inconclusive** when the run ended in an error or took too long, when BMN cannot read what the
-run reported, when a tool ran (the model may have read the file itself), or when the test skill
-could not be removed; that last one names the folder to delete. The two tests are kept as
+It **fails** when a run BMN could read to its end, with an answer and no tool in it, came back
+without the token. It is **inconclusive** when the run ended in an error or took too long, when
+BMN cannot read what the run reported or the report stops before the run's end, when the token
+shows only somewhere other than the words of a message the app gave the model, when a tool ran
+(the model may have read the file itself), or when the test skill could not be removed; that last
+one names the folder to delete. The kinds of line a Codex record holds were read from one record
+of Codex 0.162.0 (2026-10-11); a record with a kind BMN does not know is inconclusive. The two tests are kept as
 separate records and Health names each: a listing, also one recorded before the loading test
 existed, never counts as a loading test.
 
@@ -1040,14 +1043,30 @@ commands change the same file. Each result says what it rests on: a tool the app
 starting, or only the app's own listing. A listing that ends with an error proves nothing and
 the test is inconclusive.
 
-Whether a run can be kept to its own tools is taken only from a run, never from a listing. For
-Claude Code the test starts three short runs and reads, from the line each prints once it has
-started its tools, which ones it began with: one run with nothing shut out, which must show the
-stand-ins from its settings (and, where Claude Code takes them up, from its settings for the
-folder and the folder's `.mcp.json`); one told to take only its own, which must show that one
-alone; one told to take none, which must show none. The record names the places that were seen
-shut out. BMN knows no such line for a Codex, OpenCode or Cursor run, so none of them is ever
-recorded as keeping a run to its tools.
+Whether a run can be kept to its own tools is taken only from a run, never from a listing, and
+by two signs that must agree. The stand-in is a small tool of BMN's own that notes each time it
+is started, and under which name; and a Claude Code run prints a line once it has started its
+tools that says of each whether it connected. A tool counts as active in a run only when that
+line reports it connected and the tool's own note says it was started, and a run counts only
+when it came to its end: the app finished by itself, every line it printed reads, and it reported
+its end. A run cut short by the time limit, a report that is cut off, and a tool the app named
+without starting it show nothing.
+
+The test starts up to three short runs: one with nothing shut out, which must show the stand-ins
+from its settings active (and, where Claude Code takes them up, from its settings for the folder
+and the folder's `.mcp.json`); one told to take only its own, which must name and start that one
+alone; one told to take none, which must name and start none. A place counts as shut out only
+when a tool from there was first seen active. The record names the signs it was judged by and the
+places seen shut out; a record made before both signs were used grants nothing, so run the test
+again after an update of BMN. The form of that line was read on Claude Code 2.1.296 (2026-10-11,
+in an empty home folder without a sign-in); the test itself has not yet been run on a live app.
+
+A Codex run reports nothing about the tools it started with, in what it prints or in the record
+it saves (Codex 0.162.0, one run, 2026-10-11); only a tool's own note shows it was started. Codex
+also takes tools from its apps and plug-ins, both switched on unless you switch them off, and BMN
+has no way to stage one of those in a test. So no test of BMN's can show a Codex run kept to
+exactly its own tools, and Codex, like OpenCode and Cursor, is never recorded as keeping a run to
+them.
 
 | App | Settings file | Entries under | A variable is written as | Tested on a live app |
 | --- | --- | --- | --- | --- |
@@ -1121,8 +1140,11 @@ last test.
 **Which tools a run starts with.** While your team lists no tools, the check leaves a run's
 tools unjudged, as it did before. From the first tool on the list, every checked run must be
 kept to exactly its own set: the tools for every app, the tools for its app and the tools kept to
-its agent (`agents`), or only the Public ones where its provider gets public work only. The
-approval says so when the first tool is added. `bmn roster role <role> --json` gives each
+its agent (`agents`), or only the Public ones where the run's destination gets public work only.
+That destination is the agent's own: its provider at its approved host, which the check holds
+every run of it to. An app's default destination decides only for an agent that uses it, so an
+agent with a destination of its own that may see private work keeps its tools in an app whose
+default destination may not. The approval says so when the first tool is added. `bmn roster role <role> --json` gives each
 candidate a `tools` entry with the items for exactly that set, also when the set is empty.
 
 - **Claude Code.** The items are `--strict-mcp-config --mcp-config '<json>'`: the first shuts out
@@ -1136,9 +1158,14 @@ candidate a `tools` entry with the items for exactly that set, also when the set
   with, so it cannot keep one to its tools: while a tool is on your list, a checked run in them
   is refused with `ROUTE_UNSUPPORTED`, and a tool kept to one of their agents waits.
 - **Places the test did not cover.** A Claude Code run is refused when it could take tools from a
-  place the test did not see shut out: a `.mcp.json` in a folder above the run's, a plug-in
-  switched on in a settings file (`enabledPlugins`), a policy file under `/etc/claude-code`, or
-  the folder's own entries where the test did not cover them. The refusal names the place.
+  place the test did not see shut out: a `.mcp.json` in a folder above the run's; a plug-in
+  switched on (`enabledPlugins`) in any settings the check reads for the run, which are Claude
+  Code's own file, the files of the run's folder and the folders above it, and the command's own
+  `--settings`, given as text or as a file; a policy file under `/etc/claude-code`
+  (`managed-mcp.json`, `managed-settings.json`, or anything in `managed-settings.d`); or the
+  folder's own entries where the test did not cover them. A plug-in that is switched off brings
+  nothing and refuses nothing. Settings BMN cannot read, and a plug-in list it cannot read as on
+  or off, refuse the run. The refusal names the place.
 - A resumed run and a run with a profile are refused: BMN has not seen either kept to its tools.
   A packet run carries no tools at all, and a research run none either.
 
@@ -1229,8 +1256,9 @@ session send work, and may that provider see private work in this workspace?
   repository nested in an allowed one is its own workspace.
 - **What stops.** Anything else: a provider that may see public work only; a destination BMN
   cannot tell (an address no provider lists, a setting it cannot resolve, `--oss`, two settings
-  that disagree); a Codex session BMN cannot tie to the record Codex saved for it (no record with
-  that session's id, more than one, a record it cannot read or that names no provider, one
+  that disagree); a Codex session BMN cannot tie to the record Codex saved for it (the app did
+  not say which session the prompt belongs to, no record with that session's id, more than one,
+  a record it cannot read, that names no provider or does not say which session it is, one
   outside Codex's own sessions folder, or one that belongs to another session), whether the
   session is new or continued, and one saved with another provider than the settings now name; a
   destination that is only your word and whose provider may see public work only; an approved team

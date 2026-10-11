@@ -570,29 +570,58 @@ describe('whether the app hands a skill to its model: the owner-run loading test
     expect(claudeLoadingVerdict('', TOKEN)[0]).toBe('inconclusive')
   })
 
-  const META = { type: 'session_meta', payload: { id: 's', cwd: '/synthetic' } }
-  const message = (role: string, text: string) => ({ type: 'response_item', payload: { type: 'message', role, content: [{ type: 'input_text', text }] } })
+  // The lines of a record as Codex 0.162.0 saves one (kinds and fields seen 2026-10-11; every value here is synthetic).
+  const META = { type: 'session_meta', ordinal: 0, payload: { id: 's', session_id: 's', cwd: '/synthetic', model_provider: 'openai', cli_version: '0.162.0' } }
+  const message = (role: string, text: string, extra: Record<string, unknown> = {}) => ({ type: 'response_item', ...extra, payload: { type: 'message', role, content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }] } })
   const CALL = { type: 'response_item', payload: { type: 'function_call', name: 'shell', arguments: '{"command":["cat","SKILL.md"]}' } }
   const OUTPUT = { type: 'response_item', payload: { type: 'function_call_output', output: `reply with exactly ${TOKEN}` } }
+  const STARTED = { type: 'event_msg', payload: { type: 'task_started', turn_id: 't' } }
+  const WORLD = { type: 'world_state', payload: { full: true, state: {} } }
+  const TURN = { type: 'turn_context', payload: { cwd: '/synthetic', model: 'synthetic-model' } }
+  const item = (type: string, text = '') => ({ type: 'event_msg', payload: { type: 'item_completed', item: { type, id: 'i', content: [{ type: 'text', text }] } } })
+  const USAGE = { type: 'token_usage_record', payload: { usage: {} } }
+  const COUNT = { type: 'event_msg', payload: { type: 'token_count', info: {} } }
+  const DONE = (last = '') => ({ type: 'event_msg', payload: { type: 'task_complete', last_agent_message: last } })
+  /** One finished turn the way Codex saves it: what Codex gave the model, then what happened, then the answer and the end. */
+  const turn = (given: unknown[], happened: unknown[], said: string): string => `${[META, STARTED, message('developer', 'You are a synthetic agent.'), WORLD, TURN, message('user', 'Use the skill $bmn-loading-test-0a now.', { metadata: { mcp_attribution: { status: 'none' } } }), ...given,
+    item('UserMessage'), ...happened, item('AgentMessage', said), message('assistant', said), USAGE, COUNT, DONE(said)].map(line).join('\n')}\n`
 
-  it('Codex passes only when its own record shows the skill given to the model before any tool was called', () => {
+  it('Codex passes only when its own record shows the skill given to the model before any tool was called, in a run that came to its end', () => {
     const record = (...entries: unknown[]): string => `${entries.map(line).join('\n')}\n`
-    expect(codexLoadingVerdict(record(META, message('user', 'Use the skill'), message('user', `<skill>reply with exactly ${TOKEN}</skill>`), message('assistant', TOKEN)), TOKEN))
+    expect(codexLoadingVerdict(turn([message('user', `<skill>reply with exactly ${TOKEN}</skill>`)], [], TOKEN), TOKEN))
       .toEqual(['pass', "Codex gave the model the test skill's words itself, before any tool ran"])
-    expect(codexLoadingVerdict(record(META, message('developer', TOKEN), CALL, OUTPUT), TOKEN)[0]).toBe('pass')
+    expect(codexLoadingVerdict(turn([message('developer', TOKEN)], [CALL, OUTPUT], TOKEN), TOKEN)[0]).toBe('pass')
     // The model read the file with a tool: the token is there, and it shows nothing about loading.
-    expect(codexLoadingVerdict(record(META, message('user', 'Use the skill'), CALL, OUTPUT, message('assistant', TOKEN)), TOKEN))
+    expect(codexLoadingVerdict(turn([], [CALL, OUTPUT], TOKEN), TOKEN))
       .toEqual(['inconclusive', "the test skill's words reached the run only after a tool ran or in a place BMN does not know, which does not show that Codex hands a skill to the model"])
-    expect(codexLoadingVerdict(record(META, CALL, message('user', TOKEN)), TOKEN)[0]).toBe('inconclusive')
-    // The model's own message is not something Codex gave it.
-    expect(codexLoadingVerdict(record(META, message('assistant', TOKEN)), TOKEN)[0]).toBe('inconclusive')
-    expect(codexLoadingVerdict(record(META, { type: 'event_msg', payload: { type: 'exec_command_begin' } }, message('user', TOKEN)), TOKEN)[0]).toBe('inconclusive')
-    expect(codexLoadingVerdict(record(META, { type: 'response_item', payload: { type: 'web_search_call' } }, message('assistant', 'nothing')), TOKEN))
+    expect(codexLoadingVerdict(turn([CALL, message('user', TOKEN)], [], TOKEN), TOKEN)[0]).toBe('inconclusive')
+    // The model's own message is not something Codex gave it, and neither is a field beside a message's words.
+    expect(codexLoadingVerdict(turn([], [], TOKEN), TOKEN)[0]).toBe('inconclusive')
+    expect(codexLoadingVerdict(turn([message('user', '', { metadata: { note: TOKEN } })], [], 'done'), TOKEN)[0]).toBe('inconclusive')
+    expect(codexLoadingVerdict(turn([{ type: 'response_item', payload: { type: 'message', role: 'user', content: [], note: TOKEN } }], [], 'done'), TOKEN)[0]).toBe('inconclusive')
+    expect(codexLoadingVerdict(turn([{ type: 'response_item', payload: { type: 'message', role: 'user', content: TOKEN } }], [], 'done'), TOKEN)[0]).toBe('inconclusive')
+    expect(codexLoadingVerdict(turn([{ ...WORLD, payload: { full: true, state: { skills: TOKEN } } }], [], 'done'), TOKEN)[0]).toBe('inconclusive')
+    // A tool, by an event named like one or by a turn's item that is anything but words.
+    expect(codexLoadingVerdict(turn([{ type: 'event_msg', payload: { type: 'exec_command_begin' } }, message('user', TOKEN)], [], TOKEN), TOKEN)[0]).toBe('inconclusive')
+    for (const kind of ['CommandExecution', 'McpToolCall', 'FileChange', 'WebSearch', 'command_execution', 'SomethingNew']) {
+      expect(codexLoadingVerdict(turn([item(kind), message('user', TOKEN)], [], TOKEN), TOKEN)[0], kind).toBe('inconclusive')
+    }
+    expect(codexLoadingVerdict(turn([{ type: 'event_msg', payload: { type: 'item_started', item: {} } }, message('user', TOKEN)], [], TOKEN), TOKEN)[0]).toBe('inconclusive')
+    expect(codexLoadingVerdict(turn([{ type: 'event_msg', payload: {} }, message('user', TOKEN)], [], TOKEN), TOKEN)[0]).toBe('inconclusive')
+    expect(codexLoadingVerdict(turn([item('Reasoning'), item('user_message'), message('user', TOKEN)], [], TOKEN), TOKEN)[0]).toBe('pass')
+    expect(codexLoadingVerdict(turn([], [{ type: 'response_item', payload: { type: 'web_search_call' } }], 'nothing'), TOKEN))
       .toEqual(['inconclusive', "a tool ran and the test skill's words never appeared, so BMN cannot tell what Codex itself gave the model"])
-    expect(codexLoadingVerdict(record(META, message('user', 'Use the skill'), { type: 'event_msg', payload: { type: 'agent_message', message: 'I know no such skill.' } }, message('assistant', 'I know no such skill.')), TOKEN))
+    expect(codexLoadingVerdict(turn([], [{ type: 'event_msg', payload: { type: 'agent_message', message: 'I know no such skill.' } }], 'I know no such skill.'), TOKEN))
       .toEqual(['fail', "Codex ran no tool and never gave the model the test skill's words"])
-    expect(codexLoadingVerdict(record(META, { type: 'new_kind', payload: {} }, message('user', TOKEN)), TOKEN)[0]).toBe('inconclusive')
-    expect(codexLoadingVerdict(`${line(META)}\n{ torn ${TOKEN}\n`, TOKEN)).toEqual(['inconclusive', 'the record Codex saved for the run holds a line BMN cannot read'])
+    // A record that does not show the run's end, or holds no answer, says nothing either way.
+    const UNENDED = ['inconclusive', 'the record Codex saved for the run does not show that the run came to its end']
+    expect(codexLoadingVerdict(record(META), TOKEN)).toEqual(UNENDED)
+    expect(codexLoadingVerdict(record(META, message('user', 'Use the skill'), message('assistant', 'I know no such skill.')), TOKEN)).toEqual(UNENDED)
+    expect(codexLoadingVerdict(record(META, message('user', `<skill>reply with exactly ${TOKEN}</skill>`), message('assistant', TOKEN)), TOKEN)).toEqual(UNENDED)
+    expect(codexLoadingVerdict('', TOKEN)).toEqual(UNENDED)
+    expect(codexLoadingVerdict(record(META, STARTED, message('user', 'Use the skill'), DONE()), TOKEN)).toEqual(['inconclusive', 'the record Codex saved for the run holds no answer of the model'])
+    expect(codexLoadingVerdict(record(META, { type: 'new_kind', payload: {} }, message('user', TOKEN), DONE()), TOKEN)[0]).toBe('inconclusive')
+    expect(codexLoadingVerdict(`${line(META)}\n{ torn ${TOKEN}\n${line(DONE())}\n`, TOKEN)).toEqual(['inconclusive', 'the record Codex saved for the run holds a line BMN cannot read'])
   })
 
   /** A stand-in app for the prompt run: it notes how it was started and answers as `mode` says. */
@@ -617,11 +646,14 @@ if (${JSON.stringify(name)} === 'claude') {
   const out = [{ type: 'system', subtype: 'init', tools: mode === 'tools' ? ['Read'] : [] }, { type: 'result', is_error: false, result: mode === 'absent' ? 'Unknown skill' : token }]
   console.log(out.map(line).join('\\n'))
 } else if (mode !== 'no-record') {
-  const message = (role, said) => ({ type: 'response_item', payload: { type: 'message', role, content: [{ type: 'input_text', text: said }] } })
-  const records = [{ type: 'session_meta', payload: { id: 's', cwd: argv[argv.indexOf('-C') + 1] } }, message('user', prompt)]
+  const message = (role, said) => ({ type: 'response_item', payload: { type: 'message', role, content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text: said }] } })
+  const records = [{ type: 'session_meta', payload: { id: 's', session_id: 's', cwd: argv[argv.indexOf('-C') + 1] } }, { type: 'event_msg', payload: { type: 'task_started' } },
+    { type: 'world_state', payload: { full: true, state: {} } }, { type: 'turn_context', payload: {} }, message('user', prompt)]
   if (mode === 'tool') records.push({ type: 'response_item', payload: { type: 'function_call', name: 'shell' } }, { type: 'response_item', payload: { type: 'function_call_output', output: text } }, message('assistant', token))
   else if (mode === 'absent') records.push(message('assistant', 'I know no such skill.'))
   else records.push(message('user', '<skill>' + text + '</skill>'), message('assistant', token))
+  records.push({ type: 'token_usage_record', payload: {} })
+  if (mode !== 'unended') records.push({ type: 'event_msg', payload: { type: 'task_complete' } })
   fs.mkdirSync(home + '/.codex/sessions/2026/10/10', { recursive: true })
   fs.writeFileSync(home + '/.codex/sessions/2026/10/10/rollout-2026-10-10T12-00-00-s.jsonl', records.map(line).join('\\n') + '\\n')
 }
@@ -668,12 +700,16 @@ if (${JSON.stringify(name)} === 'claude') {
     prompter('codex', CODEX, 'absent')
     expect(await loading('codex')).toMatchObject({ outcome: 'fail', detail: "Codex ran no tool and never gave the model the test skill's words" })
     rmSync(join(home, '.codex'), { recursive: true })
+    // A record that stops before the run's end shows nothing, even with the skill's words in it.
+    prompter('codex', CODEX, 'unended')
+    expect(await loading('codex')).toMatchObject({ outcome: 'inconclusive', detail: 'the record Codex saved for the run does not show that the run came to its end' })
+    rmSync(join(home, '.codex'), { recursive: true })
     prompter('codex', CODEX, 'exit')
     expect(await loading('codex')).toMatchObject({ outcome: 'inconclusive', detail: 'codex did not answer (timeout or error)' })
     prompter('codex', CODEX, 'no-record')
     expect(await loading('codex')).toMatchObject({ outcome: 'inconclusive', detail: 'the record Codex saves for a run was not found' })
     expect(readdirSync(codexFolder())).toEqual([])
-    expect(skillsTests().filter((entry) => entry.kind === 'loading').map((entry) => entry.basis)).toEqual(['prompt', 'prompt', 'prompt', 'prompt'])
+    expect(skillsTests().filter((entry) => entry.kind === 'loading').map((entry) => entry.basis)).toEqual(['prompt', 'prompt', 'prompt', 'prompt', 'prompt'])
   })
 
   it('Claude Code is started with every tool off and asked for the skill by name', async () => {

@@ -38,6 +38,8 @@ export interface ToolsTestEntry {
   isolation: 'pass' | 'fail' | 'unproven'
   /** What the isolation result rests on. Only a run grants anything; `list` is an earlier record's and grants nothing. */
   isolation_basis?: 'run' | 'list'
+  /** The signs the run result was judged by: the run's own start line and the tools' own note of being started. A record without both grants nothing. */
+  isolation_signs?: string[]
   /** The places a run was seen first taking a tool from and then, told to keep to its own, without it. */
   isolation_covers?: string[]
   /** Whether a run told to take no tools was seen starting with none. */
@@ -135,9 +137,14 @@ export interface ToolsProven { isolation: boolean; variable: boolean; argument?:
 /** Every tool a run of this agent may carry: the tools for all apps or its app, and its own. */
 /** The apps for which BMN has a test that shows which tools a run starts with. */
 export declare const RUN_TEST_APPS: string[]
+/** What one run of Claude Code showed of its tools: by its own start line (`named`, `connected`), by the stand-ins' own notes (`started`), and whether it came to its own end. */
+export interface RunSeen { ended: boolean; line: boolean; named: Set<string>; connected: Set<string>; started: Set<string> }
+export declare function claudeRunSeen(result: { finished: boolean; stdout: string }, notes: { id?: unknown }[]): RunSeen
+/** The two signs a run test goes by. */
+export declare const RUN_SIGNS: string[]
 export declare function runTools(data: Pick<RosterData, 'tools' | 'providers' | 'harness_routes'> | null, agent: RosterAgent): RosterTool[]
 /** The places a run could take tools from that the owner's test did not see shut out. */
-export declare function uncoveredSources(harness: string, options?: { environment?: Environment; cwd?: string | null; covers?: string[]; policyRoot?: string }): string[]
+export declare function uncoveredSources(harness: string, options?: { environment?: Environment; cwd?: string | null; covers?: string[]; policyRoot?: string; settings?: string }): string[]
 export type ToolItems =
   | { state: 'none' }
   | { state: 'not-supported-yet' | 'blocked'; tools: string[]; reason: string }
