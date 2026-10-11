@@ -1276,7 +1276,7 @@ describe('consequences in words (60.5 AC7; the same sentences `bmn roster status
         'Codex would count as sending data to OpenAI on your word, so it gets public work only']],
     ['a tool added for every app: the apps that may have it, never one that gets public work only', EXAMPLE, (text: string) => `${text}\n## tools\n\n\`\`\`yaml\nnotes: {name: Notes, command: notes-tool}\ndocs: {name: Docs, url: "https://docs.example.test/mcp", public: true}\n\`\`\`\n`,
       ['Tool Docs would reach Claude Code, Codex, OpenCode and Cursor', 'Tool Notes would reach Claude Code and Codex',
-        'With a tool on the list, the check passes a run only in Claude Code, once its tools test passed there; a Codex run is refused until BMN has such a test for Codex']],
+        'With a tool on the list, the check keeps every Claude Code run to exactly its own tools, once its tools test passed there; it does not judge the tools of a Codex run']],
     ['the last tool taken off the list', `${EXAMPLE}\n## tools\n\n\`\`\`yaml\nnotes: {name: Notes, command: notes-tool}\n\`\`\`\n`, () => EXAMPLE,
       ['Tool Notes would no longer reach Claude Code and Codex', 'With no tool on the list, the check no longer looks at which tools a run has']],
     ['a tool kept to one app, then to an agent, and its program changed', `${EXAMPLE}\n## tools\n\n\`\`\`yaml\nnotes: {name: Notes, command: notes-tool}\nfiles: {name: Files, command: files-tool}\nbrowser: {name: Browser, command: b, agents: [luna]}\n\`\`\`\n`,

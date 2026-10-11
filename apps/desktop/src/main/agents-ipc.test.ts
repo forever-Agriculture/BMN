@@ -731,7 +731,7 @@ describe('tools on Rules › Tools and Health (60.12 AC1-AC6)', () => {
     expect(preview.valid).toBe(true)
     expect(preview.differences.map((diff) => [diff.scope, diff.id, diff.kind])).toEqual([['tools', 'docs', 'added'], ['tools', 'search', 'added']])
     expect(preview.consequences).toEqual(['Tool Docs would reach Claude Code, Codex, OpenCode and Cursor', 'Tool Search would reach Codex',
-      'With a tool on the list, the check passes a run only in Claude Code, once its tools test passed there; a Codex run is refused until BMN has such a test for Codex'])
+      'With a tool on the list, the check keeps every Claude Code run to exactly its own tools, once its tools test passed there; it does not judge the tools of a Codex run'])
     expect(await call<AgentsOutcome>('agents:save', { shown: await shown(), data: staged, teamUpdate: bindings(preview) })).toMatchObject({ ok: true })
     expect(file('.config/bmn/agents/roster.md')).toContain('## tools\n\n```yaml\ndocs: {name: Docs, url: "https://docs.example.test/mcp", public: true}\nsearch: {name: Search, command: search-tool, apps: [codex]}\n```')
     expect(await call<ToolsPlan>('rules:tools-plan')).toMatchObject({ ok: false, code: 'TOOLS_UNSUPPORTED', planHash: null, targets: [] })

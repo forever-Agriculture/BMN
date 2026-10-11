@@ -293,8 +293,9 @@ Rules → **Tools** keeps one list of MCP tools and sets each up in every agent 
 only the tool's entry changes there, every other byte of the file stays, and an install is undone
 as one step. A tool names environment variables and never holds their values. It reaches every
 app, some apps, or only the runs of some agents. Once a tool is on the list, the check before a
-hand-off passes a run only when it is kept to exactly its own tools: BMN can do that in Claude
-Code after its tools test, and refuses a Codex run until it has such a test for Codex.
+hand-off passes a Claude Code run only when it is kept to exactly its own tools, which BMN can do
+after its tools test. It does not judge the tools of a Codex run, and the receipt says so: no
+test of BMN's can show which tools a Codex run starts with.
 `bmn tools import` proposes what your apps already hold.
 
 Team → **Models** has one of your own agents look up your models' published prices and context

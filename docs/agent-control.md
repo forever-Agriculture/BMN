@@ -1066,7 +1066,7 @@ it saves (Codex 0.162.0, one run, 2026-10-11); only a tool's own note shows it w
 also takes tools from its apps and plug-ins, both switched on unless you switch them off, and BMN
 has no way to stage one of those in a test. So no test of BMN's can show a Codex run kept to
 exactly its own tools, and Codex, like OpenCode and Cursor, is never recorded as keeping a run to
-them.
+them. The check therefore does not judge a Codex run's tools (below).
 
 | App | Settings file | Entries under | A variable is written as | Tested on a live app |
 | --- | --- | --- | --- | --- |
@@ -1138,8 +1138,8 @@ Tools has one row per app: its settings file, its state, Full or Public tools on
 last test.
 
 **Which tools a run starts with.** While your team lists no tools, the check leaves a run's
-tools unjudged, as it did before. From the first tool on the list, every checked run must be
-kept to exactly its own set: the tools for every app, the tools for its app and the tools kept to
+tools unjudged, as it did before. From the first tool on the list, every checked Claude Code run
+must be kept to exactly its own set: the tools for every app, the tools for its app and the tools kept to
 its agent (`agents`), or only the Public ones where the run's destination gets public work only.
 That destination is the agent's own: its provider at its approved host, which the check holds
 every run of it to. An app's default destination decides only for an agent that uses it, so an
@@ -1154,9 +1154,15 @@ candidate a `tools` entry with the items for exactly that set, also when the set
   compares what the command names with the approved set and refuses a missing, additional,
   altered or unreadable tool, or a command without those two items, with `TOOL_MISMATCH`. The
   receipt binds the tools and a hash of their definitions.
-- **Codex, OpenCode, Cursor.** BMN has no test that shows which tools a run of these apps starts
-  with, so it cannot keep one to its tools: while a tool is on your list, a checked run in them
-  is refused with `ROUTE_UNSUPPORTED`, and a tool kept to one of their agents waits.
+- **Codex.** No test of BMN's can show which tools a Codex run starts with (see the test above),
+  so the check does not judge them (owner's decision, 2026-10-11; this narrows 60.12 AC5 for
+  Codex). A checked Codex run passes as it did before your team listed tools, whatever tools its
+  command names and its settings hold; its steps say `tools: not checked`, and its receipt
+  carries `"tools": {"checked": false}`, so it never reads as a run kept to a set. `bmn roster
+  role` gives a Codex candidate no items (`not-supported-yet`, with the reason), and a tool kept
+  to a Codex agent waits: BMN does not hand it out. Whoever starts the run decides its tools, as
+  dev-auto does today with `-c 'mcp_servers={}'`.
+- **OpenCode, Cursor.** BMN does not check their dispatches at all.
 - **Places the test did not cover.** A Claude Code run is refused when it could take tools from a
   place the test did not see shut out: a `.mcp.json` in a folder above the run's; a plug-in
   switched on (`enabledPlugins`) in any settings the check reads for the run, which are Claude
@@ -1305,6 +1311,9 @@ on Rules → Health: a provider that may see private work passes, any other warn
   one run, that the app put its text before the model. Neither shows that a model follows a
   skill. Cursor's program names `~/.cursor/skills` and `~/.claude/skills` among the folders it
   reads, but BMN has no test for it, so treat every skill in the folder as visible to Cursor.
+- The tools of a Codex run are not judged. Listing a tool keeps Claude Code runs to their own
+  set; a Codex run starts with whatever its command and Codex's own settings, apps and plug-ins
+  give it, and its receipt says its tools were not checked.
 - A new Codex session is known to the guard only by the record Codex saves for it. Whether that
   record exists by the time the first prompt is sent has not been measured on a live app; where
   it does not, that prompt is stopped and the line says so.

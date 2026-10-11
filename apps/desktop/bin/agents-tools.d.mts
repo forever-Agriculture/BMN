@@ -151,8 +151,10 @@ export type ToolItems =
   | { state: 'applied'; tools: string[]; argv: string[]; hash: string }
 export declare function toolItems(agent: RosterAgent, data: Pick<RosterData, 'tools' | 'providers' | 'harness_routes'>, proven: ToolsProven): ToolItems
 export declare function checkRunTools(agent: RosterAgent, data: Pick<RosterData, 'tools' | 'providers' | 'harness_routes'>, parsed: Record<string, unknown>, proven: ToolsProven, options?: { packet?: boolean; profile?: boolean; environment?: Environment; cwd?: string | null; policyRoot?: string }):
-  | { applied: string[]; note: string; hash?: string; refusal?: undefined }
-  | { refusal: { code: 'TOOL_MISMATCH' | 'ROUTE_UNSUPPORTED'; message: string }; applied?: undefined; note?: undefined; hash?: undefined }
+  | { applied: string[]; note: string; hash?: string; refusal?: undefined; unchecked?: undefined }
+  /** A run of an app BMN has no run test for (Codex): its tools are not judged, and the note says so. */
+  | { unchecked: true; note: string; applied?: undefined; hash?: undefined; refusal?: undefined }
+  | { refusal: { code: 'TOOL_MISMATCH' | 'ROUTE_UNSUPPORTED'; message: string }; applied?: undefined; note?: undefined; hash?: undefined; unchecked?: undefined }
 
 export declare function testTools(harness: string, options?: { environment?: Environment; now?: Date; timeoutMs?: number }): Promise<ToolsTestEntry>
 export declare const TOOLS_USAGE: string

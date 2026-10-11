@@ -1323,7 +1323,7 @@ export function consequences(before, after) {
     if (out.length === said) out.push(`Tool ${title}: no app gains or loses it`)
   }
   // The first tool on the list changes what the check asks of every run, also of an agent that has none.
-  if (oldTools.size === 0 && newTools.size > 0) out.push('With a tool on the list, the check passes a run only in Claude Code, once its tools test passed there; a Codex run is refused until BMN has such a test for Codex')
+  if (oldTools.size === 0 && newTools.size > 0) out.push('With a tool on the list, the check keeps every Claude Code run to exactly its own tools, once its tools test passed there; it does not judge the tools of a Codex run')
   if (oldTools.size > 0 && newTools.size === 0) out.push('With no tool on the list, the check no longer looks at which tools a run has')
   return [...new Set(out)]
 }
@@ -1596,7 +1596,8 @@ export function evaluate(inputs, {
       role: role.id, effort: effort.value, context_limit_applied: context.applied,
       // The tools this run was given and a hash of their definitions: variable names, never a value.
       // Bound whenever the run was kept to a set, an empty one too; a run of a team without tools carries no such entry.
-      ...(tools.hash !== undefined ? { tools: { applied: tools.applied, sha256: tools.hash } } : {}),
+      // A run whose tools BMN could not judge (Codex) says so, so no receipt reads as kept to a set that was not checked.
+      ...(tools.hash !== undefined ? { tools: { applied: tools.applied, sha256: tools.hash } } : tools.unchecked ? { tools: { checked: false } } : {}),
       workspace, cwd,
       public_status: { public: visibility.public, reason: visibility.reason, ...(visibility.public ? { commit: visibility.record.commit } : {}) },
       data: effectiveData,

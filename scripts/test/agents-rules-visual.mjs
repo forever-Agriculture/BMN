@@ -1079,7 +1079,7 @@ done`)
     await shot('tools-staged-1280.png')
     // The first tool on a list changes what the check asks of every run: Review says so before it is approved.
     await ledger.getByRole('button', { name: 'Review', exact: true }).click()
-    await ledger.getByText('With a tool on the list, the check passes a run only in Claude Code, once its tools test passed there', { exact: false }).waitFor()
+    await ledger.getByText('With a tool on the list, the check keeps every Claude Code run to exactly its own tools, once its tools test passed there; it does not judge the tools of a Codex run', { exact: false }).waitFor()
     await shot('tools-first-consequence-1280.png')
     await ledger.getByRole('button', { name: 'Review', exact: true }).click()
     await approve()

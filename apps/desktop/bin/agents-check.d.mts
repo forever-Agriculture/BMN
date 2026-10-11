@@ -32,7 +32,8 @@ interface ReceiptBase {
   effort: string
   context_limit_applied: number | null
   /** The tools this run was given and a hash of their definitions; absent when it was given none. */
-  tools?: { applied: string[]; sha256: string }
+  /** The tools the run was kept to, with a hash of their definitions; or `checked: false` for a run whose tools BMN did not judge (Codex) while the team lists tools. */
+  tools?: { applied: string[]; sha256: string; checked?: undefined } | { checked: false; applied?: undefined; sha256?: undefined }
   cwd: string
   argv_sha256: string
   harness_version: { version: string | null; state: string }

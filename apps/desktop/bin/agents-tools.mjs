@@ -922,14 +922,17 @@ export function runTools(data, agent) {
 }
 
 /**
- * The apps for which BMN has a test of a run: it can read, from the run itself, which tools the
- * run started with. For Codex it knows no such sign, so a Codex run is never taken as kept to
- * its tools, whatever a record says.
+ * The apps for which BMN has a test of a run: it can see, from the run itself and from the tools
+ * it starts, which tools the run began with. For Codex no test of BMN's can show that (a Codex
+ * run reports nothing about its tools, and Codex takes tools from apps and plug-ins BMN cannot
+ * stage), so a Codex run is never taken as kept to its tools, whatever a record says. By the
+ * owner's decision (2026-10-11) such a run is not refused for that: its tools are not judged,
+ * its receipt says so, and BMN gives it no tools of its own.
  */
 export const RUN_TEST_APPS = ['claude']
 /** The two signs a run test goes by; a record that lacks either was judged by less and grants nothing. */
 export const RUN_SIGNS = ['start-line', 'tool-start']
-const noRunTest = (app) => `BMN has no test yet that shows which tools a run of ${app} starts with, so it cannot keep one to its own tools`
+const noRunTest = (app) => `BMN has no test that shows which tools a run of ${app} starts with, so it gives one no tools of its own and does not judge the ones it has`
 
 /** The app's entries for a run's tools, or the first tool the app cannot take. */
 function runEntries(tools, harness, proven) {
@@ -948,7 +951,8 @@ function runEntries(tools, harness, proven) {
  * `--mcp-config`. A run of an agent without tools gets the same items with an empty set. `state`
  * says why there are none: `none` (the team lists no tools, so runs are not kept to any),
  * `not-supported-yet` (no test on this app version showed a run kept to its own tools; for every
- * app but Claude Code BMN has no such test at all) or `blocked` (a tool the app cannot take).
+ * app but Claude Code BMN has no such test at all, gives the run no items, and the check does not
+ * judge its tools) or `blocked` (a tool the app cannot take).
  */
 export function toolItems(agent, data, proven) {
   if ((data?.tools ?? []).length === 0) return { state: 'none' }
@@ -1108,10 +1112,11 @@ export function uncoveredSources(harness, { environment = process.env, cwd = nul
  * packet run names none. BMN does not read what the app's own settings hold to decide this: the
  * run is shut off from them, or it is refused. A resume, a Codex profile and a place the test
  * did not cover (`uncoveredSources`, the command's own `--settings` among them) are refused,
- * since nothing BMN saw says they keep to it;
- * so is every run of an app BMN has no run test for, which today is every app but Claude Code.
- * `environment` and `cwd` are the run's own. Returns `{ applied, hash, note }` or
- * `{ refusal: { code, message } }`.
+ * since nothing BMN saw says they keep to it. A run of an app BMN has no run test for, which among
+ * the apps it checks is Codex, is not judged at all (owner's decision, 2026-10-11): it passes
+ * with `unchecked` and a note that says so, whatever tools its command names or its settings
+ * hold, a packet run too. `environment` and `cwd` are the run's own. Returns
+ * `{ applied, hash, note }`, `{ unchecked: true, note }` or `{ refusal: { code, message } }`.
  */
 export function checkRunTools(agent, data, parsed, proven, { packet = false, profile = false, environment = process.env, cwd = null, policyRoot = CLAUDE_POLICY_ROOT } = {}) {
   if ((data?.tools ?? []).length === 0) return { applied: [], note: 'tools: not checked (your team lists no tools)' }
@@ -1119,7 +1124,7 @@ export function checkRunTools(agent, data, parsed, proven, { packet = false, pro
   const refuse = (code, message) => ({ refusal: { code, message } })
   const app = APP_NAMES[parsed.harness]
   const flag = "--strict-mcp-config --mcp-config '{\"mcpServers\":{…}}'"
-  if (!RUN_TEST_APPS.includes(parsed.harness)) return refuse('ROUTE_UNSUPPORTED', noRunTest(app))
+  if (!RUN_TEST_APPS.includes(parsed.harness)) return { unchecked: true, note: `tools: not checked (BMN has no test that shows which tools a run of ${app} starts with)` }
   if (parsed.resume) return refuse('ROUTE_UNSUPPORTED', `a resumed ${app} run is not something BMN has seen kept to its tools; start a fresh run`)
   if (profile || parsed.profile !== undefined) return refuse('ROUTE_UNSUPPORTED', `a ${app} profile may add tools of its own, and BMN has not seen a run with a profile kept to its tools`)
   if (!proven.isolation) return refuse('ROUTE_UNSUPPORTED', `no test on this ${app} version showed a run kept to the tools its command names (bmn tools test ${parsed.harness})`)

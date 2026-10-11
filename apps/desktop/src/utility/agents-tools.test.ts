@@ -892,7 +892,8 @@ describe('the tools of one agent\'s run (60.12 AC5)', () => {
   const proven = { isolation: true, empty: true, covers: ['settings', 'local', 'folder'], variable: true, argument: true, header: true }
   const NONE = '{"mcpServers":{}}'
   const KEEP = "the command does not keep this run to its tools: it must shut out what Claude Code would take from elsewhere and name its own (--strict-mcp-config --mcp-config '{\"mcpServers\":{…}}')"
-  const NO_CODEX_TEST = 'BMN has no test yet that shows which tools a run of Codex starts with, so it cannot keep one to its own tools'
+  const NO_CODEX_TEST = 'BMN has no test that shows which tools a run of Codex starts with, so it gives one no tools of its own and does not judge the ones it has'
+  const CODEX_UNCHECKED = 'tools: not checked (BMN has no test that shows which tools a run of Codex starts with)'
   const itemsOf = (id: string) => toolItems(agent(id), data(), proven) as { state: string; tools: string[]; argv: string[]; hash: string }
   const setOf = (id: string): Record<string, unknown> => JSON.parse(itemsOf(id).argv[2]!).mcpServers
   const REVIEW = { type: 'stdio', command: 'review-tool', args: [], env: { REVIEW_KEY: '${REVIEW_KEY}' } }
@@ -951,7 +952,7 @@ describe('the tools of one agent\'s run (60.12 AC5)', () => {
     const own = ['env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, 'ANTHROPIC_BASE_URL=https://api.anthropic.com', 'claude', '-p', '--model', 'fable', '--effort', 'medium']
     const passedRun = run('fable', 'designer', [...own, ...itemsOf('fable').argv])
     expect(passedRun.verdict, JSON.stringify(passedRun)).toBe('PASS')
-    expect(passedRun.receipt!.tools!.applied).toEqual(['docs', 'files', 'notes', 'review'])
+    expect(passedRun.receipt!.tools).toMatchObject({ applied: ['docs', 'files', 'notes', 'review'] })
     expect(run('fable', 'designer', [...own, ...only({ docs: setOf('fable').docs })])).toMatchObject({ code: 'TOOL_MISMATCH', message: "fable's tools are missing from the command: files, notes, review" })
     // An agent that uses the app's default destination, which gets public work only, carries the Public ones alone.
     expect(runTools(data(), agent('opus')).map((tool) => tool.id)).toEqual(['docs'])
@@ -981,7 +982,7 @@ describe('the tools of one agent\'s run (60.12 AC5)', () => {
     expect(setOf('opus')).toEqual({ shape: { type: 'stdio', command: 'shape-tool', args: ['--options', '{"mode":"read"}'] } })
     const result = run('opus', 'lead', OPUS(...itemsOf('opus').argv))
     expect(result.verdict, JSON.stringify(result)).toBe('PASS')
-    expect(result.receipt!.tools!.applied).toEqual(['shape'])
+    expect(result.receipt!.tools).toMatchObject({ applied: ['shape'] })
   })
 
   it('keeps a run of an agent that may have no tools to none, and says so in the receipt', () => {
@@ -1025,16 +1026,33 @@ describe('the tools of one agent\'s run (60.12 AC5)', () => {
     expect(run('fable', 'designer', argv(), [passed('claude', '2.1.296')])).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: unseen })
     // A listing was never a run.
     expect(run('fable', 'designer', argv(), [passed('claude', CLAUDE, { isolation_basis: 'list' })])).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: unseen })
-    // Codex: BMN has no run test, with or without tools of the agent's own, whatever a record says.
-    expect(run('luna', 'browser', LUNA('-c', 'mcp_servers={}', '-c', 'mcp_servers.browser.command="npx"'))).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: NO_CODEX_TEST })
-    expect(run('sol', 'lead', SOL('-c', 'mcp_servers={}'))).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: NO_CODEX_TEST })
-    expect(run('sol', 'lead', SOL())).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: NO_CODEX_TEST })
     // A resume and a profile are not something BMN saw kept to a set.
     const parsed = { harness: 'claude', strictMcp: true, mcpConfig: JSON.stringify({ mcpServers: setOf('fable') }) }
     const call = (extra: Record<string, unknown>, options: Record<string, unknown> = {}) => checkRunTools(agent('fable'), data(), { ...parsed, ...extra }, proven, { environment: env, cwd: workspace, policyRoot: noPolicy(), ...options })
     expect(call({})).toMatchObject({ applied: ['docs', 'files', 'notes', 'review'] })
     expect(call({ resume: 'last' })).toEqual({ refusal: { code: 'ROUTE_UNSUPPORTED', message: 'a resumed Claude Code run is not something BMN has seen kept to its tools; start a fresh run' } })
     expect(call({}, { profile: true })).toEqual({ refusal: { code: 'ROUTE_UNSUPPORTED', message: 'a Claude Code profile may add tools of its own, and BMN has not seen a run with a profile kept to its tools' } })
+  })
+
+  it('does not judge the tools of a Codex run, passes it, and says so in its steps and its receipt (owner, 2026-10-11)', () => {
+    // BMN has no run test for Codex: whatever the command names or leaves out, and whatever a record says, its tools are not judged.
+    const commands = [LUNA('-c', 'mcp_servers={}', '-c', 'mcp_servers.browser.command="npx"'), LUNA('-c', 'mcp_servers={}'), LUNA(), LUNA('-c', 'mcp_servers.stray.command="stray-tool"')]
+    for (const argv of commands) {
+      for (const log of [undefined, [], [passed('codex', CODEX)]]) {
+        const result = run('luna', 'browser', argv, log)
+        expect(result.verdict, JSON.stringify(result)).toBe('PASS')
+        expect(result.steps).toContain(CODEX_UNCHECKED)
+        expect(result.receipt!.tools).toEqual({ checked: false })
+      }
+    }
+    expect(run('sol', 'lead', SOL()).receipt!.tools).toEqual({ checked: false })
+    expect(checkRunTools(agent('luna'), data(), { harness: 'codex', config: [], resume: 'last', profile: 'work' }, proven, { packet: true, profile: true })).toEqual({ unchecked: true, note: CODEX_UNCHECKED })
+    // No items are given for a Codex run, and the answer says why.
+    expect(toolItems(agent('luna'), data(), proven)).toEqual({ state: 'not-supported-yet', tools: ['browser', 'docs', 'files', 'notes'], reason: NO_CODEX_TEST })
+    // A receipt of a kept run never reads as unchecked, and a team without tools carries no entry at all.
+    expect(run('fable', 'designer', FABLE(...itemsOf('fable').argv)).receipt!.tools).not.toHaveProperty('checked')
+    approve(EXAMPLE)
+    expect(run('luna', 'browser', LUNA()).receipt).not.toHaveProperty('tools')
   })
 
   it('refuses a run that could take tools from a place the test did not cover, by what is there and not by what it holds', () => {
@@ -1405,7 +1423,7 @@ describe('bmn tools', () => {
 
   it('gives every candidate of a role the tools its run may have, or why it cannot be kept to them', async () => {
     const role = JSON.parse((await run(['roster', 'role', 'browser', '--json'])).stdout)
-    expect(role.candidates[0]).toMatchObject({ agent: 'luna', tools: { state: 'not-supported-yet', tools: ['browser', 'docs', 'files', 'notes'], reason: 'BMN has no test yet that shows which tools a run of Codex starts with, so it cannot keep one to its own tools' } })
+    expect(role.candidates[0]).toMatchObject({ agent: 'luna', tools: { state: 'not-supported-yet', tools: ['browser', 'docs', 'files', 'notes'], reason: 'BMN has no test that shows which tools a run of Codex starts with, so it gives one no tools of its own and does not judge the ones it has' } })
     const lead = JSON.parse((await run(['roster', 'role', 'lead', '--json'])).stdout)
     expect(lead.candidates.map((candidate: { agent: string; tools: { state: string } }) => [candidate.agent, candidate.tools.state])).toEqual([['sol', 'not-supported-yet'], ['opus', 'applied']])
     expect(lead.candidates[1].tools).toMatchObject({ tools: ['docs', 'files', 'notes'], argv: ['--strict-mcp-config', '--mcp-config', expect.stringContaining('"notes"')] })

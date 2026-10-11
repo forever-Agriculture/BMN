@@ -1246,7 +1246,7 @@ describe('tools (60.12 AC6)', () => {
       { scope: 'tools', id: 'notes', field: null, kind: 'added', after: { present: true, value: { name: 'Notes', command: 'notes-tool', args: ['--token', { env: 'NOTES_TOKEN' }], env: { TOKEN: 'NOTES_TOKEN' }, apps: ['claude', 'codex'] } } },
       { scope: 'tools', id: 'browser', field: 'agents', kind: 'changed', before: { present: true, value: ['luna'] }, after: { present: true, value: ['luna', 'sol'] } }
     ]
-    const first = 'With a tool on the list, the check passes a run only in Claude Code, once its tools test passed there; a Codex run is refused until BMN has such a test for Codex'
+    const first = 'With a tool on the list, the check keeps every Claude Code run to exactly its own tools, once its tools test passed there; it does not judge the tools of a Codex run'
     const { groups, general } = groupDifferences(differences, DATA, WITH, ['Tool Notes would reach Claude Code and Codex', 'Tool Browser is for the runs of Sol, and BMN cannot give a Codex run a tool yet', first])
     expect(general).toEqual([])
     expect(groups).toHaveLength(1)
