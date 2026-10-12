@@ -87,8 +87,12 @@ async function nvidiaTemperature(root: string, run: HealthCommand): Promise<numb
     // The question itself wakes a suspended card and keeps it awake; a sleeping card makes no heat.
     if (await line(join(base, 'power', 'runtime_status')) !== 'active') continue
     try {
-      const answer = (await run('nvidia-smi', NVIDIA_ARGS, NVIDIA_TIMEOUT_MS)).split('\n')[0]?.trim() ?? ''
-      return /^\d{1,3}$/.test(answer) ? Number(answer) : null
+      // One line per card: the hottest counts, as for every other sensor.
+      let hottest: number | null = null
+      for (const answer of (await run('nvidia-smi', NVIDIA_ARGS, NVIDIA_TIMEOUT_MS)).split('\n')) {
+        if (/^\d{1,3}$/.test(answer.trim())) hottest = hotter(hottest, Number(answer.trim()))
+      }
+      return hottest
     } catch {
       return null
     }

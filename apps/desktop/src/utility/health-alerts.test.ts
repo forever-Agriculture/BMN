@@ -259,6 +259,70 @@ describe('the switch-off time', () => {
     await second.advance(0)
     expect(second.state.turnedOff).toBe(1)
     expect(second.state.sent).toEqual([])
+    expect(second.store.value).toEqual({ version: 1, sent: [], sentAt: null, cpuHotStreak: 0, batteryAtStart: null, offAt: null, offDeadline: null, offNoticeOwed: true })
+  })
+
+  it('owes "Health alerts are off" until Telegram can send it, across a restart, and sends it once', async () => {
+    const first = world('2026-03-10T19:59:00')
+    first.state.settings = { enabled: true, offAt: '20:00' }
+    await first.watch.configure()
+    first.state.ready = false
+    await first.advance(60)
+    expect(first.state.turnedOff).toBe(1)
+    await first.advance(30)
+    expect(first.state.sent).toEqual([])
+    // BMN restarts with the watch off: the saved settings are read again, and the notice is still owed.
+    const second = world('2026-03-10T21:00:00', first.store)
+    second.state.settings = { enabled: false, offAt: null }
+    second.state.ready = false
+    await second.watch.configure()
+    await second.advance(30)
+    expect(second.state.sent).toEqual([])
+    second.state.ready = true
+    await second.advance(30)
+    expect(second.state.sent).toEqual(['<b>Health alerts are off</b>\n<i>The switch-off time you set has come.</i>'])
+    await second.advance(30); await second.advance(86_400)
+    expect(second.state.sent).toHaveLength(1)
+    expect(second.state.checks).toBe(0)
+    expect(second.store.value).toEqual({ version: 1, sent: [], sentAt: null, cpuHotStreak: 0, batteryAtStart: null, offAt: null, offDeadline: null })
+  })
+
+  it('tries the switch-off notice again after a send that definitely failed, and not after one that may have arrived', async () => {
+    const refused = world('2026-03-10T19:59:00')
+    refused.state.settings = { enabled: true, offAt: '20:00' }
+    await refused.watch.configure()
+    await refused.advance(30)
+    refused.state.failure = new TelegramConnectorError('http', 'Too many requests', 429)
+    await refused.advance(30)
+    expect(refused.state.turnedOff).toBe(1)
+    expect(refused.state.sent.filter(text => text.includes('Health alerts are off'))).toEqual([])
+    await refused.advance(30)
+    expect(refused.state.sent.filter(text => text.includes('Health alerts are off'))).toHaveLength(1)
+
+    const lost = world('2026-03-10T19:59:00')
+    lost.state.settings = { enabled: true, offAt: '20:00' }
+    await lost.watch.configure()
+    await lost.advance(30)
+    lost.state.failure = new TelegramConnectorError('network', 'The answer never came')
+    await lost.advance(30)
+    await lost.advance(30); await lost.advance(600)
+    expect(lost.state.sent.filter(text => text.includes('Health alerts are off'))).toEqual([])
+    expect(lost.store.value).not.toHaveProperty('offNoticeOwed')
+  })
+
+  it('drops an owed switch-off notice when the owner switches the watch on again first', async () => {
+    const { state, watch, store, advance } = world('2026-03-10T19:59:00')
+    state.settings = { enabled: true, offAt: '20:00' }
+    await watch.configure()
+    state.ready = false
+    await advance(60)
+    expect(store.value).toMatchObject({ offNoticeOwed: true })
+    state.settings = { enabled: true, offAt: null }
+    await watch.configure()
+    expect(store.value).not.toHaveProperty('offNoticeOwed')
+    state.ready = true
+    await advance(60); await advance(60)
+    expect(state.sent.filter(text => text.includes('Health alerts are off'))).toEqual([])
   })
 
   it('forgets everything when the owner switches the watch off, so the next switch-on starts fresh', async () => {

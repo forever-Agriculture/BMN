@@ -21,6 +21,8 @@ interface HealthAlertState {
   /** The switch-off time this deadline was worked out for, and the moment it falls on. */
   offAt: string | null
   offDeadline: string | null
+  /** The watch switched itself off and "Health alerts are off" has not gone out yet. */
+  offNoticeOwed?: true
 }
 
 export interface HealthAlertDependencies {
@@ -41,7 +43,8 @@ export interface HealthAlertDependencies {
 const emptyState = (): HealthAlertState =>
   ({ version: 1, sent: [], sentAt: null, cpuHotStreak: 0, batteryAtStart: null, offAt: null, offDeadline: null })
 
-const STATE_KEYS = ['version', 'sent', 'sentAt', 'cpuHotStreak', 'batteryAtStart', 'offAt', 'offDeadline']
+const STATE_KEYS = ['version', 'sent', 'sentAt', 'cpuHotStreak', 'batteryAtStart', 'offAt', 'offDeadline', 'offNoticeOwed']
+const OFF_NOTICE = '<b>Health alerts are off</b>\n<i>The switch-off time you set has come.</i>'
 const instant = (value: unknown): boolean => value === null || typeof value === 'string' && value.length <= 32 && Number.isFinite(Date.parse(value))
 
 /** An unreadable state starts over: a repeated alert is safer than a watch that stops. */
@@ -54,6 +57,7 @@ function loadState(value: unknown): HealthAlertState {
     instant(state.sentAt) && instant(state.offDeadline) &&
     Number.isSafeInteger(state.cpuHotStreak) && state.cpuHotStreak >= 0 &&
     (state.batteryAtStart === null || typeof state.batteryAtStart === 'boolean') &&
+    (state.offNoticeOwed === undefined || state.offNoticeOwed === true) &&
     (state.offAt === null || typeof state.offAt === 'string' && /^\d{2}:\d{2}$/.test(state.offAt))
   return valid ? { ...state, sent: [...state.sent] } : emptyState()
 }
@@ -132,6 +136,8 @@ export class HealthAlerts {
   private active: Promise<void> | undefined
   private lastCheck: number | undefined
   private tail: Promise<void> = Promise.resolve()
+  /** Whether "Health alerts are off" is still owed; unknown until the stored state was read once. */
+  private offNoticeOwed: boolean | undefined
 
   constructor(private readonly deps: HealthAlertDependencies) {}
 
@@ -150,8 +156,8 @@ export class HealthAlerts {
   }
 
   /**
-   * Called when the settings were saved or loaded. Off forgets everything, so the next switch-on starts
-   * fresh. A new switch-off time is turned into its moment here, at the save, so "already past" is judged
+   * Called when the settings were saved or loaded. Off forgets everything but an owed "Health alerts are
+   * off", so the next switch-on starts fresh. A new switch-off time is turned into its moment here, at the save, so "already past" is judged
    * against when the owner chose it; the same time read again after a restart keeps its moment.
    */
   configure(): Promise<void> {
@@ -163,15 +169,39 @@ export class HealthAlerts {
     const state = loadState(await this.deps.read())
     if (!settings.enabled) {
       this.lastCheck = undefined
-      if (JSON.stringify(state) !== JSON.stringify(emptyState())) await this.deps.write(emptyState())
+      this.offNoticeOwed = state.offNoticeOwed === true
+      const kept: HealthAlertState = this.offNoticeOwed ? { ...emptyState(), offNoticeOwed: true } : emptyState()
+      if (JSON.stringify(state) !== JSON.stringify(kept)) await this.deps.write(kept)
       return
     }
-    if (settings.offAt === state.offAt && (settings.offAt === null) === (state.offDeadline === null)) return
+    // Switched on again: a notice that the watch is off would no longer be true.
+    this.offNoticeOwed = false
+    const { offNoticeOwed: owed, ...current } = state
+    const sameTime = settings.offAt === state.offAt && (settings.offAt === null) === (state.offDeadline === null)
+    if (owed === undefined && sameTime) return
     await this.deps.write({
-      ...state,
+      ...current,
       offAt: settings.offAt,
-      offDeadline: settings.offAt === null ? null : nextLocalTime(this.deps.now(), settings.offAt).toISOString()
+      offDeadline: sameTime ? state.offDeadline : settings.offAt === null ? null : nextLocalTime(this.deps.now(), settings.offAt).toISOString()
     } satisfies HealthAlertState)
+  }
+
+  /**
+   * "Health alerts are off" goes out once after the watch switched itself off. It waits for Telegram:
+   * a watch that went off unseen would be taken for one still watching. A send that definitely failed
+   * is tried again at the next sweep; one that may have arrived is not repeated.
+   */
+  private async sendOffNotice(): Promise<void> {
+    this.offNoticeOwed ??= loadState(await this.deps.read()).offNoticeOwed === true
+    if (!this.offNoticeOwed || !this.deps.ready()) return
+    try {
+      await this.deps.send(OFF_NOTICE)
+    } catch (error) {
+      if (telegramSendDefinitelyUnsent(error)) return
+    }
+    this.offNoticeOwed = false
+    // The owner may have switched the watch on while the notice went out; its new state stays.
+    if (!this.deps.settings().enabled) await this.deps.write(emptyState())
   }
 
   /** The current readings marked as a test; no stored state changes. */
@@ -183,15 +213,15 @@ export class HealthAlerts {
   }
 
   private async run(): Promise<void> {
-    if (!this.deps.settings().enabled) return
+    if (!this.deps.settings().enabled) return this.sendOffNotice()
     const now = this.deps.now()
     const state = loadState(await this.deps.read())
     if (state.offDeadline !== null && now.getTime() >= Date.parse(state.offDeadline)) {
       await this.deps.turnOff()
-      await this.deps.write(emptyState())
+      await this.deps.write({ ...emptyState(), offNoticeOwed: true } satisfies HealthAlertState)
       this.lastCheck = undefined
-      if (this.deps.ready()) await this.deps.send('<b>Health alerts are off</b>\n<i>The switch-off time you set has come.</i>').catch(() => undefined)
-      return
+      this.offNoticeOwed = true
+      return this.sendOffNotice()
     }
     // Nothing can be told while Telegram is away, and what is owed stays owed in the stored state.
     if (!this.deps.ready()) return

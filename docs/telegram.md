@@ -40,8 +40,10 @@ session. It uses a bot you create and own. It is off by default.
   normal** follows when it ends. Health alerts are sent in quiet hours too. A send Telegram
   refused is tried again at the next check; one whose answer was lost is not repeated before the
   10-minute repeat. **Turn off at** is an optional local time at which the watch switches itself
-  off and says so once; a time already past when you save means that time tomorrow. **Send test**
-  sends the current readings marked as a test. The watch only reads and reports: BMN never stops,
+  off and says so once (when Telegram is away at that moment, as soon as it is back); a time
+  already past when you save means that time tomorrow. **Send test** sends the current readings
+  marked as a test. A reading BMN cannot take is shown as "not measured" in every message; only
+  the CPU temperature raises an alert by being unreadable. The watch only reads and reports: BMN never stops,
   slows or suspends anything, starts no program except `nvidia-smi` for an NVIDIA card that is
   already awake, and adds no service or timer. So it runs only while BMN is open, and it cannot
   see smoke, a swelling battery or a machine that has died. A machine with no battery when the

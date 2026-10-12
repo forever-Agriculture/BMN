@@ -85,6 +85,8 @@ describe('reading the machine', () => {
     const readings = await readMachineHealth({ root, run: async (...args) => { calls.push(args); return '71\n' } })
     expect(readings.nvidiaGpuC).toBe(71)
     expect(calls).toEqual([['nvidia-smi', ['--query-gpu=temperature.gpu', '--format=csv,noheader,nounits'], 10_000]])
+    // One line per card: the hottest counts, as for every other sensor.
+    expect((await readMachineHealth({ root, run: async () => '64\n88\n71\n' })).nvidiaGpuC).toBe(88)
   })
 
   it('reads an NVIDIA card as not measured when the question fails or answers nonsense', async () => {
