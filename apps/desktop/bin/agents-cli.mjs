@@ -299,7 +299,8 @@ async function withContext(data, chain) {
   }
   const describe = async (candidate) => {
     const agent = byId.get(candidate.agent)
-    if (agent === undefined) return candidate
+    // An agent called by BMN takes no dispatch: it has no command to carry a context limit or tools.
+    if (agent === undefined || agent.harness === 'bmn') return candidate
     if (agent.context_limit === undefined || CONTEXT_CONTROLS[agent.harness] === undefined) return withTools(agent, { ...candidate, context: contextItems(agent, { limit: false, compact: false }) })
     tests ??= contextTests()
     return withTools(agent, { ...candidate, context: contextItems(agent, provenControls(agent.harness, await version(agent.harness, CONTEXT_CONTROLS[agent.harness].command), tests)) })

@@ -7,7 +7,7 @@ import {
 import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 import { createInterface } from 'node:readline'
-import { APP_NAMES, HARNESSES, RosterError, agentState, agentsDirectory, canonicalJson, harnessPrivateWork, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, HARNESSES, RosterError, agentState, agentsDirectory, canonicalJson, harnessPrivateWork, isCalled, sha256 } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { absoluteUncollapsed, pathState, replaceFileSafely, resolvedPath, restorePathState, sameState } from './safe-config-write.mjs'
@@ -166,7 +166,8 @@ function approvedOrNull() {
  */
 export function teamPhrase(generation) {
   if (generation === null) return { form: 'short phrase (nothing approved)', text: TEAM_FALLBACK }
-  const active = generation.data.agents.filter((agent) => agentState(agent) === 'active')
+  // An agent called by BMN works in no agent app: no app's rules file names it.
+  const active = generation.data.agents.filter((agent) => agentState(agent) === 'active' && !isCalled(agent))
   if (active.length === 0) return { form: 'short phrase (no active agent)', text: TEAM_FALLBACK }
   const groups = HARNESSES.map((harness) => [APP_NAMES[harness], active.filter((agent) => agent.harness === harness).map((agent) => agent.name)])
     .filter(([, names]) => names.length > 0)

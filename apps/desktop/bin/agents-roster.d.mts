@@ -4,13 +4,17 @@ export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type AgentClass = 'knight' | 'queen' | 'rook' | 'bishop' | 'pawn'
 export type PrivateWork = 'allowed' | 'public_only'
 export interface RosterPrice { input: number; output: number; cached_input?: number; source?: string; as_of?: string }
+/** What an agent's `harness` says when BMN itself calls the model instead of an agent app running it (65.1). */
+export type CalledByBmn = 'bmn'
 export interface RosterAgent {
   id: string
   name: string
   class: AgentClass
-  harness: Harness
+  harness: Harness | CalledByBmn
   model: string
   provider: string
+  /** Only for an agent called by BMN: the provider that runs the model (`provider` is who receives the request). */
+  run_by?: string
   host: string | null
   enabled: boolean
   status: 'active' | 'proposed'
@@ -51,7 +55,7 @@ export interface RosterRoute {
   accepted_versions?: string[]
 }
 export interface RosterData {
-  schema_version: 2
+  schema_version: 2 | 3
   agents: RosterAgent[]
   roles: RosterRole[]
   providers: RosterProvider[]

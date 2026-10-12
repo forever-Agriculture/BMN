@@ -6,7 +6,7 @@ import { closeSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, real
 import { dirname } from 'node:path'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
-import { APP_NAMES, EFFORTS, RESEARCH_APPS, agentState, namedResearchers, researcherProposal } from './agents-roster.mjs'
+import { APP_NAMES, EFFORTS, RESEARCH_APPS, agentState, isCalled, namedResearchers, researcherProposal } from './agents-roster.mjs'
 import { readApproved, stateDirectory } from './agents-state.mjs'
 import { CODEX_RESEARCH_ANSWER, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_HOME, RESEARCH_TOOLS, evaluateResearch, harnessVersion, prepareResearchRun, removeResearchCodexFolders, researchRunsDirectory } from './agents-check.mjs'
 import { contextItems, provenControls } from './agents-context.mjs'
@@ -219,7 +219,8 @@ export function researchers({ environment = process.env, now = new Date(), fence
   const found = []
   const named = namedResearchers(generation.data)
   for (const agent of generation.data.agents) {
-    if (agentState(agent) !== 'active' || (named !== null && !named.includes(agent.id))) continue
+    // An agent called by BMN writes no text and runs in no app: it is never offered as a researcher.
+    if (agentState(agent) !== 'active' || isCalled(agent) || (named !== null && !named.includes(agent.id))) continue
     if (!RESEARCH_APPS.includes(agent.harness)) {
       found.push({ id: agent.id, name: agent.name, harness: agent.harness, ok: false, why: `its app is ${APP_NAMES[agent.harness] ?? agent.harness}`, reason: `${APP_NAMES[agent.harness] ?? agent.harness} has no research form BMN can check` })
       continue

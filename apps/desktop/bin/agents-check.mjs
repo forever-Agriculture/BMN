@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
-import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, harnessPrivateWork, namedResearchers, publicOnlyReasons, resolvedDirectory, roleEfforts, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, harnessPrivateWork, isCalled, namedResearchers, publicOnlyReasons, resolvedDirectory, roleEfforts, sha256 } from './agents-roster.mjs'
 import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, err, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
@@ -56,6 +56,7 @@ const NEXT_STEP = {
   UNKNOWN_AGENT: 'name an agent from `bmn team --all`',
   PROPOSED: 'the owner activates this agent in Preferences > Team first',
   DISABLED: 'pick the next candidate from `bmn roster role <role>`',
+  CALLED_BY_BMN: 'ask it with `bmn judge ask` (see `bmn judge --help`); no dispatch goes to it',
   NOT_A_RESEARCHER: 'pick a researcher the team names (Preferences > Team > Models); only the owner names one, on the agent\'s own page',
   ROLE_UNKNOWN: 'name a role from the roster\'s ## roles',
   ROLE_INELIGIBLE: 'pick a candidate that holds this role (`bmn roster role <role>`)',
@@ -1488,6 +1489,8 @@ export function consequences(before, after) {
 function activeAgent(generation, id) {
   const agent = generation.data.agents.find((candidate) => candidate.id === id)
   if (agent === undefined) refuse('UNKNOWN_AGENT', `no agent ${id} in approved version ${generation.number}`)
+  // An agent BMN itself calls runs in no agent app: there is no command of it to check (65.1 AC4).
+  if (isCalled(agent)) refuse('CALLED_BY_BMN', `${agent.id} is called by BMN itself and runs in no agent app, so no dispatch command is checked for it`)
   const state = agentState(agent)
   if (state === 'proposed') refuse('PROPOSED', `${agent.id} is proposed, not approved as active`)
   if (state === 'disabled') refuse('DISABLED', `${agent.id} is disabled`)

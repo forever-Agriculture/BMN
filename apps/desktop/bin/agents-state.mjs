@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { access, readdir } from 'node:fs/promises'
 import {
-  AGENT_FIELDS, FREE_TEXT_FIELDS, ROLE_FIELDS, RosterError, SCHEMA_VERSION, TOOL_FIELDS, agentsDirectory, canonicalJson, parseRoster, rosterPath, sha256
+  AGENT_FIELDS, FREE_TEXT_FIELDS, ROLE_FIELDS, OLDEST_SCHEMA_VERSION, RosterError, TOOL_FIELDS, agentsDirectory, canonicalJson, parseRoster, rosterPath, schemaSupported, sha256
 } from './agents-roster.mjs'
 
 /**
@@ -72,7 +72,7 @@ function isObject(value) {
 
 /** Shape check of approved data: hashes guard against corruption, this against a reader crashing on garbage. */
 function wellFormed(data) {
-  return isObject(data) && data.schema_version === SCHEMA_VERSION && Array.isArray(data.agents) && Array.isArray(data.roles)
+  return isObject(data) && schemaSupported(data.schema_version) && Array.isArray(data.agents) && Array.isArray(data.roles)
     && Array.isArray(data.providers) && Array.isArray(data.exceptions) && Array.isArray(data.harness_routes)
     && data.agents.every((agent) => isObject(agent) && typeof agent.id === 'string' && Array.isArray(agent.efforts) && Array.isArray(agent.roles))
     && data.roles.every((role) => isObject(role) && typeof role.id === 'string' && Array.isArray(role.candidates))
@@ -102,7 +102,7 @@ function readVerified(number) {
  * history only (60.2 AC7): never in force, never restored, and nothing is derived from it.
  */
 function isEarlierSchema(generation) {
-  return Number.isSafeInteger(generation.data.schema_version) && generation.data.schema_version < SCHEMA_VERSION
+  return Number.isSafeInteger(generation.data.schema_version) && generation.data.schema_version < OLDEST_SCHEMA_VERSION
 }
 
 /**

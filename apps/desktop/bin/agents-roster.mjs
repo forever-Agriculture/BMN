@@ -11,8 +11,24 @@ import { homedir } from 'node:os'
  * aliases, tags, multi-line scalars and documents are refused rather than half-understood.
  */
 
-export const SCHEMA_VERSION = 2
+/** The layout BMN writes for a new team. A team file in an older layout BMN still reads keeps reading, and stays approved, as it is. */
+export const SCHEMA_VERSION = 3
+/** The oldest layout BMN still reads. Schema 3 only adds to it, so a schema 2 file means what it meant. */
+export const OLDEST_SCHEMA_VERSION = 2
+export function schemaSupported(version) {
+  return Number.isSafeInteger(version) && version >= OLDEST_SCHEMA_VERSION && version <= SCHEMA_VERSION
+}
 export const HARNESSES = ['claude', 'codex', 'opencode', 'cursor']
+/**
+ * What an agent's `harness` says in place of an agent app when BMN itself calls the model (65.1):
+ * such an agent runs in no app, takes no dispatch, and is asked through a command of BMN's own.
+ */
+export const CALLED_BY_BMN = 'bmn'
+export const CALLED_WORDS = 'called by BMN'
+/** Whether an agent is called by BMN itself instead of running in an agent app. */
+export function isCalled(agent) {
+  return agent?.harness === CALLED_BY_BMN
+}
 /** How BMN names each agent app to the owner, in the order they are always listed. */
 export const APP_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' }
 /** Apps whose requests BMN never checks: no dispatch check reads their command, and the model is picked inside the app. */
@@ -42,6 +58,9 @@ export const SKILL_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
 export const LEAD_ROLE = 'lead'
 /** The role only a rook or a queen may hold: the design pass. */
 export const DESIGNER_ROLE = 'designer'
+/** The role only an agent called by BMN may hold, and the only one it may hold (65.1). */
+export const JUDGE_ROLE = 'judge'
+export const JUDGE_DESCRIPTION = 'answers typed questions about a text with numbers; advice only'
 /** Roles only some classes may hold, with the refusal another class gets. Every other role is open to every class, and every role to a queen. */
 export const CLASS_ROLES = {
   [LEAD_ROLE]: { classes: ['knight', 'queen'], code: 'CLASS_CANNOT_LEAD', rule: 'only a knight or a queen leads' },
@@ -62,8 +81,10 @@ const DOMAIN_PATTERN = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[
 export const FREE_TEXT_FIELDS = ['enabled_note', 'description']
 
 const REQUIRED_AGENT_FIELDS = ['name', 'class', 'harness', 'model', 'provider', 'host', 'enabled', 'status', 'efforts', 'roles']
-const OPTIONAL_AGENT_FIELDS = ['aliases', 'enabled_note', 'context_window', 'context_limit', 'compact_at', 'paid_by', 'price', 'researcher']
+const OPTIONAL_AGENT_FIELDS = ['run_by', 'aliases', 'enabled_note', 'context_window', 'context_limit', 'compact_at', 'paid_by', 'price', 'researcher']
 export const AGENT_FIELDS = [...REQUIRED_AGENT_FIELDS, ...OPTIONAL_AGENT_FIELDS]
+/** What an agent called by BMN never carries: it runs in no app, so it has no effort, no context and no research. */
+const APP_ONLY_FIELDS = ['context_window', 'context_limit', 'compact_at', 'researcher']
 const PRICE_FIELDS = ['input', 'cached_input', 'output', 'source', 'as_of']
 const PROVIDER_FIELDS = ['name', 'hosts', 'sites', 'private_work']
 export const ROLE_FIELDS = ['description', 'candidates', 'then', 'recheck', 'small_work', 'read_only']
@@ -118,6 +139,57 @@ export function researcherProposal(data) {
   return proposed
 }
 
+/**
+ * BMN's first proposal for a judge (65.1 AC7): Jev, TypeSafe AI's System One model, reached through
+ * OpenCode's gateway. The two providers' private-work answer is the owner's own, given on a card on
+ * 2026-10-12 with the research of 65.1 in front of him ("Allow both"); a provider his team already
+ * names keeps the answer it has. The price is OpenCode's own figure, read in its docs source.
+ */
+export const JUDGE_PROPOSAL = {
+  receives: { id: 'opencode-zen', name: 'OpenCode Zen', hosts: ['opencode.ai'], sites: ['opencode.ai'], private_work: 'allowed' },
+  runs: { id: 'typesafe', name: 'TypeSafe AI', hosts: [], sites: ['typesafe.ai'], private_work: 'allowed' },
+  agent: {
+    id: 'jev', name: 'Jev', class: 'bishop', harness: CALLED_BY_BMN, model: 'jev-1.13', host: 'opencode.ai', enabled: true, status: 'active', efforts: [], roles: [JUDGE_ROLE],
+    paid_by: 'per_token',
+    price: { input: 0.042, output: 0, source: 'https://github.com/anomalyco/opencode/blob/bcf23b6775c79a429b1511b255d6d88ab0248d4a/services/www/src/docs/content/console/models.mdx', as_of: '2026-10-12' }
+  }
+}
+
+/**
+ * The team with BMN's judge proposal taken, or null where there is nothing to propose: the team
+ * already holds an agent called by BMN or a role judge (the choice is the owner's from then on), or
+ * an agent or role of another kind already uses the proposal's names. A proposal only: nothing can
+ * be asked until the owner approves it like every team change.
+ */
+export function judgeProposal(data) {
+  if (!data || data.agents.some(isCalled) || data.roles.some((role) => role.id === JUDGE_ROLE) || data.agents.some((agent) => agent.id === JUDGE_PROPOSAL.agent.id)) return null
+  const providers = [...data.providers]
+  const party = (wanted) => {
+    // A provider the team already names for that host, or under that id, is used as it stands.
+    const held = providers.find((provider) => provider.id === wanted.id || wanted.hosts.some((host) => provider.hosts.some((other) => other.toLowerCase() === host)))
+    if (held !== undefined) return held.id
+    providers.push({ ...wanted })
+    return wanted.id
+  }
+  const receives = party(JUDGE_PROPOSAL.receives)
+  const runs = party(JUDGE_PROPOSAL.runs)
+  const receiver = providers.find((provider) => provider.id === receives)
+  if (!receiver.hosts.some((host) => host.toLowerCase() === JUDGE_PROPOSAL.agent.host)) return null
+  const { id, name, class: agentClass, harness, model, host, ...rest } = JUDGE_PROPOSAL.agent
+  return {
+    ...data, schema_version: SCHEMA_VERSION, providers,
+    agents: [...data.agents, { id, name, class: agentClass, harness, model, provider: receives, run_by: runs, host, ...rest }],
+    roles: [...data.roles, { id: JUDGE_ROLE, description: JUDGE_DESCRIPTION, candidates: [id], then: 'skip' }]
+  }
+}
+
+/** The agents an approved team offers as a judge, in the role's order: called by BMN, candidates of the role, each with its state. */
+export function judges(data) {
+  const role = data?.roles.find((entry) => entry.id === JUDGE_ROLE)
+  if (role === undefined) return []
+  return role.candidates.map((id) => data.agents.find((agent) => agent.id === id)).filter((agent) => agent !== undefined && isCalled(agent))
+}
+
 /** The efforts a role names for an agent: its candidate entry, its effort for a recheck and the one for small work. Empty where the role does not name the agent. */
 export function roleEfforts(role, agentId) {
   const efforts = []
@@ -133,6 +205,8 @@ export function roleEfforts(role, agentId) {
 }
 const ROUTE_FIELDS = ['provider', 'basis', 'accepted_versions']
 /** What schema 1 called things, for the refusal that tells its owner what changed. */
+/** What schema 3 added, for the refusal that tells an owner why a schema 2 file cannot say it. */
+export const SCHEMA_3_CHANGES = 'schema 3 adds an agent called by BMN itself (harness: bmn, with run_by naming who runs the model, and no efforts, context fields or researcher mark) and the role judge that only such an agent holds; everything a schema 2 file says means what it meant'
 const SCHEMA_1_CHANGES = 'schema 1 is the earlier layout: title became class (knight | queen | rook | bishop | pawn); trust, authority, security, cost, quota, tags and ## data-labels are gone; small_epic became small_work and max_context_tokens became context_limit; privacy is now ## providers with private_work: allowed | public_only'
 
 export function agentsDirectory() {
@@ -515,26 +589,28 @@ export function parseRoster(text) {
     for (const key of Object.keys(header.value)) {
       if (key !== 'schema_version') add('UNKNOWN_FIELD', header.lines.get(key), `unknown field ${key} in ## roster`)
     }
-    if (header.value.schema_version !== SCHEMA_VERSION) {
+    if (!schemaSupported(header.value.schema_version)) {
       const found = header.value.schema_version
       add('SCHEMA_VERSION', header.lines.get('schema_version') ?? header.block.startLine,
-        `schema_version must be ${SCHEMA_VERSION}${found === undefined ? '' : `, not ${found}`}${found === 1 ? `; ${SCHEMA_1_CHANGES}` : ''}`)
+        `schema_version must be ${SCHEMA_VERSION} (or ${OLDEST_SCHEMA_VERSION}, the layout before it)${found === undefined ? '' : `, not ${found}`}${found === 1 ? `; ${SCHEMA_1_CHANGES}` : ''}`)
       return { data: null, errors, warnings, sections }
     }
   }
+  // A file without the section already has its error; what it holds is read as the newest layout.
+  const schema = header?.value.schema_version ?? SCHEMA_VERSION
 
   const providers = validateProviders(blocks.get('providers'), add)
   const providerIds = new Set(blocks.get('providers') ? Object.keys(blocks.get('providers').value) : [])
   const agents = []
   for (const [id, entry] of blocks) {
     if (RESERVED_SECTIONS.includes(id)) continue
-    agents.push(validateAgent(id, entry, providerIds, add))
+    agents.push(validateAgent(id, entry, providerIds, add, schema))
   }
   const agentById = new Map(agents.filter(Boolean).map((agent) => [agent.id, agent]))
   const agentIds = new Set([...seen.keys()].filter((id) => !RESERVED_SECTIONS.includes(id)))
 
   const routes = validateRoutes(blocks.get('harness-routes'), providerIds, add)
-  const roles = validateRoles(blocks.get('roles'), agentById, agentIds, add, warnings)
+  const roles = validateRoles(blocks.get('roles'), agentById, agentIds, add, warnings, schema)
   const exceptions = validateExceptions(blocks.get('exceptions'), providerIds, add, (code, line, message) => warnings.push({ code, line, message }))
   const skills = validateSkills(blocks.get('skills'), add)
   const tools = validateTools(blocks.get('tools'), agentIds, add)
@@ -544,6 +620,10 @@ export function parseRoster(text) {
   for (const agent of agentById.values()) {
     const entry = blocks.get(agent.id)
     const route = routes.find((candidate) => candidate.harness === agent.harness)
+    if (isCalled(agent) && !roleIds.has(JUDGE_ROLE) && agent.roles.includes(JUDGE_ROLE)) {
+      // Said as an error, not as the warning other roles get: without the role nothing could ever ask this agent.
+      add('ROLE_UNKNOWN', entry.lines.get('roles'), `${agent.id} holds role ${JUDGE_ROLE}, which ## roles does not hold; add ${JUDGE_ROLE} there with ${agent.id} as its candidate`)
+    }
     if (agent.host === 'default' && route !== undefined && route.provider !== agent.provider) {
       add('ROUTE_CONFLICT', entry.lines.get('host'),
         `${agent.id} has host: default on ${agent.harness}, whose default provider is ${route.provider}, not ${agent.provider}`)
@@ -560,7 +640,7 @@ export function parseRoster(text) {
 
   if (errors.length > 0) return { data: null, errors: errors.sort((a, b) => (a.line ?? 0) - (b.line ?? 0)), warnings, sections }
   return {
-    data: { schema_version: SCHEMA_VERSION, agents: agents.filter(Boolean), roles, providers, exceptions, harness_routes: routes, ...skills, ...tools },
+    data: { schema_version: schema, agents: agents.filter(Boolean), roles, providers, exceptions, harness_routes: routes, ...skills, ...tools },
     errors, warnings, sections
   }
 }
@@ -583,13 +663,16 @@ function priceProblem(price) {
   return null
 }
 
-function validateAgent(id, entry, providerIds, add) {
+function validateAgent(id, entry, providerIds, add, schema) {
   const { value, lines, block } = entry
   const at = (key) => lines.get(key) ?? block.startLine
   const bad = (key, message) => add('INVALID_VALUE', at(key), `${id}.${key}: ${message}`)
   checkFields(entry, AGENT_FIELDS, `agent ${id}`, add)
   let valid = Object.keys(value).every((key) => AGENT_FIELDS.includes(key))
+  const called = value.harness === CALLED_BY_BMN
   for (const key of REQUIRED_AGENT_FIELDS) {
+    // An agent called by BMN has no efforts to list; `run_by` is what it must name instead.
+    if (called && key === 'efforts') continue
     if (!Object.hasOwn(value, key)) {
       add('MISSING_FIELD', block.startLine, `${id} is missing required field ${key}`)
       valid = false
@@ -613,9 +696,10 @@ function validateAgent(id, entry, providerIds, add) {
   const positive = (v) => Number.isSafeInteger(v) && v > 0
   check('name', (v) => isString(v, 40), 'text of 1-40 characters')
   check('class', enumOf(CLASSES), CLASSES.join(' | '))
-  check('harness', enumOf(HARNESSES), HARNESSES.join(' | '))
+  check('harness', enumOf([...HARNESSES, CALLED_BY_BMN]), `${HARNESSES.join(' | ')}, or ${CALLED_BY_BMN} for an agent BMN itself calls`)
   check('model', (v) => isString(v, 128), 'text of 1-128 characters')
   check('provider', (v) => typeof v === 'string' && ID_PATTERN.test(v), 'a provider id from ## providers')
+  check('run_by', (v) => typeof v === 'string' && ID_PATTERN.test(v), 'a provider id from ## providers: who runs the model')
   if (Object.hasOwn(value, 'host') && value.host !== null && !(value.host === 'default' || (typeof value.host === 'string' && HOST_PATTERN.test(value.host)))) {
     bad('host', 'a hostname (optionally :port), default, or null')
     valid = false
@@ -643,6 +727,15 @@ function validateAgent(id, entry, providerIds, add) {
     add('UNKNOWN_PROVIDER', at('provider'), `${id}.provider: ${value.provider} is not in ## providers`)
     return null
   }
+  if (called) return calledAgent(id, value, at, providerIds, add, schema)
+  if (Object.hasOwn(value, 'run_by')) {
+    add('CALLED_ONLY', at('run_by'), `${id}.run_by: only an agent called by BMN (harness: ${CALLED_BY_BMN}) names who runs its model; ${id} runs in ${APP_NAMES[value.harness]}`)
+    return null
+  }
+  if (value.roles.includes(JUDGE_ROLE)) {
+    add('JUDGE_NOT_CALLED', at('roles'), `${id} holds role ${JUDGE_ROLE}; only an agent called by BMN (harness: ${CALLED_BY_BMN}) holds it, and ${id} runs in ${APP_NAMES[value.harness]}`)
+    return null
+  }
   if (value.efforts.length === 0 && value.enabled) {
     bad('efforts', 'empty efforts are allowed only when enabled is false')
     return null
@@ -667,6 +760,38 @@ function validateAgent(id, entry, providerIds, add) {
   }
   const agent = { id }
   for (const key of AGENT_FIELDS) if (Object.hasOwn(value, key)) agent[key] = value[key]
+  return agent
+}
+
+/**
+ * An agent BMN itself calls (65.1): the same name, class, model, provider, host, switch, status and
+ * roles as every agent, plus who runs the model. It runs in no app, so each field that belongs to
+ * an app is refused with its line, and it holds the role judge and no other.
+ */
+function calledAgent(id, value, at, providerIds, add, schema) {
+  const fail = (code, key, message) => {
+    add(code, at(key), `${id}.${key}: ${message}`)
+    return null
+  }
+  if (schema < 3) return fail('SCHEMA_VERSION', 'harness', `an agent called by BMN needs schema_version: 3 in ## roster, and this file says ${schema}; ${SCHEMA_3_CHANGES}`)
+  if (Object.hasOwn(value, 'efforts') && value.efforts.length > 0) return fail('CALLED_FIELD', 'efforts', `${id} is called by BMN and has no efforts (it runs in no agent app); remove the line`)
+  for (const key of APP_ONLY_FIELDS) {
+    if (!Object.hasOwn(value, key)) continue
+    const what = key === 'researcher' ? 'the researcher mark' : `a ${key.replace('_', ' ')}`
+    return fail('CALLED_FIELD', key, `${id} is called by BMN and carries no ${what.replace(/^(a|the) /, '')} (it runs in no agent app); remove the line`)
+  }
+  if (!Object.hasOwn(value, 'run_by')) {
+    add('MISSING_FIELD', at('harness'), `${id} is called by BMN and is missing run_by: the provider that runs the model (provider is who receives the request)`)
+    return null
+  }
+  if (!providerIds.has(value.run_by)) return fail('UNKNOWN_PROVIDER', 'run_by', `${value.run_by} is not in ## providers`)
+  if (value.host === null || value.host === 'default') return fail('INVALID_VALUE', 'host', `${id} is called by BMN, so host is the hostname BMN sends the request to, not ${value.host}`)
+  const other = value.roles.find((role) => role !== JUDGE_ROLE)
+  if (other !== undefined) return fail('CALLED_ROLE', 'roles', `${id} is called by BMN and holds role ${other}; such an agent holds the role ${JUDGE_ROLE} and no other`)
+  const agent = { id }
+  for (const key of AGENT_FIELDS) if (Object.hasOwn(value, key)) agent[key] = value[key]
+  // No efforts in the file; an empty list here, so nothing that reads an agent's efforts has two shapes to know.
+  agent.efforts = []
   return agent
 }
 
@@ -753,11 +878,16 @@ function validateRoutes(entry, providerIds, add) {
   return routes
 }
 
-function validateRoles(entry, agentById, agentIds, add, warnings) {
+function validateRoles(entry, agentById, agentIds, add, warnings, schema) {
   if (!entry) return []
   const roles = []
   for (const [id, role] of Object.entries(entry.value)) {
     const line = entry.lines.get(id)
+    if (id === JUDGE_ROLE) {
+      const judge = validateJudge(role, entry, agentById, agentIds, add, warnings, schema)
+      if (judge !== null) roles.push(judge)
+      continue
+    }
     if (!ID_PATTERN.test(id)) {
       add('INVALID_VALUE', line, `## roles: role id ${id} must match [a-z0-9-]{1,32}`)
       continue
@@ -794,6 +924,10 @@ function validateRoles(entry, agentById, agentIds, add, warnings) {
       }
       const agent = agentById.get(candidate.agent)
       if (agent === undefined) return candidate // its own section already failed and is reported there
+      if (isCalled(agent)) {
+        fail('CALLED_ROLE', { key, text: `"${text}": ${agent.id} is called by BMN and may be a candidate of the role ${JUDGE_ROLE} only` })
+        return null
+      }
       for (const effort of candidate.efforts) {
         if (!agent.efforts.includes(effort)) fail('EFFORT_NOT_LISTED', { key, text: `"${text}": ${agent.id} does not list effort ${effort}` })
       }
@@ -845,6 +979,57 @@ function validateRoles(entry, agentById, agentIds, add, warnings) {
     }
   }
   return roles
+}
+
+/**
+ * The role judge (65.1): its candidates are agents called by BMN, named by their id alone since
+ * such an agent has no effort. It has a description, candidates and `then`, and nothing else.
+ */
+function validateJudge(role, entry, agentById, agentIds, add, warnings, schema) {
+  const line = entry.lines.get(JUDGE_ROLE)
+  let ok = true
+  const fail = (code, key, text) => {
+    add(code, entry.lines.get(`${JUDGE_ROLE}.${key}`) ?? line, `## roles.${JUDGE_ROLE}: ${text}`)
+    ok = false
+  }
+  if (schema < 3) {
+    fail('SCHEMA_VERSION', 'candidates', `the role ${JUDGE_ROLE} needs schema_version: 3 in ## roster, and this file says ${schema}; ${SCHEMA_3_CHANGES}`)
+    return null
+  }
+  if (!isMap(role)) {
+    fail('INVALID_VALUE', 'candidates', 'must be a map with candidates and then')
+    return null
+  }
+  for (const key of Object.keys(role)) {
+    if (!ROLE_FIELDS.includes(key)) fail('UNKNOWN_FIELD', key, `unknown field ${key}`)
+    else if (!['description', 'candidates', 'then'].includes(key)) fail('INVALID_VALUE', key, `${key} belongs to a role that agent apps run; ${JUDGE_ROLE} holds a description, candidates and then`)
+  }
+  if (Object.hasOwn(role, 'description')) {
+    if (role.description === null) fail('NULL_OPTIONAL', 'description', 'description is null; omit it instead')
+    else if (!isString(role.description, 80)) fail('INVALID_VALUE', 'description', 'description must be text of 1-80 characters')
+  }
+  if (!THEN.includes(role.then)) fail('INVALID_VALUE', 'then', `then must be ${THEN.join(' | ')}`)
+  if (!Array.isArray(role.candidates)) {
+    fail('INVALID_VALUE', 'candidates', 'candidates must be a list of agents called by BMN, each by its id')
+  } else {
+    const named = new Set()
+    role.candidates.forEach((text, index) => {
+      if (typeof text !== 'string' || named.has(text)) return fail('INVALID_VALUE', 'candidates', `candidate ${index + 1} is not a distinct agent id`)
+      named.add(text)
+      if (!ID_PATTERN.test(text)) return fail('INVALID_VALUE', 'candidates', `"${text}" must be the id of an agent called by BMN, with no @effort: such an agent has no effort`)
+      if (!agentIds.has(text)) return fail('UNKNOWN_AGENT', 'candidates', `"${text}" names unknown agent ${text}`)
+      const agent = agentById.get(text)
+      if (agent === undefined) return undefined // its own section already failed and is reported there
+      if (!isCalled(agent)) return fail('JUDGE_NOT_CALLED', 'candidates', `"${text}": only an agent called by BMN may be a candidate of ${JUDGE_ROLE}, and ${agent.id} runs in ${APP_NAMES[agent.harness]}`)
+      if (!agent.roles.includes(JUDGE_ROLE)) return fail('ROLE_NOT_HELD', 'candidates', `"${text}": ${agent.id} does not hold role ${JUDGE_ROLE} in its own roles`)
+      if (!agent.enabled) warnings.push({ code: 'CANDIDATE_DISABLED', line: entry.lines.get(`${JUDGE_ROLE}.candidates`) ?? line, message: `## roles.${JUDGE_ROLE}: ${agent.id} is disabled` })
+      return undefined
+    })
+  }
+  if (!ok) return null
+  const out = { id: JUDGE_ROLE }
+  for (const key of ROLE_FIELDS) if (Object.hasOwn(role, key)) out[key] = role[key]
+  return out
 }
 
 /** The directory a path names, with symbolic links followed where the path exists. */
@@ -920,9 +1105,35 @@ export function agentState(agent) {
   return 'active'
 }
 
-/** The provider's answer for an agent: whether its provider may see private work at all. */
+/**
+ * The provider's answer for an agent: whether its provider may see private work at all. An agent
+ * called by BMN names two parties, who receives the request and who runs the model, and private
+ * work is allowed for it only where both say so (65.1 AC2).
+ */
 export function privateWorkOf(data, agent) {
-  return data.providers.find((provider) => provider.id === agent.provider)?.private_work ?? 'public_only'
+  const answer = (id) => data.providers.find((provider) => provider.id === id)?.private_work ?? 'public_only'
+  if (isCalled(agent)) return answer(agent.provider) === 'allowed' && answer(agent.run_by) === 'allowed' ? 'allowed' : 'public_only'
+  return answer(agent.provider)
+}
+
+/**
+ * The two parties of an agent called by BMN, each with its private-work answer, and the one
+ * sentence that says what follows: private work only where both allow it, otherwise public work
+ * only, with who holds it back.
+ */
+export function calledParties(data, agent) {
+  const party = (id) => {
+    const provider = data.providers.find((entry) => entry.id === id)
+    return { id, name: provider?.name ?? id, private_work: provider?.private_work ?? 'public_only' }
+  }
+  const receives = party(agent.provider)
+  const runs = party(agent.run_by)
+  const held = [receives, runs].filter((entry, index, all) => entry.private_work !== 'allowed' && all.findIndex((other) => other.id === entry.id) === index)
+  const allowed = held.length === 0
+  const names = receives.id === runs.id ? receives.name : `${receives.name} and ${runs.name}`
+  const reason = allowed ? `${names} may see private work`
+    : `public work only: ${held.map((entry) => entry.name).join(' and ')} ${held.length === 1 ? 'gets' : 'get'} public work only`
+  return { receives, runs, allowed, reason }
 }
 
 /**
@@ -949,6 +1160,11 @@ export function harnessPrivateWork(data, harness) {
  * app's default destination counts only for an agent that uses it (`host: default`).
  */
 export function publicOnlyReasons(agent, data) {
+  if (isCalled(agent)) {
+    const parties = calledParties(data, agent)
+    return [parties.receives, parties.runs].filter((entry, index, all) => entry.private_work !== 'allowed' && all.findIndex((other) => other.id === entry.id) === index)
+      .map((entry) => `${entry.name} gets public work only`)
+  }
   const reasons = []
   const provider = data.providers.find((entry) => entry.id === agent.provider)
   const route = data.harness_routes.find((entry) => entry.harness === agent.harness)
@@ -971,14 +1187,21 @@ export function teamEntry(data, agent) {
     state: agentState(agent)
   }
   if (agent.context_limit !== undefined) entry.context_limit = agent.context_limit
+  if (isCalled(agent)) {
+    entry.called_by = CALLED_BY_BMN
+    entry.run_by = agent.run_by
+  }
   return entry
 }
 
 export function teamLine(entry) {
-  const parts = [entry.id, entry.name, entry.class, entry.harness, entry.model, `provider=${entry.provider}`,
+  // An agent called by BMN says so where the others name their app, and has no effort or context to list.
+  const called = entry.harness === CALLED_BY_BMN
+  const parts = [entry.id, entry.name, entry.class, called ? CALLED_WORDS : entry.harness, entry.model, `provider=${entry.provider}`,
+    ...(called ? [`run-by=${entry.run_by}`] : []),
     `private-work=${entry.private_work === 'allowed' ? 'allowed' : 'public-only'}`,
-    `roles=${entry.roles.join(',') || '-'}`, `efforts=${entry.efforts.join(',') || '-'}`,
-    `context-limit=${entry.context_limit ?? 'app default'}`]
+    `roles=${entry.roles.join(',') || '-'}`,
+    ...(called ? [] : [`efforts=${entry.efforts.join(',') || '-'}`, `context-limit=${entry.context_limit ?? 'app default'}`])]
   if (entry.state !== 'active') parts.push(`[${entry.state}]`)
   return parts.join('  ')
 }
@@ -993,7 +1216,8 @@ export function roleChain(data, roleId) {
   if (role === undefined) throw new RosterError('ROLE_UNKNOWN', `no role ${roleId} in the roster's ## roles`)
   const byId = new Map(data.agents.map((agent) => [agent.id, agent]))
   const describe = (text) => {
-    const candidate = parseCandidate(text)
+    // The judge's candidates are named by their id alone: an agent called by BMN has no effort.
+    const candidate = parseCandidate(text) ?? { agent: text, efforts: [], choice: false }
     const agent = byId.get(candidate.agent)
     const state = agent === undefined ? 'unknown' : agentState(agent)
     return {
@@ -1009,6 +1233,8 @@ export function roleChain(data, roleId) {
   if (role.small_work !== undefined) chain.small_work = describe(role.small_work)
   // A role the check holds to read-only (63.2): a run for it must not be able to write.
   if (role.read_only === true) chain.read_only = true
+  // Nobody dispatches to this role: its agent is asked through BMN's own command.
+  if (role.id === JUDGE_ROLE) chain.called_by = CALLED_BY_BMN
   return chain
 }
 
@@ -1020,7 +1246,7 @@ export function roleChainText(chain) {
   const about = (candidate) => `${candidate.eligible ? 'eligible' : `not eligible: ${candidate.state}`}  private-work=${candidate.private_work === 'allowed' ? 'allowed' : 'public-only'}${limit(candidate.context)}`
   chain.candidates.forEach((candidate, index) => {
     const effort = candidate.effort_choice ? `${candidate.efforts.join('|')} (lead chooses)` : candidate.efforts[0]
-    lines.push(`  ${index + 1}. ${candidate.agent}@${effort}  ${about(candidate)}`)
+    lines.push(`  ${index + 1}. ${candidate.agent}${effort === undefined ? '' : `@${effort}`}  ${about(candidate)}`)
   })
   lines.push(`  then: ${chain.then}`)
   if (chain.recheck) {
@@ -1028,6 +1254,7 @@ export function roleChainText(chain) {
     lines.push(`  recheck: ${chain.recheck.same_reviewer ? 'same reviewer' : 'any candidate'}${overrides.length ? `, ${overrides.join(', ')}` : ''}`)
   }
   if (chain.small_work) lines.push(`  small work: ${chain.small_work.agent}@${chain.small_work.efforts[0]}  ${about(chain.small_work)}`)
+  if (chain.called_by === CALLED_BY_BMN) lines.push(`  ${CALLED_WORDS}: no dispatch goes to this role; ask it with \`bmn judge ask\``)
   if (chain.read_only === true) {
     lines.push('  read-only: a run for this role is refused unless it is started so that it cannot write')
     const forms = new Map(chain.candidates.filter((candidate) => candidate.read_only !== undefined).map((candidate) => [candidate.read_only.argv.join(' '), candidate.read_only.argv]))
@@ -1240,7 +1467,8 @@ function skillsFromBlock(value) {
 }
 
 export function agentYaml(agent) {
-  return AGENT_FIELDS.filter((key) => Object.hasOwn(agent, key)).map((key) => `${key}: ${yamlFlow(agent[key])}`).join('\n')
+  // An agent called by BMN has no efforts line in the file; the empty list is this module's own.
+  return AGENT_FIELDS.filter((key) => Object.hasOwn(agent, key) && !(key === 'efforts' && isCalled(agent))).map((key) => `${key}: ${yamlFlow(agent[key])}`).join('\n')
 }
 
 /** A block of `id: {…}` lines for a list of entries that each carry their key in `keyField`. */
@@ -1267,8 +1495,8 @@ export function routesYaml(routes) {
   return keyedYaml(routes, 'harness')
 }
 
-export function headerYaml() {
-  return `schema_version: ${SCHEMA_VERSION}`
+export function headerYaml(version = SCHEMA_VERSION) {
+  return `schema_version: ${version}`
 }
 
 /** The four roles a new team starts with; every one is the owner's to rename, change or remove. */
@@ -1320,6 +1548,7 @@ function agentFromBlock(id, value) {
   if (!isMap(value)) return undefined
   const agent = { id }
   for (const key of Object.keys(value)) agent[key] = value[key]
+  if (isCalled(agent) && !Object.hasOwn(agent, 'efforts')) agent.efforts = []
   return agent
 }
 
@@ -1370,8 +1599,9 @@ export function rewriteRoster(text, data, { scope = null } = {}) {
     let wanted
     let current
     if (id === 'roster') {
-      wanted = headerYaml()
-      current = same(blockValue(section), { schema_version: SCHEMA_VERSION }) ? wanted : undefined
+      // The layout the data is in: a schema 2 team stays schema 2 until it holds what only schema 3 can say.
+      wanted = headerYaml(data.schema_version ?? SCHEMA_VERSION)
+      current = same(blockValue(section), { schema_version: data.schema_version ?? SCHEMA_VERSION }) ? wanted : undefined
     } else if (id === 'skills') {
       // An emptied section keeps its heading and says so, rather than leaving a block nothing parses.
       wanted = skillsYaml(data) || 'public: []'
@@ -1406,7 +1636,7 @@ export function rewriteRoster(text, data, { scope = null } = {}) {
     if (seen.has(id) || !inScope(id)) return
     appended += `\n## ${id}\n\n\`\`\`yaml\n${body}\n\`\`\`\n`
   }
-  ensure('roster', headerYaml())
+  ensure('roster', headerYaml(data.schema_version ?? SCHEMA_VERSION))
   if (data.providers.length > 0) ensure('providers', providersYaml(data.providers))
   for (const agent of data.agents) ensure(agent.id, agentYaml(agent))
   for (const shared of SHARED) {
