@@ -467,6 +467,67 @@ describe('removing originals after a purge', () => {
     expect(await removeOriginals(base, [{ artifactId: 'gone', sha256: 'a'.repeat(64) }])).toEqual({ removed: 0, failed: 0 })
   })
 
+  it.each([[['a', 'a.b']], [['a.b', 'a']]])('removes the link of a file whose ID starts with another file\'s ID (%j)', async (order) => {
+    const base = await mkdtemp(join(tmpdir(), 'bmn-artifact-remove-test-'))
+    createdRoots.add(base)
+    const store = new ArtifactFileStore({
+      root: artifactOriginalsRoot(base), stagingRoot: join(base, 'staging'), usedBytes: async () => 0
+    })
+    const stored = new Map<string, { sha256: string; storedPath: string }>()
+    for (const artifactId of ['a', 'a.b']) stored.set(artifactId, await store.importBytes(new TextEncoder().encode(artifactId), { artifactId, originalName: 'note.txt' }))
+    const links = artifactLinksRoot(base)
+    await mkdir(links, { recursive: true })
+    await symlink(stored.get('a.b')!.storedPath, join(links, 'a.b.txt'))
+    await symlink(stored.get('a')!.storedPath, join(links, 'a.txt'))
+
+    expect(await removeOriginals(base, order.map((artifactId) => ({ artifactId, sha256: stored.get(artifactId)!.sha256 }))))
+      .toEqual({ removed: 2, failed: 0 })
+    expect(await readdir(links)).toEqual([])
+    expect(await listFiles(artifactOriginalsRoot(base))).toEqual([])
+  })
+
+  it('removes its own links in a links folder that was linked elsewhere, by an absolute or a relative target', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'bmn-artifact-remove-test-'))
+    createdRoots.add(base)
+    const store = new ArtifactFileStore({
+      root: artifactOriginalsRoot(base), stagingRoot: join(base, 'staging'), usedBytes: async () => 0
+    })
+    const gone = await store.importBytes(new TextEncoder().encode('gone'), { artifactId: 'gone', originalName: 'gone.txt' })
+    const elsewhere = join(base, 'elsewhere', 'deep', 'links')
+    await mkdir(elsewhere, { recursive: true })
+    await symlink(elsewhere, artifactLinksRoot(base))
+    await symlink(gone.storedPath, join(elsewhere, 'gone.txt'))
+    await symlink(join('..', '..', '..', 'artifacts', 'originals', gone.sha256.slice(0, 2), 'gone'), join(elsewhere, 'gone.md'))
+    await writeFile(join(elsewhere, 'gone.pdf'), 'a real file with a link\'s name')
+
+    expect(await removeOriginals(base, [{ artifactId: 'gone', sha256: gone.sha256 }])).toEqual({ removed: 1, failed: 0 })
+    expect(await readdir(elsewhere)).toEqual(['gone.pdf'])
+    expect(await readFile(join(elsewhere, 'gone.pdf'), 'utf8')).toBe('a real file with a link\'s name')
+  })
+
+  it('removes files and links when the whole artifacts folder was moved and linked', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'bmn-artifact-remove-test-'))
+    createdRoots.add(base)
+    const moved = join(base, 'bigger-disk', 'artifacts')
+    await mkdir(moved, { recursive: true })
+    await symlink(moved, join(base, 'artifacts'))
+    const store = new ArtifactFileStore({
+      root: artifactOriginalsRoot(base), stagingRoot: join(base, 'staging'), usedBytes: async () => 0
+    })
+    const gone = await store.importBytes(new TextEncoder().encode('gone'), { artifactId: 'gone', originalName: 'gone.txt' })
+    const kept = await store.importBytes(new TextEncoder().encode('kept'), { artifactId: 'kept', originalName: 'kept.txt' })
+    const links = artifactLinksRoot(base)
+    await mkdir(links, { recursive: true })
+    // One link names the file by the path BMN records, one by where the folder really is.
+    await symlink(gone.storedPath, join(links, 'gone.txt'))
+    await symlink(join(moved, 'originals', gone.sha256.slice(0, 2), 'gone'), join(links, 'gone.md'))
+    await symlink(kept.storedPath, join(links, 'kept.txt'))
+
+    expect(await removeOriginals(base, [{ artifactId: 'gone', sha256: gone.sha256 }])).toEqual({ removed: 1, failed: 0 })
+    expect(await readdir(links)).toEqual(['kept.txt'])
+    expect(await readFile(kept.storedPath, 'utf8')).toBe('kept')
+  })
+
   it('counts every file as failed when the store cannot be resolved', async () => {
     const base = await mkdtemp(join(tmpdir(), 'bmn-artifact-remove-test-'))
     createdRoots.add(base)

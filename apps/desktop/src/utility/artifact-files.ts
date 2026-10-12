@@ -189,13 +189,15 @@ export async function removeOriginals(
   }
   for (const name of names) {
     // A delivery link is named for its file. Anything else in the folder is not this purge's to remove.
-    const artifactId = [...gone.keys()].find((id) => name === id || name.startsWith(`${id}.`))
-    if (artifactId === undefined) continue
+    const named = [...gone].filter(([id]) => name === id || name.startsWith(`${id}.`))
+    if (named.length === 0) continue
     const linkPath = join(linksRoot, name)
     try {
       if (!(await lstat(linkPath)).isSymbolicLink()) continue
-      // The target is read as the filesystem reads it: from the folder the link really is in.
-      if (gone.get(artifactId)!.has(resolve(linksRoot, await readlink(linkPath)))) await unlink(linkPath)
+      // The target is read as the filesystem reads it: from the folder the link really is in. One file
+      // must own both the name and the target: `a.b.txt` may be `a.b`'s link as well as `a`'s by name.
+      const target = resolve(linksRoot, await readlink(linkPath))
+      if (named.some(([, paths]) => paths.has(target))) await unlink(linkPath)
     } catch (error) {
       if (errnoOf(error) !== 'ENOENT') failed += 1
     }
