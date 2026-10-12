@@ -1623,7 +1623,9 @@ A lone `-` (`… | bmn research ask -`) says "standard input" out loud and chang
   there (its own lookup, a redirect the site sends) is the browser's. **Remove** deletes one
   record with its text and its run's folder, **Remove all…** every one after a confirmation in
   place. Removing gives no question of the day back: the day's limit counts what
-  was asked, not what is still listed.
+  was asked, not what is still listed. The limit is decided at the moment a question takes its
+  place in the kept file, under the mark that lets one process write at a time: questions asked
+  from several processes at once cannot pass it together.
 
 #### The judge
 

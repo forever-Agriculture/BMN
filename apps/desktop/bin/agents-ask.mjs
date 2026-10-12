@@ -1,6 +1,6 @@
 // MODULE: agents-ask.mjs - Epic 64: one web question behind the research fence. BMN's frame and the question are the whole prompt, the run is checked like every research, BMN reads each cited page itself, and every question is kept where the owner can read it
 import { randomBytes } from 'node:crypto'
-import { closeSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -263,11 +263,27 @@ function withInterrupted(questions) {
     : { ...entry, outcome: 'interrupted', note: 'BMN ended before the answer was kept.' }))
 }
 
-/** What the disk holds, read in the one order that misses nothing: the ends first, then the kept file that may have taken them in meanwhile. */
+/** How often a reader reads again when an end left while it read. */
+const READ_AGAIN = 3
+
+/**
+ * What the disk holds, read in the one order that misses nothing: the ends first, then the kept
+ * file that may have taken them in meanwhile. An end's file leaves only after a write took it in,
+ * and a later write no longer names it. So an end that was read here and is gone once the kept
+ * file is read may already be in that file: the reader cannot tell, and reads again. With every
+ * such end still on the disk, the two reads say one state. Under the writer's mark no end leaves,
+ * and the first read stands.
+ */
 function readAll() {
-  const ends = readEnds()
-  const kept = readKept()
-  return { kept, ends, fresh: ends.filter((end) => !kept.merged.includes(end.id)) }
+  for (let attempt = 0; ; attempt += 1) {
+    const ends = readEnds()
+    const kept = readKept()
+    const fresh = ends.filter((end) => !kept.merged.includes(end.id))
+    const here = fresh.filter((end) => existsSync(`${endsDirectory()}/${end.id}.json`))
+    if (here.length === fresh.length) return { kept, ends, fresh }
+    // Other processes kept writing through every read: the ends that left are not laid over, so nothing is given back twice.
+    if (attempt >= READ_AGAIN) return { kept, ends, fresh: here }
+  }
 }
 
 /** Every kept question, oldest first, each with its end where it has one. */
@@ -283,6 +299,10 @@ const END_WAIT_MS = 1000
 
 /** What a writer says when another one held the mark for the whole wait. */
 export const RECORD_BUSY = 'the kept questions are being written by another BMN process; nothing was changed'
+/** What a question hears that would be one more than the day's limit. */
+const DAY_LIMIT_WORDS = `${ASK_PER_DAY} web questions were asked today, which is the day's limit; the next one can be asked tomorrow`
+/** Thrown by a write that would reserve a place past the day's limit; nothing is written. */
+class DayLimitReached extends Error {}
 
 const localDay = (date) => `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
 /** Whether local day `one` lies after local day `other`. */
@@ -340,13 +360,15 @@ const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
 /**
  * Changes the kept questions: one writer at a time across the app and the command line, the file
  * replaced whole, the last 200 kept. Ends that lie beside the file are taken in first. `change`
- * gets the list and returns the new one; `reserve` is one for a question that starts. The writer's
- * mark belongs to a process for as long as that process lives: a writer that finds a living one
+ * gets the list and returns the new one; `reserve` is one for a question that starts, and such a
+ * write is where the day's limit is decided: under the mark the count is the disk's own, whatever
+ * a reader saw before, and a place past `limit` is not reserved (DayLimitReached, nothing written).
+ * The writer's mark belongs to a process for as long as that process lives: a writer that finds a living one
  * waits without holding up its own process, and gives up with RECORD_BUSY rather than write beside
  * it. A question that leaves the list takes its run's folder with it: BMN's prompt there holds the
  * question's words (64.3 AC5).
  */
-async function changeQuestions(change, { reserve = 0, now = new Date(), waitMs = WRITE_WAIT_MS } = {}) {
+async function changeQuestions(change, { reserve = 0, limit = Infinity, now = new Date(), waitMs = WRITE_WAIT_MS } = {}) {
   mkdirSync(researchDirectory(), { recursive: true, mode: 0o700 })
   let lock
   for (const until = Date.now() + waitMs; ;) {
@@ -358,6 +380,10 @@ async function changeQuestions(change, { reserve = 0, now = new Date(), waitMs =
   // From here to the release nothing waits: the mark is held for the few steps of one write.
   try {
     const all = readAll()
+    if (reserve > 0) {
+      const counted = dayCount(all, now)
+      if ((counted.day === localDay(now) ? counted.count : 0) + reserve > limit) throw new DayLimitReached(DAY_LIMIT_WORDS)
+    }
     const before = withInterrupted(withEnds(all.kept.questions, all.fresh))
     const after = lastKept(change(before))
     // Every end on the disk is named in this very write: one that was taken in before, and whose file is still there, is not taken in again.
@@ -550,7 +576,8 @@ export async function runAsk({
   if (!owner && !agentsMayAsk()) {
     return refused('ASKING_OFF', 'the owner switched "Agents may ask the web" off in BMN (Preferences › Team › Models), so only the owner asks there; ask the owner')
   }
-  if (askedCount(started) >= ASK_PER_DAY) return refused('DAY_LIMIT', `${ASK_PER_DAY} web questions were asked today, which is the day's limit; the next one can be asked tomorrow`)
+  // A first look, before anything is taken or made; the place itself is reserved further down, under the writer's mark.
+  if (askedCount(started) >= ASK_PER_DAY) return refused('DAY_LIMIT', DAY_LIMIT_WORDS)
 
   let data
   try {
@@ -614,10 +641,15 @@ export async function runAsk({
     return { ok: outcome === 'answered', id, researcher: record.researcher, ...result }
   }
   try {
-    await keepQuestion({ ...record, outcome: 'running' }, { now: started, reserve: 1 })
+    await keepQuestion({ ...record, outcome: 'running' }, { now: started, reserve: 1, limit: ASK_PER_DAY })
   } catch (error) {
-    // No question is asked whose record cannot be written (R64-FR2).
     lock.release()
+    if (error instanceof DayLimitReached) {
+      // Other questions took the day's last places since the first look: this one never ran, and has no run to name.
+      delete record.run
+      return refused('DAY_LIMIT', DAY_LIMIT_WORDS)
+    }
+    // No question is asked whose record cannot be written (R64-FR2).
     return { ok: false, id, outcome: 'refused', code: 'RECORD_BUSY', message: `${error instanceof Error ? error.message : String(error)}; ask again in a moment` }
   }
   try {
