@@ -48,7 +48,10 @@ session. It uses a bot you create and own. It is off by default.
   slows or suspends anything, starts no program except `nvidia-smi` while every NVIDIA card is
   already awake (the question would wake a sleeping one), and adds no service or timer. So it runs only while BMN is open, and it cannot
   see smoke, a swelling battery or a machine that has died. A machine with no battery when the
-  watch is switched on has no battery or mains alerts. If you also run a watch of your own (a
+  watch is switched on has no battery or mains alerts for as long as that watch stays on, also
+  when a battery is put in later; switching the watch off and on asks again. While BMN cannot read
+  whether there is a battery, it decides nothing and raises no battery or mains alert, and a test
+  says so. A battery that was there and can no longer be read counts as no longer detected. If you also run a watch of your own (a
   script on a timer), switch one of them off, or both will message you. Linux only.
 - When an agent asks for your attention (`bmn ask`, `bmn handoff`, or a Claude Code, Codex or OpenCode hook), the bot
   sends you the request while you are away from the desk and the request is still unanswered. If

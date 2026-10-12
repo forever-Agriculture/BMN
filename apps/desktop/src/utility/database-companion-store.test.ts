@@ -42,6 +42,7 @@ import {
   prepareAgentHandoff,
   putReceipt,
   putSettingsSection,
+  putRawSetting,
   switchHealthAlertsOff,
   putTelegramMessage,
   quietDelivered,
@@ -965,10 +966,54 @@ describe('health alerts stored settings (Story 62.2)', () => {
     expect(settings.telegram.healthAlerts).toEqual({ enabled: false, offAt: null })
     expect(stored()).toEqual({ ...before, healthAlerts: { enabled: false, offAt: null } })
     expect(getRawSetting(database, 'health-alerts-v1')).toEqual(owed)
-    // A stored section nobody can read loads as the defaults, the watch off: the state is still written.
-    database.prepare("UPDATE app_setting SET value_json = '{broken' WHERE key = 'telegram'").run()
-    expect(switchHealthAlertsOff(database, 'health-alerts-v1', { ...owed, offNoticeOwed: undefined }, now).telegram.healthAlerts).toEqual({ enabled: false, offAt: null })
-    expect(getRawSetting(database, 'health-alerts-v1')).not.toHaveProperty('offNoticeOwed')
+  })
+
+  const owedNotice = { version: 1, sent: [], sentAt: null, cpuHotStreak: 0, batteryAtStart: null, offAt: null, offDeadline: null, offNoticeOwed: true }
+  const settingRow = (key: string) => database.prepare('SELECT value_json, updated_at FROM app_setting WHERE key = ?').get(key) as { value_json: string; updated_at: string } | undefined
+  /** As the database worker runs every operation: inside one transaction. */
+  const switchOff = (at: string) => database.transaction(() => switchHealthAlertsOff(database, 'health-alerts-v1', owedNotice, at))()
+
+  it.each([
+    ['the settings write', 'telegram'],
+    ['the state write', 'health-alerts-v1']
+  ])('changes neither the switch nor the state when the database refuses %s', (_label, failing) => {
+    const saved = { ...DEFAULT_APP_SETTINGS.telegram, allowedUserId: 4242, healthAlerts: { enabled: true, offAt: '20:00' } }
+    putSettingsSection(database, 'telegram', saved, now)
+    putRawSetting(database, 'health-alerts-v1', { version: 1, sent: ['drive-hot'], sentAt: now, cpuHotStreak: 0, batteryAtStart: true, offAt: '20:00', offDeadline: now }, now)
+    const before = { settings: settingRow('telegram'), state: settingRow('health-alerts-v1') }
+    database.exec(`CREATE TEMP TRIGGER refuse_write BEFORE UPDATE ON app_setting WHEN NEW.key = '${failing}'
+      BEGIN SELECT RAISE(ABORT, 'synthetic refusal'); END`)
+    expect(() => switchOff('2026-09-14T20:00:00.000Z')).toThrow(/synthetic refusal/)
+    // Both rows as they were, their times included: the watch is still on and still owes nothing.
+    expect({ settings: settingRow('telegram'), state: settingRow('health-alerts-v1') }).toEqual(before)
+    expect(getSettings(database).telegram.healthAlerts).toEqual({ enabled: true, offAt: '20:00' })
+    database.exec('DROP TRIGGER refuse_write')
+    expect(switchOff('2026-09-14T20:00:30.000Z').telegram.healthAlerts).toEqual({ enabled: false, offAt: null })
+    expect(JSON.parse(settingRow('health-alerts-v1')!.value_json)).toEqual(owedNotice)
+  })
+
+  it('stores the owed notice and no settings when there is no stored section', () => {
+    expect(settingRow('telegram')).toBeUndefined()
+    expect(switchOff(now).telegram.healthAlerts).toEqual({ enabled: false, offAt: null })
+    expect(settingRow('telegram')).toBeUndefined()
+    expect(getRawSetting(database, 'health-alerts-v1')).toEqual(owedNotice)
+  })
+
+  it.each([
+    ['text that is not JSON', '{broken'],
+    ['JSON that is not an object', '[1,2]'],
+    ['settings that do not pass', JSON.stringify({ ...DEFAULT_APP_SETTINGS.telegram, enabled: true, allowedChatId: null })],
+    // Replacing the watch's part would make this section pass and bring its other fields to life.
+    ['a watch setting that does not pass', JSON.stringify({ ...DEFAULT_APP_SETTINGS.telegram, enabled: true, allowedChatId: 77, autoSubmitReplies: true, healthAlerts: { enabled: 'yes', offAt: '25:00' } })]
+  ])('leaves a stored section holding %s as it is, and still stores the owed notice', (_label, bytes) => {
+    database.prepare("INSERT INTO app_setting(key, value_json, updated_at) VALUES ('telegram', ?, ?)").run(bytes, now)
+    const before = settingRow('telegram')
+    expect(getSettings(database).telegram).toEqual(DEFAULT_APP_SETTINGS.telegram)
+    const settings = switchOff('2026-09-14T20:00:00.000Z')
+    // It loaded as the defaults before, the watch off, and does so after: nothing was made valid.
+    expect(settings.telegram).toEqual(DEFAULT_APP_SETTINGS.telegram)
+    expect(settingRow('telegram')).toEqual(before)
+    expect(getRawSetting(database, 'health-alerts-v1')).toEqual(owedNotice)
   })
 })
 

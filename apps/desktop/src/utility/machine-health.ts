@@ -16,9 +16,13 @@ export interface HealthReadings {
   nvidiaGpuC: number | null
   /** True when every NVIDIA card is asleep: nothing is measured because nothing there makes heat. */
   nvidiaGpuAsleep?: boolean
-  /** null when the machine has no battery slot at all. */
+  /**
+   * null only when the machine was read to have no battery of its own. When that could not be read (the
+   * supplies cannot be listed, or one does not say what it is) this is a battery with nothing known.
+   */
   battery: {
-    present: boolean
+    /** What the battery says of itself: "1" is true, "0" is false, anything else is not known. */
+    present: boolean | null
     percent: number | null
     status: string | null
     millivolts: number | null
@@ -69,6 +73,11 @@ async function line(path: string): Promise<string | null> {
 
 async function entries(path: string): Promise<string[]> {
   try { return await readdir(path) } catch { return [] }
+}
+
+/** The names in a folder, or null when it cannot be listed: "nothing there" and "cannot look" differ. */
+async function listing(path: string): Promise<string[] | null> {
+  try { return await readdir(path) } catch { return null }
 }
 
 function wholeNumber(text: string | null): number | null {
@@ -132,9 +141,13 @@ export async function readMachineHealth(options: HealthReaderOptions = {}): Prom
   let battery: HealthReadings['battery'] = null
   let mainsOnline: boolean | null = null
   const supplies = join(root, 'class', 'power_supply')
-  for (const directory of (await entries(supplies)).sort()) {
+  const listed = await listing(supplies)
+  // "No battery" is said only when every supply could be asked what it is and none was the machine's own.
+  let allNamed = listed !== null
+  for (const directory of (listed ?? []).sort()) {
     const base = join(supplies, directory)
     const type = await line(join(base, 'type'))
+    if (type === null) allNamed = false
     if (type === 'Battery' && battery === null) {
       // A peripheral's battery (a mouse, a headset) says what it powers; the machine's own does not.
       if (await line(join(base, 'scope')) === 'Device') continue
@@ -142,8 +155,9 @@ export async function readMachineHealth(options: HealthReaderOptions = {}): Prom
       const design = wholeNumber(await line(join(base, 'voltage_min_design')))
       const cells = design === null ? null : Math.round(design / 1_000_000 / NOMINAL_CELL_VOLTS)
       const status = await line(join(base, 'status'))
+      const present = await line(join(base, 'present'))
       battery = {
-        present: await line(join(base, 'present')) === '1',
+        present: present === '1' ? true : present === '0' ? false : null,
         percent: wholeNumber(await line(join(base, 'capacity'))),
         status: status === null ? null : status.replace(/[^A-Za-z ]/g, '').slice(0, STATUS_CHARS),
         millivolts: micro === null ? null : Math.round(micro / 1000),
@@ -155,6 +169,7 @@ export async function readMachineHealth(options: HealthReaderOptions = {}): Prom
       else if (online === '0' && mainsOnline === null) mainsOnline = false
     }
   }
+  if (battery === null && !allNamed) battery = { present: null, percent: null, status: null, millivolts: null, cells: null }
   const nvidia = await nvidiaTemperature(root, options.run ?? runHealthCommand)
   return { cpuC, integratedGpuC, driveC, battery, mainsOnline, nvidiaGpuC: nvidia.celsius, ...(nvidia.asleep ? { nvidiaGpuAsleep: true } : {}) }
 }
@@ -166,8 +181,23 @@ export interface HealthJudgement {
 }
 
 /**
+ * Whether this watch covers the battery and mains: decided once, by the first reading that can tell, and
+ * kept for the whole watch. A machine read to have no battery (no such supply, or one that says it is
+ * not present) is not covered, also when a battery appears later. A reading that cannot tell decides
+ * nothing: the question stays open (null), so an unreadable start neither exempts the machine for good
+ * nor starts a watch on a battery nobody saw.
+ */
+export function batteryWatched(decided: boolean | null, battery: HealthReadings['battery']): boolean | null {
+  if (decided !== null) return decided
+  if (battery === null) return false
+  return battery.present
+}
+
+/**
  * Judges one reading. `cpuHotStreak` is the count before this reading; `batteryAtStart` says whether the
- * machine had a battery when the watch was switched on: without one there is no battery or mains problem.
+ * machine had a battery when the watch was switched on: without one, or while that is not yet known,
+ * there is no battery or mains problem. A battery that was there is gone when the reading shows no
+ * battery, one that says it is not present, or one that cannot say; only a battery read as present ends it.
  * `standing` is the problem set the owner was last told. A problem in it ends only on a reading that
  * shows it over: while that reading cannot be taken the problem stands, so a sensor that falls silent
  * is never read as "back to normal". An NVIDIA card that went to sleep is over: it makes no heat.
@@ -193,7 +223,7 @@ export function judgeMachineHealth(
   if (readings.driveC === null ? stands('drive-hot') : readings.driveC >= HEALTH_LIMITS.drive) found.add('drive-hot')
   if (batteryAtStart) {
     const battery = readings.battery
-    if (battery === null || !battery.present) {
+    if (battery === null || battery.present !== true) {
       found.add('battery-gone')
       if (stands('battery-voltage')) found.add('battery-voltage')
     } else if (battery.millivolts === null || battery.cells === null) {

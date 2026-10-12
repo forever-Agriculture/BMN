@@ -1391,18 +1391,22 @@ export function putSettingsSection(
  * The health watch switching itself off: the stored Telegram section gets the watch off with no
  * switch-off time, every other field as it is stored, and the watch's own state is replaced, both in
  * the one transaction this operation runs in. So a save the owner makes just before or after it is
- * never overwritten with an older copy, and the switch never changes without the state.
+ * never overwritten with an older copy, and the switch never changes without the state: a write the
+ * database refuses is thrown, and the transaction takes both back.
  */
 export function switchHealthAlertsOff(database: DatabaseConnection, stateKey: string, state: unknown, now: string): AppSettings {
   const row = database.prepare("SELECT value_json FROM app_setting WHERE key = 'telegram'").get() as { value_json: string } | undefined
+  // The section is judged as it is stored, by the rule that loads it. One that does not pass already
+  // loads as the defaults, with the watch off: it is left as it is, never made valid by this change.
+  let stored: AppSettings['telegram'] | undefined
   if (row) {
     try {
-      const stored = upgradeStoredSection('telegram', JSON.parse(row.value_json)) as Record<string, unknown>
-      putSettingsSection(database, 'telegram', { ...stored, healthAlerts: { ...DEFAULT_TELEGRAM_HEALTH_ALERTS } }, now)
+      stored = validateSettingsSection('telegram', upgradeStoredSection('telegram', JSON.parse(row.value_json))) as AppSettings['telegram']
     } catch {
-      // A stored section nobody can read already loads as the defaults, with the watch off.
+      stored = undefined
     }
   }
+  if (stored) putSettingsSection(database, 'telegram', { ...stored, healthAlerts: { ...DEFAULT_TELEGRAM_HEALTH_ALERTS } }, now)
   putRawSetting(database, stateKey, state, now)
   return getSettings(database)
 }

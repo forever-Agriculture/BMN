@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  batteryWatched,
   judgeMachineHealth,
   readMachineHealth,
   runHealthCommand,
@@ -128,10 +129,46 @@ describe('reading the machine', () => {
     expect(Date.now() - started).toBeLessThan(5_000)
   })
 
+  const unknownBattery = { present: null, percent: null, status: null, millivolts: null, cells: null }
+
   it('reads a machine with no sensors and no battery as not measured, never as fine', async () => {
-    const empty = await readMachineHealth({ root: await tree({ 'class/hwmon/hwmon0/name': 'acpitz' }), run: refuse })
-    expect(empty).toEqual({ cpuC: null, integratedGpuC: null, driveC: null, nvidiaGpuC: null, battery: null, mainsOnline: null })
-    expect(await readMachineHealth({ root: join(tmpdir(), 'bmn-health-test-absent'), run: refuse })).toEqual(empty)
+    const root = await tree({ 'class/hwmon/hwmon0/name': 'acpitz' })
+    // The supplies can be listed and there are none: this machine has no battery.
+    await mkdir(join(root, 'class', 'power_supply'), { recursive: true })
+    expect(await readMachineHealth({ root, run: refuse }))
+      .toEqual({ cpuC: null, integratedGpuC: null, driveC: null, nvidiaGpuC: null, battery: null, mainsOnline: null })
+  })
+
+  it('does not read "cannot look" as "no battery": supplies that cannot be listed leave the battery unknown', async () => {
+    const unlisted = await readMachineHealth({ root: await tree({ 'class/hwmon/hwmon0/name': 'acpitz' }), run: refuse })
+    expect(unlisted).toEqual({ cpuC: null, integratedGpuC: null, driveC: null, nvidiaGpuC: null, battery: unknownBattery, mainsOnline: null })
+    expect(await readMachineHealth({ root: join(tmpdir(), 'bmn-health-test-absent'), run: refuse })).toEqual(unlisted)
+  })
+
+  it('does not read a supply that will not say what it is as "no battery"', async () => {
+    // BAT0 is there and its type cannot be read; the mains supply beside it still counts.
+    const silent = await tree({
+      'class/power_supply/ADP0/type': 'Mains', 'class/power_supply/ADP0/online': '0', 'class/power_supply/BAT0/present': '1'
+    })
+    expect(await readMachineHealth({ root: silent, run: refuse })).toMatchObject({ battery: unknownBattery, mainsOnline: false })
+    // A battery that does say what it is is read, whatever a silent supply beside it is.
+    const named = await tree({
+      'class/power_supply/AAA/online': '1', 'class/power_supply/BAT0/type': 'Battery', 'class/power_supply/BAT0/present': '1'
+    })
+    expect((await readMachineHealth({ root: named, run: refuse })).battery).toMatchObject({ present: true })
+    // Every supply named and none the machine's own battery: no battery.
+    const mainsOnly = await tree({ 'class/power_supply/ADP0/type': 'Mains', 'class/power_supply/ADP0/online': '1' })
+    expect((await readMachineHealth({ root: mainsOnly, run: refuse })).battery).toBeNull()
+  })
+
+  it.each([
+    ['1', true], ['0', false], [null, null], ['', null], ['yes', null], ['2', null], ['01', null]
+  ] as const)('reads a battery\'s "present" of %j as %j: only "1" and "0" say anything', async (present, expected) => {
+    const root = await tree({
+      'class/power_supply/BAT0/type': 'Battery', 'class/power_supply/BAT0/capacity': '50',
+      ...(present === null ? {} : { 'class/power_supply/BAT0/present': present })
+    })
+    expect((await readMachineHealth({ root, run: refuse })).battery).toEqual({ ...unknownBattery, present: expected, percent: 50 })
   })
 
   it('ignores an unreadable value and a peripheral battery', async () => {
@@ -212,6 +249,26 @@ describe('judging a reading', () => {
     expect(judge({ mainsOnline: false }).problems).toEqual(['mains-offline'])
     expect(judge(battery({ present: false })).problems).toEqual(['battery-gone'])
     expect(judge({ battery: null }).problems).toEqual(['battery-gone'])
+  })
+
+  it('reads a battery that was there and can no longer say it is present as gone, never as fine', () => {
+    expect(judge(battery({ present: null })).problems).toEqual(['battery-gone'])
+    // Its voltage is not judged while it cannot say it is there, and a wrong voltage told before stands.
+    expect(judge(battery({ present: null, millivolts: 1 })).problems).toEqual(['battery-gone'])
+    expect(judgeMachineHealth({ ...healthy, ...battery({ present: null }) }, 0, true, ['battery-voltage']).problems).toEqual(['battery-gone', 'battery-voltage'])
+    // Only a battery read as present ends it.
+    expect(judgeMachineHealth(healthy, 0, true, ['battery-gone']).problems).toEqual([])
+  })
+
+  it('decides once whether the watch covers the battery, by the first reading that can tell', () => {
+    const present = healthy.battery!
+    const forms = [null, { ...present, present: false }, { ...present, present: null }, present]
+    // Undecided: no battery, or one that says it is not there, is "no" for good; a present one is "yes";
+    // one that cannot say leaves the question open.
+    expect(forms.map(form => batteryWatched(null, form))).toEqual([false, false, null, true])
+    // Decided: nothing a later reading shows changes it.
+    expect(forms.map(form => batteryWatched(false, form))).toEqual([false, false, false, false])
+    expect(forms.map(form => batteryWatched(true, form))).toEqual([true, true, true, true])
   })
 
   it('does not read unknown mains as lost', () => {

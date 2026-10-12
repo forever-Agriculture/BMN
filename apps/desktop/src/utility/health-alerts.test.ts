@@ -219,21 +219,97 @@ describe('the health watch', () => {
     expect(drive.state.sent[1]).toContain('Back to normal')
   })
 
-  it('watches the battery and mains from the first reading that shows a battery, whatever the first reading could tell', async () => {
-    const { state, advance } = world()
-    // The first reading cannot tell whether a battery is there.
-    state.readings = { ...healthy, battery: { ...healthy.battery!, present: false }, mainsOnline: false }
+  it.each([
+    ['no battery supply', null],
+    ['a battery that says it is not present', { ...healthy.battery!, present: false }]
+  ] as const)('never watches battery or mains on a machine that started with %s, also when a battery appears and across a restart', async (_label, start) => {
+    const first = world()
+    first.state.readings = { ...healthy, battery: start, mainsOnline: false }
+    await first.advance(0)
+    // The decision is stored though no message went out.
+    expect(first.store.value).toMatchObject({ batteryAtStart: false, sent: [] })
+    // A battery put in later, on battery power and at a wrong voltage: still not this watch's business.
+    const inserted: HealthReadings = { ...unplugged, battery: { ...unplugged.battery!, millivolts: 1 } }
+    first.state.readings = inserted
+    await first.advance(60)
+    const second = world('2026-03-10T10:05:00', first.store)
+    second.state.readings = inserted
+    await second.advance(0)
+    // The same watch after its settings were read again (a restart, a save of another field).
+    await second.watch.configure()
+    await second.advance(60)
+    expect([...first.state.sent, ...second.state.sent]).toEqual([])
+    expect(first.store.value).toMatchObject({ batteryAtStart: false })
+  })
+
+  it('leaves the question open while no reading can tell, raising nothing, and decides on the first reading that can', async () => {
+    const unknown: HealthReadings = { ...healthy, battery: { present: null, percent: null, status: null, millivolts: null, cells: null }, mainsOnline: false }
+    // Unknown, unknown, then a battery: watched from there.
+    const laptop = world()
+    laptop.state.readings = unknown
+    await laptop.advance(0)
+    // Open is how a watch starts: nothing was decided, so nothing says "true" or "false".
+    const decided = (): unknown => (laptop.store.value as { batteryAtStart?: unknown } | undefined)?.batteryAtStart ?? null
+    expect(decided()).toBeNull()
+    // Still open after a restart.
+    const restarted = world('2026-03-10T10:01:00', laptop.store)
+    restarted.state.readings = unknown
+    await restarted.advance(0)
+    expect(restarted.state.sent).toEqual([])
+    expect(decided()).toBeNull()
+    restarted.state.readings = unplugged
+    await restarted.advance(60)
+    expect(laptop.store.value).toMatchObject({ batteryAtStart: true })
+    expect(restarted.state.sent).toHaveLength(1)
+    expect(restarted.state.sent[0]).toContain('Mains power lost')
+    // Unknown, then read as absent, then a battery: not watched.
+    const desktop = world()
+    desktop.state.readings = unknown
+    await desktop.advance(0)
+    desktop.state.readings = { ...healthy, battery: null, mainsOnline: false }
+    await desktop.advance(60)
+    expect(desktop.store.value).toMatchObject({ batteryAtStart: false })
+    desktop.state.readings = unplugged
+    await desktop.advance(60)
+    expect(desktop.state.sent).toEqual([])
+  })
+
+  it.each([
+    ['no battery supply', null],
+    ['a battery that says it is not present', { ...healthy.battery!, present: false }],
+    ['a battery that cannot say whether it is present', { present: null, percent: null, status: null, millivolts: null, cells: null }]
+  ] as const)('reports a battery that was there as gone on %s, and ends it only on a battery read as present', async (_label, gone) => {
+    const { state, store, advance } = world()
     await advance(0)
-    expect(state.sent).toEqual([])
-    state.readings = unplugged
+    expect(store.value).toMatchObject({ batteryAtStart: true })
+    state.readings = { ...healthy, battery: gone }
     await advance(60)
     expect(state.sent).toHaveLength(1)
+    expect(state.sent[0]).toContain('Battery no longer detected')
+    await advance(60)
+    expect(state.sent).toHaveLength(1)
+    state.readings = healthy
+    await advance(60)
+    expect(state.sent).toHaveLength(2)
+    expect(state.sent[1]).toContain('Back to normal')
+    expect(store.value).toMatchObject({ batteryAtStart: true, sent: [] })
+  })
+
+  it('decides anew after the owner switched the watch off and on', async () => {
+    const { state, watch, store, advance } = world()
+    state.readings = { ...healthy, battery: null, mainsOnline: false }
+    await advance(0)
+    expect(store.value).toMatchObject({ batteryAtStart: false })
+    state.settings = { enabled: false, offAt: null }
+    await watch.configure()
+    expect(store.value).toMatchObject({ batteryAtStart: null })
+    state.settings = { enabled: true, offAt: null }
+    await watch.configure()
+    state.readings = unplugged
+    await advance(60)
+    expect(store.value).toMatchObject({ batteryAtStart: true })
+    expect(state.sent).toHaveLength(1)
     expect(state.sent[0]).toContain('Mains power lost')
-    // A machine that never shows a battery never gets a battery or mains alert.
-    const desktop = world()
-    desktop.state.readings = { ...healthy, battery: null, mainsOnline: false }
-    await desktop.advance(0); await desktop.advance(60)
-    expect(desktop.state.sent).toEqual([])
   })
 
   it('neither repeats a delivered alert nor loses the all-clear it owes across a restart', async () => {
@@ -516,5 +592,56 @@ describe('the message', () => {
     expect(state.sent[0]).toContain('Mains power lost')
     expect(store.value).toBeUndefined()
     expect(state.writes).toBe(0)
+  })
+
+  it('answers a test as the watch\'s next check would: a machine that started without a battery is not judged on one', async () => {
+    const { state, watch, store, advance } = world()
+    state.readings = { ...healthy, battery: null }
+    await advance(0)
+    const before = JSON.stringify(store.value)
+    const writes = state.writes
+    state.readings = unplugged
+    await watch.sendTest()
+    expect(state.sent).toHaveLength(1)
+    expect(state.sent[0]).toContain('A real check would find nothing wrong.')
+    expect(state.sent[0]).not.toContain('Mains power lost')
+    // The readings are shown as they are; nothing stored moved.
+    expect(state.sent[0]).toContain('Mains          OFF')
+    expect(JSON.stringify(store.value)).toBe(before)
+    expect(state.writes).toBe(writes)
+    // And the next real check agrees with the test.
+    await advance(60)
+    expect(state.sent).toHaveLength(1)
+  })
+
+  it('says so in a test when no reading could tell whether the machine has a battery, and shows it as not measured', async () => {
+    const unknown: HealthReadings = { ...healthy, battery: { present: null, percent: null, status: null, millivolts: null, cells: null }, mainsOnline: false }
+    const { state, watch, store, advance } = world()
+    state.readings = unknown
+    await watch.sendTest()
+    expect(state.sent[0]).toContain('A real check would find nothing wrong in what it can read.')
+    expect(state.sent[0]).toContain('Battery and mains are not checked yet: whether this machine has a battery could not be read.')
+    expect(state.sent[0]).not.toContain('A real check would find nothing wrong.')
+    expect(state.sent[0]).toContain('Battery        not measured')
+    expect(state.sent[0]).not.toContain('Battery        none')
+    expect(state.sent[0]).not.toContain('Mains power lost')
+    expect(store.value).toBeUndefined()
+    // The watch itself says nothing on the same reading, and keeps the question open.
+    await advance(0)
+    expect(state.sent).toHaveLength(1)
+    expect((store.value as { batteryAtStart?: unknown } | undefined)?.batteryAtStart ?? null).toBeNull()
+    // A problem found elsewhere is still said plainly, with the open question beside it.
+    state.readings = { ...unknown, driveC: 90 }
+    await watch.sendTest()
+    expect(state.sent[1]).toContain('A real check would alert now.')
+    expect(state.sent[1]).toContain('Battery and mains are not checked yet')
+    // A watched battery that stops saying it is present is a problem, shown as not measured.
+    const laptop = world()
+    await laptop.advance(0)
+    laptop.state.readings = { ...healthy, battery: unknown.battery }
+    await laptop.watch.sendTest()
+    expect(laptop.state.sent[0]).toContain('A real check would alert now.')
+    expect(laptop.state.sent[0]).toContain('Battery no longer detected')
+    expect(laptop.state.sent[0]).not.toContain('not checked yet')
   })
 })

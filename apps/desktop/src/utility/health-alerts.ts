@@ -1,6 +1,6 @@
 // MODULE: health-alerts.ts - the health watch: when a reading is told to the owner's phone, repeated, cleared, and when the watch switches itself off
 import { HEALTH_LIMITS, type TelegramHealthAlerts } from '@bmn/protocol'
-import { HEALTH_PROBLEM_KINDS, judgeMachineHealth, type HealthProblemKind, type HealthReadings } from './machine-health'
+import { HEALTH_PROBLEM_KINDS, batteryWatched, judgeMachineHealth, type HealthProblemKind, type HealthReadings } from './machine-health'
 import { TELEGRAM_TEXT_LIMIT, escapeHtml } from './telegram-cards'
 import { telegramSendDefinitelyUnsent } from './telegram-delivery'
 
@@ -16,7 +16,10 @@ interface HealthAlertState {
   sent: HealthProblemKind[]
   sentAt: string | null
   cpuHotStreak: number
-  /** Whether the machine had a battery when the watch was switched on. */
+  /**
+   * Whether the machine had a battery when the watch was switched on: null until a reading could tell,
+   * then true or false for as long as this watch stays on.
+   */
   batteryAtStart: boolean | null
   /** The switch-off time this deadline was worked out for, and the moment it falls on. */
   offAt: string | null
@@ -111,19 +114,27 @@ function problemLines(kind: HealthProblemKind, readings: HealthReadings, cpuHotS
 
 export type HealthMessageKind = 'alert' | 'clear' | 'test'
 
-/** Readings, the host name and fixed words only. Every reading is shown, a missing one as "not measured". */
+/**
+ * Readings, the host name and fixed words only. Every reading is shown, a missing one as "not measured".
+ * `batteryUnknown` marks a test made while no reading could tell whether the machine has a battery.
+ */
 export function buildHealthMessage(
   kind: HealthMessageKind,
   readings: HealthReadings,
   problems: readonly HealthProblemKind[],
   cpuHotStreak: number,
   now: Date,
-  host: string
+  host: string,
+  batteryUnknown = false
 ): string {
   const title = kind === 'alert' ? 'Health alert' : kind === 'clear' ? 'Back to normal' : 'Health alerts: test'
   const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
   const lines = [`<b>${title}</b>`, `<i>${time} · ${escapeHtml(host.replace(/\p{Cc}/gu, '').slice(0, HOST_CHARS) || 'this machine')}</i>`]
-  if (kind === 'test') lines.push(problems.length > 0 ? 'A real check would alert now.' : 'A real check would find nothing wrong.')
+  if (kind === 'test') {
+    lines.push(problems.length > 0 ? 'A real check would alert now.'
+      : batteryUnknown ? 'A real check would find nothing wrong in what it can read.' : 'A real check would find nothing wrong.')
+    if (batteryUnknown) lines.push('Battery and mains are not checked yet: whether this machine has a battery could not be read.')
+  }
   for (const problem of problems) {
     const [what, advice] = problemLines(problem, readings, cpuHotStreak)
     lines.push('', `• ${escapeHtml(what)}`, `   <i>${escapeHtml(advice)}</i>`)
@@ -134,7 +145,7 @@ export function buildHealthMessage(
     ['NVIDIA GPU', readings.nvidiaGpuAsleep === true ? 'asleep' : degrees(readings.nvidiaGpuC)],
     ['Integrated GPU', degrees(readings.integratedGpuC)],
     ['Drive', degrees(readings.driveC)],
-    ['Battery', battery === null ? 'none' : !battery.present ? 'not detected'
+    ['Battery', battery === null ? 'none' : battery.present === null ? 'not measured' : !battery.present ? 'not detected'
       : `${battery.percent === null ? 'not measured' : `${battery.percent}%`}${battery.status ? ` ${battery.status}` : ''}`],
     ['Voltage', battery?.millivolts == null ? 'not measured' : volts(battery.millivolts)],
     ['Mains', readings.mainsOnline === null ? 'not measured' : readings.mainsOnline ? 'on' : 'OFF']
@@ -222,8 +233,10 @@ export class HealthAlerts {
   async sendTest(): Promise<void> {
     const readings = await this.deps.check()
     const state = this.deps.settings().enabled ? loadState(await this.deps.read()) : emptyState()
-    const judged = judgeMachineHealth(readings, state.cpuHotStreak, state.batteryAtStart === true || readings.battery?.present === true, state.sent)
-    await this.deps.send(buildHealthMessage('test', readings, judged.problems, judged.cpuHotStreak, this.deps.now(), this.deps.host()))
+    // The watch's own rule, with nothing stored: a watch that is on answers as its next check would.
+    const watched = batteryWatched(state.batteryAtStart, readings.battery)
+    const judged = judgeMachineHealth(readings, state.cpuHotStreak, watched === true, state.sent)
+    await this.deps.send(buildHealthMessage('test', readings, judged.problems, judged.cpuHotStreak, this.deps.now(), this.deps.host(), watched === null))
   }
 
   private async run(): Promise<void> {
@@ -243,11 +256,11 @@ export class HealthAlerts {
     if (this.lastCheck !== undefined && this.deps.monotonic() - this.lastCheck < CHECK_INTERVAL_MS) return
     this.lastCheck = this.deps.monotonic()
     const readings = await this.deps.check()
-    // The watch covers the battery from the first reading that shows one; a reading that cannot tell
-    // decides nothing, so one unreadable start never switches the battery and mains checks off for good.
-    const batteryAtStart = state.batteryAtStart === true || readings.battery?.present === true
-    const judged = judgeMachineHealth(readings, state.cpuHotStreak, batteryAtStart, state.sent)
-    const unsent: HealthAlertState = { ...state, cpuHotStreak: judged.cpuHotStreak, batteryAtStart: batteryAtStart ? true : state.batteryAtStart }
+    // Decided by the first reading that can tell and kept while this watch is on; it is stored below
+    // also when no message goes out.
+    const batteryAtStart = batteryWatched(state.batteryAtStart, readings.battery)
+    const judged = judgeMachineHealth(readings, state.cpuHotStreak, batteryAtStart === true, state.sent)
+    const unsent: HealthAlertState = { ...state, cpuHotStreak: judged.cpuHotStreak, batteryAtStart }
     const changed = !sameSet(judged.problems, state.sent)
     const repeatDue = state.sentAt === null || now.getTime() - Date.parse(state.sentAt) >= REPEAT_MS
     // An all-clear nobody confirmed is owed again at the repeat, like an alert.
