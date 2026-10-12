@@ -891,7 +891,7 @@ describe('the skill jev-judge that BMN ships (65.3 AC4)', () => {
       '| Does a report claim "done" while admitting a required check is not done? | 14 | 14 | 70% | 0% |',
       '| Does a review finding name a requirement, a reproduction and a consequence? | 27 | 27 | 90% | 0% |',
       '| What does an agent\'s final message need from the owner? | 10 | 10 | 50% | 0% | speaks on too few cases |',
-      '| Is an agent trying the same method against the same failure again? | 18 | 18 | 82% | 5% | answers at 0.88 to 0.90 flipped between repeats |'
+      '| Is an agent trying the same method against the same failure again? | 18 | 18 | 78% | 5% | answers at 0.88 to 0.90 flipped between repeats |'
     ]) expect(body).toContain(row)
     expect(body).toContain('all 84 confident answers were right')
     expect(body).toContain('One fact per question.')

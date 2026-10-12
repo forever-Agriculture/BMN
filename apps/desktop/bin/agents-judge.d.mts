@@ -50,12 +50,20 @@ export declare function judgeRecordPath(): string
 export type JudgeOutcome = 'answered' | 'refused' | 'timeout' | 'failed' | 'shape'
 /** One line of the record: no text, no answer and no key; a hash of the text where there was one. */
 export interface JudgeCall {
+  /** Names the line, so that one written beside the record while it was held is taken in once. Older lines have none. */
+  id?: string
+  /** Its tokens are counted from the request's size: the gateway gave no count for a request it may have charged. */
+  tokens_estimated?: boolean
   at: string; by: Asker; purpose: string; agent: string | null; model: string | null
   requests: number; input_tokens: number; cost_usd: number; took_ms: number; outcome: JudgeOutcome; code?: string; state_sha256?: string
 }
 export interface JudgeTotals { calls: number; requests: number; input_tokens: number; cost_usd: number }
-export interface JudgeMonth extends JudgeTotals { refused: number; purposes: Record<string, JudgeTotals> }
-export interface JudgeRecord { calls: JudgeCall[]; months: Record<string, JudgeMonth> }
+/** `estimated`: how many of the month's calls are counted by their request's size, the gateway having given no count. */
+export interface JudgeMonth extends JudgeTotals { refused: number; estimated: number; purposes: Record<string, JudgeTotals> }
+/** `damaged`: the kept file is there and cannot be read; nothing is asked and it is never written over. `taken`: the waiting lines its last write took in. */
+export interface JudgeRecord { calls: JudgeCall[]; months: Record<string, JudgeMonth>; taken: string[]; damaged?: true }
+/** How the key of BMN's own tests starts: the stand-in server of a `.test` host is sent no other key. */
+export declare const TEST_KEY_START: string
 export declare function readJudgeRecord(): JudgeRecord
 export declare function judgeTotals(now?: Date, record?: JudgeRecord): { current: JudgeMonth & { month: string }; previous: JudgeMonth & { month: string } }
 export declare function judgeLimit(): { on: boolean; usd: number }
@@ -73,6 +81,10 @@ export interface JudgeResult {
   code?: string; message?: string; next?: string; note?: string
   agent?: string; model?: string; answers?: Record<string, JudgeAnswer>; second?: Record<string, JudgeAnswer>; readings?: Record<string, JudgeReading>
   requests?: number; input_tokens?: number; cost_usd?: number
+  /** The token count is BMN's estimate from the request's size. */
+  tokens_estimated?: true
+  /** False where the call could not be written into the record; `note` says why. */
+  recorded?: boolean
 }
 export declare function runJudge(request: JudgeRequest): Promise<JudgeResult>
 export declare function judgeLines(result: JudgeResult, questions: JudgeQuestions): string[]

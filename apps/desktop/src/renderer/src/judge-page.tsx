@@ -48,7 +48,13 @@ const REFUSAL_WORDS: Readonly<Record<string, string>> = { LIMIT_REACHED: 'refuse
 
 /** How a call ended, in a few plain words; the two refusals worth telling apart are named. */
 export function outcomeWords(call: Pick<JudgeCallView, 'outcome' | 'code'>): string {
-  return (call.outcome === 'refused' && call.code !== undefined ? REFUSAL_WORDS[call.code] : undefined) ?? OUTCOME_WORDS[call.outcome]
+  return (call.outcome === 'refused' && call.code !== undefined && Object.hasOwn(REFUSAL_WORDS, call.code) ? REFUSAL_WORDS[call.code] : undefined) ?? OUTCOME_WORDS[call.outcome]
+}
+
+/** The months' calls that are counted by the size of their request, said under the sums; null where every call has the gateway's own count. */
+export function estimatedWords(current: Pick<JudgeMonthView, 'estimated'>, previous: Pick<JudgeMonthView, 'estimated'>): string | null {
+  if (current.estimated + previous.estimated === 0) return null
+  return `The gateway gave no count of tokens for ${current.estimated} ${current.estimated === 1 ? 'call' : 'calls'} this month and ${previous.estimated} last month. BMN counted those by the size of what it sent, so their cost is an estimate.`
 }
 
 /**
@@ -61,6 +67,8 @@ const OWN_NEXT: Readonly<Record<string, string>> = {
   JUDGE_DISABLED: 'Turn it on at the top of this page and approve the team.',
   LIMIT_REACHED: 'Raise the monthly limit above or switch it off; otherwise ask again next month.',
   PRIVATE_NOT_ALLOWED: 'Choose Public if the text is public, or allow private work for both providers above and approve the team.',
+  NO_PRICE: "Record the model's price for it in the team file and approve the team.",
+  RECORD_UNREADABLE: 'Move the file away, and BMN starts a new record. Nothing is asked meanwhile.',
   NO_KEY: "Sign in to OpenCode on this computer (opencode auth login). BMN reads the key from OpenCode's own sign-in file and keeps none."
 }
 
@@ -207,6 +215,7 @@ export function JudgeGroups(props: {
   const price = priceWords(agent)
   const basis = view === null ? null : [view.current, view.previous].find((month) => month.calls > 0) ?? null
   const refused = view === null ? 0 : view.current.refused + view.previous.refused
+  const estimated = view === null ? null : estimatedWords(view.current, view.previous)
   return (
     <>
       <h4 className="group-head">Model <span className="caption">called by BMN itself, not by an agent app</span></h4>
@@ -228,7 +237,11 @@ export function JudgeGroups(props: {
       {props.state.loadError ? <p className="preferences-error" role="alert">{props.state.loadError}</p> : null}
       {view === null ? (props.state.loadError ? null : <p className="preferences-help">Reading {agent.name}'s calls…</p>) : (
         <>
-          {basis === null ? <p className="preferences-help">No calls yet. The first one you ask under Try it is counted here.</p> : (
+          {view.unreadable !== undefined ? (
+            <p className="preferences-error" role="alert">
+              BMN cannot read its record of {agent.name}'s calls at <span className="mono">{view.unreadable}</span>, so it does not know what this month cost and asks nothing. Move the file away, and BMN starts a new record.
+            </p>
+          ) : basis === null ? <p className="preferences-help">No calls yet. The first one you ask under Try it is counted here.</p> : (
             <table className="cost-table" aria-labelledby={costId}>
               <thead><tr><td /><th scope="col">Calls</th><th scope="col">Tokens in</th><th scope="col">Cost</th></tr></thead>
               {([['This month', view.current], ['Last month', view.previous]] as const).map(([label, month]) => (
@@ -239,9 +252,11 @@ export function JudgeGroups(props: {
               ))}
             </table>
           )}
+          {estimated ? <p className="preferences-help">{estimated}</p> : null}
           {refused > 0 ? <p className="preferences-help">Refused and not charged: {view.current.refused} this month, {view.previous.refused} last month.</p> : null}
           <div ref={props.limitRow}>
-            <Row label="Monthly limit" id={limitId} hint={!view.limit.on ? 'Off: there is no limit.'
+            <Row label="Monthly limit" id={limitId} hint={view.unreadable !== undefined ? 'What this month cost is not known.'
+              : !view.limit.on ? 'Off: there is no limit.'
               : view.reached ? 'Reached: asking is stopped until next month or a higher limit.'
               : `${usd(view.current.cost_usd, 4)} of ${limitUsd(view.limit.usd)} used this month.`}>
               <div className="inline">
@@ -327,6 +342,12 @@ function TryIt(props: { name: string; parties: CalledParties; ask: JudgeState['a
   )
 }
 
+/** What an answered Try it cost and whether it is in the record: an estimate is called one, and a call BMN could not write down is never said to be counted. */
+export function tryFacts(reply: Extract<JudgeTryReply, { outcome: 'answered' }>): string {
+  const tokens = reply.estimated ? `About ${thousands(reply.input_tokens)} tokens in (an estimate: the gateway gave no count)` : `${thousands(reply.input_tokens)} tokens in`
+  return `${tokens}, ${usd(reply.cost_usd, 6)}, ${seconds(reply.took_ms)}. ${reply.counted ? 'Counted in the calls below.' : 'Not counted: BMN could not write this call into its record.'}`
+}
+
 /** What Try it got back, in words: the number and BMN's reading, the command's own refusal, or why there is no answer. */
 export function TryAnswer({ reply }: { reply: JudgeTryReply }): React.JSX.Element {
   if (reply.outcome === 'answered') {
@@ -338,13 +359,13 @@ export function TryAnswer({ reply }: { reply: JudgeTryReply }): React.JSX.Elemen
         <div className="reply-words">
           <strong>{yes ? 'Yes' : 'No answer'}{reply.near ? ', near the line' : ''}</strong>
           <span>{yes ? `${number} is 0.90 or more, so BMN reads yes. It is advice, not proof.` : `${number} is under 0.90, so BMN reads no answer. That is not a no.`}</span>
-          <span className="reply-facts">{thousands(reply.input_tokens)} tokens in, {usd(reply.cost_usd, 6)}, {seconds(reply.took_ms)}. Counted in the calls below.</span>
+          <span className="reply-facts">{tryFacts(reply)}</span>
         </div>
       </div>
     )
   }
   if (reply.outcome === 'refused') {
-    const next = OWN_NEXT[reply.code] ?? reply.next
+    const next = Object.hasOwn(OWN_NEXT, reply.code) ? OWN_NEXT[reply.code] : reply.next
     return (
       <div className="try-reply">
         <div className="reply-words">

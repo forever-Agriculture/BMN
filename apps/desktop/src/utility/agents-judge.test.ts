@@ -1,7 +1,7 @@
 // MODULE: agents-judge.test.ts - Story 65.2: `bmn judge ask` against a stand-in server on this computer: the checks before any request, the one request, BMN's reading, the record and the key that appears nowhere
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-  CALLS_KEPT, EXIT, LINE, MAX_CHOICES, MAX_LEVELS, NO_ANSWER, STATE_MAX_BYTES, SYSTEM_ONE_PATH, agreed, judgeLimit, judgeLines, judgeRecordPath, judgeTotals, limitWords, openCodeSignInFile,
+  CALLS_KEPT, EXIT, LINE, MAX_CHOICES, MAX_LEVELS, NO_ANSWER, STATE_MAX_BYTES, SYSTEM_ONE_PATH, TEST_KEY_START, agreed, judgeDirectory, judgeLimit, judgeLines, judgeRecordPath, judgeTotals, limitWords, openCodeSignInFile,
   questionsProblem, readBody, readJudgeRecord, readingOf, runJudge, setJudgeLimit, sizeProblem, type JudgeQuestions, type JudgeRequest, type JudgeResult
 } from '../../bin/agents-judge.mjs'
 import { visibilityPath } from '../../bin/agents-check.mjs'
@@ -18,6 +18,7 @@ import { readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
+const BIN = fileURLToPath(new URL('../../bin/', import.meta.url))
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 /** A key no service ever gave out: planted in the stand-in sign-in file, and searched for in everything BMN writes or says. */
 const PLANTED_KEY = 'sk-synthetic-PLANTED-0123456789abcdef'
@@ -41,14 +42,15 @@ function edit(text: string, from: string, to: string): string {
   return text.replace(from, to)
 }
 
-interface TeamOptions { receives?: string; runs?: string; model?: string; host?: string; enabled?: string; status?: string; hosts?: string }
+interface TeamOptions { receives?: string; runs?: string; model?: string; host?: string; enabled?: string; status?: string; hosts?: string; price?: string | null }
 
 /** The example team with a judge on it: who receives its request, who runs its model, the agent and the role. */
-function teamWithJudge({ receives = 'allowed', runs = 'allowed', model = 'jev-1.13', host = HOST, enabled = 'true', status = 'active', hosts = HOST }: TeamOptions = {}): string {
+function teamWithJudge({ receives = 'allowed', runs = 'allowed', model = 'jev-1.13', host = HOST, enabled = 'true', status = 'active', hosts = HOST,
+  price = `{input: ${PRICE_PER_M}, output: 0, source: "https://prices.example.test/jev", as_of: 2026-10-12}` }: TeamOptions = {}): string {
   const block = [
     'name: Jev', 'class: bishop', 'harness: bmn', `model: ${model}`, 'provider: gateway', 'run_by: maker', `host: ${host}`, `enabled: ${enabled}`, `status: ${status}`,
     ...(enabled === 'false' ? ['enabled_note: switched off for a test'] : []),
-    'roles: [judge]', 'paid_by: per_token', `price: {input: ${PRICE_PER_M}, output: 0, source: "https://prices.example.test/jev", as_of: 2026-10-12}`
+    'roles: [judge]', 'paid_by: per_token', ...(price === null ? [] : [`price: ${price}`])
   ].join('\n')
   let text = edit(EXAMPLE, 'schema_version: 2', 'schema_version: 3')
   text = edit(text, 'cursor: {name: Cursor, hosts: [], private_work: public_only}\n',
@@ -125,6 +127,43 @@ function everyFile(folder: string): Array<{ path: string; text: string }> {
     if (entry.isDirectory()) return everyFile(path)
     return entry.isFile() ? [{ path, text: readFileSync(path, 'latin1') }] : []
   })
+}
+
+/** What one request is counted as where the gateway gave no count for it: the bytes BMN sent and a little. */
+const estimated = (body: string | undefined): number => Buffer.byteLength(body ?? '') + 256
+const waitingFolder = (): string => join(judgeDirectory(), 'waiting')
+const waitingFiles = (): string[] => (existsSync(waitingFolder()) ? readdirSync(waitingFolder()).sort() : [])
+/** The record as another BMN process reads it. */
+function recordElsewhere(): { calls: Array<Record<string, unknown>>; current: { calls: number; requests: number; input_tokens: number; cost_usd: number; refused: number; purposes: Record<string, unknown> } } {
+  return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', `
+    import { judgeTotals, readJudgeRecord } from ${JSON.stringify(`${BIN}agents-judge.mjs`)}
+    const record = readJudgeRecord()
+    console.log(JSON.stringify({ calls: record.calls, current: judgeTotals(new Date(), record).current }))
+  `], { env: { HOME: home, PATH: process.env.PATH ?? '' }, encoding: 'utf8' }))
+}
+
+/**
+ * Another living BMN process that holds the record as its writer until it is let go. No test
+ * setting shortens the five seconds a call waits for the record: the test waits them out.
+ */
+async function holdRecord(): Promise<{ letGo(): Promise<void> }> {
+  const holder = spawn(process.execPath, ['--input-type=module', '-e', `
+    import { takeLock } from ${JSON.stringify(`${BIN}agents-research.mjs`)}
+    const lock = takeLock(process.argv[1], { kind: 'writer' })
+    if (lock.held !== undefined) process.exit(3)
+    process.stdout.write('held\\n')
+    process.stdin.on('end', () => { lock.release(); process.exit(0) }).resume()
+  `, `${judgeRecordPath()}.writing`], { env: { HOME: home, PATH: process.env.PATH ?? '' }, stdio: ['pipe', 'pipe', 'inherit'] })
+  await new Promise<void>((resolve, reject) => {
+    holder.stdout.once('data', () => resolve())
+    holder.once('exit', (code) => reject(new Error(`the other process could not hold the record: ${code}`)))
+  })
+  return {
+    letGo: () => new Promise<void>((resolve) => {
+      holder.once('exit', () => resolve())
+      holder.stdin.end()
+    })
+  }
 }
 
 beforeEach(async () => {
@@ -292,6 +331,52 @@ describe('nothing is sent unless every check passes (65.2 AC2)', () => {
     expect([1, 0.01, 0.005].map(limitWords)).toEqual(['1.00', '0.01', '0.005'])
   })
 
+  it('a judge whose price the team does not record: what a call costs could not be counted, so none is made', async () => {
+    signIn()
+    for (const price of [null, '{input: -1, output: 0}']) {
+      let text: string
+      try {
+        text = teamWithJudge({ price })
+        approve(text)
+      } catch {
+        // The team's own check takes no such price: nothing to refuse later.
+        continue
+      }
+      expect(await refusal()).toMatchObject({ code: 'NO_PRICE', message: expect.stringContaining('records no price for Jev'), next: expect.stringContaining('price') })
+    }
+    approve(teamWithJudge({ price: null }))
+    const result = await runCli(['judge', 'ask', ...files(), '--data', 'public'])
+    expect(result).toMatchObject({ code: EXIT.refusal, stdout: '' })
+    expect(result.stderr).toMatch(/^bmn: NO_PRICE: /)
+    expect(requests).toHaveLength(0)
+  })
+
+  it('a record that is there and cannot be read: nothing is asked, with the limit on or off, and the file is left as it is', async () => {
+    signIn()
+    approve(teamWithJudge())
+    mkdirSync(dirname(judgeRecordPath()), { recursive: true })
+    for (const damaged of ['{"version":1,"calls":"all of them"', '{"version":1,"calls":"all of them","months":{}}', '{"version":2,"calls":[],"months":{}}', '']) {
+      writeFileSync(judgeRecordPath(), damaged)
+      for (const on of [false, true]) {
+        setJudgeLimit({ on, usd: 5 })
+        const result = await refusal()
+        expect(result).toMatchObject({ code: 'RECORD_UNREADABLE', message: expect.stringContaining(judgeRecordPath()), next: expect.stringContaining('moves the file away'), recorded: false })
+        expect(result.note).toContain('BMN could not write this call into its record')
+      }
+      expect(readJudgeRecord()).toMatchObject({ damaged: true, calls: [] })
+      expect(readFileSync(judgeRecordPath(), 'utf8')).toBe(damaged)
+    }
+    const told = await runCli(['judge', 'ask', ...files(), '--data', 'public'])
+    expect(told).toMatchObject({ code: EXIT.refusal, stdout: '' })
+    expect(told.stderr).toMatch(/^bmn: RECORD_UNREADABLE: .*\n {2}next: .*\nbmn: BMN could not write this call into its record/)
+    expect(requests).toHaveLength(0)
+    expect(waitingFiles()).toEqual([])
+    // Once he moved the file away a new record starts.
+    rmSync(judgeRecordPath())
+    expect(await ask()).toMatchObject({ ok: true, recorded: true })
+    expect(readJudgeRecord().calls).toHaveLength(1)
+  })
+
   it('no key in OpenCode\'s sign-in file', async () => {
     approve(teamWithJudge())
     expect(await refusal()).toMatchObject({ code: 'NO_KEY', next: expect.stringContaining('opencode auth login') })
@@ -344,6 +429,34 @@ describe('one request to the approved host and path (65.2 AC3)', () => {
     }
   })
 
+  it('does not ask again after a 4xx whose body breaks off: the status that came stands', async () => {
+    for (const status of [401, 429]) {
+      requests = []
+      respond = (_request, response, raw) => {
+        response.writeHead(status, { 'content-type': 'application/json', 'content-length': '400' })
+        response.write('{"error":"the answer ends he')
+        setTimeout(() => raw.socket.destroy(), 30)
+      }
+      const result = await ask()
+      expect(result).toMatchObject({ ok: false, outcome: 'failed', note: `the approved host answered ${status}`, requests: 1, input_tokens: 0, cost_usd: 0 })
+      expect(result.tokens_estimated).toBeUndefined()
+      expect(requests).toHaveLength(1)
+    }
+  })
+
+  it('a 200 whose body breaks off is asked once more, and the request that may have been charged is counted by its size', async () => {
+    respond = (request, response, raw) => {
+      if (request.count > 1) return ok(answer())(request, response)
+      response.writeHead(200, { 'content-type': 'application/json', 'content-length': '4000' })
+      response.write('{"answers":{"claim":')
+      setTimeout(() => raw.socket.destroy(), 30)
+    }
+    const result = await ask()
+    expect(requests).toHaveLength(2)
+    expect(result).toMatchObject({ ok: true, outcome: 'answered', tokens_estimated: true, input_tokens: 2000 + estimated(requests[0]?.body) })
+    expect(result.cost_usd).toBeCloseTo(((2000 + estimated(requests[0]?.body)) * PRICE_PER_M) / 1e6, 12)
+  })
+
   it('asks once more after a 5xx, and no third time', async () => {
     respond = (request, response) => {
       if (request.count === 1) {
@@ -368,12 +481,21 @@ describe('one request to the approved host and path (65.2 AC3)', () => {
       if (request.count === 1) return void raw.socket.destroy()
       ok(answer())(request, response)
     }
-    expect(await ask()).toMatchObject({ ok: true, outcome: 'answered' })
+    // The first request left and got no status: it may have been charged, so it is counted by its size beside the answer's own count.
+    expect(await ask()).toMatchObject({ ok: true, outcome: 'answered', tokens_estimated: true, input_tokens: 2000 + estimated(requests[0]?.body) })
     expect(requests).toHaveLength(2)
     requests = []
     respond = (_request, _response, raw) => void raw.socket.destroy()
-    expect(await ask()).toMatchObject({ ok: false, outcome: 'failed', note: 'the approved host could not be reached' })
+    expect(await ask()).toMatchObject({ ok: false, outcome: 'failed', note: 'the approved host could not be reached', tokens_estimated: true, input_tokens: 2 * estimated(requests[0]?.body) })
     expect(requests).toHaveLength(2)
+    // A request that never left (nothing listens there) costs nothing and is not called an estimate.
+    const closed = createServer()
+    await new Promise<void>((resolve) => { closed.listen(0, '127.0.0.1', resolve) })
+    const nowhere = String((closed.address() as AddressInfo).port)
+    await new Promise<void>((resolve) => { closed.close(() => resolve()) })
+    const unsent = await ask({ environment: { HOME: home, BMN_JUDGE_TEST_PORT: nowhere } })
+    expect(unsent).toMatchObject({ ok: false, outcome: 'failed', note: 'the approved host could not be reached', input_tokens: 0, cost_usd: 0 })
+    expect(unsent.tokens_estimated).toBeUndefined()
   })
 
   it('ends at its deadline, and reads nothing', async () => {
@@ -383,6 +505,9 @@ describe('one request to the approved host and path (65.2 AC3)', () => {
     expect(Date.now() - started).toBeLessThan(2000)
     expect(result).toMatchObject({ ok: false, outcome: 'timeout', readings: { claim: { reading: NO_ANSWER }, kind: { reading: NO_ANSWER }, quality: { reading: NO_ANSWER } } })
     expect(requests).toHaveLength(1)
+    // The request went out and may be charged: it is counted by its size, never as nothing.
+    expect(result).toMatchObject({ tokens_estimated: true, input_tokens: estimated(requests[0]?.body) })
+    expect(result.cost_usd).toBeGreaterThan(0)
   })
 
   it('a slow first failure leaves no time for the second try', async () => {
@@ -401,6 +526,21 @@ describe('one request to the approved host and path (65.2 AC3)', () => {
   it('a test name is no site: without the test\'s own port nothing is asked', async () => {
     expect(await ask({ environment: { HOME: home } })).toMatchObject({ ok: false, outcome: 'failed', note: expect.stringContaining('test name') })
     expect(requests).toHaveLength(0)
+  })
+
+  it('the stand-in is sent a test\'s key and no other: a key that could be his own never leaves over plain http, whatever the port variable says', async () => {
+    const others = ['not-a-test-key-0123456789abcdef', `x${PLANTED_KEY}`, 'SK-SYNTHETIC-0123456789abcdef']
+    for (const key of others) {
+      signIn({ 'opencode-go': { type: 'api', key } })
+      expect(await ask()).toMatchObject({ ok: false, outcome: 'failed', note: 'the approved host is a test name and no test is running', input_tokens: 0, cost_usd: 0 })
+      const told = await runCli(['judge', 'ask', ...files(), '--data', 'public', '--json'])
+      expect(told.code).toBe(EXIT.failed)
+      expect(told.stdout + told.stderr).not.toContain(key)
+    }
+    // Nothing at all reached the listener: no request, so no key.
+    expect(requests).toHaveLength(0)
+    expect(TEST_KEY_START).toBe('sk-synthetic-')
+    expect(PLANTED_KEY.startsWith(TEST_KEY_START)).toBe(true)
   })
 })
 
@@ -454,6 +594,23 @@ describe('BMN\'s reading of an answer (65.2 AC4)', () => {
     expect(readingOf(QUESTIONS.kind, { type: 'choice', choice: 'report', confidence: 0.99, probabilities: {} })).toBeNull()
     expect(readingOf(QUESTIONS.quality, { type: 'score', score: 7, confidence: 0.99, probabilities: {} })).toBeNull()
     expect(readingOf(QUESTIONS.quality, null)).toBeNull()
+  })
+
+  it('a probability is named by the caller\'s own label or a level\'s number, and by nothing a server chose', () => {
+    const scored = (probabilities: Record<string, number>) => readingOf(QUESTIONS.quality, { type: 'score', score: 1.8, confidence: 0.94, probabilities })
+    expect(scored({ 'Nothing is said': 0.02, 'Some of it': 0.2, 'All of it': 0.78 })).toEqual({ reading: 1.8, sure: true })
+    expect(scored({ 0: 0.02, 1: 0.2, 2: 0.78 })).toEqual({ reading: 1.8, sure: true })
+    expect(scored({ '0.5': 0.1, '10': 0.9 })).toEqual({ reading: 1.8, sure: true })
+    for (const name of ['a-name-a-server-made-up', PLANTED_KEY, '123456', '1.234', '__proto__', 'constructor']) {
+      expect(scored(JSON.parse(JSON.stringify({ 'All of it': 0.5 }).replace('}', `,${JSON.stringify(name)}:0.5}`)) as Record<string, number>), name).toBeNull()
+    }
+    const chosen = (probabilities: Record<string, number>) => readingOf(QUESTIONS.kind, { type: 'choice', choice: 'report', confidence: 0.97, probabilities })
+    expect(chosen({ report: 0.97, question: 0.03 })).toEqual({ reading: 'report' })
+    expect(chosen({ report: 0.97, [PLANTED_KEY]: 0.03 })).toBeNull()
+    expect(chosen({ report: 0.97, 1: 0.03 })).toBeNull()
+    // A label that is a word every object carries is a label only where the caller made it one.
+    expect(readingOf(QUESTIONS.kind, { type: 'choice', choice: 'constructor', confidence: 0.97, probabilities: { report: 0.97 } })).toBeNull()
+    expect(readBody({ kind: QUESTIONS.kind }, JSON.parse('{"answers":{"__proto__":{"kind":{"type":"choice","choice":"report","confidence":0.97,"probabilities":{"report":0.97}}}}}'))).toEqual({ ok: false })
   })
 
   it('the caller gets Jev\'s numbers unchanged, and nothing else a server said', async () => {
@@ -563,6 +720,19 @@ describe('the key appears nowhere (65.2 AC3, R65-NFR3)', () => {
         response.writeHead(200, { 'content-type': 'application/json', 'x-echo': PLANTED_KEY })
         response.end(JSON.stringify({ ...JSON.parse(answer()), key: PLANTED_KEY, usage: { input_tokens: 2000, note: PLANTED_KEY } }))
       },
+      // The key as the name of a probability: of a score, and of a choice.
+      (_request, response) => {
+        const body = JSON.parse(answer()) as { answers: { quality: { probabilities: Record<string, number> } } }
+        body.answers.quality.probabilities = { [PLANTED_KEY]: 1 }
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify(body))
+      },
+      (_request, response) => {
+        const body = JSON.parse(answer()) as { answers: { kind: { probabilities: Record<string, number> } } }
+        body.answers.kind.probabilities = { report: 0.95, [PLANTED_KEY]: 0.05 }
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify(body))
+      },
       // The key in place of an answer.
       (_request, response) => {
         response.writeHead(200, { 'x-echo': PLANTED_KEY })
@@ -615,7 +785,7 @@ describe('every call is counted in a bounded private record (65.2 AC7)', () => {
     const record = readJudgeRecord()
     expect(record.calls).toHaveLength(2)
     expect(record.calls[0]).toEqual({
-      at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/), by: { kind: 'session', session: 'synthetic-session', app: 'claude' }, purpose: 'dev-auto', agent: 'jev', model: 'jev-1.13',
+      id: expect.stringMatching(/^[0-9a-f-]{36}$/), at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/), by: { kind: 'session', session: 'synthetic-session', app: 'claude' }, purpose: 'dev-auto', agent: 'jev', model: 'jev-1.13',
       requests: 1, input_tokens: 2000, cost_usd: (2000 * PRICE_PER_M) / 1e6, took_ms: expect.any(Number), outcome: 'answered', state_sha256: createHash('sha256').update(STATE).digest('hex')
     })
     expect(record.calls[1]).toMatchObject({ by: { kind: 'shell' }, purpose: 'unnamed', requests: 0, cost_usd: 0, outcome: 'refused', code: 'FREE_MODEL' })
@@ -661,13 +831,106 @@ describe('every call is counted in a bounded private record (65.2 AC7)', () => {
     expect(judgeTotals().current).toMatchObject({ calls: 901, input_tokens: 11_000 })
   })
 
-  it('a damaged record reads as empty and is written anew', async () => {
-    mkdirSync(dirname(judgeRecordPath()), { recursive: true })
-    writeFileSync(judgeRecordPath(), '{"version":1,"calls":"all of them"')
-    expect(readJudgeRecord()).toEqual({ calls: [], months: {} })
-    await ask()
-    expect(readJudgeRecord().calls).toHaveLength(1)
+  it('a purpose that is a word every object carries keeps its own row of the month', async () => {
+    const run = () => runCli(['judge', 'ask', ...files(), '--data', 'public', '--purpose', 'constructor'])
+    expect((await run()).code).toBe(EXIT.ok)
+    expect((await run()).code).toBe(EXIT.ok)
+    const { current } = recordElsewhere()
+    expect(current).toMatchObject({ calls: 2, requests: 2, input_tokens: 4000 })
+    expect(Object.keys(current.purposes)).toEqual(['constructor'])
+    expect(Object.hasOwn(current.purposes, 'constructor')).toBe(true)
+    expect((current.purposes as Record<string, unknown>)['constructor']).toEqual({ calls: 2, requests: 2, input_tokens: 4000, cost_usd: expect.closeTo((4000 * PRICE_PER_M) / 1e6, 12) })
+    // The file itself holds the row, as the word's own entry.
+    const [month] = Object.values((JSON.parse(readFileSync(judgeRecordPath(), 'utf8')) as { months: Record<string, { purposes: Record<string, unknown> }> }).months)
+    expect(Object.hasOwn(month?.purposes ?? {}, 'constructor')).toBe(true)
   })
+
+  it('a call whose answer came with no count of tokens is counted by its size and marked estimated, never as free', async () => {
+    respond = ok(JSON.stringify({ answers: JSON.parse(answer()).answers }))
+    const result = await ask({ purpose: 'no-count' })
+    const tokens = estimated(requests[0]?.body)
+    expect(result).toMatchObject({ ok: true, outcome: 'answered', tokens_estimated: true, input_tokens: tokens, recorded: true })
+    expect(result.cost_usd).toBeCloseTo((tokens * PRICE_PER_M) / 1e6, 12)
+    expect(readJudgeRecord().calls[0]).toMatchObject({ tokens_estimated: true, input_tokens: tokens })
+    expect(judgeTotals().current.cost_usd).toBeCloseTo((tokens * PRICE_PER_M) / 1e6, 12)
+    expect(judgeLines(result, QUESTIONS).at(-1)).toContain(`about ${tokens} input tokens (estimated from the request's size: the gateway gave no count)`)
+    // Asked twice, both without a count: both are counted.
+    const twice = await ask({ twice: true })
+    expect(twice).toMatchObject({ ok: true, tokens_estimated: true, input_tokens: 2 * tokens })
+    // An answer that is not Jev's shape came with a 200 all the same: counted too.
+    respond = ok('<html>busy</html>')
+    expect(await ask()).toMatchObject({ ok: false, outcome: 'shape', tokens_estimated: true, input_tokens: tokens })
+    // So such calls use the monthly limit up like any other.
+    setJudgeLimit({ on: true, usd: (3 * tokens * PRICE_PER_M) / 1e6 })
+    const asked = requests.length
+    expect(await ask()).toMatchObject({ ok: false, outcome: 'refused', code: 'LIMIT_REACHED' })
+    expect(requests).toHaveLength(asked)
+  })
+
+  it('a call made while another process holds the record is still counted: its line waits beside the record and is taken in once', async () => {
+    expect(await ask({ purpose: 'before' })).toMatchObject({ ok: true })
+    const holder = await holdRecord()
+    let result: JudgeResult
+    let told: Awaited<ReturnType<typeof runCli>>
+    try {
+      // One call in this process and one from a shell, both while the record is held for longer than a call waits for it.
+      [result, told] = await Promise.all([ask({ purpose: 'held' }), runCli(['judge', 'ask', ...files(), '--data', 'public', '--purpose', 'held'])])
+      expect(result).toMatchObject({ ok: true, outcome: 'answered' })
+      expect(told.code).toBe(EXIT.ok)
+      // Both are counted, by this process and by any other, while the record is still held.
+      expect(judgeTotals().current).toMatchObject({ calls: 3, input_tokens: 6000 })
+      expect(result).toMatchObject({ recorded: true })
+      expect(result.note).toBeUndefined()
+      expect(told.stderr).toBe('')
+      expect(waitingFiles()).toHaveLength(2)
+      expect(waitingFiles().every((name) => (statSync(join(waitingFolder(), name)).mode & 0o777) === 0o600)).toBe(true)
+      expect(readFileSync(join(waitingFolder(), waitingFiles()[0] ?? ''), 'utf8')).not.toContain(STATE)
+      // The kept file still holds one call; every reader, here and in another process, counts all three.
+      expect((JSON.parse(readFileSync(judgeRecordPath(), 'utf8')) as { calls: unknown[] }).calls).toHaveLength(1)
+      expect(readJudgeRecord().calls).toHaveLength(3)
+      expect(judgeTotals().current).toMatchObject({ calls: 3, input_tokens: 6000, purposes: { before: { calls: 1 }, held: { calls: 2, input_tokens: 4000 } } })
+      expect(recordElsewhere().current).toMatchObject({ calls: 3, input_tokens: 6000 })
+    } finally {
+      await holder.letGo()
+    }
+    const waited = waitingFiles().map((name) => ({ name, text: readFileSync(join(waitingFolder(), name), 'utf8') }))
+    // The next call takes the waiting lines in, names them in the same write and removes their files.
+    expect(await ask({ purpose: 'after' })).toMatchObject({ ok: true, recorded: true })
+    expect(waitingFiles()).toEqual([])
+    const kept = JSON.parse(readFileSync(judgeRecordPath(), 'utf8')) as { calls: Array<{ id: string; purpose: string }>; taken: string[] }
+    expect(kept.calls.map((call) => call.purpose).sort()).toEqual(['after', 'before', 'held', 'held'])
+    expect(kept.taken.sort()).toEqual(waited.map((file) => file.name.slice(0, -5)).sort())
+    expect(judgeTotals().current).toMatchObject({ calls: 4, input_tokens: 8000 })
+    // A process that ended between the write and the removal leaves a file behind: its line is not counted a second time, by a reader or by the next write.
+    for (const file of waited) writeFileSync(join(waitingFolder(), file.name), file.text)
+    expect(readJudgeRecord().calls).toHaveLength(4)
+    expect(judgeTotals().current).toMatchObject({ calls: 4, input_tokens: 8000 })
+    expect(await ask({ purpose: 'after' })).toMatchObject({ ok: true })
+    expect(waitingFiles()).toEqual([])
+    expect(judgeTotals().current).toMatchObject({ calls: 5, input_tokens: 10_000, purposes: { held: { calls: 2 }, after: { calls: 2 } } })
+    // A waiting line counts toward the monthly limit like a kept one.
+    writeFileSync(join(waitingFolder(), 'aaaaaaaa-0000-4000-8000-000000000001.json'), JSON.stringify({ version: 1, line: { id: 'aaaaaaaa-0000-4000-8000-000000000001', at: new Date().toISOString(), by: { kind: 'shell' }, purpose: 'dear', agent: 'jev', model: 'jev-1.13', requests: 1, input_tokens: 1_000_000, cost_usd: 0.042, took_ms: 9, outcome: 'answered' } }))
+    setJudgeLimit({ on: true, usd: 0.04 })
+    const asked = requests.length
+    expect(await ask()).toMatchObject({ ok: false, outcome: 'refused', code: 'LIMIT_REACHED' })
+    expect(requests).toHaveLength(asked)
+  }, 60_000)
+
+  it('a call that could not be written into the record says so, from the command line too', async () => {
+    mkdirSync(judgeDirectory(), { recursive: true })
+    chmodSync(judgeDirectory(), 0o500)
+    try {
+      const result = await ask()
+      expect(result).toMatchObject({ ok: true, outcome: 'answered', recorded: false, note: expect.stringContaining('BMN could not write this call into its record') })
+      const told = await runCli(['judge', 'ask', ...files(), '--data', 'public'])
+      expect(told.code).toBe(EXIT.ok)
+      expect(told.stdout).toContain('claim: yes (noul 0.97)')
+      expect(told.stderr).toMatch(/^bmn: BMN could not write this call into its record: /)
+      expect(JSON.parse((await runCli(['judge', 'ask', ...files(), '--data', 'public', '--json'])).stdout)).toMatchObject({ ok: true, recorded: false })
+    } finally {
+      chmodSync(judgeDirectory(), 0o700)
+    }
+  }, 60_000)
 
   it('the limit holds across two processes', async () => {
     setJudgeLimit({ on: true, usd: 0.0001 })

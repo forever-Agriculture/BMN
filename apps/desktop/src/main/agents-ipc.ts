@@ -1,6 +1,7 @@
 // MODULE: agents-ipc.ts - Epic 60.5/60.6: renderer channels for the Preferences Team and Rules pages
 import { execFile } from 'node:child_process'
 import { mkdirSync, readFileSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, dirname } from 'node:path'
 import {
   ERROR_CODES,
@@ -62,7 +63,7 @@ import {
   CONTEXT_APPS, ContextError, applyContextDefault, contextAuto, contextAutoPlan, contextDefault, contextTestFolder, limitedAgents, planContextDefault, setContextAuto, sharingAgents,
   type ContextAutoPlanEntry, type ContextTestOutcome
 } from '../../bin/agents-context.mjs'
-import { judgeLimit, judgeTotals, readJudgeRecord, runJudge, setJudgeLimit } from '../../bin/agents-judge.mjs'
+import { judgeLimit, judgeRecordPath, judgeTotals, readJudgeRecord, runJudge, setJudgeLimit } from '../../bin/agents-judge.mjs'
 import { ASK_KEPT, ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, agentsMayAsk, askedCount, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord } from '../../bin/agents-ask.mjs'
 import { chooseResearcher, fetchPublicPage, processStart, publicHostName, readResearch, resolvesPublic, researchLockHolder, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
 import { runFenceTest } from '../../bin/agents-fence.mjs'
@@ -1347,14 +1348,17 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const limit = judgeLimit()
     const sums = (totals: { calls: number; input_tokens: number; cost_usd: number }): JudgeTotalsView => ({ calls: totals.calls, input_tokens: totals.input_tokens, cost_usd: totals.cost_usd })
     const month = (totals: typeof current): JudgeMonthView => ({
-      month: totals.month, ...sums(totals), refused: totals.refused, purposes: Object.fromEntries(Object.entries(totals.purposes).map(([word, entry]) => [word, sums(entry)]))
+      month: totals.month, ...sums(totals), refused: totals.refused, estimated: totals.estimated, purposes: Object.fromEntries(Object.entries(totals.purposes).map(([word, entry]) => [word, sums(entry)]))
     })
+    const home = homedir()
     return {
       limit, reached: limit.on && current.cost_usd >= limit.usd, current: month(current), previous: month(previous),
       calls: record.calls.slice(-JUDGE_CALLS_SHOWN).reverse().map((call) => ({
         at: call.at, by: askerOf(call.by) ?? { kind: 'shell' }, purpose: typeof call.purpose === 'string' ? call.purpose.slice(0, 32) : '',
         outcome: JUDGE_OUTCOMES.includes(call.outcome) ? call.outcome : 'failed', ...(typeof call.code === 'string' ? { code: call.code.slice(0, 40) } : {})
-      }))
+      })),
+      // A record that cannot be read is said, never shown as a month with no calls: the command asks nothing until it is moved away.
+      ...(record.damaged === true ? { unreadable: judgeRecordPath().startsWith(`${home}/`) ? `~${judgeRecordPath().slice(home.length)}` : judgeRecordPath() } : {})
     }
   }
   handle('aiterm:judge:load', () => judgeView())
@@ -1380,7 +1384,10 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       const answer = result.answers?.statement
       const reading = result.readings?.statement
       if (result.outcome === 'answered' && answer?.type === 'noul' && reading !== undefined) {
-        reply = { outcome: 'answered', noul: answer.noul, reading: reading.reading === 'yes' ? 'yes' : 'no answer', near: reading.near === true, input_tokens: result.input_tokens ?? 0, cost_usd: result.cost_usd ?? 0, took_ms: result.took_ms }
+        reply = {
+          outcome: 'answered', noul: answer.noul, reading: reading.reading === 'yes' ? 'yes' : 'no answer', near: reading.near === true, input_tokens: result.input_tokens ?? 0, cost_usd: result.cost_usd ?? 0, took_ms: result.took_ms,
+          counted: result.recorded !== false, estimated: result.tokens_estimated === true
+        }
       } else if (result.outcome === 'refused') {
         reply = { outcome: 'refused', code: result.code ?? 'REFUSED', message: result.message ?? 'The call was refused.', ...(result.next === undefined ? {} : { next: result.next }) }
       } else {

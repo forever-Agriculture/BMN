@@ -522,10 +522,13 @@ export interface WebQuestionAsked { ok: boolean; message: string | null; snapsho
 
 /** Epic 65: what the judge's page on Team shows of its calls. Sums count every call that made a request; a refused call costs nothing and is counted apart. */
 export interface JudgeTotalsView { calls: number; input_tokens: number; cost_usd: number }
-export interface JudgeMonthView extends JudgeTotalsView { month: string; refused: number; purposes: Record<string, JudgeTotalsView> }
+/** `estimated`: how many of the month's calls are counted by the size of their request, because the gateway gave no count of their tokens. */
+export interface JudgeMonthView extends JudgeTotalsView { month: string; refused: number; estimated: number; purposes: Record<string, JudgeTotalsView> }
 export type JudgeOutcome = 'answered' | 'refused' | 'timeout' | 'failed' | 'shape'
 /** One call as the page lists it: when, who, the purpose word and how it ended. No text and no answer is kept of a call. */
 export interface JudgeCallView { at: string; by: WebQuestionAsker; purpose: string; outcome: JudgeOutcome; code?: string }
+/** How a call the page itself made is in the record: `counted` is false where BMN could not write it down; `estimated`, where the gateway gave no count of tokens and BMN counted the request's size. */
+export interface JudgeTryCount { counted: boolean; estimated: boolean }
 export interface JudgeView {
   /** The owner's monthly limit: off until he switches it on. */
   limit: { on: boolean; usd: number }
@@ -535,10 +538,12 @@ export interface JudgeView {
   previous: JudgeMonthView
   /** Newest first, at most 20. */
   calls: JudgeCallView[]
+  /** The record of the calls is there and cannot be read: its path, the home folder as `~`. Nothing is asked until he moved the file away. */
+  unreadable?: string
 }
 /** What "Try it" got back: Jev's number with BMN's reading, the command's own refusal, or why there is no answer. */
 export type JudgeTryReply =
-  | { outcome: 'answered'; noul: number; reading: 'yes' | 'no answer'; near: boolean; input_tokens: number; cost_usd: number; took_ms: number }
+  | ({ outcome: 'answered'; noul: number; reading: 'yes' | 'no answer'; near: boolean; input_tokens: number; cost_usd: number; took_ms: number } & JudgeTryCount)
   | { outcome: 'refused'; code: string; message: string; next?: string }
   | { outcome: 'timeout' | 'failed' | 'shape'; note: string }
 export interface JudgeTried { reply: JudgeTryReply; view: JudgeView }

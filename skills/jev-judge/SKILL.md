@@ -35,7 +35,7 @@ Two did not, and Jev is not to be used for them:
 | Use | Confident answers | Right | Spoke when it should | Changed between repeats | Why it failed |
 |---|---|---|---|---|---|
 | What does an agent's final message need from the owner? | 10 | 10 | 50% | 0% | speaks on too few cases |
-| Is an agent trying the same method against the same failure again? | 18 | 18 | 82% | 5% | answers at 0.88 to 0.90 flipped between repeats |
+| Is an agent trying the same method against the same failure again? | 18 | 18 | 78% | 5% | answers at 0.88 to 0.90 flipped between repeats |
 
 ## How to ask well
 

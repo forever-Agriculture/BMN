@@ -1655,17 +1655,25 @@ printf '%s\n' 'All 12 tests passed.' | bmn judge ask --state-file - --questions-
   provider lists (`HOST_NOT_APPROVED`); the text is declared with `--data public|private`
   (`DATA_UNDECLARED`), and either private work is allowed for both providers, or the text is
   declared public and the workspace named with `--workspace`, where one is named, is one BMN
-  holds public (`PRIVATE_NOT_ALLOWED`, `WORKSPACE_PRIVATE`); a monthly limit you switched on is
-  not reached (`LIMIT_REACHED`); and OpenCode is signed in on this computer (`NO_KEY`). Each
-  refusal has its code, plain words and a `next`, and exit code 10.
+  holds public (`PRIVATE_NOT_ALLOWED`, `WORKSPACE_PRIVATE`); the team records the model's price
+  (`NO_PRICE`) and the record of the calls can be read (`RECORD_UNREADABLE`), since nothing is
+  asked whose cost BMN could not count; a monthly limit you switched on is not reached
+  (`LIMIT_REACHED`); and OpenCode is signed in on this computer (`NO_KEY`). Each refusal has its
+  code, plain words and a `next`, and exit code 10.
 - **The request** is one https POST to the approved host, path `/zen/v1/systemone`, with the
   model, the text and the questions. It waits 5 seconds unless `--timeout` says otherwise (30 at
-  most), follows no redirect, is not repeated after a 4xx, and is repeated once after a network
-  error or a 5xx while time is left. The host's name must lead to public addresses.
+  most), follows no redirect, is not repeated after a 4xx (also one whose body breaks off: the
+  status that came stands), and is repeated once after a network error, a 5xx or a 200 whose
+  body breaks off, while time is left. The host's name must lead to public addresses. A host
+  under `.test` is no site: it is the stand-in server of BMN's own tests on this computer, and
+  it is sent only a key that starts `sk-synthetic-`, as every test's key does and no key a
+  service gave out. With any other key nothing is sent there.
 - **The key** is OpenCode's own: BMN reads it from OpenCode's sign-in file
   (`~/.local/share/opencode/auth.json`, or under `$XDG_DATA_HOME`) for that one request, holds
   it in memory and writes it nowhere. It is in no output, record or error, also when a server
-  sends it back: BMN passes on nothing a server said except Jev's numbers.
+  sends it back: BMN passes on nothing a server said except Jev's numbers, each under a name
+  the caller chose (a choice's own labels) or a level's words or number (a score); an answer
+  with any other name in it is not Jev's shape.
 - **The reading** is the one rule the proof tested (`~/code/jev-eval`): a `noul` of 0.90 or more
   reads "yes"; a `choice` whose confidence and winning probability are both 0.90 or more reads
   its label; a `score` with a confidence of 0.90 or more reads its number, marked sure.
@@ -1682,12 +1690,29 @@ printf '%s\n' 'All 12 tests passed.' | bmn judge ask --state-file - --questions-
   long it took and the outcome, with a hash of the text and no text, no answer and no key. Month
   totals, in all and per purpose word, are kept beside the list and count every call that made
   a request; a refused call costs nothing and is counted apart.
+  - *A call made while another process holds the record* waits five seconds for it and then
+    writes its line to a file of its own under `judge/waiting/`. Every reader counts the waiting
+    lines, the limit included, and the next call that gets the record takes them in, once.
+  - *A request the gateway gave no count of tokens for* (a 200 with no usage, one that broke off
+    or is not Jev's shape, a request still out at the deadline, or one that left this computer
+    and got no status back) may have been charged. A request that never left, and one answered
+    with a 3xx, 4xx or 5xx, is not counted. BMN
+    counts it by the bytes it sent plus 256, marks the call `tokens_estimated`, says "about …
+    input tokens (estimated …)" and counts it toward the limit: never as free.
+  - *A record that is there and cannot be read* is never taken for an empty one and never
+    written over: every call is refused with `RECORD_UNREADABLE`, with the limit on or off,
+    until you move the file away (BMN then starts a new record) or mend it.
+  - *A call BMN could not write down* still gives its answer; the result says `recorded: false`
+    with the reason in `note`, the command says it on standard error, and Try it says "Not
+    counted" in place of "Counted in the calls below".
 - **The monthly limit** is off until you switch it on, on the judge's page. With it on, a call
   is refused once the month's recorded cost reaches it, from the page and from every shell
   alike, until next month or a higher limit. Calls that start at the same moment are each
   judged on what is recorded by then.
 - **On Team.** The judge's page shows calls, input tokens and dollars for this month and the
-  last, in all and per purpose, the last 20 calls (when, who, purpose, outcome), the limit, and
+  last, in all and per purpose (with how many calls are estimates, and the record's path in
+  place of the sums where it cannot be read), the last 20 calls (when, who, purpose, outcome),
+  the limit, and
   **Try it**: paste a text and one statement, say whether the text is private (it starts as
   private), and press Ask. It goes by the same route, is refused by the same rules in the
   command's own words and is counted like every call, under the purpose `try-it`. Team › Models

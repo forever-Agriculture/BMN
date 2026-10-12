@@ -1,6 +1,6 @@
 // MODULE: agents-judge.mjs - Epic 65: one checked call to the team's judge (Jev). A text and typed questions go to the approved host, numbers come back, and BMN reads them under the one rule the proof tested; every call is counted, and the key it uses appears nowhere
 import { createHash, randomUUID } from 'node:crypto'
-import { readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { homedir } from 'node:os'
@@ -44,6 +44,8 @@ export const STATE_MAX_BYTES = 24_000
 export const REQUEST_MAX_BYTES = 48_000
 export const MAX_QUESTIONS = 64
 const ANSWER_MAX_BYTES = 256 * 1024
+/** What is added to a request's bytes where its tokens are counted by its size: the few tokens a model puts around a text. */
+const UNCOUNTED_ALLOWANCE = 256
 /** How many calls the record lists; the month totals beside them count every call. */
 export const CALLS_KEPT = 200
 const MONTHS_KEPT = 13
@@ -116,6 +118,22 @@ export function sizeProblem(state, questions) {
 const near = (...numbers) => numbers.some((number) => Math.abs(number - LINE) <= NEAR + 1e-9)
 const atLine = (number) => number >= LINE - 1e-12
 
+/** A level of a score named by its number: "0", "2", "1.5". Five characters at most, so no key of any service fits in one. */
+const LEVEL_NUMBER = /^\d{1,2}(\.\d{1,2})?$/
+
+/**
+ * Whether a probability may carry this name: a choice's own labels; a score's levels by the
+ * caller's own words or by a short number. Nothing else a server chose is a name (R65-NFR3).
+ */
+function probabilityName(question, name) {
+  return question.type === 'choice' ? Object.hasOwn(question.criteria, name) : question.criteria.includes(name) || LEVEL_NUMBER.test(name)
+}
+
+/** The probabilities of an answer, each copied under a name BMN takes: a name a server made up is never handed on. */
+function knownProbabilities(question, probabilities) {
+  return Object.fromEntries(Object.entries(probabilities).filter(([name]) => probabilityName(question, name)))
+}
+
 /**
  * BMN's reading of one answer to one question, or null where the answer is not Jev's shape for
  * that question. A `noul` at the line or above reads "yes"; a low one is not read as "no", since
@@ -130,9 +148,10 @@ export function readingOf(question, answer) {
     return { reading: atLine(answer.noul) ? 'yes' : NO_ANSWER, ...(near(answer.noul) ? { near: true } : {}) }
   }
   if (!unit(answer.confidence) || !isObject(answer.probabilities) || !Object.values(answer.probabilities).every(unit)) return null
+  // A probability is named by the caller's own label or a level's number, and by nothing a server chose (R65-NFR3).
+  if (!Object.keys(answer.probabilities).every((name) => probabilityName(question, name))) return null
   if (question.type === 'choice') {
-    const labels = Object.keys(question.criteria)
-    if (typeof answer.choice !== 'string' || !labels.includes(answer.choice) || !Object.keys(answer.probabilities).every((label) => labels.includes(label))) return null
+    if (typeof answer.choice !== 'string' || !probabilityName(question, answer.choice) || !Object.hasOwn(answer.probabilities, answer.choice)) return null
     const winning = answer.probabilities[answer.choice]
     if (!unit(winning)) return null
     return { reading: atLine(answer.confidence) && atLine(winning) ? answer.choice : NO_ANSWER, ...(near(answer.confidence, winning) ? { near: true } : {}) }
@@ -151,12 +170,12 @@ export function readBody(questions, body) {
   const answers = {}
   const readings = {}
   for (const [id, question] of Object.entries(questions)) {
-    const answer = body.answers[id]
+    const answer = Object.hasOwn(body.answers, id) ? body.answers[id] : undefined
     const reading = readingOf(question, answer)
     if (reading === null) return { ok: false }
     answers[id] = question.type === 'noul' ? { type: 'noul', noul: answer.noul }
-      : question.type === 'choice' ? { type: 'choice', choice: answer.choice, confidence: answer.confidence, probabilities: { ...answer.probabilities } }
-        : { type: 'score', score: answer.score, confidence: answer.confidence, probabilities: { ...answer.probabilities } }
+      : question.type === 'choice' ? { type: 'choice', choice: answer.choice, confidence: answer.confidence, probabilities: knownProbabilities(question, answer.probabilities) }
+        : { type: 'score', score: answer.score, confidence: answer.confidence, probabilities: knownProbabilities(question, answer.probabilities) }
     readings[id] = reading
   }
   const tokens = isObject(body.usage) && Number.isSafeInteger(body.usage.input_tokens) && body.usage.input_tokens >= 0 ? body.usage.input_tokens : null
@@ -204,6 +223,9 @@ function readKey(environment) {
   return null
 }
 
+/** How the key of BMN's own tests starts; a key a service gave out never does. */
+export const TEST_KEY_START = 'sk-synthetic-'
+
 /** `text` with the key taken out, in case a server sent it back: the last guard, behind giving out nothing a server said. */
 function withoutKey(text, key) {
   return key === null || key === '' ? text : text.split(key).join('[key]')
@@ -222,12 +244,17 @@ function postOnce({ host, address, family, port, plain }, { path, headers, body,
       clearTimeout(timer)
       resolve(value)
     }
+    // Once a status came it stands, also when the body breaks off after it: a 401 is a 401.
+    let status = null
+    // Whether the whole request left this computer: one that did, and got no status, may have been charged all the same.
+    let written = false
+    const broke = () => settle(status === null ? { network: true, written } : { status, broken: true })
     const call = (plain ? httpRequest : httpsRequest)({
       protocol: plain ? 'http:' : 'https:', hostname: host, port, path, method: 'POST', agent: false, ...(plain ? {} : { servername: host }),
       headers: { ...headers, 'content-length': Buffer.byteLength(body), 'accept-encoding': 'identity' },
       lookup: (_host, options, callback) => (options?.all ? callback(null, [{ address, family }]) : callback(null, address, family))
     }, (response) => {
-      const status = response.statusCode ?? 0
+      status = response.statusCode ?? 0
       const chunks = []
       let size = 0
       response.on('data', (chunk) => {
@@ -238,14 +265,16 @@ function postOnce({ host, address, family, port, plain }, { path, headers, body,
         }
         chunks.push(chunk)
       })
-      response.on('end', () => settle({ status, body: Buffer.concat(chunks).toString('utf8') }))
-      response.on('error', () => settle({ network: true }))
+      response.on('end', () => (response.complete ? settle({ status, body: Buffer.concat(chunks).toString('utf8') }) : broke()))
+      response.on('error', broke)
+      response.on('close', broke)
     })
     const timer = setTimeout(() => {
       call.destroy()
       settle({ timeout: true })
     }, timeoutMs)
-    call.on('error', () => settle({ network: true }))
+    call.on('finish', () => { written = true })
+    call.on('error', broke)
     call.end(body)
   })
 }
@@ -253,15 +282,16 @@ function postOnce({ host, address, family, port, plain }, { path, headers, body,
 /**
  * Where a request for `host` goes. The approved host is looked up once and must lead to public
  * addresses only. A name under `.test` can never be a real site: it is the stand-in server of
- * BMN's own tests, reached on this computer at the port the test names, and at no other time.
- * The command line reads that port from its environment like the tests do. That opens nothing: a
- * request goes there only when the team the owner approved names a host under `.test`, and a process
- * that can set the variable runs as him and could read OpenCode's sign-in file itself.
+ * BMN's own tests, reached without TLS on this computer at the port the test names. That way
+ * carries a test's key and no other: the key read for the request must start with the words every
+ * test plants, which no key a service gave out does. So neither the variable nor an approved
+ * `.test` host can make the command line send the owner's own key anywhere but to the approved
+ * host over https.
  */
-async function destination(host, environment, timeoutMs) {
+async function destination(host, environment, timeoutMs, key) {
   if (host.endsWith('.test')) {
     const port = Number(environment.BMN_JUDGE_TEST_PORT)
-    if (!Number.isSafeInteger(port) || port < 1 || port > 65535) return { failed: 'the approved host is a test name and no test is running' }
+    if (!Number.isSafeInteger(port) || port < 1 || port > 65535 || !key.startsWith(TEST_KEY_START)) return { failed: 'the approved host is a test name and no test is running' }
     return { host, address: '127.0.0.1', family: 4, port, plain: true }
   }
   if (!publicHostName(host)) return { failed: 'the approved host is not a public name' }
@@ -278,44 +308,58 @@ async function destination(host, environment, timeoutMs) {
 }
 
 /**
- * Asks once, inside `deadline`: no redirect followed, no retry after a 4xx, one retry after a
- * network error or a 5xx while time is left. Resolves `{ ok, answers, readings, tokens }` or
- * `{ ok: false, outcome: 'timeout' | 'failed' | 'shape', note }`. `note` is BMN's own words and a
- * status number: nothing a server said is passed on.
+ * Asks once, inside `deadline`: no redirect followed, no retry after a 4xx (also one whose body
+ * broke off), one retry after a network error or a 5xx while time is left. Resolves
+ * `{ ok, answers, readings, tokens }` or `{ ok: false, outcome: 'timeout' | 'failed' | 'shape', note }`,
+ * each with `uncounted`: how many of its requests may have been charged while no count of tokens
+ * came back (a 200 that was not whole or not Jev's shape, a request still out at the deadline, a
+ * request that left and got no status). A request that never left, and one the host answered
+ * with a 3xx, 4xx or 5xx, is not among them.
+ * `note` is BMN's own words and a status number: nothing a server said is passed on.
  */
 async function askOnce({ host, model, state, questions, key, environment, deadline }) {
   const body = JSON.stringify({ model, state, questions })
+  let uncounted = 0
   let last = { ok: false, outcome: 'failed', note: 'the request was not made' }
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let left = deadline - Date.now()
-    if (left <= 0) return attempt === 0 ? { ok: false, outcome: 'timeout', note: 'no answer came inside the time for the call' } : last
-    const to = await destination(host, environment, left)
-    if (to.failed !== undefined) return { ok: false, outcome: 'failed', note: to.failed }
+    if (left <= 0) return attempt === 0 ? { ok: false, outcome: 'timeout', note: 'no answer came inside the time for the call', uncounted } : { ...last, uncounted }
+    const to = await destination(host, environment, left, key)
+    if (to.failed !== undefined) return { ok: false, outcome: 'failed', note: to.failed, uncounted }
     left = deadline - Date.now()
-    const answer = to.timeout === true || left <= 0 ? { timeout: true } : to.network === true ? { network: true }
+    const sent = to.timeout !== true && to.network !== true && left > 0
+    const answer = !sent ? (to.network === true ? { network: true } : { timeout: true })
       : await postOnce(to, { path: SYSTEM_ONE_PATH, body, timeoutMs: left, headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', 'user-agent': 'BMN judge', 'x-opencode-session': randomUUID() } })
-    if (answer.timeout === true) return { ok: false, outcome: 'timeout', note: 'no answer came inside the time for the call' }
+    if (answer.timeout === true) return { ok: false, outcome: 'timeout', note: 'no answer came inside the time for the call', uncounted: uncounted + (sent ? 1 : 0) }
     if (answer.network === true) {
+      if (answer.written === true) uncounted += 1
       last = { ok: false, outcome: 'failed', note: 'the approved host could not be reached' }
       continue
     }
-    if (answer.tooLarge === true) return { ok: false, outcome: 'shape', note: 'the answer was larger than any answer of Jev\'s' }
     if (answer.status >= 500) {
       last = { ok: false, outcome: 'failed', note: `the approved host answered ${answer.status}` }
       continue
     }
-    if (answer.status >= 300 && answer.status < 400) return { ok: false, outcome: 'failed', note: `the approved host answered ${answer.status}, a redirect, and BMN follows none` }
-    if (answer.status !== 200) return { ok: false, outcome: 'failed', note: `the approved host answered ${answer.status}` }
+    if (answer.status >= 300 && answer.status < 400) return { ok: false, outcome: 'failed', note: `the approved host answered ${answer.status}, a redirect, and BMN follows none`, uncounted }
+    if (answer.status !== 200) return { ok: false, outcome: 'failed', note: `the approved host answered ${answer.status}`, uncounted }
+    // From here the host said 200: the request may have been charged, whatever became of its answer.
+    if (answer.tooLarge === true) return { ok: false, outcome: 'shape', note: 'the answer was larger than any answer of Jev\'s', uncounted: uncounted + 1 }
+    if (answer.broken === true) {
+      uncounted += 1
+      last = { ok: false, outcome: 'failed', note: 'the answer broke off before it was whole' }
+      continue
+    }
     let parsed
     try {
       parsed = JSON.parse(answer.body)
     } catch {
-      return { ok: false, outcome: 'shape', note: 'the answer was not Jev\'s shape' }
+      return { ok: false, outcome: 'shape', note: 'the answer was not Jev\'s shape', uncounted: uncounted + 1 }
     }
     const read = readBody(questions, parsed)
-    return read.ok ? read : { ok: false, outcome: 'shape', note: 'the answer was not Jev\'s shape for these questions' }
+    if (!read.ok) return { ok: false, outcome: 'shape', note: 'the answer was not Jev\'s shape for these questions', uncounted: uncounted + 1 }
+    return { ...read, uncounted: uncounted + (read.tokens === null ? 1 : 0) }
   }
-  return last
+  return { ...last, uncounted }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -338,34 +382,128 @@ const emptyTotals = () => ({ calls: 0, requests: 0, input_tokens: 0, cost_usd: 0
 const count = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : 0)
 const dollars = (value) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0)
 const totalsOf = (value) => (isObject(value) ? { calls: count(value.calls), requests: count(value.requests), input_tokens: count(value.input_tokens), cost_usd: dollars(value.cost_usd) } : emptyTotals())
+const LINE_ID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
+const keptLine = (entry) => isObject(entry) && typeof entry.at === 'string' && typeof entry.outcome === 'string'
+
+/** What a call is told when the record is there and cannot be read: nothing is counted on a guess, and the file is not written over. */
+const RECORD_UNREADABLE_WORDS = 'the record of the judge\'s calls is there and cannot be read, so BMN can neither count a call nor judge the monthly limit'
 
 /**
- * The record: the last calls, and beside them the totals of each month, in all and per purpose
- * word. The totals count every call that made a request, also those the list no longer shows.
- * A missing or damaged file reads as empty.
+ * The kept file by itself: the last calls, the totals of each month, in all and per purpose word,
+ * and `taken`, the waiting lines the last write took in. A missing file reads as empty. A file
+ * that is there and is not a record reads as `damaged`: its months may hold what the limit is
+ * judged on, so it is never taken for an empty one.
  */
-export function readJudgeRecord() {
+function readKeptRecord() {
+  let text
   try {
-    const value = JSON.parse(readFileSync(judgeRecordPath(), 'utf8'))
+    text = readFileSync(judgeRecordPath(), 'utf8')
+  } catch (error) {
+    return error?.code === 'ENOENT' ? { calls: [], months: {}, taken: [] } : { calls: [], months: {}, taken: [], damaged: true }
+  }
+  try {
+    const value = JSON.parse(text)
     if (isObject(value) && value.version === 1 && Array.isArray(value.calls) && isObject(value.months)) {
       const months = {}
       for (const [month, entry] of Object.entries(value.months)) {
         if (!/^\d{4}-\d{2}$/.test(month) || !isObject(entry)) continue
-        months[month] = { ...totalsOf(entry), refused: count(entry.refused), purposes: Object.fromEntries(Object.entries(isObject(entry.purposes) ? entry.purposes : {}).filter(([word]) => PURPOSE.test(word)).map(([word, totals]) => [word, totalsOf(totals)])) }
+        months[month] = { ...totalsOf(entry), refused: count(entry.refused), estimated: count(entry.estimated), purposes: Object.fromEntries(Object.entries(isObject(entry.purposes) ? entry.purposes : {}).filter(([word]) => PURPOSE.test(word)).map(([word, totals]) => [word, totalsOf(totals)])) }
       }
-      return { calls: value.calls.filter((entry) => isObject(entry) && typeof entry.at === 'string' && typeof entry.outcome === 'string'), months }
+      return { calls: value.calls.filter(keptLine), months, taken: Array.isArray(value.taken) ? value.taken.filter((id) => typeof id === 'string') : [] }
     }
   } catch {
-    // Nothing recorded yet.
+    // Not JSON: damaged.
   }
-  return { calls: [], months: {} }
+  return { calls: [], months: {}, taken: [], damaged: true }
 }
 
-/** The totals of `now`'s month and the one before it: `{ month, calls, requests, input_tokens, cost_usd, refused, purposes }` each. */
+function judgeWaitingDirectory() {
+  return `${judgeDirectory()}/waiting`
+}
+
+/**
+ * The lines that wait beside the record (65.2 AC7): a call whose process could not get the record
+ * within its wait writes its line to a small file of its own, so a call that was made is counted
+ * whoever holds the record. Every reader lays the waiting lines over, and the next write takes
+ * them in, names them in the same write and only then removes their files: once, also when a
+ * process ends between the two.
+ */
+function readWaiting() {
+  let names
+  try {
+    names = readdirSync(judgeWaitingDirectory())
+  } catch {
+    return []
+  }
+  const lines = []
+  for (const name of names.sort()) {
+    if (!name.endsWith('.json') || !LINE_ID.test(name.slice(0, -5))) continue
+    try {
+      const value = JSON.parse(readFileSync(`${judgeWaitingDirectory()}/${name}`, 'utf8'))
+      const line = isObject(value) && value.version === 1 ? value.line : null
+      if (keptLine(line) && line.id === name.slice(0, -5) && !Number.isNaN(Date.parse(line.at)) && typeof line.purpose === 'string' && PURPOSE.test(line.purpose)) {
+        lines.push({ ...line, requests: count(line.requests), input_tokens: count(line.input_tokens), cost_usd: dollars(line.cost_usd) })
+      }
+    } catch {
+      // Not a whole line: nothing is read from it.
+    }
+  }
+  return lines
+}
+
+/** Adds one call to a record in memory: its month's totals, in all and under its purpose word, and the list. */
+function addLine(record, line) {
+  const month = monthOf(new Date(line.at))
+  const totals = Object.hasOwn(record.months, month) ? record.months[month] : { ...emptyTotals(), refused: 0, estimated: 0, purposes: {} }
+  if (line.requests === 0) totals.refused += 1
+  else {
+    // How many of the month's calls are counted by their size and not by the gateway's own count: said wherever the sums are.
+    if (line.tokens_estimated === true) totals.estimated += 1
+    // A word is looked up as the month's own entry and never as anything an object carries by itself: `constructor` is a purpose like any other.
+    // A purpose past the most BMN keeps a month goes under one common word; the month's own totals still hold it.
+    const word = Object.hasOwn(totals.purposes, line.purpose) || Object.keys(totals.purposes).length < PURPOSES_KEPT ? line.purpose : 'other'
+    const purpose = Object.hasOwn(totals.purposes, word) ? totals.purposes[word] : emptyTotals()
+    for (const sum of [totals, purpose]) {
+      sum.calls += 1
+      sum.requests += line.requests
+      sum.input_tokens += line.input_tokens
+      sum.cost_usd = Math.round((sum.cost_usd + line.cost_usd) * 1e12) / 1e12
+    }
+    totals.purposes = { ...totals.purposes, [word]: purpose }
+  }
+  record.months[month] = totals
+  record.calls.push(line)
+}
+
+/** How often a reader reads again when a waiting line left while it read. */
+const READ_AGAIN = 3
+
+/**
+ * The record as every reader sees it: the kept file with the waiting lines laid over. The waiting
+ * lines are read first, then the kept file that may have taken them in meanwhile. A line the kept
+ * file does not name, and whose file is gone once the kept file is read, may be in the kept file
+ * all the same (taken in, and no longer named by a later write): the reader reads again. Should
+ * that happen at every read, the line is counted: a month that reads a call too dear stops asking
+ * early, never late. `damaged` is set where the kept file is there and cannot be read.
+ */
+export function readJudgeRecord() {
+  for (let attempt = 0; ; attempt += 1) {
+    const waiting = readWaiting()
+    const record = readKeptRecord()
+    if (record.damaged === true) return record
+    const have = new Set([...record.calls.map((call) => call.id), ...record.taken])
+    const fresh = waiting.filter((line) => !have.has(line.id))
+    if (attempt < READ_AGAIN && !fresh.every((line) => existsSync(`${judgeWaitingDirectory()}/${line.id}.json`))) continue
+    for (const line of fresh) addLine(record, line)
+    return record
+  }
+}
+
+/** The totals of `now`'s month and the one before it: `{ month, calls, requests, input_tokens, cost_usd, refused, estimated, purposes }` each. */
 export function judgeTotals(now = new Date(), record = readJudgeRecord()) {
   const of = (date) => {
     const month = monthOf(date)
-    return { month, ...emptyTotals(), refused: 0, purposes: {}, ...(record.months[month] ?? {}) }
+    return { month, ...emptyTotals(), refused: 0, estimated: 0, purposes: {}, ...(Object.hasOwn(record.months, month) ? record.months[month] : {}) }
   }
   return { current: of(now), previous: of(new Date(now.getFullYear(), now.getMonth() - 1, 1)) }
 }
@@ -394,35 +532,43 @@ export function setJudgeLimit({ on, usd }) {
 const RECORD_WAIT_MS = 5000
 const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
 
-/** Adds one call to the record: one writer at a time across processes, the file replaced whole. */
-async function recordCall(line, now) {
-  let lock
+/**
+ * Writes one call down: one writer at a time across processes, the kept file replaced whole, the
+ * waiting lines taken in with it. Where another living process holds the record for the whole
+ * wait, the line is written beside the record instead and waits there, counted by every reader.
+ * Throws where the kept file cannot be read (it is never written over) or nothing can be written.
+ */
+async function recordCall(line) {
+  let lock = null
   for (const until = Date.now() + RECORD_WAIT_MS; ;) {
-    lock = takeLock(`${judgeRecordPath()}.writing`, { kind: 'writer' })
-    if (lock.held === undefined) break
-    if (Date.now() >= until) throw new Error('the record of calls is being written by another BMN process')
+    const taken = takeLock(`${judgeRecordPath()}.writing`, { kind: 'writer' })
+    if (taken.held === undefined) {
+      lock = taken
+      break
+    }
+    if (Date.now() >= until) break
     await pause(10)
   }
+  if (lock === null) {
+    if (readKeptRecord().damaged === true) throw new Error(RECORD_UNREADABLE_WORDS)
+    writePrivate(`${judgeWaitingDirectory()}/${line.id}.json`, `${JSON.stringify({ version: 1, line })}\n`)
+    return
+  }
   try {
-    const record = readJudgeRecord()
-    const month = monthOf(now)
-    const totals = record.months[month] ?? { ...emptyTotals(), refused: 0, purposes: {} }
-    if (line.requests === 0) totals.refused += 1
-    else {
-      // A purpose past the most BMN keeps a month goes under one common word; the month's own totals still hold it.
-      const word = totals.purposes[line.purpose] !== undefined || Object.keys(totals.purposes).length < PURPOSES_KEPT ? line.purpose : 'other'
-      const purpose = totals.purposes[word] ?? emptyTotals()
-      for (const sum of [totals, purpose]) {
-        sum.calls += 1
-        sum.requests += line.requests
-        sum.input_tokens += line.input_tokens
-        sum.cost_usd = Math.round((sum.cost_usd + line.cost_usd) * 1e12) / 1e12
-      }
-      totals.purposes[word] = purpose
+    const waiting = readWaiting()
+    const record = readKeptRecord()
+    if (record.damaged === true) throw new Error(RECORD_UNREADABLE_WORDS)
+    const have = new Set([...record.calls.map((call) => call.id), ...record.taken])
+    for (const entry of [...waiting, line]) {
+      if (have.has(entry.id)) continue
+      addLine(record, entry)
+      have.add(entry.id)
     }
-    record.months[month] = totals
     const months = Object.fromEntries(Object.entries(record.months).sort(([one], [other]) => (one < other ? -1 : 1)).slice(-MONTHS_KEPT))
-    writePrivate(judgeRecordPath(), `${JSON.stringify({ version: 1, months, calls: [...record.calls, line].slice(-CALLS_KEPT) }, null, 1)}\n`)
+    // Every waiting line on the disk is named in this very write: one that was taken in before, and whose file is still there, is not taken in again.
+    const taken = waiting.map((entry) => entry.id)
+    writePrivate(judgeRecordPath(), `${JSON.stringify({ version: 1, months, taken, calls: record.calls.slice(-CALLS_KEPT) }, null, 1)}\n`)
+    for (const id of taken) rmSync(`${judgeWaitingDirectory()}/${id}.json`, { force: true })
   } finally {
     lock.release()
   }
@@ -442,6 +588,8 @@ const NEXT = {
   PRIVATE_NOT_ALLOWED: 'send only text that is public and say so with --data public, or ask the owner: he allows private work for both providers in Preferences › Team',
   WORKSPACE_PRIVATE: 'refresh the workspace\'s record with `bmn roster visibility --refresh` if its repository is public, or ask the owner: he allows private work for both providers in Preferences › Team',
   LIMIT_REACHED: 'the owner raises the monthly limit or switches it off on the judge\'s page in Preferences › Team; otherwise ask again next month',
+  NO_PRICE: 'the owner records the model\'s price for the agent in the team file (price: {input: <dollars per million tokens>, output: 0}) and approves it',
+  RECORD_UNREADABLE: 'the owner moves the file away (BMN then starts a new record), or mends it; nothing is asked meanwhile',
   NO_KEY: 'sign in to OpenCode on this computer (`opencode auth login`); BMN reads the key from OpenCode\'s own sign-in file and keeps none',
   QUESTIONS_INVALID: 'see `bmn judge --help` for the three question types',
   TOO_LARGE: 'send a shorter text, or fewer questions in one call',
@@ -470,7 +618,8 @@ function pickedJudge(data, wanted) {
  * One call to the judge. Nothing is sent unless every check passes (65.2 AC2); a refusal has a
  * code, plain words and a `next`. The result holds Jev's numbers unchanged and BMN's reading of
  * each; a timeout, a failed request and an answer that is not Jev's shape all read "no answer"
- * for every question. One line goes into the record whatever happened, with no text in it.
+ * for every question. One line goes into the record whatever happened, with no text in it;
+ * `recorded` is false in the one case where it could not be written, and `note` says why.
  */
 export async function runJudge({
   state, questions, data: declared, workspace = null, purpose = NO_PURPOSE, twice = false, agent: wanted = null, model: wantedModel = null, by = { kind: 'shell' },
@@ -479,15 +628,17 @@ export async function runJudge({
   const started = now()
   const clock = Date.now()
   const stateHash = typeof state === 'string' ? createHash('sha256').update(state).digest('hex') : null
-  const line = { at: started.toISOString(), by, purpose, agent: null, model: null, requests: 0, input_tokens: 0, cost_usd: 0, took_ms: 0, outcome: 'refused', ...(stateHash === null ? {} : { state_sha256: stateHash }) }
+  const line = { id: randomUUID(), at: started.toISOString(), by, purpose, agent: null, model: null, requests: 0, input_tokens: 0, cost_usd: 0, took_ms: 0, outcome: 'refused', ...(stateHash === null ? {} : { state_sha256: stateHash }) }
   const keep = async (result) => {
     line.took_ms = Date.now() - clock
+    let recorded = true
     try {
-      await recordCall(line, started)
+      await recordCall(line)
     } catch (error) {
+      recorded = false
       result.note = `${result.note === undefined ? '' : `${result.note} `}BMN could not write this call into its record: ${error instanceof Error ? error.message : String(error)}.`
     }
-    return { ...result, took_ms: line.took_ms }
+    return { ...result, took_ms: line.took_ms, recorded }
   }
   const refused = (code, message) => {
     line.outcome = 'refused'
@@ -536,9 +687,15 @@ export async function runJudge({
     }
   }
 
+  // Nothing is asked whose cost could not be counted: the agent's price is known, and the record can be read.
+  if (typeof agent.price?.input !== 'number' || !Number.isFinite(agent.price.input) || agent.price.input < 0) {
+    return refused('NO_PRICE', `the approved team records no price for ${agent.name}, so BMN could not count what a call costs`)
+  }
+  const record = readJudgeRecord()
+  if (record.damaged === true) return refused('RECORD_UNREADABLE', `${RECORD_UNREADABLE_WORDS} (${judgeRecordPath()})`)
   const limit = judgeLimit()
   if (limit.on) {
-    const spent = judgeTotals(started).current.cost_usd
+    const spent = judgeTotals(started, record).current.cost_usd
     if (spent >= limit.usd) return refused('LIMIT_REACHED', `this month's calls to ${agent.name} cost $${spent.toFixed(4)}, which reaches the monthly limit of $${limitWords(limit.usd)}; asking is stopped until next month or a higher limit`)
   }
 
@@ -546,20 +703,24 @@ export async function runJudge({
   if (key === null) return refused('NO_KEY', 'BMN found no key for OpenCode\'s gateway in OpenCode\'s sign-in file on this computer')
 
   const deadline = clock + Math.min(Math.max(1, deadlineMs), DEADLINE_MAX_MS)
-  const price = typeof agent.price?.input === 'number' ? agent.price.input : 0
+  const price = agent.price.input
+  // A request that may have been charged while no count came back is counted by its own size, and the call is marked
+  // estimated: a token is at least a byte, so its bytes and a little for what is put around them is a count on the dear side. Never nothing.
+  const most = bytes(JSON.stringify({ model: agent.model, state, questions })) + UNCOUNTED_ALLOWANCE
   const call = () => askOnce({ host: agent.host.toLowerCase(), model: agent.model, state, questions, key, environment, deadline })
   const add = (answer) => {
     line.requests += 1
-    if (answer.ok && answer.tokens !== null) {
-      line.input_tokens += answer.tokens
-      line.cost_usd = Math.round((line.cost_usd + (answer.tokens * price) / 1e6) * 1e12) / 1e12
-    }
+    const tokens = (answer.ok && answer.tokens !== null ? answer.tokens : 0) + answer.uncounted * most
+    if (answer.uncounted > 0) line.tokens_estimated = true
+    line.input_tokens += tokens
+    line.cost_usd = Math.round((line.cost_usd + (tokens * price) / 1e6) * 1e12) / 1e12
   }
+  const sums = () => ({ requests: line.requests, input_tokens: line.input_tokens, cost_usd: line.cost_usd, ...(line.tokens_estimated === true ? { tokens_estimated: true } : {}) })
   const first = await call()
   add(first)
   const failed = (answer) => {
     line.outcome = answer.outcome
-    return keep({ ok: false, outcome: answer.outcome, agent: agent.id, model: agent.model, note: withoutKey(answer.note, key), readings: noAnswers(questions), requests: line.requests, input_tokens: line.input_tokens, cost_usd: line.cost_usd })
+    return keep({ ok: false, outcome: answer.outcome, agent: agent.id, model: agent.model, note: withoutKey(answer.note, key), readings: noAnswers(questions), ...sums() })
   }
   if (!first.ok) return failed(first)
   let second = null
@@ -571,7 +732,7 @@ export async function runJudge({
   line.outcome = 'answered'
   return keep({
     ok: true, outcome: 'answered', agent: agent.id, model: agent.model, answers: first.answers, ...(second === null ? {} : { second: second.answers }),
-    readings: second === null ? first.readings : agreed(first.readings, second.readings), requests: line.requests, input_tokens: line.input_tokens, cost_usd: line.cost_usd
+    readings: second === null ? first.readings : agreed(first.readings, second.readings), ...sums()
   })
 }
 
@@ -621,7 +782,8 @@ export function judgeLines(result, questions) {
     const said = reading.reading === NO_ANSWER ? NO_ANSWER : typeof reading.reading === 'number' ? `${number(reading.reading)}, sure` : reading.reading
     lines.push(`${id}: ${said}${basis}${reading.near === true ? ', near the line' : ''}${reading.differed === true ? ', the two calls differed' : ''}`)
   }
-  lines.push(`${result.agent} (${result.model}) · ${result.requests} ${result.requests === 1 ? 'request' : 'requests'} · ${result.input_tokens} input tokens · $${result.cost_usd.toFixed(6)} · ${(result.took_ms / 1000).toFixed(1)} s`)
+  const tokens = result.tokens_estimated === true ? `about ${result.input_tokens} input tokens (estimated from the request's size: the gateway gave no count)` : `${result.input_tokens} input tokens`
+  lines.push(`${result.agent} (${result.model}) · ${result.requests} ${result.requests === 1 ? 'request' : 'requests'} · ${tokens} · $${result.cost_usd.toFixed(6)} · ${(result.took_ms / 1000).toFixed(1)} s`)
   return lines
 }
 
@@ -683,5 +845,7 @@ export async function runJudgeCommand(argv, { judge = runJudge, environment = pr
   else if (result.outcome === 'answered') out(judgeLines(result, questions).join('\n'))
   else if (result.outcome === 'refused') process.stderr.write(`bmn: ${result.code}: ${result.message}\n${result.next === undefined ? '' : `  next: ${result.next}\n`}`)
   else process.stderr.write(`bmn: ${result.note}; every question reads "${NO_ANSWER}"\n`)
+  // What an answered or refused call can still have to say: it is not in the record. (A call with no answer says it in its note above.)
+  if (parsed.options.json !== true && result.recorded === false && (result.outcome === 'answered' || result.outcome === 'refused')) process.stderr.write(`bmn: ${result.note}\n`)
   return result.outcome === 'answered' ? EXIT.ok : result.outcome === 'refused' ? EXIT.refusal : result.outcome === 'timeout' ? EXIT.timeout : result.outcome === 'shape' ? EXIT.shape : EXIT.failed
 }

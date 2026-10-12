@@ -1606,7 +1606,7 @@ describe('the judge on Team: BMN\'s proposal, its calls, the monthly limit and T
   it('Try it asks one statement by the command\'s own route and is counted like every call', async () => {
     await approveFile(teamWithJudge())
     const tried = await tryIt()
-    expect(tried.reply).toEqual({ outcome: 'answered', noul: 0.97, reading: 'yes', near: false, input_tokens: 400, cost_usd: 0.0000168, took_ms: expect.any(Number) })
+    expect(tried.reply).toEqual({ outcome: 'answered', noul: 0.97, reading: 'yes', near: false, input_tokens: 400, cost_usd: 0.0000168, took_ms: expect.any(Number), counted: true, estimated: false })
     expect(requests).toHaveLength(1)
     expect(requests[0]).toMatchObject({ path: '/zen/v1/systemone', authorization: `Bearer ${PLANTED_KEY}` })
     expect(JSON.parse(requests[0]!.body)).toEqual({ model: 'jev-1.13', state: 'All 12 tests passed.', questions: { statement: { type: 'noul', instructions: 'The text says the tests passed.' } } })
@@ -1632,6 +1632,36 @@ describe('the judge on Team: BMN\'s proposal, its calls, the monthly limit and T
     expect((await tryIt('public', 'x'.repeat(30_000))).reply).toMatchObject({ outcome: 'refused', code: 'TOO_LARGE' })
     await expect(call('judge:try', { text: 'a', statement: 'b', data: 'secret' })).rejects.toThrow(/data must be public or private/)
     await expect(call('judge:try', { text: 7, statement: 'b', data: 'public' })).rejects.toThrow(/text must be text/)
+  })
+
+  it('says what it could not count: an estimate where the gateway gave no count, "not counted" where the record could not be written, and a record that cannot be read (65.2 AC7)', async () => {
+    await approveFile(teamWithJudge())
+    // An answer with no count of tokens: counted by the size of the request, and said so.
+    respond = (response) => response.end(JSON.stringify({ answers: { statement: { type: 'noul', noul: 0.97 } } }))
+    const guessed = await tryIt()
+    const tokens = Buffer.byteLength(requests[0]!.body) + 256
+    expect(guessed.reply).toMatchObject({ outcome: 'answered', counted: true, estimated: true, input_tokens: tokens, cost_usd: expect.closeTo((tokens * 0.042) / 1e6, 12) })
+    expect(guessed.view.current).toMatchObject({ calls: 1, input_tokens: tokens, estimated: 1 })
+    expect(guessed.view.unreadable).toBeUndefined()
+    // The record's folder cannot be written: the answer still comes, and nothing says it was counted.
+    const folder = join(home, '.config/bmn/agents/state/judge')
+    chmodSync(folder, 0o500)
+    try {
+      const lost = await tryIt()
+      expect(lost.reply).toMatchObject({ outcome: 'answered', noul: 0.97, counted: false })
+      expect(lost.view.current).toMatchObject({ calls: 1 })
+    } finally {
+      chmodSync(folder, 0o700)
+    }
+    // The record is there and cannot be read: the page says where it is, and Try it is refused before any request.
+    const before = requests.length
+    writeFileSync(join(folder, 'calls.json'), '{"version":1,"calls":')
+    const view = await load()
+    expect(view).toMatchObject({ unreadable: '~/.config/bmn/agents/state/judge/calls.json', reached: false, calls: [], current: { calls: 0 } })
+    const refused = await tryIt()
+    expect(refused.reply).toMatchObject({ outcome: 'refused', code: 'RECORD_UNREADABLE', next: expect.stringContaining('moves the file away') })
+    expect(requests).toHaveLength(before)
+    expect(readFileSync(join(folder, 'calls.json'), 'utf8')).toBe('{"version":1,"calls":')
   })
 
   it('a failed request, a late answer and a wrong shape read no answer, in BMN\'s own words', async () => {
