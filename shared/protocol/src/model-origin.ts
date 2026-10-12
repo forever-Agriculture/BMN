@@ -68,8 +68,8 @@ export const MODEL_ORIGIN_TABLE: readonly ModelOriginRow[] = Object.freeze([
     ]),
     tokens: Object.freeze([
       { word: 'claude' }, { word: 'gpt' }, { word: 'chatgpt' }, { word: 'codex' }, { word: 'gemini' }, { word: 'gemma' },
-      { word: 'grok' }, { word: 'llama' }, { word: 'nova' }, { word: 'sonar' },
-      { word: 'o', shape: /^o\d/i }, { word: 'phi', shape: /^phi-?\d/i }
+      { word: 'grok' }, { word: 'llama' }, { word: 'nova' }, { word: 'sonar' }, { word: 'nemotron' },
+      { word: 'o', shape: /^o\d/i }, { word: 'phi', shape: /^phi-?\d/i }, { word: 'muse', shape: /^muse-spark/i }
     ])
   }),
   Object.freeze({

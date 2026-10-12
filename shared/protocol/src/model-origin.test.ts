@@ -54,6 +54,8 @@ describe('modelOrigin table rows', () => {
       ['o3-mini', 'US'], ['O4-MINI', 'US'], ['codex-mini', 'US'], ['gemini-3-pro', 'US'],
       ['gemma-3-27b', 'US'], ['grok-4', 'US'], ['llama-4-maverick', 'US'], ['llama-4', 'US'],
       ['phi-4', 'US'], ['Phi-3.5', 'US'], ['nova-pro-v1', 'US'], ['sonar-reasoning-pro', 'US'],
+      ['nemotron-3-ultra-free', 'US'], ['Nemotron-3.5-Lightning', 'US'], ['muse-spark-1.3-contributor-free', 'US'],
+      ['Muse-Spark-1.2', 'US'],
       ['glm-5.3', 'CN'], ['GLM-4.6', 'CN'], ['chatglm3', 'CN'], ['kimi-k2', 'CN'], ['Kimi-K2', 'CN'],
       ['moonshot-v1-128k', 'CN'], ['MiniMax-M2', 'CN'], ['abab6.5-chat', 'CN'], ['abab6.5', 'CN'],
       ['mimo-7b', 'CN'], ['qwen3-coder', 'CN'], ['Qwen3-Max', 'CN'], ['qwq-32b', 'CN'],
@@ -142,7 +144,7 @@ describe('modelOrigin precedence', () => {
 
   it('rejects the short-token false positives the epic names', () => {
     const never: Array<[string]> = [
-      ['solar'], ['step'], ['command'], ['yi'], ['phi'], ['seed'], ['o'],
+      ['solar'], ['step'], ['command'], ['yi'], ['phi'], ['seed'], ['o'], ['muse'], ['muse-notes'],
       ['ababcd'], ['philosophy-essays'], ['command-line-runner'], ['command-runner'],
       ['step-function-builder'], ['stepwise'],
       ['only1'], ['to4-mini']
