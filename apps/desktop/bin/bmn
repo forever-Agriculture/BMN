@@ -122,6 +122,9 @@ Commands:
   research ask [--question-file <path>|-] [--agent <id>] [--json]
                                             Ask the web one question through a researcher your team names;
                                             the answer names its pages (bmn research --help)
+  judge ask --state-file <path>|- --questions-file <path> --data public|private
+                                            Ask the team's judge typed questions about one text; it answers
+                                            with numbers, and BMN reads them (bmn judge --help)
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
@@ -180,8 +183,7 @@ control socket or a token. --file replaces the agent's own file, for tests.`
 const AGENT_BRIEF = `bmn: how to behave as an agent inside a BMN session.
 
 Are you inside BMN?
-  If BMN_CONTROL_SOCKET is unset you are not in a BMN session: use none of this.
-  Run \`bmn help\` for the exact syntax. This page is etiquette, not a command reference.
+  With BMN_CONTROL_SOCKET unset you are not in a BMN session: use none of this. Syntax: \`bmn help\`.
 
 What to send, and when
   publish <file>          a file the owner should be able to open: a report, a diff, an image.
@@ -190,6 +192,7 @@ What to send, and when
   withdraw <key>          the moment the answer arrives or the question stops mattering.
   resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.
   research ask            one public question to the web (--question-file <path> or -).
+  judge ask               typed questions about one text to the team's judge; advice only.
 
 Your states are claims, not verdicts
   claimed-done says you believe the work is finished. The owner sees it as your claim.
@@ -2403,11 +2406,13 @@ async function main(argv) {
   // hooks reads and writes the owner's own hook files; it never opens the control socket.
   if (argv[0] === 'hooks') return runHooks(argv.slice(1))
   // Epic 60: the roster, its check and the rules master are owner files; no socket, no token.
-  if (argv[0] === 'team' || argv[0] === 'roster' || argv[0] === 'rules' || argv[0] === 'context' || argv[0] === 'skills' || argv[0] === 'tools' || argv[0] === 'research') {
+  if (argv[0] === 'team' || argv[0] === 'roster' || argv[0] === 'rules' || argv[0] === 'context' || argv[0] === 'skills' || argv[0] === 'tools' || argv[0] === 'research' || argv[0] === 'judge') {
     const agents = await import('./agents-cli.mjs')
     try {
       // Epic 64: a web question behind the research fence; it needs no socket either, and works with BMN closed.
       if (argv[0] === 'research') return await (await import('./agents-ask.mjs')).runResearchCommand(argv.slice(1))
+      // Epic 65: one checked call to the team's judge; no socket, and it works with BMN closed.
+      if (argv[0] === 'judge') return await (await import('./agents-judge.mjs')).runJudgeCommand(argv.slice(1))
       if (argv[0] === 'team') return await agents.runTeam(argv.slice(1))
       if (argv[0] === 'roster') return await agents.runRoster(argv.slice(1))
       if (argv[0] === 'context') return await agents.runContext(argv.slice(1))

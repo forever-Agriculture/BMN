@@ -114,14 +114,14 @@ describe('team and rules state has no path into the database, Backup export, Tel
   const imports = (file: string): string[] => [...readFileSync(join(REPOSITORY, file), 'utf8').matchAll(IMPORT)].map((match) => (match[1] ?? match[2] ?? match[3]) as string)
 
   it('searches the modules that hold it, and reads their imports', () => {
-    expect(HOLDERS).toHaveLength(21)
+    expect(HOLDERS).toHaveLength(22)
     expect(imports('apps/desktop/src/main/app-program.ts')).toEqual(['node:fs', 'node:path'])
     expect(imports('apps/desktop/src/main/agents-ipc.ts')).toEqual(expect.arrayContaining(['node:fs', '@bmn/protocol', '../../bin/agents-roster.mjs', './agents-approval', './workspace-ipc']))
     expect(imports('apps/desktop/bin/agents-rules.mjs')).toEqual(expect.arrayContaining(['./agents-check.mjs']))
   })
 
   it('they import only Node, the protocol types, each other and the IPC error type', () => {
-    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check|rules|cli|approval|guard|context|skills|research|ask|fence|supervised|tools|tool-files)|safe-config-write|text-diff)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/context-auto)$/
+    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check|rules|cli|approval|guard|context|skills|research|ask|fence|supervised|judge|tools|tool-files)|safe-config-write|text-diff)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/context-auto)$/
     const hits = HOLDERS.flatMap((file) => imports(file).filter((name) => !allowed.test(name)).map((name) => `${file}: imports ${name}`))
     expect(hits.length === 0 ? 'PASS' : `FAIL\n${hits.join('\n')}`).toBe('PASS')
     // The one Electron import is a type, and the IPC module takes only its error class from the workspace handlers.
@@ -141,5 +141,42 @@ describe('team and rules state has no path into the database, Backup export, Tel
     ].filter((file) => !/\.test\.tsx?$/.test(file) && !HOLDERS.includes(file))
     const reaching = sources.filter((file) => imports(file).some((name) => /(^|\/)(agents-(roster|state|check|rules|cli|approval|ipc|context|skills|research|guard)|visibility-refresh)(\.mjs)?$/.test(name)))
     expect(reaching.sort()).toEqual(['apps/desktop/bin/bmn', 'apps/desktop/src/main/index.ts'])
+  })
+})
+
+/**
+ * 65.3 AC6 and R65-NFR4: Jev is ready for the uses the owner finds, and nothing in BMN uses an
+ * answer yet. So nothing but the command, the judge's own page and their wiring may start a call
+ * or read what one returns. (The dev-auto repository is searched apart; its output is kept with
+ * the epic's evidence.)
+ */
+describe('nothing in BMN asks the judge or reads its answer but the command and its page (65.3 AC6)', () => {
+  const folders: Array<[folder: string, pattern: RegExp]> = [
+    ['apps/desktop/bin', /^(bmn|.*\.mjs)$/], ['apps/desktop/src/main', /\.ts$/], ['apps/desktop/src/utility', /\.ts$/], ['apps/desktop/src/preload', /\.ts$/],
+    ['apps/desktop/src/renderer/src', /\.tsx?$/], ['scripts', /\.(mjs|sh)$/], ['scripts/lib', /\.mjs$/], ['shared/protocol/src', /\.ts$/]
+  ]
+  const sources = folders.flatMap(([folder, pattern]) => inFolder(folder, pattern)).filter((file) => !/\.test\.tsx?$/.test(file))
+  /** A call of the command from code, the module that makes the request, the function that asks, or the page's own channel. */
+  const ASKS = /agents-judge(\.mjs)?['"]|\brunJudge(Command)?\(|\btryJudge\(|aiterm:judge:try|['"`]judge['"`],\s*['"`]ask['"`]|\bspawn\w*\([^)]*judge/
+  const asking = (): string[] => sources.filter((file) => ASKS.test(readFileSync(join(REPOSITORY, file), 'utf8'))).sort()
+
+  it('searches a real set of files', () => {
+    expect(sources.length).toBeGreaterThan(150)
+    expect(sources).toContain('apps/desktop/bin/agents-judge.mjs')
+    expect(sources).toContain('apps/desktop/src/renderer/src/judge-page.tsx')
+  })
+
+  it('only the command, its wiring into the CLI, and the page with its three handlers reach a call', () => {
+    expect(asking()).toEqual([
+      // The command itself, and the CLI's entry that starts it.
+      'apps/desktop/bin/agents-judge.mjs', 'apps/desktop/bin/bmn',
+      // Try it on the judge's page: the handler, the bridge with its types, and the page.
+      'apps/desktop/src/main/agents-ipc.ts', 'apps/desktop/src/preload/bridge.d.ts', 'apps/desktop/src/preload/index.ts', 'apps/desktop/src/renderer/src/judge-page.tsx'
+    ])
+  })
+
+  it('nothing reads the record of calls but the command and the page\'s handler', () => {
+    const readers = sources.filter((file) => /\b(readJudgeRecord|judgeTotals|judgeRecordPath)\b/.test(readFileSync(join(REPOSITORY, file), 'utf8'))).sort()
+    expect(readers).toEqual(['apps/desktop/bin/agents-judge.mjs', 'apps/desktop/src/main/agents-ipc.ts'])
   })
 })

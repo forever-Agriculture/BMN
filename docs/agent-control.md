@@ -95,6 +95,9 @@ Commands:
   research ask [--question-file <path>|-] [--agent <id>] [--json]
                                             Ask the web one question through a researcher your team names;
                                             the answer names its pages (bmn research --help)
+  judge ask --state-file <path>|- --questions-file <path> --data public|private
+                                            Ask the team's judge typed questions about one text; it answers
+                                            with numbers, and BMN reads them (bmn judge --help)
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
@@ -375,7 +378,8 @@ One table in `shared/protocol/src/model-origin.ts` decides, in this order:
 2. Otherwise a model-name token decides, after any router prefix (`moonshotai/kimi-k2` is 🇨🇳).
    Routers, clouds and local servers — OpenRouter, AWS, Azure, Groq, Together, Fireworks, Google's
    Vertex AI, SiliconFlow, `localhost` — never decide by themselves: Kimi on Groq is 🇨🇳, Llama on
-   Groq is 🇺🇸.
+   Groq is 🇺🇸. Jev (`jev-1.13`) reads 🇺🇸: TypeSafe AI's own Terms of Use give the company's
+   address in San Francisco (§13(e), read 2026-10-12); the row cites that page.
 3. Otherwise no base URL means the agent's own provider: Claude Code 🇺🇸 (Anthropic), Codex 🇺🇸
    (OpenAI).
 4. Otherwise nothing: an unknown host with an unknown model shows no flag.
@@ -730,7 +734,8 @@ Telegram: the Claude app already notifies your phone. The hook reads that from C
 The team lives in two files you own, both under `~/.config/bmn/agents/`, outside every repository
 and BMN's own data, so updates and uninstall never touch them:
 
-- `roster.md`, the team file. `## roster` holds the layout version (`schema_version: 2`).
+- `roster.md`, the team file. `## roster` holds the layout version (`schema_version: 3`; a file
+  that says `schema_version: 2`, the layout before it, reads as it did and stays approved).
   `## providers` names each provider, its hosts and whether it may see private work
   (`private_work: allowed` or `public_only`). Then one `## <agent-id>` section per agent: a single
   fenced `yaml` block (name, class, harness, model, provider, host, enabled, status, efforts and
@@ -742,6 +747,42 @@ and BMN's own data, so updates and uninstall never touch them:
   public-only provider you allowed in one named folder, and `## harness-routes` records where each
   agent app sends data and whether BMN observed that or you declared it.
 - `global-rules.md`, the rules master BMN renders into each agent app's own rules file.
+
+**An agent BMN itself calls.** Layout 3 adds one kind of agent that runs in no agent app: in
+place of an app it says `harness: bmn`, and BMN makes the call itself. It has a name, class,
+model, provider, host, `enabled`, `status` and roles like every agent, and names two parties:
+`provider` is who receives the request, `run_by` is who runs the model (both from
+`## providers`). It carries no efforts, no context fields (`context_window`, `context_limit`,
+`compact_at`) and no researcher mark; a file that gives it one is refused with the line (for
+example `jev.efforts: jev is called by BMN and has no efforts (it runs in no agent app); remove
+the line`, code `CALLED_FIELD`). Its `host` is the name BMN sends the request to, never `default`,
+and its provider must list it.
+
+Private work is allowed for such an agent only where **both** providers say `allowed`; in every
+other case it reads public work only, said with who holds it back ("public work only: TypeSafe
+AI gets public work only").
+
+It holds one role, `judge` ("answers typed questions about a text with numbers; advice only"),
+and no other: `CALLED_ROLE` refuses it as a candidate of any other role, and `JUDGE_NOT_CALLED`
+refuses an agent that runs in an app as a judge. A judge's candidates are written by their id
+alone (`candidates: [jev]`), since such an agent has no effort, and the role holds a
+description, candidates and `then` only. So an agent BMN calls is never offered as a lead,
+designer, helper, browser, reviewer, consultant or researcher: it is in no other role's order,
+not in the Team line written into the apps' rules files, not among the researchers of Models,
+and `bmn roster check` for it is refused with `CALLED_BY_BMN`, whose next step names `bmn judge
+ask`. `bmn team` lists it with "called by BMN" where others name their app, and `bmn roster role
+judge` says that no dispatch goes to this role.
+
+On Team its card shows its class with "Judge", "Called by BMN" with the model name, and "public
+work only" where either provider says so. Its page has the on and off control, both providers
+with their answer (each changed there, staged and approved like every change), the verdict in
+one line ("Private text: may be sent" or "not sent"), the price with the page it came from, and
+no row that belongs to an agent app. On a normal agent's page the app choice offers "Called by
+BMN" only while the agent holds no role. While your team holds no judge, Team says "Jev waits
+for you" and offers BMN's proposal: the agent `jev` (a bishop, `jev-1.13`, active), the role
+`judge`, and two providers, OpenCode's gateway (`opencode.ai`) and TypeSafe AI, each with the
+private-work answer you chose (a provider your team already names for that host keeps its own
+answer). It is a proposal: nothing can be asked until you approve it like every team change.
 
 **Classes.** Every agent has one of five chess classes: a knight leads an epic or project, a queen
 does whatever she wants, a rook is the artist who designs, a bishop reviews and advises, a pawn does
@@ -1584,6 +1625,79 @@ A lone `-` (`… | bmn research ask -`) says "standard input" out loud and chang
   place. Removing gives no question of the day back: the day's limit counts what
   was asked, not what is still listed.
 
+#### The judge
+
+`bmn judge ask` asks the team's judge typed questions about one text and prints its numbers with
+BMN's reading of each. The judge on BMN's proposal is Jev (`jev-1.13`), TypeSafe AI's "System
+One" model, reached through OpenCode's gateway: it writes no text, answers in about a second and
+costs $0.042 per million input tokens. BMN itself makes the call; no agent app is started, and
+the command works with BMN closed.
+
+```sh
+bmn judge ask --state-file report.txt --questions-file questions.json --data public --purpose dev-auto
+printf '%s\n' 'All 12 tests passed.' | bmn judge ask --state-file - --questions-file questions.json --data public --json
+```
+
+- **The questions file** is Jev's own map of question id to question: a `noul` (a statement that
+  is true or false of the text), a `choice` (with `criteria`, a map of 2 to 255 labels to what
+  each means) or a `score` (with `criteria`, a list of 2 to 10 levels from the lowest up). BMN
+  checks the shape and the sizes before any request, and a wrong file names the question and the
+  fault (`QUESTIONS_INVALID: question second: a score takes 2 to 10 levels, and this one has 1`).
+  One call takes at most 64 questions, a text with its longest question of at most 24,000 bytes,
+  and 48,000 bytes in all: counted in bytes, so it stays well inside the model's 64,000 tokens
+  in any language.
+- **What is checked before anything is sent.** No request is made unless the approved team
+  holds an active, switched-on judge (`NO_JUDGE`, `JUDGE_PROPOSED`, `JUDGE_DISABLED`,
+  `NOT_A_JUDGE` for `--agent`); the model is the agent's own (`MODEL_NOT_OWN`) and does not end
+  in `-free` (`FREE_MODEL`: the paid model only, checked in code); the host is one the agent's
+  provider lists (`HOST_NOT_APPROVED`); the text is declared with `--data public|private`
+  (`DATA_UNDECLARED`), and either private work is allowed for both providers, or the text is
+  declared public and the workspace named with `--workspace`, where one is named, is one BMN
+  holds public (`PRIVATE_NOT_ALLOWED`, `WORKSPACE_PRIVATE`); a monthly limit you switched on is
+  not reached (`LIMIT_REACHED`); and OpenCode is signed in on this computer (`NO_KEY`). Each
+  refusal has its code, plain words and a `next`, and exit code 10.
+- **The request** is one https POST to the approved host, path `/zen/v1/systemone`, with the
+  model, the text and the questions. It waits 5 seconds unless `--timeout` says otherwise (30 at
+  most), follows no redirect, is not repeated after a 4xx, and is repeated once after a network
+  error or a 5xx while time is left. The host's name must lead to public addresses.
+- **The key** is OpenCode's own: BMN reads it from OpenCode's sign-in file
+  (`~/.local/share/opencode/auth.json`, or under `$XDG_DATA_HOME`) for that one request, holds
+  it in memory and writes it nowhere. It is in no output, record or error, also when a server
+  sends it back: BMN passes on nothing a server said except Jev's numbers.
+- **The reading** is the one rule the proof tested (`~/code/jev-eval`): a `noul` of 0.90 or more
+  reads "yes"; a `choice` whose confidence and winning probability are both 0.90 or more reads
+  its label; a `score` with a confidence of 0.90 or more reads its number, marked sure.
+  Everything else reads "no answer". A low `noul` is not read as "no": the proof did not measure
+  that. An answer within 0.02 of the line is marked "near the line". The caller gets Jev's
+  numbers unchanged beside the reading (`--json` for the whole result).
+- **`--twice`** asks twice and keeps a reading only where both calls agree; it is counted as two
+  requests.
+- **No answer.** A timeout (exit 11), a failed request (12) or an answer that is not Jev's shape
+  for these questions (13) reads "no answer" for every question. Nothing is guessed.
+- **The record.** Every call adds one line to `~/.config/bmn/agents/state/judge/calls.json`
+  (private, the last 200 calls): when, who asked (the BMN session and its app, or "from a
+  shell"), the purpose word of `--purpose`, input tokens, the cost at the agent's price, how
+  long it took and the outcome, with a hash of the text and no text, no answer and no key. Month
+  totals, in all and per purpose word, are kept beside the list and count every call that made
+  a request; a refused call costs nothing and is counted apart.
+- **The monthly limit** is off until you switch it on, on the judge's page. With it on, a call
+  is refused once the month's recorded cost reaches it, from the page and from every shell
+  alike, until next month or a higher limit. Calls that start at the same moment are each
+  judged on what is recorded by then.
+- **On Team.** The judge's page shows calls, input tokens and dollars for this month and the
+  last, in all and per purpose, the last 20 calls (when, who, purpose, outcome), the limit, and
+  **Try it**: paste a text and one statement, say whether the text is private (it starts as
+  private), and press Ask. It goes by the same route, is refused by the same rules in the
+  command's own words and is counted like every call, under the purpose `try-it`. Team › Models
+  shows the price your team records for the model with its page and date where research found
+  none.
+- **Advice only.** Nothing in BMN grants, accepts, stops, spends or hides anything because of
+  an answer, and nothing in BMN but the command and the judge's page asks or reads one. The
+  skill `skills/jev-judge/` in the repository says what Jev proved good at and what it must
+  never decide; link it into your skills folder yourself (`ln -s <repository>/skills/jev-judge
+  ~/.claude/skills/jev-judge`) and it shows on Team › Skills like every other skill. A new use
+  is measured in `~/code/jev-eval`, on labelled cases, before anything acts on it.
+
 ### The prompt guard
 
 `bmn roster check` sees only work one agent hands to another. A lead you start yourself is not a
@@ -1715,8 +1829,7 @@ session. The block below is the same text; a unit test fails when the two differ
 bmn: how to behave as an agent inside a BMN session.
 
 Are you inside BMN?
-  If BMN_CONTROL_SOCKET is unset you are not in a BMN session: use none of this.
-  Run `bmn help` for the exact syntax. This page is etiquette, not a command reference.
+  With BMN_CONTROL_SOCKET unset you are not in a BMN session: use none of this. Syntax: `bmn help`.
 
 What to send, and when
   publish <file>          a file the owner should be able to open: a report, a diff, an image.
@@ -1725,6 +1838,7 @@ What to send, and when
   withdraw <key>          the moment the answer arrives or the question stops mattering.
   resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.
   research ask            one public question to the web (--question-file <path> or -).
+  judge ask               typed questions about one text to the team's judge; advice only.
 
 Your states are claims, not verdicts
   claimed-done says you believe the work is finished. The owner sees it as your claim.

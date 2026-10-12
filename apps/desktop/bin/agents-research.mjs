@@ -450,7 +450,8 @@ export async function resolvesPublic(host, { resolve = resolveHost, timeoutMs = 
   }
 }
 
-function resolveHost(host) {
+/** Every address a host name leads to, as the system's own lookup gives them. */
+export function resolveHost(host) {
   return new Promise((resolve, reject) => {
     dnsLookup(host, { all: true }, (error, addresses) => (error ? reject(error) : resolve(addresses)))
   })
