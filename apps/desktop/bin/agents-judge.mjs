@@ -24,7 +24,11 @@ export const LINE = 0.9
 /** An answer this close to the line, on either side, is marked: the proof saw such answers change between repeats. */
 export const NEAR = 0.02
 export const NO_ANSWER = 'no answer'
-/** The path the proof called on the approved host; the host itself is the agent's, from the approved team. */
+/**
+ * The path the proof called on the approved host (450 calls on 2026-10-12); the host itself is the
+ * agent's, from the approved team. OpenCode's docs also name `/inference/v1/systemone`; its public
+ * source routes both. No call from BMN's own tests reaches either: the first real one is the owner's.
+ */
 export const SYSTEM_ONE_PATH = '/zen/v1/systemone'
 export const DEADLINE_MS = 5000
 export const DEADLINE_MAX_MS = 30_000
@@ -250,6 +254,9 @@ function postOnce({ host, address, family, port, plain }, { path, headers, body,
  * Where a request for `host` goes. The approved host is looked up once and must lead to public
  * addresses only. A name under `.test` can never be a real site: it is the stand-in server of
  * BMN's own tests, reached on this computer at the port the test names, and at no other time.
+ * The command line reads that port from its environment like the tests do. That opens nothing: a
+ * request goes there only when the team the owner approved names a host under `.test`, and a process
+ * that can set the variable runs as him and could read OpenCode's sign-in file itself.
  */
 async function destination(host, environment, timeoutMs) {
   if (host.endsWith('.test')) {
