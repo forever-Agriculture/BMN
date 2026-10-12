@@ -16,7 +16,7 @@ export function out(text) {
   writeSync(1, text.endsWith('\n') ? text : `${text}\n`)
 }
 
-function err(text) {
+export function err(text) {
   writeSync(2, text.endsWith('\n') ? text : `${text}\n`)
 }
 
@@ -316,6 +316,10 @@ async function withContext(data, chain) {
   return { ...chain, candidates, ...(chain.small_work === undefined ? {} : { small_work: await held(chain.small_work) }) }
 }
 
+/** The roles whose runs look things up, and the one line that tells them how (64.2 AC3). */
+export const WEB_QUESTION_ROLES = ['helper', 'browser']
+export const WEB_QUESTION_LINE = 'to search the web, ask with `bmn research ask` (the question on standard input, or --question-file)'
+
 async function rosterRole(argv) {
   let parsed
   try {
@@ -339,8 +343,10 @@ async function rosterRole(argv) {
       }
       throw error
     }
-    if (asJson) out(JSON.stringify({ ok: true, generation: generation.number, ...chain }, null, 2))
-    else out(`${roleChainText(chain)}\n(approved version ${generation.number})`)
+    // A run for one of these roles is the one that goes looking things up (64.2 AC3).
+    const web = WEB_QUESTION_ROLES.includes(chain.role) ? WEB_QUESTION_LINE : undefined
+    if (asJson) out(JSON.stringify({ ok: true, generation: generation.number, ...chain, ...(web === undefined ? {} : { web_question: web }) }, null, 2))
+    else out(`${roleChainText(chain)}${web === undefined ? '' : `\n  web: ${web}`}\n(approved version ${generation.number})`)
     return 0
   } catch (error) {
     return failWith(error, asJson)

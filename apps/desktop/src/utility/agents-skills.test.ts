@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, MARKS } from '../../bin/agents-ask.mjs'
 import { parseRoster, rewriteRoster } from '../../bin/agents-roster.mjs'
 import { listTransactions, restoreTransaction } from '../../bin/agents-rules.mjs'
 import {
@@ -382,6 +383,53 @@ describe('check and install with links (60.11 AC2-AC4)', () => {
     skill('Bad_Name')
     expect(states('codex').Bad_Name).toBe('unreadable')
     expect(checkExit(check())).toBe(1)
+  })
+})
+
+describe('the skill web-question that BMN ships (64.2 AC4)', () => {
+  const SHIPPED = fileURLToPath(new URL('../../../../skills/web-question', import.meta.url))
+  const text = (): string => readFileSync(join(SHIPPED, 'SKILL.md'), 'utf8')
+
+  it('is read by the skills check from a skills folder that links to it, and reaches both apps only through an install', async () => {
+    // As the owner would offer it: one link in his skills folder, like a skill kept in a repository.
+    symlinkSync(SHIPPED, join(source, 'web-question'))
+    tested('claude', CLAUDE, [{ root: '.claude/skills', folder: true, link: true }])
+    const shown = checkSkills({ environment: env, versions: VERSIONS, descriptions: true }).skills.find((entry) => entry.name === 'web-question')!
+    expect(shown).toMatchObject({ readable: true, description: skillDescription(text()) })
+    // The whole description fits what a skills page shows of one.
+    expect(shown.description).toMatch(/^Ask the web one public question with `bmn research ask`.* run\.$/)
+    // Listed like every other, and nothing written yet.
+    expect(states('codex')['web-question']).toBe('missing')
+    expect(existsSync(codexFolder())).toBe(false)
+    const plan = skillsPlanView(await planSkillsInstall([], { environment: env, versions: VERSIONS }))
+    expect(plan.targets.filter((target) => target.skill === 'web-question').map((target) => [target.harness, target.action])).toEqual([['codex', 'link']])
+    await install()
+    expect(states('codex')['web-question']).toBe('current')
+    expect(readFileSync(join(codexFolder(), 'web-question/SKILL.md'), 'utf8')).toBe(text())
+    // Claude Code reads the skills folder itself: the same link is what it sees.
+    expect(states('claude')['web-question']).toBe('read-directly')
+    for (const [app, command] of [['codex', ['debug', 'prompt-input']], ['claude', ['-p']]] as const) {
+      const listed = await new Promise<string>((resolve) => execFile(join(stubs, app), [...command], { env }, (_error, stdout) => resolve(stdout)))
+      expect(listed).toContain('skill web-question')
+    }
+    // The shipped folder was read, never written.
+    expect(readdirSync(SHIPPED)).toEqual(['SKILL.md'])
+  })
+
+  it('says when to ask, what never goes into a question, how to read the three marks, and that "not found" is not evidence', () => {
+    const body = text()
+    expect(body).toMatch(/^---\nname: web-question\ndescription: .+\n---\n/)
+    for (const mark of Object.values(MARKS)) expect(body).toContain(`**${mark}**`)
+    for (const never of ['code, or the contents of any file', 'anything from a private repository beyond names that are already public',
+      'names of people or customers', 'credentials, keys or tokens', 'a path inside the owner\'s home folder']) expect(body).toContain(never)
+    expect(body).toContain('The claim is\n  not evidence')
+    expect(body).toContain('helper another agent dispatched')
+    expect(body).toContain('"Agents may ask the web" is off')
+    // The limits it names are the command's own.
+    expect(body).toContain(`${ASK_MAX_CHARS.toLocaleString('en-US')} characters`)
+    expect(body).toContain(`${ASK_PER_DAY} a day`)
+    expect(body).toContain(`${ASK_LIMIT_MS / 60_000} minutes`)
+    expect(body.split('\n').filter((line) => line.length > 100 && !line.startsWith('description: '))).toEqual([])
   })
 })
 

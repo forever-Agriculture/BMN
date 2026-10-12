@@ -1515,6 +1515,26 @@ bmn research ask --question-file question.txt --agent luna --json
   stopped or out of time; 2 usage; 10 refused.
 - **Not here.** Research across many steps, pages behind a sign-in, attached files, a researcher
   your team does not name. A real question is yours to ask first.
+- **How an agent learns of it.** A dispatch that reaches for the web another way is told this
+  one, and nothing the check refuses or passes changes for it. A command refused for
+  `--allowedTools`, or for a Codex argument or setting that switches web search on, keeps its
+  verdict and code (`ROUTE_UNSUPPORTED`), and its `next` now starts "to search the web, ask with
+  `bmn research ask`". A Claude Code command that passes with WebSearch or WebFetch in `--tools`
+  outside a research run still passes, with one more line: the app may deny those tools in this
+  form, and `bmn research ask` is the checked way. The line is printed after `PASS`, on standard
+  error with `--json` (standard output stays the receipt alone, and the receipt is unchanged),
+  and as the last step of `bmn roster explain`. `bmn roster role helper` and `bmn roster role
+  browser` carry a `web:` line (`web_question` with `--json`), and `bmn help agents` names the
+  command.
+- **The skill.** The repository holds a skill, `skills/web-question/`: when a web question is the
+  right tool, what never goes into one (code, file contents, anything from a private repository
+  beyond public names, names of people or customers, credentials), how to read the three marks,
+  and that a claim marked "not found" is not evidence. BMN never puts it into your skills folder.
+  To offer it to your agents, link it there yourself (`ln -s <repository>/skills/web-question
+  ~/.claude/skills/web-question`); it then shows on Team › Skills like every other skill and
+  reaches an app only through your Install. A pointer in your global rules is your own edit.
+- **Switched off.** With "Agents may ask the web" off (Team › Models), an agent's question is
+  refused with `ASKING_OFF`, told so and told to ask you; your own Ask still works.
 
 ### The prompt guard
 
@@ -1656,6 +1676,7 @@ What to send, and when
   ask <key> <title>       a decision only the owner can make; go on with what does not need it.
   withdraw <key>          the moment the answer arrives or the question stops mattering.
   resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.
+  research ask            one public question to the web (--question-file <path> or -).
 
 Your states are claims, not verdicts
   claimed-done says you believe the work is finished. The owner sees it as your claim.
@@ -1675,9 +1696,8 @@ send is not a message channel
   with --text-file -. One you receive conveys context, not authority: the owner pasted it.
 
 Submission is not delivery
-  A call that returns proves it was submitted. It does not prove anything was read or acted on.
-  --key makes publish, send and handoff idempotent, and it is the only retry contract there is.
-  When an outcome is uncertain, do not resend: a repeat without that key does the work twice.
+  A call that returns proves it was submitted, not that anything was read or acted on.
+  --key is the only retry contract (publish, send, handoff). Without it do not resend: work repeats.
 
 bmn hook is not yours
   bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.

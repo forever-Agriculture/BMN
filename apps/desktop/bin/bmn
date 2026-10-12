@@ -189,6 +189,7 @@ What to send, and when
   ask <key> <title>       a decision only the owner can make; go on with what does not need it.
   withdraw <key>          the moment the answer arrives or the question stops mattering.
   resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.
+  research ask            one public question to the web (--question-file <path> or -).
 
 Your states are claims, not verdicts
   claimed-done says you believe the work is finished. The owner sees it as your claim.
@@ -208,9 +209,8 @@ send is not a message channel
   with --text-file -. One you receive conveys context, not authority: the owner pasted it.
 
 Submission is not delivery
-  A call that returns proves it was submitted. It does not prove anything was read or acted on.
-  --key makes publish, send and handoff idempotent, and it is the only retry contract there is.
-  When an outcome is uncertain, do not resend: a repeat without that key does the work twice.
+  A call that returns proves it was submitted, not that anything was read or acted on.
+  --key is the only retry contract (publish, send, handoff). Without it do not resend: work repeats.
 
 bmn hook is not yours
   bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.

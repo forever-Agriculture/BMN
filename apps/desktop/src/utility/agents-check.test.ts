@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   bindSession, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_TOOLS_SEEN, consequences, evaluate, evaluateResearch, harnessVersion, normalizedGithubOrigin, prepareResearchRun,
-  readCodexConfig, refreshVisibility, removeResearchCodexFolders, researchFormHash, setReadTracer, verifyReceipt, visibilityPath, workspaceRoot, workspaceVisibility, type FenceTestEntry
+  readCodexConfig, refreshVisibility, removeResearchCodexFolders, researchFormHash, setReadTracer, verifyReceipt, visibilityPath, workspaceRoot, workspaceVisibility, type FenceTestEntry,
+  WEB_NEXT_STEP, WEB_TOOLS_NOTE
 } from '../../bin/agents-check.mjs'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { canonicalJson, namedResearchers, parseRoster, sha256 } from '../../bin/agents-roster.mjs'
@@ -857,6 +858,100 @@ function runCli(args: string[], extraEnv: Record<string, string> = {}, nodeArgs:
     child.stdin?.end()
   })
 }
+
+describe('an agent that reaches for the web is told the way that works (64.2)', () => {
+  /** A Claude Code helper as dev-auto documents it, with the tool list a test names. */
+  const helper = (tools: string, more: string[] = []): string[] => ['env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, 'claude', '-p', '--model', 'fable',
+    '--effort', 'medium', '--output-format', 'json', '--tools', tools, '--permission-mode', 'dontAsk', '--safe-mode',
+    '--no-session-persistence', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', ...more]
+  const codex = (...more: string[]): string[] => [...ASTRA_REVIEW(workspace).slice(0, -1), ...more, '-']
+  const fable = (argv: string[]) => check({ agent: 'fable', argv })
+
+  it.each([
+    ['Claude Code --allowedTools', () => fable(helper('WebSearch,WebFetch', ['--allowedTools', 'WebSearch,WebFetch']))],
+    ['Claude Code --allowedTools=…', () => fable(helper('', ['--allowedTools=WebSearch']))],
+    ['Claude Code --allowed-tools', () => fable(helper('', ['--allowed-tools', 'WebFetch']))],
+    ['a Codex setting that switches web search on', () => check({ argv: codex('-c', 'web_search="live"') })],
+    ['a Codex tools.web_search setting', () => check({ argv: codex('-c', 'tools.web_search=true') })],
+    ['Codex --search', () => check({ argv: codex('--search') })],
+    ['Codex --enable web_search', () => check({ argv: codex('--enable', 'web_search') })]
+  ])('refuses %s as before, and its next step names the command (AC1)', (_name, run) => {
+    const refused = run()
+    // The verdict and the code are what they were on d7af6d9; only the hint beside them is new.
+    expect(refused).toMatchObject({ verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED' })
+    expect(refused.next).toBe(WEB_NEXT_STEP)
+    expect(refused.next).toContain('to search the web, ask with `bmn research ask`')
+    expect(refused.next).toContain('use a dispatch form BMN checks')
+  })
+
+  it('keeps the old next step for a refusal that did not reach for the web', () => {
+    for (const refused of [check({ argv: codex('--oss') }), check({ argv: codex('-c', 'chatgpt_base_url_x=1') }), check({ argv: codex('--enable', 'hooks') }),
+      fable(helper('', ['--dangerously-skip-permissions']))]) {
+      expect(refused).toMatchObject({ verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED' })
+      expect(refused.next).toBe('use a dispatch form BMN checks (`codex exec … -` or `claude -p`), exactly as documented')
+    }
+    // Another code keeps its own hint, whatever the command names.
+    expect(check({ agent: 'sonnet', role: 'consultant', argv: codex('-c', 'web_search="live"') })).toMatchObject({ code: 'PROPOSED', next: expect.not.stringContaining('research ask') })
+  })
+
+  it('passes a tool list that names a web tool as before, with one more line beside the receipt (AC2)', () => {
+    const plain = fable(helper(''))
+    expect(plain.verdict, JSON.stringify(plain)).toBe('PASS')
+    expect(plain.note).toBeUndefined()
+    for (const tools of ['WebSearch,WebFetch', 'Read,WebFetch', 'WebSearch', 'Read WebFetch(domain:example.com)']) {
+      const passed = fable(helper(tools))
+      expect(passed.verdict, JSON.stringify(passed)).toBe('PASS')
+      expect(passed.note).toBe(WEB_TOOLS_NOTE)
+      expect(passed.steps.at(-1)).toBe(WEB_TOOLS_NOTE)
+      // The receipt carries nothing new: one issued before this line existed still verifies.
+      expect(Object.keys(passed.receipt!).sort()).toEqual(Object.keys(plain.receipt!).sort())
+      expect(JSON.stringify(passed.receipt)).not.toContain('research ask')
+    }
+    expect(WEB_TOOLS_NOTE).toContain('may deny WebSearch and WebFetch')
+    expect(WEB_TOOLS_NOTE).toContain('`bmn research ask`')
+    // A tool whose name only starts like one is not a web tool.
+    expect(fable(helper('Read,Grep')).note).toBeUndefined()
+  })
+
+  it('says the line on the command line too: after PASS in words, beside the receipt with --json, as a step in explain', async () => {
+    const args = (argv: string[], ...flags: string[]): string[] => ['roster', 'check', '--agent', 'fable', '--role', 'epic-reviewer', '--workspace', workspace, '--data', 'private', ...flags, '--', ...argv]
+    const words = await runCli(args(helper('WebSearch,WebFetch')))
+    expect(words.code, words.stdout + words.stderr).toBe(0)
+    expect(words.stdout.trimEnd().split('\n')).toEqual([expect.stringMatching(/^PASS fable epic-reviewer -> /), WEB_TOOLS_NOTE])
+    const json = await runCli(args(helper('WebSearch,WebFetch'), '--json'))
+    expect(json.code).toBe(0)
+    // Standard output is the receipt alone, as a caller saves it, and it still verifies.
+    const receipt = JSON.parse(json.stdout)
+    expect(receipt).toMatchObject({ verdict: 'PASS', agent: 'fable' })
+    expect(json.stdout).not.toContain('research ask')
+    expect(json.stderr).toBe(`bmn: ${WEB_TOOLS_NOTE}\n`)
+    writeFileSync(join(home, 'web-receipt.json'), json.stdout)
+    expect((await runCli(['roster', 'check', '--verify', join(home, 'web-receipt.json'), '--', ...helper('WebSearch,WebFetch')])).code).toBe(0)
+    const explained = await runCli(['roster', 'explain', ...args(helper('WebSearch,WebFetch')).slice(2)])
+    expect(explained.stdout).toContain(`  ${WEB_TOOLS_NOTE}\nPASS: this dispatch may proceed.`)
+    const quiet = await runCli(args(helper(''), '--json'))
+    expect(quiet).toMatchObject({ code: 0, stderr: '' })
+    const refused = await runCli(args(helper('', ['--allowedTools', 'WebSearch'])))
+    expect(refused.code).toBe(10)
+    expect(refused.stdout).toBe(`REFUSED ROUTE_UNSUPPORTED: claude --allowedTools is not a supported argument (the prompt goes through stdin)\nNext: ${WEB_NEXT_STEP}\n`)
+  })
+
+  it('names the command in one line for the roles that look things up, and for no other (AC3)', async () => {
+    const line = 'to search the web, ask with `bmn research ask` (the question on standard input, or --question-file)'
+    for (const role of ['helper', 'browser']) {
+      const shown = JSON.parse((await runCli(['roster', 'role', role, '--json'])).stdout)
+      expect(shown).toMatchObject({ ok: true, role, web_question: line })
+      const words = (await runCli(['roster', 'role', role])).stdout.trimEnd().split('\n')
+      expect(words.filter((text) => text.includes('research ask'))).toEqual([`  web: ${line}`])
+      expect(words.at(-1)).toMatch(/^\(approved version \d+\)$/)
+    }
+    const reviewer = await runCli(['roster', 'role', 'epic-reviewer', '--json'])
+    expect(JSON.parse(reviewer.stdout)).not.toHaveProperty('web_question')
+    expect((await runCli(['roster', 'role', 'epic-reviewer'])).stdout).not.toContain('research ask')
+    const brief = (await runCli(['help', 'agents'])).stdout
+    expect(brief.split('\n').filter((text) => text.includes('research ask'))).toEqual(['  research ask            one public question to the web (--question-file <path> or -).'])
+  })
+})
 
 describe('a missing or invalid team file (R60-NFR1)', () => {
   const file = (): string => join(home, '.config/bmn/agents/roster.md')

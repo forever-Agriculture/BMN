@@ -80,10 +80,15 @@ export interface CheckReceipt extends ReceiptBase {
   packet?: { path: string; manifest: { name: string; sha256: string }[]; prompt: string }
 }
 export interface ResearchReceipt extends ReceiptBase { mode: 'research'; stdin: { path: string; sha256: string } }
-interface Refused { verdict: 'REFUSED'; code: string; message: string; next: string; steps: string[]; receipt?: undefined
+interface Refused { verdict: 'REFUSED'; code: string; message: string; next: string; steps: string[]; receipt?: undefined; note?: undefined
   /** The reason within the code where a caller words it for the owner: for CONTEXT_MISMATCH, checkContext's `why`. */
   detail?: string }
-export type CheckResult = { verdict: 'PASS'; receipt: CheckReceipt; steps: string[]; code?: undefined; message?: undefined; next?: undefined } | Refused
+export type CheckResult = {
+  verdict: 'PASS'; receipt: CheckReceipt; steps: string[]
+  /** One more line said beside the PASS, never part of the receipt (64.2 AC2). */
+  note?: string
+  code?: undefined; message?: undefined; next?: undefined
+} | Refused
 export type ResearchResult =
   | { verdict: 'PASS'; receipt: ResearchReceipt; steps: string[]; dry?: undefined; version?: undefined; code?: undefined; message?: undefined; next?: undefined; detail?: undefined }
   | { verdict: 'PASS'; dry: true; version: string | null; steps: string[]; fence?: { tools: string[]; compared: boolean }; receipt?: undefined; code?: undefined; message?: undefined; next?: undefined; detail?: undefined }
@@ -135,6 +140,9 @@ export declare function versionStanding(harness: string, version: string | null,
 export declare const RESUME_TESTED_VERSIONS: Record<string, string[]>
 export declare const RESEARCH_FENCE_VERSIONS: Record<string, string[]>
 export declare const RESEARCH_TOOLS: string
+export declare const WEB_QUESTION_COMMAND: string
+export declare const WEB_NEXT_STEP: string
+export declare const WEB_TOOLS_NOTE: string
 export declare const CODEX_RESEARCH_CONFIG: string[]
 export declare const CODEX_RESEARCH_ANSWER: string
 export declare const CODEX_RESEARCH_DISABLED: string[]

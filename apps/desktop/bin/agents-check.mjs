@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, harnessPrivateWork, namedResearchers, publicOnlyReasons, resolvedDirectory, roleEfforts, sha256 } from './agents-roster.mjs'
 import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
-import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
+import { AgentsUsageError, EXIT, err, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
 import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, CONTEXT_TEST_SIZE, checkContext, contextItems, contextTestFolder, provenControls, provenPrecedence, wholeNumber } from './agents-context.mjs'
 import { RUN_TEST_APPS, appTools, checkRunTools } from './agents-tools.mjs'
@@ -75,6 +75,33 @@ const NEXT_STEP = {
   HARNESS_UNKNOWN: 'install the app, or put it on PATH, so that its --version can be read',
   DATA_FORBIDDEN: 'move to the next candidate in the role\'s chain (`bmn roster role <role>`); this provider gets public work only',
   PACKET_INVALID: 'build a packet of files the public repository already serves and dispatch it through env -i claude -p --safe-mode --tools \'\''
+}
+
+/** The one checked way to the web (64.1), in the words every hint uses. */
+export const WEB_QUESTION_COMMAND = 'bmn research ask'
+/** What a refusal says next when the command reached for the web in a way the check cannot pass (64.2 AC1). */
+export const WEB_NEXT_STEP = `to search the web, ask with \`${WEB_QUESTION_COMMAND}\` (the question on standard input, or --question-file); for anything else ${NEXT_STEP.ROUTE_UNSUPPORTED}`
+/** One more line on a PASS whose tool list names a web tool outside a research run (64.2 AC2). */
+export const WEB_TOOLS_NOTE = `Note: the app may deny WebSearch and WebFetch in this form (nobody answers its permission prompt); the checked way to the web is \`${WEB_QUESTION_COMMAND}\`.`
+
+/**
+ * Whether a refused command reached for the web: Claude Code's `--allowedTools`, or a Codex argument
+ * or setting that switches web search on. Read from the refusal's own words and the command, so it
+ * never changes a verdict or a code, only the hint beside one.
+ */
+function reachedForWeb(argv, message) {
+  if (/^claude --allowed-?[Tt]ools(?:[= ]|$)/.test(message)) return true
+  if (/^-c \S*web_search\S* is not a key /.test(message)) return true
+  if (/^codex exec --search(?:[= ]|$)/.test(message)) return true
+  if (/^codex exec --enable(?:[= ]|$)/.test(message)) {
+    return argv.some((argument, index) => (argument === '--enable' && /web_search/.test(argv[index + 1] ?? '')) || /^--enable=.*web_search/.test(argument))
+  }
+  return false
+}
+
+/** Whether a Claude Code tool list names WebSearch or WebFetch, with or without a pattern after it. */
+function namesWebTool(tools) {
+  return typeof tools === 'string' && tools.split(/[,\s]+/).some((tool) => /^(?:WebSearch|WebFetch)(?:\(|$)/.test(tool))
 }
 
 class Refusal extends Error {
@@ -1807,10 +1834,14 @@ export function evaluate(inputs, {
       ...(stdin !== null ? { stdin } : {}),
       issued_at: now.toISOString()
     }
-    return { verdict: 'PASS', receipt: { ...body, receipt_hash: receiptHash(body) }, steps }
+    // Said beside the PASS, never inside the receipt: what passed and its receipt stay what they were.
+    const webNote = parsed.harness === 'claude' && namesWebTool(parsed.tools)
+    if (webNote) note(WEB_TOOLS_NOTE)
+    return { verdict: 'PASS', receipt: { ...body, receipt_hash: receiptHash(body) }, steps, ...(webNote ? { note: WEB_TOOLS_NOTE } : {}) }
   } catch (error) {
     if (error instanceof Refusal) {
-      return { verdict: 'REFUSED', code: error.code, message: error.message, next: NEXT_STEP[error.code], steps, ...(error.detail === undefined ? {} : { detail: error.detail }) }
+      const next = error.code === 'ROUTE_UNSUPPORTED' && Array.isArray(inputs.argv) && reachedForWeb(inputs.argv, error.message) ? WEB_NEXT_STEP : NEXT_STEP[error.code]
+      return { verdict: 'REFUSED', code: error.code, message: error.message, next, steps, ...(error.detail === undefined ? {} : { detail: error.detail }) }
     }
     throw error
   }
@@ -2334,7 +2365,9 @@ export async function runCheckCommand(action, argv) {
     if (result.verdict === 'PASS') {
       const receipt = result.receipt
       out(asJson ? JSON.stringify(receipt, null, 2)
-        : `PASS ${receipt.agent} ${receipt.role ?? 'research'} -> ${receipt.route.host} (${receipt.data ?? 'research'}, private work ${receipt.private_work.allowed ? 'allowed' : 'not allowed'}); receipt ${receipt.receipt_hash.slice(0, 12)}${receipt.context_limit_note === undefined ? '' : `\n${receipt.context_limit_note}`}`)
+        : `PASS ${receipt.agent} ${receipt.role ?? 'research'} -> ${receipt.route.host} (${receipt.data ?? 'research'}, private work ${receipt.private_work.allowed ? 'allowed' : 'not allowed'}); receipt ${receipt.receipt_hash.slice(0, 12)}${receipt.context_limit_note === undefined ? '' : `\n${receipt.context_limit_note}`}${result.note === undefined ? '' : `\n${result.note}`}`)
+      // With --json standard output is the receipt alone, as a caller saves it; the line goes beside it.
+      if (asJson && result.note !== undefined) err(`bmn: ${result.note}`)
       return 0
     }
     if (asJson) out(JSON.stringify({ verdict: 'REFUSED', code: result.code, message: result.message, next: result.next, ...(result.detail === undefined ? {} : { detail: result.detail }) }, null, 2))
