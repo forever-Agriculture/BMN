@@ -63,7 +63,7 @@ import {
   CONTEXT_APPS, ContextError, applyContextDefault, contextAuto, contextAutoPlan, contextDefault, contextTestFolder, limitedAgents, planContextDefault, setContextAuto, sharingAgents,
   type ContextAutoPlanEntry, type ContextTestOutcome
 } from '../../bin/agents-context.mjs'
-import { judgeLimit, judgeRecordPath, judgeTotals, readJudgeRecord, runJudge, setJudgeLimit } from '../../bin/agents-judge.mjs'
+import { judgeLimit, judgeTotals, readJudgeRecord, runJudge, setJudgeLimit } from '../../bin/agents-judge.mjs'
 import { ASK_KEPT, ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, agentsMayAsk, askedCount, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord } from '../../bin/agents-ask.mjs'
 import { chooseResearcher, fetchPublicPage, processStart, publicHostName, readResearch, resolvesPublic, researchLockHolder, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
 import { runFenceTest } from '../../bin/agents-fence.mjs'
@@ -1343,22 +1343,27 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   // Team › the judge's page (65.3): its calls, the monthly limit and Try it. Try it goes by the route of `bmn judge ask`, in this process.
   const judgeView = (): JudgeView => {
     const now = context().now()
-    const record = readJudgeRecord()
+    const read = readJudgeRecord()
+    const home = homedir()
+    const shown = (path: string): string => (path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path)
+    // A record that cannot be read whole is said with the path of the part that cannot, never shown as a month with no calls:
+    // the page gets no sums of it at all. A limit's setting that cannot be read is said the same way, and is never shown as his "off".
+    const record = read.damaged === true ? { calls: [], months: {}, taken: [] } : read
     const { current, previous } = judgeTotals(now, record)
-    const limit = judgeLimit()
+    const set = judgeLimit()
+    const limit = set.damaged === true ? { on: false, usd: 1 } : { on: set.on, usd: set.usd }
     const sums = (totals: { calls: number; input_tokens: number; cost_usd: number }): JudgeTotalsView => ({ calls: totals.calls, input_tokens: totals.input_tokens, cost_usd: totals.cost_usd })
     const month = (totals: typeof current): JudgeMonthView => ({
       month: totals.month, ...sums(totals), refused: totals.refused, estimated: totals.estimated, purposes: Object.fromEntries(Object.entries(totals.purposes).map(([word, entry]) => [word, sums(entry)]))
     })
-    const home = homedir()
     return {
-      limit, reached: limit.on && current.cost_usd >= limit.usd, current: month(current), previous: month(previous),
+      limit, reached: read.damaged !== true && limit.on && current.cost_usd >= limit.usd, current: month(current), previous: month(previous),
       calls: record.calls.slice(-JUDGE_CALLS_SHOWN).reverse().map((call) => ({
         at: call.at, by: askerOf(call.by) ?? { kind: 'shell' }, purpose: typeof call.purpose === 'string' ? call.purpose.slice(0, 32) : '',
         outcome: JUDGE_OUTCOMES.includes(call.outcome) ? call.outcome : 'failed', ...(typeof call.code === 'string' ? { code: call.code.slice(0, 40) } : {})
       })),
-      // A record that cannot be read is said, never shown as a month with no calls: the command asks nothing until it is moved away.
-      ...(record.damaged === true ? { unreadable: judgeRecordPath().startsWith(`${home}/`) ? `~${judgeRecordPath().slice(home.length)}` : judgeRecordPath() } : {})
+      ...(read.damaged === true ? { unreadable: shown(read.where ?? '') } : {}),
+      ...(set.damaged === true ? { limitUnreadable: shown(set.where) } : {})
     }
   }
   handle('aiterm:judge:load', () => judgeView())
@@ -1386,7 +1391,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       if (result.outcome === 'answered' && answer?.type === 'noul' && reading !== undefined) {
         reply = {
           outcome: 'answered', noul: answer.noul, reading: reading.reading === 'yes' ? 'yes' : 'no answer', near: reading.near === true, input_tokens: result.input_tokens ?? 0, cost_usd: result.cost_usd ?? 0, took_ms: result.took_ms,
-          counted: result.recorded !== false, estimated: result.tokens_estimated === true
+          counted: result.recorded === false ? 'no' : result.record_pending !== undefined ? 'waiting' : 'yes', estimated: result.tokens_estimated === true
         }
       } else if (result.outcome === 'refused') {
         reply = { outcome: 'refused', code: result.code ?? 'REFUSED', message: result.message ?? 'The call was refused.', ...(result.next === undefined ? {} : { next: result.next }) }

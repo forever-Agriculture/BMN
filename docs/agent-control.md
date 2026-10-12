@@ -1656,8 +1656,9 @@ printf '%s\n' 'All 12 tests passed.' | bmn judge ask --state-file - --questions-
   (`DATA_UNDECLARED`), and either private work is allowed for both providers, or the text is
   declared public and the workspace named with `--workspace`, where one is named, is one BMN
   holds public (`PRIVATE_NOT_ALLOWED`, `WORKSPACE_PRIVATE`); the team records the model's price
-  (`NO_PRICE`) and the record of the calls can be read (`RECORD_UNREADABLE`), since nothing is
-  asked whose cost BMN could not count; a monthly limit you switched on is not reached
+  (`NO_PRICE`), the record of the calls can be read whole (`RECORD_UNREADABLE`) and so can the
+  limit's setting (`LIMIT_UNREADABLE`), since nothing is asked whose cost BMN could not count or
+  whose limit it could not judge; a monthly limit you switched on is not reached
   (`LIMIT_REACHED`); and OpenCode is signed in on this computer (`NO_KEY`). Each refusal has its
   code, plain words and a `next`, and exit code 10.
 - **The request** is one https POST to the approved host, path `/zen/v1/systemone`, with the
@@ -1693,18 +1694,29 @@ printf '%s\n' 'All 12 tests passed.' | bmn judge ask --state-file - --questions-
   - *A call made while another process holds the record* waits five seconds for it and then
     writes its line to a file of its own under `judge/waiting/`. Every reader counts the waiting
     lines, the limit included, and the next call that gets the record takes them in, once.
-  - *A request the gateway gave no count of tokens for* (a 200 with no usage, one that broke off
+  - *A request the gateway gave no count of tokens for* (a 200 with no usage or with a count
+    above 1,000,000, which no call can hold, one that broke off
     or is not Jev's shape, a request still out at the deadline, or one that left this computer
     and got no status back) may have been charged. A request that never left, and one answered
     with a 3xx, 4xx or 5xx, is not counted. BMN
     counts it by the bytes it sent plus 256, marks the call `tokens_estimated`, says "about …
     input tokens (estimated …)" and counts it toward the limit: never as free.
-  - *A record that is there and cannot be read* is never taken for an empty one and never
-    written over: every call is refused with `RECORD_UNREADABLE`, with the limit on or off,
-    until you move the file away (BMN then starts a new record) or mend it.
-  - *A call BMN could not write down* still gives its answer; the result says `recorded: false`
-    with the reason in `note`, the command says it on standard error, and Try it says "Not
-    counted" in place of "Counted in the calls below".
+  - *A part of the record that is there and cannot be read whole* (the kept file, the folder
+    of waiting lines or one line in it: not readable, not JSON, or one entry or number that is
+    not what BMN writes) is never taken for an empty one, never mended and never written over
+    or removed. No number in it is read as zero: the sums are then not known, every call is
+    refused with `RECORD_UNREADABLE` and the path, with the limit on or off, and the judge's
+    page shows the path in place of the sums and the calls, until you mend that file or move it
+    away. The same holds for the limit's setting (`judge/settings.json`): one that is there
+    and cannot be read is never taken for "off"; every call is refused with `LIMIT_UNREADABLE`
+    until you set the limit again on the judge's page (switch it on, or press **Keep it off**).
+  - *A call that already made its request when a part of the record stops being readable* keeps
+    its own line in a waiting file and says so (`record_pending` with the path, a line on
+    standard error, "Kept beside the record" on Try it): it is counted once the record is
+    mended.
+  - *A call BMN could not write down at all* still gives its answer; the result says
+    `recorded: false` with the reason in `note`, the command says it on standard error, and Try
+    it says "Not counted" in place of "Counted in the calls below".
 - **The monthly limit** is off until you switch it on, on the judge's page. With it on, a call
   is refused once the month's recorded cost reaches it, from the page and from every shell
   alike, until next month or a higher limit. Calls that start at the same moment are each

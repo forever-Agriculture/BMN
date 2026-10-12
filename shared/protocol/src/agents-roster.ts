@@ -527,8 +527,11 @@ export interface JudgeMonthView extends JudgeTotalsView { month: string; refused
 export type JudgeOutcome = 'answered' | 'refused' | 'timeout' | 'failed' | 'shape'
 /** One call as the page lists it: when, who, the purpose word and how it ended. No text and no answer is kept of a call. */
 export interface JudgeCallView { at: string; by: WebQuestionAsker; purpose: string; outcome: JudgeOutcome; code?: string }
-/** How a call the page itself made is in the record: `counted` is false where BMN could not write it down; `estimated`, where the gateway gave no count of tokens and BMN counted the request's size. */
-export interface JudgeTryCount { counted: boolean; estimated: boolean }
+/**
+ * How a call the page itself made is in the record. `counted`: "yes"; "waiting" where its line is kept beside a record that cannot be read
+ * and is counted once that is mended; "no" where BMN could not write it down at all. `estimated`: the gateway gave no count of tokens and BMN counted the request's size.
+ */
+export interface JudgeTryCount { counted: 'yes' | 'waiting' | 'no'; estimated: boolean }
 export interface JudgeView {
   /** The owner's monthly limit: off until he switches it on. */
   limit: { on: boolean; usd: number }
@@ -538,8 +541,13 @@ export interface JudgeView {
   previous: JudgeMonthView
   /** Newest first, at most 20. */
   calls: JudgeCallView[]
-  /** The record of the calls is there and cannot be read: its path, the home folder as `~`. Nothing is asked until he moved the file away. */
+  /**
+   * A part of the record of the calls is there and cannot be read: the path of that file or folder, the home folder as `~`.
+   * The sums and the calls are then not known (they are sent as none, and the page shows the path in their place); nothing is asked until he mended or moved it.
+   */
   unreadable?: string
+  /** The limit's own setting is there and cannot be read: its path. Whether a limit holds is then not known (`limit` is sent as off, and the page says so); nothing is asked until he sets it again. */
+  limitUnreadable?: string
 }
 /** What "Try it" got back: Jev's number with BMN's reading, the command's own refusal, or why there is no answer. */
 export type JudgeTryReply =

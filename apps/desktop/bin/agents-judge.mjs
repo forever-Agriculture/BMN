@@ -44,6 +44,8 @@ export const STATE_MAX_BYTES = 24_000
 export const REQUEST_MAX_BYTES = 48_000
 export const MAX_QUESTIONS = 64
 const ANSWER_MAX_BYTES = 256 * 1024
+/** The most input tokens BMN takes a gateway's word for: the model holds 64,000, and a request is far smaller. */
+const TOKENS_MAX = 1_000_000
 /** What is added to a request's bytes where its tokens are counted by its size: the few tokens a model puts around a text. */
 const UNCOUNTED_ALLOWANCE = 256
 /** How many calls the record lists; the month totals beside them count every call. */
@@ -178,7 +180,8 @@ export function readBody(questions, body) {
         : { type: 'score', score: answer.score, confidence: answer.confidence, probabilities: knownProbabilities(question, answer.probabilities) }
     readings[id] = reading
   }
-  const tokens = isObject(body.usage) && Number.isSafeInteger(body.usage.input_tokens) && body.usage.input_tokens >= 0 ? body.usage.input_tokens : null
+  // A count past anything a call can hold is no count: BMN then counts the request by its size, and no number a server chose can break a month's sums.
+  const tokens = isObject(body.usage) && Number.isSafeInteger(body.usage.input_tokens) && body.usage.input_tokens >= 0 && body.usage.input_tokens <= TOKENS_MAX ? body.usage.input_tokens : null
   return { ok: true, answers, readings, tokens }
 }
 
@@ -379,42 +382,69 @@ function judgeSettingsPath() {
 
 const monthOf = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 const emptyTotals = () => ({ calls: 0, requests: 0, input_tokens: 0, cost_usd: 0 })
-const count = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : 0)
-const dollars = (value) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0)
-const totalsOf = (value) => (isObject(value) ? { calls: count(value.calls), requests: count(value.requests), input_tokens: count(value.input_tokens), cost_usd: dollars(value.cost_usd) } : emptyTotals())
+const emptyMonth = () => ({ ...emptyTotals(), refused: 0, estimated: 0, purposes: {} })
 const LINE_ID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
-const keptLine = (entry) => isObject(entry) && typeof entry.at === 'string' && typeof entry.outcome === 'string'
+const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/
+const OUTCOMES = ['answered', 'refused', 'timeout', 'failed', 'shape']
 
-/** What a call is told when the record is there and cannot be read: nothing is counted on a guess, and the file is not written over. */
-const RECORD_UNREADABLE_WORDS = 'the record of the judge\'s calls is there and cannot be read, so BMN can neither count a call nor judge the monthly limit'
+// What the month's cost and the limit are read from is taken as it stands or not at all: a number
+// that is not one is never read as 0, and an entry that is not whole is never left out.
+const isCount = (value) => Number.isSafeInteger(value) && value >= 0
+const isDollars = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0
+const isTotals = (value) => isObject(value) && isCount(value.calls) && isCount(value.requests) && isCount(value.input_tokens) && isDollars(value.cost_usd)
+const isMonth = (value) => isTotals(value) && isCount(value.refused) && (value.estimated === undefined || isCount(value.estimated))
+  && isObject(value.purposes) && Object.entries(value.purposes).every(([word, totals]) => PURPOSE.test(word) && isTotals(totals))
+const textOrNull = (value) => value === null || typeof value === 'string'
+const isLimit = (usd) => typeof usd === 'number' && Number.isFinite(usd) && usd > 0 && usd <= 10_000
+
+/** Whether a value is one call's line as BMN writes it. The first lines BMN wrote carry no `id`. */
+function isLine(value) {
+  return isObject(value) && typeof value.at === 'string' && !Number.isNaN(Date.parse(value.at)) && MONTH.test(monthOf(new Date(value.at))) && isObject(value.by)
+    && typeof value.purpose === 'string' && PURPOSE.test(value.purpose) && textOrNull(value.agent) && textOrNull(value.model)
+    && isCount(value.requests) && isCount(value.input_tokens) && isDollars(value.cost_usd) && isCount(value.took_ms) && OUTCOMES.includes(value.outcome)
+    // A call that made no request cost nothing: a line that says otherwise would lose its cost where the refusals are counted.
+    && (value.requests > 0 || (value.input_tokens === 0 && value.cost_usd === 0))
+    && (value.id === undefined || (typeof value.id === 'string' && LINE_ID.test(value.id)))
+    && (value.code === undefined || typeof value.code === 'string') && (value.state_sha256 === undefined || typeof value.state_sha256 === 'string')
+    && (value.tokens_estimated === undefined || value.tokens_estimated === true)
+}
+
+/** What a call is told when a part of the record is there and cannot be read: nothing is counted on a guess, and that part is neither written over nor removed. */
+const RECORD_UNREADABLE_WORDS = 'a part of the record of the judge\'s calls is there and cannot be read, so BMN can neither count a call nor judge the monthly limit'
+
+/** A record no sums are read from: `where` is the file or folder that cannot be read. */
+const unreadable = (where) => ({ calls: [], months: {}, taken: [], damaged: true, where })
 
 /**
  * The kept file by itself: the last calls, the totals of each month, in all and per purpose word,
  * and `taken`, the waiting lines the last write took in. A missing file reads as empty. A file
- * that is there and is not a record reads as `damaged`: its months may hold what the limit is
- * judged on, so it is never taken for an empty one.
+ * that is there and is not a whole record (it cannot be read, is not JSON, or holds one entry or
+ * number that is not what BMN writes) reads as `damaged`: its months may hold what the limit is
+ * judged on, so nothing in it is mended, left out or read as nothing.
  */
 function readKeptRecord() {
+  const path = judgeRecordPath()
   let text
   try {
-    text = readFileSync(judgeRecordPath(), 'utf8')
+    text = readFileSync(path, 'utf8')
   } catch (error) {
-    return error?.code === 'ENOENT' ? { calls: [], months: {}, taken: [] } : { calls: [], months: {}, taken: [], damaged: true }
+    return error?.code === 'ENOENT' ? { calls: [], months: {}, taken: [] } : unreadable(path)
   }
+  let value
   try {
-    const value = JSON.parse(text)
-    if (isObject(value) && value.version === 1 && Array.isArray(value.calls) && isObject(value.months)) {
-      const months = {}
-      for (const [month, entry] of Object.entries(value.months)) {
-        if (!/^\d{4}-\d{2}$/.test(month) || !isObject(entry)) continue
-        months[month] = { ...totalsOf(entry), refused: count(entry.refused), estimated: count(entry.estimated), purposes: Object.fromEntries(Object.entries(isObject(entry.purposes) ? entry.purposes : {}).filter(([word]) => PURPOSE.test(word)).map(([word, totals]) => [word, totalsOf(totals)])) }
-      }
-      return { calls: value.calls.filter(keptLine), months, taken: Array.isArray(value.taken) ? value.taken.filter((id) => typeof id === 'string') : [] }
-    }
+    value = JSON.parse(text)
   } catch {
-    // Not JSON: damaged.
+    return unreadable(path)
   }
-  return { calls: [], months: {}, taken: [], damaged: true }
+  if (!isObject(value) || value.version !== 1 || !Array.isArray(value.calls) || !value.calls.every(isLine) || !isObject(value.months)
+    || !Object.entries(value.months).every(([month, entry]) => MONTH.test(month) && isMonth(entry))
+    || (value.taken !== undefined && !(Array.isArray(value.taken) && value.taken.every((id) => typeof id === 'string' && LINE_ID.test(id))))) return unreadable(path)
+  const sums = (totals) => ({ calls: totals.calls, requests: totals.requests, input_tokens: totals.input_tokens, cost_usd: totals.cost_usd })
+  const months = {}
+  for (const [month, entry] of Object.entries(value.months)) {
+    months[month] = { ...sums(entry), refused: entry.refused, estimated: entry.estimated ?? 0, purposes: Object.fromEntries(Object.entries(entry.purposes).map(([word, totals]) => [word, sums(totals)])) }
+  }
+  return { calls: value.calls, months, taken: value.taken ?? [] }
 }
 
 function judgeWaitingDirectory() {
@@ -427,34 +457,48 @@ function judgeWaitingDirectory() {
  * whoever holds the record. Every reader lays the waiting lines over, and the next write takes
  * them in, names them in the same write and only then removes their files: once, also when a
  * process ends between the two.
+ *
+ * `{ lines }`, or `{ damaged, where }`: no folder is no lines, and a line's file that is gone
+ * when it is read was taken in by a writer meanwhile (a writer removes a file only after the
+ * write that holds its line, and every reader reads the kept file after this). A folder that
+ * cannot be listed, and a file named like a line that cannot be read or is not a whole line, may
+ * hold a call that was counted: that is `damaged`, never "no lines". Other names (the temporary
+ * file of a write under way) are not lines.
  */
 function readWaiting() {
+  const folder = judgeWaitingDirectory()
   let names
   try {
-    names = readdirSync(judgeWaitingDirectory())
-  } catch {
-    return []
+    names = readdirSync(folder)
+  } catch (error) {
+    return error?.code === 'ENOENT' ? { lines: [] } : { lines: [], damaged: true, where: folder }
   }
   const lines = []
   for (const name of names.sort()) {
     if (!name.endsWith('.json') || !LINE_ID.test(name.slice(0, -5))) continue
+    const path = `${folder}/${name}`
+    let value
     try {
-      const value = JSON.parse(readFileSync(`${judgeWaitingDirectory()}/${name}`, 'utf8'))
-      const line = isObject(value) && value.version === 1 ? value.line : null
-      if (keptLine(line) && line.id === name.slice(0, -5) && !Number.isNaN(Date.parse(line.at)) && typeof line.purpose === 'string' && PURPOSE.test(line.purpose)) {
-        lines.push({ ...line, requests: count(line.requests), input_tokens: count(line.input_tokens), cost_usd: dollars(line.cost_usd) })
-      }
-    } catch {
-      // Not a whole line: nothing is read from it.
+      value = JSON.parse(readFileSync(path, 'utf8'))
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue
+      return { lines: [], damaged: true, where: path }
     }
+    if (!isObject(value) || value.version !== 1 || !isLine(value.line) || value.line.id !== name.slice(0, -5)) return { lines: [], damaged: true, where: path }
+    lines.push(value.line)
   }
-  return lines
+  return { lines }
 }
 
-/** Adds one call to a record in memory: its month's totals, in all and under its purpose word, and the list. */
+/**
+ * Adds one call to a record in memory: its month's totals, in all and under its purpose word, and
+ * the list. False, with the record as it was, where a sum would no longer be a number BMN keeps
+ * exactly: such a sum is never written or shown.
+ */
 function addLine(record, line) {
   const month = monthOf(new Date(line.at))
-  const totals = Object.hasOwn(record.months, month) ? record.months[month] : { ...emptyTotals(), refused: 0, estimated: 0, purposes: {} }
+  const before = Object.hasOwn(record.months, month) ? record.months[month] : emptyMonth()
+  const totals = { ...before, purposes: { ...before.purposes } }
   if (line.requests === 0) totals.refused += 1
   else {
     // How many of the month's calls are counted by their size and not by the gateway's own count: said wherever the sums are.
@@ -462,7 +506,7 @@ function addLine(record, line) {
     // A word is looked up as the month's own entry and never as anything an object carries by itself: `constructor` is a purpose like any other.
     // A purpose past the most BMN keeps a month goes under one common word; the month's own totals still hold it.
     const word = Object.hasOwn(totals.purposes, line.purpose) || Object.keys(totals.purposes).length < PURPOSES_KEPT ? line.purpose : 'other'
-    const purpose = Object.hasOwn(totals.purposes, word) ? totals.purposes[word] : emptyTotals()
+    const purpose = { ...(Object.hasOwn(totals.purposes, word) ? totals.purposes[word] : emptyTotals()) }
     for (const sum of [totals, purpose]) {
       sum.calls += 1
       sum.requests += line.requests
@@ -471,8 +515,10 @@ function addLine(record, line) {
     }
     totals.purposes = { ...totals.purposes, [word]: purpose }
   }
+  if (!isMonth(totals)) return false
   record.months[month] = totals
   record.calls.push(line)
+  return true
 }
 
 /** How often a reader reads again when a waiting line left while it read. */
@@ -484,39 +530,57 @@ const READ_AGAIN = 3
  * file does not name, and whose file is gone once the kept file is read, may be in the kept file
  * all the same (taken in, and no longer named by a later write): the reader reads again. Should
  * that happen at every read, the line is counted: a month that reads a call too dear stops asking
- * early, never late. `damaged` is set where the kept file is there and cannot be read.
+ * early, never late. Where any part cannot be read whole the record is `damaged` with `where`,
+ * and holds no sums at all.
  */
 export function readJudgeRecord() {
   for (let attempt = 0; ; attempt += 1) {
     const waiting = readWaiting()
     const record = readKeptRecord()
     if (record.damaged === true) return record
+    if (waiting.damaged === true) return unreadable(waiting.where)
     const have = new Set([...record.calls.map((call) => call.id), ...record.taken])
-    const fresh = waiting.filter((line) => !have.has(line.id))
+    const fresh = waiting.lines.filter((line) => !have.has(line.id))
     if (attempt < READ_AGAIN && !fresh.every((line) => existsSync(`${judgeWaitingDirectory()}/${line.id}.json`))) continue
-    for (const line of fresh) addLine(record, line)
+    for (const line of fresh) if (!addLine(record, line)) return unreadable(judgeRecordPath())
     return record
   }
 }
 
-/** The totals of `now`'s month and the one before it: `{ month, calls, requests, input_tokens, cost_usd, refused, estimated, purposes }` each. */
+/**
+ * The totals of `now`'s month and the one before it: `{ month, calls, requests, input_tokens, cost_usd, refused, estimated, purposes }` each.
+ * Throws for a record that cannot be read: its sums are not known, which is never said as zero.
+ */
 export function judgeTotals(now = new Date(), record = readJudgeRecord()) {
+  if (record.damaged === true) throw new RosterError('RECORD_UNREADABLE', `${RECORD_UNREADABLE_WORDS} (${record.where})`)
   const of = (date) => {
     const month = monthOf(date)
-    return { month, ...emptyTotals(), refused: 0, estimated: 0, purposes: {}, ...(Object.hasOwn(record.months, month) ? record.months[month] : {}) }
+    return { month, ...emptyMonth(), ...(Object.hasOwn(record.months, month) ? record.months[month] : {}) }
   }
   return { current: of(now), previous: of(new Date(now.getFullYear(), now.getMonth() - 1, 1)) }
 }
 
-/** The owner's monthly limit: off until he switches it on (65 (c) as he replaced it). */
+/**
+ * The owner's monthly limit: off until he switches it on (65 (c) as he replaced it). No file is
+ * "never set", which is off. A file that is there and cannot be read, or is not a setting BMN
+ * wrote, is `{ damaged, where }`: whether a limit holds is then not known, and it is never taken
+ * for off. Only his own setting on the judge's page writes the file anew.
+ */
 export function judgeLimit() {
+  const path = judgeSettingsPath()
+  let text
   try {
-    const value = JSON.parse(readFileSync(judgeSettingsPath(), 'utf8'))
-    if (isObject(value) && isObject(value.limit) && typeof value.limit.usd === 'number' && Number.isFinite(value.limit.usd) && value.limit.usd > 0) return { on: value.limit.on === true, usd: value.limit.usd }
-  } catch {
-    // Never set.
+    text = readFileSync(path, 'utf8')
+  } catch (error) {
+    return error?.code === 'ENOENT' ? { on: false, usd: 1 } : { damaged: true, where: path }
   }
-  return { on: false, usd: 1 }
+  try {
+    const value = JSON.parse(text)
+    if (isObject(value) && value.version === 1 && isObject(value.limit) && typeof value.limit.on === 'boolean' && isLimit(value.limit.usd)) return { on: value.limit.on, usd: value.limit.usd }
+  } catch {
+    // Not JSON: damaged.
+  }
+  return { damaged: true, where: path }
 }
 
 /** A limit in dollars with two places, or as many as it needs: a limit of $0.005 never reads "$0.01" or "$0.00". */
@@ -525,7 +589,7 @@ export function limitWords(usd) {
 }
 
 export function setJudgeLimit({ on, usd }) {
-  if (typeof usd !== 'number' || !Number.isFinite(usd) || usd <= 0 || usd > 10_000) throw new RosterError('LIMIT_INVALID', 'a monthly limit is an amount of dollars above 0')
+  if (!isLimit(usd)) throw new RosterError('LIMIT_INVALID', 'a monthly limit is an amount of dollars above 0')
   writePrivate(judgeSettingsPath(), `${JSON.stringify({ version: 1, limit: { on: on === true, usd } })}\n`)
 }
 
@@ -536,9 +600,20 @@ const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
  * Writes one call down: one writer at a time across processes, the kept file replaced whole, the
  * waiting lines taken in with it. Where another living process holds the record for the whole
  * wait, the line is written beside the record instead and waits there, counted by every reader.
- * Throws where the kept file cannot be read (it is never written over) or nothing can be written.
+ *
+ * Where a part of the record cannot be read, nothing of it is written over, taken in or removed.
+ * A call that made a request then still keeps its own line, in a waiting file of its own, and
+ * `{ pending: <what cannot be read> }` comes back: it is counted once that part is mended or moved
+ * away. A call that made no request writes nothing then and throws, as it does where nothing
+ * can be written at all.
  */
 async function recordCall(line) {
+  const beside = () => writePrivate(`${judgeWaitingDirectory()}/${line.id}.json`, `${JSON.stringify({ version: 1, line })}\n`)
+  const aside = (where) => {
+    if (line.requests === 0) throw new Error(`${RECORD_UNREADABLE_WORDS} (${where})`)
+    beside()
+    return { pending: where }
+  }
   let lock = null
   for (const until = Date.now() + RECORD_WAIT_MS; ;) {
     const taken = takeLock(`${judgeRecordPath()}.writing`, { kind: 'writer' })
@@ -550,25 +625,29 @@ async function recordCall(line) {
     await pause(10)
   }
   if (lock === null) {
-    if (readKeptRecord().damaged === true) throw new Error(RECORD_UNREADABLE_WORDS)
-    writePrivate(`${judgeWaitingDirectory()}/${line.id}.json`, `${JSON.stringify({ version: 1, line })}\n`)
-    return
+    const kept = readKeptRecord()
+    const waiting = kept.damaged === true ? kept : readWaiting()
+    if (waiting.damaged === true) return aside(waiting.where)
+    beside()
+    return {}
   }
   try {
     const waiting = readWaiting()
     const record = readKeptRecord()
-    if (record.damaged === true) throw new Error(RECORD_UNREADABLE_WORDS)
+    if (record.damaged === true) return aside(record.where)
+    if (waiting.damaged === true) return aside(waiting.where)
     const have = new Set([...record.calls.map((call) => call.id), ...record.taken])
-    for (const entry of [...waiting, line]) {
+    for (const entry of [...waiting.lines, line]) {
       if (have.has(entry.id)) continue
-      addLine(record, entry)
+      if (!addLine(record, entry)) return aside(judgeRecordPath())
       have.add(entry.id)
     }
     const months = Object.fromEntries(Object.entries(record.months).sort(([one], [other]) => (one < other ? -1 : 1)).slice(-MONTHS_KEPT))
     // Every waiting line on the disk is named in this very write: one that was taken in before, and whose file is still there, is not taken in again.
-    const taken = waiting.map((entry) => entry.id)
+    const taken = waiting.lines.map((entry) => entry.id)
     writePrivate(judgeRecordPath(), `${JSON.stringify({ version: 1, months, taken, calls: record.calls.slice(-CALLS_KEPT) }, null, 1)}\n`)
     for (const id of taken) rmSync(`${judgeWaitingDirectory()}/${id}.json`, { force: true })
+    return {}
   } finally {
     lock.release()
   }
@@ -589,7 +668,8 @@ const NEXT = {
   WORKSPACE_PRIVATE: 'refresh the workspace\'s record with `bmn roster visibility --refresh` if its repository is public, or ask the owner: he allows private work for both providers in Preferences › Team',
   LIMIT_REACHED: 'the owner raises the monthly limit or switches it off on the judge\'s page in Preferences › Team; otherwise ask again next month',
   NO_PRICE: 'the owner records the model\'s price for the agent in the team file (price: {input: <dollars per million tokens>, output: 0}) and approves it',
-  RECORD_UNREADABLE: 'the owner moves the file away (BMN then starts a new record), or mends it; nothing is asked meanwhile',
+  RECORD_UNREADABLE: 'the owner mends the file or folder the message names, or moves it away (BMN then counts on from what is left); nothing is asked meanwhile',
+  LIMIT_UNREADABLE: 'the owner sets the monthly limit again on the judge\'s page in Preferences › Team, on or off: that writes the setting anew; nothing is asked meanwhile',
   NO_KEY: 'sign in to OpenCode on this computer (`opencode auth login`); BMN reads the key from OpenCode\'s own sign-in file and keeps none',
   QUESTIONS_INVALID: 'see `bmn judge --help` for the three question types',
   TOO_LARGE: 'send a shorter text, or fewer questions in one call',
@@ -619,7 +699,8 @@ function pickedJudge(data, wanted) {
  * code, plain words and a `next`. The result holds Jev's numbers unchanged and BMN's reading of
  * each; a timeout, a failed request and an answer that is not Jev's shape all read "no answer"
  * for every question. One line goes into the record whatever happened, with no text in it;
- * `recorded` is false in the one case where it could not be written, and `note` says why.
+ * `recorded` is false where it could not be written, and `record_pending` names the part of the
+ * record that cannot be read where the line was kept beside it; `note` says either.
  */
 export async function runJudge({
   state, questions, data: declared, workspace = null, purpose = NO_PURPOSE, twice = false, agent: wanted = null, model: wantedModel = null, by = { kind: 'shell' },
@@ -627,18 +708,22 @@ export async function runJudge({
 } = {}) {
   const started = now()
   const clock = Date.now()
+  // The record takes one word of its own letters: anything else a caller in this process hands in is counted under the common word.
+  if (typeof purpose !== 'string' || !PURPOSE.test(purpose)) purpose = NO_PURPOSE
   const stateHash = typeof state === 'string' ? createHash('sha256').update(state).digest('hex') : null
   const line = { id: randomUUID(), at: started.toISOString(), by, purpose, agent: null, model: null, requests: 0, input_tokens: 0, cost_usd: 0, took_ms: 0, outcome: 'refused', ...(stateHash === null ? {} : { state_sha256: stateHash }) }
   const keep = async (result) => {
-    line.took_ms = Date.now() - clock
-    let recorded = true
+    line.took_ms = Math.max(0, Date.now() - clock)
+    const said = (words) => { result.note = `${result.note === undefined ? '' : `${result.note} `}${words}` }
     try {
-      await recordCall(line)
+      const saved = await recordCall(line)
+      if (saved.pending === undefined) return { ...result, took_ms: line.took_ms, recorded: true }
+      said(`BMN kept this call beside its record, a part of which cannot be read (${saved.pending}): it is counted once that is mended or moved away.`)
+      return { ...result, took_ms: line.took_ms, recorded: true, record_pending: saved.pending }
     } catch (error) {
-      recorded = false
-      result.note = `${result.note === undefined ? '' : `${result.note} `}BMN could not write this call into its record: ${error instanceof Error ? error.message : String(error)}.`
+      said(`BMN could not write this call into its record: ${error instanceof Error ? error.message : String(error)}.`)
+      return { ...result, took_ms: line.took_ms, recorded: false }
     }
-    return { ...result, took_ms: line.took_ms, recorded }
   }
   const refused = (code, message) => {
     line.outcome = 'refused'
@@ -692,8 +777,9 @@ export async function runJudge({
     return refused('NO_PRICE', `the approved team records no price for ${agent.name}, so BMN could not count what a call costs`)
   }
   const record = readJudgeRecord()
-  if (record.damaged === true) return refused('RECORD_UNREADABLE', `${RECORD_UNREADABLE_WORDS} (${judgeRecordPath()})`)
+  if (record.damaged === true) return refused('RECORD_UNREADABLE', `${RECORD_UNREADABLE_WORDS} (${record.where})`)
   const limit = judgeLimit()
+  if (limit.damaged === true) return refused('LIMIT_UNREADABLE', `the setting of the monthly limit is there and cannot be read, so BMN cannot tell whether a limit holds (${limit.where})`)
   if (limit.on) {
     const spent = judgeTotals(started, record).current.cost_usd
     if (spent >= limit.usd) return refused('LIMIT_REACHED', `this month's calls to ${agent.name} cost $${spent.toFixed(4)}, which reaches the monthly limit of $${limitWords(limit.usd)}; asking is stopped until next month or a higher limit`)
@@ -845,7 +931,7 @@ export async function runJudgeCommand(argv, { judge = runJudge, environment = pr
   else if (result.outcome === 'answered') out(judgeLines(result, questions).join('\n'))
   else if (result.outcome === 'refused') process.stderr.write(`bmn: ${result.code}: ${result.message}\n${result.next === undefined ? '' : `  next: ${result.next}\n`}`)
   else process.stderr.write(`bmn: ${result.note}; every question reads "${NO_ANSWER}"\n`)
-  // What an answered or refused call can still have to say: it is not in the record. (A call with no answer says it in its note above.)
-  if (parsed.options.json !== true && result.recorded === false && (result.outcome === 'answered' || result.outcome === 'refused')) process.stderr.write(`bmn: ${result.note}\n`)
+  // What an answered or refused call can still have to say: it is not in the record, or waits beside it. (A call with no answer says it in its note above.)
+  if (parsed.options.json !== true && (result.recorded === false || result.record_pending !== undefined) && (result.outcome === 'answered' || result.outcome === 'refused')) process.stderr.write(`bmn: ${result.note}\n`)
   return result.outcome === 'answered' ? EXIT.ok : result.outcome === 'refused' ? EXIT.refusal : result.outcome === 'timeout' ? EXIT.timeout : result.outcome === 'shape' ? EXIT.shape : EXIT.failed
 }

@@ -60,13 +60,18 @@ export interface JudgeCall {
 export interface JudgeTotals { calls: number; requests: number; input_tokens: number; cost_usd: number }
 /** `estimated`: how many of the month's calls are counted by their request's size, the gateway having given no count. */
 export interface JudgeMonth extends JudgeTotals { refused: number; estimated: number; purposes: Record<string, JudgeTotals> }
-/** `damaged`: the kept file is there and cannot be read; nothing is asked and it is never written over. `taken`: the waiting lines its last write took in. */
-export interface JudgeRecord { calls: JudgeCall[]; months: Record<string, JudgeMonth>; taken: string[]; damaged?: true }
+/**
+ * `damaged`: a part of the record (the kept file, the folder of waiting lines or one of them: `where`) is there and cannot be read whole;
+ * the record then holds no sums, nothing is asked, and that part is never written over or removed. `taken`: the waiting lines the last write took in.
+ */
+export interface JudgeRecord { calls: JudgeCall[]; months: Record<string, JudgeMonth>; taken: string[]; damaged?: true; where?: string }
 /** How the key of BMN's own tests starts: the stand-in server of a `.test` host is sent no other key. */
 export declare const TEST_KEY_START: string
 export declare function readJudgeRecord(): JudgeRecord
+/** Throws `RECORD_UNREADABLE` for a damaged record: its sums are not known, which is never said as zero. */
 export declare function judgeTotals(now?: Date, record?: JudgeRecord): { current: JudgeMonth & { month: string }; previous: JudgeMonth & { month: string } }
-export declare function judgeLimit(): { on: boolean; usd: number }
+/** The limit he set, off where he never set one; `damaged` where the setting is there and cannot be read (`where`): then it is not known, and never taken for off. */
+export declare function judgeLimit(): { on: boolean; usd: number; damaged?: undefined } | { damaged: true; where: string }
 export declare function setJudgeLimit(limit: { on: boolean; usd: number }): void
 /** A limit in dollars with two places, or as many as it needs. */
 export declare function limitWords(usd: number): string
@@ -85,6 +90,8 @@ export interface JudgeResult {
   tokens_estimated?: true
   /** False where the call could not be written into the record; `note` says why. */
   recorded?: boolean
+  /** The call's line is kept beside the record, a part of which (this path) cannot be read: it is counted once that is mended or moved away. */
+  record_pending?: string
 }
 export declare function runJudge(request: JudgeRequest): Promise<JudgeResult>
 export declare function judgeLines(result: JudgeResult, questions: JudgeQuestions): string[]

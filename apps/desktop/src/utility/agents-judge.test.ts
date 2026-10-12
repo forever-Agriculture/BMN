@@ -129,6 +129,10 @@ function everyFile(folder: string): Array<{ path: string; text: string }> {
   })
 }
 
+const THIS_MONTH = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`
+/** One call's line as BMN writes it beside the record: a dear one, so that it shows in the sums and against a limit. */
+const waitingLine = (id: string): Record<string, unknown> =>
+  ({ id, at: new Date().toISOString(), by: { kind: 'shell' }, purpose: 'dear', agent: 'jev', model: 'jev-1.13', requests: 1, input_tokens: 1_000_000, cost_usd: 0.042, took_ms: 9, outcome: 'answered' })
 /** What one request is counted as where the gateway gave no count for it: the bytes BMN sent and a little. */
 const estimated = (body: string | undefined): number => Buffer.byteLength(body ?? '') + 256
 const waitingFolder = (): string => join(judgeDirectory(), 'waiting')
@@ -351,21 +355,44 @@ describe('nothing is sent unless every check passes (65.2 AC2)', () => {
     expect(requests).toHaveLength(0)
   })
 
-  it('a record that is there and cannot be read: nothing is asked, with the limit on or off, and the file is left as it is', async () => {
+  it('a kept record that is there and is not whole: nothing is asked, with the limit on or off, no number is read as zero and the file is left as it is', async () => {
     signIn()
     approve(teamWithJudge())
     mkdirSync(dirname(judgeRecordPath()), { recursive: true })
-    for (const damaged of ['{"version":1,"calls":"all of them"', '{"version":1,"calls":"all of them","months":{}}', '{"version":2,"calls":[],"months":{}}', '']) {
-      writeFileSync(judgeRecordPath(), damaged)
+    const sums = { calls: 1, requests: 1, input_tokens: 2000, cost_usd: 0.5 }
+    const monthOf = (entry: unknown): string => JSON.stringify({ version: 1, calls: [], months: { [THIS_MONTH]: entry } })
+    const callOf = (extra: Record<string, unknown>): string => JSON.stringify({ version: 1, months: {}, calls: [{ ...waitingLine('aaaaaaaa-0000-4000-8000-000000000009'), ...extra }] })
+    const whole = { ...sums, refused: 0, purposes: { brain: sums } }
+    const damaged: Record<string, string> = {
+      'a sum that is text, in a file that is JSON of the right outer shape': monthOf({ ...whole, cost_usd: 'damaged' }),
+      'cut short': '{"version":1,"calls":"all of them"', 'calls no list': '{"version":1,"calls":"all of them","months":{}}', 'another version': '{"version":2,"calls":[],"months":{}}', empty: '',
+      'months no map': '{"version":1,"calls":[],"months":[]}', 'a month that is no month': JSON.stringify({ version: 1, calls: [], months: { '2026-13': whole } }),
+      'a month that is no entry': monthOf('damaged'), 'a sum left out': monthOf({ ...whole, cost_usd: undefined }),
+      'a negative sum': monthOf({ ...whole, cost_usd: -1 }), 'a count with a fraction': monthOf({ ...whole, calls: 1.5 }), 'a count past exact numbers': monthOf({ ...whole, input_tokens: 2 ** 60 }),
+      'refused left out': monthOf({ ...whole, refused: undefined }), 'estimated that is no count': monthOf({ ...whole, estimated: -1 }), 'purposes left out': monthOf({ ...whole, purposes: undefined }),
+      'a purpose that is no word': monthOf({ ...whole, purposes: { 'Not A Word': sums } }), 'a purpose with a sum that is text': monthOf({ ...whole, purposes: { brain: { ...sums, input_tokens: '2000' } } }),
+      'a call with no outcome': callOf({ outcome: undefined }), 'a call with an outcome BMN does not write': callOf({ outcome: 'free' }), 'a call with tokens that are text': callOf({ input_tokens: '10' }),
+      'a call that made no request and has a cost': callOf({ requests: 0 }), 'a call with a name that is none': callOf({ id: 'not-an-id' }), 'a call with no time': callOf({ at: 'yesterday' }),
+      'taken that is no list': '{"version":1,"calls":[],"months":{},"taken":"all"}', 'taken with a name that is none': '{"version":1,"calls":[],"months":{},"taken":["not-an-id"]}'
+    }
+    for (const [what, text] of Object.entries(damaged)) {
+      writeFileSync(judgeRecordPath(), text)
       for (const on of [false, true]) {
         setJudgeLimit({ on, usd: 5 })
         const result = await refusal()
-        expect(result).toMatchObject({ code: 'RECORD_UNREADABLE', message: expect.stringContaining(judgeRecordPath()), next: expect.stringContaining('moves the file away'), recorded: false })
+        expect(result, what).toMatchObject({ code: 'RECORD_UNREADABLE', message: expect.stringContaining(`(${judgeRecordPath()})`), next: expect.stringContaining('moves it away'), recorded: false })
         expect(result.note).toContain('BMN could not write this call into its record')
       }
-      expect(readJudgeRecord()).toMatchObject({ damaged: true, calls: [] })
-      expect(readFileSync(judgeRecordPath(), 'utf8')).toBe(damaged)
+      expect(readJudgeRecord(), what).toEqual({ damaged: true, where: judgeRecordPath(), calls: [], months: {}, taken: [] })
+      // The sums of such a record are not known: no reader is handed a zero.
+      expect(() => judgeTotals(), what).toThrow(/cannot be read/)
+      expect(readFileSync(judgeRecordPath(), 'utf8'), what).toBe(text)
     }
+    // A refusal that comes before the record is looked at keeps its own code, and leaves the file alone as well.
+    const earlier = await refusal({ model: 'jev-1.13-free' })
+    expect(earlier).toMatchObject({ code: 'FREE_MODEL', recorded: false })
+    const last = Object.values(damaged).at(-1)
+    expect(readFileSync(judgeRecordPath(), 'utf8')).toBe(last)
     const told = await runCli(['judge', 'ask', ...files(), '--data', 'public'])
     expect(told).toMatchObject({ code: EXIT.refusal, stdout: '' })
     expect(told.stderr).toMatch(/^bmn: RECORD_UNREADABLE: .*\n {2}next: .*\nbmn: BMN could not write this call into its record/)
@@ -375,6 +402,111 @@ describe('nothing is sent unless every check passes (65.2 AC2)', () => {
     rmSync(judgeRecordPath())
     expect(await ask()).toMatchObject({ ok: true, recorded: true })
     expect(readJudgeRecord().calls).toHaveLength(1)
+    // The record BMN wrote first, with no names of lines, none taken in and no count of estimates, is a whole record still.
+    writeFileSync(judgeRecordPath(), JSON.stringify({ version: 1, months: { [THIS_MONTH]: whole }, calls: [{ ...waitingLine('x'), id: undefined }] }))
+    expect(readJudgeRecord()).toMatchObject({ calls: [{ purpose: 'dear' }], months: { [THIS_MONTH]: { ...whole, estimated: 0 } }, taken: [] })
+    expect(readJudgeRecord().damaged).toBeUndefined()
+    expect(await ask()).toMatchObject({ ok: true, recorded: true })
+    expect(judgeTotals().current).toMatchObject({ calls: 2, input_tokens: 4000 })
+  })
+
+  it('a waiting line or its folder that cannot be read whole: the call it holds is not dropped from the sums, nothing is asked, and it is neither taken in nor removed', async () => {
+    signIn()
+    approve(teamWithJudge())
+    const id = 'aaaaaaaa-0000-4000-8000-000000000001'
+    const file = join(waitingFolder(), `${id}.json`)
+    mkdirSync(waitingFolder(), { recursive: true })
+    const whole = JSON.stringify({ version: 1, line: waitingLine(id) })
+    writeFileSync(file, whole)
+    // Whole, it is counted, and with a limit under its cost nothing more is asked.
+    // Whole, it is counted: with a limit under its cost the month has reached it.
+    expect(judgeTotals().current).toMatchObject({ calls: 1, cost_usd: 0.042 })
+    const lineOf = (extra: Record<string, unknown>): string => JSON.stringify({ version: 1, line: { ...waitingLine(id), ...extra } })
+    const damaged: Record<string, string> = {
+      'cut short': whole.slice(0, 40), 'another version': JSON.stringify({ version: 2, line: waitingLine(id) }), 'no line': '{"version":1}', 'a cost left out': lineOf({ cost_usd: undefined }),
+      'a cost that is text': lineOf({ cost_usd: '0.042' }), 'tokens with a fraction': lineOf({ input_tokens: 1.5 }), 'no request and a cost': lineOf({ requests: 0 }),
+      'a name that is not the file\'s': lineOf({ id: 'bbbbbbbb-0000-4000-8000-000000000002' }), 'a purpose that is no word': lineOf({ purpose: 'Not A Word' }), 'an outcome BMN does not write': lineOf({ outcome: 'free' })
+    }
+    for (const [what, text] of Object.entries(damaged)) {
+      writeFileSync(file, text)
+      for (const on of [true, false]) {
+        setJudgeLimit({ on, usd: 0.04 })
+        expect(await refusal(), what).toMatchObject({ code: 'RECORD_UNREADABLE', message: expect.stringContaining(`(${file})`), recorded: false })
+      }
+      expect(readJudgeRecord(), what).toMatchObject({ damaged: true, where: file })
+      expect(readFileSync(file, 'utf8'), what).toBe(text)
+    }
+    // A file of that name that cannot be opened, and a folder that cannot be listed.
+    writeFileSync(file, whole)
+    chmodSync(file, 0o000)
+    try {
+      expect(await refusal()).toMatchObject({ code: 'RECORD_UNREADABLE', message: expect.stringContaining(`(${file})`) })
+    } finally {
+      chmodSync(file, 0o600)
+    }
+    chmodSync(waitingFolder(), 0o000)
+    try {
+      expect(await refusal()).toMatchObject({ code: 'RECORD_UNREADABLE', message: expect.stringContaining(`(${waitingFolder()})`), recorded: false })
+      expect(readJudgeRecord()).toMatchObject({ damaged: true, where: waitingFolder() })
+    } finally {
+      chmodSync(waitingFolder(), 0o700)
+    }
+    expect(readFileSync(file, 'utf8')).toBe(whole)
+    expect(existsSync(judgeRecordPath())).toBe(false)
+    // Whole again, the line counts again; the file of a write under way is no line and stops nothing.
+    writeFileSync(join(waitingFolder(), `${id}.json.tmp-123-456`), '{"version":1,"li')
+    expect(judgeTotals().current).toMatchObject({ calls: 1, cost_usd: 0.042 })
+    setJudgeLimit({ on: false, usd: 0.04 })
+    expect(await ask()).toMatchObject({ ok: true, recorded: true })
+    expect(waitingFiles()).toEqual([`${id}.json.tmp-123-456`])
+    expect(judgeTotals().current).toMatchObject({ calls: 2, input_tokens: 1_002_000 })
+    // A file of a line's name is read whole before BMN looks whether the kept file holds that line already: damaged, it is never passed over as "taken in".
+    writeFileSync(file, whole.slice(0, 40))
+    expect(readJudgeRecord()).toMatchObject({ damaged: true, where: file })
+    requests = []
+    expect(await refusal()).toMatchObject({ code: 'RECORD_UNREADABLE' })
+  })
+
+  it('a limit\'s setting that is there and cannot be read is never taken for "off": nothing is asked until he sets it again', async () => {
+    signIn()
+    approve(teamWithJudge())
+    const settings = join(judgeDirectory(), 'settings.json')
+    // Never set is off, and a setting BMN wrote is read as it stands.
+    expect(judgeLimit()).toEqual({ on: false, usd: 1 })
+    setJudgeLimit({ on: false, usd: 2 })
+    expect(judgeLimit()).toEqual({ on: false, usd: 2 })
+    expect(await ask()).toMatchObject({ ok: true })
+    requests = []
+    const damaged: Record<string, string> = {
+      'cut short': '{"version":1,"limit":{"on":tr', 'another version': '{"version":2,"limit":{"on":true,"usd":1}}', 'no limit': '{"version":1}', 'a switch that is text': '{"version":1,"limit":{"on":"yes","usd":1}}',
+      'no amount': '{"version":1,"limit":{"on":true}}', 'an amount of nothing': '{"version":1,"limit":{"on":true,"usd":0}}', 'an amount past the most': '{"version":1,"limit":{"on":true,"usd":20000}}',
+      'an amount that is text': '{"version":1,"limit":{"on":true,"usd":"1"}}', empty: ''
+    }
+    for (const [what, text] of Object.entries(damaged)) {
+      writeFileSync(settings, text)
+      expect(judgeLimit(), what).toEqual({ damaged: true, where: settings })
+      const result = await refusal()
+      // The calls themselves can be read, so the refusal is counted like any other.
+      expect(result, what).toMatchObject({ code: 'LIMIT_UNREADABLE', message: expect.stringContaining(`(${settings})`), next: expect.stringContaining('sets the monthly limit again'), recorded: true })
+      expect(readFileSync(settings, 'utf8'), what).toBe(text)
+    }
+    writeFileSync(settings, '{"version":1,"limit":{"on":true,"usd":1}}')
+    chmodSync(settings, 0o000)
+    try {
+      expect(judgeLimit()).toEqual({ damaged: true, where: settings })
+      expect(await refusal()).toMatchObject({ code: 'LIMIT_UNREADABLE' })
+    } finally {
+      chmodSync(settings, 0o600)
+    }
+    const told = await runCli(['judge', 'ask', ...files(), '--data', 'public'])
+    expect(told.code).toBe(EXIT.ok)
+    writeFileSync(settings, '{"version":1,"limit":{"on":"yes","usd":1}}')
+    const refusedCli = await runCli(['judge', 'ask', ...files(), '--data', 'public'])
+    expect(refusedCli).toMatchObject({ code: EXIT.refusal, stdout: '' })
+    expect(refusedCli.stderr).toMatch(/^bmn: LIMIT_UNREADABLE: .*\n {2}next: /)
+    // His own setting writes the file anew, and asking goes on.
+    setJudgeLimit({ on: false, usd: 1 })
+    expect(await ask()).toMatchObject({ ok: true })
   })
 
   it('no key in OpenCode\'s sign-in file', async () => {
@@ -931,6 +1063,84 @@ describe('every call is counted in a bounded private record (65.2 AC7)', () => {
       chmodSync(judgeDirectory(), 0o700)
     }
   }, 60_000)
+
+  it('a record that stops being readable while a call is out: the call keeps its own line beside it, says so, and is counted once when the record is mended', async () => {
+    expect(await ask({ purpose: 'before' })).toMatchObject({ ok: true })
+    const good = readFileSync(judgeRecordPath(), 'utf8')
+    // The kept file is damaged between the call's checks and its answer: the stand-in does it before it answers.
+    respond = (request, response) => {
+      writeFileSync(judgeRecordPath(), '{"version":1,"calls":')
+      ok(answer())(request, response)
+    }
+    const result = await ask({ purpose: 'during' })
+    expect(result).toMatchObject({ ok: true, outcome: 'answered', recorded: true, record_pending: judgeRecordPath(), note: expect.stringContaining('BMN kept this call beside its record') })
+    expect(waitingFiles()).toHaveLength(1)
+    expect(readFileSync(judgeRecordPath(), 'utf8')).toBe('{"version":1,"calls":')
+    // From a shell the same is said on standard error, beside the answer (the file is whole when that call starts, and damaged again before its answer).
+    writeFileSync(judgeRecordPath(), good)
+    const told = await runCli(['judge', 'ask', ...files(), '--data', 'public', '--purpose', 'during'])
+    expect(told.code).toBe(EXIT.ok)
+    expect(told.stdout).toContain('claim: yes (noul 0.97)')
+    expect(told.stderr).toMatch(/^bmn: BMN kept this call beside its record, a part of which cannot be read \(.*calls\.json\): it is counted once that is mended or moved away\.\n$/)
+    expect(waitingFiles()).toHaveLength(2)
+    // Meanwhile nothing more is asked, and nothing is said to be zero.
+    respond = ok(answer())
+    const asked = requests.length
+    expect(await ask()).toMatchObject({ ok: false, outcome: 'refused', code: 'RECORD_UNREADABLE', recorded: false })
+    expect(requests).toHaveLength(asked)
+    expect(waitingFiles()).toHaveLength(2)
+    // He mends the file: every call is counted, and the next write takes the two waiting lines in once.
+    writeFileSync(judgeRecordPath(), good)
+    expect(judgeTotals().current).toMatchObject({ calls: 3, input_tokens: 6000, purposes: { before: { calls: 1 }, during: { calls: 2 } } })
+    expect(await ask({ purpose: 'after' })).toMatchObject({ ok: true, recorded: true })
+    expect(waitingFiles()).toEqual([])
+    expect(judgeTotals().current).toMatchObject({ calls: 4, input_tokens: 8000, purposes: { before: { calls: 1 }, during: { calls: 2 }, after: { calls: 1 } } })
+    expect((JSON.parse(readFileSync(judgeRecordPath(), 'utf8')) as { calls: unknown[] }).calls).toHaveLength(4)
+  })
+
+  it('the same while another process holds the record: the paid call\'s line is kept beside the damaged record all the same', async () => {
+    expect(await ask({ purpose: 'before' })).toMatchObject({ ok: true })
+    const holder = await holdRecord()
+    try {
+      respond = (request, response) => {
+        writeFileSync(judgeRecordPath(), '{"version":1,"calls":')
+        ok(answer())(request, response)
+      }
+      const result = await ask({ purpose: 'during' })
+      expect(result).toMatchObject({ ok: true, recorded: true, record_pending: judgeRecordPath() })
+      expect(waitingFiles()).toHaveLength(1)
+      expect(readFileSync(judgeRecordPath(), 'utf8')).toBe('{"version":1,"calls":')
+    } finally {
+      await holder.letGo()
+    }
+  }, 60_000)
+
+  it('a sum that would pass what a number holds exactly is never written or shown as a sum; a count of tokens no call can hold is no count', async () => {
+    // The gateway names a count far past any call: BMN counts the request by its size.
+    respond = ok(JSON.stringify({ answers: JSON.parse(answer()).answers, usage: { input_tokens: 5_000_000_000_000_000 } }))
+    const huge = await ask()
+    expect(huge).toMatchObject({ ok: true, tokens_estimated: true, input_tokens: estimated(requests[0]?.body), recorded: true })
+    // A month that already holds the most a count can: one more call cannot be added to it.
+    respond = ok(answer())
+    const full = { calls: 1, requests: 1, input_tokens: Number.MAX_SAFE_INTEGER - 10, cost_usd: 1 }
+    const text = JSON.stringify({ version: 1, calls: [], months: { [THIS_MONTH]: { ...full, refused: 0, purposes: { old: full } } } })
+    writeFileSync(judgeRecordPath(), text)
+    expect(judgeTotals().current).toMatchObject({ input_tokens: Number.MAX_SAFE_INTEGER - 10 })
+    const result = await ask()
+    expect(result).toMatchObject({ ok: true, recorded: true, record_pending: judgeRecordPath() })
+    expect(readFileSync(judgeRecordPath(), 'utf8')).toBe(text)
+    expect(waitingFiles()).toHaveLength(1)
+    expect(readJudgeRecord()).toMatchObject({ damaged: true, where: judgeRecordPath() })
+    const asked = requests.length
+    expect(await ask()).toMatchObject({ ok: false, outcome: 'refused', code: 'RECORD_UNREADABLE' })
+    expect(requests).toHaveLength(asked)
+  })
+
+  it('a purpose that is no word, handed in by a caller in this process, is counted under the common word', async () => {
+    expect(await ask({ purpose: 'Not A Word' })).toMatchObject({ ok: true, recorded: true })
+    expect(readJudgeRecord().calls[0]).toMatchObject({ purpose: 'unnamed' })
+    expect(readJudgeRecord().damaged).toBeUndefined()
+  })
 
   it('the limit holds across two processes', async () => {
     setJudgeLimit({ on: true, usd: 0.0001 })

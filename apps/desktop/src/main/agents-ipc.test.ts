@@ -1606,7 +1606,7 @@ describe('the judge on Team: BMN\'s proposal, its calls, the monthly limit and T
   it('Try it asks one statement by the command\'s own route and is counted like every call', async () => {
     await approveFile(teamWithJudge())
     const tried = await tryIt()
-    expect(tried.reply).toEqual({ outcome: 'answered', noul: 0.97, reading: 'yes', near: false, input_tokens: 400, cost_usd: 0.0000168, took_ms: expect.any(Number), counted: true, estimated: false })
+    expect(tried.reply).toEqual({ outcome: 'answered', noul: 0.97, reading: 'yes', near: false, input_tokens: 400, cost_usd: 0.0000168, took_ms: expect.any(Number), counted: 'yes', estimated: false })
     expect(requests).toHaveLength(1)
     expect(requests[0]).toMatchObject({ path: '/zen/v1/systemone', authorization: `Bearer ${PLANTED_KEY}` })
     expect(JSON.parse(requests[0]!.body)).toEqual({ model: 'jev-1.13', state: 'All 12 tests passed.', questions: { statement: { type: 'noul', instructions: 'The text says the tests passed.' } } })
@@ -1640,7 +1640,7 @@ describe('the judge on Team: BMN\'s proposal, its calls, the monthly limit and T
     respond = (response) => response.end(JSON.stringify({ answers: { statement: { type: 'noul', noul: 0.97 } } }))
     const guessed = await tryIt()
     const tokens = Buffer.byteLength(requests[0]!.body) + 256
-    expect(guessed.reply).toMatchObject({ outcome: 'answered', counted: true, estimated: true, input_tokens: tokens, cost_usd: expect.closeTo((tokens * 0.042) / 1e6, 12) })
+    expect(guessed.reply).toMatchObject({ outcome: 'answered', counted: 'yes', estimated: true, input_tokens: tokens, cost_usd: expect.closeTo((tokens * 0.042) / 1e6, 12) })
     expect(guessed.view.current).toMatchObject({ calls: 1, input_tokens: tokens, estimated: 1 })
     expect(guessed.view.unreadable).toBeUndefined()
     // The record's folder cannot be written: the answer still comes, and nothing says it was counted.
@@ -1648,7 +1648,7 @@ describe('the judge on Team: BMN\'s proposal, its calls, the monthly limit and T
     chmodSync(folder, 0o500)
     try {
       const lost = await tryIt()
-      expect(lost.reply).toMatchObject({ outcome: 'answered', noul: 0.97, counted: false })
+      expect(lost.reply).toMatchObject({ outcome: 'answered', noul: 0.97, counted: 'no' })
       expect(lost.view.current).toMatchObject({ calls: 1 })
     } finally {
       chmodSync(folder, 0o700)
@@ -1659,9 +1659,39 @@ describe('the judge on Team: BMN\'s proposal, its calls, the monthly limit and T
     const view = await load()
     expect(view).toMatchObject({ unreadable: '~/.config/bmn/agents/state/judge/calls.json', reached: false, calls: [], current: { calls: 0 } })
     const refused = await tryIt()
-    expect(refused.reply).toMatchObject({ outcome: 'refused', code: 'RECORD_UNREADABLE', next: expect.stringContaining('moves the file away') })
+    expect(refused.reply).toMatchObject({ outcome: 'refused', code: 'RECORD_UNREADABLE', message: expect.stringContaining('calls.json'), next: expect.stringContaining('moves it away') })
     expect(requests).toHaveLength(before)
     expect(readFileSync(join(folder, 'calls.json'), 'utf8')).toBe('{"version":1,"calls":')
+    // A waiting line that is cut short is named by its own path.
+    rmSync(join(folder, 'calls.json'))
+    mkdirSync(join(folder, 'waiting'), { recursive: true })
+    writeFileSync(join(folder, 'waiting/aaaaaaaa-0000-4000-8000-000000000001.json'), '{"version":1,"li')
+    expect(await load()).toMatchObject({ unreadable: '~/.config/bmn/agents/state/judge/waiting/aaaaaaaa-0000-4000-8000-000000000001.json', calls: [], reached: false })
+    expect((await tryIt()).reply).toMatchObject({ outcome: 'refused', code: 'RECORD_UNREADABLE' })
+    rmSync(join(folder, 'waiting'), { recursive: true })
+    // The record stops being readable while Try it's call is out: the answer comes, and it is said to wait beside the record.
+    respond = (response) => {
+      writeFileSync(join(folder, 'calls.json'), '{"version":1,"calls":')
+      response.end(answer(0.97))
+    }
+    const waits = await tryIt()
+    expect(waits.reply).toMatchObject({ outcome: 'answered', counted: 'waiting' })
+    expect(waits.view.unreadable).toBe('~/.config/bmn/agents/state/judge/calls.json')
+    rmSync(join(folder, 'calls.json'))
+    respond = (response) => response.end(answer(0.97))
+    expect((await load()).current).toMatchObject({ calls: 1 })
+    // The limit's own setting cannot be read: the sums still show, the limit is not said to be off by his choice, and nothing is asked until he sets it.
+    writeFileSync(join(folder, 'settings.json'), '{"version":1,"limit":{"on":"yes","usd":1}}')
+    const unset = await load()
+    expect(unset).toMatchObject({ limitUnreadable: '~/.config/bmn/agents/state/judge/settings.json', reached: false, current: { calls: 1 } })
+    expect(unset.unreadable).toBeUndefined()
+    const asked = requests.length
+    expect((await tryIt()).reply).toMatchObject({ outcome: 'refused', code: 'LIMIT_UNREADABLE', message: expect.stringContaining('settings.json') })
+    expect(requests).toHaveLength(asked)
+    expect(readFileSync(join(folder, 'settings.json'), 'utf8')).toBe('{"version":1,"limit":{"on":"yes","usd":1}}')
+    const set = await call<JudgeView>('judge:limit', { on: false, usd: 1 })
+    expect(set.limitUnreadable).toBeUndefined()
+    expect((await tryIt()).reply).toMatchObject({ outcome: 'answered', counted: 'yes' })
   })
 
   it('a failed request, a late answer and a wrong shape read no answer, in BMN\'s own words', async () => {

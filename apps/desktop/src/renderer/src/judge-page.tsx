@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import {
   JUDGE_TRY_STATEMENT_MAX, JUDGE_TRY_TEXT_MAX,
-  type JudgeCallView, type JudgeMonthView, type JudgeTotalsView, type JudgeTryReply, type JudgeView, type RosterAgentShape, type RosterPrivateWork
+  type JudgeCallView, type JudgeMonthView, type JudgeTotalsView, type JudgeTryCount, type JudgeTryReply, type JudgeView, type RosterAgentShape, type RosterPrivateWork
 } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { Segmented } from './history-preferences'
@@ -68,7 +68,8 @@ const OWN_NEXT: Readonly<Record<string, string>> = {
   LIMIT_REACHED: 'Raise the monthly limit above or switch it off; otherwise ask again next month.',
   PRIVATE_NOT_ALLOWED: 'Choose Public if the text is public, or allow private work for both providers above and approve the team.',
   NO_PRICE: "Record the model's price for it in the team file and approve the team.",
-  RECORD_UNREADABLE: 'Move the file away, and BMN starts a new record. Nothing is asked meanwhile.',
+  RECORD_UNREADABLE: 'Mend what the message names or move it away, and BMN counts again. Nothing is asked meanwhile.',
+  LIMIT_UNREADABLE: 'Set the monthly limit again above: switch it on, or press Keep it off.',
   NO_KEY: "Sign in to OpenCode on this computer (opencode auth login). BMN reads the key from OpenCode's own sign-in file and keeps none."
 }
 
@@ -182,6 +183,11 @@ export function dollarsOf(text: string): number | null {
   return /^\d{1,5}(\.\d{1,4})?$/.test(digits) && Number(digits) > 0 ? Number(digits) : null
 }
 
+/** The limit's setting cannot be read: whether a limit holds is not known, and only his own setting writes it anew. */
+function LimitUnreadable(props: { path: string; name: string }): React.JSX.Element {
+  return <>BMN cannot read the limit you set at <span className="mono">{props.path}</span>, so it asks {props.name} nothing. Set it again: switch it on, or press Keep it off.</>
+}
+
 /** The limit reached, said at the top of the page with the way out. */
 export function LimitReached(props: { view: JudgeView; name: string; raise(): void }): React.JSX.Element | null {
   const { view } = props
@@ -239,7 +245,7 @@ export function JudgeGroups(props: {
         <>
           {view.unreadable !== undefined ? (
             <p className="preferences-error" role="alert">
-              BMN cannot read its record of {agent.name}'s calls at <span className="mono">{view.unreadable}</span>, so it does not know what this month cost and asks nothing. Move the file away, and BMN starts a new record.
+              BMN cannot read its record of {agent.name}'s calls at <span className="mono">{view.unreadable}</span>, so it does not know what this month cost and asks nothing. Mend it or move it away, and BMN counts again.
             </p>
           ) : basis === null ? <p className="preferences-help">No calls yet. The first one you ask under Try it is counted here.</p> : (
             <table className="cost-table" aria-labelledby={costId}>
@@ -255,7 +261,8 @@ export function JudgeGroups(props: {
           {estimated ? <p className="preferences-help">{estimated}</p> : null}
           {refused > 0 ? <p className="preferences-help">Refused and not charged: {view.current.refused} this month, {view.previous.refused} last month.</p> : null}
           <div ref={props.limitRow}>
-            <Row label="Monthly limit" id={limitId} hint={view.unreadable !== undefined ? 'What this month cost is not known.'
+            <Row label="Monthly limit" id={limitId} hint={view.limitUnreadable !== undefined ? <LimitUnreadable path={view.limitUnreadable} name={agent.name} />
+              : view.unreadable !== undefined ? 'What this month cost is not known.'
               : !view.limit.on ? 'Off: there is no limit.'
               : view.reached ? 'Reached: asking is stopped until next month or a higher limit.'
               : `${usd(view.current.cost_usd, 4)} of ${limitUsd(view.limit.usd)} used this month.`}>
@@ -264,6 +271,7 @@ export function JudgeGroups(props: {
                 <span className="faint">$</span>
                 <DollarField label="Monthly limit in dollars" value={view.limit.usd} onChange={(usdLimit) => { if (usdLimit !== view.limit.usd) props.state.setLimit({ ...view.limit, usd: usdLimit }) }} />
                 <span className="faint">a month</span>
+                {view.limitUnreadable !== undefined ? <button type="button" className="small" onClick={() => props.state.setLimit({ ...view.limit, on: false })}>Keep it off</button> : null}
               </div>
             </Row>
           </div>
@@ -273,7 +281,7 @@ export function JudgeGroups(props: {
       <h4 className="group-head">Try it <span className="caption">goes by the same route and is counted like every call</span></h4>
       <TryIt name={agent.name} parties={parties} ask={props.state.ask} />
 
-      {view === null ? null : (
+      {view === null || view.unreadable !== undefined ? null : (
         <>
           <h4 className="group-head" id={callsId}>Last calls <span className="caption">the newest 20</span></h4>
           {view.calls.length === 0 ? <p className="preferences-help">No calls yet.</p> : (
@@ -342,10 +350,16 @@ function TryIt(props: { name: string; parties: CalledParties; ask: JudgeState['a
   )
 }
 
+const TRY_COUNTED: Readonly<Record<JudgeTryCount['counted'], string>> = {
+  yes: 'Counted in the calls below.',
+  waiting: 'Kept beside the record, which cannot be read just now: it is counted once that is mended.',
+  no: 'Not counted: BMN could not write this call into its record.'
+}
+
 /** What an answered Try it cost and whether it is in the record: an estimate is called one, and a call BMN could not write down is never said to be counted. */
 export function tryFacts(reply: Extract<JudgeTryReply, { outcome: 'answered' }>): string {
   const tokens = reply.estimated ? `About ${thousands(reply.input_tokens)} tokens in (an estimate: the gateway gave no count)` : `${thousands(reply.input_tokens)} tokens in`
-  return `${tokens}, ${usd(reply.cost_usd, 6)}, ${seconds(reply.took_ms)}. ${reply.counted ? 'Counted in the calls below.' : 'Not counted: BMN could not write this call into its record.'}`
+  return `${tokens}, ${usd(reply.cost_usd, 6)}, ${seconds(reply.took_ms)}. ${TRY_COUNTED[reply.counted]}`
 }
 
 /** What Try it got back, in words: the number and BMN's reading, the command's own refusal, or why there is no answer. */

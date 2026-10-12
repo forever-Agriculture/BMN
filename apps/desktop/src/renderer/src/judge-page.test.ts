@@ -336,7 +336,17 @@ describe('what Jev\'s calls cost (65.3 AC1)', () => {
     const some = words(groups({ ...VIEW, current: { ...VIEW.current, estimated: 1 }, previous: { ...VIEW.previous, estimated: 4 } }))
     expect(some).toContain('The gateway gave no count of tokens for 1 call this month and 4 last month. BMN counted those by the size of what it sent, so their cost is an estimate.')
     const unreadable = words(groups({ ...VIEW, current: { ...VIEW.previous, month: '2026-10' }, calls: [], unreadable: '~/.config/bmn/agents/state/judge/calls.json' }))
-    expect(unreadable).toContain("BMN cannot read its record of Jev's calls at ~/.config/bmn/agents/state/judge/calls.json , so it does not know what this month cost and asks nothing. Move the file away, and BMN starts a new record.")
+    expect(unreadable).toContain("BMN cannot read its record of Jev's calls at ~/.config/bmn/agents/state/judge/calls.json , so it does not know what this month cost and asks nothing. Mend it or move it away, and BMN counts again.")
+    // Neither sums nor calls are shown of a record that cannot be read: "no calls" would be a claim.
+    expect(unreadable).not.toContain('Last calls')
+    expect(unreadable).not.toContain('No calls yet')
+    // A limit's setting that cannot be read: the sums still show, the limit is said to be unknown, and only his own setting writes it anew.
+    const unset = words(groups({ ...VIEW, limit: { on: false, usd: 1 }, limitUnreadable: '~/.config/bmn/agents/state/judge/settings.json' }))
+    expect(unset).toContain('BMN cannot read the limit you set at ~/.config/bmn/agents/state/judge/settings.json , so it asks Jev nothing. Set it again: switch it on, or press Keep it off.')
+    expect(unset).toContain('Keep it off')
+    expect(unset).toContain('dev-auto 9 3 735 $0.000157')
+    expect(unset).not.toContain('Off: there is no limit.')
+    expect(text).not.toContain('Keep it off')
     // The limit's row claims no amount it cannot know.
     expect(unreadable).toContain('What this month cost is not known.')
     expect(unreadable).not.toContain('used this month')
@@ -354,8 +364,8 @@ describe('what Jev\'s calls cost (65.3 AC1)', () => {
 
 describe('Try it (65.3 AC2)', () => {
   const reply = (value: JudgeTryReply): string => words(renderToStaticMarkup(createElement(TryAnswer, { reply: value })))
-  const answered = (noul: number, near = false, count: { counted?: boolean; estimated?: boolean } = {}): Extract<JudgeTryReply, { outcome: 'answered' }> =>
-    ({ outcome: 'answered', noul, reading: noul >= 0.9 ? 'yes' : 'no answer', near, input_tokens: 415, cost_usd: 0.000017, took_ms: 812, counted: true, estimated: false, ...count })
+  const answered = (noul: number, near = false, count: { counted?: 'yes' | 'waiting' | 'no'; estimated?: boolean } = {}): Extract<JudgeTryReply, { outcome: 'answered' }> =>
+    ({ outcome: 'answered', noul, reading: noul >= 0.9 ? 'yes' : 'no answer', near, input_tokens: 415, cost_usd: 0.000017, took_ms: 812, counted: 'yes', estimated: false, ...count })
 
   it('shows Jev\'s number and BMN\'s reading', () => {
     expect(reply(answered(0.97))).toContain('0.97 Yes 0.97 is 0.90 or more, so BMN reads yes. It is advice, not proof. 415 tokens in, $0.000017, 0.8 seconds. Counted in the calls below.')
@@ -368,7 +378,10 @@ describe('Try it (65.3 AC2)', () => {
 
   it('says "counted" only of a call that is in the record, and calls an estimate an estimate (65.2 AC7)', () => {
     expect(tryFacts(answered(0.97))).toBe('415 tokens in, $0.000017, 0.8 seconds. Counted in the calls below.')
-    const lost = reply(answered(0.97, false, { counted: false }))
+    const waits = reply(answered(0.97, false, { counted: 'waiting' }))
+    expect(waits).toContain('0.8 seconds. Kept beside the record, which cannot be read just now: it is counted once that is mended.')
+    expect(waits).not.toContain('Counted in the calls below')
+    const lost = reply(answered(0.97, false, { counted: 'no' }))
     expect(lost).toContain('415 tokens in, $0.000017, 0.8 seconds. Not counted: BMN could not write this call into its record.')
     expect(lost).not.toContain('Counted in the calls below')
     expect(reply(answered(0.97, false, { estimated: true }))).toContain('About 415 tokens in (an estimate: the gateway gave no count), $0.000017, 0.8 seconds. Counted in the calls below.')
@@ -391,7 +404,8 @@ describe('Try it (65.3 AC2)', () => {
     expect(limit).toContain('Raise the monthly limit above or switch it off; otherwise ask again next month.')
     expect(limit).not.toContain('the owner')
     // The two refusals that keep an uncounted call from being made are his to mend, and are said to him.
-    expect(reply({ outcome: 'refused', code: 'RECORD_UNREADABLE', message: 'the record of the judge\'s calls is there and cannot be read', next: 'the owner moves the file away' })).toContain('Move the file away, and BMN starts a new record.')
+    expect(reply({ outcome: 'refused', code: 'RECORD_UNREADABLE', message: 'the record of the judge\'s calls is there and cannot be read', next: 'the owner moves the file away' })).toContain('Mend what the message names or move it away, and BMN counts again. Nothing is asked meanwhile.')
+    expect(reply({ outcome: 'refused', code: 'LIMIT_UNREADABLE', message: 'the setting of the monthly limit is there and cannot be read', next: 'the owner sets the monthly limit again' })).toContain('Set the monthly limit again above: switch it on, or press Keep it off.')
     expect(reply({ outcome: 'refused', code: 'NO_PRICE', message: 'the approved team records no price for Jev', next: 'the owner records the model\'s price' })).toContain("Record the model's price for it in the team file and approve the team.")
     // A code that is a word every object carries finds no words of the page's own.
     expect(reply({ outcome: 'refused', code: 'constructor', message: 'refused', next: 'the next step' })).toContain('Refused: refused the next step')
