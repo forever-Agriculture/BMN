@@ -12,6 +12,15 @@ export interface ArchivePurgeResult {
 
 const DAY_MS = 86_400_000
 
+/** The host's one log line for a purge: what was deleted, and how many files could not be removed. */
+export function archivePurgeMessage(
+  purged: Pick<ArchivePurgeResult, 'sessionIds' | 'workspaceIds'>,
+  files: { removed: number; failed: number }
+): string {
+  return `[BMN] deleted ${purged.sessionIds.length} archived session(s), ${purged.workspaceIds.length} archived workspace(s) ` +
+    `and ${files.removed} file(s)${files.failed > 0 ? `; ${files.failed} file(s) could not be removed` : ''}`
+}
+
 /** Rows that point at a session and go with it. Artifacts are handled apart: see expiredArtifacts. */
 const SESSION_CHILD_TABLES = [
   'input_draft',

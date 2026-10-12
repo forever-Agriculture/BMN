@@ -1,7 +1,7 @@
 // MODULE: database-archive-purge.test.ts - archive retention deletes only expired archives and leaves a readable layout
 import { createRequire } from 'node:module'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { purgeExpiredArchives } from './database-archive-purge'
+import { archivePurgeMessage, purgeExpiredArchives } from './database-archive-purge'
 import { getSettings, putSettingsSection } from './database-companion-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import { getLayout, listSessions, listWorkspaces, putLayout } from './database-workspace-store'
@@ -46,7 +46,7 @@ function handoff(
   draftId: string,
   sourceSessionId: string,
   destinationSessionId: string,
-  state: 'draft' | 'accepted' | 'uncertain' | 'discarded',
+  state: 'draft' | 'accepted' | 'submitted' | 'uncertain' | 'discarded',
   artifactIds: string[] = []
 ): void {
   database.prepare(
@@ -253,6 +253,41 @@ describe('archive retention', () => {
     expect(artifactSessions()).toEqual([])
   })
 
+  it.each(['draft', 'accepted', 'submitted', 'uncertain'] as const)(
+    'keeps the file of a kept %s handoff and drops the file of a discarded one',
+    (state) => {
+      retention(30)
+      session('source', DEFAULT_WORKSPACE_ID, daysAgo(31))
+      session('destination', DEFAULT_WORKSPACE_ID, null)
+      artifact('named', 'source')
+      artifact('dropped', 'source')
+      handoff('open', 'source', 'destination', state, ['named'])
+      handoff('closed', 'source', 'destination', 'discarded', ['dropped'])
+
+      expect(purgeExpiredArchives(database, now).originals).toEqual([{ artifactId: 'dropped', sha256: 'b'.repeat(64) }])
+      expect(artifactSessions()).toEqual([{ artifact_id: 'named', session_id: null }])
+    }
+  )
+
+  it('keeps a file named by two kept handoffs until the last of their sessions is deleted', () => {
+    retention(30)
+    session('source', DEFAULT_WORKSPACE_ID, daysAgo(31))
+    session('first', DEFAULT_WORKSPACE_ID, null)
+    session('second', DEFAULT_WORKSPACE_ID, null)
+    artifact('shared', 'source')
+    handoff('to-first', 'source', 'first', 'accepted', ['shared'])
+    handoff('to-second', 'source', 'second', 'draft', ['shared'])
+    expect(purgeExpiredArchives(database, now).originals).toEqual([])
+
+    database.prepare("UPDATE session SET archived_at = ? WHERE session_id = 'first'").run(daysAgo(31))
+    expect(purgeExpiredArchives(database, now)).toMatchObject({ sessionIds: ['first'], originals: [] })
+    expect(artifactSessions()).toEqual([{ artifact_id: 'shared', session_id: null }])
+
+    database.prepare("UPDATE session SET archived_at = ? WHERE session_id = 'second'").run(daysAgo(31))
+    expect(purgeExpiredArchives(database, now).originals).toEqual([{ artifactId: 'shared', sha256: 'b'.repeat(64) }])
+    expect(artifactSessions()).toEqual([])
+  })
+
   it('never deletes an unlinked file no deleted session refers to', () => {
     retention(30)
     session('expired', DEFAULT_WORKSPACE_ID, daysAgo(31))
@@ -317,6 +352,14 @@ describe('archive retention', () => {
     expect(result.layout.split.panes).toEqual([{ sessionId: 'kept', ratio: 1 }])
     expect(result.layout.sessionView).toEqual({ kept: { scrollLine: null, followTail: true } })
   })
+})
+
+it('logs how many files were removed and names failures only when there are some', () => {
+  const purged = { sessionIds: ['a', 'b'], workspaceIds: ['w'] }
+  expect(archivePurgeMessage(purged, { removed: 3, failed: 0 }))
+    .toBe('[BMN] deleted 2 archived session(s), 1 archived workspace(s) and 3 file(s)')
+  expect(archivePurgeMessage(purged, { removed: 1, failed: 2 }))
+    .toBe('[BMN] deleted 2 archived session(s), 1 archived workspace(s) and 1 file(s); 2 file(s) could not be removed')
 })
 
 it('cascades only expired workspace launch sets while preserving unrelated definitions', () => {

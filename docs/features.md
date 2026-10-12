@@ -94,8 +94,9 @@ use are never deleted. See [Agent history](agent-history.md).
 
 **Archive retention.** Preferences → History → Delete archived sessions and workspaces sets how long
 archived sessions and workspaces are kept: a number of days, or forever. The check runs when BMN
-starts. Deletion is permanent and takes the saved output, requests and Telegram history with it;
-published files are kept.
+starts. Deletion is permanent and takes the saved output, requests and Telegram history with it,
+and the session's files leave the disk too. One exception: a file that a handoff in a session you
+still keep names stays until that session is deleted.
 
 ## The terminal and panes
 
