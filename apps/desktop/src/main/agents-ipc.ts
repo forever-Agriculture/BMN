@@ -1254,7 +1254,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       // Said on the Team page; nothing to add here.
     }
     return {
-      questions: kept.map((entry) => questionView(entry, names)).reverse(),
+      // Newest first by when it was asked: the file keeps an ended question last, which is not the order to read them in.
+      questions: kept.map((entry) => questionView(entry, names)).reverse().sort((one, other) => (one.at < other.at ? 1 : one.at > other.at ? -1 : 0)),
       holder: held === null ? null : {
         kind: held.kind === 'question' || held.kind === 'lookup' ? held.kind : 'research',
         ...(typeof held.id === 'string' ? { id: held.id.slice(0, 64) } : {}), ...(typeof held.at === 'string' ? { at: held.at.slice(0, 32) } : {}),
@@ -1294,7 +1295,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     else if (research !== null) research.controller.abort()
     else {
       const held = researchLockHolder()
-      if (held !== null && held.kind === 'question' && held.pid !== process.pid && isQuestionCommand(held.pid, held.start)) {
+      if (held !== null && held.kind === 'question' && held.pid !== undefined && held.start !== undefined && held.pid !== process.pid && isQuestionCommand(held.pid, held.start)) {
         try {
           process.kill(held.pid, 'SIGINT')
         } catch {
@@ -1321,9 +1322,9 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     await options.openExternal(address)
     return { opened: true }
   })
-  handle('aiterm:questions:remove', (params) => {
+  handle('aiterm:questions:remove', async (params) => {
     if (params.id !== null && (typeof params.id !== 'string' || params.id.length > 64)) invalid('id must be a question id or null')
-    removeQuestions(params.id, context().now())
+    await removeQuestions(params.id, context().now())
     return questionsSnapshot()
   })
   return { contextAutoAtStart: () => auto.trigger() }

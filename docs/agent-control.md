@@ -1504,27 +1504,43 @@ A lone `-` (`… | bmn research ask -`) says "standard input" out loud and chang
   evidence. An answer that is not the asked shape comes back as "no usable answer" with the run's
   id; BMN never repairs one.
 - **The limits.** One research at a time, Models research included: a second one is refused
-  with "a research is running", never queued. One lock file holds this across the app and the
-  command line, and a lock left by a process that has ended is taken over. The lock names the
-  researcher app while it runs: where a command was killed outright and could end nothing
-  itself, whoever takes its lock over ends that app first, so it never runs on outside the lock
-  and the time limit. A question ends after 10 minutes with what it has. 20 questions may start
+  with "a research is running", never queued. One lock holds this across the app and the
+  command line. It is a row of small files, `research/lock.1`, `lock.2` and so on, and the one
+  with the highest number is the lock as it stands: a holder that is done writes "released" into
+  its own file, the next holder makes the file one number higher, and nobody ever removes the
+  highest one. So taking over from a process that has ended never removes a file another process
+  may just have made its own. A lock BMN cannot read counts as held. The researcher app never
+  runs as a child of BMN alone: BMN starts a small supervisor of its own
+  (`bin/agents-supervised.mjs`), writes the supervisor's process into the lock, and only then
+  lets it start the app. The supervisor ends the app and everything the app started when BMN's
+  process ends, however it ends, at the time limit, and on Stop; and the lock counts as held for
+  as long as BMN's process or that supervisor lives. A command that is killed outright therefore
+  leaves no researcher running, with nobody asking again, and nobody starts a second research
+  beside one that is still ending. The comparison a Codex researcher's first run waits for runs
+  the same way. A process the app starts that leaves the app's process group is outside this, as
+  it is outside Stop. A question ends after 10 minutes with what it has. 20 questions may start
   in one local day; a refused one does not count. The day's count is kept beside the list and
   apart from it, so a question that left the list (removed, or pushed out by newer records)
-  stays counted. The researcher runs at its lowest effort. Ctrl-C, or the end of its terminal,
-  ends the run. These limits bind this command and Models' own Ask only: the web search inside
-  your own Claude Code and Codex sessions is not touched.
+  stays counted; it belongs to its day, and a question that ends after midnight neither brings
+  the old day's count back nor takes from the new one. The researcher runs at its lowest effort.
+  Ctrl-C, or the end of its terminal, ends the run. These limits bind this command and Models'
+  own Ask only: the web search inside your own Claude Code and Codex sessions is not touched.
 - **What is kept.** One record per question in `~/.config/bmn/agents/state/research/questions.json`,
   the last 200: when, who asked (the BMN session and its app, the session's shell, or "from a
   shell"), the researcher, the exact question, the outcome, the claims with their marks and how
-  long it took. No key, and no page text beyond the quoted passages. A question whose process
-  ended before its record was written reads as interrupted. The file has one writer at a time
-  across the app and the command line: a writer's mark is its own for as long as its process
-  lives, a second writer waits up to five seconds and then gives up without writing (a question
-  whose record cannot be written is not asked: `RECORD_BUSY`), and a mark whose process has ended
-  is taken over at once. Beside the record, the run's folder under `research/runs/` holds BMN's
-  prompt with the question; a researcher's raw answer is never kept there, and the folder goes
-  when the question leaves the list.
+  long it took. No key, and no page text beyond the quoted passages. A question that is still
+  running is one of the 200 and is never pushed out; the oldest ended ones go first. A question
+  whose process ended before its record was written reads as interrupted. The file has one
+  writer at a time across the app and the command line (a lock of the same kind,
+  `questions.json.writing.<n>`): a second writer waits up to five seconds without holding up its
+  own process and then gives up without writing, and a question whose first record cannot be
+  written is not asked (`RECORD_BUSY`). A question's end waits for nobody: it is written whole
+  to a small file of its own under `research/question-ends/` before the caller hears of it, and
+  everything that reads the questions lays these ends over the file. The next change of the
+  file takes each end in, names it in the same write, and only then removes the end's file, so
+  an end is taken in exactly once, also when a process ends between the two. Beside the record,
+  the run's folder under `research/runs/` holds BMN's prompt with the question; a researcher's
+  raw answer is never kept there, and the folder goes when the question leaves the list.
 - **With BMN closed** the command works by itself. Exit 0 answered; 1 no usable answer, failed,
   stopped or out of time; 2 usage; 10 refused.
 - **Not here.** Research across many steps, pages behind a sign-in, attached files, a researcher

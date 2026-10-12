@@ -1,5 +1,4 @@
 // MODULE: agents-fence.mjs - Story 63.3: the fence test of a Codex research run: planted markers, a loopback stand-in for the provider, the very command a research run is, and the record the check reads
-import { spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -9,6 +8,7 @@ import { APP_NAMES, agentState, canonicalJson, sha256 } from './agents-roster.mj
 import { readApproved, stateDirectory } from './agents-state.mjs'
 import { CODEX_RESEARCH_HOME, CODEX_RESEARCH_TOOLS_SEEN, CODEX_SIGN_IN, fenceStanding, fenceTestsPath, harnessVersion, parseDispatch, researchFormHash, researchFormProblem } from './agents-check.mjs'
 import { researchArgv } from './agents-research.mjs'
+import { NOTHING_STARTED, startSupervised } from './agents-supervised.mjs'
 
 /**
  * The fence test shows, for exactly the installed Codex, that a research run sends its provider
@@ -403,26 +403,29 @@ function startStandIn() {
 // ---------------------------------------------------------------------------------------------
 // One run against the stand-in
 
-function runCommand(argv, run, limitMs, signal = undefined) {
+/**
+ * One run of the test, under a supervisor like every research run (agents-supervised.mjs): it ends
+ * with this process, at its time limit and on Stop. `register` writes the supervisor's process into
+ * the research lock where the run belongs to a research; a test by itself holds no lock.
+ */
+function runCommand(argv, run, limitMs, signal = undefined, register = undefined) {
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve({ code: null, error: 'stopped', stderr: '' })
     const input = openSync(run.prompt, 'r')
-    let child
+    let started
     try {
-      child = spawn(argv[0], argv.slice(1), { cwd: run.cwd, env: {}, stdio: [input, 'ignore', 'pipe'], detached: true })
-    } catch (error) {
+      started = startSupervised(argv, { cwd: run.cwd, stdio: [input, 'ignore', 'pipe'], deadline: Date.now() + limitMs, ...(register === undefined ? {} : { register }) })
+    } finally {
       closeSync(input)
-      return resolve({ code: null, error: error instanceof Error ? error.message : String(error), stderr: '' })
     }
-    closeSync(input)
+    const child = started.child
+    if (child === undefined) return resolve({ code: null, error: started.failed, stderr: '' })
     let stderr = ''
     child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-4000) })
+    let cut = false
     const end = () => {
-      try {
-        process.kill(-child.pid, 'SIGKILL')
-      } catch {
-        // Already gone.
-      }
+      cut = true
+      started.kill()
     }
     const limit = setTimeout(end, limitMs)
     signal?.addEventListener('abort', end, { once: true })
@@ -432,7 +435,11 @@ function runCommand(argv, run, limitMs, signal = undefined) {
       resolve(result)
     }
     child.on('error', (error) => settle({ code: null, error: error.message, stderr }))
-    child.on('close', (code, killed) => settle({ code, signal: killed, stderr }))
+    child.on('close', (code) => {
+      if (started.failed !== undefined) return settle({ code: null, error: started.failed, stderr })
+      // Ended by the limit or by Stop, here or by the supervisor's own clock: a run that did not end by itself has no code.
+      settle(cut || code === NOTHING_STARTED || code === 128 + 9 ? { code: null, signal: 'SIGKILL', stderr } : { code, signal: null, stderr })
+    })
   })
 }
 
@@ -467,7 +474,7 @@ function listed(names) {
  * stand-in calls every offered tool, three short runs that each try one tool no research run has,
  * and, with `renewal`, one more that starts from a sign-in grown old.
  */
-async function testModel({ agent, root, environment, argvOf, catalog, expected, renewal, limitMs, deadline, signal }) {
+async function testModel({ agent, root, environment, argvOf, catalog, expected, renewal, limitMs, deadline, signal, register }) {
   const started = Date.now()
   const standIn = await startStandIn()
   try {
@@ -514,7 +521,7 @@ async function testModel({ agent, root, environment, argvOf, catalog, expected, 
       }
       const base = argvOf(agent, { environment: fenced, run })
       const at = base.findIndex((item) => item.startsWith('PATH=')) + 1
-      const exit = await runCommand(extra.length === 0 ? base : [...base.slice(0, at), ...extra, ...base.slice(at)], run, left, signal)
+      const exit = await runCommand(extra.length === 0 ? base : [...base.slice(0, at), ...extra, ...base.slice(at)], run, left, signal, register)
       if (deadline !== undefined && Date.now() >= deadline) expired = true
       return { session, exit }
     }
@@ -666,7 +673,7 @@ const RENEWAL_WORDS = {
  */
 export async function runFenceTest({
   agents = undefined, environment = process.env, now = new Date(), catalog = null, expected = {}, entries = {}, renewal = catalog === null,
-  argvOf = undefined, record = true, limitMs = RUN_LIMIT_MS, deadline = undefined, signal = undefined
+  argvOf = undefined, record = true, limitMs = RUN_LIMIT_MS, deadline = undefined, signal = undefined, register = undefined
 } = {}) {
   const real = { HOME: environment.HOME ?? '', PATH: environment.PATH ?? '' }
   const version = harnessVersion('codex', real)
@@ -693,7 +700,7 @@ export async function runFenceTest({
   // Each model has a home folder and a stand-in of its own, so the models are tested side by side.
   const models = await Promise.all(tested.map((agent, index) => testModel({
     agent, root: join(fenceDirectory(), `${id}-${index}`), environment: real, argvOf: build, catalog,
-    expected: expected[agent.model], renewal: renewal && index === 0, limitMs, deadline, signal
+    expected: expected[agent.model], renewal: renewal && index === 0, limitMs, deadline, signal, register
   }).then((result) => ({ ...result, ...(entries[agent.model] === undefined ? {} : { catalog_entry: entries[agent.model] }) }),
     (error) => ({ model: agent.model, verdict: 'inconclusive', tools: [], reasons: [`the test could not run: ${error instanceof Error ? error.message : String(error)}`], seconds: 0 }))))
   if (signal?.aborted) return { ...base, form, verdict: 'inconclusive', stopped: true, seconds: Math.round((Date.now() - started) / 100) / 10, models: [], reasons: ['the test was stopped before it ended'] }
@@ -709,22 +716,13 @@ export async function runFenceTest({
 // ---------------------------------------------------------------------------------------------
 // The provider's own model list (63.3 AC6)
 
-function collect(argv, cwd, limitMs, signal = undefined) {
+function collect(argv, cwd, limitMs, signal = undefined, register = undefined) {
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve(null)
-    let child
-    try {
-      child = spawn(argv[0], argv.slice(1), { cwd, env: {}, stdio: ['ignore', 'ignore', 'ignore'], detached: true })
-    } catch {
-      return resolve(null)
-    }
-    const end = () => {
-      try {
-        process.kill(-child.pid, 'SIGKILL')
-      } catch {
-        // Already gone.
-      }
-    }
+    const started = startSupervised(argv, { cwd, stdio: ['ignore', 'ignore', 'ignore'], deadline: Date.now() + limitMs, ...(register === undefined ? {} : { register }) })
+    const child = started.child
+    if (child === undefined) return resolve(null)
+    const end = () => started.kill()
     const limit = setTimeout(end, limitMs)
     signal?.addEventListener('abort', end, { once: true })
     const settle = (code) => {
@@ -733,7 +731,7 @@ function collect(argv, cwd, limitMs, signal = undefined) {
       resolve(code)
     }
     child.on('error', () => settle(null))
-    child.on('close', (code) => settle(code))
+    child.on('close', (code) => settle(started.failed === undefined ? code : null))
   })
 }
 
@@ -744,14 +742,14 @@ function collect(argv, cwd, limitMs, signal = undefined) {
  * when Codex kept it as fetched: with no answer from the provider Codex falls back to the list it
  * was built with, which is not what this asks for.
  */
-export async function providerModelList({ environment = process.env, limitMs = 60_000, signal = undefined } = {}) {
+export async function providerModelList({ environment = process.env, limitMs = 60_000, signal = undefined, register = undefined } = {}) {
   const folder = join(fenceDirectory(), `list-${randomBytes(6).toString('hex')}`)
   const codex = join(folder, CODEX_RESEARCH_HOME)
   try {
     mkdirSync(join(folder, 'cwd'), { recursive: true, mode: 0o700 })
     mkdirSync(codex, { mode: 0o700 })
     symlinkSync(`${environment.HOME ?? ''}/.codex/${CODEX_SIGN_IN}`, join(codex, CODEX_SIGN_IN))
-    const code = await collect(['/usr/bin/env', '-i', `HOME=${environment.HOME ?? ''}`, `PATH=${environment.PATH ?? ''}`, `CODEX_HOME=${codex}`, 'codex', 'debug', 'models'], join(folder, 'cwd'), limitMs, signal)
+    const code = await collect(['/usr/bin/env', '-i', `HOME=${environment.HOME ?? ''}`, `PATH=${environment.PATH ?? ''}`, `CODEX_HOME=${codex}`, 'codex', 'debug', 'models'], join(folder, 'cwd'), limitMs, signal, register)
     if (code !== 0) return { ok: false, reason: 'Codex could not be asked for the provider\'s model list' }
     let kept
     try {
@@ -774,7 +772,7 @@ export async function providerModelList({ environment = process.env, limitMs = 6
  * passes under a list only where Codex was seen to use that list in the run. `signal` and `limitMs`
  * are the research's own Stop and what is left of its time.
  */
-export async function compareUnderProviderList({ agent, environment = process.env, now = new Date(), tests = undefined, modelList = providerModelList, test = runFenceTest, signal = undefined, limitMs = undefined } = {}) {
+export async function compareUnderProviderList({ agent, environment = process.env, now = new Date(), tests = undefined, modelList = providerModelList, test = runFenceTest, signal = undefined, limitMs = undefined, register = undefined } = {}) {
   const begun = Date.now()
   const real = { HOME: environment.HOME ?? '', PATH: environment.PATH ?? '' }
   const version = harnessVersion('codex', real)
@@ -788,7 +786,7 @@ export async function compareUnderProviderList({ agent, environment = process.en
   const late = { ok: false, stopped: true, reason: 'the time ran out before the tools were compared under the provider\'s own model list' }
   if (signal?.aborted) return stopped
   if (left() <= 0) return late
-  const list = await modelList({ environment, limitMs: Math.min(60_000, left()), ...(signal === undefined ? {} : { signal }) })
+  const list = await modelList({ environment, limitMs: Math.min(60_000, left()), ...(signal === undefined ? {} : { signal }), ...(register === undefined ? {} : { register }) })
   if (signal?.aborted) return stopped
   if (left() <= 0) return late
   if (!list.ok) return { ok: false, reason: `${list.reason}, so its tool list could not be compared with the tested one` }
@@ -797,7 +795,7 @@ export async function compareUnderProviderList({ agent, environment = process.en
   const hash = sha256(canonicalJson(entry)).slice(0, 16)
   if (standing.live !== null && standing.live.same && standing.live.entry === hash) return { ok: true, compared: false }
   const result = await test({ agents: [agent], environment, now, catalog: { models: list.models }, expected: { [agent.model]: standing.tools }, entries: { [agent.model]: hash }, renewal: false,
-    ...(deadline === undefined ? {} : { deadline }), ...(signal === undefined ? {} : { signal }) })
+    ...(deadline === undefined ? {} : { deadline }), ...(signal === undefined ? {} : { signal }), ...(register === undefined ? {} : { register }) })
   if (signal?.aborted || result.stopped === true) return stopped
   if (result.expired === true) return late
   if (result.verdict === 'pass') return { ok: true, compared: true }

@@ -1,9 +1,8 @@
 // MODULE: agents-research.mjs - Story 60.10, first release: BMN writes the research prompt, runs one checked run per provider, accepts only a typed answer, reads each cited page itself and keeps what was found; one lock holds a research across the app and the command line (64.1)
-import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { lookup as dnsLookup } from 'node:dns'
-import { closeSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { closeSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { basename, dirname } from 'node:path'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
 import { APP_NAMES, EFFORTS, RESEARCH_APPS, agentState, isCalled, namedResearchers, researcherProposal } from './agents-roster.mjs'
@@ -11,6 +10,9 @@ import { readApproved, stateDirectory } from './agents-state.mjs'
 import { CODEX_RESEARCH_ANSWER, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_HOME, RESEARCH_TOOLS, evaluateResearch, harnessVersion, prepareResearchRun, removeResearchCodexFolders, researchRunsDirectory } from './agents-check.mjs'
 import { contextItems, provenControls } from './agents-context.mjs'
 import { writePrivate } from './agents-rules.mjs'
+import { NOTHING_STARTED, processLives, processStart, startSupervised } from './agents-supervised.mjs'
+
+export { processStart }
 
 /**
  * Research asks one of the owner's agents for published facts about the team's models: the price
@@ -866,157 +868,183 @@ export function researchLockPath() {
   return `${researchDirectory()}/lock`
 }
 
-/** When a process started, in the kernel's own count, or null when there is no such process. A number that was given out again reads differently. */
-export function processStart(pid) {
+/**
+ * The lock at `path` is a row of files, `path.1`, `path.2` and so on, and the one with the highest
+ * number is the lock as it stands. Nobody ever removes that one: a holder that is done writes
+ * "released" into its own file, and the next holder makes the file one number higher. So no step
+ * of taking the lock removes a name another process may just have made its own, which is the one
+ * thing a lock kept in a single file cannot avoid when it takes over from a process that ended.
+ */
+
+/** A lock's numbers in its folder, lowest first. Throws when the folder is there and cannot be listed. */
+function lockGenerations(path) {
+  const prefix = `${basename(path)}.`
+  let names
   try {
-    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
-    // The program's name may hold spaces and brackets; the fields are counted after its closing one.
-    const start = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
-    return /^\d+$/.test(start ?? '') ? start : null
-  } catch {
-    return null
+    names = readdirSync(dirname(path))
+  } catch (error) {
+    if (error.code === 'ENOENT') return []
+    throw error
   }
+  // Whole decimal numbers only, written one way, and compared as numbers of any size.
+  return names.filter((name) => name.startsWith(prefix) && /^[1-9]\d*$/.test(name.slice(prefix.length))).map((name) => BigInt(name.slice(prefix.length)))
+    .sort((one, other) => (one < other ? -1 : one > other ? 1 : 0))
 }
 
-/** A lock as it lies on the disk: its text, and its record where the process that wrote it still runs. */
-function readLock(path = researchLockPath()) {
-  let text
-  try {
-    text = readFileSync(path, 'utf8')
-  } catch {
-    return { text: null, record: null }
+/** What a caller is told of a lock BMN could not read: held, by nobody it can name. */
+const UNREAD_HOLDER = Object.freeze({ version: 1, kind: 'research' })
+
+/**
+ * A lock as it stands: `top` is its highest number (0n when it was never taken), `text` what that
+ * file holds, and `record` the holder's record while it is held, else null. It is held while the
+ * process that took it lives, or a supervisor that process wrote into it (`apps`); it is free when
+ * the file says released, when both have ended, or when the file holds no record. A lock that
+ * cannot be read for a reason of the disk is nobody's to take: it reads as held (`unread`).
+ */
+function lockState(path) {
+  const unread = { top: null, text: null, record: UNREAD_HOLDER, unread: true }
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    let generations
+    try {
+      generations = lockGenerations(path)
+    } catch {
+      return unread
+    }
+    if (generations.length === 0) return { top: 0n, text: null, record: null }
+    const top = generations.at(-1)
+    let text
+    try {
+      text = readFileSync(`${path}.${top}`, 'utf8')
+    } catch (error) {
+      // Gone since it was listed: only a higher one's holder removes it, so the list is read again.
+      if (error.code === 'ENOENT') continue
+      return unread
+    }
+    let record = null
+    try {
+      const value = JSON.parse(text)
+      if (isObject(value) && value.released !== true && (processLives(value) || (Array.isArray(value.apps) && value.apps.some(processLives)))) record = value
+    } catch {
+      // A file that holds no record is nobody's lock.
+    }
+    return { top, text, record }
   }
-  try {
-    const record = JSON.parse(text)
-    if (isObject(record) && Number.isInteger(record.pid) && typeof record.start === 'string' && processStart(record.pid) === record.start) return { text, record }
-  } catch {
-    // A lock nobody can read is nobody's.
-  }
-  return { text, record: null }
+  return unread
 }
 
 /** Who holds the research lock now: the record its holder wrote, or null. A lock left by a process that has ended counts as none. */
 export function researchLockHolder() {
-  return readLock().record
+  return lockState(researchLockPath()).record
 }
-
-/**
- * Ends the researcher app a dead holder's lock still names (64.1 AC6, AC7): a command killed outright
- * could end nothing itself, and its app would run on outside the lock and the time limit. The app
- * was started as the head of a process group of its own, so the group goes. Only the very process
- * the lock named is ended: a process number given out again reads another start.
- */
-function endLeftApp(text) {
-  let app
-  try {
-    app = JSON.parse(text).app
-  } catch {
-    return
-  }
-  if (!isObject(app) || !Number.isInteger(app.pid) || app.pid <= 1 || typeof app.start !== 'string' || processStart(app.pid) !== app.start) return
-  for (const target of [-app.pid, app.pid]) {
-    try {
-      process.kill(target, 'SIGKILL')
-    } catch {
-      // Already gone, or not ours to end.
-    }
-  }
-}
-
-/** How long a take-over of a dead process's lock may stand before it is itself taken for dead. */
-const TAKEOVER_MS = 10_000
 
 /**
  * Takes the one research lock for this process, or says who holds it. `holder` is what the others
- * are told: the kind of research, who asked and its id. A lock left by a process that has ended is
- * taken over; two processes that find the same dead lock cannot both remove it, since removing goes
- * through a second, short-lived file only one of them can make.
+ * are told: the kind of research, who asked and its id.
  */
 export function takeResearchLock(holder) {
-  return takeLock(researchLockPath(), holder, { onDead: endLeftApp })
+  return takeLock(researchLockPath(), holder)
 }
 
 /**
- * Takes the lock file at `path` for this process, or says who holds it: `{ release, note }`, or
- * `{ held }` with the living holder's record. A lock is its holder's for as long as that process
- * lives, however long that is; only a lock whose process has ended is taken over, after `onDead`
- * was given its text. `note` adds fields to the holder's own record.
+ * Takes the lock at `path` for this process, or says who holds it: `{ release, note, app }`, or
+ * `{ held }` with the holder's record. A lock is its holder's for as long as that process lives,
+ * however long that is; only a free one is taken. `note` adds fields to the holder's own record,
+ * `app` writes a supervisor's process into it, and both throw when the record could not be
+ * written. `release` is final: nothing brings a released lock back. `seam` is called at each step,
+ * for tests that stop a taker there.
  */
-export function takeLock(path, holder, { onDead = () => {} } = {}) {
-  const own = { version: 1, ...holder, pid: process.pid, start: processStart(process.pid) ?? '0' }
+export function takeLock(path, holder, { seam = () => {} } = {}) {
+  const own = { version: 1, ...holder, pid: process.pid, start: processStart(process.pid) ?? '0', token: randomBytes(8).toString('hex') }
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-  const draft = `${path}.new-${process.pid}-${randomBytes(4).toString('hex')}`
-  writeFileSync(draft, `${JSON.stringify(own)}\n`, { mode: 0o600, flag: 'wx' })
+  let file = null
+  let released = false
+  // The holder's own record, replaced whole: a reader sees the old record or the new one.
+  const write = (record) => {
+    const next = `${path}.note-${process.pid}-${randomBytes(4).toString('hex')}`
+    writeFileSync(next, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: 'wx' })
+    try {
+      renameSync(next, file)
+    } catch (error) {
+      rmSync(next, { force: true })
+      throw error
+    }
+  }
   const mine = () => {
-    const now = readLock(path)
-    return now.record !== null && now.record.pid === own.pid && now.record.start === own.start && now.record.id === own.id
+    if (file === null || released) return false
+    try {
+      const now = JSON.parse(readFileSync(file, 'utf8'))
+      return isObject(now) && now.token === own.token && now.released !== true
+    } catch {
+      return false
+    }
   }
   const release = () => {
-    if (!mine()) return
+    if (released) return
+    const held = mine()
+    released = true
+    if (!held) return
     try {
-      unlinkSync(path)
+      write({ ...own, released: true })
     } catch {
-      // Already gone.
+      // The record could not be replaced: the lock is free when this process ends.
     }
   }
-  // The holder's own record with more in it, replaced whole: a reader sees the old record or the new one.
   const note = (fields) => {
-    if (!mine()) return
+    if (!mine()) throw new Error('the lock is no longer this process\'s own')
     Object.assign(own, fields)
-    const next = `${path}.note-${process.pid}-${randomBytes(4).toString('hex')}`
-    writeFileSync(next, `${JSON.stringify(own)}\n`, { mode: 0o600, flag: 'wx' })
-    renameSync(next, path)
+    write(own)
   }
+  const app = (identity) => note({ apps: [...(own.apps ?? []).filter(processLives), identity] })
+  const draft = `${path}.new-${process.pid}-${own.token}`
+  writeFileSync(draft, `${JSON.stringify(own)}\n`, { mode: 0o600, flag: 'wx' })
   try {
-    for (let attempt = 0; attempt < 4; attempt += 1) {
+    for (let attempt = 0; attempt < 16; attempt += 1) {
+      const state = lockState(path)
+      seam('read', state)
+      if (state.record !== null) return { held: state.record }
+      const number = state.top + 1n
+      const target = `${path}.${number}`
       try {
-        // A link appears whole or not at all, and never over a lock that is there.
-        linkSync(draft, path)
-        return { release, note }
+        // A link appears whole or not at all, and never over a file that is there.
+        linkSync(draft, target)
       } catch (error) {
-        if (error.code !== 'EEXIST') throw error
+        if (error.code === 'EEXIST') continue
+        throw error
       }
-      const found = readLock(path)
-      if (found.record !== null) return { held: found.record }
-      const guard = `${path}.takeover`
+      seam('made', number)
+      // The lock is this process's only as the highest number. A lower one is a number that was
+      // cleared away and made again by a taker that read the lock long ago: it holds nothing.
+      let after
       try {
-        closeSync(openSync(guard, 'wx', 0o600))
-      } catch {
-        try {
-          if (Date.now() - statSync(guard).mtimeMs > TAKEOVER_MS) unlinkSync(guard)
-        } catch {
-          // The other take-over just ended.
-        }
+        after = lockGenerations(path)
+      } catch (error) {
+        // Not known to be the highest: the file is given up as released, never removed, and nothing is held.
+        file = target
+        release()
+        throw error
+      }
+      if (after.at(-1) !== number) {
+        rmSync(target, { force: true })
         continue
       }
-      try {
-        const again = readLock(path)
-        // Only the very lock that was judged dead is removed: another process may have taken a new one meanwhile.
-        if (again.record === null && again.text === found.text && again.text !== null) {
-          onDead(again.text)
-          unlinkSync(path)
-        } else if (again.text === null && found.text === null) {
-          // Not a file at all: an empty folder of that name is nobody's lock and goes; anything else stays and is reported as held.
-          rmdirSync(path)
-        }
-      } catch {
-        // Gone already.
-      } finally {
+      file = target
+      seam('taken', number)
+      // Only what lies below the lock this process now holds is cleared away; what cannot be removed stays there and means nothing.
+      for (const generation of after) {
+        if (generation >= number) continue
         try {
-          unlinkSync(guard)
+          rmSync(`${path}.${generation}`, { force: true })
         } catch {
-          // Gone already.
+          // Left where it is.
         }
       }
+      seam('cleared', number)
+      return { release, note, app }
     }
-    // Held, by a holder that could not be read: said as a research, the word a caller of the research lock has always got here.
-    return { held: readLock(path).record ?? { version: 1, kind: 'research' } }
+    // Held, by a holder that could not be read.
+    return { held: lockState(path).record ?? UNREAD_HOLDER }
   } finally {
-    try {
-      unlinkSync(draft)
-    } catch {
-      // Gone already.
-    }
+    rmSync(draft, { force: true })
   }
 }
 
@@ -1026,46 +1054,31 @@ export const RESEARCH_RUNNING = 'a research is running'
 // ---------------------------------------------------------------------------------------------
 // Running it
 
-/** Ends a run's whole process group: first asked, then made to. */
-function endGroup(child) {
-  if (child.pid === undefined) return
-  const signal = (name) => {
-    try {
-      process.kill(-child.pid, name)
-    } catch {
-      // Already gone.
-    }
-  }
-  signal('SIGTERM')
-  setTimeout(() => signal('SIGKILL'), 3000).unref()
-}
-
-/** Starts one checked run and resolves with what it printed, or with why it ended early. */
+/**
+ * Starts one checked run and resolves with what it printed, or with why it ended early. The app
+ * runs under a supervisor (agents-supervised.mjs): `onSpawn` gets the supervisor's process before
+ * the app is started and writes it into the research lock, and where that fails nothing is
+ * started. Stop and the time limit are held here and by the supervisor, so they hold also when
+ * this process is gone.
+ */
 export function runOnce(argv, run, { signal, deadline, onSpawn = () => {} }) {
   return new Promise((resolve) => {
     const input = openSync(run.prompt, 'r')
-    let child
+    let started
     try {
-      child = spawn(argv[0], argv.slice(1), { cwd: run.cwd, env: {}, stdio: [input, 'pipe', 'ignore'], detached: true })
-    } catch (error) {
+      started = startSupervised(argv, { cwd: run.cwd, stdio: [input, 'pipe', 'ignore'], deadline, register: onSpawn })
+    } finally {
       closeSync(input)
-      return resolve({ ended: 'failed', reason: error instanceof Error ? error.message : String(error) })
     }
-    closeSync(input)
-    // Who runs, for the lock's record: a holder that is killed outright leaves this for the next one to end.
-    if (child.pid !== undefined) {
-      try {
-        onSpawn({ pid: child.pid, start: processStart(child.pid) ?? '0' })
-      } catch {
-        // The run goes on without the note.
-      }
-    }
+    const child = started.child
+    if (child === undefined) return resolve({ ended: 'failed', reason: started.failed })
     const chunks = []
     let size = 0
-    let ended = null
+    let ended = started.failed === undefined ? null : 'failed'
+    let reason = started.failed
     const stop = (why) => {
       ended ??= why
-      endGroup(child)
+      started.stop()
     }
     const onAbort = () => stop('stopped')
     signal?.addEventListener('abort', onAbort, { once: true })
@@ -1073,7 +1086,10 @@ export function runOnce(argv, run, { signal, deadline, onSpawn = () => {} }) {
     const timer = setTimeout(() => stop('limit'), Math.max(0, deadline - Date.now()))
     child.stdout.on('data', (chunk) => {
       size += chunk.length
-      if (size > MAX_ANSWER_BYTES) return stop('failed')
+      if (size > MAX_ANSWER_BYTES) {
+        reason ??= 'the app printed more than BMN reads'
+        return stop('failed')
+      }
       chunks.push(chunk)
     })
     child.on('error', (error) => {
@@ -1084,7 +1100,9 @@ export function runOnce(argv, run, { signal, deadline, onSpawn = () => {} }) {
     child.on('close', (code) => {
       clearTimeout(timer)
       signal?.removeEventListener('abort', onAbort)
-      if (ended !== null) return resolve({ ended, reason: ended === 'failed' ? 'the app printed more than BMN reads' : undefined })
+      if (ended !== null) return resolve({ ended, reason: ended === 'failed' ? reason : undefined })
+      // The supervisor's own word for a run it never started: the time had passed.
+      if (code === NOTHING_STARTED) return resolve({ ended: 'limit' })
       if (code !== 0) return resolve({ ended: 'failed', reason: `the app ended with code ${code}` })
       resolve({ ended: 'done', stdout: Buffer.concat(chunks).toString('utf8') })
     })
@@ -1097,11 +1115,11 @@ export function runOnce(argv, run, { signal, deadline, onSpawn = () => {} }) {
  * otherwise how the research ends (`stopped`, `limit` or `refused` with the `reason`). Stop and the
  * time limit hold during the comparison too: no run is started after either.
  */
-export async function compareBeforeFirstRun({ agent, environment, now, fenceTests = undefined, signal = undefined, deadline, compare = undefined }) {
+export async function compareBeforeFirstRun({ agent, environment, now, fenceTests = undefined, signal = undefined, deadline, compare = undefined, register = undefined }) {
   let same
   try {
     same = await (compare ?? (await import('./agents-fence.mjs')).compareUnderProviderList)({
-      agent, environment, now, ...(fenceTests === undefined ? {} : { tests: fenceTests }), ...(signal === undefined ? {} : { signal }), limitMs: Math.max(1, deadline - Date.now())
+      agent, environment, now, ...(fenceTests === undefined ? {} : { tests: fenceTests }), ...(signal === undefined ? {} : { signal }), ...(register === undefined ? {} : { register }), limitMs: Math.max(1, deadline - Date.now())
     })
   } catch (error) {
     same = { ok: false, reason: error instanceof Error ? error.message : String(error) }
@@ -1178,7 +1196,7 @@ export async function runResearch({
       }
       if (!compared) {
         // Once per research, after the check and before the first run: the fence test knew only the model list Codex was built with.
-        const stop = await compareBeforeFirstRun({ agent, environment, now: now(), fenceTests, signal, deadline, compare })
+        const stop = await compareBeforeFirstRun({ agent, environment, now: now(), fenceTests, signal, deadline, compare, register: lock.app })
         if (stop !== null) {
           removeResearchCodexFolders(run)
           if (stop.ended === 'refused') failures.push(`BMN did not start the run: ${stop.reason}`)
@@ -1190,7 +1208,7 @@ export async function runResearch({
       writePrivate(`${run.folder}/receipt.json`, `${JSON.stringify(verdict.receipt)}\n`)
       let result
       try {
-        result = await runOnce(argv, run, { signal, deadline, onSpawn: (app) => lock.note({ app }) })
+        result = await runOnce(argv, run, { signal, deadline, onSpawn: lock.app })
       } finally {
         // The run's own Codex folder goes with the run: the link is removed, never the sign-in file it points at.
         removeResearchCodexFolders(run)

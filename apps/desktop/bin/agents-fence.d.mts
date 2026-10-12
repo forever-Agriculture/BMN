@@ -33,13 +33,17 @@ export interface FenceTestOptions {
   deadline?: number
   /** Stops the test: every Codex it started is ended and nothing is recorded. */
   signal?: AbortSignal
+  /** Writes a run's supervisor into the research lock before the run starts; a run whose supervisor could not be written is not started. */
+  register?: (supervisor: { pid: number; start: string }) => void
 }
 export declare function runFenceTest(options?: FenceTestOptions): Promise<FenceTestEntry>
-export declare function providerModelList(options?: { environment?: Environment; limitMs?: number; signal?: AbortSignal }): Promise<{ ok: true; models: unknown[] } | { ok: false; reason: string }>
+export declare function providerModelList(options?: { environment?: Environment; limitMs?: number; signal?: AbortSignal; register?: (supervisor: { pid: number; start: string }) => void }): Promise<{ ok: true; models: unknown[] } | { ok: false; reason: string }>
 export declare function compareUnderProviderList(options: {
   agent: RosterAgent; environment?: Environment; now?: Date; tests?: FenceTestEntry[]
   modelList?: typeof providerModelList; test?: typeof runFenceTest
   /** The research's own Stop, and what is left of its time. */
   signal?: AbortSignal; limitMs?: number
+  /** Writes a run's supervisor into the research lock before the run starts; a run whose supervisor could not be written is not started. */
+  register?: (supervisor: { pid: number; start: string }) => void
 }): Promise<{ ok: boolean; reason?: string; compared?: boolean; closed?: boolean; stopped?: boolean }>
 export declare function runFenceCommand(argv: string[]): Promise<number>

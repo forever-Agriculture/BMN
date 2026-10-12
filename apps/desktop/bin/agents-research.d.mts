@@ -76,20 +76,24 @@ export interface ResearchViewShape {
 export declare function researchView(store: ResearchStore): ResearchViewShape
 
 /** Who holds the one research lock: what its holder wrote, with the process that wrote it. */
-export interface ResearchLockRecord { version: 1; kind: 'research' | 'lookup' | 'question'; id?: string; at?: string; researcher?: string; by?: unknown; pid: number; start: string; /** The researcher app while it runs: the head of its own process group. */ app?: { pid: number; start: string } | null }
+export interface ResearchLockRecord { version: 1; kind: 'research' | 'lookup' | 'question'; id?: string; at?: string; researcher?: string; by?: unknown; /** Absent only for a lock BMN could not read: held, by nobody it can name. */ pid?: number; start?: string; /** The supervisors of the runs this holder started; the lock is held while one of them lives. */ apps?: { pid: number; start: string }[] }
 export declare const RESEARCH_RUNNING: string
 export declare function researchLockPath(): string
 export declare function processStart(pid: number): string | null
 export declare function researchLockHolder(): ResearchLockRecord | null
-/** A lock this process took (`release`, and `note` to add fields to its own record), or the living holder's record. */
-export type LockTaken<Record> = { release(): void; note(fields: { [key: string]: unknown }): void; held?: undefined } | { held: Record; release?: undefined; note?: undefined }
-export declare function takeResearchLock(holder: Omit<ResearchLockRecord, 'version' | 'pid' | 'start' | 'app'>): LockTaken<ResearchLockRecord>
-export declare function takeLock(path: string, holder: { kind: string; id?: string; [key: string]: unknown }, options?: { onDead?: (text: string) => void }): LockTaken<{ version: 1; kind: string; id?: string; pid: number; start: string }>
+/** A lock this process took (`release`, `note` to add fields to its own record, `app` to name a run's supervisor in it), or the holder's record. */
+/** A process as a lock names it: its number and the start time it had then. */
+export interface ProcessIdentity { pid: number; start: string }
+export type LockTaken<Record> = { release(): void; note(fields: { [key: string]: unknown }): void; app(identity: ProcessIdentity): void; held?: undefined } | { held: Record; release?: undefined; note?: undefined; app?: undefined }
+export declare function takeResearchLock(holder: Omit<ResearchLockRecord, 'version' | 'pid' | 'start' | 'apps'>): LockTaken<ResearchLockRecord>
+export declare function takeLock(path: string, holder: { kind: string; id?: string; [key: string]: unknown }, options?: { seam?: (step: 'read' | 'made' | 'taken' | 'cleared', detail?: unknown) => void }): LockTaken<{ version: 1; kind: string; id?: string; pid?: number; start?: string }>
 export declare function appVersion(agent: RosterData['agents'][number], environment: Environment): string | null
-export declare function runOnce(argv: string[], run: { prompt: string; cwd: string }, limits: { signal?: AbortSignal; deadline: number }): Promise<{ ended: 'done'; stdout: string } | { ended: 'failed' | 'stopped' | 'limit'; reason?: string }>
+export declare function runOnce(argv: string[], run: { prompt: string; cwd: string }, limits: { signal?: AbortSignal; deadline: number; onSpawn?: (supervisor: ProcessIdentity) => void }): Promise<{ ended: 'done'; stdout: string } | { ended: 'failed' | 'stopped' | 'limit'; reason?: string }>
 export declare function compareBeforeFirstRun(options: {
   agent: RosterData['agents'][number]; environment?: Environment; now: Date; fenceTests?: FenceTestEntry[]; signal?: AbortSignal; deadline: number
   compare?: NonNullable<Parameters<typeof runResearch>[0]['compare']>
+  /** Writes each of the comparison's own runs into the research lock before it starts. */
+  register?: (supervisor: ProcessIdentity) => void
 }): Promise<null | { ended: 'stopped' | 'limit' } | { ended: 'refused'; reason: string }>
 
 export declare function runResearch(options: {

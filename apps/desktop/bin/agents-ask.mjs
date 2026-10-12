@@ -1,6 +1,6 @@
 // MODULE: agents-ask.mjs - Epic 64: one web question behind the research fence. BMN's frame and the question are the whole prompt, the run is checked like every research, BMN reads each cited page itself, and every question is kept where the owner can read it
 import { randomBytes } from 'node:crypto'
-import { closeSync, mkdirSync, openSync, readFileSync, readSync, rmSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -190,59 +190,133 @@ export function setAgentsMayAsk(on) {
 }
 
 const OUTCOMES = ['running', 'answered', 'no-answer', 'failed', 'stopped', 'limit', 'refused', 'interrupted']
+const keptRecord = (entry) => isObject(entry) && typeof entry.id === 'string' && typeof entry.at === 'string' && OUTCOMES.includes(entry.outcome)
 
 /**
- * Every kept question, oldest first. A missing or damaged file reads as none. A question still
- * marked as running whose process no longer holds the research lock ended without its record being
- * written (a crash, a kill): it reads as interrupted.
+ * The kept file as it lies on the disk: the questions oldest first, the day's count, and the ends
+ * already taken in from files that may still lie beside it (`merged`). A missing or damaged file
+ * reads as empty.
  */
-export function readQuestions() {
-  let kept = []
+function readKept() {
   try {
     const value = JSON.parse(readFileSync(questionsPath(), 'utf8'))
     if (isObject(value) && value.version === 1 && Array.isArray(value.questions)) {
-      kept = value.questions.filter((entry) => isObject(entry) && typeof entry.id === 'string' && typeof entry.at === 'string' && OUTCOMES.includes(entry.outcome))
+      const asked = isObject(value.asked) && typeof value.asked.day === 'string' && Number.isSafeInteger(value.asked.count) && value.asked.count >= 0 ? { day: value.asked.day, count: value.asked.count } : null
+      return { questions: value.questions.filter(keptRecord), asked, merged: Array.isArray(value.merged) ? value.merged.filter((id) => typeof id === 'string') : [] }
     }
   } catch {
     // Nothing kept yet.
   }
-  if (!kept.some((entry) => entry.outcome === 'running')) return kept
+  return { questions: [], asked: null, merged: [] }
+}
+
+/**
+ * A question's end is first written to a small file of its own (R64-FR2): that write waits for
+ * nobody, so the answer, its pages and a refund are on the disk before the caller hears of them,
+ * also while another process holds the kept file. Every change of the kept file takes the ends in
+ * first and names them in the same write, and only then are their files removed: an end is taken in
+ * exactly once, also when a process ends between the two. Readers lay the ends over the kept file.
+ */
+function endsDirectory() {
+  return `${researchDirectory()}/question-ends`
+}
+
+const END_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,79}\.json$/
+
+/** The ends that lie on the disk, in name order: each the question's last record, the local day it was counted on, and whether its count is given back. */
+function readEnds() {
+  let names
+  try {
+    names = readdirSync(endsDirectory())
+  } catch {
+    return []
+  }
+  const ends = []
+  for (const name of names.filter((entry) => END_NAME.test(entry)).sort()) {
+    try {
+      const value = JSON.parse(readFileSync(`${endsDirectory()}/${name}`, 'utf8'))
+      if (isObject(value) && value.version === 1 && keptRecord(value.record) && value.record.outcome !== 'running' && `${value.record.id}.json` === name && typeof value.day === 'string') {
+        ends.push({ id: value.record.id, record: value.record, day: value.day, refund: value.refund === true })
+      }
+    } catch {
+      // Not a whole end: nothing is read from it.
+    }
+  }
+  return ends
+}
+
+/** The questions with ends laid over them: an ended question takes the place at the end of the list, where the newest are kept longest. */
+function withEnds(questions, ends) {
+  if (ends.length === 0) return questions
+  const ended = new Set(ends.map((end) => end.id))
+  return [...questions.filter((entry) => !ended.has(entry.id)), ...ends.map((end) => end.record)]
+}
+
+/**
+ * A question still marked as running whose process no longer holds the research lock ended without
+ * its record being written (a crash, a kill): it reads as interrupted.
+ */
+function withInterrupted(questions) {
+  if (!questions.some((entry) => entry.outcome === 'running')) return questions
   const holder = researchLockHolder()
-  return kept.map((entry) => (entry.outcome !== 'running' || (holder?.kind === 'question' && holder.id === entry.id) ? entry
+  return questions.map((entry) => (entry.outcome !== 'running' || (holder?.kind === 'question' && holder.id === entry.id) ? entry
     : { ...entry, outcome: 'interrupted', note: 'BMN ended before the answer was kept.' }))
+}
+
+/** What the disk holds, read in the one order that misses nothing: the ends first, then the kept file that may have taken them in meanwhile. */
+function readAll() {
+  const ends = readEnds()
+  const kept = readKept()
+  return { kept, ends, fresh: ends.filter((end) => !kept.merged.includes(end.id)) }
+}
+
+/** Every kept question, oldest first, each with its end where it has one. */
+export function readQuestions() {
+  const { kept, fresh } = readAll()
+  return withInterrupted(withEnds(kept.questions, fresh))
 }
 
 /** How long a writer waits for another one that lives. */
 const WRITE_WAIT_MS = 5000
+/** How long a question's end waits for the kept file before it leaves its end beside it for the next writer. */
+const END_WAIT_MS = 1000
 
 /** What a writer says when another one held the mark for the whole wait. */
 export const RECORD_BUSY = 'the kept questions are being written by another BMN process; nothing was changed'
 
 const localDay = (date) => `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
+/** Whether local day `one` lies after local day `other`. */
+const dayAfter = (one, other) => {
+  const [a, b] = [one, other].map((day) => day.split('-').map(Number))
+  return a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b[1] : a[2] > b[2]
+}
+const askedOn = (questions, day) => questions.filter((entry) => entry.outcome !== 'refused' && localDay(new Date(entry.at)) === day).length
 
 /** How many questions in a list started on `now`'s local day. A question refused before it started does not count. */
 export function askedToday(questions, now = new Date()) {
-  const today = localDay(now)
-  return questions.filter((entry) => entry.outcome !== 'refused' && localDay(new Date(entry.at)) === today).length
-}
-
-/** The day's count as the file holds it: 0 for another day, or none. */
-function storedCount(now) {
-  try {
-    const asked = JSON.parse(readFileSync(questionsPath(), 'utf8')).asked
-    return isObject(asked) && asked.day === localDay(now) && Number.isSafeInteger(asked.count) && asked.count > 0 ? asked.count : 0
-  } catch {
-    return 0
-  }
+  return askedOn(questions, localDay(now))
 }
 
 /**
- * How many questions were asked on `now`'s local day. The count is kept beside the list and apart
- * from it (R64-NFR3): a question that left the list, removed by the owner or pushed out by newer
- * records, stays counted, so neither gives a question of the day back.
+ * The day's count as the disk says it, with `reserve` added for a question that starts. The count
+ * is kept beside the list and apart from it (R64-NFR3): a question that left the list, removed by
+ * the owner or pushed out by newer records, stays counted. It belongs to one local day: a newer
+ * day starts at none, an end that comes in after midnight never brings the old day's count back,
+ * and an end whose question the check refused gives its one back to the day it was counted on.
  */
+function dayCount({ kept, fresh }, now, reserve = 0) {
+  const today = localDay(now)
+  const day = kept.asked !== null && dayAfter(kept.asked.day, today) ? kept.asked.day : today
+  const stored = kept.asked !== null && kept.asked.day === day ? kept.asked.count : 0
+  const back = fresh.filter((end) => end.refund && end.day === day).length
+  return { day, count: Math.max(0, Math.max(stored, askedOn(kept.questions, day)) - back + (day === today ? reserve : 0)) }
+}
+
+/** How many questions were asked on `now`'s local day, those since removed from the list included. */
 export function askedCount(now = new Date()) {
-  return Math.max(storedCount(now), askedToday(readQuestions(), now))
+  const all = readAll()
+  const { day, count } = dayCount(all, now)
+  return day === localDay(now) ? count : 0
 }
 
 /** A run's folder under BMN's research runs, by the id a question's record keeps; null for anything that is not such an id. */
@@ -250,34 +324,49 @@ function runFolder(id) {
   return typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]{0,79}$/.test(id) ? `${researchRunsDirectory()}/${id}` : null
 }
 
+/** The last 200, the oldest ended ones going first: a question still running is never pushed out (its run's folder is in use). */
+function lastKept(questions) {
+  let over = questions.length - ASK_KEPT
+  if (over <= 0) return questions
+  return questions.filter((entry) => {
+    if (over <= 0 || entry.outcome === 'running') return true
+    over -= 1
+    return false
+  })
+}
+
+const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
+
 /**
  * Changes the kept questions: one writer at a time across the app and the command line, the file
- * replaced whole, the last 200 kept. `change` gets the list and returns the new one; `count` is
- * added to the day's count of `now` (one for a question that starts, one back for a question the
- * check then refuses). The writer's mark belongs to a process for as long as that process lives:
- * a writer that finds a living one waits, and gives up with RECORD_BUSY rather than write beside
- * it; a mark whose process has ended is taken over at once. A question that leaves the list takes
- * its run's folder with it: BMN's prompt there holds the question's words (64.3 AC5).
+ * replaced whole, the last 200 kept. Ends that lie beside the file are taken in first. `change`
+ * gets the list and returns the new one; `reserve` is one for a question that starts. The writer's
+ * mark belongs to a process for as long as that process lives: a writer that finds a living one
+ * waits without holding up its own process, and gives up with RECORD_BUSY rather than write beside
+ * it. A question that leaves the list takes its run's folder with it: BMN's prompt there holds the
+ * question's words (64.3 AC5).
  */
-function changeQuestions(change, { count = 0, now = new Date() } = {}) {
+async function changeQuestions(change, { reserve = 0, now = new Date(), waitMs = WRITE_WAIT_MS } = {}) {
   mkdirSync(researchDirectory(), { recursive: true, mode: 0o700 })
-  const mark = `${questionsPath()}.writing`
-  const pause = new Int32Array(new SharedArrayBuffer(4))
   let lock
-  for (const until = Date.now() + WRITE_WAIT_MS; ;) {
-    lock = takeLock(mark, { kind: 'writer', id: randomBytes(6).toString('hex') })
+  for (const until = Date.now() + waitMs; ;) {
+    lock = takeLock(`${questionsPath()}.writing`, { kind: 'writer' })
     if (lock.held === undefined) break
     if (Date.now() >= until) throw new Error(RECORD_BUSY)
-    Atomics.wait(pause, 0, 0, 10)
+    await pause(10)
   }
+  // From here to the release nothing waits: the mark is held for the few steps of one write.
   try {
-    const before = readQuestions()
-    const after = change(before).slice(-ASK_KEPT)
-    const asked = { day: localDay(now), count: Math.max(0, Math.max(storedCount(now), askedToday(before, now)) + count) }
-    writePrivate(questionsPath(), `${JSON.stringify({ version: 1, asked, questions: after }, null, 1)}\n`)
+    const all = readAll()
+    const before = withInterrupted(withEnds(all.kept.questions, all.fresh))
+    const after = lastKept(change(before))
+    // Every end on the disk is named in this very write: one that was taken in before, and whose file is still there, is not taken in again.
+    const merged = all.ends.map((end) => end.id)
+    writePrivate(questionsPath(), `${JSON.stringify({ version: 1, asked: dayCount(all, now, reserve), merged, questions: after }, null, 1)}\n`)
+    for (const id of merged) rmSync(`${endsDirectory()}/${id}.json`, { force: true })
     const stays = new Set(after.map((entry) => entry.run).filter((run) => run !== undefined))
     for (const entry of before) {
-      const folder = stays.has(entry.run) ? null : runFolder(entry.run)
+      const folder = entry.outcome === 'running' || stays.has(entry.run) ? null : runFolder(entry.run)
       if (folder !== null) rmSync(folder, { recursive: true, force: true })
     }
   } finally {
@@ -286,17 +375,17 @@ function changeQuestions(change, { count = 0, now = new Date() } = {}) {
 }
 
 function keepQuestion(record, options = {}) {
-  changeQuestions((kept) => (kept.some((entry) => entry.id === record.id) ? kept.map((entry) => (entry.id === record.id ? record : entry)) : [...kept, record]), options)
+  return changeQuestions((kept) => (kept.some((entry) => entry.id === record.id) ? kept.map((entry) => (entry.id === record.id ? record : entry)) : [...kept, record]), options)
 }
 
 /**
  * Removes one kept question, or every one with `id` null: its text is gone from the file, and its
  * run's folder with BMN's prompt from the disk. A question under way stays until it ends. The
- * day's count stays what it was. Throws RECORD_BUSY where another process holds the file.
+ * day's count stays what it was. Rejects with RECORD_BUSY where another process holds the file.
  */
 export function removeQuestions(id = null, now = new Date()) {
   const goes = (entry) => entry.outcome !== 'running' && (id === null || entry.id === id)
-  changeQuestions((kept) => kept.filter((entry) => !goes(entry)), { now })
+  return changeQuestions((kept) => kept.filter((entry) => !goes(entry)), { now })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -445,9 +534,9 @@ export async function runAsk({
   const id = `${started.toISOString().replace(/[-:.]/g, '').slice(0, 15)}-q${randomBytes(3).toString('hex')}`
   const record = { id, at: started.toISOString(), by, researcher: null, researcher_name: null, question: null }
   const took = () => Date.now() - clock
-  const refused = (code, message, next = undefined) => {
+  const refused = async (code, message, next = undefined) => {
     try {
-      keepQuestion({ ...record, outcome: 'refused', code, note: message, took_ms: took() }, { now: started })
+      await keepQuestion({ ...record, outcome: 'refused', code, note: message, took_ms: took() }, { now: started })
     } catch {
       // Another process holds the kept questions: the refusal is given all the same, and nothing was asked.
     }
@@ -500,7 +589,7 @@ export async function runAsk({
   // that never got its last record still takes its folder along when it is removed.
   const runId = `${id.slice(0, 15)}-${randomBytes(4).toString('hex')}`
   record.run = runId
-  const finish = (outcome, fields = {}) => {
+  const finish = async (outcome, fields = {}) => {
     const result = { outcome, run: runId, ...fields, took_ms: took() }
     // The record keeps the check's words as its note; `message` and `next` are for the caller only.
     const kept = { ...record, ...result }
@@ -509,16 +598,23 @@ export async function runAsk({
     // A raw answer is not kept beside the record, also one BMN took for no usable answer: what was read from it is in the record.
     if (run !== null) rmSync(`${run.folder}/${CODEX_RESEARCH_ANSWER}`, { force: true })
     try {
-      // A question the check refused after all is not one of the day's: its count is given back.
-      keepQuestion(kept, { now: started, count: outcome === 'refused' ? -1 : 0 })
+      // The end is on the disk before the caller hears of it, whoever holds the kept file. A question
+      // the check refused after all is not one of the day's: its end gives the count back.
+      writePrivate(`${endsDirectory()}/${id}.json`, `${JSON.stringify({ version: 1, record: kept, day: localDay(started), refund: outcome === 'refused' })}\n`)
     } catch (error) {
       // The caller gets what happened; the list shows this question as one that never got its record.
       result.note = `${result.note === undefined ? '' : `${result.note} `}BMN could not write this question's record: ${error instanceof Error ? error.message : String(error)}.`
+      return { ok: outcome === 'answered', id, researcher: record.researcher, ...result }
+    }
+    try {
+      await changeQuestions((questions) => questions, { now: now(), waitMs: END_WAIT_MS })
+    } catch {
+      // Another process holds the kept file: the end stays beside it, read by everyone, and the next change of the file takes it in.
     }
     return { ok: outcome === 'answered', id, researcher: record.researcher, ...result }
   }
   try {
-    keepQuestion({ ...record, outcome: 'running' }, { now: started, count: 1 })
+    await keepQuestion({ ...record, outcome: 'running' }, { now: started, reserve: 1 })
   } catch (error) {
     // No question is asked whose record cannot be written (R64-FR2).
     lock.release()
@@ -531,38 +627,38 @@ export async function runAsk({
     const verdict = evaluateResearch({ agent: agent.id, argv, stdin: run.prompt, cwd: run.cwd }, { ...checkOptions, cwd: run.cwd, now: started })
     if (verdict.verdict !== 'PASS') {
       removeResearchCodexFolders(run)
-      return finish('refused', { code: verdict.code, note: verdict.message, message: verdict.message, ...(verdict.next === undefined ? {} : { next: verdict.next }) })
+      return await finish('refused', { code: verdict.code, note: verdict.message, message: verdict.message, ...(verdict.next === undefined ? {} : { next: verdict.next }) })
     }
     if (agent.harness === 'codex') {
       // Before a Codex researcher's run, exactly as in a Models research (63.3 AC6).
-      const stop = await compareBeforeFirstRun({ agent, environment, now: started, fenceTests, signal, deadline, compare })
+      const stop = await compareBeforeFirstRun({ agent, environment, now: started, fenceTests, signal, deadline, compare, register: lock.app })
       if (stop !== null) {
         removeResearchCodexFolders(run)
-        if (stop.ended === 'refused') return finish('refused', { code: 'ROUTE_UNSUPPORTED', note: stop.reason, message: stop.reason })
-        return finish(stop.ended, { note: stop.ended === 'stopped' ? 'Stopped before the researcher started.' : 'Ended at the time limit before the researcher started.' })
+        if (stop.ended === 'refused') return await finish('refused', { code: 'ROUTE_UNSUPPORTED', note: stop.reason, message: stop.reason })
+        return await finish(stop.ended, { note: stop.ended === 'stopped' ? 'Stopped before the researcher started.' : 'Ended at the time limit before the researcher started.' })
       }
     }
     writePrivate(`${run.folder}/receipt.json`, `${JSON.stringify(verdict.receipt)}\n`)
     let result
     try {
-      result = await runOnce(argv, run, { signal, deadline, onSpawn: (app) => lock.note({ app }) })
+      result = await runOnce(argv, run, { signal, deadline, onSpawn: lock.app })
     } finally {
       // The run's own Codex folder goes with the run, as after every research.
       removeResearchCodexFolders(run)
     }
-    if (result.ended === 'stopped') return finish('stopped', { note: 'Stopped before the researcher answered.' })
-    if (result.ended === 'limit') return finish('limit', { note: 'Ended at the time limit before the researcher answered.' })
-    if (result.ended === 'failed') return finish('failed', { note: result.reason })
+    if (result.ended === 'stopped') return await finish('stopped', { note: 'Stopped before the researcher answered.' })
+    if (result.ended === 'limit') return await finish('limit', { note: 'Ended at the time limit before the researcher answered.' })
+    if (result.ended === 'failed') return await finish('failed', { note: result.reason })
     const printed = answerText(agent.harness, result.stdout, run)
     const answer = printed.ok ? parseAskAnswer(printed.text) : printed
-    if (!answer.ok) return finish('no-answer', { note: `no usable answer: ${answer.reason}` })
+    if (!answer.ok) return await finish('no-answer', { note: `no usable answer: ${answer.reason}` })
     const claims = await markClaims(answer.claims, { fetchPage, signal, deadline })
     const cut = signal?.aborted ? 'Stopped while BMN read the cited pages; the pages not read by then are marked not readable.'
       : Date.now() >= deadline ? 'The time limit came while BMN read the cited pages; the pages not read by then are marked not readable.' : undefined
-    return finish('answered', { answer: answer.answer, claims, not_found: answer.notFound, counts: markCounts(claims), ...(cut === undefined ? {} : { note: cut }) })
+    return await finish('answered', { answer: answer.answer, claims, not_found: answer.notFound, counts: markCounts(claims), ...(cut === undefined ? {} : { note: cut }) })
   } catch (error) {
     if (run !== null) removeResearchCodexFolders(run)
-    return finish('failed', { note: error instanceof Error ? error.message : String(error) })
+    return await finish('failed', { note: error instanceof Error ? error.message : String(error) })
   } finally {
     lock.release()
   }

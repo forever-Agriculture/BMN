@@ -10,7 +10,7 @@ import {
   noResearcherWords, parseAskAnswer, questionProblem, questionsPath, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord
 } from '../../bin/agents-ask.mjs'
 import { CODEX_RESEARCH_TOOLS_SEEN, researchFormHash, researchRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
-import { RESEARCH_RUNNING, chooseResearcher, researchArgv, researchLockHolder, researchLockPath, runResearch, takeResearchLock, type PageRead } from '../../bin/agents-research.mjs'
+import { RESEARCH_RUNNING, chooseResearcher, researchArgv, researchLockHolder, researchLockPath, runResearch, takeLock, takeResearchLock, type PageRead } from '../../bin/agents-research.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
 
@@ -63,16 +63,19 @@ if (process.argv[2] === '--version') { console.log(${JSON.stringify(version)}); 
 const prompt = fs.readFileSync(0, 'utf8')
 fs.appendFileSync(home + '/calls.log', JSON.stringify({ app: ${JSON.stringify(name)}, pid: process.pid, argv: process.argv.slice(2), env: process.env, cwd: process.cwd(), files: fs.readdirSync('.'), prompt }) + '\\n')
 const plan = JSON.parse(fs.readFileSync(home + '/plan.json', 'utf8'))
-setTimeout(() => {
+const answer = () => {
+  // With waitFor the app answers only once that file is there: the test says when.
+  if (plan.waitFor && !fs.existsSync(plan.waitFor)) return setTimeout(answer, 20)
   if (plan.exit) process.exit(plan.exit)
   if (${JSON.stringify(name)} === 'codex') fs.writeFileSync(process.argv[process.argv.indexOf('-o') + 1], plan.text)
   else console.log(JSON.stringify({ type: 'result', is_error: false, result: plan.text }))
-}, plan.delay ?? 0)
+}
+setTimeout(answer, plan.delay ?? 0)
 `)
   chmodSync(join(stubs, name), 0o755)
 }
 
-interface Plan { text?: string; delay?: number; exit?: number }
+interface Plan { text?: string; delay?: number; exit?: number; waitFor?: string }
 const plan = (entry: Plan): void => writeFileSync(join(home, 'plan.json'), JSON.stringify(entry))
 const calls = (): { app: string; pid: number; argv: string[]; env: Record<string, string>; cwd: string; files: string[]; prompt: string }[] =>
   (existsSync(join(home, 'calls.log')) ? readFileSync(join(home, 'calls.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [])
@@ -110,6 +113,13 @@ const FENCED: FenceTestEntry[] = [{
   models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna'].map((id) => ({ model: id, verdict: 'pass' as const, tools: [...CODEX_RESEARCH_TOOLS_SEEN], reasons: [] }))
 }]
 const SAME = async () => ({ ok: true, compared: true })
+/** The numbers a lock's files carry, lowest first: the highest one is the lock as it stands. */
+const lockNumbers = (path: string): number[] => {
+  const folder = path.slice(0, path.lastIndexOf('/'))
+  const prefix = `${path.slice(path.lastIndexOf('/') + 1)}.`
+  return existsSync(folder) ? readdirSync(folder).filter((name) => name.startsWith(prefix) && /^[1-9]\d*$/.test(name.slice(prefix.length))).map((name) => Number(name.slice(prefix.length))).sort((one, other) => one - other) : []
+}
+const lockText = (path: string, number: number): Record<string, unknown> => JSON.parse(readFileSync(`${path}.${number}`, 'utf8'))
 
 beforeEach(() => {
   home = realpathSync(mkdtempSync(join(tmpdir(), 'bmn-ask-')))
@@ -281,7 +291,7 @@ describe('what a question may not be (64.1 AC5)', () => {
     expect(result).toMatchObject({ ok: false, outcome: 'refused', code })
     expect(calls()).toEqual([])
     expect(existsSync(researchRunsDirectory())).toBe(false)
-    expect(existsSync(researchLockPath())).toBe(false)
+    expect(lockNumbers(researchLockPath())).toEqual([])
     // The record says that a question was refused and why; the text itself is not kept.
     expect(readQuestions()).toHaveLength(1)
     expect(readQuestions()[0]).toMatchObject({ outcome: 'refused', code, question: null })
@@ -337,11 +347,12 @@ describe('one research at a time, across the app and the command line (64.1 AC6)
     } finally {
       await ended(other)
     }
-    // The process is gone and its lock is still on the disk: it counts as none and is taken over.
-    expect(existsSync(researchLockPath())).toBe(true)
+    // The process is gone and its lock is still on the disk: it counts as none, and the next holder takes the number above it.
+    expect(lockNumbers(researchLockPath())).toEqual([1])
     expect(researchLockHolder()).toBeNull()
     expect(await ask()).toMatchObject({ ok: true, outcome: 'answered' })
-    expect(existsSync(researchLockPath())).toBe(false)
+    expect(lockNumbers(researchLockPath())).toEqual([2])
+    expect(lockText(researchLockPath(), 2)).toMatchObject({ kind: 'question', released: true })
   })
 
   it('a question is refused while Models research runs, and the other way round, in one process too', async () => {
@@ -369,14 +380,16 @@ describe('one research at a time, across the app and the command line (64.1 AC6)
 
   it('a lock that is not a holder\'s record, or names a process number given out again, is nobody\'s', async () => {
     mkdirSync(join(home, '.config/bmn/agents/state/research'), { recursive: true })
-    writeFileSync(researchLockPath(), '{torn')
+    writeFileSync(`${researchLockPath()}.1`, '{torn')
     expect(researchLockHolder()).toBeNull()
     answered()
     expect(await ask()).toMatchObject({ outcome: 'answered' })
+    expect(lockNumbers(researchLockPath())).toEqual([2])
     // This very process number, with another start time: a number that was given out again.
-    writeFileSync(researchLockPath(), JSON.stringify({ version: 1, kind: 'question', id: 'old', pid: process.pid, start: '1' }))
+    writeFileSync(`${researchLockPath()}.3`, JSON.stringify({ version: 1, kind: 'question', id: 'old', pid: process.pid, start: '1' }))
     expect(researchLockHolder()).toBeNull()
     expect(await ask()).toMatchObject({ outcome: 'answered' })
+    expect(lockNumbers(researchLockPath())).toEqual([4])
   })
 })
 
@@ -437,7 +450,11 @@ describe('what is kept (64.1 AC8)', () => {
     expect(text).not.toContain('Jev reached the gateway')
     expect(text).not.toContain('<html>')
     expect((await import('node:fs')).statSync(questionsPath()).mode & 0o777).toBe(0o600)
-    expect(readdirSync(join(home, '.config/bmn/agents/state/research')).filter((name) => name.includes('.tmp') || name.includes('.writing') || name.includes('.new'))).toEqual([])
+    // Nothing half-written is left: the writer's mark is one small file that says released, and no end waits beside the kept file.
+    const left = readdirSync(join(home, '.config/bmn/agents/state/research')).filter((name) => name.includes('.tmp') || name.includes('.writing') || name.includes('.new') || name.includes('.note'))
+    expect(left).toHaveLength(1)
+    expect(lockText(`${questionsPath()}.writing`, Number(left[0]!.split('.').at(-1)))).toMatchObject({ kind: 'writer', released: true })
+    expect(existsSync(join(home, '.config/bmn/agents/state/research/question-ends')) ? readdirSync(join(home, '.config/bmn/agents/state/research/question-ends')) : []).toEqual([])
   })
 
   it('keeps the last 200 and reads a question that never got its record as interrupted', async () => {
@@ -467,10 +484,10 @@ describe('what is kept (64.1 AC8)', () => {
     answered()
     const first = await ask()
     const second = await ask({ question: 'What is a context window, in one sentence from a public page?' })
-    removeQuestions(first.id)
+    await removeQuestions(first.id)
     expect(readQuestions().map((entry) => entry.id)).toEqual([second.id])
     expect(readFileSync(questionsPath(), 'utf8')).not.toContain(QUESTION)
-    removeQuestions()
+    await removeQuestions()
     expect(readQuestions()).toEqual([])
     expect(readFileSync(questionsPath(), 'utf8')).not.toContain('context window')
   })
@@ -488,10 +505,10 @@ describe('what is kept (64.1 AC8)', () => {
     writeFileSync(questionsPath(), JSON.stringify({ version: 1, questions: kept }))
     setAgentsMayAsk(false)
     expect(askedCount(day)).toBe(ASK_PER_DAY - 1)
-    removeQuestions('seed-0', day)
-    removeQuestions('yesterday', day)
+    await removeQuestions('seed-0', day)
+    await removeQuestions('yesterday', day)
     expect(askedCount(day)).toBe(ASK_PER_DAY - 1)
-    removeQuestions(null, day)
+    await removeQuestions(null, day)
     expect(readQuestions()).toEqual([])
     expect(askedCount(day)).toBe(ASK_PER_DAY - 1)
     // The switch kept its place in the same file.
@@ -656,17 +673,22 @@ describe('what the pre-review found (Epic 64)', () => {
     for (const output of [JSON.stringify(result), everythingKept()]) expect(output).not.toContain(PLANTED)
   })
 
-  it('takes a mark on the kept questions that is no process\'s at once: an empty folder, or text nobody wrote as a holder', () => {
+  it('takes a mark on the kept questions that is no process\'s at once: text nobody wrote as a holder, or a holder that is gone', async () => {
     mkdirSync(join(home, '.config/bmn/agents/state/research'), { recursive: true })
     const mark = `${questionsPath()}.writing`
-    for (const leave of [() => mkdirSync(mark), () => writeFileSync(mark, 'not a record'), () => writeFileSync(mark, JSON.stringify({ version: 1, kind: 'writer', id: 'gone', pid: 2 ** 22 + 7, start: '1' }))]) {
-      leave()
+    const leave = [(at: number) => writeFileSync(`${mark}.${at}`, 'not a record'), (at: number) => writeFileSync(`${mark}.${at}`, JSON.stringify({ version: 1, kind: 'writer', id: 'gone', pid: 2 ** 22 + 7, start: '1' }))]
+    for (const [index, left] of leave.entries()) {
+      const at = (lockNumbers(mark).at(-1) ?? 0) + 1
+      left(at)
       const began = Date.now()
-      removeQuestions(null, NOW)
+      await removeQuestions(null, NOW)
       expect(Date.now() - began).toBeLessThan(1500)
-      expect(existsSync(mark)).toBe(false)
+      // The mark that was left is cleared away from below the one that was taken, and that one says released.
+      expect(lockNumbers(mark)).toEqual([at + 1])
+      expect(lockText(mark, at + 1)).toMatchObject({ released: true })
       expect(JSON.parse(readFileSync(questionsPath(), 'utf8'))).toMatchObject({ version: 1, questions: [] })
       expect(statSync(questionsPath()).mode & 0o777).toBe(0o600)
+      expect(index).toBeLessThan(2)
     }
   })
 })
@@ -723,12 +745,12 @@ describe('what the review found (Epic 64)', () => {
     mkdirSync(join(researchRunsDirectory(), '20261012T080000-team'), { recursive: true })
     writeFileSync(join(researchRunsDirectory(), '20261012T080000-team', 'prompt.md'), 'KEPT-RESEARCH')
     for (const word of ['MARKERONE', 'MARKERTWO', 'MARKERTHREE']) expect(everythingKept()).toContain(word)
-    removeQuestions(first.id, NOW)
+    await removeQuestions(first.id, NOW)
     expect(everythingKept()).not.toContain('MARKERONE')
-    removeQuestions(second.id, NOW)
+    await removeQuestions(second.id, NOW)
     expect(everythingKept()).not.toContain('MARKERTWO')
     expect(everythingKept()).toContain('MARKERTHREE')
-    removeQuestions(null, NOW)
+    await removeQuestions(null, NOW)
     expect(everythingKept()).not.toContain('MARKERTHREE')
     expect(everythingKept()).toContain('KEPT-RESEARCH')
     expect(readdirSync(researchRunsDirectory())).toEqual(['20261012T080000-team'])
@@ -756,21 +778,28 @@ describe('what the review found (Epic 64)', () => {
     for (const name of readdirSync(researchRunsDirectory())) expect(readdirSync(join(researchRunsDirectory(), name)).sort()).toEqual(['cwd', 'prompt.md', 'receipt.json', 'run.json'])
   })
 
+  /** Another BMN process in the middle of a write: it takes the mark on the kept questions and does not let go until it is killed. */
+  const writer = async (): Promise<ReturnType<typeof spawn>> => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { takeLock } from ${JSON.stringify(`${BIN}agents-research.mjs`)}
+      const lock = takeLock(process.argv[1], { kind: 'writer' })
+      console.log(lock.held === undefined ? 'held' : 'refused')
+      setInterval(() => {}, 1000)
+    `, `${questionsPath()}.writing`], { env: { ...env, HOME: home }, stdio: ['ignore', 'pipe', 'inherit'] })
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once('data', (chunk: Buffer) => (String(chunk).trim() === 'held' ? resolve() : reject(new Error(String(chunk)))))
+      child.once('error', reject)
+    })
+    return child
+  }
+  const gone = (child: ReturnType<typeof spawn>): Promise<void> => new Promise((resolve) => { child.once('exit', () => resolve()); child.kill('SIGKILL') })
+
   it('never writes the kept questions beside a living writer\'s mark, and takes a dead writer\'s mark at once', async () => {
     seedToday(NOW, 2)
     const before = readFileSync(questionsPath(), 'utf8')
-    // Another BMN process in the middle of a write: it holds the mark and does not let go.
-    const holder = spawn(process.execPath, ['-e', `
-      const fs = require('node:fs')
-      const stat = fs.readFileSync('/proc/' + process.pid + '/stat', 'utf8')
-      const start = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
-      fs.writeFileSync(process.argv[1], JSON.stringify({ version: 1, kind: 'writer', id: 'held', pid: process.pid, start }) + '\\n', { flag: 'wx' })
-      console.log('held')
-      setInterval(() => {}, 1000)
-    `, `${questionsPath()}.writing`], { stdio: ['ignore', 'pipe', 'inherit'] })
+    const holder = await writer()
     try {
-      await new Promise((resolve) => holder.stdout.once('data', resolve))
-      expect(() => removeQuestions(null, NOW)).toThrow(/another BMN process/)
+      await expect(removeQuestions(null, NOW)).rejects.toThrow(/another BMN process/)
       expect(readFileSync(questionsPath(), 'utf8')).toBe(before)
       // The same holds for a question: none is asked while its record cannot be written.
       answered()
@@ -778,19 +807,19 @@ describe('what the review found (Epic 64)', () => {
       expect(calls()).toEqual([])
       expect(researchLockHolder()).toBeNull()
     } finally {
-      holder.kill('SIGKILL')
-      await new Promise((resolve) => holder.once('exit', resolve))
+      await gone(holder)
     }
-    // Its mark is still there, and its owner is gone: the next writer takes it without waiting.
-    expect(existsSync(`${questionsPath()}.writing`)).toBe(true)
+    // Its mark is still there, and its owner is gone: the next writer takes the number above it without waiting.
+    const left = lockNumbers(`${questionsPath()}.writing`)
+    expect(left).toHaveLength(1)
     const began = Date.now()
-    removeQuestions('seed-0', NOW)
+    await removeQuestions('seed-0', NOW)
     expect(Date.now() - began).toBeLessThan(1500)
     expect(readQuestions().map((entry) => entry.id)).toEqual(['seed-1'])
-    expect(existsSync(`${questionsPath()}.writing`)).toBe(false)
+    expect(lockNumbers(`${questionsPath()}.writing`)).toEqual([left[0]! + 1])
   }, 40_000)
 
-  it('ends the researcher a killed command left running before another research starts', async () => {
+  it('ends the researcher of a killed command by itself, with nobody asking again, and no second research starts beside it', async () => {
     plan({ text: JSON.stringify(ANSWER), delay: 120_000 })
     const child = spawn(process.execPath, [join(BIN, 'bmn'), 'research', 'ask', '--json'], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }, stdio: ['pipe', 'ignore', 'ignore'] })
     child.stdin.end(QUESTION)
@@ -798,16 +827,27 @@ describe('what the review found (Epic 64)', () => {
     expect(calls()).toHaveLength(1)
     const app = calls()[0]!.pid
     try {
+      // The lock names the run's supervisor, written there before the app was started.
+      const supervisor = (researchLockHolder()?.apps ?? [])[0]!
+      expect(alive(supervisor.pid)).toBe(true)
       // The command is killed outright: it can end nothing itself.
       child.kill('SIGKILL')
       await new Promise((resolve) => child.once('exit', resolve))
-      expect(alive(app)).toBe(true)
-      expect(researchLockHolder()).toBeNull()
+      // Whoever asks while the app still lives is refused: the lock is held for as long as the supervisor is.
       plan({ text: JSON.stringify({ ...ANSWER, claims: [] }) })
-      expect(await ask()).toMatchObject({ ok: true, outcome: 'answered' })
-      for (let waited = 0; alive(app) && waited < 100; waited += 1) await new Promise((resolve) => setTimeout(resolve, 50))
+      let next = await ask()
+      if (next.outcome === 'refused') {
+        expect(next).toMatchObject({ code: 'RESEARCH_RUNNING' })
+        expect(calls()).toHaveLength(1)
+      }
+      // Nobody has to ask: the app and its supervisor end by themselves, well inside a second.
+      for (let waited = 0; (alive(app) || alive(supervisor.pid)) && waited < 100; waited += 1) await new Promise((resolve) => setTimeout(resolve, 20))
       expect(alive(app)).toBe(false)
-      expect(readQuestions().map((entry) => entry.outcome)).toEqual(['interrupted', 'answered'])
+      expect(alive(supervisor.pid)).toBe(false)
+      expect(researchLockHolder()).toBeNull()
+      if (next.outcome === 'refused') next = await ask()
+      expect(next).toMatchObject({ ok: true, outcome: 'answered' })
+      expect(readQuestions().filter((entry) => entry.outcome !== 'refused').map((entry) => entry.outcome)).toEqual(['interrupted', 'answered'])
     } finally {
       try {
         process.kill(app, 'SIGKILL')
@@ -836,3 +876,188 @@ describe('what the review found (Epic 64)', () => {
     expect(spawnSync(process.execPath, [join(BIN, 'bmn'), 'research', 'ask', QUESTION], { input: '', encoding: 'utf8', env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` } }).status).toBe(2)
   })
 })
+
+describe('what the recheck found (Epic 64)', () => {
+  const state = (): string => join(home, '.config/bmn/agents/state/research')
+  const ends = (): string[] => (existsSync(join(state(), 'question-ends')) ? readdirSync(join(state(), 'question-ends')) : [])
+  const keptFile = (): { asked: { day: string; count: number }; merged: string[]; questions: QuestionRecord[] } => JSON.parse(readFileSync(questionsPath(), 'utf8'))
+  const DAY = new Date(2026, 9, 12, 12, 0)
+  const running: QuestionRecord = { id: '20261012T090000-qaaaaaa', at: new Date(2026, 9, 12, 9, 0).toISOString(), by: { kind: 'shell' }, researcher: 'fable', researcher_name: 'Fable', question: 'Which page says it?', outcome: 'running' }
+  const leave = (kept: { asked: { day: string; count: number }; merged?: string[]; questions: QuestionRecord[] }, end: { record: QuestionRecord; day: string; refund: boolean } | null): void => {
+    mkdirSync(join(state(), 'question-ends'), { recursive: true })
+    writeFileSync(questionsPath(), JSON.stringify({ version: 1, merged: [], ...kept }))
+    if (end !== null) writeFileSync(join(state(), 'question-ends', `${end.record.id}.json`), JSON.stringify({ version: 1, ...end }))
+  }
+  /** Another BMN process in the middle of a write: it holds the mark on the kept questions until it is killed. */
+  const writer = async (): Promise<ReturnType<typeof spawn>> => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { takeLock } from ${JSON.stringify(`${BIN}agents-research.mjs`)}
+      const lock = takeLock(process.argv[1], { kind: 'writer' })
+      console.log(lock.held === undefined ? 'held' : 'refused')
+      setInterval(() => {}, 1000)
+    `, `${questionsPath()}.writing`], { env: { ...env, HOME: home }, stdio: ['ignore', 'pipe', 'inherit'] })
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once('data', (chunk: Buffer) => (String(chunk).trim() === 'held' ? resolve() : reject(new Error(String(chunk)))))
+      child.once('error', reject)
+    })
+    return child
+  }
+  const gone = (child: ReturnType<typeof spawn>): Promise<void> => new Promise((resolve) => { child.once('exit', () => resolve()); child.kill('SIGKILL') })
+  const started = async (): Promise<void> => {
+    for (let waited = 0; calls().length === 0 && waited < 1000; waited += 1) await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(calls()).toHaveLength(1)
+  }
+
+  it('never pushes a running question out of the list nor takes its run\'s folder: refusals past 200 and Remove all leave it to finish, and its answer is kept', async () => {
+    const release = join(home, 'answer-now')
+    plan({ text: JSON.stringify({ ...ANSWER, answer: 'Pages describe RUNNINGMARK in one way.' }), waitFor: release })
+    const question = ask({ question: 'Which public page describes RUNNINGMARK best?', agent: 'luna', fenceTests: FENCED, compare: SAME })
+    try {
+      await started()
+      const record = readQuestions().find((entry) => entry.outcome === 'running')!
+      const folder = join(researchRunsDirectory(), record.run!)
+      expect(existsSync(join(folder, 'prompt.md'))).toBe(true)
+      for (let index = 0; index < ASK_KEPT + 5; index += 1) await ask({ question: '  ' })
+      // 200 kept, the running one among them: it is one of the 200, not one more.
+      expect(readQuestions()).toHaveLength(ASK_KEPT)
+      expect(readQuestions().filter((entry) => entry.outcome === 'running').map((entry) => entry.id)).toEqual([record.id])
+      expect(existsSync(join(folder, 'prompt.md'))).toBe(true)
+      await removeQuestions(null, NOW)
+      expect(readQuestions().map((entry) => entry.id)).toEqual([record.id])
+      expect(existsSync(join(folder, 'prompt.md'))).toBe(true)
+      for (let index = 0; index < ASK_KEPT + 5; index += 1) await ask({ question: '  ' })
+      expect(existsSync(join(folder, 'prompt.md'))).toBe(true)
+      // A Models research run's folder is nobody's question and stays too.
+      mkdirSync(join(researchRunsDirectory(), '20261012T080000-team'), { recursive: true })
+    } finally {
+      writeFileSync(release, '')
+      await question.catch(() => undefined)
+    }
+    const result = await question
+    expect(result).toMatchObject({ ok: true, outcome: 'answered', answer: 'Pages describe RUNNINGMARK in one way.' })
+    const kept = readQuestions()
+    expect(kept).toHaveLength(ASK_KEPT)
+    // The ended question stands last, where the newest are kept longest.
+    expect(kept.at(-1)).toMatchObject({ id: result.id, outcome: 'answered', answer: 'Pages describe RUNNINGMARK in one way.' })
+    expect(existsSync(join(researchRunsDirectory(), '20261012T080000-team'))).toBe(true)
+    expect(ends()).toEqual([])
+  }, 120_000)
+
+  it('keeps a question\'s end while another process holds the kept file: the caller is not held up, every reader sees the end, and the next change takes it in once', async () => {
+    const release = join(home, 'answer-now')
+    plan({ text: JSON.stringify(ANSWER), waitFor: release })
+    const question = ask()
+    await started()
+    const holder = await writer()
+    let result: Awaited<ReturnType<typeof ask>>
+    try {
+      const began = Date.now()
+      writeFileSync(release, '')
+      result = await question
+      expect(result).toMatchObject({ ok: true, outcome: 'answered' })
+      expect(result.note).toBeUndefined()
+      // Not the five seconds a writer waits, and not for as long as the other process lives.
+      expect(Date.now() - began).toBeLessThan(4000)
+      // The kept file still says running; the end lies beside it, whole, and every reader lays it over.
+      expect(keptFile().questions.map((entry) => entry.outcome)).toEqual(['running'])
+      expect(ends()).toEqual([`${result.id}.json`])
+      expect(readQuestions()).toHaveLength(1)
+      expect(readQuestions()[0]).toMatchObject({ id: result.id, outcome: 'answered', answer: ANSWER.answer, counts: { found: 1, not_found: 1, unreadable: 1 } })
+      expect(readQuestions()[0]!.claims!.map((claim) => claim.source)).toEqual([USES, USES, GONE])
+      expect(askedCount(NOW)).toBe(1)
+      expect(researchLockHolder()).toBeNull()
+      // No new question is asked while the kept file cannot take the waiting end in.
+      expect(await ask()).toMatchObject({ outcome: 'refused', code: 'RECORD_BUSY' })
+      expect(calls()).toHaveLength(1)
+    } finally {
+      writeFileSync(release, '')
+      await gone(holder)
+      await question.catch(() => undefined)
+    }
+    // The other writer is gone: the next change of the file takes the end in, names it in the same write, and removes its file.
+    await removeQuestions('no-such-question', NOW)
+    expect(keptFile().questions.map((entry) => [entry.id, entry.outcome])).toEqual([[result.id, 'answered']])
+    expect(keptFile().merged).toEqual([result.id])
+    expect(ends()).toEqual([])
+    await removeQuestions('no-such-question', NOW)
+    expect(keptFile().merged).toEqual([])
+    expect(readQuestions()).toHaveLength(1)
+    expect(askedCount(NOW)).toBe(1)
+  }, 60_000)
+
+  it('gives a refused question\'s count back once, also while the kept file is held at that moment', async () => {
+    answered()
+    let mark: ReturnType<typeof takeLock> | null = null
+    // The kept file is held from just after the question's first record until after its end.
+    const refused = await ask({ agent: 'luna', fenceTests: [], compare: SAME, onStart: () => { mark = takeLock(`${questionsPath()}.writing`, { kind: 'writer' }) } })
+    expect(refused).toMatchObject({ ok: false, outcome: 'refused', code: 'ROUTE_UNSUPPORTED' })
+    expect(mark!.held).toBeUndefined()
+    expect(keptFile().asked.count).toBe(1)
+    expect(ends()).toEqual([`${refused.id}.json`])
+    expect(askedCount(NOW)).toBe(0)
+    expect(readQuestions()[0]).toMatchObject({ id: refused.id, outcome: 'refused', code: 'ROUTE_UNSUPPORTED' })
+    mark!.release!()
+    for (let round = 0; round < 3; round += 1) {
+      await removeQuestions('no-such-question', NOW)
+      expect(keptFile().asked.count).toBe(0)
+      expect(askedCount(NOW)).toBe(0)
+    }
+    expect(ends()).toEqual([])
+    expect(await ask()).toMatchObject({ ok: true })
+    expect(askedCount(NOW)).toBe(1)
+  })
+
+  it('takes an end in exactly once when a process ended between any two of its writes', async () => {
+    const final: QuestionRecord = { ...running, outcome: 'refused', code: 'ROUTE_UNSUPPORTED', note: 'refused by the check' }
+    // Ended after the end was written and before the kept file took it in.
+    leave({ asked: { day: '2026-10-12', count: 3 }, questions: [running] }, { record: final, day: '2026-10-12', refund: true })
+    expect(readQuestions()).toEqual([final])
+    expect(askedCount(DAY)).toBe(2)
+    // Ended after the kept file took it in and named it, and before the end's file was removed.
+    leave({ asked: { day: '2026-10-12', count: 2 }, merged: [final.id], questions: [final] }, { record: final, day: '2026-10-12', refund: true })
+    expect(readQuestions()).toEqual([final])
+    expect(askedCount(DAY)).toBe(2)
+    for (let round = 0; round < 3; round += 1) {
+      await removeQuestions('no-such-question', DAY)
+      expect(keptFile().asked).toEqual({ day: '2026-10-12', count: 2 })
+      expect(keptFile().questions).toEqual([final])
+      expect(keptFile().merged).toEqual(round === 0 ? [final.id] : [])
+      expect(ends()).toEqual([])
+    }
+    // A file that is no whole end is read as none, and nothing is taken from it.
+    leave({ asked: { day: '2026-10-12', count: 2 }, questions: [running] }, null)
+    writeFileSync(join(state(), 'question-ends', `${running.id}.json`), '{"version":1,"record":{"id":"')
+    expect(askedCount(DAY)).toBe(2)
+    expect(readQuestions()[0]).toMatchObject({ id: running.id, outcome: 'interrupted' })
+  })
+
+  it('keeps the count with its day: an end that comes in after midnight neither brings the old day back nor takes from the new one', async () => {
+    const late: QuestionRecord = { ...running, id: '20261012T235800-qbbbbbb', at: new Date(2026, 9, 12, 23, 58).toISOString() }
+    const end = { record: { ...late, outcome: 'refused' as const, code: 'ROUTE_UNSUPPORTED' }, day: '2026-10-12', refund: true }
+    // The new day already has its own count; the end is taken in by a process whose clock was read before midnight.
+    leave({ asked: { day: '2026-10-13', count: 4 }, questions: [late] }, end)
+    expect(askedCount(new Date(2026, 9, 13, 0, 5))).toBe(4)
+    await removeQuestions('no-such-question', new Date(2026, 9, 12, 23, 59))
+    expect(keptFile().asked).toEqual({ day: '2026-10-13', count: 4 })
+    expect(keptFile().questions.map((entry) => entry.outcome)).toEqual(['refused'])
+    // The old day's count is in the file and the first change of the new day comes with an old end: the new day starts at none.
+    leave({ asked: { day: '2026-10-12', count: 7 }, questions: [late] }, end)
+    expect(askedCount(new Date(2026, 9, 12, 23, 59))).toBe(6)
+    expect(askedCount(new Date(2026, 9, 13, 0, 5))).toBe(0)
+    await removeQuestions('no-such-question', new Date(2026, 9, 13, 0, 5))
+    expect(keptFile().asked).toEqual({ day: '2026-10-13', count: 0 })
+  })
+
+  it('removal takes a waiting end in first: a removed question does not come back, and its answer is gone', async () => {
+    const final: QuestionRecord = { ...running, outcome: 'answered', answer: 'Pages describe ENDMARK in one way.' }
+    leave({ asked: { day: '2026-10-12', count: 1 }, questions: [running] }, { record: final, day: '2026-10-12', refund: false })
+    expect(readQuestions()).toEqual([final])
+    await removeQuestions(final.id, DAY)
+    expect(readQuestions()).toEqual([])
+    expect(everythingKept()).not.toContain('ENDMARK')
+    await removeQuestions('no-such-question', DAY)
+    expect(readQuestions()).toEqual([])
+    expect(askedCount(DAY)).toBe(1)
+  })
+})
+

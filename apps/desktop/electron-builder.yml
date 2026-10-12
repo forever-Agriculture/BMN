@@ -62,6 +62,9 @@ extraResources:
     to: bin/agents-ask.mjs
   - from: bin/agents-fence.mjs
     to: bin/agents-fence.mjs
+  # A research run is started under this file as a program of its own, by the command line and by the app alike.
+  - from: bin/agents-supervised.mjs
+    to: bin/agents-supervised.mjs
   # The --self-test stand-in agents draw these recorded dialogs; the packaged smoke runs that phase too.
   - from: src/utility/test-fixtures/remote-answers
     to: self-test/remote-answers

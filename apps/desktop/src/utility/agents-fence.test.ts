@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CODEX_RESEARCH_TOOLS_SEEN, evaluateResearch, fenceStanding, fenceTests, fenceTestsPath, prepareResearchRun, researchFormHash, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import { FENCE_MARKERS, compareUnderProviderList, fenceDirectory, fenceSubjects, markersIn, providerModelList, runFenceTest } from '../../bin/agents-fence.mjs'
 import { researchArgv, researchers } from '../../bin/agents-research.mjs'
+import { processLives } from '../../bin/agents-supervised.mjs'
 import type { RosterAgent } from '../../bin/agents-roster.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
@@ -209,6 +210,24 @@ describe('the tool list under the provider\'s own model list (63.3 AC6)', () => 
     expect(researchers({ environment: env, now: NOW }).find((entry) => entry.id === 'luna')?.fence?.compared).toBe(true)
     expect(await compare()).toEqual({ ok: true, compared: false })
     expect(fenceTests()).toHaveLength(2)
+  }, 60_000)
+
+  it('writes each of the comparison\'s own runs into the lock before it starts, and starts none where that fails', async () => {
+    await test()
+    codex({ providerModels: LISTED, logsStarts: true })
+    const seen: boolean[] = []
+    expect(await compare({ register: (supervisor) => { seen.push(processLives(supervisor)) } })).toEqual({ ok: true, compared: true })
+    // Asking for the list is one run, and the test under it is several more: each had a living supervisor when it was written down.
+    expect(seen.length).toBeGreaterThan(1)
+    expect(seen.every((lives) => lives)).toBe(true)
+    const starts = readFileSync(join(stubs, 'codex-starts.log'), 'utf8')
+    // The lock's record cannot be written: Codex is not even asked for the list, and nothing is compared.
+    expect(await providerModelList({ environment: env, register: () => { throw new Error('no record') } })).toEqual({ ok: false, reason: 'Codex could not be asked for the provider\'s model list' })
+    codex({ providerModels: [{ slug: 'gpt-6-luna', base_instructions: 'You are Luna, changed.' }], logsStarts: true })
+    let asked = 0
+    const closed = await compare({ register: () => { asked += 1; if (asked > 1) throw new Error('no record') } })
+    expect(closed.ok).toBe(false)
+    expect(readFileSync(join(stubs, 'codex-starts.log'), 'utf8')).toBe(starts)
   }, 60_000)
 
   it('a tool the provider\'s list adds closes the offer, and no run starts', async () => {
