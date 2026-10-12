@@ -1454,7 +1454,9 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     expect(await call('questions:open-page', { id: kept!.id, claim: 7 })).toEqual({ opened: false })
     expect(await call('questions:open-page', { id: 'no-such-question', claim: 0 })).toEqual({ opened: false })
     const file = join(home, '.config/bmn/agents/state/research/questions.json')
-    for (const address of ['file:///etc/passwd', 'http://docs.example.org/jev', 'javascript:alert(1)', 'https://user:word@docs.example.org/', 'not an address']) {
+    // Nor is an address of this machine or a local network: a researcher's answer never sends his browser there.
+    const local = ['https://192.168.1.1/admin', 'https://127.0.0.1/', 'https://[::1]/', 'https://localhost/x', 'https://printer.local/', 'https://router/', 'https://wiki.internal/page']
+    for (const address of ['file:///etc/passwd', 'http://docs.example.org/jev', 'javascript:alert(1)', 'https://user:word@docs.example.org/', 'not an address', ...local]) {
       const stored = JSON.parse(readFileSync(file, 'utf8'))
       stored.questions[0].claims[0].source = address
       writeFileSync(file, JSON.stringify(stored))

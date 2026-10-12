@@ -1,6 +1,7 @@
 // MODULE: agents-ask.mjs - Epic 64: one web question behind the research fence. BMN's frame and the question are the whole prompt, the run is checked like every research, BMN reads each cited page itself, and every question is kept where the owner can read it
 import { randomBytes } from 'node:crypto'
 import { closeSync, mkdirSync, openSync, readFileSync, readSync, rmdirSync, statSync } from 'node:fs'
+import { userInfo } from 'node:os'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { APP_NAMES, RosterError, namedResearchers } from './agents-roster.mjs'
@@ -84,6 +85,20 @@ function credentialShaped(word) {
 }
 
 /**
+ * The home folders a question may not name: the one this process was given, and the account's own
+ * as the system holds it, which no caller's environment unsets or points elsewhere.
+ */
+function homeFolders(given) {
+  const folders = [given]
+  try {
+    folders.push(userInfo().homedir)
+  } catch {
+    // An account without an entry: only the given folder is known.
+  }
+  return [...new Set(folders.map((folder) => (typeof folder === 'string' ? folder.replace(/\/+$/, '') : '')).filter((folder) => folder.length > 1))]
+}
+
+/**
  * Why a text cannot be a web question, or null. Checked before anything is made: an empty text, one
  * over the length, a credential-shaped word, a path inside the owner's home folder. The message
  * says which and never quotes the word.
@@ -98,9 +113,8 @@ export function questionProblem(question, { home = process.env.HOME ?? '' } = {}
   if (at !== -1) {
     return { code: 'QUESTION_HOLDS_CREDENTIAL', message: `word ${at + 1} of the question looks like a key or a password; a web question is public text and its words reach the search sites` }
   }
-  const root = home.replace(/\/+$/, '')
-  if ((root.length > 1 && (question.includes(`${root}/`) || new RegExp(`${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w.-])`).test(question)))
-    || /(^|[\s"'`(=:,])~\//.test(question) || /\$\{?HOME\b/.test(question)) {
+  const namesFolder = (root) => question.includes(`${root}/`) || new RegExp(`${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w.-])`).test(question)
+  if (homeFolders(home).some(namesFolder) || /(^|[\s"'`(=:,])~\//.test(question) || /\$\{?HOME\b/.test(question)) {
     return { code: 'QUESTION_NAMES_HOME', message: 'the question names a path inside your home folder; a web question is public text and takes no file or folder with it' }
   }
   return null
@@ -198,9 +212,14 @@ export function readQuestions() {
     : { ...entry, outcome: 'interrupted', note: 'BMN ended before the answer was kept.' }))
 }
 
-/** How long a writer waits for another one, and after how long a writer's mark counts as left behind. */
-const WRITE_WAIT_MS = 2000
-const WRITE_STALE_MS = 5000
+/**
+ * After how long a writer's mark counts as left behind, and how long a writer waits for the mark. A
+ * writer holds it for one read and one write of a small file, so two seconds without release is a
+ * writer that ended; the wait is longer than that, so a waiting writer takes the mark and never
+ * writes beside it.
+ */
+const WRITE_STALE_MS = 2000
+const WRITE_WAIT_MS = 5000
 
 /**
  * Changes the kept questions: one writer at a time across the app and the command line, the file
@@ -225,6 +244,7 @@ function changeQuestions(change) {
       Atomics.wait(pause, 0, 0, 10)
     }
   }
+  // Past the wait only where writers followed each other without a gap for five seconds: the record is written all the same, a question never ends without one.
   try {
     writePrivate(questionsPath(), `${JSON.stringify({ version: 1, questions: change(readQuestions()).slice(-ASK_KEPT) }, null, 1)}\n`)
   } finally {
@@ -275,12 +295,12 @@ export function removeQuestions(id = null, now = new Date()) {
 // ---------------------------------------------------------------------------------------------
 // The answer: one typed object, or no usable answer
 
-/** An https address as BMN keeps it, or null for anything else. */
+/** An https address as BMN keeps it, or null for anything else. One with a sign-in part is not kept: that part is a credential. */
 function httpsAddress(value) {
   if (typeof value !== 'string' || value.length > ADDRESS_CHARS) return null
   try {
     const address = new URL(value)
-    return address.protocol === 'https:' ? address.href : null
+    return address.protocol === 'https:' && address.username === '' && address.password === '' ? address.href : null
   } catch {
     return null
   }

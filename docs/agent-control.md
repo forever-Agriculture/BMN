@@ -1490,7 +1490,9 @@ bmn research ask --question-file question.txt --agent luna --json
   researcher uses them as search terms, so they reach the search sites.
 - **What a question may not be.** It is refused before anything is made when it is empty, longer
   than 2,000 characters, holds a word shaped like a key or a password, or names a path inside
-  your home folder. The refusal says which and quotes nothing; such a text is not kept.
+  your home folder (the account's own, also where the command was started with another `HOME`
+  or none). The refusal says which and quotes nothing; such a text is not kept. An answer whose
+  claim cites an address with a sign-in part is no usable answer, and that address is not kept.
 - **Who answers.** The researcher picked on Models, or the one named with `--agent` where your
   team names it a researcher. Where nobody can research now, the command says why in the words
   Models uses.
@@ -1545,8 +1547,9 @@ bmn research ask --question-file question.txt --agent luna --json
   questions, newest first: the first line, when, who asked whom (a session by the name it has
   now), what its claims are worth and the outcome. Opening one shows the whole question, the
   answer, the claims that are evidence on a plate and the others under "Not evidence", each with
-  its page as a link that opens in your browser, what was looked for and not found, and how long
-  it took. **Remove** deletes one record with its text, **Remove all…** every one after a
+  its page as a link that opens in your browser (only an https address of a public name: one
+  that points at this computer or your network is never opened), what was looked for and not
+  found, and how long it took. **Remove** deletes one record with its text, **Remove all…** every one after a
   confirmation in place. Removing gives no question of the day back: the day's limit counts what
   was asked, not what is still listed.
 

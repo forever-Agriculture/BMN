@@ -1,7 +1,7 @@
 // MODULE: agents-ask.test.ts - Epic 64.1: one web question behind the research fence, over a synthetic team, a stand-in app and made-up pages; no provider and no real site is reached
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -633,5 +633,39 @@ describe('the command (64.1 AC1, AC10)', () => {
     expect(JSON.parse(printed)).toMatchObject({ ok: false, outcome: 'stopped' })
     expect(readQuestions()[0]).toMatchObject({ outcome: 'stopped', question: QUESTION })
     expect(researchLockHolder()).toBeNull()
+  })
+})
+
+describe('what the pre-review found (Epic 64)', () => {
+  it('refuses a path inside the account\'s own home folder also when HOME is unset or names another folder', () => {
+    // The account's home comes from the system, not from the environment a caller hands over.
+    const own = userInfo().homedir
+    for (const given of ['', '/tmp/somewhere-else']) {
+      expect(questionProblem(`What does ${own}/notes/plan.md say about pricing?`, { home: given })).toMatchObject({ code: 'QUESTION_NAMES_HOME' })
+      expect(questionProblem(`Why is ${own} not readable?`, { home: given })).toMatchObject({ code: 'QUESTION_NAMES_HOME' })
+    }
+    expect(questionProblem('Why do people keep notes under /home on Linux?', { home: '' })).toBeNull()
+  })
+
+  it('takes no claim whose page address carries a sign-in part, and keeps none of it', async () => {
+    const withSignIn = { ...ANSWER, claims: [{ ...ANSWER.claims[0]!, source: `https://reader:${PLANTED}@docs.example.org/jev` }] }
+    expect(parseAskAnswer(JSON.stringify(withSignIn))).toMatchObject({ ok: false })
+    plan({ text: JSON.stringify(withSignIn) })
+    const result = await ask()
+    expect(result).toMatchObject({ ok: false, outcome: 'no-answer' })
+    for (const output of [JSON.stringify(result), everythingKept()]) expect(output).not.toContain(PLANTED)
+  })
+
+  it('waits for another writer\'s mark on the kept questions and takes it over once it is left behind, never writing beside it', () => {
+    mkdirSync(join(home, '.config/bmn/agents/state/research'), { recursive: true })
+    const mark = `${questionsPath()}.writing`
+    mkdirSync(mark)
+    const began = Date.now()
+    removeQuestions(null, NOW)
+    // The mark was another writer's until it counted as left behind; only then was the file written, and the mark taken was given back.
+    expect(Date.now() - began).toBeGreaterThanOrEqual(1500)
+    expect(existsSync(mark)).toBe(false)
+    expect(JSON.parse(readFileSync(questionsPath(), 'utf8'))).toEqual({ version: 1, questions: [] })
+    expect(statSync(questionsPath()).mode & 0o777).toBe(0o600)
   })
 })

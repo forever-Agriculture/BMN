@@ -54,7 +54,7 @@ import {
   type ContextAutoPlanEntry, type ContextTestOutcome
 } from '../../bin/agents-context.mjs'
 import { ASK_KEPT, ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, agentsMayAsk, askedCount, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord } from '../../bin/agents-ask.mjs'
-import { chooseResearcher, fetchPublicPage, processStart, readResearch, researchLockHolder, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
+import { chooseResearcher, fetchPublicPage, processStart, publicHostName, readResearch, researchLockHolder, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
 import { runFenceTest } from '../../bin/agents-fence.mjs'
 import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsTests } from '../../bin/agents-skills.mjs'
 import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsTests } from '../../bin/agents-tools.mjs'
@@ -1310,7 +1310,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   handle('aiterm:questions:open-page', async (params) => {
     const id = textParam(params, 'id', 64)
     if (!Number.isSafeInteger(params.claim) || (params.claim as number) < 0) invalid('claim must be a claim\'s place in the record')
-    // The address comes from the kept record, written by a researcher: only an https address is opened, and only in the browser.
+    // The address comes from the kept record, written by a researcher: only an https address of a public name is opened, and only in the browser.
     const source = readQuestions().find((entry) => entry.id === id)?.claims?.[params.claim as number]?.source
     const address = httpsPage(source)
     if (address === null || options.openExternal === undefined) return { opened: false }
@@ -1325,12 +1325,16 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   return { contextAutoAtStart: () => auto.trigger() }
 }
 
-/** A kept page address as the browser may be given it: https, no sign-in part; null for anything else. */
+/**
+ * A kept page address as the browser may be given it: https, no sign-in part, and a host that is a
+ * public name. A researcher's answer never sends the owner's browser to this machine or his network.
+ */
 function httpsPage(source: unknown): string | null {
   if (typeof source !== 'string') return null
   try {
     const address = new URL(source)
-    return address.protocol === 'https:' && address.username === '' && address.password === '' ? address.href : null
+    const plain = address.protocol === 'https:' && address.username === '' && address.password === ''
+    return plain && publicHostName(address.hostname.toLowerCase().replace(/\.$/, '')) ? address.href : null
   } catch {
     return null
   }

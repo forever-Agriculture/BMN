@@ -39,6 +39,7 @@ export declare function answerText(harness: string, stdout: string, run: { folde
 export type PageRead = { ok: true; text: string } | { ok: false; reason: string }
 export type FetchPage = (address: string, limits?: { signal?: AbortSignal; timeoutMs?: number }) => Promise<PageRead>
 export declare function isPublicAddress(address: string): boolean
+export declare function publicHostName(host: string): boolean
 export declare function fetchPublicPage(address: string, options?: {
   timeoutMs?: number; maxBytes?: number; redirects?: number; selfTestPages?: string | null; signal?: AbortSignal
   resolve?: (host: string) => Promise<{ address: string; family: number }[]>

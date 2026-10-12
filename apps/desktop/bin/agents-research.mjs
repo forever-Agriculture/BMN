@@ -421,6 +421,14 @@ export function isPublicAddress(address) {
   return false
 }
 
+/**
+ * Whether a host, as written, can be a public site: a name with a dot, not a number address and not
+ * a name of this machine or a local network. What the name resolves to is checked where a page is read.
+ */
+export function publicHostName(host) {
+  return !(isIP(host) !== 0 || host.startsWith('[') || !host.includes('.') || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal'))
+}
+
 function resolveHost(host) {
   return new Promise((resolve, reject) => {
     dnsLookup(host, { all: true }, (error, addresses) => (error ? reject(error) : resolve(addresses)))
@@ -521,9 +529,7 @@ export async function fetchPublicPage(address, { timeoutMs = PAGE_LIMIT_MS, maxB
         return { ok: false, reason: 'the page could not be read' }
       }
     }
-    if (isIP(host) !== 0 || host.startsWith('[') || !host.includes('.') || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) {
-      return { ok: false, reason: 'not a public address' }
-    }
+    if (!publicHostName(host)) return { ok: false, reason: 'not a public address' }
     let addresses
     try {
       const wait = deadline - Date.now()
