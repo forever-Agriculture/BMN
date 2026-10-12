@@ -727,7 +727,23 @@ describe('a research run (60.10 AC2-AC5)', () => {
     plan({ ...FULL, 'gpt-6-astra': { text: OPENAI_ANSWER, delay: 60_000 } })
     const controller = new AbortController()
     const startedAt = Date.now()
-    const result = await research({ signal: controller.signal, onProgress: ({ done }) => { if (done === 4) setTimeout(() => controller.abort(), 150) } })
+    // Stop is pressed once the second run is going. (A fixed wait after the first run's end is too short on a busy machine: the second run's app had not always started.)
+    let watching: ReturnType<typeof setInterval> | null = null
+    const result = await research({ signal: controller.signal, onProgress: ({ done }) => {
+      if (done !== 4 || watching !== null) return
+      watching = setInterval(() => {
+        let started = 0
+        try {
+          started = calls().length
+        } catch {
+          // A line of the log was being written: look again.
+        }
+        if (started < 2) return
+        if (watching !== null) clearInterval(watching)
+        controller.abort()
+      }, 20)
+    } })
+    if (watching !== null) clearInterval(watching)
     expect(Date.now() - startedAt).toBeLessThan(20_000)
     expect(result.run).toMatchObject({ state: 'partial', note: 'Stopped before it finished.', models: 5 })
     expect(calls()).toHaveLength(2)
