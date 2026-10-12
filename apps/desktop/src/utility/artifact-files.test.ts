@@ -466,4 +466,58 @@ describe('removing originals after a purge', () => {
     createdRoots.add(base)
     expect(await removeOriginals(base, [{ artifactId: 'gone', sha256: 'a'.repeat(64) }])).toEqual({ removed: 0, failed: 0 })
   })
+
+  it('counts every file as failed when the store cannot be resolved', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'bmn-artifact-remove-test-'))
+    createdRoots.add(base)
+    await mkdir(join(base, 'artifacts'), { recursive: true })
+    // A link to itself: the store is there, but no path through it can be resolved.
+    await symlink('originals', artifactOriginalsRoot(base))
+
+    expect(await removeOriginals(base, [
+      { artifactId: 'one', sha256: 'a'.repeat(64) },
+      { artifactId: 'two', sha256: 'b'.repeat(64) }
+    ])).toEqual({ removed: 0, failed: 2 })
+  })
+
+  it('removes the delivery link of a file that is already absent, folder and all', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'bmn-artifact-remove-test-'))
+    createdRoots.add(base)
+    const originals = artifactOriginalsRoot(base)
+    const links = artifactLinksRoot(base)
+    await mkdir(originals, { recursive: true })
+    await mkdir(links, { recursive: true })
+    const sha256 = 'ab' + 'c'.repeat(62)
+    await symlink(join(originals, 'ab', 'gone'), join(links, 'gone.txt'))
+
+    expect(await removeOriginals(base, [{ artifactId: 'gone', sha256 }])).toEqual({ removed: 0, failed: 0 })
+    expect(await readdir(links)).toEqual([])
+  })
+
+  it('keeps links that are not this file\'s own, also in a links folder that was linked elsewhere', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'bmn-artifact-remove-test-'))
+    createdRoots.add(base)
+    const store = new ArtifactFileStore({
+      root: artifactOriginalsRoot(base), stagingRoot: join(base, 'staging'), usedBytes: async () => 0
+    })
+    const gone = await store.importBytes(new TextEncoder().encode('gone'), { artifactId: 'gone', originalName: 'gone.txt' })
+    const bucket = gone.sha256.slice(0, 2)
+    // The owner's own tree mirrors the store's shape, and the links folder points into it.
+    const owner = join(base, 'owner')
+    await mkdir(join(owner, 'links'), { recursive: true })
+    await mkdir(join(owner, 'originals', bucket), { recursive: true })
+    await writeFile(join(owner, 'originals', bucket, 'gone'), 'owner file')
+    await symlink(join(owner, 'links'), artifactLinksRoot(base))
+    // Read from where it really is, this link names the owner's file; read from the store's path, the removed one.
+    await symlink(join('..', 'originals', bucket, 'gone'), join(owner, 'links', 'gone.txt'))
+    await symlink(join(owner, 'originals', bucket, 'gone'), join(owner, 'links', 'gone.md'))
+    // Points at the removed file but is not named for it: not a delivery link.
+    await symlink(gone.storedPath, join(owner, 'links', 'notes.txt'))
+    // The one real delivery link.
+    await symlink(gone.storedPath, join(owner, 'links', 'gone'))
+
+    expect(await removeOriginals(base, [{ artifactId: 'gone', sha256: gone.sha256 }])).toEqual({ removed: 1, failed: 0 })
+    expect((await readdir(join(owner, 'links'))).sort()).toEqual(['gone.md', 'gone.txt', 'notes.txt'])
+    expect(await readFile(join(owner, 'originals', bucket, 'gone'), 'utf8')).toBe('owner file')
+  })
 })

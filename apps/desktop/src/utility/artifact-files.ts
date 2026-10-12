@@ -130,46 +130,72 @@ export function artifactLinksRoot(dataRoot: string): string {
 
 /**
  * Removes originals whose records are already deleted, and the delivery links that point at them.
- * Each path is rebuilt from ID and digest rather than read from the database, so nothing outside the
- * store can be touched. One failure does not stop the rest; the failed files are reported, not retried.
+ * Each path is rebuilt from ID and digest rather than read from the database, and every folder is
+ * resolved before anything in it is removed, so nothing outside the store can be touched. One failure
+ * does not stop the rest; the failed files are reported, not retried.
  */
 export async function removeOriginals(
   dataRoot: string,
   originals: readonly { artifactId: string; sha256: string }[]
 ): Promise<{ removed: number; failed: number }> {
   const root = resolve(artifactOriginalsRoot(dataRoot))
-  const paths = new Set<string>()
+  // Per removed or already absent original: the paths a delivery link to it may name.
+  const gone = new Map<string, Set<string>>()
   let removed = 0
   let failed = 0
-  // A store that is not there has nothing to remove, and nothing is removed through a root that fails to resolve.
-  const realRoot = await realpath(root).catch(() => undefined)
+  let realRoot: string | undefined
+  let rootAbsent = false
+  try {
+    realRoot = await realpath(root)
+  } catch (error) {
+    // A store that is not there holds nothing to remove. Any other failure removes nothing and is counted.
+    rootAbsent = errnoOf(error) === 'ENOENT'
+  }
   for (const original of originals) {
     try {
       const path = originalPath(root, original.artifactId, original.sha256)
-      if (realRoot === undefined) continue
+      if (realRoot === undefined) {
+        if (rootAbsent) gone.set(original.artifactId, new Set([path]))
+        else failed += 1
+        continue
+      }
+      const bucket = original.sha256.slice(0, 2)
       // The folder a file sits in must be the store's own: one replaced by a link would lead the removal elsewhere.
-      const folder = await realpath(dirname(path))
-      if (folder !== join(realRoot, original.sha256.slice(0, 2))) throw new TypeError('the file folder is outside the store')
-      paths.add(path)
+      const folder = await realpath(dirname(path)).catch((error: unknown) => {
+        if (errnoOf(error) === 'ENOENT') return undefined
+        throw error
+      })
+      if (folder !== undefined && folder !== join(realRoot, bucket)) throw new TypeError('the file folder is outside the store')
+      gone.set(original.artifactId, new Set([path, join(realRoot, bucket, original.artifactId)]))
+      if (folder === undefined) continue
       await unlink(path)
       removed += 1
     } catch (error) {
-      if (errnoOf(error) !== 'ENOENT') failed += 1
+      if (errnoOf(error) === 'ENOENT') continue
+      // The original is still there, so its links stay too.
+      gone.delete(original.artifactId)
+      failed += 1
     }
   }
-  if (paths.size === 0) return { removed, failed }
-  const linksRoot = resolve(artifactLinksRoot(dataRoot))
-  let names: string[] = []
+  if (gone.size === 0) return { removed, failed }
+  let linksRoot: string
+  let names: string[]
   try {
+    linksRoot = await realpath(resolve(artifactLinksRoot(dataRoot)))
     names = await readdir(linksRoot)
   } catch (error) {
     if (errnoOf(error) !== 'ENOENT') failed += 1
+    return { removed, failed }
   }
   for (const name of names) {
+    // A delivery link is named for its file. Anything else in the folder is not this purge's to remove.
+    const artifactId = [...gone.keys()].find((id) => name === id || name.startsWith(`${id}.`))
+    if (artifactId === undefined) continue
     const linkPath = join(linksRoot, name)
     try {
       if (!(await lstat(linkPath)).isSymbolicLink()) continue
-      if (paths.has(resolve(linksRoot, await readlink(linkPath)))) await unlink(linkPath)
+      // The target is read as the filesystem reads it: from the folder the link really is in.
+      if (gone.get(artifactId)!.has(resolve(linksRoot, await readlink(linkPath)))) await unlink(linkPath)
     } catch (error) {
       if (errnoOf(error) !== 'ENOENT') failed += 1
     }
