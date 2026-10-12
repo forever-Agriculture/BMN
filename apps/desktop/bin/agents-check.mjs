@@ -2087,7 +2087,12 @@ export function evaluateResearch(inputs, {
       ? resolveCodexRoute({ ...parsed, config: parsed.config.filter((entry) => !CODEX_RESEARCH_CONFIG.includes(entry)) }, environment, cwd ?? processCwd)
       : resolveClaudeRoute(parsed, environment, cwd ?? processCwd)
     if (resolution.unsupported) refuse('ROUTE_UNSUPPORTED', resolution.unsupported)
-    const version = harnessVersion(parsed.command, dispatchEnvironment(parsed, environment))
+    const versionEnvironment = dispatchEnvironment(parsed, environment)
+    // Like appVersion and the fence test, query the executable with bare HOME/PATH. Native Codex
+    // creates startup aliases even for --version; probing in the run's auth-only folder dirties it.
+    // The research command retains its own CODEX_HOME and every folder/form restriction below.
+    if (parsed.harness === 'codex') delete versionEnvironment.CODEX_HOME
+    const version = harnessVersion(parsed.command, versionEnvironment)
     note(parsed.harness === 'codex' ? 'dispatch form: env -i codex exec from a Codex folder of its own, read-only, web search, no command or app tools' : 'dispatch form: env -i claude -p, web tools only')
     const { model, effort } = checkModelAndEffort(agent, resolution, note)
     const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog),
