@@ -92,6 +92,9 @@ Commands:
                                             the owner-run test of where an app reads skills (bmn skills --help)
   tools check|install|import|test           One list of MCP tools set up in each agent app's own settings,
                                             with the owner-run test of where an app reads them (bmn tools --help)
+  research ask [--question-file <path>|-] [--agent <id>] [--json]
+                                            Ask the web one question through a researcher your team names;
+                                            the answer names its pages (bmn research --help)
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
@@ -1467,6 +1470,51 @@ Codex agent is yours to start.
 - The sign-in itself: Codex needs it to reach its provider, so the run can use it as Codex does.
 - Claude Code researchers: their limits are in the command and checked, and not yet tested this
   way on a live run.
+
+#### Asking the web a question
+
+`bmn research ask` puts one question of your own, or of an agent working for you, to the web
+through a researcher your team names. It is a research run like the one above: BMN makes the
+run's folder, writes the prompt, builds the same command and asks the same check, and the app
+starts only on PASS. A refusal starts nothing and is given in the check's own words.
+
+```bash
+bmn research ask <<'EOF'
+How do people use the Jev 1.13 model, according to public pages?
+EOF
+bmn research ask --question-file question.txt --agent luna --json
+```
+
+- **What leaves.** The prompt is a fixed frame and your question, nothing else: no file, folder,
+  rule, skill, tool or name of yours. The question's words go further than a dispatch does: the
+  researcher uses them as search terms, so they reach the search sites.
+- **What a question may not be.** It is refused before anything is made when it is empty, longer
+  than 2,000 characters, holds a word shaped like a key or a password, or names a path inside
+  your home folder. The refusal says which and quotes nothing; such a text is not kept.
+- **Who answers.** The researcher picked on Models, or the one named with `--agent` where your
+  team names it a researcher. Where nobody can research now, the command says why in the words
+  Models uses.
+- **The answer.** A few sentences, then each claim with the page it rests on and a short passage
+  copied from that page. BMN reads each cited page itself and marks every claim: "passage found
+  on the page", "page read, passage not found" or "page not readable". Only the first is
+  evidence. An answer that is not the asked shape comes back as "no usable answer" with the run's
+  id; BMN never repairs one.
+- **The limits.** One research at a time, Models research included: a second one is refused
+  with "a research is running", never queued. One lock file holds this across the app and the
+  command line, and a lock left by a process that has ended is taken over. A question ends after
+  10 minutes with what it has. 20 questions may start in one local day; a refused one does not
+  count. The researcher runs at its lowest effort. Ctrl-C ends the run. These limits bind this
+  command and Models' own Ask only: the web search inside your own Claude Code and Codex sessions
+  is not touched.
+- **What is kept.** One record per question in `~/.config/bmn/agents/state/research/questions.json`,
+  the last 200: when, who asked (the BMN session and its app, the session's shell, or "from a
+  shell"), the researcher, the exact question, the outcome, the claims with their marks and how
+  long it took. No key, and no page text beyond the quoted passages. A question whose process
+  ended before its record was written reads as interrupted.
+- **With BMN closed** the command works by itself. Exit 0 answered; 1 no usable answer, failed,
+  stopped or out of time; 2 usage; 10 refused.
+- **Not here.** Research across many steps, pages behind a sign-in, attached files, a researcher
+  your team does not name. A real question is yours to ask first.
 
 ### The prompt guard
 

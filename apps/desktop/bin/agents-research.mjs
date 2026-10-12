@@ -1,8 +1,8 @@
-// MODULE: agents-research.mjs - Story 60.10, first release: BMN writes the research prompt, runs one checked run per provider, accepts only a typed answer, reads each cited page itself and keeps what was found
+// MODULE: agents-research.mjs - Story 60.10, first release: BMN writes the research prompt, runs one checked run per provider, accepts only a typed answer, reads each cited page itself and keeps what was found; one lock holds a research across the app and the command line (64.1)
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { lookup as dnsLookup } from 'node:dns'
-import { closeSync, lstatSync, openSync, readFileSync, realpathSync } from 'node:fs'
+import { closeSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
@@ -155,7 +155,7 @@ export function researchArgv(agent, { environment = process.env, run = null, ver
  * bare environment. The command needs it before the check runs, since an agent's context limit
  * goes into the command only on a version the owner's test proved.
  */
-function appVersion(agent, environment) {
+export function appVersion(agent, environment) {
   return harnessVersion(agent.harness, { HOME: environment.HOME ?? '', PATH: environment.PATH ?? '' })
 }
 
@@ -835,6 +835,121 @@ export function researchView(store) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// One research at a time, across the app and the command line (64.1 AC6)
+
+export function researchLockPath() {
+  return `${researchDirectory()}/lock`
+}
+
+/** When a process started, in the kernel's own count, or null when there is no such process. A number that was given out again reads differently. */
+export function processStart(pid) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    // The program's name may hold spaces and brackets; the fields are counted after its closing one.
+    const start = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
+    return /^\d+$/.test(start ?? '') ? start : null
+  } catch {
+    return null
+  }
+}
+
+/** The lock as it lies on the disk: its text, and its record where the process that wrote it still runs. */
+function readLock() {
+  let text
+  try {
+    text = readFileSync(researchLockPath(), 'utf8')
+  } catch {
+    return { text: null, record: null }
+  }
+  try {
+    const record = JSON.parse(text)
+    if (isObject(record) && Number.isInteger(record.pid) && typeof record.start === 'string' && processStart(record.pid) === record.start) return { text, record }
+  } catch {
+    // A lock nobody can read is nobody's.
+  }
+  return { text, record: null }
+}
+
+/** Who holds the research lock now: the record its holder wrote, or null. A lock left by a process that has ended counts as none. */
+export function researchLockHolder() {
+  return readLock().record
+}
+
+/** How long a take-over of a dead process's lock may stand before it is itself taken for dead. */
+const TAKEOVER_MS = 10_000
+
+/**
+ * Takes the one research lock for this process, or says who holds it. `holder` is what the others
+ * are told: the kind of research, who asked and its id. A lock left by a process that has ended is
+ * taken over; two processes that find the same dead lock cannot both remove it, since removing goes
+ * through a second, short-lived file only one of them can make.
+ */
+export function takeResearchLock(holder) {
+  const path = researchLockPath()
+  const own = { version: 1, ...holder, pid: process.pid, start: processStart(process.pid) ?? '0' }
+  mkdirSync(researchDirectory(), { recursive: true, mode: 0o700 })
+  const draft = `${path}.new-${process.pid}-${randomBytes(4).toString('hex')}`
+  writeFileSync(draft, `${JSON.stringify(own)}\n`, { mode: 0o600, flag: 'wx' })
+  const release = () => {
+    const now = readLock()
+    if (now.record !== null && now.record.pid === own.pid && now.record.start === own.start && now.record.id === own.id) {
+      try {
+        unlinkSync(path)
+      } catch {
+        // Already gone.
+      }
+    }
+  }
+  try {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        // A link appears whole or not at all, and never over a lock that is there.
+        linkSync(draft, path)
+        return { release }
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error
+      }
+      const found = readLock()
+      if (found.record !== null) return { held: found.record }
+      const guard = `${path}.takeover`
+      try {
+        closeSync(openSync(guard, 'wx', 0o600))
+      } catch {
+        try {
+          if (Date.now() - statSync(guard).mtimeMs > TAKEOVER_MS) unlinkSync(guard)
+        } catch {
+          // The other take-over just ended.
+        }
+        continue
+      }
+      try {
+        const again = readLock()
+        // Only the very lock that was judged dead is removed: another process may have taken a new one meanwhile.
+        if (again.record === null && again.text === found.text && again.text !== null) unlinkSync(path)
+      } catch {
+        // Gone already.
+      } finally {
+        try {
+          unlinkSync(guard)
+        } catch {
+          // Gone already.
+        }
+      }
+    }
+    return { held: readLock().record ?? { version: 1, kind: 'research' } }
+  } finally {
+    try {
+      unlinkSync(draft)
+    } catch {
+      // Gone already.
+    }
+  }
+}
+
+/** What a second research is told while one runs. */
+export const RESEARCH_RUNNING = 'a research is running'
+
+// ---------------------------------------------------------------------------------------------
 // Running it
 
 /** Ends a run's whole process group: first asked, then made to. */
@@ -852,7 +967,7 @@ function endGroup(child) {
 }
 
 /** Starts one checked run and resolves with what it printed, or with why it ended early. */
-function runOnce(argv, run, { signal, deadline }) {
+export function runOnce(argv, run, { signal, deadline }) {
   return new Promise((resolve) => {
     const input = openSync(run.prompt, 'r')
     let child
@@ -895,6 +1010,26 @@ function runOnce(argv, run, { signal, deadline }) {
 }
 
 /**
+ * The comparison a Codex researcher's first run waits for (63.3 AC6): its tool list under the
+ * provider's own model list against the one the fence test saw. Null when the run may start;
+ * otherwise how the research ends (`stopped`, `limit` or `refused` with the `reason`). Stop and the
+ * time limit hold during the comparison too: no run is started after either.
+ */
+export async function compareBeforeFirstRun({ agent, environment, now, fenceTests = undefined, signal = undefined, deadline, compare = undefined }) {
+  let same
+  try {
+    same = await (compare ?? (await import('./agents-fence.mjs')).compareUnderProviderList)({
+      agent, environment, now, ...(fenceTests === undefined ? {} : { tests: fenceTests }), ...(signal === undefined ? {} : { signal }), limitMs: Math.max(1, deadline - Date.now())
+    })
+  } catch (error) {
+    same = { ok: false, reason: error instanceof Error ? error.message : String(error) }
+  }
+  if (signal?.aborted || Date.now() >= deadline || same.stopped === true) return { ended: signal?.aborted ? 'stopped' : 'limit' }
+  if (!same.ok) return { ended: 'refused', reason: same.reason }
+  return null
+}
+
+/**
  * One research: a checked run per provider, one after another. Each run's models are verified and
  * kept as soon as it ends, so Stop, the time limit or a failed run keeps what the earlier runs
  * found; the research is then marked partial. `only` researches one name on one provider (Look up).
@@ -929,6 +1064,9 @@ export async function runResearch({
   }
   const total = batches.reduce((sum, batch) => sum + batch.models.length, 0)
   if (total === 0) return finish('failed', 'the team has no model names to research', [])
+  // One research at a time, whoever started it: a web question from a shell holds the same lock (64.1 AC6).
+  const lock = takeResearchLock({ kind: record.kind, id, at: record.at, researcher })
+  if (lock.held !== undefined) return finish('failed', `${RESEARCH_RUNNING}${lock.held.kind === 'question' ? ' (a web question)' : ''}; wait for it to end, or stop it`, [])
   // The limit runs on the machine's clock; `now` only dates what is kept.
   const deadline = Date.now() + limitMs
   const found = []
@@ -937,81 +1075,72 @@ export async function runResearch({
   let ended = null
   let compared = agent.harness !== 'codex'
   onProgress({ done, total })
-  for (const batch of batches) {
-    if (signal?.aborted) ended = 'stopped'
-    else if (Date.now() >= deadline) ended = 'limit'
-    if (ended !== null) break
-    const prompt = researchPrompt(batch)
-    const run = prepareResearchRun(prompt, { now: now(), harness: agent.harness, environment })
-    const argv = researchArgv(agent, { environment, run, version: appVersion(agent, environment), contextTests })
-    const verdict = evaluateResearch({ agent: agent.id, argv, stdin: run.prompt, cwd: run.cwd }, {
-      environment, cwd: run.cwd, now: now(), ...(contextTests === undefined ? {} : { contextTestLog: contextTests }),
-      ...(fenceVersions === undefined ? {} : { fenceVersions }), ...(fenceTests === undefined ? {} : { fenceTestLog: fenceTests })
-    })
-    if (verdict.verdict !== 'PASS') {
-      // The same refusal would meet every later run: nothing more is started.
-      removeResearchCodexFolders(run)
-      failures.push(`BMN did not start the run: ${verdict.message}`)
-      ended = 'refused'
-      break
-    }
-    if (!compared) {
-      // Once per research, after the check and before the first run: the fence test knew only the model list Codex was built with.
-      let same
-      try {
-        same = await (compare ?? (await import('./agents-fence.mjs')).compareUnderProviderList)({
-          agent, environment, now: now(), ...(fenceTests === undefined ? {} : { tests: fenceTests }), ...(signal === undefined ? {} : { signal }), limitMs: Math.max(1, deadline - Date.now())
-        })
-      } catch (error) {
-        same = { ok: false, reason: error instanceof Error ? error.message : String(error) }
-      }
-      // Stop and the time limit hold during the comparison too: no run is started after either.
-      if (signal?.aborted || Date.now() >= deadline || same.stopped === true) {
+  try {
+    for (const batch of batches) {
+      if (signal?.aborted) ended = 'stopped'
+      else if (Date.now() >= deadline) ended = 'limit'
+      if (ended !== null) break
+      const prompt = researchPrompt(batch)
+      const run = prepareResearchRun(prompt, { now: now(), harness: agent.harness, environment })
+      const argv = researchArgv(agent, { environment, run, version: appVersion(agent, environment), contextTests })
+      const verdict = evaluateResearch({ agent: agent.id, argv, stdin: run.prompt, cwd: run.cwd }, {
+        environment, cwd: run.cwd, now: now(), ...(contextTests === undefined ? {} : { contextTestLog: contextTests }),
+        ...(fenceVersions === undefined ? {} : { fenceVersions }), ...(fenceTests === undefined ? {} : { fenceTestLog: fenceTests })
+      })
+      if (verdict.verdict !== 'PASS') {
+        // The same refusal would meet every later run: nothing more is started.
         removeResearchCodexFolders(run)
-        ended = signal?.aborted ? 'stopped' : 'limit'
-        break
-      }
-      if (!same.ok) {
-        removeResearchCodexFolders(run)
-        failures.push(`BMN did not start the run: ${same.reason}`)
+        failures.push(`BMN did not start the run: ${verdict.message}`)
         ended = 'refused'
         break
       }
-      compared = true
-    }
-    writePrivate(`${run.folder}/receipt.json`, `${JSON.stringify(verdict.receipt)}\n`)
-    let result
-    try {
-      result = await runOnce(argv, run, { signal, deadline })
-    } finally {
-      // The run's own Codex folder goes with the run: the link is removed, never the sign-in file it points at.
-      removeResearchCodexFolders(run)
-    }
-    if (result.ended === 'stopped' || result.ended === 'limit') {
-      ended = result.ended
-      break
-    }
-    if (result.ended === 'failed') {
-      failures.push(`${batch.name}: ${result.reason}`)
-    } else {
-      const text = answerText(agent.harness, result.stdout, run)
-      const answer = text.ok ? parseAnswer(text.text, batch, { now: now() }) : text
-      if (!answer.ok) failures.push(`${batch.name}: ${answer.reason}`)
-      else {
-        // Stop and the time limit hold while the cited pages are read too: what was read by then is kept, marked.
-        const report = {}
-        const checked = await verifyModels(answer.models, batch.sites, { fetchPage, signal, deadline, report })
-        found.push(...checked.map((model) => ({ ...model, provider_id: batch.provider })))
-        if (report.cut !== undefined) {
-          ended = report.cut
-          done += batch.models.length
-          onProgress({ done, total })
+      if (!compared) {
+        // Once per research, after the check and before the first run: the fence test knew only the model list Codex was built with.
+        const stop = await compareBeforeFirstRun({ agent, environment, now: now(), fenceTests, signal, deadline, compare })
+        if (stop !== null) {
+          removeResearchCodexFolders(run)
+          if (stop.ended === 'refused') failures.push(`BMN did not start the run: ${stop.reason}`)
+          ended = stop.ended
           break
         }
+        compared = true
       }
+      writePrivate(`${run.folder}/receipt.json`, `${JSON.stringify(verdict.receipt)}\n`)
+      let result
+      try {
+        result = await runOnce(argv, run, { signal, deadline })
+      } finally {
+        // The run's own Codex folder goes with the run: the link is removed, never the sign-in file it points at.
+        removeResearchCodexFolders(run)
+      }
+      if (result.ended === 'stopped' || result.ended === 'limit') {
+        ended = result.ended
+        break
+      }
+      if (result.ended === 'failed') {
+        failures.push(`${batch.name}: ${result.reason}`)
+      } else {
+        const text = answerText(agent.harness, result.stdout, run)
+        const answer = text.ok ? parseAnswer(text.text, batch, { now: now() }) : text
+        if (!answer.ok) failures.push(`${batch.name}: ${answer.reason}`)
+        else {
+          // Stop and the time limit hold while the cited pages are read too: what was read by then is kept, marked.
+          const report = {}
+          const checked = await verifyModels(answer.models, batch.sites, { fetchPage, signal, deadline, report })
+          found.push(...checked.map((model) => ({ ...model, provider_id: batch.provider })))
+          if (report.cut !== undefined) {
+            ended = report.cut
+            done += batch.models.length
+            onProgress({ done, total })
+            break
+          }
+        }
+      }
+      done += batch.models.length
+      onProgress({ done, total })
     }
-    done += batch.models.length
-    onProgress({ done, total })
+  } finally {
+    lock.release()
   }
   if (ended === 'stopped') return finish(found.length > 0 ? 'partial' : 'stopped', 'Stopped before it finished.', found)
   if (ended === 'limit') return finish(found.length > 0 ? 'partial' : 'stopped', 'Ended at the 20-minute limit.', found)

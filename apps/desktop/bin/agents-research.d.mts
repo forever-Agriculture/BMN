@@ -73,6 +73,20 @@ export interface ResearchViewShape {
 }
 export declare function researchView(store: ResearchStore): ResearchViewShape
 
+/** Who holds the one research lock: what its holder wrote, with the process that wrote it. */
+export interface ResearchLockRecord { version: 1; kind: 'research' | 'lookup' | 'question'; id?: string; at?: string; researcher?: string; by?: unknown; pid: number; start: string }
+export declare const RESEARCH_RUNNING: string
+export declare function researchLockPath(): string
+export declare function processStart(pid: number): string | null
+export declare function researchLockHolder(): ResearchLockRecord | null
+export declare function takeResearchLock(holder: Omit<ResearchLockRecord, 'version' | 'pid' | 'start'>): { release(): void; held?: undefined } | { held: ResearchLockRecord; release?: undefined }
+export declare function appVersion(agent: RosterData['agents'][number], environment: Environment): string | null
+export declare function runOnce(argv: string[], run: { prompt: string; cwd: string }, limits: { signal?: AbortSignal; deadline: number }): Promise<{ ended: 'done'; stdout: string } | { ended: 'failed' | 'stopped' | 'limit'; reason?: string }>
+export declare function compareBeforeFirstRun(options: {
+  agent: RosterData['agents'][number]; environment?: Environment; now: Date; fenceTests?: FenceTestEntry[]; signal?: AbortSignal; deadline: number
+  compare?: NonNullable<Parameters<typeof runResearch>[0]['compare']>
+}): Promise<null | { ended: 'stopped' | 'limit' } | { ended: 'refused'; reason: string }>
+
 export declare function runResearch(options: {
   researcher: string; only?: { provider: string; model: string } | null; environment?: Environment; now?: () => Date; signal?: AbortSignal
   onProgress?: (progress: { done: number; total: number }) => void; fetchPage?: FetchPage; limitMs?: number; contextTests?: unknown[]; fenceVersions?: Record<string, string[]>
