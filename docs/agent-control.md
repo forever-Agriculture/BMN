@@ -1485,6 +1485,8 @@ EOF
 bmn research ask --question-file question.txt --agent luna --json
 ```
 
+A lone `-` (`… | bmn research ask -`) says "standard input" out loud and changes nothing.
+
 - **What leaves.** The prompt is a fixed frame and your question, nothing else: no file, folder,
   rule, skill, tool or name of yours. The question's words go further than a dispatch does: the
   researcher uses them as search terms, so they reach the search sites.
@@ -1503,16 +1505,26 @@ bmn research ask --question-file question.txt --agent luna --json
   id; BMN never repairs one.
 - **The limits.** One research at a time, Models research included: a second one is refused
   with "a research is running", never queued. One lock file holds this across the app and the
-  command line, and a lock left by a process that has ended is taken over. A question ends after
-  10 minutes with what it has. 20 questions may start in one local day; a refused one does not
-  count. The researcher runs at its lowest effort. Ctrl-C ends the run. These limits bind this
-  command and Models' own Ask only: the web search inside your own Claude Code and Codex sessions
-  is not touched.
+  command line, and a lock left by a process that has ended is taken over. The lock names the
+  researcher app while it runs: where a command was killed outright and could end nothing
+  itself, whoever takes its lock over ends that app first, so it never runs on outside the lock
+  and the time limit. A question ends after 10 minutes with what it has. 20 questions may start
+  in one local day; a refused one does not count. The day's count is kept beside the list and
+  apart from it, so a question that left the list (removed, or pushed out by newer records)
+  stays counted. The researcher runs at its lowest effort. Ctrl-C, or the end of its terminal,
+  ends the run. These limits bind this command and Models' own Ask only: the web search inside
+  your own Claude Code and Codex sessions is not touched.
 - **What is kept.** One record per question in `~/.config/bmn/agents/state/research/questions.json`,
   the last 200: when, who asked (the BMN session and its app, the session's shell, or "from a
   shell"), the researcher, the exact question, the outcome, the claims with their marks and how
   long it took. No key, and no page text beyond the quoted passages. A question whose process
-  ended before its record was written reads as interrupted.
+  ended before its record was written reads as interrupted. The file has one writer at a time
+  across the app and the command line: a writer's mark is its own for as long as its process
+  lives, a second writer waits up to five seconds and then gives up without writing (a question
+  whose record cannot be written is not asked: `RECORD_BUSY`), and a mark whose process has ended
+  is taken over at once. Beside the record, the run's folder under `research/runs/` holds BMN's
+  prompt with the question; a researcher's raw answer is never kept there, and the folder goes
+  when the question leaves the list.
 - **With BMN closed** the command works by itself. Exit 0 answered; 1 no usable answer, failed,
   stopped or out of time; 2 usage; 10 refused.
 - **Not here.** Research across many steps, pages behind a sign-in, attached files, a researcher
@@ -1547,10 +1559,13 @@ bmn research ask --question-file question.txt --agent luna --json
   questions, newest first: the first line, when, who asked whom (a session by the name it has
   now), what its claims are worth and the outcome. Opening one shows the whole question, the
   answer, the claims that are evidence on a plate and the others under "Not evidence", each with
-  its page as a link that opens in your browser (only an https address of a public name: one
-  that points at this computer or your network is never opened), what was looked for and not
-  found, and how long it took. **Remove** deletes one record with its text, **Remove all…** every one after a
-  confirmation in place. Removing gives no question of the day back: the day's limit counts what
+  its page as a link that opens in your browser, what was looked for and not found, and how
+  long it took. BMN hands the browser only an https address with no sign-in part, written as a
+  public name, that leads to public addresses when BMN looks it up at that moment; one that
+  leads to this computer or your network, or nowhere, is not opened. What the browser does from
+  there (its own lookup, a redirect the site sends) is the browser's. **Remove** deletes one
+  record with its text and its run's folder, **Remove all…** every one after a confirmation in
+  place. Removing gives no question of the day back: the day's limit counts what
   was asked, not what is still listed.
 
 ### The prompt guard

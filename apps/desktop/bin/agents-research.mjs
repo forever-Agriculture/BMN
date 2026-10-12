@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { lookup as dnsLookup } from 'node:dns'
-import { closeSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
@@ -427,6 +427,24 @@ export function isPublicAddress(address) {
  */
 export function publicHostName(host) {
   return !(isIP(host) !== 0 || host.startsWith('[') || !host.includes('.') || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal'))
+}
+
+/**
+ * Whether a host name leads, when looked up now, to public addresses only. A name that cannot be
+ * looked up in time leads nowhere BMN can vouch for.
+ */
+export async function resolvesPublic(host, { resolve = resolveHost, timeoutMs = 3000 } = {}) {
+  const name = String(host).toLowerCase().replace(/\.$/, '')
+  if (!publicHostName(name)) return false
+  let timer
+  try {
+    const addresses = await Promise.race([resolve(name), new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error('lookup timed out')), timeoutMs) })])
+    return Array.isArray(addresses) && addresses.length > 0 && addresses.every((entry) => isPublicAddress(entry.address))
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 function resolveHost(host) {
@@ -859,11 +877,11 @@ export function processStart(pid) {
   }
 }
 
-/** The lock as it lies on the disk: its text, and its record where the process that wrote it still runs. */
-function readLock() {
+/** A lock as it lies on the disk: its text, and its record where the process that wrote it still runs. */
+function readLock(path = researchLockPath()) {
   let text
   try {
-    text = readFileSync(researchLockPath(), 'utf8')
+    text = readFileSync(path, 'utf8')
   } catch {
     return { text: null, record: null }
   }
@@ -881,6 +899,29 @@ export function researchLockHolder() {
   return readLock().record
 }
 
+/**
+ * Ends the researcher app a dead holder's lock still names (64.1 AC6, AC7): a command killed outright
+ * could end nothing itself, and its app would run on outside the lock and the time limit. The app
+ * was started as the head of a process group of its own, so the group goes. Only the very process
+ * the lock named is ended: a process number given out again reads another start.
+ */
+function endLeftApp(text) {
+  let app
+  try {
+    app = JSON.parse(text).app
+  } catch {
+    return
+  }
+  if (!isObject(app) || !Number.isInteger(app.pid) || app.pid <= 1 || typeof app.start !== 'string' || processStart(app.pid) !== app.start) return
+  for (const target of [-app.pid, app.pid]) {
+    try {
+      process.kill(target, 'SIGKILL')
+    } catch {
+      // Already gone, or not ours to end.
+    }
+  }
+}
+
 /** How long a take-over of a dead process's lock may stand before it is itself taken for dead. */
 const TAKEOVER_MS = 10_000
 
@@ -891,31 +932,50 @@ const TAKEOVER_MS = 10_000
  * through a second, short-lived file only one of them can make.
  */
 export function takeResearchLock(holder) {
-  const path = researchLockPath()
+  return takeLock(researchLockPath(), holder, { onDead: endLeftApp })
+}
+
+/**
+ * Takes the lock file at `path` for this process, or says who holds it: `{ release, note }`, or
+ * `{ held }` with the living holder's record. A lock is its holder's for as long as that process
+ * lives, however long that is; only a lock whose process has ended is taken over, after `onDead`
+ * was given its text. `note` adds fields to the holder's own record.
+ */
+export function takeLock(path, holder, { onDead = () => {} } = {}) {
   const own = { version: 1, ...holder, pid: process.pid, start: processStart(process.pid) ?? '0' }
-  mkdirSync(researchDirectory(), { recursive: true, mode: 0o700 })
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const draft = `${path}.new-${process.pid}-${randomBytes(4).toString('hex')}`
   writeFileSync(draft, `${JSON.stringify(own)}\n`, { mode: 0o600, flag: 'wx' })
+  const mine = () => {
+    const now = readLock(path)
+    return now.record !== null && now.record.pid === own.pid && now.record.start === own.start && now.record.id === own.id
+  }
   const release = () => {
-    const now = readLock()
-    if (now.record !== null && now.record.pid === own.pid && now.record.start === own.start && now.record.id === own.id) {
-      try {
-        unlinkSync(path)
-      } catch {
-        // Already gone.
-      }
+    if (!mine()) return
+    try {
+      unlinkSync(path)
+    } catch {
+      // Already gone.
     }
+  }
+  // The holder's own record with more in it, replaced whole: a reader sees the old record or the new one.
+  const note = (fields) => {
+    if (!mine()) return
+    Object.assign(own, fields)
+    const next = `${path}.note-${process.pid}-${randomBytes(4).toString('hex')}`
+    writeFileSync(next, `${JSON.stringify(own)}\n`, { mode: 0o600, flag: 'wx' })
+    renameSync(next, path)
   }
   try {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       try {
         // A link appears whole or not at all, and never over a lock that is there.
         linkSync(draft, path)
-        return { release }
+        return { release, note }
       } catch (error) {
         if (error.code !== 'EEXIST') throw error
       }
-      const found = readLock()
+      const found = readLock(path)
       if (found.record !== null) return { held: found.record }
       const guard = `${path}.takeover`
       try {
@@ -929,9 +989,15 @@ export function takeResearchLock(holder) {
         continue
       }
       try {
-        const again = readLock()
+        const again = readLock(path)
         // Only the very lock that was judged dead is removed: another process may have taken a new one meanwhile.
-        if (again.record === null && again.text === found.text && again.text !== null) unlinkSync(path)
+        if (again.record === null && again.text === found.text && again.text !== null) {
+          onDead(again.text)
+          unlinkSync(path)
+        } else if (again.text === null && found.text === null) {
+          // Not a file at all: an empty folder of that name is nobody's lock and goes; anything else stays and is reported as held.
+          rmdirSync(path)
+        }
       } catch {
         // Gone already.
       } finally {
@@ -942,7 +1008,8 @@ export function takeResearchLock(holder) {
         }
       }
     }
-    return { held: readLock().record ?? { version: 1, kind: 'research' } }
+    // Held, by a holder that could not be read: said as a research, the word a caller of the research lock has always got here.
+    return { held: readLock(path).record ?? { version: 1, kind: 'research' } }
   } finally {
     try {
       unlinkSync(draft)
@@ -973,7 +1040,7 @@ function endGroup(child) {
 }
 
 /** Starts one checked run and resolves with what it printed, or with why it ended early. */
-export function runOnce(argv, run, { signal, deadline }) {
+export function runOnce(argv, run, { signal, deadline, onSpawn = () => {} }) {
   return new Promise((resolve) => {
     const input = openSync(run.prompt, 'r')
     let child
@@ -984,6 +1051,14 @@ export function runOnce(argv, run, { signal, deadline }) {
       return resolve({ ended: 'failed', reason: error instanceof Error ? error.message : String(error) })
     }
     closeSync(input)
+    // Who runs, for the lock's record: a holder that is killed outright leaves this for the next one to end.
+    if (child.pid !== undefined) {
+      try {
+        onSpawn({ pid: child.pid, start: processStart(child.pid) ?? '0' })
+      } catch {
+        // The run goes on without the note.
+      }
+    }
     const chunks = []
     let size = 0
     let ended = null
@@ -1114,7 +1189,7 @@ export async function runResearch({
       writePrivate(`${run.folder}/receipt.json`, `${JSON.stringify(verdict.receipt)}\n`)
       let result
       try {
-        result = await runOnce(argv, run, { signal, deadline })
+        result = await runOnce(argv, run, { signal, deadline, onSpawn: (app) => lock.note({ app }) })
       } finally {
         // The run's own Codex folder goes with the run: the link is removed, never the sign-in file it points at.
         removeResearchCodexFolders(run)

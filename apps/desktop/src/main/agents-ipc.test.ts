@@ -65,7 +65,7 @@ beforeEach(() => {
   setContextAuto({ enabled: false })
   ipc = installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
     senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...appEnv }),
-    openPath: async (path) => (existsSync(path) ? '' : 'no such file'), openExternal: async (address) => { openedInBrowser.push(address) }, researchPages: () => researchPages,
+    openPath: async (path) => (existsSync(path) ? '' : 'no such file'), openExternal: async (address) => { openedInBrowser.push(address) }, resolvesPublic: async (host) => !host.startsWith('intranet.') && !host.startsWith('unknown.'), researchPages: () => researchPages,
     researchFetch: (address, limits) => (researchFetch ?? fetchPublicPage)(address, limits), researchLimitMs: () => researchLimitMs,
     fenceTest: async (options) => {
       if (fenceTest === null || fenceTest === undefined) throw new Error('no fence test is expected here')
@@ -1456,6 +1456,8 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     const file = join(home, '.config/bmn/agents/state/research/questions.json')
     // Nor is an address of this machine or a local network: a researcher's answer never sends his browser there.
     const local = ['https://192.168.1.1/admin', 'https://127.0.0.1/', 'https://[::1]/', 'https://localhost/x', 'https://printer.local/', 'https://router/', 'https://wiki.internal/page']
+    // Nor a public-looking name that leads to his own network, or to nowhere, when BMN looks it up at that moment.
+    local.push('https://intranet.example.org/wiki', 'https://unknown.example.org/')
     for (const address of ['file:///etc/passwd', 'http://docs.example.org/jev', 'javascript:alert(1)', 'https://user:word@docs.example.org/', 'not an address', ...local]) {
       const stored = JSON.parse(readFileSync(file, 'utf8'))
       stored.questions[0].claims[0].source = address

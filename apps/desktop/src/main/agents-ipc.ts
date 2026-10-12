@@ -54,7 +54,7 @@ import {
   type ContextAutoPlanEntry, type ContextTestOutcome
 } from '../../bin/agents-context.mjs'
 import { ASK_KEPT, ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, agentsMayAsk, askedCount, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord } from '../../bin/agents-ask.mjs'
-import { chooseResearcher, fetchPublicPage, processStart, publicHostName, readResearch, researchLockHolder, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
+import { chooseResearcher, fetchPublicPage, processStart, publicHostName, readResearch, resolvesPublic, researchLockHolder, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
 import { runFenceTest } from '../../bin/agents-fence.mjs'
 import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsTests } from '../../bin/agents-skills.mjs'
 import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsTests } from '../../bin/agents-tools.mjs'
@@ -82,6 +82,8 @@ export interface AgentsIpcOptions {
   openPath?(path: string): Promise<string>
   /** Opens an https address in the owner's own browser; absent where there is none to open. */
   openExternal?(address: string): Promise<void>
+  /** Whether a host name leads to public addresses only when looked up now; tests give a stand-in. */
+  resolvesPublic?(host: string): Promise<boolean>
   now?(): Date
   /** Where the process table is read when Allow here asks about a stopped session again; tests replace it. */
   procRoot?: string
@@ -1314,6 +1316,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const source = readQuestions().find((entry) => entry.id === id)?.claims?.[params.claim as number]?.source
     const address = httpsPage(source)
     if (address === null || options.openExternal === undefined) return { opened: false }
+    // The name is looked up now, as BMN's own read of a page does: one that leads to this computer or his network, or nowhere, is not opened.
+    if (!await (options.resolvesPublic ?? resolvesPublic)(new URL(address).hostname)) return { opened: false }
     await options.openExternal(address)
     return { opened: true }
   })
@@ -1326,8 +1330,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
 }
 
 /**
- * A kept page address as the browser may be given it: https, no sign-in part, and a host that is a
- * public name. A researcher's answer never sends the owner's browser to this machine or his network.
+ * A kept page address as the browser may be given it, as far as its text says: https, no sign-in
+ * part, and a host written as a public name. Where the name leads is looked up before it is opened.
  */
 function httpsPage(source: unknown): string | null {
   if (typeof source !== 'string') return null

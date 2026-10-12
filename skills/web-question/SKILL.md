@@ -36,7 +36,7 @@ the rest: that part is yours. Rewrite the question with public names only, or do
 ## How to ask
 
 ```sh
-printf '%s\n' 'How do people use <public thing>? Name the page for each claim.' | bmn research ask -
+printf '%s\n' 'How do people use <public thing>? Name the page for each claim.' | bmn research ask
 bmn research ask --question-file question.txt --json
 ```
 

@@ -61,7 +61,7 @@ const fs = require('node:fs')
 const home = process.env.HOME
 if (process.argv[2] === '--version') { console.log(${JSON.stringify(version)}); process.exit(0) }
 const prompt = fs.readFileSync(0, 'utf8')
-fs.appendFileSync(home + '/calls.log', JSON.stringify({ app: ${JSON.stringify(name)}, argv: process.argv.slice(2), env: process.env, cwd: process.cwd(), files: fs.readdirSync('.'), prompt }) + '\\n')
+fs.appendFileSync(home + '/calls.log', JSON.stringify({ app: ${JSON.stringify(name)}, pid: process.pid, argv: process.argv.slice(2), env: process.env, cwd: process.cwd(), files: fs.readdirSync('.'), prompt }) + '\\n')
 const plan = JSON.parse(fs.readFileSync(home + '/plan.json', 'utf8'))
 setTimeout(() => {
   if (plan.exit) process.exit(plan.exit)
@@ -74,7 +74,7 @@ setTimeout(() => {
 
 interface Plan { text?: string; delay?: number; exit?: number }
 const plan = (entry: Plan): void => writeFileSync(join(home, 'plan.json'), JSON.stringify(entry))
-const calls = (): { app: string; argv: string[]; env: Record<string, string>; cwd: string; files: string[]; prompt: string }[] =>
+const calls = (): { app: string; pid: number; argv: string[]; env: Record<string, string>; cwd: string; files: string[]; prompt: string }[] =>
   (existsSync(join(home, 'calls.log')) ? readFileSync(join(home, 'calls.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [])
 
 const USES = 'https://docs.example.org/jev/uses'
@@ -656,16 +656,183 @@ describe('what the pre-review found (Epic 64)', () => {
     for (const output of [JSON.stringify(result), everythingKept()]) expect(output).not.toContain(PLANTED)
   })
 
-  it('waits for another writer\'s mark on the kept questions and takes it over once it is left behind, never writing beside it', () => {
+  it('takes a mark on the kept questions that is no process\'s at once: an empty folder, or text nobody wrote as a holder', () => {
     mkdirSync(join(home, '.config/bmn/agents/state/research'), { recursive: true })
     const mark = `${questionsPath()}.writing`
-    mkdirSync(mark)
-    const began = Date.now()
+    for (const leave of [() => mkdirSync(mark), () => writeFileSync(mark, 'not a record'), () => writeFileSync(mark, JSON.stringify({ version: 1, kind: 'writer', id: 'gone', pid: 2 ** 22 + 7, start: '1' }))]) {
+      leave()
+      const began = Date.now()
+      removeQuestions(null, NOW)
+      expect(Date.now() - began).toBeLessThan(1500)
+      expect(existsSync(mark)).toBe(false)
+      expect(JSON.parse(readFileSync(questionsPath(), 'utf8'))).toMatchObject({ version: 1, questions: [] })
+      expect(statSync(questionsPath()).mode & 0o777).toBe(0o600)
+    }
+  })
+})
+
+describe('what the review found (Epic 64)', () => {
+  const seedToday = (day: Date, count: number): void => {
+    const kept: QuestionRecord[] = Array.from({ length: count }, (_unused, index) => ({
+      id: `seed-${index}`, at: new Date(day.getFullYear(), day.getMonth(), day.getDate(), 8, index).toISOString(), by: { kind: 'shell' }, researcher: 'fable', researcher_name: 'Fable', question: 'seed', outcome: 'answered'
+    }))
+    mkdirSync(join(home, '.config/bmn/agents/state/research'), { recursive: true })
+    writeFileSync(questionsPath(), JSON.stringify({ version: 1, questions: kept }))
+  }
+  const alive = (pid: number): boolean => existsSync(`/proc/${pid}`) && !/^\S+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, 'utf8'))
+
+  it('counts the day\'s questions apart from the kept list: refusals that push them out of it give none back', async () => {
+    answered()
+    const day = new Date(2026, 9, 12, 12, 0)
+    seedToday(day, ASK_PER_DAY)
+    // As many refused submissions as the list keeps: every question of the day leaves the list.
+    for (let index = 0; index < ASK_KEPT; index += 1) expect(await ask({ question: '  ', now: () => day })).toMatchObject({ code: 'QUESTION_EMPTY' })
+    expect(readQuestions()).toHaveLength(ASK_KEPT)
+    expect(readQuestions().every((entry) => entry.outcome === 'refused')).toBe(true)
+    expect(askedCount(day)).toBe(ASK_PER_DAY)
+    expect(await ask({ now: () => day })).toMatchObject({ ok: false, outcome: 'refused', code: 'DAY_LIMIT' })
+    expect(calls()).toEqual([])
+    // A question the check refuses after it took the lock is not counted either, and the next day starts at none.
+    expect(askedCount(new Date(2026, 9, 13, 0, 5))).toBe(0)
+  }, 30_000)
+
+  it('does not count a question the check refuses, and counts one that ran whatever became of its record', async () => {
+    const day = new Date(2026, 9, 12, 12, 0)
+    answered()
+    expect(await ask({ now: () => day, agent: 'luna', fenceTests: [], compare: SAME })).toMatchObject({ outcome: 'refused', code: 'ROUTE_UNSUPPORTED' })
+    expect(askedCount(day)).toBe(0)
+    expect(await ask({ now: () => day })).toMatchObject({ ok: true })
+    expect(askedCount(day)).toBe(1)
+    writeFileSync(questionsPath(), JSON.stringify({ ...JSON.parse(readFileSync(questionsPath(), 'utf8')), questions: [] }))
+    expect(askedCount(day)).toBe(1)
+  })
+
+  it('removal takes the run\'s folder with the question, whatever the app, and leaves other research alone', async () => {
+    const marked = (word: string) => ({ question: `Which public page describes ${word} best?`, answer: JSON.stringify({ ...ANSWER, answer: `Pages describe ${word}-ANSWER in one way.` }) })
+    const one = marked('MARKERONE')
+    plan({ text: one.answer })
+    const first = await ask({ question: one.question })
+    const two = marked('MARKERTWO')
+    plan({ text: two.answer })
+    const second = await ask({ question: two.question, agent: 'luna', fenceTests: FENCED, compare: SAME })
+    const three = marked('MARKERTHREE')
+    plan({ text: three.answer })
+    const third = await ask({ question: three.question, agent: 'luna', fenceTests: FENCED, compare: SAME })
+    expect([first, second, third].map((result) => result.outcome)).toEqual(['answered', 'answered', 'answered'])
+    // A Models research run's folder, which no question names.
+    mkdirSync(join(researchRunsDirectory(), '20261012T080000-team'), { recursive: true })
+    writeFileSync(join(researchRunsDirectory(), '20261012T080000-team', 'prompt.md'), 'KEPT-RESEARCH')
+    for (const word of ['MARKERONE', 'MARKERTWO', 'MARKERTHREE']) expect(everythingKept()).toContain(word)
+    removeQuestions(first.id, NOW)
+    expect(everythingKept()).not.toContain('MARKERONE')
+    removeQuestions(second.id, NOW)
+    expect(everythingKept()).not.toContain('MARKERTWO')
+    expect(everythingKept()).toContain('MARKERTHREE')
     removeQuestions(null, NOW)
-    // The mark was another writer's until it counted as left behind; only then was the file written, and the mark taken was given back.
-    expect(Date.now() - began).toBeGreaterThanOrEqual(1500)
-    expect(existsSync(mark)).toBe(false)
-    expect(JSON.parse(readFileSync(questionsPath(), 'utf8'))).toEqual({ version: 1, questions: [] })
-    expect(statSync(questionsPath()).mode & 0o777).toBe(0o600)
+    expect(everythingKept()).not.toContain('MARKERTHREE')
+    expect(everythingKept()).toContain('KEPT-RESEARCH')
+    expect(readdirSync(researchRunsDirectory())).toEqual(['20261012T080000-team'])
+  })
+
+  it('a question the list lets go of takes its run\'s folder with it', async () => {
+    plan({ text: JSON.stringify({ ...ANSWER, answer: 'Pages describe OLDESTMARK in one way.' }) })
+    const first = await ask({ question: 'Which public page describes OLDESTMARK best?' })
+    expect(first.outcome).toBe('answered')
+    expect(everythingKept()).toContain('OLDESTMARK')
+    for (let index = 0; index < ASK_KEPT; index += 1) await ask({ question: '  ' })
+    expect(readQuestions().some((entry) => entry.id === first.id)).toBe(false)
+    expect(everythingKept()).not.toContain('OLDESTMARK')
+  }, 30_000)
+
+  it('leaves no raw answer of a Codex researcher behind, also one BMN took for no usable answer', async () => {
+    const withSignIn = { ...ANSWER, claims: [{ ...ANSWER.claims[0]!, source: `https://reader:${PLANTED}@docs.example.org/jev` }] }
+    plan({ text: JSON.stringify(withSignIn) })
+    const refusedAnswer = await ask({ agent: 'luna', fenceTests: FENCED, compare: SAME })
+    expect(refusedAnswer).toMatchObject({ ok: false, outcome: 'no-answer' })
+    expect(calls().at(-1)!.app).toBe('codex')
+    for (const output of [JSON.stringify(refusedAnswer), everythingKept()]) expect(output).not.toContain(PLANTED)
+    answered()
+    expect(await ask({ agent: 'luna', fenceTests: FENCED, compare: SAME })).toMatchObject({ ok: true })
+    for (const name of readdirSync(researchRunsDirectory())) expect(readdirSync(join(researchRunsDirectory(), name)).sort()).toEqual(['cwd', 'prompt.md', 'receipt.json', 'run.json'])
+  })
+
+  it('never writes the kept questions beside a living writer\'s mark, and takes a dead writer\'s mark at once', async () => {
+    seedToday(NOW, 2)
+    const before = readFileSync(questionsPath(), 'utf8')
+    // Another BMN process in the middle of a write: it holds the mark and does not let go.
+    const holder = spawn(process.execPath, ['-e', `
+      const fs = require('node:fs')
+      const stat = fs.readFileSync('/proc/' + process.pid + '/stat', 'utf8')
+      const start = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]
+      fs.writeFileSync(process.argv[1], JSON.stringify({ version: 1, kind: 'writer', id: 'held', pid: process.pid, start }) + '\\n', { flag: 'wx' })
+      console.log('held')
+      setInterval(() => {}, 1000)
+    `, `${questionsPath()}.writing`], { stdio: ['ignore', 'pipe', 'inherit'] })
+    try {
+      await new Promise((resolve) => holder.stdout.once('data', resolve))
+      expect(() => removeQuestions(null, NOW)).toThrow(/another BMN process/)
+      expect(readFileSync(questionsPath(), 'utf8')).toBe(before)
+      // The same holds for a question: none is asked while its record cannot be written.
+      answered()
+      expect(await ask()).toMatchObject({ ok: false, outcome: 'refused', code: 'RECORD_BUSY' })
+      expect(calls()).toEqual([])
+      expect(researchLockHolder()).toBeNull()
+    } finally {
+      holder.kill('SIGKILL')
+      await new Promise((resolve) => holder.once('exit', resolve))
+    }
+    // Its mark is still there, and its owner is gone: the next writer takes it without waiting.
+    expect(existsSync(`${questionsPath()}.writing`)).toBe(true)
+    const began = Date.now()
+    removeQuestions('seed-0', NOW)
+    expect(Date.now() - began).toBeLessThan(1500)
+    expect(readQuestions().map((entry) => entry.id)).toEqual(['seed-1'])
+    expect(existsSync(`${questionsPath()}.writing`)).toBe(false)
+  }, 40_000)
+
+  it('ends the researcher a killed command left running before another research starts', async () => {
+    plan({ text: JSON.stringify(ANSWER), delay: 120_000 })
+    const child = spawn(process.execPath, [join(BIN, 'bmn'), 'research', 'ask', '--json'], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }, stdio: ['pipe', 'ignore', 'ignore'] })
+    child.stdin.end(QUESTION)
+    for (let waited = 0; calls().length === 0 && waited < 200; waited += 1) await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(calls()).toHaveLength(1)
+    const app = calls()[0]!.pid
+    try {
+      // The command is killed outright: it can end nothing itself.
+      child.kill('SIGKILL')
+      await new Promise((resolve) => child.once('exit', resolve))
+      expect(alive(app)).toBe(true)
+      expect(researchLockHolder()).toBeNull()
+      plan({ text: JSON.stringify({ ...ANSWER, claims: [] }) })
+      expect(await ask()).toMatchObject({ ok: true, outcome: 'answered' })
+      for (let waited = 0; alive(app) && waited < 100; waited += 1) await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(alive(app)).toBe(false)
+      expect(readQuestions().map((entry) => entry.outcome)).toEqual(['interrupted', 'answered'])
+    } finally {
+      try {
+        process.kill(app, 'SIGKILL')
+      } catch {
+        // Already gone.
+      }
+    }
+  }, 40_000)
+
+  it('runs the skill\'s own example as it is written', () => {
+    const skill = readFileSync(fileURLToPath(new URL('../../../../skills/web-question/SKILL.md', import.meta.url)), 'utf8')
+    const example = skill.split('\n').find((line) => line.includes('| bmn research ask'))
+    expect(example).toBeDefined()
+    writeFileSync(join(stubs, 'bmn'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(BIN, 'bmn'))} "$@"\n`)
+    chmodSync(join(stubs, 'bmn'), 0o755)
+    plan({ text: JSON.stringify({ ...ANSWER, claims: [] }) })
+    const ran = spawnSync('/bin/sh', ['-c', example!], { encoding: 'utf8', env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` } })
+    expect(ran.stderr).toBe('')
+    expect(ran.status).toBe(0)
+    expect(ran.stdout).toContain(ANSWER.answer)
+    expect(calls()[0]!.prompt).toBe(askPrompt('How do people use <public thing>? Name the page for each claim.'))
+    // A lone - says "standard input" out loud; any other argument is still not a question.
+    const dashed = spawnSync(process.execPath, [join(BIN, 'bmn'), 'research', 'ask', '-', '--json'], { input: `${QUESTION}\n`, encoding: 'utf8', env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` } })
+    expect(dashed.status).toBe(0)
+    expect(calls()[1]!.prompt).toBe(askPrompt(QUESTION))
+    expect(spawnSync(process.execPath, [join(BIN, 'bmn'), 'research', 'ask', QUESTION], { input: '', encoding: 'utf8', env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` } }).status).toBe(2)
   })
 })

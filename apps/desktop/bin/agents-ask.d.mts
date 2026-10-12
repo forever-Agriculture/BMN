@@ -35,6 +35,7 @@ export declare function removeQuestions(id?: string | null, now?: Date): void
 export declare function askedToday(questions: Pick<QuestionRecord, 'at' | 'outcome'>[], now?: Date): number
 /** The day's count the limit is held against: what the list shows for today, and today's questions since removed from it. */
 export declare function askedCount(now?: Date): number
+export declare const RECORD_BUSY: string
 export declare function agentsMayAsk(): boolean
 export declare function setAgentsMayAsk(on: boolean): void
 

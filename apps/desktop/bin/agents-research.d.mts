@@ -40,6 +40,7 @@ export type PageRead = { ok: true; text: string } | { ok: false; reason: string 
 export type FetchPage = (address: string, limits?: { signal?: AbortSignal; timeoutMs?: number }) => Promise<PageRead>
 export declare function isPublicAddress(address: string): boolean
 export declare function publicHostName(host: string): boolean
+export declare function resolvesPublic(host: string, options?: { resolve?: (host: string) => Promise<{ address: string }[]>; timeoutMs?: number }): Promise<boolean>
 export declare function fetchPublicPage(address: string, options?: {
   timeoutMs?: number; maxBytes?: number; redirects?: number; selfTestPages?: string | null; signal?: AbortSignal
   resolve?: (host: string) => Promise<{ address: string; family: number }[]>
@@ -75,12 +76,15 @@ export interface ResearchViewShape {
 export declare function researchView(store: ResearchStore): ResearchViewShape
 
 /** Who holds the one research lock: what its holder wrote, with the process that wrote it. */
-export interface ResearchLockRecord { version: 1; kind: 'research' | 'lookup' | 'question'; id?: string; at?: string; researcher?: string; by?: unknown; pid: number; start: string }
+export interface ResearchLockRecord { version: 1; kind: 'research' | 'lookup' | 'question'; id?: string; at?: string; researcher?: string; by?: unknown; pid: number; start: string; /** The researcher app while it runs: the head of its own process group. */ app?: { pid: number; start: string } | null }
 export declare const RESEARCH_RUNNING: string
 export declare function researchLockPath(): string
 export declare function processStart(pid: number): string | null
 export declare function researchLockHolder(): ResearchLockRecord | null
-export declare function takeResearchLock(holder: Omit<ResearchLockRecord, 'version' | 'pid' | 'start'>): { release(): void; held?: undefined } | { held: ResearchLockRecord; release?: undefined }
+/** A lock this process took (`release`, and `note` to add fields to its own record), or the living holder's record. */
+export type LockTaken<Record> = { release(): void; note(fields: { [key: string]: unknown }): void; held?: undefined } | { held: Record; release?: undefined; note?: undefined }
+export declare function takeResearchLock(holder: Omit<ResearchLockRecord, 'version' | 'pid' | 'start' | 'app'>): LockTaken<ResearchLockRecord>
+export declare function takeLock(path: string, holder: { kind: string; id?: string; [key: string]: unknown }, options?: { onDead?: (text: string) => void }): LockTaken<{ version: 1; kind: string; id?: string; pid: number; start: string }>
 export declare function appVersion(agent: RosterData['agents'][number], environment: Environment): string | null
 export declare function runOnce(argv: string[], run: { prompt: string; cwd: string }, limits: { signal?: AbortSignal; deadline: number }): Promise<{ ended: 'done'; stdout: string } | { ended: 'failed' | 'stopped' | 'limit'; reason?: string }>
 export declare function compareBeforeFirstRun(options: {
