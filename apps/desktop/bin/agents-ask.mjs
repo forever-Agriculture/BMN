@@ -156,17 +156,23 @@ function askSettingsPath() {
   return `${researchDirectory()}/questions-settings.json`
 }
 
-/** Whether agents may ask the web by themselves. On until the owner switches it off (64 (a)). */
-export function agentsMayAsk() {
+/** The one small settings file: the switch, and how many of a day's questions were removed from the list. */
+function askSettings() {
   try {
-    return JSON.parse(readFileSync(askSettingsPath(), 'utf8'))?.agents !== false
+    const value = JSON.parse(readFileSync(askSettingsPath(), 'utf8'))
+    return isObject(value) ? value : {}
   } catch {
-    return true
+    return {}
   }
 }
 
+/** Whether agents may ask the web by themselves. On until the owner switches it off (64 (a)). */
+export function agentsMayAsk() {
+  return askSettings().agents !== false
+}
+
 export function setAgentsMayAsk(on) {
-  writePrivate(askSettingsPath(), `${JSON.stringify({ version: 1, agents: on === true })}\n`)
+  writePrivate(askSettingsPath(), `${JSON.stringify({ ...askSettings(), version: 1, agents: on === true })}\n`)
 }
 
 const OUTCOMES = ['running', 'answered', 'no-answer', 'failed', 'stopped', 'limit', 'refused', 'interrupted']
@@ -236,17 +242,34 @@ function keepQuestion(record) {
   changeQuestions((kept) => (kept.some((entry) => entry.id === record.id) ? kept.map((entry) => (entry.id === record.id ? record : entry)) : [...kept, record]))
 }
 
-/** Removes one kept question, or every one with `id` null. A question under way stays until it ends. */
-export function removeQuestions(id = null) {
-  changeQuestions((kept) => kept.filter((entry) => entry.outcome === 'running' || (id !== null && entry.id !== id)))
-}
-
 const localDay = (date) => `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
 
-/** How many questions started on `now`'s local day. A question refused before it started does not count. */
+/** How many questions in a list started on `now`'s local day. A question refused before it started does not count. */
 export function askedToday(questions, now = new Date()) {
   const today = localDay(now)
   return questions.filter((entry) => entry.outcome !== 'refused' && localDay(new Date(entry.at)) === today).length
+}
+
+function removedToday(now) {
+  const removed = askSettings().removed
+  return isObject(removed) && removed.day === localDay(now) && Number.isSafeInteger(removed.count) && removed.count > 0 ? removed.count : 0
+}
+
+/** How many questions were asked on `now`'s local day, those since removed from the list included: removing a record gives no question back. */
+export function askedCount(now = new Date()) {
+  return askedToday(readQuestions(), now) + removedToday(now)
+}
+
+/**
+ * Removes one kept question, or every one with `id` null; its text is gone from the file. A question
+ * under way stays until it ends. Today's removed questions stay counted against the day's limit:
+ * the count is written first, so an ending between the two writes counts one too many, never one too few.
+ */
+export function removeQuestions(id = null, now = new Date()) {
+  const goes = (entry) => entry.outcome !== 'running' && (id === null || entry.id === id)
+  const counted = askedToday(readQuestions().filter(goes), now)
+  if (counted > 0) writePrivate(askSettingsPath(), `${JSON.stringify({ ...askSettings(), version: 1, removed: { day: localDay(now), count: removedToday(now) + counted } })}\n`)
+  changeQuestions((kept) => kept.filter((entry) => !goes(entry)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -407,7 +430,7 @@ export async function runAsk({
   if (!owner && !agentsMayAsk()) {
     return refused('ASKING_OFF', 'the owner switched "Agents may ask the web" off in BMN (Preferences › Team › Models), so only the owner asks there; ask the owner')
   }
-  if (askedToday(readQuestions(), started) >= ASK_PER_DAY) return refused('DAY_LIMIT', `${ASK_PER_DAY} web questions were asked today, which is the day's limit; the next one can be asked tomorrow`)
+  if (askedCount(started) >= ASK_PER_DAY) return refused('DAY_LIMIT', `${ASK_PER_DAY} web questions were asked today, which is the day's limit; the next one can be asked tomorrow`)
 
   let data
   try {

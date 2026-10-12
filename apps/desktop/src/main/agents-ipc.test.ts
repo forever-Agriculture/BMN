@@ -3,7 +3,8 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, re
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, ResearchLookup, ResearchSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan, ToolProposalView, ToolsPlan } from '@bmn/protocol'
+import { spawn } from 'node:child_process'
+import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, ResearchLookup, ResearchSnapshot, WebQuestionAsked, WebQuestionsSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan, ToolProposalView, ToolsPlan } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CODEX_RESEARCH_TOOLS_SEEN, fenceTestsPath, researchFormHash, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import { contextAuto, contextTests, setContextAuto } from '../../bin/agents-context.mjs'
@@ -32,6 +33,8 @@ let researchCompare: NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]>
 /** What installing the handlers handed back, and the notices BMN itself showed. */
 let ipc: AgentsIpcHandle
 let notices: { title: string; body: string }[]
+/** The addresses handed to the owner's browser. */
+let openedInBrowser: string[]
 const saved = { HOME: process.env.HOME, PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
 
 function stub(name: string, body: string): void {
@@ -57,11 +60,12 @@ beforeEach(() => {
   fenceTest = null
   researchCompare = null
   notices = []
+  openedInBrowser = []
   // BMN's own context testing is off here, as an owner may have it, so no test starts a stand-in app behind another test's back; its own tests switch it on.
   setContextAuto({ enabled: false })
   ipc = installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
     senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...appEnv }),
-    openPath: async (path) => (existsSync(path) ? '' : 'no such file'), researchPages: () => researchPages,
+    openPath: async (path) => (existsSync(path) ? '' : 'no such file'), openExternal: async (address) => { openedInBrowser.push(address) }, researchPages: () => researchPages,
     researchFetch: (address, limits) => (researchFetch ?? fetchPublicPage)(address, limits), researchLimitMs: () => researchLimitMs,
     fenceTest: async (options) => {
       if (fenceTest === null || fenceTest === undefined) throw new Error('no fence test is expected here')
@@ -1259,6 +1263,223 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     expect(researchEndedWords({ state: 'partial', models: 3, note: 'Ended at the 20-minute limit.' })).toBe('Research kept 3 models. Ended at the 20-minute limit.')
     expect(researchEndedWords({ state: 'stopped', models: 0, note: 'Stopped before it finished.' })).toBe('Stopped before it finished. Nothing was kept.')
     expect(researchEndedWords({ state: 'failed', models: 0, note: 'BMN did not start the run: sonnet is proposed, not approved as active' })).toBe('Research failed: BMN did not start the run: sonnet is proposed, not approved as active')
+  })
+})
+
+describe('web questions on Team › Models (64.3)', () => {
+  const USES = 'https://docs.example.org/jev/uses'
+  const GONE = 'https://gone.example.org/jev'
+  const QUESTION = 'How do people use the Jev 1.13 model, according to public pages?'
+  const ANSWER = { version: 1, answer: 'People use Jev mostly to route requests by intent.', claims: [
+    { claim: 'Jev is used for intent routing.', source: USES, passage: 'Teams use Jev for intent routing: "Which team should handle this?"' },
+    { claim: 'A vendor page lists four patterns.', source: GONE, passage: 'four patterns: speculative fan-out' }
+  ], not_found: ['an independent accuracy measurement'] }
+  /** A stand-in Claude Code that answers every prompt with plan.json's text, after its delay. */
+  const researcher = (): void => {
+    writeFileSync(join(stubs, 'claude'), `#!${process.execPath}
+const fs = require('node:fs')
+const home = process.env.HOME
+if (process.argv[2] === '--version') { console.log('2.1.295 (Claude Code)'); process.exit(0) }
+const prompt = fs.readFileSync(0, 'utf8')
+fs.appendFileSync(home + '/calls.log', JSON.stringify({ argv: process.argv.slice(2), prompt }) + '\\n')
+const plan = JSON.parse(fs.readFileSync(home + '/plan.json', 'utf8'))
+setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, result: plan.text })), plan.delay ?? 0)
+`)
+    chmodSync(join(stubs, 'claude'), 0o755)
+  }
+  const plan = (delay = 0): void => writeFileSync(join(home, 'plan.json'), JSON.stringify({ text: JSON.stringify(ANSWER), delay }))
+  const calls = (): { argv: string[]; prompt: string }[] =>
+    (existsSync(join(home, 'calls.log')) ? readFileSync(join(home, 'calls.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [])
+  const load = (): Promise<WebQuestionsSnapshot> => call('questions:load')
+  const ask = (question = QUESTION): Promise<WebQuestionAsked> => call('questions:ask', { question })
+  const pause = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
+  const until = async <Value>(read: () => Value | Promise<Value>, done: (value: Value) => boolean, what: string): Promise<Value> => {
+    for (let tries = 0; tries < 800; tries += 1) {
+      const value = await read()
+      if (done(value)) return value
+      await pause(25)
+    }
+    throw new Error(`waited in vain for ${what}`)
+  }
+  const idle = (): Promise<WebQuestionsSnapshot> => until(load, (state) => state.holder === null, 'the question to end')
+  /** `bmn research ask` in a process of its own, as an agent in a session's shell runs it. */
+  const fromShell = (extra: Record<string, string> = {}): ReturnType<typeof spawn> => {
+    const child = spawn(process.execPath, [SCRIPT, 'research', 'ask', '--json'], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...extra }, stdio: ['pipe', 'pipe', 'pipe'] })
+    child.stdin!.end(QUESTION)
+    return child
+  }
+  const exited = (child: ReturnType<typeof spawn>): Promise<number | null> => new Promise((resolve) => {
+    if (child.exitCode !== null) resolve(child.exitCode)
+    else child.once('exit', (code) => resolve(code))
+  })
+
+  beforeEach(async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
+    researcher()
+    researchFetch = async (address) => (address === USES ? { ok: true, text: '<p>Teams use Jev for intent routing: &ldquo;Which team should handle this?&rdquo;</p>' } : { ok: false, reason: 'the site answered 404' })
+  })
+
+  it('reads as nothing asked, the switch on and the limits, before any question', async () => {
+    expect(await load()).toEqual({ questions: [], holder: null, agentsMayAsk: true, today: 0, limits: { perDay: 20, minutes: 10, characters: 2000, kept: 200 } })
+  })
+
+  it('asks the owner\'s question by the command\'s own route: shown running with who asked, then answered with each claim\'s mark', async () => {
+    plan(400)
+    const asked = await ask()
+    expect(asked).toMatchObject({ ok: true, message: null })
+    expect(asked.snapshot.holder).toMatchObject({ kind: 'question', by: { kind: 'owner' }, researcher: 'Opus' })
+    expect(asked.snapshot.questions).toMatchObject([{ id: asked.snapshot.holder!.id, by: { kind: 'owner' }, researcher: 'Opus', question: QUESTION, outcome: 'running' }])
+    const state = await idle()
+    expect(state.today).toBe(1)
+    expect(state.questions).toHaveLength(1)
+    expect(state.questions[0]).toMatchObject({
+      by: { kind: 'owner' }, researcher: 'Opus', question: QUESTION, outcome: 'answered', answer: ANSWER.answer, notFound: ANSWER.not_found,
+      claims: [{ claim: 'Jev is used for intent routing.', source: USES, mark: 'passage found on the page' }, { source: GONE, mark: 'page not readable', why: 'the site answered 404' }],
+      counts: { found: 1, not_found: 0, unreadable: 1 }
+    })
+    expect(typeof state.questions[0]!.tookMs).toBe('number')
+    // The run was a research run: the fixed frame and the question, the web tools and nothing else.
+    expect(calls()).toHaveLength(1)
+    expect(calls()[0]!.prompt.endsWith(`${QUESTION}\n`)).toBe(true)
+    expect(calls()[0]!.argv[calls()[0]!.argv.indexOf('--tools') + 1]).toBe('WebSearch,WebFetch')
+  })
+
+  it('shows a refusal in the command\'s own words, starts nothing, and keeps no text it refused for what it held', async () => {
+    plan()
+    const key = `sk-${'a1B2c3D4'.repeat(5)}`
+    expect(await ask('   ')).toMatchObject({ ok: false, message: expect.stringContaining('empty') })
+    expect(await ask('x '.repeat(1200))).toMatchObject({ ok: false, message: expect.stringContaining('longer than 2000 characters') })
+    const secret = await ask(`Is ${key} a valid key?`)
+    expect(secret).toMatchObject({ ok: false, message: expect.stringMatching(/word 2 of the question looks like a key or a password/) })
+    const pathed = await ask('What is in ~/notes on a default install?')
+    expect(pathed).toMatchObject({ ok: false, message: expect.stringContaining('home folder') })
+    expect(JSON.stringify([secret, pathed, await load()])).not.toContain(key)
+    expect((await load()).questions.map((entry) => [entry.outcome, entry.question])).toEqual([['refused', null], ['refused', null], ['refused', null], ['refused', null]])
+    expect((await load()).today).toBe(0)
+    expect(calls()).toEqual([])
+    await expect(call('questions:ask', { question: 7 })).rejects.toThrow(/question must be text/)
+  })
+
+  it('holds Models research off while a question runs, saying why, and the other way round', async () => {
+    plan(600)
+    expect(await ask()).toMatchObject({ ok: true })
+    const refused = await call<ResearchSnapshot>('research:start', { researcher: 'fable' })
+    expect(refused.running).toBeNull()
+    expect(refused.ended).toEqual({ ok: false, text: 'A web question is running, so this research did not start. Wait for it to end, or stop it.', kept: false })
+    expect(await call<ResearchLookup>('research:lookup', { researcher: 'fable', provider: 'anthropic', model: 'claude-opus-5-6' }))
+      .toEqual({ ok: false, message: 'A web question is running. Wait for it to end, or stop it.', model: null })
+    // A second question is refused too, never queued.
+    expect(await ask()).toMatchObject({ ok: false, message: expect.stringContaining('a research is running (a web question)') })
+    await idle()
+    expect(calls()).toHaveLength(1)
+    // A research that is going refuses a question in the command's words.
+    plan(600)
+    const started = await call<ResearchSnapshot>('research:start', { researcher: 'fable' })
+    expect(started.running).toMatchObject({ researcher: 'fable' })
+    expect((await load()).holder).toMatchObject({ kind: 'research', researcher: 'Fable' })
+    expect(await ask()).toMatchObject({ ok: false, message: expect.stringContaining('a research is running (Models research)') })
+    await call('questions:stop')
+    await until(() => call<ResearchSnapshot>('research:load', { fresh: false }), (state) => state.running === null, 'the research to end')
+    expect((await load()).holder).toBeNull()
+  })
+
+  it('Stop ends a question whoever started it: the owner\'s own, and one an agent asked from a shell', async () => {
+    plan(20_000)
+    expect(await ask()).toMatchObject({ ok: true })
+    await until(calls, (all) => all.length === 1, 'the researcher to start')
+    await call('questions:stop')
+    expect((await idle()).questions[0]).toMatchObject({ outcome: 'stopped', by: { kind: 'owner' } })
+    // Another process asks, as an agent does in a session's shell; this window has no switch of its own for it.
+    const child = fromShell({ BMN_SESSION_ID: 'session-7', CLAUDECODE: '1' })
+    try {
+      const running = await until(load, (state) => state.holder?.kind === 'question' && state.questions[0]?.outcome === 'running', 'the shell\'s question to run')
+      expect(running.holder).toMatchObject({ by: { kind: 'session', session: 'session-7', app: 'claude' }, researcher: 'Opus' })
+      expect(running.questions[0]).toMatchObject({ by: { kind: 'session', session: 'session-7', app: 'claude' }, outcome: 'running', question: QUESTION })
+      await until(calls, (all) => all.length === 2, 'the researcher to start again')
+      await call('questions:stop')
+      expect(await exited(child)).toBe(1)
+    } finally {
+      child.kill('SIGKILL')
+    }
+    const after = await load()
+    expect(after.holder).toBeNull()
+    expect(after.questions.map((entry) => [entry.by.kind, entry.outcome])).toEqual([['session', 'stopped'], ['owner', 'stopped']])
+  })
+
+  it('Stop signals nothing but BMN\'s own question command: a lock another program holds is left alone', async () => {
+    const other = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { takeResearchLock } from ${JSON.stringify(fileURLToPath(new URL('../../bin/agents-research.mjs', import.meta.url)))}
+      takeResearchLock({ kind: 'question', id: 'not-the-command', at: new Date().toISOString(), researcher: 'opus', by: { kind: 'shell' } })
+      process.on('SIGINT', () => { console.log('signalled'); process.exit(3) })
+      console.log('held')
+      setInterval(() => {}, 1000)
+    `], { env: { HOME: home, PATH: process.env.PATH ?? '' }, stdio: ['ignore', 'pipe', 'inherit'] })
+    let printed = ''
+    other.stdout!.on('data', (chunk: Buffer) => { printed += String(chunk) })
+    try {
+      await until(() => printed, (text) => text.includes('held'), 'the other program to hold the lock')
+      expect((await load()).holder).toMatchObject({ kind: 'question', id: 'not-the-command' })
+      await call('questions:stop')
+      await pause(300)
+      expect(other.exitCode).toBeNull()
+      expect(printed).not.toContain('signalled')
+    } finally {
+      other.kill('SIGKILL')
+    }
+  })
+
+  it('the switch off refuses an agent\'s question and not the owner\'s own', async () => {
+    plan()
+    expect(await call<WebQuestionsSnapshot>('questions:allow', { on: false })).toMatchObject({ agentsMayAsk: false })
+    const child = fromShell({ BMN_SESSION_ID: 'session-7' })
+    let printed = ''
+    child.stdout!.on('data', (chunk: Buffer) => { printed += String(chunk) })
+    expect(await exited(child)).toBe(10)
+    expect(JSON.parse(printed)).toMatchObject({ ok: false, outcome: 'refused', code: 'ASKING_OFF', message: expect.stringContaining('ask the owner') })
+    expect(calls()).toEqual([])
+    expect(await ask()).toMatchObject({ ok: true })
+    expect((await idle()).questions.map((entry) => [entry.by.kind, entry.outcome])).toEqual([['owner', 'answered'], ['session', 'refused']])
+    expect(await call<WebQuestionsSnapshot>('questions:allow', { on: true })).toMatchObject({ agentsMayAsk: true })
+    await expect(call('questions:allow', { on: 'yes' })).rejects.toThrow(/on must be true or false/)
+  })
+
+  it('opens a claim\'s page in the browser by the claim\'s place in the kept record, and only an https page', async () => {
+    plan()
+    await ask()
+    const [kept] = (await idle()).questions
+    expect(await call('questions:open-page', { id: kept!.id, claim: 0 })).toEqual({ opened: true })
+    expect(openedInBrowser).toEqual([USES])
+    // No such claim, no such question, or an address in the file that is not an https page: nothing is opened.
+    expect(await call('questions:open-page', { id: kept!.id, claim: 7 })).toEqual({ opened: false })
+    expect(await call('questions:open-page', { id: 'no-such-question', claim: 0 })).toEqual({ opened: false })
+    const file = join(home, '.config/bmn/agents/state/research/questions.json')
+    for (const address of ['file:///etc/passwd', 'http://docs.example.org/jev', 'javascript:alert(1)', 'https://user:word@docs.example.org/', 'not an address']) {
+      const stored = JSON.parse(readFileSync(file, 'utf8'))
+      stored.questions[0].claims[0].source = address
+      writeFileSync(file, JSON.stringify(stored))
+      expect(await call('questions:open-page', { id: kept!.id, claim: 0 })).toEqual({ opened: false })
+    }
+    expect(openedInBrowser).toEqual([USES])
+    await expect(call('questions:open-page', { id: kept!.id, claim: -1 })).rejects.toThrow(/claim must be/)
+    await expect(call('questions:open-page', { id: kept!.id, claim: 'https://evil.example.org/' })).rejects.toThrow(/claim must be/)
+  })
+
+  it('removes one record or all with its text, and gives no question of the day back', async () => {
+    plan()
+    await ask()
+    await idle()
+    await ask('What is a context window, in one sentence from a public page?')
+    const two = await idle()
+    expect(two.questions).toHaveLength(2)
+    const kept = join(home, '.config/bmn/agents/state/research/questions.json')
+    const one = await call<WebQuestionsSnapshot>('questions:remove', { id: two.questions[0]!.id })
+    expect(one.questions.map((entry) => entry.question)).toEqual([QUESTION])
+    expect(readFileSync(kept, 'utf8')).not.toContain('context window')
+    const none = await call<WebQuestionsSnapshot>('questions:remove', { id: null })
+    expect(none).toMatchObject({ questions: [], today: 2 })
+    expect(readFileSync(kept, 'utf8')).not.toContain('Jev')
+    await expect(call('questions:remove', { id: 5 })).rejects.toThrow(/id must be a question id or null/)
   })
 })
 

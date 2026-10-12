@@ -2620,6 +2620,7 @@ function App(): React.JSX.Element {
           telegramCue={telegramCue}
           reportedModels={reportedModels(hookOrigins, sessions, live)}
           recognisedSessions={sessionsByApp(hookOrigins, sessions, live)}
+          sessionName={(id) => sessions.find((session) => session.sessionId === id)?.name}
           onRunInSession={activeWorkspaceId ? async (name, command, onEnded, left) => {
             // Listening from before the session exists: its shell may write its first prompt before the answer that names it arrives.
             const run = sessionCommandRun(command, { readyWithinMs: SHELL_READY_WAIT_MS }, onEnded)

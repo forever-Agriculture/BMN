@@ -2134,3 +2134,220 @@
     transition: none;
   }
 }
+
+/* Team › Models › Web questions (64.3): the switch and Ask as rows, a plate for the question under way, then one line per kept question; an opened one is a raised sheet. */
+.preferences-dialog .web-questions {
+  container: web-questions / inline-size;
+  margin-top: 14px;
+}
+
+.preferences-dialog .web-questions .one-line {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The Ask field is the page's own field; it grows with the question up to a few lines. */
+.preferences-dialog .web-questions .ask-field {
+  flex: 1 1 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 52px;
+  max-height: 184px;
+  line-height: 1.45;
+  resize: none;
+  field-sizing: content;
+}
+
+/* Who the question goes to takes the room; Ask keeps the end of the first line. */
+.preferences-dialog .web-questions .ask-line {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.preferences-dialog .web-questions .ask-line > :first-child {
+  flex: 1 1 0;
+  min-width: 12em;
+}
+
+.preferences-dialog .web-questions .ask-reply {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .web-questions .note-text > strong {
+  font-weight: 600;
+}
+
+.preferences-dialog .web-questions .question {
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* A line is a button without a plate: the whole line opens the question. Its text starts where the plates' text starts. */
+.preferences-dialog .web-questions .question-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 14px;
+  align-items: center;
+  width: 100%;
+  min-height: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+}
+
+.preferences-dialog .web-questions .question-line:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.preferences-dialog .web-questions .question-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.preferences-dialog .web-questions .question-line .model-facts {
+  column-gap: 14px;
+  color: var(--muted);
+}
+
+/* The time keeps one width down the list, so who asked starts at the same place on every line. */
+.preferences-dialog .web-questions .model-facts > .when {
+  min-width: 15ch;
+  font-variant-numeric: tabular-nums;
+}
+
+.preferences-dialog .web-questions .outcome {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* A question without an answer is quiet: the bright lines are the ones with something to read. */
+.preferences-dialog .web-questions .question.quiet :is(.outcome, .question-text > .one-line) {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* The opened question is one raised sheet with the selection bar. */
+.preferences-dialog .web-questions .question.open {
+  border-bottom-color: transparent;
+  border-radius: 0 6px 6px 0;
+  background: var(--raised);
+  box-shadow: inset 2px 0 0 var(--identity);
+}
+
+.preferences-dialog .web-questions .question.open > .question-line:hover:not(:disabled) {
+  background: transparent;
+}
+
+.preferences-dialog .web-questions .question-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.preferences-dialog .web-questions .question-body p {
+  margin: 0;
+}
+
+.preferences-dialog .web-questions .whole {
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .web-questions .part-label {
+  margin: 8px 0 0;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.preferences-dialog .web-questions :is(.claims, .plain-lines) {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.preferences-dialog .web-questions .plain-lines {
+  gap: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* A claim that is not evidence has no plate and stays quiet. */
+.preferences-dialog .web-questions .claim {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 0 10px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* Evidence stands on a plate, with its mark in weight. */
+.preferences-dialog .web-questions .claim.found {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--selected);
+  color: var(--text);
+}
+
+.preferences-dialog .web-questions .claim > :is(.mark, .passage) {
+  font-size: 12px;
+}
+
+.preferences-dialog .web-questions .claim.found > .mark {
+  font-weight: 600;
+}
+
+.preferences-dialog .web-questions .claim.found > .passage {
+  color: var(--muted);
+}
+
+.preferences-dialog .web-questions .page-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--faint);
+  text-underline-offset: 3px;
+}
+
+.preferences-dialog .web-questions .page-link:hover {
+  text-decoration-color: currentColor;
+}
+
+.preferences-dialog .web-questions .question-body > .page-foot {
+  padding: 6px 0 12px;
+}
+
+/* Narrow: the label goes above its control, so the field and the switch's words get the whole width. */
+@container web-questions (max-width: 520px) {
+  .preferences-dialog .web-questions .preferences-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .preferences-dialog .web-questions .preferences-row-label {
+    padding-top: 0;
+  }
+}

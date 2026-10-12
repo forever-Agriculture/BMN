@@ -14,6 +14,8 @@ import type {
   ContextLimitApp,
   ContextLimitPlan,
   ResearchLookup,
+  WebQuestionAsked,
+  WebQuestionsSnapshot,
   ResearchSnapshot,
   SkillsPlan,
   ToolProposalView,
@@ -408,6 +410,17 @@ export interface AiTerminalBridge {
   testCodexFence(): Promise<ResearchSnapshot>
   /** Owner-run: researches one model name on one provider and resolves when that run ends. */
   lookUpModel(researcher: string, provider: string, model: string): Promise<ResearchLookup>
+  /** Story 64.3: the kept web questions, what holds the research lock now, the switch and the day's count. */
+  webQuestions(): Promise<WebQuestionsSnapshot>
+  /** Owner-run: asks the web one question through the researcher picked on Models. It runs in the background; a refusal comes back in the command's own words. */
+  askWebQuestion(question: string): Promise<WebQuestionAsked>
+  /** Ends the research or question that is under way, whoever started it. */
+  stopWebQuestion(): Promise<WebQuestionsSnapshot>
+  setAgentsMayAsk(on: boolean): Promise<WebQuestionsSnapshot>
+  /** Removes one kept question, or all of them with null; the kept text is deleted. */
+  removeWebQuestions(id: string | null): Promise<WebQuestionsSnapshot>
+  /** Opens the page one kept claim cites in the owner's browser. The address is read from the kept record, never taken from the window. */
+  openWebQuestionPage(id: string, claim: number): Promise<{ opened: boolean }>
   readClipboardText(): Promise<{ text: string }>
   writeClipboardText(text: string): Promise<{ written: true }>
   /** Local Whisper dictation: engine and model availability, with progress for running downloads. */

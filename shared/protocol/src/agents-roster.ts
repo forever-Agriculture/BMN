@@ -471,6 +471,40 @@ export interface ResearchSnapshot {
 /** What Look up found for one model name. */
 export interface ResearchLookup { ok: boolean; message: string; model: ResearchModelView | null }
 
+/** Who asked a web question (Epic 64): the owner on Models, a BMN session (with the agent app the command ran under, where there was one), or a shell outside BMN. */
+export type WebQuestionAsker = { kind: 'owner' } | { kind: 'shell' } | { kind: 'session'; session: string; app?: string }
+/** The three marks BMN sets by reading a claim's page itself; only the first is evidence. */
+export const WEB_QUESTION_MARKS = { found: 'passage found on the page', missing: 'page read, passage not found', unreadable: 'page not readable' } as const
+export interface WebQuestionClaim { claim: string; source: string; passage: string; mark: string; why?: string }
+export type WebQuestionOutcome = 'running' | 'answered' | 'no-answer' | 'failed' | 'stopped' | 'limit' | 'refused' | 'interrupted'
+/** One kept web question, as Models lists it. `question` is null for a text refused for what it held: that text is not kept. */
+export interface WebQuestionView {
+  id: string
+  at: string
+  by: WebQuestionAsker
+  researcher: string | null
+  question: string | null
+  outcome: WebQuestionOutcome
+  note?: string
+  answer?: string
+  claims?: WebQuestionClaim[]
+  notFound?: string[]
+  counts?: { found: number; not_found: number; unreadable: number }
+  tookMs?: number
+}
+/** Team › Models, "Web questions" (64.3): what was asked, what holds the one research lock now, the switch and the day's count. */
+export interface WebQuestionsSnapshot {
+  /** Newest first, at most the 200 BMN keeps. */
+  questions: WebQuestionView[]
+  /** The research or question that holds the one research lock now, whoever started it. */
+  holder: { kind: 'research' | 'lookup' | 'question'; id?: string; at?: string; researcher?: string; by?: WebQuestionAsker } | null
+  agentsMayAsk: boolean
+  today: number
+  limits: { perDay: number; minutes: number; characters: number; kept: number }
+}
+/** How an Ask from Models went on: started (the list shows it running), or refused in the command's own words. */
+export interface WebQuestionAsked { ok: boolean; message: string | null; snapshot: WebQuestionsSnapshot }
+
 /** What changing a default would write, before it is written (R60-NFR2). */
 export interface ContextLimitPlan {
   ok: boolean

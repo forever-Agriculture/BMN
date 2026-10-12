@@ -9,6 +9,7 @@ import { Dot, Piece } from './roster-marks'
 import { listedAgents, nameResearchers, namedResearchers, thousands } from './roster-staging'
 import { PageHead, Row, shortDate } from './team-preferences'
 import type { TeamState } from './team-state'
+import { WebQuestions, useWebQuestionsState } from './web-questions'
 import { failureDetail } from './bridge-error'
 
 export interface ResearchState {
@@ -103,7 +104,12 @@ export function useResearchState(): ResearchState {
       const researcher = snapshot?.researcher
       if (!researcher) return Promise.resolve()
       setNotice(null)
-      return act(() => window.aiTerminal.startResearch(researcher), 'The research could not start')
+      return act(async () => {
+        const next = await window.aiTerminal.startResearch(researcher)
+        // Nothing started (a web question holds the research lock): the page says why now, since no run will end to say it.
+        if (next.running === null && next.ended !== null && !next.ended.ok) setNotice(next.ended)
+        return next
+      }, 'The research could not start')
     },
     stop: () => act(() => window.aiTerminal.stopResearch(), 'The research could not be stopped'),
     lookUp: async (provider, model) => {
@@ -268,9 +274,14 @@ function ApplyPrices(props: { changes: readonly PriceChange[]; onStage(): void; 
   )
 }
 
-export function ModelsPage(props: { team: TeamState; data: RosterDataShape; research: ResearchState; add(fill: ResearchFill): void }): React.JSX.Element {
+export function ModelsPage(props: {
+  team: TeamState; data: RosterDataShape; research: ResearchState; add(fill: ResearchFill): void
+  /** The name a BMN session has now, for who asked a web question; absent for one that is closed. */
+  sessionName?(id: string): string | undefined
+}): React.JSX.Element {
   const { research, data, team } = props
   const researcherId = useId()
+  const questions = useWebQuestionsState()
   const [applying, setApplying] = useState(false)
   // Said while the staged prices wait for approval; gone once they are approved or discarded.
   const [staged, setStaged] = useState<string | null>(null)
@@ -291,6 +302,8 @@ export function ModelsPage(props: { team: TeamState; data: RosterDataShape; rese
   const groups = researchGroups(snapshot.models, data)
   const changes = priceChanges(snapshot.models, data)
   const running = snapshot.running !== null
+  // A web question holds the one research lock, whoever asked it: research waits for it (64.3 AC2).
+  const asking = !running && questions.snapshot?.holder?.kind === 'question'
   const lastDay = snapshot.last ? dayWords(snapshot.last.at) : null
   // Two agents may share a name (Opus the knight, Opus the queen): the class's piece tells them apart, as on the Team pages.
   const researcherLabel = (id: string): React.ReactNode => {
@@ -302,10 +315,10 @@ export function ModelsPage(props: { team: TeamState; data: RosterDataShape; rese
   const providerName = (model: ResearchModelView): string => data.providers.find((provider) => provider.id === model.providerId)?.name ?? model.provider
   return (
     <>
-      <PageHead title="Models" status={researchStatus(snapshot, shortDate)}>
+      <PageHead title="Models" status={asking ? 'Research waits for the web question below' : researchStatus(snapshot, shortDate)}>
         {running
           ? <button type="button" disabled={research.busy} onClick={() => void research.stop()}>Stop</button>
-          : <button type="button" disabled={research.busy || chosen === undefined || testing} title={able.length === 0 ? 'No agent on your team can research' : chosen === undefined ? 'Pick a researcher first' : testing ? 'The Codex fence test is running' : undefined} onClick={() => void research.start()}>Research now</button>}
+          : <button type="button" disabled={research.busy || chosen === undefined || testing || asking} title={able.length === 0 ? 'No agent on your team can research' : chosen === undefined ? 'Pick a researcher first' : testing ? 'The Codex fence test is running' : asking ? 'A web question is under way; research can start when it ends or you stop it' : undefined} onClick={() => void research.start()}>Research now</button>}
       </PageHead>
       {staged !== null && team.hasStaged ? <p className="preferences-success" role="status">{staged}</p>
         : research.notice ? <p className={research.notice.ok ? 'preferences-success' : 'preferences-error'} role={research.notice.ok ? 'status' : 'alert'}>{research.notice.text}</p> : null}
@@ -369,6 +382,11 @@ export function ModelsPage(props: { team: TeamState; data: RosterDataShape; rese
         </details>
       ) : null}
       <p className="preferences-help">Research changes nothing by itself. Apply prices and Add to team wait for your Approve.</p>
+      {questions.loadError ? <p className="preferences-error" role="alert">{questions.loadError}</p> : null}
+      {questions.snapshot ? (
+        <WebQuestions snapshot={questions.snapshot} researcher={chosen?.name ?? null} busy={questions.busy} sessionName={props.sessionName ?? (() => undefined)}
+          ask={questions.ask} stop={questions.stop} allow={questions.allow} remove={questions.remove} openPage={questions.openPage} />
+      ) : null}
     </>
   )
 }

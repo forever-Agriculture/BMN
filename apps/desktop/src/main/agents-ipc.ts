@@ -1,7 +1,7 @@
 // MODULE: agents-ipc.ts - Epic 60.5/60.6: renderer channels for the Preferences Team and Rules pages
 import { execFile } from 'node:child_process'
 import { mkdirSync, readFileSync, statSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
 import {
   ERROR_CODES,
   ROSTER_APP_NAMES,
@@ -18,6 +18,10 @@ import {
   type ResearchLookup,
   type ResearchSnapshot,
   type ResearcherView,
+  type WebQuestionAsked,
+  type WebQuestionAsker,
+  type WebQuestionView,
+  type WebQuestionsSnapshot,
   type RosterDataShape,
   type RosterHarness,
   type RulesOutcome,
@@ -49,7 +53,8 @@ import {
   CONTEXT_APPS, ContextError, applyContextDefault, contextAuto, contextAutoPlan, contextDefault, contextTestFolder, limitedAgents, planContextDefault, setContextAuto, sharingAgents,
   type ContextAutoPlanEntry, type ContextTestOutcome
 } from '../../bin/agents-context.mjs'
-import { chooseResearcher, fetchPublicPage, readResearch, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
+import { ASK_KEPT, ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, agentsMayAsk, askedCount, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord } from '../../bin/agents-ask.mjs'
+import { chooseResearcher, fetchPublicPage, processStart, readResearch, researchLockHolder, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
 import { runFenceTest } from '../../bin/agents-fence.mjs'
 import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsTests } from '../../bin/agents-skills.mjs'
 import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsTests } from '../../bin/agents-tools.mjs'
@@ -75,6 +80,8 @@ export interface AgentsIpcOptions {
   sessionEnvironment?: { current(): { env: NodeJS.ProcessEnv; source: 'shell' | 'app'; reason?: string }; refresh(): Promise<void> }
   /** Opens a file in the owner's own editor; resolves to an error message, or '' when it opened. */
   openPath?(path: string): Promise<string>
+  /** Opens an https address in the owner's own browser; absent where there is none to open. */
+  openExternal?(address: string): Promise<void>
   now?(): Date
   /** Where the process table is read when Allow here asks about a stopped session again; tests replace it. */
   procRoot?: string
@@ -1180,6 +1187,12 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const researcher = textParam(params, 'researcher', 64)
     // One at a time, the fence test included: a research asks how that test stands.
     if (research !== null || fenceTest.running) return researchSnapshot(false)
+    // A web question holds the same lock, whoever asked it (64.3 AC2): nothing starts, and the page says why.
+    const held = researchLockHolder()
+    if (held !== null) {
+      researchEnded = { ok: false, text: `${held.kind === 'question' ? 'A web question is running' : 'Another research is running'}, so this research did not start. Wait for it to end, or stop it.`, kept: false }
+      return researchSnapshot(false)
+    }
     const ctx = context()
     chooseResearcher(researcher)
     const state = begin(researcher, false)
@@ -1207,6 +1220,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const model = textParam(params, 'model', 100)
     if (research !== null) return { ok: false, message: 'A research is going. Wait for it to end, or stop it.', model: null }
     if (fenceTest.running) return { ok: false, message: 'The Codex fence test is running. Wait for it to end.', model: null }
+    if (researchLockHolder()?.kind === 'question') return { ok: false, message: 'A web question is running. Wait for it to end, or stop it.', model: null }
     const ctx = context()
     const state = begin(researcher, true)
     try {
@@ -1224,7 +1238,146 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       if (research === state) research = null
     }
   })
+
+  // Team › Models, "Web questions" (64.3). The owner's own Ask runs in this process, as a research does; an agent's runs in its own.
+  let asking: { controller: AbortController } | null = null
+  const questionsSnapshot = (): WebQuestionsSnapshot => {
+    const kept = readQuestions()
+    const held = researchLockHolder()
+    // A team that cannot be read names nobody: the list still shows, with the ids the records hold.
+    let names = new Map<string, string>()
+    try {
+      names = new Map((approvedIfAny()?.data.agents ?? []).map((agent) => [agent.id, agent.name]))
+    } catch {
+      // Said on the Team page; nothing to add here.
+    }
+    return {
+      questions: kept.map((entry) => questionView(entry, names)).reverse(),
+      holder: held === null ? null : {
+        kind: held.kind === 'question' || held.kind === 'lookup' ? held.kind : 'research',
+        ...(typeof held.id === 'string' ? { id: held.id.slice(0, 64) } : {}), ...(typeof held.at === 'string' ? { at: held.at.slice(0, 32) } : {}),
+        ...(typeof held.researcher === 'string' ? { researcher: names.get(held.researcher) ?? held.researcher.slice(0, 64) } : {}),
+        ...(askerOf(held.by) === null ? {} : { by: askerOf(held.by)! })
+      },
+      agentsMayAsk: agentsMayAsk(),
+      today: askedCount(context().now()),
+      limits: { perDay: ASK_PER_DAY, minutes: ASK_LIMIT_MS / 60_000, characters: ASK_MAX_CHARS, kept: ASK_KEPT }
+    }
+  }
+  handle('aiterm:questions:load', () => questionsSnapshot())
+  handle('aiterm:questions:ask', async (params): Promise<WebQuestionAsked> => {
+    // Longer than the command takes, so that a question too long is refused in the command's own words.
+    const question = textParam(params, 'question', 16 * ASK_MAX_CHARS)
+    if (fenceTest.running) return { ok: false, message: 'The Codex fence test is running. Wait for it to end.', snapshot: questionsSnapshot() }
+    const ctx = context()
+    const state = { controller: new AbortController() }
+    let begun!: () => void
+    const started = new Promise<null>((resolve) => { begun = () => resolve(null) })
+    const run = runAsk({
+      question, by: { kind: 'owner' }, owner: true, environment: researchEnvironment(ctx), now: ctx.now, signal: state.controller.signal, fetchPage: readPage, ...researchLimit(),
+      onStart: () => { asking = state; begun() }
+    }).then((result) => result, (error: unknown) => ({ ok: false, outcome: 'failed' as const, researcher: null, message: `The question failed: ${error instanceof Error ? error.message : String(error)}` }))
+    void run.then((result) => {
+      if (asking === state) asking = null
+      if (typeof result.researcher === 'string') rereadAfter(result.researcher, ctx)
+    })
+    // Refused before anything started: said now, in the command's words. Started: the list shows it running.
+    const first = await Promise.race([started, run])
+    if (first === null) return { ok: true, message: null, snapshot: questionsSnapshot() }
+    return { ok: first.ok, message: first.ok ? null : first.message ?? ('note' in first ? first.note : undefined) ?? 'The question could not be asked.', snapshot: questionsSnapshot() }
+  })
+  handle('aiterm:questions:stop', () => {
+    // Whoever started it (AC2): this window's own question or research by its own switch, another process's question by the signal Ctrl-C sends.
+    if (asking !== null) asking.controller.abort()
+    else if (research !== null) research.controller.abort()
+    else {
+      const held = researchLockHolder()
+      if (held !== null && held.kind === 'question' && held.pid !== process.pid && isQuestionCommand(held.pid, held.start)) {
+        try {
+          process.kill(held.pid, 'SIGINT')
+        } catch {
+          // It ended by itself in between.
+        }
+      }
+    }
+    return questionsSnapshot()
+  })
+  handle('aiterm:questions:allow', (params) => {
+    if (typeof params.on !== 'boolean') invalid('on must be true or false')
+    setAgentsMayAsk(params.on)
+    return questionsSnapshot()
+  })
+  handle('aiterm:questions:open-page', async (params) => {
+    const id = textParam(params, 'id', 64)
+    if (!Number.isSafeInteger(params.claim) || (params.claim as number) < 0) invalid('claim must be a claim\'s place in the record')
+    // The address comes from the kept record, written by a researcher: only an https address is opened, and only in the browser.
+    const source = readQuestions().find((entry) => entry.id === id)?.claims?.[params.claim as number]?.source
+    const address = httpsPage(source)
+    if (address === null || options.openExternal === undefined) return { opened: false }
+    await options.openExternal(address)
+    return { opened: true }
+  })
+  handle('aiterm:questions:remove', (params) => {
+    if (params.id !== null && (typeof params.id !== 'string' || params.id.length > 64)) invalid('id must be a question id or null')
+    removeQuestions(params.id, context().now())
+    return questionsSnapshot()
+  })
   return { contextAutoAtStart: () => auto.trigger() }
+}
+
+/** A kept page address as the browser may be given it: https, no sign-in part; null for anything else. */
+function httpsPage(source: unknown): string | null {
+  if (typeof source !== 'string') return null
+  try {
+    const address = new URL(source)
+    return address.protocol === 'https:' && address.username === '' && address.password === '' ? address.href : null
+  } catch {
+    return null
+  }
+}
+
+/** Who asked, as far as a stored value says it; anything else is nobody BMN can name. */
+function askerOf(value: unknown): WebQuestionAsker | null {
+  if (value === null || typeof value !== 'object') return null
+  const by = value as { kind?: unknown; session?: unknown; app?: unknown }
+  if (by.kind === 'owner' || by.kind === 'shell') return { kind: by.kind }
+  if (by.kind !== 'session' || typeof by.session !== 'string') return null
+  return { kind: 'session', session: by.session.slice(0, 64), ...(typeof by.app === 'string' ? { app: by.app.slice(0, 32) } : {}) }
+}
+
+/** One kept question as the page lists it; a field of the wrong kind is left out, never shown. */
+function questionView(entry: QuestionRecord, names: ReadonlyMap<string, string>): WebQuestionView {
+  const text = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined)
+  const claims = Array.isArray(entry.claims)
+    ? entry.claims.filter((claim) => claim !== null && typeof claim === 'object' && [claim.claim, claim.source, claim.passage, claim.mark].every((part) => typeof part === 'string'))
+      .map((claim) => ({ claim: claim.claim, source: claim.source, passage: claim.passage, mark: claim.mark, ...(typeof claim.why === 'string' ? { why: claim.why } : {}) }))
+    : undefined
+  const counts = entry.counts
+  return {
+    id: entry.id, at: entry.at, by: askerOf(entry.by) ?? { kind: 'shell' },
+    researcher: text(entry.researcher_name) ?? (typeof entry.researcher === 'string' ? names.get(entry.researcher) ?? entry.researcher : null),
+    question: text(entry.question) ?? null, outcome: entry.outcome,
+    ...(text(entry.note) === undefined ? {} : { note: text(entry.note)! }), ...(text(entry.answer) === undefined ? {} : { answer: text(entry.answer)! }),
+    ...(claims === undefined ? {} : { claims }),
+    ...(Array.isArray(entry.not_found) ? { notFound: entry.not_found.filter((line): line is string => typeof line === 'string') } : {}),
+    ...(counts !== undefined && [counts.found, counts.not_found, counts.unreadable].every(Number.isSafeInteger) ? { counts: { found: counts.found, not_found: counts.not_found, unreadable: counts.unreadable } } : {}),
+    ...(Number.isSafeInteger(entry.took_ms) ? { tookMs: entry.took_ms! } : {})
+  }
+}
+
+/**
+ * Whether a process is BMN's own `bmn research ask`, still the one that wrote the lock: its start
+ * time is the lock's, and its command line is the command's. Stop signals nothing else.
+ */
+function isQuestionCommand(pid: number, start: string): boolean {
+  if (processStart(pid) !== start) return false
+  try {
+    const argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0')
+    const script = argv.findIndex((part) => basename(part) === 'bmn')
+    return script !== -1 && argv[script + 1] === 'research' && argv[script + 2] === 'ask'
+  } catch {
+    return false
+  }
 }
 
 /** How a fence test ended, for the page's notice. */

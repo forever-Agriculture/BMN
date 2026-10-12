@@ -1535,6 +1535,20 @@ bmn research ask --question-file question.txt --agent luna --json
   reaches an app only through your Install. A pointer in your global rules is your own edit.
 - **Switched off.** With "Agents may ask the web" off (Team › Models), an agent's question is
   refused with `ASKING_OFF`, told so and told to ask you; your own Ask still works.
+- **On Models.** Team › Models ends with "Web questions". The switch "Agents may ask the web" is
+  on until you switch it off, with the day's count beside it. **Ask** sends a question of your
+  own by the same route, to the researcher picked above (Ctrl+Enter or the button; Enter makes a
+  new line); a refusal is shown under the field in the command's own words, and what you typed
+  stays. A question under way is shown with who asked and a **Stop** that ends it whoever started
+  it: your own by BMN itself, an agent's by the signal Ctrl-C sends to its `bmn research ask`,
+  and to nothing else. While one runs, "Research now" waits and says why. Below are the kept
+  questions, newest first: the first line, when, who asked whom (a session by the name it has
+  now), what its claims are worth and the outcome. Opening one shows the whole question, the
+  answer, the claims that are evidence on a plate and the others under "Not evidence", each with
+  its page as a link that opens in your browser, what was looked for and not found, and how long
+  it took. **Remove** deletes one record with its text, **Remove all…** every one after a
+  confirmation in place. Removing gives no question of the day back: the day's limit counts what
+  was asked, not what is still listed.
 
 ### The prompt guard
 

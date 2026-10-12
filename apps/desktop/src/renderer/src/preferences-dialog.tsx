@@ -129,6 +129,8 @@ export function PreferencesDialog(props: {
   reportedModels?: readonly ReportedModel[]
   /** How many running sessions BMN recognises as each app; Rules › Health says it beside an update. */
   recognisedSessions?: RecognisedSessions
+  /** The name a session has now; Team › Models says who asked a web question by it. */
+  sessionName?(id: string): string | undefined
   /** Opens a new shell session and runs a command there; Rules › Health offers it for an app's update command. */
   onRunInSession?: RunInSession | undefined
 }): React.JSX.Element {
@@ -541,7 +543,7 @@ export function PreferencesDialog(props: {
         ))}
       </nav>
       <main className="preferences-main" ref={main}>
-      {parent === 'team' ? <div className="preferences-page team-page"><TeamPreferences team={team} page={shownTeamPage} apps={rules.snapshot?.apps ?? null} context={rules.snapshot?.context ?? null} reported={props.reportedModels ?? []} research={research} go={goTeam} /></div> : null}
+      {parent === 'team' ? <div className="preferences-page team-page"><TeamPreferences team={team} page={shownTeamPage} apps={rules.snapshot?.apps ?? null} context={rules.snapshot?.context ?? null} reported={props.reportedModels ?? []} research={research} {...(props.sessionName ? { sessionName: props.sessionName } : {})} go={goTeam} /></div> : null}
       {parent === 'rules' ? <div className="preferences-page rules-page"><RulesPreferences rules={rules} team={team} page={page === 'health' ? 'health' : page === 'skills' ? 'skills' : page === 'tools' ? 'tools' : 'editor'} recognised={props.recognisedSessions ?? {}} onRunInSession={props.onRunInSession} /></div> : null}
       {pageOf('appearance', <>
       <section className="preferences-section">

@@ -22,6 +22,8 @@ import {
   type ContextLimitApp,
   type ContextLimitPlan,
   type ResearchLookup,
+  type WebQuestionAsked,
+  type WebQuestionsSnapshot,
   type ResearchSnapshot,
   type SkillsPlan,
   type ToolProposalView,
@@ -856,6 +858,24 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   lookUpModel(researcher: string, provider: string, model: string): Promise<ResearchLookup> {
     return invokeBridge('aiterm:research:lookup', { researcher, provider, model })
+  },
+  webQuestions(): Promise<WebQuestionsSnapshot> {
+    return invokeBridge('aiterm:questions:load', {})
+  },
+  askWebQuestion(question: string): Promise<WebQuestionAsked> {
+    return invokeBridge('aiterm:questions:ask', { question })
+  },
+  stopWebQuestion(): Promise<WebQuestionsSnapshot> {
+    return invokeBridge('aiterm:questions:stop', {})
+  },
+  setAgentsMayAsk(on: boolean): Promise<WebQuestionsSnapshot> {
+    return invokeBridge('aiterm:questions:allow', { on })
+  },
+  removeWebQuestions(id: string | null): Promise<WebQuestionsSnapshot> {
+    return invokeBridge('aiterm:questions:remove', { id })
+  },
+  openWebQuestionPage(id: string, claim: number): Promise<{ opened: boolean }> {
+    return invokeBridge('aiterm:questions:open-page', { id, claim })
   },
   readClipboardText(): Promise<{ text: string }> {
     return invokeBridge('aiterm:clipboard:read-text', {})

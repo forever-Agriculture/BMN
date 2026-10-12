@@ -1034,7 +1034,7 @@ function ChangesPage(props: { team: TeamState }): React.JSX.Element {
 // ---------------------------------------------------------------------------------------------
 // The pages and their footer
 
-export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?: Apps; context?: Context; reported?: Reported; research?: ResearchState; go(page: TeamPage): void }): React.JSX.Element {
+export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?: Apps; context?: Context; reported?: Reported; research?: ResearchState; sessionName?(id: string): string | undefined; go(page: TeamPage): void }): React.JSX.Element {
   const { team, page } = props
   const snapshot = team.snapshot
   if (team.loadError) return <><PageHead title="Team" /><p className="preferences-error" role="alert">{team.loadError}</p></>
@@ -1069,7 +1069,7 @@ export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?:
   const research = props.research ?? null
   if (page.name === 'new') return <NewAgentPage key={page.fill?.model ?? ''} team={team} data={data} apps={apps} reported={reported} research={research} fill={page.fill} go={props.go} />
   if (page.name === 'roles') return <RolesPage team={team} data={data} />
-  if (page.name === 'models' && research !== null) return <ModelsPage team={team} data={data} research={research} add={(fill) => props.go({ name: 'new', fill })} />
+  if (page.name === 'models' && research !== null) return <ModelsPage team={team} data={data} research={research} add={(fill) => props.go({ name: 'new', fill })} {...(props.sessionName ? { sessionName: props.sessionName } : {})} />
   if (page.name === 'changes') return <ChangesPage team={team} />
   const agent = page.name === 'agent' ? data.agents.find((entry) => entry.id === page.id) : undefined
   if (agent) return <AgentPage key={agent.id} team={team} data={data} agent={agent} apps={apps} context={props.context ?? null} reported={reported} research={research} go={props.go} />

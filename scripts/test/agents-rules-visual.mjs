@@ -1,11 +1,11 @@
-/* global document, window */
+/* global document, window, getComputedStyle */
 // MODULE: agents-rules-visual.mjs - Epic 60.5/60.6: Preferences › Team and Rules on a synthetic roster and master in a temporary HOME
 // HOME points at a scratch folder holding the synthetic roster (the unit-test fixture), a synthetic rules master and stub
 // app files. BMN itself starts with the system folders only, as from the desktop; the stub claude/codex binaries are on
 // the PATH the temporary home's shell settings add, as a version manager would, so every step that finds an app proves
 // BMN looked where a session does. No step reaches a provider or the owner's own rules. Screenshots land in .dev-auto/evidence/epic-60/shots/ (ignored).
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -1549,6 +1549,206 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     // The earlier stand-in comes back for the pages that follow.
     stub('claude', 'case "$1" in --version) echo "2.1.295 (Claude Code)";; *) cat > /dev/null; echo "I cannot tell";; esac')
     passed('Models offers only agents that may research, shows progress, keeps a stopped run\'s finished providers, marks a price its page does not show, stages verified prices behind a review and approval, and fills New agent from Add to team… and Look up (60.10 first release)')
+
+    phase('64.3: Web questions on Models: a question from a session\'s shell shows running and then answered with who asked, Stop ends one, the switch holds agents and not the owner, and removal empties the kept file')
+    {
+      const questionsFile = join(stateDir, 'research/questions.json')
+      const keptQuestions = () => (existsSync(questionsFile) ? JSON.parse(readFileSync(questionsFile, 'utf8')).questions : [])
+      const askPlan = join(home, 'ask-plan.json')
+      const askCalls = join(root, 'ask-calls.log')
+      const usesPage = 'https://docs.jev.test/uses'
+      mkdirSync(join(root, 'pages/docs.jev.test'), { recursive: true })
+      writeFileSync(join(root, 'pages/docs.jev.test/uses'), '<h1>Uses</h1><p>Teams use Jev for intent routing: &ldquo;Which team should handle this?&rdquo; with billing, shipping and returns.</p>')
+      const webAnswer = { version: 1, answer: 'People use Jev mostly to route requests by intent.', claims: [
+        { claim: 'Jev is used for intent routing.', source: usesPage, passage: 'Teams use Jev for intent routing: "Which team should handle this?"' },
+        { claim: 'Urgency detection is a common use.', source: usesPage, passage: 'urgency detection is the most common use' },
+        { claim: 'A vendor page lists four patterns.', source: 'https://gone.jev.test/patterns', passage: 'four patterns: speculative fan-out' }
+      ], not_found: ['an independent accuracy measurement'] }
+      const askAnswers = (delayMs) => writeFileSync(askPlan, JSON.stringify({ text: JSON.stringify(webAnswer), delayMs }))
+      // A stand-in Claude Code that answers a web question from the plan, after its delay.
+      writeFileSync(join(stubs, 'claude'), `#!${process.execPath}
+const fs = require('node:fs')
+if (process.argv[2] === '--version') { console.log('2.1.295 (Claude Code)'); process.exit(0) }
+const prompt = fs.readFileSync(0, 'utf8')
+fs.appendFileSync(${JSON.stringify(askCalls)}, JSON.stringify({ argv: process.argv.slice(2), env: Object.keys(process.env).sort(), cwd: process.cwd(), files: fs.readdirSync('.'), prompt }) + '\\n')
+const plan = JSON.parse(fs.readFileSync(${JSON.stringify(askPlan)}, 'utf8'))
+setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, result: plan.text })), plan.delayMs)
+`)
+      chmodSync(join(stubs, 'claude'), 0o755)
+      const askRuns = () => (existsSync(askCalls) ? readFileSync(askCalls, 'utf8').trim().split('\n').map((entry) => JSON.parse(entry)) : [])
+      // `bmn research ask` as an agent runs it in a session's shell: a process of its own, the session's id in its environment.
+      const sessionButton = page.locator('.session-row [data-session-id]').first()
+      const sessionId = await sessionButton.getAttribute('data-session-id')
+      const sessionName = (await sessionButton.getAttribute('title')).split(' · ')[0]
+      const askFromShell = (question, extra = {}) => {
+        const child = spawn(process.execPath, [join(appDirectory, 'bin/bmn'), 'research', 'ask', '--json'],
+          { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin`, BMN_SESSION_ID: sessionId, CLAUDECODE: '1', ...extra }, stdio: ['pipe', 'pipe', 'pipe'] })
+        let printed = ''
+        child.stdout.on('data', (chunk) => { printed += String(chunk) })
+        child.stdin.end(question)
+        const ended = new Promise((resolveEnded) => child.once('exit', (code) => resolveEnded({ code, printed })))
+        return { child, ended }
+      }
+      const agentQuestion = 'How do people use the Jev 1.13 model, according to public pages?'
+      const ownQuestion = 'Which public pages describe intent routing with Jev?\nName the page for each claim.'
+
+      await go('Team', 'Models')
+      const part = main.locator('.web-questions')
+      await part.getByRole('heading', { name: /^Web questions/ }).waitFor()
+      await part.scrollIntoViewIfNeeded()
+      const researcherName = (await main.getByRole('radiogroup', { name: 'Researcher' }).locator('[aria-checked="true"]').textContent()).trim()
+      await part.getByText('No questions yet. Yours and your agents\' are kept here with their answers.', { exact: true }).waitFor()
+      const agentsSwitch = part.getByRole('switch', { name: 'Agents may ask the web' })
+      assert.equal(await agentsSwitch.getAttribute('aria-checked'), 'true', 'agents may not ask although nobody switched that off')
+      await part.getByText('0 of 20 asked today', { exact: true }).waitFor()
+      await part.getByText(`Goes to ${researcherName}.`, { exact: true }).waitFor()
+      const askField = part.getByRole('textbox', { name: 'Ask' })
+      const askButton = part.getByRole('button', { name: 'Ask', exact: true })
+      assert.equal(await askButton.isDisabled(), true, 'Ask can be pressed with nothing typed')
+      await shot('web-questions-empty-1280.png')
+
+      // A question an agent asks from a session's shell: the open page shows it running, with who asked, and research waits.
+      askAnswers(120_000)
+      const fromAgent = askFromShell(agentQuestion)
+      const under = part.locator('.page-note.with-action[role="status"]')
+      await under.getByText(`${sessionName} (Claude Code) is asking ${researcherName}`, { exact: true }).waitFor()
+      await under.getByText(agentQuestion, { exact: true }).waitFor()
+      await head.getByText('Research waits for the web question below', { exact: true }).waitFor()
+      const researchNow = head.getByRole('button', { name: 'Research now' })
+      assert.equal(await researchNow.isDisabled(), true, 'Models research can start while a web question holds the lock')
+      assert.equal(await researchNow.getAttribute('title'), 'A web question is under way; research can start when it ends or you stop it')
+      await part.getByText('One question at a time: the one below is under way.', { exact: true }).waitFor()
+      await askField.fill(ownQuestion)
+      assert.equal(await askButton.isDisabled(), true, 'the owner can ask while another question is under way')
+      await part.getByText('1 of 20 asked today', { exact: true }).waitFor()
+      await shot('web-questions-running-1280.png')
+      // Stop ends it, whoever started it: the command in the other process ends as on Ctrl-C.
+      await until(() => askRuns().length === 1, 'the researcher of the shell\'s question')
+      await under.getByRole('button', { name: 'Stop', exact: true }).click()
+      const stopped = await fromAgent.ended
+      assert.equal(stopped.code, 1, `the stopped command ended with ${stopped.code}: ${stopped.printed}`)
+      assert.equal(JSON.parse(stopped.printed).outcome, 'stopped')
+      await under.waitFor({ state: 'detached' })
+      const lineOf = (id) => part.locator(`.question[data-question="${id}"]`)
+      const stoppedId = keptQuestions()[0].id
+      await lineOf(stoppedId).getByText(`${sessionName} (Claude Code) asked ${researcherName}`, { exact: true }).waitFor()
+      assert.equal(await lineOf(stoppedId).locator('.outcome').textContent(), 'Stopped')
+      await head.getByRole('button', { name: 'Research now' }).and(page.locator(':enabled')).waitFor()
+
+      // The same from the shell, left to end: answered, with its asker; its pages are real sites this test cannot reach, so nothing counts as evidence.
+      askAnswers(0)
+      const answeredFromShell = await askFromShell(agentQuestion).ended
+      assert.equal(answeredFromShell.code, 0, answeredFromShell.printed)
+      const agentAnswered = JSON.parse(answeredFromShell.printed)
+      assert.equal(agentAnswered.outcome, 'answered')
+      await lineOf(agentAnswered.id).getByText(`${sessionName} (Claude Code) asked ${researcherName}`, { exact: true }).waitFor()
+      assert.equal(await lineOf(agentAnswered.id).locator('.outcome').textContent(), 'Answered')
+      await lineOf(agentAnswered.id).getByText('no evidence for its 3 claims', { exact: true }).waitFor()
+
+      // His own Ask, by the same route: what he typed, the researcher beside it, then the answer with each claim marked by BMN's own read of its page.
+      await part.getByText(`Goes to ${researcherName}.`, { exact: true }).waitFor()
+      assert.equal(await askField.inputValue(), ownQuestion, 'what the owner typed was lost while another question ran')
+      await askButton.click()
+      await until(() => keptQuestions().some((entry) => entry.by?.kind === 'owner' && entry.outcome === 'answered'), 'the owner\'s question answered')
+      const own = keptQuestions().find((entry) => entry.by?.kind === 'owner')
+      assert.equal(own.question, ownQuestion)
+      assert.equal(await askField.inputValue(), '', 'the field kept a question that was sent')
+      await lineOf(own.id).getByText(`You asked ${researcherName}`, { exact: true }).waitFor()
+      await lineOf(own.id).getByText('evidence for 1 of 3 claims', { exact: true }).waitFor()
+      await lineOf(own.id).getByText('Which public pages describe intent routing with Jev?', { exact: true }).waitFor()
+      const ran = askRuns()
+      assert.equal(ran.length, 3, 'each question is one run of the researcher')
+      assert.ok(ran.every((call) => call.files.length === 0 && call.cwd.includes('/state/research/')), 'a question did not start in an empty folder of its own')
+      assert.ok(ran.every((call) => call.env.every((key) => ['HOME', 'PATH', '__CF_USER_TEXT_ENCODING'].includes(key))), `a question's run saw more of the environment: ${ran[0].env.join(', ')}`)
+      assert.ok(ran.every((call) => call.argv.includes('--safe-mode') && call.argv[call.argv.indexOf('--tools') + 1] === 'WebSearch,WebFetch'), 'a question\'s run was not held to the web tools')
+      assert.ok(ran[2].prompt.endsWith(`${ownQuestion}\n`) && ran[0].prompt.endsWith(`${agentQuestion}\n`), 'the prompt does not end with the question as asked')
+      // Opened: all of the question, the answer, the claims with their marks (evidence first, on its plate), and the page as a link.
+      await lineOf(own.id).locator('.question-line').click()
+      const body = lineOf(own.id).locator('.question-body')
+      assert.equal(await body.locator('.whole').first().textContent(), ownQuestion)
+      await body.getByText(webAnswer.answer, { exact: true }).waitFor()
+      await body.getByText('1 of 3 is evidence: BMN found the passage on the page. Pages open in your browser.', { exact: true }).waitFor()
+      assert.deepEqual(await body.getByRole('list', { name: 'Evidence', exact: true }).locator('.mark').allTextContents(), ['Passage found on the page'])
+      const notEvidence = await body.getByRole('list', { name: 'Not evidence' }).locator('.mark').allTextContents()
+      assert.equal(notEvidence.length, 2)
+      assert.ok(notEvidence[0] === 'Page read, passage not found' && notEvidence[1].startsWith('Page not readable'), `the other two marks read ${notEvidence.join(' | ')}`)
+      assert.equal(await body.getByRole('link', { name: 'docs.jev.test/uses, opens in your browser' }).first().getAttribute('href'), usesPage)
+      await body.getByText(/^Took \d+ (second|minute)/).waitFor()
+      // Only evidence stands on a plate, and nothing here has a colour of its own: the plate is the page's selection grey.
+      const plates = await body.locator('.claim').evaluateAll((items) => items.map((item) => [item.className, getComputedStyle(item).backgroundColor]))
+      assert.equal(plates.filter(([name]) => name === 'claim found').length, 1)
+      assert.ok(plates.every(([name, colour]) => (name === 'claim found') === (colour !== 'rgba(0, 0, 0, 0)')), `a claim that is not evidence has a plate: ${JSON.stringify(plates)}`)
+      const hues = await part.evaluate((element) => [...element.querySelectorAll('*')].flatMap((item) => {
+        const style = getComputedStyle(item)
+        return [style.color, style.backgroundColor, style.borderTopColor, style.borderBottomColor]
+      }).map((colour) => (/^rgba?\((\d+), (\d+), (\d+)/.exec(colour) ?? []).slice(1, 4).map(Number)).filter((rgb) => rgb.length === 3 && Math.max(...rgb) - Math.min(...rgb) > 24).map((rgb) => rgb.join(',')))
+      assert.ok(hues.every((hue) => hue === '201,164,92'), `a colour other than identity gold is used: ${[...new Set(hues)].join(' | ')}`)
+      assert.equal(await part.locator('select').count(), 0, 'the part uses a native select')
+      await part.scrollIntoViewIfNeeded()
+      await lineOf(own.id).scrollIntoViewIfNeeded()
+      await shot('web-questions-open-1280.png')
+
+      // A refusal is shown in the command's own words, and what he typed stays.
+      await askField.fill('   ')
+      assert.equal(await askButton.isDisabled(), true, 'an empty question can be sent')
+      await askField.fill('What is in ~/notes on a default install?')
+      await askButton.click()
+      await part.getByRole('alert').getByText('Not asked: the question names a path inside your home folder; a web question is public text and takes no file or folder with it', { exact: true }).waitFor()
+      assert.equal(await askField.inputValue(), 'What is in ~/notes on a default install?')
+      assert.equal(askRuns().length, 3, 'a refused question started the researcher')
+      await askField.fill('')
+
+      // The switch off: an agent's question is refused and told to ask the owner; his own Ask still works.
+      await agentsSwitch.click()
+      await part.getByRole('switch', { name: 'Agents may ask the web' }).and(page.locator('[aria-checked="false"]')).waitFor()
+      await part.getByText(/^Off: only your own Ask works\. /).waitFor()
+      const refusedAgent = await askFromShell(agentQuestion).ended
+      assert.equal(refusedAgent.code, 10, refusedAgent.printed)
+      assert.equal(JSON.parse(refusedAgent.printed).code, 'ASKING_OFF')
+      assert.match(JSON.parse(refusedAgent.printed).message, /ask the owner/)
+      assert.equal(askRuns().length, 3, 'an agent\'s question started the researcher with the switch off')
+      await askField.fill('What is a context window, in one sentence from a public page?')
+      await askButton.click()
+      await until(() => keptQuestions().filter((entry) => entry.by?.kind === 'owner' && entry.outcome === 'answered').length === 2, 'the owner\'s question with the switch off')
+      assert.equal(askRuns().length, 4)
+      await part.getByText('4 of 20 asked today', { exact: true }).waitFor()
+      await agentsSwitch.click()
+      await part.getByRole('switch', { name: 'Agents may ask the web' }).and(page.locator('[aria-checked="true"]')).waitFor()
+
+      // Narrow: the rows stack, the line's question truncates, nothing scrolls sideways.
+      await resize(540, 700)
+      await sleep(300)
+      await lineOf(own.id).scrollIntoViewIfNeeded()
+      const narrow = await part.evaluate((element) => ({
+        wide: element.scrollWidth > element.clientWidth + 1 || document.querySelector('.preferences-main').scrollWidth > document.querySelector('.preferences-main').clientWidth + 1,
+        stacked: [...element.querySelectorAll('.preferences-row')].every((row) => row.querySelector('.preferences-row-control').getBoundingClientRect().top >= row.querySelector('.preferences-row-label').getBoundingClientRect().bottom - 1),
+        outcomes: [...element.querySelectorAll('.question-line')].every((row) => row.querySelector('.outcome').getBoundingClientRect().right <= row.getBoundingClientRect().right + 1)
+      }))
+      assert.deepEqual(narrow, { wide: false, stacked: true, outcomes: true })
+      await shot('web-questions-open-540.png')
+      await resize(1280, 900)
+      await sleep(300)
+
+      // Removal: one question goes with its text; all go after a confirmation in place; the day's count stays.
+      await lineOf(own.id).getByRole('button', { name: 'Remove', exact: true }).click()
+      await lineOf(own.id).waitFor({ state: 'detached' })
+      assert.ok(!readFileSync(questionsFile, 'utf8').includes('intent routing with Jev'), 'a removed question\'s text is still kept')
+      await part.getByRole('button', { name: 'Remove all…' }).click()
+      const confirm = part.getByRole('group', { name: 'Remove all questions' })
+      await confirm.getByText(/^Remove all \d+ kept questions\? Their words, answers and claims are deleted\.$/).waitFor()
+      await shot('web-questions-remove-all-1280.png')
+      await confirm.getByRole('button', { name: 'Keep', exact: true }).click()
+      assert.ok(keptQuestions().length > 0, 'Keep removed the questions')
+      await part.getByRole('button', { name: 'Remove all…' }).click()
+      await confirm.getByRole('button', { name: 'Remove all', exact: true }).click()
+      await part.getByText('No questions yet. Yours and your agents\' are kept here with their answers.', { exact: true }).waitFor()
+      assert.deepEqual(keptQuestions(), [], 'the kept file still holds questions')
+      assert.ok(!/Jev|context window/.test(readFileSync(questionsFile, 'utf8')), 'the kept file still holds a question\'s words')
+      await part.getByText('4 of 20 asked today', { exact: true }).waitFor()
+      // The earlier stand-in comes back for the pages that follow.
+      stub('claude', 'case "$1" in --version) echo "2.1.295 (Claude Code)";; *) cat > /dev/null; echo "I cannot tell";; esac')
+    }
+    passed('Web questions shows a question an agent asks from a session\'s shell as running and then answered with who asked, holds research off meanwhile, Stop ends one whoever started it, the owner\'s Ask goes by the same route with claims marked and refusals in the command\'s words, the switch off refuses an agent and not the owner, and removal empties the kept file while the day\'s count stays (64.3)')
 
     phase('63.3: Codex researchers only where the fence test passed for exactly the installed version, and only the researchers the team names')
     assert.equal(await ledger.count(), 0, 'a change is still staged before the researchers phase')

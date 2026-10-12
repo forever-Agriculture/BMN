@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-  ASK_KEPT, ASK_MAX_CHARS, ASK_PER_DAY, MARKS, RESEARCH_USAGE, agentsMayAsk, askEnvironment, askPrompt, askedToday, askerOf, askerWords, answerLines, markClaims,
+  ASK_KEPT, ASK_MAX_CHARS, ASK_PER_DAY, MARKS, RESEARCH_USAGE, agentsMayAsk, askEnvironment, askPrompt, askedCount, askedToday, askerOf, askerWords, answerLines, markClaims,
   noResearcherWords, parseAskAnswer, questionProblem, questionsPath, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord
 } from '../../bin/agents-ask.mjs'
 import { CODEX_RESEARCH_TOOLS_SEEN, researchFormHash, researchRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
@@ -353,9 +353,15 @@ describe('one research at a time, across the app and the command line (64.1 AC6)
     lock.release!()
     plan({ text: JSON.stringify(ANSWER), delay: 300 })
     const first = ask()
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    expect(researchLockHolder()).toMatchObject({ kind: 'question', researcher: 'fable', by: { kind: 'shell' } })
-    expect(await ask()).toMatchObject({ outcome: 'refused', code: 'RESEARCH_RUNNING' })
+    try {
+      // However busy the machine is: the first question is waited for, never given a fixed time.
+      for (let waited = 0; researchLockHolder() === null && waited < 10_000; waited += 10) await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(researchLockHolder()).toMatchObject({ kind: 'question', researcher: 'fable', by: { kind: 'shell' } })
+      expect(await ask()).toMatchObject({ outcome: 'refused', code: 'RESEARCH_RUNNING' })
+    } finally {
+      // A question still going would write into the next test's folder.
+      await first.catch(() => undefined)
+    }
     expect(await first).toMatchObject({ outcome: 'answered' })
     expect(researchLockHolder()).toBeNull()
     expect(calls()).toHaveLength(1)
@@ -467,6 +473,35 @@ describe('what is kept (64.1 AC8)', () => {
     removeQuestions()
     expect(readQuestions()).toEqual([])
     expect(readFileSync(questionsPath(), 'utf8')).not.toContain('context window')
+  })
+
+  it('gives no question back when a record is removed: the day\'s limit counts what was asked, not what is still listed', async () => {
+    answered()
+    const day = new Date(2026, 9, 12, 12, 0)
+    const kept: QuestionRecord[] = Array.from({ length: ASK_PER_DAY - 1 }, (_unused, index) => ({
+      id: `seed-${index}`, at: new Date(2026, 9, 12, 8, index).toISOString(), by: { kind: 'shell' }, researcher: 'fable', researcher_name: 'Fable', question: 'seed', outcome: 'answered'
+    }))
+    // One from yesterday and one refused before it started: neither counts for today, removed or not.
+    kept.push({ id: 'yesterday', at: new Date(2026, 9, 11, 8, 0).toISOString(), by: { kind: 'shell' }, researcher: 'fable', researcher_name: 'Fable', question: 'old', outcome: 'answered' })
+    kept.push({ id: 'refused', at: new Date(2026, 9, 12, 9, 0).toISOString(), by: { kind: 'shell' }, researcher: null, researcher_name: null, question: null, outcome: 'refused', code: 'QUESTION_EMPTY' })
+    mkdirSync(join(home, '.config/bmn/agents/state/research'), { recursive: true })
+    writeFileSync(questionsPath(), JSON.stringify({ version: 1, questions: kept }))
+    setAgentsMayAsk(false)
+    expect(askedCount(day)).toBe(ASK_PER_DAY - 1)
+    removeQuestions('seed-0', day)
+    removeQuestions('yesterday', day)
+    expect(askedCount(day)).toBe(ASK_PER_DAY - 1)
+    removeQuestions(null, day)
+    expect(readQuestions()).toEqual([])
+    expect(askedCount(day)).toBe(ASK_PER_DAY - 1)
+    // The switch kept its place in the same file.
+    expect(agentsMayAsk()).toBe(false)
+    setAgentsMayAsk(true)
+    expect(askedCount(day)).toBe(ASK_PER_DAY - 1)
+    expect(await ask({ now: () => day })).toMatchObject({ ok: true })
+    expect(await ask({ now: () => day })).toMatchObject({ ok: false, code: 'DAY_LIMIT' })
+    // The next day starts at none.
+    expect(askedCount(new Date(2026, 9, 13, 0, 5))).toBe(0)
   })
 
   it('says who asked: a BMN session with its app, the session\'s shell, or a shell outside BMN', () => {
