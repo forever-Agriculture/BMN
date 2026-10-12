@@ -3,6 +3,7 @@
 // An isolated BMN with a backdated archived session: after the next start its delivered file and that
 // file's link are gone from the disk, and a file a kept session's pending handoff names is still there.
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -134,6 +135,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     ].sort((a, b) => a.artifact_id.localeCompare(b.artifact_id)))
     assert.deepEqual(drafts, [{ draft_id: 'pending-handoff', session_id: kept, source_session_id: null, state: 'draft' }])
     writeFileSync(join(evidence, 'result.json'), JSON.stringify({ status: 'PASS',
+      revision: execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+      uncommittedChanges: execFileSync('git', ['-C', repo, 'status', '--porcelain'], { encoding: 'utf8' }).trim().length > 0,
       fixture: 'Synthetic sessions and files in an isolated data root; archive date and pending handoff set in its SQLite; the purge ran at a real start',
       checks: ['expired session deleted', 'delivered original removed', 'delivery link removed', 'pending-handoff file kept and unlinked',
         'kept session file and record untouched', 'owner file outside the store untouched'],

@@ -141,9 +141,15 @@ export async function removeOriginals(
   const paths = new Set<string>()
   let removed = 0
   let failed = 0
+  // A store that is not there has nothing to remove, and nothing is removed through a root that fails to resolve.
+  const realRoot = await realpath(root).catch(() => undefined)
   for (const original of originals) {
     try {
       const path = originalPath(root, original.artifactId, original.sha256)
+      if (realRoot === undefined) continue
+      // The folder a file sits in must be the store's own: one replaced by a link would lead the removal elsewhere.
+      const folder = await realpath(dirname(path))
+      if (folder !== join(realRoot, original.sha256.slice(0, 2))) throw new TypeError('the file folder is outside the store')
       paths.add(path)
       await unlink(path)
       removed += 1

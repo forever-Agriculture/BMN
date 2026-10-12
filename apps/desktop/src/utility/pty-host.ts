@@ -50,7 +50,7 @@ import { ensureApplicationRoots, resolveApplicationRoots } from './roots'
 import { installBundledTerminfo } from './terminal-graphics'
 import { FileSavedOutputStore } from './saved-output-store'
 import { removeOriginals } from './artifact-files'
-import { archivePurgeMessage } from './database-archive-purge'
+import { removePurgedFiles } from './archive-purge-files'
 import { routeTerminalSavedOutputGet } from './saved-output-route'
 import { type AgentHistoryAdapter } from './agent-history'
 import { codexHistoryAdapter } from './agent-history-codex'
@@ -240,10 +240,12 @@ async function purgeExpiredArchives(
   try {
     const purged = await database.purgeExpiredArchives()
     if (purged.sessionIds.length === 0 && purged.workspaceIds.length === 0) return
-    await savedOutputStore.removeSessions(purged.sessionIds)
     // After the commit: a crash before this leaves only unused files, never a record without its file.
-    const files = await removeOriginals(dataRoot, purged.originals)
-    process.stderr.write(`${archivePurgeMessage(purged, files)}\n`)
+    const lines = await removePurgedFiles(purged, {
+      savedOutput: async (sessionIds) => { await savedOutputStore.removeSessions(sessionIds) },
+      originals: (originals) => removeOriginals(dataRoot, originals)
+    })
+    process.stderr.write(`${lines.join('\n')}\n`)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown error'
     process.stderr.write(`[BMN] archive cleanup failed: ${message.slice(0, 240)}\n`)

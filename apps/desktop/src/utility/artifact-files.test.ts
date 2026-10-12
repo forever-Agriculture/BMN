@@ -428,4 +428,42 @@ describe('removing originals after a purge', () => {
       .toEqual({ removed: 0, failed: 1 })
     expect(await readFile(outside, 'utf8')).toBe('owner file')
   })
+
+  it('counts an unusable digest as a failure and removes nothing for it', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'bmn-artifact-remove-test-'))
+    createdRoots.add(base)
+    const store = new ArtifactFileStore({
+      root: artifactOriginalsRoot(base), stagingRoot: join(base, 'staging'), usedBytes: async () => 0
+    })
+    const kept = await store.importBytes(new TextEncoder().encode('kept'), { artifactId: 'kept', originalName: 'kept.txt' })
+
+    expect(await removeOriginals(base, [
+      { artifactId: 'kept', sha256: '../' + 'e'.repeat(61) },
+      { artifactId: 'kept', sha256: kept.sha256.toUpperCase() },
+      { artifactId: 'kept', sha256: '' }
+    ])).toEqual({ removed: 0, failed: 3 })
+    expect(await listFiles(artifactOriginalsRoot(base))).toEqual([kept.storedPath])
+  })
+
+  it('removes nothing through a file folder that was replaced by a link out of the store', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'bmn-artifact-remove-test-'))
+    createdRoots.add(base)
+    const originals = artifactOriginalsRoot(base)
+    const elsewhere = join(base, 'elsewhere')
+    await mkdir(originals, { recursive: true })
+    await mkdir(elsewhere)
+    const sha256 = 'f'.repeat(64)
+    // The folder the store would use for this digest points at a folder of the owner's, holding a file of that name.
+    await symlink(elsewhere, join(originals, 'ff'))
+    await writeFile(join(elsewhere, 'victim'), 'owner file')
+
+    expect(await removeOriginals(base, [{ artifactId: 'victim', sha256 }])).toEqual({ removed: 0, failed: 1 })
+    expect(await readFile(join(elsewhere, 'victim'), 'utf8')).toBe('owner file')
+  })
+
+  it('reports nothing removed and nothing failed when the store does not exist', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'bmn-artifact-remove-test-'))
+    createdRoots.add(base)
+    expect(await removeOriginals(base, [{ artifactId: 'gone', sha256: 'a'.repeat(64) }])).toEqual({ removed: 0, failed: 0 })
+  })
 })
