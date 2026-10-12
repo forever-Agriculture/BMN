@@ -38,14 +38,15 @@ session. It uses a bot you create and own. It is off by default.
   advice and all readings, and nothing about your sessions or files. While a problem stays, the
   message repeats every 10 minutes; a different set of problems is told at once; one **Back to
   normal** follows when it ends. Health alerts are sent in quiet hours too. A send Telegram
-  refused is tried again at the next check; one whose answer was lost is not repeated before the
-  10-minute repeat. **Turn off at** is an optional local time at which the watch switches itself
+  refused is tried again at the next check; one whose answer was lost, an all-clear included, is
+  said again at the 10-minute repeat and not before. **Turn off at** is an optional local time at which the watch switches itself
   off and says so once (when Telegram is away at that moment, as soon as it is back); a time
   already past when you save means that time tomorrow. **Send test** sends the current readings
-  marked as a test. A reading BMN cannot take is shown as "not measured" in every message; only
-  the CPU temperature raises an alert by being unreadable. The watch only reads and reports: BMN never stops,
-  slows or suspends anything, starts no program except `nvidia-smi` for an NVIDIA card that is
-  already awake, and adds no service or timer. So it runs only while BMN is open, and it cannot
+  marked as a test. A reading BMN cannot take is shown as "not measured" in every message. Only
+  the CPU temperature raises an alert by being unreadable, but a problem you were told about never
+  ends on a reading that fell silent: it stands, and repeats, until a reading shows it over. The watch only reads and reports: BMN never stops,
+  slows or suspends anything, starts no program except `nvidia-smi` while every NVIDIA card is
+  already awake (the question would wake a sleeping one), and adds no service or timer. So it runs only while BMN is open, and it cannot
   see smoke, a swelling battery or a machine that has died. A machine with no battery when the
   watch is switched on has no battery or mains alerts. If you also run a watch of your own (a
   script on a timer), switch one of them off, or both will message you. Linux only.

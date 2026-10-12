@@ -1387,6 +1387,26 @@ export function putSettingsSection(
   return getSettings(database)
 }
 
+/**
+ * The health watch switching itself off: the stored Telegram section gets the watch off with no
+ * switch-off time, every other field as it is stored, and the watch's own state is replaced, both in
+ * the one transaction this operation runs in. So a save the owner makes just before or after it is
+ * never overwritten with an older copy, and the switch never changes without the state.
+ */
+export function switchHealthAlertsOff(database: DatabaseConnection, stateKey: string, state: unknown, now: string): AppSettings {
+  const row = database.prepare("SELECT value_json FROM app_setting WHERE key = 'telegram'").get() as { value_json: string } | undefined
+  if (row) {
+    try {
+      const stored = upgradeStoredSection('telegram', JSON.parse(row.value_json)) as Record<string, unknown>
+      putSettingsSection(database, 'telegram', { ...stored, healthAlerts: { ...DEFAULT_TELEGRAM_HEALTH_ALERTS } }, now)
+    } catch {
+      // A stored section nobody can read already loads as the defaults, with the watch off.
+    }
+  }
+  putRawSetting(database, stateKey, state, now)
+  return getSettings(database)
+}
+
 export function getRawSetting(database: DatabaseConnection, key: string): unknown {
   const row = database.prepare('SELECT value_json FROM app_setting WHERE key = ?').get(key) as
     | { value_json: string }
@@ -1508,6 +1528,7 @@ export const COMPANION_OPERATIONS = Object.freeze({
   quietDelivered,
   getSettings,
   putSettingsSection,
+  switchHealthAlertsOff,
   getRawSetting,
   putRawSetting
 })

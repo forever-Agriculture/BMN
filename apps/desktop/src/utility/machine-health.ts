@@ -12,8 +12,10 @@ export interface HealthReadings {
   integratedGpuC: number | null
   /** Hottest reading over every hwmon named nvme. */
   driveC: number | null
-  /** Asked from nvidia-smi only while the card is awake; a sleeping card is not measured. */
+  /** Asked from nvidia-smi only while every NVIDIA card is awake; a sleeping card is not measured. */
   nvidiaGpuC: number | null
+  /** True when every NVIDIA card is asleep: nothing is measured because nothing there makes heat. */
+  nvidiaGpuAsleep?: boolean
   /** null when the machine has no battery slot at all. */
   battery: {
     present: boolean
@@ -78,26 +80,30 @@ function hotter(left: number | null, right: number | null): number | null {
   return right === null ? left : Math.max(left, right)
 }
 
-async function nvidiaTemperature(root: string, run: HealthCommand): Promise<number | null> {
+async function nvidiaTemperature(root: string, run: HealthCommand): Promise<{ celsius: number | null; asleep: boolean }> {
   const devices = join(root, 'bus', 'pci', 'devices')
+  const cards: Array<string | null> = []
   for (const device of await entries(devices)) {
     const base = join(devices, device)
     if (await line(join(base, 'vendor')) !== NVIDIA_VENDOR) continue
     if (!(await line(join(base, 'class')))?.startsWith('0x03')) continue
-    // The question itself wakes a suspended card and keeps it awake; a sleeping card makes no heat.
-    if (await line(join(base, 'power', 'runtime_status')) !== 'active') continue
-    try {
-      // One line per card: the hottest counts, as for every other sensor.
-      let hottest: number | null = null
-      for (const answer of (await run('nvidia-smi', NVIDIA_ARGS, NVIDIA_TIMEOUT_MS)).split('\n')) {
-        if (/^\d{1,3}$/.test(answer.trim())) hottest = hotter(hottest, Number(answer.trim()))
-      }
-      return hottest
-    } catch {
-      return null
-    }
+    cards.push(await line(join(base, 'power', 'runtime_status')))
   }
-  return null
+  // The question goes to every card, and it wakes a suspended one and keeps it awake. So it is asked
+  // only while every card is already awake; a sleeping card makes no heat.
+  if (cards.length === 0 || cards.some(status => status !== 'active')) {
+    return { celsius: null, asleep: cards.length > 0 && cards.every(status => status === 'suspended') }
+  }
+  try {
+    // One line per card: the hottest counts, as for every other sensor.
+    let hottest: number | null = null
+    for (const answer of (await run('nvidia-smi', NVIDIA_ARGS, NVIDIA_TIMEOUT_MS)).split('\n')) {
+      if (/^\d{1,3}$/.test(answer.trim())) hottest = hotter(hottest, Number(answer.trim()))
+    }
+    return { celsius: hottest, asleep: false }
+  } catch {
+    return { celsius: null, asleep: false }
+  }
 }
 
 /** One read of the machine. It starts at most one process (nvidia-smi) and changes nothing. */
@@ -149,10 +155,8 @@ export async function readMachineHealth(options: HealthReaderOptions = {}): Prom
       else if (online === '0' && mainsOnline === null) mainsOnline = false
     }
   }
-  return {
-    cpuC, integratedGpuC, driveC, battery, mainsOnline,
-    nvidiaGpuC: await nvidiaTemperature(root, options.run ?? runHealthCommand)
-  }
+  const nvidia = await nvidiaTemperature(root, options.run ?? runHealthCommand)
+  return { cpuC, integratedGpuC, driveC, battery, mainsOnline, nvidiaGpuC: nvidia.celsius, ...(nvidia.asleep ? { nvidiaGpuAsleep: true } : {}) }
 }
 
 export interface HealthJudgement {
@@ -164,8 +168,16 @@ export interface HealthJudgement {
 /**
  * Judges one reading. `cpuHotStreak` is the count before this reading; `batteryAtStart` says whether the
  * machine had a battery when the watch was switched on: without one there is no battery or mains problem.
+ * `standing` is the problem set the owner was last told. A problem in it ends only on a reading that
+ * shows it over: while that reading cannot be taken the problem stands, so a sensor that falls silent
+ * is never read as "back to normal". An NVIDIA card that went to sleep is over: it makes no heat.
  */
-export function judgeMachineHealth(readings: HealthReadings, cpuHotStreak: number, batteryAtStart: boolean): HealthJudgement {
+export function judgeMachineHealth(
+  readings: HealthReadings,
+  cpuHotStreak: number,
+  batteryAtStart: boolean,
+  standing: readonly HealthProblemKind[] = []
+): HealthJudgement {
   const found = new Set<HealthProblemKind>()
   let streak = 0
   if (readings.cpuC === null) {
@@ -175,18 +187,22 @@ export function judgeMachineHealth(readings: HealthReadings, cpuHotStreak: numbe
     if (readings.cpuC >= HEALTH_LIMITS.cpuCritical) found.add('cpu-critical')
     else if (streak >= HEALTH_LIMITS.cpuHotReadings) found.add('cpu-hot')
   }
-  if (readings.nvidiaGpuC !== null && readings.nvidiaGpuC >= HEALTH_LIMITS.nvidiaGpu) found.add('nvidia-gpu-hot')
-  if (readings.integratedGpuC !== null && readings.integratedGpuC >= HEALTH_LIMITS.integratedGpu) found.add('integrated-gpu-hot')
-  if (readings.driveC !== null && readings.driveC >= HEALTH_LIMITS.drive) found.add('drive-hot')
+  const stands = (kind: HealthProblemKind): boolean => standing.includes(kind)
+  if (readings.nvidiaGpuC === null ? stands('nvidia-gpu-hot') && readings.nvidiaGpuAsleep !== true : readings.nvidiaGpuC >= HEALTH_LIMITS.nvidiaGpu) found.add('nvidia-gpu-hot')
+  if (readings.integratedGpuC === null ? stands('integrated-gpu-hot') : readings.integratedGpuC >= HEALTH_LIMITS.integratedGpu) found.add('integrated-gpu-hot')
+  if (readings.driveC === null ? stands('drive-hot') : readings.driveC >= HEALTH_LIMITS.drive) found.add('drive-hot')
   if (batteryAtStart) {
     const battery = readings.battery
     if (battery === null || !battery.present) {
       found.add('battery-gone')
-    } else if (battery.millivolts !== null && battery.cells !== null) {
+      if (stands('battery-voltage')) found.add('battery-voltage')
+    } else if (battery.millivolts === null || battery.cells === null) {
+      if (stands('battery-voltage')) found.add('battery-voltage')
+    } else {
       const perCell = battery.millivolts / 1000 / battery.cells
       if (perCell < HEALTH_LIMITS.cellVoltsMin || perCell > HEALTH_LIMITS.cellVoltsMax) found.add('battery-voltage')
     }
-    if (readings.mainsOnline === false) found.add('mains-offline')
+    if (readings.mainsOnline === null ? stands('mains-offline') : !readings.mainsOnline) found.add('mains-offline')
   }
   return { problems: HEALTH_PROBLEM_KINDS.filter(kind => found.has(kind)), cpuHotStreak: Math.min(streak, 1_000_000) }
 }

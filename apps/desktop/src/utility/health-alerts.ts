@@ -23,6 +23,11 @@ interface HealthAlertState {
   offDeadline: string | null
   /** The watch switched itself off and "Health alerts are off" has not gone out yet. */
   offNoticeOwed?: true
+  /**
+   * `sent` was written before its message went out and no answer confirmed it since: the send was cut
+   * short, or its answer was lost. It reads as sent, and is said again at the 10-minute repeat.
+   */
+  unconfirmed?: true
 }
 
 export interface HealthAlertDependencies {
@@ -36,14 +41,14 @@ export interface HealthAlertDependencies {
   host(): string
   check(): Promise<HealthReadings>
   send(html: string): Promise<void>
-  /** Saves the watch as off with no switch-off time. */
-  turnOff(): Promise<void>
+  /** Saves the watch as off with no switch-off time and `state` as its stored state, in one step. */
+  turnOff(state: unknown): Promise<void>
 }
 
 const emptyState = (): HealthAlertState =>
   ({ version: 1, sent: [], sentAt: null, cpuHotStreak: 0, batteryAtStart: null, offAt: null, offDeadline: null })
 
-const STATE_KEYS = ['version', 'sent', 'sentAt', 'cpuHotStreak', 'batteryAtStart', 'offAt', 'offDeadline', 'offNoticeOwed']
+const STATE_KEYS = ['version', 'sent', 'sentAt', 'cpuHotStreak', 'batteryAtStart', 'offAt', 'offDeadline', 'offNoticeOwed', 'unconfirmed']
 const OFF_NOTICE = '<b>Health alerts are off</b>\n<i>The switch-off time you set has come.</i>'
 const instant = (value: unknown): boolean => value === null || typeof value === 'string' && value.length <= 32 && Number.isFinite(Date.parse(value))
 
@@ -58,6 +63,7 @@ function loadState(value: unknown): HealthAlertState {
     Number.isSafeInteger(state.cpuHotStreak) && state.cpuHotStreak >= 0 &&
     (state.batteryAtStart === null || typeof state.batteryAtStart === 'boolean') &&
     (state.offNoticeOwed === undefined || state.offNoticeOwed === true) &&
+    (state.unconfirmed === undefined || state.unconfirmed === true) &&
     (state.offAt === null || typeof state.offAt === 'string' && /^\d{2}:\d{2}$/.test(state.offAt))
   return valid ? { ...state, sent: [...state.sent] } : emptyState()
 }
@@ -74,6 +80,9 @@ export function nextLocalTime(now: Date, time: string): Date {
 }
 
 const degrees = (value: number | null): string => value === null ? 'not measured' : `${value} °C`
+/** A problem that stands on a reading BMN can no longer take says so instead of a number. */
+const hot = (what: string, value: number | null): string =>
+  value === null ? `${what} was too hot and can no longer be read` : `${what} at ${value} °C`
 const volts = (millivolts: number): string => `${(millivolts / 1000).toFixed(1)} V`
 
 function problemLines(kind: HealthProblemKind, readings: HealthReadings, cpuHotStreak: number): [string, string] {
@@ -81,16 +90,20 @@ function problemLines(kind: HealthProblemKind, readings: HealthReadings, cpuHotS
     case 'cpu-unreadable': return ['CPU temperature cannot be read', 'The watch is blind to heat; check the machine.']
     case 'cpu-critical': return [`CPU at ${degrees(readings.cpuC)}, at its limit`, 'Stop the job or suspend the machine now.']
     case 'cpu-hot': return [`CPU at ${degrees(readings.cpuC)} for ${cpuHotStreak} checks in a row`, 'Stop the heavy job; check the vents are clear.']
-    case 'nvidia-gpu-hot': return [`NVIDIA GPU at ${degrees(readings.nvidiaGpuC)}`, 'Stop the GPU job.']
-    case 'integrated-gpu-hot': return [`Integrated GPU at ${degrees(readings.integratedGpuC)}`, 'Stop the heavy job.']
-    case 'drive-hot': return [`Drive at ${degrees(readings.driveC)}`, 'Stop the disk-heavy job.']
+    case 'nvidia-gpu-hot': return [hot('NVIDIA GPU', readings.nvidiaGpuC), 'Stop the GPU job.']
+    case 'integrated-gpu-hot': return [hot('Integrated GPU', readings.integratedGpuC), 'Stop the heavy job.']
+    case 'drive-hot': return [hot('Drive', readings.driveC), 'Stop the disk-heavy job.']
     case 'battery-gone': return ['Battery no longer detected', 'Have someone look at the machine.']
     case 'battery-voltage': return [
-      `Battery voltage ${readings.battery?.millivolts == null ? 'out of range' : `${volts(readings.battery.millivolts)}, out of range`}`,
+      readings.battery?.millivolts == null || readings.battery.cells === null
+        ? 'Battery voltage was out of range and can no longer be read'
+        : `Battery voltage ${volts(readings.battery.millivolts)}, out of range`,
       'Suspend the machine and have someone unplug it.'
     ]
     case 'mains-offline': return [
-      `Mains power lost${readings.battery?.percent == null ? '' : `, on battery at ${readings.battery.percent}%`}`,
+      readings.mainsOnline === null
+        ? 'Mains power was lost and can no longer be read'
+        : `Mains power lost${readings.battery?.percent == null ? '' : `, on battery at ${readings.battery.percent}%`}`,
       'A power cut or a charger fault; the battery will run out.'
     ]
   }
@@ -118,7 +131,7 @@ export function buildHealthMessage(
   const battery = readings.battery
   const rows: Array<[string, string]> = [
     ['CPU', degrees(readings.cpuC)],
-    ['NVIDIA GPU', degrees(readings.nvidiaGpuC)],
+    ['NVIDIA GPU', readings.nvidiaGpuAsleep === true ? 'asleep' : degrees(readings.nvidiaGpuC)],
     ['Integrated GPU', degrees(readings.integratedGpuC)],
     ['Drive', degrees(readings.driveC)],
     ['Battery', battery === null ? 'none' : !battery.present ? 'not detected'
@@ -157,14 +170,15 @@ export class HealthAlerts {
 
   /**
    * Called when the settings were saved or loaded. Off forgets everything but an owed "Health alerts are
-   * off", so the next switch-on starts fresh. A new switch-off time is turned into its moment here, at the save, so "already past" is judged
-   * against when the owner chose it; the same time read again after a restart keeps its moment.
+   * off", so the next switch-on starts fresh. A new switch-off time is turned into its moment against
+   * `savedAt`, when the owner chose it, so "already past" is not judged by how long a running check made
+   * the save wait; the same time read again after a restart keeps its moment.
    */
-  configure(): Promise<void> {
-    return this.exclusive(() => this.applySettings())
+  configure(savedAt: Date = this.deps.now()): Promise<void> {
+    return this.exclusive(() => this.applySettings(savedAt))
   }
 
-  private async applySettings(): Promise<void> {
+  private async applySettings(savedAt: Date): Promise<void> {
     const settings = this.deps.settings()
     const state = loadState(await this.deps.read())
     if (!settings.enabled) {
@@ -182,7 +196,7 @@ export class HealthAlerts {
     await this.deps.write({
       ...current,
       offAt: settings.offAt,
-      offDeadline: sameTime ? state.offDeadline : settings.offAt === null ? null : nextLocalTime(this.deps.now(), settings.offAt).toISOString()
+      offDeadline: sameTime ? state.offDeadline : settings.offAt === null ? null : nextLocalTime(savedAt, settings.offAt).toISOString()
     } satisfies HealthAlertState)
   }
 
@@ -208,7 +222,7 @@ export class HealthAlerts {
   async sendTest(): Promise<void> {
     const readings = await this.deps.check()
     const state = this.deps.settings().enabled ? loadState(await this.deps.read()) : emptyState()
-    const judged = judgeMachineHealth(readings, state.cpuHotStreak, state.batteryAtStart ?? readings.battery?.present === true)
+    const judged = judgeMachineHealth(readings, state.cpuHotStreak, state.batteryAtStart === true || readings.battery?.present === true, state.sent)
     await this.deps.send(buildHealthMessage('test', readings, judged.problems, judged.cpuHotStreak, this.deps.now(), this.deps.host()))
   }
 
@@ -217,8 +231,9 @@ export class HealthAlerts {
     const now = this.deps.now()
     const state = loadState(await this.deps.read())
     if (state.offDeadline !== null && now.getTime() >= Date.parse(state.offDeadline)) {
-      await this.deps.turnOff()
-      await this.deps.write({ ...emptyState(), offNoticeOwed: true } satisfies HealthAlertState)
+      // The saved switch and the owed notice change together: after a crash here the watch is either
+      // still on, and switches off at the next start, or off with its notice owed.
+      await this.deps.turnOff({ ...emptyState(), offNoticeOwed: true } satisfies HealthAlertState)
       this.lastCheck = undefined
       this.offNoticeOwed = true
       return this.sendOffNotice()
@@ -228,31 +243,37 @@ export class HealthAlerts {
     if (this.lastCheck !== undefined && this.deps.monotonic() - this.lastCheck < CHECK_INTERVAL_MS) return
     this.lastCheck = this.deps.monotonic()
     const readings = await this.deps.check()
-    const batteryAtStart = state.batteryAtStart ?? readings.battery?.present === true
-    const judged = judgeMachineHealth(readings, state.cpuHotStreak, batteryAtStart)
-    const next: HealthAlertState = { ...state, cpuHotStreak: judged.cpuHotStreak, batteryAtStart }
+    // The watch covers the battery from the first reading that shows one; a reading that cannot tell
+    // decides nothing, so one unreadable start never switches the battery and mains checks off for good.
+    const batteryAtStart = state.batteryAtStart === true || readings.battery?.present === true
+    const judged = judgeMachineHealth(readings, state.cpuHotStreak, batteryAtStart, state.sent)
+    const unsent: HealthAlertState = { ...state, cpuHotStreak: judged.cpuHotStreak, batteryAtStart: batteryAtStart ? true : state.batteryAtStart }
     const changed = !sameSet(judged.problems, state.sent)
     const repeatDue = state.sentAt === null || now.getTime() - Date.parse(state.sentAt) >= REPEAT_MS
+    // An all-clear nobody confirmed is owed again at the repeat, like an alert.
     const kind: HealthMessageKind | null = judged.problems.length > 0
       ? (changed || repeatDue ? 'alert' : null)
-      : (state.sent.length > 0 ? 'clear' : null)
+      : (state.sent.length > 0 || (state.unconfirmed === true && repeatDue) ? 'clear' : null)
+    let next = unsent
+    let stored = state
     if (kind !== null && this.deps.ready() && this.deps.settings().enabled) {
-      // The message goes out before it is recorded: after a crash between the two an alert repeats
-      // once, which is better than an alert that was recorded and never sent.
-      let delivered = true
+      // Recorded first, as not yet confirmed: after a crash between the record and the send's answer a
+      // restart does not say it again at once, and says it again at the repeat.
+      const ahead: HealthAlertState = { ...unsent, sent: judged.problems, sentAt: now.toISOString(), unconfirmed: true }
+      await this.deps.write(ahead)
+      stored = ahead
       try {
         await this.deps.send(buildHealthMessage(kind, readings, judged.problems, judged.cpuHotStreak, now, this.deps.host()))
+        next = { ...ahead }
+        delete next.unconfirmed
       } catch (error) {
-        // A refusal is tried again at the next check. A lost answer may have arrived: wait for the repeat.
-        delivered = !telegramSendDefinitelyUnsent(error)
-      }
-      if (delivered) {
-        next.sent = judged.problems
-        next.sentAt = now.toISOString()
+        // A refusal went nowhere: what was told before stands, and the next check tries again.
+        // A lost answer may have arrived: it stays recorded as unconfirmed and waits for the repeat.
+        next = telegramSendDefinitelyUnsent(error) ? unsent : ahead
       }
     }
     // The owner may have switched the watch off while the check ran; its forgotten state stays forgotten.
     if (!this.deps.settings().enabled) return
-    if (JSON.stringify(next) !== JSON.stringify(state)) await this.deps.write(next)
+    if (JSON.stringify(next) !== JSON.stringify(stored)) await this.deps.write(next)
   }
 }

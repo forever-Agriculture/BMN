@@ -16,22 +16,29 @@ const hotDrive: HealthReadings = { ...healthy, driveC: 81 }
 function world(start = '2026-03-10T10:00:00', store: { value?: unknown } = {}) {
   const state = {
     now: new Date(start), settings: { enabled: true, offAt: null } as TelegramHealthAlerts, ready: true,
-    readings: healthy, sent: [] as string[], checks: 0, turnedOff: 0, failure: undefined as unknown, writes: 0
+    readings: healthy, sent: [] as string[], checks: 0, turnedOff: 0, failure: undefined as unknown, writes: 0,
+    /** The write with this number fails, as when BMN ends there; a check waits for `hold`. */
+    failWrite: 0, hold: undefined as Promise<void> | undefined
   }
   const watch = new HealthAlerts({
     read: async () => store.value,
-    write: async value => { store.value = JSON.parse(JSON.stringify(value)); state.writes += 1 },
+    write: async value => {
+      state.writes += 1
+      if (state.writes === state.failWrite) throw new Error('synthetic crash')
+      store.value = JSON.parse(JSON.stringify(value))
+    },
     settings: () => state.settings,
     ready: () => state.ready,
     now: () => new Date(state.now),
     monotonic: () => state.now.getTime(),
     host: () => 'synthetic-host',
-    check: async () => { state.checks += 1; return state.readings },
+    check: async () => { state.checks += 1; await state.hold; return state.readings },
     send: async html => {
       if (state.failure !== undefined) { const failure = state.failure; state.failure = undefined; throw failure }
       state.sent.push(html)
     },
-    turnOff: async () => { state.turnedOff += 1; state.settings = { enabled: false, offAt: null } }
+    // One step, as in the store: the saved switch and the watch's state change together.
+    turnOff: async value => { state.turnedOff += 1; state.settings = { enabled: false, offAt: null }; store.value = JSON.parse(JSON.stringify(value)) }
   })
   const advance = async (seconds: number): Promise<void> => {
     state.now = new Date(state.now.getTime() + seconds * 1000)
@@ -135,6 +142,100 @@ describe('the health watch', () => {
     expect(state.sent).toHaveLength(1)
   })
 
+  it('says an all-clear again at the repeat when its answer was lost, also across a restart', async () => {
+    const first = world()
+    first.state.readings = unplugged
+    await first.advance(0)
+    first.state.readings = healthy
+    first.state.failure = new TelegramConnectorError('network', 'The answer never came')
+    await first.advance(60)
+    expect(first.state.sent).toHaveLength(1)
+    expect(first.store.value).toMatchObject({ sent: [], unconfirmed: true })
+    const second = world('2026-03-10T10:03:00', first.store)
+    for (let minute = 0; minute < 7; minute++) await second.advance(60)
+    expect(second.state.sent).toEqual([])
+    await second.advance(60)
+    expect(second.state.sent).toHaveLength(1)
+    expect(second.state.sent[0]).toContain('Back to normal')
+    expect(second.store.value).not.toHaveProperty('unconfirmed')
+    await second.advance(600); await second.advance(600)
+    expect(second.state.sent).toHaveLength(1)
+  })
+
+  it('tries an all-clear Telegram refused again at the next check', async () => {
+    const { state, advance } = world()
+    state.readings = unplugged
+    await advance(0)
+    state.readings = healthy
+    state.failure = new TelegramConnectorError('http', 'Too many requests', 429)
+    await advance(60)
+    expect(state.sent).toHaveLength(1)
+    await advance(60)
+    expect(state.sent).toHaveLength(2)
+    expect(state.sent[1]).toContain('Back to normal')
+  })
+
+  it('does not say an alert twice when BMN ended between the send and its record', async () => {
+    const first = world()
+    first.state.readings = unplugged
+    // The record after the send is the one that never happens.
+    first.state.failWrite = 2
+    await expect(first.advance(0)).rejects.toThrow('synthetic crash')
+    expect(first.state.sent).toHaveLength(1)
+    expect(first.store.value).toMatchObject({ sent: ['mains-offline'], unconfirmed: true })
+    const second = world('2026-03-10T10:01:00', first.store)
+    second.state.readings = unplugged
+    for (let minute = 0; minute < 8; minute++) await second.advance(60)
+    expect(second.state.sent).toEqual([])
+    await second.advance(60)
+    expect(second.state.sent).toHaveLength(1)
+    expect(second.store.value).not.toHaveProperty('unconfirmed')
+  })
+
+  it('does not call a problem over when its reading falls silent: no "Back to normal" on a reading it cannot take', async () => {
+    const { state, advance } = world()
+    state.readings = unplugged
+    await advance(0)
+    expect(state.sent).toHaveLength(1)
+    state.readings = { ...unplugged, mainsOnline: null }
+    await advance(60); await advance(60)
+    expect(state.sent).toHaveLength(1)
+    await advance(480)
+    expect(state.sent).toHaveLength(2)
+    expect(state.sent[1]).toContain('Health alert')
+    expect(state.sent[1]).toContain('Mains power was lost and can no longer be read')
+    state.readings = healthy
+    await advance(60)
+    expect(state.sent[2]).toContain('Back to normal')
+
+    const drive = world()
+    drive.state.readings = hotDrive
+    await drive.advance(0)
+    drive.state.readings = { ...healthy, driveC: null }
+    await drive.advance(60)
+    expect(drive.state.sent).toHaveLength(1)
+    drive.state.readings = healthy
+    await drive.advance(60)
+    expect(drive.state.sent[1]).toContain('Back to normal')
+  })
+
+  it('watches the battery and mains from the first reading that shows a battery, whatever the first reading could tell', async () => {
+    const { state, advance } = world()
+    // The first reading cannot tell whether a battery is there.
+    state.readings = { ...healthy, battery: { ...healthy.battery!, present: false }, mainsOnline: false }
+    await advance(0)
+    expect(state.sent).toEqual([])
+    state.readings = unplugged
+    await advance(60)
+    expect(state.sent).toHaveLength(1)
+    expect(state.sent[0]).toContain('Mains power lost')
+    // A machine that never shows a battery never gets a battery or mains alert.
+    const desktop = world()
+    desktop.state.readings = { ...healthy, battery: null, mainsOnline: false }
+    await desktop.advance(0); await desktop.advance(60)
+    expect(desktop.state.sent).toEqual([])
+  })
+
   it('neither repeats a delivered alert nor loses the all-clear it owes across a restart', async () => {
     const first = world()
     first.state.readings = unplugged
@@ -222,6 +323,24 @@ describe('the switch-off time', () => {
     expect(state.sent).toHaveLength(sent)
     expect(state.turnedOff).toBe(1)
     expect(store.value).toMatchObject({ sent: [], offAt: null, offDeadline: null })
+  })
+
+  it('judges the time against the moment of the save, however long a running check makes the save wait', async () => {
+    const { state, watch, store, advance } = world('2026-03-10T19:58:00')
+    await advance(0)
+    let release = (): void => {}
+    state.hold = new Promise<void>(resolve => { release = resolve })
+    state.now = new Date('2026-03-10T19:59:30')
+    const running = watch.sweep()
+    // The owner saves 20:00 five seconds before it; the check is still reading.
+    state.settings = { enabled: true, offAt: '20:00' }
+    const saved = watch.configure(new Date('2026-03-10T19:59:55'))
+    state.now = new Date('2026-03-10T20:00:05')
+    release()
+    await running; await saved
+    expect(store.value).toMatchObject({ offAt: '20:00', offDeadline: new Date('2026-03-10T20:00:00').toISOString() })
+    await advance(0)
+    expect(state.turnedOff).toBe(1)
   })
 
   it('reads a time already past when saved as that time tomorrow', async () => {

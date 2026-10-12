@@ -481,10 +481,11 @@ export class CompanionService {
       check: () => readMachineHealth(options.health),
       // Health alerts are sent at once, also in quiet hours: a fire warning that waits is useless.
       send: async html => { await this.telegram!.sendMessage(html, { html: true }) },
-      turnOff: async () => {
-        const settings = await options.database.companion('getSettings')
+      turnOff: async state => {
+        // One step in the store: the saved switch and the watch's state change together, and a save the
+        // owner makes at the same moment is not overwritten with an older copy of the section.
+        await options.database.companion('switchHealthAlertsOff', HEALTH_ALERTS_KEY, state, this.iso())
         this.healthSettings = { ...DEFAULT_TELEGRAM_HEALTH_ALERTS }
-        await options.database.companion('putSettingsSection', 'telegram', { ...settings.telegram, healthAlerts: this.healthSettings }, this.iso())
         this.emit('settings', null)
       }
     })
@@ -1008,9 +1009,11 @@ export class CompanionService {
           await this.history.setKeepDays(keepDays as AgentHistoryKeepDays)
           return database.companion('getSettings')
         }
+        // A switch-off time is judged against this moment, not against when a running check lets the save through.
+        const savedAt = this.now()
         const settings = await database.companion('putSettingsSection', section, params.value, this.iso())
         this.emit('settings', null)
-        if (section === 'telegram') await this.restartTelegram()
+        if (section === 'telegram') await this.restartTelegram(savedAt)
         return settings
       }
       case METHOD_REGISTRY.historyStatus:
@@ -2718,7 +2721,7 @@ export class CompanionService {
     }
   }
 
-  private async restartTelegram(): Promise<void> {
+  private async restartTelegram(savedAt?: Date): Promise<void> {
     this.telegramReady = false
     const previous = this.telegram
     this.telegram = undefined
@@ -2728,7 +2731,7 @@ export class CompanionService {
     this.quietSettings = settings.telegram.quietHours ?? { ...DEFAULT_TELEGRAM_QUIET_HOURS }
     this.digestSettings = settings.telegram.morningDigest ?? { ...DEFAULT_TELEGRAM_MORNING_DIGEST }
     this.healthSettings = settings.telegram.healthAlerts ?? { ...DEFAULT_TELEGRAM_HEALTH_ALERTS }
-    await this.healthAlerts.configure().catch(() => undefined)
+    await this.healthAlerts.configure(savedAt).catch(() => undefined)
     const token = await this.readTelegramToken()
     this.telegramToken = token
     if (!settings.telegram.enabled) {

@@ -42,6 +42,7 @@ import {
   prepareAgentHandoff,
   putReceipt,
   putSettingsSection,
+  switchHealthAlertsOff,
   putTelegramMessage,
   quietDelivered,
   setArtifactState,
@@ -951,6 +952,23 @@ describe('health alerts stored settings (Story 62.2)', () => {
     expect(getSettings(database).telegram.healthAlerts).toEqual({ enabled: true, offAt: null })
     // A save that leaves the watch out (an older window) keeps the section valid and reads it as off.
     expect(putSettingsSection(database, 'telegram', before, now).telegram.healthAlerts).toEqual({ enabled: false, offAt: null })
+  })
+
+  it('switches the watch off in one step: every other stored field stays, and the watch\'s state is written with it', () => {
+    // What the owner saved a moment ago is what is stored: the step works on that, never on a copy read earlier.
+    const saved = { ...DEFAULT_APP_SETTINGS.telegram, allowedUserId: 4242, morningDigest: { enabled: true, time: '09:15' }, healthAlerts: { enabled: true, offAt: '20:00' } }
+    putSettingsSection(database, 'telegram', saved, now)
+    const stored = () => JSON.parse((database.prepare("SELECT value_json FROM app_setting WHERE key = 'telegram'").get() as { value_json: string }).value_json) as Record<string, unknown>
+    const before = stored()
+    const owed = { version: 1, sent: [], sentAt: null, cpuHotStreak: 0, batteryAtStart: null, offAt: null, offDeadline: null, offNoticeOwed: true }
+    const settings = switchHealthAlertsOff(database, 'health-alerts-v1', owed, now)
+    expect(settings.telegram.healthAlerts).toEqual({ enabled: false, offAt: null })
+    expect(stored()).toEqual({ ...before, healthAlerts: { enabled: false, offAt: null } })
+    expect(getRawSetting(database, 'health-alerts-v1')).toEqual(owed)
+    // A stored section nobody can read loads as the defaults, the watch off: the state is still written.
+    database.prepare("UPDATE app_setting SET value_json = '{broken' WHERE key = 'telegram'").run()
+    expect(switchHealthAlertsOff(database, 'health-alerts-v1', { ...owed, offNoticeOwed: undefined }, now).telegram.healthAlerts).toEqual({ enabled: false, offAt: null })
+    expect(getRawSetting(database, 'health-alerts-v1')).not.toHaveProperty('offNoticeOwed')
   })
 })
 

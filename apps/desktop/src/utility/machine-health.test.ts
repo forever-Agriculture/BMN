@@ -62,11 +62,38 @@ describe('reading the machine', () => {
     const calls: unknown[] = []
     const readings = await readMachineHealth({ root: await tree(LAPTOP), run: async (...args) => { calls.push(args); return '99\n' } })
     expect(readings).toEqual({
-      cpuC: 61, integratedGpuC: 58, driveC: 52, nvidiaGpuC: null,
+      cpuC: 61, integratedGpuC: 58, driveC: 52, nvidiaGpuC: null, nvidiaGpuAsleep: true,
       battery: { present: true, percent: 77, status: 'Not charging', millivolts: 11629, cells: 3 },
       mainsOnline: true
     })
     expect(calls).toEqual([])
+  })
+
+  it('asks no NVIDIA card while one of several sleeps: the question would wake it', async () => {
+    const second = {
+      'bus/pci/devices/0000:02:00.0/vendor': '0x10de',
+      'bus/pci/devices/0000:02:00.0/class': '0x030200'
+    }
+    const calls: unknown[] = []
+    const run: HealthCommand = async (...args) => { calls.push(args); return '70\n75\n' }
+    // One awake, one asleep: not asked, and not "asleep" either, since one card is making heat unseen.
+    const mixed = await readMachineHealth({ root: await tree({
+      ...LAPTOP, ...second, 'bus/pci/devices/0000:01:00.0/power/runtime_status': 'active', 'bus/pci/devices/0000:02:00.0/power/runtime_status': 'suspended'
+    }), run })
+    expect(mixed.nvidiaGpuC).toBeNull()
+    expect(mixed.nvidiaGpuAsleep).toBeUndefined()
+    // A card whose state cannot be read counts as not awake.
+    const unknown = await readMachineHealth({ root: await tree({ ...LAPTOP, ...second, 'bus/pci/devices/0000:01:00.0/power/runtime_status': 'active' }), run })
+    expect(unknown.nvidiaGpuC).toBeNull()
+    expect(calls).toEqual([])
+    const awake = await readMachineHealth({ root: await tree({
+      ...LAPTOP, ...second, 'bus/pci/devices/0000:01:00.0/power/runtime_status': 'active', 'bus/pci/devices/0000:02:00.0/power/runtime_status': 'active'
+    }), run })
+    expect(awake.nvidiaGpuC).toBe(75)
+    expect(calls).toHaveLength(1)
+    const asleep = await readMachineHealth({ root: await tree({ ...LAPTOP, ...second, 'bus/pci/devices/0000:02:00.0/power/runtime_status': 'suspended' }), run })
+    expect(asleep).toMatchObject({ nvidiaGpuC: null, nvidiaGpuAsleep: true })
+    expect(calls).toHaveLength(1)
   })
 
   it('finds sensors by name when the hwmon numbers are in another order', async () => {
@@ -194,6 +221,25 @@ describe('judging a reading', () => {
   it('has no battery or mains problem on a machine that had no battery at the start', () => {
     expect(judge({ battery: null, mainsOnline: false }, 0, false).problems).toEqual([])
     expect(judge({ ...battery({ millivolts: 1 }), mainsOnline: false }, 0, false).problems).toEqual([])
+  })
+
+  it.each([
+    ['a hot NVIDIA card', 'nvidia-gpu-hot', { nvidiaGpuC: null }, { nvidiaGpuC: 70 }],
+    ['a hot integrated GPU', 'integrated-gpu-hot', { integratedGpuC: null }, { integratedGpuC: 70 }],
+    ['a hot drive', 'drive-hot', { driveC: null }, { driveC: 50 }],
+    ['a battery voltage out of range', 'battery-voltage', battery({ millivolts: null }), battery({ millivolts: 11_600 })],
+    ['a battery voltage out of range, the cell count gone', 'battery-voltage', battery({ cells: null }), battery({})],
+    ['mains power lost', 'mains-offline', { mainsOnline: null }, { mainsOnline: true }]
+  ] as const)('keeps %s standing while its reading cannot be taken, and ends it on a reading that shows it over', (_label, kind, silent, over) => {
+    expect(judgeMachineHealth({ ...healthy, ...silent }, 0, true, [kind]).problems).toEqual([kind])
+    expect(judgeMachineHealth({ ...healthy, ...over }, 0, true, [kind]).problems).toEqual([])
+    // A reading that was never told as a problem and cannot be taken raises nothing by itself.
+    expect(judgeMachineHealth({ ...healthy, ...silent }, 0, true, []).problems).toEqual([])
+  })
+
+  it('ends a hot NVIDIA card when the card went to sleep, and keeps a wrong voltage standing when the battery is gone', () => {
+    expect(judgeMachineHealth({ ...healthy, nvidiaGpuC: null, nvidiaGpuAsleep: true }, 0, true, ['nvidia-gpu-hot']).problems).toEqual([])
+    expect(judgeMachineHealth({ ...healthy, battery: null }, 0, true, ['battery-voltage']).problems).toEqual(['battery-gone', 'battery-voltage'])
   })
 
   it('names several problems in one fixed order', () => {
