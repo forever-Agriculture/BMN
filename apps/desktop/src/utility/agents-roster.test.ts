@@ -110,7 +110,7 @@ describe('roster validation (60.1 AC1, AC2)', () => {
 
   const SOL_CONTEXT = 'context_window: 400000\ncontext_limit: 272000'
   const refusals: [string, (text: string) => string, string][] = [
-    ['unsupported schema version', (t) => edit(t, 'schema_version: 2', 'schema_version: 3'), 'SCHEMA_VERSION'],
+    ['unsupported schema version', (t) => edit(t, 'schema_version: 2', 'schema_version: 9'), 'SCHEMA_VERSION'],
     ['schema 1', (t) => edit(t, 'schema_version: 2', 'schema_version: 1'), 'SCHEMA_VERSION'],
     ['missing schema section', (t) => edit(t, '## roster\n\n```yaml\nschema_version: 2\n```\n', ''), 'SCHEMA_VERSION'],
     ['duplicate agent id', (t) => `${t}\n## luna\n\n\`\`\`yaml\nname: x\n\`\`\`\n`, 'DUPLICATE_ID'],

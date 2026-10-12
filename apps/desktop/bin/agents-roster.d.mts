@@ -87,7 +87,27 @@ export interface RosterTool {
 export interface RosterIssue { code: string; line?: number; message: string }
 export interface RosterBlock { startLine: number; contentLine: number; endLine: number; start: number; end: number; contentStart: number; contentEnd: number; source: string }
 export interface RosterSection { heading: string; line: number; start: number; blocks: RosterBlock[] }
-export declare const SCHEMA_VERSION: 2
+/** The layout BMN writes for a new team; an older one it still reads stays as it is. */
+export declare const SCHEMA_VERSION: 3
+export declare const OLDEST_SCHEMA_VERSION: 2
+export declare function schemaSupported(version: unknown): boolean
+export declare const CALLED_BY_BMN: CalledByBmn
+export declare const CALLED_WORDS: 'called by BMN'
+/** Whether an agent is called by BMN itself instead of running in an agent app (65.1). */
+export declare function isCalled(agent: Pick<RosterAgent, 'harness'> | null | undefined): boolean
+/** The role only an agent called by BMN may hold, and the only one it may hold. */
+export declare const JUDGE_ROLE: 'judge'
+export declare const JUDGE_DESCRIPTION: string
+export declare const SCHEMA_3_CHANGES: string
+export interface JudgeProposal { receives: RosterProvider; runs: RosterProvider; agent: Omit<RosterAgent, 'provider' | 'run_by'> }
+export declare const JUDGE_PROPOSAL: JudgeProposal
+/** The team with BMN's judge proposal taken, or null where there is nothing to propose. */
+export declare function judgeProposal(data: RosterData | null | undefined): RosterData | null
+/** The agents an approved team offers as a judge, in the role's order. */
+export declare function judges(data: Pick<RosterData, 'agents' | 'roles'> | null | undefined): RosterAgent[]
+export interface CalledParty { id: string; name: string; private_work: PrivateWork }
+/** Who receives a called agent's request and who runs its model, and whether both allow private work. */
+export declare function calledParties(data: Pick<RosterData, 'providers'>, agent: RosterAgent): { receives: CalledParty; runs: CalledParty; allowed: boolean; reason: string }
 export declare const HARNESSES: Harness[]
 export declare const EFFORTS: Effort[]
 export declare const THEN: RosterRole['then'][]
@@ -128,6 +148,8 @@ export declare function agentState(agent: RosterAgent): 'active' | 'disabled' | 
 export interface TeamEntry {
   id: string; name: string; class: AgentClass; harness: string; model: string; provider: string; private_work: PrivateWork
   roles: string[]; efforts: string[]; state: 'active' | 'proposed' | 'disabled'; context_limit?: number
+  /** Only for an agent called by BMN: said in place of an app, with who runs the model. */
+  called_by?: CalledByBmn; run_by?: string
 }
 export declare const APP_NAMES: Record<'claude' | 'codex' | 'opencode' | 'cursor', string>
 export declare const UNCHECKED_APPS: Harness[]
@@ -161,7 +183,7 @@ export declare function starterRoster(): string
 export declare function privateWorkOf(data: RosterData, agent: RosterAgent): PrivateWork
 export declare function resolvedDirectory(path: string): string
 export declare function routesYaml(routes: RosterRoute[]): string
-export declare function headerYaml(): string
+export declare function headerYaml(version?: number): string
 export declare function rewriteRoster(text: string, data: RosterData, options?: { scope?: string[] | null }): string
 export declare function outsideYamlBlocks(text: string): string[]
 export declare function proseOf(text: string, id: string): string | null

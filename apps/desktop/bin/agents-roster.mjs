@@ -617,10 +617,13 @@ export function parseRoster(text) {
 
   const providerById = new Map(providers.map((provider) => [provider.id, provider]))
   const roleIds = new Set(roles.map((role) => role.id))
+  // A role judge that is written but wrong has its own error already.
+  const rolesBlock = blocks.get('roles')
+  const judgeWritten = isMap(rolesBlock?.value) && Object.hasOwn(rolesBlock.value, JUDGE_ROLE)
   for (const agent of agentById.values()) {
     const entry = blocks.get(agent.id)
     const route = routes.find((candidate) => candidate.harness === agent.harness)
-    if (isCalled(agent) && !roleIds.has(JUDGE_ROLE) && agent.roles.includes(JUDGE_ROLE)) {
+    if (isCalled(agent) && !roleIds.has(JUDGE_ROLE) && !judgeWritten && agent.roles.includes(JUDGE_ROLE)) {
       // Said as an error, not as the warning other roles get: without the role nothing could ever ask this agent.
       add('ROLE_UNKNOWN', entry.lines.get('roles'), `${agent.id} holds role ${JUDGE_ROLE}, which ## roles does not hold; add ${JUDGE_ROLE} there with ${agent.id} as its candidate`)
     }
