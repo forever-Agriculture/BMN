@@ -1136,6 +1136,31 @@ describe('every call is counted in a bounded private record (65.2 AC7)', () => {
     expect(requests).toHaveLength(asked)
   })
 
+  it('the same sum while another process holds the record: the paid call is not said counted, and a refusal then writes nothing', async () => {
+    const full = { calls: 1, requests: 1, input_tokens: Number.MAX_SAFE_INTEGER - 10, cost_usd: 1 }
+    const text = JSON.stringify({ version: 1, calls: [], months: { [THIS_MONTH]: { ...full, refused: 0, purposes: { old: full } } } })
+    mkdirSync(dirname(judgeRecordPath()), { recursive: true })
+    writeFileSync(judgeRecordPath(), text)
+    const holder = await holdRecord()
+    try {
+      // The wait for the record runs out: the line goes beside it, and BMN says the record no longer adds up, as it does under the writer's mark.
+      const paid = await ask()
+      expect(requests).toHaveLength(1)
+      expect(paid).toMatchObject({ ok: true, outcome: 'answered', recorded: true, record_pending: judgeRecordPath(), note: expect.stringContaining('BMN kept this call beside its record') })
+      expect(waitingFiles()).toHaveLength(1)
+      expect(readJudgeRecord()).toMatchObject({ damaged: true, where: judgeRecordPath() })
+      expect(() => judgeTotals()).toThrow(/cannot be read/)
+      // A refusal under the same held record: nothing is written for it, and it says so.
+      const refused = await ask()
+      expect(refused).toMatchObject({ ok: false, outcome: 'refused', code: 'RECORD_UNREADABLE', recorded: false })
+      expect(requests).toHaveLength(1)
+      expect(waitingFiles()).toHaveLength(1)
+      expect(readFileSync(judgeRecordPath(), 'utf8')).toBe(text)
+    } finally {
+      await holder.letGo()
+    }
+  }, 60_000)
+
   it('a purpose that is no word, handed in by a caller in this process, is counted under the common word', async () => {
     expect(await ask({ purpose: 'Not A Word' })).toMatchObject({ ok: true, recorded: true })
     expect(readJudgeRecord().calls[0]).toMatchObject({ purpose: 'unnamed' })

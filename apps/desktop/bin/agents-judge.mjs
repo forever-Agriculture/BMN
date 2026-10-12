@@ -605,7 +605,8 @@ const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
  * A call that made a request then still keeps its own line, in a waiting file of its own, and
  * `{ pending: <what cannot be read> }` comes back: it is counted once that part is mended or moved
  * away. A call that made no request writes nothing then and throws, as it does where nothing
- * can be written at all.
+ * can be written at all. Both ways of writing judge that alike, sums included: under the
+ * writer's mark, and beside the record after the wait for the mark ran out.
  */
 async function recordCall(line) {
   const beside = () => writePrivate(`${judgeWaitingDirectory()}/${line.id}.json`, `${JSON.stringify({ version: 1, line })}\n`)
@@ -625,9 +626,11 @@ async function recordCall(line) {
     await pause(10)
   }
   if (lock === null) {
-    const kept = readKeptRecord()
-    const waiting = kept.damaged === true ? kept : readWaiting()
-    if (waiting.damaged === true) return aside(waiting.where)
+    // The same question the writer under the mark asks, of the record as every reader sees it: is each part whole,
+    // and do the kept sums, the waiting lines and this line still add up to numbers BMN keeps exactly?
+    const record = readJudgeRecord()
+    if (record.damaged === true) return aside(record.where)
+    if (!addLine(record, line)) return aside(judgeRecordPath())
     beside()
     return {}
   }
