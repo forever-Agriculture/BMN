@@ -2,10 +2,13 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   ROSTER_APP_NAMES,
+  ROSTER_CALLED_BY_BMN,
   ROSTER_CLASSES,
   ROSTER_EFFORTS,
   ROSTER_HARNESSES,
+  ROSTER_JUDGE_ROLE,
   ROSTER_THEN,
+  rosterApp,
   type AgentAppView,
   type ContextLimitView,
   type AgentsGenerationSummary,
@@ -23,8 +26,16 @@ import { ModelField } from './model-field'
 import { modelSourceWords, modelSuggestions, type ReportedModel } from './model-suggestions'
 import { ModelsPage, researchedModels, type ResearchState } from './models-preferences'
 import { dayWords, fillFrom, fillWords, lookupFits, priceText, type ResearchFill } from './research-view'
+import { JudgeGroups, LimitReached, useJudgeState } from './judge-page'
 import { Dot, Piece } from './roster-marks'
 import {
+  CALLED_WORDS,
+  appWords,
+  callByBmn,
+  calledParties,
+  isCalled,
+  judgeProposal,
+  roleBar,
   CLASS_WORDS,
   PRIVATE_WORK_WORDS,
   THEN_WORDS,
@@ -34,7 +45,6 @@ import {
   agentGroups,
   changeModel,
   agentsOnProvider,
-  classBar,
   consequenceWords,
   diffBody,
   effortWords,
@@ -152,11 +162,11 @@ function ClassChoice(props: { name: string; value: RosterClass; onChange(next: R
   )
 }
 
-function RoleChoices(props: { data: RosterDataShape; agentClass: RosterClass; held: readonly string[]; onToggle(role: string): void }): React.JSX.Element {
+function RoleChoices(props: { data: RosterDataShape; agent: Pick<RosterAgentShape, 'class' | 'harness'>; held: readonly string[]; onToggle(role: string): void }): React.JSX.Element {
   return (
     <div className="choice-list">
       {props.data.roles.map((role) => {
-        const bar = props.held.includes(role.id) ? null : classBar(props.agentClass, role.id)
+        const bar = props.held.includes(role.id) ? null : roleBar(props.agent, role.id)
         return (
           <label key={role.id} className={bar ? 'choice disabled' : 'choice'}>
             <input type="checkbox" checked={props.held.includes(role.id)} disabled={bar !== null} onChange={() => props.onToggle(role.id)} />
@@ -225,22 +235,26 @@ function TurnOff(props: { agent: RosterAgentShape; onDone(reason: string | null)
   )
 }
 
+/** What the card of an agent BMN calls says where another shows the first line of its notes, while it has none. */
+const CALLED_CARD_LINE = 'Says whether a statement is true of a text'
+
 function AgentCard(props: { agent: RosterAgentShape; data: RosterDataShape; notes: string; changed: boolean; team: TeamState; open(): void }): React.JSX.Element {
   const { agent, data, team } = props
   const [asking, setAsking] = useState(false)
   const off = agent.status === 'active' && !agent.enabled
   const price = priceWords(agent)
+  const called = isCalled(agent)
   return (
     <article className={off ? 'agent-card off' : 'agent-card'} onClick={props.open}>
       <Piece agentClass={agent.class} plate />
       <div className="agent-main">
         <div className="agent-name">
           <button type="button" className="agent-open" aria-label={`Open ${agent.name}`} onClick={(event) => { event.stopPropagation(); props.open() }}>{agent.name}</button>
-          <span className="class-word">{CLASS_WORDS[agent.class].name}</span>
+          <span className="class-word">{CLASS_WORDS[agent.class].name}{called && agent.roles.includes(ROSTER_JUDGE_ROLE) ? ' · Judge' : ''}</span>
           {props.changed ? <Dot label="Unapproved change" /> : null}
         </div>
-        <div className="agent-notes">{off ? agent.enabled_note ?? 'Off' : firstLine(props.notes)}</div>
-        <div className="agent-app">{ROSTER_APP_NAMES[agent.harness]} · <span className="mono">{agent.model}</span>{publicOnly(data, agent) ? ' · public work only' : ''}</div>
+        <div className="agent-notes">{off ? agent.enabled_note ?? 'Off' : firstLine(props.notes) || (called ? CALLED_CARD_LINE : '')}</div>
+        <div className="agent-app">{appWords(agent)} · <span className="mono">{agent.model}</span>{publicOnly(data, agent) ? ' · public work only' : ''}</div>
         {asking ? <TurnOff agent={agent} onDone={(reason) => { setAsking(false); if (reason !== null) team.stage(setAgentOn(data, agent.id, false, reason)) }} /> : null}
       </div>
       <div className="agent-side">
@@ -297,6 +311,29 @@ function OutsideHead(props: { team: TeamState }): React.JSX.Element {
   )
 }
 
+/** Whether both of two providers of the proposal may see private work, as the team would hold them once it is taken. */
+export function judgeProposalWords(proposed: RosterDataShape): string {
+  const jev = proposed.agents.find(isCalled)
+  if (jev === undefined) return ''
+  const parties = calledParties(proposed, jev)
+  const names = `${parties.receives.name} and ${parties.runs.name}`
+  const answer = parties.allowed ? `${names}, which may both see private work, as you chose` : `${names}; ${jev.name} gets ${parties.reason}`
+  return `${jev.name} waits for you. BMN's proposal adds the agent ${jev.name}, the role Judge and its two providers, ${answer}. Nothing can be asked until you approve it.`
+}
+
+/** While the team holds no judge: BMN's proposal, taken with one press and approved like any other change (65.1 AC7). */
+function JudgeProposal(props: { team: TeamState; data: RosterDataShape }): React.JSX.Element | null {
+  const proposed = judgeProposal(props.data)
+  if (proposed === null) return null
+  return (
+    <div className="page-note with-action" role="status">
+      <Dot label="Needs you" />
+      <span className="note-text">{judgeProposalWords(proposed)}</span>
+      <button type="button" className="small" onClick={() => props.team.stage(proposed)}>Use proposal</button>
+    </div>
+  )
+}
+
 function AgentsPage(props: { team: TeamState; data: RosterDataShape; go(page: TeamPage): void }): React.JSX.Element {
   const { team, data } = props
   const groups = agentGroups(data)
@@ -324,6 +361,7 @@ function AgentsPage(props: { team: TeamState; data: RosterDataShape; go(page: Te
           {' '}A change saved from these pages replaces the link with a regular file here; the file it points to stays as it is.
         </p>
       ) : null}
+      <JudgeProposal team={team} data={data} />
       {team.outside.groups.length > 0 ? <OutsideHead team={team} /> : null}
       {team.outside.groups.map((group) => <OutsideRow key={group.key} group={group} team={team} />)}
       {data.agents.length === 0 ? <p className="page-note">No agents yet. New agent adds the first one.</p> : null}
@@ -418,7 +456,8 @@ function HostRow(props: { team: TeamState; data: RosterDataShape; agent: RosterA
   const [host, setHost] = useState(custom ? agent.host ?? '' : '')
   const [answer, setAnswer] = useState<RosterPrivateWork>('public_only')
   const answerId = useId()
-  const landing = landingFor(data, agent.harness, kind === 'custom' ? host : '')
+  const app = rosterApp(agent) ?? 'claude'
+  const landing = landingFor(data, app, kind === 'custom' ? host : '')
   const pending = kind === 'custom' && host.trim() !== '' && host.trim().toLowerCase() !== agent.host
   return (
     <Row label="Host" id={labelId} hint={agent.host === null ? `No host is recorded, so BMN refuses every request for ${agent.name}. Choose one.`
@@ -426,7 +465,7 @@ function HostRow(props: { team: TeamState; data: RosterDataShape; agent: RosterA
       <Segmented<'default' | 'custom' | null> labelledBy={labelId} fit options={['default', 'custom']} value={kind} optionLabel={(value) => (value === 'default' ? 'Provider default' : 'Custom host')}
         onChange={(value) => {
           setKind(value)
-          if (value === 'default' && agent.host !== 'default') team.stage(moveAgent(data, agent.id, agent.harness, '', 'public_only', props.apps))
+          if (value === 'default' && agent.host !== 'default') team.stage(moveAgent(data, agent.id, app, '', 'public_only', props.apps))
         }} />
       {kind === 'custom' ? (
         <div className="stack">
@@ -437,7 +476,7 @@ function HostRow(props: { team: TeamState; data: RosterDataShape; agent: RosterA
               <Segmented<RosterPrivateWork> labelledBy={answerId} fit options={['allowed', 'public_only']} value={answer} optionLabel={(value) => PRIVATE_WORK_WORDS[value]} onChange={(value) => setAnswer(value)} />
             </>
           ) : null}
-          {pending ? <button type="button" className="small" onClick={() => team.stage(moveAgent(data, agent.id, agent.harness, host, answer, props.apps))}>Use this host</button> : null}
+          {pending ? <button type="button" className="small" onClick={() => team.stage(moveAgent(data, agent.id, app, host, answer, props.apps))}>Use this host</button> : null}
         </div>
       ) : null}
     </Row>
@@ -482,7 +521,7 @@ export function compactRefusal(agent: Pick<RosterAgentShape, 'context_limit'>, v
 export function contextLimitHint(agent: Pick<RosterAgentShape, 'harness' | 'context_limit'>, context: Context): string {
   const base = "Empty means the app's own default."
   if (agent.context_limit === undefined || context === null) return base
-  const app = ROSTER_APP_NAMES[agent.harness]
+  const app = appWords(agent)
   const row = context.find((entry) => entry.harness === agent.harness)
   if (row === undefined) return `Not supported yet: BMN has no context setting for ${app}. The limit is kept but not applied.`
   if (!row.limitProven) return `Not supported yet on ${app}${row.version ? ` ${row.version}` : ''}: kept but not applied until its test passes in Rules › Health.`
@@ -494,31 +533,23 @@ export function compactHint(agent: Pick<RosterAgentShape, 'harness'>, context: C
   const base = 'The app starts summarising the conversation here.'
   if (context === null) return base
   const row = context.find((entry) => entry.harness === agent.harness)
-  return row?.compactProven ? base : `Not supported yet on ${ROSTER_APP_NAMES[agent.harness]}: kept but not applied. ${base}`
+  return row?.compactProven ? base : `Not supported yet on ${appWords(agent)}: kept but not applied. ${base}`
 }
 
-function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: RosterAgentShape; apps: Apps; context: Context; reported: Reported; research: ResearchState | null; go(page: TeamPage): void }): React.JSX.Element {
-  const researched = researchedModels(props.research?.snapshot ?? null)
+/** What the app choice offers: the agent apps, and "Called by BMN" only for an agent that holds no role (65.1 AC5): one that holds a role runs in an app. */
+type AppChoice = RosterHarness | typeof ROSTER_CALLED_BY_BMN
+export function appChoices(agent: Pick<RosterAgentShape, 'roles'>): readonly AppChoice[] {
+  return agent.roles.length === 0 ? [...ROSTER_HARNESSES, ROSTER_CALLED_BY_BMN] : ROSTER_HARNESSES
+}
+
+/** The head of an agent's page, its on and off control and Identity. `note` stands between the head and Identity. */
+function AgentTop(props: { team: TeamState; data: RosterDataShape; agent: RosterAgentShape; note?: ReactNode; go(page: TeamPage): void }): React.JSX.Element {
   const { team, data, agent } = props
-  // A price and a capacity belong to a model: once the name changes they still describe the old one until the owner says otherwise.
-  const before = team.approved?.agents.find((entry) => entry.id === agent.id)
-  const renamed = before !== undefined && before.model !== agent.model ? before.model : null
-  const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
-  // Another agent on the new model: what the team recorded for it was taken over with the name.
-  const twin = renamed === null ? undefined : modelTwin({ ...data, agents: data.agents.filter((entry) => entry.id !== agent.id) }, agent.harness, agent.provider, agent.model)
-  const twinPrice = twin?.price !== undefined && same(agent.price, twin.price)
-  const twinCapacity = twin?.context_window !== undefined && agent.context_window === twin.context_window
-  const oldPrice = renamed !== null && agent.price !== undefined && !twinPrice && same(agent.price, before?.price)
   const saved = team.snapshot?.file.prose[agent.id]
   const [notes, setNotes] = useState(team.pendingNotes[agent.id] ?? saved ?? '')
   const [asking, setAsking] = useState(false)
-  const [fileMessage, setFileMessage] = useState<string | null>(null)
-  const appId = useId()
-  const paidId = useId()
-  const researcherId = useId()
   useEffect(() => setNotes(team.pendingNotes[agent.id] ?? saved ?? ''), [agent.id, saved])
   const off = agent.status === 'active' && !agent.enabled
-  const price = priceWords(agent)
   const patch = (change: Parameters<typeof updateAgent>[2]): void => team.stage(updateAgent(data, agent.id, change))
   const keepNotes = (): void => {
     if (saved === undefined) team.setPendingNote(agent.id, notes)
@@ -536,21 +567,87 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
       {asking ? <TurnOff agent={agent} onDone={(reason) => { setAsking(false); if (reason !== null) team.stage(setAgentOn(data, agent.id, false, reason)) }} /> : null}
       {off && agent.enabled_note ? <p className="page-note">Off: {agent.enabled_note}</p> : null}
 
+      {props.note}
       <h4 className="group-head">Identity</h4>
       <Row label="Name"><input className="field" aria-label="Name" maxLength={40} value={agent.name} onChange={(event) => patch({ name: event.currentTarget.value })} /></Row>
       <Row label="Class"><ClassChoice name={`class-${agent.id}`} value={agent.class} onChange={(next) => team.stage(setAgentClass(data, agent.id, next))} /></Row>
       <Row label="Notes" hint="Only you see this. The first line shows on the card.">
         <textarea className="field wide" aria-label="Notes" rows={3} maxLength={8000} value={notes} onChange={(event) => setNotes(event.currentTarget.value)} onBlur={keepNotes} />
       </Row>
+    </>
+  )
+}
+
+function TeamFileRow(props: { go(page: TeamPage): void }): React.JSX.Element {
+  const [fileMessage, setFileMessage] = useState<string | null>(null)
+  return (
+    <Row label="Team file" hint={fileMessage ?? undefined}>
+      <div className="inline">
+        <button type="button" className="small" onClick={() => {
+          window.aiTerminal.openTeamFile().then((result) => setFileMessage(result.ok ? `Opened ${result.path}` : `${result.path}: ${result.message ?? 'could not be opened'}`))
+            .catch(() => setFileMessage('The team file could not be opened'))
+        }}>Open team file</button>
+        <button type="button" className="small" onClick={() => props.go({ name: 'changes' })}>See earlier changes</button>
+      </div>
+    </Row>
+  )
+}
+
+/**
+ * The page of an agent BMN itself calls (65.1 AC5, 65.3): the on and off control, both providers
+ * with their private-work answer, the price, what its calls cost and Try it. No row that belongs
+ * to an agent app is drawn: no app, effort, context or researcher row.
+ */
+function CalledAgentPage(props: { team: TeamState; data: RosterDataShape; agent: RosterAgentShape; sessionName(id: string): string | undefined; go(page: TeamPage): void }): React.JSX.Element {
+  const { team, data, agent } = props
+  const state = useJudgeState()
+  const limitRow = useRef<HTMLDivElement>(null)
+  return (
+    <div className="judge-page">
+      <AgentTop team={team} data={data} agent={agent} go={props.go}
+        note={state.view ? <LimitReached view={state.view} name={agent.name} raise={() => limitRow.current?.querySelector('input')?.focus()} /> : null} />
+      <JudgeGroups agent={agent} parties={calledParties(data, agent)} state={state} limitRow={limitRow} sessionName={props.sessionName}
+        covered={(provider) => agentsOnProvider(data, provider).map((entry) => entry.name)} onAnswer={(provider, answer) => team.stage(setProviderAnswer(data, provider, answer))} />
+      <details className="advanced">
+        <summary>Advanced</summary>
+        <TeamFileRow go={props.go} />
+      </details>
+    </div>
+  )
+}
+
+function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: RosterAgentShape; apps: Apps; context: Context; reported: Reported; research: ResearchState | null; sessionName(id: string): string | undefined; go(page: TeamPage): void }): React.JSX.Element {
+  const researched = researchedModels(props.research?.snapshot ?? null)
+  const { team, data, agent } = props
+  // A price and a capacity belong to a model: once the name changes they still describe the old one until the owner says otherwise.
+  const before = team.approved?.agents.find((entry) => entry.id === agent.id)
+  const renamed = before !== undefined && before.model !== agent.model ? before.model : null
+  const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+  // Another agent on the new model: what the team recorded for it was taken over with the name.
+  const twin = renamed === null ? undefined : modelTwin({ ...data, agents: data.agents.filter((entry) => entry.id !== agent.id) }, agent.harness, agent.provider, agent.model)
+  const twinPrice = twin?.price !== undefined && same(agent.price, twin.price)
+  const twinCapacity = twin?.context_window !== undefined && agent.context_window === twin.context_window
+  const oldPrice = renamed !== null && agent.price !== undefined && !twinPrice && same(agent.price, before?.price)
+  const appId = useId()
+  const paidId = useId()
+  const researcherId = useId()
+  const price = priceWords(agent)
+  const patch = (change: Parameters<typeof updateAgent>[2]): void => team.stage(updateAgent(data, agent.id, change))
+  const app = rosterApp(agent)
+  if (app === null) return <CalledAgentPage team={team} data={data} agent={agent} sessionName={props.sessionName} go={props.go} />
+  return (
+    <>
+      <AgentTop team={team} data={data} agent={agent} go={props.go} />
 
       <h4 className="group-head">Model</h4>
-      <Row label="Agent app" id={appId}>
-        <Segmented labelledBy={appId} fit options={ROSTER_HARNESSES} value={agent.harness} optionLabel={(harness) => ROSTER_APP_NAMES[harness]}
-          onChange={(harness: RosterHarness) => team.stage(moveAgent(data, agent.id, harness, agent.host === 'default' || agent.host === null ? '' : agent.host, 'public_only', props.apps))} />
+      <Row label="Agent app" id={appId} hint={agent.roles.length === 0 ? `${CALLED_WORDS}: BMN asks the model itself, and it runs in no agent app. Such an agent holds the role Judge only.` : undefined}>
+        <Segmented<AppChoice> labelledBy={appId} fit options={appChoices(agent)} value={app} optionLabel={(harness) => (harness === ROSTER_CALLED_BY_BMN ? CALLED_WORDS : ROSTER_APP_NAMES[harness])}
+          onChange={(harness) => team.stage(harness === ROSTER_CALLED_BY_BMN ? callByBmn(data, agent.id)
+            : moveAgent(data, agent.id, harness, agent.host === 'default' || agent.host === null ? '' : agent.host, 'public_only', props.apps))} />
       </Row>
       <Row label="Model">
-        <ModelField value={agent.model} hint={modelSourceWords(agent.model, data, agent.harness, props.reported, { self: agent.id, ...(before ? { approved: before.model } : {}), ...(researched ? { research: researched } : {}) })}
-          suggest={(query) => modelSuggestions(data, agent.harness, props.reported, query, agent.id, researched)} onChange={(model) => team.stage(changeModel(data, agent.id, model, before))} />
+        <ModelField value={agent.model} hint={modelSourceWords(agent.model, data, app, props.reported, { self: agent.id, ...(before ? { approved: before.model } : {}), ...(researched ? { research: researched } : {}) })}
+          suggest={(query) => modelSuggestions(data, app, props.reported, query, agent.id, researched)} onChange={(model) => team.stage(changeModel(data, agent.id, model, before))} />
       </Row>
       <PrivateWorkRow team={team} data={data} agent={agent} />
       <Row label="Price" hint={twinPrice && twin ? `Taken from ${twin.name}, which uses the same model.`
@@ -569,7 +666,7 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
       </Row>
 
       <h4 className="group-head">Work</h4>
-      <Row label="Roles"><RoleChoices data={data} agentClass={agent.class} held={agent.roles} onToggle={(role) => team.stage(toggleAgentRole(data, agent.id, role))} /></Row>
+      <Row label="Roles"><RoleChoices data={data} agent={agent} held={agent.roles} onToggle={(role) => team.stage(toggleAgentRole(data, agent.id, role))} /></Row>
       <Row label="Efforts" hint="Effort levels its roles may ask for.">
         <EffortChips efforts={agent.efforts} onToggle={(effort) => team.stage(toggleAgentEffort(data, agent.id, effort, ROSTER_EFFORTS))} />
       </Row>
@@ -595,15 +692,7 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
             <AllowedWorkspaces team={team} data={data} provider={agent.provider} />
           </Row>
         ) : null}
-        <Row label="Team file" hint={fileMessage ?? undefined}>
-          <div className="inline">
-            <button type="button" className="small" onClick={() => {
-              window.aiTerminal.openTeamFile().then((result) => setFileMessage(result.ok ? `Opened ${result.path}` : `${result.path}: ${result.message ?? 'could not be opened'}`))
-                .catch(() => setFileMessage('The team file could not be opened'))
-            }}>Open team file</button>
-            <button type="button" className="small" onClick={() => props.go({ name: 'changes' })}>See earlier changes</button>
-          </div>
-        </Row>
+        <TeamFileRow go={props.go} />
       </details>
     </>
   )
@@ -736,14 +825,14 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
       <h4 className="group-head">Identity</h4>
       <Row label="Name"><input className="field" aria-label="Name" maxLength={40} value={draft.name} onChange={(event) => set({ name: event.currentTarget.value })} /></Row>
       <Row label="Class">
-        <ClassChoice name="class-new" value={draft.class} onChange={(next) => set({ class: next, roles: draft.roles.filter((role) => classBar(next, role) === null) })} />
+        <ClassChoice name="class-new" value={draft.class} onChange={(next) => set({ class: next, roles: draft.roles.filter((role) => roleBar({ class: next, harness: draft.harness }, role) === null) })} />
       </Row>
       <Row label="Notes" hint="Only you see this. The first line shows on the card.">
         <textarea className="field wide" aria-label="Notes" rows={2} maxLength={8000} placeholder="What it's good at, in your words" value={notes} onChange={(event) => setNotes(event.currentTarget.value)} />
       </Row>
       <h4 className="group-head">Work</h4>
       <Row label="Roles">
-        <RoleChoices data={data} agentClass={draft.class} held={draft.roles}
+        <RoleChoices data={data} agent={draft} held={draft.roles}
           onToggle={(role) => set({ roles: draft.roles.includes(role) ? draft.roles.filter((entry) => entry !== role) : [...draft.roles, role] })} />
       </Row>
       <Row label="Efforts" hint={!ownEfforts && twin ? `Taken from ${twin.name}, which uses the same model.` : undefined}>
@@ -785,7 +874,7 @@ function Steps(props: { candidates: readonly string[]; data: RosterDataShape }):
             {index > 0 ? <span className="faint" aria-hidden="true">›</span> : null}
             {agent ? <Piece agentClass={agent.class} /> : null}
             <span>{agent?.name ?? candidate.agent}{state ? `, ${state}` : ''}</span>
-            <span className="effort mono">{effortWords(candidate)}</span>
+            {candidate.efforts.length > 0 ? <span className="effort mono">{effortWords(candidate)}</span> : agent && isCalled(agent) ? <span className="faint">called by BMN</span> : null}
             {agent && publicOnly(data, agent) ? <span className="faint">public work only</span> : null}
           </span>
         )
@@ -821,7 +910,9 @@ function ChainEditor(props: { team: TeamState; data: RosterDataShape; role: Rost
   const thenId = useId()
   const readOnlyId = useId()
   const inChain = new Set(role.candidates.map((text) => parseCandidate(text).agent))
-  const addable = data.agents.filter((agent) => !inChain.has(agent.id) && agent.efforts.length > 0 && classBar(agent.class, role.id) === null)
+  // An agent BMN calls has no effort and is a candidate by its name alone; the role Judge takes no other agent.
+  const addable = data.agents.filter((agent) => !inChain.has(agent.id) && (isCalled(agent) || agent.efforts.length > 0) && roleBar(agent, role.id) === null)
+  const judge = role.id === ROSTER_JUDGE_ROLE
   return (
     <div className="chain-editor">
       {role.candidates.map((text, index) => {
@@ -863,14 +954,19 @@ function ChainEditor(props: { team: TeamState; data: RosterDataShape; role: Rost
         <span className="muted" id={thenId}>If all of them fail</span>
         <Segmented labelledBy={thenId} fit options={ROSTER_THEN} value={role.then} optionLabel={(then) => THEN_WORDS[then]} onChange={(then) => team.stage(setRoleThen(data, role.id, then))} />
       </div>
-      <div className="candidate">
-        <span className="muted" id={readOnlyId}>Read-only</span>
-        <Switch labelledBy={readOnlyId} on={role.read_only === true} onChange={(on) => team.stage(setRoleReadOnly(data, role.id, on))} />
-        <span className="faint">{READ_ONLY_HELP}</span>
-      </div>
+      {judge ? <div className="candidate"><span className="faint">{JUDGE_ROLE_HELP}</span></div> : (
+        <div className="candidate">
+          <span className="muted" id={readOnlyId}>Read-only</span>
+          <Switch labelledBy={readOnlyId} on={role.read_only === true} onChange={(on) => team.stage(setRoleReadOnly(data, role.id, on))} />
+          <span className="faint">{READ_ONLY_HELP}</span>
+        </div>
+      )}
     </div>
   )
 }
+
+/** What the role Judge is, where its order is edited: no app runs for it, so nothing of a run applies. */
+export const JUDGE_ROLE_HELP = 'BMN calls a judge itself: no agent app runs for this role, and an answer is advice. Ask with bmn judge ask.'
 
 /** What holding a role to read-only means, wherever a page says it. */
 export const READ_ONLY_HELP = 'A run for this role is refused unless it is started so that it cannot write.'
@@ -981,7 +1077,7 @@ function VersionView(props: { number: number; earlier: boolean }): React.JSX.Ele
           <Piece agentClass={agent.class} />
           <span>{agent.name}</span>
           <span className="muted">{CLASS_WORDS[agent.class].name}{agent.status === 'proposed' ? ', proposed' : agent.enabled ? '' : ', off'}</span>
-          <span className="faint">{ROSTER_APP_NAMES[agent.harness]} · <span className="mono">{agent.model}</span>{publicOnly(data, agent) ? ' · public work only' : ''}</span>
+          <span className="faint">{appWords(agent)} · <span className="mono">{agent.model}</span>{publicOnly(data, agent) ? ' · public work only' : ''}</span>
         </div>
       ))}
       {data.roles.map((role) => <div key={role.id} className="version-role"><span>{roleName(role.id)}</span><Chain role={role} data={data} /></div>)}
@@ -1072,7 +1168,7 @@ export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?:
   if (page.name === 'models' && research !== null) return <ModelsPage team={team} data={data} research={research} add={(fill) => props.go({ name: 'new', fill })} {...(props.sessionName ? { sessionName: props.sessionName } : {})} />
   if (page.name === 'changes') return <ChangesPage team={team} />
   const agent = page.name === 'agent' ? data.agents.find((entry) => entry.id === page.id) : undefined
-  if (agent) return <AgentPage key={agent.id} team={team} data={data} agent={agent} apps={apps} context={props.context ?? null} reported={reported} research={research} go={props.go} />
+  if (agent) return <AgentPage key={agent.id} team={team} data={data} agent={agent} apps={apps} context={props.context ?? null} reported={reported} research={research} sessionName={props.sessionName ?? (() => undefined)} go={props.go} />
   return <AgentsPage team={team} data={data} go={props.go} />
 }
 

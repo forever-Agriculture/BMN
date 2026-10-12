@@ -15,6 +15,12 @@ export type RosterClass = (typeof ROSTER_CLASSES)[number]
 /** The role only a knight or a queen may hold, and the one only a rook or a queen may hold. */
 export const ROSTER_LEAD_ROLE = 'lead'
 export const ROSTER_DESIGNER_ROLE = 'designer'
+/** What an agent BMN itself calls has in place of an app, and the one role only such an agent holds (Epic 65). */
+export const ROSTER_CALLED_BY_BMN = 'bmn'
+export const ROSTER_JUDGE_ROLE = 'judge'
+/** The team file's layout now, and the one before it, which BMN still reads. */
+export const ROSTER_SCHEMA_VERSION = 3
+export type RosterSchemaVersion = 2 | 3
 export type RosterPrivateWork = 'allowed' | 'public_only'
 
 export interface RosterPriceShape { input: number; output: number; cached_input?: number; source?: string; as_of?: string }
@@ -23,9 +29,13 @@ export interface RosterAgentShape {
   id: string
   name: string
   class: RosterClass
-  harness: RosterHarness
+  /** The app the agent runs in, or `bmn` for an agent BMN itself calls. */
+  harness: RosterHarness | typeof ROSTER_CALLED_BY_BMN
   model: string
+  /** Who receives the request. */
   provider: string
+  /** Who runs the model, for an agent BMN itself calls; no other agent names it. */
+  run_by?: string
   host: string | null
   enabled: boolean
   status: 'active' | 'proposed'
@@ -40,6 +50,11 @@ export interface RosterAgentShape {
   price?: RosterPriceShape
   /** The team names this agent a researcher (63.3). */
   researcher?: boolean
+}
+
+/** The app an agent runs in, or null for an agent BMN itself calls. */
+export function rosterApp(agent: Pick<RosterAgentShape, 'harness'>): RosterHarness | null {
+  return agent.harness === ROSTER_CALLED_BY_BMN ? null : agent.harness
 }
 
 export interface RosterRoleShape {
@@ -65,7 +80,7 @@ export interface RosterRouteShape {
 }
 
 export interface RosterDataShape {
-  schema_version: 2
+  schema_version: RosterSchemaVersion
   agents: RosterAgentShape[]
   roles: RosterRoleShape[]
   providers: RosterProviderShape[]
@@ -504,6 +519,33 @@ export interface WebQuestionsSnapshot {
 }
 /** How an Ask from Models went on: started (the list shows it running), or refused in the command's own words. */
 export interface WebQuestionAsked { ok: boolean; message: string | null; snapshot: WebQuestionsSnapshot }
+
+/** Epic 65: what the judge's page on Team shows of its calls. Sums count every call that made a request; a refused call costs nothing and is counted apart. */
+export interface JudgeTotalsView { calls: number; input_tokens: number; cost_usd: number }
+export interface JudgeMonthView extends JudgeTotalsView { month: string; refused: number; purposes: Record<string, JudgeTotalsView> }
+export type JudgeOutcome = 'answered' | 'refused' | 'timeout' | 'failed' | 'shape'
+/** One call as the page lists it: when, who, the purpose word and how it ended. No text and no answer is kept of a call. */
+export interface JudgeCallView { at: string; by: WebQuestionAsker; purpose: string; outcome: JudgeOutcome; code?: string }
+export interface JudgeView {
+  /** The owner's monthly limit: off until he switches it on. */
+  limit: { on: boolean; usd: number }
+  /** The limit is on and this month's calls reach it: asking is stopped. */
+  reached: boolean
+  current: JudgeMonthView
+  previous: JudgeMonthView
+  /** Newest first, at most 20. */
+  calls: JudgeCallView[]
+}
+/** What "Try it" got back: Jev's number with BMN's reading, the command's own refusal, or why there is no answer. */
+export type JudgeTryReply =
+  | { outcome: 'answered'; noul: number; reading: 'yes' | 'no answer'; near: boolean; input_tokens: number; cost_usd: number; took_ms: number }
+  | { outcome: 'refused'; code: string; message: string; next?: string }
+  | { outcome: 'timeout' | 'failed' | 'shape'; note: string }
+export interface JudgeTried { reply: JudgeTryReply; view: JudgeView }
+/** How many of the judge's calls its page lists, and the most a text and a statement pasted there may hold. */
+export const JUDGE_CALLS_SHOWN = 20
+export const JUDGE_TRY_TEXT_MAX = 20_000
+export const JUDGE_TRY_STATEMENT_MAX = 400
 
 /** What changing a default would write, before it is written (R60-NFR2). */
 export interface ContextLimitPlan {

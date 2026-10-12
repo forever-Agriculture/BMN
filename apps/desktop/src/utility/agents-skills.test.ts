@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { LINE, NEAR, judgeLines, questionsProblem, readingOf } from '../../bin/agents-judge.mjs'
 import { ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, MARKS } from '../../bin/agents-ask.mjs'
 import { parseRoster, rewriteRoster } from '../../bin/agents-roster.mjs'
 import { listTransactions, restoreTransaction } from '../../bin/agents-rules.mjs'
@@ -857,5 +858,63 @@ describe('bmn skills (60.11 AC2, AC3)', () => {
     expect(readdirSync(codexFolder())).toEqual([])
     expect((await run(['skills', 'frobnicate'])).code).toBe(2)
     expect((await run(['skills', 'install', 'vim'])).code).toBe(2)
+  })
+})
+
+describe('the skill jev-judge that BMN ships (65.3 AC4)', () => {
+  const SHIPPED = fileURLToPath(new URL('../../../../skills/jev-judge', import.meta.url))
+  const text = (): string => readFileSync(join(SHIPPED, 'SKILL.md'), 'utf8')
+
+  it('is read by the skills check from a skills folder that links to it, and reaches an app only through an install', async () => {
+    symlinkSync(SHIPPED, join(source, 'jev-judge'))
+    tested('claude', CLAUDE, [{ root: '.claude/skills', folder: true, link: true }])
+    const shown = checkSkills({ environment: env, versions: VERSIONS, descriptions: true }).skills.find((entry) => entry.name === 'jev-judge')!
+    expect(shown).toMatchObject({ readable: true, description: skillDescription(text()) })
+    expect(shown.description).toMatch(/^Ask the team's judge Jev typed questions about one text with `bmn judge ask`.* never for a decision\.$/)
+    expect(states('codex')['jev-judge']).toBe('missing')
+    const plan = skillsPlanView(await planSkillsInstall([], { environment: env, versions: VERSIONS }))
+    expect(plan.targets.filter((target) => target.skill === 'jev-judge').map((target) => [target.harness, target.action])).toEqual([['codex', 'link']])
+    await install()
+    expect(states('codex')['jev-judge']).toBe('current')
+    expect(readFileSync(join(codexFolder(), 'jev-judge/SKILL.md'), 'utf8')).toBe(text())
+    expect(states('claude')['jev-judge']).toBe('read-directly')
+    // The shipped folder was read, never written.
+    expect(readdirSync(SHIPPED)).toEqual(['SKILL.md'])
+  })
+
+  it('says what Jev is, what the proof measured, the rule, what may be sent, and what it must never decide', () => {
+    const body = text()
+    expect(body).toMatch(/^---\nname: jev-judge\ndescription: .+\n---\n/)
+    // The three uses that met the bar and the two that did not, each with its numbers.
+    for (const row of [
+      '| Does a pricing-page excerpt give this input price for this model? | 15 | 15 | 75% | 0% |',
+      '| Does a report claim "done" while admitting a required check is not done? | 14 | 14 | 70% | 0% |',
+      '| Does a review finding name a requirement, a reproduction and a consequence? | 27 | 27 | 90% | 0% |',
+      '| What does an agent\'s final message need from the owner? | 10 | 10 | 50% | 0% | speaks on too few cases |',
+      '| Is an agent trying the same method against the same failure again? | 18 | 18 | 82% | 5% | answers at 0.88 to 0.90 flipped between repeats |'
+    ]) expect(body).toContain(row)
+    expect(body).toContain('all 84 confident answers were right')
+    expect(body).toContain('One fact per question.')
+    // The rule is the command's own, to the digit.
+    expect(body).toContain(`a \`noul\` of ${LINE.toFixed(2)} or more reads **yes**`)
+    expect(body).toContain(`both ${LINE.toFixed(2)} or more reads its label`)
+    expect(body).toContain(`within ${NEAR.toFixed(2)} of the line`)
+    expect(body).toContain('"No answer" is not "no".')
+    expect(body).toContain('Public text only, declared with `--data public`, unless the owner\'s team allows private work for\nboth')
+    for (const never of ['a permission, or whether a dialog may be answered', 'acceptance of work, an epic or a story', 'waiving a test or a check', 'lifting a stop', 'spending money',
+      'replacing a review the workflow asks for']) expect(body).toContain(`- ${never}`)
+    expect(body).toContain('bmn judge ask --state-file report.txt --questions-file questions.json --data public --purpose dev-auto')
+  })
+
+  it('its worked example is a questions file the command takes, printed as the command prints it', () => {
+    const body = text()
+    const questions = JSON.parse(/<<'EOF'\n([\s\S]*?)\nEOF/.exec(body)![1]!) as Record<string, { type: 'noul'; instructions: string }>
+    expect(questionsProblem(questions)).toBeNull()
+    const lines = judgeLines({
+      ok: true, outcome: 'answered', agent: 'jev', model: 'jev-1.13', requests: 1, input_tokens: 412, cost_usd: 0.000017, took_ms: 800,
+      answers: { claims_complete: { type: 'noul', noul: 0.97 }, unfinished_check: { type: 'noul', noul: 0.31 } },
+      readings: { claims_complete: readingOf(questions.claims_complete!, { type: 'noul', noul: 0.97 })!, unfinished_check: readingOf(questions.unfinished_check!, { type: 'noul', noul: 0.31 })! }
+    }, questions)
+    expect(body).toContain(lines.join('\n'))
   })
 })

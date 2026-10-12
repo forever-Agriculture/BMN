@@ -645,7 +645,8 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
   const agentsIpc = installAgentsIpcHandlers(bridgeIpc, {
     senderIsAllowed, cliScript: bmnCliScript, sessionEnvironment, openPath: (path) => shell.openPath(path), openExternal: (address) => shell.openExternal(address), notifyApp: showAppNotice,
     // Only the app's own self-test, started in test mode, serves made-up pages, and only for site names ending in `.test`.
-    researchPages: () => (rendererTestMode ? process.env.BMN_SELF_TEST_PAGES ?? null : null)
+    researchPages: () => (rendererTestMode ? process.env.BMN_SELF_TEST_PAGES ?? null : null),
+    judgeTestPort: () => (rendererTestMode ? process.env.BMN_JUDGE_TEST_PORT ?? null : null)
   })
   // Once the shell's own program path is known, so a new app version is tested with the program a session would start (63.1).
   void sessionEnvironment.refresh().finally(() => agentsIpc.contextAutoAtStart())

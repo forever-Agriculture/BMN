@@ -11,6 +11,7 @@ import {
 } from '../../bin/agents-roster.mjs'
 import { approveRoster } from '../main/agents-approval'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
+import { consequences } from '../../bin/agents-check.mjs'
 import { researchers } from '../../bin/agents-research.mjs'
 import { teamPhrase } from '../../bin/agents-rules.mjs'
 
@@ -250,6 +251,17 @@ describe("BMN's first proposal for a judge (65.1 AC7)", () => {
     // Everything the team said before is still what it says.
     expect(again.data!.agents.slice(0, -1)).toEqual(before.agents)
     expect(again.data!.roles.slice(0, -1)).toEqual(before.roles)
+  })
+
+  it('is said in a judge\'s own words where an approval names what it changes: it is asked and sent text, never given work', () => {
+    const before = parseRoster(EXAMPLE).data!
+    const proposed = judgeProposal(before)!
+    expect(consequences(before, proposed)).toEqual(['Jev could be asked as the judge', 'Jev could be sent private text'])
+    const off = { ...proposed, agents: proposed.agents.map((agent) => (agent.id === 'jev' ? { ...agent, enabled: false, enabled_note: 'paused' } : agent)) }
+    expect(consequences(proposed, off)).toEqual(['Jev could no longer be asked as the judge', 'Jev could no longer be sent private text'])
+    // An agent that runs in an app keeps the words it had.
+    const withoutSol = { ...before, agents: before.agents.map((agent) => (agent.id === 'sol' ? { ...agent, enabled: false, enabled_note: 'paused' } : agent)) }
+    expect(consequences(before, withoutSol)).toContain('Sol could no longer be given work')
   })
 
   it('keeps the answer of a provider the team already names for that host', () => {

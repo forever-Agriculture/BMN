@@ -1,5 +1,5 @@
 // MODULE: research-view.ts - Story 60.10: what Team › Models shows of a research, worked out against the team as drafted; kept pure for tests
-import type { ResearchModelView, ResearchPrice, ResearchSnapshot, RosterAgentShape, RosterDataShape, RosterHarness, RosterPriceShape } from '@bmn/protocol'
+import { rosterApp, type ResearchModelView, type ResearchPrice, type ResearchSnapshot, type RosterAgentShape, type RosterDataShape, type RosterHarness, type RosterPriceShape } from '@bmn/protocol'
 import { dayWords, priceText, siteOf, updateAgent } from './roster-staging'
 
 export { dayWords, priceText, siteOf }
@@ -15,6 +15,12 @@ export interface TeamModelRow {
   teamHas: RosterPriceShape | null
   /** A verified researched price differs from what an agent on this model records, or none is recorded. */
   differs: boolean
+  /**
+   * The price the team itself records for a model BMN calls (Epic 65), with the page it came from
+   * and the date. Shown where research found none: such a model is on no provider's list of models
+   * for agent apps, and nothing about an app (effort, context, researcher) is missing from it.
+   */
+  recorded?: RosterPriceShape
 }
 
 export interface ResearchGroups {
@@ -73,6 +79,7 @@ export function researchGroups(models: readonly ResearchModelView[], data: Roste
       team.push(row)
     }
     row.agents.push(agent.name)
+    if (rosterApp(agent) === null && agent.price !== undefined) row.recorded ??= agent.price
     const price = row.found?.price
     if (price?.verified && !samePrice(agent.price, price)) {
       row.differs = true
@@ -89,7 +96,14 @@ export function unverifiedWords(why: string | undefined): string {
 
 /** The app whose own provider serves a researched model, so Add to team can start on it; null when no app's destination is that provider. */
 export function appFor(data: RosterDataShape, providerId: string): RosterHarness | null {
-  return data.harness_routes.find((route) => route.provider === providerId)?.harness ?? data.agents.find((agent) => agent.provider === providerId)?.harness ?? null
+  const route = data.harness_routes.find((entry) => entry.provider === providerId)
+  if (route !== undefined) return route.harness
+  // An agent BMN itself calls runs in no app, so its provider says nothing about one.
+  for (const agent of data.agents) {
+    const app = agent.provider === providerId ? rosterApp(agent) : null
+    if (app !== null) return app
+  }
+  return null
 }
 
 /** What research found of a model, as New agent takes it: only values BMN verified. */

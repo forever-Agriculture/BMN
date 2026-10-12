@@ -1,9 +1,13 @@
 // MODULE: roster-staging.ts - Epic 60.5: the Team pages' staged edits, review rows and their words, kept pure for tests
 import {
   ROSTER_APP_NAMES,
+  ROSTER_CALLED_BY_BMN,
   ROSTER_DESIGNER_ROLE,
   ROSTER_HARNESSES,
+  ROSTER_JUDGE_ROLE,
   ROSTER_LEAD_ROLE,
+  ROSTER_SCHEMA_VERSION,
+  rosterApp,
   type AgentAppView,
   type RosterAgentShape,
   type RosterClass,
@@ -66,7 +70,7 @@ const SECTION_SUBJECTS: Readonly<Record<string, string>> = {
 
 const FIELD_WORDS: Readonly<Record<string, string>> = {
   name: 'Name', class: 'Class', harness: 'Agent app', model: 'Model', provider: 'Provider', host: 'Host', enabled: 'On', status: 'Status',
-  efforts: 'Efforts', roles: 'Roles', aliases: 'Also called', enabled_note: 'Reason it is off', context_window: 'Capacity', context_limit: 'Context limit',
+  efforts: 'Efforts', roles: 'Roles', run_by: 'Runs the model', aliases: 'Also called', enabled_note: 'Reason it is off', context_window: 'Capacity', context_limit: 'Context limit',
   compact_at: 'Compact at', paid_by: 'Paid by', price: 'Price', description: 'Line', candidates: 'Order', then: 'If all fail', recheck: 'Recheck',
   small_work: 'Small work', read_only: 'Read-only', researcher: 'Researcher', hosts: 'Hosts', sites: 'Sites', private_work: 'Private work', folder: 'Workspace', basis: 'Destination', accepted_versions: 'Accepted versions',
   input: 'In', cached_input: 'Cached in', output: 'Out', source: 'Source', as_of: 'As of', public: 'Public', only: 'Only in',
@@ -75,7 +79,7 @@ const FIELD_WORDS: Readonly<Record<string, string>> = {
 
 const VALUE_WORDS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   class: Object.fromEntries(Object.entries(CLASS_WORDS).map(([key, words]) => [key, words.name])),
-  harness: ROSTER_APP_NAMES,
+  harness: { ...ROSTER_APP_NAMES, [ROSTER_CALLED_BY_BMN]: 'none, called by BMN' },
   then: THEN_WORDS,
   private_work: PRIVATE_WORK_WORDS,
   paid_by: { per_token: 'Per token', subscription: 'Subscription' },
@@ -188,7 +192,7 @@ function formatPlain(value: unknown, field: string | undefined, names: Names): s
   }
   if (field === 'small_work') return candidateWords(String(value), names)
   if (field === 'read_only' || field === 'researcher') return value === true ? 'yes' : 'no'
-  if (field === 'provider') return names.providers.get(String(value)) ?? String(value)
+  if (field === 'provider' || field === 'run_by') return names.providers.get(String(value)) ?? String(value)
   const word = field === undefined ? undefined : VALUE_WORDS[field]?.[String(value)]
   if (word !== undefined) return word
   return typeof value === 'number' && value >= 10_000 ? thousands(value) : String(value)
@@ -204,8 +208,11 @@ export function formatValue(side: RosterDiffShape['before'], field?: string, nam
   return formatPlain(side.value, field, names)
 }
 
-function fieldWords(diff: RosterDiffShape, names: Names): string {
-  const word = FIELD_WORDS[diff.field ?? ''] ?? diff.field ?? ''
+/** For an agent BMN itself calls, its provider is the party that receives the request; the other one runs the model. */
+const CALLED_FIELD_WORDS: Readonly<Record<string, string>> = { provider: 'Receives the request' }
+
+function fieldWords(diff: RosterDiffShape, names: Names, called = false): string {
+  const word = (called ? CALLED_FIELD_WORDS[diff.field ?? ''] : undefined) ?? FIELD_WORDS[diff.field ?? ''] ?? diff.field ?? ''
   if (diff.scope === 'agent') return word
   // The folder the skills come from is one value of the section, not a skill.
   if (diff.scope === 'skills' && diff.id === SKILLS_SOURCE_ID) return 'Skills folder'
@@ -220,22 +227,22 @@ function fieldWords(diff: RosterDiffShape, names: Names): string {
 const candidatesOf = (side: RosterDiffShape['before']): string[] | null =>
   side?.present && side.hash === undefined && Array.isArray(side.value) ? side.value.map(String) : null
 
-function lineFor(diff: RosterDiffShape, names: Names): DiffLine {
-  const line: DiffLine = { field: fieldWords(diff, names), before: formatValue(diff.before, diff.field ?? undefined, names), after: formatValue(diff.after, diff.field ?? undefined, names) }
+function lineFor(diff: RosterDiffShape, names: Names, called: boolean): DiffLine {
+  const line: DiffLine = { field: fieldWords(diff, names, called), before: formatValue(diff.before, diff.field ?? undefined, names), after: formatValue(diff.after, diff.field ?? undefined, names) }
   return diff.field === 'candidates' ? { ...line, chain: { before: candidatesOf(diff.before), after: candidatesOf(diff.after) } } : line
 }
 
-/** An added or removed entry shows every value it carries, one line per field (60.5 AC2). */
-function linesFor(diff: RosterDiffShape, names: Names): DiffLine[] {
-  if (diff.field !== null) return [lineFor(diff, names)]
+/** An added or removed entry shows every value it carries, one line per field (60.5 AC2); an agent BMN calls has no efforts to show. */
+function linesFor(diff: RosterDiffShape, names: Names, called: boolean): DiffLine[] {
+  if (diff.field !== null) return [lineFor(diff, names, called)]
   const added = diff.kind === 'added'
   const side = added ? diff.after : diff.before
   const head: DiffLine = { field: fieldWords({ ...diff, field: null }, names) || 'Agent', before: added ? '—' : 'present', after: added ? 'added' : 'removed' }
   if (!side?.present || side.value === null || typeof side.value !== 'object') return [head]
-  const hidden = new Set(['id', ...(diff.scope === 'harness-routes' ? ['harness'] : [])])
+  const hidden = new Set(['id', ...(diff.scope === 'harness-routes' ? ['harness'] : []), ...(called ? ['efforts'] : [])])
   return [head, ...Object.entries(side.value as Record<string, unknown>).filter(([key]) => !hidden.has(key)).map(([key, value]) => {
     const text = typeof value === 'string' && value.startsWith('text ') ? 'set' : formatPlain(value, key, names)
-    return { field: fieldWords({ ...diff, field: key }, names), before: added ? '—' : text, after: added ? text : '—', detail: true as const }
+    return { field: fieldWords({ ...diff, field: key }, names, called), before: added ? '—' : text, after: added ? text : '—', detail: true as const }
   })]
 }
 
@@ -301,7 +308,8 @@ export function groupDifferences(diffs: readonly RosterDiffShape[], data: Roster
       group = { key, subject: agent?.name ?? SECTION_SUBJECTS[key] ?? key, lines: [], consequences: [], ...(agent ? { agent } : {}) }
       groups.set(key, group)
     }
-    group.lines.push(...linesFor(diff, names))
+    const subject = diff.scope === 'agent' ? agentById.get(diff.id) : undefined
+    group.lines.push(...linesFor(diff, names, subject !== undefined && isCalled(subject)))
   }
   const general: string[] = []
   const roleIds = roleIdsOf(data, approved)
@@ -425,8 +433,9 @@ export function parseCandidate(text: string): Candidate {
   return { agent, efforts: efforts.split('|').filter(Boolean) as RosterEffort[], choice: efforts.includes('|') }
 }
 
+/** An agent BMN calls has no effort, and is named by its id alone. */
 export function formatCandidate(candidate: Pick<Candidate, 'agent' | 'efforts'>): string {
-  return `${candidate.agent}@${candidate.efforts.join('|')}`
+  return candidate.efforts.length === 0 ? candidate.agent : `${candidate.agent}@${candidate.efforts.join('|')}`
 }
 
 /** "max", or "medium or high" where the lead chooses. */
@@ -439,6 +448,28 @@ export function classBar(agentClass: RosterClass, roleId: string): string | null
   if (roleId === ROSTER_LEAD_ROLE && agentClass !== 'knight' && agentClass !== 'queen') return 'Only a Knight or a Queen leads'
   if (roleId === ROSTER_DESIGNER_ROLE && agentClass !== 'rook' && agentClass !== 'queen') return 'Only a Rook or a Queen designs'
   return null
+}
+
+/** Whether BMN itself calls the agent: it runs in no agent app (Epic 65). */
+export function isCalled(agent: Pick<RosterAgentShape, 'harness'>): boolean {
+  return rosterApp(agent) === null
+}
+
+/** Where an agent runs, as a card says it: its app, or that BMN calls it. */
+export const CALLED_WORDS = 'Called by BMN'
+export function appWords(agent: Pick<RosterAgentShape, 'harness'>): string {
+  const app = rosterApp(agent)
+  return app === null ? CALLED_WORDS : ROSTER_APP_NAMES[app]
+}
+
+/**
+ * Why an agent may not hold a role, or null when it may. An agent BMN calls holds the role Judge
+ * and no other, and nobody else holds that one; for the rest its class decides.
+ */
+export function roleBar(agent: Pick<RosterAgentShape, 'class' | 'harness'>, roleId: string): string | null {
+  if (isCalled(agent)) return roleId === ROSTER_JUDGE_ROLE ? null : 'An agent BMN calls holds the role Judge only'
+  if (roleId === ROSTER_JUDGE_ROLE) return 'Only an agent BMN calls is a judge'
+  return classBar(agent.class, roleId)
 }
 
 function updateRole(data: RosterDataShape, roleId: string, change: (role: RosterRoleShape) => RosterRoleShape): RosterDataShape {
@@ -558,23 +589,24 @@ function withoutAgent(role: RosterRoleShape, agentId: string): RosterRoleShape {
 
 /**
  * An agent holds a role exactly when it is one of the role's candidates (60.1's ROLE_NOT_HELD), so
- * both change together: holding adds it last in the chain at its highest effort, releasing removes
- * it. A role its class may not hold is never added.
+ * both change together: holding adds it last in the chain at its highest effort (an agent BMN
+ * calls has none, and is named alone), releasing removes it. A role it may not hold is never added.
  */
 export function toggleAgentRole(data: RosterDataShape, agentId: string, roleId: string): RosterDataShape {
   const agent = data.agents.find((entry) => entry.id === agentId)
   if (agent === undefined) return data
   const holds = agent.roles.includes(roleId)
-  if (!holds && classBar(agent.class, roleId) !== null) return data
+  if (!holds && roleBar(agent, roleId) !== null) return data
+  const called = isCalled(agent)
   const top = agent.efforts.at(-1)
-  if (!holds && top === undefined) return data
+  if (!holds && !called && top === undefined) return data
   const agents = data.agents.map((entry) => entry.id !== agentId ? entry
     : { ...entry, roles: holds ? entry.roles.filter((role) => role !== roleId) : [...entry.roles, roleId] })
   const roles = data.roles.map((role) => {
     if (role.id !== roleId) return role
     if (holds) return withoutAgent(role, agentId)
-    return top === undefined || role.candidates.some((text) => parseCandidate(text).agent === agentId) ? role
-      : { ...role, candidates: [...role.candidates, formatCandidate({ agent: agentId, efforts: [top] })] }
+    return (top === undefined && !called) || role.candidates.some((text) => parseCandidate(text).agent === agentId) ? role
+      : { ...role, candidates: [...role.candidates, formatCandidate({ agent: agentId, efforts: top === undefined ? [] : [top] })] }
   })
   return { ...data, agents, roles }
 }
@@ -584,7 +616,7 @@ export function setAgentClass(data: RosterDataShape, agentId: string, agentClass
   const agent = data.agents.find((entry) => entry.id === agentId)
   if (agent === undefined || agent.class === agentClass) return data
   let next = data
-  for (const role of agent.roles) if (classBar(agentClass, role) !== null) next = toggleAgentRole(next, agentId, role)
+  for (const role of agent.roles) if (roleBar({ ...agent, class: agentClass }, role) !== null) next = toggleAgentRole(next, agentId, role)
   return { ...next, agents: next.agents.map((entry) => (entry.id === agentId ? { ...entry, class: agentClass } : entry)) }
 }
 
@@ -675,17 +707,94 @@ export function removeException(data: RosterDataShape, id: string): RosterDataSh
   return { ...data, exceptions: data.exceptions.filter((entry) => entry.id !== id) }
 }
 
+/** The agents a provider's answer covers: those it serves, and an agent BMN calls whose model it runs. */
 export function agentsOnProvider(data: RosterDataShape, providerId: string): RosterAgentShape[] {
-  return data.agents.filter((agent) => agent.provider === providerId)
+  return data.agents.filter((agent) => agent.provider === providerId || (isCalled(agent) && agent.run_by === providerId))
 }
 
 export function providerOf(data: RosterDataShape, agent: Pick<RosterAgentShape, 'provider'>): RosterProviderShape | undefined {
   return data.providers.find((provider) => provider.id === agent.provider)
 }
 
-/** Whether an agent's provider answers Public work only (an unknown provider does). */
-export function publicOnly(data: RosterDataShape, agent: Pick<RosterAgentShape, 'provider'>): boolean {
-  return providerOf(data, agent)?.private_work !== 'allowed'
+/**
+ * Whether an agent gets public work only: its provider answers so (an unknown provider does). An
+ * agent BMN calls names two parties, and gets private work only where both allow it: the same rule
+ * as the CLI's `privateWorkOf`.
+ */
+export function publicOnly(data: RosterDataShape, agent: Pick<RosterAgentShape, 'provider'> & Partial<Pick<RosterAgentShape, 'harness' | 'run_by'>>): boolean {
+  const allowed = (id: string | undefined): boolean => data.providers.find((provider) => provider.id === id)?.private_work === 'allowed'
+  return !(allowed(agent.provider) && (agent.harness !== ROSTER_CALLED_BY_BMN || allowed(agent.run_by)))
+}
+
+export interface CalledParty { id: string; name: string; private_work: RosterPrivateWork }
+
+/**
+ * The two parties of an agent BMN calls, who receives the request and who runs the model, each
+ * with its answer, and the one sentence that says what follows: the same words as the CLI's
+ * `calledParties`.
+ */
+export function calledParties(data: RosterDataShape, agent: Pick<RosterAgentShape, 'provider' | 'run_by'>): { receives: CalledParty; runs: CalledParty; allowed: boolean; reason: string } {
+  const party = (id: string): CalledParty => {
+    const provider = data.providers.find((entry) => entry.id === id)
+    return { id, name: provider?.name ?? id, private_work: provider?.private_work ?? 'public_only' }
+  }
+  const receives = party(agent.provider)
+  const runs = party(agent.run_by ?? agent.provider)
+  const held = [receives, runs].filter((entry, index, all) => entry.private_work !== 'allowed' && all.findIndex((other) => other.id === entry.id) === index)
+  const names = receives.id === runs.id ? receives.name : `${receives.name} and ${runs.name}`
+  const reason = held.length === 0 ? `${names} may see private work`
+    : `public work only: ${held.map((entry) => entry.name).join(' and ')} ${held.length === 1 ? 'gets' : 'get'} public work only`
+  return { receives, runs, allowed: held.length === 0, reason }
+}
+
+/** BMN's first proposal for a judge, as the CLI's `JUDGE_PROPOSAL` holds it (65.1 AC7); the two are compared in a test. */
+export const JUDGE_PROPOSAL = {
+  receives: { id: 'opencode-zen', name: 'OpenCode Zen', hosts: ['opencode.ai'], sites: ['opencode.ai'], private_work: 'allowed' },
+  runs: { id: 'typesafe', name: 'TypeSafe AI', hosts: [], sites: ['typesafe.ai'], private_work: 'allowed' },
+  agent: {
+    id: 'jev', name: 'Jev', class: 'bishop', harness: ROSTER_CALLED_BY_BMN, model: 'jev-1.13', host: 'opencode.ai', enabled: true, status: 'active', efforts: [], roles: [ROSTER_JUDGE_ROLE],
+    paid_by: 'per_token',
+    price: { input: 0.042, output: 0, source: 'https://github.com/anomalyco/opencode/blob/bcf23b6775c79a429b1511b255d6d88ab0248d4a/services/www/src/docs/content/console/models.mdx', as_of: '2026-10-12' }
+  },
+  description: 'answers typed questions about a text with numbers; advice only'
+} as const satisfies { receives: RosterProviderShape; runs: RosterProviderShape; agent: Omit<RosterAgentShape, 'provider' | 'run_by'>; description: string }
+
+/**
+ * The team with BMN's judge proposal taken, or null where there is nothing to propose: the team
+ * already holds an agent BMN calls or a role judge, or its names are in use. The same rule as the
+ * CLI's `judgeProposal`: a provider the team already names for that host keeps its own answer.
+ */
+export function judgeProposal(data: RosterDataShape): RosterDataShape | null {
+  if (data.agents.some(isCalled) || data.roles.some((role) => role.id === ROSTER_JUDGE_ROLE) || data.agents.some((agent) => agent.id === JUDGE_PROPOSAL.agent.id)) return null
+  const providers = [...data.providers]
+  const party = (wanted: RosterProviderShape): string => {
+    const held = providers.find((provider) => provider.id === wanted.id || wanted.hosts.some((host) => provider.hosts.some((other) => other.toLowerCase() === host)))
+    if (held !== undefined) return held.id
+    providers.push({ ...wanted, hosts: [...wanted.hosts], ...(wanted.sites ? { sites: [...wanted.sites] } : {}) })
+    return wanted.id
+  }
+  const receives = party(JUDGE_PROPOSAL.receives)
+  const runs = party(JUDGE_PROPOSAL.runs)
+  if (!providers.find((provider) => provider.id === receives)?.hosts.some((host) => host.toLowerCase() === JUDGE_PROPOSAL.agent.host)) return null
+  const { id, name, class: agentClass, harness, model, host, enabled, status, roles, paid_by: paidBy, price } = JUDGE_PROPOSAL.agent
+  return {
+    ...data, schema_version: ROSTER_SCHEMA_VERSION, providers,
+    agents: [...data.agents, { id, name, class: agentClass, harness, model, provider: receives, run_by: runs, host, enabled, status, efforts: [], roles: [...roles], paid_by: paidBy, price: { ...price } }],
+    roles: [...data.roles, { id: ROSTER_JUDGE_ROLE, description: JUDGE_PROPOSAL.description, candidates: [id], then: 'skip' }]
+  }
+}
+
+/**
+ * An agent with no role, turned into one BMN calls: it runs in no app, so what belongs to an app
+ * leaves it (efforts, context fields, the researcher mark) and its provider is named as the one
+ * that runs the model too, until the owner names another. An agent that holds a role stays as it is.
+ */
+export function callByBmn(data: RosterDataShape, agentId: string): RosterDataShape {
+  const agent = data.agents.find((entry) => entry.id === agentId)
+  if (agent === undefined || isCalled(agent) || agent.roles.length > 0) return data
+  const called: RosterAgentShape = { ...agent, harness: ROSTER_CALLED_BY_BMN, run_by: agent.provider, efforts: [] }
+  for (const key of ['context_window', 'context_limit', 'compact_at', 'researcher'] as const) delete called[key]
+  return { ...data, schema_version: ROSTER_SCHEMA_VERSION, agents: data.agents.map((entry) => (entry.id === agentId ? called : entry)) }
 }
 
 /** An id from a name: lower case, digits and dashes, at most 32 characters, distinct from the ids taken. */
@@ -752,7 +861,7 @@ export function unrecordedBasis(harness: RosterHarness, provider: string, apps: 
  * An agent already on the team that runs the same model through the same app on the same provider:
  * what the team recorded about that model (its price, its capacity) holds for a new agent too.
  */
-export function modelTwin(data: RosterDataShape, harness: RosterHarness, provider: string, model: string): RosterAgentShape | undefined {
+export function modelTwin(data: RosterDataShape, harness: RosterAgentShape['harness'], provider: string, model: string): RosterAgentShape | undefined {
   const name = model.trim()
   if (name === '') return undefined
   const twins = data.agents.filter((agent) => agent.harness === harness && agent.provider === provider && agent.model === name)

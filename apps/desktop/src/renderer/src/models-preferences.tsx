@@ -1,6 +1,6 @@
 // MODULE: models-preferences.tsx - Stories 60.10, 63.3: Preferences › Team › Models: what research found for the team's models, who researches, Codex behind its fence, and Apply prices
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { type ResearchLookup, type ResearchModelView, type ResearchSnapshot, type ResearcherView, type RosterDataShape } from '@bmn/protocol'
+import { type ResearchLookup, type ResearchModelView, type ResearchSnapshot, type ResearcherView, type RosterDataShape, type RosterPriceShape } from '@bmn/protocol'
 import { Segmented } from './history-preferences'
 import {
   applyPrices, codexToolsLine, dayWords, fillFrom, priceChanges, priceText, researchGroups, researchStatus, siteOf, unverifiedWords, type PriceChange, type ResearchFill, type TeamModelRow
@@ -230,6 +230,19 @@ function FoundLine(props: { model: ResearchModelView; provider: string; add(): v
   )
 }
 
+/** The price the team records for a model BMN itself calls, laid out as a researched one is: the numbers, the site and the day. */
+function Recorded(props: { price: RosterPriceShape; of: string }): React.JSX.Element {
+  const { price } = props
+  return (
+    <div className="model-facts">
+      <span className="mono value">{priceText(price)}</span><span className="faint">per M tokens, in / out</span>
+      {price.source ? <span className="mono source" title={price.source} aria-label={`${siteOf(price.source)}, price source for ${props.of}`}>{siteOf(price.source)}</span> : null}
+      {price.as_of ? <span className="faint">{dayWords(price.as_of)}</span> : null}
+      <span className="faint">· your team's own record</span>
+    </div>
+  )
+}
+
 function TeamLine(props: { row: TeamModelRow; researched: boolean }): React.JSX.Element {
   const { row } = props
   return (
@@ -237,7 +250,7 @@ function TeamLine(props: { row: TeamModelRow; researched: boolean }): React.JSX.
       <div className="model-text">
         <div><span className="mono">{row.model}</span> <span className="faint">{row.agents.join(', ')} · {row.provider}</span></div>
         {row.found === null
-          ? (props.researched ? <div className="faint">Not found yet</div> : null)
+          ? row.recorded ? <Recorded price={row.recorded} of={row.model} /> : (props.researched ? <div className="faint">Not found yet</div> : null)
           : (
             <>
               <Facts model={row.found} teamHas={row.differs ? (row.teamHas ? priceText(row.teamHas) : 'no price') : undefined} />

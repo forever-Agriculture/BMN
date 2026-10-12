@@ -18,6 +18,15 @@ import {
   type ResearchLookup,
   type ResearchSnapshot,
   type ResearcherView,
+  JUDGE_CALLS_SHOWN,
+  JUDGE_TRY_STATEMENT_MAX,
+  JUDGE_TRY_TEXT_MAX,
+  type JudgeMonthView,
+  type JudgeOutcome,
+  type JudgeTotalsView,
+  type JudgeTried,
+  type JudgeTryReply,
+  type JudgeView,
   type WebQuestionAsked,
   type WebQuestionAsker,
   type WebQuestionView,
@@ -53,6 +62,7 @@ import {
   CONTEXT_APPS, ContextError, applyContextDefault, contextAuto, contextAutoPlan, contextDefault, contextTestFolder, limitedAgents, planContextDefault, setContextAuto, sharingAgents,
   type ContextAutoPlanEntry, type ContextTestOutcome
 } from '../../bin/agents-context.mjs'
+import { judgeLimit, judgeTotals, readJudgeRecord, runJudge, setJudgeLimit } from '../../bin/agents-judge.mjs'
 import { ASK_KEPT, ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, agentsMayAsk, askedCount, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord } from '../../bin/agents-ask.mjs'
 import { chooseResearcher, fetchPublicPage, processStart, publicHostName, readResearch, resolvesPublic, researchLockHolder, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
 import { runFenceTest } from '../../bin/agents-fence.mjs'
@@ -92,6 +102,8 @@ export interface AgentsIpcOptions {
    * a name no real site can have. Null everywhere else, where every cited page is read from its site.
    */
   researchPages?(): string | null
+  /** The port of the stand-in judge server of BMN's own tests; null as in the real app, where a `.test` host is then asked nothing. */
+  judgeTestPort?(): string | null
   /** Reads one cited page for a research; tests replace it to hold a page open. */
   researchFetch?: typeof fetchPublicPage
   /** How long one research may take in all; tests shorten it. */
@@ -333,7 +345,7 @@ export async function previewApproval(request: AgentsApprovalRequest, environmen
 
 function stagedParam(params: Record<string, unknown>): RosterDataShape {
   const data = params.data as RosterDataShape | undefined
-  if (!data || typeof data !== 'object' || data.schema_version !== 2 || !Array.isArray(data.agents) || !Array.isArray(data.roles)
+  if (!data || typeof data !== 'object' || (data.schema_version !== 2 && data.schema_version !== 3) || !Array.isArray(data.agents) || !Array.isArray(data.roles)
     || !Array.isArray(data.providers) || !Array.isArray(data.exceptions) || !Array.isArray(data.harness_routes)) {
     invalid('data must be team data')
   }
@@ -1327,8 +1339,64 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     await removeQuestions(params.id, context().now())
     return questionsSnapshot()
   })
+  // Team › the judge's page (65.3): its calls, the monthly limit and Try it. Try it goes by the route of `bmn judge ask`, in this process.
+  const judgeView = (): JudgeView => {
+    const now = context().now()
+    const record = readJudgeRecord()
+    const { current, previous } = judgeTotals(now, record)
+    const limit = judgeLimit()
+    const sums = (totals: { calls: number; input_tokens: number; cost_usd: number }): JudgeTotalsView => ({ calls: totals.calls, input_tokens: totals.input_tokens, cost_usd: totals.cost_usd })
+    const month = (totals: typeof current): JudgeMonthView => ({
+      month: totals.month, ...sums(totals), refused: totals.refused, purposes: Object.fromEntries(Object.entries(totals.purposes).map(([word, entry]) => [word, sums(entry)]))
+    })
+    return {
+      limit, reached: limit.on && current.cost_usd >= limit.usd, current: month(current), previous: month(previous),
+      calls: record.calls.slice(-JUDGE_CALLS_SHOWN).reverse().map((call) => ({
+        at: call.at, by: askerOf(call.by) ?? { kind: 'shell' }, purpose: typeof call.purpose === 'string' ? call.purpose.slice(0, 32) : '',
+        outcome: JUDGE_OUTCOMES.includes(call.outcome) ? call.outcome : 'failed', ...(typeof call.code === 'string' ? { code: call.code.slice(0, 40) } : {})
+      }))
+    }
+  }
+  handle('aiterm:judge:load', () => judgeView())
+  handle('aiterm:judge:limit', (params) => {
+    if (typeof params.on !== 'boolean') invalid('on must be true or false')
+    if (typeof params.usd !== 'number' || !Number.isFinite(params.usd) || params.usd <= 0 || params.usd > 10_000) invalid('usd must be an amount of dollars above 0')
+    setJudgeLimit({ on: params.on, usd: params.usd })
+    return judgeView()
+  })
+  handle('aiterm:judge:try', async (params): Promise<JudgeTried> => {
+    // Longer than the page lets in, so that a text too long is refused in the command's own words.
+    const text = textParam(params, 'text', 4 * JUDGE_TRY_TEXT_MAX)
+    const statement = textParam(params, 'statement', 4 * JUDGE_TRY_STATEMENT_MAX)
+    if (params.data !== 'public' && params.data !== 'private') invalid('data must be public or private')
+    const ctx = context()
+    const testPort = options.judgeTestPort?.() ?? null
+    let reply: JudgeTryReply
+    try {
+      const result = await runJudge({
+        state: text, questions: { statement: { type: 'noul', instructions: statement } }, data: params.data, purpose: JUDGE_TRY_PURPOSE, by: { kind: 'owner' },
+        environment: { ...researchEnvironment(ctx), ...(testPort ? { BMN_JUDGE_TEST_PORT: testPort } : {}) }, now: ctx.now
+      })
+      const answer = result.answers?.statement
+      const reading = result.readings?.statement
+      if (result.outcome === 'answered' && answer?.type === 'noul' && reading !== undefined) {
+        reply = { outcome: 'answered', noul: answer.noul, reading: reading.reading === 'yes' ? 'yes' : 'no answer', near: reading.near === true, input_tokens: result.input_tokens ?? 0, cost_usd: result.cost_usd ?? 0, took_ms: result.took_ms }
+      } else if (result.outcome === 'refused') {
+        reply = { outcome: 'refused', code: result.code ?? 'REFUSED', message: result.message ?? 'The call was refused.', ...(result.next === undefined ? {} : { next: result.next }) }
+      } else {
+        reply = { outcome: result.outcome === 'timeout' || result.outcome === 'shape' ? result.outcome : 'failed', note: result.note ?? 'No answer came back.' }
+      }
+    } catch (error) {
+      reply = { outcome: 'failed', note: `BMN could not ask: ${error instanceof Error ? error.message : String(error)}` }
+    }
+    return { reply, view: judgeView() }
+  })
   return { contextAutoAtStart: () => auto.trigger() }
 }
+
+/** The purpose word a call from the judge's own page is counted under. */
+const JUDGE_TRY_PURPOSE = 'try-it'
+const JUDGE_OUTCOMES: readonly JudgeOutcome[] = ['answered', 'refused', 'timeout', 'failed', 'shape']
 
 /**
  * A kept page address as the browser may be given it, as far as its text says: https, no sign-in

@@ -22,6 +22,8 @@ import {
   type ContextLimitApp,
   type ContextLimitPlan,
   type ResearchLookup,
+  type JudgeTried,
+  type JudgeView,
   type WebQuestionAsked,
   type WebQuestionsSnapshot,
   type ResearchSnapshot,
@@ -876,6 +878,15 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   openWebQuestionPage(id: string, claim: number): Promise<{ opened: boolean }> {
     return invokeBridge('aiterm:questions:open-page', { id, claim })
+  },
+  judgeCalls(): Promise<JudgeView> {
+    return invokeBridge('aiterm:judge:load', {})
+  },
+  setJudgeLimit(limit: { on: boolean; usd: number }): Promise<JudgeView> {
+    return invokeBridge('aiterm:judge:limit', limit)
+  },
+  tryJudge(text: string, statement: string, data: 'public' | 'private'): Promise<JudgeTried> {
+    return invokeBridge('aiterm:judge:try', { text, statement, data })
   },
   readClipboardText(): Promise<{ text: string }> {
     return invokeBridge('aiterm:clipboard:read-text', {})

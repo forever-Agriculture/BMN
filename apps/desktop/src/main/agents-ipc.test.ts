@@ -4,11 +4,14 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
-import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, ResearchLookup, ResearchSnapshot, WebQuestionAsked, WebQuestionsSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan, ToolProposalView, ToolsPlan } from '@bmn/protocol'
+import { createServer, type Server, type ServerResponse } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, JudgeTried, JudgeView, ResearchLookup, ResearchSnapshot, WebQuestionAsked, WebQuestionsSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan, ToolProposalView, ToolsPlan } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CODEX_RESEARCH_TOOLS_SEEN, fenceTestsPath, researchFormHash, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import { contextAuto, contextTests, setContextAuto } from '../../bin/agents-context.mjs'
 import { fetchPublicPage } from '../../bin/agents-research.mjs'
+import { judgeProposal } from '../../bin/agents-roster.mjs'
 import { approveRoster, restoreGeneration, saveAndApprove } from './agents-approval'
 import { fenceEndedWords, fileToApproved, installAgentsIpcHandlers, researchEndedWords, type AgentsIpcHandle } from './agents-ipc'
 
@@ -27,6 +30,8 @@ let appEnv: Record<string, string>
 let researchPages: string | null
 let researchFetch: typeof fetchPublicPage | null
 let researchLimitMs: number | undefined
+/** The port of the stand-in judge server; null as in the real app. */
+let judgeTestPort: string | null
 /** What the fence test started from Models does here; none is expected unless a test sets one. */
 let fenceTest: NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]>['fenceTest'] | null
 let researchCompare: NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]>['researchCompare'] | null
@@ -57,6 +62,7 @@ beforeEach(() => {
   researchPages = null
   researchFetch = null
   researchLimitMs = undefined
+  judgeTestPort = null
   fenceTest = null
   researchCompare = null
   notices = []
@@ -66,7 +72,7 @@ beforeEach(() => {
   ipc = installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
     senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...appEnv }),
     openPath: async (path) => (existsSync(path) ? '' : 'no such file'), openExternal: async (address) => { openedInBrowser.push(address) }, resolvesPublic: async (host) => !host.startsWith('intranet.') && !host.startsWith('unknown.'), researchPages: () => researchPages,
-    researchFetch: (address, limits) => (researchFetch ?? fetchPublicPage)(address, limits), researchLimitMs: () => researchLimitMs,
+    researchFetch: (address, limits) => (researchFetch ?? fetchPublicPage)(address, limits), researchLimitMs: () => researchLimitMs, judgeTestPort: () => judgeTestPort,
     fenceTest: async (options) => {
       if (fenceTest === null || fenceTest === undefined) throw new Error('no fence test is expected here')
       return fenceTest(options)
@@ -1513,5 +1519,170 @@ describe('read-only roles through Team and Health (63.2 AC4)', () => {
 
   it('reports no roles where no team is approved', async () => {
     expect((await call<RulesSnapshot>('rules:snapshot')).readOnlyRoles).toBeNull()
+  })
+})
+
+describe('the judge on Team: BMN\'s proposal, its calls, the monthly limit and Try it (65.1 AC7, 65.3 AC1-AC2)', () => {
+  const HOST = 'gateway.example.test'
+  const PLANTED_KEY = 'sk-synthetic-PLANTED-ipc-0123456789'
+  let server: Server
+  let requests: Array<{ path: string; body: string; authorization: string | undefined }>
+  let respond: (response: ServerResponse) => void
+  const answer = (noul: number): string => JSON.stringify({ answers: { statement: { type: 'noul', noul } }, usage: { input_tokens: 400 } })
+  const load = (): Promise<JudgeView> => call('judge:load')
+  const tryIt = (data: 'public' | 'private' = 'private', text = 'All 12 tests passed.', statement = 'The text says the tests passed.'): Promise<JudgeTried> => call('judge:try', { text, statement, data })
+  /** The example team with a judge whose gateway is the stand-in server's name. */
+  const teamWithJudge = (runs = 'allowed'): string => {
+    const once = (text: string, from: string, to: string): string => {
+      if (text.split(from).length !== 2) throw new Error(`fixture edit expected one "${from}"`)
+      return text.replace(from, to)
+    }
+    let text = once(EXAMPLE, 'schema_version: 2', 'schema_version: 3')
+    text = once(text, 'cursor: {name: Cursor, hosts: [], private_work: public_only}\n',
+      `cursor: {name: Cursor, hosts: [], private_work: public_only}\ngateway: {name: Gateway, hosts: [${HOST}], private_work: allowed}\nmaker: {name: Maker, hosts: [], private_work: ${runs}}\n`)
+    text = once(text, '## roles\n', `## jev\n\n\`\`\`yaml\n${[
+      'name: Jev', 'class: bishop', 'harness: bmn', 'model: jev-1.13', 'provider: gateway', 'run_by: maker', `host: ${HOST}`, 'enabled: true', 'status: active', 'roles: [judge]',
+      'paid_by: per_token', 'price: {input: 0.042, output: 0, source: "https://prices.example.test/jev", as_of: 2026-10-12}'
+    ].join('\n')}\n\`\`\`\n\n## roles\n`)
+    return once(text, 'consultant: {candidates: [astra@medium|high, fable@medium|high], then: blocked}\n',
+      'consultant: {candidates: [astra@medium|high, fable@medium|high], then: blocked}\njudge: {description: answers typed questions about a text with numbers; advice only, candidates: [jev], then: skip}\n')
+  }
+  const approveFile = async (text: string): Promise<void> => {
+    writeFileSync(rosterFile(), text)
+    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
+  }
+
+  beforeEach(async () => {
+    requests = []
+    respond = (response) => {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(answer(0.97))
+    }
+    server = createServer((request, response) => {
+      const chunks: Buffer[] = []
+      request.on('data', (chunk: Buffer) => chunks.push(chunk))
+      request.on('end', () => {
+        requests.push({ path: request.url ?? '', body: Buffer.concat(chunks).toString('utf8'), authorization: request.headers.authorization })
+        respond(response)
+      })
+    })
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+    judgeTestPort = String((server.address() as AddressInfo).port)
+    mkdirSync(join(home, '.local/share/opencode'), { recursive: true })
+    writeFileSync(join(home, '.local/share/opencode/auth.json'), JSON.stringify({ 'opencode-go': { type: 'api', key: PLANTED_KEY } }))
+  })
+
+  afterEach(async () => {
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => { server.close(() => resolve()) })
+  })
+
+  it('BMN\'s proposal is staged, previewed with its consequences and approved like every team change', async () => {
+    await approveFile(EXAMPLE)
+    const state = await snapshot()
+    const proposed = judgeProposal(state.file.data as never) as unknown as RosterDataShape
+    expect(proposed.agents.at(-1)).toMatchObject({ id: 'jev', harness: 'bmn', provider: 'opencode-zen', run_by: 'typesafe' })
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: proposed } })
+    expect(preview.errors).toEqual([])
+    // Until he approves it nothing can be asked.
+    expect((await tryIt()).reply).toMatchObject({ outcome: 'refused', code: 'NO_JUDGE' })
+    expect(requests).toHaveLength(0)
+    expect(await call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: proposed, teamUpdate: bindings(preview) })).toMatchObject({ ok: true })
+    const after = await snapshot()
+    expect(after.approved?.data.schema_version).toBe(3)
+    expect(after.approved?.data.agents.at(-1)).toMatchObject({ id: 'jev', name: 'Jev', class: 'bishop', harness: 'bmn', model: 'jev-1.13', status: 'active', efforts: [], roles: ['judge'] })
+    expect(after.approved?.data.roles.at(-1)).toMatchObject({ id: 'judge', candidates: ['jev'] })
+    expect(file('.config/bmn/agents/roster.md')).toContain('harness: bmn')
+    expect(after.file.errors).toEqual([])
+  })
+
+  it('reads as no calls and no limit before anything was asked', async () => {
+    await approveFile(teamWithJudge())
+    const view = await load()
+    expect(view).toMatchObject({ limit: { on: false, usd: 1 }, reached: false, calls: [], current: { calls: 0, input_tokens: 0, cost_usd: 0, refused: 0, purposes: {} }, previous: { calls: 0 } })
+    expect(view.current.month).toMatch(/^\d{4}-\d{2}$/)
+  })
+
+  it('Try it asks one statement by the command\'s own route and is counted like every call', async () => {
+    await approveFile(teamWithJudge())
+    const tried = await tryIt()
+    expect(tried.reply).toEqual({ outcome: 'answered', noul: 0.97, reading: 'yes', near: false, input_tokens: 400, cost_usd: 0.0000168, took_ms: expect.any(Number) })
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({ path: '/zen/v1/systemone', authorization: `Bearer ${PLANTED_KEY}` })
+    expect(JSON.parse(requests[0]!.body)).toEqual({ model: 'jev-1.13', state: 'All 12 tests passed.', questions: { statement: { type: 'noul', instructions: 'The text says the tests passed.' } } })
+    expect(tried.view.calls).toEqual([{ at: expect.any(String), by: { kind: 'owner' }, purpose: 'try-it', outcome: 'answered' }])
+    expect(tried.view.current).toMatchObject({ calls: 1, input_tokens: 400, purposes: { 'try-it': { calls: 1, input_tokens: 400 } } })
+    expect(JSON.stringify(tried)).not.toContain(PLANTED_KEY)
+    // A number under the line reads no answer, and one beside the line says so.
+    respond = (response) => response.end(answer(0.41))
+    expect((await tryIt()).reply).toMatchObject({ outcome: 'answered', noul: 0.41, reading: 'no answer', near: false })
+    respond = (response) => response.end(answer(0.89))
+    expect((await tryIt()).reply).toMatchObject({ outcome: 'answered', reading: 'no answer', near: true })
+  })
+
+  it('is refused by the same rules: private text while a provider gets public work only, and a text too long', async () => {
+    await approveFile(teamWithJudge('public_only'))
+    const refused = await tryIt('private')
+    expect(refused.reply).toMatchObject({ outcome: 'refused', code: 'PRIVATE_NOT_ALLOWED', message: expect.stringContaining('Maker gets public work only'), next: expect.any(String) })
+    expect(requests).toHaveLength(0)
+    expect(refused.view.calls).toMatchObject([{ outcome: 'refused', code: 'PRIVATE_NOT_ALLOWED', purpose: 'try-it' }])
+    expect(refused.view.current).toMatchObject({ calls: 0, refused: 1 })
+    // Text he says is public goes.
+    expect((await tryIt('public')).reply).toMatchObject({ outcome: 'answered' })
+    expect((await tryIt('public', 'x'.repeat(30_000))).reply).toMatchObject({ outcome: 'refused', code: 'TOO_LARGE' })
+    await expect(call('judge:try', { text: 'a', statement: 'b', data: 'secret' })).rejects.toThrow(/data must be public or private/)
+    await expect(call('judge:try', { text: 7, statement: 'b', data: 'public' })).rejects.toThrow(/text must be text/)
+  })
+
+  it('a failed request, a late answer and a wrong shape read no answer, in BMN\'s own words', async () => {
+    await approveFile(teamWithJudge())
+    respond = (response) => {
+      response.writeHead(401)
+      response.end(`{"error":"bad key ${PLANTED_KEY}"}`)
+    }
+    const failed = await tryIt()
+    expect(failed.reply).toEqual({ outcome: 'failed', note: 'the approved host answered 401' })
+    respond = (response) => response.end('<html>')
+    expect((await tryIt()).reply).toMatchObject({ outcome: 'shape' })
+    expect(JSON.stringify(await load())).not.toContain(PLANTED_KEY)
+    expect((await load()).calls.map((entry) => entry.outcome)).toEqual(['shape', 'failed'])
+  })
+
+  it('the monthly limit is off by default; switched on and reached, it stops Try it and a call from a shell alike', async () => {
+    await approveFile(teamWithJudge())
+    expect((await tryIt()).reply).toMatchObject({ outcome: 'answered' })
+    const limited = await call<JudgeView>('judge:limit', { on: true, usd: 0.00001 })
+    expect(limited).toMatchObject({ limit: { on: true, usd: 0.00001 }, reached: true })
+    requests = []
+    expect((await tryIt()).reply).toMatchObject({ outcome: 'refused', code: 'LIMIT_REACHED', message: expect.stringContaining('asking is stopped until next month or a higher limit') })
+    // The same file holds for the command in a process of its own.
+    writeFileSync(join(home, 'state.txt'), 'A text.')
+    writeFileSync(join(home, 'questions.json'), JSON.stringify({ q: { type: 'noul', instructions: 'It is a text.' } }))
+    const shell = spawn(process.execPath, [SCRIPT, 'judge', 'ask', '--state-file', join(home, 'state.txt'), '--questions-file', join(home, 'questions.json'), '--data', 'public', '--purpose', 'dev-auto', '--json'],
+      { env: { HOME: home, PATH: '/usr/bin:/bin', BMN_SESSION_ID: 'synthetic-session', BMN_JUDGE_TEST_PORT: judgeTestPort ?? '' }, stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    shell.stdout!.on('data', (chunk: Buffer) => { out += chunk.toString('utf8') })
+    expect(await new Promise((resolve) => { shell.once('exit', resolve) })).toBe(10)
+    expect(JSON.parse(out)).toMatchObject({ outcome: 'refused', code: 'LIMIT_REACHED' })
+    expect(requests).toHaveLength(0)
+    const view = await load()
+    expect(view.calls.slice(0, 2)).toMatchObject([
+      { by: { kind: 'session', session: 'synthetic-session' }, purpose: 'dev-auto', outcome: 'refused', code: 'LIMIT_REACHED' },
+      { by: { kind: 'owner' }, purpose: 'try-it', outcome: 'refused', code: 'LIMIT_REACHED' }
+    ])
+    // A higher limit, or the switch off, lets the next call through.
+    expect(await call<JudgeView>('judge:limit', { on: true, usd: 5 })).toMatchObject({ reached: false })
+    expect((await tryIt()).reply).toMatchObject({ outcome: 'answered' })
+    await expect(call('judge:limit', { on: true, usd: 0 })).rejects.toThrow(/above 0/)
+    await expect(call('judge:limit', { on: 'yes', usd: 1 })).rejects.toThrow(/true or false/)
+  })
+
+  it('lists the newest 20 calls only', async () => {
+    await approveFile(teamWithJudge())
+    for (let asked = 0; asked < 22; asked += 1) await tryIt('public', `Text number ${asked}.`)
+    const view = await load()
+    expect(view.calls).toHaveLength(20)
+    expect(view.current.calls).toBe(22)
+    expect(view.calls[0]!.at >= view.calls[19]!.at).toBe(true)
   })
 })

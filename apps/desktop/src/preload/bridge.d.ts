@@ -14,6 +14,8 @@ import type {
   ContextLimitApp,
   ContextLimitPlan,
   ResearchLookup,
+  JudgeTried,
+  JudgeView,
   WebQuestionAsked,
   WebQuestionsSnapshot,
   ResearchSnapshot,
@@ -411,6 +413,10 @@ export interface AiTerminalBridge {
   /** Owner-run: researches one model name on one provider and resolves when that run ends. */
   lookUpModel(researcher: string, provider: string, model: string): Promise<ResearchLookup>
   /** Story 64.3: the kept web questions, what holds the research lock now, the switch and the day's count. */
+  /** Team › the judge's page (65.3): its calls and the monthly limit, and one statement asked from the page. */
+  judgeCalls(): Promise<JudgeView>
+  setJudgeLimit(limit: { on: boolean; usd: number }): Promise<JudgeView>
+  tryJudge(text: string, statement: string, data: 'public' | 'private'): Promise<JudgeTried>
   webQuestions(): Promise<WebQuestionsSnapshot>
   /** Owner-run: asks the web one question through the researcher picked on Models. It runs in the background; a refusal comes back in the command's own words. */
   askWebQuestion(question: string): Promise<WebQuestionAsked>

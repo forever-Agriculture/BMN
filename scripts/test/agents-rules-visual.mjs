@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -97,6 +98,22 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const approved = () => generation(current().generation).data
   const stateHash = () => (existsSync(join(stateDir, 'current')) ? sha(readFileSync(join(stateDir, 'current'), 'utf8')) : null)
 
+  // Epic 65: a stand-in for the judge's gateway on this computer. The judge's requests come here only while the team's host is a name under .test; no step reaches the real gateway.
+  const judgeRequests = []
+  const judgeServer = createServer((request, response) => {
+    const chunks = []
+    request.on('data', (chunk) => chunks.push(chunk))
+    request.on('end', () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      judgeRequests.push({ path: request.url, authorization: request.headers.authorization, body })
+      const noul = body.state.includes('UNSURE-SENTINEL') ? 0.42 : 0.97
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ answers: Object.fromEntries(Object.keys(body.questions).map((id) => [id, { type: 'noul', noul }])), usage: { input_tokens: 100_000 } }))
+    })
+  })
+  await new Promise((resolveListening) => { judgeServer.listen(0, '127.0.0.1', resolveListening) })
+  const judgePort = String(judgeServer.address().port)
+
   const application = await electron.launch({
     executablePath: electronBinary,
     args: [appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
@@ -118,6 +135,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       BMN_LAUNCH_CWD: root,
       // Research reads each cited page itself; in the self-test the names under .test are served from this folder and nothing else is.
       BMN_SELF_TEST_PAGES: join(root, 'pages'),
+      // The judge's host under .test is this script's stand-in server (Epic 65).
+      BMN_JUDGE_TEST_PORT: judgePort,
       ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
     }
   })
@@ -1885,6 +1904,210 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     stub('codex', 'echo "codex-cli 0.161.0"')
     passed('Models offers a Codex researcher only where the fence test passed for exactly the installed Codex, names the tools Codex keeps offering, takes BMN\'s proposal through an approval, then offers one Opus where the team holds two and no agent the team does not name; the check refuses such an agent with NOT_A_RESEARCHER (63.3 AC2, AC4, AC7, AC8)')
 
+    phase('65: Jev, the judge BMN itself calls: the proposal and its approval, the card and the page, calls from a session\'s shell with who asked and why, the monthly limit, and Try it')
+    {
+      const PLANTED_KEY = 'sk-synthetic-PLANTED-0123456789abcdef'
+      const TEST_HOST = 'gateway.jev.test'
+      const recordFile = join(stateDir, 'judge/calls.json')
+      const textFile = join(root, 'judge-text.md')
+      const questionsFile = join(root, 'judge-questions.json')
+      writeFileSync(textFile, 'The review found nothing open and the tests passed.\n')
+      writeFileSync(questionsFile, JSON.stringify({ claim: { type: 'noul', instructions: 'The text says the tests passed.' } }))
+      const sessionButton = page.locator('.session-row [data-session-id]').first()
+      const sessionId = await sessionButton.getAttribute('data-session-id')
+      const sessionName = (await sessionButton.getAttribute('title')).split(' · ')[0]
+      // `bmn judge ask` as an agent runs it in a session's shell: a process of its own, with the session's id in its environment. Never spawnSync: the stand-in server lives in this process.
+      const judgeFromShell = (purpose) => new Promise((resolveEnded) => {
+        const child = spawn(process.execPath, [join(appDirectory, 'bin/bmn'), 'judge', 'ask', '--state-file', textFile, '--questions-file', questionsFile, '--data', 'private', '--purpose', purpose, '--json'],
+          { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin`, XDG_DATA_HOME: roots.data, BMN_SESSION_ID: sessionId, CLAUDECODE: '1', BMN_JUDGE_TEST_PORT: judgePort }, stdio: ['ignore', 'pipe', 'pipe'] })
+        let printed = ''
+        child.stdout.on('data', (chunk) => { printed += String(chunk) })
+        child.once('exit', (code) => resolveEnded({ code, printed, said: () => JSON.parse(printed) }))
+      })
+      const text = async (locator) => (await locator.textContent()).replace(/\s+/g, ' ').trim()
+
+      // No judge on the team yet: the command refuses, and the Team page says Jev waits with BMN's proposal.
+      const none = await judgeFromShell('dev-auto')
+      assert.equal(none.code, 10, none.printed)
+      assert.equal(none.said().code, 'NO_JUDGE')
+      await go('Team')
+      const waits = main.locator('.page-note.with-action', { hasText: 'Jev waits for you' })
+      assert.equal(await text(waits.locator('.note-text')), 'Jev waits for you. BMN\'s proposal adds the agent Jev, the role Judge and its two providers, OpenCode Zen and TypeSafe AI, which may both see private work, as you chose. Nothing can be asked until you approve it.')
+      await shot('judge-proposal-1280.png')
+      const beforeProposal = { roster: rosterHash(), state: stateHash() }
+      await waits.getByRole('button', { name: 'Use proposal', exact: true }).click()
+      await waits.waitFor({ state: 'detached' })
+      await card('Jev').waitFor()
+      assert.equal(await text(card('Jev').locator('.class-word')), 'Bishop · Judge')
+      assert.equal(await text(card('Jev').locator('.agent-app')), 'Called by BMN · jev-1.13')
+      assert.equal(await text(card('Jev').locator('.agent-notes')), 'Says whether a statement is true of a text')
+      assert.match(await text(card('Jev').locator('.price')), /^\$0\.042 /)
+      await card('Jev').scrollIntoViewIfNeeded()
+      await shot('judge-card-1280.png')
+      // Staged, not approved: nothing is written, and the command still refuses.
+      assert.deepEqual({ roster: rosterHash(), state: stateHash() }, beforeProposal)
+      await ledger.getByRole('button', { name: 'Review', exact: true }).click()
+      const proposalReview = await text(ledger.locator('.ledger-sheet'))
+      // In the page's words, never the team file's: who receives the request, who runs the model, and what approving lets happen.
+      for (const said of ['Agent app: none, called by BMN', 'Receives the request: OpenCode Zen', 'Runs the model: TypeSafe AI', 'Roles: Judge', 'Jev could be asked as the judge', 'Jev could be sent private text', 'TypeSafe AI · private work: Allowed']) {
+        assert.ok(proposalReview.includes(said), `the review does not say "${said}": ${proposalReview}`)
+      }
+      assert.doesNotMatch(proposalReview, /run_by|: bmn|Efforts: none|given work/)
+      await shot('judge-proposal-review-1280.png')
+      const versionBefore = current().generation
+      await approve()
+      // An approval that also updates the rules files commits from its sheet.
+      const sheetApprove = ledger.locator('.ledger-sheet[role="group"] button.primary')
+      await until(async () => current().generation !== versionBefore || await sheetApprove.count() > 0, 'the approval or its sheet')
+      if (current().generation === versionBefore) await sheetApprove.click()
+      await until(() => current().generation !== versionBefore, 'the approved proposal')
+      const team = approved()
+      assert.equal(team.schema_version, 3)
+      const jev = team.agents.find((agent) => agent.id === 'jev')
+      assert.deepEqual({ harness: jev.harness, class: jev.class, model: jev.model, provider: jev.provider, run_by: jev.run_by, host: jev.host, enabled: jev.enabled, status: jev.status, roles: jev.roles, efforts: jev.efforts },
+        { harness: 'bmn', class: 'bishop', model: 'jev-1.13', provider: 'opencode-zen', run_by: 'typesafe', host: 'opencode.ai', enabled: true, status: 'active', roles: ['judge'], efforts: [] })
+      assert.deepEqual(team.roles.find((role) => role.id === 'judge').candidates, ['jev'])
+      assert.deepEqual(['opencode-zen', 'typesafe'].map((id) => team.providers.find((provider) => provider.id === id).private_work), ['allowed', 'allowed'])
+      assert.equal(await main.getByText('Jev waits for you').count(), 0, 'the proposal is still offered after its approval')
+
+      // Jev's own page: the model, its two parties with their answers, the verdict and the price; nothing that belongs to an agent app.
+      await go('Team')
+      await card('Jev').locator('.agent-open').click()
+      await main.locator('.page-head', { hasText: /Team\s*›\s*Jev/ }).waitFor()
+      const jevPage = main.locator('.judge-page')
+      const rowOf = (label) => jevPage.locator('.preferences-row', { has: page.locator('.preferences-row-label', { hasText: new RegExp(`^${label}`) }) })
+      assert.match(await text(rowOf('Receives the request').locator('.party')), /^OpenCode Zen ?private work allowed ?Change…$/)
+      assert.match(await text(rowOf('Runs the model').locator('.party')), /^TypeSafe AI ?private work allowed ?Change…$/)
+      assert.equal(await text(rowOf('Private text').locator('.verdict')), 'May be sent')
+      assert.match(await text(rowOf('Price').locator('.preferences-row-control')), /^\$0\.042 .*per M tokens, in \/ out ?From the price page at github\.com, /)
+      for (const label of ['Agent app', 'Efforts', 'Context limit', 'Researcher', 'Paid by']) assert.equal(await rowOf(label).count(), 0, `Jev's page shows the row ${label}, which belongs to an agent app`)
+      // The one call so far was refused before the team held a judge: nothing was charged, and the page says so.
+      await jevPage.getByText('No calls yet. The first one you ask under Try it is counted here.', { exact: true }).waitFor()
+      await jevPage.getByText('Refused and not charged: 1 this month, 0 last month.', { exact: true }).waitFor()
+      assert.equal(await text(jevPage.locator('.calls > li.call.loud .outcome')), 'refused')
+      await jevPage.getByText('Off: there is no limit.', { exact: true }).waitFor()
+      await jevPage.getByText('Private text may be sent.', { exact: true }).waitFor()
+      const tryButton = jevPage.getByRole('button', { name: 'Ask', exact: true })
+      assert.equal(await tryButton.isDisabled(), true, 'Ask can be pressed with nothing typed')
+      await shot('judge-page-1280.png')
+
+      // From here the judge's host is a name under .test: the stand-in server of this script. The owner's approval of that team is given through the page's own bridge, in one step.
+      const moved = await page.evaluate(async (host) => {
+        const snapshot = await window.aiTerminal.agentsSnapshot()
+        const data = structuredClone(snapshot.approved.data)
+        const gateway = data.providers.find((provider) => provider.id === 'opencode-zen')
+        gateway.hosts = [...gateway.hosts, host]
+        data.agents.find((agent) => agent.id === 'jev').host = host
+        const outcome = await window.aiTerminal.saveAgents({ generation: snapshot.approved.generation, fileHash: snapshot.file.hash, link: snapshot.file.link, directory: snapshot.file.directory }, data)
+        return { ok: outcome.ok, message: outcome.message }
+      }, TEST_HOST)
+      assert.equal(moved.ok, true, moved.message)
+      assert.equal(approved().agents.find((agent) => agent.id === 'jev').host, TEST_HOST)
+      await outsideFocus()
+      // A key no service ever gave out, where OpenCode keeps its own on this temporary computer.
+      for (const folder of [join(roots.data, 'opencode'), join(home, '.local/share/opencode')]) {
+        mkdirSync(folder, { recursive: true })
+        writeFileSync(join(folder, 'auth.json'), JSON.stringify({ 'opencode-go': { type: 'api', key: PLANTED_KEY } }), { mode: 0o600 })
+      }
+      assert.equal(judgeRequests.length, 0, 'a request left before the judge\'s host was the stand-in')
+
+      // Three callers ask from a session's shell, each with its one-word purpose.
+      for (const purpose of ['dev-auto', 'brain', 'bmn']) {
+        const asked = await judgeFromShell(purpose)
+        assert.equal(asked.code, 0, asked.printed)
+        assert.equal(asked.said().outcome, 'answered')
+        assert.equal(asked.said().readings.claim.reading, 'yes')
+      }
+      assert.deepEqual(judgeRequests.map((request) => [request.path, request.authorization, request.body.model]), Array(3).fill(['/zen/v1/systemone', `Bearer ${PLANTED_KEY}`, 'jev-1.13']))
+      // The page's one table is the cost by purpose.
+      const table = jevPage.locator('table')
+      await until(async () => await table.count() > 0 && /^This month \S+ ?3 ?300 000 ?\$0\.012600$/.test(await text(table.locator('tr.month').first())), 'this month\'s three calls on the page')
+      assert.deepEqual((await table.locator('tbody').first().locator('tr:not(.month) th').allTextContents()).sort(), ['bmn', 'brain', 'dev-auto'])
+      assert.match(await text(table.locator('tbody').first().locator('tr:not(.month)').first()), /^\S+ ?1 ?100 000 ?\$0\.004200$/)
+      await jevPage.getByText('About $0.004200 a call so far.', { exact: true }).waitFor()
+      const calls = jevPage.locator('.calls > li.call:not(.loud)')
+      assert.equal(await calls.count(), 3)
+      assert.deepEqual(await calls.locator('.purpose').allTextContents(), ['bmn', 'brain', 'dev-auto'], 'the newest call is not first')
+      assert.deepEqual(await calls.locator('.who').allTextContents(), Array(3).fill(`${sessionName} (Claude Code)`))
+      assert.deepEqual(await calls.locator('.outcome').allTextContents(), Array(3).fill('answered'))
+      await table.scrollIntoViewIfNeeded()
+      await shot('judge-calls-1280.png')
+
+      // The monthly limit: below what the month already cost, switched on. The page says asking is stopped, and the command refuses before any request.
+      const limitField = jevPage.getByRole('textbox', { name: 'Monthly limit in dollars' })
+      await limitField.fill('0.01')
+      const limitSwitch = rowOf('Monthly limit').getByRole('switch')
+      await limitSwitch.click()
+      const stoppedNote = jevPage.locator('.page-note.with-action', { hasText: 'Asking Jev is stopped' })
+      assert.equal(await text(stoppedNote.locator('.note-text')), 'Asking Jev is stopped until next month or a higher limit. This month\'s calls cost $0.0126, which reaches the limit of $0.01.')
+      await jevPage.getByText('Reached: asking is stopped until next month or a higher limit.', { exact: true }).waitFor()
+      const overLimit = await judgeFromShell('dev-auto')
+      assert.equal(overLimit.code, 10, overLimit.printed)
+      assert.equal(overLimit.said().code, 'LIMIT_REACHED')
+      assert.equal(judgeRequests.length, 3, 'a request was made although the monthly limit was reached')
+      await jevPage.getByText('Refused and not charged: 2 this month, 0 last month.', { exact: true }).waitFor()
+      assert.equal(await text(jevPage.locator('.calls > li.call.loud .outcome').first()), 'refused: monthly limit reached')
+      // Try it goes by the same route, so it is refused in the command's own words.
+      await jevPage.getByRole('textbox', { name: 'Text', exact: true }).fill('The review found nothing open and the tests passed.')
+      await jevPage.getByRole('textbox', { name: 'Statement', exact: true }).fill('The text says the tests passed.')
+      await tryButton.click()
+      const reply = jevPage.locator('.try-reply')
+      assert.match(await text(reply), /^Refused: this month's calls to Jev cost \$0\.0126, which reaches the monthly limit of \$0\.01; asking is stopped until next month or a higher limit ?Raise the monthly limit above or switch it off; otherwise ask again next month\.$/)
+      assert.equal(judgeRequests.length, 3)
+      await jevPage.locator('.page-head').scrollIntoViewIfNeeded()
+      await shot('judge-limit-reached-1280.png')
+
+      // A higher limit from the note's own button: asking works again, and Try it shows the number with BMN's reading.
+      await stoppedNote.getByRole('button', { name: 'Raise the limit', exact: true }).click()
+      assert.equal(await limitField.evaluate((element) => element === document.activeElement), true, 'Raise the limit does not lead to the limit')
+      await limitField.fill('1')
+      await stoppedNote.waitFor({ state: 'detached' })
+      await jevPage.getByText('$0.0126 of $1.00 used this month.', { exact: true }).waitFor()
+      await tryButton.click()
+      await jevPage.locator('.try-reply.said').waitFor()
+      assert.match(await text(reply), /^0\.97 ?Yes ?0\.97 is 0\.90 or more, so BMN reads yes\. It is advice, not proof\. ?100 000 tokens in, \$0\.004200, \d+\.\d seconds\. Counted in the calls below\.$/)
+      assert.equal(judgeRequests.length, 4)
+      assert.deepEqual(judgeRequests[3].body, { model: 'jev-1.13', state: 'The review found nothing open and the tests passed.', questions: { statement: { type: 'noul', instructions: 'The text says the tests passed.' } } })
+      await until(async () => await text(jevPage.locator('.calls > li.call').first()) !== '' && (await jevPage.locator('.calls > li.call').first().locator('.purpose').textContent()) === 'try-it', 'the Try it call in the list')
+      assert.equal(await jevPage.locator('.calls > li.call').first().locator('.who').textContent(), 'You, on this page')
+      await reply.scrollIntoViewIfNeeded()
+      // The facts line keeps the reply's width: it is one line here, not a narrow column.
+      const factsLine = await reply.locator('.reply-facts').evaluate((element) => ({ height: element.getBoundingClientRect().height, line: parseFloat(getComputedStyle(element).lineHeight) || 18 }))
+      assert.ok(factsLine.height <= factsLine.line * 1.5, `the facts under the reading wrap into ${Math.round(factsLine.height / factsLine.line)} lines at 1280`)
+      await shot('judge-try-yes-1280.png')
+      // A number under the line is no answer, and the page says it is not a no.
+      await jevPage.getByRole('textbox', { name: 'Text', exact: true }).fill('UNSURE-SENTINEL: the notes do not say whether the tests ran.')
+      await tryButton.click()
+      await until(async () => await reply.count() > 0 && /^0\.42/.test(await text(reply)), 'the second Try it answer')
+      assert.match(await text(reply), /^0\.42 ?No answer ?0\.42 is under 0\.90, so BMN reads no answer\. That is not a no\. ?100 000 tokens in, /)
+      assert.equal(await jevPage.locator('.try-reply.said').count(), 0, 'a number under the line is drawn as a yes')
+      await shot('judge-try-no-answer-1280.png')
+      // The key is in nothing BMN wrote.
+      assert.equal(readFileSync(recordFile, 'utf8').includes(PLANTED_KEY), false)
+      assert.equal(readdirSync(join(stateDir, 'judge')).every((name) => !readFileSync(join(stateDir, 'judge', name), 'utf8').includes(PLANTED_KEY)), true)
+
+      // Narrow: the rows stack and nothing scrolls sideways.
+      await resize(540, 700)
+      await sleep(300)
+      const narrowJudge = await jevPage.evaluate(() => {
+        const body = document.querySelector('.preferences-main')
+        return { wide: body.scrollWidth > body.clientWidth + 1, table: document.querySelector('.judge-page table').getBoundingClientRect().right <= body.getBoundingClientRect().right + 1 }
+      })
+      assert.deepEqual(narrowJudge, { wide: false, table: true })
+      await jevPage.locator('table').scrollIntoViewIfNeeded()
+      await shot('judge-page-540.png')
+      await resize(1280, 900)
+      await sleep(300)
+
+      // Models shows the price the team itself recorded for Jev, since no research names it.
+      await go('Team', 'Models')
+      const recorded = main.locator('.model-facts', { hasText: 'your team\'s own record' }).first()
+      await recorded.waitFor()
+      assert.match(await text(recorded), /^\$0\.042 .*per M tokens, in \/ out ?github\.com.*· your team's own record$/)
+      await shot('judge-models-1280.png')
+      passed('Team offers BMN\'s proposal for Jev and approves it; the card and page show a model BMN calls with both providers\' answers; three calls from a session\'s shell show with asker, purpose and cost; the monthly limit stops the command and Try it before any request; Try it shows the number with BMN\'s reading; no request left for any host but the stand-in (65.1 AC2-AC7, 65.2, 65.3 AC1-AC3)')
+    }
+
     phase('three sizes: no horizontal scrollbar, every control named')
     const pages = [
       ['team', () => go('Team')],
@@ -1900,7 +2123,8 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
       ['health', () => go('Rules', 'Health')],
       // The sheet closes when the owner leaves Health, so each size opens it again.
       ['health-update', async () => { await go('Rules', 'Health'); await main.getByRole('button', { name: 'Update Claude Code' }).click(); await main.getByRole('group', { name: 'Update Claude Code' }).waitFor() }],
-      ['telegram', () => go(null, 'Telegram')]
+      ['telegram', () => go(null, 'Telegram')],
+      ['judge', async () => { await go('Team'); await card('Jev').locator('.agent-open').click(); await main.locator('.judge-page table').waitFor() }]
     ]
     for (const [width, height] of SIZES) {
       await resize(width, height)
@@ -1932,7 +2156,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
         return !name || name.trim() === ''
       }).map((element) => element.outerHTML.slice(0, 120)))
     assert.deepEqual(unnamed, [])
-    passed('no horizontal scroll on twelve pages at 800x500, 1000x700 and 1280x900; every control has a name (60.5 AC8, 60.6 AC5)')
+    passed('no horizontal scroll on thirteen pages at 800x500, 1000x700 and 1280x900; every control has a name (60.5 AC8, 60.6 AC5)')
 
     phase('keyboard: the navigation and a card open from the keyboard')
     await resize(1280, 900)
@@ -1963,5 +2187,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
   } finally {
     await Promise.race([application.close(), sleep(10_000)])
     try { application.process().kill('SIGKILL') } catch { /* already gone */ }
+    judgeServer.closeAllConnections()
+    judgeServer.close()
   }
 })

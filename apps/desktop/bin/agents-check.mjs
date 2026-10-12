@@ -1300,7 +1300,7 @@ function capabilities(data) {
   for (const agent of data.agents) {
     const active = agentState(agent) === 'active'
     out.set(agent.id, {
-      name: agent.name, active, provider: agent.provider,
+      name: agent.name, active, provider: agent.provider, called: isCalled(agent),
       lead: active && agent.roles.includes(LEAD_ROLE) && classRefusal(agent.class, LEAD_ROLE) === null,
       design: active && agent.roles.includes(DESIGNER_ROLE) && classRefusal(agent.class, DESIGNER_ROLE) === null,
       private: active && publicOnlyReasons(agent, data).length === 0,
@@ -1359,15 +1359,17 @@ export function consequences(before, after) {
   for (const id of new Set([...old.keys(), ...next.keys()])) {
     const a = old.get(id) ?? none
     const b = next.get(id) ?? none
-    if (!a.active && b.active) out.push(`${name(id)} could be given work`)
-    if (a.active && !b.active) out.push(`${name(id)} could no longer be given work`)
+    // An agent BMN itself calls is given no work: it is asked, and it is sent text.
+    const called = (next.get(id) ?? old.get(id))?.called === true
+    if (!a.active && b.active) out.push(called ? `${name(id)} could be asked as the judge` : `${name(id)} could be given work`)
+    if (a.active && !b.active) out.push(called ? `${name(id)} could no longer be asked as the judge` : `${name(id)} could no longer be given work`)
     if (!a.lead && b.lead) out.push(`${name(id)} could lead`)
     if (a.lead && !b.lead) out.push(`${name(id)} could no longer lead`)
     if (!a.design && b.design) out.push(`${name(id)} could design`)
     if (a.design && !b.design) out.push(`${name(id)} could no longer design`)
     if (!explained.has(id)) {
-      if (!a.private && b.private) out.push(`${name(id)} could receive private work`)
-      if (a.private && !b.private) out.push(`${name(id)} could no longer receive private work`)
+      if (!a.private && b.private) out.push(called ? `${name(id)} could be sent private text` : `${name(id)} could receive private work`)
+      if (a.private && !b.private) out.push(called ? `${name(id)} could no longer be sent private text` : `${name(id)} could no longer receive private work`)
     }
     if (a.active && b.active) {
       for (const role of b.roles) if (!a.roles.has(role)) out.push(`${name(id)} could take the ${role} role`)

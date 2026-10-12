@@ -58,6 +58,9 @@ interface ModelOriginRow {
  * (`dashscope-intl.aliyuncs.com`) and Moonshot's Kimi Code (`api.kimi.com`, `api.kimi.ai`) are
  * where their Anthropic-compatible endpoints for Claude Code live, so a Claude alias served there
  * still reads as its real maker (checked 2026-09-27: docs.qwencloud.com, kimi.com/code/docs).
+ * Jev (`jev-1.13`) is TypeSafe AI's System One model; the company's country is on a page of its
+ * own: "TypeSafe AI, Inc., located at 255 California St, Suite 1300, San Francisco, CA", Terms of
+ * Use §13(e), https://typesafe.ai/legal/terms (read 2026-10-12, Story 65.1's research).
  */
 export const MODEL_ORIGIN_TABLE: readonly ModelOriginRow[] = Object.freeze([
   Object.freeze({
@@ -69,7 +72,7 @@ export const MODEL_ORIGIN_TABLE: readonly ModelOriginRow[] = Object.freeze([
     tokens: Object.freeze([
       { word: 'claude' }, { word: 'gpt' }, { word: 'chatgpt' }, { word: 'codex' }, { word: 'gemini' }, { word: 'gemma' },
       { word: 'grok' }, { word: 'llama' }, { word: 'nova' }, { word: 'sonar' }, { word: 'nemotron' },
-      { word: 'o', shape: /^o\d/i }, { word: 'phi', shape: /^phi-?\d/i }, { word: 'muse', shape: /^muse-spark/i }
+      { word: 'o', shape: /^o\d/i }, { word: 'phi', shape: /^phi-?\d/i }, { word: 'muse', shape: /^muse-spark/i }, { word: 'jev', shape: /^jev-\d/i }
     ])
   }),
   Object.freeze({
