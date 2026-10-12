@@ -730,6 +730,9 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   testTelegram(): Promise<TelegramStatus> {
     return invokeBridge('aiterm:telegram:test', {})
   },
+  testHealthAlerts(): Promise<TelegramStatus> {
+    return invokeBridge('aiterm:telegram:health-test', {})
+  },
   getControlInfo(): Promise<ControlInfo> {
     return invokeBridge('aiterm:control:info', {})
   },

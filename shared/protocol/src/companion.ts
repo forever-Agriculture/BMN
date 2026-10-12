@@ -6,6 +6,7 @@ import type { ManualChoices } from './manual-choices'
 import type { SessionRecord, WorkspaceRecord } from './workspace'
 import { DEFAULT_TELEGRAM_QUIET_HOURS, type TelegramQuietHours } from './telegram-quiet'
 import { DEFAULT_TELEGRAM_MORNING_DIGEST, type TelegramMorningDigest } from './telegram-digest'
+import { DEFAULT_TELEGRAM_HEALTH_ALERTS, type TelegramHealthAlerts } from './telegram-health'
 
 export type ArtifactDirection = 'input' | 'output'
 export type ArtifactSource = 'owner' | 'agent' | 'telegram'
@@ -586,6 +587,8 @@ export interface TelegramSettings {
   /** Older saved sections load with quiet hours off. */
   quietHours?: TelegramQuietHours
   morningDigest?: TelegramMorningDigest
+  /** Older saved sections load with health alerts off. */
+  healthAlerts?: TelegramHealthAlerts
 }
 
 export type VoiceModelId = 'base' | 'small'
@@ -733,7 +736,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = Object.freeze({
     autoSubmitReplies: false,
     answerPermissions: false,
     quietHours: DEFAULT_TELEGRAM_QUIET_HOURS,
-    morningDigest: DEFAULT_TELEGRAM_MORNING_DIGEST
+    morningDigest: DEFAULT_TELEGRAM_MORNING_DIGEST,
+    healthAlerts: DEFAULT_TELEGRAM_HEALTH_ALERTS
   }),
   voice: Object.freeze({ model: 'base', language: 'auto', modelFolder: null, holdSpaceToTalk: true, vocabulary: Object.freeze([]) as unknown as string[] }),
   archive: Object.freeze({ deleteAfterDays: null }),

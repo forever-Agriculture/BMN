@@ -341,6 +341,8 @@ export interface AiTerminalBridge {
   configureTelegram(token: string | null): Promise<TelegramStatus>
   getTelegramStatus(): Promise<TelegramStatus>
   testTelegram(): Promise<TelegramStatus>
+  /** Sends the machine's current readings to Telegram marked as a test; no stored state changes. */
+  testHealthAlerts(): Promise<TelegramStatus>
   getControlInfo(): Promise<ControlInfo>
   exportBackup(): Promise<{ directory: string; manifest: BackupManifest } | null>
   verifyBackup(directory?: string): Promise<BackupVerifyResult | null>

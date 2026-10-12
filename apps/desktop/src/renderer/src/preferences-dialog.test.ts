@@ -79,6 +79,62 @@ describe('Morning digest and Quiet hours rows', () => {
   })
 })
 
+describe('Health alerts row (Story 62.2)', () => {
+  const settings = (enabled: boolean, offAt: string | null, telegram = false): AppSettings => ({
+    ...DEFAULT_APP_SETTINGS,
+    telegram: { ...DEFAULT_APP_SETTINGS.telegram, enabled: telegram, allowedChatId: telegram ? 7 : null, healthAlerts: { enabled, offAt } }
+  })
+  const dialog = (value: AppSettings): string => renderToStaticMarkup(createElement(PreferencesDialog, {
+    settings: value, onSettings: () => undefined, onClose: () => undefined,
+    saveVoice: async () => value, suggestVocabulary: () => ({ ok: false as const, reason: 'test' }) }))
+  const input = (markup: string, id: string): string => new RegExp(`<input[^>]*id="${id}"[^>]*>`).exec(markup)![0]
+  const row = (markup: string): string => /<label for="preferences-telegram-health">Health alerts<\/label>.*?<label for="preferences-telegram-quiet">Quiet hours<\/label>/s.exec(markup)![0]
+
+  it('sits between Morning digest and Quiet hours as a labelled row, off with no time by default', () => {
+    const markup = dialog(DEFAULT_APP_SETTINGS)
+    expect(markup.indexOf('>Morning digest</label>')).toBeLessThan(markup.indexOf('>Health alerts</label>'))
+    expect(markup.indexOf('>Health alerts</label>')).toBeLessThan(markup.indexOf('>Quiet hours</label>'))
+    expect(input(markup, 'preferences-telegram-health')).not.toContain('checked=""')
+    expect(input(markup, 'preferences-telegram-health-off')).toMatch(/type="time"/)
+    expect(input(markup, 'preferences-telegram-health-off')).toContain('value=""')
+    expect(input(markup, 'preferences-telegram-health-off')).toContain('disabled=""')
+    expect(row(markup)).not.toMatch(/<fieldset|<legend|<select/)
+  })
+
+  it('shows a saved watch and its switch-off time', () => {
+    const markup = dialog(settings(true, '20:00'))
+    expect(input(markup, 'preferences-telegram-health')).toContain('checked=""')
+    expect(input(markup, 'preferences-telegram-health-off')).toContain('value="20:00"')
+    expect(input(markup, 'preferences-telegram-health-off')).not.toContain('disabled=""')
+  })
+
+  it('names what is checked, the limits, what a message holds and what the watch cannot do', () => {
+    const help = row(dialog(settings(true, null)))
+    expect(help).toContain('CPU 100 °C on one reading or 95 °C on 3 in a row')
+    expect(help).toContain('NVIDIA GPU 87 °C; integrated GPU 95 °C; a drive 80 °C')
+    expect(help).toContain('battery voltage outside 3.0–4.45 V per cell')
+    expect(help).toContain('mains power lost')
+    expect(help).toContain('A message holds the time, this machine&#x27;s name, each problem with one line of advice, and all readings.')
+    expect(help).toContain('repeats every 10 minutes')
+    expect(help).toContain('It runs only while BMN is open. It cannot see smoke, a swelling battery, or a machine that has died.')
+    expect(help).toContain('BMN never stops, slows or suspends anything')
+  })
+
+  it('says nothing will be sent while Telegram is off or not connected, and keeps Send test disabled', () => {
+    const off = row(dialog(settings(true, null, false)))
+    expect(off).toContain('Telegram is off; nothing will be sent.')
+    expect(off).toMatch(/<button[^>]*disabled=""[^>]*>Send test<\/button>/)
+    // Before the status has loaded, an enabled Telegram is not known to be polling either.
+    const waiting = row(dialog(settings(true, null, true)))
+    expect(waiting).toContain('Telegram is not connected; nothing will be sent until it is.')
+    expect(waiting).toMatch(/<button[^>]*disabled=""[^>]*>Send test<\/button>/)
+  })
+
+  it('tells in the Quiet hours help that health alerts are sent anyway', () => {
+    expect(dialog(DEFAULT_APP_SETTINGS)).toContain('Held messages are sent when quiet hours end. Health alerts are sent anyway.')
+  })
+})
+
 describe('the left navigation and its pages (Story 60.5 AC1)', () => {
   const dialog = (initialSection?: 'agent-control'): string => renderToStaticMarkup(createElement(PreferencesDialog, {
     settings: DEFAULT_APP_SETTINGS, initialSection, onSettings: () => undefined, onClose: () => undefined,

@@ -13,7 +13,7 @@ import type {
   TelegramStatus,
   VoiceSettings
 } from '@bmn/protocol'
-import { COLOR_MODE_NAMES, DEFAULT_APP_SETTINGS, DEFAULT_TELEGRAM_QUIET_HOURS, DEFAULT_TELEGRAM_MORNING_DIGEST, IDENTITY_NAMES, TERMINAL_FONT_SIZE_RANGE, type AttentionKind } from '@bmn/protocol'
+import { COLOR_MODE_NAMES, DEFAULT_APP_SETTINGS, DEFAULT_TELEGRAM_HEALTH_ALERTS, DEFAULT_TELEGRAM_QUIET_HOURS, DEFAULT_TELEGRAM_MORNING_DIGEST, HEALTH_LIMITS, IDENTITY_NAMES, TERMINAL_FONT_SIZE_RANGE, type AttentionKind } from '@bmn/protocol'
 import { Icon } from './icons'
 import { COLOR_MODE_PRESENTATION, IDENTITY_PRESENTATION } from './theme'
 import { VoicePreferences } from './voice-preferences'
@@ -321,6 +321,13 @@ export function PreferencesDialog(props: {
   const [telegramEnabled, setTelegramEnabled] = useState(props.settings.telegram.enabled)
   const [quietHours, setQuietHours] = useState(props.settings.telegram.quietHours ?? DEFAULT_TELEGRAM_QUIET_HOURS)
   const [morningDigest, setMorningDigest] = useState(props.settings.telegram.morningDigest ?? DEFAULT_TELEGRAM_MORNING_DIGEST)
+  const [healthAlerts, setHealthAlerts] = useState(props.settings.telegram.healthAlerts ?? DEFAULT_TELEGRAM_HEALTH_ALERTS)
+  // The watch saves itself as off at its switch-off time; an open dialog follows, so a later Save keeps it off.
+  const savedHealthEnabled = props.settings.telegram.healthAlerts?.enabled ?? false
+  const savedHealthOffAt = props.settings.telegram.healthAlerts?.offAt ?? null
+  useEffect(() => {
+    setHealthAlerts({ enabled: savedHealthEnabled, offAt: savedHealthOffAt })
+  }, [savedHealthEnabled, savedHealthOffAt])
   const [telegramFormBusy, setTelegramFormBusy] = useState(false)
   const [telegramFormError, setTelegramFormError] = useState<string | null>(null)
   const [telegramFormSuccess, setTelegramFormSuccess] = useState<string | null>(null)
@@ -334,7 +341,8 @@ export function PreferencesDialog(props: {
       autoSubmitReplies,
       answerPermissions,
       quietHours,
-      morningDigest
+      morningDigest,
+      healthAlerts
     }
     const parsed = parseTelegramForm(fields)
     if (!parsed.ok) {
@@ -355,6 +363,7 @@ export function PreferencesDialog(props: {
       setTelegramEnabled(result.telegram.enabled)
       setQuietHours(result.telegram.quietHours ?? DEFAULT_TELEGRAM_QUIET_HOURS)
       setMorningDigest(result.telegram.morningDigest ?? DEFAULT_TELEGRAM_MORNING_DIGEST)
+      setHealthAlerts(result.telegram.healthAlerts ?? DEFAULT_TELEGRAM_HEALTH_ALERTS)
       onSettings.current(result)
       setTelegramFormSuccess('Telegram settings saved.')
       void refreshTelegramStatus()
@@ -383,6 +392,24 @@ export function PreferencesDialog(props: {
       setTestError(failureDetail(error, 'Could not send the test message'))
     } finally {
       setTestBusy(false)
+    }
+  }
+
+  const [healthTestBusy, setHealthTestBusy] = useState(false)
+  const [healthTestError, setHealthTestError] = useState<string | null>(null)
+  const [healthTestSuccess, setHealthTestSuccess] = useState<string | null>(null)
+
+  async function sendHealthTest(): Promise<void> {
+    setHealthTestBusy(true)
+    setHealthTestError(null)
+    setHealthTestSuccess(null)
+    try {
+      setTelegramStatus(await window.aiTerminal.testHealthAlerts())
+      setHealthTestSuccess('Test sent with the current readings.')
+    } catch (error) {
+      setHealthTestError(failureDetail(error, 'Could not send the health test'))
+    } finally {
+      setHealthTestBusy(false)
     }
   }
 
@@ -838,6 +865,73 @@ export function PreferencesDialog(props: {
         <div className="telegram-group">
           <div className="preferences-row">
             <div className="preferences-row-label">
+              <label htmlFor="preferences-telegram-health">Health alerts</label>
+            </div>
+            <div className="preferences-row-control">
+              <div className="telegram-schedule">
+                <input
+                  id="preferences-telegram-health"
+                  type="checkbox"
+                  checked={healthAlerts.enabled}
+                  disabled={telegramFormBusy}
+                  onChange={(event) => setHealthAlerts({ ...healthAlerts, enabled: event.target.checked })}
+                />
+                <span>
+                  <label htmlFor="preferences-telegram-health">Watch this machine</label>
+                </span>
+                <span>
+                  <label htmlFor="preferences-telegram-health-off">Turn off at</label>
+                  <input
+                    id="preferences-telegram-health-off"
+                    aria-label="Health alerts switch-off time"
+                    type="time"
+                    value={healthAlerts.offAt ?? ''}
+                    disabled={telegramFormBusy || !healthAlerts.enabled}
+                    onChange={(event) => setHealthAlerts({ ...healthAlerts, offAt: event.target.value === '' ? null : event.target.value })}
+                  />
+                </span>
+                <button
+                  type="button"
+                  className="small"
+                  disabled={!canSendTest || healthTestBusy}
+                  title={canSendTest ? undefined : TEST_MESSAGE_DISABLED_TITLE}
+                  onClick={() => void sendHealthTest()}
+                >
+                  {healthTestBusy ? 'Sending…' : 'Send test'}
+                </button>
+              </div>
+              <p className="preferences-help">
+                Checks temperatures, battery and mains every minute while BMN is open, and tells your phone when something is wrong and when it is over.
+                Leave the time empty to keep watching; a time already past means that time tomorrow.
+              </p>
+              {!canSendTest && (
+                <p className="preferences-help" role="status">
+                  {telegramEnabled ? 'Telegram is not connected; nothing will be sent until it is.' : 'Telegram is off; nothing will be sent. Enable and connect Telegram to be told.'}
+                </p>
+              )}
+              {healthTestError && <p className="preferences-error" role="alert">{healthTestError}</p>}
+              {healthTestSuccess && <p className="preferences-help" role="status">{healthTestSuccess}</p>}
+              <details className="advanced">
+                <summary>What is checked, and what it cannot see</summary>
+                <div className="advanced-body">
+                  <p>
+                    Alerts at: CPU {HEALTH_LIMITS.cpuCritical} °C on one reading or {HEALTH_LIMITS.cpuHot} °C on {HEALTH_LIMITS.cpuHotReadings} in a row;
+                    NVIDIA GPU {HEALTH_LIMITS.nvidiaGpu} °C; integrated GPU {HEALTH_LIMITS.integratedGpu} °C; a drive {HEALTH_LIMITS.drive} °C;
+                    battery voltage outside {HEALTH_LIMITS.cellVoltsMin.toFixed(1)}–{HEALTH_LIMITS.cellVoltsMax} V per cell; the battery no longer detected; mains power lost;
+                    a CPU temperature that cannot be read. The limits are fixed.
+                  </p>
+                  <p>A message holds the time, this machine&apos;s name, each problem with one line of advice, and all readings. While a problem stays, it repeats every {HEALTH_LIMITS.repeatMinutes} minutes; one &ldquo;Back to normal&rdquo; follows when it ends.</p>
+                  <p>It only reads and reports: BMN never stops, slows or suspends anything. A sleeping NVIDIA card is not woken to be asked.</p>
+                  <p>It runs only while BMN is open. It cannot see smoke, a swelling battery, or a machine that has died.</p>
+                </div>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div className="telegram-group">
+          <div className="preferences-row">
+            <div className="preferences-row-label">
               <label htmlFor="preferences-telegram-quiet">Quiet hours</label>
             </div>
             <div className="preferences-row-control">
@@ -872,7 +966,7 @@ export function PreferencesDialog(props: {
                   />
                 </span>
               </div>
-              <p className="preferences-help">Local time. Held messages are sent when quiet hours end.</p>
+              <p className="preferences-help">Local time. Held messages are sent when quiet hours end. Health alerts are sent anyway.</p>
             </div>
           </div>
 

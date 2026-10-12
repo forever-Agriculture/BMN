@@ -6,7 +6,9 @@ import {
   COLOR_MODE_NAMES,
   DEFAULT_APP_SETTINGS,
   DEFAULT_TELEGRAM_QUIET_HOURS,
+  DEFAULT_TELEGRAM_HEALTH_ALERTS,
   DEFAULT_TELEGRAM_MORNING_DIGEST,
+  isTelegramHealthAlerts,
   isTelegramMorningDigest,
   isTelegramQuietHours,
   ERROR_CODES,
@@ -1260,6 +1262,9 @@ export function validateSettingsSection(section: string, value: unknown): AppSet
       if (!isTelegramMorningDigest(morningDigest)) invalid('Morning digest needs a valid HH:MM time')
       const quietHours = candidate.quietHours ?? DEFAULT_TELEGRAM_QUIET_HOURS
       if (!isTelegramQuietHours(quietHours)) invalid('Quiet hours require different HH:MM times and valid allow-through choices')
+      // Sections saved before Epic 62 have no healthAlerts and keep the watch off.
+      const healthAlerts = candidate.healthAlerts ?? DEFAULT_TELEGRAM_HEALTH_ALERTS
+      if (!isTelegramHealthAlerts(healthAlerts)) invalid('Health alerts need on or off and a valid HH:MM switch-off time or none')
       const allowedChatId = nullableInteger(candidate.allowedChatId, 'Allowed chat id')
       const allowedUserId = nullableInteger(candidate.allowedUserId, 'Allowed user id')
       if (candidate.enabled && allowedChatId === null) invalid('Choose the allowed chat before enabling Telegram')
@@ -1271,7 +1276,8 @@ export function validateSettingsSection(section: string, value: unknown): AppSet
         autoSubmitReplies: candidate.autoSubmitReplies,
         answerPermissions,
         quietHours: { ...quietHours, allowKinds: [...quietHours.allowKinds], allowSessions: [...quietHours.allowSessions] },
-        morningDigest: { ...morningDigest }
+        morningDigest: { ...morningDigest },
+        healthAlerts: { ...healthAlerts }
       }
     }
     case 'voice': {

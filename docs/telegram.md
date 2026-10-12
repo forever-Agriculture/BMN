@@ -29,6 +29,24 @@ session. It uses a bot you create and own. It is off by default.
   It needs Telegram connected and obeys quiet hours. A late start can send that day's digest;
   missed days are skipped. An uncertain send is not repeated that day. Reading a digest never
   answers a request or changes a run.
+- **Health alerts** in Preferences → Telegram are off by default. With the switch on, BMN reads
+  this machine's temperatures, battery and mains about once a minute and messages you when a
+  reading crosses its limit: CPU 100 °C on one reading or 95 °C on three in a row; NVIDIA GPU
+  87 °C; integrated GPU 95 °C; a drive 80 °C; battery voltage outside 3.0–4.45 V per cell; the
+  battery no longer detected; mains power lost; a CPU temperature that cannot be read. The limits
+  are fixed. A message holds the local time, the machine's name, each problem with one line of
+  advice and all readings, and nothing about your sessions or files. While a problem stays, the
+  message repeats every 10 minutes; a different set of problems is told at once; one **Back to
+  normal** follows when it ends. Health alerts are sent in quiet hours too. A send Telegram
+  refused is tried again at the next check; one whose answer was lost is not repeated before the
+  10-minute repeat. **Turn off at** is an optional local time at which the watch switches itself
+  off and says so once; a time already past when you save means that time tomorrow. **Send test**
+  sends the current readings marked as a test. The watch only reads and reports: BMN never stops,
+  slows or suspends anything, starts no program except `nvidia-smi` for an NVIDIA card that is
+  already awake, and adds no service or timer. So it runs only while BMN is open, and it cannot
+  see smoke, a swelling battery or a machine that has died. A machine with no battery when the
+  watch is switched on has no battery or mains alerts. If you also run a watch of your own (a
+  script on a timer), switch one of them off, or both will message you. Linux only.
 - When an agent asks for your attention (`bmn ask`, `bmn handoff`, or a Claude Code, Codex or OpenCode hook), the bot
   sends you the request while you are away from the desk and the request is still unanswered. If
   BMN cannot read idle time, it treats you as away. Claude sessions connected to Remote Control

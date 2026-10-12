@@ -707,7 +707,7 @@ describe('companion store', () => {
     const legacy = { enabled: false, allowedChatId: 7, allowedUserId: null, notifyOn: 'attention', autoSubmitReplies: true }
     database.prepare("INSERT OR REPLACE INTO app_setting(key, value_json, updated_at) VALUES ('telegram', ?, ?)")
       .run(JSON.stringify(legacy), now)
-    expect(getSettings(database).telegram).toEqual({ ...legacy, answerPermissions: false, quietHours: DEFAULT_APP_SETTINGS.telegram.quietHours, morningDigest: DEFAULT_APP_SETTINGS.telegram.morningDigest })
+    expect(getSettings(database).telegram).toEqual({ ...legacy, answerPermissions: false, quietHours: DEFAULT_APP_SETTINGS.telegram.quietHours, morningDigest: DEFAULT_APP_SETTINGS.telegram.morningDigest, healthAlerts: { enabled: false, offAt: null } })
     expect(putSettingsSection(database, 'telegram', { ...legacy, answerPermissions: true }, now).telegram.answerPermissions).toBe(true)
     expect(() => putSettingsSection(database, 'telegram', { ...legacy, answerPermissions: 'yes' }, now)).toThrow(/permission prompts/)
   })
@@ -933,6 +933,26 @@ describe('private quiet delivery markers', () => {
   })
 })
 
+
+describe('health alerts stored settings (Story 62.2)', () => {
+  it('loads a section saved before the watch existed with it off, stores a choice and refuses a bad one', () => {
+    const before = { ...DEFAULT_APP_SETTINGS.telegram } as Record<string, unknown>
+    delete before.healthAlerts
+    database.prepare("INSERT OR REPLACE INTO app_setting(key, value_json, updated_at) VALUES ('telegram', ?, ?)").run(JSON.stringify(before), now)
+    expect(getSettings(database).telegram.healthAlerts).toEqual({ enabled: false, offAt: null })
+    const value = { ...DEFAULT_APP_SETTINGS.telegram, healthAlerts: { enabled: true, offAt: '20:00' } }
+    expect(putSettingsSection(database, 'telegram', value, now).telegram.healthAlerts).toEqual(value.healthAlerts)
+    expect(putSettingsSection(database, 'telegram', { ...value, healthAlerts: { enabled: true, offAt: null } }, now).telegram.healthAlerts)
+      .toEqual({ enabled: true, offAt: null })
+    for (const offAt of ['8:00', '24:00', '', 2000]) {
+      expect(() => putSettingsSection(database, 'telegram', { ...value, healthAlerts: { enabled: true, offAt } }, now)).toThrow(/Health alerts/)
+    }
+    expect(() => putSettingsSection(database, 'telegram', { ...value, healthAlerts: { enabled: 'yes', offAt: null } }, now)).toThrow(/Health alerts/)
+    expect(getSettings(database).telegram.healthAlerts).toEqual({ enabled: true, offAt: null })
+    // A save that leaves the watch out (an older window) keeps the section valid and reads it as off.
+    expect(putSettingsSection(database, 'telegram', before, now).telegram.healthAlerts).toEqual({ enabled: false, offAt: null })
+  })
+})
 
 describe('morning digest stored settings', () => {
   it('defaults old sections off and applies the same strict local-time validation as the form', () => {

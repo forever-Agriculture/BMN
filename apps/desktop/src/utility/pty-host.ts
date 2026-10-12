@@ -327,6 +327,10 @@ async function start(): Promise<void> {
       ? { telegramApiOrigin: process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN }
       : {}),
     historyAdapters: historyAdapters(),
+    // Electron self-test only (Story 62.2): the health watch reads a fixture tree and starts no nvidia-smi.
+    ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_SYSFS_ROOT
+      ? { health: { root: process.env.BMN_SELF_TEST_SYSFS_ROOT, run: () => Promise.reject(new Error('no nvidia-smi in the self-test')) } }
+      : {}),
     ...(process.env.BMN_SELF_TEST_HOME && process.argv.includes('--self-test-host') ? { home: process.env.BMN_SELF_TEST_HOME } : {}),
     // Electron self-test only (Story 31.4): pages sooner, so every answer shape fits the run's time.
     ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_PAGE_AFTER_MS
@@ -466,6 +470,8 @@ async function start(): Promise<void> {
       return companionService['sweepAttention']().then(async () => ({ selfTestQuietClock: value,
         ledger: await database.companion('getRawSetting', QUIET_LEDGER_KEY),
         digest: await database.companion('getRawSetting', 'dev-auto-morning-digest-v1') }))
+        // The sweep starts the health check without waiting for it; the self-test reads its stored state after it.
+        .then(async receipt => { await companionService['healthAlerts'].sweep(); return { ...receipt, health: await database.companion('getRawSetting', 'health-alerts-v1') } })
     }
     if (params.selfTestHostLoss === true) {
       setTimeout(() => {

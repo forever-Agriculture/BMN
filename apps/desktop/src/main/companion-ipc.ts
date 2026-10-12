@@ -71,6 +71,7 @@ const ROUTES = {
   'aiterm:telegram:configure': METHOD_REGISTRY.telegramConfigure,
   'aiterm:telegram:status': METHOD_REGISTRY.telegramStatus,
   'aiterm:telegram:test': METHOD_REGISTRY.telegramTest,
+  'aiterm:telegram:health-test': METHOD_REGISTRY.telegramHealthTest,
   'aiterm:control:info': METHOD_REGISTRY.controlInfo
 } as const
 

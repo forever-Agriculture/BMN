@@ -144,11 +144,12 @@ describe('protocol surface', () => {
         'telegram.configure',
         'telegram.status',
         'telegram.test',
+        'telegram.healthTest',
         'control.info',
         'presence.set'
       ])
     )
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(81)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(82)
   })
 
   it('exports the initial stable error codes', () => {

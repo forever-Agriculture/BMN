@@ -1,5 +1,5 @@
 // MODULE: telegram-form.ts - pure parsing and validation of the Telegram preferences form
-import { DEFAULT_TELEGRAM_MORNING_DIGEST, isTelegramMorningDigest, type TelegramMorningDigest, DEFAULT_TELEGRAM_QUIET_HOURS, isTelegramQuietHours, type TelegramQuietHours, type TelegramSettings } from '@bmn/protocol'
+import { DEFAULT_TELEGRAM_HEALTH_ALERTS, isTelegramHealthAlerts, type TelegramHealthAlerts, DEFAULT_TELEGRAM_MORNING_DIGEST, isTelegramMorningDigest, type TelegramMorningDigest, DEFAULT_TELEGRAM_QUIET_HOURS, isTelegramQuietHours, type TelegramQuietHours, type TelegramSettings } from '@bmn/protocol'
 
 /** Raw field values as the Telegram form in PreferencesDialog holds them. */
 export interface TelegramFormFields {
@@ -13,6 +13,7 @@ export interface TelegramFormFields {
   answerPermissions: boolean
   quietHours?: TelegramQuietHours
   morningDigest?: TelegramMorningDigest
+  healthAlerts?: TelegramHealthAlerts
 }
 
 export type TelegramFormResult = { ok: true; value: TelegramSettings } | { ok: false; message: string }
@@ -38,6 +39,8 @@ function parseOptionalInteger(raw: string, name: string): OptionalIntegerResult 
 export function parseTelegramForm(fields: TelegramFormFields): TelegramFormResult {
   const morningDigest = fields.morningDigest ?? DEFAULT_TELEGRAM_MORNING_DIGEST
   if (!isTelegramMorningDigest(morningDigest)) return { ok: false, message: 'Morning digest needs a valid HH:MM time' }
+  const healthAlerts = fields.healthAlerts ?? DEFAULT_TELEGRAM_HEALTH_ALERTS
+  if (!isTelegramHealthAlerts(healthAlerts)) return { ok: false, message: 'Health alerts need a valid HH:MM switch-off time, or none' }
   const quietHours = fields.quietHours ?? DEFAULT_TELEGRAM_QUIET_HOURS
   if (!isTelegramQuietHours(quietHours)) return { ok: false, message: 'Quiet hours require different HH:MM times and valid allow-through choices' }
   const chat = parseOptionalInteger(fields.allowedChatId, 'Allowed chat id')
@@ -57,7 +60,8 @@ export function parseTelegramForm(fields: TelegramFormFields): TelegramFormResul
       autoSubmitReplies: fields.autoSubmitReplies,
       answerPermissions: fields.answerPermissions,
       quietHours: { ...quietHours, allowKinds: [...quietHours.allowKinds], allowSessions: [...quietHours.allowSessions] },
-      morningDigest: { ...morningDigest }
+      morningDigest: { ...morningDigest },
+      healthAlerts: { ...healthAlerts }
     }
   }
 }

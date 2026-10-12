@@ -12,6 +12,7 @@ import { selfTestHistoryEnvironment } from '../agent-history-self-test'
 import { startFakeBotApi, type FakeBotApi } from '../fake-bot-api'
 import { validateWav, whisperArguments, type transcribeRecording } from '../voice-engine'
 import type { SelfTestTaps } from './contract'
+import { selfTestSysfsRoot } from './health-alerts'
 
 /** The self-test's pages wait this long instead of 15 s, so each card shape costs seconds, not a quarter minute. */
 const SELF_TEST_PAGE_AFTER_MS = 2_000
@@ -106,6 +107,7 @@ export class SelfTestRecorder implements SelfTestTaps {
       environment: {
         ...base, ...selfTestHistoryEnvironment(),
         BMN_SELF_TEST_TELEGRAM_ORIGIN: (await this.telegram()).origin,
+        ...(selfTestSysfsRoot() ? { BMN_SELF_TEST_SYSFS_ROOT: selfTestSysfsRoot() } : {}),
         BMN_SELF_TEST_PAGE_AFTER_MS: String(SELF_TEST_PAGE_AFTER_MS)
       },
       args: ['--self-test-host']

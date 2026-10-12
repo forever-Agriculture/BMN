@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
-import { homedir, tmpdir } from 'node:os'
+import { homedir, hostname, tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import {
   ERROR_CODES,
@@ -86,8 +86,10 @@ import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, typ
 import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramCardKeeper } from './telegram-card-keeper'
 import { QUIET_LEDGER_KEY, QuietHoursDelivery, phoneField } from './quiet-hours-delivery'
-import { DEFAULT_TELEGRAM_MORNING_DIGEST, telegramQuietWindow, type TelegramMorningDigest } from '@bmn/protocol'
+import { DEFAULT_TELEGRAM_HEALTH_ALERTS, DEFAULT_TELEGRAM_MORNING_DIGEST, telegramQuietWindow, type TelegramHealthAlerts, type TelegramMorningDigest } from '@bmn/protocol'
 import { DIGEST_KEY, DevAutoMorningDigest } from './dev-auto-digest'
+import { HEALTH_ALERTS_KEY, HealthAlerts } from './health-alerts'
+import { readMachineHealth, type HealthReaderOptions } from './machine-health'
 import { readDevAutoRuns } from './dev-auto-runs'
 import { manualCardFits } from './telegram-cards'
 import { createScanMemory, procReader, scanSessionPorts, type ProcReader } from './listening-ports'
@@ -161,6 +163,8 @@ export interface CompanionServiceOptions {
   now?: () => Date
   /** Where port scans read /proc; tests hand it a fixture tree. */
   proc?: ProcReader
+  /** Where the health watch reads sensors; tests and the self-test host hand it a fixture tree. */
+  health?: HealthReaderOptions
 }
 
 function invalid(message: string): never {
@@ -348,6 +352,8 @@ export class CompanionService {
   private readonly quietDelivery: QuietHoursDelivery
   private readonly morningDigest: DevAutoMorningDigest
   private digestSettings: TelegramMorningDigest = { ...DEFAULT_TELEGRAM_MORNING_DIGEST }
+  private readonly healthAlerts: HealthAlerts
+  private healthSettings: TelegramHealthAlerts = { ...DEFAULT_TELEGRAM_HEALTH_ALERTS }
   private quietSettings: TelegramQuietHours = { ...DEFAULT_TELEGRAM_QUIET_HOURS }
   private telegramReady = false
   private readonly manualAnswerClaims = new Set<string>()
@@ -462,6 +468,25 @@ export class CompanionService {
         return { result, workspaceNames: Object.fromEntries(workspaces.map(workspace => [workspace.workspaceId, workspace.name])) }
       },
       send: async text => { await this.telegram!.sendMessage(text) }
+    })
+    this.healthAlerts = new HealthAlerts({
+      read: () => options.database.companion('getRawSetting', HEALTH_ALERTS_KEY),
+      write: value => options.database.companion('putRawSetting', HEALTH_ALERTS_KEY, value, this.iso()),
+      settings: () => this.healthSettings,
+      ready: () => this.telegram !== undefined && this.telegramHealth?.state === 'polling',
+      now: () => this.now(),
+      // An injected clock (tests, the self-test host) also paces the checks.
+      monotonic: () => options.now ? this.now().getTime() : performance.now(),
+      host: () => hostname(),
+      check: () => readMachineHealth(options.health),
+      // Health alerts are sent at once, also in quiet hours: a fire warning that waits is useless.
+      send: async html => { await this.telegram!.sendMessage(html, { html: true }) },
+      turnOff: async () => {
+        const settings = await options.database.companion('getSettings')
+        this.healthSettings = { ...DEFAULT_TELEGRAM_HEALTH_ALERTS }
+        await options.database.companion('putSettingsSection', 'telegram', { ...settings.telegram, healthAlerts: this.healthSettings }, this.iso())
+        this.emit('settings', null)
+      }
     })
     const proc = options.proc ?? procReader
     const uid = process.getuid?.() ?? -1
@@ -1006,6 +1031,13 @@ export class CompanionService {
           throw new HostControlError(ERROR_CODES.ioError, 'Telegram is not connected', true)
         }
         await this.telegram.sendMessage('BMN test message. Replies to notifications return to their session.')
+        return this.telegramStatus()
+      }
+      case METHOD_REGISTRY.telegramHealthTest: {
+        if (!this.telegram || this.telegramHealth?.state !== 'polling') {
+          throw new HostControlError(ERROR_CODES.ioError, 'Telegram is not connected', true)
+        }
+        await this.healthAlerts.sendTest()
         return this.telegramStatus()
       }
       case METHOD_REGISTRY.presenceSet: {
@@ -1991,6 +2023,8 @@ export class CompanionService {
     if (rows) this.answers.retain(new Set(rows.filter((row) => row.state === 'open').map((row) => row.requestId)))
     await this.quietDelivery.sweep(true).catch(() => undefined)
     await this.morningDigest.sweep().catch(() => undefined)
+    // Not awaited: a slow sensor or a slow send must not hold the sweep, and an overlapping check skips.
+    void this.healthAlerts.sweep().catch(() => undefined)
   }
 
   private async readyArtifact(artifactId: string): Promise<ArtifactRecord> {
@@ -2693,6 +2727,8 @@ export class CompanionService {
     const settings: AppSettings = await this.options.database.companion('getSettings')
     this.quietSettings = settings.telegram.quietHours ?? { ...DEFAULT_TELEGRAM_QUIET_HOURS }
     this.digestSettings = settings.telegram.morningDigest ?? { ...DEFAULT_TELEGRAM_MORNING_DIGEST }
+    this.healthSettings = settings.telegram.healthAlerts ?? { ...DEFAULT_TELEGRAM_HEALTH_ALERTS }
+    await this.healthAlerts.configure().catch(() => undefined)
     const token = await this.readTelegramToken()
     this.telegramToken = token
     if (!settings.telegram.enabled) {

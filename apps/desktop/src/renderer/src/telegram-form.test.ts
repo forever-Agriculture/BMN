@@ -1,4 +1,4 @@
-import { DEFAULT_TELEGRAM_QUIET_HOURS, DEFAULT_TELEGRAM_MORNING_DIGEST } from '@bmn/protocol'
+import { DEFAULT_TELEGRAM_HEALTH_ALERTS, DEFAULT_TELEGRAM_QUIET_HOURS, DEFAULT_TELEGRAM_MORNING_DIGEST } from '@bmn/protocol'
 // MODULE: telegram-form.test.ts - parseTelegramForm validation parity with the main-process store
 import { describe, expect, it } from 'vitest'
 import { parseTelegramForm, type TelegramFormFields } from './telegram-form'
@@ -35,7 +35,8 @@ describe('parseTelegramForm', () => {
         autoSubmitReplies: false,
         answerPermissions: false,
         quietHours: DEFAULT_TELEGRAM_QUIET_HOURS,
-        morningDigest: DEFAULT_TELEGRAM_MORNING_DIGEST
+        morningDigest: DEFAULT_TELEGRAM_MORNING_DIGEST,
+        healthAlerts: DEFAULT_TELEGRAM_HEALTH_ALERTS
       }
     })
   })
@@ -52,7 +53,8 @@ describe('parseTelegramForm', () => {
         autoSubmitReplies: false,
         answerPermissions: false,
         quietHours: DEFAULT_TELEGRAM_QUIET_HOURS,
-        morningDigest: DEFAULT_TELEGRAM_MORNING_DIGEST
+        morningDigest: DEFAULT_TELEGRAM_MORNING_DIGEST,
+        healthAlerts: DEFAULT_TELEGRAM_HEALTH_ALERTS
       }
     })
   })
@@ -94,7 +96,8 @@ describe('parseTelegramForm', () => {
         autoSubmitReplies: false,
         answerPermissions: false,
         quietHours: DEFAULT_TELEGRAM_QUIET_HOURS,
-        morningDigest: DEFAULT_TELEGRAM_MORNING_DIGEST
+        morningDigest: DEFAULT_TELEGRAM_MORNING_DIGEST,
+        healthAlerts: DEFAULT_TELEGRAM_HEALTH_ALERTS
       }
     })
   })
@@ -113,12 +116,26 @@ describe('parseTelegramForm', () => {
         autoSubmitReplies: true,
         answerPermissions: false,
         quietHours: DEFAULT_TELEGRAM_QUIET_HOURS,
-        morningDigest: DEFAULT_TELEGRAM_MORNING_DIGEST
+        morningDigest: DEFAULT_TELEGRAM_MORNING_DIGEST,
+        healthAlerts: DEFAULT_TELEGRAM_HEALTH_ALERTS
       }
     })
   })
 })
 
+
+describe('health alerts form (Story 62.2)', () => {
+  it('keeps the watch and its optional switch-off time, also while Telegram is off, and validates the time', () => {
+    expect(parseTelegramForm(fields({ healthAlerts: { enabled: true, offAt: '20:00' } }))).toMatchObject({ ok: true,
+      value: { enabled: false, healthAlerts: { enabled: true, offAt: '20:00' } } })
+    expect(parseTelegramForm(fields({ healthAlerts: { enabled: true, offAt: null } }))).toMatchObject({ ok: true,
+      value: { healthAlerts: { enabled: true, offAt: null } } })
+    for (const offAt of ['9:15', '24:00', '', '12:60']) {
+      expect(parseTelegramForm(fields({ healthAlerts: { enabled: true, offAt } }))).toEqual({ ok: false,
+        message: 'Health alerts need a valid HH:MM switch-off time, or none' })
+    }
+  })
+})
 
 describe('morning digest form', () => {
   it('keeps the explicit opt-in while Telegram is off, and validates its local time', () => {

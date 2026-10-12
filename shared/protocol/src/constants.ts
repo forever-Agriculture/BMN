@@ -84,6 +84,7 @@ export const METHOD_REGISTRY = Object.freeze({
   telegramConfigure: 'telegram.configure',
   telegramStatus: 'telegram.status',
   telegramTest: 'telegram.test',
+  telegramHealthTest: 'telegram.healthTest',
   controlInfo: 'control.info',
   presenceSet: 'presence.set'
 } as const)
