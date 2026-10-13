@@ -16,18 +16,17 @@ raw records are kept under `_bmad-output/planning-artifacts/reference-66-session
 | App | Hand-over by its own hook | Measured on |
 | --- | --- | --- |
 | Codex | **PASS**: five of five runs, the whole stamped text once, read before the next action | codex-cli 0.162.1 |
-| Claude Code | **NOT MEASURED YET**: the test profile is not signed in. No hand-over until it is measured | none |
+| Claude Code | **PASS**: five of five runs, the whole stamped text once, read before the next action | Claude Code 2.1.296 |
 | OpenCode | no hand-over: BMN cannot tell where they send work | does not apply |
 | Cursor | no hand-over: BMN cannot tell where they send work | does not apply |
 
 A PASS needs five runs with no doubled, cut or lost text. An agent of an app without PASS can
 send, and receives only through the owner's **Paste** in **Messages…**.
 
-These records hold the two halves of one direction, each measured by itself: a Claude Code agent
-can send (it runs `bmn` from its own shell tool, below), and a working Codex agent is handed a
-text by its hook. They also hold one real message from end to end: `bmn tell` typed in a second
-session's shell, handed to a working Codex by BMN's own hook (below). A message from a Claude Code
-agent to a Codex agent on an installed build is not in these records.
+Both apps hold PASS, and each app's agent runs `bmn` from its own shell tool (below), so a message
+can travel either way between a Claude Code agent and a Codex agent without the owner's Paste. A
+message written by one app's agent and handed to the other's on an installed build is not in these
+records.
 
 ## Codex 0.162.1
 
@@ -84,18 +83,66 @@ the agent*. Two runs of two.
 
 ## Claude Code 2.1.296
 
-**The hand-over is not measured yet.** The isolated test profile is not signed in, so nothing on
-this page says what Claude Code's hook can hand its agent, and BMN hands it nothing.
+Measured with the model Haiku 5.5, started as `claude --permission-mode dontAsk` with `echo`,
+`bmn`, `claude` and `codex` as its allowed shell commands, so that no question waits for an owner.
 
-**Running `bmn` from Claude Code's own shell tool.** Observed 2026-10-13 in the owner's own
-profile, not an isolated one: an agent typed into a BMN session ran `bmn list --json` from its
-shell tool; it answered with exit code 0 and listed that agent's own session and no other. The
-agent did not ask to leave a sandbox and the owner was asked nothing.
+**The answer that hands a text over.** The same as for Codex: on `PostToolUse` the hook prints
+`{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"<text>"}}` and exits 0.
+Claude Code gives the text to the agent before its next action. Five runs with a stamp and three
+lines of 2,000 characters (2,219 characters in all): in each run Claude Code's own record holds
+one entry for what the hook added, that entry is the whole text once, and the agent's next command
+named the three made-up words from its start, middle and end. Nothing about it is shown on screen.
+
+Other forms, one run each: `{"decision":"block","reason":…}` hands the text over too, but shows
+"PostToolUse:Bash hook returned blocking error" with the whole text on screen; exit code 2 with
+the text on standard error does the same and shows the hook's own command line as well;
+`systemMessage` shows the text on screen ("PostToolUse:Bash says: …") and does not reach the
+agent; plain standard output reaches neither the agent nor the screen.
+
+**Size.** 9,219 characters arrived whole. At 12,219 and at 30,219 Claude Code gave the agent the
+first 2 KB with the path of a file in its own profile that holds the whole text ("Output too
+large … Full output saved to …"); in both runs the agent read that file with its shell tool and
+named all three words. A message is at most 2,000 characters plus its stamp, far below that.
+
+**Time.** With `timeout: 5` on the hook entry, a hook that took 3.0 s and one that took 4.5 s
+still handed the text over; at 7 s Claude Code cancelled the hook, the agent got nothing and went
+on. BMN bounds what it adds to an event for a message to 300 ms.
+
+**Which conversation an event belongs to.** The event carries `session_id`, `transcript_path`
+(the record Claude Code keeps), `cwd`, `permission_mode`, `prompt_id`, `effort`, `scratchpad_dir`,
+`tool_name`, `tool_input`, `tool_response`, `tool_use_id` and `duration_ms`. A sub-agent's events
+add `agent_id` and `agent_type` and keep the parent's `session_id` and, unlike Codex, the parent's
+`transcript_path` too: only `agent_id` tells them from the main conversation's. The `PostToolUse`
+of the tool call that started the sub-agent belongs to the main conversation. After each turn
+Claude Code also sent one `SubagentStop` with an `agent_id` and an empty `agent_type`, in runs
+that started no sub-agent; no tool event carried such an id. An agent another agent started
+(`claude -p` from the typed agent's shell tool) has its own `session_id`, the same BMN token and
+no terminal, which is how BMN's process rule already tells it from the agent typed into the
+session.
+
+**Where the agent sends work.** The prompt guard's resolver answered on every `PostToolUse` event
+of the main conversation (51 events, provider Anthropic, slowest 89 ms). It answered on the
+sub-agent's event as well, because that event names the parent's record: the `agent_id` on the
+event, not the resolver, keeps a message from a sub-agent. For the started agent it stopped at the
+process. Neither gets a message.
+
+**Version.** No event names the app's version. `/proc/<agent pid>/exe --version` answers
+`2.1.296 (Claude Code)` in 14 to 23 ms; lines of the record the event names carry it
+(`"version":"2.1.296"`), and the hook's environment held `AI_AGENT=claude-code_2-1-296_harness`.
+BMN does not ask per event: `bmn hooks check` and Messages name the version this page was
+measured on.
+
+**Running `bmn` from Claude Code's own shell tool.** In the isolated profile `bmn list` ran from
+the Bash tool and listed its own session; no sandbox stood in its way and nothing waited for the
+owner. The same was observed 2026-10-13 in the owner's own profile: an agent typed into a BMN
+session ran `bmn list --json` from its shell tool; it answered with exit code 0 and listed that
+agent's own session and no other, and the owner was asked nothing.
 
 ## What BMN does with this
 
-- Only Codex's hook hands a message over, on `PostToolUse`, one message per event, and only to
-  the agent typed into the session, on an event of its main conversation.
+- The hooks of Claude Code and Codex hand a message over, on `PostToolUse`, one message per event,
+  and only to the agent typed into the session, on an event of its main conversation: an event
+  that carries `agent_id` is a sub-agent's and gets nothing.
 - The hook resolves where its agent sends work with the prompt guard's own resolver for that
   event. No answer, or an answer that is only the owner's word, means no hand-over.
 - An app that changes where it sends work without its launch or settings changing is not

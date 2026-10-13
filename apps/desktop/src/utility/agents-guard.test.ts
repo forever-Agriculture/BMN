@@ -486,6 +486,8 @@ describe('where a receiving agent sends work, for a message (Epic 66.4)', () => 
 
   it('holds the hook\'s record of measured apps and the window\'s to one', () => {
     expect(MESSAGE_HANDOVER).toEqual(SESSION_MESSAGE_HANDOVER)
+    // The two apps docs/session-messages.md holds a PASS for, each on the event after a tool call.
+    expect(MESSAGE_HANDOVER).toEqual({ claude: { event: 'PostToolUse', version: '2.1.296' }, codex: { event: 'PostToolUse', version: '0.162.1' } })
     expect(MESSAGE_LIMIT_MS).toBe(300)
   })
 
@@ -531,8 +533,10 @@ describe('where a receiving agent sends work, for a message (Epic 66.4)', () => 
 
   it('says per app, for `bmn hooks check`, whether its hook hands messages over and on which version that was measured', () => {
     expect(messageStanding('codex')).toBe('messages: not handed over until a team is approved (measured on Codex 0.162.1)')
+    expect(messageStanding('claude')).toBe('messages: not handed over until a team is approved (measured on Claude Code 2.1.296)')
     approve(team())
     expect(messageStanding('codex')).toBe('messages: handed to a working agent by this hook after a tool call (measured on Codex 0.162.1)')
+    expect(messageStanding('claude')).toBe('messages: handed to a working agent by this hook after a tool call (measured on Claude Code 2.1.296)')
     expect(messageStanding('opencode')).toBe('messages: not handed over by a hook in OpenCode; your Paste in Messages delivers them')
     expect(messageStanding('cursor')).toBe('messages: not handed over by a hook in Cursor; your Paste in Messages delivers them')
   })

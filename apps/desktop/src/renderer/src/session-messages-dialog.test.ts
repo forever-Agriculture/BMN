@@ -107,6 +107,9 @@ describe('the Paste button (Story 66.2)', () => {
     expect(messagePasteControl(message({ state: 'printed', claimedApp: 'codex' }), NOW, 'process-1', false)).toEqual({
       offered: false, note: `Printed for the agent by Codex's hook: printed, not proven read. Hand-over measured on Codex ${version}.`
     })
+    expect(messagePasteControl(message({ state: 'printed', claimedApp: 'claude' }), NOW, 'process-1', false)).toEqual({
+      offered: false, note: "Printed for the agent by Claude Code's hook: printed, not proven read. Hand-over measured on Claude Code 2.1.296."
+    })
     // An app BMN holds no measurement for is named without one.
     expect(messagePasteControl(message({ state: 'printed', claimedApp: 'opencode' }), NOW, 'process-1', false)).toEqual({
       offered: false, note: "Printed for the agent by OpenCode's hook: printed, not proven read."
@@ -118,8 +121,10 @@ describe('the Paste button (Story 66.2)', () => {
     for (const [app, measured] of Object.entries(SESSION_MESSAGE_HANDOVER)) {
       expect(handover.byHook).toContain(`measured on ${app === 'codex' ? 'Codex' : 'Claude Code'} ${measured!.version}`)
     }
+    expect(handover.byHook).toBe('Claude Code (measured on Claude Code 2.1.296), Codex (measured on Codex 0.162.1)')
     expect(handover.byPaste).toContain('OpenCode')
     expect(handover.byPaste).toContain('Cursor')
+    expect(handover.byPaste).not.toContain('Claude Code')
     expect(handover.byHook).not.toContain('OpenCode')
     expect(handover.byHook).not.toContain('Cursor')
   })

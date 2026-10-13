@@ -716,6 +716,23 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
     expect((await messages.status('a', first.messageId)).messages[0]!.state).toBe('printed for the agent')
   })
 
+  it('hands a message to a Claude Code agent\'s hook as it does to Codex\'s, and records which app took it', async () => {
+    const anthropic: MessageDestination = { provider: 'anthropic', host: 'default:anthropic', basis: 'observed-default', default: true }
+    const asked: MessageDestination[] = []
+    allowed = (destination) => { asked.push(destination); return { allowed: true, reason: 'ok' } }
+    const sent = await tell('b', 'a', 'hold your merge')
+
+    const taken = await take('a', anthropic, { app: 'claude' })
+
+    expect(taken.message).toMatchObject({ messageId: sent.messageId, stamp: stored(sent.messageId).stamp, text: 'hold your merge' })
+    expect(asked).toEqual([anthropic])
+    expect(stored(sent.messageId)).toMatchObject({ state: 'taken', claimedApp: 'claude' })
+    expect(await messages.report({ sessionId: 'a', incarnationId: live.get('a')!, pid: 4242, messageId: sent.messageId, claimId: taken.message!.claimId }))
+      .toEqual({ recorded: true })
+    expect((await messages.status('b', sent.messageId)).messages[0]!.state).toBe('printed for the agent')
+    expect((await take('a', anthropic, { app: 'claude' })).message).toBeNull()
+  })
+
   it('hands over one message per event: the next event gets the next one', async () => {
     const first = await tell('a', 'b')
     const second = await tell('c', 'b')
@@ -980,7 +997,9 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
     expect(await ask()).toBe(false)
     await tell('a', 'b')
     expect(await ask()).toBe(true)
+    expect(await ask({ agent: 'claude' })).toBe(true)
     expect(await ask({ event: 'Stop' })).toBe(false)
+    expect(await ask({ agent: 'claude', event: 'PostToolUseFailure' })).toBe(false)
     expect(await ask({ agent: 'cursor' })).toBe(false)
     expect(await ask({ incarnationId: 'run-earlier' })).toBe(false)
     expect(await ask({ incarnationId: null })).toBe(false)

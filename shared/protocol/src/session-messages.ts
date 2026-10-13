@@ -41,6 +41,7 @@ export const SESSION_MESSAGES_HELP = [
  * hook itself; a test holds the two together. An app that is not here receives only through the owner's Paste.
  */
 export const SESSION_MESSAGE_HANDOVER: Readonly<Record<string, { event: string; version: string } | undefined>> = Object.freeze({
+  claude: { event: 'PostToolUse', version: '2.1.296' },
   codex: { event: 'PostToolUse', version: '0.162.1' }
 })
 

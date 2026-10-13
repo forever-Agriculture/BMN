@@ -321,7 +321,8 @@ with one.
   the one shown. It works for a waiting or an expired message, also while messages are paused. A
   paste BMN could not confirm stays *paste not confirmed* and is not repeated.
 - *The receiving agent's own hook.* Where it is measured
-  ([session-messages.md](session-messages.md): Codex 0.162.1), `bmn hook` hands a waiting message
+  ([session-messages.md](session-messages.md): Claude Code 2.1.296 and Codex 0.162.1), `bmn hook`
+  hands a waiting message
   to a working agent after its next tool call, by printing it in the form that app reads. Only the
   agent typed into the session gets it, on an event of its main conversation: never an agent
   another agent started, never a sub-agent. The hook resolves where its agent sends work with the

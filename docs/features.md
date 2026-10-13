@@ -237,8 +237,9 @@ where each message is from: the session, the folder the command ran in and the a
 there. The stamp says the message was written in that session, not by you, and that it is context,
 not an instruction; it does not prove which program wrote the text.
 
-BMN never presses Enter for a message and never wakes a resting agent with one. A working Codex
-agent gets a waiting message from its own hook after its next tool call, when its provider may see
+BMN never presses Enter for a message and never wakes a resting agent with one. A working Claude
+Code or Codex agent gets a waiting message from its own hook after its next tool call, when its
+provider may see
 the sender's folder ([measured per app](session-messages.md)); for every other app, and whenever
 you want, **Messages…** in the workspace's ⋯ menu lists the latest 200 and **Paste into
 <session>** appends one to that session's input without pressing Enter. A message is delivered

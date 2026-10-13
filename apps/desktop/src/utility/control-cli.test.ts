@@ -1450,6 +1450,69 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
   })
 
+  /** A Claude Code agent the owner typed into the session; its events name the conversation and the record Claude Code keeps of it. */
+  async function claudeSession(root: string, agentEnv: Record<string, string> = {}) {
+    const session = await guardedSession(root, ['claude'], agentEnv)
+    return { ...session, record: join(session.home, `.claude/projects/-synthetic-code-app/${SESSION}.jsonl`) }
+  }
+  const ANTHROPIC = { provider: 'anthropic', host: 'default:anthropic', basis: 'observed-default', default: true }
+
+  it('prints the stamped message in Claude Code\'s measured answer form, once, and then reports it as printed', async () => {
+    const fixture = await cliFixture()
+    const session = await claudeSession(fixture.root)
+    waiting(fixture)
+
+    const result = await runCli(['hook', 'claude'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
+
+    expect(result).toEqual({
+      code: 0, stderr: '',
+      stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `${STAMP}\nhold any commit on local main\nI am about to merge` } })
+    })
+    expect(fixture.handlers.takeMessage).toHaveBeenCalledTimes(1)
+    expect(fixture.handlers.takeMessage).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, app: 'claude', destination: ANTHROPIC })
+    expect(fixture.handlers.reportMessage).toHaveBeenCalledTimes(1)
+    expect(fixture.handlers.reportMessage).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, messageId: 'message-1', claimId: 'claim-1' })
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('never asks on a Claude Code sub-agent\'s event: it names its parent\'s conversation and record, and only its agent_id tells it apart', async () => {
+    const fixture = await cliFixture()
+    const session = await claudeSession(fixture.root)
+    waiting(fixture)
+    const env = { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }
+
+    const result = await runCli(['hook', 'claude'], { env, input: afterTool(session, { agent_id: 'ad7491c96f2012aab', agent_type: 'general-purpose' }) })
+    // The same event of the main conversation is answered, so it was the mark and nothing else that held this one back.
+    const main = await runCli(['hook', 'claude'], { env, input: afterTool(session) })
+
+    expect(result).toEqual(QUIET)
+    expect(main.stdout).toContain('additionalContext')
+    expect(fixture.handlers.takeMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('never asks on another of Claude Code\'s events, a failed tool call among them', async () => {
+    const fixture = await cliFixture()
+    const session = await claudeSession(fixture.root)
+    waiting(fixture)
+    const env = { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }
+
+    for (const event of ['PostToolUseFailure', 'PreToolUse', 'Stop', 'SubagentStop']) {
+      expect(await runCli(['hook', 'claude'], { env, input: afterTool(session, { hook_event_name: event }) }), event).toEqual(QUIET)
+    }
+    expect(fixture.handlers.takeMessage).not.toHaveBeenCalled()
+  })
+
+  it('never asks when a Claude Code session sends work to a provider that may not see its own folder', async () => {
+    const fixture = await cliFixture()
+    const session = await claudeSession(fixture.root, MOONSHOT_SESSION)
+    waiting(fixture)
+
+    const result = await runCli(['hook', 'claude'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.takeMessage).not.toHaveBeenCalled()
+  })
+
   it('asks for nothing and prints nothing while BMN has not said that a message waits', async () => {
     const fixture = await cliFixture()
     const session = await codexSession(fixture.root)
@@ -1606,10 +1669,12 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     const asJson = JSON.parse((await runHooks(['check', '--json'], { HOME: session.home })).stdout) as { agents: Array<{ agent: string; messages?: string }> }
 
     expect(withTeam.stdout).toContain('  messages: handed to a working agent by this hook after a tool call (measured on Codex 0.162.1)')
+    expect(withTeam.stdout).toContain('  messages: handed to a working agent by this hook after a tool call (measured on Claude Code 2.1.296)')
     expect(withTeam.stdout).toContain('  messages: not handed over by a hook in OpenCode; your Paste in Messages delivers them')
     expect(withTeam.stdout).toContain('  messages: not handed over by a hook in Cursor; your Paste in Messages delivers them')
     expect(withoutTeam.stdout).toContain('  messages: not handed over until a team is approved (measured on Codex 0.162.1)')
     expect(asJson.agents.find((row) => row.agent === 'codex')?.messages).toMatch(/^messages: handed to a working agent/)
+    expect(asJson.agents.find((row) => row.agent === 'claude')?.messages).toMatch(/^messages: handed to a working agent/)
   })
 })
 

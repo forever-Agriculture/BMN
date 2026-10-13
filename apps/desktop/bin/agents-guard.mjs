@@ -302,7 +302,10 @@ function decision(input) {
  * through the owner's Paste. The window reads the same record from the protocol package
  * (`SESSION_MESSAGE_HANDOVER` in shared/protocol/src/session-messages.ts); a test holds the two together.
  */
-export const MESSAGE_HANDOVER = { codex: { event: 'PostToolUse', version: '0.162.1' } }
+export const MESSAGE_HANDOVER = {
+  claude: { event: 'PostToolUse', version: '2.1.296' },
+  codex: { event: 'PostToolUse', version: '0.162.1' }
+}
 
 /** How long everything a hook adds to an event for a message may take, resolving the destination included. */
 export const MESSAGE_LIMIT_MS = 300
