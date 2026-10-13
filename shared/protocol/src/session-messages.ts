@@ -64,8 +64,6 @@ export interface SessionMessageRecord {
   sentAt: string
   expiresAt: string
   state: SessionMessageState
-  /** Why BMN holds a waiting message back from the hook, in the owner's words; null when nothing does. */
-  detail: string | null
   /** The app whose hook took the message, once one did; null for every other route. */
   claimedApp: string | null
 }
@@ -76,6 +74,11 @@ export interface SessionMessageListRow extends SessionMessageRecord {
   receiverName: string
   /** False once either session is archived or in another workspace: no route delivers the message then. */
   membersPresent: boolean
+  /**
+   * Why a hook was not handed this waiting message, in the owner's words; null when nothing holds it back.
+   * It names a provider of the owner's team, so BMN keeps it in memory for this run only and never stores it.
+   */
+  detail: string | null
 }
 
 export interface SessionMessagePairPause {
@@ -93,6 +96,55 @@ export interface SessionMessageListing {
   /** Set while new messages are refused in the whole workspace: by the owner's press, or by the hourly limit. */
   workspacePause: { at: string; by: 'owner' | 'limit' } | null
   pairPauses: SessionMessagePairPause[]
+}
+
+/** Where a receiving agent sends work, as its own hook resolved it with the prompt guard's resolver. */
+export interface MessageDestination {
+  provider: string
+  host: string
+  basis: string
+  default: boolean
+}
+
+/**
+ * The two things about a message the terminal host may not work out itself: only the app's entry point reads
+ * the owner's team (its files never reach the process that holds the database). The host asks, the app answers.
+ */
+export type MessageTeamQuestion =
+  /** The Git root, or the folder itself, of a folder the host already resolved. */
+  | { kind: 'source-root'; folder: string }
+  /** May the provider behind this destination see private work under this root, by the approved team now? */
+  | { kind: 'provider'; destination: MessageDestination; senderRoot: string }
+
+export type MessageTeamAnswer = { root: string } | { allowed: boolean; reason: string } | { failed: true }
+
+export interface MessageTeamQuestionMessage { kind: 'message-team-question'; id: string; question: MessageTeamQuestion }
+export interface MessageTeamAnswerMessage { kind: 'message-team-answer'; id: string; answer: MessageTeamAnswer }
+
+const text = (value: unknown, max: number): value is string => typeof value === 'string' && value.length > 0 && value.length <= max
+
+export function isMessageTeamQuestion(value: unknown): value is MessageTeamQuestion {
+  if (typeof value !== 'object' || value === null) return false
+  const question = value as Record<string, unknown>
+  if (question.kind === 'source-root') return Object.keys(question).length === 2 && text(question.folder, 4096)
+  if (question.kind !== 'provider' || Object.keys(question).length !== 3 || !text(question.senderRoot, 4096)) return false
+  const destination = question.destination as Record<string, unknown> | null
+  return typeof destination === 'object' && destination !== null && Object.keys(destination).length === 4 &&
+    text(destination.provider, 200) && text(destination.host, 400) && text(destination.basis, 40) && typeof destination.default === 'boolean'
+}
+
+export function isMessageTeamQuestionMessage(value: unknown): value is MessageTeamQuestionMessage {
+  if (typeof value !== 'object' || value === null) return false
+  const message = value as Record<string, unknown>
+  return message.kind === 'message-team-question' && text(message.id, 100) && isMessageTeamQuestion(message.question)
+}
+
+export function isMessageTeamAnswerMessage(value: unknown): value is MessageTeamAnswerMessage {
+  if (typeof value !== 'object' || value === null) return false
+  const message = value as Record<string, unknown>
+  if (message.kind !== 'message-team-answer' || !text(message.id, 100) || typeof message.answer !== 'object' || message.answer === null) return false
+  const answer = message.answer as Record<string, unknown>
+  return answer.failed === true || text(answer.root, 4096) || (typeof answer.allowed === 'boolean' && typeof answer.reason === 'string')
 }
 
 /** What the hook gets for one event: the block to print, and the claim it reports back. */

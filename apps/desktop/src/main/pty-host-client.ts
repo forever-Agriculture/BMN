@@ -7,6 +7,7 @@ import {
   isProtocolError,
   isSessionProcessStateChangedMessage,
   isProgramCopyMessage,
+  isMessageTeamQuestionMessage,
   type AppEventMessage,
   type ProtocolError,
   type ProtocolMethod,
@@ -14,7 +15,10 @@ import {
   type RpcSuccess,
   type SessionProcessState,
   type SessionProcessStateChangedMessage,
-  type ProgramCopyMessage
+  type ProgramCopyMessage,
+  type MessageTeamAnswer,
+  type MessageTeamAnswerMessage,
+  type MessageTeamQuestion
 } from '@bmn/protocol'
 import { utilityProcess, type MessagePortMain, type UtilityProcess } from 'electron'
 
@@ -173,6 +177,7 @@ export class PtyHostClient {
   >()
   private readonly latestSessionStates = new Map<string, SessionProcessStateChangedMessage>()
   private readonly programCopyListeners = new Set<(message: ProgramCopyMessage) => void>()
+  private messageTeamAnswerer: ((question: MessageTeamQuestion) => MessageTeamAnswer) | null = null
   private readonly exitComplete: Promise<void>
   private resolveExit = (): void => undefined
   private rejectReady: (error: Error) => void = () => undefined
@@ -232,6 +237,17 @@ export class PtyHostClient {
       }
       if (isProgramCopyMessage(message)) {
         for (const listener of this.programCopyListeners) listener(message)
+        return
+      }
+      if (isMessageTeamQuestionMessage(message)) {
+        // The host waits a bounded time for this, so every question gets an answer, a failed one included.
+        let answer: MessageTeamAnswer = { failed: true }
+        try {
+          if (this.messageTeamAnswerer) answer = this.messageTeamAnswerer(message.question)
+        } catch {
+          answer = { failed: true }
+        }
+        this.process.postMessage({ kind: 'message-team-answer', id: message.id, answer } satisfies MessageTeamAnswerMessage)
         return
       }
       if (!isControlResponse(message)) return
@@ -307,6 +323,14 @@ export class PtyHostClient {
   }
 
   /** Story 42.1: clipboard writes live programs asked for; nothing is replayed to a later listener. */
+  /**
+   * Epic 66: who answers the host's two questions about a message (a folder's repository; whether a provider
+   * may see a sender's work). Only the app's entry point reads the owner's team, so the host has to ask.
+   */
+  answerMessageTeam(answerer: (question: MessageTeamQuestion) => MessageTeamAnswer): void {
+    this.messageTeamAnswerer = answerer
+  }
+
   onProgramCopy(listener: (message: ProgramCopyMessage) => void): () => void {
     this.programCopyListeners.add(listener)
     return () => this.programCopyListeners.delete(listener)

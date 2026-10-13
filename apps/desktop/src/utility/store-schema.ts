@@ -639,7 +639,6 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
         sent_at TEXT NOT NULL,
         expires_at TEXT NOT NULL,
         state TEXT NOT NULL CHECK (state IN ('waiting', 'paste-uncertain', 'pasted', 'taken', 'printed')),
-        detail TEXT,
         claim_id TEXT,
         claimed_incarnation_id TEXT,
         claimed_pid INTEGER,

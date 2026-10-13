@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { GUARD_MEASURED as PROTOCOL_GUARD_MEASURED, SESSION_MESSAGE_HANDOVER } from '@bmn/protocol'
 import { GUARD_APPS, GUARD_MEASURED, MESSAGE_HANDOVER, MESSAGE_LIMIT_MS, decide, decideWithin, guardStanding, guardState, messageDestination, messageDestinationWithin, messageStanding, parseLaunch, stopAnswer } from '../../bin/agents-guard.mjs'
-import { messageProviderAnswer, messageSourceRoot } from './session-message-provider'
+import type { MessageDestination } from '@bmn/protocol'
+import { messageTeamAnswer } from '../main/agents-ipc'
 import { visibilityPath } from '../../bin/agents-check.mjs'
 import { buildGeneration, currentPointerPath, generationPath, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
@@ -536,6 +537,12 @@ describe('where a receiving agent sends work, for a message (Epic 66.4)', () => 
     expect(messageStanding('cursor')).toBe('messages: not handed over by a hook in Cursor; your Paste in Messages delivers them')
   })
 })
+
+
+/** The host's two questions about a message, as the app's entry point answers them (Epic 66). */
+const messageSourceRoot = (folder: string): string => (messageTeamAnswer({ kind: 'source-root', folder }) as { root: string }).root
+const messageProviderAnswer = (destination: MessageDestination, senderRoot: string): { allowed: boolean; reason: string } =>
+  messageTeamAnswer({ kind: 'provider', destination, senderRoot }) as { allowed: boolean; reason: string }
 
 describe('whether a receiving agent\'s provider may see the sender\'s work (Epic 66.4 AC2)', () => {
   const OPENAI = { provider: 'openai', host: 'default:openai', basis: 'observed-default', default: true }

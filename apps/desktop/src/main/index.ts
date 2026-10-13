@@ -81,7 +81,7 @@ import {
 import { installFileReferenceIpcHandlers } from './file-reference-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
 import { installVoiceIpcHandlers } from './voice-ipc'
-import { installAgentsIpcHandlers } from './agents-ipc'
+import { installAgentsIpcHandlers, messageTeamAnswer } from './agents-ipc'
 import { createSessionEnvironmentReader } from './session-environment'
 import { transcribeRecording } from './voice-engine'
 import {
@@ -446,6 +446,8 @@ async function initializeApplication(testMode: boolean): Promise<ApplicationStar
     announce: (notice) => applicationWindow?.webContents.send('aiterm:program-copy', notice)
   })
   launched.client.onProgramCopy((message) => void programCopy(message))
+  // Epic 66: the host asks here what only this process may read from the owner's team.
+  launched.client.answerMessageTeam(messageTeamAnswer)
   void appEvents.prime()
   reportPresence()
   let startup = await loadApplicationStartup(testMode)

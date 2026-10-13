@@ -874,9 +874,13 @@ input[type='radio'] {
   text-align: right;
 }
 
-.popup-menu [role='menuitemradio'][aria-checked='true']::after,
-.popup-menu [role='menuitemcheckbox'][aria-checked='true']::after {
+.popup-menu [role='menuitemradio'][aria-checked='true']::after {
   content: '✓';
+}
+
+/* The glyph is for the eye; aria-checked already says it, so the switch keeps its plain name when it is read out. */
+.popup-menu [role='menuitemcheckbox'][aria-checked='true']::after {
+  content: '✓' / '';
 }
 
 .popup-menu [role='menuitemradio'][aria-checked='true'] {

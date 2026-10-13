@@ -3391,10 +3391,31 @@ describe('messages between sessions, through the service (Epic 66)', () => {
   }) as Promise<{ messageId: string; state: string }>
   const listing = () => service.route(METHOD_REGISTRY.messagesList, { workspaceId: DEFAULT_WORKSPACE_ID }) as Promise<Listing>
   const OPENAI = { provider: 'openai', host: 'default:openai', basis: 'observed-default', default: true }
-  /** The provider question is answered from a fixed word here; the real one reads the owner's approved team. */
+  /** The provider question is answered from a fixed word here; the app's entry point answers the real one from the owner's approved team. */
   const provider = (answer: { allowed: boolean; reason: string }): void => {
     service['messages']['options'].providerAnswer = () => answer
   }
+  const appAnswers = (): void => {
+    service['messages']['options'].sourceRoot = (folder) => folder
+    provider({ allowed: true, reason: 'OpenAI may see private work' })
+  }
+  beforeEach(appAnswers)
+
+  it('reads nothing of the team itself: until the app answers, a send is refused and a hook is handed nothing', async () => {
+    messagesOn()
+    const unanswered = new CompanionService(service['options'])
+    await expect(unanswered['control']['options'].handlers.sendMessage({
+      senderSessionId: 's1', senderIncarnationId: 'incarnation-1', destinationSessionId: 's2', text: 'made-up text', senderCwd: root
+    })).rejects.toMatchObject({ code: ERROR_CODES.invalidArgument, message: 'BMN cannot tell which repository the folder this command ran in belongs to; try again' })
+    const sent = await tell()
+    expect(await unanswered['control']['options'].handlers.takeMessage({ sessionId: 's2', incarnationId: 'incarnation-2', pid: 7001, app: 'codex', destination: OPENAI }))
+      .toEqual({ message: null })
+    expect((await listing()).messages[0]).toMatchObject({ messageId: sent.messageId, state: 'waiting' })
+    // The host process imports no module that reads the team's files.
+    for (const file of ['companion-service.ts', 'session-messages.ts', 'pty-host.ts', 'database-message-store.ts']) {
+      expect(readFileSync(join(__dirname, file), 'utf8')).not.toMatch(/bin\/agents-|agents-(check|state|roster|guard)/)
+    }
+  })
 
   it('refuses everything while the workspace switch is off, and still shows a session only itself', async () => {
     expect(await handlers().listPeers('s1')).toEqual({ on: false, paused: false, peers: [] })

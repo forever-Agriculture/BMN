@@ -20,6 +20,8 @@ import {
   type ResearchSnapshot,
   type ResearcherView,
   JUDGE_CALLS_SHOWN,
+  type MessageTeamAnswer,
+  type MessageTeamQuestion,
   JUDGE_TRY_STATEMENT_MAX,
   JUDGE_TRY_TEXT_MAX,
   type JudgeMonthView,
@@ -52,7 +54,7 @@ import {
 import type { IpcMainInvokeEvent } from 'electron'
 import { HARNESSES, RosterError, agentsDirectory, parseRoster, proseOf, readOnlyProposal, rewriteProse, rewriteRoster, rosterPath, sha256, starterRoster, type RosterData } from '../../bin/agents-roster.mjs'
 import { approvedIfAny, listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
-import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, harnessVersion, inspectRoute, limitStanding, versionStanding, type FenceTestEntry } from '../../bin/agents-check.mjs'
+import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, harnessVersion, inspectRoute, limitStanding, privateWorkAnswer, versionStanding, workspaceRoot, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import {
   applyTeamUpdate, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planTeamUpdate, probeInspector, render, writeMaster, type RulesHarness
 } from '../../bin/agents-rules.mjs'
@@ -738,6 +740,32 @@ async function rulesOutcome(context: RulesIpcContext, result: CliResult, success
 }
 
 // ---------------------------------------------------------------------------------------------
+
+/**
+ * Epic 66: the two answers about a message between sessions that the terminal host asks for, because it reads
+ * nothing of the owner's team itself (R60-NFR3). The Git root of a folder the host already resolved, by the
+ * prompt guard's own rule; and the prompt guard's question asked for a message instead of a prompt: may the
+ * provider a receiving agent's hook resolved see private work in the root a message came from? The approved
+ * team is read at this call, so an exception the owner made or withdrew a moment ago counts. A destination
+ * that is only the owner's word, or names no provider of the team, gets nothing. It throws when no approved
+ * team can be read, which the caller answers as a failure and the host treats as a refusal.
+ */
+export function messageTeamAnswer(question: MessageTeamQuestion): MessageTeamAnswer {
+  if (question.kind === 'source-root') return { root: workspaceRoot(question.folder) }
+  const data = readApproved().data
+  const { destination } = question
+  if (!data.providers.some((provider) => provider.id === destination.provider)) {
+    return { allowed: false, reason: 'the approved team names no such provider' }
+  }
+  const basis = destination.basis
+  if (basis !== 'observed-default' && basis !== 'explicit') {
+    return { allowed: false, reason: 'where that agent sends work is your word, not something BMN inspected' }
+  }
+  const answer = privateWorkAnswer(data, {
+    known: true, default: destination.default, provider: destination.provider, host: destination.host, basis
+  }, question.senderRoot)
+  return { allowed: answer.allowed, reason: answer.reason }
+}
 
 export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: AgentsIpcOptions): AgentsIpcHandle {
   const handle = (channel: `aiterm:${string}`, listener: (params: Record<string, unknown>) => unknown): void => {

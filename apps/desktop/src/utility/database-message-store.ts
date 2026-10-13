@@ -30,7 +30,6 @@ interface MessageRow {
   sent_at: string
   expires_at: string
   state: string
-  detail: string | null
   claimed_app: string | null
 }
 
@@ -48,7 +47,7 @@ interface MemberRow {
 }
 
 const MESSAGE_COLUMNS = `message_id, workspace_id, sender_session_id, receiver_session_id, sender_root, stamp, text,
-  sent_at, expires_at, state, detail, claimed_app`
+  sent_at, expires_at, state, claimed_app`
 
 function refuse(message: string): never {
   throw new WorkspaceStoreError(ERROR_CODES.invalidArgument, message)
@@ -59,7 +58,7 @@ function messageRecord(row: MessageRow): SessionMessageRecord {
   return {
     messageId: row.message_id, workspaceId: row.workspace_id, senderSessionId: row.sender_session_id,
     receiverSessionId: row.receiver_session_id, senderRoot: row.sender_root, stamp: row.stamp, text: row.text,
-    sentAt: row.sent_at, expiresAt: row.expires_at, state: row.state, detail: row.detail, claimedApp: row.claimed_app
+    sentAt: row.sent_at, expiresAt: row.expires_at, state: row.state, claimedApp: row.claimed_app
   }
 }
 
@@ -231,7 +230,7 @@ export function listSentMessages(
 ): Array<Pick<SessionMessageRecord, 'messageId' | 'receiverSessionId' | 'state' | 'sentAt' | 'expiresAt'>> {
   const rows = (messageId === null
     ? database.prepare(
-        `SELECT ${MESSAGE_COLUMNS} FROM session_message WHERE sender_session_id = ? ORDER BY sent_at DESC, message_id LIMIT 50`
+        `SELECT ${MESSAGE_COLUMNS} FROM session_message WHERE sender_session_id = ? ORDER BY sent_at DESC, rowid DESC LIMIT 50`
       ).all(senderSessionId)
     : database.prepare(
         `SELECT ${MESSAGE_COLUMNS} FROM session_message WHERE sender_session_id = ? AND message_id = ?`
@@ -260,7 +259,7 @@ export function listWorkspaceMessages(database: DatabaseConnection, workspaceId:
   ).get(workspaceId) as { at: string | null; by: string | null } | undefined
   if (!workspace) throw new WorkspaceStoreError(ERROR_CODES.notFound, 'The workspace was not found')
   const rows = database.prepare(
-    `SELECT ${MESSAGE_COLUMNS} FROM session_message WHERE workspace_id = ? ORDER BY sent_at DESC, message_id LIMIT ?`
+    `SELECT ${MESSAGE_COLUMNS} FROM session_message WHERE workspace_id = ? ORDER BY sent_at DESC, rowid DESC LIMIT ?`
   ).all(workspaceId, SESSION_MESSAGE_LIST_LIMIT) as MessageRow[]
   const name = database.prepare('SELECT name FROM session WHERE session_id = ?')
   const named = (sessionId: string): string => (name.get(sessionId) as { name: string } | undefined)?.name ?? sessionId
@@ -268,7 +267,9 @@ export function listWorkspaceMessages(database: DatabaseConnection, workspaceId:
     ...messageRecord(row),
     senderName: named(row.sender_session_id),
     receiverName: named(row.receiver_session_id),
-    membersPresent: stillMembers(database, row)
+    membersPresent: stillMembers(database, row),
+    // Why a hook was not handed a message names a provider of the owner's team: the host keeps that in memory, never here.
+    detail: null
   }))
   const pairs = database.prepare(
     `SELECT first_session_id, second_session_id, paused_at FROM session_message_pair
@@ -336,7 +337,7 @@ export function claimMessageForPaste(
     refuse('A session of this message has left the workspace it was sent in, so it is not delivered')
   }
   const updated = database.prepare(
-    `UPDATE session_message SET state = 'paste-uncertain', detail = NULL, claimed_incarnation_id = ?, claimed_at = ?
+    `UPDATE session_message SET state = 'paste-uncertain', claimed_incarnation_id = ?, claimed_at = ?
      WHERE message_id = ? AND state = 'waiting'`
   ).run(receiverIncarnationId, now, messageId)
   return { record: getSessionMessage(database, messageId), claimed: Number(updated.changes) === 1 }
@@ -385,7 +386,7 @@ export function messageTakeCandidates(
   database: DatabaseConnection, receiverSessionId: string, now: string
 ): Array<{ messageId: string; senderRoot: string }> {
   const rows = database.prepare(
-    `SELECT m.message_id, m.sender_root FROM ${HOOK_FROM} WHERE ${HOOK_ELIGIBLE} ORDER BY m.sent_at, m.message_id`
+    `SELECT m.message_id, m.sender_root FROM ${HOOK_FROM} WHERE ${HOOK_ELIGIBLE} ORDER BY m.sent_at, m.rowid`
   ).all(now, receiverSessionId) as Array<{ message_id: string; sender_root: string }>
   return rows.map((row) => ({ messageId: row.message_id, senderRoot: row.sender_root }))
 }
@@ -409,19 +410,11 @@ export function claimMessageForHook(database: DatabaseConnection, p: {
   if (!eligible) return { claimed: false, record: null }
   const updated = database.prepare(
     `UPDATE session_message
-     SET state = 'taken', detail = NULL, claim_id = ?, claimed_incarnation_id = ?, claimed_pid = ?, claimed_app = ?, claimed_at = ?
+     SET state = 'taken', claim_id = ?, claimed_incarnation_id = ?, claimed_pid = ?, claimed_app = ?, claimed_at = ?
      WHERE message_id = ? AND state = 'waiting'`
   ).run(p.claimId, p.incarnationId, p.pid, p.app, now, p.messageId)
   if (Number(updated.changes) !== 1) return { claimed: false, record: null }
   return { claimed: true, record: getSessionMessage(database, p.messageId) }
-}
-
-/** Why a waiting message is held back from the hook, for the owner's list; it changes nothing else. */
-export function holdSessionMessage(database: DatabaseConnection, messageId: string, detail: string): boolean {
-  const updated = database.prepare(
-    "UPDATE session_message SET detail = ? WHERE message_id = ? AND state = 'waiting' AND detail IS NOT ?"
-  ).run(detail, messageId, detail)
-  return Number(updated.changes) === 1
 }
 
 /**
@@ -461,7 +454,6 @@ export const MESSAGE_OPERATIONS = Object.freeze({
   finishMessagePaste,
   messageTakeCandidates,
   claimMessageForHook,
-  holdSessionMessage,
   reportMessagePrinted,
   deleteMessagesSentBefore
 })

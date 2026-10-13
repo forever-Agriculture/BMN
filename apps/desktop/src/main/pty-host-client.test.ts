@@ -87,6 +87,34 @@ describe('PtyHostClient lifecycle', () => {
     expect(listener).toHaveBeenCalledWith(state)
   })
 
+  it('answers the host\'s question about a message with what the app\'s answerer says, under the question\'s id (Epic 66)', async () => {
+    const { client, process } = await connectedClient()
+    const question = { kind: 'provider', destination: { provider: 'openai', host: 'default:openai', basis: 'observed-default', default: true }, senderRoot: '/synthetic/repo' } as const
+    const answerer = vi.fn(() => ({ allowed: true, reason: 'OpenAI may see private work' }))
+    client.answerMessageTeam(answerer)
+    process.postMessage.mockClear()
+
+    process.emit('message', { kind: 'message-team-question', id: 'team-7', question })
+
+    expect(answerer).toHaveBeenCalledWith(question)
+    expect(process.postMessage.mock.calls).toEqual([[{ kind: 'message-team-answer', id: 'team-7', answer: { allowed: true, reason: 'OpenAI may see private work' } }]])
+  })
+
+  it('answers a question as failed when nobody answers or the answer throws, so the host never waits for nothing', async () => {
+    const { client, process } = await connectedClient()
+    process.postMessage.mockClear()
+    process.emit('message', { kind: 'message-team-question', id: 'team-1', question: { kind: 'source-root', folder: '/synthetic/repo' } })
+    client.answerMessageTeam(() => { throw new Error('NOT_APPROVED') })
+    process.emit('message', { kind: 'message-team-question', id: 'team-2', question: { kind: 'source-root', folder: '/synthetic/repo' } })
+    // A question in a shape the app does not know is not answered at all.
+    process.emit('message', { kind: 'message-team-question', id: 'team-3', question: { kind: 'roster' } })
+
+    expect(process.postMessage.mock.calls).toEqual([
+      [{ kind: 'message-team-answer', id: 'team-1', answer: { failed: true } }],
+      [{ kind: 'message-team-answer', id: 'team-2', answer: { failed: true } }]
+    ])
+  })
+
   it('times out a hung control request with a typed error', async () => {
     const { client } = await connectedClient({ requestTimeoutMs: 5 })
     const startedAt = Date.now()

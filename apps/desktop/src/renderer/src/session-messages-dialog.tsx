@@ -119,7 +119,7 @@ export function MessagesSwitchDialog(props: { workspaceName: string; onConfirm()
       <ul>
         {SESSION_MESSAGES_HELP.map((line) => <li key={line}>{line}</li>)}
       </ul>
-      <p className="dialog-note">BMN stamps where each message is from and never presses Enter for one. You read, paste and pause them in Messages….</p>
+      <p className="dialog-note">BMN stamps where each message is from and never presses Enter for one. Messages… in this menu is where you read, paste and pause them.</p>
       <div className="dialog-actions">
         <button type="button" className="ghost" autoFocus onClick={props.onClose}>Cancel</button>
         <button type="button" className="primary" onClick={() => { props.onClose(); props.onConfirm() }}>Switch on</button>
@@ -298,8 +298,6 @@ export function SessionMessagesDialog(props: {
                         <dd className="path" title={message.senderRoot}><bdi>{message.senderRoot}</bdi></dd>
                         <dt>Sent</dt>
                         <dd>{localTime(message.sentAt)}</dd>
-                        <dt>State</dt>
-                        <dd>{row.state}</dd>
                       </dl>
                       <div className="message-actions">
                         {control.offered ? (

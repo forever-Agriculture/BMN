@@ -97,7 +97,6 @@ import { PortWatch } from './port-watch'
 import { AGENT_HISTORY_STATE_KEY, AgentHistory, readHistoryState, type AgentHistoryAdapter } from './agent-history'
 import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
 import { SessionMessages, type MessageDestination } from './session-messages'
-import { messageProviderAnswer, messageSourceRoot } from './session-message-provider'
 
 /** A listed session plus its conversation route; `null` when the session has no stored binding. */
 type ListedSession = SessionRecord & {
@@ -168,8 +167,14 @@ export interface CompanionServiceOptions {
   proc?: ProcReader
   /** Where the health watch reads sensors; tests and the self-test host hand it a fixture tree. */
   health?: HealthReaderOptions
-  /** Epic 66.4: whether a receiving agent's provider may see a sender's work; tests hand it a fixed team. */
-  messageProviderAnswer?: (destination: MessageDestination, senderRoot: string) => { allowed: boolean; reason: string }
+  /**
+   * Epic 66: the two answers about a message that only the app's entry point may give, because nothing of the
+   * owner's team is read in this process (R60-NFR3): the Git root a folder belongs to, by the prompt guard's
+   * rule, and whether a receiving agent's provider may see a sender's work. Without them a send and a hook's
+   * hand-over are refused; the owner's Paste needs neither.
+   */
+  messageSourceRoot?: (folder: string) => Promise<string> | string
+  messageProviderAnswer?: (destination: MessageDestination, senderRoot: string) => Promise<{ allowed: boolean; reason: string }> | { allowed: boolean; reason: string }
 }
 
 function invalid(message: string): never {
@@ -555,8 +560,8 @@ export class CompanionService {
       },
       changed: () => this.emit('messages', null),
       now: () => this.now(),
-      sourceRoot: messageSourceRoot,
-      providerAnswer: options.messageProviderAnswer ?? messageProviderAnswer,
+      sourceRoot: options.messageSourceRoot ?? (() => Promise.reject(new Error('The app does not answer for a folder\'s repository'))),
+      providerAnswer: options.messageProviderAnswer ?? (() => Promise.reject(new Error('The app does not answer for the approved team'))),
       confirmedKeepDays: async () => (await options.database.companion('getSettings')).agentHistory.confirmedKeepDays
     })
     this.producers = new LiveProducers((sessionId) => options.manager.liveIncarnationId(sessionId),

@@ -227,11 +227,35 @@ The same workspace results view lists pending and uncertain handoffs for either 
 destination workspace, with both names and a route to review the exact draft in Files. Opening
 that view never pastes or submits a handoff. Its draft list is bounded, not a complete history.
 
+**Messages between sessions.** A handoff waits for you; a message is for the short thing one agent
+must tell another while both work: "hold any commit on local main". A workspace's ⋯ menu has
+**Sessions here may message each other**, off by default. With it on, agents in that workspace
+can see each other's session names (`bmn peers`) and leave each other short messages
+(`bmn tell`), and a message can influence an agent that runs with wider permissions than its
+sender. A session's ⋯ menu has **Receive messages** to shut that one session out. BMN stamps
+where each message is from: the session, the folder the command ran in and the app BMN last saw
+there. The stamp says the message was written in that session, not by you, and that it is context,
+not an instruction; it does not prove which program wrote the text.
+
+BMN never presses Enter for a message and never wakes a resting agent with one. A working Codex
+agent gets a waiting message from its own hook after its next tool call, when its provider may see
+the sender's folder ([measured per app](session-messages.md)); for every other app, and whenever
+you want, **Messages…** in the workspace's ⋯ menu lists the latest 200 and **Paste into
+<session>** appends one to that session's input without pressing Enter. A message is delivered
+once: by the hook or by your Paste, whichever takes it first.
+
+**Pause messages** in that dialog refuses new ones until **Resume**. Twelve messages between two
+sessions in an hour pause that pair, forty in a workspace pause the workspace, and you get one
+notice for it; a pause lasts until you resume it. Messages never go to Telegram. They are kept as
+long as Preferences → History → Keep agent history says, counted from sending, and are deleted
+with either of their sessions. Limits and the exact rules:
+[agent-control.md](agent-control.md#messages-between-sessions).
+
 ### How agents reach the app
 
 Every session gets the `bmn` command and a token scoped to that session and run. An agent can list
-sessions, publish a file, report progress, ask you a question, prepare a handoff, or send text to
-its own terminal. `bmn help agents` prints the etiquette page agents can read. Preferences →
+sessions, publish a file, report progress, ask you a question, prepare a handoff, leave a message
+for a peer session where you allowed it, or send text to its own terminal. `bmn help agents` prints the etiquette page agents can read. Preferences →
 **Local control** shows whether the control socket is listening, with its path; a runtime
 path that is too long disables the socket, and Preferences says so. **Check configured hooks**
 reads BMN's existing checker report for Claude Code, Codex and OpenCode, including missing

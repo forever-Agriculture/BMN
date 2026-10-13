@@ -44,6 +44,12 @@ import { readFileReference } from './file-reference-reader'
 import { inspectRepositoryIdentity } from './repository-identity'
 import { readDevAutoRuns } from './dev-auto-runs'
 import { isDevAutoRunsParams } from '@bmn/protocol'
+import {
+  isMessageTeamAnswerMessage, type MessageTeamAnswer, type MessageTeamQuestion, type MessageTeamQuestionMessage
+} from '@bmn/protocol'
+
+/** How long the host waits for the app's answer about a message's folder or provider before it reads none. */
+const MESSAGE_TEAM_ANSWER_MS = 200
 import { LaunchSetCoordinator } from './launch-set-coordinator'
 import { nativeLoadFailureMessage } from './native-load-error'
 import { ensureApplicationRoots, resolveApplicationRoots } from './roots'
@@ -312,6 +318,21 @@ async function start(): Promise<void> {
     sessionPath: () => companionHolder.current?.sessionPath() ?? process.env.PATH ?? ''
   })
   const cliPath = process.env.BMN_CLI_PATH ?? join(__dirname, '..', '..', 'bin', 'bmn')
+  /**
+   * Questions about a message put to the app's entry point, each waiting for its answer. An answer that does
+   * not come in time is a failure, which the caller reads as a refusal: a hook has 300 ms for everything.
+   */
+  const teamQuestions = new Map<string, { resolve(answer: MessageTeamAnswer): void; timer: NodeJS.Timeout }>()
+  let teamQuestionNumber = 0
+  const askTeam = (question: MessageTeamQuestion): Promise<MessageTeamAnswer> => new Promise((resolve) => {
+    const id = `team-${++teamQuestionNumber}`
+    const timer = setTimeout(() => {
+      teamQuestions.delete(id)
+      resolve({ failed: true })
+    }, MESSAGE_TEAM_ANSWER_MS)
+    teamQuestions.set(id, { resolve, timer })
+    parentPort.postMessage({ kind: 'message-team-question', id, question } satisfies MessageTeamQuestionMessage)
+  })
   let selfTestClock: Date | undefined
   const selfTestQuietTrace: Array<Record<string, unknown>> = []
   let stopSelfTestQuietTrace: (() => void) | undefined
@@ -336,6 +357,17 @@ async function start(): Promise<void> {
     ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_PAGE_AFTER_MS
       ? { pageAfterMs: Number(process.env.BMN_SELF_TEST_PAGE_AFTER_MS) }
       : {}),
+    // Epic 66: the app's entry point alone reads the owner's team; this process only asks it (R60-NFR3).
+    messageSourceRoot: async (folder) => {
+      const answer = await askTeam({ kind: 'source-root', folder })
+      if (!('root' in answer)) throw new Error('The app did not answer for the folder')
+      return answer.root
+    },
+    messageProviderAnswer: async (destination, senderRoot) => {
+      const answer = await askTeam({ kind: 'provider', destination, senderRoot })
+      if (!('allowed' in answer)) throw new Error('The app did not answer for the approved team')
+      return answer
+    },
     emit: (message) => parentPort.postMessage(message)
   })
   companionHolder.current = companion
@@ -861,6 +893,14 @@ async function start(): Promise<void> {
   }
 
   parentPort.on('message', (event: ParentMessageEvent) => {
+    if (isMessageTeamAnswerMessage(event.data)) {
+      const pending = teamQuestions.get(event.data.id)
+      if (!pending) return
+      teamQuestions.delete(event.data.id)
+      clearTimeout(pending.timer)
+      pending.resolve(event.data.answer)
+      return
+    }
     if (
       event.data &&
       typeof event.data === 'object' &&

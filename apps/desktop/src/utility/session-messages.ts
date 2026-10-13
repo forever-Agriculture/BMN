@@ -14,6 +14,7 @@ import {
   sessionMessageStamp,
   sessionMessageStateWord,
   stripFormatCharacters,
+  type MessageDestination,
   type SessionMessageListing,
   type SessionMessageReceipt,
   type SessionMessageRecord,
@@ -24,13 +25,7 @@ import {
 import type { DatabaseWorkerClient } from './database-client'
 import { HostControlError } from './session-manager'
 
-/** Where a receiving agent sends work, as its own hook resolved it with the prompt guard's resolver. */
-export interface MessageDestination {
-  provider: string
-  host: string
-  basis: string
-  default: boolean
-}
+export type { MessageDestination }
 
 export interface SessionMessagesOptions {
   database: Pick<DatabaseWorkerClient, 'companion'>
@@ -46,18 +41,24 @@ export interface SessionMessagesOptions {
   /** Something the Messages dialog shows has changed. */
   changed(): void
   now(): Date
-  /** The Git root (or the folder itself) a resolved, existing folder belongs to. */
-  sourceRoot(folder: string): string
+  /**
+   * The Git root (or the folder itself) a resolved, existing folder belongs to, by the prompt guard's own rule.
+   * The host does not work it out: the app's entry point answers (see `MessageTeamQuestion`).
+   */
+  sourceRoot(folder: string): Promise<string> | string
   /**
    * Whether the provider behind `destination` may see private work under `senderRoot`, by the approved team
-   * read at this moment. It throws when the team cannot be read; that is a refusal, never a pass.
+   * read at this moment. Answered by the app's entry point: the host never reads the team's files. It fails
+   * when the team cannot be read or the app does not answer; that is a refusal, never a pass.
    */
-  providerAnswer(destination: MessageDestination, senderRoot: string): { allowed: boolean; reason: string }
+  providerAnswer(destination: MessageDestination, senderRoot: string): Promise<{ allowed: boolean; reason: string }> | { allowed: boolean; reason: string }
   /** The confirmed "Keep agent history" days: a number, null for Never, undefined when none is confirmed. */
   confirmedKeepDays(): Promise<number | null | undefined>
 }
 
 const DAY_MS = 86_400_000
+/** How many held-back reasons one run keeps; the oldest leave first. */
+const HELD_MAX = 500
 
 function invalid(message: string): never {
   throw new HostControlError(ERROR_CODES.invalidArgument, message)
@@ -72,7 +73,35 @@ function appName(app: string | null): string | null {
  * owner's press, and nothing here opens a request except the one notice of a pause.
  */
 export class SessionMessages {
+  /**
+   * Why a hook was not handed a waiting message, by message id. The reason names a provider of the owner's
+   * team, and nothing of the team may reach the database, a Backup export, Telegram or a log (R60-NFR3): it
+   * lives here for this run only, as a prompt guard stop does, and the next refused event writes it again.
+   */
+  private readonly held = new Map<string, string>()
+
   constructor(private readonly options: SessionMessagesOptions) {}
+
+  private hold(messageId: string, reason: string): boolean {
+    if (this.held.get(messageId) === reason) return false
+    this.held.delete(messageId)
+    this.held.set(messageId, reason)
+    for (const oldest of this.held.keys()) {
+      if (this.held.size <= HELD_MAX) break
+      this.held.delete(oldest)
+    }
+    return true
+  }
+
+  /** The list as the owner reads it: each waiting message with the reason a hook was not handed it, if any. */
+  private shown(listing: SessionMessageListing): SessionMessageListing {
+    return {
+      ...listing,
+      messages: listing.messages.map((message) => ({
+        ...message, detail: message.state === 'waiting' ? this.held.get(message.messageId) ?? null : null
+      }))
+    }
+  }
 
   private iso(): string {
     return this.options.now().toISOString()
@@ -109,7 +138,12 @@ export class SessionMessages {
     if (!sender) invalid('The sending session is unavailable')
     const folder = await this.existingFolder(p.senderCwd)
     if (folder === null) invalid('BMN cannot find the folder this command ran in; run bmn tell from an existing folder')
-    const senderRoot = this.options.sourceRoot(folder)
+    let senderRoot: string
+    try {
+      senderRoot = await this.options.sourceRoot(folder)
+    } catch {
+      return invalid('BMN cannot tell which repository the folder this command ran in belongs to; try again')
+    }
     const stamp = sessionMessageStamp({
       sessionId: sender.sessionId, name: sender.name, folder: stripFormatCharacters(senderRoot),
       app: appName(await this.options.lastApp(sender.sessionId))
@@ -163,20 +197,20 @@ export class SessionMessages {
     }
   }
 
-  list(workspaceId: string): Promise<SessionMessageListing> {
-    return this.options.database.companion('listWorkspaceMessages', workspaceId)
+  async list(workspaceId: string): Promise<SessionMessageListing> {
+    return this.shown(await this.options.database.companion('listWorkspaceMessages', workspaceId))
   }
 
   async pause(workspaceId: string, paused: boolean): Promise<SessionMessageListing> {
     const listing = await this.options.database.companion('setWorkspaceMessagePause', workspaceId, paused, this.iso())
     this.options.changed()
-    return listing
+    return this.shown(listing)
   }
 
   async resumePair(workspaceId: string, firstSessionId: string, secondSessionId: string): Promise<SessionMessageListing> {
     const listing = await this.options.database.companion('resumeMessagePair', workspaceId, firstSessionId, secondSessionId, this.iso())
     this.options.changed()
-    return listing
+    return this.shown(listing)
   }
 
   /**
@@ -194,6 +228,7 @@ export class SessionMessages {
     }
     const claim = await database.companion('claimMessageForPaste', messageId, expectedIncarnationId, this.iso())
     if (!claim.claimed) return claim.record
+    this.held.delete(messageId)
     this.options.changed()
     if (this.options.liveIncarnationId(message.receiverSessionId) !== expectedIncarnationId) {
       await database.companion('finishMessagePaste', messageId, 'waiting')
@@ -210,8 +245,8 @@ export class SessionMessages {
    * `message.take`, asked by the receiving agent's own hook after a tool call: the oldest message that may be
    * handed over at this moment, claimed in one step, or nothing. The store answers for expiry, memberships,
    * switches and pauses; this asks, per message, whether the provider the hook resolved may see private work in
-   * the root stored with that message. A message refused for its provider stays waiting and says why; a later
-   * one from another folder is not held up behind it. One message per event.
+   * the root stored with that message. A message refused for its provider stays waiting and the list says why
+   * for as long as this run lasts; a later one from another folder is not held up behind it. One message per event.
    */
   async take(p: {
     sessionId: string
@@ -227,13 +262,13 @@ export class SessionMessages {
     for (const candidate of candidates) {
       let answer: { allowed: boolean; reason: string }
       try {
-        answer = this.options.providerAnswer(p.destination, candidate.senderRoot)
+        answer = await this.options.providerAnswer(p.destination, candidate.senderRoot)
       } catch {
         answer = { allowed: false, reason: 'BMN could not read the approved team' }
       }
       if (!answer.allowed) {
-        const detail = `Not handed over by the hook: ${answer.reason}. Paste hands it over on your word.`.slice(0, 400)
-        if (await database.companion('holdSessionMessage', candidate.messageId, detail)) this.options.changed()
+        const detail = `Not handed over by the hook: ${stripFormatCharacters(answer.reason)}. Paste hands it over on your word.`.slice(0, 400)
+        if (this.hold(candidate.messageId, detail)) this.options.changed()
         continue
       }
       const claimId = randomUUID()
@@ -243,6 +278,7 @@ export class SessionMessages {
       }, this.iso())
       // Lost to the owner's Paste, or a condition ended between the two reads: nothing more on this event.
       if (!claim.claimed || claim.record === null) return { message: null }
+      this.held.delete(candidate.messageId)
       this.options.changed()
       return { message: { messageId: claim.record.messageId, claimId, stamp: claim.record.stamp, text: claim.record.text } }
     }
