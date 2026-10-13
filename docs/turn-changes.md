@@ -188,6 +188,24 @@ cancelled at another moment.
   "Incomplete: 100 MiB read". A work tree with more than 20,000 covered entries, or one that
   would pass 1 GiB in the store, is never whole.
 
+### In the app
+
+The app runs this mechanism from `apps/desktop/src/utility/turn-changes-*.ts`: the Git commands
+(`turn-changes-git.ts`, the only file of the feature that starts a process), the store, the
+capture, the comparison, and an engine that runs in a worker thread of its own
+(`turn-changes-worker.ts`), so that no scan and no comparison runs on the thread that keeps
+terminals flowing. Its tests repeat what this page proves on made-up repositories at every run of
+`pnpm run test:unit`, the hostile repository under its trace included
+(`turn-changes-hostile.test.ts`; it needs `strace` and fails, never passes over, where it cannot
+trace). The app differs from the measured script in three places, each the stricter way:
+
+- A bare repository reads "not supported here: a bare repository"; the script said
+  "unavailable".
+- The 2 s limit holds for every capture, the first one too, and a listing cut short by it keeps
+  nothing.
+- A path that is only in the later capture is "added" when the file was born at least 1 ms after
+  the earlier scan began; a file born in that very millisecond reads "entered what is covered".
+
 ## The apps
 
 ### How the test works

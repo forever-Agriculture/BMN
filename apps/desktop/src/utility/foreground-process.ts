@@ -1,4 +1,5 @@
-import { readFileSync, statSync } from 'node:fs'
+// MODULE: foreground-process.ts - which process holds the foreground of a session's terminal, as Linux reports it, and the folder that process is in
+import { readFileSync, readlinkSync, statSync } from 'node:fs'
 
 function processStat(pid: number) {
   const text = readFileSync(`/proc/${pid}/stat`, 'utf8')
@@ -32,5 +33,20 @@ export function foregroundProcessIdentity(ptyPid: number): string | null {
       current.foreground !== pid || leader.start !== process.start || leader.group !== pid ||
       leader.foreground !== pid || leader.tty !== terminal.tty) return null
     return `${terminal.tty}:${pid}:${process.start}:${executable.dev}:${executable.ino}`
+  } catch { return null }
+}
+
+/**
+ * The folder Linux reports for the process an identity names; null when that process is gone or is
+ * another one by now. The link is read first and the process checked after, so a reused process id
+ * cannot lend its folder.
+ */
+export function foregroundProcessFolder(identity: string): string | null {
+  const [, pidText, start] = identity.split(':')
+  const pid = Number(pidText)
+  if (process.platform !== 'linux' || !Number.isSafeInteger(pid) || pid <= 0 || !start) return null
+  try {
+    const folder = readlinkSync(`/proc/${pid}/cwd`)
+    return processStat(pid)?.start === start && folder.startsWith('/') ? folder : null
   } catch { return null }
 }

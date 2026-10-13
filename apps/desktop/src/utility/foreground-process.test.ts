@@ -1,7 +1,8 @@
+// MODULE: foreground-process.test.ts - the foreground process's identity and folder against made-up /proc rows
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { foregroundProcessIdentity } from './foreground-process'
+import { foregroundProcessFolder, foregroundProcessIdentity } from './foreground-process'
 
-const fs = vi.hoisted(() => ({ readFileSync: vi.fn(), statSync: vi.fn() }))
+const fs = vi.hoisted(() => ({ readFileSync: vi.fn(), readlinkSync: vi.fn(), statSync: vi.fn() }))
 vi.mock('node:fs', () => fs)
 
 function stat(pid: number, group: number, foreground: number, start: string, tty = 34817, state = 'S') {
@@ -40,6 +41,22 @@ describe.skipIf(process.platform !== 'linux')('host foreground process identity'
     if (kind === 'no-tty') rows.set('/proc/100/stat', stat(100, 100, 200, '10', 0))
     if (kind === 'shell') rows.set('/proc/200/stat', stat(200, 200, 200, '20').replace('(name with ) parentheses)', '(bash)'))
     expect(foregroundProcessIdentity(100)).toBeNull()
+  })
+
+  it('reads the folder of the process an identity names, and none once that process is another or gone', () => {
+    fs.readlinkSync.mockReset().mockImplementation(path => {
+      if (path !== '/proc/200/cwd') throw new Error('unreadable')
+      return '/made/up/folder'
+    })
+    const identity = foregroundProcessIdentity(100) as string
+    expect(foregroundProcessFolder(identity)).toBe('/made/up/folder')
+    // The process id was given to another process: its start time differs.
+    rows.set('/proc/200/stat', stat(200, 200, 200, '21'))
+    expect(foregroundProcessFolder(identity)).toBeNull()
+    rows.delete('/proc/200/stat')
+    expect(foregroundProcessFolder(identity)).toBeNull()
+    expect(foregroundProcessFolder('34817:0:20:1:2')).toBeNull()
+    expect(foregroundProcessFolder('not an identity')).toBeNull()
   })
 
   it('refuses a foreground switch during its synchronous snapshot', () => {
