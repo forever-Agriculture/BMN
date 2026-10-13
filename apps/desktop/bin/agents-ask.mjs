@@ -473,6 +473,40 @@ function plain(value) {
 }
 
 /**
+ * A passage without the marks markdown writing adds to a page's words. Both agent apps hand their
+ * model a page as markdown, so a passage "copied word for word" can carry a heading's #, a bullet,
+ * a number, a quote's >, emphasis, a link's address or a table's bars that the page itself does not
+ * show. Only marks go. What may be text stays: a * _ or ` between two letters or digits or
+ * standing alone between words (2**3, snake_case), a - + or > before a digit (a sign, not a
+ * bullet or a quote), and every mark behind a backslash.
+ */
+function unmarked(passage) {
+  return passage
+    // A picture leaves nothing on the page's words; a link leaves its words, not its address.
+    .replace(/(?<!\\)!\[[^\]]*\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+"[^"]*")?\)/g, ' ')
+    .replace(/(?<!\\)\[([^\]]*)\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+"[^"]*")?\)/g, '$1')
+    .replace(/(?<!\\)\[([^\]]*)\]\[[^\]]*\]/g, '$1')
+    .replace(/(?<!\\)<(https?:\/\/[^>\s]+)>/g, '$1')
+    // The rule under a table's head, then each line's quote, heading, bullet or number.
+    .replace(/^[ \t|:-]*-{3,}[ \t|:-]*$/gm, ' ')
+    .replace(/^[ \t]*(?:>[ \t]+(?![ \t\d]))*(?:#{1,6}[ \t]+|[-+][ \t]+(?![ \t\d])|\*[ \t]+|\d{1,3}[.)][ \t]+)?/gm, '')
+    // Emphasis and code marks that open or close a word.
+    .replace(/(?<![\p{L}\p{N}*_`\\])[*_`]+(?=[^\s*_`])|(?<=[^\s*_`\\])[*_`]+(?![\p{L}\p{N}*_`])/gu, '')
+    .replace(/(?<!\\)\|/g, ' ')
+    .replace(/\\([!-/:-@[-`{-~])/g, '$1')
+}
+
+/**
+ * Whether a page's words show the passage: as it was written, or without its markdown marks where
+ * what is left is still a passage (a link's address alone is not one).
+ */
+function shows(pageWords, passage) {
+  if (pageWords.includes(plain(passage))) return true
+  const words = plain(unmarked(passage))
+  return words.length >= PASSAGE_MIN && pageWords.includes(words)
+}
+
+/**
  * Reads each cited page once, the way anyone could, and marks every claim by what the page showed:
  * the passage is there, the page was read and the passage is not there, or the page could not be
  * read. Stop and the question's time hold here too: a page not read by then is not readable.
@@ -497,7 +531,7 @@ export async function markClaims(claims, { fetchPage = fetchPublicPage, signal =
       pages.set(claim.source, page)
     }
     marked.push(page.ok
-      ? { ...claim, mark: page.text.includes(plain(claim.passage)) ? MARKS.found : MARKS.missing }
+      ? { ...claim, mark: shows(page.text, claim.passage) ? MARKS.found : MARKS.missing }
       : { ...claim, mark: MARKS.unreadable, why: page.reason })
   }
   return marked

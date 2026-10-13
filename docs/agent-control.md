@@ -1542,8 +1542,11 @@ A lone `-` (`… | bmn research ask -`) says "standard input" out loud and chang
 - **The answer.** A few sentences, then each claim with the page it rests on and a short passage
   copied from that page. BMN reads each cited page itself and marks every claim: "passage found
   on the page", "page read, passage not found" or "page not readable". Only the first is
-  evidence. An answer that is not the asked shape comes back as "no usable answer" with the run's
-  id; BMN never repairs one.
+  evidence. A passage is found when the page shows its words in the same order. The marks
+  markdown writing adds to them (a heading's `#`, a bullet, bold, a link's address, a table's
+  bars) are not held against it, since an agent app shows its model a page as markdown. An
+  answer that is not the asked shape comes back as "no usable answer" with the run's id; BMN
+  never repairs one.
 - **The limits.** One research at a time, Models research included: a second one is refused
   with "a research is running", never queued. One lock holds this across the app and the
   command line. It is a row of small files, `research/lock.1`, `lock.2` and so on, and the one
