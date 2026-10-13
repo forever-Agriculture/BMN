@@ -1339,7 +1339,7 @@ describe('bmn peers and bmn tell (Story 66.2)', () => {
     ['no destination', ['tell', '--text', 'hi', '--key', 'k'], undefined, 'tell expects a session id and --text T or --text-file -'],
     ['two destinations', ['tell', 'session-2', 'session-3', '--text', 'hi', '--key', 'k'], undefined, 'tell expects a session id and --text T or --text-file -'],
     ['two text sources', ['tell', 'session-2', '--text', 'hi', '--text-file', '-', '--key', 'k'], 'piped', 'tell takes its text from one source: --text or --text-file -, not both'],
-    ['more than 2,000 piped characters', ['tell', 'session-2', '--text-file', '-', '--key', 'k'], 'x'.repeat(2001), 'text from standard input must be at most 2000 characters'],
+    ['more piped text than BMN reads at all', ['tell', 'session-2', '--text-file', '-', '--key', 'k'], 'x'.repeat(16 * 1024 + 1), 'text from standard input must be at most 2000 characters'],
     ['an option of another command', ['tell', 'session-2', '--text', 'hi', '--key', 'k', '--submit'], undefined, 'tell does not accept --submit'],
     ['a key on status', ['tell', 'status', '--key', 'k'], undefined, 'tell status expects at most one message id and no other options']
   ])('refuses %s as a usage error and sends nothing', async (_label, args, input, message) => {
@@ -1349,6 +1349,21 @@ describe('bmn peers and bmn tell (Story 66.2)', () => {
 
     expect(result).toEqual({ code: 2, stdout: '', stderr: `bmn: ${message}\nRun "bmn help" for usage.\n` })
     expect(fixture.handlers.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('counts 2,000 characters after invisible ones are removed, the same from --text and from standard input', async () => {
+    const fixture = await cliFixture()
+    const options = { env: fixture.sessionEnv, cwd: fixture.root }
+    const full = `${'y'.repeat(1000)}\u200b${'y'.repeat(1000)}\u2066`
+    const over = `${'y'.repeat(2001)}\u200b`
+    const refusal = { code: 1, stdout: '', stderr: 'bmn: INVALID_ARGUMENT: Message text must be at most 2000 characters\n' }
+
+    expect((await runCli(['tell', 'session-2', '--text', full, '--key', 'inline-full'], options)).code).toBe(0)
+    expect((await runCli(['tell', 'session-2', '--text-file', '-', '--key', 'piped-full'], { ...options, input: `${full}\n` })).code).toBe(0)
+    expect(fixture.handlers.sendMessage.mock.calls.map(([sent]) => sent.text)).toEqual(['y'.repeat(2000), 'y'.repeat(2000)])
+    expect(await runCli(['tell', 'session-2', '--text', over, '--key', 'inline-over'], options)).toEqual(refusal)
+    expect(await runCli(['tell', 'session-2', '--text-file', '-', '--key', 'piped-over'], { ...options, input: over })).toEqual(refusal)
+    expect(fixture.handlers.sendMessage).toHaveBeenCalledTimes(2)
   })
 
   it('prints the app\'s refusal as it is, with the one wording for a session that is not a peer', async () => {
@@ -1549,6 +1564,37 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     // From its question to its exit the hook has at most the 300 ms it may add to an event; the rest is the
     // process ending and this test noticing it.
     expect(gone).toBeLessThan(300 + 400)
+  })
+
+  it('counts BMN\'s word that a message waits inside the limit: a slow answer to the report leaves less for the rest', async () => {
+    const fixture = await cliFixture()
+    const session = await codexSession(fixture.root)
+    let reported = 0
+    fixture.handlers.observeHookEvent.mockImplementation(() => {
+      reported = Date.now()
+      return new Promise((resolve) => setTimeout(() => resolve({ recorded: true, messageWaiting: true }), 200))
+    })
+    // On a clock started after that answer, this hand-over would still fit and be printed.
+    fixture.handlers.takeMessage.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve({ message: MESSAGE }), 110)))
+
+    const result = await runCli(['hook', 'codex'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
+    const gone = Date.now() - reported
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.reportMessage).not.toHaveBeenCalled()
+    expect(gone).toBeLessThan(300 + 400)
+  })
+
+  it('asks for nothing when BMN\'s answer to the report used the limit up', async () => {
+    const fixture = await cliFixture()
+    const session = await codexSession(fixture.root)
+    fixture.handlers.observeHookEvent.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve({ recorded: true, messageWaiting: true }), 350)))
+    fixture.handlers.takeMessage.mockResolvedValue({ message: MESSAGE })
+
+    const result = await runCli(['hook', 'codex'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.takeMessage).not.toHaveBeenCalled()
   })
 
   it('says in `hooks check` whether each app\'s hook hands messages over, and on which version that was measured', async () => {

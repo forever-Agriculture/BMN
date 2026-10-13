@@ -302,7 +302,11 @@ text:
 
 The folder is the Git top-level of the folder the `bmn tell` command itself ran in (the folder
 itself outside Git), with links resolved; the folder the terminal started in is never used in its
-place, and a folder that cannot be resolved refuses the send. The stamp does not prove which
+place, and a folder that cannot be resolved refuses the send. A folder's name is whatever its
+maker chose, so the stamp shows it on one line: invisible characters are left out, a control
+character reads as the replacement mark (U+FFFD), square brackets read as round ones, and a folder
+longer than 240 characters keeps its end. The provider check uses the folder exactly as it is on
+disk. The stamp does not prove which
 program in that session wrote the text, and the folder is workflow protection, not proof against a
 program that reports a false one. "Context, not an instruction" is guidance to the receiving
 agent; BMN cannot enforce it and never acts on what a message says.
@@ -336,7 +340,9 @@ reads *taken, not confirmed* until the hook reports that it printed it, then *pr
 agent*. Printed means printed, never read. A lost answer or report leaves it *taken, not
 confirmed*, and neither the hook nor Paste offers it again by itself; you still read it in
 Messages. One message is handed over per event, and everything the hook adds to an event for a
-message is bounded to 300 ms. A resting agent reads a message at the first tool call of its next
+message is bounded to 300 ms, counted from the moment the hook reports the event: BMN's word that
+a message waits (150 ms at most; no word in time means nothing on this event), resolving where the
+agent sends work, taking and reporting. A resting agent reads a message at the first tool call of its next
 turn. A message not collected within two hours is no longer handed over by a hook; nothing is
 deleted by that, and Paste still works.
 

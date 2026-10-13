@@ -35,7 +35,7 @@ const PIPED_FIELDS = {
   progress: { option: 'detail-file', twin: 'detail', field: 'detail', limit: 2000, unit: 'characters' },
   send: { option: 'text-file', twin: null, field: 'text', limit: 64 * 1024, unit: 'bytes' },
   handoff: { option: 'text-file', twin: 'text', field: 'text', limit: 16 * 1024, unit: 'bytes' },
-  tell: { option: 'text-file', twin: 'text', field: 'text', limit: 2000, unit: 'characters' }
+  tell: { option: 'text-file', twin: 'text', field: 'text', limit: 2000, unit: 'characters', received: 16 * 1024 }
 }
 /** The longest `answer take --wait` the app accepts (control-server MAX_ANSWER_WAIT_SECONDS). */
 const MAX_ANSWER_WAIT_SECONDS = 25
@@ -2078,10 +2078,11 @@ function guardReport(agent, event, verdict, stopped) {
  * to this event's report, that something waits. The hook resolves where its agent sends work with the prompt
  * guard's own resolver and sends that whole destination with one `message.take`; BMN decides, with the folder
  * the message came from, whether that provider may read it. What comes back is printed in the app's measured
- * answer form and then reported as printed, which never means read. Resolving, taking and reporting share one
- * limit; past it nothing is printed, and a claim BMN made anyway stays "taken, not confirmed".
+ * answer form and then reported as printed, which never means read. BMN's word that something waits, resolving,
+ * taking and reporting share one limit, counted from `reported`, the moment the event's report was sent; past it
+ * nothing is printed, and a claim BMN made anyway stays "taken, not confirmed".
  */
-async function handMessage(agent, event, agentPid, procRoot, socketPath, token) {
+async function handMessage(agent, event, agentPid, procRoot, socketPath, token, reported) {
   if (!agentPid || (event.agent_id !== undefined && event.agent_id !== null)) return
   let guard
   try {
@@ -2091,12 +2092,12 @@ async function handMessage(agent, event, agentPid, procRoot, socketPath, token) 
   }
   const measured = guard.MESSAGE_HANDOVER[agent]
   if (measured === undefined || measured.event !== event.hook_event_name) return
-  const started = Date.now()
-  const left = () => guard.MESSAGE_LIMIT_MS - (Date.now() - started)
+  const left = () => guard.MESSAGE_LIMIT_MS - (Date.now() - reported)
+  if (left() <= 0) return
   const destination = await guard.messageDestinationWithin({
     agent, pid: agentPid, procRoot,
     event: { cwd: event.cwd, session_id: event.session_id, transcript_path: event.transcript_path }
-  }, guard.MESSAGE_LIMIT_MS).catch(() => null)
+  }, left()).catch(() => null)
   if (destination === null || left() <= 0) return
   const take = { method: 'message.take', params: { agent, pid: agentPid, destination } }
   const report = (outcomes) => {
@@ -2161,12 +2162,18 @@ async function runHook(args) {
   const observable = hookEventName(event.hook_event_name) !== undefined
   if (requests.length === 0 && !observable) return 0
   const configDir = agent === 'claude' ? claudeConfigDir() : undefined
-  const calls = [...requests, (outcomes) => hookObservation(agent, event, requests, outcomes, apiHost, model, configDir)]
+  // What a message may add to an event is counted from the sending of this report, whose answer carries BMN's
+  // word on whether one waits.
+  let reported = Date.now()
+  const calls = [...requests, (outcomes) => {
+    reported = Date.now()
+    return hookObservation(agent, event, requests, outcomes, apiHost, model, configDir)
+  }]
   const outcomes = await callEach(socketPath, token, calls, HOOK_TIMEOUT_MS).catch(() => [])
   // BMN's answer to the report of this event says when a message waits for this session; without that word
   // the hook adds nothing to the event.
   if (outcomes[requests.length]?.result?.messageWaiting === true) {
-    await handMessage(agent, event, agentPid, procRoot, socketPath, token).catch(() => undefined)
+    await handMessage(agent, event, agentPid, procRoot, socketPath, token, reported).catch(() => undefined)
   }
   return 0
 }
@@ -2438,7 +2445,9 @@ function tellRequest(positionals, parsed) {
  */
 async function readPipedField(piped) {
   if (process.stdin.isTTY) throw new UsageError(`--${piped.option} - needs piped input, not a terminal`)
-  const cap = piped.unit === 'bytes' ? piped.limit + 1 : piped.limit * 4
+  // Where the app counts after its own cleaning (`received`), only what it would not even read is refused here.
+  const most = piped.received ?? piped.limit
+  const cap = piped.unit === 'bytes' ? most + 1 : most * 4
   const chunks = []
   let size = 0
   for await (const chunk of process.stdin) {
@@ -2456,7 +2465,7 @@ async function readPipedField(piped) {
   }
   // A heredoc always ends in a newline the agent did not mean; anything else is kept exactly.
   if (text.endsWith('\n')) text = text.slice(0, -1)
-  if ((piped.unit === 'bytes' ? Buffer.byteLength(text, 'utf8') : text.length) > piped.limit) throw tooLong
+  if ((piped.unit === 'bytes' ? Buffer.byteLength(text, 'utf8') : text.length) > most) throw tooLong
   return text
 }
 

@@ -7,6 +7,7 @@ import {
   ROSTER_APP_NAMES,
   SESSION_MESSAGE_HANDOVER,
   SESSION_MESSAGE_PAIR_HOURLY,
+  SESSION_MESSAGE_WAITING_CHECK_MS,
   SESSION_MESSAGE_WORKSPACE_HOURLY,
   cleanSessionMessageName,
   cleanSessionMessageText,
@@ -103,6 +104,11 @@ export class SessionMessages {
     }
   }
 
+  /** A send speaks for the process its token was given to, and for no later one in that terminal. */
+  private sameProcess(sessionId: string, incarnationId: string): void {
+    if (this.options.liveIncarnationId(sessionId) !== incarnationId) invalid('The sending session is running a different process now')
+  }
+
   private iso(): string {
     return this.options.now().toISOString()
   }
@@ -129,9 +135,7 @@ export class SessionMessages {
     text: string
     senderCwd: string
   }): Promise<{ messageId: string; state: 'waiting' }> {
-    if (this.options.liveIncarnationId(p.senderSessionId) !== p.senderIncarnationId) {
-      invalid('The sending session is running a different process now')
-    }
+    this.sameProcess(p.senderSessionId, p.senderIncarnationId)
     const cleaned = cleanSessionMessageText(p.text)
     if ('problem' in cleaned) invalid(cleaned.problem)
     const sender = await this.options.session(p.senderSessionId)
@@ -145,9 +149,11 @@ export class SessionMessages {
       return invalid('BMN cannot tell which repository the folder this command ran in belongs to; try again')
     }
     const stamp = sessionMessageStamp({
-      sessionId: sender.sessionId, name: sender.name, folder: stripFormatCharacters(senderRoot),
+      sessionId: sender.sessionId, name: sender.name, folder: senderRoot,
       app: appName(await this.options.lastApp(sender.sessionId))
     })
+    // The reads above took time, and the terminal may have been given another process meanwhile.
+    this.sameProcess(p.senderSessionId, p.senderIncarnationId)
     const outcome = await this.options.database.companion('sendSessionMessage', {
       messageId: randomUUID(), senderSessionId: p.senderSessionId, receiverSessionId: p.destinationSessionId,
       senderRoot, stamp, text: cleaned.text
@@ -259,18 +265,25 @@ export class SessionMessages {
     if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return { message: null }
     const database = this.options.database
     const candidates = await database.companion('messageTakeCandidates', p.sessionId, this.iso())
+    // One question per folder: the messages of one sender's repository share its answer for this event.
+    const answers = new Map<string, { allowed: boolean; reason: string }>()
     for (const candidate of candidates) {
-      let answer: { allowed: boolean; reason: string }
-      try {
-        answer = await this.options.providerAnswer(p.destination, candidate.senderRoot)
-      } catch {
-        answer = { allowed: false, reason: 'BMN could not read the approved team' }
+      let answer = answers.get(candidate.senderRoot)
+      if (answer === undefined) {
+        try {
+          answer = await this.options.providerAnswer(p.destination, candidate.senderRoot)
+        } catch {
+          answer = { allowed: false, reason: 'BMN could not read the approved team' }
+        }
+        answers.set(candidate.senderRoot, answer)
       }
       if (!answer.allowed) {
         const detail = `Not handed over by the hook: ${stripFormatCharacters(answer.reason)}. Paste hands it over on your word.`.slice(0, 400)
         if (this.hold(candidate.messageId, detail)) this.options.changed()
         continue
       }
+      // The answers above took time: a hook of a process this terminal no longer runs is handed nothing.
+      if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return { message: null }
       const claimId = randomUUID()
       const claim = await database.companion('claimMessageForHook', {
         messageId: candidate.messageId, receiverSessionId: p.sessionId, incarnationId: p.incarnationId,
@@ -293,10 +306,16 @@ export class SessionMessages {
   async waiting(p: { sessionId: string; incarnationId: string | null; agent: string; event: string }): Promise<boolean> {
     if (SESSION_MESSAGE_HANDOVER[p.agent]?.event !== p.event || p.incarnationId === null) return false
     if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return false
+    // This answer rides on the report of every such event, so a slow store may not hold it: no word in time
+    // means nothing is handed over on this event, and the message waits for the next.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), SESSION_MESSAGE_WAITING_CHECK_MS) })
+    const found = this.options.database.companion('messageTakeCandidates', p.sessionId, this.iso())
+      .then((candidates) => candidates.length > 0, () => false)
     try {
-      return (await this.options.database.companion('messageTakeCandidates', p.sessionId, this.iso())).length > 0
-    } catch {
-      return false
+      return await Promise.race([found, late])
+    } finally {
+      clearTimeout(timer)
     }
   }
 
