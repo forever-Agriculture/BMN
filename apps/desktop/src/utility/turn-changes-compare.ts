@@ -4,8 +4,10 @@
 // only one capture is "added" or "removed" only where the later capture showed it: the file was made
 // after the earlier scan began, or nothing has that name any more. Otherwise it entered or left what
 // is covered, adds no lines and makes the totals partial; so does every entry that was not read.
+import type { TurnShownDifference } from '@bmn/protocol'
 import { TURN_LIMITS, refusal, type TurnRefusal } from './turn-changes-capture'
 import { DiffStopped, decodeText, diffLines, splitLines, unified, type Hunk } from './turn-changes-diff'
+import { showDifference, type ShownLimits } from './turn-changes-shown'
 import type { TreeRow, TurnCaptureRecord, TurnStore } from './turn-changes-store'
 
 export type TurnFileState =
@@ -212,14 +214,15 @@ function entryAt(store: TurnStore, tree: string, path: string): Leaf | null {
   return null
 }
 
-/** One file's difference between two captures: unified, `context` lines around each change. */
-export function fileDifference(
+/** One path's two texts and what to make of them, inside the comparison's limit; a binary file gives its sizes. */
+function differenceAt<Made>(
   store: TurnStore,
   a: string,
   b: string,
   path: string,
-  options: CompareOptions & { context?: number } = {}
-): TurnDifference | TurnRefusal {
+  options: CompareOptions,
+  make: (before: string, after: string, stop: () => boolean) => Made
+): Made | Extract<TurnDifference, { state: 'binary' }> | TurnRefusal {
   const pair = loadPair(store, a, b)
   if ('reason' in pair) return pair
   const limitMs = options.limitMs ?? TURN_LIMITS.compareMs
@@ -234,9 +237,36 @@ export function fileDifference(
     const before = ea ? textOf(store, ea) : ''
     const after = eb ? textOf(store, eb) : ''
     if (before === null || after === null) return { state: 'binary', sizeBefore: sizeOf(ea), sizeAfter: sizeOf(eb) }
-    return { state: 'text', ...unified(before, after, { context: options.context ?? 3, stop }) }
+    return make(before, after, stop)
   } catch (error) {
     if (error instanceof DiffStopped) return cancelled() ? refusal('cancelled', 'cancelled') : refusal('unavailable', LIMIT_REACHED)
     return refusal('unavailable', 'a stored capture cannot be read')
   }
+}
+
+/** One file's difference between two captures: unified, `context` lines around each change. */
+export function fileDifference(
+  store: TurnStore,
+  a: string,
+  b: string,
+  path: string,
+  options: CompareOptions & { context?: number } = {}
+): TurnDifference | TurnRefusal {
+  return differenceAt(store, a, b, path, options, (before, after, stop): TurnDifference =>
+    ({ state: 'text', ...unified(before, after, { context: options.context ?? 3, stop }) }))
+}
+
+/**
+ * One file's difference as the window may read it (Story 69.5): three lines of context, bounded, and with
+ * every secret value already masked. Finding and laying the masks is inside the same limit as the comparison.
+ */
+export function shownFileDifference(
+  store: TurnStore,
+  a: string,
+  b: string,
+  path: string,
+  options: CompareOptions & { shown?: ShownLimits } = {}
+): TurnShownDifference | TurnRefusal {
+  return differenceAt(store, a, b, path, options, (before, after, stop): TurnShownDifference =>
+    showDifference(path, before, after, unified(before, after, { context: 3, stop }), { stop, ...(options.shown ? { limits: options.shown } : {}) }))
 }

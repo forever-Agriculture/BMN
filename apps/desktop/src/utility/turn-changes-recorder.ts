@@ -119,6 +119,8 @@ interface SessionTurns {
   failures: Map<string, { failed: number; incomplete: number }>
   paused: Map<string, TurnPauseReason>
   app: string | null
+  /** The foreground process that app was seen as; another one in its place is no longer that app. */
+  appIdentity: string | null
 }
 
 const TOOL_EVENTS: readonly string[] = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest']
@@ -236,11 +238,23 @@ export class TurnRecorder {
       const paused = state ? [...state.paused][0] : undefined
       if (!this.on.has(sessionId)) continue
       states.push({
-        sessionId, state: paused ? 'paused' : 'recording', app: state?.app ?? null,
+        sessionId, state: state ? this.standing(state) : 'recording', app: state ? this.appNow(state) : null,
         pausedRoot: paused?.[0] ?? null, pauseReason: paused?.[1] ?? null
       })
     }
     return states
+  }
+
+  /** The app seen in the session's terminal, while the process it was seen as still holds the foreground. */
+  private appNow(state: SessionTurns): string | null {
+    if (state.app === null || state.appIdentity === null) return null
+    return this.options.foreground.identity(state.sessionId) === state.appIdentity ? state.app : null
+  }
+
+  private standing(state: SessionTurns): TurnRecordingState['state'] {
+    if (state.paused.size > 0) return 'paused'
+    const app = this.appNow(state)
+    return app !== null && TURN_RECORDED_APPS[app] === undefined ? 'not-supported' : 'recording'
   }
 
   /** Resolves when nothing of any session is waited for. For tests and for the host's end. */
@@ -284,12 +298,29 @@ export class TurnRecorder {
     }))
   }
 
+  /**
+   * Any hook event of any app in a recording session says which app runs there now, so that the window can say
+   * "Not supported for <app>" beside the earlier numbers of an app BMN does not record.
+   */
+  seen(sessionId: string, app: string): void {
+    if (!this.on.has(sessionId)) return
+    const state = this.session(sessionId)
+    const identity = this.options.foreground.identity(sessionId)
+    // Without a process to tie it to, a name says nothing about what runs there a moment later.
+    if (identity === null || (state.app === app && state.appIdentity === identity)) return
+    const before = this.standing(state)
+    state.app = app
+    state.appIdentity = identity
+    if (this.standing(state) !== before) this.options.changed(sessionId)
+  }
+
   /** An ordinary hook event of a recorded app: a tool ran, a conversation started or ended. */
   observe(observation: TurnObservation): void {
     if (!this.on.has(observation.sessionId) || TURN_RECORDED_APPS[observation.app] === undefined) return
     const state = this.session(observation.sessionId)
-    state.app = observation.app
     const identity = this.options.foreground.identity(observation.sessionId)
+    state.app = observation.app
+    state.appIdentity = identity
     if (identity !== null) void this.version(identity, observation.app)
     if (state.live.length === 0 && state.pending === null) return
     this.track(this.enqueue(state, () => this.observed(state, observation)))
@@ -302,6 +333,7 @@ export class TurnRecorder {
     const identity = this.options.foreground.identity(call.sessionId)
     if (identity === null) return 'unavailable'
     state.app = call.app
+    state.appIdentity = identity
     void this.version(identity, call.app)
     // An earlier "before" that nobody confirmed, and turns of another agent or conversation.
     await this.dropPending(state)
@@ -801,7 +833,7 @@ export class TurnRecorder {
   private session(sessionId: string): SessionTurns {
     let state = this.sessions.get(sessionId)
     if (!state) {
-      state = { sessionId, queue: Promise.resolve(), number: null, live: [], pending: null, requests: new Map(), failures: new Map(), paused: new Map(), app: null }
+      state = { sessionId, queue: Promise.resolve(), number: null, live: [], pending: null, requests: new Map(), failures: new Map(), paused: new Map(), app: null, appIdentity: null }
       this.sessions.set(sessionId, state)
     }
     return state

@@ -5,7 +5,7 @@ import { purgeExpiredArchives } from './database-archive-purge'
 import { getSettings, putSettingsSection } from './database-companion-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import {
-  failTurnRemovalJob, finishTurnRemovalJob, getTurn, getTurnCapture, listTurnRemovalJobs, listTurns, listUnclosedTurns, namedTurnCaptures,
+  failTurnRemovalJob, finishTurnRemovalJob, getTurn, getTurnCapture, latestTurns, listTurnRemovalJobs, listTurns, listUnclosedTurns, namedTurnCaptures,
   nextTurnNumber, putTurn, sweepTurns, turnRemovalPendingSessions, type TurnCaptureRow, type TurnRow
 } from './database-turn-store'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
@@ -68,6 +68,17 @@ describe('a turn and its captures, written and read', () => {
     expect(getTurnCapture(database, 'c-none')).toBeNull()
     // A capture a turn names must have its row.
     expect(() => turn('t-3', { before: 'c-missing' })).toThrow(/constraint/)
+  })
+})
+
+describe('the latest turn of each session', () => {
+  it('is the one with the highest number, whichever was written last, and nothing for a session without a turn', () => {
+    for (const sessionId of ['s-one', 's-two', 's-three']) session(sessionId)
+    turn('t-2', { number: 2 })
+    turn('t-1', { number: 1 })
+    turn('u-7', { number: 7, sessionId: 's-two', state: 'open', endKind: null, endedAt: null, totals: null, totalsState: 'none' })
+
+    expect(latestTurns(database).map((row) => [row.sessionId, row.turnId, row.state])).toEqual([['s-one', 't-2', 'closed'], ['s-two', 'u-7', 'open']])
   })
 })
 

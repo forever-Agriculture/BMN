@@ -172,6 +172,12 @@ export function listTurns(database: DatabaseConnection, p: { sessionId: string; 
     .all(p.sessionId, Math.max(1, Math.min(500, Math.trunc(p.limit)))) as TurnDatabaseRow[]).map(turnRow)
 }
 
+/** Every session's newest kept turn: what a pane's header reads. */
+export function latestTurns(database: DatabaseConnection): TurnRow[] {
+  return (database.prepare(`${TURN_SELECT} WHERE t.number = (SELECT MAX(number) FROM turn_record WHERE session_id = t.session_id) ORDER BY t.session_id`)
+    .all() as TurnDatabaseRow[]).map(turnRow)
+}
+
 /** The number the session's next turn gets. */
 export function nextTurnNumber(database: DatabaseConnection, sessionId: string): number {
   const row = database.prepare('SELECT COALESCE(MAX(number), 0) AS last FROM turn_record WHERE session_id = ?').get(sessionId) as { last: number }
@@ -276,6 +282,7 @@ export const TURN_OPERATIONS = Object.freeze({
   putTurn,
   getTurn,
   listTurns,
+  latestTurns,
   nextTurnNumber,
   listUnclosedTurns,
   sweepTurns,

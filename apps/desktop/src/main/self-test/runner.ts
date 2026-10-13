@@ -4162,9 +4162,12 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error(`the owner's answer did not reach the main process: ${closePrompt.decision}`)
     }
 
-    // Epic 69 (Story 69.4): a stand-in agent sends real hook events around real writes in a made-up repository.
-    // With the workspace's switch off nothing is recorded; with it on, prompt, write and stop give a turn with
-    // those files and an interrupt gives "interrupted"; three failed scans pause recording in the window only.
+    // Epic 69 (Stories 69.4 and 69.5): a stand-in agent sends real hook events around real writes in a made-up
+    // repository. With the workspace's switch off nothing is recorded; with it on, prompt, write and stop give a
+    // turn with those files and an interrupt gives "interrupted"; three failed scans pause recording in the window
+    // only. The pane's header shows the latest turn on one plate that opens the dialog; a turn opens to its files
+    // and a file to its difference with its secret masked; a turn removed while open reads "No longer kept"; and
+    // none of it resizes the terminal or sends it a byte.
     console.error('[BMN] self-test phase: turn changes')
     const turnRepo = join(isolatedCwd, 'turn-changes-repo')
     const turnDirectory = join(isolatedCwd, 'turn-changes')
@@ -4177,6 +4180,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     }
     turnGit('init', '-q', '-b', 'main')
     writeFileSync(join(turnRepo, 'keep.txt'), 'k\n')
+    writeFileSync(join(turnRepo, 'settings.yaml'), 'name: shop\napi_key: SELFTEST-KEY-ONE\nregion: eu\n')
     turnGit('add', '-A')
     turnGit('commit', '-qm', 'made-up start')
     const turnWorkspace = await client.request<WorkspaceRecord>(METHOD_REGISTRY.workspaceCreate, {
@@ -4223,6 +4227,54 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
 
     await turnSwitch(true)
     const statesWhenOn = await turnStates()
+    // From here the session's pane is on screen: what the header's plate does, it does beside a live terminal.
+    type TurnGrid = { cols: number; rows: number; refits: number; inputEvents: number }
+    type TurnPlateRead = { full: string; short: string; title: string; gold: string[] }
+    const turnWindow = host.applicationWindow
+    await host.recoverApplicationRenderer(turnWindow)
+    const turnPage = <Result>(body: string): Promise<Result> => turnWindow.webContents.executeJavaScript(`(async () => {
+      const id = ${JSON.stringify(turnSessionId)};
+      const until = async (find, what) => {
+        const end = Date.now() + 10000;
+        while (Date.now() < end) { const found = find(); if (found) return found; await new Promise(r => setTimeout(r, 50)) }
+        // A wait that ran out says what the window showed instead.
+        const views = await window.aiTerminal.listTurnRecording().catch((error) => String(error));
+        throw new Error('turn changes: nothing came of waiting for ' + what + ': ' + JSON.stringify({ plate: words(plate()), pane: pane()?.className ?? null,
+          head: (pane()?.querySelector('.pane-heading')?.textContent ?? '').slice(0, 200), views }));
+      };
+      const pane = () => document.querySelector('.session-terminal[data-session-id="' + id + '"]');
+      const plate = () => document.querySelector('[data-turn-plate="' + id + '"]');
+      const grid = () => { const shot = window.__aitermTest.snapshot(id); return { cols: shot.cols, rows: shot.rows, refits: shot.refits, inputEvents: shot.inputEvents } };
+      const words = (button) => button ? { full: button.querySelector('.full')?.textContent ?? '', short: button.querySelector('.short')?.textContent ?? '', title: button.title,
+        gold: [...button.querySelectorAll('.caveat')].map((part) => part.textContent) } : null;
+      // A finished turn opens a notice, and by the board the plate gives way while its session waits for the owner.
+      // Going to the session clears the notice, as the owner's click does; \`gaveWay\` says whether the plate was away meanwhile.
+      let went = 0;
+      let gaveWay = null;
+      const attended = (find) => () => {
+        if (pane()?.querySelector('.pane-status.needs-you')) {
+          if (gaveWay !== false) gaveWay = plate() === null;
+          if (Date.now() - went > 1000) { went = Date.now(); document.querySelector('button[data-session-id="' + id + '"]')?.click() }
+        }
+        return find();
+      };
+      ${body}
+    })()`) as Promise<Result>
+    const turnShown = await turnPage<{ selected: string | null; plate: boolean; grid: TurnGrid }>(`
+      // The later phases read the panes that were mounted before this one: the selection is put back at the end.
+      const selected = document.querySelector('button[data-session-id][aria-current="true"]')?.getAttribute('data-session-id') ?? null;
+      (await until(() => document.querySelector('button[data-session-id="' + id + '"]'), 'the session row')).click();
+      await until(() => pane() && !pane().classList.contains('session-terminal-hidden') && window.__aitermTest?.snapshots()?.[id] ? true : null, 'the pane');
+      // The grid is read once it has stood still.
+      let last = JSON.stringify(grid());
+      let since = Date.now();
+      while (Date.now() - since < 800) {
+        await new Promise(r => setTimeout(r, 50));
+        const now = JSON.stringify(grid());
+        if (now !== last) { last = now; since = Date.now() }
+      }
+      return { selected, plate: plate() !== null, grid: grid() };
+    `)
     // Prompt, write, stop.
     await turnStep({ event: turnEvent('UserPromptSubmit', 'turn-1') })
     await turnStep({ write: { 'a.txt': 'one\ntwo\n' }, event: { ...turnEvent('PostToolUse', 'turn-1'), tool_name: 'Bash', tool_input: {}, tool_response: {} } })
@@ -4233,43 +4285,97 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     await turnStep({ write: { 'b.txt': 'three\n' } })
     await turnStep({ event: turnEvent('Interrupt', 'turn-2') })
     const afterInterrupt = await turnRows()
+    // A third turn changes a key in a config file: its plate, its row, its file and its difference are read in the window.
+    await turnStep({ event: turnEvent('UserPromptSubmit', 'turn-3') })
+    await turnStep({ write: { 'settings.yaml': 'name: shop\napi_key: SELFTEST-KEY-TWO\nregion: eu\n' },
+      event: { ...turnEvent('PostToolUse', 'turn-3'), tool_name: 'Bash', tool_input: {}, tool_response: {} } })
+    await turnStep({ event: turnEvent('Stop', 'turn-3') })
+    const afterThird = await turnRows()
+    const turnRead = await turnPage<{
+      read: TurnPlateRead | null; gaveWay: boolean | null; before: TurnGrid; after: TurnGrid; heading: string; state: string; list: string[]; files: string[]
+      sentence: string; labels: number; shown: { text: string; name: string | null; masks: number; lines: string[] }; whole: string
+    }>(`
+      const read = await until(attended(() => { const now = words(plate()); return now?.full.startsWith('1 file +1 −1') ? now : null }), 'the plate of the third turn');
+      const before = grid();
+      (await until(attended(plate), 'the plate to open the dialog with')).click();
+      const dialog = await until(() => document.querySelector('dialog.turn-changes-dialog[open]'), 'the dialog');
+      const rows = await until(() => { const found = [...dialog.querySelectorAll('.turn-row')]; return found.length >= 3 ? found : null }, 'the three turns');
+      const heading = dialog.querySelector('.turns-side h3')?.textContent ?? '';
+      const state = dialog.querySelector('.turns-side .turn-recording')?.textContent ?? '';
+      const list = rows.map((row) => [...row.querySelectorAll('.l1 > span, .l2')].map((part) => part.textContent).join(' | '));
+      rows[0].click();
+      const file = await until(() => [...dialog.querySelectorAll('.file-row')].find((row) => row.querySelector('.path')?.textContent === 'settings.yaml'), 'the changed file');
+      const files = [...dialog.querySelectorAll('.file-row')].map((row) => [...row.children].map((cell) => cell.textContent).join(' | '));
+      const sentence = dialog.querySelector('.turn-detail .dialog-note')?.textContent ?? '';
+      const labels = dialog.querySelectorAll('.turn-labels li').length;
+      file.click();
+      const difference = await until(() => dialog.querySelector('.turn-diff'), 'the difference');
+      const shown = { text: difference.textContent, name: difference.getAttribute('aria-label'), masks: difference.querySelectorAll('.msk').length,
+        lines: [...difference.querySelectorAll('.dl')].map((line) => line.className.replace('dl ', '') + ' ' + [...line.children].map((cell) => cell.textContent).join('|')) };
+      // The dialog stays open on this turn: the next step removes it under the owner's eyes.
+      return { read, gaveWay, before, after: grid(), heading, state, list, files, sentence, labels, shown, whole: dialog.textContent };
+    `)
+    // The keep rule removes every turn, as a sweep at its hour would. The opened turn says so, the session reads
+    // "Removal pending" while the job for its bytes waits, and with no kept turn the plate goes away.
+    await client.request(METHOD_REGISTRY.healthGet, { selfTestTurnsForget: turnSessionId })
+    const turnGone = await turnPage<{ gone: string; state: string; empty: string; grid: TurnGrid }>(`
+      const dialog = document.querySelector('dialog.turn-changes-dialog[open]');
+      const gone = await until(() => dialog?.querySelector('.turn-detail .turn-gone')?.textContent === 'No longer kept' ? 'No longer kept' : null, 'No longer kept');
+      const state = await until(() => { const now = dialog.querySelector('.turns-side .turn-recording')?.textContent ?? ''; return now.includes('Removal pending') ? now : null }, 'Removal pending');
+      const empty = await until(() => dialog.querySelectorAll('.turn-row').length === 0 ? dialog.querySelector('.turns-side .turn-gone')?.textContent : null, 'the emptied list');
+      dialog.dispatchEvent(new Event('cancel', { cancelable: true }));
+      await until(() => document.querySelector('dialog.turn-changes-dialog[open]') === null ? true : null, 'the dialog closed');
+      await until(() => plate() === null ? true : null, 'the plate gone');
+      return { gone, state, empty, grid: grid() };
+    `)
     // Three prompts that name a folder outside the work tree: each scan fails, and recording pauses.
-    for (const turn of ['turn-3', 'turn-4', 'turn-5']) {
+    for (const turn of ['turn-4', 'turn-5', 'turn-6']) {
       await turnStep({ event: turnEvent('UserPromptSubmit', turn, isolatedCwd) })
       await turnStep({ event: turnEvent('Stop', turn) })
     }
     const statesWhenPaused = await turnStates()
-    await host.recoverApplicationRenderer(host.applicationWindow)
-    const turnPause = await host.applicationWindow.webContents.executeJavaScript(`(async () => {
-      const until = async (find) => { const end = Date.now() + 10000; while (Date.now() < end) { const found = find(); if (found) return found; await new Promise(r => setTimeout(r, 50)) } return null };
-      // The later phases read the panes that were mounted before this one: the selection is put back.
-      const selected = document.querySelector('button[data-session-id][aria-current="true"]')?.getAttribute('data-session-id') ?? null;
-      const back = () => { if (selected) document.querySelector('button[data-session-id="' + selected + '"]')?.click() };
-      document.querySelector('button[data-session-id="${turnSessionId}"]')?.click();
-      const mark = await until(() => document.querySelector('[data-session-turns="${turnSessionId}"]'));
-      if (!mark) { back(); return { mark: null }; }
-      const words = mark.textContent;
-      mark.click();
-      const card = await until(() => document.querySelector('.session-guard-card[aria-label="Turn changes"]'));
-      const text = card?.textContent ?? '';
-      const resume = [...(card?.querySelectorAll('.actions button') ?? [])].find((button) => button.textContent === 'Resume');
-      resume?.click();
-      const gone = await until(() => document.querySelector('[data-session-turns="${turnSessionId}"]') === null);
-      back();
-      return { mark: words, text, resumed: resume !== undefined, gone: gone === true };
-    })()`) as { mark: string | null; text?: string; resumed?: boolean; gone?: boolean }
+    // The card comes by itself, once, under its session's header; it only closes. Resume is in the workspace's menu.
+    const turnPause = await turnPage<{ text: string; buttons: string[]; paused: TurnPlateRead | null; again: boolean; entry: string; grid: TurnGrid }>(`
+      const shown = () => document.querySelector('.session-guard-card[aria-label="Turn changes"]');
+      const card = await until(shown, 'the pause card');
+      const text = card.textContent;
+      const buttons = [...card.querySelectorAll('button')].map((button) => button.textContent);
+      [...card.querySelectorAll('.actions button')].find((button) => button.textContent === 'Close').click();
+      await until(() => shown() === null ? true : null, 'the card closed');
+      const paused = words(await until(attended(() => plate()?.textContent.includes('Paused') ? plate() : null), 'the plate saying Paused'));
+      await new Promise(r => setTimeout(r, 400));
+      const again = shown() !== null;
+      const menuButton = await until(() => [...document.querySelectorAll('.workspace-group')]
+        .find((group) => group.textContent.includes('Turn agent'))?.querySelector('.row-menu-button'), 'the workspace menu');
+      menuButton.click();
+      const resume = await until(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')]
+        .find((row) => row.textContent.trim().startsWith('Resume recording in ')), 'Resume in the menu');
+      const entry = resume.textContent.trim();
+      resume.click();
+      await until(() => plate() === null || !plate().textContent.includes('Paused') ? true : null, 'the pause lifted');
+      return { text, buttons, paused, again, entry, grid: grid() };
+    `)
     const statesAfterResume = await turnStates()
     const turnSnapshot = JSON.stringify(await client.request(METHOD_REGISTRY.attentionList, {}))
     const turnTyped = existsSync(join(turnDirectory, 'stdin.log')) ? readFileSync(join(turnDirectory, 'stdin.log')).length : 0
     await turnSwitch(false)
     const statesAfterOff = await turnStates()
+    const turnOff = await turnPage<{ off: TurnPlateRead | null; grid: TurnGrid }>(`
+      await until(attended(() => plate()?.textContent.includes('Recording off') ? true : null), 'the plate saying Recording off');
+      const read = { off: words(plate()), grid: grid() };
+      const selected = ${JSON.stringify(turnShown.selected)};
+      if (selected) document.querySelector('button[data-session-id="' + selected + '"]')?.click();
+      return read;
+    `)
     await client.request(METHOD_REGISTRY.sessionStop, { sessionId: turnSessionId,
       incarnationId: turnSession.session.lastProcess?.incarnationId, cause: 'explicit' })
     const turnChanges = {
       turnsWhileOff: turnsWhileOff.length, statesWhileOff, statesWhenOn,
       afterStop: afterStop.map((row) => ({ ...row, labels: row.labels.length })),
       afterInterrupt: afterInterrupt.slice(1).map((row) => ({ ...row, labels: row.labels.length })),
-      statesWhenPaused, turnPause, statesAfterResume, statesAfterOff, turnTyped,
+      afterThird: afterThird.slice(2).map((row) => ({ ...row, labels: row.labels.length })),
+      turnShown, turnRead: { ...turnRead, whole: turnRead.whole.length }, turnGone,
+      statesWhenPaused, turnPause, statesAfterResume, statesAfterOff, turnOff, turnTyped,
       error: existsSync(join(turnDirectory, 'error')) ? readFileSync(join(turnDirectory, 'error'), 'utf8') : null
     }
     console.error(`[BMN] self-test phase: turn changes ${JSON.stringify(turnChanges)}`)
@@ -4292,12 +4398,55 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     if (statesWhenPaused[0]?.state !== 'paused' || statesWhenPaused[0]?.pauseReason !== 'failed') {
       throw new Error(`three failed scans did not pause recording: ${JSON.stringify(statesWhenPaused)}`)
     }
-    if (turnPause.mark !== 'Recording paused' || !turnPause.text?.includes('Three scans in a row failed') || !turnPause.resumed || !turnPause.gone) {
-      throw new Error(`the pause was not shown on its session, or Resume did not clear it: ${JSON.stringify(turnPause)}`)
+    if (!turnPause.text.includes('Recording what each turn changes is paused here') || !turnPause.text.includes('Three scans in a row failed') ||
+      JSON.stringify(turnPause.buttons) !== JSON.stringify(['×', 'Close']) || turnPause.again || !turnPause.paused?.full.startsWith('Paused') ||
+      turnPause.paused.gold.length !== 0 || !turnPause.entry.startsWith('Resume recording in ')) {
+      throw new Error(`the pause was not shown once on its session, or Resume was not in the workspace's menu: ${JSON.stringify(turnPause)}`)
+    }
+    // Story 69.5: the plate, the dialog, a file and its difference.
+    const thirdTurn = afterThird[2]
+    if (afterThird.length !== 3 || !thirdTurn || JSON.stringify(thirdTurn.totals) !== JSON.stringify({ files: 1, added: 1, removed: 1 })) {
+      throw new Error(`the third turn did not count the changed key: ${JSON.stringify(afterThird)}`)
+    }
+    if (turnShown.plate) throw new Error('a session without a kept turn showed a plate')
+    if (turnRead.gaveWay === false) throw new Error('the plate stood beside a session that waited for the owner')
+    if (turnRead.read?.full !== '1 file +1 −1 not complete' || turnRead.read.short !== 'Not complete' ||
+      JSON.stringify(turnRead.read.gold) !== JSON.stringify([' not complete', 'Not complete']) ||
+      !turnRead.read.title.includes('Ordering unverified on Codex (version not read); early writes may be missed')) {
+      throw new Error(`the header's plate did not read the latest turn: ${JSON.stringify(turnRead.read)}`)
+    }
+    if (turnRead.heading !== 'The latest 50 turns still kept' || turnRead.state !== 'Recording on' || turnRead.list.length !== 3 ||
+      !/^\d\d:\d\d \| Codex \| Finished \| 1 file \+1 −1not complete$/.test(turnRead.list[0] ?? '') || !turnRead.list[1]?.includes('| Interrupted |') ||
+      !turnRead.list[2]?.includes('1 file +2 −0')) {
+      throw new Error(`the dialog did not list the kept turns newest first: ${JSON.stringify(turnRead)}`)
+    }
+    if (!turnRead.sentence.startsWith('What differs between two scans of ') || !turnRead.sentence.endsWith('It is not a list of what the agent did.') ||
+      turnRead.labels < 4 || JSON.stringify(turnRead.files) !== JSON.stringify(['› | settings.yaml | changed | +1−1'])) {
+      throw new Error(`the opened turn did not show its labels and files: ${JSON.stringify(turnRead)}`)
+    }
+    const expectedLines = ['hunk |||@@ −1,3 +1,3 @@Secret value changed', 'ctx 1|1||name: shop', 'del 2||−|api_key: ••••••••••', 'add |2|+|api_key: ••••••••••', 'ctx 3|3||region: eu']
+    if (turnRead.shown.name !== 'Difference of settings.yaml' || turnRead.shown.masks !== 2 ||
+      JSON.stringify(turnRead.shown.lines) !== JSON.stringify(expectedLines)) {
+      throw new Error(`the file's difference was not shown with its numbers, signs and masks: ${JSON.stringify(turnRead.shown)}`)
+    }
+    // Neither the difference nor anything else in the dialog holds the value.
+    if (/SELFTEST-KEY/.test(turnRead.shown.text) || /SELFTEST-KEY/.test(turnRead.whole)) throw new Error('a secret value reached the window')
+    if (turnGone.gone !== 'No longer kept' || !turnGone.state.includes('Removal pending') || turnGone.empty !== 'No turns yet') {
+      throw new Error(`a turn removed while open did not say so: ${JSON.stringify(turnGone)}`)
+    }
+    if (!turnOff.off?.full.startsWith('Recording off') || turnOff.off.gold.length !== 0) {
+      throw new Error(`the plate did not say that recording is off: ${JSON.stringify(turnOff)}`)
+    }
+    // The plate appearing, changing and going, the dialog and the card: the terminal keeps its grid and gets no byte.
+    for (const [name, grid] of Object.entries({ 'plate shown': turnRead.before, 'dialog read': turnRead.after, 'plate gone': turnGone.grid, paused: turnPause.grid, off: turnOff.grid })) {
+      if (grid.cols !== turnShown.grid.cols || grid.rows !== turnShown.grid.rows || grid.refits !== turnShown.grid.refits || grid.inputEvents !== turnShown.grid.inputEvents) {
+        throw new Error(`turn changes disturbed the terminal (${name}): ${JSON.stringify({ first: turnShown.grid, now: grid })}`)
+      }
     }
     if (statesAfterResume[0]?.state !== 'recording') throw new Error(`Resume did not start recording again: ${JSON.stringify(statesAfterResume)}`)
     if (/paus|Three scans/i.test(turnSnapshot)) throw new Error('the pause reached a request')
-    if (statesAfterOff.length !== 0) throw new Error(`the switch did not stop recording: ${JSON.stringify(statesAfterOff)}`)
+    // With the switch off the session is still listed beside what is kept of it, as off.
+    if (statesAfterOff.length !== 1 || statesAfterOff[0]?.state !== 'off') throw new Error(`the switch did not stop recording: ${JSON.stringify(statesAfterOff)}`)
     if (turnTyped !== 0) throw new Error(`recording a turn wrote ${turnTyped} bytes to its terminal`)
 
     // Epic 26.2: the survival-table endings no automated check had exercised. The two stops run

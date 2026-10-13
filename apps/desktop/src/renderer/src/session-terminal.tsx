@@ -15,6 +15,7 @@ import {
   type TerminalExitMessage,
   type TerminalOutputMessage,
   type TerminalViewDisconnectReason,
+  type TurnSessionView,
   type VoiceSettings,
   type WorkspaceMarker
 } from '@bmn/protocol'
@@ -39,6 +40,7 @@ import { trackTerminalView } from './terminal-view-tracking'
 import { SIXEL_SMOKE_FRAME, checkSixelRenderer, createTerminalImageAddon, registerTerminalImages } from './terminal-images'
 import { searchStatusText } from './terminal-view'
 import { TERMINAL_THEMES } from './theme'
+import { TurnPlate } from './turn-changes-plate'
 import { readRecentLines } from './voice-suggestions'
 import type { SessionView, SessionViewUpdate } from './workspace-layout'
 
@@ -104,6 +106,12 @@ export function SessionTerminal(props: {
   onAnswer(): void
   armed: boolean
   progress: ProgressPresentation | null
+  /** Epic 69: where recording of turn changes stands for this session, with its latest kept turn; null when it has neither. */
+  turns: TurnSessionView | null
+  /** The shell's clock, for the time in the plate's tooltip. */
+  now: number
+  /** The header's plate: opens the Turn changes dialog. */
+  onOpenTurns(): void
   colorMode: ColorModeName
   fontSize: number
   /** Reads the session's persisted view from its own workspace's desired layout. */
@@ -620,6 +628,8 @@ export function SessionTerminal(props: {
           <span className="pane-directory">{` · ${props.startup.cwd}`}</span>
         </span>
         <PanePorts entry={props.ports} onOpen={props.onOpenPort} />
+        {/* The state word always wins: while the session waits for the owner there is no plate. */}
+        {props.attention && !exitStatus ? null : <TurnPlate view={props.turns} now={props.now} onOpen={props.onOpenTurns} />}
         <div className="pane-actions">
           <button type="button" aria-pressed={props.split} title={`Split (${SHORTCUT_LABELS['split-toggle']})`} onClick={props.onSplit}>
             <Icon name="split" /><span className="button-label">{props.split ? 'Unsplit' : 'Split'}</span>

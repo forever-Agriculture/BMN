@@ -1,0 +1,525 @@
+/* MODULE: turn-changes.css - the header plate of a session's latest turn and the Turn changes dialog (Epic 69): the app's tokens only, and gold only on a turn without complete totals */
+
+/* ---------- The header plate: the shape of .pane-ports .port-chip, between the ports and the pane's actions ---------- */
+
+.pane-heading button.turn-plate {
+  display: inline-flex;
+  flex: none;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 0;
+  min-height: 0;
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font: 11px/22px var(--font-mono);
+  white-space: pre;
+}
+
+.pane-heading button.turn-plate:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+.pane-heading button.turn-plate:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
+.turn-plate .short {
+  display: none;
+}
+
+.turn-plate .old {
+  color: var(--muted);
+}
+
+.turn-plate .caveat {
+  color: var(--attention);
+}
+
+/* The state word always wins. So that the plate takes no room from it, a pane that shows one drops its button
+   words at 720 px instead of 620 and goes compact at 600 px instead of 420; under 415 px there is no plate, and
+   while the session waits for the owner none is rendered. The row keeps its height, so no terminal changes size. */
+@container pane (max-width: 880px) {
+  .turn-plate .full {
+    display: none;
+  }
+
+  .turn-plate .short {
+    display: inline;
+  }
+}
+
+@container pane (max-width: 720px) {
+  .pane-heading:has(.turn-plate) .pane-actions .button-label {
+    display: none;
+  }
+}
+
+@container pane (max-width: 600px) {
+  .pane-heading:has(.turn-plate) :is(.pane-directory, .chip, .pane-ports) {
+    display: none;
+  }
+
+  .pane-heading:has(.turn-plate) .pane-status {
+    flex: 0 1 auto;
+  }
+
+  .pane-heading:has(.turn-plate) strong {
+    flex: 1 1 0;
+    max-width: none;
+  }
+}
+
+@container pane (max-width: 415px) {
+  .pane-heading button.turn-plate {
+    display: none;
+  }
+}
+
+/* ---------- The dialog: the width of a reading surface, the list beside the opened turn ---------- */
+
+.turn-changes-dialog {
+  /* The sheet's own ground, for a row that must cover what scrolls under it. */
+  --sheet: color-mix(in srgb, var(--identity) 3%, var(--raised));
+  width: min(1120px, calc(100vw - 48px));
+  height: min(780px, 90vh);
+}
+
+.turn-changes-dialog .app-dialog-body {
+  flex: 1 1 auto;
+  overflow: hidden;
+  container: turns / inline-size;
+}
+
+.turns-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0 20px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.turns-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  padding-right: 20px;
+  border-right: 1px solid color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.turn-changes-dialog h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.turn-recording {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.turn-list,
+.turn-files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.turn-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-right: -12px;
+  padding-right: 12px;
+  overflow: auto;
+}
+
+.turn-changes-dialog button.turn-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-content: stretch;
+  justify-items: stretch;
+  gap: 1px;
+  width: 100%;
+  min-height: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+}
+
+.turn-changes-dialog button.turn-row:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.turn-changes-dialog button.turn-row[aria-current='true'] {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.turn-row .l1,
+.turn-row .l2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.turn-row .l2 {
+  min-height: 18px;
+  overflow: hidden;
+  line-height: 18px;
+}
+
+.turn-row .when {
+  font-variant-numeric: tabular-nums;
+}
+
+.turn-row[aria-current='true'] .when {
+  font-weight: 600;
+}
+
+.turn-row .app {
+  color: var(--muted);
+}
+
+.turn-row .end {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.turn-changes-dialog .totals {
+  font: 11.5px/18px var(--font-mono);
+  white-space: pre;
+}
+
+.turn-changes-dialog .rm {
+  color: var(--muted);
+}
+
+.turn-changes-dialog .caveat {
+  overflow: hidden;
+  color: var(--attention);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turn-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  margin-right: -12px;
+  padding-right: 12px;
+  overflow: auto;
+}
+
+.turn-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.turn-head h3 {
+  margin-right: auto;
+}
+
+.turn-head .caveat {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.turn-labels {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 9px 14px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 3.5%, transparent);
+  list-style: none;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
+
+.turn-labels .own {
+  color: var(--text);
+}
+
+.turn-detail > .eyebrow {
+  display: block;
+  margin-top: 4px;
+}
+
+.turn-gone {
+  margin: 0;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.turn-gone:empty {
+  display: none;
+}
+
+/* A file of the opened turn: its path keeps its tail, its state, the lines it gained and lost. */
+.turn-changes-dialog button.file-row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) max-content 96px;
+  justify-content: stretch;
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  min-height: 0;
+  padding: 4px 8px 4px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--raised);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+}
+
+.turn-changes-dialog button.file-row:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 5%, var(--raised));
+}
+
+.turn-changes-dialog button.file-row:disabled {
+  background: var(--raised);
+  opacity: 1;
+  cursor: default;
+}
+
+/* An opened file's row stays at the top while its difference scrolls under it. */
+.turn-changes-dialog .turn-files li.pinned > button.file-row {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: color-mix(in srgb, var(--text) 8%, var(--sheet));
+  box-shadow: 0 10px 14px -8px rgb(0 0 0 / 55%);
+}
+
+.file-row .chev {
+  color: var(--muted);
+  text-align: center;
+}
+
+.file-row[aria-expanded='true'] .chev {
+  transform: rotate(90deg);
+  color: var(--text);
+}
+
+.file-row .path {
+  overflow: hidden;
+  direction: rtl;
+  font: 12px/1.4 var(--font-mono);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-row .path > bdi {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.file-row .state {
+  color: var(--muted);
+}
+
+.file-row .lines {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 96px;
+  font: 11.5px/18px var(--font-mono);
+  text-align: right;
+}
+
+/* A side without lines keeps its line of text, so a row with one count sits on the same baseline as one with two. */
+.file-row .lines > span:empty::before {
+  content: '\200b';
+}
+
+.file-body {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  padding: 7px 8px 9px 28px;
+  font-size: 12.5px;
+}
+
+.file-body small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.back-row {
+  display: none;
+  align-items: center;
+  gap: 12px;
+}
+
+.back-row .turn-recording {
+  margin: 0 0 0 auto;
+}
+
+.turn-changes-dialog .back-row button.ghost {
+  min-height: 28px;
+  margin-left: -10px;
+  padding: 2px 10px;
+}
+
+/* One file's difference: the box of .file-reference-preview; three neutral tones and no hue. */
+.turn-diff {
+  --no: 6ch;
+  margin: 4px 0 8px;
+  padding: 6px 0;
+  overflow: auto hidden;
+  scrollbar-width: thin;
+  border: 1px solid color-mix(in srgb, var(--text) 7%, transparent);
+  border-radius: 10px;
+  background: var(--ground);
+  font: 12px/1.5 var(--font-mono);
+}
+
+.shell-window .turn-diff:focus-visible {
+  outline: none;
+  border-color: var(--focus);
+}
+
+/* Every line is as wide as the longest one, so a plate runs to the same edge on each. */
+.turn-diff-lines {
+  min-width: max-content;
+}
+
+.turn-diff .dl {
+  display: grid;
+  grid-template-columns: var(--no) var(--no) 3ch minmax(0, 1fr);
+  white-space: pre;
+}
+
+/* Numbers are not part of the text: a copy of a line starts at its sign. */
+.turn-diff .dl .no {
+  padding-right: 1ch;
+  color: var(--faint);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.turn-diff .dl .sg {
+  text-align: center;
+  font-weight: 700;
+}
+
+.turn-diff .dl .tx {
+  min-width: 0;
+  padding-right: 12px;
+  color: var(--muted);
+}
+
+.turn-diff .dl.add {
+  background: linear-gradient(to right, transparent calc(var(--no) * 2), color-mix(in srgb, var(--text) 11%, transparent) calc(var(--no) * 2));
+}
+
+.turn-diff .dl.add .tx,
+.turn-diff .dl.add .sg {
+  color: var(--text);
+}
+
+.turn-diff .dl.del {
+  background: linear-gradient(to right, transparent calc(var(--no) * 2), color-mix(in srgb, var(--text) 4.5%, transparent) calc(var(--no) * 2));
+}
+
+.turn-diff .dl.del .sg {
+  color: var(--text);
+}
+
+.turn-diff .dl.hunk .tx {
+  color: var(--faint);
+}
+
+.turn-diff .hunk-note {
+  margin-left: 2ch;
+  color: var(--text);
+  font: 500 12px var(--font-chrome);
+}
+
+.turn-diff .dl.more .tx {
+  padding: 6px 0 2px;
+  color: var(--muted);
+  font: 12px var(--font-chrome);
+}
+
+/* Where a secret value stood: one plate of dots, the same in an added, a removed and an unchanged line. */
+.turn-diff .msk {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 15%, transparent);
+  color: var(--muted);
+  letter-spacing: 1px;
+}
+
+.turn-diff .cut-mark {
+  margin-left: 1ch;
+  padding: 0 7px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 15%, transparent);
+  color: var(--text);
+  font: 11px/16px var(--font-chrome);
+  user-select: none;
+}
+
+/* Under 900 px of dialog the opened turn takes the list's place, one line per turn, and Back returns to it. */
+@container turns (max-width: 859px) {
+  .turns-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .turns-side {
+    padding-right: 0;
+    border-right: 0;
+  }
+
+  .turns-layout[data-opened='true'] .turns-side,
+  .turns-layout:not([data-opened='true']) .turn-detail {
+    display: none;
+  }
+
+  .back-row {
+    display: flex;
+  }
+
+  .turn-changes-dialog button.turn-row {
+    grid-template-columns: 96px 104px 132px minmax(0, 1fr);
+    gap: 10px;
+    align-items: baseline;
+    padding: 5px 8px;
+    border-radius: 4px;
+    background: var(--raised);
+  }
+
+  .turn-row .l1 {
+    display: contents;
+  }
+
+  .turn-row .end {
+    margin-left: 0;
+  }
+}

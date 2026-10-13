@@ -5,17 +5,21 @@ import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { METHOD_REGISTRY, TURN_SWITCH_FOLDER, TURN_WORDINGS, type AppEventMessage, type TurnRecordingState } from '@bmn/protocol'
+import {
+  ERROR_CODES, METHOD_REGISTRY, TURN_LABELS, TURN_LIST_LIMIT, TURN_SECRET_PLATE, TURN_SWITCH_FOLDER, TURN_WORDINGS,
+  type AppEventMessage, type TurnDetailAnswer, type TurnDifferenceAnswer, type TurnSessionView, type TurnShownLine, type TurnSummary
+} from '@bmn/protocol'
 import { CompanionService } from './companion-service'
 import type { DatabaseWorkerClient } from './database-client'
 import { COMPANION_OPERATIONS, type CompanionOperationName } from './database-companion-store'
 import { selectConversationRoutes } from './database-binding-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
-import { listTurns, type TurnRow } from './database-turn-store'
+import { listTurns, sweepTurns, type TurnRow } from './database-turn-store'
 import { createWorkspace, listSessions, listWorkspaces, selectWorkspace, updateWorkspace } from './database-workspace-store'
 import type { SessionManager } from './session-manager'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
-import { TurnChangesEngine, inProcessKeeper, inProcessPort } from './turn-changes-engine'
+import { refusal } from './turn-changes-capture'
+import { TurnChangesEngine, inProcessKeeper, inProcessPort, type TurnChangesPort } from './turn-changes-engine'
 import { scratch, sleep, write, type Place } from './test-fixtures/turn-changes/fixtures'
 
 const testRequire = createRequire(import.meta.url)
@@ -83,12 +87,14 @@ interface Host {
   switchOn: (on: boolean, workspaceId?: string) => Promise<void>
   idle: () => Promise<void>
   turns: () => TurnRow[]
-  states: () => Promise<TurnRecordingState[]>
+  states: () => Promise<TurnSessionView[]>
+  /** The window's own reads, as its channels reach the host. */
+  window: <Result>(method: string, params: Record<string, unknown>) => Promise<Result>
 }
 
 const hosts: Host[] = []
 let requests = 0
-async function host(name: string): Promise<Host> {
+async function host(name: string, wrap: (port: TurnChangesPort) => TurnChangesPort = (port) => port): Promise<Host> {
   const at = scratch(name)
   const root = mkdtempSync(join(tmpdir(), 'bmn-th-'))
   const database = new BetterSqlite3(':memory:')
@@ -126,7 +132,7 @@ async function host(name: string): Promise<Host> {
     cliPath: join(root, 'bin', 'bmn'),
     emit: (message) => emitted.push(message),
     now: () => new Date(),
-    turnChanges: { ...inProcessPort(engine), removeCaptures: inProcessKeeper(engine).removeCaptures },
+    turnChanges: { ...wrap(inProcessPort(engine)), removeCaptures: inProcessKeeper(engine).removeCaptures },
     turnVersion: () => Promise.resolve('0.162.1'),
     turnForegroundFolder: () => foreground.folder
   })
@@ -165,7 +171,8 @@ async function host(name: string): Promise<Host> {
     },
     idle: () => (service['turns'] as { idle: () => Promise<void> }).idle(),
     turns: () => listTurns(database, { sessionId: 's1', limit: 50 }).reverse(),
-    states: () => service.route(METHOD_REGISTRY.turnChangesState, {}) as Promise<TurnRecordingState[]>
+    states: () => service.route(METHOD_REGISTRY.turnChangesState, {}) as Promise<TurnSessionView[]>,
+    window: <Result>(method: string, params: Record<string, unknown>) => service.route(method, params) as Promise<Result>
   }
   hosts.push(made)
   return made
@@ -193,7 +200,7 @@ describe('the workspace\'s switch', () => {
     await h.switchOn(true)
     expect(selectWorkspace(h.database, DEFAULT_WORKSPACE_ID)).toMatchObject({ turnChanges: true })
     expect(existsSync(hint)).toBe(true)
-    expect(await h.states()).toEqual([{ sessionId: 's1', state: 'recording', app: null, pausedRoot: null, pauseReason: null }])
+    expect(await h.states()).toEqual([{ sessionId: 's1', state: 'recording', app: null, pausedRoot: null, pauseReason: null, latest: null, removalPending: false }])
     expect(h.emitted).toContainEqual({ kind: 'app-event', topic: 'turns', sessionId: null })
 
     await h.switchOn(false)
@@ -328,7 +335,7 @@ describe('what a token can read', () => {
     for (const turn of ['t-1', 't-2', 't-3']) expect(await h.prompt(turn, h.at.base)).toBe('unavailable')
     await h.idle()
 
-    expect(await h.states()).toEqual([{ sessionId: 's1', state: 'paused', app: 'codex', pausedRoot: h.at.base, pauseReason: 'failed' }])
+    expect(await h.states()).toMatchObject([{ sessionId: 's1', state: 'paused', app: 'codex', pausedRoot: h.at.base, pauseReason: 'failed' }])
     expect(await h.prompt('t-4', h.at.base)).toBe('paused')
     expect(await h.service.route(METHOD_REGISTRY.attentionList, {})).toEqual([])
     for (const token of [h.session, h.owner]) {
@@ -338,9 +345,186 @@ describe('what a token can read', () => {
     expect(h.emitted.filter((event) => event.topic === 'attention')).toEqual([])
 
     expect(await h.service.route(METHOD_REGISTRY.turnChangesResume, { sessionId: 's1' })).toEqual({ resumed: true })
-    expect(await h.states()).toEqual([{ sessionId: 's1', state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null }])
+    expect(await h.states()).toMatchObject([{ sessionId: 's1', state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null }])
     expect(await h.service.route(METHOD_REGISTRY.turnChangesResume, { sessionId: 's1' })).toEqual({ resumed: false })
     h.foreground.folder = h.at.repo
     expect(await h.prompt('t-5')).toBe('captured, confirmed')
+  })
+})
+
+/** One finished turn in a repository with a made-up secret: a changed config file, an added text file. */
+async function windowTurn(h: Host): Promise<string> {
+  await h.switchOn(true)
+  write(h.at.repo, `config/${MARKER}-payments.yaml`, `provider: stripe\napi_key: ${MARKER}-key-one\n`)
+  h.at.git(h.at.repo, 'add', '-A')
+  h.at.git(h.at.repo, 'commit', '-qm', 'made-up second')
+  await sleep(25)
+  expect(await h.prompt('t-1')).toBe('captured, confirmed')
+  write(h.at.repo, `config/${MARKER}-payments.yaml`, `provider: stripe\napi_key: ${MARKER}-key-two\nretries: 3\n`)
+  write(h.at.repo, `${MARKER}-added.txt`, `${MARKER}-content one\ntwo\n`)
+  await sleep(25)
+  expect(await h.mark({ edge: 'end', kind: 'finished', turn: 't-1' })).toBe('queued')
+  await h.idle()
+  return h.turns()[0]!.turnId
+}
+
+describe('what the window reads (Story 69.5)', () => {
+  it('gives each session where recording stands with its latest turn, a turn\'s labels and files by path, and a file\'s difference with every secret value masked', async () => {
+    const h = await host('window')
+    const turnId = await windowTurn(h)
+
+    expect(await h.states()).toEqual([{
+      sessionId: 's1', state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null, removalPending: false,
+      latest: expect.objectContaining({
+        turnId, number: 1, app: 'codex', appVersion: '0.162.1', end: 'finished', state: 'provisional', totalsState: 'complete',
+        totals: { files: 2, added: 4, removed: 1 }, wording: null
+      })
+    }])
+    const list = await h.window<TurnSummary[]>(METHOD_REGISTRY.turnChangesList, { sessionId: 's1' })
+    expect(list.map((turn) => turn.turnId)).toEqual([turnId])
+    // A summary is fixed words and counts: it cannot hold a file's name.
+    expect(Object.keys(list[0]!).sort()).toEqual(['app', 'appVersion', 'end', 'endedAt', 'number', 'startedAt', 'state', 'totals', 'totalsState', 'turnId', 'wording'])
+    expect(await h.window(METHOD_REGISTRY.turnChangesList, { sessionId: 's-other' })).toEqual([])
+
+    const turn = await h.window<TurnDetailAnswer>(METHOD_REGISTRY.turnChangesTurn, { sessionId: 's1', turnId })
+    if (!turn.kept) throw new Error('the turn is kept')
+    expect(turn.detail).toMatchObject({ workTree: h.at.repo, moreFiles: 0, unavailable: null })
+    expect(turn.detail.labels).toEqual(expect.arrayContaining([TURN_LABELS.covered(), TURN_LABELS.after()]))
+    expect(turn.detail.files).toEqual([
+      { path: `${MARKER}-added.txt`, state: 'added', added: 2, removed: 0, note: null, opens: true },
+      { path: `config/${MARKER}-payments.yaml`, state: 'changed', added: 2, removed: 1, note: null, opens: true }
+    ])
+
+    const answer = await h.window<TurnDifferenceAnswer>(METHOD_REGISTRY.turnChangesDifference, { sessionId: 's1', turnId, path: `config/${MARKER}-payments.yaml` })
+    if (!answer.kept || !('difference' in answer) || answer.difference.state !== 'text') throw new Error('a text difference is shown')
+    expect(answer.difference).toMatchObject({ added: 2, removed: 1, more: 0 })
+    const lines = answer.difference.hunks.flatMap((hunk) => hunk.lines).filter((line): line is TurnShownLine => line.kind !== '\\')
+    expect(lines.map((line) => `${line.kind}${line.a ?? ''}/${line.b ?? ''} ${line.text}`)).toEqual([
+      ' 1/1 provider: stripe', `-2/ api_key: ${TURN_SECRET_PLATE}`, `+/2 api_key: ${TURN_SECRET_PLATE}`, '+/3 retries: 3'
+    ])
+    // Not even the window is handed a value: what it shows, copies and finds is the plate.
+    expect(JSON.stringify(answer)).not.toMatch(/key-one|key-two/)
+
+    // A turn is read only under its own session, and a path neither scan holds has nothing that differs.
+    expect(await h.window(METHOD_REGISTRY.turnChangesTurn, { sessionId: 's-other', turnId })).toEqual({ kept: false })
+    expect(await h.window(METHOD_REGISTRY.turnChangesDifference, { sessionId: 's-other', turnId, path: `${MARKER}-added.txt` })).toEqual({ kept: false })
+    expect(await h.window(METHOD_REGISTRY.turnChangesDifference, { sessionId: 's1', turnId, path: 'no/such/file' }))
+      .toEqual({ kept: true, difference: { state: 'text', added: 0, removed: 0, hunks: [], more: 0 } })
+    expect(TURN_LIST_LIMIT).toBe(50)
+  })
+
+  it('is refused on the control socket, for a session\'s token and for the owner\'s', async () => {
+    const h = await host('refused')
+    const turnId = await windowTurn(h)
+    const path = `config/${MARKER}-payments.yaml`
+    // The window's own route answers each of them.
+    expect((await h.window<TurnDifferenceAnswer>(METHOD_REGISTRY.turnChangesDifference, { sessionId: 's1', turnId, path })).kept).toBe(true)
+    h.heard.length = 0
+
+    const reads: Array<[string, Record<string, unknown>]> = [
+      [METHOD_REGISTRY.turnChangesState, {}],
+      [METHOD_REGISTRY.turnChangesList, { sessionId: 's1' }],
+      [METHOD_REGISTRY.turnChangesTurn, { sessionId: 's1', turnId }],
+      [METHOD_REGISTRY.turnChangesDifference, { sessionId: 's1', turnId, path }],
+      [METHOD_REGISTRY.turnChangesResume, { sessionId: 's1' }]
+    ]
+    for (const token of [h.session, h.owner]) {
+      for (const [method, params] of reads) {
+        const answer = await h.call(token, method, params)
+        expect(answer.result, `${method} answered a token`).toBeUndefined()
+        expect(answer.error?.data.code).toBe(ERROR_CODES.invalidArgument)
+        expect(answer.error?.message).toBe(`Unknown method: ${method}`)
+      }
+    }
+    expect(h.heard).toHaveLength(10)
+    // The only marker a refusal carries is the one the caller itself sent: none.
+    expect(h.heard.join('\n')).not.toContain(MARKER)
+  })
+
+  it('answers "no longer kept" for a turn that was removed, and says while a removal waits for the session', async () => {
+    const h = await host('removed')
+    const turnId = await windowTurn(h)
+    expect((await h.states())[0]).toMatchObject({ removalPending: false })
+
+    // The keep rule removes the turn; the job for its bytes waits for the sweep to run it.
+    h.database.transaction(() => sweepTurns(h.database, { now: new Date(Date.now() + 2 * 86_400_000).toISOString(), keepDays: 1 }))()
+    expect(await h.window(METHOD_REGISTRY.turnChangesTurn, { sessionId: 's1', turnId })).toEqual({ kept: false })
+    expect(await h.window(METHOD_REGISTRY.turnChangesDifference, { sessionId: 's1', turnId, path: `${MARKER}-added.txt` })).toEqual({ kept: false })
+    expect(await h.window(METHOD_REGISTRY.turnChangesList, { sessionId: 's1' })).toEqual([])
+    expect(await h.states()).toEqual([{ sessionId: 's1', state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null, latest: null, removalPending: true }])
+
+    // With the switch off the session is still listed while something of it is kept or waits... and not once nothing is.
+    h.database.prepare('DELETE FROM turn_removal_job').run()
+    await h.switchOn(false)
+    expect(await h.states()).toEqual([])
+  })
+
+  it('still lists a session whose switch went off beside its kept turn, as off', async () => {
+    const h = await host('off-kept')
+    const turnId = await windowTurn(h)
+    await h.switchOn(false)
+    await h.idle()
+    expect(await h.states()).toMatchObject([{ sessionId: 's1', state: 'off', app: null, latest: { turnId }, removalPending: false }])
+    // What was kept can still be read.
+    expect((await h.window<TurnDetailAnswer>(METHOD_REGISTRY.turnChangesTurn, { sessionId: 's1', turnId })).kept).toBe(true)
+  })
+
+  it('gives way to a prompt\'s scan: a read still in the worker is stopped, and asked again once the prompt has gone on', async () => {
+    let asked = 0
+    const h = await host('give-way', (port) => ({
+      ...port,
+      difference: async (request, signal) => {
+        asked += 1
+        if (asked > 1) return port.difference(request, signal)
+        // The first read is in the worker until it is stopped; it answers as a stopped comparison does.
+        await new Promise<void>((resolve) => signal?.addEventListener('abort', () => resolve(), { once: true }))
+        return refusal('cancelled', 'cancelled')
+      }
+    }))
+    const turnId = await windowTurn(h)
+    const reading = h.window<TurnDifferenceAnswer>(METHOD_REGISTRY.turnChangesDifference, { sessionId: 's1', turnId, path: `${MARKER}-added.txt` })
+    await expect.poll(() => asked).toBe(1)
+
+    expect(await h.prompt('t-2')).toBe('captured, confirmed')
+    expect(await reading).toMatchObject({ kept: true, difference: { state: 'text', added: 2, removed: 0 } })
+    expect(asked).toBe(2)
+  })
+
+  it('says so, in fixed words, when prompts keep stopping a read', async () => {
+    let asked = 0
+    const h = await host('gave-up', (port) => ({
+      ...port,
+      compare: async () => {
+        asked += 1
+        return refusal('cancelled', 'cancelled')
+      }
+    }))
+    await h.switchOn(true)
+    // A turn whose totals were stored, so that opening it compares its two scans again.
+    const turnId = await (async () => {
+      const id = 't-kept'
+      h.database.prepare(
+        `INSERT INTO turn_capture(capture_id, session_id, work_tree, scan_started_ms, scan_ended_ms, head_start, head_end, state, bound, size)
+         VALUES ('c-1', 's1', ?, 1, 2, NULL, NULL, 'whole', NULL, 1), ('c-2', 's1', ?, 3, 4, NULL, NULL, 'whole', NULL, 1)`
+      ).run(h.at.repo, h.at.repo)
+      await h.service['options'].database.companion('putTurn', { turn: {
+        turnId: id, number: 1, sessionId: 's1', incarnationId: 'incarnation-1', foreground: '34817:7001:555:1:2', app: 'codex', appVersion: '0.162.1',
+        conversation: CONVERSATION, appTurnId: null, namedFolder: h.at.repo, workTree: h.at.repo, state: 'closed', endKind: 'finished',
+        startedAt: NOW, endedAt: NOW, totalsState: 'complete', totals: { files: 1, added: 1, removed: 0 }, wording: null, labels: [], before: 'c-1', after: 'c-2'
+      } })
+      return id
+    })()
+
+    expect(await h.window(METHOD_REGISTRY.turnChangesTurn, { sessionId: 's1', turnId })).toMatchObject({
+      kept: true, detail: { files: [], unavailable: 'BMN was scanning for a prompt; open it again' }
+    })
+    expect(asked).toBe(3)
+  })
+
+  it('tells the window when the sweep removed something', async () => {
+    const h = await host('swept')
+    h.emitted.length = 0
+    h.service.turnsChanged()
+    expect(h.emitted).toEqual([{ kind: 'app-event', topic: 'turns', sessionId: null }])
   })
 })

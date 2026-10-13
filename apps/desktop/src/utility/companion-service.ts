@@ -61,8 +61,14 @@ import {
   type UsageReading,
   type GuardReport,
   type GuardStop,
+  TURN_FILES_LIMIT,
+  TURN_LIST_LIMIT,
+  TURN_MARK_LIMIT_MS,
   TURN_SWITCH_FOLDER,
-  type TurnRecordingState
+  type TurnDetailAnswer,
+  type TurnDifferenceAnswer,
+  type TurnFileView,
+  type TurnSessionView
 } from '@bmn/protocol'
 import {
   ArtifactFileError,
@@ -103,6 +109,7 @@ import { foregroundProcessFolder } from './foreground-process'
 import type { TurnChangesPort, TurnStoreKeeper } from './turn-changes-engine'
 import { TurnRecorder } from './turn-changes-recorder'
 import { readAppVersion } from './turn-changes-version'
+import { turnFileView, turnSummary, turnUnavailable } from './turn-changes-view'
 
 /** A listed session plus its conversation route; `null` when the session has no stored binding. */
 type ListedSession = SessionRecord & {
@@ -117,6 +124,8 @@ const TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024
 const TELEGRAM_TOKEN_FILE = 'telegram-bot.token'
 const TELEGRAM_OFFSET_KEY = 'telegram.offset'
 const ATTENTION_SWEEP_MS = 30_000
+/** How often a read for the Turn changes dialog is asked while prompts' scans keep stopping it (Story 69.5). */
+const TURN_READ_ATTEMPTS = 3
 const MESSAGE_SWEEP_EVERY_MS = 60 * 60_000
 /** How often a busy Codex run's session file is reread for plan use (Story 37.2). */
 const CODEX_USAGE_READ_EVERY_MS = 15_000
@@ -683,7 +692,12 @@ export class CompanionService {
         takeMessage: (p) => this.controlCall(() => this.messages.take(p)),
         reportMessage: (p) => this.controlCall(() => this.messages.report(p)),
         // Epic 69: the answer is one status word. Without the scanning thread nothing is recorded.
-        markTurn: (p) => this.controlCall(async () => (this.turns === null ? 'off' : this.turns.mark(p))),
+        markTurn: (p) => this.controlCall(async () => {
+          if (this.turns === null) return 'off'
+          // A prompt's scan never waits for something the owner only reads: that is stopped and asked again.
+          if (p.edge === 'start') for (const read of this.turnReads) read.abort()
+          return this.turns.mark(p)
+        }),
         dropTurnMark: (sessionId, requestId) => this.turns?.dropped(sessionId, requestId),
         reportRefusal: (method, sessionId, reason) => this.logRefusal(method, sessionId, reason),
         observeConversation: (p) => this.controlCall(async () => {
@@ -717,6 +731,7 @@ export class CompanionService {
         observeHookEvent: (p) => this.controlCall(async () => {
           const recorded = await this.observeHookEvent(p)
           // Epic 69: a tool that ran, a conversation that started or ended; it moves a turn's record and answers nothing.
+          this.turns?.seen(p.sessionId, p.agent)
           if (p.turn !== undefined) this.turns?.observe({ sessionId: p.sessionId, app: p.agent, event: p.event, source: p.source, ...p.turn })
           // Epic 66.4: the hook asks for a message only when told one waits, so an ordinary tool call adds nothing.
           return await this.messages.waiting(p) ? { ...recorded, messageWaiting: true } : recorded
@@ -980,10 +995,17 @@ export class CompanionService {
         return { cleared }
       }
       case METHOD_REGISTRY.turnChangesState:
-        // Epic 69: where recording stands per session. For the window only; it reaches no snapshot, token or phone.
-        return (this.turns?.states() ?? []) satisfies TurnRecordingState[]
+        // Epic 69: where recording stands per session, with its latest kept turn. These four reads are for the
+        // window only; they reach no snapshot, token or phone, and the control socket has no method for them.
+        return await this.turnViews()
       case METHOD_REGISTRY.turnChangesResume:
         return { resumed: this.turns?.resume(text(params, 'sessionId')) ?? false }
+      case METHOD_REGISTRY.turnChangesList:
+        return (await this.options.database.companion('listTurns', { sessionId: text(params, 'sessionId'), limit: TURN_LIST_LIMIT })).map(turnSummary)
+      case METHOD_REGISTRY.turnChangesTurn:
+        return await this.turnDetail(text(params, 'sessionId'), text(params, 'turnId'))
+      case METHOD_REGISTRY.turnChangesDifference:
+        return await this.turnDifference(text(params, 'sessionId'), text(params, 'turnId'), text(params, 'path'))
       case METHOD_REGISTRY.portsList:
         // Read-only: what the last scan found, with a stopped session's leftovers marked. Nothing here reads /proc.
         return this.ports.list() satisfies SessionPorts[]
@@ -1219,6 +1241,70 @@ export class CompanionService {
       this.turns.setSwitches(new Set([...this.knownSessions.values()].filter((session) => recording.has(session.workspaceId))
         .map((session) => session.sessionId)))
     }
+  }
+
+  /** Epic 69: the comparisons the window waits for now. A prompt that needs the worker stops them. */
+  private readonly turnReads = new Set<AbortController>()
+
+  /**
+   * One read for the window in the worker thread. Stopped by a prompt's scan, it is asked again once that scan's
+   * time has passed, and after the third time it says so instead of keeping the owner waiting.
+   */
+  private async turnRead<Answer extends { state: string }>(ask: (signal: AbortSignal) => Promise<Answer>): Promise<Answer> {
+    for (let attempt = 1; ; attempt += 1) {
+      const stop = new AbortController()
+      this.turnReads.add(stop)
+      try {
+        const answer = await ask(stop.signal)
+        if (answer.state !== 'cancelled' || attempt === TURN_READ_ATTEMPTS) return answer
+      } finally {
+        this.turnReads.delete(stop)
+      }
+      await new Promise<void>((resolve) => { setTimeout(resolve, TURN_MARK_LIMIT_MS + 50) })
+    }
+  }
+
+  /** Epic 69: every session that records now or still has a kept turn, as its pane's header and the dialog read it. */
+  private async turnViews(): Promise<TurnSessionView[]> {
+    const states = new Map((this.turns?.states() ?? []).map((state) => [state.sessionId, state]))
+    const latest = new Map((await this.options.database.companion('latestTurns')).map((row) => [row.sessionId, turnSummary(row)]))
+    const pending = new Set(await this.options.database.companion('turnRemovalPendingSessions'))
+    return [...new Set([...states.keys(), ...latest.keys()])].sort().map((sessionId) => ({
+      ...(states.get(sessionId) ?? { sessionId, state: 'off' as const, app: null, pausedRoot: null, pauseReason: null }),
+      latest: latest.get(sessionId) ?? null,
+      removalPending: pending.has(sessionId)
+    }))
+  }
+
+  /** One kept turn of a session with its files, compared again from its two stored scans. */
+  private async turnDetail(sessionId: string, turnId: string): Promise<TurnDetailAnswer> {
+    const row = await this.options.database.companion('getTurn', turnId)
+    if (row === null || row.sessionId !== sessionId) return { kept: false }
+    const detail = { turn: turnSummary(row), workTree: row.workTree, labels: row.labels, files: [] as TurnFileView[], moreFiles: 0, unavailable: null as string | null }
+    const port = this.options.turnChanges
+    if (row.totals === null || row.before === null || row.after === null || row.workTree === null || port === undefined) return { kept: true, detail }
+    const pair = { session: sessionId, root: row.workTree, a: row.before, b: row.after }
+    const compared = await this.turnRead((signal) => port.compare(pair, signal))
+    if (compared.state !== 'compared') return { kept: true, detail: { ...detail, unavailable: turnUnavailable(compared.reason) } }
+    return { kept: true, detail: {
+      ...detail, files: compared.files.slice(0, TURN_FILES_LIMIT).map(turnFileView), moreFiles: Math.max(0, compared.files.length - TURN_FILES_LIMIT)
+    } }
+  }
+
+  /** One file's difference of a kept turn: bounded, every secret value masked before it leaves the worker thread. */
+  private async turnDifference(sessionId: string, turnId: string, path: string): Promise<TurnDifferenceAnswer> {
+    const row = await this.options.database.companion('getTurn', turnId)
+    if (row === null || row.sessionId !== sessionId) return { kept: false }
+    const port = this.options.turnChanges
+    if (row.before === null || row.after === null || row.workTree === null || port === undefined) return { kept: true, unavailable: turnUnavailable('') }
+    const pair = { session: sessionId, root: row.workTree, a: row.before, b: row.after, path }
+    const difference = await this.turnRead((signal) => port.difference(pair, signal))
+    return difference.state === 'text' || difference.state === 'binary' ? { kept: true, difference } : { kept: true, unavailable: turnUnavailable(difference.reason) }
+  }
+
+  /** Epic 69: the sweep removed a turn, or a removal now waits or no longer does; the window reads again. */
+  turnsChanged(): void {
+    this.emit('turns', null)
   }
 
   /** Epic 69, self-test only: resolves when no scan, comparison or record of a turn is waited for. */

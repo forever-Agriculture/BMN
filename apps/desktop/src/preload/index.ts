@@ -49,7 +49,10 @@ import {
   type SessionUsage,
   type UsageReading,
   type GuardStop,
-  type TurnRecordingState,
+  type TurnDetailAnswer,
+  type TurnDifferenceAnswer,
+  type TurnSessionView,
+  type TurnSummary,
   type BackupManifest,
   type BackupVerifyResult,
   type ControlInfo,
@@ -728,8 +731,17 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   resumeSessionMessagePair(workspaceId: string, firstSessionId: string, secondSessionId: string): Promise<SessionMessageListing> {
     return invokeBridge('aiterm:messages:resume-pair', { workspaceId, firstSessionId, secondSessionId })
   },
-  listTurnRecording(): Promise<TurnRecordingState[]> {
+  listTurnRecording(): Promise<TurnSessionView[]> {
     return invokeBridge('aiterm:turn-changes:state', {})
+  },
+  listTurns(sessionId: string): Promise<TurnSummary[]> {
+    return invokeBridge('aiterm:turn-changes:list', { sessionId })
+  },
+  readTurn(sessionId: string, turnId: string): Promise<TurnDetailAnswer> {
+    return invokeBridge('aiterm:turn-changes:turn', { sessionId, turnId })
+  },
+  readTurnDifference(sessionId: string, turnId: string, path: string): Promise<TurnDifferenceAnswer> {
+    return invokeBridge('aiterm:turn-changes:difference', { sessionId, turnId, path })
   },
   resumeTurnRecording(sessionId: string): Promise<{ resumed: boolean }> {
     return invokeBridge('aiterm:turn-changes:resume', { sessionId })

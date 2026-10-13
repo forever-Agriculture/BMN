@@ -6,7 +6,8 @@
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { TURN_LIMITS, capture, isRefusal, refusal, type CaptureSeams, type StagedCapture, type TurnLimits, type TurnRefusal, type TurnRootIdentity } from './turn-changes-capture'
-import { compareCaptures, fileDifference, type TurnComparison, type TurnDifference } from './turn-changes-compare'
+import type { TurnShownDifference } from '@bmn/protocol'
+import { compareCaptures, shownFileDifference, type TurnComparison } from './turn-changes-compare'
 import type { TurnGitCall } from './turn-changes-git'
 import { TURN_STORE_FOLDER, TurnStore, isStoreSegment, listTurnStores, workTreeKey, type TurnCaptureRecord } from './turn-changes-store'
 
@@ -53,7 +54,7 @@ export interface TurnChangesPort {
   publish: (capture: string) => Promise<TurnCaptureRecord | null>
   discard: (capture: string) => Promise<void>
   compare: (request: TurnPairRequest, signal?: AbortSignal) => Promise<TurnComparison | TurnRefusal>
-  difference: (request: TurnPairRequest & { path: string }, signal?: AbortSignal) => Promise<TurnDifference | TurnRefusal>
+  difference: (request: TurnPairRequest & { path: string }, signal?: AbortSignal) => Promise<TurnShownDifference | TurnRefusal>
 }
 
 /** One store on disk, by its two folder names, with its published captures: an id and the time its scan ended. Never a file's name. */
@@ -267,8 +268,9 @@ export class TurnChangesEngine {
     })
   }
 
-  difference(request: TurnPairRequest & { path: string }, cancelled?: () => boolean): TurnDifference | TurnRefusal {
-    return fileDifference(this.pairStore(request), request.a, request.b, request.path, {
+  /** One file's difference as the window may read it: bounded, every secret value masked. The texts never leave this thread. */
+  difference(request: TurnPairRequest & { path: string }, cancelled?: () => boolean): TurnShownDifference | TurnRefusal {
+    return shownFileDifference(this.pairStore(request), request.a, request.b, request.path, {
       ...(this.options.limits?.compareMs === undefined ? {} : { limitMs: this.options.limits.compareMs }),
       ...(cancelled ? { cancelled } : {})
     })

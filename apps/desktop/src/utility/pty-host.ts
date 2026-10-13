@@ -393,7 +393,8 @@ async function start(): Promise<void> {
     },
     keeper: turnChanges,
     storePresent: () => existsSync(join(roots.data, TURN_STORE_FOLDER)),
-    log: (line) => process.stderr.write(line)
+    log: (line) => process.stderr.write(line),
+    changed: () => companionService.turnsChanged()
   }).start()
   const launchSets = new LaunchSetCoordinator({
     getSet: (workspaceId, setId) => database.getLaunchSet(workspaceId, setId),
@@ -544,6 +545,16 @@ async function start(): Promise<void> {
       return (async () => {
         await companionService.turnsIdle()
         return { selfTestTurns: await database.companion('listTurns', { sessionId, limit: 50 }) }
+      })()
+    }
+    if (typeof params.selfTestTurnsForget === 'string') {
+      // Epic 69: the keep rule with no day left removes every turn now, as a sweep at its hour would, and
+      // leaves the jobs for their bytes waiting; the window is told as after any sweep.
+      return (async () => {
+        await companionService.turnsIdle()
+        const swept = await database.companion('sweepTurns', { now: new Date().toISOString(), keepDays: 0 })
+        companionService.turnsChanged()
+        return { selfTestTurnsForget: swept }
       })()
     }
     if (params.selfTestRemoteAnswer === undefined) return undefined

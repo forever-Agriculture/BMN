@@ -85,16 +85,6 @@ export const TURN_WORDINGS = Object.freeze({
   partial: (files: number): string => `Partial: ${files} files`
 })
 
-/** The short form of a wording, for the one quiet button in a pane's header. */
-export function turnWordingShort(wording: string): string {
-  if (wording.startsWith('Ordering unverified')) return 'Ordering unverified'
-  if (wording.startsWith('Not supported here')) return 'Not supported here'
-  if (wording.startsWith('Comparison unavailable')) return 'Prompts overlapped'
-  if (wording.startsWith('End not observed')) return 'End not observed'
-  if (wording.startsWith('Difference unavailable')) return 'Limit reached'
-  return wording
-}
-
 /** The labels a closed turn carries (Story 69.4, criterion 8). The first three always; the others when they apply. */
 export const TURN_LABELS = Object.freeze({
   scans: (root: string, first: readonly [string, string], second: readonly [string, string]): string =>
@@ -143,3 +133,100 @@ export function isTurnRecordingState(value: unknown): value is TurnRecordingStat
     (state.pausedRoot === null || typeof state.pausedRoot === 'string') &&
     (state.pauseReason === null || Object.hasOwn(TURN_PAUSE_REASONS, state.pauseReason as string))
 }
+
+// ---- what the window reads (Story 69.5) -------------------------------------------------------------
+//
+// These reach the window through its own channels only. No token reads them: the control socket has no
+// method that returns a turn, a file's name or a difference.
+
+/** How much of one file's difference is shown: at most this many lines or bytes, and a line cut at this many characters. */
+export const TURN_SHOWN_LIMITS = Object.freeze({ lines: 5_000, bytes: 256 * 1024, lineCharacters: 2_000 })
+/** How many turns the dialog lists, newest first. */
+export const TURN_LIST_LIMIT = 50
+/** How many files of one turn are listed; the rest is a count. */
+export const TURN_FILES_LIMIT = 2_000
+/** What stands in a shown line where a secret value is: one plate, the same whatever the value's length. */
+export const TURN_SECRET_PLATE = '••••••••••'
+
+export type TurnTotalsWord = 'complete' | 'partial' | 'not-complete' | 'none'
+
+/** One kept turn as the list shows it. Nothing here can hold a file's name or content. */
+export interface TurnSummary {
+  turnId: string
+  number: number
+  app: string
+  appVersion: string | null
+  startedAt: string
+  endedAt: string | null
+  /** How it ended, one of `TURN_ENDS`; null while it runs. */
+  end: string | null
+  state: 'open' | 'provisional' | 'closed'
+  totalsState: TurnTotalsWord
+  totals: { files: number; added: number; removed: number } | null
+  /** Why the totals are not complete, in one of the nine wordings. */
+  wording: string | null
+}
+
+/** Where recording stands for a session, with its latest kept turn: what the header's plate and the dialog's state line read. */
+export interface TurnSessionView extends TurnRecordingState {
+  latest: TurnSummary | null
+  /** A removal of this session's stored bytes waits for its next try. */
+  removalPending: boolean
+}
+
+/** One file of an opened turn. `note` says what a state alone does not: why it was not read, what changed kind, a binary file's sizes. */
+export interface TurnFileView {
+  path: string
+  state: string
+  added: number | null
+  removed: number | null
+  note: string | null
+  /** Whether a difference can be opened for it. */
+  opens: boolean
+}
+
+export interface TurnDetail {
+  turn: TurnSummary
+  workTree: string | null
+  labels: string[]
+  files: TurnFileView[]
+  /** Files beyond `TURN_FILES_LIMIT`. */
+  moreFiles: number
+  /** Why no files are listed, when the two scans could not be compared now. */
+  unavailable: string | null
+}
+/** `kept: false`: the turn is no longer kept. */
+export type TurnDetailAnswer = { kept: true; detail: TurnDetail } | { kept: false }
+
+/** One shown line. `text` is what may be read, copied and found: every secret value in it is already the plate, at `masks`. */
+export interface TurnShownLine {
+  kind: ' ' | '-' | '+'
+  /** The line's number in the earlier and the later text, as the original texts count them. */
+  a: number | null
+  b: number | null
+  text: string
+  masks: Array<[start: number, end: number]>
+  /** The line was longer than `TURN_SHOWN_LIMITS.lineCharacters`. */
+  cut: boolean
+}
+/** The mark after a last line that has no line ending. */
+export interface TurnShownMark { kind: '\\' }
+
+export interface TurnShownHunk {
+  aStart: number
+  aLines: number
+  bStart: number
+  bLines: number
+  /** The only thing that differs in this hunk is inside masked values. */
+  secret: boolean
+  lines: Array<TurnShownLine | TurnShownMark>
+}
+
+export type TurnShownDifference =
+  /** `more`: lines not shown; 0 when all are, null when there are more and their number is not known. */
+  | { state: 'text'; added: number; removed: number; hunks: TurnShownHunk[]; more: number | null }
+  | { state: 'binary'; sizeBefore: number | null; sizeAfter: number | null }
+export type TurnDifferenceAnswer =
+  | { kept: true; difference: TurnShownDifference }
+  | { kept: true; unavailable: string }
+  | { kept: false }

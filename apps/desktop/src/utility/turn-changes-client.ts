@@ -2,7 +2,8 @@
 import { randomUUID } from 'node:crypto'
 import { Worker, type WorkerOptions } from 'node:worker_threads'
 import { refusal, type TurnRefusal } from './turn-changes-capture'
-import type { TurnComparison, TurnDifference } from './turn-changes-compare'
+import type { TurnShownDifference } from '@bmn/protocol'
+import type { TurnComparison } from './turn-changes-compare'
 import type {
   TurnCaptureAnswer, TurnCaptureRequest, TurnChangesPort, TurnPairRequest, TurnStoreInventory, TurnStoreKeeper, TurnStoreUsage
 } from './turn-changes-engine'
@@ -123,7 +124,7 @@ export class TurnChangesClient implements TurnChangesPort, TurnStoreKeeper {
     return this.stoppable(signal, (stop) => this.request({ operation: 'compare', params: request, stop }))
   }
 
-  difference(request: TurnPairRequest & { path: string }, signal?: AbortSignal): Promise<TurnDifference | TurnRefusal> {
+  difference(request: TurnPairRequest & { path: string }, signal?: AbortSignal): Promise<TurnShownDifference | TurnRefusal> {
     return this.stoppable(signal, (stop) => this.request({ operation: 'difference', params: request, stop }))
   }
 

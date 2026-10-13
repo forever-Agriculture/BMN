@@ -216,6 +216,34 @@ source, with observation time, current or previous run, ten-minute freshness and
 availability. It names sessions with no report. This view reads current records; it does not
 judge whether an agent succeeded or promise a report history.
 
+**Turn changes.** Progress is what the agent says; turn changes are what BMN saw in the files. A
+workspace's ⋯ menu has **Record what each turn changes**, off by default. With it on, for Claude
+Code and Codex sessions in that workspace, BMN scans the Git work tree the agent runs in when a
+prompt is sent and again when the turn ends, and keeps what differs between the two scans. The
+pane's header then shows one quiet button for the latest turn, "4 files +120 −33", and the pane's
+⋯ menu and the session's menu have **Turn changes…**; both open the same read-only dialog. It
+lists the latest 50 turns still kept, newest first: time, app, how the turn ended, and its totals.
+A turn opens to its files by path, each with its state and the lines it gained and lost, and a
+file opens to its difference under its own row.
+
+Read it by one rule: it is what differs between two scans of that work tree, not a list of what
+the agent did. Another program's changes in between are included, and each turn says under its
+heading what its numbers cover. A turn whose totals are not complete says so in gold with the one
+reason that applies, such as "Partial: 3 files" or "Before snapshot unavailable"; in a narrow pane
+the button reads Partial, Not complete or No totals and its tooltip gives the reason. While
+recording is off, paused or not possible for the app now running, the button and the dialog say
+"Recording off", "Paused" or "Not supported for <app>" beside the earlier turn, so an old number
+is not read as the latest.
+
+A difference shows at most 5,000 lines or 256 KiB, and says how many lines it left out. Secret
+values in it are masked before it reaches the window, in added, removed and unchanged lines
+alike: every value of an `.env` file, values named like a key, token or password in JSON, YAML
+and TOML files, and the known shapes of keys anywhere. Nothing in this dialog reveals one; a
+change that is only a masked value reads "Secret value changed". Three scans in a row that fail
+or read nothing new pause recording for that work tree; a card says so once, and **Resume
+recording in <work tree>** in the workspace's menu starts it again. How turns are recorded, the
+limits and each wording: [turn-changes.md](turn-changes.md).
+
 **Handoffs.** An agent can prepare a package for another session — text plus up to ten of its
 published files — but cannot deliver it. The handoff opens in the source session's Needs you queue;
 you open the Files panel, check or edit the text and files, and press **Paste handoff** in the
@@ -473,6 +501,18 @@ full shortcut table is in the [README](../README.md#keyboard).
 - Voice audio is transcribed locally; the microphone is open only while recording; model downloads
   are pinned by size and SHA-256.
 - Telegram is off by default and answers only the chat (and optionally the user) you allow.
+- **Record what each turn changes** is off by default, per workspace. While it is on, BMN keeps
+  its own copy of the files in the Git work tree an agent runs in: every tracked file and every
+  untracked file Git does not ignore, secrets in them included. The copies are in
+  `~/.local/share/bmn/turn-changes/`, in owner-only folders, one per session; nothing is written
+  into your repository. A turn and its copies are kept as long as Preferences → History → Keep
+  agent history says, counted from the turn's end, and are removed with their session. Removal
+  runs when BMN starts and every hour; one that failed is tried again and reads "Removal
+  pending" until it is done. Switching the workspace's switch off stops new copies and removes
+  none before its time. The copies and the differences are read by the window only: no agent's
+  token and no Telegram message carries them. A backup export holds the database's list of
+  turns (work tree, times, counts and the fixed wordings; no file name or content) and none of
+  the copies.
 
 These protections separate the app's parts from each other. They do not protect you from a
 malicious program already running as your user.

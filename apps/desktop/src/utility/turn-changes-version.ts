@@ -1,6 +1,6 @@
 // MODULE: turn-changes-version.ts - reads which version of an app a session's foreground process runs, by asking that very program, away from a prompt's path (Epic 69, docs/turn-changes.md)
 import { execFile } from 'node:child_process'
-import { readFileSync, readlinkSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { TURN_CAPTURE_LIMIT_MS } from '@bmn/protocol'
 import { foregroundProcessFolder } from './foreground-process'
@@ -10,6 +10,9 @@ const ANSWERS: Readonly<Record<string, RegExp | undefined>> = Object.freeze({
   claude: /^(\d+\.\d+\.\d+[0-9A-Za-z.+-]*) \(Claude Code\)\s*$/,
   codex: /^codex-cli (\d+\.\d+\.\d+[0-9A-Za-z.+-]*)\s*$/
 })
+
+/** How many programs a foreground process started may be asked. An app's launcher starts one. */
+const STARTED_LIMIT = 8
 
 /** The version in an app's own answer, or null when the answer is not that app's. */
 export function turnAppVersion(app: string, answer: string): string | null {
@@ -51,23 +54,92 @@ export function mayAskProgram(identity: string, procRoot: string = '/proc'): boo
 }
 
 /**
- * Runs the program a foreground process is (`/proc/<pid>/exe`) with `--version` and reads the app's version from
- * its answer. Null when BMN may not run it, when the process is gone or another one by now, when it does not
- * answer in time, or when the answer is not that app's: a turn then reads "Ordering unverified".
+ * The processes a foreground process started itself that still share the terminal's foreground with it, each
+ * named the way a foreground process is. An app installed as a launcher runs its real program as one of them:
+ * Codex from npm is a Node script whose one child is the native `codex`. What those children start in turn (an
+ * agent's commands) is not looked at.
  */
-export function readAppVersion(identity: string, app: string, limitMs: number = TURN_CAPTURE_LIMIT_MS): Promise<string | null> {
+export function startedPrograms(identity: string, procRoot: string = '/proc'): string[] {
+  const [tty, pidText] = identity.split(':')
+  const pid = Number(pidText)
+  if (!tty || !Number.isSafeInteger(pid) || pid <= 0) return []
+  try {
+    const children = new Set<number>()
+    for (const task of readdirSync(`${procRoot}/${pid}/task`)) {
+      try {
+        for (const child of readFileSync(`${procRoot}/${pid}/task/${task}/children`, 'utf8').trim().split(/\s+/)) {
+          if (/^[1-9]\d*$/.test(child)) children.add(Number(child))
+        }
+      } catch {
+        // A thread that ended meanwhile started nothing that is still its own.
+      }
+    }
+    const named: string[] = []
+    for (const child of [...children].sort((a, b) => a - b).slice(0, STARTED_LIMIT)) {
+      try {
+        const text = readFileSync(`${procRoot}/${child}/stat`, 'utf8')
+        // comm can contain spaces and parentheses. The fields following its final ')' are fixed.
+        const fields = text.slice(text.lastIndexOf(')') + 2).trim().split(/\s+/)
+        const start = fields[19]
+        // Its parent's own child, still in the terminal's foreground with it, neither stopped nor ended.
+        if (Number(fields[1]) !== pid || Number(fields[2]) !== pid || fields[4] !== tty || !start || !/^\d+$/.test(start) ||
+          !fields[0] || ['T', 't', 'Z', 'X'].includes(fields[0])) continue
+        const program = statSync(`${procRoot}/${child}/exe`, { bigint: true })
+        named.push(`${tty}:${child}:${start}:${program.dev}:${program.ino}`)
+      } catch {
+        // Gone by now.
+      }
+    }
+    return named
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Runs the program one process is (`/proc/<pid>/exe`) with `--version` and gives its answer. Null when BMN may
+ * not run it, when it does not answer in time, or when the process is gone or another one by now.
+ */
+function askProgram(identity: string, limitMs: number): Promise<string | null> {
   const [, pidText] = identity.split(':')
   const pid = Number(pidText)
-  if (process.platform !== 'linux' || ANSWERS[app] === undefined) return Promise.resolve(null)
   if (!mayAskProgram(identity)) return Promise.resolve(null)
   return new Promise((resolve) => {
     try {
       execFile(`/proc/${pid}/exe`, ['--version'], { timeout: limitMs, maxBuffer: 4096, env: { PATH: '/usr/bin:/bin', HOME: homedir() } }, (error, stdout) => {
         // The process must still be the one the identity names: a reused process id would lend another program's answer.
-        resolve(error || foregroundProcessFolder(identity) === null ? null : turnAppVersion(app, String(stdout)))
+        resolve(error || foregroundProcessFolder(identity) === null ? null : String(stdout))
       })
     } catch {
       resolve(null)
     }
   })
+}
+
+/** What a test puts in place of the question and of the list of started programs. */
+export interface VersionSeams {
+  ask?: (identity: string, limitMs: number) => Promise<string | null>
+  started?: (identity: string) => string[]
+}
+
+/**
+ * Reads the app's version from the answer of the program a foreground process is. When that answer is another
+ * program's (a launcher's), the programs that process started itself are asked the same way, one after another
+ * inside the same time, and one of them counts only while it is still that process's own. Null when no answer is
+ * the app's: a turn then reads "Ordering unverified".
+ */
+export async function readAppVersion(identity: string, app: string, limitMs: number = TURN_CAPTURE_LIMIT_MS, seams: VersionSeams = {}): Promise<string | null> {
+  if (process.platform !== 'linux' || ANSWERS[app] === undefined) return null
+  const ask = seams.ask ?? askProgram
+  const started = seams.started ?? startedPrograms
+  const end = Date.now() + limitMs
+  const own = turnAppVersion(app, await ask(identity, limitMs) ?? '')
+  if (own !== null) return own
+  for (const candidate of started(identity)) {
+    const left = end - Date.now()
+    if (left <= 0) break
+    const version = turnAppVersion(app, await ask(candidate, left) ?? '')
+    if (version !== null) return started(identity).includes(candidate) ? version : null
+  }
+  return null
 }

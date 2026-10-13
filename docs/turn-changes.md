@@ -1,4 +1,4 @@
-# Turn changes: how a work tree is captured, where a turn's ends are proven, and how a turn is recorded
+# Turn changes: how a work tree is captured, where a turn's ends are proven, how a turn is recorded and what the owner reads
 
 BMN can record what differs in a Git work tree between the moment the owner sends a prompt and
 the moment the agent's turn ends. This page holds the measurements that feature is built on
@@ -6,7 +6,7 @@ the moment the agent's turn ends. This page holds the measurements that feature 
 that costs, and, per app and version, whether the app waits for its prompt hook before it acts
 and which events mark the ends of a turn. BMN records turns only for an app and version that
 holds PASS in the table below. [How a turn is recorded](#how-a-turn-is-recorded) says what the
-app does with all of this.
+app does with all of this, and [What the owner reads](#what-the-owner-reads) what he sees of it.
 
 Measured 2026-10-13 on Linux (Ryzen 5 4600H, 12 threads, ext4, Git 2.53.0, Node 24.14.0) with
 the installed apps, each in a throwaway profile inside an isolated BMN built from `cff5032`, in
@@ -358,7 +358,10 @@ Records: `records/edges/codex-0.162.1/` (`waiting-20261013T174527`, `edges-20261
   Codex's start and for Ctrl+Z.
 - **Reading the version.** Running the agent's own program with `--version` answers
   `codex-cli 0.162.1` in 10 to 20 ms. The hook's parent is the native `codex` program, whose
-  link target does not name the version, so the program has to be asked.
+  link target does not name the version, so the program has to be asked. Installed from npm,
+  the process that holds the terminal's foreground is a Node launcher (`bin/codex.js`) and the
+  native program is its one child: asked alone, the launcher answers for Node (seen 2026-10-14
+  in a live turn on 0.162.1).
 
 ### OpenCode 1.19.0
 
@@ -497,13 +500,20 @@ and its labels. No row holds a file's name or content.
 ### The app's version
 
 BMN reads the version once per foreground process, away from the prompt's path, by running the
-program that process is (`/proc/<its process>/exe`) with `--version`. With the Git commands
-above this is the only program the feature starts (`turn-changes-version.ts`; a test holds both
-lists). BMN asks only a process as free as itself: one in another view of the file system (a
-container, a sandbox), one that gave up new privileges (Landlock asks for that) or one with a
-system-call filter on it is never asked, since a program BMN starts would run outside that
-sandbox; and only while the program is still the file BMN identified. Only an answer in the
-app's own shape counts (`2.1.296 (Claude Code)`, `codex-cli 0.162.1`).
+program that process is (`/proc/<its process>/exe`) with `--version`. When the answer is another
+program's, the process is a launcher: Codex from npm is a Node script whose one child is the
+native `codex`. BMN then asks, the same way and inside the same 2 s, the programs that process
+started itself and that still share the terminal's foreground with it, at most eight, and never
+what those start in turn (an agent's commands). With the Git commands above these are the only
+programs the feature starts, always as `/proc/<a process>/exe --version` and never by a path
+anybody names (`turn-changes-version.ts`; a test holds both lists). BMN asks only a process as
+free as itself: one in another view of the file system (a container, a sandbox), one that gave
+up new privileges (Landlock asks for that) or one with a system-call filter on it is never
+asked, since a program BMN starts would run outside that sandbox; and only while the program is
+still the file BMN identified. Only an answer in the app's own shape counts (`2.1.296 (Claude
+Code)`, `codex-cli 0.162.1`). An app that an interpreter runs without a program of its own has
+none to ask (Claude Code installed from npm would be one; not tried here), and its turns read
+"Ordering unverified".
 
 A turn on another version than the measured one, or on one BMN could not read, is still
 recorded. It reads "Ordering unverified on <app> <version>; early writes may be missed", and
@@ -558,8 +568,10 @@ While paused, BMN scans and records nothing for that root. The pause is shown on
 the window only, as the prompt guard's card is: it is not a request and reaches no snapshot, no
 token and no phone. Its reason is one of three fixed sentences, never a file's name: "Three
 scans in a row failed", "Three scans in a row were incomplete and read nothing new", or "Three
-scans in a row failed, or were incomplete and read nothing new". **Resume** in the workspace's
-menu sets the count back to zero.
+scans in a row failed, or were incomplete and read nothing new". The card shows once for a pause,
+under that session's header when its pane is on screen, with the work tree and the reason, and
+only closes; after it the header's plate reads "Paused" and its tooltip keeps the reason.
+**Resume recording in <work tree>** in the workspace's menu sets the count back to zero.
 
 ### Who can read it
 
@@ -567,6 +579,74 @@ No token reads a capture, a turn or a difference: the control socket has no meth
 one, and the answer to `turn.mark` is a status word. `bmn hooks check` says per app, on a `turn
 changes:` line, whether its turns are recorded and on which version waiting for the prompt hook
 was measured. The agent brief and `bmn help agents` are unchanged.
+
+The window reads through four channels of its own, each checked for its sender: where recording
+stands for each session with its latest turn, a session's latest 50 kept turns, one turn with its
+labels and files, and one file's difference. A test calls each of them on the control socket with
+a session's token and with the owner's and is refused both times.
+
+## What the owner reads
+
+### The plate and the dialog
+
+A session with a kept turn has one quiet button in its pane's header, between its ports and Split,
+and **Turn changes…** in the pane's ⋯ menu and in the session's menu. Neither depends on an agent
+ever reporting progress. The button is as high as a port's plate and sits in the row the header
+already has, so it changes no terminal's size when it appears, changes or goes.
+
+| The latest turn | Pane over 880 px | Pane of 880 px and under |
+| --- | --- | --- |
+| Complete totals | 4 files +120 −33 | 4 files |
+| "Partial: <n> files" | 11 files +96 −40 partial | Partial |
+| "Ordering unverified on <app> <version>; …" | 6 files +58 −7 not complete | Not complete |
+| Any wording without totals | the wording up to its first ";" or ":" | No totals |
+| Still running | Turn running | Running |
+| Recording off, paused, or another app | Recording off · 4 files | Recording off |
+
+Gold marks only a turn without complete totals: "partial", "not complete" or the wording. The
+state of recording is plain, and beside it the earlier turn shrinks to its file count. A pane with
+a plate drops its button words at 720 px and its directory, agent name and ports at 600 px; under
+415 px, and while the session waits for you, there is no plate and the menu entry remains. "Not
+supported for <app>" is said while a program whose hooks named an app BMN does not record holds
+the terminal's foreground.
+
+The dialog is headed "The latest 50 turns still kept" with the state of recording under it:
+Recording on, Recording off, Paused or Not supported for <app>, joined by "Removal pending" while
+a removal waits for that session. A turn opens beside the list, and in place of it with **Back**
+in a dialog under 900 px wide. An opened turn says "What differs between two scans of <root>. It
+is not a list of what the agent did.", then its labels, its own first, then its files sorted by
+path. At most 2,000 files are listed and the rest are counted. A turn that was removed while open
+reads "No longer kept". The end words are Finished, Error, Interrupted, End not observed and
+Running; a turn that reads "Recording was switched off" has none.
+
+### A file's difference
+
+A file with counted lines or a binary file's sizes opens in place under its row, several at once;
+an open file's row stays at the top while its difference scrolls. The difference is unified with
+three lines of context, a `+` or `−` before each changed line and three neutral tones.
+
+- **Bounds.** At most 5,000 lines or 256 KiB of shown text; then "N more lines not shown", or
+  "More lines not shown" when the number is not known. A line is cut at 2,000 characters with the
+  mark "cut at 2,000 characters". A binary file reads "Binary file changed" with both sizes. A
+  difference that ran out of its 2 s reads "Difference unavailable: limit reached".
+- **Masks.** Secret ranges are found over both whole texts by the rule for that file's name and
+  laid over the lines of the difference, inside the same 2 s and inside the worker thread. Line
+  numbers, hunk ranges and the added and removed counts are those of the original texts. A value
+  is one plate of ten dots whatever its length, in added, removed and unchanged lines alike; a key
+  block of many lines stays that many masked lines. A hunk in which every removed line reads the
+  same as the added line in its place once masked says "Secret value changed".
+- **The rule** (`apps/desktop/src/utility/secret-ranges.ts`, shared with the terminal's own mask):
+  in a file named `.env`, `.env.<anything>` or `<name>.env`, every value; in JSON, YAML and TOML
+  files and lock files, a value whose name contains key, token, secret, password, passwd, auth,
+  credential, cookie or private, but not a map, a list, a block, true, false or null; in those
+  config files and not in lock files, any unbroken run of 32 or more letters, digits, `-`, `_`,
+  `+` or `=`; and in every file the known shapes of keys, tokens and private key blocks.
+- **Nothing reveals a value.** The original text never leaves the worker thread: what the host
+  hands the window already holds the plate, so a copy, Find, a screen reader and the test hook get
+  the masked text. There is no control that shows a value.
+- **Giving way.** A comparison the owner only reads is stopped when a prompt needs the worker for
+  its scan, and asked again 350 ms later, up to three times; after that it reads "BMN was scanning
+  for a prompt; open it again".
 
 ## Running it again
 

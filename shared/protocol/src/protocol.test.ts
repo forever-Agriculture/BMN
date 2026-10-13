@@ -141,6 +141,9 @@ describe('protocol surface', () => {
         'messages.resumePair',
         'turnChanges.state',
         'turnChanges.resume',
+        'turnChanges.list',
+        'turnChanges.turn',
+        'turnChanges.difference',
         'settings.get',
         'settings.put',
         'history.status',
@@ -155,7 +158,7 @@ describe('protocol surface', () => {
         'presence.set'
       ])
     )
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(88)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(91)
   })
 
   it('exports the initial stable error codes', () => {

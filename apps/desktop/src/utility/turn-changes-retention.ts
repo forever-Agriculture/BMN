@@ -31,6 +31,8 @@ export interface TurnRetentionOptions {
   now?: () => Date
   /** One line per sweep that did something: counts only, never a name. */
   log?: (line: string) => void
+  /** Told after a sweep that did something: a turn went, or a removal now waits or no longer does. */
+  changed?: () => void
   setTimer?: (callback: () => void, ms: number) => { cancel: () => void }
 }
 
@@ -156,6 +158,7 @@ export class TurnRetention {
     if (report.turns + report.captures + report.removed + report.waiting + report.unnamed > 0) {
       this.options.log?.(`[BMN] turn changes: ${report.turns} turn(s) and ${report.captures} capture(s) past their time, ` +
         `${report.removed + report.unnamed} removal(s) done${report.waiting > 0 ? `, ${report.waiting} waiting` : ''}\n`)
+      this.options.changed?.()
     }
     return report
   }

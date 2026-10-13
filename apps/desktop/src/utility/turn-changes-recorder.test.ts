@@ -11,7 +11,7 @@ import { refusal, type TurnLimits } from './turn-changes-capture'
 import { TurnChangesEngine, inProcessKeeper, inProcessPort, type TurnChangesPort } from './turn-changes-engine'
 import { TurnRecorder, turnLabelTime, type TurnMarkCall, type TurnObservation } from './turn-changes-recorder'
 import { TURN_STORE_FOLDER } from './turn-changes-store'
-import { mayAskProgram, readAppVersion, turnAppVersion } from './turn-changes-version'
+import { mayAskProgram, readAppVersion, startedPrograms, turnAppVersion, type VersionSeams } from './turn-changes-version'
 import { filesUnder, scratch, sleep, write, type Place } from './test-fixtures/turn-changes/fixtures'
 
 const testRequire = createRequire(import.meta.url)
@@ -375,6 +375,74 @@ describe('the version of the app', () => {
     expect(await readAppVersion(`0:${process.pid}:0:${program.dev}:${program.ino}`, 'opencode')).toBeNull()
     expect(await readAppVersion(`0:${process.pid}:0:1:2`, 'codex')).toBeNull()
   })
+
+  it('names the programs a foreground process started itself and that still share the terminal\'s foreground with it', () => {
+    const at = scratch('started-programs', { commit: false })
+    const root = join(at.base, 'proc')
+    const put = (pid: number, parent: number, group: number, tty: number, start: number, state = 'S'): void => {
+      mkdirSync(join(root, String(pid)), { recursive: true })
+      // What Linux writes: the name may hold spaces and brackets, the fields after its last bracket are fixed.
+      writeFileSync(join(root, String(pid), 'stat'), `${pid} (made (up)) ${state} ${parent} ${group} ${group} ${tty} ${group} 0 0 0 0 0 0 0 0 0 20 0 1 0 ${start} 0 0\n`)
+      writeFileSync(join(root, String(pid), 'exe'), '')
+    }
+    try {
+      // 7001 is a launcher with two threads. One started the app's own program (7005), a job in a group of its
+      // own (7003) and a process that is gone (7009); the other a stopped one (7004) and one on another terminal (7006).
+      for (const [task, children] of [['7001', '7005 7003 7009 7007 '], ['7002', '7004 7006 ']] as const) {
+        mkdirSync(join(root, '7001', 'task', task), { recursive: true })
+        writeFileSync(join(root, '7001', 'task', task, 'children'), children)
+      }
+      put(7005, 7001, 7001, 34817, 900)
+      put(7003, 7001, 7003, 34817, 901)
+      put(7004, 7001, 7001, 34817, 902, 'T')
+      put(7006, 7001, 7001, 34999, 903)
+      // Listed as a child, but its parent is another process by now.
+      put(7007, 1, 7001, 34817, 904)
+      const program = statSync(join(root, '7005', 'exe'), { bigint: true })
+      expect(startedPrograms('34817:7001:555:1:2', root)).toEqual([`34817:7005:900:${program.dev}:${program.ino}`])
+      // A process that started nothing, one that is gone, and an identity that names none.
+      expect(startedPrograms('34817:7005:900:1:2', root)).toEqual([])
+      expect(startedPrograms('34817:7999:555:1:2', root)).toEqual([])
+      expect(startedPrograms('34817:0:555:1:2', root)).toEqual([])
+      expect(startedPrograms('', root)).toEqual([])
+      // At most eight, the lowest process ids first.
+      mkdirSync(join(root, '8000', 'task', '8000'), { recursive: true })
+      const many = Array.from({ length: 11 }, (_unused, at) => 8111 - at)
+      writeFileSync(join(root, '8000', 'task', '8000', 'children'), `${many.join(' ')} `)
+      for (const pid of many) put(pid, 8000, 8000, 34817, pid)
+      expect(startedPrograms('34817:8000:555:1:2', root).map((identity) => Number(identity.split(':')[1]))).toEqual([8101, 8102, 8103, 8104, 8105, 8106, 8107, 8108])
+    } finally {
+      at.done()
+    }
+  })
+
+  it('asks the programs a launcher started when the launcher\'s own answer is not the app\'s', async () => {
+    const asked: string[] = []
+    const answers: Record<string, string> = { leader: 'v24.14.0\n', tool: 'ripgrep 14.1.0\n', real: 'codex-cli 0.162.1\n' }
+    /** `listed` is what the launcher's own children are at each look: before the questions, then after an answer. */
+    const seams = (...listed: string[][]): VersionSeams => {
+      let look = 0
+      return {
+        ask: async (identity) => { asked.push(identity); return answers[identity] ?? null },
+        started: () => listed[Math.min(look++, listed.length - 1)] ?? []
+      }
+    }
+    // Codex from npm: Node answers for the launcher, the native program for the launcher's child.
+    expect(await readAppVersion('leader', 'codex', 2_000, seams(['tool', 'real']))).toBe('0.162.1')
+    expect(asked).toEqual(['leader', 'tool', 'real'])
+    // An app that answers for itself is asked alone.
+    asked.length = 0
+    expect(await readAppVersion('real', 'codex', 2_000, seams(['tool']))).toBe('0.162.1')
+    expect(asked).toEqual(['real'])
+    // No answer is the app's; the program that answered is no longer the launcher's own; the answer is another app's.
+    expect(await readAppVersion('leader', 'codex', 2_000, seams(['tool', 'gone']))).toBeNull()
+    expect(await readAppVersion('leader', 'codex', 2_000, seams(['real'], []))).toBeNull()
+    expect(await readAppVersion('leader', 'claude', 2_000, seams(['real']))).toBeNull()
+    // The time is one for all the questions: with none left, a started program is not asked.
+    asked.length = 0
+    expect(await readAppVersion('leader', 'codex', 0, seams(['real']))).toBeNull()
+    expect(asked).toEqual(['leader'])
+  })
 })
 
 describe('a prompt while a turn is open', () => {
@@ -667,5 +735,47 @@ describe('the switch', () => {
     w.foreground.identity = null
     expect(await w.mark('start')).toBe('unavailable')
     expect(w.turns()).toHaveLength(0)
+  })
+})
+
+describe('the app now running (Story 69.5)', () => {
+  it('reads "not supported" for an app BMN does not record while that program holds the terminal, and no longer once it has gone', async () => {
+    const w = world('app-now')
+    await turn(w, 'a.txt', 'one\n')
+    expect(w.recorder.states()).toEqual([{ sessionId: SESSION, state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null }])
+
+    // Another program takes the terminal; until its own hook speaks nothing is known of it.
+    w.foreground.identity = '34817:7002:900:1:3'
+    expect(w.recorder.states()[0]).toMatchObject({ state: 'recording', app: null })
+    const told = w.changes.length
+    w.recorder.seen(SESSION, 'opencode')
+    expect(w.recorder.states()[0]).toMatchObject({ state: 'not-supported', app: 'opencode' })
+    expect(w.changes.slice(told)).toEqual([SESSION])
+    // The same word again tells the window nothing new.
+    w.recorder.seen(SESSION, 'opencode')
+    expect(w.changes).toHaveLength(told + 1)
+
+    // That program ends: an old name is not said of whatever runs there next.
+    w.foreground.identity = null
+    expect(w.recorder.states()[0]).toMatchObject({ state: 'recording', app: null })
+    w.recorder.seen(SESSION, 'opencode')
+    expect(w.recorder.states()[0]).toMatchObject({ state: 'recording', app: null })
+    w.foreground.identity = AGENT
+    w.recorder.seen(SESSION, 'codex')
+    expect(w.recorder.states()[0]).toMatchObject({ state: 'recording', app: 'codex' })
+    // Its turn of before is still the session's only one.
+    expect(w.turns()).toHaveLength(1)
+  })
+
+  it('says paused before anything else, and hears nothing of a session whose switch is off', async () => {
+    const w = world('app-paused')
+    w.foreground.folder = w.at.base
+    for (const turnId of ['t-1', 't-2', 't-3']) expect(await w.prompt({ turn: turnId, folder: w.at.base })).toBe('unavailable')
+    w.recorder.seen(SESSION, 'opencode')
+    expect(w.recorder.states()[0]).toMatchObject({ state: 'paused', app: 'opencode', pauseReason: 'failed' })
+
+    w.recorder.setSwitches(new Set())
+    w.recorder.seen(SESSION, 'opencode')
+    expect(w.recorder.states()).toEqual([])
   })
 })
