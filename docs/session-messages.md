@@ -25,7 +25,9 @@ send, and receives only through the owner's **Paste** in **Messages…**.
 
 These records hold the two halves of one direction, each measured by itself: a Claude Code agent
 can send (it runs `bmn` from its own shell tool, below), and a working Codex agent is handed a
-text by its hook. A real message crossing from one to the other is not in these records.
+text by its hook. They also hold one real message from end to end: `bmn tell` typed in a second
+session's shell, handed to a working Codex by BMN's own hook (below). A message from a Claude Code
+agent to a Codex agent on an installed build is not in these records.
 
 ## Codex 0.162.1
 
@@ -70,6 +72,15 @@ Auto Review, the workspace-write sandbox) the sandbox refuses the control socket
 runs the model did not ask to leave it). Told to ask for a run outside the sandbox, `bmn list`
 ran and listed its own session, with no question to the owner. `bmn` names that remedy in its
 error.
+
+**A real message, end to end.** Measured 2026-10-13 on the build that has this feature
+(`accde55`), in the same isolated profile, with nothing standing in for BMN or for Codex. A second
+session of the workspace ran `bmn peers` and `bmn tell <id> --text-file -` in its shell with a
+made-up text of 2,000 characters in three lines. BMN stored it as *waiting* under its own stamp.
+Codex, typed into the first session, was then asked to run three commands. After the first, BMN's
+hook printed the message; Codex's next command named the three marked words of the text; Codex's
+own record of the conversation holds the whole stamped text once; and Messages read *printed for
+the agent*. Two runs of two.
 
 ## Claude Code 2.1.296
 
