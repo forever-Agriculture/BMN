@@ -23,6 +23,10 @@ raw records are kept under `_bmad-output/planning-artifacts/reference-66-session
 A PASS needs five runs with no doubled, cut or lost text. An agent of an app without PASS can
 send, and receives only through the owner's **Paste** in **Messages…**.
 
+These records hold the two halves of one direction, each measured by itself: a Claude Code agent
+can send (it runs `bmn` from its own shell tool, below), and a working Codex agent is handed a
+text by its hook. A real message crossing from one to the other is not in these records.
+
 ## Codex 0.162.1
 
 **The answer that hands a text over.** On `PostToolUse` the hook prints
@@ -66,6 +70,16 @@ Auto Review, the workspace-write sandbox) the sandbox refuses the control socket
 runs the model did not ask to leave it). Told to ask for a run outside the sandbox, `bmn list`
 ran and listed its own session, with no question to the owner. `bmn` names that remedy in its
 error.
+
+## Claude Code 2.1.296
+
+**The hand-over is not measured yet.** The isolated test profile is not signed in, so nothing on
+this page says what Claude Code's hook can hand its agent, and BMN hands it nothing.
+
+**Running `bmn` from Claude Code's own shell tool.** Observed 2026-10-13 in the owner's own
+profile, not an isolated one: an agent typed into a BMN session ran `bmn list --json` from its
+shell tool; it answered with exit code 0 and listed that agent's own session and no other. The
+agent did not ask to leave a sandbox and the owner was asked nothing.
 
 ## What BMN does with this
 

@@ -1531,16 +1531,24 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     const fixture = await cliFixture()
     const session = await codexSession(fixture.root)
     fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, messageWaiting: true })
-    fixture.handlers.takeMessage.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve({ message: MESSAGE }), 700)))
-    const from = Date.now()
+    // BMN answers only after the hook is gone, so a hook that waited for it would run into the test's own timeout.
+    let answer: (value: unknown) => void = () => undefined
+    let asked = 0
+    fixture.handlers.takeMessage.mockImplementation(() => {
+      asked = Date.now()
+      return new Promise((resolve) => { answer = resolve })
+    })
 
     const result = await runCli(['hook', 'codex'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
+    const gone = Date.now() - asked
+    answer({ message: MESSAGE })
 
     expect(result).toEqual(QUIET)
     expect(fixture.handlers.takeMessage).toHaveBeenCalledTimes(1)
     expect(fixture.handlers.reportMessage).not.toHaveBeenCalled()
-    // The hook did not wait for the slow answer.
-    expect(Date.now() - from).toBeLessThan(700 + 600)
+    // From its question to its exit the hook has at most the 300 ms it may add to an event; the rest is the
+    // process ending and this test noticing it.
+    expect(gone).toBeLessThan(300 + 400)
   })
 
   it('says in `hooks check` whether each app\'s hook hands messages over, and on which version that was measured', async () => {
