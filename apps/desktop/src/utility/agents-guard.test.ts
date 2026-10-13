@@ -481,8 +481,18 @@ describe('the decision reads nothing it was not given (60.8 AC1)', () => {
 })
 
 describe('where a receiving agent sends work, for a message (Epic 66.4)', () => {
+  /** The record Claude Code keeps of a conversation, under the folder of the app that runs it; returns what its events say of it. */
+  const claudeRecord = (configDir = join(home, '.claude')): { session_id: string; transcript_path: string } => {
+    const record = join(configDir, `projects/-synthetic-code-app/${SESSION}.jsonl`)
+    mkdirSync(dirname(record), { recursive: true })
+    writeFileSync(record, '{"type":"user"}\n')
+    return { session_id: SESSION, transcript_path: record }
+  }
   const afterTool = (agent: string, pid: number, event: Record<string, unknown> = {}) => messageDestination({ agent, pid, procRoot: proc,
-    event: { cwd: workspace, ...(agent === 'codex' && !('session_id' in event) ? codexRecord() : {}), ...event } })
+    event: {
+      cwd: workspace, ...(agent === 'codex' && !('session_id' in event) ? codexRecord() : {}),
+      ...(agent === 'claude' && !('transcript_path' in event) ? claudeRecord() : {}), ...event
+    } })
 
   it('holds the hook\'s record of measured apps and the window\'s to one', () => {
     expect(MESSAGE_HANDOVER).toEqual(SESSION_MESSAGE_HANDOVER)
@@ -512,6 +522,34 @@ describe('where a receiving agent sends work, for a message (Epic 66.4)', () => 
     // A process the table cannot show.
     expect(afterTool('codex', 0)).toBeNull()
     expect(afterTool('codex', 9999)).toBeNull()
+  })
+
+  it('gives nothing for a Claude Code event that does not name that process\'s own record: another app\'s hook entry may have run this hook', () => {
+    approve(team())
+    const anthropic = { provider: 'anthropic', host: 'default:anthropic', basis: 'observed-default', default: true }
+    // A Codex agent whose hook entry runs `bmn hook claude` by mistake: its event names Codex's own record.
+    const codex = session(['codex'])
+    const rollout = join(home, `.codex/sessions/2026/10/10/rollout-2026-10-10T09-00-00-${SESSION}.jsonl`)
+    expect(afterTool('claude', codex, { ...codexRecord(), transcript_path: rollout })).toBeNull()
+    const claude = session(['claude'])
+    expect(afterTool('claude', claude, { transcript_path: undefined })).toBeNull()
+    expect(afterTool('claude', claude, { transcript_path: 'projects/relative.jsonl' })).toBeNull()
+    expect(afterTool('claude', claude, { transcript_path: join(home, '.claude/projects/-synthetic-code-app/never-written.jsonl') })).toBeNull()
+    // A folder is no record, and neither is a file beside the projects folder.
+    mkdirSync(join(home, '.claude/projects/-synthetic-code-app/folder.jsonl'), { recursive: true })
+    expect(afterTool('claude', claude, { transcript_path: join(home, '.claude/projects/-synthetic-code-app/folder.jsonl') })).toBeNull()
+    writeFileSync(join(home, '.claude/beside.jsonl'), '{}\n')
+    expect(afterTool('claude', claude, { transcript_path: join(home, '.claude/beside.jsonl') })).toBeNull()
+    // A link out of the projects folder is followed before the place is judged.
+    symlinkSync(rollout, join(home, '.claude/projects/-synthetic-code-app/linked.jsonl'))
+    expect(afterTool('claude', claude, { transcript_path: join(home, '.claude/projects/-synthetic-code-app/linked.jsonl') })).toBeNull()
+    // The process's own Claude Code folder decides, wherever it was told to keep it.
+    const elsewhere = join(home, 'claude-elsewhere')
+    const moved = session(['claude'], { env: { CLAUDE_CONFIG_DIR: elsewhere } })
+    expect(afterTool('claude', moved, claudeRecord())).toBeNull()
+    expect(afterTool('claude', moved, claudeRecord(elsewhere))).toEqual(anthropic)
+    // None of this is asked of a prompt: the guard's decision for the same event is unchanged.
+    expect(decide({ agent: 'claude', pid: claude, procRoot: proc, event: { cwd: workspace } })).toMatchObject({ outcome: 'pass', cause: 'allowed' })
   })
 
   it('gives nothing on an installation that never approved a team: no resolver, no hand-over', () => {

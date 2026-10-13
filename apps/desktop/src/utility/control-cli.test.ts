@@ -1453,7 +1453,10 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
   /** A Claude Code agent the owner typed into the session; its events name the conversation and the record Claude Code keeps of it. */
   async function claudeSession(root: string, agentEnv: Record<string, string> = {}) {
     const session = await guardedSession(root, ['claude'], agentEnv)
-    return { ...session, record: join(session.home, `.claude/projects/-synthetic-code-app/${SESSION}.jsonl`) }
+    const record = join(session.home, `.claude/projects/-synthetic-code-app/${SESSION}.jsonl`)
+    await mkdir(dirname(record), { recursive: true })
+    writeFileSync(record, '{"type":"user"}\n')
+    return { ...session, record }
   }
   const ANTHROPIC = { provider: 'anthropic', host: 'default:anthropic', basis: 'observed-default', default: true }
 
@@ -1500,6 +1503,23 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
       expect(await runCli(['hook', 'claude'], { env, input: afterTool(session, { hook_event_name: event }) }), event).toEqual(QUIET)
     }
     expect(fixture.handlers.takeMessage).not.toHaveBeenCalled()
+  })
+
+  it('never asks when another app\'s hook entry runs `bmn hook claude`: its event names no record of Claude Code\'s', async () => {
+    const fixture = await cliFixture()
+    // A Codex agent typed into the session, with Codex's event and Codex's saved record. Read as Claude Code,
+    // this process would send work to Anthropic by default, which is not where Codex sends it.
+    const codex = await codexSession(fixture.root)
+    waiting(fixture)
+    const env = { ...fixture.sessionEnv, BMN_PROC_ROOT: codex.proc, HOME: codex.home }
+
+    const miswired = await runCli(['hook', 'claude'], { env, input: afterTool(codex) })
+    const noRecord = await runCli(['hook', 'claude'], { env, input: afterTool(codex, { transcript_path: undefined }) })
+
+    expect([miswired, noRecord]).toEqual([QUIET, QUIET])
+    expect(fixture.handlers.takeMessage).not.toHaveBeenCalled()
+    // The entry that names the right app is answered on the same event.
+    expect((await runCli(['hook', 'codex'], { env, input: afterTool(codex) })).stdout).toContain('additionalContext')
   })
 
   it('never asks when a Claude Code session sends work to a provider that may not see its own folder', async () => {

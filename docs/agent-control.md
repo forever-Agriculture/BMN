@@ -326,7 +326,10 @@ with one.
   to a working agent after its next tool call, by printing it in the form that app reads. Only the
   agent typed into the session gets it, on an event of its main conversation: never an agent
   another agent started, never a sub-agent. The hook resolves where its agent sends work with the
-  prompt guard's own resolver and BMN hands over the oldest message that may be handed over: not
+  prompt guard's own resolver, and only for an event that is that app's own: Codex's names the
+  record Codex saved for the session, Claude Code's a record under that process's own Claude Code
+  folder, so a hook entry that names the wrong app hands nothing over. BMN hands over the oldest
+  message that may be handed over: not
   expired, both sessions still unarchived members of the message's workspace, both switches on, no
   pause, and a provider that may see private work in the sender's folder by the approved team as it
   stands at that moment. A destination BMN cannot tell, or one that is only the owner's word, gets

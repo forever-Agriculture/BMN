@@ -313,15 +313,38 @@ export const MESSAGE_LIMIT_MS = 300
 /**
  * Where the owner's agent sends work, for an event after a tool call: the prompt guard's own decision for
  * that event, and the destination its resolver found. null when no team is approved, when the guard would
- * stop this event for any reason, and when it found no destination: then nothing is asked of BMN and no
- * message is handed over. Whether that provider may see the *sender's* work is BMN's question, asked with
+ * stop this event for any reason, when it found no destination, and when a Claude Code event does not name
+ * that process's own record of the conversation: then nothing is asked of BMN and no message is handed over. Whether that provider may see the *sender's* work is BMN's question, asked with
  * the root stored with each message; this only says where this agent sends what it reads.
  */
 export function messageDestination(input) {
   const { verdict, destination } = decision(input)
   if (verdict.outcome !== 'pass' || verdict.cause === 'inactive' || destination === null) return null
+  if (input.agent === 'claude' && !claudeConversation(input)) return null
   if (typeof destination.provider !== 'string' || typeof destination.host !== 'string' || typeof destination.basis !== 'string') return null
   return { provider: destination.provider, host: destination.host, basis: destination.basis, default: destination.default === true }
+}
+
+/**
+ * Whether an event handed to `bmn hook claude` is Claude Code's own: the record it names is a file under the
+ * Claude Code folder of the very process the hook answers for (docs/session-messages.md: every event names one).
+ * Claude Code's destination is read from that process's launch and settings alone, so without this a hook entry
+ * of another app that runs `bmn hook claude` by mistake would have its agent, which sends work somewhere this
+ * resolver never looked, judged as Claude Code. Codex's resolver already ties its event to Codex's own saved
+ * record (`codexSession`). An event that names no such record gets no message; the prompt guard is unchanged.
+ */
+function claudeConversation(input) {
+  const named = input.event?.transcript_path
+  if (typeof named !== 'string' || !isAbsolute(named) || !named.endsWith('.jsonl')) return false
+  const env = readAgentProcess(input.procRoot ?? '/proc', input.pid)?.env
+  if (!env?.HOME) return false
+  try {
+    const root = realpathSync(`${env.CLAUDE_CONFIG_DIR || `${env.HOME}/.claude`}/projects`)
+    const real = realpathSync(named)
+    return real.startsWith(`${root}/`) && statSync(real).isFile()
+  } catch {
+    return false
+  }
 }
 
 /** One line for `bmn hooks check`: whether this app's hook hands messages over, and on which version that was measured. */

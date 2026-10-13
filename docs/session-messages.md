@@ -114,9 +114,9 @@ on. BMN bounds what it adds to an event for a message to 300 ms.
 `tool_name`, `tool_input`, `tool_response`, `tool_use_id` and `duration_ms`. A sub-agent's events
 add `agent_id` and `agent_type` and keep the parent's `session_id` and, unlike Codex, the parent's
 `transcript_path` too: only `agent_id` tells them from the main conversation's. The `PostToolUse`
-of the tool call that started the sub-agent belongs to the main conversation. After each turn
-Claude Code also sent one `SubagentStop` with an `agent_id` and an empty `agent_type`, in runs
-that started no sub-agent; no tool event carried such an id. An agent another agent started
+of the tool call that started the sub-agent belongs to the main conversation. After the turn
+Claude Code also sent one `SubagentStop` with an `agent_id` and an empty `agent_type` in 19 of 20
+runs, runs that started no sub-agent among them; no tool event carried such an id. An agent another agent started
 (`claude -p` from the typed agent's shell tool) has its own `session_id`, the same BMN token and
 no terminal, which is how BMN's process rule already tells it from the agent typed into the
 session.
@@ -155,6 +155,10 @@ stamped text once; and Messages read *printed for the agent*. Two runs of two.
   that carries `agent_id` is a sub-agent's and gets nothing.
 - The hook resolves where its agent sends work with the prompt guard's own resolver for that
   event. No answer, or an answer that is only the owner's word, means no hand-over.
+- The event must be the app's own. Codex's destination is read from the record Codex saved for
+  the event's session. Claude Code's is read from its launch and settings, so its event must also
+  name a record under that process's own Claude Code folder (`projects/` in `CLAUDE_CONFIG_DIR`
+  or `~/.claude`). A hook entry that runs `bmn hook` for the wrong app hands nothing over.
 - An app that changes where it sends work without its launch or settings changing is not
   noticed, as for the [prompt guard](agent-control.md#the-prompt-guard).
 - A new version of an app is not measured by itself. The table names the version; after an
