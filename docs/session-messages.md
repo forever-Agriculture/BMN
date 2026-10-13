@@ -24,9 +24,10 @@ A PASS needs five runs with no doubled, cut or lost text. An agent of an app wit
 send, and receives only through the owner's **Paste** in **Messages…**.
 
 Both apps hold PASS, and each app's agent runs `bmn` from its own shell tool (below), so a message
-can travel either way between a Claude Code agent and a Codex agent without the owner's Paste. A
-message written by one app's agent and handed to the other's on an installed build is not in these
-records.
+can travel either way between a Claude Code agent and a Codex agent without the owner's Paste. For
+each app these records also hold one real message from end to end: `bmn tell` typed in a second
+session's shell, handed to the working agent by BMN's own hook (below). A message written by one
+app's agent and handed to the other's on an installed build is not in these records.
 
 ## Codex 0.162.1
 
@@ -137,6 +138,15 @@ the Bash tool and listed its own session; no sandbox stood in its way and nothin
 owner. The same was observed 2026-10-13 in the owner's own profile: an agent typed into a BMN
 session ran `bmn list --json` from its shell tool; it answered with exit code 0 and listed that
 agent's own session and no other, and the owner was asked nothing.
+
+**A real message, end to end.** Measured 2026-10-13 on the build that hands messages to Claude
+Code (`b941348`), in the same isolated profile, with nothing standing in for BMN or for Claude
+Code. A second session of the workspace ran `bmn peers` and `bmn tell <id> --text-file -` in its
+shell with a made-up text of 2,000 characters in three lines. BMN stored it as *waiting* under
+its own stamp. Claude Code, typed into the first session, was then asked to run three commands.
+After the first, BMN's hook printed the message; Claude Code's next command named the three marked
+words of the text; its own record of the conversation holds one entry added by a hook, the whole
+stamped text once; and Messages read *printed for the agent*. Two runs of two.
 
 ## What BMN does with this
 
