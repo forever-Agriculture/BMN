@@ -500,7 +500,10 @@ and its labels. No row holds a file's name or content.
 ### The app's version
 
 BMN reads the version once per foreground process, away from the prompt's path, by running the
-program that process is (`/proc/<its process>/exe`) with `--version`. When the answer is another
+program that process is (`/proc/<its process>/exe`) with `--version`. It opens that program first,
+compares the open file with the one it identified, and runs that same open file, so a process that
+becomes another program in between cannot have that one run instead; a program BMN cannot open for
+reading is not asked. When the answer is another
 program's, the process is a launcher: Codex from npm is a Node script whose one child is the
 native `codex`. BMN then asks, the same way and inside the same 2 s, the programs that process
 started itself and that still share the terminal's foreground with it, at most eight, and never
@@ -604,11 +607,14 @@ already has, so it changes no terminal's size when it appears, changes or goes.
 | Recording off, paused, or another app | Recording off · 4 files | Recording off |
 
 Gold marks only a turn without complete totals: "partial", "not complete" or the wording. The
-state of recording is plain, and beside it the earlier turn shrinks to its file count. A pane with
-a plate drops its button words at 720 px and its directory, agent name and ports at 600 px; under
-415 px, and while the session waits for you, there is no plate and the menu entry remains. "Not
-supported for <app>" is said while a program whose hooks named an app BMN does not record holds
-the terminal's foreground.
+state of recording is plain, and beside it the earlier turn shrinks to its file count. The state
+word always wins: beside a plate it keeps its width, and the directory gives way first, then the
+session's name, then a port's plate. A pane with a plate drops its button words at 720 px (at
+880 px when it also shows a port) and its directory, agent name and ports at 600 px. Under 415 px,
+and while the session waits for you, there is no plate and the menu entry remains: a finished turn
+opens BMN's usual notice, so the pane reads "Update available" until you go to that session, and
+then shows the plate. "Not supported for <app>" is said while a program whose hooks named an app
+BMN does not record holds the terminal's foreground.
 
 The dialog is headed "The latest 50 turns still kept" with the state of recording under it:
 Recording on, Recording off, Paused or Not supported for <app>, joined by "Removal pending" while

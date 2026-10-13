@@ -86,10 +86,12 @@ describe('the Git commands of turn changes', () => {
     expect(git.match(/\bspawn\(/g)).toHaveLength(1)
     expect(git).not.toMatch(/execFile|\bexec\(|shell:/)
     // Story 69.4 reads a foreground agent's version by asking the program that process already is, and nothing
-    // else: never Git, never a path anybody names, never through a shell, and only after `mayAskProgram`.
+    // else: never Git, never a path anybody names, never through a shell, and only after `mayAskProgram`. What
+    // runs is the file it opened from `/proc/<pid>/exe` and compared, through that same open file.
     const version = readFileSync(join(here, 'turn-changes-version.ts'), 'utf8')
     expect(version.match(/\bexecFile\(/g)).toHaveLength(1)
-    expect(version).toMatch(/execFile\(`\/proc\/\$\{pid\}\/exe`, \['--version'\], /)
+    expect(version).toMatch(/held = openSync\(`\/proc\/\$\{pid\}\/exe`, constants\.O_RDONLY\)\n\s+const program = fstatSync\(held, \{ bigint: true \}\)/)
+    expect(version).toMatch(/execFile\(`\/proc\/\$\{process\.pid\}\/fd\/\$\{held\}`, \['--version'\], /)
     expect(version).toMatch(/if \(!mayAskProgram\(identity\)\) return Promise\.resolve\(null\)\n\s+return new Promise/)
     // `.exec(` is a regular expression's; a bare `exec(` would be a shell's.
     expect(version).not.toMatch(/\bspawn\(|(?<!\.)\bexec\(|shell:|repositoryGit|turn-changes-git/)

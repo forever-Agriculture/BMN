@@ -40,8 +40,9 @@
 }
 
 /* The state word always wins. So that the plate takes no room from it, a pane that shows one drops its button
-   words at 720 px instead of 620 and goes compact at 600 px instead of 420; under 415 px there is no plate, and
-   while the session waits for the owner none is rendered. The row keeps its height, so no terminal changes size. */
+   words at 720 px instead of 620 (at 880 px when a port's plate stands beside the turn's) and goes compact at
+   600 px instead of 420; under 415 px there is no plate, and while the session waits for the owner none is
+   rendered. The row keeps its height, so no terminal changes size. */
 @container pane (max-width: 880px) {
   .turn-plate .full {
     display: none;
@@ -50,10 +51,58 @@
   .turn-plate .short {
     display: inline;
   }
+
+  .pane-heading:has(.turn-plate):has(.pane-ports .port-chip) .pane-actions .button-label {
+    display: none;
+  }
+}
+
+/* Whatever the width, in a pane with a plate the state word and the marks beside it keep their own width. The
+   directory gives way first, then the session's name, then a port's plate; the turn's plate and the actions never. */
+.pane-heading:has(.turn-plate) .pane-status {
+  display: flex;
+  align-items: baseline;
+  min-width: min-content;
+}
+
+.pane-heading:has(.turn-plate) .pane-status > * {
+  flex: none;
+  white-space: pre;
+}
+
+.pane-heading:has(.turn-plate) .pane-status > .pane-directory {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pane-heading:has(.turn-plate) strong {
+  flex-shrink: 20;
+}
+
+.pane-heading:has(.turn-plate) .pane-ports {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pane-heading:has(.turn-plate) .pane-ports .port-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
 }
 
 @container pane (max-width: 720px) {
   .pane-heading:has(.turn-plate) .pane-actions .button-label {
+    display: none;
+  }
+
+  /* With a port's plate beside the turn's, the agent's name goes here already. */
+  .pane-heading:has(.turn-plate):has(.pane-ports .port-chip) .chip {
     display: none;
   }
 }

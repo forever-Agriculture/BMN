@@ -233,7 +233,8 @@ reason that applies, such as "Partial: 3 files" or "Before snapshot unavailable"
 the button reads Partial, Not complete or No totals and its tooltip gives the reason. While
 recording is off, paused or not possible for the app now running, the button and the dialog say
 "Recording off", "Paused" or "Not supported for <app>" beside the earlier turn, so an old number
-is not read as the latest.
+is not read as the latest. While a pane says it waits for you, as it does with the notice of a
+finished turn, the button is away until you go to that session; the menu entry stays.
 
 A difference shows at most 5,000 lines or 256 KiB, and says how many lines it left out. Secret
 values in it are masked before it reaches the window, in added, removed and unchanged lines

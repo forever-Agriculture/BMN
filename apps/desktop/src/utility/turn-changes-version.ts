@@ -1,6 +1,6 @@
 // MODULE: turn-changes-version.ts - reads which version of an app a session's foreground process runs, by asking that very program, away from a prompt's path (Epic 69, docs/turn-changes.md)
 import { execFile } from 'node:child_process'
-import { readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs'
+import { closeSync, constants, fstatSync, openSync, readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { TURN_CAPTURE_LIMIT_MS } from '@bmn/protocol'
 import { foregroundProcessFolder } from './foreground-process'
@@ -98,20 +98,41 @@ export function startedPrograms(identity: string, procRoot: string = '/proc'): s
 
 /**
  * Runs the program one process is (`/proc/<pid>/exe`) with `--version` and gives its answer. Null when BMN may
- * not run it, when it does not answer in time, or when the process is gone or another one by now.
+ * not run it or cannot read it, when it does not answer in time, or when the process is gone or another one by
+ * now. The program is opened first, the open file is compared with the one the identity names, and that same
+ * open file is what runs: a process that becomes another program in between, or another process that took its
+ * id, cannot have its program run in place of the one that was compared.
  */
 function askProgram(identity: string, limitMs: number): Promise<string | null> {
-  const [, pidText] = identity.split(':')
+  const [, pidText, , device, inode] = identity.split(':')
   const pid = Number(pidText)
   if (!mayAskProgram(identity)) return Promise.resolve(null)
   return new Promise((resolve) => {
+    let held: number | null = null
+    const answer = (text: string | null): void => {
+      if (held !== null) {
+        try {
+          closeSync(held)
+        } catch {
+          // Already closed.
+        }
+        held = null
+      }
+      resolve(text)
+    }
     try {
-      execFile(`/proc/${pid}/exe`, ['--version'], { timeout: limitMs, maxBuffer: 4096, env: { PATH: '/usr/bin:/bin', HOME: homedir() } }, (error, stdout) => {
+      held = openSync(`/proc/${pid}/exe`, constants.O_RDONLY)
+      const program = fstatSync(held, { bigint: true })
+      if (String(program.dev) !== device || String(program.ino) !== inode) {
+        answer(null)
+        return
+      }
+      execFile(`/proc/${process.pid}/fd/${held}`, ['--version'], { timeout: limitMs, maxBuffer: 4096, env: { PATH: '/usr/bin:/bin', HOME: homedir() } }, (error, stdout) => {
         // The process must still be the one the identity names: a reused process id would lend another program's answer.
-        resolve(error || foregroundProcessFolder(identity) === null ? null : String(stdout))
+        answer(error || foregroundProcessFolder(identity) === null ? null : String(stdout))
       })
     } catch {
-      resolve(null)
+      answer(null)
     }
   })
 }
