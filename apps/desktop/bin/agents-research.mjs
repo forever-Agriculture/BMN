@@ -476,8 +476,20 @@ function within(work, ms, signal) {
   })
 }
 
-/** One GET to an address BMN already checked: the name is resolved once, so the answer cannot move between the check and the read. */
-function getOnce(url, { address, family }, { timeoutMs, maxBytes, signal }) {
+/**
+ * What the one GET says of itself. It asks as a reader's browser does: for the page, and for any other
+ * kind of answer only below it. No other kind of text is named: a site may keep a short text form of
+ * its pages for programs and send it to whoever names text/plain, whatever weight that has (seen
+ * 2026-10-13), and BMN would then read other words than the reader saw. A file that is only text or
+ * JSON is still taken.
+ */
+const PAGE_ASK = { 'user-agent': 'BMN model research (reads one cited page)', accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8', 'accept-encoding': 'identity' }
+
+/**
+ * One GET to an address BMN already checked: the name is resolved once, so the answer cannot move between the check and the read.
+ * `request` is `https.request`; a test hands in one that reaches its stand-in site.
+ */
+export function getOnce(url, { address, family }, { timeoutMs, maxBytes, signal, request = httpsRequest }) {
   return new Promise((resolve) => {
     const stop = () => {
       call.destroy()
@@ -488,9 +500,9 @@ function getOnce(url, { address, family }, { timeoutMs, maxBytes, signal }) {
       signal?.removeEventListener('abort', stop)
       resolve(value)
     }
-    const call = httpsRequest({
+    const call = request({
       protocol: 'https:', hostname: url.hostname, port: 443, path: `${url.pathname}${url.search}`, method: 'GET', servername: url.hostname, agent: false,
-      headers: { 'user-agent': 'BMN model research (reads one cited page)', accept: 'text/html,application/xhtml+xml,application/json;q=0.9,text/plain;q=0.8', 'accept-encoding': 'identity' },
+      headers: PAGE_ASK,
       lookup: (_host, options, callback) => (options?.all ? callback(null, [{ address, family }]) : callback(null, address, family))
     }, (response) => {
       const status = response.statusCode ?? 0

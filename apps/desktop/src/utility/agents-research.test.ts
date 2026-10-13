@@ -1,12 +1,14 @@
 // MODULE: agents-research.test.ts - Story 60.10 (first release): model research over a synthetic team, stub researchers and made-up pages; no provider and no real site is reached
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer, request as httpRequest, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_TOOLS_SEEN, researchFormHash, researchRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import {
-  MAX_LISTED, answerText, chooseResearcher, chosenResearcher, fetchPublicPage, forgetDroppedResearcher, isPublicAddress, mergeResearch, ownNames, pageText, parseAnswer, priceShown, readResearch,
+  MAX_LISTED, answerText, chooseResearcher, chosenResearcher, fetchPublicPage, forgetDroppedResearcher, getOnce, isPublicAddress, mergeResearch, ownNames, pageText, parseAnswer, priceShown, readResearch,
   researchArgv, researchBatches, researchEffort, researchPrompt, researchResultsPath, researchSubjects, researchView, researcherChoice, researchers, runResearch, settledResearcher, sourceRank,
   verifyModels, windowShown, type AnsweredModel, type PageRead, type ResearchBatch
 } from '../../bin/agents-research.mjs'
@@ -662,6 +664,56 @@ describe('a cited address never reaches this machine or a private network', () =
     let asked = 0
     await fetchPublicPage('https://www.example.com/pricing', { selfTestPages: pages, resolve: async () => { asked += 1; return [{ address: '10.0.0.1', family: 4 }] } })
     expect(asked).toBe(1)
+  })
+})
+
+describe('a page is asked for as a reader\'s browser asks for it (Epic 64 owner check)', () => {
+  // A stand-in for a site as one was seen on 2026-10-13: it keeps a short text form of its pages for programs and
+  // sends it to whoever names text/plain, whatever weight that has; a reader's browser gets the page. Its text
+  // file goes only to one who takes text. The real request is made, to this computer in place of port 443.
+  const PAGE = '<h1>Example v9.9.9</h1> <span>Latest Stable</span> <p>Released Jan 2, 2030</p>'
+  const TEXT_FORM = '# Example v9.9.9 (Latest Stable)\n\nReleased: 2030-01-02T16:26:44.000Z\n'
+  const asked: string[] = []
+  let site: Server
+  const read = (address: string) => fetchPublicPage(address, {
+    resolve: async () => [{ address: '93.184.216.34', family: 4 }],
+    transport: (url, to, limits) => getOnce(url, to, {
+      ...limits,
+      request: (options, answered) => httpRequest({ host: '127.0.0.1', port: (site.address() as AddressInfo).port, path: options.path, method: options.method, headers: options.headers }, answered)
+    })
+  })
+
+  beforeEach(async () => {
+    asked.length = 0
+    site = createServer((request, response) => {
+      const accept = String(request.headers.accept ?? '')
+      asked.push(accept)
+      if (request.url === '/notes.txt') {
+        const taken = /text\/plain|\*\/\*/.test(accept)
+        response.writeHead(taken ? 200 : 406, { 'content-type': 'text/plain; charset=utf-8' }).end(taken ? 'notes kept as text' : '')
+      } else if (accept.includes('text/plain')) {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }).end(TEXT_FORM)
+      } else {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(PAGE)
+      }
+    })
+    await new Promise<void>((listening) => { site.listen(0, '127.0.0.1', listening) })
+  })
+  afterEach(async () => { await new Promise((closed) => { site.close(closed) }) })
+
+  it('reads the page a reader sees where a site keeps a text form for those who name text/plain', async () => {
+    const page = await read('https://releases.example.com/release/v9.9.9')
+    expect(page).toEqual({ ok: true, text: PAGE })
+    expect(pageText(PAGE)).toContain('Example v9.9.9 Latest Stable Released Jan 2, 2030')
+  })
+
+  it('still reads a file that is only text, from a site that sends it only to one who takes it', async () => {
+    expect(await read('https://releases.example.com/notes.txt')).toEqual({ ok: true, text: 'notes kept as text' })
+  })
+
+  it('names html first and no other kind of text', async () => {
+    await read('https://releases.example.com/release/v9.9.9')
+    expect(asked).toEqual(['text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8'])
   })
 })
 

@@ -1397,7 +1397,9 @@ provider's run; the other providers' answers stay.
 **BMN reads each cited page itself**, once, before a value counts: a plain `https` request with no
 cookies and no sign-in, to a public address only (never this machine or a private network, also
 after a redirect), ten seconds and two megabytes at most, 24 pages per run; finding the address
-has the same ten seconds. A price is counted when the page shows both amounts in dollars after
+has the same ten seconds. It asks for the page as a reader's browser does and names no other
+kind of text, so a site that keeps a short text form of its pages for programs sends BMN the
+page the reader sees. A price is counted when the page shows both amounts in dollars after
 that model's name, before the next model's name, says the unit is a million tokens, and each
 amount stands with its own word (input, output, cached). Two amounts in a row without those
 words are not counted, whatever their order. A context window is counted when the number stands there beside the word

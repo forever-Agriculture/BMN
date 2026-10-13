@@ -1,6 +1,8 @@
 // MODULE: agents-ask.test.ts - Epic 64.1: one web question behind the research fence, over a synthetic team, a stand-in app and made-up pages; no provider and no real site is reached
 import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createServer, request as httpRequest } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,7 +12,7 @@ import {
   noResearcherWords, parseAskAnswer, questionProblem, questionsPath, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord
 } from '../../bin/agents-ask.mjs'
 import { CODEX_RESEARCH_TOOLS_SEEN, researchFormHash, researchRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
-import { RESEARCH_RUNNING, chooseResearcher, researchArgv, researchLockHolder, researchLockPath, runResearch, takeLock, takeResearchLock, type PageRead } from '../../bin/agents-research.mjs'
+import { RESEARCH_RUNNING, chooseResearcher, fetchPublicPage, getOnce, researchArgv, researchLockHolder, researchLockPath, runResearch, takeLock, takeResearchLock, type PageRead } from '../../bin/agents-research.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
 
@@ -282,6 +284,30 @@ describe('the answer and its marks (64.1 AC3)', () => {
     expect(result.run).toMatch(/^\d{8}T\d{6}-[0-9a-f]{8}$/)
     expect(result.claims).toBeUndefined()
     expect(readQuestions()[0]).toMatchObject({ outcome: 'no-answer', run: result.run, question: QUESTION })
+  })
+
+  // The second thing the owner's check of 2026-10-13 found: a site that keeps a short text form of its pages for
+  // programs sent it to BMN's reader, which named text/plain, so a passage a reader sees read "not found".
+  it('finds a passage on the page a reader sees, where the site keeps another form for programs', async () => {
+    const site = createServer((request, response) => {
+      if (String(request.headers.accept ?? '').includes('text/plain')) response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }).end('# Example v9.9.9 (Latest Stable)\n\nReleased: 2030-01-02T16:26:44.000Z\n')
+      else response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<h1>Example v9.9.9</h1> <span>Latest Stable</span> <p>Released Jan 2, 2030</p>')
+    })
+    await new Promise<void>((listening) => { site.listen(0, '127.0.0.1', listening) })
+    try {
+      const fetchPage = (address: string, limits?: { signal?: AbortSignal; timeoutMs?: number }) => fetchPublicPage(address, {
+        ...limits,
+        resolve: async () => [{ address: '93.184.216.34', family: 4 }],
+        transport: (url, to, bounds) => getOnce(url, to, {
+          ...bounds,
+          request: (options, answered) => httpRequest({ host: '127.0.0.1', port: (site.address() as AddressInfo).port, path: options.path, method: options.method, headers: options.headers }, answered)
+        })
+      })
+      const [claim] = await markClaims([{ claim: 'a fact', source: 'https://releases.example.org/release/v9.9.9', passage: 'Example v9.9.9 Latest Stable Released Jan 2, 2030' }], { fetchPage })
+      expect(claim!.mark).toBe(MARKS.found)
+    } finally {
+      await new Promise((closed) => { site.close(closed) })
+    }
   })
 
   it('takes an answer in a code fence and one with no claims', () => {

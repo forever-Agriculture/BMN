@@ -47,6 +47,10 @@ export declare function fetchPublicPage(address: string, options?: {
   resolve?: (host: string) => Promise<{ address: string; family: number }[]>
   transport?: (url: URL, address: { address: string; family: number }, limits: { timeoutMs: number; maxBytes: number; signal?: AbortSignal }) => Promise<{ status?: number; location?: string | null; type?: string; body?: string; failed?: string; tooLarge?: boolean }>
 }): Promise<PageRead>
+export declare function getOnce(url: URL, address: { address: string; family: number }, limits: {
+  timeoutMs: number; maxBytes: number; signal?: AbortSignal
+  request?: (options: import('node:https').RequestOptions, answered: (response: import('node:http').IncomingMessage) => void) => import('node:http').ClientRequest
+}): Promise<{ status?: number; location?: string | null; type?: string; body?: string; failed?: string; tooLarge?: boolean }>
 export declare function pageText(html: string): string
 export declare function priceShown(text: string, names: string[], others: string[], price: { input: number; output: number; cached_input?: number }): { shown: boolean; why?: string; cached?: boolean }
 export declare function windowShown(text: string, names: string[], others: string[], tokens: number): { shown: boolean; why?: string }
