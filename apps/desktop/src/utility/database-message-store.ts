@@ -418,6 +418,25 @@ export function claimMessageForHook(database: DatabaseConnection, p: {
 }
 
 /**
+ * Gives back a hook's claim for which nothing was printed: the message waits again, as it did. Only the claim's
+ * own id does it, and the take that made the claim is the only one that knows it until BMN has answered.
+ */
+export function releaseMessageClaim(database: DatabaseConnection, p: { messageId: string; claimId: string }): { released: boolean } {
+  const updated = database.prepare(
+    `UPDATE session_message
+     SET state = 'waiting', claim_id = NULL, claimed_incarnation_id = NULL, claimed_pid = NULL, claimed_app = NULL, claimed_at = NULL
+     WHERE message_id = ? AND state = 'taken' AND claim_id = ?`
+  ).run(p.messageId, p.claimId)
+  return { released: Number(updated.changes) === 1 }
+}
+
+/** Takes back a message that was just stored, only while it still waits: one that somebody has is theirs. */
+export function withdrawSessionMessage(database: DatabaseConnection, messageId: string): { withdrawn: boolean } {
+  const deleted = database.prepare("DELETE FROM session_message WHERE message_id = ? AND state = 'waiting'").run(messageId)
+  return { withdrawn: Number(deleted.changes) === 1 }
+}
+
+/**
  * The hook's word that it printed what it took. Accepted only with the claim's own id, from the session and
  * process that claimed; it means printed, never read.
  */
@@ -454,6 +473,8 @@ export const MESSAGE_OPERATIONS = Object.freeze({
   finishMessagePaste,
   messageTakeCandidates,
   claimMessageForHook,
+  releaseMessageClaim,
+  withdrawSessionMessage,
   reportMessagePrinted,
   deleteMessagesSentBefore
 })

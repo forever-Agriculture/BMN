@@ -44,6 +44,17 @@ let sourceRoot: (folder: string) => string | Promise<string>
 let betweenClaimAndWrite: (() => void) | null
 /** While set, the store does not answer which messages a hook may have. */
 let stalled: Promise<unknown> | null
+/** One store call held back after it was asked for, as the store's own thread may run it later. */
+let held: { name: CompanionOperationName; reached: () => void; gate: Promise<void> } | null
+
+/** Holds the next call of one store operation: `asked` settles when the service has asked, `answer` lets it run. */
+function holdStore(name: CompanionOperationName): { asked: Promise<void>; answer: () => void } {
+  let answer: () => void = () => undefined
+  let reached: () => void = () => undefined
+  const asked = new Promise<void>((resolve) => { reached = resolve })
+  held = { name, reached, gate: new Promise<void>((resolve) => { answer = resolve }) }
+  return { asked, answer: () => { answer() } }
+}
 
 const iso = (): string => new Date(clock).toISOString()
 
@@ -103,6 +114,7 @@ beforeEach(() => {
   sourceRoot = workspaceRoot
   betweenClaimAndWrite = null
   stalled = null
+  held = null
   database.transaction(() => {
     createWorkspace(database, { name: 'Shop' }, 'w1', iso())
     createWorkspace(database, { name: 'Other' }, 'w2', iso())
@@ -115,6 +127,12 @@ beforeEach(() => {
   const worker = {
     companion: async (name: CompanionOperationName, ...args: unknown[]) => {
       if (name === 'messageTakeCandidates' && stalled) await stalled
+      if (held?.name === name) {
+        const hold = held
+        held = null
+        hold.reached()
+        await hold.gate
+      }
       const operation = COMPANION_OPERATIONS[name] as (connection: DatabaseConnection, ...rest: unknown[]) => unknown
       const result = database.transaction(() => operation(database, ...args))()
       if (name === 'claimMessageForPaste' && betweenClaimAndWrite) {
@@ -294,6 +312,36 @@ describe('bmn tell (66.2 AC3-AC5)', () => {
 
     await expect(sending).rejects.toMatchObject({ message: 'The sending session is running a different process now' })
     expect(count()).toBe(0)
+  })
+
+  it('takes a message back when the sending terminal is given another process between asking the store and its answer', async () => {
+    const store = holdStore('sendSessionMessage')
+
+    const sending = tell('a', 'b')
+    await store.asked
+    live.set('a', 'run-later')
+    store.answer()
+
+    await expect(sending).rejects.toMatchObject({ message: 'The sending session is running a different process now' })
+    expect(count()).toBe(0)
+    // Nothing of it is left to count: the terminal's next process sends at once.
+    const next = await messages.send({ senderSessionId: 'a', senderIncarnationId: 'run-later', destinationSessionId: 'b', text: 'from the next process', senderCwd: repo })
+    expect(stored(next.messageId).state).toBe('waiting')
+  })
+
+  it('lets a message stand that a peer was handed in that same instant, and says it was sent', async () => {
+    const store = holdStore('sendSessionMessage')
+    const sending = tell('a', 'b')
+    await store.asked
+    live.set('a', 'run-later')
+    const takeBack = holdStore('withdrawSessionMessage')
+    store.answer()
+    await takeBack.asked
+    const handed = (await take('b')).message!
+    takeBack.answer()
+
+    expect(await sending).toEqual({ messageId: handed.messageId, state: 'waiting' })
+    expect(stored(handed.messageId).state).toBe('taken')
   })
 
   it('refuses a send whose folder is missing, is a file or is not absolute', async () => {
@@ -837,6 +885,23 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
 
     expect((await taking).message).toBeNull()
     expect(stored(sent.messageId).state).toBe('waiting')
+  })
+
+  it('gives a claim back when the receiving terminal is given another process between asking the store and its answer', async () => {
+    const sent = await tell('a', 'b')
+    const store = holdStore('claimMessageForHook')
+
+    const taking = take('b')
+    await store.asked
+    live.set('b', 'run-later')
+    store.answer()
+
+    expect((await taking).message).toBeNull()
+    expect(stored(sent.messageId)).toMatchObject({ state: 'waiting', claimedApp: null })
+    expect(database.prepare('SELECT claim_id, claimed_incarnation_id, claimed_pid, claimed_at FROM session_message WHERE message_id = ?').get(sent.messageId))
+      .toEqual({ claim_id: null, claimed_incarnation_id: null, claimed_pid: null, claimed_at: null })
+    // Nothing was printed, so the terminal's next process is handed it.
+    expect((await take('b')).message!.messageId).toBe(sent.messageId)
   })
 
   it('asks about a folder once on an event, however many messages from it wait', async () => {
