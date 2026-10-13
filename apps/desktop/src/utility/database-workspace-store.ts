@@ -57,6 +57,7 @@ interface WorkspaceRow {
   marker: string
   archived_at: string | null
   revision: number
+  session_messages: number
 }
 
 interface SessionRow {
@@ -70,6 +71,7 @@ interface SessionRow {
   background_choice: string | null
   terminal_graphics: string | null
   reported_resume_json: string | null
+  receive_messages: number
   revision: number
   created_at: string
   archived_at: string | null
@@ -85,7 +87,7 @@ interface SessionRow {
  * it never claims a process is live — the host liveness owner decides that.
  */
 const SESSION_SELECT = `SELECT s.session_id, s.workspace_id, s.name, s.cwd, s.executable, s.argv_json,
-              s.position, s.background_choice, s.terminal_graphics, s.reported_resume_json, s.revision, s.created_at,
+              s.position, s.background_choice, s.terminal_graphics, s.reported_resume_json, s.receive_messages, s.revision, s.created_at,
               s.archived_at, i.incarnation_id AS last_incarnation_id, i.state AS last_state,
               i.exit_code AS last_exit_code, i.exit_signal AS last_exit_signal,
               i.exit_detail AS last_exit_detail
@@ -184,7 +186,9 @@ function workspaceRecord(row: WorkspaceRow): WorkspaceRecord {
     // workspace and every session under it.
     marker: isWorkspaceMarker(row.marker) ? row.marker : DEFAULT_WORKSPACE_MARKER,
     archivedAt: row.archived_at,
-    revision: row.revision
+    revision: row.revision,
+    // Carried only while on, so a workspace that never switched messages on reads exactly as before (Story 66.2).
+    ...(row.session_messages === 1 ? { sessionMessages: true } : {})
   }
   if (!isWorkspaceRecord(record)) {
     throw new WorkspaceStoreError(ERROR_CODES.ioError, 'A stored workspace record is invalid')
@@ -235,7 +239,9 @@ function sessionRecord(row: SessionRow): SessionRecord {
     createdAt: row.created_at,
     archivedAt: row.archived_at,
     lastProcess: recordedProcessStatus(row),
-    ...storedReportedResume(row.reported_resume_json)
+    ...storedReportedResume(row.reported_resume_json),
+    // Carried only while the owner has shut the session out; absent means it receives messages (Story 66.2).
+    ...(row.receive_messages === 0 ? { receiveMessages: false } : {})
   }
   if (!isSessionRecord(record)) {
     throw new WorkspaceStoreError(ERROR_CODES.ioError, 'A stored session record is invalid')
@@ -272,7 +278,7 @@ function templateRecord(row: TemplateRow): LaunchTemplateRecord {
 export function selectWorkspace(database: DatabaseConnection, workspaceId: string): WorkspaceRecord {
   const row = database
     .prepare(
-      `SELECT workspace_id, name, default_cwd, pinned_file_paths_json, position, marker, archived_at, revision
+      `SELECT workspace_id, name, default_cwd, pinned_file_paths_json, position, marker, archived_at, revision, session_messages
        FROM workspace WHERE workspace_id = ?`
     )
     .get(workspaceId) as WorkspaceRow | undefined
@@ -303,7 +309,7 @@ export function listWorkspaces(
 ): WorkspaceRecord[] {
   const rows = database
     .prepare(
-      `SELECT workspace_id, name, default_cwd, pinned_file_paths_json, position, marker, archived_at, revision
+      `SELECT workspace_id, name, default_cwd, pinned_file_paths_json, position, marker, archived_at, revision, session_messages
        FROM workspace
        WHERE ? = 1 OR archived_at IS NULL
        ORDER BY CASE WHEN archived_at IS NULL THEN 0 ELSE 1 END, position, workspace_id`
@@ -372,7 +378,8 @@ export function updateWorkspace(
   database
     .prepare(
       `UPDATE workspace
-       SET name = ?, default_cwd = ?, position = ?, marker = ?, archived_at = ?, revision = ?, pinned_file_paths_json = ?
+       SET name = ?, default_cwd = ?, position = ?, marker = ?, archived_at = ?, revision = ?, pinned_file_paths_json = ?,
+           session_messages = ?
        WHERE workspace_id = ? AND revision = ?`
     )
     .run(
@@ -383,6 +390,7 @@ export function updateWorkspace(
       archivedAt,
       current.revision + 1,
       JSON.stringify(pins),
+      (params.sessionMessages ?? current.sessionMessages === true) ? 1 : 0,
       current.workspaceId,
       current.revision
     )
@@ -418,7 +426,7 @@ export function updateSession(
     .prepare(
       `UPDATE session
        SET workspace_id = ?, name = ?, cwd = ?, executable = ?, argv_json = ?,
-           position = ?, background_choice = ?, terminal_graphics = ?, archived_at = ?, revision = ?
+           position = ?, background_choice = ?, terminal_graphics = ?, archived_at = ?, receive_messages = ?, revision = ?
        WHERE session_id = ? AND revision = ?`
     )
     .run(
@@ -431,6 +439,7 @@ export function updateSession(
       'backgroundChoice' in params ? params.backgroundChoice ?? null : current.backgroundChoice,
       'terminalGraphics' in params ? params.terminalGraphics ?? null : current.terminalGraphics,
       'archived' in params ? (params.archived ? current.archivedAt ?? now : null) : current.archivedAt,
+      (params.receiveMessages ?? current.receiveMessages !== false) ? 1 : 0,
       current.revision + 1,
       current.sessionId,
       current.revision

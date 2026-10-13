@@ -129,6 +129,11 @@ function fakeHandlers(current: Map<string, string>) {
     reportProgress: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     openAttention: vi.fn(async (): Promise<unknown> => ({ opened: true })),
     prepareHandoff: vi.fn(async (): Promise<unknown> => ({ draftId: 'draft-1', requestId: 'request-1', state: 'draft' })),
+    listPeers: vi.fn(async (): Promise<unknown> => ({ on: true, paused: false, peers: [] })),
+    sendMessage: vi.fn(async (): Promise<unknown> => ({ messageId: 'message-1', state: 'waiting' })),
+    messageStatus: vi.fn(async (): Promise<unknown> => ({ messages: [] })),
+    takeMessage: vi.fn(async (): Promise<unknown> => ({ message: null })),
+    reportMessage: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     reportRefusal: vi.fn(),
     observeConversation: vi.fn(async (): Promise<unknown> => ({ accepted: true, detail: 'observed' })),
     withdrawAttention: vi.fn(async (): Promise<unknown> => ({ withdrawn: true })),
@@ -568,6 +573,190 @@ describe('control server handoff preparation', () => {
     expectError(conflict, ERROR_CODES.revisionConflict)
     expect(conflict.error?.message).toBe('idempotency key reused with different parameters')
     expect(fixture.handlers.prepareHandoff).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('messages between sessions over the socket (Epic 66)', () => {
+  const message = { destinationSessionId: 'session-2', text: 'hold any commit on local main', senderCwd: '/synthetic/code/app', idempotencyKey: 'tell-1' }
+  const destination = { provider: 'openai', host: 'default:openai', basis: 'observed-default', default: true }
+  const take = { agent: 'codex', pid: 4242, destination }
+  const report = { messageId: 'message-1', claimId: 'claim-1', pid: 4242 }
+
+  it.each([
+    ['peers.list', {}],
+    ['message.send', message],
+    ['message.status', {}],
+    ['message.take', take],
+    ['message.report', report]
+  ])('refuses the owner token on %s', async (method, params) => {
+    const fixture = await serverFixture()
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+
+    expectError(await owner.request(method, params), ERROR_CODES.unauthorized)
+
+    for (const handler of ['listPeers', 'sendMessage', 'messageStatus', 'takeMessage', 'reportMessage'] as const) {
+      expect(fixture.handlers[handler]).not.toHaveBeenCalled()
+    }
+  })
+
+  it.each([
+    ['peers.list', { sessionId: 'session-2' }],
+    ['message.send', { ...message, sessionId: 'session-2' }],
+    ['message.send', { ...message, senderSessionId: 'session-2' }],
+    ['message.status', { sessionId: 'session-2' }],
+    ['message.take', { ...take, sessionId: 'session-2' }],
+    ['message.take', { ...take, destination: { ...destination, name: 'OpenAI' } }],
+    ['message.report', { ...report, sessionId: 'session-2' }]
+  ])('takes closed parameters on %s: nothing can name another session', async (method, params) => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    expectError(await agent.request(method, params), ERROR_CODES.invalidArgument)
+
+    for (const handler of ['listPeers', 'sendMessage', 'messageStatus', 'takeMessage', 'reportMessage'] as const) {
+      expect(fixture.handlers[handler]).not.toHaveBeenCalled()
+    }
+  })
+
+  it('lists peers for the caller\'s own session', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    expect((await agent.request('peers.list', {})).result).toEqual({ on: true, paused: false, peers: [] })
+
+    expect(fixture.handlers.listPeers).toHaveBeenLastCalledWith('session-1')
+  })
+
+  it('takes the sender and its process from the token, and forwards the destination, the cleaned text and the folder', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    const response = await agent.request('message.send', { ...message, text: '\u202ehold\u200b any commit\n\ton local main\u2069' })
+
+    expect(response.result).toEqual({ messageId: 'message-1', state: 'waiting' })
+    expect(fixture.handlers.sendMessage).toHaveBeenLastCalledWith({
+      senderSessionId: 'session-1', senderIncarnationId: 'incarnation-1', destinationSessionId: 'session-2',
+      text: 'hold any commit\n\ton local main', senderCwd: '/synthetic/code/app'
+    })
+  })
+
+  it.each([
+    ['no text', { ...message, text: undefined }],
+    ['text that is not a string', { ...message, text: 7 }],
+    ['text that is empty once invisible characters are removed', { ...message, text: '\u2066\u2069' }],
+    ['2,001 characters', { ...message, text: 'x'.repeat(2001) }],
+    ['a carriage return', { ...message, text: 'line\rbreak' }],
+    ['an escape character', { ...message, text: 'colour \u001b[31m' }],
+    ['no destination', { ...message, destinationSessionId: undefined }],
+    ['no folder', { ...message, senderCwd: undefined }],
+    ['a folder that is not absolute', { ...message, senderCwd: 'code/app' }],
+    ['no key', { ...message, idempotencyKey: undefined }]
+  ])('refuses a send with %s before the handler runs', async (_label, params) => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    expectError(await agent.request('message.send', params), ERROR_CODES.invalidArgument)
+
+    expect(fixture.handlers.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('accepts exactly 2,000 characters', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    expect((await agent.request('message.send', { ...message, text: 'x'.repeat(2000) })).result).toEqual({ messageId: 'message-1', state: 'waiting' })
+  })
+
+  it('returns the first result for the same key and parameters, and refuses the key with different ones', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    const first = await agent.request('message.send', message)
+    const repeat = await agent.request('message.send', message)
+    const conflict = await agent.request('message.send', { ...message, text: 'another text' })
+
+    expect(first.result).toEqual({ messageId: 'message-1', state: 'waiting' })
+    expect(repeat.result).toEqual({ messageId: 'message-1', state: 'waiting', duplicate: true })
+    expectError(conflict, ERROR_CODES.revisionConflict)
+    expect(fixture.handlers.sendMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a refusal under its key: the peer wording comes back and the handler is not asked twice', async () => {
+    const fixture = await serverFixture()
+    fixture.handlers.sendMessage.mockRejectedValueOnce(new ControlError(ERROR_CODES.invalidArgument, 'That session is not one of your peers; run bmn peers'))
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    const first = await agent.request('message.send', message)
+    const repeat = await agent.request('message.send', message)
+
+    for (const response of [first, repeat]) {
+      expectError(response, ERROR_CODES.invalidArgument)
+      expect(response.error?.message).toBe('That session is not one of your peers; run bmn peers')
+    }
+    expect(fixture.handlers.sendMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads the state of the caller\'s own messages, all or one', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    await agent.request('message.status', {})
+    expect(fixture.handlers.messageStatus).toHaveBeenLastCalledWith('session-1', null)
+    await agent.request('message.status', { messageId: 'message-1' })
+    expect(fixture.handlers.messageStatus).toHaveBeenLastCalledWith('session-1', 'message-1')
+  })
+
+  it('forwards a take with the caller\'s own session and process and the whole resolved destination', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    expect((await agent.request('message.take', take)).result).toEqual({ message: null })
+
+    expect(fixture.handlers.takeMessage).toHaveBeenLastCalledWith({
+      sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 4242, app: 'codex', destination
+    })
+  })
+
+  it.each([
+    ['an app without a measured hand-over', { ...take, agent: 'opencode' }],
+    ['no app', { ...take, agent: undefined }],
+    ['no process id', { ...take, pid: undefined }],
+    ['a process id that is not one', { ...take, pid: 1 }],
+    ['no destination', { ...take, destination: undefined }],
+    ['only a provider\'s name', { ...take, destination: 'openai' }],
+    ['a destination without a host', { ...take, destination: { provider: 'openai', basis: 'explicit', default: false } }],
+    ['a destination of unknown basis', { ...take, destination: { ...destination, basis: 'unknown' } }],
+    ['a destination that does not say whether it is the app\'s default', { ...take, destination: { provider: 'openai', host: 'api.openai.com', basis: 'explicit' } }]
+  ])('refuses a take with %s', async (_label, params) => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    expectError(await agent.request('message.take', params), ERROR_CODES.invalidArgument)
+
+    expect(fixture.handlers.takeMessage).not.toHaveBeenCalled()
+  })
+
+  it('forwards a report with the caller\'s own session and process', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    expect((await agent.request('message.report', report)).result).toEqual({ recorded: true })
+
+    expect(fixture.handlers.reportMessage).toHaveBeenLastCalledWith({
+      sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 4242, messageId: 'message-1', claimId: 'claim-1'
+    })
+    expectError(await agent.request('message.report', { ...report, claimId: undefined }), ERROR_CODES.invalidArgument)
+  })
+
+  it('keeps session.list and state.snapshot to the caller\'s own scope: no new method widens them', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    await agent.request('session.list', {})
+    await agent.request('state.snapshot', {})
+
+    expect(fixture.handlers.listSessions).toHaveBeenLastCalledWith({ kind: 'session', sessionId: 'session-1', incarnationId: 'incarnation-1' })
+    expect(fixture.handlers.snapshot).toHaveBeenLastCalledWith({ kind: 'session', sessionId: 'session-1', incarnationId: 'incarnation-1' })
   })
 })
 

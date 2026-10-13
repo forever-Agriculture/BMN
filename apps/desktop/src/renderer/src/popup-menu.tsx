@@ -9,6 +9,8 @@ export type MenuEntry =
       title?: string | undefined
       danger?: boolean | undefined
       shortcut?: string | undefined
+      /** A switch inside the menu: set, the item is a checkbox that carries a check while it is on. */
+      checked?: boolean | undefined
     }
   /** One exclusive choice inside the menu: a named group whose options carry the current selection. */
   | {
@@ -46,7 +48,7 @@ export function PopupMenu(props: { anchor: MenuAnchor; onClose(): void }): React
     const top = below + height > window.innerHeight - 8 ? Math.max(8, rect.top - height - 4) : below
     setPosition({ top, left })
     menu.current?.querySelector<HTMLButtonElement>(
-      '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)'
+      '[role="menuitem"]:not(:disabled), [role="menuitemcheckbox"]:not(:disabled), [role="menuitemradio"]:not(:disabled)'
     )?.focus()
   }, [props.anchor])
 
@@ -61,7 +63,7 @@ export function PopupMenu(props: { anchor: MenuAnchor; onClose(): void }): React
 
   const items = (): HTMLButtonElement[] =>
     [...(menu.current?.querySelectorAll<HTMLButtonElement>(
-      '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)'
+      '[role="menuitem"]:not(:disabled), [role="menuitemcheckbox"]:not(:disabled), [role="menuitemradio"]:not(:disabled)'
     ) ?? [])]
 
   return (
@@ -118,7 +120,8 @@ export function PopupMenu(props: { anchor: MenuAnchor; onClose(): void }): React
             <button
               key={entry.label}
               type="button"
-              role="menuitem"
+              role={entry.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+              aria-checked={entry.checked}
               className={entry.danger ? 'danger' : undefined}
               disabled={entry.disabled}
               title={entry.title}

@@ -812,7 +812,8 @@ input[type='radio'] {
   box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
 }
 
-.popup-menu [role='menuitem'] {
+.popup-menu [role='menuitem'],
+.popup-menu [role='menuitemcheckbox'] {
   justify-content: space-between;
   gap: 16px;
   border-color: transparent;
@@ -864,15 +865,17 @@ input[type='radio'] {
   align-items: center;
 }
 
-/* The selected choice is named by a glyph as well as by aria-checked, never by colour alone. */
-.popup-menu [role='menuitemradio']::after {
+/* The selected choice, and a switch that is on, are named by a glyph as well as by aria-checked, never by colour alone. */
+.popup-menu [role='menuitemradio']::after,
+.popup-menu [role='menuitemcheckbox']::after {
   content: '';
   width: 12px;
   color: var(--text);
   text-align: right;
 }
 
-.popup-menu [role='menuitemradio'][aria-checked='true']::after {
+.popup-menu [role='menuitemradio'][aria-checked='true']::after,
+.popup-menu [role='menuitemcheckbox'][aria-checked='true']::after {
   content: '✓';
 }
 

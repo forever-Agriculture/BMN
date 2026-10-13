@@ -7,6 +7,7 @@ import {
   DEFAULT_TELEGRAM_QUIET_HOURS,
   IDENTITY_NAMES,
   RESTORED_VIEW_NOTICE,
+  SESSION_MESSAGES_HELP,
   TERMINAL_FONT_SIZE_RANGE,
   type AppearanceSettings,
   type AppSettings,
@@ -49,6 +50,7 @@ import { FilesPanel } from './files-panel'
 import { HookEventsDialog } from './hook-events-dialog'
 import { ProgressEvidenceDialog } from './progress-evidence-dialog'
 import { WorkspaceResultsDialog } from './workspace-results'
+import { MessagesSwitchDialog, SessionMessagesDialog } from './session-messages-dialog'
 import { DevAutoRunsDialog } from './dev-auto-runs'
 import { prepareWorkspaceHandoffReview, sameHandoffDraft } from './workspace-handoff-review'
 import { HookObservationView } from './hook-observation-view'
@@ -173,6 +175,10 @@ type ShellDialog =
   | { kind: 'split-picker'; sessionId: string | null }
   | { kind: 'preferences'; section?: 'agent-control' }
   | { kind: 'workspace-results'; workspace: WorkspaceRecord; openedFromWorkspaceId: string | null }
+  /** The owner's reading of one workspace's messages between sessions (Epic 66). */
+  | { kind: 'workspace-messages'; workspaceId: string; openedFromWorkspaceId: string | null }
+  /** The messages switch's two help lines, read before it goes on. */
+  | { kind: 'messages-switch'; workspaceId: string }
   | { kind: 'new-workspace' }
   | { kind: 'dev-auto-runs'; workspaceId?: string }
   | { kind: 'rename-workspace'; workspace: WorkspaceRecord }
@@ -237,6 +243,7 @@ function App(): React.JSX.Element {
   const [binding, setBinding] = useState<ConversationBindingState>()
   /** Bumped when something outside the window changes a binding, so the shown one is reloaded. */
   const [bindingRevision, setBindingRevision] = useState(0)
+  const [messagesRevision, setMessagesRevision] = useState(0)
   const [savedOutput, setSavedOutput] = useState<SavedOutputCatalogPresentation>()
   const [sessionForm, setSessionForm] = useState<SessionLaunchForm>(INITIAL_SESSION_FORM)
   const sessionFormRef = useRef(sessionForm)
@@ -343,6 +350,7 @@ function App(): React.JSX.Element {
   }, [workspaces, activeWorkspace, tree.showArchived])
   useEffect(() => {
     if (dialog?.kind === 'workspace-results' && dialog.openedFromWorkspaceId !== activeWorkspaceId) setDialog(null)
+    if (dialog?.kind === 'workspace-messages' && dialog.openedFromWorkspaceId !== activeWorkspaceId) setDialog(null)
     if (dialog?.kind === 'workspace-pins' && (dialog.openedFromWorkspaceId !== activeWorkspaceId ||
       !workspaces.some(workspace => workspace.workspaceId === dialog.workspaceId && workspace.archivedAt === null))) setDialog(null)
     if (dialog?.kind === 'file-reference' && dialog.request.workspaceId &&
@@ -545,6 +553,8 @@ function App(): React.JSX.Element {
     ports: () => window.aiTerminal.listPorts().then(setPorts),
     guard: () => window.aiTerminal.listGuardStops().then(setGuardStops),
     drafts: () => window.aiTerminal.listDrafts().then(setDrafts),
+    // Epic 66: the Messages dialog reads its own workspace's list; a change only tells an open one to read again.
+    messages: async () => setMessagesRevision((revision) => revision + 1),
     settings: async () => {
       setSettings(await window.aiTerminal.getSettings())
       // Start cleanup waiting is the one History state that must not sit unseen behind the gear.
@@ -885,6 +895,20 @@ function App(): React.JSX.Element {
     } else if (change.archived === false) {
       brief(`Restored ${updated.name}.`)
     }
+  }
+
+  /** The workspace's consent for its sessions to list and message each other (Epic 66). */
+  const setSessionMessages = async (workspace: WorkspaceRecord, sessionMessages: boolean): Promise<void> => {
+    await updateWorkspace(workspace, { sessionMessages })
+    brief(sessionMessages ? `Sessions in ${workspace.name} may message each other.` : `Messages are off in ${workspace.name}.`)
+  }
+
+  /** Shuts one session out of its workspace's messages, or lets it back in. */
+  const setReceiveMessages = async (record: SessionRecord, receiveMessages: boolean): Promise<void> => {
+    handoffReviewEpoch.current += 1
+    const updated = await window.aiTerminal.updateSession({ sessionId: record.sessionId, expectedRevision: record.revision, receiveMessages })
+    setSessions((current) => current.map((item) => item.sessionId === updated.sessionId ? updated : item))
+    brief(receiveMessages ? `${updated.name} receives messages.` : `${updated.name} receives no messages.`)
   }
 
   const moveWorkspace = (ordered: readonly WorkspaceRecord[], index: number, direction: -1 | 1): void => {
@@ -1459,6 +1483,14 @@ function App(): React.JSX.Element {
           .then(setSettings).catch(fail('Quiet-hours exception could not be saved'))
       }
     },
+    {
+      label: 'Receive messages',
+      checked: session.receiveMessages !== false,
+      title: workspaces.find((workspace) => workspace.workspaceId === session.workspaceId)?.sessionMessages === true
+        ? 'Other sessions of this workspace may leave this one a message'
+        : 'Without effect while messages are off in this workspace',
+      onSelect: () => void setReceiveMessages(session, session.receiveMessages === false).catch(fail('Receive messages could not be changed'))
+    },
     { label: 'Edit launch settings', onSelect: () => beginSessionEdit(session) },
     { label: 'Move up', disabled: index === 0, onSelect: () => void moveSession(siblings, index, -1).catch(fail('Session move failed')) },
     { label: 'Move down', disabled: index === siblings.length - 1, onSelect: () => void moveSession(siblings, index, 1).catch(fail('Session move failed')) },
@@ -1520,6 +1552,8 @@ function App(): React.JSX.Element {
     { label: 'New session here', disabled: workspace.archivedAt !== null, onSelect: () => beginNewSession(workspace) },
     { label: 'Review results…', onSelect: () =>
       setDialog({ kind: 'workspace-results', workspace, openedFromWorkspaceId: activeWorkspaceId }) },
+    { label: 'Messages…', onSelect: () =>
+      setDialog({ kind: 'workspace-messages', workspaceId: workspace.workspaceId, openedFromWorkspaceId: activeWorkspaceId }) },
     { label: 'Save a launch set…', disabled: workspace.archivedAt !== null,
       onSelect: () => setDialog({ kind: 'launch-sets', workspace, initialMode: 'manage' }) },
     { label: 'Launch set…', disabled: workspace.archivedAt !== null,
@@ -1527,6 +1561,17 @@ function App(): React.JSX.Element {
     { label: 'Rename…', onSelect: () => setDialog({ kind: 'rename-workspace', workspace }) },
     { label: 'Move up', disabled: index === 0, onSelect: () => moveWorkspace(ordered, index, -1) },
     { label: 'Move down', disabled: index === ordered.length - 1, onSelect: () => moveWorkspace(ordered, index, 1) },
+    'separator',
+    {
+      // Off by default. Switching it on first shows what it allows; switching it off needs no second thought.
+      label: 'Sessions here may message each other',
+      checked: workspace.sessionMessages === true,
+      disabled: workspace.archivedAt !== null,
+      title: SESSION_MESSAGES_HELP.join(' '),
+      onSelect: () => workspace.sessionMessages === true
+        ? void setSessionMessages(workspace, false).catch(fail('The messages switch could not be changed'))
+        : setDialog({ kind: 'messages-switch', workspaceId: workspace.workspaceId })
+    },
     'separator',
     {
       group: 'Marker',
@@ -2663,6 +2708,26 @@ function App(): React.JSX.Element {
       {dialog?.kind === 'dev-auto-runs' ? <DevAutoRunsDialog
         workspaceId={dialog.workspaceId} workspaces={workspaces}
         onClose={() => setDialog(null)} onOpenSession={(id) => { setDialog(null); openSession(id) }} /> : null}
+      {dialog?.kind === 'workspace-messages' ? (() => {
+        const workspace = workspaces.find((item) => item.workspaceId === dialog.workspaceId)
+        return workspace ? <SessionMessagesDialog
+          workspace={workspace}
+          now={now}
+          revision={messagesRevision}
+          incarnationOf={(sessionId) => {
+            const record = sessions.find((session) => session.sessionId === sessionId)
+            const incarnationId = live[sessionId]?.incarnationId
+            return record && incarnationId && sessionProcessLive(record, incarnationId) ? incarnationId : null
+          }}
+          onClose={() => setDialog(null)} /> : null
+      })() : null}
+      {dialog?.kind === 'messages-switch' ? (() => {
+        const workspace = workspaces.find((item) => item.workspaceId === dialog.workspaceId && item.archivedAt === null)
+        return workspace ? <MessagesSwitchDialog
+          workspaceName={workspace.name}
+          onConfirm={() => void setSessionMessages(workspace, true).catch(fail('The messages switch could not be changed'))}
+          onClose={() => setDialog(null)} /> : null
+      })() : null}
       {dialog?.kind === 'workspace-results' ? (
         <WorkspaceResultsDialog
           workspace={dialog.workspace}

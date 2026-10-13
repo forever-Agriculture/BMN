@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { GUARD_MEASURED as PROTOCOL_GUARD_MEASURED } from '@bmn/protocol'
-import { GUARD_APPS, GUARD_MEASURED, decide, decideWithin, guardStanding, guardState, parseLaunch, stopAnswer } from '../../bin/agents-guard.mjs'
+import { GUARD_MEASURED as PROTOCOL_GUARD_MEASURED, SESSION_MESSAGE_HANDOVER } from '@bmn/protocol'
+import { GUARD_APPS, GUARD_MEASURED, MESSAGE_HANDOVER, MESSAGE_LIMIT_MS, decide, decideWithin, guardStanding, guardState, messageDestination, messageDestinationWithin, messageStanding, parseLaunch, stopAnswer } from '../../bin/agents-guard.mjs'
+import { messageProviderAnswer, messageSourceRoot } from './session-message-provider'
 import { visibilityPath } from '../../bin/agents-check.mjs'
 import { buildGeneration, currentPointerPath, generationPath, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
@@ -475,5 +476,105 @@ describe('the decision reads nothing it was not given (60.8 AC1)', () => {
       // grep exits 1 when no file holds the text.
     }
     expect(holding).toBe('')
+  })
+})
+
+describe('where a receiving agent sends work, for a message (Epic 66.4)', () => {
+  const afterTool = (agent: string, pid: number, event: Record<string, unknown> = {}) => messageDestination({ agent, pid, procRoot: proc,
+    event: { cwd: workspace, ...(agent === 'codex' && !('session_id' in event) ? codexRecord() : {}), ...event } })
+
+  it('holds the hook\'s record of measured apps and the window\'s to one', () => {
+    expect(MESSAGE_HANDOVER).toEqual(SESSION_MESSAGE_HANDOVER)
+    expect(MESSAGE_LIMIT_MS).toBe(300)
+  })
+
+  it('gives the whole destination the resolver found when the guard would let this event pass', () => {
+    approve(team())
+    expect(afterTool('codex', session(['codex']))).toEqual({ provider: 'openai', host: 'default:openai', basis: 'observed-default', default: true })
+    expect(afterTool('claude', session(['claude']))).toEqual({ provider: 'anthropic', host: 'default:anthropic', basis: 'observed-default', default: true })
+  })
+
+  it('gives an explicit address as it was resolved, when the owner allowed that provider in the receiver\'s own folder', () => {
+    approve(team(exception(workspace)))
+    expect(afterTool('claude', session(['claude'], { env: MOONSHOT_ENV })))
+      .toEqual({ provider: 'moonshot', host: 'api.moonshot.ai', basis: 'explicit', default: false })
+  })
+
+  it('gives nothing when the guard would stop the event, whatever the reason', () => {
+    approve(team())
+    // A provider that may not see the receiver's own folder.
+    expect(afterTool('claude', session(['claude'], { env: MOONSHOT_ENV }))).toBeNull()
+    // A Codex conversation with no saved record: an unknown destination.
+    expect(afterTool('codex', session(['codex']), { session_id: '9f9f9f9f-1b1b-2c2c-3d3d-4e4e4e4e4e4e' })).toBeNull()
+    // A process the table cannot show.
+    expect(afterTool('codex', 0)).toBeNull()
+    expect(afterTool('codex', 9999)).toBeNull()
+  })
+
+  it('gives nothing on an installation that never approved a team: no resolver, no hand-over', () => {
+    expect(guardState().state).toBe('inactive')
+    expect(afterTool('codex', session(['codex']))).toBeNull()
+  })
+
+  it('answers through its thread like the direct call, and with nothing when the thread fails or is too slow', async () => {
+    approve(team())
+    const input = { agent: 'codex', pid: session(['codex']), procRoot: proc, event: { cwd: workspace, ...codexRecord() } }
+    expect(await messageDestinationWithin(input, 2000)).toEqual(messageDestination(input))
+    const failing = () => { throw new Error('synthetic: no thread') }
+    expect(await messageDestinationWithin(input, 2000, { startThread: failing })).toBeNull()
+    const silent = () => Object.assign(new EventEmitter(), { terminate: () => undefined })
+    const from = Date.now()
+    expect(await messageDestinationWithin(input, 40, { startThread: silent })).toBeNull()
+    expect(Date.now() - from).toBeLessThan(1000)
+  })
+
+  it('says per app, for `bmn hooks check`, whether its hook hands messages over and on which version that was measured', () => {
+    expect(messageStanding('codex')).toBe('messages: not handed over until a team is approved (measured on Codex 0.162.1)')
+    approve(team())
+    expect(messageStanding('codex')).toBe('messages: handed to a working agent by this hook after a tool call (measured on Codex 0.162.1)')
+    expect(messageStanding('opencode')).toBe('messages: not handed over by a hook in OpenCode; your Paste in Messages delivers them')
+    expect(messageStanding('cursor')).toBe('messages: not handed over by a hook in Cursor; your Paste in Messages delivers them')
+  })
+})
+
+describe('whether a receiving agent\'s provider may see the sender\'s work (Epic 66.4 AC2)', () => {
+  const OPENAI = { provider: 'openai', host: 'default:openai', basis: 'observed-default', default: true }
+  const MOONSHOT = { provider: 'moonshot', host: 'api.moonshot.ai', basis: 'explicit', default: false }
+
+  it('takes the Git root of a folder, or the folder itself outside Git, as the sender\'s root', () => {
+    expect(messageSourceRoot(join(workspace, 'src'))).toBe(workspace)
+    expect(messageSourceRoot(home)).toBe(home)
+  })
+
+  it('allows a provider that may see private work, for any sender\'s root', () => {
+    approve(team())
+    expect(messageProviderAnswer(OPENAI, workspace)).toMatchObject({ allowed: true })
+    expect(messageProviderAnswer(OPENAI, '/synthetic/another/root')).toMatchObject({ allowed: true })
+  })
+
+  it('refuses a provider that may see public work only, until "Allow here" names the root the message came from', () => {
+    const other = join(home, 'code/other')
+    repository(other)
+    approve(team())
+    expect(messageProviderAnswer(MOONSHOT, workspace)).toEqual({ allowed: false, reason: 'Moonshot AI gets public work only' })
+
+    approve(team(exception(workspace)))
+
+    // The exception is read at the call: it counts for the root it names and for no other.
+    expect(messageProviderAnswer(MOONSHOT, workspace)).toMatchObject({ allowed: true })
+    expect(messageProviderAnswer(MOONSHOT, other)).toEqual({ allowed: false, reason: 'Moonshot AI gets public work only' })
+  })
+
+  it('gives nothing to a destination that is only the owner\'s word, or to a provider the team does not name', () => {
+    approve(team())
+    expect(messageProviderAnswer({ provider: 'cursor', host: 'default:cursor', basis: 'owner-declared', default: true }, workspace))
+      .toMatchObject({ allowed: false })
+    expect(messageProviderAnswer({ ...OPENAI, basis: 'owner-declared' }, workspace)).toMatchObject({ allowed: false })
+    expect(messageProviderAnswer({ provider: 'nobody', host: 'api.nobody.example', basis: 'explicit', default: false }, workspace))
+      .toEqual({ allowed: false, reason: 'the approved team names no such provider' })
+  })
+
+  it('throws when no team is approved, which the host treats as a refusal', () => {
+    expect(() => messageProviderAnswer(OPENAI, workspace)).toThrow()
   })
 })

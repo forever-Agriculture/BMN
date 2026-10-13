@@ -1,0 +1,60 @@
+/* MODULE: session-messages.css - the Messages dialog of a workspace: its list, an opened message, paused pairs (Epic 66) */
+.session-messages-dialog { width: min(820px, calc(100vw - 32px)); }
+.session-messages-dialog .inspector-section:first-child { padding-top: 0; border-top: 0; }
+.session-messages-dialog .kv { grid-template-columns: 112px minmax(0, 1fr); }
+
+.session-messages-switch { width: min(520px, calc(100vw - 32px)); }
+.session-messages-switch ul { display: grid; gap: 6px; margin: 0 0 10px; padding-left: 18px; }
+
+.message-pairs { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.message-pairs li { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; }
+
+.message-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 52vh;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+/* One line per message: when, who to whom, where it stands, how it starts. */
+.app-dialog .message-row {
+  display: grid;
+  grid-template-columns: 64px minmax(96px, 190px) 136px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  padding: 5px 8px;
+  border-color: transparent;
+  border-radius: 4px;
+  background: var(--raised);
+  font-size: 12px;
+  text-align: left;
+}
+
+.app-dialog .message-row[aria-expanded='true'] { background: var(--selected); }
+.message-row > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.message-row .age, .message-row .state { color: var(--muted); }
+
+.message-detail { display: grid; gap: 8px; padding: 8px 8px 12px; }
+
+/* The text and the stamp are shown whole, wrapped rather than cut: the owner reads all of what he may paste. */
+.message-text {
+  max-height: 30vh;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--ground);
+  font: 12px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message-stamp { margin: 0; color: var(--muted); font: 11.5px/1.45 var(--font-mono); overflow-wrap: anywhere; }
+.message-actions { display: flex; align-items: center; gap: 10px; }
+.message-actions small { color: var(--muted); font-size: 11px; }

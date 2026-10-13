@@ -121,10 +121,12 @@ export function terminalNoticeOrigin(code: TerminalNoticeCode): string {
 
 export const ATTENTION_ORIGINS = Object.freeze([
   'cli', 'owner', 'input', 'telegram', 'expiry',
-  // App-assigned terminal notifications, repeat watch and plan-use watch. Never claimable by a token.
+  // App-assigned terminal notifications, repeat watch, plan-use watch and the pause of messages between sessions
+  // (Epic 66). Never claimable by a token.
   ...TERMINAL_NOTICE_CODES.map(terminalNoticeOrigin),
   'watch:repeat',
-  'watch:usage'
+  'watch:usage',
+  'watch:messages'
 ] as const)
 
 /** Origins a session's own token may claim: its harness's hook events, and the CLI it runs itself. */
@@ -838,7 +840,8 @@ export const APP_EVENT_TOPICS = [
   'telegram',
   'conversations',
   'ports',
-  'guard'
+  'guard',
+  'messages'
 ] as const
 
 export type AppEventTopic = (typeof APP_EVENT_TOPICS)[number]

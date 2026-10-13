@@ -301,6 +301,7 @@ function originName(origin: string | null, action: 'opened' | 'closed'): string 
     case 'telegram': return 'Telegram'
     case 'watch:repeat': return "BMN's repeat watch"
     case 'watch:usage': return "BMN's plan-use watch"
+    case 'watch:messages': return "BMN's message limit"
     case 'expiry': return 'expiry'
     default: return origin
   }

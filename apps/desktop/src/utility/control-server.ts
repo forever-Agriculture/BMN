@@ -11,6 +11,8 @@ import {
   MAX_CONTROL_FRAME_BYTES,
   MAX_PROGRESS_EVIDENCE,
   MAX_USAGE_WINDOWS,
+  SESSION_MESSAGE_HANDOVER,
+  cleanSessionMessageText,
   isAttentionOrigin,
   hasDisallowedHandoffControl,
   isHookEventName,
@@ -100,6 +102,32 @@ export interface ControlHandlers {
     text: string
     artifactIds: string[]
   }): Promise<unknown>
+  /** Epic 66: the sessions a session may message. Never reachable by the owner token. */
+  listPeers(sessionId: string): Promise<unknown>
+  /** One short text for one peer; the handler stamps where it is from and stores it. It reaches no terminal. */
+  sendMessage(p: {
+    senderSessionId: string
+    senderIncarnationId: string
+    destinationSessionId: string
+    text: string
+    /** The folder the sending `bmn` process itself stood in. */
+    senderCwd: string
+  }): Promise<unknown>
+  /** The caller's own sent messages and where each stands; nothing of a receiver's activity. */
+  messageStatus(sessionId: string, messageId: string | null): Promise<unknown>
+  /**
+   * Epic 66.4: hands a session's own hook the one message it may print for its agent, consuming it. `destination`
+   * is where that agent sends work, as the hook resolved it for this event.
+   */
+  takeMessage(p: {
+    sessionId: string
+    incarnationId: string
+    pid: number
+    app: string
+    destination: { provider: string; host: string; basis: string; default: boolean }
+  }): Promise<unknown>
+  /** The hook's word that it printed what it took. */
+  reportMessage(p: { sessionId: string; incarnationId: string; pid: number; messageId: string; claimId: string }): Promise<unknown>
   /** Records why a conversation report was refused, so a refusal is not silent to the owner. */
   reportRefusal(method: string, sessionId: string | null, reason: string): void
   /** The harness's own word about which conversation its process is in; never reachable by the owner token. */
@@ -444,6 +472,18 @@ function requireEffects(params: Params, key: string): HookEventEffect[] {
   }
   return value as HookEventEffect[]
 }
+
+/** The pid of the agent a hook speaks for, as the hook read it from the process table. */
+function requirePid(params: Params): number {
+  const { pid } = params
+  if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 2 || pid > 0x7fff_ffff) throw invalid('pid must be a process id')
+  return pid
+}
+
+/** How a destination can be known; an unknown one is never sent. */
+const DESTINATION_BASES = ['observed-default', 'explicit', 'owner-declared'] as const
+/** The longest message text a request may carry before invisible characters are removed from it. */
+const MESSAGE_TEXT_RECEIVED_MAX = 16 * 1024
 
 function requestId(message: unknown): RequestId {
   if (!isRecord(message)) return null
@@ -913,6 +953,62 @@ export class ControlServer {
           text: handoffText,
           artifactIds
         }))
+      }
+      case 'peers.list': {
+        closedParams(rawParams, [])
+        if (scope.kind !== 'session') throw unauthorized('Only a session may list its peers')
+        return handlers.listPeers(scope.sessionId)
+      }
+      case 'message.send': {
+        const params = closedParams(rawParams, ['destinationSessionId', 'text', 'senderCwd', 'idempotencyKey'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session may leave a message for a peer')
+        const destinationSessionId = requireText(params, 'destinationSessionId', RULES.sessionId)
+        if (typeof params.text !== 'string') throw invalid('text is required')
+        if (params.text.length > MESSAGE_TEXT_RECEIVED_MAX) throw invalid('text is too long')
+        const cleaned = cleanSessionMessageText(params.text)
+        if ('problem' in cleaned) throw invalid(cleaned.problem)
+        const senderCwd = requireText(params, 'senderCwd', RULES.path)
+        if (!isAbsolute(senderCwd)) throw invalid('senderCwd must be absolute')
+        const idempotencyKey = requireText(params, 'idempotencyKey', RULES.idempotencyKey)
+        return this.idempotent(scope, method, idempotencyKey, params, () => handlers.sendMessage({
+          senderSessionId: scope.sessionId,
+          senderIncarnationId: scope.incarnationId,
+          destinationSessionId,
+          text: cleaned.text,
+          senderCwd
+        }))
+      }
+      case 'message.status': {
+        const params = closedParams(rawParams, ['messageId'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session may read the state of its own messages')
+        return handlers.messageStatus(scope.sessionId, readText(params, 'messageId', IDENTIFIER) ?? null)
+      }
+      case 'message.take': {
+        // Read-and-consume only, for the session's own hook: nothing here can write to a terminal or name another session.
+        const params = closedParams(rawParams, ['agent', 'pid', 'destination'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session may collect its own messages')
+        const app = requireEnum(params, 'agent', Object.keys(SESSION_MESSAGE_HANDOVER))
+        const pid = requirePid(params)
+        if (params.destination === undefined) throw invalid('destination is required')
+        const destination = closedParams(params.destination, ['provider', 'host', 'basis', 'default'])
+        if (typeof destination.default !== 'boolean') throw invalid('destination.default must be true or false')
+        return handlers.takeMessage({
+          sessionId: scope.sessionId, incarnationId: scope.incarnationId, pid, app,
+          destination: {
+            provider: requireText(destination, 'provider', IDENTIFIER),
+            host: requireText(destination, 'host', RULES.name),
+            basis: requireEnum(destination, 'basis', DESTINATION_BASES),
+            default: destination.default
+          }
+        })
+      }
+      case 'message.report': {
+        const params = closedParams(rawParams, ['messageId', 'claimId', 'pid'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session may report a message it printed')
+        return handlers.reportMessage({
+          sessionId: scope.sessionId, incarnationId: scope.incarnationId, pid: requirePid(params),
+          messageId: requireText(params, 'messageId', IDENTIFIER), claimId: requireText(params, 'claimId', IDENTIFIER)
+        })
       }
       case 'progress.report': {
         const params = closedParams(rawParams, [

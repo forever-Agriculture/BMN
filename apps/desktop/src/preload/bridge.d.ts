@@ -83,6 +83,8 @@ import type {
   SavedOutputCatalog,
   SavedOutputSnapshot,
   SessionCreateParams,
+  SessionMessageListing,
+  SessionMessageRecord,
   SessionRecord,
   SessionUpdateParams,
   TerminalActivationResult,
@@ -336,6 +338,12 @@ export interface AiTerminalBridge {
   retryHandoffDraft(draftId: string): Promise<InputDraftRecord>
   sendDraft(draftId: string, submit: boolean, expected?: DraftSendExpectation): Promise<InputDraftRecord>
   discardDraft(draftId: string): Promise<InputDraftRecord>
+  /** Epic 66: one workspace's latest messages between its sessions, with its pauses. */
+  listSessionMessages(workspaceId: string): Promise<SessionMessageListing>
+  /** The owner's Paste of one message into the receiving session's process as shown; Enter is never pressed. */
+  pasteSessionMessage(messageId: string, expectedIncarnationId: string): Promise<SessionMessageRecord>
+  pauseSessionMessages(workspaceId: string, paused: boolean): Promise<SessionMessageListing>
+  resumeSessionMessagePair(workspaceId: string, firstSessionId: string, secondSessionId: string): Promise<SessionMessageListing>
   getSettings(): Promise<AppSettings>
   putSettings<Section extends keyof AppSettings>(section: Section, value: AppSettings[Section]): Promise<AppSettings>
   /** Preferences → History: each Claude folder, each agent's counts and whether Start cleanup is waiting. */

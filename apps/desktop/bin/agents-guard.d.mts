@@ -37,3 +37,10 @@ export declare function decide(input: GuardInput): GuardVerdict
 export declare function decideWithin(input: GuardInput, limitMs?: number, seams?: { startThread?: (data: { bmnGuard: GuardInput }) => { once(event: string, listener: (...values: unknown[]) => void): unknown; terminate(): unknown } }): Promise<GuardVerdict>
 export declare function stopAnswer(agent: string, line: string): string | null
 export declare function guardStanding(agent: string): string
+/** Epic 66.4: where an agent sends work, as its own hook resolved it for an event after a tool call. */
+export interface MessageDestination { provider: string; host: string; basis: string; default: boolean }
+export declare const MESSAGE_HANDOVER: Record<string, { event: string; version: string } | undefined>
+export declare const MESSAGE_LIMIT_MS: number
+export declare function messageDestination(input: GuardInput): MessageDestination | null
+export declare function messageDestinationWithin(input: GuardInput, limitMs?: number, seams?: { startThread?: (data: { bmnMessageDestination: GuardInput }) => { once(event: string, listener: (...values: unknown[]) => void): unknown; terminate(): unknown } }): Promise<MessageDestination | null>
+export declare function messageStanding(agent: string): string

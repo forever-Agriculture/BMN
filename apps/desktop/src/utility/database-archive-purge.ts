@@ -57,8 +57,13 @@ export function purgeExpiredArchives(database: DatabaseConnection, now: string):
   const artifacts = expiredArtifacts(database, deletedSessions)
   const deleteChildren = SESSION_CHILD_TABLES.map((table) =>
     database.prepare(`DELETE FROM ${table} WHERE session_id = ?`))
+  // Epic 66: a message goes with either of its sessions, and a pair's pause with either of the pair.
+  const deleteMessages = database.prepare('DELETE FROM session_message WHERE sender_session_id = ? OR receiver_session_id = ?')
+  const deletePairs = database.prepare('DELETE FROM session_message_pair WHERE first_session_id = ? OR second_session_id = ?')
   for (const { session_id: sessionId } of sessions) {
     for (const statement of deleteChildren) statement.run(sessionId)
+    deleteMessages.run(sessionId, sessionId)
+    deletePairs.run(sessionId, sessionId)
   }
   const unlinkArtifact = database.prepare('UPDATE artifact SET session_id = NULL WHERE artifact_id = ?')
   const deleteArtifact = database.prepare('DELETE FROM artifact WHERE artifact_id = ?')
@@ -85,6 +90,9 @@ export function purgeExpiredArchives(database: DatabaseConnection, now: string):
   }
   for (const workspaceId of workspaceIds) {
     database.prepare('DELETE FROM workspace_layout WHERE workspace_id = ?').run(workspaceId)
+    // What a session that moved away left behind in this workspace stays there, so it goes with it.
+    database.prepare('DELETE FROM session_message WHERE workspace_id = ?').run(workspaceId)
+    database.prepare('DELETE FROM session_message_pair WHERE workspace_id = ?').run(workspaceId)
     database.prepare('DELETE FROM workspace WHERE workspace_id = ?').run(workspaceId)
   }
   return { sessionIds: sessions.map((row) => row.session_id), workspaceIds, originals }

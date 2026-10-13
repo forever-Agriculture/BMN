@@ -64,6 +64,8 @@ import {
   type ClosePromptDecision,
   type ClosePromptRequest,
   type InputDraftRecord,
+  type SessionMessageListing,
+  type SessionMessageRecord,
   type InterruptedSessionCohort,
   type ProgressRecord,
   type RepositoryIdentity,
@@ -712,6 +714,18 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   discardDraft(draftId: string): Promise<InputDraftRecord> {
     return invokeBridge('aiterm:draft:discard', { draftId })
+  },
+  listSessionMessages(workspaceId: string): Promise<SessionMessageListing> {
+    return invokeBridge('aiterm:messages:list', { workspaceId })
+  },
+  pasteSessionMessage(messageId: string, expectedIncarnationId: string): Promise<SessionMessageRecord> {
+    return invokeBridge('aiterm:messages:paste', { messageId, expectedIncarnationId })
+  },
+  pauseSessionMessages(workspaceId: string, paused: boolean): Promise<SessionMessageListing> {
+    return invokeBridge('aiterm:messages:pause', { workspaceId, paused })
+  },
+  resumeSessionMessagePair(workspaceId: string, firstSessionId: string, secondSessionId: string): Promise<SessionMessageListing> {
+    return invokeBridge('aiterm:messages:resume-pair', { workspaceId, firstSessionId, secondSessionId })
   },
   getSettings(): Promise<AppSettings> {
     return invokeBridge('aiterm:settings:get', {})

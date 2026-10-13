@@ -135,6 +135,10 @@ describe('protocol surface', () => {
         'draft.retry',
         'draft.send',
         'draft.discard',
+        'messages.list',
+        'messages.paste',
+        'messages.pause',
+        'messages.resumePair',
         'settings.get',
         'settings.put',
         'history.status',
@@ -149,7 +153,7 @@ describe('protocol surface', () => {
         'presence.set'
       ])
     )
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(82)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(86)
   })
 
   it('exports the initial stable error codes', () => {

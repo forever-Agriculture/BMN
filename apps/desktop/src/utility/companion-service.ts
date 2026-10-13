@@ -96,6 +96,8 @@ import { createScanMemory, procReader, scanSessionPorts, type ProcReader } from 
 import { PortWatch } from './port-watch'
 import { AGENT_HISTORY_STATE_KEY, AgentHistory, readHistoryState, type AgentHistoryAdapter } from './agent-history'
 import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
+import { SessionMessages, type MessageDestination } from './session-messages'
+import { messageProviderAnswer, messageSourceRoot } from './session-message-provider'
 
 /** A listed session plus its conversation route; `null` when the session has no stored binding. */
 type ListedSession = SessionRecord & {
@@ -110,6 +112,7 @@ const TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024
 const TELEGRAM_TOKEN_FILE = 'telegram-bot.token'
 const TELEGRAM_OFFSET_KEY = 'telegram.offset'
 const ATTENTION_SWEEP_MS = 30_000
+const MESSAGE_SWEEP_EVERY_MS = 60 * 60_000
 /** How often a busy Codex run's session file is reread for plan use (Story 37.2). */
 const CODEX_USAGE_READ_EVERY_MS = 15_000
 /**
@@ -165,6 +168,8 @@ export interface CompanionServiceOptions {
   proc?: ProcReader
   /** Where the health watch reads sensors; tests and the self-test host hand it a fixture tree. */
   health?: HealthReaderOptions
+  /** Epic 66.4: whether a receiving agent's provider may see a sender's work; tests hand it a fixed team. */
+  messageProviderAnswer?: (destination: MessageDestination, senderRoot: string) => { allowed: boolean; reason: string }
 }
 
 function invalid(message: string): never {
@@ -416,6 +421,9 @@ export class CompanionService {
   private readonly repeatStates = new Map<string, RepeatState>()
   /** The one history limit for every agent (Stories 31.1, 31.2). */
   private readonly history: AgentHistory
+  /** Epic 66: messages the sessions of one workspace leave each other. */
+  private readonly messages: SessionMessages
+  private lastMessageSweepAt = 0
   /** Each bounded log has its own serialized append queue. */
   private repeatWrites: Promise<void> = Promise.resolve()
   private refusalWrites: Promise<void> = Promise.resolve()
@@ -528,6 +536,29 @@ export class CompanionService {
       log: (line) => process.stderr.write(line),
       changed: () => this.emit('settings', null)
     })
+    this.messages = new SessionMessages({
+      database: options.database,
+      liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
+      session: async (sessionId) => {
+        await this.sessionsChanged()
+        return this.knownSessions.get(sessionId)
+      },
+      // What a hook of this run of BMN reported last; before any, the app the session's stored conversation names.
+      lastApp: async (sessionId) => this.hookObservations.get(sessionId)?.agent ??
+        (await options.database.getConversationBinding(sessionId).catch(() => undefined))?.agentCli ?? null,
+      paste: (sessionId, payload) => options.manager.writeToSession(sessionId, bracketedPaste(payload, false)),
+      notice: async (p) => {
+        await this.openAttention({
+          sessionId: p.sessionId, incarnationId: p.incarnationId, requestKey: p.requestKey, kind: 'notice',
+          origin: 'watch:messages', title: p.title.slice(0, TERMINAL_NOTICE_TITLE_MAX), body: p.body
+        })
+      },
+      changed: () => this.emit('messages', null),
+      now: () => this.now(),
+      sourceRoot: messageSourceRoot,
+      providerAnswer: options.messageProviderAnswer ?? messageProviderAnswer,
+      confirmedKeepDays: async () => (await options.database.companion('getSettings')).agentHistory.confirmedKeepDays
+    })
     this.producers = new LiveProducers((sessionId) => options.manager.liveIncarnationId(sessionId),
       process.platform === 'linux' ? (sessionId) => options.manager.foregroundProcessIdentity(sessionId) : undefined)
     this.answers = new RemoteAnswers({
@@ -608,6 +639,11 @@ export class CompanionService {
         reportProgress: (p) => this.controlCall(() => this.reportProgress(p)),
         openAttention: (p) => this.controlCall(async () => this.publicAttention(await this.openAttention(p))),
         prepareHandoff: (p) => this.controlCall(() => this.prepareAgentHandoff(p)),
+        listPeers: (sessionId) => this.controlCall(() => this.messages.peers(sessionId)),
+        sendMessage: (p) => this.controlCall(() => this.messages.send(p)),
+        messageStatus: (sessionId, messageId) => this.controlCall(() => this.messages.status(sessionId, messageId)),
+        takeMessage: (p) => this.controlCall(() => this.messages.take(p)),
+        reportMessage: (p) => this.controlCall(() => this.messages.report(p)),
         reportRefusal: (method, sessionId, reason) => this.logRefusal(method, sessionId, reason),
         observeConversation: (p) => this.controlCall(async () => {
           if (p.agentCli === 'claude' || p.agentCli === 'codex') {
@@ -637,7 +673,11 @@ export class CompanionService {
         takeAnswers: (p) => this.controlCall(
           async (): Promise<{ answers: PluginAnswer[] }> => ({ answers: await this.answers.take(p.sessionId, p.incarnationId, p.waitMs, p.report ?? undefined) })
         ),
-        observeHookEvent: (p) => this.controlCall(async () => this.observeHookEvent(p)),
+        observeHookEvent: (p) => this.controlCall(async () => {
+          const recorded = await this.observeHookEvent(p)
+          // Epic 66.4: the hook asks for a message only when told one waits, so an ordinary tool call adds nothing.
+          return await this.messages.waiting(p) ? { ...recorded, messageWaiting: true } : recorded
+        }),
         reportUsage: (p) => this.controlCall(async () => this.recordUsage(p)),
         reportGuard: (p) => this.controlCall(async () => this.recordGuard(p)),
         submitInput: (p) => this.controlCall(async () => {
@@ -995,6 +1035,16 @@ export class CompanionService {
           return record
         })
       }
+      case METHOD_REGISTRY.messagesList:
+        return this.messages.list(text(params, 'workspaceId'))
+      case METHOD_REGISTRY.messagesPaste:
+        return this.messages.paste(text(params, 'messageId'), text(params, 'expectedIncarnationId'))
+      case METHOD_REGISTRY.messagesPause: {
+        if (params.paused !== true && params.paused !== false) invalid('paused must be true or false')
+        return this.messages.pause(text(params, 'workspaceId'), params.paused)
+      }
+      case METHOD_REGISTRY.messagesResumePair:
+        return this.messages.resumePair(text(params, 'workspaceId'), text(params, 'firstSessionId'), text(params, 'secondSessionId'))
       case METHOD_REGISTRY.settingsGet:
         return database.companion('getSettings')
       case METHOD_REGISTRY.settingsPut: {
@@ -1288,7 +1338,7 @@ export class CompanionService {
     }
     const pluginPrompt = p.prompt?.harness === 'opencode'
     if (pluginPrompt) this.producers.unavailable(p.sessionId)
-    const producer = pluginPrompt || p.origin === 'watch:repeat' ? null : p.producer && p.origin?.endsWith(':PreToolUse')
+    const producer = pluginPrompt || p.origin === 'watch:repeat' || p.origin === 'watch:messages' ? null : p.producer && p.origin?.endsWith(':PreToolUse')
       ? this.producers.observe(p.sessionId, p.incarnationId, p.producer)
       : this.producers.stamp(p.sessionId, p.incarnationId)
     if (p.producer && producer && (p.producer.agentCli !== producer.agentCli ||
@@ -2028,6 +2078,11 @@ export class CompanionService {
     await this.morningDigest.sweep().catch(() => undefined)
     // Not awaited: a slow sensor or a slow send must not hold the sweep, and an overlapping check skips.
     void this.healthAlerts.sweep().catch(() => undefined)
+    // Epic 66.3: old messages go by the owner's confirmed Keep agent history days; once an hour is often enough.
+    if (this.now().getTime() - this.lastMessageSweepAt >= MESSAGE_SWEEP_EVERY_MS) {
+      this.lastMessageSweepAt = this.now().getTime()
+      await this.messages.sweep().catch(() => undefined)
+    }
   }
 
   private async readyArtifact(artifactId: string): Promise<ArtifactRecord> {

@@ -48,6 +48,7 @@ import {
 } from '@bmn/protocol'
 import { isAbsolute, normalize } from 'node:path'
 import type { DatabaseConnection } from './database-initialization'
+import { MESSAGE_OPERATIONS } from './database-message-store'
 import { selectSession, selectWorkspace, WorkspaceStoreError } from './database-workspace-store'
 import { clipOutsideSecrets } from './secret-mask'
 
@@ -1534,7 +1535,8 @@ export const COMPANION_OPERATIONS = Object.freeze({
   putSettingsSection,
   switchHealthAlertsOff,
   getRawSetting,
-  putRawSetting
+  putRawSetting,
+  ...MESSAGE_OPERATIONS
 })
 
 export type CompanionOperations = typeof COMPANION_OPERATIONS

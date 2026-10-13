@@ -246,23 +246,29 @@ function stop(base, cause, line, more = {}) {
  * could allow it, `allow: true` with the provider and workspace an exception would name.
  */
 export function decide(input) {
+  return decision(input).verdict
+}
+
+/** `decide`, with the destination the resolver found beside the verdict (null where it found none). */
+function decision(input) {
   const { agent, event, pid, procRoot = '/proc' } = input
   const app = APP_NAMES[agent] ?? agent
   const base = { agent, app, pid: pid || null, start: null, folder: null, processFolder: null, workspace: null, provider: null, host: null, name: null }
+  const none = (verdict) => ({ verdict, destination: null })
   const state = guardState()
-  if (state.state === 'inactive') return { ...base, outcome: 'pass', cause: 'inactive' }
-  if (state.state === 'broken') return stop(base, 'state', `BMN stopped this prompt: ${state.fix}`)
+  if (state.state === 'inactive') return none({ ...base, outcome: 'pass', cause: 'inactive' })
+  if (state.state === 'broken') return none(stop(base, 'state', `BMN stopped this prompt: ${state.fix}`))
   const data = state.data
   const agentProcess = pid ? readAgentProcess(procRoot, pid) : null
   if (agentProcess === null) {
-    return stop(base, 'process', `BMN stopped this prompt: it cannot read how this ${app} session was started. Start ${app} again in a BMN session.`)
+    return none(stop(base, 'process', `BMN stopped this prompt: it cannot read how this ${app} session was started. Start ${app} again in a BMN session.`))
   }
   base.start = agentProcess.start
   const home = agentProcess.env.HOME
   const eventFolder = canonicalFolder(event.cwd)
   const startFolder = canonicalFolder(agentProcess.cwd)
   const folder = eventFolder ?? startFolder
-  if (folder === null) return stop(base, 'process', `BMN stopped this prompt: it cannot read which folder this ${app} session works in. Start ${app} again in a BMN session.`)
+  if (folder === null) return none(stop(base, 'process', `BMN stopped this prompt: it cannot read which folder this ${app} session works in. Start ${app} again in a BMN session.`))
   const workspace = workspaceRoot(folder)
   base.folder = folder
   // Where the process itself stands: Allow here compares it with where it stands at the press.
@@ -271,8 +277,8 @@ export function decide(input) {
   const where = tilde(workspace, home)
   const found = sessionDestination(agent, data, event, agentProcess, [...new Set([startFolder, eventFolder].filter((entry) => entry !== null))])
   if (found.unknown !== undefined) {
-    return stop(base, 'unknown', `BMN stopped this prompt: it cannot tell where this ${app} session sends work (${found.unknown}). ${found.fix ?? `Change that and start ${app} again.`}`,
-      { host: found.host ?? null })
+    return none(stop(base, 'unknown', `BMN stopped this prompt: it cannot tell where this ${app} session sends work (${found.unknown}). ${found.fix ?? `Change that and start ${app} again.`}`,
+      { host: found.host ?? null }))
   }
   const destination = found.destination
   const provider = data.providers.find((entry) => entry.id === destination.provider)
@@ -281,13 +287,47 @@ export function decide(input) {
   base.host = destination.host
   const candidates = data.agents.filter((entry) => entry.harness === agent && entry.provider === destination.provider)
   base.name = (candidates.find((entry) => (destination.default ? entry.host === 'default' : entry.host?.toLowerCase?.() === destination.host)) ?? candidates[0])?.name ?? null
-  if (provider?.private_work === 'allowed') return { ...base, outcome: 'pass', cause: 'allowed' }
+  if (provider?.private_work === 'allowed') return { verdict: { ...base, outcome: 'pass', cause: 'allowed' }, destination }
   if (destination.basis === 'owner-declared') {
-    return stop(base, 'declared', `${providerName} can't see private work in ${where}: where ${app} sends work is your word, not something BMN inspected. Record it as inspected in BMN Preferences › Rules › Health.`)
+    return { verdict: stop(base, 'declared', `${providerName} can't see private work in ${where}: where ${app} sends work is your word, not something BMN inspected. Record it as inspected in BMN Preferences › Rules › Health.`), destination }
   }
   const answer = privateWorkAnswer(data, destination, workspace)
-  if (answer.allowed) return { ...base, outcome: 'pass', cause: 'exception', exception: answer.exception?.id ?? null }
-  return stop(base, 'public-only', `${providerName} can't see private work in ${where}. Allow it in BMN.`, { allow: true })
+  if (answer.allowed) return { verdict: { ...base, outcome: 'pass', cause: 'exception', exception: answer.exception?.id ?? null }, destination }
+  return { verdict: stop(base, 'public-only', `${providerName} can't see private work in ${where}. Allow it in BMN.`, { allow: true }), destination }
+}
+
+/**
+ * Epic 66.4: the apps whose own hook hands a waiting message to its agent, the event it answers and the
+ * version that was measured on (docs/session-messages.md). An app that is not here receives a message only
+ * through the owner's Paste. The window reads the same record from the protocol package
+ * (`SESSION_MESSAGE_HANDOVER` in shared/protocol/src/session-messages.ts); a test holds the two together.
+ */
+export const MESSAGE_HANDOVER = { codex: { event: 'PostToolUse', version: '0.162.1' } }
+
+/** How long everything a hook adds to an event for a message may take, resolving the destination included. */
+export const MESSAGE_LIMIT_MS = 300
+
+/**
+ * Where the owner's agent sends work, for an event after a tool call: the prompt guard's own decision for
+ * that event, and the destination its resolver found. null when no team is approved, when the guard would
+ * stop this event for any reason, and when it found no destination: then nothing is asked of BMN and no
+ * message is handed over. Whether that provider may see the *sender's* work is BMN's question, asked with
+ * the root stored with each message; this only says where this agent sends what it reads.
+ */
+export function messageDestination(input) {
+  const { verdict, destination } = decision(input)
+  if (verdict.outcome !== 'pass' || verdict.cause === 'inactive' || destination === null) return null
+  if (typeof destination.provider !== 'string' || typeof destination.host !== 'string' || typeof destination.basis !== 'string') return null
+  return { provider: destination.provider, host: destination.host, basis: destination.basis, default: destination.default === true }
+}
+
+/** One line for `bmn hooks check`: whether this app's hook hands messages over, and on which version that was measured. */
+export function messageStanding(agent) {
+  const app = APP_NAMES[agent] ?? agent
+  const measured = MESSAGE_HANDOVER[agent]
+  if (measured === undefined) return `messages: not handed over by a hook in ${app}; your Paste in Messages delivers them`
+  if (guardState().state !== 'active') return `messages: not handed over until a team is approved (measured on ${app} ${measured.version})`
+  return `messages: handed to a working agent by this hook after a tool call (measured on ${app} ${measured.version})`
 }
 
 function slow(input) {
@@ -350,6 +390,33 @@ export function decideWithin(input, limitMs = GUARD_LIMIT_MS, { startThread = de
   })
 }
 
+/**
+ * `messageDestination`, held to `limitMs` the way `decideWithin` holds a decision: the reads run on another
+ * thread, and a slow or failed one ends as null, which hands nothing over.
+ */
+export function messageDestinationWithin(input, limitMs = MESSAGE_LIMIT_MS, { startThread = decidingThread } = {}) {
+  return new Promise((resolve) => {
+    let worker = null
+    let settled = false
+    const finish = (result) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      void worker?.terminate()
+      resolve(result ?? null)
+    }
+    const timer = setTimeout(() => finish(null), limitMs)
+    try {
+      worker = startThread({ bmnMessageDestination: input })
+      worker.once('message', finish)
+      worker.once('error', () => finish(null))
+      worker.once('exit', () => finish(null))
+    } catch {
+      finish(null)
+    }
+  })
+}
+
 /** What the hook prints for the app to stop the prompt and show `line`; null where the app has no such answer. */
 export function stopAnswer(agent, line) {
   return GUARD_APPS[agent]?.stops ? JSON.stringify({ decision: 'block', reason: line }) : null
@@ -369,4 +436,9 @@ export function guardStanding(agent) {
 
 if (!isMainThread && parentPort !== null && workerData !== null && typeof workerData === 'object' && workerData.bmnGuard !== undefined) {
   parentPort.postMessage(decide(workerData.bmnGuard))
+}
+if (!isMainThread && parentPort !== null && workerData !== null && typeof workerData === 'object' && workerData.bmnMessageDestination !== undefined) {
+  let found = null
+  try { found = messageDestination(workerData.bmnMessageDestination) } catch { /* null: nothing is handed over */ }
+  parentPort.postMessage(found)
 }

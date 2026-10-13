@@ -835,9 +835,13 @@ describe('workspace identity marker', () => {
           revision INTEGER NOT NULL,
           position INTEGER NOT NULL DEFAULT 0,
           marker TEXT NOT NULL DEFAULT 'none',
-          pinned_file_paths_json TEXT NOT NULL DEFAULT '[]'
+          pinned_file_paths_json TEXT NOT NULL DEFAULT '[]',
+          session_messages INTEGER NOT NULL DEFAULT 0,
+          session_messages_paused_at TEXT,
+          session_messages_paused_by TEXT,
+          session_messages_counted_from TEXT
         );
-        INSERT INTO workspace_unchecked
+        INSERT INTO workspace_unchecked(workspace_id, name, default_cwd, archived_at, revision, position, marker, pinned_file_paths_json)
           SELECT workspace_id, name, default_cwd, archived_at, revision, position, marker, pinned_file_paths_json
           FROM workspace;
         DROP TABLE workspace;

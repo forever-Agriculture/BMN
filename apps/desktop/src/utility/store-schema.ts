@@ -16,6 +16,8 @@ export const STORY_SCHEMA_TABLES = Object.freeze([
   'progress_observation',
   'schema_migration',
   'session',
+  'session_message',
+  'session_message_pair',
   'telegram_message',
   'workspace',
   'workspace_layout'
@@ -611,5 +613,50 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
       DROP INDEX attention_quiet_held;
       CREATE INDEX attention_quiet_held ON attention_request(telegram_quiet_held_at)
         WHERE telegram_quiet_held_at IS NOT NULL AND telegram_quiet_attempt_revision IS NULL;`
+  },
+  {
+    // Epic 66: one switch per workspace (off for every existing one), one per session (on), and the messages
+    // sessions leave each other. A message keeps the workspace it was sent in, the root of the folder its sending
+    // command ran in and the stamp BMN wrote, so a later move or rename changes none of them. The claim columns
+    // say who took a message out of `waiting`; deleting either session deletes its messages (the purge does it,
+    // and ON DELETE CASCADE holds for any other delete). A pause is stored apart from the switch, so switching
+    // messages off and on lifts none; `counted_from` is the last Resume, where the hourly count starts again.
+    version: 26,
+    sql: `ALTER TABLE workspace ADD COLUMN session_messages INTEGER NOT NULL DEFAULT 0 CHECK (session_messages IN (0, 1));
+      ALTER TABLE workspace ADD COLUMN session_messages_paused_at TEXT;
+      ALTER TABLE workspace ADD COLUMN session_messages_paused_by TEXT CHECK (
+        session_messages_paused_by IS NULL OR session_messages_paused_by IN ('owner', 'limit'));
+      ALTER TABLE workspace ADD COLUMN session_messages_counted_from TEXT;
+      ALTER TABLE session ADD COLUMN receive_messages INTEGER NOT NULL DEFAULT 1 CHECK (receive_messages IN (0, 1));
+      CREATE TABLE session_message (
+        message_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspace(workspace_id) ON DELETE CASCADE,
+        sender_session_id TEXT NOT NULL REFERENCES session(session_id) ON DELETE CASCADE,
+        receiver_session_id TEXT NOT NULL REFERENCES session(session_id) ON DELETE CASCADE,
+        sender_root TEXT NOT NULL,
+        stamp TEXT NOT NULL,
+        text TEXT NOT NULL,
+        sent_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('waiting', 'paste-uncertain', 'pasted', 'taken', 'printed')),
+        detail TEXT,
+        claim_id TEXT,
+        claimed_incarnation_id TEXT,
+        claimed_pid INTEGER,
+        claimed_app TEXT,
+        claimed_at TEXT
+      );
+      CREATE INDEX session_message_by_workspace ON session_message(workspace_id, sent_at);
+      CREATE INDEX session_message_by_receiver ON session_message(receiver_session_id, state, sent_at);
+      CREATE INDEX session_message_by_sender ON session_message(sender_session_id, sent_at);
+      CREATE TABLE session_message_pair (
+        workspace_id TEXT NOT NULL REFERENCES workspace(workspace_id) ON DELETE CASCADE,
+        first_session_id TEXT NOT NULL REFERENCES session(session_id) ON DELETE CASCADE,
+        second_session_id TEXT NOT NULL REFERENCES session(session_id) ON DELETE CASCADE,
+        paused_at TEXT,
+        counted_from TEXT,
+        PRIMARY KEY (workspace_id, first_session_id, second_session_id),
+        CHECK (first_session_id < second_session_id)
+      );`
   }
 ])
