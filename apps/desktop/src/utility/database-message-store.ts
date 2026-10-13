@@ -430,12 +430,6 @@ export function releaseMessageClaim(database: DatabaseConnection, p: { messageId
   return { released: Number(updated.changes) === 1 }
 }
 
-/** Takes back a message that was just stored, only while it still waits: one that somebody has is theirs. */
-export function withdrawSessionMessage(database: DatabaseConnection, messageId: string): { withdrawn: boolean } {
-  const deleted = database.prepare("DELETE FROM session_message WHERE message_id = ? AND state = 'waiting'").run(messageId)
-  return { withdrawn: Number(deleted.changes) === 1 }
-}
-
 /**
  * The hook's word that it printed what it took. Accepted only with the claim's own id, from the session and
  * process that claimed; it means printed, never read.
@@ -474,7 +468,6 @@ export const MESSAGE_OPERATIONS = Object.freeze({
   messageTakeCandidates,
   claimMessageForHook,
   releaseMessageClaim,
-  withdrawSessionMessage,
   reportMessagePrinted,
   deleteMessagesSentBefore
 })

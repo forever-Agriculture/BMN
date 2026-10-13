@@ -346,6 +346,14 @@ agent sends work, taking and reporting. A resting agent reads a message at the f
 turn. A message not collected within two hours is no longer handed over by a hook; nothing is
 deleted by that, and Paste still works.
 
+A message speaks for its session, not for one process in it. `bmn tell` is refused when, by the
+time BMN passes the message to its store, the terminal runs another process than the one that sent
+it. From that moment ending the process cancels nothing: the message is stored and waits like any
+other. On
+the receiving side a claim made for a process the terminal has stopped running is never answered
+with the text: BMN gives the claim back so the terminal's next process may have the message, and
+if giving it back fails the message stays *taken, not confirmed*.
+
 **Limits and pauses.** One waiting message per sender and receiver; 30 seconds between one
 session's sends; at most five waiting for one receiver. Two sessions may exchange twelve messages
 in a rolling hour: the thirteenth is refused and that pair is paused. A workspace may hold forty

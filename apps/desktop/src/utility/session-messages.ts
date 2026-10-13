@@ -58,8 +58,6 @@ export interface SessionMessagesOptions {
 }
 
 const DAY_MS = 86_400_000
-/** What a send is told when its terminal runs another process than the one its token was given to. */
-const OTHER_PROCESS = 'The sending session is running a different process now'
 /** How many held-back reasons one run keeps; the oldest leave first. */
 const HELD_MAX = 500
 
@@ -108,7 +106,7 @@ export class SessionMessages {
 
   /** A send speaks for the process its token was given to, and for no later one in that terminal. */
   private sameProcess(sessionId: string, incarnationId: string): void {
-    if (this.options.liveIncarnationId(sessionId) !== incarnationId) invalid(OTHER_PROCESS)
+    if (this.options.liveIncarnationId(sessionId) !== incarnationId) invalid('The sending session is running a different process now')
   }
 
   private iso(): string {
@@ -154,21 +152,15 @@ export class SessionMessages {
       sessionId: sender.sessionId, name: sender.name, folder: senderRoot,
       app: appName(await this.options.lastApp(sender.sessionId))
     })
-    // The reads above took time, and the terminal may have been given another process meanwhile.
+    // The reads above took time, and the terminal may have been given another process meanwhile. This is the
+    // last look: a send is the word of the process that was running when the store was asked, and a process
+    // that ends after that does not cancel it. A message outlives its sender's process in any case.
     this.sameProcess(p.senderSessionId, p.senderIncarnationId)
     const outcome = await this.options.database.companion('sendSessionMessage', {
       messageId: randomUUID(), senderSessionId: p.senderSessionId, receiverSessionId: p.destinationSessionId,
       senderRoot, stamp, text: cleaned.text
     }, this.iso())
     this.options.changed()
-    // The store answers later than it was asked, and only this process knows which process a terminal runs. A
-    // message that landed for one the terminal stopped running meanwhile is taken back while it still waits; one
-    // a peer was handed in that same instant stands, as any message stands after its sender has gone.
-    if (outcome.accepted && this.options.liveIncarnationId(p.senderSessionId) !== p.senderIncarnationId) {
-      const taken = await this.options.database.companion('withdrawSessionMessage', outcome.messageId).catch(() => ({ withdrawn: false }))
-      this.options.changed()
-      if (taken.withdrawn) invalid(OTHER_PROCESS)
-    }
     if (outcome.accepted) return { messageId: outcome.messageId, state: outcome.state }
     const sent = cleanSessionMessageName(outcome.senderName)
     const received = cleanSessionMessageName(outcome.receiverName)
@@ -302,7 +294,9 @@ export class SessionMessages {
       // Lost to the owner's Paste, or a condition ended between the two reads: nothing more on this event.
       if (!claim.claimed || claim.record === null) return { message: null }
       // The store answers later than it was asked. A claim that landed for a process the terminal stopped running
-      // meanwhile is given back before anything is printed, so the terminal's next process may have the message.
+      // meanwhile is never answered with the text; it is given back so the terminal's next process may have the
+      // message. Giving back is best effort: if it fails, the message stays "taken, not confirmed", which the
+      // owner reads and no route offers again.
       if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) {
         await database.companion('releaseMessageClaim', { messageId: candidate.messageId, claimId }).catch(() => undefined)
         this.options.changed()

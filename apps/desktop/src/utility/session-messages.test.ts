@@ -44,6 +44,8 @@ let sourceRoot: (folder: string) => string | Promise<string>
 let betweenClaimAndWrite: (() => void) | null
 /** While set, the store does not answer which messages a hook may have. */
 let stalled: Promise<unknown> | null
+/** One store call that fails: before it changed anything, or after it did, with its answer lost. */
+let failing: { name: CompanionOperationName; when: 'before' | 'after' } | null
 /** One store call held back after it was asked for, as the store's own thread may run it later. */
 let held: { name: CompanionOperationName; reached: () => void; gate: Promise<void> } | null
 
@@ -115,6 +117,7 @@ beforeEach(() => {
   betweenClaimAndWrite = null
   stalled = null
   held = null
+  failing = null
   database.transaction(() => {
     createWorkspace(database, { name: 'Shop' }, 'w1', iso())
     createWorkspace(database, { name: 'Other' }, 'w2', iso())
@@ -133,8 +136,12 @@ beforeEach(() => {
         hold.reached()
         await hold.gate
       }
+      const fails = failing?.name === name ? failing.when : null
+      if (fails !== null) failing = null
+      if (fails === 'before') throw new Error('the store did not run it')
       const operation = COMPANION_OPERATIONS[name] as (connection: DatabaseConnection, ...rest: unknown[]) => unknown
       const result = database.transaction(() => operation(database, ...args))()
+      if (fails === 'after') throw new Error('the store ran it and its answer was lost')
       if (name === 'claimMessageForPaste' && betweenClaimAndWrite) {
         const staged = betweenClaimAndWrite
         betweenClaimAndWrite = null
@@ -314,34 +321,37 @@ describe('bmn tell (66.2 AC3-AC5)', () => {
     expect(count()).toBe(0)
   })
 
-  it('takes a message back when the sending terminal is given another process between asking the store and its answer', async () => {
-    const store = holdStore('sendSessionMessage')
+  it('accepts a send that was on its way to the store when the sending terminal was given another process, and keeps the message', async () => {
+    // The send is the word of the process that was running when the store was asked; ending it later cancels nothing.
+    for (const hookFirst of [true, false]) {
+      const store = holdStore('sendSessionMessage')
+      const sending = tell('a', 'b')
+      await store.asked
+      const before = live.get('a')!
+      live.set('a', 'run-later')
+      store.answer()
 
-    const sending = tell('a', 'b')
-    await store.asked
-    live.set('a', 'run-later')
-    store.answer()
-
-    await expect(sending).rejects.toMatchObject({ message: 'The sending session is running a different process now' })
-    expect(count()).toBe(0)
-    // Nothing of it is left to count: the terminal's next process sends at once.
-    const next = await messages.send({ senderSessionId: 'a', senderIncarnationId: 'run-later', destinationSessionId: 'b', text: 'from the next process', senderCwd: repo })
-    expect(stored(next.messageId).state).toBe('waiting')
+      const sent = await sending
+      expect(stored(sent.messageId)).toMatchObject({ state: 'waiting', senderSessionId: 'a' })
+      // It is a message like any other: the hook and the owner's Paste reach for it and exactly one has it.
+      const [taken, pastedRecord] = hookFirst
+        ? await Promise.all([take('b'), messages.paste(sent.messageId, 'run-b')])
+        : (await Promise.all([messages.paste(sent.messageId, 'run-b'), take('b')])).reverse() as [Awaited<ReturnType<typeof take>>, SessionMessageRecord]
+      const hookWon = taken.message !== null
+      expect(hookWon).toBe(pastedRecord.state === 'taken')
+      expect(stored(sent.messageId).state).toBe(hookWon ? 'taken' : 'pasted')
+      expect(pasted).toHaveLength(hookWon ? 0 : 1)
+      pasted = []
+      live.set('a', before)
+      clock += 31 * SECOND
+    }
   })
 
-  it('lets a message stand that a peer was handed in that same instant, and says it was sent', async () => {
-    const store = holdStore('sendSessionMessage')
-    const sending = tell('a', 'b')
-    await store.asked
-    live.set('a', 'run-later')
-    const takeBack = holdStore('withdrawSessionMessage')
-    store.answer()
-    await takeBack.asked
-    const handed = (await take('b')).message!
-    takeBack.answer()
+  it('hands over a message whose sender\'s process has ended since it was sent', async () => {
+    const sent = await tell('a', 'b')
+    live.delete('a')
 
-    expect(await sending).toEqual({ messageId: handed.messageId, state: 'waiting' })
-    expect(stored(handed.messageId).state).toBe('taken')
+    expect((await take('b')).message!.messageId).toBe(sent.messageId)
   })
 
   it('refuses a send whose folder is missing, is a file or is not absolute', async () => {
@@ -902,6 +912,34 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
       .toEqual({ claim_id: null, claimed_incarnation_id: null, claimed_pid: null, claimed_at: null })
     // Nothing was printed, so the terminal's next process is handed it.
     expect((await take('b')).message!.messageId).toBe(sent.messageId)
+  })
+
+  it('never answers a claim made for a process that is gone with the text, also when giving the claim back fails', async () => {
+    const replacedDuringClaim = async (): Promise<{ messageId: string }> => {
+      const sent = await tell('a', 'b')
+      const store = holdStore('claimMessageForHook')
+      const taking = take('b')
+      await store.asked
+      live.set('b', `${live.get('b')!}-next`)
+      store.answer()
+      expect((await taking).message).toBeNull()
+      return sent
+    }
+
+    // The store never ran the give-back: the message stays "taken, not confirmed" and no route offers it again.
+    failing = { name: 'releaseMessageClaim', when: 'before' }
+    const kept = await replacedDuringClaim()
+    expect((await messages.status('a', kept.messageId)).messages[0]!.state).toBe('taken, not confirmed')
+    expect((await take('b')).message).toBeNull()
+    expect((await messages.paste(kept.messageId, live.get('b')!)).state).toBe('taken')
+    expect(pasted).toEqual([])
+
+    // The store ran the give-back and only its answer was lost: nothing was printed, so the message waits again.
+    clock += 31 * SECOND
+    failing = { name: 'releaseMessageClaim', when: 'after' }
+    const again = await replacedDuringClaim()
+    expect(stored(again.messageId).state).toBe('waiting')
+    expect((await take('b')).message!.messageId).toBe(again.messageId)
   })
 
   it('asks about a folder once on an event, however many messages from it wait', async () => {
