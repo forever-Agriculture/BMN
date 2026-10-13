@@ -1,3 +1,4 @@
+// MODULE: store-schema.test.ts - holds the list of schema versions and of owned tables, and migrates databases of earlier versions with their rows
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -20,9 +21,9 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
-  it('contains the twenty-six ordered migrations and only the owned tables', () => {
+  it('contains the twenty-seven ordered migrations and only the owned tables', () => {
     expect(DATABASE_MIGRATIONS.map((migration) => migration.version))
-      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26])
+      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
@@ -40,6 +41,10 @@ describe('owned database schema', () => {
       'session_message',
       'session_message_pair',
       'telegram_message',
+      'turn_capture',
+      'turn_capture_reference',
+      'turn_record',
+      'turn_removal_job',
       'workspace',
       'workspace_layout'
     ])
@@ -194,7 +199,7 @@ describe('owned database schema', () => {
           { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 },
           { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 },
           { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 },
-          { version: 26 }
+          { version: 26 }, { version: 27 }
         ])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
@@ -312,7 +317,7 @@ describe('owned database schema', () => {
           { version: 19, applied_at: migratedAt },
           { version: 20, applied_at: migratedAt }, { version: 21, applied_at: migratedAt },
           { version: 22, applied_at: migratedAt }, { version: 23, applied_at: migratedAt }, { version: 24, applied_at: migratedAt }, { version: 25, applied_at: migratedAt },
-          { version: 26, applied_at: migratedAt }
+          { version: 26, applied_at: migratedAt }, { version: 27, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
@@ -359,7 +364,7 @@ describe('owned database schema', () => {
         state: 'draft'
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
-        .toEqual({ version: 26 })
+        .toEqual({ version: 27 })
     } finally {
       database.close()
     }
@@ -402,7 +407,8 @@ describe('owned database schema', () => {
       })
       // Later migrations add evidence and launch definitions without changing legacy records.
       expect(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all())
-        .toEqual([...tablesBefore, { name: 'progress_evidence' }, { name: 'launch_set' }, { name: 'session_message' }, { name: 'session_message_pair' }]
+        .toEqual([...tablesBefore, { name: 'progress_evidence' }, { name: 'launch_set' }, { name: 'session_message' }, { name: 'session_message_pair' },
+          { name: 'turn_capture' }, { name: 'turn_capture_reference' }, { name: 'turn_record' }, { name: 'turn_removal_job' }]
           .sort((left, right) => (left as { name: string }).name.localeCompare((right as { name: string }).name)))
     } finally {
       database.close()
@@ -683,7 +689,7 @@ it('adds messages between sessions at version 26: off for every existing workspa
 
     expect(database.prepare('SELECT * FROM workspace WHERE workspace_id = ?').get(DEFAULT_WORKSPACE_ID)).toEqual({
       ...workspaceBefore, session_messages: 0, session_messages_paused_at: null, session_messages_paused_by: null,
-      session_messages_counted_from: null
+      session_messages_counted_from: null, turn_changes: 0
     })
     expect(database.prepare("SELECT * FROM session WHERE session_id = 'old-a'").get()).toEqual({ ...sessionBefore, receive_messages: 1 })
     expect(database.prepare('SELECT COUNT(*) AS count FROM session_message').get()).toEqual({ count: 0 })
@@ -708,6 +714,86 @@ it('adds messages between sessions at version 26: off for every existing workspa
     expect(database.prepare('SELECT COUNT(*) AS count FROM session_message_pair').get()).toEqual({ count: 0 })
     expect(database.pragma('foreign_key_check')).toEqual([])
     initializeDatabase(database, '2026-10-13T02:00:00.000Z')
-    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 26 })
+    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 27 })
+  } finally { database.close() }
+})
+
+it('adds turn changes at version 27: off for every existing workspace, four tables that name no file (Epic 69)', () => {
+  const database = new BetterSqlite3(':memory:')
+  const at = '2026-10-13T00:00:00.000Z'
+  try {
+    // A copy of a version-26 database with a workspace, a session and a message the owner already had.
+    for (const migration of DATABASE_MIGRATIONS.filter((item) => item.version <= 26)) {
+      database.exec(migration.sql)
+      database.prepare('INSERT INTO schema_migration VALUES (?, ?)').run(migration.version, at)
+    }
+    const insertSession = database.prepare(
+      `INSERT INTO session(session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position)
+       VALUES (?, ?, ?, '/work', '/bin/bash', '[]', 1, ?, ?)`
+    )
+    insertSession.run('old-a', DEFAULT_WORKSPACE_ID, 'A', at, 0)
+    insertSession.run('old-b', DEFAULT_WORKSPACE_ID, 'B', at, 1)
+    database.prepare('UPDATE workspace SET session_messages = 1 WHERE workspace_id = ?').run(DEFAULT_WORKSPACE_ID)
+    database.prepare(
+      `INSERT INTO session_message(message_id, workspace_id, sender_session_id, receiver_session_id, sender_root, stamp, text,
+         sent_at, expires_at, state) VALUES ('m-1', ?, 'old-a', 'old-b', '/work', '[stamp]', 'text', ?, ?, 'waiting')`
+    ).run(DEFAULT_WORKSPACE_ID, at, at)
+    const workspaceBefore = database.prepare('SELECT * FROM workspace WHERE workspace_id = ?').get(DEFAULT_WORKSPACE_ID) as object
+    const sessionBefore = database.prepare("SELECT * FROM session WHERE session_id = 'old-a'").get() as object
+    const messageBefore = database.prepare("SELECT * FROM session_message WHERE message_id = 'm-1'").get() as object
+
+    initializeDatabase(database, '2026-10-13T01:00:00.000Z')
+
+    expect(database.prepare('SELECT * FROM workspace WHERE workspace_id = ?').get(DEFAULT_WORKSPACE_ID)).toEqual({ ...workspaceBefore, turn_changes: 0 })
+    expect(database.prepare("SELECT * FROM session WHERE session_id = 'old-a'").get()).toEqual(sessionBefore)
+    expect(database.prepare("SELECT * FROM session_message WHERE message_id = 'm-1'").get()).toEqual(messageBefore)
+    for (const table of ['turn_capture', 'turn_record', 'turn_capture_reference', 'turn_removal_job']) {
+      expect(database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 })
+    }
+    // No column of the four tables can hold a file's name or its bytes: a capture's rows name the root and commits.
+    const columns = (table: string): string[] => (database.prepare(`SELECT name FROM pragma_table_info('${table}') ORDER BY cid`).all() as Array<{ name: string }>).map((row) => row.name)
+    expect(columns('turn_capture')).toEqual(['capture_id', 'session_id', 'work_tree', 'scan_started_ms', 'scan_ended_ms', 'head_start', 'head_end', 'state', 'bound', 'size'])
+    expect(columns('turn_record')).toEqual(['turn_id', 'number', 'session_id', 'incarnation_id', 'foreground', 'app', 'app_version', 'conversation', 'app_turn_id',
+      'named_folder', 'work_tree', 'state', 'end_kind', 'started_at', 'ended_at', 'totals_state', 'totals_json', 'wording', 'labels_json'])
+    expect(columns('turn_capture_reference')).toEqual(['turn_id', 'role', 'capture_id'])
+    expect(columns('turn_removal_job')).toEqual(['job_id', 'session_id', 'work_tree', 'capture_id', 'created_at', 'attempts', 'last_tried_at'])
+
+    const capture = database.prepare(
+      `INSERT INTO turn_capture(capture_id, session_id, work_tree, scan_started_ms, scan_ended_ms, state, size) VALUES (?, 'old-a', '/work', 1, 2, ?, ?)`
+    )
+    capture.run('c-1', 'whole', 10)
+    capture.run('c-2', 'incomplete', 0)
+    expect(() => capture.run('c-3', 'gone', 0)).toThrow(/CHECK constraint/)
+    expect(() => capture.run('c-3', 'whole', -1)).toThrow(/CHECK constraint/)
+    const turn = database.prepare(
+      `INSERT INTO turn_record(turn_id, number, session_id, foreground, app, state, started_at, totals_state) VALUES (?, ?, 'old-a', '1:2:3', 'codex', ?, ?, ?)`
+    )
+    turn.run('t-1', 1, 'open', at, 'none')
+    expect(() => turn.run('t-2', 1, 'closed', at, 'complete')).toThrow(/UNIQUE constraint/)
+    expect(() => turn.run('t-2', 2, 'ended', at, 'complete')).toThrow(/CHECK constraint/)
+    expect(() => turn.run('t-2', 2, 'closed', at, 'zero')).toThrow(/CHECK constraint/)
+    expect(() => turn.run('t-2', 0, 'closed', at, 'none')).toThrow(/CHECK constraint/)
+    const refer = database.prepare('INSERT INTO turn_capture_reference(turn_id, role, capture_id) VALUES (?, ?, ?)')
+    refer.run('t-1', 'before', 'c-1')
+    refer.run('t-1', 'after', 'c-2')
+    expect(() => refer.run('t-1', 'before', 'c-2')).toThrow(/UNIQUE constraint/)
+    expect(() => refer.run('t-1', 'between', 'c-2')).toThrow(/CHECK constraint/)
+    expect(() => refer.run('t-1', 'after', 'no-such-capture')).toThrow(/constraint/)
+    // A job names a capture with its work tree, or a session's whole folder; it outlives the session it names.
+    const job = database.prepare('INSERT INTO turn_removal_job(session_id, work_tree, capture_id, created_at) VALUES (?, ?, ?, ?)')
+    job.run('old-a', '/work', 'c-9', at)
+    job.run('old-a', null, null, at)
+    expect(() => job.run('old-a', '/work', null, at)).toThrow(/CHECK constraint/)
+    expect(() => database.prepare('UPDATE workspace SET turn_changes = 2').run()).toThrow(/CHECK constraint/)
+    // Any delete of the session takes its turns, their references and its captures with it; the jobs stay.
+    database.prepare("DELETE FROM session_message WHERE sender_session_id = 'old-a'").run()
+    database.prepare("DELETE FROM session WHERE session_id = 'old-a'").run()
+    for (const table of ['turn_capture', 'turn_record', 'turn_capture_reference']) {
+      expect(database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 })
+    }
+    expect(database.prepare('SELECT COUNT(*) AS count FROM turn_removal_job').get()).toEqual({ count: 2 })
+    expect(database.pragma('foreign_key_check')).toEqual([])
+    initializeDatabase(database, '2026-10-13T02:00:00.000Z')
+    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 27 })
   } finally { database.close() }
 })

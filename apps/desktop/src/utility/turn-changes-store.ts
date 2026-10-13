@@ -7,7 +7,7 @@
 // repository and borrows nothing from one, so a kept capture reads whole after the owner's repository
 // is moved, deleted or garbage-collected (R69-NFR3).
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -84,6 +84,10 @@ export interface TurnCache {
 }
 
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+const WORK_TREE_KEY = /^[0-9a-f]{24}$/
+
+/** Whether a session id or a capture id can name a folder or a file of the store, and nothing above it. */
+export const isStoreSegment = (name: string): boolean => SEGMENT.test(name)
 
 export const sha256 = (bytes: Uint8Array | string): string => createHash('sha256').update(bytes).digest('hex')
 export const privateFolder = (path: string): void => {
@@ -100,10 +104,12 @@ export class TurnStore {
   private stored: number | null = null
   private removing: Promise<void> = Promise.resolve()
 
-  constructor(dataRoot: string, session: string, root: string) {
+  /** `key` names the store's folder directly, for a store found on disk whose root is not known. */
+  constructor(dataRoot: string, session: string, root: string, key: string = workTreeKey(root)) {
     if (!SEGMENT.test(session)) throw new Error('a session id that cannot name a folder')
+    if (!WORK_TREE_KEY.test(key)) throw new Error('a work tree key that cannot name a folder')
     this.root = root
-    this.directory = join(dataRoot, TURN_STORE_FOLDER, session, workTreeKey(root))
+    this.directory = join(dataRoot, TURN_STORE_FOLDER, session, key)
   }
 
   exists(): boolean {
@@ -134,6 +140,17 @@ export class TurnStore {
       return record.format === TURN_STORE_FORMAT && record.id === id ? record : null
     } catch {
       return null
+    }
+  }
+
+  /** When a published capture's scan ended, as its own record says; the time its file was written when the record cannot be read. */
+  captureTime(id: string): number {
+    const record = this.record(id)
+    if (record) return record.endedAt
+    try {
+      return lstatSync(this.capturePath(id)).mtimeMs
+    } catch {
+      return 0
     }
   }
 
@@ -215,6 +232,70 @@ export class TurnStore {
     this.removing = this.removing.then(() => rm(to, { recursive: true, force: true })).catch(() => undefined)
   }
 
+  /**
+   * Removes published captures and every stored byte no remaining capture needs. With no capture left
+   * the whole folder goes. Nothing may be staged for this store meanwhile: the caller sees to that.
+   * Returns how many captures are still kept. Throws when something could not be removed.
+   */
+  removeCaptures(ids: readonly string[]): number {
+    for (const id of ids) if (SEGMENT.test(id)) rmSync(this.capturePath(id), { force: true })
+    this.forget()
+    const kept = this.captures()
+    if (kept.length === 0) {
+      rmSync(this.directory, { recursive: true, force: true })
+      return 0
+    }
+    // What the kept captures need: every folder list and every file's bytes reachable from their trees.
+    const trees = new Set<string>()
+    const blobs = new Set<string>()
+    const walk = (hash: string): void => {
+      if (trees.has(hash)) return
+      trees.add(hash)
+      for (const row of this.tree(hash).values()) {
+        if (row[1] === 'd') walk(row[2])
+        else if (row[1] === 'f') blobs.add(row[2])
+      }
+    }
+    try {
+      for (const id of kept) {
+        const record = this.record(id)
+        if (!record) return kept.length
+        if (record.tree) walk(record.tree)
+      }
+    } catch {
+      // A kept capture or one of its lists cannot be read: what it needs is not known, so no byte is taken from under it.
+      return kept.length
+    }
+    for (const [kind, needed] of [['trees', trees], ['blobs', blobs]] as const) {
+      const base = join(this.directory, 'objects', kind)
+      for (const prefix of existsSync(base) ? readdirSync(base) : []) {
+        for (const rest of readdirSync(join(base, prefix))) {
+          if (!needed.has(`${prefix}${rest}`)) unlinkSync(join(base, prefix, rest))
+        }
+      }
+    }
+    // What the newest capture saw is of no use once that capture is gone: the next one reads every file.
+    // Where it stays, the number of bytes written down with it is counted anew.
+    const cachePath = join(this.directory, 'cache.json')
+    try {
+      const saved = JSON.parse(readFileSync(cachePath, 'utf8')) as { capture?: unknown; stored?: number }
+      if (typeof saved.capture !== 'string' || !kept.includes(saved.capture)) rmSync(cachePath, { force: true })
+      else {
+        saved.stored = this.size('objects')
+        writeFileSync(`${cachePath}.new`, JSON.stringify(saved), { mode: 0o600 })
+        renameSync(`${cachePath}.new`, cachePath)
+      }
+    } catch {
+      rmSync(cachePath, { force: true })
+    }
+    return kept.length
+  }
+
+  /** What a crash left behind: captures that were never published, and cancelled ones on their way out. Only when none is being taken. */
+  clearLeftovers(): void {
+    for (const part of ['staging', 'trash']) rmSync(join(this.directory, part), { recursive: true, force: true })
+  }
+
   /** Resolves when every discarded capture's bytes are gone. */
   settled(): Promise<void> {
     return this.removing
@@ -239,4 +320,22 @@ export class TurnStore {
     walk(join(this.directory, part))
     return total
   }
+}
+
+/** Every store under the data root, as its two folder names; a name that is not one of BMN's own is left alone. */
+export function listTurnStores(dataRoot: string): Array<{ session: string; key: string }> {
+  const found: Array<{ session: string; key: string }> = []
+  const base = join(dataRoot, TURN_STORE_FOLDER)
+  const folders = (path: string): string[] => {
+    try {
+      return readdirSync(path, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+    } catch {
+      return []
+    }
+  }
+  for (const session of folders(base)) {
+    if (!SEGMENT.test(session)) continue
+    for (const key of folders(join(base, session))) if (WORK_TREE_KEY.test(key)) found.push({ session, key })
+  }
+  return found
 }

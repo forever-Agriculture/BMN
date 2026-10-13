@@ -1,3 +1,4 @@
+// MODULE: store-schema.ts - the tables BMN owns in its database and every migration that made them, in order
 import { DEFAULT_WORKSPACE_ID } from '@bmn/protocol'
 
 export { DEFAULT_WORKSPACE_ID }
@@ -19,6 +20,10 @@ export const STORY_SCHEMA_TABLES = Object.freeze([
   'session_message',
   'session_message_pair',
   'telegram_message',
+  'turn_capture',
+  'turn_capture_reference',
+  'turn_record',
+  'turn_removal_job',
   'workspace',
   'workspace_layout'
 ] as const)
@@ -657,5 +662,70 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
         PRIMARY KEY (workspace_id, first_session_id, second_session_id),
         CHECK (first_session_id < second_session_id)
       );`
+  },
+  {
+    // Epic 69: what a turn changed. One switch per workspace, off for every existing one. `turn_capture` is one
+    // scan of a work tree, kept in BMN's own store under the data root; `turn_record` is one turn of an agent;
+    // `turn_capture_reference` says which turn needs which capture, so a scan two turns share goes only when the
+    // second has gone. `turn_removal_job` names bytes whose rows are already deleted: it is written in the
+    // deleting transaction and cleared when the bytes are gone, so a crash in between loses no removal. It
+    // deliberately references no session: the session it names may be the row just deleted. No table holds a
+    // file's name or content; a capture's rows name the work tree's root and commits only.
+    version: 27,
+    sql: `ALTER TABLE workspace ADD COLUMN turn_changes INTEGER NOT NULL DEFAULT 0 CHECK (turn_changes IN (0, 1));
+      CREATE TABLE turn_capture (
+        capture_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES session(session_id) ON DELETE CASCADE,
+        work_tree TEXT NOT NULL,
+        scan_started_ms INTEGER NOT NULL,
+        scan_ended_ms INTEGER NOT NULL,
+        head_start TEXT,
+        head_end TEXT,
+        state TEXT NOT NULL CHECK (state IN ('whole', 'incomplete')),
+        bound TEXT,
+        size INTEGER NOT NULL CHECK (size >= 0)
+      );
+      CREATE INDEX turn_capture_by_session ON turn_capture(session_id, scan_started_ms);
+      CREATE TABLE turn_record (
+        turn_id TEXT PRIMARY KEY,
+        number INTEGER NOT NULL CHECK (number > 0),
+        session_id TEXT NOT NULL REFERENCES session(session_id) ON DELETE CASCADE,
+        incarnation_id TEXT,
+        foreground TEXT NOT NULL,
+        app TEXT NOT NULL,
+        app_version TEXT,
+        conversation TEXT,
+        app_turn_id TEXT,
+        named_folder TEXT,
+        work_tree TEXT,
+        state TEXT NOT NULL CHECK (state IN ('open', 'provisional', 'closed')),
+        end_kind TEXT,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        totals_state TEXT NOT NULL CHECK (totals_state IN ('none', 'complete', 'partial', 'not-complete')),
+        totals_json TEXT CHECK (totals_json IS NULL OR json_valid(totals_json)),
+        wording TEXT,
+        labels_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(labels_json)),
+        UNIQUE (session_id, number)
+      );
+      CREATE INDEX turn_record_by_end ON turn_record(ended_at, started_at);
+      CREATE TABLE turn_capture_reference (
+        turn_id TEXT NOT NULL REFERENCES turn_record(turn_id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK (role IN ('before', 'after')),
+        capture_id TEXT NOT NULL REFERENCES turn_capture(capture_id) ON DELETE CASCADE,
+        PRIMARY KEY (turn_id, role)
+      );
+      CREATE INDEX turn_capture_reference_by_capture ON turn_capture_reference(capture_id);
+      CREATE TABLE turn_removal_job (
+        job_id INTEGER PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        work_tree TEXT,
+        capture_id TEXT,
+        created_at TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_tried_at TEXT,
+        CHECK ((work_tree IS NULL) = (capture_id IS NULL))
+      );
+      CREATE INDEX turn_removal_job_by_session ON turn_removal_job(session_id);`
   }
 ])

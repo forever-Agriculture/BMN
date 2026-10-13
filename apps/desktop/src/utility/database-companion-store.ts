@@ -49,6 +49,7 @@ import {
 import { isAbsolute, normalize } from 'node:path'
 import type { DatabaseConnection } from './database-initialization'
 import { MESSAGE_OPERATIONS } from './database-message-store'
+import { TURN_OPERATIONS } from './database-turn-store'
 import { selectSession, selectWorkspace, WorkspaceStoreError } from './database-workspace-store'
 import { clipOutsideSecrets } from './secret-mask'
 
@@ -1536,7 +1537,8 @@ export const COMPANION_OPERATIONS = Object.freeze({
   switchHealthAlertsOff,
   getRawSetting,
   putRawSetting,
-  ...MESSAGE_OPERATIONS
+  ...MESSAGE_OPERATIONS,
+  ...TURN_OPERATIONS
 })
 
 export type CompanionOperations = typeof COMPANION_OPERATIONS

@@ -1,3 +1,4 @@
+// MODULE: pty-host.ts - the host process: starts the database, sessions, the companion service and their workers, and answers the app's requests
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
@@ -64,6 +65,9 @@ import { openCodeHistoryAdapter } from './agent-history-opencode'
 import { cursorHistoryAdapter } from './agent-history-cursor'
 import { conversationReferenceExists } from './conversation-binding'
 import type { OpenReadOnly } from './agent-history-store'
+import { TurnChangesClient } from './turn-changes-client'
+import { TurnRetention } from './turn-changes-retention'
+import { TURN_STORE_FOLDER } from './turn-changes-store'
 import {
   HostControlError,
   PersistedSessionStartError,
@@ -373,6 +377,22 @@ async function start(): Promise<void> {
   companionHolder.current = companion
   await companion.start()
   const companionService = companion
+  // Epic 69: the thread that captures work trees starts with its first request. The sweep removes what
+  // turn changes may no longer keep, now (after the archive purge wrote its jobs) and every hour.
+  const turnChanges = new TurnChangesClient(join(__dirname, 'turn-changes-worker.js'), { dataRoot: roots.data, home: agentHome() })
+  new TurnRetention({
+    database: {
+      keepDays: async () => (await database.companion('getSettings')).agentHistory.confirmedKeepDays,
+      sweep: (sweep) => database.companion('sweepTurns', sweep),
+      jobs: () => database.companion('listTurnRemovalJobs'),
+      finish: (jobId) => database.companion('finishTurnRemovalJob', jobId),
+      fail: (failure) => database.companion('failTurnRemovalJob', failure),
+      named: () => database.companion('namedTurnCaptures')
+    },
+    keeper: turnChanges,
+    storePresent: () => existsSync(join(roots.data, TURN_STORE_FOLDER)),
+    log: (line) => process.stderr.write(line)
+  }).start()
   const launchSets = new LaunchSetCoordinator({
     getSet: (workspaceId, setId) => database.getLaunchSet(workspaceId, setId),
     listWorkspaces: () => database.listWorkspaces(),

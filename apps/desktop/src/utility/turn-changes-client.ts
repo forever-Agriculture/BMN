@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto'
 import { Worker, type WorkerOptions } from 'node:worker_threads'
 import { refusal, type TurnRefusal } from './turn-changes-capture'
 import type { TurnComparison, TurnDifference } from './turn-changes-compare'
-import type { TurnCaptureAnswer, TurnCaptureRequest, TurnChangesPort, TurnPairRequest } from './turn-changes-engine'
+import type {
+  TurnCaptureAnswer, TurnCaptureRequest, TurnChangesPort, TurnPairRequest, TurnStoreInventory, TurnStoreKeeper, TurnStoreUsage
+} from './turn-changes-engine'
 import type { TurnCaptureRecord } from './turn-changes-store'
 import type { TurnWorkerData, TurnWorkerRequest, TurnWorkerResponse } from './turn-changes-worker'
 
@@ -22,7 +24,7 @@ interface Pending {
 
 type Body = TurnWorkerRequest extends infer Request ? (Request extends { id: number } ? Omit<Request, 'id'> : never) : never
 
-export class TurnChangesClient implements TurnChangesPort {
+export class TurnChangesClient implements TurnChangesPort, TurnStoreKeeper {
   private readonly entry: string | URL
   private readonly data: TurnWorkerData
   private readonly workerOptions: WorkerOptions
@@ -95,6 +97,26 @@ export class TurnChangesClient implements TurnChangesPort {
 
   async forget(session: string): Promise<void> {
     await this.request({ operation: 'forget', params: { session } })
+  }
+
+  async removeCaptures(request: { session: string; key: string; captures: string[] }): Promise<void> {
+    await this.request({ operation: 'remove-captures', params: request })
+  }
+
+  async removeSession(session: string): Promise<void> {
+    await this.request({ operation: 'remove-session', params: { session } })
+  }
+
+  async clearLeftovers(): Promise<void> {
+    await this.request({ operation: 'clear-leftovers' })
+  }
+
+  inventory(): Promise<TurnStoreInventory[]> {
+    return this.request({ operation: 'inventory' })
+  }
+
+  usage(): Promise<TurnStoreUsage> {
+    return this.request({ operation: 'usage' })
   }
 
   compare(request: TurnPairRequest, signal?: AbortSignal): Promise<TurnComparison | TurnRefusal> {

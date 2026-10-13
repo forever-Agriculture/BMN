@@ -2,6 +2,7 @@
 import { DEFAULT_WORKSPACE_ID } from '@bmn/protocol'
 import { getSettings } from './database-companion-store'
 import type { DatabaseConnection } from './database-initialization'
+import { deleteSessionTurns } from './database-turn-store'
 
 export interface ArchivePurgeResult {
   sessionIds: string[]
@@ -64,6 +65,8 @@ export function purgeExpiredArchives(database: DatabaseConnection, now: string):
     for (const statement of deleteChildren) statement.run(sessionId)
     deleteMessages.run(sessionId, sessionId)
     deletePairs.run(sessionId, sessionId)
+    // Epic 69: its turns and captures go here, with one job for its folder of captured files.
+    deleteSessionTurns(database, sessionId, now)
   }
   const unlinkArtifact = database.prepare('UPDATE artifact SET session_id = NULL WHERE artifact_id = ?')
   const deleteArtifact = database.prepare('DELETE FROM artifact WHERE artifact_id = ?')

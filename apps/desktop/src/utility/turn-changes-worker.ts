@@ -11,7 +11,9 @@ export type TurnWorkerRequest =
   | { id: number; operation: 'capture'; params: TurnCaptureRequest }
   | { id: number; operation: 'publish' | 'discard'; params: { capture: string } }
   | { id: number; operation: 'cancel'; params: { job: string } }
-  | { id: number; operation: 'forget'; params: { session: string } }
+  | { id: number; operation: 'forget' | 'remove-session'; params: { session: string } }
+  | { id: number; operation: 'remove-captures'; params: { session: string; key: string; captures: string[] } }
+  | { id: number; operation: 'clear-leftovers' | 'inventory' | 'usage' }
   /** `stop` is one shared number the host sets to 1: a comparison cannot hear a message while it runs. */
   | { id: number; operation: 'compare'; params: TurnPairRequest; stop: SharedArrayBuffer }
   | { id: number; operation: 'difference'; params: TurnPairRequest & { path: string }; stop: SharedArrayBuffer }
@@ -33,6 +35,11 @@ async function answer(request: TurnWorkerRequest): Promise<unknown> {
     case 'discard': return engine.discard(request.params.capture)
     case 'cancel': return engine.cancel(request.params.job)
     case 'forget': return engine.forget(request.params.session)
+    case 'remove-session': return engine.removeSession(request.params.session)
+    case 'remove-captures': return engine.removeCaptures(request.params)
+    case 'clear-leftovers': return engine.clearLeftovers()
+    case 'inventory': return engine.inventory()
+    case 'usage': return engine.usage()
     case 'compare': return engine.compare(request.params, stopped(request.stop))
     case 'difference': return engine.difference(request.params, stopped(request.stop))
   }

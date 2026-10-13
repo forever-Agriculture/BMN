@@ -53,6 +53,24 @@ describe('the turn changes worker thread', () => {
     await client.forget('s-one')
     expect(await client.compare(pair)).toMatchObject({ state: 'compared', totals: { files: 1, added: 1, removed: 0 } })
     expect(await client.compare({ ...pair, b: 'no-such-capture' })).toMatchObject({ state: 'unavailable' })
+
+    // Keeping the store in order goes through the same thread: counts and ids, then removal.
+    const [store] = await client.inventory()
+    expect(store).toMatchObject({ session: 's-one', captures: [{ id: record(staged).id }, { id: two.id }] })
+    const before = await client.usage()
+    expect(before.all).toBeGreaterThan(0)
+    expect(before.sessions).toEqual({ 's-one': before.all })
+    await client.removeCaptures({ session: 's-one', key: store!.key, captures: [record(staged).id] })
+    expect((await client.inventory())[0]?.captures.map((capture) => capture.id)).toEqual([two.id])
+    expect((await client.usage()).all).toBeLessThan(before.all)
+    expect(await client.compare(pair)).toMatchObject({ state: 'unavailable' })
+    await client.clearLeftovers()
+    await client.removeSession('s-one')
+    expect(await client.inventory()).toEqual([])
+    expect(await client.usage()).toEqual({ sessions: {}, all: 0 })
+    // A name that could reach outside the store is refused, with the fixed words.
+    await expect(client.removeSession('../s-one')).rejects.toBeInstanceOf(TurnChangesUnavailable)
+    await expect(client.removeCaptures({ session: 's-one', key: '../../x', captures: [] })).rejects.toBeInstanceOf(TurnChangesUnavailable)
   })
 
   it('stops a comparison and one file\'s difference within 100 ms, while the host\'s own thread stays free', async () => {

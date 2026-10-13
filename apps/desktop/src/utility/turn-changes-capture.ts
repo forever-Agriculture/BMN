@@ -26,7 +26,10 @@ export const TURN_LIMITS = Object.freeze({
   entries: 20_000,
   fileBytes: 10 * MiB,
   readBytes: 100 * MiB,
+  /** One session's stores, all its work trees together. */
   storeBytes: 1024 * MiB,
+  /** Every session's stores together. */
+  allStoresBytes: 5 * 1024 * MiB,
   captureMs: 2_000,
   compareMs: 2_000
 })
@@ -100,6 +103,11 @@ export interface CaptureOptions {
   store?: TurnStore
   /** The same, for a caller that learns the root only from the capture. */
   storeFor?: (root: string) => TurnStore
+  /**
+   * How many more bytes this capture may store, as the caller counted them on disk: what is left of
+   * the session's bound and of the bound of all stores. Without it, only this one store is counted.
+   */
+  room?: number
   observeGit?: (call: TurnGitCall) => void
 }
 
@@ -471,6 +479,7 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
     const base = options.base ? store.record(options.base) : null
     const basePaths = base?.tree ? (cache?.capture === base.id ? cache.paths : new Set(leaves(store, base.tree))) : null
     const stored = store.storedBytes()
+    const room = options.room ?? limits.storeBytes - stored
     phase('cache')
 
     // 1. What belongs, listed anew. Each record is looked at (lstat) as it arrives. A file that is as it
@@ -598,7 +607,7 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
     let bytesStored = 0
     let slice = performance.now()
     const stage = (kind: 'blobs' | 'trees', hash: string, bytes: Uint8Array): boolean => {
-      if (stored + bytesStored + bytes.length > limits.storeBytes) return false
+      if (bytesStored + bytes.length > room) return false
       if (!staged) {
         privateFolder(join(staging, 'blobs'))
         privateFolder(join(staging, 'trees'))

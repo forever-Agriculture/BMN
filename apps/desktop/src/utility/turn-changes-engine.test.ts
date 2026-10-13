@@ -1,8 +1,8 @@
-// MODULE: turn-changes-engine.test.ts - the order of a session's captures, "busy" between sessions, staged captures that are published, discarded or let go, and a capture for a session's terminal
+// MODULE: turn-changes-engine.test.ts - the order of a session's captures, "busy" between sessions, staged captures that are published, discarded or let go, both bounds of the store's size, and a capture for a session's terminal
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isCapturing, type TurnRefusal } from './turn-changes-capture'
-import { TurnChangesEngine, inProcessPort, type TurnCaptureAnswer, type TurnCaptureRequest } from './turn-changes-engine'
+import { isCapturing, type TurnLimits, type TurnRefusal } from './turn-changes-capture'
+import { TurnChangesEngine, inProcessKeeper, inProcessPort, type TurnCaptureAnswer, type TurnCaptureRequest } from './turn-changes-engine'
 import { captureSessionWorkTree } from './turn-changes-service'
 import { TurnStore, type TurnCaptureRecord } from './turn-changes-store'
 import { filesUnder, scratch, sleep, write, type Place } from './test-fixtures/turn-changes/fixtures'
@@ -150,6 +150,67 @@ describe('the engine of turn changes', () => {
     const staged = await port.capture({ job: 'job-2', session: 's-one', folder: at.repo, publish: false }, controller.signal)
     controller.abort()
     expect(await port.publish(record(staged).id)).not.toBeNull()
+  })
+})
+
+describe('the space the stores may take', () => {
+  const FULL = { state: 'incomplete', record: { state: 'incomplete', bound: 'store full', tree: null, bytesStored: 0 } }
+  /** A place whose repository holds one more file, and an engine with these bounds over the place's data root. */
+  function bounded(name: string, limits: Partial<TurnLimits>, dataRoot?: string): { at: Place; engine: TurnChangesEngine } {
+    const at = scratch(name)
+    places.push(at)
+    write(at.repo, 'a.txt', 'x'.repeat(4_000))
+    const engine = new TurnChangesEngine({ dataRoot: dataRoot ?? at.dataRoot, home: at.home, limits })
+    engines.push(engine)
+    return { at, engine }
+  }
+  const take = (engine: TurnChangesEngine, session: string, folder: string, job = `job-${session}-${folder}`): Promise<TurnCaptureAnswer> =>
+    engine.capture({ job, session, folder, publish: true })
+  /** What one capture of such a repository stores: its files' bytes and its folder lists. */
+  async function need(): Promise<number> {
+    const probe = bounded('bound-probe', {})
+    return record(await take(probe.engine, 's-one', probe.at.repo)).bytesStored
+  }
+
+  it('lets one session store up to its bound, all its work trees together, and ends a capture that would pass it as "incomplete: store full"', async () => {
+    const one = await need()
+    expect(one).toBeGreaterThan(4_000)
+    for (const [bound, state] of [[2 * one, 'whole'], [2 * one - 1, 'incomplete']] as const) {
+      const first = bounded(`session-${state}-a`, { storeBytes: bound })
+      const second = bounded(`session-${state}-b`, {})
+      expect(await take(first.engine, 's-one', first.at.repo)).toMatchObject({ state: 'whole' })
+      // The same session in another work tree: its copy there counts against the same bound.
+      const answer = await take(first.engine, 's-one', second.at.repo)
+      expect(answer).toMatchObject(state === 'whole' ? { state: 'whole' } : FULL)
+      // Another session has a bound of its own.
+      expect(await take(first.engine, 's-two', second.at.repo)).toMatchObject({ state: 'whole' })
+      expect((await inProcessKeeper(first.engine).usage()).sessions).toEqual({ 's-one': state === 'whole' ? 2 * one : one, 's-two': one })
+    }
+  })
+
+  it('lets all sessions together store up to their bound, each counting its own copy, and removes nothing kept to make room', async () => {
+    const one = await need()
+    for (const [bound, state] of [[2 * one, 'whole'], [2 * one - 1, 'incomplete']] as const) {
+      const { at, engine } = bounded(`all-${state}`, { allStoresBytes: bound })
+      const kept = record(await take(engine, 's-one', at.repo))
+      // A second session in the same repository keeps its own copy of every file.
+      const answer = await take(engine, 's-two', at.repo)
+      expect(answer).toMatchObject(state === 'whole' ? { state: 'whole' } : FULL)
+      const keeper = inProcessKeeper(engine)
+      // A capture that ended "store full" is kept as that word and holds no byte.
+      expect(await keeper.usage()).toEqual(state === 'whole' ? { sessions: { 's-one': one, 's-two': one }, all: 2 * one } : { sessions: { 's-one': one, 's-two': 0 }, all: one })
+      expect(engine.store('s-one', at.repo).record(kept.id)?.state).toBe('whole')
+      if (state === 'whole') continue
+      // An engine that starts on this data root counts the same from the disk.
+      const again = new TurnChangesEngine({ dataRoot: at.dataRoot, home: at.home, limits: { allStoresBytes: bound } })
+      engines.push(again)
+      expect(await inProcessKeeper(again).usage()).toEqual({ sessions: { 's-one': one, 's-two': 0 }, all: one })
+      expect(await take(again, 's-two', at.repo, 'job-again')).toMatchObject(FULL)
+      // What is counted is what is on disk after a removal: once the first session's store has gone, the second fits.
+      await keeper.removeSession('s-one')
+      expect(await take(engine, 's-two', at.repo, 'job-after')).toMatchObject({ state: 'whole' })
+      expect(await keeper.usage()).toEqual({ sessions: { 's-two': one }, all: one })
+    }
   })
 })
 

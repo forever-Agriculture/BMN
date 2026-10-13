@@ -206,6 +206,33 @@ trace). The app differs from the measured script in three places, each the stric
 - A path that is only in the later capture is "added" when the file was born at least 1 ms after
   the earlier scan began; a file born in that very millisecond reads "entered what is covered".
 
+### How long a copy stays
+
+The copies are real files' bytes, secrets included, under `<data root>/turn-changes/<session>/`,
+one folder per work tree, in private folders. BMN's database lists every capture and every turn
+(schema version 27: `turn_capture`, `turn_record`, `turn_capture_reference`, `turn_removal_job`;
+no row holds a file's name or content).
+
+- **A turn** is kept as many days after its end as the confirmed Keep agent history setting says
+  (after its start when it has no end). Never, or no confirmed limit, keeps every turn; a shorter
+  limit that was picked but not confirmed does not apply. A turn whose time has passed is removed
+  whole.
+- **A capture** stays while a kept turn refers to it, so a scan two turns share goes only when the
+  second has gone. With it goes every stored byte that no remaining capture needs.
+- **The sweep** runs when BMN starts and every hour. Rows are deleted in one transaction together
+  with a job that names their bytes; the bytes are removed after that, and the job is cleared when
+  they are gone. A crash in between, or a removal that fails, leaves the job, and the next sweep
+  tries again; meanwhile that session reads "Removal pending".
+- **A deleted session** takes its turns and captures in the deleting transaction, with one job for
+  its whole folder.
+- **At a start**, what a crash left of a capture that was never published is removed. A published
+  capture that no row names, as after a database restore, is left until it is older than the keep
+  limit by the time written in its own record, and is then removed.
+- **Space.** One session's stores hold at most 1 GiB and all stores 5 GiB, counted as the bytes of
+  files and folder lists on disk; two sessions in one repository each count their own copy. A
+  capture that would pass either ends "incomplete: store full". Nothing is removed before its time
+  to make room, and nothing outside `<data root>/turn-changes/` is touched.
+
 ## The apps
 
 ### How the test works
