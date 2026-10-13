@@ -152,6 +152,10 @@ describe('what leaves (64.1 AC1, AC2)', () => {
     expect(frame).toContain('Use web search and page reads only.')
     expect(frame).toContain('Answer with one JSON object and nothing else')
     expect(frame).toContain('A claim without a page is left out. Never guess')
+    // It asks for the page's own words: a view's formatting stays out, what the page shows stays in.
+    expect(frame).toContain('one unbroken run of the words a reader sees on that page, exactly as the page shows them')
+    expect(frame).toContain('keep every sign, number and name the page itself shows')
+    expect(frame).toContain('take another passage')
     for (const word of ['fable', 'Fable', home, 'roster', 'BMN']) expect(frame).not.toContain(word)
     // The command is the research form of the team's agent, from the folder BMN made, with a bare environment.
     const agent = readApproved().data.agents.find((entry) => entry.id === 'fable')!
@@ -212,59 +216,50 @@ describe('the answer and its marks (64.1 AC3)', () => {
     expect(reads).toBe(2)
   })
 
-  // Both agent apps hand their model a page as markdown, so a passage "copied word for word" can
-  // carry marks the page's own words do not have. The owner's two real questions of 2026-10-13 came
-  // back "not found" for that alone: a heading's ## on one, bold, a link and a table's bars on the other.
-  describe('a passage copied with the marks of markdown writing', () => {
-    const RELEASE = 'https://releases.example.org/v9.9.9'
-    const SCHEDULE = 'https://code.example.org/schedule'
-    const RAW = 'https://raw.example.org/schedule.md'
-    const pages: Record<string, string> = {
-      [RELEASE]: '<main><h2>Example v9.9.9 <span class="tag">Latest Stable</span></h2><p>Released <time>Jan 2, 2030</time> <span>5 days ago</span></p></main>',
-      [SCHEDULE]: [
-        '<table><tr><th>Release</th><th>Status</th><th>Codename</th><th>Starts</th><th>Ends</th></tr>',
-        '<tr><td>9.x</td><td><strong>Active</strong></td><td><a href="https://example.org/download/quartz/">Quartz</a></td><td>2030-01-02</td><td>2031-04-30</td></tr></table>',
-        '<ul><li>Fixes reach the <em>stable</em> line before any other.</li></ul>',
-        '<ol><li>Install it, then run <code>example --check</code> once.</li></ol>',
-        '<blockquote><p>Dates are subject to change without notice.</p></blockquote>',
-        '<p>Names such as snake_case stay as they are, and the code 23 is used by all of them.</p>',
-        '<p>See <a href="https://example.org/wiki/Quartz_(release)">the Quartz release notes</a> and <img alt="a badge" src="/badge.svg"> the build status page.</p>'
-      ].join('\n'),
-      [RAW]: '| [9.x][] | **Active** | [Quartz][] | 2030-01-02 | 2031-04-30 |\n'
-    }
-    const read = async (address: string): Promise<PageRead> => ({ ok: true, text: pages[address]! })
-    const markOf = async (source: string, passage: string) => (await markClaims([{ claim: 'a fact', source, passage }], { fetchPage: read }))[0]!.mark
+  // Both agent apps hand their model a page as markdown, so a passage can come back with marks the
+  // page's own words do not have. The owner's two real questions of 2026-10-13 did: a heading's ## on
+  // one, bold, a link and a table's bars on the other. A first repair took such marks away before
+  // comparing and gave "found" where a mark had meant something; so the comparison takes nothing
+  // away, and the frame asks for the page's visible words instead.
+  describe('a passage is found only as it was written', () => {
+    const SOURCE = 'https://code.example.org/schedule'
+    const markOn = async (page: string, passage: string) => (await markClaims([{ claim: 'a fact', source: SOURCE, passage }], { fetchPage: async () => ({ ok: true, text: page }) }))[0]!.mark
+    const RELEASE = '<main><h2>Example v9.9.9 <span class="tag">Latest Stable</span></h2><p>Released <time>Jan 2, 2030</time> <span>5 days ago</span></p></main>'
+    const SCHEDULE = [
+      '<table><tr><th>Release</th><th>Status</th><th>Codename</th><th>Starts</th><th>Ends</th></tr>',
+      '<tr><td>9.x</td><td><strong>Active</strong></td><td><a href="https://example.org/download/quartz/">Quartz</a></td><td>2030-01-02</td><td>2031-04-30</td></tr></table>',
+      '<ul><li>Fixes reach the <em>stable</em> line before any other.</li></ul>'
+    ].join('\n')
+    const words = (text: string): string => `<p>${text}</p>`
 
     it.each([
-      ['a heading (the owner\'s Luna question)', RELEASE, '## Example v9.9.9 Latest Stable Released Jan 2, 2030 5 days ago'],
-      ['bold, a link and a table\'s bars (the owner\'s Haiku question)', SCHEDULE, '**Active** | [Quartz](https://example.org/download/quartz/) | 2030-01-02 | 2031-04-30'],
-      ['a whole table row with its bars', SCHEDULE, '| 9.x | **Active** | [Quartz](https://example.org/download/quartz/) | 2030-01-02 | 2031-04-30 |'],
-      ['a table\'s head, its rule and a row', SCHEDULE, '| Release | Status | Codename | Starts | Ends |\n| --- | :---: | --- | --- | ---: |\n| 9.x | **Active** | [Quartz][] | 2030-01-02 | 2031-04-30 |'],
-      ['a bullet and emphasis', SCHEDULE, '- Fixes reach the *stable* line before any other.'],
-      ['underscore emphasis after a star bullet', SCHEDULE, '* Fixes reach the _stable_ line before any other.'],
-      ['a numbered line and a code span', SCHEDULE, '1. Install it, then run `example --check` once.'],
-      ['a quoted line', SCHEDULE, '> Dates are subject to change without notice.'],
-      ['an escaped mark', SCHEDULE, 'Names such as snake\\_case stay as they are'],
-      ['a link whose address has brackets, and a picture', SCHEDULE, 'See [the Quartz release notes](https://example.org/wiki/Quartz_(release)) and ![a badge](/badge.svg) the build status page.'],
-      ['the same marks where the page itself is markdown', RAW, '| [9.x][] | **Active** | [Quartz][] | 2030-01-02 | 2031-04-30 |']
-    ])('finds %s', async (_name, source, passage) => {
-      expect(await markOf(source, passage)).toBe(MARKS.found)
+      ['a heading\'s words (the owner\'s Luna question, as the page shows it)', RELEASE, 'Example v9.9.9 Latest Stable Released Jan 2, 2030 5 days ago'],
+      ['a table row\'s words (the owner\'s Haiku question, as the page shows it)', SCHEDULE, 'Active Quartz 2030-01-02 2031-04-30'],
+      ['a list line\'s words', SCHEDULE, 'Fixes reach the stable line before any other.'],
+      ['marks that are the page\'s own words, where the page is markdown', '| [9.x][] | **Active** | [Quartz][] | 2030-01-02 | 2031-04-30 |\n', '| [9.x][] | **Active** | [Quartz][] | 2030-01-02 | 2031-04-30 |'],
+      ['a bar the page shows', words('Run alpha | beta to process incoming records.'), 'Run alpha | beta to process incoming records.'],
+      ['an underscore the page shows', words('Call _exit to terminate the process immediately.'), 'Call _exit to terminate the process immediately.'],
+      ['a sign the page shows', words('A reading &gt; -5 degrees is required for storage.'), '> -5 degrees is required for storage.']
+    ])('finds %s', async (_name, page, passage) => {
+      expect(await markOn(page, passage)).toBe(MARKS.found)
     })
 
     it.each([
-      ['other words under the same heading mark', RELEASE, '## Example v9.9.8 Latest Stable Released Jan 2, 2030'],
-      ['a link whose words the page does not show', SCHEDULE, '**Active** | [Onyx](https://example.org/download/quartz/) | 2030-01-02 | 2031-04-30'],
-      ['a mark between two digits, which is text', SCHEDULE, 'the code 2**3 is used by all of them'],
-      ['a mark standing alone between words, which is text', SCHEDULE, 'the code * 23 is used by all of them'],
-      ['two marks standing alone between words', SCHEDULE, 'the code ** 23 is used by all of them'],
-      ['a dash before a number, which may be a minus', SCHEDULE, '- 23 is used by all of them.'],
-      ['a dash, more spaces and a number', SCHEDULE, '-   23 is used by all of them.'],
-      ['a > before a number, which may be "more than"', SCHEDULE, '> 23 is used by all of them.'],
-      ['a >, more spaces and a number', SCHEDULE, '>   23 is used by all of them.'],
-      ['a passage that is little but marks', SCHEDULE, '[9.x](https://example.org/a-long-address/that-fills-the-passage-by-itself)'],
-      ['a passage that is only marks', SCHEDULE, '| --- | :---: | --- | --- | ---: |']
-    ])('does not find %s', async (_name, source, passage) => {
-      expect(await markOf(source, passage)).toBe(MARKS.missing)
+      ['a heading mark the page does not show (the owner\'s Luna question)', RELEASE, '## Example v9.9.9 Latest Stable Released Jan 2, 2030 5 days ago'],
+      ['bold, a link and bars the page does not show (the owner\'s Haiku question)', SCHEDULE, '**Active** | [Quartz](https://example.org/download/quartz/) | 2030-01-02 | 2031-04-30'],
+      ['a bullet and emphasis the page does not show', SCHEDULE, '- Fixes reach the *stable* line before any other.'],
+      ['other words under a heading', RELEASE, 'Example v9.9.8 Latest Stable Released Jan 2, 2030'],
+      // The reviewer's eight: each mark means something, and the page says the words without it.
+      ['an underscore that names another function', words('Call exit to terminate the process immediately.'), 'Call _exit to terminate the process immediately.'],
+      ['a bar that is a command\'s pipe', words('Run alpha beta to process incoming records.'), 'Run alpha | beta to process incoming records.'],
+      ['a > that says "more than"', words('-5 degrees is required for storage.'), '> -5 degrees is required for storage.'],
+      ['a dash that is a minus before wide digits', words('23 degrees is required for storage.'), '- ２３ degrees is required for storage.'],
+      ['brackets that are part of an expression', words('Use deny for every production request.'), 'Use [deny][allow] for every production request.'],
+      ['a picture\'s words inside code', words('Service is safe for public access.'), 'Service is `![not](/not.svg)` safe for public access.'],
+      ['a line of dashes that is the token itself', words('The required token is for every production request.'), 'The required token is\n---\nfor every production request.'],
+      ['a backslash that is part of a pattern', words('Use * to match a literal asterisk.'), 'Use `\\*` to match a literal asterisk.']
+    ])('does not find %s', async (_name, page, passage) => {
+      expect(await markOn(page, passage)).toBe(MARKS.missing)
     })
   })
 
