@@ -154,6 +154,7 @@ describe('what leaves (64.1 AC1, AC2)', () => {
     expect(frame).toContain('A claim without a page is left out. Never guess')
     // It asks for the page's own words: a view's formatting stays out, what the page shows stays in.
     expect(frame).toContain('one unbroken run of the words a reader sees on that page, exactly as the page shows them')
+    expect(frame).toContain('Your view of a page may add formatting of its own (heading, list, emphasis, link or table marks): that is not the page\'s text, so leave it out')
     expect(frame).toContain('keep every sign, number and name the page itself shows')
     expect(frame).toContain('take another passage')
     for (const word of ['fable', 'Fable', home, 'roster', 'BMN']) expect(frame).not.toContain(word)
