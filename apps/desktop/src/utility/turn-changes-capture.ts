@@ -85,6 +85,10 @@ export interface CaptureSeams {
   afterList?: (root: string) => void | Promise<void>
   beforeEntry?: (path: string, root: string) => void | Promise<void>
   duringRead?: (path: string) => void
+  /** After the entries, before the earlier capture's paths are looked at. */
+  beforeProbes?: () => void | Promise<void>
+  /** After the last Git command, before the lists are written. */
+  beforeLists?: () => void | Promise<void>
 }
 
 export interface CaptureOptions {
@@ -110,8 +114,9 @@ export interface CaptureOptions {
   /** The same, for a caller that learns the root only from the capture. */
   storeFor?: (root: string) => TurnStore
   /**
-   * How many more bytes this capture may store, as the caller counted them on disk: what is left of
-   * the session's bound and of the bound of all stores. Without it, only this one store is counted.
+   * How many more bytes this capture may put on disk, as the caller counted them there: what is left of
+   * the session's bound and of the bound of all stores. Its files, its lists, its own record and what its
+   * cache grows by all count. Without it, only this one store is counted.
    */
   room?: number
   observeGit?: (call: TurnGitCall) => void
@@ -130,6 +135,8 @@ export interface StagedCapture {
   record: TurnCaptureRecord
   tookMs: number
   phases: Record<string, number>
+  /** How many bytes publishing it puts on disk: its files and lists, its record, and what the cache grows by. */
+  adds: number
   publish: () => TurnCaptureRecord
   discard: () => void
 }
@@ -434,9 +441,14 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
   const caller = options.signal
   const cancelled = (): boolean => caller?.aborted === true
   const overtime = (): boolean => performance.now() - startedClock > limits.captureMs
-  /** The signal of one Git command: the caller's cancel, and what is left of the capture's time (never less than `least`). */
-  const gitSignal = (least = 0): AbortSignal => {
-    const left = Math.max(least, limits.captureMs - (performance.now() - startedClock))
+  // Reading ends a little before the capture's time, so that what was read is still listed and written
+  // inside it. A capture is whole only when everything, its last Git command and its lists included, was
+  // done in its time.
+  const closing = Math.min(250, limits.captureMs / 8)
+  const readingOver = (): boolean => performance.now() - startedClock > limits.captureMs - closing
+  /** The signal of one Git command: the caller's cancel, and what is left of the capture's time. */
+  const gitSignal = (): AbortSignal => {
+    const left = limits.captureMs - (performance.now() - startedClock)
     const timeout = AbortSignal.timeout(Math.max(1, Math.ceil(left)))
     return caller ? AbortSignal.any([caller, timeout]) : timeout
   }
@@ -496,8 +508,7 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
     const cache = store.loadCache()
     const base = options.base ? store.record(options.base) : null
     const basePaths = base?.tree ? (cache?.capture === base.id ? cache.paths : new Set(leaves(store, base.tree))) : null
-    const stored = store.storedBytes()
-    const room = options.room ?? limits.storeBytes - stored
+    const room = options.room ?? limits.storeBytes - store.keptBytes()
     phase('cache')
 
     // 1. What belongs, listed anew. Each record is looked at (lstat) as it arrives. A file that is as it
@@ -644,7 +655,7 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
         await yieldNow()
         slice = performance.now()
         if (cancelled()) return end('cancelled', 'cancelled')
-        if (overtime()) {
+        if (readingOver()) {
           met.bound = timeBound
           break
         }
@@ -658,12 +669,15 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
       }
       if (beforeEntry) await beforeEntry(path, root)
       let entry: TurnEntry
+      let stopped = false
       try {
         if (stat.isSymbolicLink()) {
           const text = decodeText(confined.readLink(path))
           entry = text === null ? notRead('not read') : ['l', text]
         } else if (stat.isDirectory()) {
-          entry = ['s', await nestedHead(git(gitSignal(250)), confined, root, path), item.gitlink ? 0 : 1]
+          const nested = await nestedHead(git(gitSignal()), confined, root, path)
+          stopped = nested.stopped
+          entry = ['s', nested.commit, item.gitlink ? 0 : 1]
         } else if (!stat.isFile()) {
           entry = notRead('not a regular file')
         } else if (stat.size > limits.fileBytes) {
@@ -694,8 +708,15 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
         // A link or a folder in the way, a file that went away, a file BMN may not open: not read.
         entry = notRead('not read')
       }
+      if (stopped) {
+        // Git did not say which commit it holds before the capture's time was up: nothing is written down for it.
+        if (cancelled()) return end('cancelled', 'cancelled')
+        met.bound = timeBound
+        break
+      }
       place(path, entry)
     }
+    await options.seams?.beforeProbes?.()
     if (cancelled()) return end('cancelled', 'cancelled')
     phase('entries')
 
@@ -704,6 +725,15 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
     const left: string[] = []
     if (basePaths && met.bound === null) {
       for (const path of basePaths) {
+        if (performance.now() - slice > 4) {
+          await yieldNow()
+          slice = performance.now()
+          if (cancelled()) return end('cancelled', 'cancelled')
+          if (overtime()) {
+            met.bound = timeBound
+            break
+          }
+        }
         if (paths.has(path)) continue
         // Looking only: a path that still names something was not removed, whatever it now is.
         if (lstatSync(prefix + path, { throwIfNoEntry: false }) === undefined) gone.push(path)
@@ -712,10 +742,13 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
     }
     phase('probes')
 
-    const head = await runTurnGit(git(gitSignal(250)), root, 'head')
+    const head = await runTurnGit(git(gitSignal()), root, 'head')
     if (cancelled()) return end('cancelled', 'cancelled')
     if (!sameFolder(root, { dev: established.device, ino: established.inode })) return end('unavailable', 'the root changed while it was captured')
+    if (met.bound === null && (head.stopped || overtime())) met.bound = timeBound
     phase('head')
+    await options.seams?.beforeLists?.()
+    if (cancelled()) return end('cancelled', 'cancelled')
 
     // 4. One list per folder, the deepest first, each named by the SHA-256 of its text. A folder in which
     // every entry is as it was, with as many entries as before, keeps the list it had. A capture that
@@ -740,6 +773,11 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
         }
       }
       for (const relative of [...folders.keys()].sort((one, other) => other.length - one.length)) {
+        if (performance.now() - slice > 4) {
+          await yieldNow()
+          slice = performance.now()
+          if (cancelled()) return end('cancelled', 'cancelled')
+        }
         const rows = folders.get(relative) as Map<string, TurnEntry | null>
         const kept = cache?.folders.get(relative)
         let hash: string
@@ -768,35 +806,64 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
         trees.add(hash)
       }
     }
+    // The lists are written whatever the clock says, so that what was read counts for the next capture; a
+    // capture whose time passed while they were written is not whole.
+    if (met.bound === null && overtime()) met.bound = timeBound
+    const nothingKept = (): void => {
+      hollow = true
+      Object.assign(counts, { entries: count, files: 0, links: 0, submodules: 0, tooLarge: 0, notRead: 0 })
+      drop()
+      bytesStored = 0
+    }
     if (!hollow) {
       const kinds = { f: 'files', l: 'links', s: 'submodules', x: 'tooLarge', u: 'notRead' } as const
       for (const rows of folders.values()) for (const entry of rows.values()) if (entry !== null) counts[kinds[entry[0]]] += 1
       counts.entries = counts.files + counts.links + counts.submodules + counts.tooLarge + counts.notRead
-    } else {
-      counts.entries = count
-      drop()
-      bytesStored = 0
-    }
+    } else nothingKept()
     phase('lists')
 
     const headEnd = head.stdout.trim()
-    const record: TurnCaptureRecord = {
+    const endedAt = Date.now()
+    const describe = (): TurnCaptureRecord => ({
       format: TURN_STORE_FORMAT, id, root, rootDevice: established.device, rootInode: established.inode, objectFormat: established.objectFormat,
-      startedAt, endedAt: Date.now(), headStart: established.head, headEnd: head.code === 0 && COMMIT.test(headEnd) ? headEnd : null,
+      startedAt, endedAt, headStart: established.head, headEnd: head.code === 0 && COMMIT.test(headEnd) ? headEnd : null,
       state: met.bound === null ? 'whole' : 'incomplete', bound: met.bound, tree: hollow ? null : (hashes.get('') ?? null), counts, bytesRead, bytesStored,
-      base: met.bound === null ? (base?.id ?? null) : null, gone, left, entered: met.bound === null ? entered : []
+      base: met.bound === null ? (base?.id ?? null) : null, gone: met.bound === null ? gone : [], left: met.bound === null ? left : [],
+      entered: met.bound === null ? entered : []
+    })
+    // What publishing puts on disk beside the staged bytes: the record itself, and what the cache grows by.
+    // All of it counts against the room, so the store's bound is a bound on what is on disk.
+    let record = describe()
+    let cacheText = hollow ? null : store.cacheText({ capture: id, startedAt, files, paths, trees, folders: lists })
+    const beside = (): number =>
+      Buffer.byteLength(JSON.stringify(record)) + (cacheText === null ? 0 : Math.max(0, Buffer.byteLength(cacheText) - store.cacheBytes()))
+    if (!hollow && bytesStored + beside() > room) {
+      met.bound = STORE_FULL
+      nothingKept()
+      cacheText = null
+      record = describe()
     }
+    // A store with no room even for the few bytes of this record gets nothing: the caller still has the record.
+    const written = beside() <= room
+    const adds = written ? bytesStored + beside() : 0
+    phase('record')
     let settled = false
     return {
       state: record.state,
       record,
       tookMs: performance.now() - startedClock,
       phases,
-      /** One step makes the capture real: its record appears under `captures/`. */
+      adds,
+      /**
+       * One step makes the capture real: its record appears under `captures/`. Its files and lists are moved
+       * in first; should BMN end between the two, the folder in `staging/` is still there at the next start,
+       * and the start then removes every byte no published capture needs (`TurnStore.clearLeftovers`).
+       */
       publish(): TurnCaptureRecord {
         if (settled) throw new Error('this capture was already published or discarded')
         settled = true
         try {
+          if (!written) return record
           privateFolder(join(store.directory, 'captures'))
           if (staged) {
             const made = new Set<string>()
@@ -815,7 +882,7 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
           renameSync(join(staging, 'capture.json'), store.capturePath(id))
           rmSync(staging, { recursive: true, force: true })
           staged = false
-          if (!hollow) store.saveCache({ capture: id, startedAt, files, paths, trees, folders: lists }, stored + bytesStored)
+          if (cacheText !== null) store.saveCache({ capture: id, startedAt, files, paths, trees, folders: lists }, cacheText)
         } finally {
           release()
         }
@@ -877,14 +944,17 @@ function readStill(confined: Confined, path: string, limits: TurnLimits, allowan
   return { counted, entry: notRead('changed while read') }
 }
 
-/** The commit a submodule's or nested repository's own HEAD names, as Git reports it; null when it has none. */
-async function nestedHead(git: TurnGitContext, confined: Confined, root: string, path: string): Promise<string | null> {
+/**
+ * The commit a submodule's or nested repository's own HEAD names, as Git reports it; null when it has none.
+ * `stopped`: Git was stopped before it answered, by a cancel or by the capture's time.
+ */
+async function nestedHead(git: TurnGitContext, confined: Confined, root: string, path: string): Promise<{ commit: string | null; stopped: boolean }> {
   // Its folder is opened under the root like any other; Git is started in that very folder and may not look above it.
   const fd = confined.folder(path)
-  if (!lstatSync(`/proc/self/fd/${fd}/.git`, { throwIfNoEntry: false })) return null
+  if (!lstatSync(`/proc/self/fd/${fd}/.git`, { throwIfNoEntry: false })) return { commit: null, stopped: false }
   const real = readlinkSync(`/proc/self/fd/${fd}`)
-  if (!within(real, root) || real === root) return null
+  if (!within(real, root) || real === root) return { commit: null, stopped: false }
   const answer = await runTurnGit(git, real, 'nested')
   const commit = answer.stdout.trim()
-  return answer.code === 0 && COMMIT.test(commit) ? commit : null
+  return { commit: answer.code === 0 && COMMIT.test(commit) ? commit : null, stopped: answer.stopped }
 }

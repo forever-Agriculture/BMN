@@ -737,8 +737,8 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   listTurns(sessionId: string): Promise<TurnSummary[]> {
     return invokeBridge('aiterm:turn-changes:list', { sessionId })
   },
-  readTurn(sessionId: string, turnId: string): Promise<TurnDetailAnswer> {
-    return invokeBridge('aiterm:turn-changes:turn', { sessionId, turnId })
+  readTurn(sessionId: string, turnId: string, from = 0): Promise<TurnDetailAnswer> {
+    return invokeBridge('aiterm:turn-changes:turn', { sessionId, turnId, from })
   },
   readTurnDifference(sessionId: string, turnId: string, path: string): Promise<TurnDifferenceAnswer> {
     return invokeBridge('aiterm:turn-changes:difference', { sessionId, turnId, path })

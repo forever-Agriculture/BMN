@@ -1,12 +1,11 @@
-// MODULE: turn-changes-dialog.tsx - "Turn changes…": a session's kept turns, one opened to its labels and files, and a file's difference in place under its row (Story 69.5)
-import { useEffect, useRef, useState } from 'react'
+// MODULE: turn-changes-dialog.tsx - "Turn changes…": a session's kept turns, one opened to its labels and files a page at a time, and a file's difference in place under its row (Story 69.5)
+import { useEffect, useReducer, useRef } from 'react'
 import {
+  TURN_FILES_LIMIT,
   TURN_LIST_LIMIT,
   TURN_SHOWN_LIMITS,
-  type TurnDetail,
   type TurnFileView,
   type TurnSessionView,
-  type TurnShownDifference,
   type TurnShownHunk,
   type TurnShownLine,
   type TurnSummary
@@ -19,6 +18,7 @@ import {
   turnBinarySizes,
   turnEndWord,
   turnFileLines,
+  turnFilesShown,
   turnHeading,
   turnHunkRange,
   turnLabelShown,
@@ -29,25 +29,16 @@ import {
   turnAppName,
   turnWhen
 } from './turn-changes-presentation'
+import { TurnReader, type TurnFileBody, type TurnOpened } from './turn-changes-reader'
 import './turn-changes.css'
+
+export type { TurnFileBody, TurnOpened } from './turn-changes-reader'
 
 export const TURNS_HEADING = `The latest ${TURN_LIST_LIMIT} turns still kept`
 export const TURN_GONE_WORDS = 'No longer kept'
 export const TURN_REMOVAL_PENDING_WORDS = 'Removal pending'
 export const TURN_SECRET_CHANGED_WORDS = 'Secret value changed'
 export const TURN_CUT_WORDS = `cut at ${TURN_SHOWN_LIMITS.lineCharacters.toLocaleString('en-US')} characters`
-
-/** What stands under an opened file's row. */
-export type TurnFileBody =
-  | { state: 'reading' }
-  | { state: 'shown'; difference: TurnShownDifference }
-  | { state: 'unavailable'; words: string }
-
-/** The place of the opened turn: still being read, read, or no longer kept. */
-export type TurnOpened =
-  | { state: 'reading'; turnId: string }
-  | { state: 'read'; turnId: string; detail: TurnDetail }
-  | { state: 'gone'; turnId: string }
 
 /** A turn's totals with their mark, or the wording that says why there are none. Gold is only ever on the mark and the wording. */
 function TurnResult(props: { turn: TurnSummary; whole?: boolean }): React.JSX.Element | null {
@@ -146,18 +137,44 @@ function FileRow(props: { file: TurnFileView; body: TurnFileBody | undefined; on
   )
 }
 
+/** Which of a turn's files are listed, between the ways to the pages before and after them. */
+function FilePages(props: { from: number; listed: number; total: number; onPage(from: number): void }): React.JSX.Element | null {
+  const words = turnFilesShown(props.from, props.listed, props.total)
+  if (words === null) return null
+  return (
+    <nav className="turn-pages" aria-label="Pages of this turn's files">
+      <button type="button" className="ghost" disabled={props.from === 0} onClick={() => props.onPage(Math.max(0, props.from - TURN_FILES_LIMIT))}>‹ Earlier files</button>
+      <span>{words}</span>
+      <button type="button" className="ghost" disabled={props.from + props.listed >= props.total} onClick={() => props.onPage(props.from + TURN_FILES_LIMIT)}>Later files ›</button>
+    </nav>
+  )
+}
+
 function OpenedTurn(props: {
   opened: TurnOpened
   bodies: ReadonlyMap<string, TurnFileBody>
   home: string | null
   now: number
   onToggleFile(path: string): void
+  onPage(from: number): void
 }): React.JSX.Element {
+  const filesHead = useRef<HTMLSpanElement>(null)
+  const from = props.opened.state === 'read' ? props.opened.detail.from : null
+  const shownFrom = useRef(from)
+  useEffect(() => {
+    // Another page of the same turn: its first file comes to where the reader looks. Only the detail scrolls.
+    const head = filesHead.current
+    const section = head?.closest('.turn-detail')
+    if (shownFrom.current !== null && from !== null && shownFrom.current !== from && head && section) {
+      section.scrollTop += head.getBoundingClientRect().top - section.getBoundingClientRect().top
+    }
+    shownFrom.current = from
+  }, [from])
   if (props.opened.state === 'gone') return <p className="turn-gone" role="status">{TURN_GONE_WORDS}</p>
   if (props.opened.state === 'reading') return <p className="turn-gone">Reading the turn…</p>
   const detail = props.opened.detail
   const root = detail.workTree === null ? null : guardPath(detail.workTree, props.home)
-  const count = detail.files.length + detail.moreFiles
+  const pages = <FilePages from={detail.from} listed={detail.files.length} total={detail.total} onPage={props.onPage} />
   // The labels that are this turn's own stand first; the three every turn carries follow.
   const own = (label: string): boolean => !/^(Two scans of |Covered: |Anything written after )/.test(label)
   const labels = [...detail.labels.filter(own), ...detail.labels.filter((label) => !own(label))]
@@ -177,7 +194,8 @@ function OpenedTurn(props: {
       )}
       {detail.unavailable !== null ? <p className="turn-gone">{detail.unavailable}</p> : detail.turn.totals === null ? null : (
         <>
-          <span className="eyebrow">Files · {count.toLocaleString('en-US')}</span>
+          <span className="eyebrow" ref={filesHead}>Files · {detail.total.toLocaleString('en-US')}</span>
+          {pages}
           {detail.files.length === 0 ? <p className="turn-gone">No file differs</p> : (
             <ul className="turn-files" aria-label="Files">
               {detail.files.map((file) => (
@@ -185,7 +203,7 @@ function OpenedTurn(props: {
               ))}
             </ul>
           )}
-          {detail.moreFiles > 0 ? <p className="dialog-note">{detail.moreFiles.toLocaleString('en-US')} more files not listed</p> : null}
+          {pages}
         </>
       )}
     </>
@@ -208,6 +226,8 @@ export function TurnChangesView(props: {
   onOpenTurn(turnId: string): void
   onBack(): void
   onToggleFile(path: string): void
+  /** Another page of the opened turn's files: the one that `from` files stand before. */
+  onPage(from: number): void
 }): React.JSX.Element {
   const recording = turnRecordingWords(props.view)
   const state = props.view?.removalPending ? `${recording} · ${TURN_REMOVAL_PENDING_WORDS}` : recording
@@ -241,7 +261,7 @@ export function TurnChangesView(props: {
         </div>
         {props.opened === null
           ? <p className="turn-gone">{props.turns !== null && props.turns.length > 0 ? 'Open a turn to read what differs' : ''}</p>
-          : <OpenedTurn opened={props.opened} bodies={props.bodies} home={props.home} now={props.now} onToggleFile={props.onToggleFile} />}
+          : <OpenedTurn opened={props.opened} bodies={props.bodies} home={props.home} now={props.now} onToggleFile={props.onToggleFile} onPage={props.onPage} />}
       </section>
     </div>
   )
@@ -253,7 +273,8 @@ const BESIDE_MIN_WINDOW = 948
 /**
  * The session's kept turns. It reads through the window's own channels only, starts nothing, types nothing into a
  * terminal and changes no pane's size: it is a modal dialog for the reason the progress detail is one. Whenever
- * turns change anywhere it reads its list again; a turn that went while it was open says "No longer kept".
+ * turns change anywhere it reads its list again; a turn that went while it was open says "No longer kept", and
+ * stays so whatever a read that was still on its way answers (the reader keeps that order).
  */
 export function TurnChangesDialog(props: {
   sessionId: string
@@ -267,105 +288,31 @@ export function TurnChangesDialog(props: {
   onClose(): void
   onFailure(message: string): void
 }): React.JSX.Element {
-  const [turns, setTurns] = useState<TurnSummary[] | null>(null)
-  const [opened, setOpened] = useState<TurnOpened | null>(null)
-  const [bodies, setBodies] = useState<ReadonlyMap<string, TurnFileBody>>(new Map())
-  const openedRef = useRef(opened)
-  openedRef.current = opened
+  const [, redraw] = useReducer((drawn: number) => drawn + 1, 0)
   const onFailure = useRef(props.onFailure)
   onFailure.current = props.onFailure
-  /** What the opened turn's detail was read for: when its row changes, the detail is read again. */
-  const readFor = useRef<string | null>(null)
-  const first = useRef(true)
   const { sessionId } = props
-
-  const stamp = (turn: TurnSummary): string => JSON.stringify([turn.state, turn.end, turn.endedAt, turn.totalsState, turn.totals, turn.wording])
-
-  const readTurn = (turnId: string, turn: TurnSummary | null, quiet: boolean): void => {
-    readFor.current = turn === null ? null : stamp(turn)
-    if (!quiet) {
-      setOpened({ state: 'reading', turnId })
-      setBodies(new Map())
-    }
-    void window.aiTerminal.readTurn(sessionId, turnId).then((answer) => {
-      if (openedRef.current?.turnId !== turnId) return
-      if (!answer.kept) {
-        setBodies(new Map())
-        setOpened({ state: 'gone', turnId })
-        return
-      }
-      // A turn that was compared again may list other files: what was open under the old ones goes.
-      if (quiet) setBodies(new Map())
-      setOpened({ state: 'read', turnId, detail: answer.detail })
-    }).catch((error: unknown) => {
-      if (openedRef.current?.turnId === turnId) setOpened(null)
-      onFailure.current(failureDetail(error, 'The turn could not be read'))
+  const held = useRef<TurnReader | null>(null)
+  if (held.current === null || held.current.sessionId !== sessionId) {
+    held.current = new TurnReader(window.aiTerminal, sessionId, {
+      changed: redraw,
+      failed: (error, words) => onFailure.current(failureDetail(error, words)),
+      opensLatest: () => window.innerWidth >= BESIDE_MIN_WINDOW
     })
   }
+  const reader = held.current
 
-  useEffect(() => {
-    let current = true
-    void window.aiTerminal.listTurns(sessionId).then((list) => {
-      if (!current) return
-      setTurns(list)
-      const now = openedRef.current
-      if (first.current) {
-        first.current = false
-        const latest = list.find((turn) => turn.state !== 'open')
-        if (latest && window.innerWidth >= BESIDE_MIN_WINDOW) readTurn(latest.turnId, latest, false)
-        return
-      }
-      if (now === null || now.state === 'gone') return
-      const row = list.find((turn) => turn.turnId === now.turnId)
-      if (!row) {
-        // Removed while it was open: its row is gone and its place says so.
-        setBodies(new Map())
-        setOpened({ state: 'gone', turnId: now.turnId })
-      } else if (now.state === 'read' && readFor.current !== stamp(row)) {
-        readTurn(row.turnId, row, true)
-      }
-    }).catch((error: unknown) => {
-      if (current) onFailure.current(failureDetail(error, 'The turns could not be read'))
-    })
-    return () => { current = false }
-  }, [sessionId, props.revision])
+  useEffect(() => reader.list(), [reader, props.revision])
+  useEffect(() => () => reader.leave(), [reader])
 
-  const toggleFile = (path: string): void => {
-    const turn = openedRef.current
-    if (turn?.state !== 'read') return
-    if (bodies.has(path)) {
-      setBodies((current) => new Map([...current].filter(([key]) => key !== path)))
-      return
-    }
-    const turnId = turn.turnId
-    const put = (body: TurnFileBody): void => setBodies((current) => {
-      // An answer for a file the owner closed again, or of another turn, is dropped.
-      if (openedRef.current?.turnId !== turnId || (body.state !== 'reading' && !current.has(path))) return current
-      return new Map(current).set(path, body)
-    })
-    put({ state: 'reading' })
-    void window.aiTerminal.readTurnDifference(sessionId, turnId, path).then((answer) => {
-      if (openedRef.current?.turnId !== turnId) return
-      if (!answer.kept) {
-        setBodies(new Map())
-        setOpened({ state: 'gone', turnId })
-      } else if ('difference' in answer) put({ state: 'shown', difference: answer.difference })
-      else put({ state: 'unavailable', words: answer.unavailable })
-    }).catch((error: unknown) => {
-      setBodies((current) => new Map([...current].filter(([key]) => key !== path)))
-      onFailure.current(failureDetail(error, 'The difference could not be read'))
-    })
-  }
-
+  const { turns, opened, bodies } = reader.state
   return (
     <Dialog label={`Turn changes — ${props.sessionName}`} onClose={props.onClose} className="turn-changes-dialog">
       <TurnChangesView view={props.view} turns={turns} opened={opened} bodies={bodies} home={props.home} now={props.now}
-        onOpenTurn={(turnId) => {
-          if (opened?.turnId === turnId && opened.state !== 'gone') return
-          readTurn(turnId, turns?.find((turn) => turn.turnId === turnId) ?? null, false)
-        }}
-        onBack={() => { setOpened(null); setBodies(new Map()) }}
-        onToggleFile={toggleFile} />
+        onOpenTurn={(turnId) => reader.open(turnId)}
+        onBack={() => reader.back()}
+        onToggleFile={(path) => reader.toggle(path)}
+        onPage={(from) => reader.page(from)} />
     </Dialog>
   )
 }

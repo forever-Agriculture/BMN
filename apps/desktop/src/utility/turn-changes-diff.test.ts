@@ -1,6 +1,6 @@
-// MODULE: turn-changes-diff.test.ts - the line comparison against a brute-force longest common subsequence, against known texts, and its stop
+// MODULE: turn-changes-diff.test.ts - the line comparison against a brute-force longest common subsequence, against known texts and a plain layout of every row, and its stop in every long step
 import { describe, expect, it } from 'vitest'
-import { DiffStopped, decodeText, diffLines, splitLines, unified, type SplitText } from './turn-changes-diff'
+import { DiffStopped, countLines, decodeText, diffLines, splitLines, unified, type Hunk, type HunkLine, type SplitText } from './turn-changes-diff'
 
 /** Length of the longest common subsequence, the slow and obvious way. */
 function lcs(a: string[], b: string[]): number {
@@ -25,7 +25,84 @@ const text = (count: number, alphabet: number): string =>
   Array.from({ length: count }, () => `line ${Math.floor(random() * alphabet)}`).join('\n') + (count > 0 && random() < 0.7 ? '\n' : '')
 const keys = (split: SplitText): string[] => split.lines.map((line, index) => (split.open && index === split.lines.length - 1 ? `${line}\n` : line))
 
+/** The hunks laid out the plain way: one row per line of both texts, then cut into hunks. What `unified` must give without holding those rows. */
+function plainHunks(before: string, after: string, context: number): Hunk[] {
+  const { a, b, removed, added } = diffLines(before, after)
+  const rows: Array<{ kind: ' ' | '-' | '+'; a: number | null; b: number | null; text: string; open: boolean; i: number; j: number }> = []
+  let i = 0
+  let j = 0
+  while (i < a.lines.length || j < b.lines.length) {
+    if (i < a.lines.length && removed[i] === 1) {
+      rows.push({ kind: '-', a: i + 1, b: null, text: a.lines[i] as string, open: a.open && i === a.lines.length - 1, i, j })
+      i += 1
+    } else if (j < b.lines.length && added[j] === 1) {
+      rows.push({ kind: '+', a: null, b: j + 1, text: b.lines[j] as string, open: b.open && j === b.lines.length - 1, i, j })
+      j += 1
+    } else {
+      rows.push({ kind: ' ', a: i + 1, b: j + 1, text: a.lines[i] as string, open: a.open && i === a.lines.length - 1, i, j })
+      i += 1
+      j += 1
+    }
+  }
+  const hunks: Hunk[] = []
+  let index = 0
+  while (index < rows.length) {
+    if (rows[index]?.kind === ' ') {
+      index += 1
+      continue
+    }
+    const start = Math.max(0, index - context)
+    let end = index + 1
+    for (let scan = index + 1; scan < rows.length; scan += 1) {
+      if (rows[scan]?.kind !== ' ') {
+        end = scan + 1
+        continue
+      }
+      if (scan - end + 1 > context * 2) break
+    }
+    const stopAt = Math.min(rows.length, end + context)
+    const slice = rows.slice(start, stopAt)
+    const first = slice[0] as (typeof rows)[number]
+    const lines: HunkLine[] = []
+    let aLines = 0
+    let bLines = 0
+    for (const row of slice) {
+      if (row.kind !== '+') aLines += 1
+      if (row.kind !== '-') bLines += 1
+      lines.push({ kind: row.kind, a: row.a, b: row.b, text: row.text })
+      if (row.open) lines.push({ kind: '\\' })
+    }
+    hunks.push({ aStart: first.i + (aLines > 0 ? 1 : 0), aLines, bStart: first.j + (bLines > 0 ? 1 : 0), bLines, lines })
+    index = stopAt
+  }
+  return hunks
+}
+
 describe('the lines of two texts', () => {
+  it('splits and counts the lines of a text the same way', () => {
+    for (const sample of ['', 'a', 'a\n', 'a\nb', 'a\nb\n', '\n', '\n\n', 'a\n\nb']) {
+      const expected = sample === '' ? [] : sample.split('\n')
+      const open = expected.length > 0 && expected.at(-1) !== ''
+      if (!open) expected.pop()
+      expect(splitLines(sample), JSON.stringify(sample)).toEqual({ lines: expected, open })
+      expect(countLines(sample), JSON.stringify(sample)).toBe(expected.length)
+    }
+  })
+
+  it('lays out the same hunks as one row per line would, for every context', () => {
+    for (let round = 0; round < 3000; round += 1) {
+      const before = text(Math.floor(random() * 60), 4 + Math.floor(random() * 30))
+      const after = random() < 0.2 ? before : text(Math.floor(random() * 60), 4 + Math.floor(random() * 30))
+      const context = Math.floor(random() * 4)
+      expect(unified(before, after, { context }).hunks, JSON.stringify([before, after, context])).toEqual(plainHunks(before, after, context))
+    }
+    const long = Array.from({ length: 400 }, (_value, n) => `row ${n}`)
+    const edited = long.map((line, n) => ([3, 9, 10, 17, 200, 399].includes(n) ? `${line}!` : line))
+    for (const context of [0, 1, 3]) {
+      expect(unified(`${long.join('\n')}\n`, `${edited.join('\n')}`, { context }).hunks).toEqual(plainHunks(`${long.join('\n')}\n`, `${edited.join('\n')}`, context))
+    }
+  })
+
   it('keeps a longest common subsequence of random texts', () => {
     for (let round = 0; round < 4000; round += 1) {
       const before = text(Math.floor(random() * 14), 1 + Math.floor(random() * 5))
@@ -116,6 +193,54 @@ describe('the lines of two texts', () => {
     const began = Date.now()
     expect(() => diffLines(long('a'), long('b'), () => Date.now() - began > 150)).toThrow(DiffStopped)
     expect(Date.now() - began).toBeLessThan(250)
+  })
+
+  it('stops a text that is all new, all gone or unchanged, where no line is compared', () => {
+    const many = 'line\n'.repeat(50_000)
+    for (const [before, after] of [['', many], [many, ''], [many, many]] as const) {
+      expect(() => diffLines(before, after, () => true)).toThrow(DiffStopped)
+      expect(() => unified(before, after, { stop: () => true })).toThrow(DiffStopped)
+    }
+    expect(() => countLines(many, () => true)).toThrow(DiffStopped)
+    expect(() => splitLines(many, () => true)).toThrow(DiffStopped)
+  })
+
+  it('asks its stop often on millions of short lines, and holds no row for a line outside a hunk', () => {
+    const count = 2_000_000
+    const rows = Array.from({ length: count }, (_value, n) => `r${n % 977}`)
+    const before = rows.join('\n')
+    const after = `${[...rows.slice(0, count / 2), 'changed', ...rows.slice(count / 2)].join('\n')}\n`
+    let last = performance.now()
+    let longest = 0
+    const patch = unified(`${before}\n`, after, { stop: () => {
+      const now = performance.now()
+      longest = Math.max(longest, now - last)
+      last = now
+      return false
+    } })
+    longest = Math.max(longest, performance.now() - last)
+    expect([patch.added, patch.removed, patch.hunks.length]).toEqual([1, 0, 1])
+    expect(patch.hunks[0]?.lines).toHaveLength(7)
+    // A cancel is heard within 100 ms: no stretch between two questions comes near it.
+    expect(longest).toBeLessThan(90)
+    const began = performance.now()
+    expect(() => unified(`${before}\n`, after, { stop: () => performance.now() - began > 100 })).toThrow(DiffStopped)
+    expect(performance.now() - began).toBeLessThan(190)
+  })
+
+  it('holds only as many lines as its caller keeps, and counts the rest', () => {
+    const after = `${Array.from({ length: 50 }, (_value, n) => `n${n}`).join('\n')}\n`
+    const cut = unified('', after, { keep: 7 })
+    expect(cut).toMatchObject({ added: 50, removed: 0, dropped: 43, hunks: [{ aStart: 0, aLines: 0, bStart: 1, bLines: 50 }] })
+    expect(cut.hunks[0]?.lines).toEqual(unified('', after).hunks[0]?.lines.slice(0, 7))
+    expect(unified('', after).dropped).toBeUndefined()
+    // A hunk none of whose lines is held is not given; its lines are counted.
+    const base = Array.from({ length: 40 }, (_value, n) => `l${n}`)
+    const edited = base.map((line, n) => (n === 2 || n === 30 ? `${line}!` : line))
+    const two = unified(`${base.join('\n')}\n`, `${edited.join('\n')}\n`, { keep: 7 })
+    expect(two.hunks).toHaveLength(1)
+    expect(two.hunks[0]?.lines).toHaveLength(7)
+    expect(two.dropped).toBe(8)
   })
 
   it('is quick on a long text with few changes', () => {

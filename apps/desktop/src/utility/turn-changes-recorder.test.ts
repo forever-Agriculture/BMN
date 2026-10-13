@@ -307,6 +307,60 @@ describe('the confirmation of a "before"', () => {
     expect(await w.mark('start', { until: Date.now() - 1 })).toBe('late')
     expect(w.turns()[0]).toMatchObject({ before: null, wording: TURN_WORDINGS.beforeUnavailable() })
   })
+
+  const NEXT_AGENT = '34817:7200:999:1:2'
+  const published = (w: World): number => {
+    const folder = join(w.at.dataRoot, TURN_STORE_FOLDER, SESSION)
+    if (!existsSync(folder)) return 0
+    return readdirSync(folder).reduce((sum, key) => sum + (existsSync(join(folder, key, 'captures')) ? readdirSync(join(folder, key, 'captures')).length : 0), 0)
+  }
+  const captureRows = (w: World): number => (w.database.prepare('SELECT count(*) AS n FROM turn_capture').get() as { n: number }).n
+
+  it('never publishes a "before" during whose scan another process took the agent\'s place, with no event in between', async () => {
+    const world_: { made: World | null } = { made: null }
+    // The scan is done and its answer on its way when the terminal's foreground is another process.
+    const replacedMeanwhile = (port: TurnChangesPort): TurnChangesPort => ({
+      ...port,
+      capture: async (request, signal) => {
+        const answer = await port.capture(request, signal)
+        if (!request.publish && world_.made) world_.made.foreground.identity = NEXT_AGENT
+        return answer
+      }
+    })
+    const w = world('replaced-in-scan', { port: replacedMeanwhile })
+    world_.made = w
+    expect(await w.mark('start', { requestId: 'old-agent' })).toBe('unavailable')
+    // A confirmation that comes all the same finds nothing to publish.
+    expect(await w.mark('confirm', { requestId: 'old-agent' })).toBe('late')
+    await w.recorder.idle()
+    expect(w.staged()).toBe(0)
+    expect(published(w)).toBe(0)
+    expect(captureRows(w)).toBe(0)
+    expect(w.turns()).toHaveLength(1)
+    expect(w.turns()[0]).toMatchObject({
+      foreground: AGENT, state: 'closed', endKind: 'not-observed', before: null, after: null, totalsState: 'none', totals: null,
+      wording: TURN_WORDINGS.beforeUnavailable()
+    })
+    // An agent that left is not a scan that failed: nothing counts towards the pause.
+    expect(w.recorder.states()).toEqual([expect.objectContaining({ sessionId: SESSION, state: 'recording', pausedRoot: null })])
+  })
+
+  it('never publishes a "before" when another process took the agent\'s place before the confirmation, with no event in between', async () => {
+    const w = world('replaced-before-confirm')
+    expect(await w.mark('start', { requestId: 'old-agent' })).toBe('captured')
+    expect(w.staged()).toBeGreaterThan(0)
+    w.foreground.identity = NEXT_AGENT
+    expect(await w.mark('confirm', { requestId: 'old-agent' })).toBe('late')
+    await w.recorder.idle()
+    expect(w.staged()).toBe(0)
+    expect(published(w)).toBe(0)
+    expect(captureRows(w)).toBe(0)
+    expect(w.turns()).toHaveLength(1)
+    expect(w.turns()[0]).toMatchObject({
+      foreground: AGENT, state: 'closed', endKind: 'not-observed', before: null, after: null, totalsState: 'none', totals: null,
+      wording: TURN_WORDINGS.beforeUnavailable()
+    })
+  })
 })
 
 describe('the version of the app', () => {
@@ -331,40 +385,55 @@ describe('the version of the app', () => {
   })
 
   /** A made-up process table: BMN itself and one process, each with what Linux says confines it. */
-  const processes = (name: string, other: { namespace?: string; privileges?: number; filter?: number } = {}): { root: string; identity: string; done: () => void } => {
+  interface Confined { namespace?: string; users?: string; privileges?: number; filter?: number; label?: string | null }
+  const processes = (name: string, other: Confined = {}, own: Confined = {}): { root: string; identity: string; done: () => void } => {
     const at = scratch(name, { commit: false })
     const root = join(at.base, 'proc')
-    const put = (pid: string, namespace: string, privileges: number, filter: number): void => {
+    const put = (pid: string, told: Confined): void => {
       mkdirSync(join(root, pid, 'ns'), { recursive: true })
-      writeFileSync(join(root, pid, 'status'), `Name:\tmade-up\nNoNewPrivs:\t${privileges}\nSeccomp:\t${filter}\nSeccomp_filters:\t0\n`)
-      symlinkSync(namespace, join(root, pid, 'ns', 'mnt'))
+      mkdirSync(join(root, pid, 'attr'), { recursive: true })
+      writeFileSync(join(root, pid, 'status'), `Name:\tmade-up\nNoNewPrivs:\t${told.privileges ?? 0}\nSeccomp:\t${told.filter ?? 0}\nSeccomp_filters:\t0\n`)
+      symlinkSync(told.namespace ?? 'mnt:[4026531832]', join(root, pid, 'ns', 'mnt'))
+      symlinkSync(told.users ?? 'user:[4026531837]', join(root, pid, 'ns', 'user'))
+      symlinkSync('pid:[4026531836]', join(root, pid, 'ns', 'pid'))
+      if (told.label !== null) writeFileSync(join(root, pid, 'attr', 'current'), `${told.label ?? 'unconfined'}\n`)
       writeFileSync(join(root, pid, 'exe'), '')
     }
-    put('self', 'mnt:[4026531832]', 0, 0)
-    put('7001', other.namespace ?? 'mnt:[4026531832]', other.privileges ?? 0, other.filter ?? 0)
+    put('self', own)
+    put('7001', other)
     const program = statSync(join(root, '7001', 'exe'), { bigint: true })
     return { root, identity: `34817:7001:555:${program.dev}:${program.ino}`, done: at.done }
   }
 
-  it('asks only the program of a process as free as BMN itself', () => {
+  it('asks only the program of a process Linux reports as unconfined, in the views and under the label BMN has itself', () => {
     const free = processes('ask-free')
+    const noModule = processes('ask-no-module', { label: null }, { label: null })
     const elsewhere = processes('ask-namespace', { namespace: 'mnt:[4026532999]' })
+    const otherUsers = processes('ask-users', { users: 'user:[4026532888]' })
     const landlocked = processes('ask-privileges', { privileges: 1 })
     const filtered = processes('ask-filter', { filter: 2 })
+    const labelled = processes('ask-label', { label: 'snap.made-up (enforce)' })
+    const unreadLabel = processes('ask-label-unread', { label: null })
+    // BMN itself gave up new privileges and carries a filter, and so does the process, with the very same flags:
+    // a tighter filter or a Landlock rule set on the process reads no differently, so nobody is asked.
+    const bothConfined = processes('ask-both', { privileges: 1, filter: 2 }, { privileges: 1, filter: 2 })
+    const ownFilter = processes('ask-own-filter', {}, { filter: 2 })
+    const all = [free, noModule, elsewhere, otherUsers, landlocked, filtered, labelled, unreadLabel, bothConfined, ownFilter]
     try {
       expect(mayAskProgram(free.identity, free.root)).toBe(true)
-      // Another view of the file system, new privileges given up (Landlock asks for that), a system-call filter:
-      // each may be a sandbox, and a program BMN starts would run outside it.
-      expect(mayAskProgram(elsewhere.identity, elsewhere.root)).toBe(false)
-      expect(mayAskProgram(landlocked.identity, landlocked.root)).toBe(false)
-      expect(mayAskProgram(filtered.identity, filtered.root)).toBe(false)
+      expect(mayAskProgram(noModule.identity, noModule.root)).toBe(true)
+      // Another view of the file system or of users, new privileges given up (Landlock asks for that), a
+      // system-call filter, another security label: each may be a sandbox, and a program BMN starts would run outside it.
+      for (const confined of [elsewhere, otherUsers, landlocked, filtered, labelled, unreadLabel, bothConfined, ownFilter]) {
+        expect(mayAskProgram(confined.identity, confined.root)).toBe(false)
+      }
       // The program is no longer the file the identity names, the process is gone, or the identity names none.
       expect(mayAskProgram(free.identity.replace(/:\d+$/, ':1'), free.root)).toBe(false)
       expect(mayAskProgram('34817:7002:555:1:2', free.root)).toBe(false)
       expect(mayAskProgram('34817:0:555:1:2', free.root)).toBe(false)
       expect(mayAskProgram('', free.root)).toBe(false)
     } finally {
-      for (const made of [free, elsewhere, landlocked, filtered]) made.done()
+      for (const made of all) made.done()
     }
   })
 

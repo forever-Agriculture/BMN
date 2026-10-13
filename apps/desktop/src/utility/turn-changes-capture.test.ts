@@ -1,4 +1,4 @@
-// MODULE: turn-changes-capture.test.ts - captures of made-up repositories against contents known beforehand: the root, what belongs, each kind of entry, each bound at and one past it, swaps under a running capture
+// MODULE: turn-changes-capture.test.ts - captures of made-up repositories against contents known beforehand: the root, what belongs, each kind of entry, each bound at and one past it, its time in every phase, swaps under a running capture, and a publication that was interrupted
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -354,6 +354,58 @@ describe('what a capture holds, against known contents', () => {
     expect(holds(at.dataRoot, readFileSync(join(source, 'inside.txt')))).toBe(false)
   })
 
+  // Which paths belong is Git's answer (R69-NFR2, NFR4). Git 2.53 lists the files of a folder the outer repository
+  // tracks as that repository's own, tracked and untracked, also once the folder holds a `.git` of its own; only a
+  // folder none of whose files it tracks is listed as one nested repository. BMN keeps to that listing.
+  it('takes for a nested repository what Git lists as one: a tracked folder that got a .git of its own stays the outer repository\'s', async () => {
+    const at = place('tracked-nested')
+    write(at.repo, 'vendor/a.txt', 'one\n')
+    commit(at, 'vendor')
+    at.git(join(at.repo, 'vendor'), 'init', '-q', '-b', 'main')
+    write(at.repo, 'vendor/b.txt', 'two\n')
+    const marker = `INSIDE-${randomBytes(6).toString('hex')}`
+    mkdirSync(join(at.repo, 'other'))
+    at.git(join(at.repo, 'other'), 'init', '-q', '-b', 'main')
+    write(at.repo, 'other/c.txt', `${marker}\n`)
+    expect(at.git(at.repo, 'ls-files', '-t', '--cached', '--others', '--exclude-standard').trim().split('\n').sort())
+      .toEqual(['? other/', '? vendor/b.txt', 'H keep.txt', 'H vendor/a.txt'])
+    const run = await around(at, () => write(at.repo, 'vendor/a.txt', 'one\nmore\n'))
+    expect(rows(run.compared)).toEqual({ 'vendor/a.txt': { state: 'changed', added: 1, removed: 0 } })
+    expect(rowAt(run.store, run.two.tree, 'vendor/b.txt')?.[1]).toBe('f')
+    expect(rowAt(run.store, run.two.tree, 'other')?.slice(1)).toEqual(['s', null, 1])
+    expect(run.two.counts).toMatchObject({ submodules: 1, files: 3 })
+    expect(holds(at.dataRoot, marker)).toBe(false)
+  })
+
+  it('lists a file it did not read as "not read" and calls the totals partial, also when the file reads the same in both captures', async () => {
+    const at = place('unread-same')
+    write(at.repo, 'huge.bin', 'h'.repeat(200))
+    write(at.repo, 'a.txt', 'a\n')
+    commit(at, 'files')
+    at.options.limits = { fileBytes: 100 }
+    const changed = await around(at, () => write(at.repo, 'a.txt', 'a\nb\n'))
+    expect(rows(changed.compared)).toEqual({
+      'a.txt': { state: 'changed', added: 1, removed: 0 },
+      'huge.bin': { state: 'not read', why: 'too large, not read' }
+    })
+    expect(changed.compared.totals).toEqual({ files: 2, added: 1, removed: 0, partial: true, notCounted: 1 })
+    // Nothing else differs: still not a complete "0 files".
+    const same = await around(at, () => undefined)
+    expect(same.one.tree).toBe(same.two.tree)
+    expect(rows(same.compared)).toEqual({ 'huge.bin': { state: 'not read', why: 'too large, not read' } })
+    expect(same.compared.totals).toEqual({ files: 1, added: 0, removed: 0, partial: true, notCounted: 1 })
+  })
+
+  it.skipIf(process.getuid?.() === 0)('does the same for a file BMN may not open in either capture', async () => {
+    const at = place('unread-locked')
+    write(at.repo, 'deep/locked.txt', 'l\n')
+    chmodSync(join(at.repo, 'deep/locked.txt'), 0)
+    const run = await around(at, () => undefined)
+    expect(rowAt(run.store, run.two.tree, 'deep/locked.txt')?.slice(1)).toEqual(['u', 'not read'])
+    expect(rows(run.compared)).toEqual({ 'deep/locked.txt': { state: 'not read', why: 'not read' } })
+    expect(run.compared.totals).toEqual({ files: 1, added: 0, removed: 0, partial: true, notCounted: 1 })
+  })
+
   for (const [name, prepare, init] of [
     ['a split index', (at: Place) => at.git(at.repo, 'update-index', '--split-index'), []],
     ['a SHA-256 repository', () => undefined, ['--object-format=sha256']]
@@ -565,7 +617,7 @@ describe('the bounds of a capture, at and one past', () => {
     four(at)
     const slow = staged(await capture(at.repo, { ...at.options, limits: { captureMs: 60 }, seams: { beforeEntry: () => sleep(25) } }))
     expect(slow.record).toMatchObject({ state: 'incomplete', bound: '0.06 s' })
-    expect(slow.tookMs).toBeLessThan(400)
+    expect(slow.tookMs).toBeLessThan(200)
     slow.publish()
     const next = staged(await capture(at.repo, at.options))
     expect(next.record.state).toBe('whole')
@@ -573,21 +625,114 @@ describe('the bounds of a capture, at and one past', () => {
     next.discard()
   })
 
-  it('ends as "store full" when the store would pass its bound, and removes nothing that is kept', async () => {
+  /** Git that does not answer the last question of a capture (which commit HEAD names at its end, and in a nested repository). */
+  const slowHead = (at: Place): string => {
+    const path = join(at.base, 'git-slow-head')
+    writeFileSync(path, '#!/bin/sh\ncase "$*" in *"--verify --quiet"*) exec sleep 30;; esac\nexec /usr/bin/git "$@"\n', { mode: 0o755 })
+    return path
+  }
+
+  it('gives its last Git command no time of its own: a capture whose time passes there is incomplete, inside its time', async () => {
+    const at = place('time-head')
+    four(at)
+    // A file is taken as read before only when it had been still for a moment when it was read.
+    await sleep(25)
+    const began = performance.now()
+    const late = staged(await capture(at.repo, { ...at.options, git: slowHead(at), limits: { captureMs: 300 } }))
+    expect(performance.now() - began).toBeLessThan(300 + 150)
+    expect(late.record).toMatchObject({ state: 'incomplete', bound: '0.3 s', headEnd: null, base: null })
+    // Every file was read and listed: the next capture reads nothing again.
+    expect(late.record.tree).not.toBeNull()
+    late.publish()
+    const next = staged(await capture(at.repo, at.options))
+    expect(next.record).toMatchObject({ state: 'whole', bytesRead: 0 })
+    next.discard()
+  })
+
+  it('writes down no commit for a nested repository whose Git did not answer in the capture\'s time', async () => {
+    const at = place('time-nested')
+    mkdirSync(join(at.repo, 'nested'))
+    at.git(join(at.repo, 'nested'), 'init', '-q', '-b', 'main')
+    write(at.repo, 'nested/deep.txt', 'd\n')
+    const began = performance.now()
+    const late = staged(await capture(at.repo, { ...at.options, git: slowHead(at), limits: { captureMs: 300 } }))
+    expect(performance.now() - began).toBeLessThan(300 + 150)
+    expect(late.record).toMatchObject({ state: 'incomplete', bound: '0.3 s', counts: { submodules: 0 } })
+    late.discard()
+  })
+
+  it('is not whole when its time passes while the earlier capture\'s paths are looked at or its lists are written, and is cancelled there too', async () => {
+    const at = place('time-late')
+    four(at)
+    const store = new TurnStore(at.dataRoot, 's-case', at.repo)
+    const base = staged(await capture(at.repo, { ...at.options, store })).publish()
+    unlinkSync(join(at.repo, 'a.txt'))
+    for (const seam of ['beforeProbes', 'beforeLists'] as const) {
+      const late = staged(await capture(at.repo, { ...at.options, store, base: base.id, limits: { captureMs: 80 }, seams: { [seam]: () => sleep(120) } }))
+      expect(late.record, seam).toMatchObject({ state: 'incomplete', bound: '0.08 s', base: null, gone: [], left: [] })
+      late.discard()
+      const controller = new AbortController()
+      const cancelled = await capture(at.repo, { ...at.options, store, base: base.id, signal: controller.signal, seams: { [seam]: () => controller.abort() } })
+      expect(cancelled, seam).toEqual({ state: 'cancelled', reason: 'cancelled' })
+      await store.settled()
+      expect(filesUnder(join(store.directory, 'staging')) + filesUnder(join(store.directory, 'trash')), seam).toBe(0)
+      expect(isCapturing(at.repo)).toBe(false)
+    }
+    const whole = staged(await capture(at.repo, { ...at.options, store, base: base.id }))
+    expect(whole.record).toMatchObject({ state: 'whole', gone: ['a.txt'] })
+    whole.discard()
+  })
+
+  it('ends as "store full" when what it would put on disk passes the bound by one byte, and removes nothing that is kept', async () => {
     const at = place('full')
     const store = new TurnStore(at.dataRoot, 's-case', at.repo)
-    const first = staged(await capture(at.repo, { ...at.options, store })).publish()
-    const kept = store.size('objects')
+    const first = staged(await capture(at.repo, { ...at.options, store }))
+    const firstAdds = first.adds
+    first.publish()
+    // What a capture adds is its files and lists, its own record and what the cache grows by: all of it is on disk.
+    const kept = store.keptBytes()
+    expect(kept).toBe(firstAdds)
+    expect(kept).toBeGreaterThan(store.size('objects'))
     write(at.repo, 'big.txt', 'z'.repeat(500))
-    const full = staged(await capture(at.repo, { ...at.options, store, limits: { storeBytes: kept + 499 } }))
+    const probe = staged(await capture(at.repo, { ...at.options, store }))
+    const adds = probe.adds
+    expect(adds).toBeGreaterThan(500)
+    probe.discard()
+    await store.settled()
+    const full = staged(await capture(at.repo, { ...at.options, store, limits: { storeBytes: kept + adds - 1 } }))
     expect(full.record).toMatchObject({ state: 'incomplete', bound: 'store full', tree: null, bytesStored: 0 })
     full.publish()
     await store.settled()
-    expect(store.size('objects')).toBe(kept)
-    expect(store.record(first.id)?.state).toBe('whole')
-    const fits = staged(await capture(at.repo, { ...at.options, limits: { storeBytes: kept + 2000 } }))
+    // Only the few bytes of its record are new; they were counted and fit.
+    expect(store.keptBytes()).toBe(kept + full.adds)
+    expect(full.adds).toBeLessThan(adds - 500)
+    expect(store.record(first.record.id)?.state).toBe('whole')
+    const fits = staged(await capture(at.repo, { ...at.options, store, limits: { storeBytes: store.keptBytes() + adds } }))
     expect(fits.record.state).toBe('whole')
     fits.discard()
+    await store.settled()
+    // A store with no room even for a record gets nothing at all, however often a capture is taken.
+    const before = store.keptBytes()
+    for (let round = 0; round < 3; round += 1) {
+      const none = staged(await capture(at.repo, { ...at.options, store, limits: { storeBytes: before + 10 } }))
+      expect(none.record).toMatchObject({ state: 'incomplete', bound: 'store full', tree: null })
+      expect(none.adds).toBe(0)
+      const record = none.publish()
+      await store.settled()
+      expect(store.record(record.id)).toBeNull()
+      expect(store.keptBytes()).toBe(before)
+    }
+  })
+
+  it('does not let a capture of an unchanged work tree pass the bound with its record', async () => {
+    const at = place('full-unchanged')
+    const store = new TurnStore(at.dataRoot, 's-case', at.repo)
+    staged(await capture(at.repo, { ...at.options, store })).publish()
+    const kept = store.keptBytes()
+    const again = staged(await capture(at.repo, { ...at.options, store, limits: { storeBytes: kept + 10 } }))
+    expect(again.record).toMatchObject({ state: 'incomplete', bound: 'store full', bytesStored: 0 })
+    again.publish()
+    expect(store.keptBytes()).toBe(kept)
   })
 
   it('stops a listing that does not end in time, and keeps nothing of it', async () => {
@@ -657,6 +802,53 @@ describe('a capture that is cancelled, or discarded', () => {
     const again = staged(await capture(at.repo, { ...at.options, session: 's-other' }))
     expect(again.record.state).toBe('whole')
     again.discard()
+  })
+
+  it('removes at the next start what a publication left that was interrupted before its record appeared, and nothing a kept capture needs', async () => {
+    const at = place('interrupted')
+    const store = new TurnStore(at.dataRoot, 's-case', at.repo)
+    write(at.repo, 'kept.txt', 'KEPT-CONTENT\n')
+    const first = staged(await capture(at.repo, { ...at.options, store })).publish()
+    const marker = `MARKER-${randomBytes(8).toString('hex')}`
+    write(at.repo, 'secret.txt', `${marker}\n`)
+    const second = staged(await capture(at.repo, { ...at.options, store }))
+    // BMN ends after the files and lists were moved in and before the record appears: the record's place cannot be taken.
+    mkdirSync(store.capturePath(second.record.id), { recursive: true })
+    expect(() => second.publish()).toThrow()
+    rmSync(store.capturePath(second.record.id), { recursive: true })
+    expect(store.captures()).toEqual([first.id])
+    expect(holds(join(store.directory, 'objects'), marker)).toBe(true)
+    // The next start.
+    const restarted = new TurnStore(at.dataRoot, 's-case', at.repo)
+    restarted.clearLeftovers()
+    expect(holds(at.dataRoot, marker)).toBe(false)
+    expect(filesUnder(join(restarted.directory, 'staging'))).toBe(0)
+    expect(holds(join(restarted.directory, 'objects'), 'KEPT-CONTENT')).toBe(true)
+    const again = staged(await capture(at.repo, { ...at.options, store: restarted, base: first.id })).publish()
+    expect(compareCaptures(restarted, first.id, again.id)).toMatchObject({ state: 'compared', files: [{ path: 'secret.txt', state: 'added' }] })
+  })
+
+  it('removes the whole store at the next start when its very first publication was interrupted', async () => {
+    const at = place('interrupted-first')
+    const store = new TurnStore(at.dataRoot, 's-case', at.repo)
+    const marker = `MARKER-${randomBytes(8).toString('hex')}`
+    write(at.repo, 'secret.txt', `${marker}\n`)
+    const only = staged(await capture(at.repo, { ...at.options, store }))
+    mkdirSync(store.capturePath(only.record.id), { recursive: true })
+    expect(() => only.publish()).toThrow()
+    rmSync(store.capturePath(only.record.id), { recursive: true })
+    expect(holds(at.dataRoot, marker)).toBe(true)
+    new TurnStore(at.dataRoot, 's-case', at.repo).clearLeftovers()
+    expect(holds(at.dataRoot, marker)).toBe(false)
+    expect(filesUnder(at.dataRoot)).toBe(0)
+    // A start with nothing interrupted leaves a store as it is.
+    const kept = staged(await capture(at.repo, { ...at.options, store: new TurnStore(at.dataRoot, 's-case', at.repo) })).publish()
+    const later = new TurnStore(at.dataRoot, 's-case', at.repo)
+    const before = snapshot(later.directory)
+    later.clearLeftovers()
+    // Only the empty folders for staged and discarded captures go.
+    expect(unequal(before, snapshot(later.directory)).filter((name) => !name.endsWith('/'))).toEqual([])
+    expect(later.record(kept.id)?.state).toBe('whole')
   })
 
   it('keeps every folder of the store private, and no path of the work tree in a folder name', async () => {

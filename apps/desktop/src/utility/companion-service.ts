@@ -215,6 +215,14 @@ function optionalText(params: Record<string, unknown>, key: string): string | nu
   return value
 }
 
+/** Where a page of a turn's files starts: at the first file when nothing is said, else at a whole number of pages. */
+function turnFilesFrom(params: Record<string, unknown>, key: string): number {
+  const value = params[key]
+  if (value === undefined || value === null) return 0
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value % TURN_FILES_LIMIT !== 0) invalid(`${key} must be where a page starts`)
+  return value
+}
+
 /** Paste text as one bracketed paste; the end marker is removed from the payload so it cannot close the paste early. */
 export function bracketedPaste(payload: string, submit: boolean): Uint8Array {
   const safe = payload.split(BRACKETED_PASTE_END).join('')
@@ -1003,7 +1011,7 @@ export class CompanionService {
       case METHOD_REGISTRY.turnChangesList:
         return (await this.options.database.companion('listTurns', { sessionId: text(params, 'sessionId'), limit: TURN_LIST_LIMIT })).map(turnSummary)
       case METHOD_REGISTRY.turnChangesTurn:
-        return await this.turnDetail(text(params, 'sessionId'), text(params, 'turnId'))
+        return await this.turnDetail(text(params, 'sessionId'), text(params, 'turnId'), turnFilesFrom(params, 'from'))
       case METHOD_REGISTRY.turnChangesDifference:
         return await this.turnDifference(text(params, 'sessionId'), text(params, 'turnId'), text(params, 'path'))
       case METHOD_REGISTRY.portsList:
@@ -1264,31 +1272,49 @@ export class CompanionService {
     }
   }
 
-  /** Epic 69: every session that records now or still has a kept turn, as its pane's header and the dialog read it. */
+  /**
+   * Epic 69: every session that records now, still has a kept turn, or has stored bytes whose removal still waits,
+   * as its pane's header and the dialog read it. The last keeps "Removal pending" readable with recording off and
+   * no turn left.
+   */
   private async turnViews(): Promise<TurnSessionView[]> {
     const states = new Map((this.turns?.states() ?? []).map((state) => [state.sessionId, state]))
     const latest = new Map((await this.options.database.companion('latestTurns')).map((row) => [row.sessionId, turnSummary(row)]))
     const pending = new Set(await this.options.database.companion('turnRemovalPendingSessions'))
-    return [...new Set([...states.keys(), ...latest.keys()])].sort().map((sessionId) => ({
+    return [...new Set([...states.keys(), ...latest.keys(), ...pending])].sort().map((sessionId) => ({
       ...(states.get(sessionId) ?? { sessionId, state: 'off' as const, app: null, pausedRoot: null, pauseReason: null }),
       latest: latest.get(sessionId) ?? null,
       removalPending: pending.has(sessionId)
     }))
   }
 
-  /** One kept turn of a session with its files, compared again from its two stored scans. */
-  private async turnDetail(sessionId: string, turnId: string): Promise<TurnDetailAnswer> {
+  /** Whether a turn of this session is still kept now. */
+  private async turnKept(sessionId: string, turnId: string): Promise<boolean> {
+    const row = await this.options.database.companion('getTurn', turnId)
+    return row !== null && row.sessionId === sessionId
+  }
+
+  /**
+   * One kept turn of a session with one page of its files, compared again from its two stored scans. Every file
+   * of the turn is on some page: `from` says how many stand before the one asked for.
+   */
+  private async turnDetail(sessionId: string, turnId: string, from: number): Promise<TurnDetailAnswer> {
     const row = await this.options.database.companion('getTurn', turnId)
     if (row === null || row.sessionId !== sessionId) return { kept: false }
-    const detail = { turn: turnSummary(row), workTree: row.workTree, labels: row.labels, files: [] as TurnFileView[], moreFiles: 0, unavailable: null as string | null }
+    const detail = {
+      turn: turnSummary(row), workTree: row.workTree, labels: row.labels, files: [] as TurnFileView[], from: 0, total: 0, unavailable: null as string | null
+    }
     const port = this.options.turnChanges
     if (row.totals === null || row.before === null || row.after === null || row.workTree === null || port === undefined) return { kept: true, detail }
     const pair = { session: sessionId, root: row.workTree, a: row.before, b: row.after }
     const compared = await this.turnRead((signal) => port.compare(pair, signal))
+    // The comparison took its time: a turn that was removed meanwhile is not answered as kept.
+    if (!(await this.turnKept(sessionId, turnId))) return { kept: false }
     if (compared.state !== 'compared') return { kept: true, detail: { ...detail, unavailable: turnUnavailable(compared.reason) } }
-    return { kept: true, detail: {
-      ...detail, files: compared.files.slice(0, TURN_FILES_LIMIT).map(turnFileView), moreFiles: Math.max(0, compared.files.length - TURN_FILES_LIMIT)
-    } }
+    const total = compared.files.length
+    // A page past the last one (the scans list fewer files than when it was asked for) is answered with the last.
+    const start = Math.min(from, Math.max(0, Math.ceil(total / TURN_FILES_LIMIT) - 1) * TURN_FILES_LIMIT)
+    return { kept: true, detail: { ...detail, files: compared.files.slice(start, start + TURN_FILES_LIMIT).map(turnFileView), from: start, total } }
   }
 
   /** One file's difference of a kept turn: bounded, every secret value masked before it leaves the worker thread. */
@@ -1299,6 +1325,8 @@ export class CompanionService {
     if (row.before === null || row.after === null || row.workTree === null || port === undefined) return { kept: true, unavailable: turnUnavailable('') }
     const pair = { session: sessionId, root: row.workTree, a: row.before, b: row.after, path }
     const difference = await this.turnRead((signal) => port.difference(pair, signal))
+    // Read while the turn was being removed: nothing of it is shown as kept.
+    if (!(await this.turnKept(sessionId, turnId))) return { kept: false }
     return difference.state === 'text' || difference.state === 'binary' ? { kept: true, difference } : { kept: true, unavailable: turnUnavailable(difference.reason) }
   }
 

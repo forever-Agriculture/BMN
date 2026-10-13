@@ -79,7 +79,12 @@ work tree than the folder BMN found, the capture is refused.
 
 **What belongs** is listed anew at every capture: every tracked path, ignored or not, and every
 untracked path Git does not ignore. A link is stored as its text, the executable bit is stored,
-and a submodule or nested repository is one entry with the commit Git reports for it.
+and a submodule or nested repository is one entry with the commit Git reports for it. Git's list
+decides which is which, and BMN adds no rule of its own: a folder Git lists as one entry (a
+submodule, or an untracked folder with a repository of its own) is never walked, and files the
+repository itself tracks stay its files, read as before, also when their folder later gets a
+`.git` of its own; Git lists them one by one, and its `status` shows a change in them as a change
+of this repository.
 
 **Only new bytes are read.** A file whose size, times, file number and device are what they
 were when it was last read, and that had been still for a moment then, is not read again; a
@@ -205,7 +210,16 @@ trace). The app differs from the measured script in three places, each the stric
 - A bare repository reads "not supported here: a bare repository"; the script said
   "unavailable".
 - The 2 s limit holds for every capture, the first one too, and a listing cut short by it keeps
-  nothing.
+  nothing. It holds for all of a capture's work: reading ends 250 ms before the capture's time
+  (an eighth of that time when it is shorter), so that `HEAD` at the scan's end, the commits of
+  nested repositories, one look at what became of the earlier scan's paths and the folder lists
+  are done inside it. No Git command is given time of its own past the capture's. A capture
+  whose time passes in any of these is "incomplete: 2 s" and never whole, and a cancel is heard
+  in each of them. What is left after that is one step: the staged files and the record are
+  moved into place.
+- A file that neither scan could read (too large, or not readable) is listed in the turn as "not
+  read" and makes its totals partial, also when it reads the same in both scans and nothing else
+  differs: a turn there never shows complete totals of zero.
 - A path that is only in the later capture is "added" when the file was born at least 1 ms after
   the earlier scan began; a file born in that very millisecond reads "entered what is covered".
 
@@ -228,13 +242,21 @@ no row holds a file's name or content).
   tries again; meanwhile that session reads "Removal pending".
 - **A deleted session** takes its turns and captures in the deleting transaction, with one job for
   its whole folder.
-- **At a start**, what a crash left of a capture that was never published is removed. A published
+- **At a start**, what a crash left of a capture that was never published is removed. A capture is
+  published by moving its files into place and then its record; a crash between the two leaves
+  files no record names, with the record still under `staging/`. So a start that finds anything
+  under `staging/` also removes every stored byte that no published capture needs. A published
   capture that no row names, as after a database restore, is left until it is older than the keep
   limit by the time written in its own record, and is then removed.
-- **Space.** One session's stores hold at most 1 GiB and all stores 5 GiB, counted as the bytes of
-  files and folder lists on disk; two sessions in one repository each count their own copy. A
-  capture that would pass either ends "incomplete: store full". Nothing is removed before its time
-  to make room, and nothing outside `<data root>/turn-changes/` is touched.
+- **Space.** One session's stores hold at most 1 GiB and all stores 5 GiB, counted as everything a
+  store keeps on disk: files, folder lists, the records of captures and the note of what was
+  already read. Bytes that are staged, and bytes of a discarded capture until they are unlinked,
+  count too; two sessions in one repository each count their own copy. Room is held for every
+  capture while it runs, so two sessions that capture at once cannot both take the same last
+  bytes; near a bound one of them ends "incomplete: store full" where, alone, it would have
+  fitted. A capture that would pass either bound ends "incomplete: store full", its record
+  included; one for whose record there is no room either writes nothing. Nothing is removed
+  before its time to make room, and nothing outside `<data root>/turn-changes/` is touched.
 
 ## The apps
 
@@ -481,7 +503,10 @@ stored and matched too.
   is the app going on by itself: the hook says `continued` (the prompt's text never leaves the
   hook) and the turn stays open.
 - `SessionStart` with another conversation (source `compact` is none), `SessionEnd`, another
-  foreground process and the session's end close an open turn as "End not observed". BMN takes
+  foreground process and the session's end close an open turn as "End not observed". A "before"
+  is the old process's the moment another one holds the terminal's foreground: BMN reads the
+  foreground again when the scan answers and when the hook confirms, not only at the next
+  event, and such a "before" is discarded, never published. BMN takes
   one last scan of that turn's root while the folder is still the same one; otherwise the turn
   reads "End not observed; final scan unavailable". A new agent's root is never used for an old
   turn. An observed end whose second scan cannot be taken reads the same, or "Not supported
@@ -509,11 +534,16 @@ native `codex`. BMN then asks, the same way and inside the same 2 s, the program
 started itself and that still share the terminal's foreground with it, at most eight, and never
 what those start in turn (an agent's commands). With the Git commands above these are the only
 programs the feature starts, always as `/proc/<a process>/exe --version` and never by a path
-anybody names (`turn-changes-version.ts`; a test holds both lists). BMN asks only a process as
-free as itself: one in another view of the file system (a container, a sandbox), one that gave
-up new privileges (Landlock asks for that) or one with a system-call filter on it is never
-asked, since a program BMN starts would run outside that sandbox; and only while the program is
-still the file BMN identified. Only an answer in the app's own shape counts (`2.1.296 (Claude
+anybody names (`turn-changes-version.ts`; a test holds both lists). BMN asks only where Linux
+reports no confinement on either side: the process and BMN itself both show `NoNewPrivs: 0` (no
+given-up privileges; Landlock asks for that) and `Seccomp: 0` (no system-call filter), live in
+the same views of the file system, of users and of processes, and carry the same label of the
+security module (AppArmor, SELinux). Any other process may be a sandboxed agent's own, and a
+program BMN starts would run outside that sandbox. Equal flags are not taken for equal
+restrictions: when BMN itself runs confined it asks nobody, since a tighter filter or a Landlock
+rule set on the process would read no differently, and every turn then reads "Ordering
+unverified". The program must also still be the file BMN identified. Only an answer in the
+app's own shape counts (`2.1.296 (Claude
 Code)`, `codex-cli 0.162.1`). An app that an interpreter runs without a program of its own has
 none to ask (Claude Code installed from npm would be one; not tried here), and its turns read
 "Ordering unverified".
@@ -585,8 +615,8 @@ was measured. The agent brief and `bmn help agents` are unchanged.
 
 The window reads through four channels of its own, each checked for its sender: where recording
 stands for each session with its latest turn, a session's latest 50 kept turns, one turn with its
-labels and files, and one file's difference. A test calls each of them on the control socket with
-a session's token and with the owner's and is refused both times.
+labels and one page of its files, and one file's difference. A test calls each of them on the
+control socket with a session's token and with the owner's and is refused both times.
 
 ## What the owner reads
 
@@ -618,12 +648,18 @@ BMN does not record holds the terminal's foreground.
 
 The dialog is headed "The latest 50 turns still kept" with the state of recording under it:
 Recording on, Recording off, Paused or Not supported for <app>, joined by "Removal pending" while
-a removal waits for that session. A turn opens beside the list, and in place of it with **Back**
-in a dialog under 900 px wide. An opened turn says "What differs between two scans of <root>. It
-is not a list of what the agent did.", then its labels, its own first, then its files sorted by
-path. At most 2,000 files are listed and the rest are counted. A turn that was removed while open
-reads "No longer kept". The end words are Finished, Error, Interrupted, End not observed and
-Running; a turn that reads "Recording was switched off" has none.
+a removal waits for that session. A session keeps its menu entry and this line while it records,
+has a kept turn, or has stored bytes whose removal still waits, so "Recording off · Removal
+pending" can be read after its last turn has gone. A turn opens beside the list, and in place of
+it with **Back** in a dialog under 900 px wide. An opened turn says "What differs between two
+scans of <root>. It is not a list of what the agent did.", then its labels, its own first, then
+its files sorted by path. Files are listed 2,000 at a time. A turn with more has a row above and
+under the list that says which are listed, as in "Files 2,001–4,000 of 4,321", between **Earlier
+files** and **Later files**, so every file of a turn can be opened. A turn that was removed while
+open reads "No longer kept", and stays so whatever a read that was still on its way answers; the
+host answers "no longer kept" too when the turn goes while it compares. The end words are
+Finished, Error, Interrupted, End not observed and Running; a turn that reads "Recording was
+switched off" has none.
 
 ### A file's difference
 
@@ -644,9 +680,21 @@ three lines of context, a `+` or `−` before each changed line and three neutra
 - **The rule** (`apps/desktop/src/utility/secret-ranges.ts`, shared with the terminal's own mask):
   in a file named `.env`, `.env.<anything>` or `<name>.env`, every value; in JSON, YAML and TOML
   files and lock files, a value whose name contains key, token, secret, password, passwd, auth,
-  credential, cookie or private, but not a map, a list, a block, true, false or null; in those
-  config files and not in lock files, any unbroken run of 32 or more letters, digits, `-`, `_`,
-  `+` or `=`; and in every file the known shapes of keys, tokens and private key blocks.
+  credential, cookie or private; in those config files and not in lock files, any unbroken run of
+  32 or more letters, digits, `-`, `_`, `+` or `=`; and in every file the known shapes of keys,
+  tokens and private key blocks. A named value is taken whole wherever its name stands and
+  however far it goes: at a line's start or inside a map written on one line
+  (`{"db": {"password": "…"}}`, `auth = { token = "…" }`), a quoted value that runs over several
+  lines (in a `.env` file too), a YAML block (`key: |`), a TOML string between three quotes, and
+  the plain items of a list under such a name. Not hidden: true, false, null and `~` (in a
+  config file; a `.env` file hides every value), and a map under such a name, whose own names
+  decide for their values. The rule is blunt on purpose: `"keywords": ["a"]` is hidden too.
+- **Bounded work.** The search is linear and asks, often enough for a stop to be heard within
+  100 ms, whether the read was stopped or its 2 s have passed, as do splitting the texts into
+  lines and laying out the hunks; an all-new file of a million lines stops like any other. A line is searched as far
+  as it can be shown and 2,048 characters further, and where that cut falls inside a run of 32
+  or more characters a token is made of, the run is hidden. Of a difference only the lines that
+  can be shown are laid out; the rest is counted.
 - **Nothing reveals a value.** The original text never leaves the worker thread: what the host
   hands the window already holds the plate, so a copy, Find, a screen reader and the test hook get
   the masked text. There is no control that shows a value.

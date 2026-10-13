@@ -101,7 +101,6 @@ export class TurnStore {
   readonly directory: string
   readonly root: string
   private cache: TurnCache | null = null
-  private stored: number | null = null
   private removing: Promise<void> = Promise.resolve()
 
   /** `key` names the store's folder directly, for a store found on disk whose root is not known. */
@@ -177,10 +176,9 @@ export class TurnStore {
   loadCache(): TurnCache | null {
     if (this.cache && this.record(this.cache.capture)) return this.cache
     this.cache = null
-    this.stored = null
     try {
       const saved = JSON.parse(readFileSync(join(this.directory, 'cache.json'), 'utf8')) as {
-        format: number; capture: string; startedAt: number; stored: number
+        format: number; capture: string; startedAt: number
         files: Array<[string, SeenFile]>; paths: string[]; trees: string[]; folders: Array<[string, [string, number]]>
       }
       if (saved.format === TURN_STORE_FORMAT && this.record(saved.capture)) {
@@ -188,7 +186,6 @@ export class TurnStore {
           capture: saved.capture, startedAt: saved.startedAt, files: new Map(saved.files), paths: new Set(saved.paths),
           trees: new Set(saved.trees), folders: new Map(saved.folders)
         }
-        this.stored = saved.stored
       }
     } catch {
       // No cache: every file is read.
@@ -196,27 +193,37 @@ export class TurnStore {
     return this.cache
   }
 
-  saveCache(cache: TurnCache, stored: number): void {
-    this.cache = cache
-    this.stored = stored
-    const path = join(this.directory, 'cache.json')
-    writeFileSync(`${path}.new`, JSON.stringify({
-      format: TURN_STORE_FORMAT, capture: cache.capture, startedAt: cache.startedAt, stored,
+  /** The cache as it is written to disk. Made before a capture is published, so that its size can be counted first. */
+  cacheText(cache: TurnCache): string {
+    return JSON.stringify({
+      format: TURN_STORE_FORMAT, capture: cache.capture, startedAt: cache.startedAt,
       files: [...cache.files], paths: [...cache.paths], trees: [...cache.trees], folders: [...cache.folders]
-    }), { mode: 0o600 })
+    })
+  }
+
+  /** How many bytes the cache on disk has now; 0 when there is none. */
+  cacheBytes(): number {
+    return lstatSync(join(this.directory, 'cache.json'), { throwIfNoEntry: false })?.size ?? 0
+  }
+
+  saveCache(cache: TurnCache, text: string = this.cacheText(cache)): void {
+    this.cache = cache
+    const path = join(this.directory, 'cache.json')
+    writeFileSync(`${path}.new`, text, { mode: 0o600 })
     renameSync(`${path}.new`, path)
   }
 
   /** Forget what is held in memory: something under the store was removed. */
   forget(): void {
     this.cache = null
-    this.stored = null
   }
 
-  /** Bytes of files and lists kept so far; counted from the disk when nobody wrote the number down. */
-  storedBytes(): number {
-    if (this.stored === null) this.stored = this.exists() ? this.size('objects') : 0
-    return this.stored
+  /**
+   * Bytes on disk of everything this store keeps: files, lists, the records of its captures and its cache.
+   * What is staged and what is on its way out is not kept; whoever stages or discards counts that.
+   */
+  keptBytes(): number {
+    return this.exists() ? this.size('objects') + this.size('captures') + this.cacheBytes() : 0
   }
 
   /**
@@ -275,25 +282,31 @@ export class TurnStore {
       }
     }
     // What the newest capture saw is of no use once that capture is gone: the next one reads every file.
-    // Where it stays, the number of bytes written down with it is counted anew.
     const cachePath = join(this.directory, 'cache.json')
     try {
-      const saved = JSON.parse(readFileSync(cachePath, 'utf8')) as { capture?: unknown; stored?: number }
+      const saved = JSON.parse(readFileSync(cachePath, 'utf8')) as { capture?: unknown }
       if (typeof saved.capture !== 'string' || !kept.includes(saved.capture)) rmSync(cachePath, { force: true })
-      else {
-        saved.stored = this.size('objects')
-        writeFileSync(`${cachePath}.new`, JSON.stringify(saved), { mode: 0o600 })
-        renameSync(`${cachePath}.new`, cachePath)
-      }
     } catch {
       rmSync(cachePath, { force: true })
     }
     return kept.length
   }
 
-  /** What a crash left behind: captures that were never published, and cancelled ones on their way out. Only when none is being taken. */
+  /**
+   * What a crash left behind: captures that were never published, and cancelled ones on their way out. Only
+   * when none is being taken. A folder still in `staging/` may be a publication that was interrupted after
+   * some of its files and lists were moved in and before its record appeared: no record names those bytes,
+   * so every byte no published capture needs is removed with it, and a store that has no capture goes whole.
+   */
   clearLeftovers(): void {
+    let interrupted = false
+    try {
+      interrupted = readdirSync(join(this.directory, 'staging')).length > 0
+    } catch {
+      // No staging folder: nothing was being published.
+    }
     for (const part of ['staging', 'trash']) rmSync(join(this.directory, part), { recursive: true, force: true })
+    if (interrupted) this.removeCaptures([])
   }
 
   /** Resolves when every discarded capture's bytes are gone. */

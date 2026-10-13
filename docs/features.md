@@ -223,8 +223,8 @@ prompt is sent and again when the turn ends, and keeps what differs between the 
 pane's header then shows one quiet button for the latest turn, "4 files +120 −33", and the pane's
 ⋯ menu and the session's menu have **Turn changes…**; both open the same read-only dialog. It
 lists the latest 50 turns still kept, newest first: time, app, how the turn ended, and its totals.
-A turn opens to its files by path, each with its state and the lines it gained and lost, and a
-file opens to its difference under its own row.
+A turn opens to its files by path, 2,000 at a time when it has more, each with its state and the
+lines it gained and lost, and a file opens to its difference under its own row.
 
 Read it by one rule: it is what differs between two scans of that work tree, not a list of what
 the agent did. Another program's changes in between are included, and each turn says under its

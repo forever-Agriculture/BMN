@@ -2,7 +2,8 @@
 //
 // Pure code: no file, no process. A text is split at "\n"; a last line without a line ending is a line
 // of its own kind, so "a" and "a\n" differ, and the missing ending is reported as a mark, never counted
-// as a line.
+// as a line. `stop` is asked in every step that can be long (splitting, numbering, comparing, laying out),
+// so a text of millions of lines is stopped as quickly as a small one.
 
 /** Thrown when the caller's `stop()` says the time is up or the work was cancelled. */
 export class DiffStopped extends Error {
@@ -47,6 +48,8 @@ export interface UnifiedDifference {
   added: number
   removed: number
   hunks: Hunk[]
+  /** Lines of hunks that were counted and not held, because the caller keeps only so many. Absent when all are held. */
+  dropped?: number
 }
 
 const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
@@ -61,17 +64,38 @@ export function decodeText(bytes: Uint8Array): string | null {
   }
 }
 
+const never = (): boolean => false
+/** How many lines pass between two questions to `stop`. */
+const ASK_EVERY = 8_191
+
 /** The lines of a text. An empty text has no line. */
-export function splitLines(text: string): SplitText {
-  if (text === '') return { lines: [], open: false }
-  const lines = text.split('\n')
-  const open = lines[lines.length - 1] !== ''
-  if (!open) lines.pop()
+export function splitLines(text: string, stop: () => boolean = never): SplitText {
+  const lines: string[] = []
+  let start = 0
+  for (let end = text.indexOf('\n'); end >= 0; end = text.indexOf('\n', start)) {
+    lines.push(text.slice(start, end))
+    start = end + 1
+    if ((lines.length & ASK_EVERY) === 0 && stop()) throw new DiffStopped()
+  }
+  const open = start < text.length
+  if (open) lines.push(text.slice(start))
   return { lines, open }
 }
 
+/** How many lines a text has, counted without holding them. */
+export function countLines(text: string, stop: () => boolean = never): number {
+  let count = 0
+  let start = 0
+  for (let end = text.indexOf('\n'); end >= 0; end = text.indexOf('\n', start)) {
+    count += 1
+    start = end + 1
+    if ((count & ASK_EVERY) === 0 && stop()) throw new DiffStopped()
+  }
+  return start < text.length ? count + 1 : count
+}
+
 /** Line identities as numbers, shared by both sides; the open last line gets an identity of its own. */
-function intern(a: SplitText, b: SplitText): [Int32Array, Int32Array] {
+function intern(a: SplitText, b: SplitText, stop: () => boolean): [Int32Array, Int32Array] {
   const ids = new Map<string, number>()
   const idOf = (key: string): number => {
     let id = ids.get(key)
@@ -83,10 +107,12 @@ function intern(a: SplitText, b: SplitText): [Int32Array, Int32Array] {
   }
   const side = (split: SplitText): Int32Array => {
     const out = new Int32Array(split.lines.length)
-    split.lines.forEach((line, index) => {
+    for (let index = 0; index < split.lines.length; index += 1) {
+      if ((index & ASK_EVERY) === ASK_EVERY && stop()) throw new DiffStopped()
+      const line = split.lines[index] as string
       // "\n" cannot occur inside a line, so it marks the open last line without colliding with a real one.
       out[index] = idOf(index === split.lines.length - 1 && split.open ? `${line}\n` : line)
-    })
+    }
     return out
   }
   return [side(a), side(b)]
@@ -97,11 +123,13 @@ function intern(a: SplitText, b: SplitText): [Int32Array, Int32Array] {
  * line that is not part of one longest common subsequence. `stop` is asked about every 2,048 steps.
  */
 function compareIds(a: Int32Array, b: Int32Array, removed: Uint8Array, added: Uint8Array, stop: () => boolean): void {
-  const offset = a.length + b.length + 3
+  // Sized by the first piece that needs them, which is the largest: every later piece lies inside it. Two
+  // texts that differ in a few lines only need a few entries, whatever their length.
+  let offset = 0
   // Furthest x reached on each diagonal: `forward` from the near corner, `backward` from the far one
   // in coordinates counted back from it. Only entries written in the current call are ever read.
-  const forward = new Int32Array(2 * offset + 2)
-  const backward = new Int32Array(2 * offset + 2)
+  let forward = new Int32Array(0)
+  let backward = new Int32Array(0)
   let steps = 0
   const at = (cells: Int32Array, index: number): number => cells[index] as number
 
@@ -111,6 +139,11 @@ function compareIds(a: Int32Array, b: Int32Array, removed: Uint8Array, added: Ui
     const m = bHigh - bLow
     const delta = n - m
     const odd = (delta & 1) !== 0
+    if (forward.length === 0) {
+      offset = n + m + 3
+      forward = new Int32Array(2 * offset + 2)
+      backward = new Int32Array(2 * offset + 2)
+    }
     forward[offset + 1] = 0
     backward[offset + 1] = 0
     const half = Math.ceil((n + m) / 2)
@@ -160,6 +193,8 @@ function compareIds(a: Int32Array, b: Int32Array, removed: Uint8Array, added: Ui
   // An explicit stack: a text of very many lines must not run out of call depth.
   const work: Array<[number, number, number, number]> = [[0, a.length, 0, b.length]]
   for (let next = work.pop(); next !== undefined; next = work.pop()) {
+    // Also before the first piece: a text that is all new or all gone has no step in which to ask.
+    if (stop()) throw new DiffStopped()
     let [aLow, aHigh, bLow, bHigh] = next
     while (aLow < aHigh && bLow < bHigh && a[aLow] === b[bLow]) {
       aLow += 1
@@ -184,88 +219,103 @@ function compareIds(a: Int32Array, b: Int32Array, removed: Uint8Array, added: Ui
 
 /** Which lines of two texts differ. */
 export function diffLines(before: string, after: string, stop: () => boolean = () => false): LineDifference {
-  const a = splitLines(before)
-  const b = splitLines(after)
-  const [idsA, idsB] = intern(a, b)
+  const a = splitLines(before, stop)
+  const b = splitLines(after, stop)
+  const [idsA, idsB] = intern(a, b, stop)
   const removed = new Uint8Array(idsA.length)
   const added = new Uint8Array(idsB.length)
   compareIds(idsA, idsB, removed, added, stop)
   let removedCount = 0
   let addedCount = 0
-  for (const flag of removed) removedCount += flag
-  for (const flag of added) addedCount += flag
+  for (let index = 0; index < removed.length; index += 1) removedCount += removed[index] as number
+  for (let index = 0; index < added.length; index += 1) addedCount += added[index] as number
   return { a, b, removed, added, removedCount, addedCount }
 }
 
-interface Row {
-  kind: ' ' | '-' | '+'
-  a: number | null
-  b: number | null
-  text: string
-  open: boolean
+interface OpenHunk {
+  /** Where its first row stands: lines of each text before it. */
   i: number
   j: number
+  aLines: number
+  bLines: number
+  lines: HunkLine[]
 }
 
 /**
  * A unified difference with `context` lines around each change. `added` and `removed` count whole
- * lines of the two texts; the mark for a missing last line ending counts as none.
+ * lines of the two texts; the mark for a missing last line ending counts as none. It is laid out from
+ * counters: nothing is held for a line outside a hunk, and of the hunks' lines at most `keep` are held,
+ * the rest counted in `dropped`, so a text of millions of lines, changed or not, costs what is shown.
  */
 export function unified(
   before: string,
   after: string,
-  { context = 3, stop = () => false }: { context?: number; stop?: () => boolean } = {}
+  { context = 3, stop = never, keep = Number.POSITIVE_INFINITY }: { context?: number; stop?: () => boolean; keep?: number } = {}
 ): UnifiedDifference {
   const result = diffLines(before, after, stop)
   const { a, b, removed, added } = result
-  const rows: Row[] = []
+  const n = a.lines.length
+  const m = b.lines.length
+  const hunks: Hunk[] = []
+  let kept = 0
+  let dropped = 0
+  let open: OpenHunk | null = null
+  const put = (hunk: OpenHunk, kind: ' ' | '-' | '+', ai: number, bj: number): void => {
+    if (kind !== '+') hunk.aLines += 1
+    if (kind !== '-') hunk.bLines += 1
+    if (kept >= keep) {
+      dropped += 1
+      return
+    }
+    kept += 1
+    const fromA = kind !== '+'
+    hunk.lines.push({ kind, a: fromA ? ai + 1 : null, b: kind !== '-' ? bj + 1 : null, text: (fromA ? a.lines[ai] : b.lines[bj]) as string })
+    if (fromA ? a.open && ai === n - 1 : b.open && bj === m - 1) hunk.lines.push({ kind: '\\' })
+  }
+  const close = (hunk: OpenHunk): void => {
+    // As `diff -u` counts: a side with no line in the hunk is named by the line before it.
+    if (hunk.lines.length > 0) {
+      hunks.push({ aStart: hunk.i + (hunk.aLines > 0 ? 1 : 0), aLines: hunk.aLines, bStart: hunk.j + (hunk.bLines > 0 ? 1 : 0), bLines: hunk.bLines, lines: hunk.lines })
+    }
+  }
   let i = 0
   let j = 0
-  while (i < a.lines.length || j < b.lines.length) {
-    if (i < a.lines.length && removed[i] === 1) {
-      rows.push({ kind: '-', a: i + 1, b: null, text: a.lines[i] as string, open: a.open && i === a.lines.length - 1, i, j })
+  // Unchanged lines since the last change: they are lines i - run .. i - 1 of the earlier text and j - run .. j - 1 of the later.
+  let run = 0
+  let steps = 0
+  while (i < n || j < m) {
+    steps += 1
+    if ((steps & ASK_EVERY) === 0 && stop()) throw new DiffStopped()
+    const gone = i < n && removed[i] === 1
+    const came = !gone && j < m && added[j] === 1
+    if (!gone && !came) {
       i += 1
-    } else if (j < b.lines.length && added[j] === 1) {
-      rows.push({ kind: '+', a: null, b: j + 1, text: b.lines[j] as string, open: b.open && j === b.lines.length - 1, i, j })
       j += 1
-    } else {
-      rows.push({ kind: ' ', a: i + 1, b: j + 1, text: a.lines[i] as string, open: a.open && i === a.lines.length - 1, i, j })
-      i += 1
-      j += 1
-    }
-  }
-  const hunks: Hunk[] = []
-  let index = 0
-  while (index < rows.length) {
-    if ((rows[index] as Row).kind === ' ') {
-      index += 1
+      run += 1
+      if (open !== null && run > context * 2) {
+        // More unchanged lines than two contexts hold: the hunk ends, and the next change starts one of its own.
+        for (let k = 0; k < context; k += 1) put(open, ' ', i - run + k, j - run + k)
+        close(open)
+        open = null
+      }
       continue
     }
-    const start = Math.max(0, index - context)
-    let end = index + 1
-    for (let scan = index + 1; scan < rows.length; scan += 1) {
-      if ((rows[scan] as Row).kind !== ' ') {
-        end = scan + 1
-        continue
-      }
-      // More unchanged lines than two contexts hold: the next change starts a hunk of its own.
-      if (scan - end + 1 > context * 2) break
+    if (open === null) {
+      const lead = Math.min(context, run)
+      open = { i: i - lead, j: j - lead, aLines: 0, bLines: 0, lines: [] }
+      for (let k = lead; k > 0; k -= 1) put(open, ' ', i - k, j - k)
+    } else {
+      for (let k = run; k > 0; k -= 1) put(open, ' ', i - k, j - k)
     }
-    const stopAt = Math.min(rows.length, end + context)
-    const slice = rows.slice(start, stopAt)
-    const first = slice[0] as Row
-    const lines: HunkLine[] = []
-    let aLines = 0
-    let bLines = 0
-    for (const row of slice) {
-      if (row.kind !== '+') aLines += 1
-      if (row.kind !== '-') bLines += 1
-      lines.push({ kind: row.kind, a: row.a, b: row.b, text: row.text })
-      if (row.open) lines.push({ kind: '\\' })
-    }
-    // As `diff -u` counts: a side with no line in the hunk is named by the line before it.
-    hunks.push({ aStart: first.i + (aLines > 0 ? 1 : 0), aLines, bStart: first.j + (bLines > 0 ? 1 : 0), bLines, lines })
-    index = stopAt
+    run = 0
+    put(open, gone ? '-' : '+', i, j)
+    if (gone) i += 1
+    else j += 1
   }
-  return { added: result.addedCount, removed: result.removedCount, hunks }
+  if (open !== null) {
+    const tail = Math.min(context, run)
+    for (let k = 0; k < tail; k += 1) put(open, ' ', i - run + k, j - run + k)
+    close(open)
+  }
+  return { added: result.addedCount, removed: result.removedCount, hunks, ...(dropped > 0 ? { dropped } : {}) }
 }

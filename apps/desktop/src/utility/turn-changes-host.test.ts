@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  ERROR_CODES, METHOD_REGISTRY, TURN_LABELS, TURN_LIST_LIMIT, TURN_SECRET_PLATE, TURN_SWITCH_FOLDER, TURN_WORDINGS,
-  type AppEventMessage, type TurnDetailAnswer, type TurnDifferenceAnswer, type TurnSessionView, type TurnShownLine, type TurnSummary
+  ERROR_CODES, METHOD_REGISTRY, TURN_FILES_LIMIT, TURN_LABELS, TURN_LIST_LIMIT, TURN_SECRET_PLATE, TURN_SWITCH_FOLDER, TURN_WORDINGS,
+  type AppEventMessage, type TurnDetail, type TurnDetailAnswer, type TurnDifferenceAnswer, type TurnSessionView, type TurnShownLine, type TurnSummary
 } from '@bmn/protocol'
 import { CompanionService } from './companion-service'
 import type { DatabaseWorkerClient } from './database-client'
@@ -20,6 +20,7 @@ import type { SessionManager } from './session-manager'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
 import { refusal } from './turn-changes-capture'
 import { TurnChangesEngine, inProcessKeeper, inProcessPort, type TurnChangesPort } from './turn-changes-engine'
+import type { TurnCaptureRecord } from './turn-changes-store'
 import { scratch, sleep, write, type Place } from './test-fixtures/turn-changes/fixtures'
 
 const testRequire = createRequire(import.meta.url)
@@ -388,7 +389,7 @@ describe('what the window reads (Story 69.5)', () => {
 
     const turn = await h.window<TurnDetailAnswer>(METHOD_REGISTRY.turnChangesTurn, { sessionId: 's1', turnId })
     if (!turn.kept) throw new Error('the turn is kept')
-    expect(turn.detail).toMatchObject({ workTree: h.at.repo, moreFiles: 0, unavailable: null })
+    expect(turn.detail).toMatchObject({ workTree: h.at.repo, from: 0, total: 2, unavailable: null })
     expect(turn.detail.labels).toEqual(expect.arrayContaining([TURN_LABELS.covered(), TURN_LABELS.after()]))
     expect(turn.detail.files).toEqual([
       { path: `${MARKER}-added.txt`, state: 'added', added: 2, removed: 0, note: null, opens: true },
@@ -453,11 +454,94 @@ describe('what the window reads (Story 69.5)', () => {
     expect(await h.window(METHOD_REGISTRY.turnChangesList, { sessionId: 's1' })).toEqual([])
     expect(await h.states()).toEqual([{ sessionId: 's1', state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null, latest: null, removalPending: true }])
 
-    // With the switch off the session is still listed while something of it is kept or waits... and not once nothing is.
-    h.database.prepare('DELETE FROM turn_removal_job').run()
+    // With the switch off and its last turn gone, the session is still listed while its bytes wait to be removed:
+    // "Removal pending" stays readable, and the menu's entry stays open...
     await h.switchOn(false)
+    await h.idle()
+    expect(await h.states()).toEqual([{ sessionId: 's1', state: 'off', app: null, pausedRoot: null, pauseReason: null, latest: null, removalPending: true }])
+    // ...and not once nothing of it is kept or waits.
+    h.database.prepare('DELETE FROM turn_removal_job').run()
     expect(await h.states()).toEqual([])
   })
+
+  it('answers "no longer kept" when the turn is removed while its files or a difference are being read', async () => {
+    const waiting: Array<() => void> = []
+    const held = { on: false }
+    const afterwards = async <Answer>(answer: Answer): Promise<Answer> => {
+      if (held.on) await new Promise<void>((resolve) => { waiting.push(resolve) })
+      return answer
+    }
+    // The worker has answered; the answer is on its way to the window when the turn goes.
+    const h = await host('removed-meanwhile', (port) => ({
+      ...port,
+      compare: async (request, signal) => afterwards(await port.compare(request, signal)),
+      difference: async (request, signal) => afterwards(await port.difference(request, signal))
+    }))
+    const turnId = await windowTurn(h)
+    held.on = true
+    const files = h.window<TurnDetailAnswer>(METHOD_REGISTRY.turnChangesTurn, { sessionId: 's1', turnId })
+    const difference = h.window<TurnDifferenceAnswer>(METHOD_REGISTRY.turnChangesDifference, { sessionId: 's1', turnId, path: `${MARKER}-added.txt` })
+    await expect.poll(() => waiting.length).toBe(2)
+    h.database.transaction(() => sweepTurns(h.database, { now: new Date(Date.now() + 2 * 86_400_000).toISOString(), keepDays: 1 }))()
+    held.on = false
+    for (const release of waiting) release()
+    expect(await files).toEqual({ kept: false })
+    expect(await difference).toEqual({ kept: false })
+  })
+
+  it('reaches every file of a turn a page at a time: the last of 2,001 changed files opens like the first', async () => {
+    const h = await host('pages')
+    await h.switchOn(true)
+    const scan = async (job: string, base: string | null = null): Promise<TurnCaptureRecord> => {
+      const answer = await h.engine.capture({ job, session: 's1', folder: h.at.repo, base, publish: true })
+      if (!('record' in answer) || answer.state !== 'whole') throw new Error(`the scan is whole: ${answer.state}`)
+      return answer.record
+    }
+    const before = await scan('before')
+    const name = (index: number): string => `made-up/f-${String(index).padStart(4, '0')}.txt`
+    for (let index = 0; index <= TURN_FILES_LIMIT; index += 1) write(h.at.repo, name(index), `line of ${index}\n`)
+    await sleep(25)
+    // As a turn's second scan is taken: it looks at what became of the first one's paths.
+    const after = await scan('after', before.id)
+    const turnId = 't-many'
+    const row = (record: TurnCaptureRecord): Record<string, unknown> => ({
+      captureId: record.id, sessionId: 's1', workTree: record.root, scanStartedMs: record.startedAt, scanEndedMs: record.endedAt,
+      headStart: record.headStart, headEnd: record.headEnd, state: record.state, bound: record.bound, size: record.bytesStored
+    })
+    await h.service['options'].database.companion('putTurn', {
+      turn: {
+        turnId, number: 1, sessionId: 's1', incarnationId: 'incarnation-1', foreground: '34817:7001:555:1:2', app: 'codex', appVersion: '0.162.1',
+        conversation: CONVERSATION, appTurnId: null, namedFolder: before.root, workTree: before.root, state: 'closed', endKind: 'finished',
+        startedAt: NOW, endedAt: NOW, totalsState: 'complete', totals: { files: TURN_FILES_LIMIT + 1, added: TURN_FILES_LIMIT + 1, removed: 0 }, wording: null,
+        labels: [], before: before.id, after: after.id
+      },
+      captures: [row(before), row(after)]
+    } as never)
+    const read = async (from?: number): Promise<TurnDetail> => {
+      const answer = await h.window<TurnDetailAnswer>(METHOD_REGISTRY.turnChangesTurn, { sessionId: 's1', turnId, ...(from === undefined ? {} : { from }) })
+      if (!answer.kept) throw new Error('the turn is kept')
+      return answer.detail
+    }
+
+    const first = await read()
+    expect(first).toMatchObject({ from: 0, total: TURN_FILES_LIMIT + 1, unavailable: null })
+    expect(first.files).toHaveLength(TURN_FILES_LIMIT)
+    expect(first.files[0]).toEqual({ path: name(0), state: 'added', added: 1, removed: 0, note: null, opens: true })
+    expect(first.files.at(-1)?.path).toBe(name(TURN_FILES_LIMIT - 1))
+    // The file the first page does not hold is on the next one, and opens.
+    const second = await read(TURN_FILES_LIMIT)
+    expect(second).toMatchObject({ from: TURN_FILES_LIMIT, total: TURN_FILES_LIMIT + 1 })
+    expect(second.files).toEqual([{ path: name(TURN_FILES_LIMIT), state: 'added', added: 1, removed: 0, note: null, opens: true }])
+    const answer = await h.window<TurnDifferenceAnswer>(METHOD_REGISTRY.turnChangesDifference, { sessionId: 's1', turnId, path: name(TURN_FILES_LIMIT) })
+    if (!answer.kept || !('difference' in answer) || answer.difference.state !== 'text') throw new Error('a text difference is shown')
+    expect(answer.difference).toMatchObject({ added: 1, removed: 0, more: 0 })
+    expect(answer.difference.hunks.flatMap((hunk) => hunk.lines)).toMatchObject([{ kind: '+', a: null, b: 1, text: `line of ${TURN_FILES_LIMIT}` }])
+    // A page past the last is answered with the last; a start that is no page's is refused.
+    expect(await read(TURN_FILES_LIMIT * 3)).toMatchObject({ from: TURN_FILES_LIMIT, files: [{ path: name(TURN_FILES_LIMIT) }] })
+    for (const from of [1, -TURN_FILES_LIMIT, 1.5, `${TURN_FILES_LIMIT}`]) {
+      await expect(h.window(METHOD_REGISTRY.turnChangesTurn, { sessionId: 's1', turnId, from })).rejects.toThrow('from must be where a page starts')
+    }
+  }, 60_000)
 
   it('still lists a session whose switch went off beside its kept turn, as off', async () => {
     const h = await host('off-kept')

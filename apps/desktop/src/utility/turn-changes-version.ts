@@ -19,33 +19,47 @@ export function turnAppVersion(app: string, answer: string): string | null {
   return ANSWERS[app]?.exec(answer.slice(0, 256))?.[1] ?? null
 }
 
-/** What Linux says confines a process: the view of the file system it lives in, whether it gave up new privileges, and whether a system-call filter is on it. */
-function confinement(procRoot: string, pid: number | 'self'): string | null {
+/**
+ * Where a process that Linux reports as unconfined lives: its views of the file system, of users and of
+ * processes, and the label a security module put on it. Null for a process that gave up new privileges (Landlock
+ * asks for that) or carries a system-call filter, and when any of this cannot be read. Those two flags read the
+ * same however many further restrictions were laid on top (a tighter filter, a Landlock rule set), so two
+ * processes that both carry them are never taken for equally confined.
+ */
+function unconfined(procRoot: string, pid: number | 'self'): string | null {
   try {
     const status = readFileSync(`${procRoot}/${pid}/status`, 'utf8')
     const flag = (name: string): string | null => new RegExp(`^${name}:\\s*(\\d+)$`, 'm').exec(status)?.[1] ?? null
-    const privileges = flag('NoNewPrivs')
-    const filter = flag('Seccomp')
-    if (privileges === null || filter === null) return null
-    return `${readlinkSync(`${procRoot}/${pid}/ns/mnt`)} ${privileges} ${filter}`
+    if (flag('NoNewPrivs') !== '0' || flag('Seccomp') !== '0') return null
+    const views = ['mnt', 'user', 'pid'].map((view) => readlinkSync(`${procRoot}/${pid}/ns/${view}`))
+    let label: string
+    try {
+      label = readFileSync(`${procRoot}/${pid}/attr/current`, 'utf8').replaceAll('\0', '').trim()
+    } catch {
+      // No security module answers for this process. Where one labels BMN, a process without a label that can be read differs from it.
+      label = ''
+    }
+    return `${views.join(' ')} ${label}`
   } catch {
     return null
   }
 }
 
 /**
- * Whether BMN may run the program a foreground process is. Only for a process as free as BMN itself: one that
- * lives in another view of the file system (a container, a sandbox), that gave up new privileges (Landlock asks
- * for that) or that has a system-call filter on it may be a sandboxed agent's own, and a program BMN starts runs
- * outside that sandbox. The program must also still be the very file the identity names.
+ * Whether BMN may run the program a foreground process is. Only where Linux reports no confinement on either
+ * side and both live in the same views under the same label: a process in another view of the file system (a
+ * container, a sandbox), one that gave up new privileges, one with a system-call filter or one under another
+ * security label may be a sandboxed agent's own, and a program BMN starts runs outside that sandbox. When BMN
+ * itself is confined nobody is asked: what else was laid on a process beside BMN's own confinement cannot be
+ * read. The program must also still be the very file the identity names.
  */
 export function mayAskProgram(identity: string, procRoot: string = '/proc'): boolean {
   const [, pidText, , device, inode] = identity.split(':')
   const pid = Number(pidText)
   if (!Number.isSafeInteger(pid) || pid <= 0) return false
   try {
-    const own = confinement(procRoot, 'self')
-    if (own === null || confinement(procRoot, pid) !== own) return false
+    const own = unconfined(procRoot, 'self')
+    if (own === null || unconfined(procRoot, pid) !== own) return false
     const program = statSync(`${procRoot}/${pid}/exe`, { bigint: true })
     return String(program.dev) === device && String(program.ino) === inode
   } catch {

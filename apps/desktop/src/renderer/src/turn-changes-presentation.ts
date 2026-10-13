@@ -166,6 +166,13 @@ export function turnMoreWords(more: number | null): string | null {
   return more === null ? 'More lines not shown' : `${count(more)} more ${more === 1 ? 'line' : 'lines'} not shown`
 }
 
+/** Which of a turn's files are listed, when one page does not hold them all: "Files 2,001–4,000 of 4,321", "File 4,001 of 4,001". */
+export function turnFilesShown(from: number, listed: number, total: number): string | null {
+  if (listed === 0 || listed >= total) return null
+  if (listed === 1) return `File ${count(from + 1)} of ${count(total)}`
+  return `Files ${count(from + 1)}–${count(from + listed)} of ${count(total)}`
+}
+
 /** A line number as a difference shows it. */
 export function turnLineNumber(value: number | null): string {
   return value === null ? '' : count(value)

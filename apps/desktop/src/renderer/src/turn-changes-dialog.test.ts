@@ -33,7 +33,7 @@ function dialog(given: {
   return renderToStaticMarkup(createElement(TurnChangesView, {
     view: given.view === undefined ? view() : given.view, turns: given.turns === undefined ? [turn('t-1')] : given.turns,
     opened: given.opened ?? null, bodies: given.bodies ?? new Map(), home: '/home/synthetic', now: NOW,
-    onOpenTurn: noop, onBack: noop, onToggleFile: noop
+    onOpenTurn: noop, onBack: noop, onToggleFile: noop, onPage: noop
   }))
 }
 /** What a reader, a copy and Find get: the text of the markup. */
@@ -113,6 +113,10 @@ describe('the state of recording beside older numbers', () => {
   it('says "Removal pending" beside the state while a removal waits for this session', () => {
     expect(dialog({ view: view({ state: 'paused', removalPending: true }) })).toContain('<p class="turn-recording" role="status">Paused · Removal pending</p>')
     expect(dialog({ view: view({ removalPending: true }) })).toContain('Recording on · Removal pending')
+    // With recording off and its last turn gone, the session's bytes may still wait to be removed: the dialog says so.
+    const leftOnly = dialog({ turns: [], view: view({ state: 'off', app: null, latest: null, removalPending: true }) })
+    expect(leftOnly).toContain('<p class="turn-recording" role="status">Recording off · Removal pending</p>')
+    expect(leftOnly).toContain('<p class="turn-gone">No turns yet</p>')
     expect(dialog({ view: view() })).not.toContain('Removal pending')
   })
 })
@@ -133,7 +137,7 @@ const SCANS = 'Two scans of /home/synthetic/code/shop, the first from 14:05:02 t
 function detail(change: Partial<TurnDetail> = {}): TurnDetail {
   return {
     turn: turn('t-2', { app: 'codex', appVersion: '0.162.1', startedAt: at(13, 14, 5), totalsState: 'partial', totals: { files: 11, added: 96, removed: 40 }, wording: TURN_WORDINGS.partial(3) }),
-    workTree: '/home/synthetic/code/shop', labels: [SCANS, 'Anything written after the second scan ended is not included', OWN], files: FILES, moreFiles: 0, unavailable: null, ...change
+    workTree: '/home/synthetic/code/shop', labels: [SCANS, 'Anything written after the second scan ended is not included', OWN], files: FILES, from: 0, total: FILES.length, unavailable: null, ...change
   }
 }
 const opened = (change: Partial<TurnDetail> = {}): TurnOpened => ({ state: 'read', turnId: 't-2', detail: detail(change) })
@@ -168,10 +172,34 @@ describe('an opened turn', () => {
     expect(html).toContain('‹ Back')
   })
 
-  it('counts the files it does not list, and says why when the two scans cannot be compared now', () => {
-    const many = dialog({ opened: opened({ moreFiles: 1_500 }) })
-    expect(many).toContain('<span class="eyebrow">Files · 1,509</span>')
-    expect(many).toContain('1,500 more files not listed')
+  it('lists one page of its files between the ways to the pages before and after, so that every file can be opened', () => {
+    const page = (from: number, listed: number): TurnFileView[] => Array.from({ length: listed }, (_unused, index) => (
+      { path: `src/f-${String(from + index).padStart(4, '0')}.ts`, state: 'changed', added: 1, removed: 1, note: null, opens: true }))
+    const pages = (html: string): string[] => [...html.matchAll(/<nav class="turn-pages" aria-label="Pages of this turn&#x27;s files">(.*?)<\/nav>/g)]
+      .map((match) => [...(match[1] ?? '').matchAll(/<(button|span)([^>]*)>([^<]*)</g)]
+        .map((part) => `${part[1] === 'span' ? '' : /disabled/.test(part[2] ?? '') ? 'x ' : '> '}${part[3]}`).join(' | '))
+
+    const first = dialog({ opened: opened({ files: page(0, 2_000), from: 0, total: 4_321 }) })
+    expect(first).toContain('<span class="eyebrow">Files · 4,321</span>')
+    // Above the list and under it: wherever the reader is when the page ends.
+    expect(pages(first)).toEqual(Array(2).fill('x ‹ Earlier files | Files 1–2,000 of 4,321 | > Later files ›'))
+    expect(fileRows(first)).toHaveLength(2_000)
+    expect(fileRows(first)[0]).toBe('> src/f-0000.ts changed +1 −1')
+
+    const middle = dialog({ opened: opened({ files: page(2_000, 2_000), from: 2_000, total: 4_321 }) })
+    expect(pages(middle)).toEqual(Array(2).fill('> ‹ Earlier files | Files 2,001–4,000 of 4,321 | > Later files ›'))
+    const last = dialog({ opened: opened({ files: page(4_000, 321), from: 4_000, total: 4_321 }) })
+    expect(pages(last)).toEqual(Array(2).fill('> ‹ Earlier files | Files 4,001–4,321 of 4,321 | x Later files ›'))
+    expect(fileRows(last).at(-1)).toBe('> src/f-4320.ts changed +1 −1')
+    // A page of one file names it as one.
+    expect(pages(dialog({ opened: opened({ files: page(2_000, 1), from: 2_000, total: 2_001 }) })))
+      .toEqual(Array(2).fill('> ‹ Earlier files | File 2,001 of 2,001 | x Later files ›'))
+    // A turn whose files stand on one page has no such row, and nothing reads "not listed".
+    expect(dialog({ opened: opened() })).not.toContain('turn-pages')
+    expect(first + middle + last).not.toMatch(/not listed/)
+  })
+
+  it('says why when the two scans cannot be compared now', () => {
     const unreadable = dialog({ opened: opened({ files: [], unavailable: 'The stored scans of this turn cannot be read' }) })
     expect(unreadable).toContain('<p class="turn-gone">The stored scans of this turn cannot be read</p>')
     expect(unreadable).not.toContain('class="turn-files"')

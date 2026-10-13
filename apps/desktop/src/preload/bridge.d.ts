@@ -314,8 +314,8 @@ export interface AiTerminalBridge {
   listTurnRecording(): Promise<TurnSessionView[]>
   /** A session's latest kept turns, newest first. */
   listTurns(sessionId: string): Promise<TurnSummary[]>
-  /** One kept turn with its labels and files; `kept: false` once it is no longer kept. */
-  readTurn(sessionId: string, turnId: string): Promise<TurnDetailAnswer>
+  /** One kept turn with its labels and one page of its files, the one that `from` files stand before; `kept: false` once it is no longer kept. */
+  readTurn(sessionId: string, turnId: string, from?: number): Promise<TurnDetailAnswer>
   /** One file's difference of a kept turn: bounded, every secret value already masked. Nothing reveals one. */
   readTurnDifference(sessionId: string, turnId: string, path: string): Promise<TurnDifferenceAnswer>
   /** Resume: a session's count of failed scans goes back to zero. */

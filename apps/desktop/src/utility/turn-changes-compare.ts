@@ -3,11 +3,12 @@
 // The reading is "what differs between two scans of this work tree" (R69-NFR7). A path that is in
 // only one capture is "added" or "removed" only where the later capture showed it: the file was made
 // after the earlier scan began, or nothing has that name any more. Otherwise it entered or left what
-// is covered, adds no lines and makes the totals partial; so does every entry that was not read.
+// is covered, adds no lines and makes the totals partial; so does every entry that was not read, also
+// one that reads the same in both scans: BMN cannot say whether a file it did not read changed.
 import type { TurnShownDifference } from '@bmn/protocol'
 import { TURN_LIMITS, refusal, type TurnRefusal } from './turn-changes-capture'
-import { DiffStopped, decodeText, diffLines, splitLines, unified, type Hunk } from './turn-changes-diff'
-import { showDifference, type ShownLimits } from './turn-changes-shown'
+import { DiffStopped, countLines, decodeText, diffLines, unified, type Hunk } from './turn-changes-diff'
+import { SHOWN_LIMITS, showDifference, type ShownLimits } from './turn-changes-shown'
 import type { TreeRow, TurnCaptureRecord, TurnStore } from './turn-changes-store'
 
 export type TurnFileState =
@@ -120,7 +121,17 @@ function textOf(store: TurnStore, row: Leaf): string | null {
   return null
 }
 
-const countLines = (text: string): number => splitLines(text).lines.length
+/** Every entry of a stored tree that was not read, with why. */
+function* unread(store: TurnStore, hash: string, prefix = ''): Generator<{ path: string; why: string }> {
+  for (const [name, row] of store.tree(hash)) {
+    if (row[1] === 'd') yield* unread(store, row[2], `${prefix}${name}/`)
+    else {
+      const why = whyNotRead(row as Leaf)
+      if (why !== null) yield { path: `${prefix}${name}`, why }
+    }
+  }
+}
+
 const whyNotRead = (row: Leaf): string | null => (row[1] === 'u' ? row[2] : row[1] === 'x' ? TOO_LARGE : null)
 const sizeOf = (row: Leaf | null): number | null => (row !== null && row[1] === 'f' ? row[3] : null)
 
@@ -148,10 +159,9 @@ export function compareCaptures(store: TurnStore, a: string, b: string, options:
     return row
   }
   try {
-    let seen = 0
     for (const { path, a: ea, b: eb } of differing(store, one.tree, other.tree)) {
-      seen += 1
-      if ((seen & 63) === 0 && stop()) throw new DiffStopped()
+      // At every file: one file may be 10 MiB to read and to count.
+      if (stop()) throw new DiffStopped()
       let row: TurnFileRow
       if (ea && eb) {
         const why = whyNotRead(ea) ?? whyNotRead(eb)
@@ -175,7 +185,7 @@ export function compareCaptures(store: TurnStore, a: string, b: string, options:
         else if (eb[1] === 's') row = { path, state: 'added', kind: 'submodule' }
         else {
           const text = textOf(store, eb)
-          row = text === null ? { path, state: 'added', kind: KIND[eb[1]], sizeBefore: null, sizeAfter: sizeOf(eb) } : { path, state: 'added', kind: KIND[eb[1]], added: countLines(text), removed: 0 }
+          row = text === null ? { path, state: 'added', kind: KIND[eb[1]], sizeBefore: null, sizeAfter: sizeOf(eb) } : { path, state: 'added', kind: KIND[eb[1]], added: countLines(text, stop), removed: 0 }
         }
       } else if (ea) {
         const why = whyNotRead(ea)
@@ -184,13 +194,27 @@ export function compareCaptures(store: TurnStore, a: string, b: string, options:
         else if (ea[1] === 's') row = { path, state: 'removed', kind: 'submodule' }
         else {
           const text = textOf(store, ea)
-          row = text === null ? { path, state: 'removed', kind: KIND[ea[1]], sizeBefore: sizeOf(ea), sizeAfter: null } : { path, state: 'removed', kind: KIND[ea[1]], added: 0, removed: countLines(text) }
+          row = text === null ? { path, state: 'removed', kind: KIND[ea[1]], sizeBefore: sizeOf(ea), sizeAfter: null } : { path, state: 'removed', kind: KIND[ea[1]], added: 0, removed: countLines(text, stop) }
         }
       } else continue
       files.push(row)
       totals.files += 1
       totals.added += row.added ?? 0
       totals.removed += row.removed ?? 0
+    }
+    // An entry that was not read and reads the same in both scans (a file over the limit with its size and
+    // time unchanged, a file BMN may not open) did not come up above. The later scan counted how many it has;
+    // only then is its tree walked for them.
+    if (other.counts.tooLarge + other.counts.notRead > 0) {
+      const listed = new Set(files.map((row) => row.path))
+      let walked = 0
+      for (const { path, why } of unread(store, other.tree)) {
+        walked += 1
+        if ((walked & 255) === 0 && stop()) throw new DiffStopped()
+        if (listed.has(path)) continue
+        files.push(uncounted({ path, state: 'not read', why }))
+        totals.files += 1
+      }
     }
   } catch (error) {
     if (error instanceof DiffStopped) return cancelled() ? refusal('cancelled', 'cancelled') : refusal('unavailable', LIMIT_REACHED)
@@ -267,6 +291,8 @@ export function shownFileDifference(
   path: string,
   options: CompareOptions & { shown?: ShownLimits } = {}
 ): TurnShownDifference | TurnRefusal {
+  // No more lines are laid out than can be shown: the rest is counted.
   return differenceAt(store, a, b, path, options, (before, after, stop): TurnShownDifference =>
-    showDifference(path, before, after, unified(before, after, { context: 3, stop }), { stop, ...(options.shown ? { limits: options.shown } : {}) }))
+    showDifference(path, before, after, unified(before, after, { context: 3, stop, keep: (options.shown ?? SHOWN_LIMITS).lines + 1 }),
+      { stop, ...(options.shown ? { limits: options.shown } : {}) }))
 }

@@ -1,8 +1,9 @@
-// MODULE: turn-changes-client.test.ts - the real worker thread, asked from the host's side: a capture and its comparison, a comparison stopped while it runs with the host's own thread left free, and a worker that died
+// MODULE: turn-changes-client.test.ts - the real worker thread, asked from the host's side: a capture and its comparison, a comparison stopped while it runs with the host's own thread left free, the stop where no line is compared and in the search for secrets, named secret values of config files masked in every kind of line, and a worker that died
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { TURN_SECRET_PLATE, type TurnShownLine } from '@bmn/protocol'
 import { TurnChangesClient, TurnChangesUnavailable, turnJobId } from './turn-changes-client'
 import type { TurnCaptureAnswer } from './turn-changes-engine'
 import type { TurnCaptureRecord } from './turn-changes-store'
@@ -112,6 +113,77 @@ describe('the turn changes worker thread', () => {
       clearInterval(ticking)
     }
     expect(longest).toBeLessThan(100)
+  })
+
+  it('stops within 100 ms where no line is compared: a file that is all new, millions of short lines, and text made to be slow to search for secrets', async () => {
+    const { at, client } = setup('worker-bounds')
+    const one = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true }))
+    // About 9 MiB of short lines, all new; and one line of 2 MiB that is secret-shaped from end to end.
+    write(at.repo, 'lines.txt', Array.from({ length: 1_500_000 }, (_value, n) => `r${n % 977}`).join('\n') + '\n')
+    write(at.repo, 'keys.txt', `${'sk-'.repeat(700_000)}\nplain\n`)
+    write(at.repo, 'config.yaml', `${'a-'.repeat(400_000)}\ntoken: "${'eyJ'.repeat(200_000)}\n`)
+    const two = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true, base: one.id }))
+    const pair = { session: 's-one', root: at.repo, a: one.id, b: two.id }
+    const compared = await client.compare(pair)
+    expect(compared).toMatchObject({ state: 'compared', totals: { files: 3, partial: false } })
+    for (const path of ['lines.txt', 'keys.txt', 'config.yaml']) {
+      // Left alone it answers inside its 2 s, with every bound of what is shown kept and no value in it.
+      const began = performance.now()
+      const whole = await client.difference({ ...pair, path })
+      expect(performance.now() - began, path).toBeLessThan(2_600)
+      expect(whole.state, path).toBe('text')
+      expect(JSON.stringify(whole).length, path).toBeLessThan(2_000_000)
+      expect(JSON.stringify(whole), path).not.toMatch(/sk-sk-|eyJeyJ/)
+      // Stopped at once, and stopped a moment after it began: heard within 100 ms both times.
+      for (const wait of [0, 20]) {
+        const controller = new AbortController()
+        const answer = client.difference({ ...pair, path }, controller.signal)
+        await sleep(wait)
+        const stoppedAt = performance.now()
+        controller.abort()
+        expect(await answer, `${path} after ${wait} ms`).toEqual({ state: 'cancelled', reason: 'cancelled' })
+        expect(performance.now() - stoppedAt, `${path} after ${wait} ms`).toBeLessThan(100)
+      }
+    }
+    const controller = new AbortController()
+    const answer = client.compare(pair, controller.signal)
+    await sleep(10)
+    const stoppedAt = performance.now()
+    controller.abort()
+    expect(await answer).toEqual({ state: 'cancelled', reason: 'cancelled' })
+    expect(performance.now() - stoppedAt).toBeLessThan(100)
+  }, 60_000)
+
+  it('hands back no named secret value of a config file, in removed, added or unchanged lines, however the file writes it, with the counts of the original texts', async () => {
+    const { at, client } = setup('worker-masks')
+    // Values no known shape and no long run would find: only their names say what they are. In each file one
+    // stays (an unchanged line beside the change), one changes (removed and added lines), and a plain line changes.
+    const files = (was: 'old' | 'new'): Record<string, string> => ({
+      'nested.json': `{"db": {"user": "shop", "password": "MADEUPctxJ"},\n "auth": {"client": {"key": "MADEUP${was}J"}},\n "retries": "${was}"}\n`,
+      'block.yaml': `service: shop\nprivate_key: |\n  MADEUPctxY one\n  MADEUPctxY two\nsigning_secret: >-\n  MADEUP${was}Y folded\nretries: ${was}\n`,
+      'strings.toml': `name = "shop"\napi_token = """\nMADEUPctxT\nmore MADEUPctxT"""\nsession_secret = """MADEUP${was}T"""\nretries = "${was}"\n`,
+      '.env': `NAME=shop\nCERT="MADEUPctxE\nsecond MADEUPctxE"\nOTHER="MADEUP${was}E\ntail MADEUP${was}E"\nRETRIES=${was}\n`
+    })
+    for (const [name, content] of Object.entries(files('old'))) write(at.repo, name, content)
+    const one = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true }))
+    await sleep(25)
+    for (const [name, content] of Object.entries(files('new'))) write(at.repo, name, content)
+    const two = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true, base: one.id }))
+    const pair = { session: 's-one', root: at.repo, a: one.id, b: two.id }
+    const changed: Record<string, number> = { 'nested.json': 2, 'block.yaml': 2, 'strings.toml': 2, '.env': 3 }
+    for (const [path, lines] of Object.entries(changed)) {
+      const answer = await client.difference({ ...pair, path })
+      if (answer.state !== 'text') throw new Error(`${path}: ${answer.state}`)
+      // The counts and the line numbers are the original texts'.
+      expect(answer, path).toMatchObject({ added: lines, removed: lines, more: 0 })
+      const shown = answer.hunks.flatMap((hunk) => hunk.lines).filter((line): line is TurnShownLine => line.kind !== '\\')
+      for (const kind of [' ', '-', '+'] as const) {
+        expect(shown.some((line) => line.kind === kind && line.text.includes(TURN_SECRET_PLATE)), `${path}: a masked "${kind}" line`).toBe(true)
+      }
+      expect(shown.filter((line) => line.kind === '+'), path).toHaveLength(lines)
+      // Nothing the worker hands back holds a value, whichever line it stood in.
+      expect(JSON.stringify(answer), path).not.toContain('MADEUP')
+    }
   })
 
   it('answers "unavailable" with fixed words when the worker dies, and starts it again for the next request', async () => {

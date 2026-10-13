@@ -3,7 +3,8 @@
 // Pure code: no file, no process. The lines, their numbers and the counts are the original texts'. Secret
 // ranges are found over both whole texts by the rule that goes by the file's name (R67-NFR7) and laid over
 // those lines, so a value is the same plate in an added, a removed and a context line, and a key block of
-// many lines stays that many lines. Nothing here can be asked to show a value.
+// many lines stays that many lines. Nothing here can be asked to show a value. The search for values is
+// stopped by the same `stop` as the comparison and looks at each line only as far as it can be shown.
 import type { TurnShownDifference, TurnShownHunk, TurnShownLine } from '@bmn/protocol'
 import { secretRanges, type SecretRange } from './secret-ranges'
 import { DiffStopped, type UnifiedDifference } from './turn-changes-diff'
@@ -21,9 +22,12 @@ export const SHOWN_LIMITS: Readonly<ShownLimits> = Object.freeze({ lines: 5_000,
 export const SECRET_PLATE = '••••••••••'
 
 /** Where each line of a text begins; the line numbered n begins at index n - 1. */
-function lineStarts(text: string): number[] {
+function lineStarts(text: string, check: () => void): number[] {
   const starts = [0]
-  for (let at = text.indexOf('\n'); at >= 0; at = text.indexOf('\n', at + 1)) starts.push(at + 1)
+  for (let at = text.indexOf('\n'); at >= 0; at = text.indexOf('\n', at + 1)) {
+    starts.push(at + 1)
+    if ((starts.length & 8_191) === 0) check()
+  }
   return starts
 }
 
@@ -33,9 +37,9 @@ class Laid {
   private readonly ranges: readonly SecretRange[]
   private readonly starts: readonly number[]
 
-  constructor(path: string, text: string) {
-    this.ranges = secretRanges(path, text)
-    this.starts = lineStarts(text)
+  constructor(path: string, text: string, shown: number, check: () => void) {
+    this.ranges = secretRanges(path, text, { shown, check })
+    this.starts = lineStarts(text, check)
   }
 
   /** The parts of the line numbered `line` that a range covers, in the line's own offsets. */
@@ -99,9 +103,13 @@ export function showDifference(
 ): Extract<TurnShownDifference, { state: 'text' }> {
   const limits = options.limits ?? SHOWN_LIMITS
   const stop = options.stop ?? (() => false)
-  const a = new Laid(path, before)
-  const b = new Laid(path, after)
-  if (stop()) throw new DiffStopped()
+  const check = (): void => {
+    if (stop()) throw new DiffStopped()
+  }
+  check()
+  const a = new Laid(path, before, limits.lineCharacters, check)
+  const b = new Laid(path, after, limits.lineCharacters, check)
+  check()
   const hunks: TurnShownHunk[] = []
   let shown = 0
   let bytes = 0
@@ -123,6 +131,7 @@ export function showDifference(
         continue
       }
       total += 1
+      if ((total & 255) === 0) check()
       if (full) continue
       const covered = either(line.a === null ? [] : a.over(line.a, line.text.length), line.b === null ? [] : b.over(line.b, line.text.length))
       const made = readable(line.text, covered, limits.lineCharacters)
@@ -141,5 +150,5 @@ export function showDifference(
     const secret = !full && masked && removed.length > 0 && removed.length === added.length && removed.every((text, index) => text === added[index])
     if (lines.length > 0) hunks.push({ aStart: hunk.aStart, aLines: hunk.aLines, bStart: hunk.bStart, bLines: hunk.bLines, secret, lines })
   }
-  return { state: 'text', added: difference.added, removed: difference.removed, hunks, more: total - shown }
+  return { state: 'text', added: difference.added, removed: difference.removed, hunks, more: total - shown + (difference.dropped ?? 0) }
 }

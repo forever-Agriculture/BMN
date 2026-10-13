@@ -129,7 +129,8 @@ describe('the sweep of turn changes', () => {
     // What is counted against the bounds is what is on disk after the sweep.
     const after = await w.keeper.usage()
     expect(after.all).toBeLessThan(before)
-    expect(after).toEqual({ sessions: { 's-one': store.size('objects') }, all: store.size('objects') })
+    expect(after).toEqual({ sessions: { 's-one': store.keptBytes() }, all: store.keptBytes() })
+    expect(store.keptBytes()).toBeGreaterThan(store.size('objects'))
     const pair = { session: 's-one', root: w.at.repo, a: two.id, b: three.id }
     expect(w.engine.compare(pair)).toMatchObject({ state: 'compared', files: [{ path: 'a.txt', state: 'changed', added: 1, removed: 1 }] })
     expect(w.engine.difference({ ...pair, path: 'a.txt' })).toMatchObject({ state: 'text', added: 1, removed: 1 })

@@ -1,7 +1,7 @@
 // MODULE: turn-changes-shown.test.ts - one file's difference as the window may read it: masks over original lines of all three kinds, a many-line key block, "Secret value changed", both display bounds and the cut of a long line, on made-up values
 import { TURN_SECRET_PLATE, TURN_SHOWN_LIMITS, type TurnShownHunk, type TurnShownLine } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
-import { unified } from './turn-changes-diff'
+import { DiffStopped, unified } from './turn-changes-diff'
 import { SECRET_PLATE, SHOWN_LIMITS, showDifference } from './turn-changes-shown'
 
 const show = (path: string, before: string, after: string, limits?: { lines: number; bytes: number; lineCharacters: number }): ReturnType<typeof showDifference> =>
@@ -66,6 +66,21 @@ describe('the display bounds', () => {
     const shown = show('a.txt', '', many(12), { lines: 5, bytes: 1_000_000, lineCharacters: 2_000 })
     expect(lines(shown.hunks[0])).toHaveLength(5)
     expect(shown).toMatchObject({ added: 12, more: 7 })
+  })
+
+  it('counts the lines the comparison did not hold among those not shown', () => {
+    const after = many(30)
+    const shown = showDifference('a.txt', '', after, unified('', after, { keep: 11 }), { limits: { lines: 10, bytes: 1_000_000, lineCharacters: 2_000 } })
+    expect(lines(shown.hunks[0])).toHaveLength(10)
+    expect(shown).toMatchObject({ added: 30, more: 20 })
+  })
+
+  it('is stopped while it looks for secret values, before a line is laid out', () => {
+    const after = 'name: value\n'.repeat(20_000)
+    const difference = unified('', after)
+    let asked = 0
+    expect(() => showDifference('a.yaml', '', after, difference, { stop: () => (asked += 1) > 2 })).toThrow(DiffStopped)
+    expect(asked).toBe(3)
   })
 
   it('shows at most so many bytes and counts the rest, over several hunks', () => {

@@ -418,6 +418,28 @@
   font-size: 12px;
 }
 
+/* More files than one page lists: which of them are listed, between the ways to the pages before and after. */
+.turn-pages {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.turn-pages span {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
+.turn-changes-dialog .turn-pages button.ghost {
+  min-height: 28px;
+  padding: 2px 10px;
+}
+
 .back-row {
   display: none;
   align-items: center;

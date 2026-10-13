@@ -400,16 +400,22 @@ export class TurnRecorder {
     this.clearTimer(timer)
     const late = first === null
     let answer = first ?? refusal('cancelled', 'cancelled')
+    // The terminal's foreground as it is now, after the scan: a capture during which another process took the
+    // agent's place is the old agent's, and is never published.
+    const current = this.options.foreground.identity(call.sessionId)
+    const replaced = current !== identity
     if (late) {
       void asked.then((done) => (refused(done) ? undefined : this.options.port.discard(done.record.id).catch(() => undefined)))
-    } else if (!refused(answer) && answer.foreground !== identity) {
+    } else if (!refused(answer) && (replaced || answer.foreground !== identity)) {
       await this.options.port.discard(answer.record.id).catch(() => undefined)
       answer = refusal('unavailable', 'the terminal has no foreground process')
     }
     if (refused(answer)) {
-      this.count(state, folder ?? identity, 'failed')
+      // An agent that left is no scan that failed.
+      if (!replaced) this.count(state, folder ?? identity, 'failed')
       if (answer.state === 'not-supported') turn.unsupported = answer.reason
       await this.open(state, turn, waiting, null)
+      if (replaced) this.leave(state, current, null)
       return late ? 'late' : answer.state === 'not-supported' ? 'not-supported' : answer.state === 'busy' ? 'busy' : 'unavailable'
     }
     // Tentative until the hook says, before it lets the app go on, that this answer arrived.
@@ -427,6 +433,14 @@ export class TurnRecorder {
     if (!pending || pending.requestId !== call.requestId) return 'late'
     if (this.now() > pending.deadline) {
       await this.dropPending(state)
+      return 'late'
+    }
+    // Read here and now, not at the last event: another process in the agent's place means the "before" is the
+    // old agent's. It goes, and that agent's turns have no end to wait for.
+    const identity = this.options.foreground.identity(call.sessionId)
+    if (identity !== pending.turn.row.foreground) {
+      await this.dropPending(state)
+      this.leave(state, identity, null)
       return 'late'
     }
     state.pending = null

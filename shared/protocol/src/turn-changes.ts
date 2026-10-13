@@ -143,7 +143,7 @@ export function isTurnRecordingState(value: unknown): value is TurnRecordingStat
 export const TURN_SHOWN_LIMITS = Object.freeze({ lines: 5_000, bytes: 256 * 1024, lineCharacters: 2_000 })
 /** How many turns the dialog lists, newest first. */
 export const TURN_LIST_LIMIT = 50
-/** How many files of one turn are listed; the rest is a count. */
+/** How many files of one turn are listed at a time; the others are read a page at a time. */
 export const TURN_FILES_LIMIT = 2_000
 /** What stands in a shown line where a secret value is: one plate, the same whatever the value's length. */
 export const TURN_SECRET_PLATE = '••••••••••'
@@ -167,7 +167,10 @@ export interface TurnSummary {
   wording: string | null
 }
 
-/** Where recording stands for a session, with its latest kept turn: what the header's plate and the dialog's state line read. */
+/**
+ * Where recording stands for a session, with its latest kept turn: what the header's plate and the dialog's state
+ * line read. A session is here while it records, has a kept turn, or has stored bytes whose removal still waits.
+ */
 export interface TurnSessionView extends TurnRecordingState {
   latest: TurnSummary | null
   /** A removal of this session's stored bytes waits for its next try. */
@@ -189,9 +192,12 @@ export interface TurnDetail {
   turn: TurnSummary
   workTree: string | null
   labels: string[]
+  /** One page of the turn's files in the order of their paths: `TURN_FILES_LIMIT` at most. */
   files: TurnFileView[]
-  /** Files beyond `TURN_FILES_LIMIT`. */
-  moreFiles: number
+  /** How many of the turn's files stand before this page. */
+  from: number
+  /** How many files the turn has, on all its pages. */
+  total: number
   /** Why no files are listed, when the two scans could not be compared now. */
   unavailable: string | null
 }
