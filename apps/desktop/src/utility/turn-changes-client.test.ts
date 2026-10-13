@@ -133,10 +133,16 @@ describe('the turn changes worker thread', () => {
 })
 
 describe('what can reach a capture', () => {
-  // Criterion 11 of Story 69.2: this story adds no way in. A method that marks a turn comes with Story 69.4, and its own test.
-  it('is no control-socket method and no bmn command', () => {
-    for (const file of ['control-server.ts', '../../bin/bmn']) {
-      expect(readFileSync(join(here, file), 'utf8'), file).not.toMatch(/turn-changes|turnChanges|TurnChanges/)
-    }
+  // Story 69.4 added the one way in: `turn.mark`, which answers a status word. Neither the control socket nor
+  // the `bmn` command loads anything that scans, compares or reads the store, and no command reads a turn.
+  it('is one control-socket method that marks a turn; the socket and the bmn command load nothing that reads a capture', () => {
+    const server = readFileSync(join(here, 'control-server.ts'), 'utf8')
+    const cli = readFileSync(join(here, '../../bin/bmn'), 'utf8')
+    const marks = readFileSync(join(here, '../../bin/turn-marks.mjs'), 'utf8')
+    expect(server).not.toMatch(/from '\.\/turn-changes/)
+    expect(cli).not.toMatch(/turn-changes/)
+    expect(marks).not.toMatch(/turn-changes-|child_process|readFile|createReadStream|readdir/)
+    expect([...server.matchAll(/case '(turn[^']*)'/g)].map((match) => match[1])).toEqual(['turn.mark'])
+    expect([...new Set([...cli.matchAll(/method: '(turn[^']*)'/g)].map((match) => match[1]))]).toEqual(['turn.mark'])
   })
 })

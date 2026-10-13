@@ -81,6 +81,8 @@ export interface WorkspaceRecord {
   revision: number
   /** Present and true while "Sessions here may message each other" is on (Epic 66); absent means off. */
   sessionMessages?: boolean
+  /** Present and true while "Record what each turn changes" is on (Epic 69); absent means off. */
+  turnChanges?: boolean
 }
 
 /**
@@ -168,6 +170,7 @@ export interface WorkspaceUpdateParams {
   archived?: boolean
   pinnedFilePaths?: string[]
   sessionMessages?: boolean
+  turnChanges?: boolean
 }
 
 export interface SessionListParams {
@@ -383,7 +386,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const WORKSPACE_RECORD_KEYS = ['workspaceId', 'name', 'defaultCwd', 'pinnedFilePaths', 'position', 'marker', 'archivedAt', 'revision'] as const
-const WORKSPACE_RECORD_OPTIONAL_KEYS = ['sessionMessages'] as const
+const WORKSPACE_RECORD_OPTIONAL_KEYS = ['sessionMessages', 'turnChanges'] as const
 const SESSION_RECORD_KEYS = [
   'sessionId', 'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'terminalGraphics',
   'revision', 'createdAt', 'archivedAt', 'lastProcess'
@@ -394,7 +397,7 @@ const TEMPLATE_RECORD_KEYS = [
   'templateId', 'name', 'executable', 'argv', 'cwd', 'backgroundChoice', 'terminalGraphics', 'revision', 'createdAt'
 ] as const
 const TEMPLATE_RECORD_OPTIONAL_KEYS = ['launchDisabledReason'] as const
-const WORKSPACE_UPDATE_FIELDS = ['name', 'defaultCwd', 'position', 'marker', 'archived', 'pinnedFilePaths', 'sessionMessages'] as const
+const WORKSPACE_UPDATE_FIELDS = ['name', 'defaultCwd', 'position', 'marker', 'archived', 'pinnedFilePaths', 'sessionMessages', 'turnChanges'] as const
 const SESSION_UPDATE_FIELDS = [
   'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'terminalGraphics', 'archived', 'receiveMessages'
 ] as const
@@ -463,6 +466,7 @@ export function isWorkspaceRecord(value: unknown): value is WorkspaceRecord {
   if (!isRecord(value) || !hasExactKeys(value, WORKSPACE_RECORD_KEYS, WORKSPACE_RECORD_OPTIONAL_KEYS)) return false
   return (
     (!('sessionMessages' in value) || typeof value.sessionMessages === 'boolean') &&
+    (!('turnChanges' in value) || typeof value.turnChanges === 'boolean') &&
     isIdentifier(value.workspaceId) &&
     isName(value.name) &&
     isNullableText(value.defaultCwd) &&
@@ -559,6 +563,7 @@ export function isWorkspaceUpdateParams(value: unknown): value is WorkspaceUpdat
   if ('archived' in value && typeof value.archived !== 'boolean') return false
   if ('pinnedFilePaths' in value && !isPinnedFilePaths(value.pinnedFilePaths)) return false
   if ('sessionMessages' in value && typeof value.sessionMessages !== 'boolean') return false
+  if ('turnChanges' in value && typeof value.turnChanges !== 'boolean') return false
   return WORKSPACE_UPDATE_FIELDS.some((key) => key in value)
 }
 

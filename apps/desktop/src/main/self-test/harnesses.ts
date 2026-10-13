@@ -104,6 +104,29 @@ export function writeOriginHarness(directory: string): string {
 }
 
 /**
+ * Epic 69 stand-in agent, started in a made-up repository. Each gate `fire-N` carries one step: files to write
+ * into the folder it stands in, and one event sent through the real `bmn hook codex`. Every byte its terminal
+ * hands it is logged, so the self-test proves that recording a turn types nothing.
+ */
+export function writeTurnHarness(directory: string): string {
+  return writeAcceptanceHarness(directory, 'codex', [
+    "const fs = require('node:fs')",
+    "if (process.stdin.isTTY) process.stdin.setRawMode(true)",
+    "process.stdin.on('data', (chunk) => appendFileSync(file('stdin.log'), chunk))",
+    "writeFileSync(file('ready'), '')",
+    "for (let n = 0; ; n++) {",
+    "  await wait('fire-' + n)",
+    "  const step = JSON.parse(fs.readFileSync(file('fire-' + n), 'utf8'))",
+    "  for (const [name, content] of Object.entries(step.write || {})) fs.writeFileSync(process.cwd() + '/' + name, content)",
+    // The prompt guard reads the approved team under HOME. This stand-in gets a HOME of its own, where there is
+    // none, so the guard has nothing to say on any computer and the owner's team is not read.
+    "  const sent = step.event ? spawnSync('bmn', ['hook', 'codex'], { input: JSON.stringify(step.event), encoding: 'utf8', env: { ...process.env, HOME: directory } }) : { status: 0, stdout: '' }",
+    "  writeFileSync(file('done-' + n), JSON.stringify({ status: sent.status, stdout: sent.stdout }))",
+    "}"
+  ])
+}
+
+/**
  * Epic 30.2 stand-in agent. Each gate `fire-<scenario>` makes it draw one recorded dialog in raw mode,
  * report it through the real `bmn hook`, and log every byte the terminal sends it, so the self-test
  * proves exactly which keys a phone answer wrote. After the keys it reports the answer the way the

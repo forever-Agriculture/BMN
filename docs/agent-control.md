@@ -632,6 +632,9 @@ and `1` otherwise, and `--json` prints the same report as one object. Run it aft
 update rewrites its hook or plugin file. Per app it also says whether the prompt guard is in force
 and, on a `messages:` line, whether that app's hook hands
 [messages](#messages-between-sessions) to a working agent and on which version that was measured.
+A `turn changes:` line says whether that app's turns are recorded where a workspace's switch
+**Record what each turn changes** is on, and on which version waiting for the prompt hook was
+measured ([turn-changes.md](turn-changes.md#how-a-turn-is-recorded)).
 
 For OpenCode 1.18.31 (checked 2026-09-22), `bmn hooks print opencode` prints the TypeScript plugin
 shipped with this CLI. Both `plugin/` and `plugins/` load in the installed binary; BMN uses an
@@ -2084,6 +2087,16 @@ bmn hook is not yours
   printed only for the session and process id that claimed it, with the claim id it was handed. BMN cannot tell which program of a session calls
   these: the destination is what the caller states, so this keeps a well-behaved hook honest and is
   not proof against a program that holds the session's token.
+- No token reads what a turn changed. `turn.mark` is accepted only from a session token, for its
+  own live process, and names no session; the owner token is refused. It takes a closed list
+  (`requestId`, `edge`, `app`, `conversation`, `turn`, and by edge `until`, `folder`,
+  `continued` or `kind`) and answers one status word, never a path, a count or a reason. BMN
+  itself establishes which folder is scanned, from the terminal's foreground process; the folder
+  a hook names says where to look and is never permission to read. No socket method returns a
+  capture, a turn, a file's name or a difference, for a session token or the owner's. Recording
+  paused for a work tree is shown in the window only: it is not a request and reaches no
+  snapshot, token or phone. `hook.observe` takes a conversation, a turn id and a sub-agent mark
+  only from a session token ([turn-changes.md](turn-changes.md#how-a-turn-is-recorded)).
 - `guard.report` is accepted only from a session token, for its own live process. It carries the
   prompt guard's decision (the app, the cause, the line the agent showed, and the provider,
   workspace and agent process a stop is about) and refuses any other field, so a prompt cannot

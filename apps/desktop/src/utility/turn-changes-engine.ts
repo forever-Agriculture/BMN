@@ -5,7 +5,7 @@
 // confirmed the answer, or discards it, and a staged capture nobody settles is discarded by itself.
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { TURN_LIMITS, capture, isRefusal, refusal, type CaptureSeams, type StagedCapture, type TurnLimits, type TurnRefusal } from './turn-changes-capture'
+import { TURN_LIMITS, capture, isRefusal, refusal, type CaptureSeams, type StagedCapture, type TurnLimits, type TurnRefusal, type TurnRootIdentity } from './turn-changes-capture'
 import { compareCaptures, fileDifference, type TurnComparison, type TurnDifference } from './turn-changes-compare'
 import type { TurnGitCall } from './turn-changes-git'
 import { TURN_STORE_FOLDER, TurnStore, isStoreSegment, listTurnStores, workTreeKey, type TurnCaptureRecord } from './turn-changes-store'
@@ -29,6 +29,8 @@ export interface TurnCaptureRequest {
   /** A folder a hook names; it must lie in the root BMN establishes. */
   named?: string | null
   base?: string | null
+  /** The root this capture must find again, or it reads nothing: for a turn's second scan. */
+  expect?: TurnRootIdentity | null
   /** Publish at once, for a capture nobody has to confirm. */
   publish: boolean
 }
@@ -200,7 +202,7 @@ export class TurnChangesEngine {
       if (controller.signal.aborted) return refusal('cancelled', 'cancelled')
       const outcome = await capture(request.folder, {
         git: this.options.git, home: this.options.home, dataRoot: this.options.dataRoot, session: request.session,
-        named: request.named ?? null, base: request.base ?? null, signal: controller.signal, room: this.room(request.session),
+        named: request.named ?? null, base: request.base ?? null, expect: request.expect ?? null, signal: controller.signal, room: this.room(request.session),
         ...(this.options.limits ? { limits: this.options.limits } : {}),
         ...(seams ? { seams } : {}),
         ...(this.options.observeGit ? { observeGit: this.options.observeGit } : {}),

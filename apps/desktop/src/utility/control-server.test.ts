@@ -5,7 +5,7 @@ import { lstat, mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { ERROR_CODES, MAX_CONTROL_FRAME_BYTES } from '@bmn/protocol'
+import { ERROR_CODES, MAX_CONTROL_FRAME_BYTES, type TurnMarkStatus } from '@bmn/protocol'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth } from './control-auth'
 import {
@@ -134,6 +134,9 @@ function fakeHandlers(current: Map<string, string>) {
     messageStatus: vi.fn(async (): Promise<unknown> => ({ messages: [] })),
     takeMessage: vi.fn(async (): Promise<unknown> => ({ message: null })),
     reportMessage: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
+    markTurn: vi.fn(async (p: Parameters<ControlHandlers['markTurn']>[0]): Promise<TurnMarkStatus> =>
+      (p.edge === 'start' ? 'captured' : p.edge === 'confirm' ? 'confirmed' : 'queued')),
+    dropTurnMark: vi.fn(),
     reportRefusal: vi.fn(),
     observeConversation: vi.fn(async (): Promise<unknown> => ({ accepted: true, detail: 'observed' })),
     withdrawAttention: vi.fn(async (): Promise<unknown> => ({ withdrawn: true })),
@@ -1558,5 +1561,115 @@ describe('control server socket lifecycle', () => {
 
     const client = await TestClient.connect(fixture.socketPath)
     expect((await client.request('auth', { token: fixture.auth.ownerToken })).result).toEqual({ scope: 'owner' })
+  })
+})
+
+describe('turn.mark (Story 69.4)', () => {
+  const start = {
+    requestId: 'r-1', until: 1_800_000_000_000, app: 'codex', edge: 'start', conversation: OBSERVED_REFERENCE, turn: 'turn-1', folder: '/synthetic/code/app'
+  }
+  const end = { requestId: 'r-2', app: 'codex', edge: 'end', kind: 'finished', conversation: OBSERVED_REFERENCE, turn: 'turn-1' }
+  const confirm = { requestId: 'r-1', app: 'codex', edge: 'confirm', conversation: OBSERVED_REFERENCE, turn: 'turn-1' }
+
+  it('forwards each edge with the caller\'s own session and answers one status word', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    expect((await agent.request('turn.mark', start)).result).toEqual({ status: 'captured' })
+    expect(fixture.handlers.markTurn).toHaveBeenLastCalledWith({
+      sessionId: 'session-1', incarnationId: 'incarnation-1', requestId: 'r-1', edge: 'start', app: 'codex', conversation: OBSERVED_REFERENCE,
+      turn: 'turn-1', folder: '/synthetic/code/app', until: 1_800_000_000_000, kind: null, continued: false
+    })
+    await agent.request('turn.mark', confirm)
+    expect(fixture.handlers.markTurn).toHaveBeenLastCalledWith(expect.objectContaining({ edge: 'confirm', requestId: 'r-1', folder: null, until: null, kind: null }))
+    await agent.request('turn.mark', end)
+    expect(fixture.handlers.markTurn).toHaveBeenLastCalledWith(expect.objectContaining({ edge: 'end', kind: 'finished', folder: null, until: null }))
+    await agent.request('turn.mark', { ...start, requestId: 'r-3', turn: undefined, folder: undefined, continued: true })
+    expect(fixture.handlers.markTurn).toHaveBeenLastCalledWith(expect.objectContaining({ turn: null, folder: null, continued: true }))
+  })
+
+  it('refuses the owner token, and a session cannot name another session', async () => {
+    const fixture = await serverFixture()
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    expectError(await owner.request('turn.mark', start), ERROR_CODES.unauthorized)
+    expectError(await owner.request('turn.mark', { ...start, sessionId: 'session-1' }), ERROR_CODES.invalidArgument)
+    expectError(await agent.request('turn.mark', { ...start, sessionId: 'session-2' }), ERROR_CODES.invalidArgument)
+    expectError(await agent.request('turn.mark', { ...start, sessionId: 'session-1' }), ERROR_CODES.invalidArgument)
+
+    expect(fixture.handlers.markTurn).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['an unknown parameter', { ...start, files: ['a.txt'] }],
+    ['no request id', { ...start, requestId: undefined }],
+    ['an unknown edge', { ...start, edge: 'middle' }],
+    ['an unknown app', { ...start, app: 'shell' }],
+    ['a conversation that is no reference', { ...start, conversation: 'not-a-conversation-reference-at-all-00' }],
+    ['a turn id with a space', { ...start, turn: 'turn 1' }],
+    ['a start without its time', { ...start, until: undefined }],
+    ['a time that is no whole number', { ...start, until: 12.5 }],
+    ['a folder that is not absolute', { ...start, folder: 'code/app' }],
+    ['a continuation that is not true', { ...start, continued: false }],
+    ['a kind on a start', { ...start, kind: 'finished' }],
+    ['a time on an end', { ...end, until: 1_800_000_000_000 }],
+    ['an end without its kind', { ...end, kind: undefined }],
+    ['an unknown kind', { ...end, kind: 'crashed' }],
+    ['a folder on a confirmation', { ...confirm, folder: '/synthetic/code/app' }]
+  ])('refuses %s', async (_label, params) => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    expectError(await agent.request('turn.mark', params), ERROR_CODES.invalidArgument)
+
+    expect(fixture.handlers.markTurn).not.toHaveBeenCalled()
+  })
+
+  it('lets nothing but a status word back out', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    fixture.handlers.markTurn.mockResolvedValueOnce({ status: 'captured', files: ['MARKER-name.txt'] } as unknown as TurnMarkStatus)
+
+    const response = await agent.request('turn.mark', start)
+
+    expectError(response, ERROR_CODES.ioError)
+    expect(JSON.stringify(response)).not.toContain('MARKER')
+  })
+
+  it('tells the handler when the connection of a "before" that waits for its confirmation closes', async () => {
+    const fixture = await serverFixture()
+    const waiting = await authenticated(fixture, sessionToken(fixture))
+    const answered = await authenticated(fixture, sessionToken(fixture))
+    fixture.handlers.markTurn.mockResolvedValueOnce('late')
+
+    await answered.request('turn.mark', { ...start, requestId: 'r-late' })
+    answered.destroy()
+    await waiting.request('turn.mark', start)
+    expect(fixture.handlers.dropTurnMark).not.toHaveBeenCalled()
+    waiting.destroy()
+
+    await vi.waitFor(() => expect(fixture.handlers.dropTurnMark).toHaveBeenCalledWith('session-1', 'r-1'))
+    expect(fixture.handlers.dropTurnMark).toHaveBeenCalledTimes(1)
+  })
+
+  it('takes what an event says of a turn from a session\'s own hook only', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    const observed = { agent: 'codex', event: 'PostToolUse', effects: [] }
+
+    await agent.request('hook.observe', { ...observed, conversation: OBSERVED_REFERENCE, turn: 'turn-1', nested: true })
+    expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+      sessionId: 'session-1', turn: { conversation: OBSERVED_REFERENCE, turn: 'turn-1', nested: true }
+    }))
+    await agent.request('hook.observe', observed)
+    expect((fixture.handlers.observeHookEvent.mock.calls.at(-1) as unknown[] | undefined)?.[0]).not.toHaveProperty('turn')
+
+    expectError(await owner.request('hook.observe', { ...observed, sessionId: 'session-1', conversation: OBSERVED_REFERENCE }), ERROR_CODES.unauthorized)
+    expectError(await agent.request('hook.observe', { ...observed, turn: 'turn-1' }), ERROR_CODES.invalidArgument)
+    expectError(await agent.request('hook.observe', { ...observed, conversation: OBSERVED_REFERENCE, nested: false }), ERROR_CODES.invalidArgument)
+    expectError(await agent.request('hook.observe', { ...observed, conversation: 'no reference' }), ERROR_CODES.invalidArgument)
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(2)
   })
 })

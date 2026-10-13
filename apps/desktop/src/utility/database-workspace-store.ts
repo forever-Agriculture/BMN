@@ -58,6 +58,7 @@ interface WorkspaceRow {
   archived_at: string | null
   revision: number
   session_messages: number
+  turn_changes: number
 }
 
 interface SessionRow {
@@ -188,7 +189,9 @@ function workspaceRecord(row: WorkspaceRow): WorkspaceRecord {
     archivedAt: row.archived_at,
     revision: row.revision,
     // Carried only while on, so a workspace that never switched messages on reads exactly as before (Story 66.2).
-    ...(row.session_messages === 1 ? { sessionMessages: true } : {})
+    ...(row.session_messages === 1 ? { sessionMessages: true } : {}),
+    // The same for turn changes: old data, which has no such column value but 0, loads as off (Story 69.4).
+    ...(row.turn_changes === 1 ? { turnChanges: true } : {})
   }
   if (!isWorkspaceRecord(record)) {
     throw new WorkspaceStoreError(ERROR_CODES.ioError, 'A stored workspace record is invalid')
@@ -278,7 +281,7 @@ function templateRecord(row: TemplateRow): LaunchTemplateRecord {
 export function selectWorkspace(database: DatabaseConnection, workspaceId: string): WorkspaceRecord {
   const row = database
     .prepare(
-      `SELECT workspace_id, name, default_cwd, pinned_file_paths_json, position, marker, archived_at, revision, session_messages
+      `SELECT workspace_id, name, default_cwd, pinned_file_paths_json, position, marker, archived_at, revision, session_messages, turn_changes
        FROM workspace WHERE workspace_id = ?`
     )
     .get(workspaceId) as WorkspaceRow | undefined
@@ -309,7 +312,7 @@ export function listWorkspaces(
 ): WorkspaceRecord[] {
   const rows = database
     .prepare(
-      `SELECT workspace_id, name, default_cwd, pinned_file_paths_json, position, marker, archived_at, revision, session_messages
+      `SELECT workspace_id, name, default_cwd, pinned_file_paths_json, position, marker, archived_at, revision, session_messages, turn_changes
        FROM workspace
        WHERE ? = 1 OR archived_at IS NULL
        ORDER BY CASE WHEN archived_at IS NULL THEN 0 ELSE 1 END, position, workspace_id`
@@ -379,7 +382,7 @@ export function updateWorkspace(
     .prepare(
       `UPDATE workspace
        SET name = ?, default_cwd = ?, position = ?, marker = ?, archived_at = ?, revision = ?, pinned_file_paths_json = ?,
-           session_messages = ?
+           session_messages = ?, turn_changes = ?
        WHERE workspace_id = ? AND revision = ?`
     )
     .run(
@@ -391,6 +394,7 @@ export function updateWorkspace(
       current.revision + 1,
       JSON.stringify(pins),
       (params.sessionMessages ?? current.sessionMessages === true) ? 1 : 0,
+      (params.turnChanges ?? current.turnChanges === true) ? 1 : 0,
       current.workspaceId,
       current.revision
     )

@@ -57,6 +57,7 @@ export type TurnRefusalReason =
   | 'Git refuses this repository as unsafe'
   | "the repository's settings name another work tree"
   | 'the root changed while it was being established'
+  | 'the root is no longer the folder that was scanned'
   | "this work tree holds BMN's data folder"
   | "this work tree lies in BMN's data folder"
   | 'a sparse checkout'
@@ -96,6 +97,11 @@ export interface CaptureOptions {
   named?: string | null
   /** The capture this one will be compared with first: its paths that are no longer listed are looked at, to tell "gone" from "no longer covered". */
   base?: string | null
+  /**
+   * The root an earlier capture of the same turn established. When the root found now is not that very folder
+   * (the same path, device and file number), nothing is read: a folder put in its place is not the turn's.
+   */
+  expect?: TurnRootIdentity | null
   limits?: Partial<TurnLimits>
   signal?: AbortSignal
   seams?: CaptureSeams
@@ -109,6 +115,13 @@ export interface CaptureOptions {
    */
   room?: number
   observeGit?: (call: TurnGitCall) => void
+}
+
+/** A root as a capture established it: its path, and the device and file number of the folder it opened. */
+export interface TurnRootIdentity {
+  root: string
+  device: number
+  inode: number
 }
 
 /** A capture that is whole or incomplete and not yet real: `publish` makes it so in one step, `discard` removes its bytes at once. */
@@ -436,6 +449,11 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
   if (isRefusal(established)) return established
   phase('root')
   const { root, rootFd } = established
+  const expect = options.expect
+  if (expect && (root !== expect.root || established.device !== expect.device || established.inode !== expect.inode)) {
+    closeSync(rootFd)
+    return refusal('unavailable', 'the root is no longer the folder that was scanned')
+  }
   if (busy.has(root)) {
     closeSync(rootFd)
     return refusal('busy', 'busy')

@@ -49,6 +49,7 @@ import {
   type SessionUsage,
   type UsageReading,
   type GuardStop,
+  type TurnRecordingState,
   type BackupManifest,
   type BackupVerifyResult,
   type ControlInfo,
@@ -726,6 +727,12 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   resumeSessionMessagePair(workspaceId: string, firstSessionId: string, secondSessionId: string): Promise<SessionMessageListing> {
     return invokeBridge('aiterm:messages:resume-pair', { workspaceId, firstSessionId, secondSessionId })
+  },
+  listTurnRecording(): Promise<TurnRecordingState[]> {
+    return invokeBridge('aiterm:turn-changes:state', {})
+  },
+  resumeTurnRecording(sessionId: string): Promise<{ resumed: boolean }> {
+    return invokeBridge('aiterm:turn-changes:resume', { sessionId })
   },
   getSettings(): Promise<AppSettings> {
     return invokeBridge('aiterm:settings:get', {})

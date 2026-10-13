@@ -1616,13 +1616,17 @@ async function checkHooksCommand(agents, pathFor, asJson) {
   const standing = new Map(guard === null ? [] : reports.map((report) => [report.agent, guard.guardStanding(report.agent)]))
   // Epic 66.4: whether this app's hook hands a waiting message to its agent, and on which version that was measured.
   const messages = new Map(guard === null ? [] : reports.map((report) => [report.agent, guard.messageStanding(report.agent)]))
+  // Epic 69: whether this app's turns are recorded, and on which version waiting for the prompt hook was measured.
+  const marks = await import('./turn-marks.mjs').catch(() => null)
+  const turns = new Map(marks === null ? [] : reports.map((report) => [report.agent, marks.turnStanding(report.agent)]))
+  const more = (report) => ({ ...(standing.has(report.agent) ? { guard: standing.get(report.agent), messages: messages.get(report.agent) } : {}), ...(turns.has(report.agent) ? { turnChanges: turns.get(report.agent) } : {}) })
   if (asJson) {
     // This owner command finishes synchronously; a pipe can lose an asynchronous stdout write
     // before the CLI exits. The desktop checker reads that pipe, so finish the report first.
-    writeSync(1, `${JSON.stringify({ ok, agents: reports.map((report) => (standing.has(report.agent) ? { ...report, guard: standing.get(report.agent), messages: messages.get(report.agent) } : report)) }, null, 2)}\n`)
+    writeSync(1, `${JSON.stringify({ ok, agents: reports.map((report) => ({ ...report, ...more(report) })) }, null, 2)}\n`)
     return ok ? 0 : 1
   }
-  const lines = reports.map((report) => `${describeHookCheck(report)}${standing.has(report.agent) ? `\n  ${standing.get(report.agent)}\n  ${messages.get(report.agent)}` : ''}`)
+  const lines = reports.map((report) => `${describeHookCheck(report)}${Object.values(more(report)).map((line) => `\n  ${line}`).join('')}`)
   lines.push(ok
     ? 'Every hook BMN expects is wired. This is what is configured, not proof that a hook fired.'
     : 'Run `bmn hooks install <agent>` to add the missing entries. This reports configuration, not that a hook fired.')
@@ -2110,6 +2114,21 @@ async function handMessage(agent, event, agentPid, procRoot, socketPath, token, 
 }
 
 /**
+ * Epic 69: marks where a turn starts, on a connection of its own. BMN scans the work tree and answers one status
+ * word; when that word says it holds a "before", the hook confirms that the answer arrived, before it lets the
+ * app go on, and only then does the scan count. The mark, its answer and the confirmation share one limit,
+ * `until`, which the mark carries; past it the hook goes on. Nothing is printed, whatever comes back.
+ */
+async function markTurnStart(marks, mark, socketPath, token) {
+  const requestId = randomUUID()
+  const start = { method: 'turn.mark', params: { requestId, until: Date.now() + marks.TURN_MARK_LIMIT_MS, ...mark } }
+  const confirm = (outcomes) => (marks.TURN_MARK_CONFIRMED.includes(outcomes[0]?.result?.status)
+    ? { method: 'turn.mark', params: { requestId, edge: 'confirm', app: mark.app, conversation: mark.conversation, ...(mark.turn === undefined ? {} : { turn: mark.turn }) } }
+    : undefined)
+  await callEach(socketPath, token, [start, confirm], marks.TURN_MARK_LIMIT_MS).catch(() => undefined)
+}
+
+/**
  * Hooks must never disturb the agent: exit 0 whatever happens, and nothing on stdout, with two
  * exceptions: the answer that stops a prompt the guard refused, and a message for its own agent.
  */
@@ -2149,7 +2168,17 @@ async function runHook(args) {
     await callEach(socketPath, token, report, HOOK_TIMEOUT_MS).catch(() => undefined)
     return 0
   }
-  const requests = [...report, ...hookRequests(agent, event)]
+  // Epic 69: a turn's start and end, only for the agent typed into this session (`agentPid` is its process), its
+  // main conversation, an app measured to wait for its prompt hook, and a workspace whose switch BMN wrote down
+  // as on. Everywhere else nothing below adds a call or a parameter.
+  const marks = agentPid ? await import('./turn-marks.mjs').catch(() => null) : null
+  const turns = marks !== null && marks.turnMarksWanted(socketPath, process.env.BMN_SESSION_ID ?? process.env.AITERM_SESSION_ID)
+  const mark = turns ? marks.turnMark(agent, event) : null
+  const marked = Date.now()
+  if (mark?.edge === 'start') await markTurnStart(marks, mark, socketPath, token)
+  // The end goes first among this event's calls: BMN answers "queued" at once and scans after the hook has gone.
+  const ended = mark?.edge === 'end' ? [{ method: 'turn.mark', params: { requestId: randomUUID(), ...mark } }] : []
+  const requests = [...ended, ...report, ...hookRequests(agent, event)]
   const opens = requests.filter((request) => request.method === 'attention.open')
   if (agent === 'claude' && opens.length > 0 && claudeRemoteControlled(agentPid, event.session_id)) {
     for (const request of opens) request.params.phoneNotified = true
@@ -2167,13 +2196,14 @@ async function runHook(args) {
   let reported = Date.now()
   const calls = [...requests, (outcomes) => {
     reported = Date.now()
-    return hookObservation(agent, event, requests, outcomes, apiHost, model, configDir)
+    return hookObservation(agent, event, requests, outcomes, apiHost, model, configDir, turns ? marks.turnFacts(agent, event) : {})
   }]
   const outcomes = await callEach(socketPath, token, calls, HOOK_TIMEOUT_MS).catch(() => [])
   // BMN's answer to the report of this event says when a message waits for this session; without that word
   // the hook adds nothing to the event.
   if (outcomes[requests.length]?.result?.messageWaiting === true) {
-    await handMessage(agent, event, agentPid, procRoot, socketPath, token, reported).catch(() => undefined)
+    // Should one event ever carry both a turn's start and a message, they share the one allowance (R69-NFR5).
+    await handMessage(agent, event, agentPid, procRoot, socketPath, token, mark?.edge === 'start' ? marked : reported).catch(() => undefined)
   }
   return 0
 }
@@ -2249,7 +2279,7 @@ function toolFingerprint(event, agent) {
  * the host accepted: a Stop that found nothing to withdraw, or an open the host refused, leaves the list
  * empty, which is what the owner needs to see when a request they expected never arrived.
  */
-function hookObservation(agent, event, requests, outcomes, apiHost = null, model = undefined, configDir = undefined) {
+function hookObservation(agent, event, requests, outcomes, apiHost = null, model = undefined, configDir = undefined, turn = {}) {
   const eventName = hookEventName(event.hook_event_name)
   if (eventName === undefined) return undefined
   const byMethod = { 'attention.open': 'opened', 'attention.withdraw': 'withdrew', 'attention.resolve': 'answered' }
@@ -2283,7 +2313,9 @@ function hookObservation(agent, event, requests, outcomes, apiHost = null, model
       ...(fingerprint === undefined ? {} : { fingerprint }),
       ...(apiHost === null ? {} : { apiHost }),
       ...(model === undefined ? {} : { model }),
-      ...(configDir === undefined ? {} : { claudeConfigDir: configDir })
+      ...(configDir === undefined ? {} : { claudeConfigDir: configDir }),
+      // Epic 69: which conversation and turn this event belongs to, and whether a sub-agent speaks.
+      ...turn
     }
   }
 }

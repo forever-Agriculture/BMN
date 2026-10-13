@@ -88,6 +88,8 @@ async function cliFixture() {
     messageStatus: vi.fn<ControlHandlers['messageStatus']>(async () => ({ messages: [] })),
     takeMessage: vi.fn<ControlHandlers['takeMessage']>(async () => ({ message: null })),
     reportMessage: vi.fn<ControlHandlers['reportMessage']>(async () => ({ recorded: true })),
+    markTurn: vi.fn<ControlHandlers['markTurn']>(async () => 'off'),
+    dropTurnMark: vi.fn<ControlHandlers['dropTurnMark']>(),
     reportRefusal: vi.fn<ControlHandlers['reportRefusal']>(),
     observeConversation: vi.fn<ControlHandlers['observeConversation']>(async () => ({ accepted: true, detail: 'observed' })),
     withdrawAttention: vi.fn<ControlHandlers['withdrawAttention']>(async () => ({ withdrawn: true })),
@@ -4695,4 +4697,198 @@ it.each(['\u00ad', '\u061c', '\u2060'])('refuses a format-bearing manual option 
   const result = await runCli(['ask', 'format-choice', 'Synthetic', '--choices-json', JSON.stringify(options)], { env: fixture.sessionEnv })
   expect(result.code).toBe(2)
   expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+})
+
+describe('bmn hook turn marks (Story 69.4)', () => {
+  const CWD = '/synthetic/code/app'
+  const WORDS = 'PROMPT-SENTINEL-69-4 the words the owner typed'
+  const prompt = { hook_event_name: 'UserPromptSubmit', session_id: OBSERVED_REFERENCE, prompt_id: 'prompt-1', turn_id: 'turn-1', cwd: CWD, prompt: WORDS }
+  type Fixture = Awaited<ReturnType<typeof cliFixture>>
+
+  /** BMN wrote down, beside its control socket, that this session's workspace has the switch on. */
+  async function recording(fixture: Fixture): Promise<Record<string, string>> {
+    await mkdir(join(dirname(fixture.socketPath), 'turn-marks'), { recursive: true })
+    await writeFile(join(dirname(fixture.socketPath), 'turn-marks', 'session-1'), '')
+    return { BMN_SESSION_ID: 'session-1' }
+  }
+  const marks = (fixture: Fixture) => fixture.handlers.markTurn.mock.calls.map(([call]) => call)
+  const answering = (fixture: Fixture): void => {
+    fixture.handlers.markTurn.mockImplementation(async (p) => (p.edge === 'start' ? 'captured' : p.edge === 'confirm' ? 'confirmed' : 'queued'))
+  }
+
+  it('sends one start mark with closed parameters, confirms the answer, then reports the event as always, and prints nothing', async () => {
+    const fixture = await cliFixture()
+    const env = await recording(fixture)
+    answering(fixture)
+    const before = Date.now()
+
+    const result = await runHook(fixture, 'claude', prompt, HOLDS_TERMINAL, env)
+
+    expect(result).toEqual(QUIET)
+    const [start, confirm] = marks(fixture)
+    expect(marks(fixture)).toHaveLength(2)
+    expect(start).toEqual({
+      sessionId: 'session-1', incarnationId: 'incarnation-1', requestId: expect.stringMatching(/^[0-9a-f-]{36}$/), edge: 'start', app: 'claude',
+      conversation: OBSERVED_REFERENCE, turn: 'prompt-1', folder: CWD, until: expect.any(Number), kind: null, continued: false
+    })
+    expect((start?.until ?? 0) - before).toBeGreaterThan(300)
+    expect((start?.until ?? 0) - Date.now()).toBeLessThanOrEqual(300)
+    expect(confirm).toEqual({ ...start, edge: 'confirm', folder: null, until: null })
+    // The mark and its confirmation come before the event's usual report, which now says which turn it belongs to.
+    const reported = fixture.handlers.observeHookEvent.mock.invocationCallOrder[0] ?? 0
+    expect(Math.max(...fixture.handlers.markTurn.mock.invocationCallOrder)).toBeLessThan(reported)
+    expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+      event: 'UserPromptSubmit', turn: { conversation: OBSERVED_REFERENCE, turn: 'prompt-1', nested: false }
+    }))
+    expect(JSON.stringify([marks(fixture), fixture.handlers.observeHookEvent.mock.calls])).not.toContain('PROMPT-SENTINEL')
+  })
+
+  it.each([['late'], ['unavailable'], ['off'], ['paused'], ['overlapped'], ['not-supported']] as const)('sends no confirmation after the answer %s', async (status) => {
+    const fixture = await cliFixture()
+    const env = await recording(fixture)
+    fixture.handlers.markTurn.mockResolvedValue(status)
+
+    expect(await runHook(fixture, 'codex', prompt, HOLDS_TERMINAL, env)).toEqual(QUIET)
+
+    expect(marks(fixture).map((mark) => mark.edge)).toEqual(['start'])
+    expect(marks(fixture)[0]).toMatchObject({ app: 'codex', turn: 'turn-1' })
+  })
+
+  it('goes on and prints nothing when BMN does not answer within the time of the call', async () => {
+    const fixture = await cliFixture()
+    const env = await recording(fixture)
+    fixture.handlers.markTurn.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve('captured'), 1_500)))
+    const asked = Date.now()
+
+    expect(await runHook(fixture, 'claude', prompt, HOLDS_TERMINAL, env)).toEqual(QUIET)
+
+    // The hook's own start and its usual report are in this time too; the mark alone would hold it for 1.5 s.
+    expect(Date.now() - asked).toBeLessThan(1_300)
+    expect(marks(fixture).map((mark) => mark.edge)).toEqual(['start'])
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('says that the app goes on by itself when Claude Code sends its own prompt after work it left running', async () => {
+    const fixture = await cliFixture()
+    const env = await recording(fixture)
+    fixture.handlers.markTurn.mockResolvedValue('continued')
+
+    expect(await runHook(fixture, 'claude', { ...prompt, prompt_id: 'prompt-2', prompt: '<task-notification>\n<task-id>7</task-id>' }, HOLDS_TERMINAL, env)).toEqual(QUIET)
+
+    expect(marks(fixture)).toEqual([expect.objectContaining({ edge: 'start', turn: 'prompt-2', continued: true })])
+    expect(JSON.stringify(marks(fixture))).not.toContain('task-id')
+  })
+
+  it.each([
+    ['claude', { hook_event_name: 'Stop' }, 'finished'],
+    ['claude', { hook_event_name: 'Stop', background_tasks: [{ id: 'task-1' }] }, 'continues'],
+    ['claude', { hook_event_name: 'Stop', session_crons: [{ id: 'cron-1' }] }, 'continues'],
+    ['codex', { hook_event_name: 'Stop' }, 'finished'],
+    ['codex', { hook_event_name: 'Interrupt' }, 'interrupted']
+  ])('marks the end of a %s turn at %j as %s, first among the event\'s calls', async (agent, event, kind) => {
+    const fixture = await cliFixture()
+    const env = await recording(fixture)
+    answering(fixture)
+
+    expect(await runHook(fixture, agent, { ...prompt, ...event, prompt: undefined }, HOLDS_TERMINAL, env)).toEqual(QUIET)
+
+    expect(marks(fixture)).toEqual([{
+      sessionId: 'session-1', incarnationId: 'incarnation-1', requestId: expect.stringMatching(/^[0-9a-f-]{36}$/), edge: 'end', kind, app: agent,
+      conversation: OBSERVED_REFERENCE, turn: agent === 'claude' ? 'prompt-1' : 'turn-1', folder: null, until: null, continued: false
+    }])
+    const others = [fixture.handlers.observeHookEvent, fixture.handlers.withdrawAttention, fixture.handlers.resolveAttention, fixture.handlers.openAttention]
+      .flatMap((handler) => handler.mock.invocationCallOrder)
+    expect(fixture.handlers.markTurn.mock.invocationCallOrder[0]).toBeLessThan(Math.min(...others))
+  })
+
+  it.each([
+    ['a sub-agent', 'claude', { ...prompt, agent_id: 'agent-7' }, HOLDS_TERMINAL],
+    ['a sub-agent\'s end', 'codex', { ...prompt, hook_event_name: 'Stop', agent_id: 'agent-7' }, HOLDS_TERMINAL],
+    ['an agent another agent started', 'claude', prompt, { comm: 'claude', tty: 0, group: 7001, foreground: -1 }],
+    ['an app that was not measured to wait', 'cursor', { hook_event_name: 'beforeSubmitPrompt', conversation_id: OBSERVED_REFERENCE, prompt: WORDS }, { ...HOLDS_TERMINAL, comm: 'cursor-agent' }],
+    ['OpenCode', 'opencode', { hook_event_name: 'session.status', sessionID: 'ses_1', status: { type: 'busy' } }, { ...HOLDS_TERMINAL, comm: 'opencode' }],
+    ['an event that is neither a prompt nor an end', 'claude', { ...prompt, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {}, tool_response: {} }, HOLDS_TERMINAL],
+    ['an event without a conversation', 'claude', { ...prompt, session_id: 'not a conversation' }, HOLDS_TERMINAL]
+  ])('sends no mark for %s', async (_label, agent, event, agentProcess) => {
+    const fixture = await cliFixture()
+    const env = await recording(fixture)
+
+    const result = await runHook(fixture, agent, event, agentProcess, env)
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toBe('')
+    expect(fixture.handlers.markTurn).not.toHaveBeenCalled()
+  })
+
+  it('sends no mark and no word of a turn while the switch is off, and reports the event exactly as before', async () => {
+    const fixture = await cliFixture()
+    const off = await runHook(fixture, 'claude', prompt, HOLDS_TERMINAL, { BMN_SESSION_ID: 'session-1' })
+    const ended = await runHook(fixture, 'claude', { ...prompt, hook_event_name: 'Stop' }, HOLDS_TERMINAL, { BMN_SESSION_ID: 'session-1' })
+    // Another session's switch is not this session's.
+    await mkdir(join(dirname(fixture.socketPath), 'turn-marks'), { recursive: true })
+    await writeFile(join(dirname(fixture.socketPath), 'turn-marks', 'session-2'), '')
+    const other = await runHook(fixture, 'claude', prompt, HOLDS_TERMINAL, { BMN_SESSION_ID: 'session-1' })
+
+    expect([off, ended, other]).toEqual([QUIET, QUIET, QUIET])
+    expect(fixture.handlers.markTurn).not.toHaveBeenCalled()
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(3)
+    for (const [call] of fixture.handlers.observeHookEvent.mock.calls) expect(call).not.toHaveProperty('turn')
+  })
+
+  it('says of a tool event which turn it belongs to, and that a sub-agent speaks', async () => {
+    const fixture = await cliFixture()
+    const env = await recording(fixture)
+    const tool = { ...prompt, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {}, tool_response: {}, prompt: undefined }
+
+    await runHook(fixture, 'codex', tool, HOLDS_TERMINAL, env)
+    await runHook(fixture, 'codex', { ...tool, agent_id: 'agent-7', turn_id: 'sub-turn' }, HOLDS_TERMINAL, env)
+
+    expect(fixture.handlers.observeHookEvent.mock.calls.map(([call]) => call.turn)).toEqual([
+      { conversation: OBSERVED_REFERENCE, turn: 'turn-1', nested: false },
+      { conversation: OBSERVED_REFERENCE, turn: 'sub-turn', nested: true }
+    ])
+  })
+
+  it('sends no mark for a prompt the guard stopped: the guard\'s answer is all that is printed', async () => {
+    const fixture = await cliFixture()
+    const env = await recording(fixture)
+    const session = await guardedSession(fixture.root, ['claude', '--resume'], MOONSHOT_SESSION)
+
+    const result = await runCli(['hook', 'claude'], {
+      env: { ...fixture.sessionEnv, ...env, BMN_PROC_ROOT: session.proc, HOME: session.home },
+      input: JSON.stringify({ ...prompt, cwd: session.workspace })
+    })
+
+    expect(JSON.parse(result.stdout)).toMatchObject({ decision: 'block' })
+    expect(fixture.handlers.reportGuard).toHaveBeenCalledTimes(1)
+    expect(fixture.handlers.markTurn).not.toHaveBeenCalled()
+  })
+
+  it('prints the guard\'s pass first and the mark after it for a prompt that may go on', async () => {
+    const fixture = await cliFixture()
+    const env = await recording(fixture)
+    answering(fixture)
+    const session = await guardedSession(fixture.root, ['claude', '--continue'])
+
+    const result = await runCli(['hook', 'claude'], {
+      env: { ...fixture.sessionEnv, ...env, BMN_PROC_ROOT: session.proc, HOME: session.home },
+      input: JSON.stringify({ ...prompt, cwd: session.workspace })
+    })
+
+    expect(result).toEqual(QUIET)
+    expect(marks(fixture).map((mark) => mark.edge)).toEqual(['start', 'confirm'])
+    expect(marks(fixture)[0]).toMatchObject({ folder: session.workspace })
+    expect(fixture.handlers.reportGuard).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'pass' }))
+  })
+
+  it('says in `hooks check` per app whether turn changes are recorded and on which version that was measured', async () => {
+    const text = (await runHooks(['check'])).stdout
+    const asJson = JSON.parse((await runHooks(['check', '--json'])).stdout) as { agents: Array<{ agent: string; turnChanges?: string }> }
+
+    expect(text).toContain("  turn changes: recorded where a workspace's switch is on (waiting for the prompt hook measured on Claude Code 2.1.296)")
+    expect(text).toContain("  turn changes: recorded where a workspace's switch is on (waiting for the prompt hook measured on Codex 0.162.1)")
+    expect(text).toContain('  turn changes: not recorded for OpenCode; it was not measured to wait for its prompt hook')
+    expect(text).toContain('  turn changes: not recorded for Cursor; it was not measured to wait for its prompt hook')
+    expect(asJson.agents.find((row) => row.agent === 'codex')?.turnChanges).toMatch(/^turn changes: recorded/)
+  })
 })

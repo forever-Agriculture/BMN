@@ -79,6 +79,8 @@ export const METHOD_REGISTRY = Object.freeze({
   messagesPaste: 'messages.paste',
   messagesPause: 'messages.pause',
   messagesResumePair: 'messages.resumePair',
+  turnChangesState: 'turnChanges.state',
+  turnChangesResume: 'turnChanges.resume',
   settingsGet: 'settings.get',
   settingsPut: 'settings.put',
   historyStatus: 'history.status',

@@ -1,11 +1,12 @@
-# Turn changes: how a work tree is captured, and where a turn's ends are proven
+# Turn changes: how a work tree is captured, where a turn's ends are proven, and how a turn is recorded
 
 BMN can record what differs in a Git work tree between the moment the owner sends a prompt and
 the moment the agent's turn ends. This page holds the measurements that feature is built on
 (Story 69.1): how BMN copies a work tree without touching it or running anything it names, what
 that costs, and, per app and version, whether the app waits for its prompt hook before it acts
 and which events mark the ends of a turn. BMN records turns only for an app and version that
-holds PASS in the table below.
+holds PASS in the table below. [How a turn is recorded](#how-a-turn-is-recorded) says what the
+app does with all of this.
 
 Measured 2026-10-13 on Linux (Ryzen 5 4600H, 12 threads, ext4, Git 2.53.0, Node 24.14.0) with
 the installed apps, each in a throwaway profile inside an isolated BMN built from `cff5032`, in
@@ -186,12 +187,14 @@ cancelled at another moment.
 - **Limits a big work tree meets.** A first capture reads at most 100 MiB, so a work tree with
   426 MiB of covered files is whole only at its fifth scan; until then a turn there reads
   "Incomplete: 100 MiB read". A work tree with more than 20,000 covered entries, or one that
-  would pass 1 GiB in the store, is never whole.
+  would pass 1 GiB in the store, is never whole. Scans that read on do not pause recording; see
+  [The pause](#the-pause).
 
 ### In the app
 
 The app runs this mechanism from `apps/desktop/src/utility/turn-changes-*.ts`: the Git commands
-(`turn-changes-git.ts`, the only file of the feature that starts a process), the store, the
+(`turn-changes-git.ts`, the only file of the feature that starts Git; the one other program
+BMN starts is told under [The app's version](#the-apps-version)), the store, the
 capture, the comparison, and an engine that runs in a worker thread of its own
 (`turn-changes-worker.ts`), so that no scan and no comparison runs on the thread that keeps
 terminals flowing. Its tests repeat what this page proves on made-up repositories at every run of
@@ -403,6 +406,167 @@ another model. An app that cannot be pointed at a stand-in does not pass.
 - A Codex `Stop` does not say that a sub-agent is still at work. `SubagentStart` without its
   `SubagentStop` does.
 - `SessionStart` with source `compact` is not a new conversation.
+
+## How a turn is recorded
+
+The app records turns with the mechanism above (Story 69.4). Nothing is recorded until the owner
+switches it on, and no agent gets a new command.
+
+### The switch
+
+A workspace's menu has **Record what each turn changes**. It is off for every workspace until he
+ticks it, and it is stored with the workspace. Ticking it first shows what is stored, in the
+words its tooltip also carries:
+
+- BMN keeps a copy of the files in the Git work tree the agent runs in, every tracked file and
+  every untracked file Git does not ignore, secrets in them included, on this computer for as
+  long as you keep agent history.
+- Removal runs when BMN starts and every hour; one that failed shows as pending.
+- BMN shows what differs between two scans of that work tree, not who changed it.
+
+While the switch is on for a session's workspace, BMN keeps an empty file named after the
+session in the private folder `turn-marks/` beside its control socket. `bmn hook` looks for that
+file and adds nothing when it is not there, so with the switch off a hook does exactly what it
+did before: the prompt guard's answer first, then a message for its own agent, exit 0.
+
+### The marks a hook sends
+
+`turn.mark` is a control-socket method that only a session's own token may call, for its own
+live process. It names no session, and the owner's token is refused. Its parameters are a closed
+list: `requestId`, `edge` (`start`, `confirm` or `end`), `app`, `conversation`, `turn` (the
+app's own id of the turn: Claude Code's `prompt_id`, Codex's `turn_id`), with `until`, `folder`
+and `continued` on a start and `kind` on an end. The answer is one status word and never more:
+`captured`, `incomplete`, `unavailable`, `not-supported`, `busy`, `late`, `off`, `paused`,
+`continued`, `overlapped`, `confirmed`, `queued`, `stale` or `repeated`.
+
+Only the hook of the agent typed into the session sends it, for its main conversation, and only
+after the prompt guard let the prompt through: never for a sub-agent, an agent another agent
+started, or a stopped prompt. `hook.observe` carries the conversation, the turn's id and whether
+the event is a sub-agent's, so that BMN can tell a tool event of the turn from any other.
+
+- **At a prompt** the hook sends `start` with the time until which it will wait: 300 ms from the
+  moment it began, the same allowance a message's hand-over shares. BMN scans ("before") and
+  answers. After `captured` or `incomplete` the hook sends `confirm` on the same connection,
+  before it lets the app go on. Until then the scan is tentative: when the time passes, the
+  connection drops, no confirmation comes, or a tool event of that agent arrives first (the app
+  did not wait), BMN cancels it, its staged bytes go at once, and the turn reads "Before
+  snapshot unavailable". The hook prints nothing for any of this.
+- **At an end** the hook sends `end` with its kind: `finished` for `Stop`, `interrupted` for
+  Codex's `Interrupt`, and `continues` for a Claude Code `Stop` that lists work in flight, which
+  leaves the turn open. `error` is in the list; no measured event sends it. BMN answers `queued`
+  at once and scans ("after") within 2 s, from the turn's own root and only while that folder is
+  still the folder it scanned first (the same device and file number).
+
+### How a turn moves
+
+A turn belongs to one foreground process (BMN's own reading of the session's terminal), one
+conversation and one root, and has a number BMN counts per session; the app's id of the turn is
+stored and matched too.
+
+- An ended turn stays provisional until the next prompt of that agent and conversation runs.
+  Until then a tool event of the same agent, conversation and turn reopens it and drops its
+  "after"; a later end takes its place.
+- **Codex** sends its prompt event when the prompt is taken into a turn. A prompt event while a
+  turn is open therefore closes that turn as "End not observed" and starts the next one, and the
+  earlier turn is compared through the new turn's "before".
+- **Claude Code** sends its prompt event when the prompt is typed. A prompt event that carries
+  the open turn's id, or none, was typed into that turn: each such prompt gets a record of its
+  own, and those records and the turn they arrived in read "Comparison unavailable: prompts
+  overlapped", without totals. A prompt event with a new id means the earlier turn ended without
+  an event (an interrupt): it closes as "End not observed" and is compared through the new
+  "before". A prompt that begins `<task-notification>` after a stop that listed work in flight
+  is the app going on by itself: the hook says `continued` (the prompt's text never leaves the
+  hook) and the turn stays open.
+- `SessionStart` with another conversation (source `compact` is none), `SessionEnd`, another
+  foreground process and the session's end close an open turn as "End not observed". BMN takes
+  one last scan of that turn's root while the folder is still the same one; otherwise the turn
+  reads "End not observed; final scan unavailable". A new agent's root is never used for an old
+  turn. An observed end whose second scan cannot be taken reads the same, or "Not supported
+  here: <reason>" when the work tree is one BMN does not scan.
+- A call repeated with the same request id changes nothing. An end, tool or compaction event of
+  another agent, conversation or turn is counted as stale and changes no turn.
+- When the switch goes off, or the session moves to a workspace whose switch is off, a scan
+  still running is cancelled and an open turn closes as "Recording was switched off". A turn
+  stored as open when BMN starts closes as "End not observed; final scan unavailable".
+
+One row per turn is stored (`turn_record`): its id, number, session, incarnation, foreground
+process, app, the app's version where BMN could read it, conversation, the folder the event
+named, the root, its two captures, the kind of end, the totals and whether they are complete,
+and its labels. No row holds a file's name or content.
+
+### The app's version
+
+BMN reads the version once per foreground process, away from the prompt's path, by running the
+program that process is (`/proc/<its process>/exe`) with `--version`. With the Git commands
+above this is the only program the feature starts (`turn-changes-version.ts`; a test holds both
+lists). BMN asks only a process as free as itself: one in another view of the file system (a
+container, a sandbox), one that gave up new privileges (Landlock asks for that) or one with a
+system-call filter on it is never asked, since a program BMN starts would run outside that
+sandbox; and only while the program is still the file BMN identified. Only an answer in the
+app's own shape counts (`2.1.296 (Claude Code)`, `codex-cli 0.162.1`).
+
+A turn on another version than the measured one, or on one BMN could not read, is still
+recorded. It reads "Ordering unverified on <app> <version>; early writes may be missed", and
+its totals are shown as not complete.
+
+### The wordings
+
+A turn without complete totals says so in exactly one of these nine, and no other. When more
+than one applies, the first in this order is said:
+
+1. "Recording was switched off"
+2. "Comparison unavailable: prompts overlapped"
+3. "Before snapshot unavailable"
+4. "Not supported here: <reason>"
+5. "End not observed; final scan unavailable"
+6. "Incomplete: <bound>"
+7. "Difference unavailable: limit reached"
+8. "Ordering unverified on <app> <version>; early writes may be missed"
+9. "Partial: <n> files"
+
+### The labels
+
+Every closed turn carries three:
+
+- "Two scans of <root>, the first from <time> to <time>, the second from <time> to <time>. Files
+  in a scan were read at different moments, and other programs' changes may be included" (times
+  are this computer's own date and time)
+- "Covered: every tracked file and every untracked file Git does not ignore. Not covered: other
+  ignored files, anything outside this work tree, and the contents of submodules and nested
+  repositories, of which only the recorded commit is compared"
+- "Anything written after the second scan ended is not included"
+
+And these when they apply:
+
+- "End not observed: compared through BMN's next scan; whatever changed in between is included"
+- "Another BMN session was started in this work tree; whether it worked here is not known"
+- "HEAD was <a> when the first scan began and <b> when it ended, <c> and <d> for the second;
+  what Git brought in may be included, and moves in between may be missed", whenever any two of
+  the four differ
+- "This turn ran on <app> <version>; waiting for the prompt hook was measured on <version>"
+- "Partial: <n> files were not read or entered or left what is covered"
+
+### The pause
+
+Three scans in a row that failed, or were incomplete and read nothing new, for one root of a
+session pause recording there. An incomplete scan that read on is not one of the three (the
+owner's choice, 2026-10-13): each scan of a big work tree reads up to 100 MiB further, so one of
+426 MiB is whole at its fifth scan, two turns there read "Incomplete: 100 MiB read", and nothing
+has to be pressed. A whole scan sets the count back to zero.
+
+While paused, BMN scans and records nothing for that root. The pause is shown on that session in
+the window only, as the prompt guard's card is: it is not a request and reaches no snapshot, no
+token and no phone. Its reason is one of three fixed sentences, never a file's name: "Three
+scans in a row failed", "Three scans in a row were incomplete and read nothing new", or "Three
+scans in a row failed, or were incomplete and read nothing new". **Resume** in the workspace's
+menu sets the count back to zero.
+
+### Who can read it
+
+No token reads a capture, a turn or a difference: the control socket has no method that returns
+one, and the answer to `turn.mark` is a status word. `bmn hooks check` says per app, on a `turn
+changes:` line, whether its turns are recorded and on which version waiting for the prompt hook
+was measured. The agent brief and `bmn help agents` are unchanged.
 
 ## Running it again
 

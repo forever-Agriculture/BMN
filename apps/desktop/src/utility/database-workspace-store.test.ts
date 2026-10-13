@@ -839,7 +839,8 @@ describe('workspace identity marker', () => {
           session_messages INTEGER NOT NULL DEFAULT 0,
           session_messages_paused_at TEXT,
           session_messages_paused_by TEXT,
-          session_messages_counted_from TEXT
+          session_messages_counted_from TEXT,
+          turn_changes INTEGER NOT NULL DEFAULT 0
         );
         INSERT INTO workspace_unchecked(workspace_id, name, default_cwd, archived_at, revision, position, marker, pinned_file_paths_json)
           SELECT workspace_id, name, default_cwd, archived_at, revision, position, marker, pinned_file_paths_json

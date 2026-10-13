@@ -12,6 +12,10 @@ import {
   MAX_PROGRESS_EVIDENCE,
   MAX_USAGE_WINDOWS,
   SESSION_MESSAGE_HANDOVER,
+  TURN_END_KINDS,
+  TURN_MARK_CONFIRMED_STATUSES,
+  TURN_MARK_EDGES,
+  TURN_MARK_STATUSES,
   cleanSessionMessageText,
   isAttentionOrigin,
   hasDisallowedHandoffControl,
@@ -37,6 +41,9 @@ import {
   type AgentCli,
   type ProgressState,
   type ProtocolErrorCode,
+  type TurnEndKind,
+  type TurnMarkEdge,
+  type TurnMarkStatus,
   type UsageWindow
 } from '@bmn/protocol'
 import type { ControlAuth, ControlScope } from './control-auth'
@@ -176,7 +183,28 @@ export interface ControlHandlers {
     /** The Claude config folder the CLI resolved (Story 31.1); absent from other agents and old CLIs. */
     claudeConfigDir?: string | undefined
     effects: readonly HookEventEffect[]
+    /** Epic 69: what the event says of a turn. Only a session's own hook may say it. */
+    turn?: { conversation: string; turn: string | null; nested: boolean } | undefined
   }): Promise<unknown>
+  /**
+   * Epic 69: one mark of a turn's start, of the hook's confirmation or of its end, from a session's own hook.
+   * The answer is one status word and nothing else; never reachable by the owner token.
+   */
+  markTurn(p: {
+    sessionId: string
+    incarnationId: string
+    requestId: string
+    edge: TurnMarkEdge
+    app: string
+    conversation: string
+    turn: string | null
+    folder: string | null
+    until: number | null
+    kind: TurnEndKind | null
+    continued: boolean
+  }): Promise<TurnMarkStatus>
+  /** The connection a turn's start mark came on closed: a "before" nobody confirmed goes at once. */
+  dropTurnMark(sessionId: string, requestId: string): void
   /**
    * One plan-use reading from Claude's status line (Story 37.2): the windows and context share the
    * status-line input carried, never the input itself. It is kept in memory for the reporting run.
@@ -293,6 +321,8 @@ const CONVERSATION_OBSERVATION_SOURCES: readonly ConversationObservationSource[]
 ]
 /** 8-4-4-4-12 hex, the shape Claude Code session ids, Codex rollout ids and Cursor chat ids use. */
 const CONVERSATION_REFERENCE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+/** A turn's id as an app gives it (Epic 69): Claude Code's `prompt_id`, Codex's `turn_id`. */
+const TURN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/
 const SESSION_TOKEN_TEXT = /s1\.[A-Za-z0-9_:-]+\.[A-Za-z0-9_:-]+\.[0-9a-fA-F]{16,}/g
 const LONG_HEX_TEXT = /[0-9a-fA-F]{32,}/g
@@ -737,7 +767,7 @@ export class ControlServer {
       return
     }
     try {
-      const result = await this.dispatchOrReplay(scope, request.method, request.params)
+      const result = await this.dispatchOrReplay(scope, request.method, request.params, connection)
       this.respond(connection, { jsonrpc: '2.0', id: request.id, result: result ?? null })
     } catch (error) {
       this.fail(connection, request.id, error, false)
@@ -882,9 +912,9 @@ export class ControlServer {
    * that held only them is empty). An identical retry under the same idempotency key still gets its stored
    * receipt, as `idempotent` would give it; a new request keeps the validation error.
    */
-  private async dispatchOrReplay(scope: ControlScope, method: string, rawParams: unknown): Promise<unknown> {
+  private async dispatchOrReplay(scope: ControlScope, method: string, rawParams: unknown, connection?: Connection): Promise<unknown> {
     try {
-      return await this.dispatch(scope, method, rawParams)
+      return await this.dispatch(scope, method, rawParams, connection)
     } catch (error) {
       // Only those methods: a receipt key joins scope, method and key with `|`, so an unknown method must never
       // reach a receipt.
@@ -903,7 +933,7 @@ export class ControlServer {
     }
   }
 
-  private async dispatch(scope: ControlScope, method: string, rawParams: unknown): Promise<unknown> {
+  private async dispatch(scope: ControlScope, method: string, rawParams: unknown, connection?: Connection): Promise<unknown> {
     const { handlers } = this.options
     switch (method) {
       case 'auth':
@@ -1009,6 +1039,47 @@ export class ControlServer {
           sessionId: scope.sessionId, incarnationId: scope.incarnationId, pid: requirePid(params),
           messageId: requireText(params, 'messageId', IDENTIFIER), claimId: requireText(params, 'claimId', IDENTIFIER)
         })
+      }
+      case 'turn.mark': {
+        // Epic 69: a session's own hook marks where its agent's turn starts and ends. It names no session: the
+        // token says whose turn it is. What comes back is one status word; nothing of a capture can ride on it.
+        const params = closedParams(rawParams, ['requestId', 'until', 'app', 'edge', 'kind', 'conversation', 'turn', 'folder', 'continued'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session may mark its own turns')
+        const edge = requireEnum(params, 'edge', TURN_MARK_EDGES)
+        const app = requireEnum(params, 'app', HOOK_EVENT_AGENTS)
+        const requestId = requireText(params, 'requestId', IDENTIFIER)
+        const conversation = requireText(params, 'conversation', RULES.conversationReference)
+        if (!CONVERSATION_REFERENCE.test(conversation)) throw invalid('conversation is not a conversation reference')
+        const turn = readText(params, 'turn', IDENTIFIER)
+        if (turn !== undefined && !TURN_ID.test(turn)) throw invalid('turn is not a turn id')
+        const own: Record<TurnMarkEdge, readonly string[]> = { start: ['until', 'folder', 'continued'], confirm: [], end: ['kind'] }
+        for (const key of ['until', 'folder', 'continued', 'kind']) {
+          if (params[key] !== undefined && !own[edge].includes(key)) throw invalid(`${key} does not belong to the edge ${edge}`)
+        }
+        let until: number | null = null
+        let folder: string | null = null
+        if (edge === 'start') {
+          if (typeof params.until !== 'number' || !Number.isSafeInteger(params.until) || params.until <= 0) {
+            throw invalid('until must be a time in whole milliseconds')
+          }
+          until = params.until
+          folder = readText(params, 'folder', RULES.path) ?? null
+          if (folder !== null && !isAbsolute(folder)) throw invalid('folder must be an absolute path')
+          if (params.continued !== undefined && params.continued !== true) throw invalid('continued must be true')
+        }
+        const status = await handlers.markTurn({
+          sessionId: scope.sessionId, incarnationId: scope.incarnationId, requestId, edge, app, conversation: conversation.toLowerCase(),
+          turn: turn ?? null, folder, until, kind: edge === 'end' ? requireEnum(params, 'kind', TURN_END_KINDS) : null,
+          continued: params.continued === true
+        })
+        if (!(TURN_MARK_STATUSES as readonly unknown[]).includes(status)) throw new ControlError(ERROR_CODES.ioError, 'The mark was not answered')
+        if (edge === 'start' && connection && TURN_MARK_CONFIRMED_STATUSES.includes(status)) {
+          // The "before" waits for the hook's confirmation on this connection; when it closes first, the capture goes.
+          const dropped = (): void => handlers.dropTurnMark(scope.sessionId, requestId)
+          if (connection.closing) dropped()
+          else connection.socket.once('close', dropped)
+        }
+        return { status }
       }
       case 'progress.report': {
         const params = closedParams(rawParams, [
@@ -1179,7 +1250,8 @@ export class ControlServer {
       }
       case 'hook.observe': {
         // Observations are diagnostic; the repeat watch may open or withdraw its one notice.
-        const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'effects', 'fingerprint', 'apiHost', 'model', 'claudeConfigDir'])
+        const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'effects', 'fingerprint', 'apiHost', 'model', 'claudeConfigDir',
+          'conversation', 'turn', 'nested'])
         const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
         const event = requireText(params, 'event', RULES.source)
         if (!isHookEventName(event)) throw invalid('event must be printable ASCII without spaces')
@@ -1203,6 +1275,16 @@ export class ControlServer {
           throw invalid('claudeConfigDir must be an absolute path from a Claude hook')
         }
         const effects = requireEffects(params, 'effects')
+        // Epic 69: which conversation and turn the event belongs to. It moves a turn's record, so only a session's
+        // own hook may say it: the owner's token, which may observe for a named session, may not.
+        const conversation = readText(params, 'conversation', RULES.conversationReference)
+        const turnId = readText(params, 'turn', IDENTIFIER)
+        if (conversation === undefined ? turnId !== undefined || params.nested !== undefined
+          : !CONVERSATION_REFERENCE.test(conversation) || (turnId !== undefined && !TURN_ID.test(turnId)) ||
+            (params.nested !== undefined && params.nested !== true)) {
+          throw invalid('conversation, turn and nested must name a conversation, a turn id and true')
+        }
+        if (conversation !== undefined && scope.kind !== 'session') throw unauthorized('Only a session may report its own turn')
         const sessionId = this.target(scope, params)
         return handlers.observeHookEvent({
           sessionId,
@@ -1215,6 +1297,7 @@ export class ControlServer {
           ...(apiHost === undefined ? {} : { apiHost }),
           ...(model === undefined ? {} : { model }),
           ...(claudeConfigDir === undefined ? {} : { claudeConfigDir }),
+          ...(conversation === undefined ? {} : { turn: { conversation: conversation.toLowerCase(), turn: turnId ?? null, nested: params.nested === true } }),
           effects
         })
       }

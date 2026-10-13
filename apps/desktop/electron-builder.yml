@@ -58,6 +58,9 @@ extraResources:
   # `bmn roster fence` runs the very command a research run is, so it loads the research module too.
   - from: bin/agents-research.mjs
     to: bin/agents-research.mjs
+  # Epic 69: which hook events mark a turn's start and end; `bmn hook` and `bmn hooks check` load it.
+  - from: bin/turn-marks.mjs
+    to: bin/turn-marks.mjs
   - from: bin/agents-ask.mjs
     to: bin/agents-ask.mjs
   - from: bin/agents-fence.mjs

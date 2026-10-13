@@ -1,6 +1,6 @@
 // MODULE: companion-service.ts - host-side artifacts, attention, progress, drafts, settings, control socket, Telegram and backup
 import { createHash, randomUUID } from 'node:crypto'
-import { createReadStream } from 'node:fs'
+import { createReadStream, realpathSync } from 'node:fs'
 import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
 import { homedir, hostname, tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
@@ -60,7 +60,9 @@ import {
   type UsageAgent,
   type UsageReading,
   type GuardReport,
-  type GuardStop
+  type GuardStop,
+  TURN_SWITCH_FOLDER,
+  type TurnRecordingState
 } from '@bmn/protocol'
 import {
   ArtifactFileError,
@@ -97,6 +99,10 @@ import { PortWatch } from './port-watch'
 import { AGENT_HISTORY_STATE_KEY, AgentHistory, readHistoryState, type AgentHistoryAdapter } from './agent-history'
 import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
 import { SessionMessages, type MessageDestination } from './session-messages'
+import { foregroundProcessFolder } from './foreground-process'
+import type { TurnChangesPort, TurnStoreKeeper } from './turn-changes-engine'
+import { TurnRecorder } from './turn-changes-recorder'
+import { readAppVersion } from './turn-changes-version'
 
 /** A listed session plus its conversation route; `null` when the session has no stored binding. */
 type ListedSession = SessionRecord & {
@@ -160,6 +166,12 @@ export interface CompanionServiceOptions {
   historyAdapters?: readonly AgentHistoryAdapter[]
   /** The owner's home, where `~/.claude` lives; the self-test points it at a scratch folder. */
   home?: string
+  /** Epic 69: the thread that scans and compares work trees. Without it no turn is recorded. */
+  turnChanges?: TurnChangesPort & Pick<TurnStoreKeeper, 'removeCaptures'>
+  /** Epic 69: reads an app's version from a foreground process; a test gives its own. */
+  turnVersion?: (identity: string, app: string) => Promise<string | null>
+  /** Epic 69: the folder Linux reports for a foreground process; a test gives its own. */
+  turnForegroundFolder?: (identity: string) => string | null
   /** How long a question or permission waits before it is paged; only the self-test host shortens it. */
   pageAfterMs?: number
   now?: () => Date
@@ -402,6 +414,9 @@ export class CompanionService {
    * the reporting run: it never reaches the database, a Backup export, Telegram or a notification.
    */
   private readonly guardStops = new Map<string, GuardStop>()
+  /** Epic 69: what brackets turns, and the sessions it was last told of. Null when this host scans nothing. */
+  private readonly turns: TurnRecorder | null
+  private turnSessions = new Set<string>()
   private readonly planReadings = new Map<UsageAgent, UsageReading>()
   /** The 90% notice decisions, one at a time (Story 37.2). */
   private usageNoticeQueue: Promise<void> = Promise.resolve()
@@ -620,6 +635,24 @@ export class CompanionService {
     })
     this.answers.onLateOutcome((requestId, outcome) => this.cards.lateOutcome(requestId, outcome))
     this.socketPath = join(options.roots.runtime, 'control', 'control.sock')
+    this.turns = options.turnChanges === undefined ? null : new TurnRecorder({
+      port: options.turnChanges,
+      keeper: options.turnChanges,
+      foreground: {
+        identity: (sessionId) => options.manager.foregroundProcessIdentity(sessionId),
+        folder: options.turnForegroundFolder ?? foregroundProcessFolder
+      },
+      database: {
+        putTurn: (input) => options.database.companion('putTurn', input),
+        nextTurnNumber: (sessionId) => options.database.companion('nextTurnNumber', sessionId),
+        listUnclosedTurns: () => options.database.companion('listUnclosedTurns')
+      },
+      version: options.turnVersion ?? readAppVersion,
+      shared: (sessionId, root) => this.startedInWorkTree(sessionId, root),
+      hintFolder: join(dirname(this.socketPath), TURN_SWITCH_FOLDER),
+      changed: (sessionId) => this.emit('turns', sessionId),
+      now: () => this.now().getTime()
+    })
     this.refusalLogPath = join(options.roots.state, 'refused-requests.log')
     this.telegramDeliveryLogPath = join(options.roots.state, 'telegram-delivery.log')
     this.files = new ArtifactFileStore({
@@ -649,6 +682,9 @@ export class CompanionService {
         messageStatus: (sessionId, messageId) => this.controlCall(() => this.messages.status(sessionId, messageId)),
         takeMessage: (p) => this.controlCall(() => this.messages.take(p)),
         reportMessage: (p) => this.controlCall(() => this.messages.report(p)),
+        // Epic 69: the answer is one status word. Without the scanning thread nothing is recorded.
+        markTurn: (p) => this.controlCall(async () => (this.turns === null ? 'off' : this.turns.mark(p))),
+        dropTurnMark: (sessionId, requestId) => this.turns?.dropped(sessionId, requestId),
         reportRefusal: (method, sessionId, reason) => this.logRefusal(method, sessionId, reason),
         observeConversation: (p) => this.controlCall(async () => {
           if (p.agentCli === 'claude' || p.agentCli === 'codex') {
@@ -680,6 +716,8 @@ export class CompanionService {
         ),
         observeHookEvent: (p) => this.controlCall(async () => {
           const recorded = await this.observeHookEvent(p)
+          // Epic 69: a tool that ran, a conversation that started or ended; it moves a turn's record and answers nothing.
+          if (p.turn !== undefined) this.turns?.observe({ sessionId: p.sessionId, app: p.agent, event: p.event, source: p.source, ...p.turn })
           // Epic 66.4: the hook asks for a message only when told one waits, so an ordinary tool call adds nothing.
           return await this.messages.waiting(p) ? { ...recorded, messageWaiting: true } : recorded
         }),
@@ -783,6 +821,8 @@ export class CompanionService {
   }
 
   async start(): Promise<void> {
+    // Epic 69: a turn stored as open has nobody left to end it.
+    await this.turns?.start()
     await this.sessionsChanged()
     await this.retainedHooks.load()
     await this.files.reconcileStaging().catch(() => [])
@@ -839,6 +879,7 @@ export class CompanionService {
 
   /** Called for every session process transition so exit notices and the session cache stay current. */
   sessionStateChanged(sessionId: string, state: string): void {
+    if (state === 'exited') this.turns?.sessionEnded(sessionId)
     void this.sessionsChanged().then(async () => {
       if (state !== 'exited') return
       const settings = await this.options.database.companion('getSettings')
@@ -938,6 +979,11 @@ export class CompanionService {
         if (cleared) this.emit('guard', sessionId)
         return { cleared }
       }
+      case METHOD_REGISTRY.turnChangesState:
+        // Epic 69: where recording stands per session. For the window only; it reaches no snapshot, token or phone.
+        return (this.turns?.states() ?? []) satisfies TurnRecordingState[]
+      case METHOD_REGISTRY.turnChangesResume:
+        return { resumed: this.turns?.resume(text(params, 'sessionId')) ?? false }
       case METHOD_REGISTRY.portsList:
         // Read-only: what the last scan found, with a stopped session's leftovers marked. Nothing here reads /proc.
         return this.ports.list() satisfies SessionPorts[]
@@ -1164,6 +1210,38 @@ export class CompanionService {
     this.retainedHooks.sessionsChanged()
     if (removedHooks) this.retainedHooks.markDirty()
     this.ports.sessionsChanged()
+    if (this.turns !== null) {
+      // Epic 69: recording is on for the sessions of a workspace whose switch is on, wherever a session is now.
+      const recording = new Set(workspaces.filter((workspace) => workspace.turnChanges === true && workspace.archivedAt === null)
+        .map((workspace) => workspace.workspaceId))
+      for (const sessionId of this.turnSessions) if (!this.knownSessions.has(sessionId)) this.turns.forget(sessionId)
+      this.turnSessions = new Set(this.knownSessions.keys())
+      this.turns.setSwitches(new Set([...this.knownSessions.values()].filter((session) => recording.has(session.workspaceId))
+        .map((session) => session.sessionId)))
+    }
+  }
+
+  /** Epic 69, self-test only: resolves when no scan, comparison or record of a turn is waited for. */
+  async turnsIdle(): Promise<void> {
+    await this.turns?.idle()
+  }
+
+  /** Epic 69: whether another live BMN session was started in a folder of this work tree. */
+  private startedInWorkTree(sessionId: string, root: string): boolean {
+    const inside = (folder: string): boolean => {
+      let real = folder
+      try {
+        real = realpathSync(folder)
+      } catch {
+        // Compared as written.
+      }
+      return real === root || real.startsWith(root.endsWith('/') ? root : `${root}/`)
+    }
+    for (const other of this.knownSessions.values()) {
+      if (other.sessionId === sessionId || !this.options.manager.liveIncarnationId(other.sessionId)) continue
+      if (inside(this.options.manager.liveLaunchDirectory(other.sessionId) ?? other.cwd)) return true
+    }
+    return false
   }
 
   private async sessionsFor(scope: ControlScope): Promise<SessionRecord[]> {

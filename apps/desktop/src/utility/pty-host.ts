@@ -340,9 +340,12 @@ async function start(): Promise<void> {
   let selfTestClock: Date | undefined
   const selfTestQuietTrace: Array<Record<string, unknown>> = []
   let stopSelfTestQuietTrace: (() => void) | undefined
+  // Epic 69: the thread that captures work trees starts with its first request.
+  const turnChanges = new TurnChangesClient(join(__dirname, 'turn-changes-worker.js'), { dataRoot: roots.data, home: agentHome() })
   const companion = new CompanionService({
     database,
     manager,
+    turnChanges,
     roots,
     cliPath,
     cliScriptPath: process.env.BMN_CLI_SCRIPT ?? cliPath,
@@ -377,9 +380,8 @@ async function start(): Promise<void> {
   companionHolder.current = companion
   await companion.start()
   const companionService = companion
-  // Epic 69: the thread that captures work trees starts with its first request. The sweep removes what
-  // turn changes may no longer keep, now (after the archive purge wrote its jobs) and every hour.
-  const turnChanges = new TurnChangesClient(join(__dirname, 'turn-changes-worker.js'), { dataRoot: roots.data, home: agentHome() })
+  // Epic 69: the sweep removes what turn changes may no longer keep, now (after the archive purge wrote its
+  // jobs) and every hour.
   new TurnRetention({
     database: {
       keepDays: async () => (await database.companion('getSettings')).agentHistory.confirmedKeepDays,
@@ -535,6 +537,15 @@ async function start(): Promise<void> {
       }, 0)
       return Promise.resolve({ selfTestHostLossScheduled: true })
     }
+    if (typeof params.selfTestTurns === 'string') {
+      // Epic 69: a session's turns as their rows hold them, once nothing of them is waited for. The window
+      // gets its own channels for them in Story 69.5; no token reads them.
+      const sessionId = params.selfTestTurns
+      return (async () => {
+        await companionService.turnsIdle()
+        return { selfTestTurns: await database.companion('listTurns', { sessionId, limit: 50 }) }
+      })()
+    }
     if (params.selfTestRemoteAnswer === undefined) return undefined
     const probe = record(params.selfTestRemoteAnswer)
     return (async () => {
@@ -610,6 +621,8 @@ async function start(): Promise<void> {
             )
             const updated = await (params.archived === true ? manager.archiveWorkspace(params.workspaceId, mutate) : mutate())
             companionService.catalogueChanged()
+            // Epic 69: a workspace's switch for turn changes takes effect for its sessions at once.
+            if ('turnChanges' in params || params.archived !== undefined) await companionService.sessionsChanged().catch(() => undefined)
             return updated
           } finally {
             finish()
@@ -688,6 +701,8 @@ async function start(): Promise<void> {
           const updated = await (typeof update.archived === 'boolean' || typeof update.workspaceId === 'string'
             ? manager.updateSessionAvailability(update.sessionId, update, mutate) : mutate())
           companionService.catalogueChanged()
+          // Epic 69: a session moved to another workspace follows that workspace's switch for turn changes.
+          if (typeof update.workspaceId === 'string') await companionService.sessionsChanged().catch(() => undefined)
           return updated
         } finally {
           finish()

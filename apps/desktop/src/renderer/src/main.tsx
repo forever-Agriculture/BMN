@@ -1,5 +1,5 @@
 // MODULE: main.tsx - Chancel application shell: header, workspace tree, session panes, side panels, dialogs and keyboard map
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   COLOR_MODE_NAMES,
@@ -8,6 +8,9 @@ import {
   IDENTITY_NAMES,
   RESTORED_VIEW_NOTICE,
   SESSION_MESSAGES_HELP,
+  TURN_CHANGES_HELP,
+  TURN_CHANGES_SWITCH,
+  type TurnRecordingState,
   TERMINAL_FONT_SIZE_RANGE,
   type AppearanceSettings,
   type AppSettings,
@@ -86,6 +89,7 @@ import {
 } from './launch-template'
 import { SessionRequestCard, type ClearedNotice } from './session-request-card'
 import { SessionGuardCard, guardMark } from './session-guard-card'
+import { TURN_PAUSED_WORDS, TurnChangesSwitchDialog, TurnPauseCard } from './turn-changes-card'
 import { dismissAttentionReminder, noticesWhenNavigating, applyAttentionWithdrawal } from './attention-actions'
 import { PopupMenu, type MenuAnchor, type MenuEntry } from './popup-menu'
 import { PreferencesDialog } from './preferences-dialog'
@@ -179,6 +183,8 @@ type ShellDialog =
   | { kind: 'workspace-messages'; workspaceId: string; openedFromWorkspaceId: string | null }
   /** The messages switch's two help lines, read before it goes on. */
   | { kind: 'messages-switch'; workspaceId: string }
+  /** What "Record what each turn changes" stores, read before it goes on (Story 69.4). */
+  | { kind: 'turn-changes-switch'; workspaceId: string }
   | { kind: 'new-workspace' }
   | { kind: 'dev-auto-runs'; workspaceId?: string }
   | { kind: 'rename-workspace'; workspace: WorkspaceRecord }
@@ -282,6 +288,9 @@ function App(): React.JSX.Element {
   const [guardStops, setGuardStops] = useState<GuardStop[]>([])
   const [guardCard, setGuardCard] = useState<{ sessionId: string; anchor: HTMLElement | null; busy: boolean; refusal: string | null } | null>(null)
   const guardSeen = useRef(new Map<string, string>())
+  /** Story 69.4: where recording of turn changes stands per session, and the one pause card that is open. Window only. */
+  const [turnRecording, setTurnRecording] = useState<TurnRecordingState[]>([])
+  const [turnCard, setTurnCard] = useState<{ sessionId: string; anchor: HTMLElement | null } | null>(null)
   const [clearedNotices, setClearedNotices] = useState<{ sessionId: string | null; notices: ClearedNotice[] }>({ sessionId: null, notices: [] })
   const navigationEpoch = useRef({ sessionId: null as string | null, epoch: 0 })
   const recentSessions = useRef<string[]>([])
@@ -552,6 +561,7 @@ function App(): React.JSX.Element {
     // Each scan that changes any session's ports announces it; the list is the last scan's, never a new read of /proc.
     ports: () => window.aiTerminal.listPorts().then(setPorts),
     guard: () => window.aiTerminal.listGuardStops().then(setGuardStops),
+    turns: () => window.aiTerminal.listTurnRecording().then(setTurnRecording),
     drafts: () => window.aiTerminal.listDrafts().then(setDrafts),
     // Epic 66: the Messages dialog reads its own workspace's list; a change only tells an open one to read again.
     messages: async () => setMessagesRevision((revision) => revision + 1),
@@ -901,6 +911,19 @@ function App(): React.JSX.Element {
   const setSessionMessages = async (workspace: WorkspaceRecord, sessionMessages: boolean): Promise<void> => {
     await updateWorkspace(workspace, { sessionMessages })
     brief(sessionMessages ? `Sessions in ${workspace.name} may message each other.` : `Messages are off in ${workspace.name}.`)
+  }
+
+  /** The workspace's switch for turn changes (Story 69.4): BMN keeps copies of the work tree's files while it is on. */
+  const setTurnChanges = async (workspace: WorkspaceRecord, turnChanges: boolean): Promise<void> => {
+    await updateWorkspace(workspace, { turnChanges })
+    brief(turnChanges ? `BMN records what each turn changes in ${workspace.name}.` : `Turn changes are no longer recorded in ${workspace.name}.`)
+  }
+
+  /** Resume: every paused session of the workspace starts again with its count at zero. */
+  const resumeTurnRecording = async (sessionIds: readonly string[]): Promise<void> => {
+    await Promise.all(sessionIds.map((sessionId) => window.aiTerminal.resumeTurnRecording(sessionId)))
+    setTurnCard(null)
+    brief('Recording of turn changes resumed.')
   }
 
   /** Shuts one session out of its workspace's messages, or lets it back in. */
@@ -1572,6 +1595,26 @@ function App(): React.JSX.Element {
         ? void setSessionMessages(workspace, false).catch(fail('The messages switch could not be changed'))
         : setDialog({ kind: 'messages-switch', workspaceId: workspace.workspaceId })
     },
+    {
+      // Off by default. Switching it on first shows what BMN will keep; switching it off needs no second thought.
+      label: TURN_CHANGES_SWITCH,
+      checked: workspace.turnChanges === true,
+      disabled: workspace.archivedAt !== null,
+      title: TURN_CHANGES_HELP.join(' '),
+      onSelect: () => workspace.turnChanges === true
+        ? void setTurnChanges(workspace, false).catch(fail('The switch for turn changes could not be changed'))
+        : setDialog({ kind: 'turn-changes-switch', workspaceId: workspace.workspaceId })
+    },
+    ...((): MenuEntry[] => {
+      // Offered only while recording is paused for a session of this workspace.
+      const paused = turnRecording.filter((state) => state.state === 'paused' &&
+        sessions.some((session) => session.sessionId === state.sessionId && session.workspaceId === workspace.workspaceId)).map((state) => state.sessionId)
+      return paused.length === 0 ? [] : [{
+        label: 'Resume recording turn changes',
+        title: 'Recording paused after three scans in a row failed or read nothing new. Resume sets the count back to zero.',
+        onSelect: () => void resumeTurnRecording(paused).catch(fail('Recording could not be resumed'))
+      }]
+    })(),
     'separator',
     {
       group: 'Marker',
@@ -1804,6 +1847,7 @@ function App(): React.JSX.Element {
   }
 
   const guardCardStop = guardCard ? guardStops.find(item => item.sessionId === guardCard.sessionId) ?? null : null
+  const turnCardState = turnCard ? turnRecording.find(item => item.sessionId === turnCard.sessionId && item.state === 'paused') ?? null : null
   const snapshotsFor = (sessionId: string): ClearedNotice[] => selectedSessionId === sessionId && clearedNotices.sessionId === sessionId ? clearedNotices.notices : []
   const requestControl = (sessionId: string): React.JSX.Element | null => {
     const requests = unresolved.filter(request => request.sessionId === sessionId)
@@ -1830,10 +1874,22 @@ function App(): React.JSX.Element {
         setGuardCard(current => current?.sessionId === sessionId ? null : { sessionId, anchor, busy: false, refusal: null })
       }}>{guardMark(stop)}</button>
   }
+  /** The session's own mark for a paused recording of turn changes; the card opens from it. */
+  const turnPauseControl = (sessionId: string): React.JSX.Element | null => {
+    const state = turnRecording.find(item => item.sessionId === sessionId && item.state === 'paused')
+    if (!state) return null
+    return <button type="button" className="pane-request-control" data-cleared data-session-turns={sessionId}
+      aria-haspopup="dialog" aria-expanded={turnCard?.sessionId === sessionId} title="Recording of turn changes is paused for this session's work tree"
+      onClick={event => {
+        const anchor = event.currentTarget
+        setTurnCard(current => current?.sessionId === sessionId ? null : { sessionId, anchor })
+      }}>{TURN_PAUSED_WORDS}</button>
+  }
   const paneControls = (sessionId: string): React.JSX.Element | null => {
-    const guard = guardControl(sessionId)
-    const requests = requestControl(sessionId)
-    return guard && requests ? <>{guard}{requests}</> : guard ?? requests
+    // Each mark keeps its own element: one that goes away must not hand its button, and a card's anchor, to another.
+    const controls = ([['guard', guardControl(sessionId)], ['turns', turnPauseControl(sessionId)], ['requests', requestControl(sessionId)]] as const)
+      .filter(([, control]) => control !== null)
+    return controls.length === 0 ? null : <>{controls.map(([name, control]) => <Fragment key={name}>{control}</Fragment>)}</>
   }
   const closeGuardCard = (returnFocus: boolean): void => {
     const anchor = guardCard?.anchor
@@ -2169,6 +2225,14 @@ function App(): React.JSX.Element {
                 </section>
               )
             }) : null}
+          {turnCardState && turnCard ? <TurnPauseCard key={turnCardState.sessionId}
+            state={turnCardState} place={place(turnCardState.sessionId)} home={home} anchor={turnCard.anchor}
+            onResume={() => void resumeTurnRecording([turnCardState.sessionId]).catch(fail('Recording could not be resumed'))}
+            onClose={returnFocus => {
+              const anchor = turnCard.anchor
+              setTurnCard(null)
+              if (returnFocus) (anchor?.isConnected ? anchor : sessionArea.current)?.focus({ preventScroll: true })
+            }} /> : null}
           {guardCardStop && guardCard ? <SessionGuardCard key={`${guardCardStop.sessionId}:${guardCardStop.at}`}
             stop={guardCardStop} place={place(guardCardStop.sessionId)} home={home} now={now} anchor={guardCard.anchor}
             busy={guardCard.busy} refusal={guardCard.refusal}
@@ -2719,6 +2783,13 @@ function App(): React.JSX.Element {
             const incarnationId = live[sessionId]?.incarnationId
             return record && incarnationId && sessionProcessLive(record, incarnationId) ? incarnationId : null
           }}
+          onClose={() => setDialog(null)} /> : null
+      })() : null}
+      {dialog?.kind === 'turn-changes-switch' ? (() => {
+        const workspace = workspaces.find((item) => item.workspaceId === dialog.workspaceId && item.archivedAt === null)
+        return workspace ? <TurnChangesSwitchDialog
+          workspaceName={workspace.name}
+          onConfirm={() => void setTurnChanges(workspace, true).catch(fail('The switch for turn changes could not be changed'))}
           onClose={() => setDialog(null)} /> : null
       })() : null}
       {dialog?.kind === 'messages-switch' ? (() => {

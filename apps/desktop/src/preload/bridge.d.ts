@@ -55,6 +55,7 @@ import type {
   SessionUsage,
   UsageReading,
   GuardStop,
+  TurnRecordingState,
   InputDraftRecord,
   InterruptedSessionCohort,
   SessionCohortOfferedResult,
@@ -306,6 +307,10 @@ export interface AiTerminalBridge {
   clearGuardStop(sessionId: string): Promise<{ cleared: boolean }>
   /** Allow here: asks about the same session again and, if nothing changed, approves that provider in that workspace. */
   allowGuardStop(stop: GuardStop): Promise<AgentsOutcome>
+  /** Epic 69: where recording of turn changes stands for each session whose workspace has the switch on. Window only. */
+  listTurnRecording(): Promise<TurnRecordingState[]>
+  /** Resume: a session's count of failed scans goes back to zero. */
+  resumeTurnRecording(sessionId: string): Promise<{ resumed: boolean }>
   /** Read-only: the local ports each session's programs listen on, as the last /proc scan found them (Story 41.1). */
   listPorts(): Promise<SessionPorts[]>
   /**

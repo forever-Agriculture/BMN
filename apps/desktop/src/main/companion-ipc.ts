@@ -68,6 +68,8 @@ const ROUTES = {
   'aiterm:messages:paste': METHOD_REGISTRY.messagesPaste,
   'aiterm:messages:pause': METHOD_REGISTRY.messagesPause,
   'aiterm:messages:resume-pair': METHOD_REGISTRY.messagesResumePair,
+  'aiterm:turn-changes:state': METHOD_REGISTRY.turnChangesState,
+  'aiterm:turn-changes:resume': METHOD_REGISTRY.turnChangesResume,
   'aiterm:settings:get': METHOD_REGISTRY.settingsGet,
   'aiterm:settings:put': METHOD_REGISTRY.settingsPut,
   'aiterm:history:status': METHOD_REGISTRY.historyStatus,

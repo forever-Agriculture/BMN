@@ -69,6 +69,7 @@ import {
   type SessionRecord,
   type TelegramStatus,
   type TerminalOutputMessage,
+  type TurnRecordingState,
   type WorkspaceRecord
 } from '@bmn/protocol'
 import {
@@ -134,6 +135,7 @@ import {
   writeCodexHarness,
   writeIsolationHookHarness,
   writeOriginHarness,
+  writeTurnHarness,
   writeRemoteAnswerHarness,
   writeTerminalModeProgram,
   writeTerminalNoticeHarness
@@ -4124,7 +4126,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     if (!requestProvenance.openRequestsUnchanged) throw new Error('opening the Hook events list changed a request')
     if (!requestProvenance.dialogClosed) throw new Error('the Hook events dialog did not close on Escape')
 
-
     // The close question itself: asked inside the window, in session names, and answerable.
     console.error('[BMN] self-test phase: close prompt')
     const closePromptRuntime = host.runtimes.get(hookSession.startup.sessionId)
@@ -4160,6 +4161,144 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     if (closePrompt.decision !== 'cancel') {
       throw new Error(`the owner's answer did not reach the main process: ${closePrompt.decision}`)
     }
+
+    // Epic 69 (Story 69.4): a stand-in agent sends real hook events around real writes in a made-up repository.
+    // With the workspace's switch off nothing is recorded; with it on, prompt, write and stop give a turn with
+    // those files and an interrupt gives "interrupted"; three failed scans pause recording in the window only.
+    console.error('[BMN] self-test phase: turn changes')
+    const turnRepo = join(isolatedCwd, 'turn-changes-repo')
+    const turnDirectory = join(isolatedCwd, 'turn-changes')
+    mkdirSync(turnRepo, { recursive: true })
+    const turnGit = (...args: string[]): void => {
+      const done = spawnSync('/usr/bin/git', args, { cwd: turnRepo, encoding: 'utf8', env: {
+        PATH: '/usr/bin:/bin', HOME: isolatedCwd, GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'Made Up', GIT_AUTHOR_EMAIL: 'made@example.test',
+        GIT_COMMITTER_NAME: 'Made Up', GIT_COMMITTER_EMAIL: 'made@example.test' } })
+      if (done.status !== 0) throw new Error(`the turn repository could not be made: git ${args[0]}: ${done.stderr}`)
+    }
+    turnGit('init', '-q', '-b', 'main')
+    writeFileSync(join(turnRepo, 'keep.txt'), 'k\n')
+    turnGit('add', '-A')
+    turnGit('commit', '-qm', 'made-up start')
+    const turnWorkspace = await client.request<WorkspaceRecord>(METHOD_REGISTRY.workspaceCreate, {
+      name: 'Turn changes', defaultCwd: turnRepo, position: 30
+    })
+    const turnSession = await host.createSessionRuntime({ workspaceId: turnWorkspace.workspaceId,
+      name: 'Turn agent', cwd: turnRepo, executable: writeTurnHarness(turnDirectory), argv: [], cols: 80, rows: 24 }, true)
+    await untilFileExists(join(turnDirectory, 'ready'), 'started the turn stand-in')
+    const turnSessionId = turnSession.session.sessionId
+    const turnConversation = '6f9a0b65-21a8-4f00-8ddd-b73646828f5b'
+    let turnSteps = 0
+    const turnStep = async (step: { write?: Record<string, string>; event?: Record<string, unknown> }): Promise<void> => {
+      const n = turnSteps
+      turnSteps += 1
+      writeFileSync(join(turnDirectory, `fire-${n}`), JSON.stringify(step))
+      await untilFileExists(join(turnDirectory, `done-${n}`), `finished turn step ${n}`)
+      const done = JSON.parse(readFileSync(join(turnDirectory, `done-${n}`), 'utf8')) as { status: number; stdout: string }
+      // The hook prints nothing for a turn and never fails its agent.
+      if (done.status !== 0 || done.stdout !== '') throw new Error(`turn step ${n} disturbed its agent: ${JSON.stringify(done)}`)
+      // A scan reads a file as it stands only once it has been still for a moment.
+      if (step.write) await new Promise((resolve) => setTimeout(resolve, 40))
+    }
+    const turnEvent = (name: string, turn: string, folder = turnRepo): Record<string, unknown> =>
+      ({ hook_event_name: name, session_id: turnConversation, turn_id: turn, cwd: folder })
+    type TurnProbeRow = { number: number; state: string; endKind: string | null; workTree: string | null; totalsState: string
+      totals: { files: number; added: number; removed: number } | null; wording: string | null; labels: string[] }
+    const turnRows = async (): Promise<TurnProbeRow[]> => (await client.request<{ selfTestTurns: TurnProbeRow[] }>(
+      METHOD_REGISTRY.healthGet, { selfTestTurns: turnSessionId })).selfTestTurns.sort((a, b) => a.number - b.number)
+    const turnSwitch = async (on: boolean): Promise<void> => {
+      const current = (await client.request<WorkspaceRecord[]>(METHOD_REGISTRY.workspaceList, { includeArchived: true }))
+        .find((workspace) => workspace.workspaceId === turnWorkspace.workspaceId)
+      if (!current) throw new Error('the turn workspace is gone')
+      await client.request(METHOD_REGISTRY.workspaceUpdate, { workspaceId: current.workspaceId, expectedRevision: current.revision, turnChanges: on })
+    }
+    const turnStates = async (): Promise<TurnRecordingState[]> =>
+      (await client.request<TurnRecordingState[]>(METHOD_REGISTRY.turnChangesState, {})).filter((state) => state.sessionId === turnSessionId)
+
+    // The switch is off: a whole turn's events record nothing.
+    await turnStep({ event: turnEvent('UserPromptSubmit', 'turn-off') })
+    await turnStep({ write: { 'off.txt': 'written while the switch is off\n' } })
+    await turnStep({ event: turnEvent('Stop', 'turn-off') })
+    const turnsWhileOff = await turnRows()
+    const statesWhileOff = await turnStates()
+
+    await turnSwitch(true)
+    const statesWhenOn = await turnStates()
+    // Prompt, write, stop.
+    await turnStep({ event: turnEvent('UserPromptSubmit', 'turn-1') })
+    await turnStep({ write: { 'a.txt': 'one\ntwo\n' }, event: { ...turnEvent('PostToolUse', 'turn-1'), tool_name: 'Bash', tool_input: {}, tool_response: {} } })
+    await turnStep({ event: turnEvent('Stop', 'turn-1') })
+    const afterStop = await turnRows()
+    // Prompt, write, interrupt.
+    await turnStep({ event: turnEvent('UserPromptSubmit', 'turn-2') })
+    await turnStep({ write: { 'b.txt': 'three\n' } })
+    await turnStep({ event: turnEvent('Interrupt', 'turn-2') })
+    const afterInterrupt = await turnRows()
+    // Three prompts that name a folder outside the work tree: each scan fails, and recording pauses.
+    for (const turn of ['turn-3', 'turn-4', 'turn-5']) {
+      await turnStep({ event: turnEvent('UserPromptSubmit', turn, isolatedCwd) })
+      await turnStep({ event: turnEvent('Stop', turn) })
+    }
+    const statesWhenPaused = await turnStates()
+    await host.recoverApplicationRenderer(host.applicationWindow)
+    const turnPause = await host.applicationWindow.webContents.executeJavaScript(`(async () => {
+      const until = async (find) => { const end = Date.now() + 10000; while (Date.now() < end) { const found = find(); if (found) return found; await new Promise(r => setTimeout(r, 50)) } return null };
+      // The later phases read the panes that were mounted before this one: the selection is put back.
+      const selected = document.querySelector('button[data-session-id][aria-current="true"]')?.getAttribute('data-session-id') ?? null;
+      const back = () => { if (selected) document.querySelector('button[data-session-id="' + selected + '"]')?.click() };
+      document.querySelector('button[data-session-id="${turnSessionId}"]')?.click();
+      const mark = await until(() => document.querySelector('[data-session-turns="${turnSessionId}"]'));
+      if (!mark) { back(); return { mark: null }; }
+      const words = mark.textContent;
+      mark.click();
+      const card = await until(() => document.querySelector('.session-guard-card[aria-label="Turn changes"]'));
+      const text = card?.textContent ?? '';
+      const resume = [...(card?.querySelectorAll('.actions button') ?? [])].find((button) => button.textContent === 'Resume');
+      resume?.click();
+      const gone = await until(() => document.querySelector('[data-session-turns="${turnSessionId}"]') === null);
+      back();
+      return { mark: words, text, resumed: resume !== undefined, gone: gone === true };
+    })()`) as { mark: string | null; text?: string; resumed?: boolean; gone?: boolean }
+    const statesAfterResume = await turnStates()
+    const turnSnapshot = JSON.stringify(await client.request(METHOD_REGISTRY.attentionList, {}))
+    const turnTyped = existsSync(join(turnDirectory, 'stdin.log')) ? readFileSync(join(turnDirectory, 'stdin.log')).length : 0
+    await turnSwitch(false)
+    const statesAfterOff = await turnStates()
+    await client.request(METHOD_REGISTRY.sessionStop, { sessionId: turnSessionId,
+      incarnationId: turnSession.session.lastProcess?.incarnationId, cause: 'explicit' })
+    const turnChanges = {
+      turnsWhileOff: turnsWhileOff.length, statesWhileOff, statesWhenOn,
+      afterStop: afterStop.map((row) => ({ ...row, labels: row.labels.length })),
+      afterInterrupt: afterInterrupt.slice(1).map((row) => ({ ...row, labels: row.labels.length })),
+      statesWhenPaused, turnPause, statesAfterResume, statesAfterOff, turnTyped,
+      error: existsSync(join(turnDirectory, 'error')) ? readFileSync(join(turnDirectory, 'error'), 'utf8') : null
+    }
+    console.error(`[BMN] self-test phase: turn changes ${JSON.stringify(turnChanges)}`)
+    if (turnChanges.error !== null) throw new Error(`the turn stand-in failed: ${turnChanges.error}`)
+    if (turnChanges.turnsWhileOff !== 0 || statesWhileOff.length !== 0) throw new Error('a turn was recorded while the switch was off')
+    if (statesWhenOn[0]?.state !== 'recording') throw new Error(`the switch did not start recording: ${JSON.stringify(statesWhenOn)}`)
+    const firstTurn = afterStop[0]
+    // The stand-in is not Codex, so its version cannot be read: the totals are there and are not called complete.
+    if (afterStop.length !== 1 || !firstTurn || firstTurn.state !== 'provisional' || firstTurn.endKind !== 'finished' ||
+      firstTurn.workTree !== turnRepo || JSON.stringify(firstTurn.totals) !== JSON.stringify({ files: 1, added: 2, removed: 0 }) ||
+      firstTurn.totalsState !== 'not-complete' || firstTurn.wording !== 'Ordering unverified on Codex (version not read); early writes may be missed' ||
+      firstTurn.labels.length < 4) {
+      throw new Error(`prompt, write and stop did not give a turn with those files: ${JSON.stringify(afterStop)}`)
+    }
+    const secondTurn = afterInterrupt[1]
+    if (afterInterrupt.length !== 2 || afterInterrupt[0]?.state !== 'closed' || !secondTurn || secondTurn.endKind !== 'interrupted' ||
+      JSON.stringify(secondTurn.totals) !== JSON.stringify({ files: 1, added: 1, removed: 0 })) {
+      throw new Error(`an interrupt did not end its turn as interrupted: ${JSON.stringify(afterInterrupt)}`)
+    }
+    if (statesWhenPaused[0]?.state !== 'paused' || statesWhenPaused[0]?.pauseReason !== 'failed') {
+      throw new Error(`three failed scans did not pause recording: ${JSON.stringify(statesWhenPaused)}`)
+    }
+    if (turnPause.mark !== 'Recording paused' || !turnPause.text?.includes('Three scans in a row failed') || !turnPause.resumed || !turnPause.gone) {
+      throw new Error(`the pause was not shown on its session, or Resume did not clear it: ${JSON.stringify(turnPause)}`)
+    }
+    if (statesAfterResume[0]?.state !== 'recording') throw new Error(`Resume did not start recording again: ${JSON.stringify(statesAfterResume)}`)
+    if (/paus|Three scans/i.test(turnSnapshot)) throw new Error('the pause reached a request')
+    if (statesAfterOff.length !== 0) throw new Error(`the switch did not stop recording: ${JSON.stringify(statesAfterOff)}`)
+    if (turnTyped !== 0) throw new Error(`recording a turn wrote ${turnTyped} bytes to its terminal`)
 
     // Epic 26.2: the survival-table endings no automated check had exercised. The two stops run
     // through the exact paths the window close and the Stop button drive; the sessions are the
