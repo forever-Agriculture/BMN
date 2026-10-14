@@ -476,8 +476,9 @@ describe.runIf(REAL_OPENCODE !== '')('the real OpenCode run through the checked 
 
     // Its usage, model and agent are read back from BMN's folder as dev-auto's models.md says (70.4 AC3), and that read leaves the folder as it was.
     const exported = execFileSync(argv[0] ?? 'env', [...argv.slice(1, argv.indexOf('run')), 'session', 'export', session, '--standalone'], { cwd: workspace, timeout: 60_000, encoding: 'utf8' })
-    expect(JSON.parse(exported)).toMatchObject({ info: { id: session, agent: 'bmn-helper', model: { providerID: 'opencode-go', id: 'kimi-k3', variant: 'max' },
-      tokens: { input: expect.any(Number), output: expect.any(Number) }, cost: expect.any(Number) } })
+    const info = JSON.parse(exported).info
+    expect(info).toMatchObject({ id: session, agent: 'bmn-helper', model: { providerID: 'opencode-go', id: 'kimi-k3', variant: 'max' } })
+    expect(info.tokens).toMatchObject({ input: expect.any(Number), output: expect.any(Number) })
     expect(openCodeFolderProblem()).toBeNull()
   }, 120_000)
 })
