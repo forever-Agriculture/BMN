@@ -9,7 +9,9 @@ export interface TurnWorkerData {
 
 export type TurnWorkerRequest =
   | { id: number; operation: 'capture'; params: TurnCaptureRequest }
-  | { id: number; operation: 'publish' | 'discard'; params: { capture: string } }
+  /** `until` is a time of `Date.now()`, and `stop` a shared number the host sets to 1: the publication reads both at every step. */
+  | { id: number; operation: 'publish'; params: { capture: string; until?: number }; stop: SharedArrayBuffer }
+  | { id: number; operation: 'discard'; params: { capture: string } }
   | { id: number; operation: 'cancel'; params: { job: string } }
   | { id: number; operation: 'forget' | 'remove-session'; params: { session: string } }
   | { id: number; operation: 'remove-captures'; params: { session: string; key: string; captures: string[] } }
@@ -31,7 +33,7 @@ const stopped = (flag: SharedArrayBuffer): (() => boolean) => {
 async function answer(request: TurnWorkerRequest): Promise<unknown> {
   switch (request.operation) {
     case 'capture': return engine.capture(request.params)
-    case 'publish': return engine.publish(request.params.capture)
+    case 'publish': return engine.publish(request.params.capture, { until: request.params.until, stopped: stopped(request.stop) })
     case 'discard': return engine.discard(request.params.capture)
     case 'cancel': return engine.cancel(request.params.job)
     case 'forget': return engine.forget(request.params.session)

@@ -117,7 +117,7 @@ interface SessionTurns {
   live: LiveTurn[]
   pending: Pending | null
   /** A confirmed "before" that is being published now: its call's time and its connection still hold it. */
-  confirming: { requestId: string; capture: string } | null
+  confirming: { requestId: string; stop: AbortController } | null
   /** Marks already answered, by edge and request id. */
   requests: Map<string, TurnMarkStatus>
   failures: Map<string, { failed: number; incomplete: number }>
@@ -313,7 +313,7 @@ export class TurnRecorder {
     const state = this.sessions.get(sessionId)
     if (!state) return
     // A "before" that is being published is stopped here and now: its confirmation is answered in this session's line, behind which this would wait.
-    if (state.confirming?.requestId === requestId) void this.options.port.discard(state.confirming.capture).catch(() => undefined)
+    if (state.confirming?.requestId === requestId) state.confirming.stop.abort()
     this.track(this.enqueue(state, async () => {
       if (state.pending?.requestId === requestId) await this.dropPending(state)
     }))
@@ -466,12 +466,13 @@ export class TurnRecorder {
     state.pending = null
     this.clearTimer(pending.timer)
     // The call's time and its connection hold the "before" until it is published (69.4 criterion 3): past the
-    // one, or without the other, the publication is stopped, and a stopped publication keeps nothing.
-    const capture = pending.record.id
-    state.confirming = { requestId: call.requestId, capture }
-    const timer = this.setTimer(() => void this.options.port.discard(capture).catch(() => undefined), Math.max(0, pending.deadline - this.now()))
-    const record = await this.options.port.publish(capture).catch(() => null)
-    this.clearTimer(timer)
+    // one, or without the other, the publication is stopped, and a stopped publication keeps nothing. Both go
+    // with the publication, which reads them at every step itself, last just before its record appears: a
+    // record comes back only when it appeared inside them, however late this thread hears of it, and is kept.
+    const stop = new AbortController()
+    state.confirming = { requestId: call.requestId, stop }
+    const until = Date.now() + Math.max(0, pending.deadline - this.now())
+    const record = await this.options.port.publish(pending.record.id, until, stop.signal).catch(() => null)
     state.confirming = null
     if (record === null) {
       await this.open(state, pending.turn, pending.waiting, null)

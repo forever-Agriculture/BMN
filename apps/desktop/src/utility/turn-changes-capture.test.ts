@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { capture, isCapturing, isRefusal, type CaptureOptions, type CaptureOutcome, type StagedCapture } from './turn-changes-capture'
 import { compareCaptures, fileDifference } from './turn-changes-compare'
-import { TurnStore, type TreeRow } from './turn-changes-store'
+import { TurnStore, type TreeRow, type TurnCache } from './turn-changes-store'
 import { around, filesUnder, holds, published, rows, scratch, sleep, snapshot, unequal, write, type Place } from './test-fixtures/turn-changes/fixtures'
 
 const places: Place[] = []
@@ -935,6 +935,116 @@ describe('the bounds of a capture, at and one past', () => {
     await store.settled()
     expect(store.record(written.id)?.bound).toBe('store full')
     expect(store.keptBytes()).toBe(fits.adds)
+  })
+
+  it('counts against its room the lists it staged before its time passed in them, though it keeps none: on disk it never passes that room', async () => {
+    const at = place('full-treeless')
+    for (let n = 0; n < 4; n += 1) write(at.repo, `d${n}/f${n}.txt`, `content ${n}\n`)
+    await sleep(25)
+    const limits = { captureMs: 300 }
+    let asked = 0
+    let slowAt = 0
+    let before = 0
+    const peaks: number[] = []
+    let holding: Array<() => void> | null = null
+    const store = new (class extends TurnStore {
+      override hasObject(kind: 'blobs' | 'trees', hash: string): boolean {
+        if (kind === 'trees' && slowAt > 0 && (asked += 1) === slowAt) {
+          // The capture's whole time goes on this list: it is staged, and the next folder finds the time passed.
+          const until = performance.now() + limits.captureMs
+          while (performance.now() < until) {
+            // A list that takes that long.
+          }
+        }
+        return super.hasObject(kind, hash)
+      }
+      override adoptCache(cache: TurnCache): boolean {
+        // The record is there, the new cache beside the old one, and the lists not yet gone: the most on disk.
+        peaks.push(this.diskBytes() - before)
+        return super.adoptCache(cache)
+      }
+      override discardStaging(id: string): Promise<boolean> {
+        // Removal held: what was dropped stays on disk until the test lets it go.
+        if (holding === null) return super.discardStaging(id)
+        const held = holding
+        return new Promise((resolve) => held.push(() => resolve(super.discardStaging(id))))
+      }
+    })(at.dataRoot, 's-case', at.repo)
+    await published(staged(await capture(at.repo, { ...at.options, store })))
+    peaks.splice(0)
+    // New folders whose files hold bytes the store already has: their lists are new, their files are not.
+    for (let n = 0; n < 8; n += 1) write(at.repo, `new${n}/g${n}.txt`, `content ${n % 4}\n`)
+    await sleep(25)
+    const late = async (room: number): Promise<StagedCapture> => {
+      before = store.diskBytes()
+      asked = 0
+      slowAt = 5
+      try {
+        return staged(await capture(at.repo, { ...at.options, store, limits, room }))
+      } finally {
+        slowAt = 0
+      }
+    }
+
+    // Room enough: five lists were staged, and none is kept.
+    const roomy = await late(1_000_000_000)
+    expect(roomy.record).toMatchObject({ state: 'incomplete', bound: '0.3 s', tree: null, bytesStored: 0 })
+    const lists = store.size('staging')
+    expect(lists).toBeGreaterThan(0)
+    holding = []
+    await published(roomy)
+    // What it said it needs at its most covers what was on disk at its most, its lists included.
+    expect(peaks).toHaveLength(1)
+    expect(peaks[0]).toBeGreaterThan(lists)
+    expect(peaks[0]).toBeLessThanOrEqual(roomy.adds)
+    for (const release of holding.splice(0)) release()
+    holding = null
+    await store.settled()
+
+    // Room for its record and cache and for half its lists: it ends "store full", and on disk it stays inside that room.
+    const room = roomy.adds - Math.floor(lists / 2)
+    holding = []
+    const full = await late(room)
+    expect(full.record).toMatchObject({ state: 'incomplete', bound: 'store full', tree: null, bytesStored: 0 })
+    await published(full)
+    expect(store.diskBytes() - before).toBeLessThanOrEqual(room)
+    for (const release of holding.splice(0)) release()
+    holding = null
+    await store.settled()
+    expect(filesUnder(join(store.directory, 'staging')) + filesUnder(join(store.directory, 'trash'))).toBe(0)
+  }, 30_000)
+
+  it('stays inside its room when its time passes at the last look and its record says so', async () => {
+    const at = place('full-last-look')
+    write(at.repo, 'big.txt', 'z'.repeat(2_000))
+    await sleep(25)
+    let before = 0
+    const peaks: number[] = []
+    const store = new (class extends TurnStore {
+      override adoptCache(cache: TurnCache): boolean {
+        // The record is there and the new cache beside the old one: the most on disk.
+        peaks.push(this.diskBytes() - before)
+        return super.adoptCache(cache)
+      }
+    })(at.dataRoot, 's-case', at.repo)
+    const limits = { captureMs: 400 }
+    const probe = staged(await capture(at.repo, { ...at.options, store, limits }))
+    expect(probe.record.state).toBe('whole')
+    probe.discard()
+    await store.settled()
+    // Exactly the room it said it needs; everything is moved in, and then its time passes before the record.
+    before = store.diskBytes()
+    const late = staged(await capture(at.repo, { ...at.options, store, limits, room: probe.adds, seams: { beforeLastLook: () => sleep(450) } }))
+    expect(late.record.state).toBe('whole')
+    expect(late.adds).toBe(probe.adds)
+    const made = await published(late)
+    expect(made).toMatchObject({ state: 'incomplete', bound: '0.4 s' })
+    expect(peaks).toHaveLength(1)
+    expect(peaks[0]).toBeLessThanOrEqual(probe.adds)
+    // What is kept is what was counted for it, to the byte, and the record reads as any other.
+    await store.settled()
+    expect(store.keptBytes()).toBeLessThanOrEqual(probe.adds)
+    expect(store.record(made.id)).toMatchObject({ state: 'incomplete', bound: '0.4 s' })
   })
 
   it('does not let a capture of an unchanged work tree pass the bound with its record', async () => {

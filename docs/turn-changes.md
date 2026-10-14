@@ -239,7 +239,9 @@ trace). The app differs from the measured script in these places, each the stric
   its confirmation is staged inside the capture's time and published the same way when the
   confirmation comes; one that is discarded, or confirmed too late, is never published, and one
   whose publication is still going when the time of its call passes or its connection drops is
-  stopped there like any other.
+  stopped there like any other. The time and a word for the connection go with the publication
+  into the worker thread, which reads both at every step, last just before the record appears:
+  neither waits for BMN's main thread to be free.
 - A folder below the root that holds an entry named `.git` is a repository of its own: one entry
   with the commit its own `HEAD` names (none when its `.git` is no repository), never walked,
   also when Git lists files below it as this repository's, which it does for files that were
@@ -305,8 +307,12 @@ no row holds a file's name or content).
   with the store. Two sessions in one repository each count their own copy. Room is held for
   every capture while it runs, so two sessions that capture at once cannot both take the same
   last bytes; near a bound one of them ends "incomplete: store full" where, alone, it would have
-  fitted. A capture must fit at its most: its files, its record and the whole new note, since
-  the old note is still there while the new one is written. A capture that would pass either
+  fitted. A capture must fit at its most: every file and list it staged, kept or not (one whose
+  time passed while its lists were written keeps none of them, and they stay under `staging/`
+  until after its record), its record and the whole new note, since the old note is still there
+  while the new one is written. A whole capture's record is written as long as it would be if its
+  time passed at the last look and it read "incomplete", so it never takes more than was counted
+  for it. A capture that would pass either
   bound ends "incomplete: store full", its record included; one for whose record there is no
   room either writes nothing. What such a capture had staged is on disk until it is removed, so
   its record is written only where it fits beside those bytes. When something fails after a
@@ -537,7 +543,10 @@ the event is a sub-agent's, so that BMN can tell a tool event of the turn from a
   snapshot unavailable". The time and the connection hold the scan until it is published, not
   only until the confirmation arrives: a publication that is still going when the time passes or
   the connection closes is stopped, what it moved in is taken out, the confirmation is answered
-  `late` and the turn reads the same. The hook prints nothing for any of this.
+  `late` and the turn reads the same. The worker thread that publishes it reads the time and the
+  connection's word itself, so a held-up main thread cannot let it run past either; a record that
+  appeared inside them is kept, however late the main thread hears of it. The hook prints
+  nothing for any of this.
 - **At an end** the hook sends `end` with its kind: `finished` for `Stop`, `interrupted` for
   Codex's `Interrupt`, and `continues` for a Claude Code `Stop` that lists work in flight, which
   leaves the turn open. `error` is in the list; no measured event sends it. BMN answers `queued`

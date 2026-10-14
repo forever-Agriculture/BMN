@@ -51,8 +51,12 @@ export interface TurnPairRequest {
 /** What the host may ask of the engine, whether it runs in a worker or, in a test, in the same thread. */
 export interface TurnChangesPort {
   capture: (request: TurnCaptureRequest, signal?: AbortSignal) => Promise<TurnCaptureAnswer>
-  /** Makes a staged capture real. Null when it is no longer staged: discarded, cancelled or never there. */
-  publish: (capture: string) => Promise<TurnCaptureRecord | null>
+  /**
+   * Makes a staged capture real. Null when it is no longer staged (discarded, cancelled or never there) and when
+   * it was stopped: by `signal`, or by `until`, a time of `Date.now()`. Both are heard where the capture is
+   * published, at every step of it and last just before its record appears, whatever the caller's thread is doing.
+   */
+  publish: (capture: string, until?: number, signal?: AbortSignal) => Promise<TurnCaptureRecord | null>
   discard: (capture: string) => Promise<void>
   compare: (request: TurnPairRequest, signal?: AbortSignal) => Promise<TurnComparison | TurnRefusal>
   difference: (request: TurnPairRequest & { path: string }, signal?: AbortSignal) => Promise<TurnShownDifference | TurnRefusal>
@@ -81,6 +85,12 @@ export interface TurnStoreKeeper {
   clearLeftovers: () => Promise<void>
   inventory: () => Promise<TurnStoreInventory[]>
   usage: () => Promise<TurnStoreUsage>
+}
+
+/** What holds a publication besides the engine's own words: a time of `Date.now()` past which it stops, and its caller's stop. */
+export interface PublishHold {
+  until?: number | undefined
+  stopped?: (() => boolean) | undefined
 }
 
 interface Held {
@@ -310,9 +320,10 @@ export class TurnChangesEngine {
 
   /**
    * Publishes or discards a staged capture. While it is being published it still counts as staged and can
-   * still be stopped: by its job's cancel, by a discard, by the worker's end. A stopped publication keeps nothing.
+   * still be stopped: by its job's cancel, by a discard, by the worker's end, and by the caller's own word
+   * (`hold`), which it reads at every step itself. A stopped publication keeps nothing.
    */
-  private async settle(capture: string, publish: boolean): Promise<TurnCaptureRecord | null> {
+  private async settle(capture: string, publish: boolean, hold: PublishHold = {}): Promise<TurnCaptureRecord | null> {
     const stopping = this.publishing.get(capture)
     if (stopping) {
       if (!publish) stopping.stopped = true
@@ -328,7 +339,10 @@ export class TurnChangesEngine {
         return null
       }
       this.publishing.set(capture, word)
-      return (await this.published(held.session, held.staged, () => word.stopped))?.record ?? null
+      const { until, stopped } = hold
+      // A message is heard only between steps; the caller's word and the clock are read at each of them.
+      const stop = (): boolean => word.stopped || stopped?.() === true || (until !== undefined && Date.now() > until)
+      return (await this.published(held.session, held.staged, stop))?.record ?? null
     } finally {
       this.publishing.delete(capture)
       this.held.delete(capture)
@@ -337,8 +351,8 @@ export class TurnChangesEngine {
     }
   }
 
-  publish(capture: string): Promise<TurnCaptureRecord | null> {
-    return this.settle(capture, true)
+  publish(capture: string, hold: PublishHold = {}): Promise<TurnCaptureRecord | null> {
+    return this.settle(capture, true, hold)
   }
 
   async discard(capture: string): Promise<void> {
@@ -478,7 +492,7 @@ export function inProcessPort(engine: TurnChangesEngine): TurnChangesPort {
       signal?.addEventListener('abort', cancel, { once: true })
       return engine.capture(request).finally(() => signal?.removeEventListener('abort', cancel))
     },
-    publish: (capture) => engine.publish(capture),
+    publish: (capture, until, signal) => engine.publish(capture, { until, stopped: () => signal?.aborted === true }),
     discard: (capture) => engine.discard(capture),
     compare: (request, signal) => Promise.resolve(signal?.aborted ? refusal('cancelled', 'cancelled') : engine.compare(request, () => signal?.aborted === true)),
     difference: (request, signal) => Promise.resolve(signal?.aborted ? refusal('cancelled', 'cancelled') : engine.difference(request, () => signal?.aborted === true))

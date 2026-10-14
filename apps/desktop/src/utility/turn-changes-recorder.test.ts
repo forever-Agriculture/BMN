@@ -2,13 +2,14 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TURN_LABELS, TURN_PAUSE_REASONS, TURN_WORDINGS } from '@bmn/protocol'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import { listTurns, listUnclosedTurns, nextTurnNumber, putTurn, type TurnRow } from './database-turn-store'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
 import { refusal, type CaptureSeams, type TurnLimits } from './turn-changes-capture'
+import { TurnChangesClient } from './turn-changes-client'
 import { TurnChangesEngine, inProcessKeeper, inProcessPort, type TurnCaptureRequest, type TurnChangesPort } from './turn-changes-engine'
 import { TurnRecorder, turnLabelTime, type TurnMarkCall, type TurnObservation } from './turn-changes-recorder'
 import { TURN_STORE_FOLDER } from './turn-changes-store'
@@ -48,7 +49,7 @@ interface World {
 
 const worlds: World[] = []
 let requests = 0
-function world(name: string, options: { app?: string; limits?: Partial<TurnLimits>; port?: (port: TurnChangesPort) => TurnChangesPort; limitMs?: number; defer?: (work: () => void) => void } = {}): World {
+function world(name: string, options: { app?: string; limits?: Partial<TurnLimits>; port?: (port: TurnChangesPort, at: Place) => TurnChangesPort; limitMs?: number; defer?: (work: () => void) => void; now?: () => number } = {}): World {
   const at = scratch(name)
   const database = new BetterSqlite3(':memory:')
   initializeDatabase(database, new Date().toISOString())
@@ -66,7 +67,7 @@ function world(name: string, options: { app?: string; limits?: Partial<TurnLimit
   const once = <Result>(work: () => Result): Promise<Result> => Promise.resolve(database.transaction(work)())
   const port = inProcessPort(engine)
   const recorder = new TurnRecorder({
-    port: options.port ? options.port(port) : port,
+    port: options.port ? options.port(port, at) : port,
     keeper: inProcessKeeper(engine),
     foreground: { identity: () => foreground.identity, folder: (identity) => (identity === foreground.identity ? foreground.folder : null) },
     database: {
@@ -79,6 +80,7 @@ function world(name: string, options: { app?: string; limits?: Partial<TurnLimit
       return version.value
     },
     ...(options.defer ? { defer: options.defer } : {}),
+    ...(options.now ? { now: options.now } : {}),
     shared: () => shared.value,
     hintFolder: hints,
     changed: (sessionId) => changes.push(sessionId),
@@ -124,9 +126,11 @@ function world(name: string, options: { app?: string; limits?: Partial<TurnLimit
   worlds.push(made)
   return made
 }
+const clients: TurnChangesClient[] = []
 afterEach(async () => {
+  for (const made of worlds) await made.recorder.idle()
+  for (const client of clients.splice(0)) await client.close()
   for (const made of worlds.splice(0)) {
-    await made.recorder.idle()
     made.engine.close()
     made.database.close()
     made.at.done()
@@ -147,6 +151,51 @@ function seamed(name: string, seams: (request: TurnCaptureRequest) => CaptureSea
     })
   })
   return made
+}
+
+// The worker is the product's own file, run by plain Node.
+const WORKER = join(here, 'turn-changes-worker.ts')
+const RESOLVE = pathToFileURL(join(here, 'test-fixtures/turn-changes/ts-resolve.mjs')).href
+
+/** A world whose captures and publications run in the real worker thread; `held` runs on this thread right after a publication was asked for. */
+function inWorker(name: string, held: (w: World) => void, options: { now?: () => number } = {}): World {
+  let made: World | null = null
+  made = world(name, {
+    ...options,
+    port: (_port, at) => {
+      const client = new TurnChangesClient(WORKER, { dataRoot: at.dataRoot, home: at.home }, { execArgv: ['--import', RESOLVE] })
+      clients.push(client)
+      return {
+        capture: (request, signal) => client.capture(request, signal),
+        publish: (capture, until, signal) => {
+          const asked = client.publish(capture, until, signal)
+          held(made as World)
+          return asked
+        },
+        discard: (capture) => client.discard(capture),
+        compare: (request, signal) => client.compare(request, signal),
+        difference: (request, signal) => client.difference(request, signal)
+      }
+    }
+  })
+  return made
+}
+
+/** This thread is held: none of its timers fires and no message reaches it meanwhile. */
+function busy(ms: number): void {
+  const until = performance.now() + ms
+  while (performance.now() < until) {
+    // Held.
+  }
+}
+
+async function eventually(check: () => boolean, ms = 5_000): Promise<boolean> {
+  const until = Date.now() + ms
+  while (!check()) {
+    if (Date.now() > until) return false
+    await sleep(10)
+  }
+  return true
 }
 
 /** A whole turn: prompt, one edit, the end. */
@@ -330,7 +379,8 @@ describe('the confirmation of a "before"', () => {
     const store = w.engine.store(SESSION, w.at.repo)
     await store.settled()
     expect(store.captures()).toEqual([])
-    expect(filesUnder(join(w.at.dataRoot, TURN_STORE_FOLDER))).toBe(0)
+    // In the worker thread its bytes go after the answer: a moment later.
+    expect(await eventually(() => filesUnder(join(w.at.dataRoot, TURN_STORE_FOLDER)) === 0)).toBe(true)
     expect(w.turns()[0]).toMatchObject({ state: 'open', before: null, wording: TURN_WORDINGS.beforeUnavailable(), totals: null })
     // The turn goes on: its end still scans, and that scan is its only one.
     expect(await w.end()).toBe('queued')
@@ -374,6 +424,42 @@ describe('the confirmation of a "before"', () => {
     expect(await answer).toBe('late')
     await keptNothing(w)
   })
+
+  it('has the worker itself stop a confirmed "before" whose call\'s time passes while this thread is held, so that no timer of it can fire', async () => {
+    let skew = 0
+    const asked: number[] = []
+    // This thread is held for 300 ms right after it asked for the publication, which takes about 60 ms.
+    const w = inWorker('worker-held-past-time', () => {
+      asked.push(Date.now())
+      busy(300)
+    }, { now: () => Date.now() + skew })
+    for (let n = 0; n < 3_000; n += 1) write(w.at.repo, `d${n % 40}/f${n}.txt`, `content ${n}\n`)
+    await sleep(25)
+    const until = Date.now() + 4_000
+    expect(await w.mark('start', { requestId: 'held', until })).toBe('captured')
+    expect(w.staged()).toBeGreaterThan(3_000)
+    // The confirmation comes 10 ms before the call's time is over, as this thread counts it.
+    skew = until - 10 - Date.now()
+    expect(await w.mark('confirm', { requestId: 'held' })).toBe('late')
+    // It was asked for, inside the time: the stop came from the worker.
+    expect(asked).toHaveLength(1)
+    await keptNothing(w)
+  }, 30_000)
+
+  it('has the worker hear a dropped connection through the word it reads at every step, while this thread is held after the drop', async () => {
+    const asked: number[] = []
+    const w = inWorker('worker-held-dropped', (made) => {
+      asked.push(Date.now())
+      made.recorder.dropped(SESSION, 'gone')
+      busy(300)
+    })
+    for (let n = 0; n < 3_000; n += 1) write(w.at.repo, `d${n % 40}/f${n}.txt`, `content ${n}\n`)
+    await sleep(25)
+    expect(await w.mark('start', { requestId: 'gone' })).toBe('captured')
+    expect(await w.mark('confirm', { requestId: 'gone' })).toBe('late')
+    expect(asked).toHaveLength(1)
+    await keptNothing(w)
+  }, 30_000)
 
   it('answers a mark whose time has already passed as late', async () => {
     const w = world('passed')

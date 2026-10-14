@@ -88,8 +88,17 @@ export class TurnChangesClient implements TurnChangesPort, TurnStoreKeeper {
     return this.request<TurnCaptureAnswer>({ operation: 'capture', params: request }).finally(() => signal?.removeEventListener('abort', cancel))
   }
 
-  publish(capture: string): Promise<TurnCaptureRecord | null> {
-    return this.request({ operation: 'publish', params: { capture } })
+  /** The time and the stop go with the request: the worker reads both itself, and the host's thread need not be free to stop it. */
+  publish(capture: string, until?: number, signal?: AbortSignal): Promise<TurnCaptureRecord | null> {
+    const stop = new SharedArrayBuffer(4)
+    const raise = (): void => {
+      Atomics.store(new Int32Array(stop), 0, 1)
+    }
+    // Stopped already: it is asked all the same, so that the worker discards it at once.
+    if (signal?.aborted) raise()
+    signal?.addEventListener('abort', raise, { once: true })
+    return this.request<TurnCaptureRecord | null>({ operation: 'publish', params: { capture, ...(until === undefined ? {} : { until }) }, stop })
+      .finally(() => signal?.removeEventListener('abort', raise))
   }
 
   async discard(capture: string): Promise<void> {

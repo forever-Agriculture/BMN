@@ -1,4 +1,4 @@
-// MODULE: turn-changes-client.test.ts - the real worker thread, asked from the host's side: a capture and its comparison, a comparison stopped while it runs with the host's own thread left free, the stop where no line is compared and in the search for secrets, named secret values of config files masked in every kind of line, and a worker that died
+// MODULE: turn-changes-client.test.ts - the real worker thread, asked from the host's side: a capture and its comparison, a publication whose time passed or that was stopped before it was asked, a comparison stopped while it runs with the host's own thread left free, the stop where no line is compared and in the search for secrets, named secret values of config files masked in every kind of line, and a worker that died
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -7,7 +7,7 @@ import { TURN_SECRET_PLATE, type TurnShownLine } from '@bmn/protocol'
 import { TurnChangesClient, TurnChangesUnavailable, turnJobId } from './turn-changes-client'
 import type { TurnCaptureAnswer } from './turn-changes-engine'
 import type { TurnCaptureRecord } from './turn-changes-store'
-import { scratch, sleep, write, type Place } from './test-fixtures/turn-changes/fixtures'
+import { filesUnder, scratch, sleep, write, type Place } from './test-fixtures/turn-changes/fixtures'
 
 const here = dirname(fileURLToPath(import.meta.url))
 // The worker is the product's own file, run by plain Node: the app's build is not needed to test the thread.
@@ -72,6 +72,20 @@ describe('the turn changes worker thread', () => {
     // A name that could reach outside the store is refused, with the fixed words.
     await expect(client.removeSession('../s-one')).rejects.toBeInstanceOf(TurnChangesUnavailable)
     await expect(client.removeCaptures({ session: 's-one', key: '../../x', captures: [] })).rejects.toBeInstanceOf(TurnChangesUnavailable)
+  })
+
+  it('publishes nothing whose time already passed or whose stop was raised before it was asked, and leaves none of its bytes', async () => {
+    const { at, client } = setup('worker-publish-stopped')
+    write(at.repo, 'a.txt', 'one\n')
+    const late = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: false }))
+    expect(await client.publish(late.id, Date.now() - 1)).toBeNull()
+    const controller = new AbortController()
+    controller.abort()
+    const stopped = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: false }))
+    expect(await client.publish(stopped.id, Date.now() + 5_000, controller.signal)).toBeNull()
+    expect(await client.inventory()).toEqual([expect.objectContaining({ captures: [] })])
+    for (let tries = 0; tries < 100 && filesUnder(at.dataRoot) > 0; tries += 1) await sleep(10)
+    expect(filesUnder(at.dataRoot)).toBe(0)
   })
 
   it('stops a comparison and one file\'s difference within 100 ms, while the host\'s own thread stays free', async () => {

@@ -1008,26 +1008,34 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
       entered: met.bound === null ? entered : []
     })
     const cached = (): TurnCache => ({ capture: id, startedAt, files, paths, trees: treeless ? new Set() : trees, folders: treeless ? new Map() : lists })
-    // What publishing needs on disk at its most: the staged bytes it keeps, the record itself, and the whole
-    // new cache, because the old one is still there while the new one is written. All of it counts against
-    // the room, so the store's bound is a bound on what is on disk.
     if (met.bound === null && slicedOver()) {
       met.bound = timeBound
       treeless = true
     }
+    // A record can still become "incomplete: <time>" at the last look at the clock, and a few bytes longer: a whole
+    // one is written as long as that from the start, so what was counted for it is what it takes on disk.
+    const recordText = (made: TurnCaptureRecord): string => {
+      const text = JSON.stringify(made)
+      if (made.bound !== null) return text
+      return text.padEnd(Buffer.byteLength(JSON.stringify({ ...made, state: 'incomplete', bound: timeBound })) - (Buffer.byteLength(text) - text.length))
+    }
     let record = describe(keeps())
     let cacheText = hollow ? null : store.cacheText(cached())
-    const beside = (): number => Buffer.byteLength(JSON.stringify(record)) + (cacheText === null ? 0 : Buffer.byteLength(cacheText))
-    if (!hollow && keeps() + beside() > room) {
+    const beside = (): number => Buffer.byteLength(recordText(record)) + (cacheText === null ? 0 : Buffer.byteLength(cacheText))
+    // What publishing has on disk at its most: every byte it staged, kept or not, because the lists of a capture
+    // that keeps none stay in `staging/` until after the record; the record itself; the whole new cache, because
+    // the old one is still there while the new one is written; and what it dropped, until its removal is done.
+    // All of it counts against the room, so the store's bound is a bound on what is on disk.
+    const most = (): number => bytesStored + beside() + droppedBytes
+    if (!hollow && most() > room) {
       met.bound = STORE_FULL
       nothingKept()
       cacheText = null
       record = describe(0)
     }
     // A store with no room even for the few bytes of this record gets nothing: the caller still has the record.
-    // What this capture dropped is still on disk until its removal is done, so the record must fit beside that too.
-    const written = beside() + droppedBytes <= room
-    const adds = written ? keeps() + beside() : 0
+    const written = most() <= room
+    const adds = written ? bytesStored + beside() : 0
     phase('record')
     const stagedTook = performance.now() - startedClock
     let settled = false
@@ -1063,6 +1071,11 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
           inStaging = 0
         }
         try {
+          // Stopped before it began, or its caller's time already over: nothing of it is kept.
+          if (stop?.()) {
+            undo()
+            return null
+          }
           if (!written) return { record, added: 0, tookMs: spent() }
           privateFolder(join(store.directory, 'captures'))
           // 1. The staged files and lists are moved in, a few at a time. Until the record appears nothing names them.
@@ -1115,7 +1128,7 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
           const cacheBefore = cacheText === null ? 0 : store.cacheBytes()
           if (cacheText !== null) store.writeCache(cacheText)
           record = describe(movedBytes)
-          let text = JSON.stringify(record)
+          let text = recordText(record)
           await options.seams?.beforeLastLook?.()
           // Writing the cache held the event loop: a stop that was sent meanwhile is heard in its next turn, before the record appears.
           if (stop) await yieldNow()
@@ -1127,7 +1140,7 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
           if (met.bound === null && spent() > limits.captureMs) {
             met.bound = timeBound
             record = describe(movedBytes)
-            text = JSON.stringify(record)
+            text = recordText(record)
           }
           const recordPath = store.capturePath(id)
           writeFileSync(`${recordPath}.new`, text, { mode: 0o600 })
