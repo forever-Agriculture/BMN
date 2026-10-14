@@ -1,6 +1,6 @@
 // MODULE: secret-ranges.test.ts - where secret values are found in a text, by shape and by the rule that goes by a file's name (R67-NFR7): a value under a name that says so is hidden whole, an uncertain file hides more, and the work is bounded and can be stopped; on made-up values
 import { describe, expect, it } from 'vitest'
-import { secretFileKind, secretRanges, secretShapeRanges } from './secret-ranges'
+import { secretFileKind, secretRanges, secretShapeRanges, sortedByStart, type SecretRange } from './secret-ranges'
 
 /** The stretches a rule hides, as text. */
 const hidden = (path: string, text: string): string[] => secretRanges(path, text).map(([start, end]) => text.slice(start, end))
@@ -275,6 +275,15 @@ describe('a config file', () => {
     expect(hidden('a.yaml', 'note: a token = b\n- a secret thing = x\n')).toEqual([])
   })
 
+  it('reads a name with its escapes taken out wherever it is written: a TOML table header, a dotted name, a name partly in quotes', () => {
+    expect(hidden('a.toml', '["to\\u006ben"]\nvalue = "abc"\n[other]\nn = "v"\n')).toEqual(['abc'])
+    expect(hidden('a.toml', '[[a."pass\\u0077ord".b]]\nvalue = "abc"\n[other]\nn = "v"\n')).toEqual(['abc'])
+    expect(hidden('a.toml', 'a."to\\u006ben" = "abc"\nn = "v"\n')).toEqual(['abc'])
+    expect(hidden('a.toml', 'k = { a."to\\u006ben" = "abc", n = "v" }\n')).toEqual(['abc'])
+    expect(hidden('a.yaml', '"to\\x6ben": abc\nouter:\n  "pass\\u0077ord": def\nn: v\n')).toEqual(['abc', 'def'])
+    expect(hidden('Cargo.lock', '["to\\u006ben"]\nvalue = "abc"\n')).toEqual(['abc'])
+  })
+
   it('hides what a value written as NAME=value sets when that name says so: quoted in a list, after another name, and inside brackets', () => {
     expect(hidden('compose.yaml', 'environment:\n  - "DB_PASSWORD=p1"\n  - \'APP_SECRET=s1\'\n  - "DB_USER=shop"\n')).toEqual(['p1', 's1'])
     expect(hidden('ci.yaml', 'steps:\n  - run: API_TOKEN=t1 make\n  - run: MODE=fast make\n')).toEqual(['t1 make'])
@@ -461,6 +470,42 @@ describe('bounded work', () => {
     expect(() => secretRanges('notes.txt', `${OPENAI}\n`.repeat(50), { check })).toThrow('stopped')
     calls = 0
     expect(() => secretRanges('a.yaml', 'name: x\n'.repeat(5_000), { check })).toThrow('stopped')
+    // Every loop over a text or a line asks: a key block with many lines that begin like its end and are none, a
+    // token after `Bearer` on the line before, comments one after another, YAML's marks before a value, list
+    // dashes one after another, lines that begin like a shape and hold none, and a value with space before its comma.
+    const slow: Array<[string, string]> = [
+      ['notes.txt', `-----BEGIN PRIVATE KEY-----\n${'-----END \n'.repeat(5_000)}`],
+      ['notes.txt', `Authorization: Bearer\n${'a'.repeat(2_000_000)}`],
+      ['a.json', `{${'/**/'.repeat(5_000)}"a": 1}`],
+      ['a.jsonc', `${'// c\n'.repeat(5_000)}{"a": 1}`],
+      ['a.yaml', `k: ${'!a '.repeat(200_000)}v`],
+      ['a.yaml', `${'- '.repeat(5_000)}v`],
+      ['notes.txt', 'token\n'.repeat(5_000)],
+      ['a.yaml', `token: x${' '.repeat(2_000_000)},`],
+      ['.env', `export${' '.repeat(2_000_000)}A=b`]
+    ]
+    for (const [path, text] of slow) {
+      // Asked many times on the way, not only between the parts of the search.
+      let asked = 0
+      secretRanges(path, text, { check: () => void (asked += 1) })
+      expect(asked, `${path}: ${text.slice(0, 24)}`).toBeGreaterThan(12)
+    }
+  })
+
+  it('puts a list that is not in order into it, asking its caller on the way', () => {
+    let state = 7
+    const next = (): number => (state = (state * 1_103_515_245 + 12_345) % 2_147_483_648)
+    const list: SecretRange[] = Array.from({ length: 20_000 }, () => {
+      const start = next() % 1_000_000
+      return [start, start + 1 + (next() % 50)]
+    })
+    let calls = 0
+    const sorted = sortedByStart([...list], () => void (calls += 1))
+    expect(sorted.map((range) => range[0])).toEqual([...list].sort((a, b) => a[0] - b[0]).map((range) => range[0]))
+    expect(sorted).toHaveLength(list.length)
+    expect(calls).toBeGreaterThan(20)
+    expect(sortedByStart([], () => undefined)).toEqual([])
+    expect(sortedByStart([[3, 4]], () => undefined)).toEqual([[3, 4]])
   })
 
   it('reads a run of any length, and brackets nested however deep, without running out of stack', () => {
@@ -501,7 +546,15 @@ describe('bounded work', () => {
       `${' '.repeat(2_000_000)}token: abcdefgh`,
       `"${'\\'.repeat(2_000_000)}"`,
       `${'['.repeat(1_000)}${'"a",'.repeat(400_000)}`,
-      `password:\n${'\n'.repeat(2_000_000)}hunter2hunter2`
+      `password:\n${'\n'.repeat(2_000_000)}hunter2hunter2`,
+      `-----BEGIN PRIVATE KEY-----\n${'-----END \n'.repeat(200_000)}`,
+      `Authorization: Bearer\n${'a'.repeat(2_000_000)}`,
+      `{${'/**/'.repeat(500_000)}"a": 1}`,
+      `${'// c\n'.repeat(400_000)}{"a": 1}`,
+      `k: ${'!a '.repeat(700_000)}v`,
+      `${'- '.repeat(1_000_000)}v`,
+      'token\n'.repeat(350_000),
+      `token: x${' '.repeat(2_000_000)},`
     ]
     for (const path of ['notes.txt', 'a.json', 'a.yaml', 'a.toml', '.env', 'yarn.lock']) {
       for (const text of texts) {
@@ -519,5 +572,5 @@ describe('bounded work', () => {
         expect(performance.now() - began).toBeLessThan(1_500)
       }
     }
-  })
+  }, 60_000)
 })

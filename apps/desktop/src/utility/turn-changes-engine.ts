@@ -189,7 +189,12 @@ export class TurnChangesEngine {
   /** Publishes a staged capture and counts what the store really grew by. Null when `stop` said so meanwhile: nothing of it is kept. */
   private async published(session: string, staged: StagedCapture, stop: () => boolean): Promise<PublishedCapture | null> {
     const done = await staged.publish(stop)
-    if (done) this.count(session, workTreeKey(done.record.root), (before) => before + done.added)
+    if (done) {
+      const key = workTreeKey(done.record.root)
+      // Something failed after the record appeared: what the store holds is read from the disk, not worked out.
+      if (done.recount) this.count(session, key, () => this.onDisk(this.store(session, done.record.root)))
+      else this.count(session, key, (before) => before + done.added)
+    }
     return done
   }
 

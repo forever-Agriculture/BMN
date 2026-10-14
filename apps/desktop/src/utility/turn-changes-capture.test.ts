@@ -813,12 +813,14 @@ describe('the bounds of a capture, at and one past', () => {
     // A file is taken as read before only when it had been still for a moment when it was read.
     await sleep(25)
     const began = performance.now()
-    const late = staged(await capture(at.repo, { ...at.options, git: slowHead(at), limits: { captureMs: 300 } }))
-    expect(performance.now() - began).toBeLessThan(300 + 80)
-    expect(late.tookMs).toBeLessThan(300 + 50)
-    expect(late.record).toMatchObject({ state: 'incomplete', bound: '0.3 s', headEnd: null, base: null, tree: null })
+    // The command is ended with the capture's sliced work (the last 50 of 1,000 ms), so the capture is back inside its time.
+    const late = staged(await capture(at.repo, { ...at.options, git: slowHead(at), limits: { captureMs: 1_000 } }))
+    expect(performance.now() - began).toBeLessThan(1_000)
+    expect(late.tookMs).toBeLessThan(1_000)
+    expect(late.tookMs).toBeGreaterThan(900)
+    expect(late.record).toMatchObject({ state: 'incomplete', bound: '1 s', headEnd: null, base: null, tree: null })
     // Its time is over: nothing more is moved in, and its record says so.
-    expect(await published(late)).toMatchObject({ state: 'incomplete', bound: '0.3 s', tree: null, bytesStored: 0 })
+    expect(await published(late)).toMatchObject({ state: 'incomplete', bound: '1 s', tree: null, bytesStored: 0 })
     const next = staged(await capture(at.repo, at.options))
     expect(next.record).toMatchObject({ state: 'whole' })
     next.discard()
@@ -830,9 +832,10 @@ describe('the bounds of a capture, at and one past', () => {
     at.git(join(at.repo, 'nested'), 'init', '-q', '-b', 'main')
     write(at.repo, 'nested/deep.txt', 'd\n')
     const began = performance.now()
-    const late = staged(await capture(at.repo, { ...at.options, git: slowHead(at), limits: { captureMs: 300 } }))
-    expect(performance.now() - began).toBeLessThan(300 + 150)
-    expect(late.record).toMatchObject({ state: 'incomplete', bound: '0.3 s', counts: { submodules: 0 } })
+    const late = staged(await capture(at.repo, { ...at.options, git: slowHead(at), limits: { captureMs: 1_000 } }))
+    expect(performance.now() - began).toBeLessThan(1_000)
+    expect(late.tookMs).toBeLessThan(1_000)
+    expect(late.record).toMatchObject({ state: 'incomplete', bound: '1 s', counts: { submodules: 0 } })
     late.discard()
   })
 
@@ -897,6 +900,41 @@ describe('the bounds of a capture, at and one past', () => {
       expect(store.record(record.id)).toBeNull()
       expect(store.keptBytes()).toBe(before)
     }
+  })
+
+  it('writes no record of a capture that ended "store full" while the bytes it dropped lie on disk beside it, and writes one where both fit', async () => {
+    const at = place('full-dropped')
+    const store = new TurnStore(at.dataRoot, 's-case', at.repo)
+    write(at.repo, 'big.txt', 'z'.repeat(2_000))
+    const probe = staged(await capture(at.repo, { ...at.options, store }))
+    // Everything it would stage: its files and its lists.
+    const stagedBytes = probe.record.bytesStored
+    expect(stagedBytes).toBeGreaterThan(2_000)
+    probe.discard()
+    await store.settled()
+    // Room for all it stages and not for its record and cache beside that: it ends "store full" and drops what it staged.
+    const drops: Array<{ bytes: number; gone: Promise<boolean> }> = []
+    const full = staged(await capture(at.repo, { ...at.options, store, room: stagedBytes, dropped: (bytes, gone) => drops.push({ bytes, gone }) }))
+    expect(full.record).toMatchObject({ state: 'incomplete', bound: 'store full', tree: null, bytesStored: 0 })
+    expect(drops.map((drop) => drop.bytes)).toEqual([stagedBytes])
+    // Its record alone would fit in the room. Beside the dropped bytes, which are on disk until they are removed, it does not.
+    const recordBytes = Buffer.byteLength(JSON.stringify(full.record))
+    expect(recordBytes).toBeLessThan(stagedBytes)
+    expect(full.adds).toBe(0)
+    const record = await published(full)
+    expect(store.diskBytes()).toBeLessThanOrEqual(stagedBytes)
+    expect(store.record(record.id)).toBeNull()
+    expect(await drops[0]?.gone).toBe(true)
+    expect(filesUnder(at.dataRoot)).toBe(0)
+    // With room for the dropped bytes and the record together, and still none for the capture: the record is written.
+    const fits = staged(await capture(at.repo, { ...at.options, store, room: stagedBytes + recordBytes + 8 }))
+    expect(fits.record).toMatchObject({ state: 'incomplete', bound: 'store full', tree: null, bytesStored: 0 })
+    expect(fits.adds).toBeGreaterThan(0)
+    const written = await published(fits)
+    expect(store.diskBytes()).toBeLessThanOrEqual(stagedBytes + recordBytes + 8)
+    await store.settled()
+    expect(store.record(written.id)?.bound).toBe('store full')
+    expect(store.keptBytes()).toBe(fits.adds)
   })
 
   it('does not let a capture of an unchanged work tree pass the bound with its record', async () => {
@@ -1068,6 +1106,149 @@ describe('a capture that is cancelled, or discarded', () => {
     expect(isCapturing(at.repo)).toBe(false)
     const again = await published(staged(await capture(at.repo, { ...at.options, store, base: first.id })))
     expect(compareCaptures(store, first.id, again.id)).toMatchObject({ state: 'compared', files: [{ path: 'secret.txt', state: 'added' }] })
+  })
+
+  /** Every file a kept capture lists whose bytes are not in the store. */
+  const missing = (store: TurnStore, tree: string | null): string[] => {
+    const out: string[] = []
+    const walk = (hash: string, prefix: string): void => {
+      for (const [name, row] of store.tree(hash)) {
+        if (row[1] === 'd') walk(row[2], `${prefix}${name}/`)
+        else if (row[1] === 'f' && !store.hasObject('blobs', row[2])) out.push(`${prefix}${name}`)
+      }
+    }
+    if (tree !== null) walk(tree, '')
+    return out
+  }
+
+  it('lets no capture take for stored what a stopped publication is still taking out: it waits until that is done, hears a cancel meanwhile and ends with its time', async () => {
+    const at = place('undo-meanwhile')
+    for (let n = 0; n < 40; n += 1) write(at.repo, `f${String(n).padStart(2, '0')}.txt`, `content ${n}\n`)
+    await sleep(25)
+    const store = new TurnStore(at.dataRoot, 's-case', at.repo)
+    // The taking-out is held: what the stopped publication moved in is still in the store.
+    let release = (): void => undefined
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const undoMoves = store.undoMoves.bind(store)
+    store.undoMoves = (id, moved) => held.then(() => undoMoves(id, moved))
+    let stop = false
+    const one = staged(await capture(at.repo, {
+      ...at.options, store,
+      seams: {
+        beforeMove: (moved) => {
+          if (moved === 30) stop = true
+        }
+      }
+    }))
+    expect(await one.publish(() => stop)).toBeNull()
+    const blobs = join(store.directory, 'objects', 'blobs')
+    expect(filesUnder(blobs)).toBe(30)
+    // A capture whose time is shorter than the wait ends with its time: it listed and read nothing, and names nothing.
+    const short = staged(await capture(at.repo, { ...at.options, store, limits: { captureMs: 600 } }))
+    expect(short.record).toMatchObject({ state: 'incomplete', bound: '0.6 s', tree: null, bytesRead: 0, bytesStored: 0 })
+    expect(short.tookMs).toBeLessThan(600)
+    short.discard()
+    // One that is cancelled while it waits is cancelled.
+    const controller = new AbortController()
+    const cancelled = capture(at.repo, { ...at.options, store, signal: controller.signal })
+    await sleep(30)
+    controller.abort()
+    expect(await cancelled).toEqual({ state: 'cancelled', reason: 'cancelled' })
+    // One with time waits, and reads only when everything is out.
+    const waiting = capture(at.repo, { ...at.options, store })
+    expect(await Promise.race([waiting, sleep(80).then(() => 'waiting')])).toBe('waiting')
+    expect(filesUnder(blobs)).toBe(30)
+    release()
+    const two = await published(staged(await waiting))
+    await store.settled()
+    expect(two.state).toBe('whole')
+    // Every file it lists is in the store: none of them was taken for stored and then taken out.
+    expect(missing(store, two.tree)).toEqual([])
+    expect(filesUnder(blobs)).toBe(41)
+    expect(filesUnder(join(store.directory, 'staging'))).toBe(0)
+  })
+
+  it.skipIf(process.getuid?.() === 0)('takes nothing from under a cache it cannot read: the clearing after an interrupted publication waits, and the files only the cache names are there for the next capture', async () => {
+    const at = place('cache-unreadable')
+    for (const name of ['a', 'b', 'c', 'd', 'e']) write(at.repo, `${name}.txt`, `content ${name}\n`)
+    await sleep(25)
+    const store = new TurnStore(at.dataRoot, 's-case', at.repo)
+    // A kept capture whose time passed: it keeps the three files it read without a list, and only its cache names them.
+    const began = performance.now()
+    let seen = 0
+    const cut = await published(staged(await capture(at.repo, {
+      ...at.options, store, limits: { captureMs: 600 },
+      seams: {
+        beforeEntry: async () => {
+          seen += 1
+          if (seen === 3) await sleep(Math.max(0, began + 535 - performance.now()))
+        }
+      }
+    })))
+    expect(cut).toMatchObject({ state: 'incomplete', bound: '0.6 s', tree: null })
+    const kept = filesUnder(join(store.directory, 'objects', 'blobs'))
+    expect(kept).toBe(3)
+    // The publication of a second capture ends after its first file was moved in.
+    const marker = `MARKER-${randomBytes(8).toString('hex')}`
+    write(at.repo, 'secret.txt', `${marker}\n`)
+    let root = ''
+    const second = staged(await capture(at.repo, {
+      ...at.options, store,
+      seams: {
+        beforeMove: (moved) => {
+          if (moved === 1) root = crashed(at, 'data-crashed')
+        }
+      }
+    }))
+    await second.publish()
+    expect(root).not.toBe('')
+    expect(holds(root, marker)).toBe(true)
+    const restarted = new TurnStore(root, 's-case', at.repo)
+    const blobs = join(restarted.directory, 'objects', 'blobs')
+    const cachePath = join(restarted.directory, 'cache.json')
+    expect(filesUnder(blobs)).toBe(kept + 1)
+    chmodSync(cachePath, 0o000)
+    try {
+      // The start cannot read the cache: what it names is not known, so nothing goes and the folder that says "interrupted" stays.
+      expect(restarted.clearLeftovers()).toBe(false)
+      expect(filesUnder(blobs)).toBe(kept + 1)
+      expect(filesUnder(join(restarted.directory, 'staging'))).toBeGreaterThan(0)
+      expect(existsSync(cachePath)).toBe(true)
+      // A removal is not done either: it says so, and whoever asked tries again.
+      expect(() => restarted.removeCaptures([])).toThrow()
+      expect(filesUnder(blobs)).toBe(kept + 1)
+    } finally {
+      chmodSync(cachePath, 0o600)
+    }
+    // The next start can read it: what the interrupted publication left goes, what the cache names stays.
+    const next = new TurnStore(root, 's-case', at.repo)
+    expect(next.clearLeftovers()).toBe(true)
+    expect(holds(root, marker)).toBe(false)
+    expect(filesUnder(join(next.directory, 'staging'))).toBe(0)
+    expect(filesUnder(blobs)).toBe(kept)
+    // A later capture takes those files from the cache, and has every one of them.
+    const whole = await published(staged(await capture(at.repo, { ...at.options, dataRoot: root, store: next })))
+    expect(whole.state).toBe('whole')
+    // Three of the seven files were read before: no more than the other four are read now.
+    const all = 5 * 'content a\n'.length + 'k\n'.length + marker.length + 1
+    expect(whole.bytesRead).toBeGreaterThan(0)
+    expect(whole.bytesRead).toBeLessThanOrEqual(all - 2 * 'content a\n'.length - 'k\n'.length)
+    expect(missing(next, whole.tree)).toEqual([])
+  })
+
+  it('removes a cache that is no cache before it clears, and clears: no capture can go by it', async () => {
+    const { at, root, first, marker } = await interrupted('cache-broken')
+    const restarted = new TurnStore(root, 's-case', at.repo)
+    writeFileSync(join(restarted.directory, 'cache.json'), '{"capture": "cut sho')
+    expect(restarted.clearLeftovers()).toBe(true)
+    expect(existsSync(join(restarted.directory, 'cache.json'))).toBe(false)
+    expect(holds(root, marker)).toBe(false)
+    expect(filesUnder(join(restarted.directory, 'staging'))).toBe(0)
+    expect(holds(join(restarted.directory, 'objects'), 'KEPT-CONTENT')).toBe(true)
+    const again = await published(staged(await capture(at.repo, { ...at.options, dataRoot: root, store: restarted, base: first.id })))
+    expect(compareCaptures(restarted, first.id, again.id)).toMatchObject({ state: 'compared', files: [{ path: 'secret.txt', state: 'added' }] })
   })
 
   it.skipIf(process.getuid?.() === 0)('removes the whole store at the next start when its very first publication was interrupted, also when that start is interrupted itself', async () => {

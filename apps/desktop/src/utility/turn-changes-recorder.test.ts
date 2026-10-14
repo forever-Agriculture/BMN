@@ -8,8 +8,8 @@ import { TURN_LABELS, TURN_PAUSE_REASONS, TURN_WORDINGS } from '@bmn/protocol'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import { listTurns, listUnclosedTurns, nextTurnNumber, putTurn, type TurnRow } from './database-turn-store'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
-import { refusal, type TurnLimits } from './turn-changes-capture'
-import { TurnChangesEngine, inProcessKeeper, inProcessPort, type TurnChangesPort } from './turn-changes-engine'
+import { refusal, type CaptureSeams, type TurnLimits } from './turn-changes-capture'
+import { TurnChangesEngine, inProcessKeeper, inProcessPort, type TurnCaptureRequest, type TurnChangesPort } from './turn-changes-engine'
 import { TurnRecorder, turnLabelTime, type TurnMarkCall, type TurnObservation } from './turn-changes-recorder'
 import { TURN_STORE_FOLDER } from './turn-changes-store'
 import { readAppVersion, type VersionPlaces } from './turn-changes-version'
@@ -132,6 +132,22 @@ afterEach(async () => {
     made.at.done()
   }
 })
+
+/** A world whose captures are held where a test says: its port asks the engine itself, as the in-process port does, with these seams. */
+function seamed(name: string, seams: (request: TurnCaptureRequest) => CaptureSeams, options: { limits?: Partial<TurnLimits>; limitMs?: number } = {}): World {
+  const made: World = world(name, {
+    ...options,
+    port: (port) => ({
+      ...port,
+      capture: (request, signal) => {
+        const cancel = (): void => made.engine.cancel(request.job)
+        signal?.addEventListener('abort', cancel, { once: true })
+        return made.engine.capture(request, seams(request)).finally(() => signal?.removeEventListener('abort', cancel))
+      }
+    })
+  })
+  return made
+}
 
 /** A whole turn: prompt, one edit, the end. */
 async function turn(w: World, file: string, content: string, extra: Partial<TurnMarkCall> = {}): Promise<void> {
@@ -306,6 +322,57 @@ describe('the confirmation of a "before"', () => {
     expect(await w.end()).toBe('queued')
     expect(w.turns()[0]).toMatchObject({ state: 'provisional', before: null, wording: TURN_WORDINGS.beforeUnavailable(), totals: null })
     expect(w.turns()[0]?.after).not.toBeNull()
+  })
+
+  /** What a "before" leaves whose publication was stopped: no capture, no byte under the stores, and a turn that goes on without it. */
+  const keptNothing = async (w: World): Promise<void> => {
+    await w.recorder.idle()
+    const store = w.engine.store(SESSION, w.at.repo)
+    await store.settled()
+    expect(store.captures()).toEqual([])
+    expect(filesUnder(join(w.at.dataRoot, TURN_STORE_FOLDER))).toBe(0)
+    expect(w.turns()[0]).toMatchObject({ state: 'open', before: null, wording: TURN_WORDINGS.beforeUnavailable(), totals: null })
+    // The turn goes on: its end still scans, and that scan is its only one.
+    expect(await w.end()).toBe('queued')
+    expect(w.turns()[0]).toMatchObject({ state: 'provisional', before: null, wording: TURN_WORDINGS.beforeUnavailable(), totals: null })
+    expect(w.turns()[0]?.after).not.toBeNull()
+  }
+
+  it('stops the publication of a confirmed "before" when the time of its call passes meanwhile: the answer is late and nothing of it is kept', async () => {
+    // The confirmation comes in time. The publication is held at its third file until the time of the call is over.
+    const w = seamed('confirm-past-time', (request) => (request.publish ? {} : { beforeMove: (moved) => (moved === 2 ? sleep(450) : undefined) }), { limitMs: 300 })
+    for (let n = 0; n < 6; n += 1) write(w.at.repo, `f${n}.txt`, `content ${n}\n`)
+    await sleep(25)
+    expect(await w.mark('start', { requestId: 'held' })).toBe('captured')
+    expect(await w.mark('confirm', { requestId: 'held' })).toBe('late')
+    await keptNothing(w)
+  })
+
+  it('stops it too when the connection drops while it is published', async () => {
+    let reached = (): void => undefined
+    const moving = new Promise<void>((resolve) => {
+      reached = resolve
+    })
+    let release = (): void => undefined
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const w = seamed('confirm-dropped', (request) => (request.publish ? {} : {
+      beforeMove: async (moved) => {
+        if (moved !== 2) return
+        reached()
+        await held
+      }
+    }))
+    for (let n = 0; n < 6; n += 1) write(w.at.repo, `f${n}.txt`, `content ${n}\n`)
+    await sleep(25)
+    expect(await w.mark('start', { requestId: 'gone' })).toBe('captured')
+    const answer = w.mark('confirm', { requestId: 'gone' })
+    await moving
+    w.recorder.dropped(SESSION, 'gone')
+    release()
+    expect(await answer).toBe('late')
+    await keptNothing(w)
   })
 
   it('answers a mark whose time has already passed as late', async () => {
@@ -759,6 +826,46 @@ describe('the pause', () => {
     expect(rows.slice(0, 2).map((row) => [row.totals, /^Incomplete: .+ read$/.test(row.wording ?? '')])).toEqual([[null, true], [null, true]])
     expect(rows[2]).toMatchObject({ totalsState: 'complete', totals: { files: 1, added: 1, removed: 0 }, wording: null })
     expect(w.recorder.states()[0]).toMatchObject({ state: 'recording', pausedRoot: null })
+  })
+
+  it('does not count a scan whose time passed and which kept the files it read: it has no list, and the next scan starts further on', async () => {
+    // Each scan is held at its second new file until its time for reading is over (the last 100 of 800 ms): it
+    // reads two files, keeps them without a list and ends "incomplete".
+    const w = seamed('pause-time-read-on', () => {
+      const began = performance.now()
+      let seen = 0
+      return {
+        beforeEntry: async () => {
+          seen += 1
+          if (seen === 2) await sleep(Math.max(0, began + 710 - performance.now()))
+        }
+      }
+    }, { limits: { captureMs: 800 } })
+    for (let n = 0; n < 10; n += 1) write(w.at.repo, `f${n}.txt`, `content ${n}\n`)
+    await sleep(25)
+    expect(await w.prompt()).toBe('incomplete, confirmed')
+    expect(await w.end()).toBe('queued')
+    expect(await w.prompt({ turn: 't-2' })).toBe('incomplete, confirmed')
+    const store = w.engine.store(SESSION, w.at.repo)
+    const kept = store.captures().map((id) => store.record(id))
+    expect(kept.map((record) => [record?.state, record?.bound, record?.tree, (record?.bytesRead ?? 0) > 0, (record?.bytesStored ?? 0) > 0]))
+      .toEqual([1, 2, 3].map(() => ['incomplete', '0.8 s', null, true, true]))
+    // Three incomplete scans in a row, and each got further: recording goes on.
+    expect(w.recorder.states()[0]).toMatchObject({ state: 'recording', pausedRoot: null })
+  }, 30_000)
+
+  it('counts a scan whose time passed before anything it read was kept', async () => {
+    // Each publication is held before its first file until the capture's time is over: nothing is moved in.
+    const w = seamed('pause-time-kept-none', () => ({ beforeMove: (moved) => (moved === 0 ? sleep(240) : undefined) }), { limits: { captureMs: 200 } })
+    for (let n = 0; n < 3; n += 1) write(w.at.repo, `f${n}.txt`, `content ${n}\n`)
+    await sleep(25)
+    expect(await w.prompt()).toBe('captured, confirmed')
+    expect(await w.end()).toBe('queued')
+    expect(w.recorder.states()[0]).toMatchObject({ state: 'recording' })
+    expect(await w.prompt({ turn: 't-2' })).toBe('captured, confirmed')
+    const store = w.engine.store(SESSION, w.at.repo)
+    expect(store.captures().map((id) => store.record(id)).map((record) => [record?.state, record?.tree, record?.bytesStored])).toEqual([1, 2, 3].map(() => ['incomplete', null, 0]))
+    expect(w.recorder.states()[0]).toMatchObject({ state: 'paused', pausedRoot: w.at.repo, pauseReason: 'incomplete' })
   })
 
   it('still pauses when a failed scan follows incomplete ones that read on', async () => {

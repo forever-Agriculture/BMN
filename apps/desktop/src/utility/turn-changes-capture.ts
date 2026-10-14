@@ -147,6 +147,8 @@ export interface PublishedCapture {
   added: number
   /** From the capture's start through the step that published it, the wait between staging and publishing left out. */
   tookMs: number
+  /** Something failed after the record appeared: the capture is real, and `added` may not be what the disk holds. The store is to be counted from the disk. */
+  recount?: boolean
 }
 
 /** A capture that is whole or incomplete and not yet real: `publish` makes it so in one step, `discard` removes its bytes at once. */
@@ -391,6 +393,20 @@ export function isCapturing(root: string): boolean {
 }
 
 const yieldNow = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+
+/**
+ * Stores in which a stopped publication is still taking out what it moved in, by the store's folder, each
+ * with the promise that says when that is done. Until then nothing in that store may be taken for stored:
+ * a file that is about to go would be named by a capture that stays.
+ */
+const takingOut = new Map<string, Promise<void>>()
+
+/** Resolves when the signal says stop; never without a signal. */
+const stopped = (signal: AbortSignal | undefined): Promise<void> => new Promise((resolve) => {
+  if (!signal) return
+  if (signal.aborted) resolve()
+  else signal.addEventListener('abort', () => resolve(), { once: true })
+})
 const strict = new TextDecoder('utf-8', { fatal: true })
 const lossy = new TextDecoder('utf-8')
 /** A path Git may list: no empty part, no `.` and no `..`, not from the top. */
@@ -480,9 +496,9 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
   // is bounded by the limit of entries: making the record and the cache, writing them, the renames.
   const tail = Math.min(100, limits.captureMs / 20)
   const slicedOver = (): boolean => performance.now() - startedClock > limits.captureMs - tail
-  /** The signal of one Git command: the caller's cancel, and what is left of the capture's time. */
+  /** The signal of one Git command: the caller's cancel, and what is left of the time for the capture's sliced work, so that what follows the command fits in the capture's time too. */
   const gitSignal = (): AbortSignal => {
-    const left = limits.captureMs - (performance.now() - startedClock)
+    const left = limits.captureMs - tail - (performance.now() - startedClock)
     const timeout = AbortSignal.timeout(Math.max(1, Math.ceil(left)))
     return caller ? AbortSignal.any([caller, timeout]) : timeout
   }
@@ -528,11 +544,14 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
   }
   // Bytes of this capture that lie in `staging/` now.
   let inStaging = 0
+  // Bytes this capture dropped from `staging/`: their removal was started and may not be done.
+  let droppedBytes = 0
   const drop = (): void => {
     if (staged) {
       // The removal starts whether or not anybody counts its bytes.
       const gone = store.discardStaging(id)
       options.dropped?.(inStaging, gone)
+      droppedBytes += inStaging
     }
     staged = false
     inStaging = 0
@@ -546,6 +565,21 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
   const prefix = `${root}/`
 
   try {
+    // A stopped publication of this store may still be taking out what it moved in. Nothing of that may be
+    // taken for stored, so this capture waits until it is done. A cancel is heard meanwhile. The wait is
+    // part of the capture's time: when that passes first the capture lists and reads nothing, like one
+    // whose listing was cut, and so names nothing in the store.
+    let waitedOut = false
+    for (let going = takingOut.get(store.directory); going !== undefined && !waitedOut; going = takingOut.get(store.directory)) {
+      let timer: NodeJS.Timeout | undefined
+      const passed = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, Math.max(0, limits.captureMs - tail - (performance.now() - startedClock)))
+      })
+      await Promise.race([going, stopped(caller), passed])
+      clearTimeout(timer)
+      if (cancelled()) return end('cancelled', 'cancelled')
+      waitedOut = slicedOver()
+    }
     const cache = store.loadCache()
     const base = options.base ? store.record(options.base) : null
     const basePaths = base?.tree ? (cache?.capture === base.id ? cache.paths : new Set(leaves(store, base.tree))) : null
@@ -726,8 +760,9 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
       waiting.push({ path, stat, gitlink: parsed.mode === '160000' })
       return true
     }
-    let listingCut = false
-    const listing = await runTurnGit(git(gitSignal()), root, 'list', (chunk) => {
+    let listingCut = waitedOut
+    if (waitedOut) met.bound = timeBound
+    const listing = waitedOut ? null : await runTurnGit(git(gitSignal()), root, 'list', (chunk) => {
       pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk])
       let from = 0
       for (;;) {
@@ -741,7 +776,7 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
     })
     if (cancelled()) return end('cancelled', 'cancelled')
     if (met.refused) return end(met.refused.state, met.refused.reason)
-    if (met.bound === null) {
+    if (listing !== null && met.bound === null) {
       if (listing.stopped) {
         // The listing ran out of the capture's time: what was listed is not the work tree, so nothing is kept.
         met.bound = timeBound
@@ -990,7 +1025,8 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
       record = describe(0)
     }
     // A store with no room even for the few bytes of this record gets nothing: the caller still has the record.
-    const written = beside() <= room
+    // What this capture dropped is still on disk until its removal is done, so the record must fit beside that too.
+    const written = beside() + droppedBytes <= room
     const adds = written ? keeps() + beside() : 0
     phase('record')
     const stagedTook = performance.now() - startedClock
@@ -1015,6 +1051,13 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
         const undo = (): void => {
           store.dropWritten(id)
           const gone = store.undoMoves(id, moved)
+          // Until all of it is out, no capture of this store reads anything: see `takingOut`.
+          const key = store.directory
+          const done = Promise.all([takingOut.get(key), gone]).then(() => undefined, () => undefined)
+          takingOut.set(key, done)
+          void done.then(() => {
+            if (takingOut.get(key) === done) takingOut.delete(key)
+          })
           options.dropped?.(inStaging + movedBytes, gone)
           staged = false
           inStaging = 0
@@ -1074,6 +1117,8 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
           record = describe(movedBytes)
           let text = JSON.stringify(record)
           await options.seams?.beforeLastLook?.()
+          // Writing the cache held the event loop: a stop that was sent meanwhile is heard in its next turn, before the record appears.
+          if (stop) await yieldNow()
           if (stop?.()) {
             undo()
             return null
@@ -1088,14 +1133,24 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
           writeFileSync(`${recordPath}.new`, text, { mode: 0o600 })
           renameSync(`${recordPath}.new`, recordPath)
           real = true
-          // What is left in `staging/` (a list of a capture that keeps none, a copy of what the store had) goes now, not before.
-          if (staged) {
-            if (inStaging > 0) drop()
-            else rmSync(staging, { recursive: true, force: true })
-            staged = false
+          // From here the capture is real whatever fails: nothing is thrown, and the caller is told to count the store from the disk.
+          let cacheAdded = 0
+          let recount = false
+          try {
+            // What is left in `staging/` (a list of a capture that keeps none, a copy of what the store had) goes now, not before.
+            if (staged) {
+              if (inStaging > 0) drop()
+              else rmSync(staging, { recursive: true, force: true })
+              staged = false
+            }
+            if (cacheText !== null) {
+              if (store.adoptCache(cached())) cacheAdded = Buffer.byteLength(cacheText) - cacheBefore
+              else recount = true
+            }
+          } catch {
+            recount = true
           }
-          const cacheAdded = cacheText !== null && store.adoptCache(cached()) ? Buffer.byteLength(cacheText) - cacheBefore : 0
-          return { record, added: movedBytes + Buffer.byteLength(text) + cacheAdded, tookMs: spent() }
+          return { record, added: movedBytes + Buffer.byteLength(text) + cacheAdded, tookMs: spent(), ...(recount ? { recount } : {}) }
         } catch (error) {
           // Before the record appeared nothing may stay of it; once it is there the capture is real, whatever failed after.
           if (!real) undo()

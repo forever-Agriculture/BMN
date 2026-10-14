@@ -116,6 +116,8 @@ interface SessionTurns {
   number: number | null
   live: LiveTurn[]
   pending: Pending | null
+  /** A confirmed "before" that is being published now: its call's time and its connection still hold it. */
+  confirming: { requestId: string; capture: string } | null
   /** Marks already answered, by edge and request id. */
   requests: Map<string, TurnMarkStatus>
   failures: Map<string, { failed: number; incomplete: number }>
@@ -134,8 +136,13 @@ const two = (value: number): string => String(value).padStart(2, '0')
 const shortCommit = (commit: string | null): string => (commit === null ? 'no commit' : commit.slice(0, 12))
 
 /** A moment as a label says it: this computer's own date and time. */
-/** An incomplete capture that read new bytes and kept what it read: the next scan of that root starts further on. */
-const readOn = (record: TurnCaptureRecord): boolean => record.state === 'incomplete' && record.tree !== null && record.bytesRead > 0
+/**
+ * An incomplete capture that read new bytes and kept what it read: the next scan of that root starts further on.
+ * One whose time passed keeps the files it read without a list of them, so it is told by the bytes it put
+ * in the store; one that kept nothing put none there.
+ */
+const readOn = (record: TurnCaptureRecord): boolean =>
+  record.state === 'incomplete' && record.bytesRead > 0 && (record.tree !== null || record.bytesStored > 0)
 
 export function turnLabelTime(ms: number): string {
   const at = new Date(ms)
@@ -305,6 +312,8 @@ export class TurnRecorder {
   dropped(sessionId: string, requestId: string): void {
     const state = this.sessions.get(sessionId)
     if (!state) return
+    // A "before" that is being published is stopped here and now: its confirmation is answered in this session's line, behind which this would wait.
+    if (state.confirming?.requestId === requestId) void this.options.port.discard(state.confirming.capture).catch(() => undefined)
     this.track(this.enqueue(state, async () => {
       if (state.pending?.requestId === requestId) await this.dropPending(state)
     }))
@@ -456,7 +465,14 @@ export class TurnRecorder {
     }
     state.pending = null
     this.clearTimer(pending.timer)
-    const record = await this.options.port.publish(pending.record.id).catch(() => null)
+    // The call's time and its connection hold the "before" until it is published (69.4 criterion 3): past the
+    // one, or without the other, the publication is stopped, and a stopped publication keeps nothing.
+    const capture = pending.record.id
+    state.confirming = { requestId: call.requestId, capture }
+    const timer = this.setTimer(() => void this.options.port.discard(capture).catch(() => undefined), Math.max(0, pending.deadline - this.now()))
+    const record = await this.options.port.publish(capture).catch(() => null)
+    this.clearTimer(timer)
+    state.confirming = null
     if (record === null) {
       await this.open(state, pending.turn, pending.waiting, null)
       return 'late'
@@ -858,7 +874,7 @@ export class TurnRecorder {
   private session(sessionId: string): SessionTurns {
     let state = this.sessions.get(sessionId)
     if (!state) {
-      state = { sessionId, queue: Promise.resolve(), number: null, live: [], pending: null, requests: new Map(), failures: new Map(), paused: new Map(), app: null, appIdentity: null }
+      state = { sessionId, queue: Promise.resolve(), number: null, live: [], pending: null, confirming: null, requests: new Map(), failures: new Map(), paused: new Map(), app: null, appIdentity: null }
       this.sessions.set(sessionId, state)
     }
     return state

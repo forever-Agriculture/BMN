@@ -330,6 +330,25 @@ describe('the space the stores may take', () => {
     expect(isCapturing(at.repo)).toBe(false)
   })
 
+  it('hears a stop that was sent while the last of a publication was written: no record appears', async () => {
+    const { at, engine } = bounded('stop-at-the-end', {})
+    const store = engine.store('s-one', at.repo)
+    let id = ''
+    const one = await engine.capture({ job: 'job-1', session: 's-one', folder: at.repo, publish: false }, {
+      // As a word from the host arrives: in the event loop's next turn, not in this one.
+      beforeLastLook: () => {
+        setImmediate(() => void engine.discard(id))
+      }
+    })
+    id = record(one).id
+    expect(await engine.publish(id)).toBeNull()
+    await store.settled()
+    expect(store.captures()).toEqual([])
+    expect(filesUnder(at.dataRoot)).toBe(0)
+    expect((await inProcessKeeper(engine).usage()).all).toBe(0)
+    expect(await take(engine, 's-one', at.repo, 'job-2')).toMatchObject({ state: 'whole', published: true })
+  })
+
   it.skipIf(process.getuid?.() === 0)('goes on counting what a capture dropped and could not remove, also when it ended "store full", until a start cleared it', async () => {
     const { at, engine: free } = bounded('stuck', {})
     const probe = await free.capture({ job: 'probe', session: 's-one', folder: at.repo, publish: false })
@@ -366,6 +385,40 @@ describe('the space the stores may take', () => {
     await keeper.clearLeftovers()
     expect((await keeper.usage()).all).toBe(bytesUnder(join(at.dataRoot, 'turn-changes')))
     expect(filesUnder(trash)).toBe(0)
+  })
+
+  it.skipIf(process.getuid?.() === 0)('keeps a capture whose record appeared whatever fails after it, and then counts the store from the disk', async () => {
+    const { at, engine } = bounded('after-record', {})
+    const store = engine.store('s-one', at.repo)
+    const keeper = inProcessKeeper(engine)
+    let stuck = ''
+    const answer = await engine.capture({ job: 'job-1', session: 's-one', folder: at.repo, publish: true }, {
+      // What is left in `staging/` cannot be removed once the record is there.
+      beforeLastLook: () => {
+        stuck = join(store.directory, 'staging', readdirSync(join(store.directory, 'staging'))[0] as string, 'stuck')
+        mkdirSync(stuck)
+        writeFileSync(join(stuck, 'left'), 'x'.repeat(100))
+        chmodSync(stuck, 0o500)
+      }
+    })
+    try {
+      // The capture is real, and nothing was thrown at whoever asked for it.
+      expect(answer).toMatchObject({ state: 'whole', published: true })
+      expect(store.record(record(answer).id)?.state).toBe('whole')
+      // What it left behind is on disk and is counted: more than the capture was worked out to add.
+      const onDisk = bytesUnder(join(at.dataRoot, 'turn-changes'))
+      expect(onDisk).toBeGreaterThan(store.keptBytes() + 100)
+      expect((await keeper.usage()).all).toBe(onDisk)
+    } finally {
+      chmodSync(stuck, 0o700)
+    }
+    // A start clears what was left and counts the disk again; the capture stays.
+    await keeper.clearLeftovers()
+    expect(filesUnder(join(store.directory, 'staging'))).toBe(0)
+    expect((await keeper.usage()).all).toBe(bytesUnder(join(at.dataRoot, 'turn-changes')))
+    expect(store.record(record(answer).id)?.state).toBe('whole')
+    expect(await take(engine, 's-one', at.repo, 'job-2')).toMatchObject({ state: 'whole', published: true })
+    expect((await keeper.usage()).all).toBe(bytesUnder(join(at.dataRoot, 'turn-changes')))
   })
 
   it('counts a cache that shrinks as well as one that grows: after every publication its number is what a count of the disk finds', async () => {

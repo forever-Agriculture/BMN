@@ -213,10 +213,11 @@ trace). The app differs from the measured script in these places, each the stric
   nothing. It holds for all of a capture's work, its publication included. Reading ends 250 ms
   before the capture's time (an eighth of that time when it is shorter), so that `HEAD` at the
   scan's end, the commits of nested repositories, one look at what became of the earlier scan's
-  paths and the folder lists are done inside it. No Git command is given time of its own past the
-  capture's. Everything that is done a slice at a time after the reading, moving the staged files
-  into the store included, ends 100 ms before the capture's time (a twentieth of it when it is
-  shorter). What is left for those 100 ms is not sliced: the record and the note of what was read
+  paths and the folder lists are done inside it. Everything that is done a slice at a time after
+  the reading, moving the staged files into the store included, ends 100 ms before the capture's
+  time (a twentieth of it when it is shorter), and a Git command that has not answered by then is
+  ended there, so that what follows it is done inside the capture's time too. What is left for
+  those 100 ms is not sliced: the record and the note of what was read
   are made and written, the clock is looked at one last time, and the record is renamed into
   place. On 20,000 entries that end took at most 33 ms: 26 ms to make the record and the note,
   7 ms from the last file moved to the published record (three rounds of a first scan, one after
@@ -230,9 +231,15 @@ trace). The app differs from the measured script in these places, each the stric
 - A cancel is heard in every one of these steps, the publication too. BMN then answers
   "cancelled", no record appears, exactly the files this publication moved in are unlinked, and
   the capture's folder under `staging/` stays until they are gone, so that a start after a crash
-  in between still finds it. A "before" held for its confirmation is staged inside the capture's
-  time and published the same way when the confirmation comes; one that is discarded, or
-  confirmed too late, is never published.
+  in between still finds it. A stop that was sent while the note was written is heard in the
+  event loop's next turn, before the record appears. While a stopped publication takes its files
+  out, no capture of that store lists or reads anything, so none can take for stored a file that
+  is about to go: it waits, hears a cancel meanwhile, and when its own time passes first it ends
+  "incomplete: <time>", having read nothing and naming nothing in the store. A "before" held for
+  its confirmation is staged inside the capture's time and published the same way when the
+  confirmation comes; one that is discarded, or confirmed too late, is never published, and one
+  whose publication is still going when the time of its call passes or its connection drops is
+  stopped there like any other.
 - A folder below the root that holds an entry named `.git` is a repository of its own: one entry
   with the commit its own `HEAD` names (none when its `.git` is no repository), never walked,
   also when Git lists files below it as this repository's, which it does for files that were
@@ -279,9 +286,12 @@ no row holds a file's name or content).
   published by moving its files into place and then its record; a crash between the two leaves
   files no record names, with the capture's folder still under `staging/`. So a start that finds
   anything under `staging/` first removes every stored byte that no published capture needs, and
-  removes `staging/` only when that was done completely. When a kept capture or one of its lists
-  cannot be read, nothing is taken from under it and `staging/` stays, so the next start or
-  sweep tries again. A store without a published capture goes whole, `staging/` last. What a
+  removes `staging/` only when that was done completely. When a kept capture, one of its lists or
+  the note of what was already read cannot be read, nothing is taken from under it and
+  `staging/` stays, so the next start or sweep tries again; a removal that meets the same is not
+  done and stays pending. The note counts because a capture whose time passed keeps the files it
+  read without a list, and only the note names them. A note that can be read and is no note is
+  removed first: no capture can go by it. A store without a published capture goes whole, `staging/` last. What a
   cancelled capture left on its way out (`trash/`) goes at any start, and half-written files go
   with `staging/`. A published capture that no row names, as after a database restore, is left until it is older
   than the keep limit by the time written in its own record, and is then removed.
@@ -298,7 +308,11 @@ no row holds a file's name or content).
   fitted. A capture must fit at its most: its files, its record and the whole new note, since
   the old note is still there while the new one is written. A capture that would pass either
   bound ends "incomplete: store full", its record included; one for whose record there is no
-  room either writes nothing. Nothing is removed before its time to make room, and nothing
+  room either writes nothing. What such a capture had staged is on disk until it is removed, so
+  its record is written only where it fits beside those bytes. When something fails after a
+  capture's record appeared (what is left under `staging/` cannot be removed, the note cannot
+  take its place), the capture is kept, nothing is thrown at whoever asked for it, and the store
+  is counted from the disk. Nothing is removed before its time to make room, and nothing
   outside `<data root>/turn-changes/` is touched.
 
 ## The apps
@@ -520,7 +534,10 @@ the event is a sub-agent's, so that BMN can tell a tool event of the turn from a
   before it lets the app go on. Until then the scan is tentative: when the time passes, the
   connection drops, no confirmation comes, or a tool event of that agent arrives first (the app
   did not wait), BMN cancels it, its staged bytes go at once, and the turn reads "Before
-  snapshot unavailable". The hook prints nothing for any of this.
+  snapshot unavailable". The time and the connection hold the scan until it is published, not
+  only until the confirmation arrives: a publication that is still going when the time passes or
+  the connection closes is stopped, what it moved in is taken out, the confirmation is answered
+  `late` and the turn reads the same. The hook prints nothing for any of this.
 - **At an end** the hook sends `end` with its kind: `finished` for `Stop`, `interrupted` for
   Codex's `Interrupt`, and `continues` for a Claude Code `Stop` that lists work in flight, which
   leaves the turn open. `error` is in the list; no measured event sends it. BMN answers `queued`
@@ -641,7 +658,10 @@ Three scans in a row that failed, or were incomplete and read nothing new, for o
 session pause recording there. An incomplete scan that read on is not one of the three (the
 owner's choice, 2026-10-13): each scan of a big work tree reads up to 100 MiB further, so one of
 426 MiB is whole at its fifth scan, two turns there read "Incomplete: 100 MiB read", and nothing
-has to be pressed. A whole scan sets the count back to zero.
+has to be pressed. A scan read on when it read new bytes and kept them: with its folder lists,
+or, when its time passed and it has none, by the bytes it put in the store. One whose time
+passed before anything it read was kept is one of the three. A whole scan sets the count back
+to zero.
 
 While paused, BMN scans and records nothing for that root. The pause is shown on that session in
 the window only, as the prompt guard's card is: it is not a request and reaches no snapshot, no
@@ -741,8 +761,9 @@ three lines of context, a `+` or `−` before each changed line and three neutra
     (`"auth": {"user": "…"}` hides the user too), a YAML block (`key: |`), a TOML string between
     three quotes, every value under a TOML table whose header says so, and in YAML every line set
     in deeper below the name, with whatever a quote or a bracket opened on those lines goes on
-    to. The escapes of a quoted name are taken out first (`"token"` is `token`). True,
-    false, null and `~` are spared in a config file.
+    to. The escapes of a name are taken out first, wherever it is written: a quoted name
+    (`"to\u006ben"` is `token`), a TOML table header (`["to\u006ben"]`) and a dotted name with
+    a quoted part (`a."to\u006ben"`). True, false, null and `~` are spared in a config file.
   - A quoted value that goes on over a line ending is hidden whole, whatever its name: nothing
     tells a long value from a quote that was never closed.
   - What follows a closed value on its line and is neither a comma, a bracket nor a comment is
@@ -772,8 +793,10 @@ three lines of context, a `+` or `−` before each changed line and three neutra
   brackets. A file's form (its names, quotes and brackets) is read over each whole line. The
   known shapes are searched in a line as far as it can be shown and 2,048 characters further,
   and where that cut falls inside a run of 32 or more characters a token is made of, the run is
-  hidden. On made-up texts of 10 MiB a whole search took at most 0.6 s. Of a difference only the
-  lines that can be shown are laid out; the rest is counted.
+  hidden. On made-up texts of 10 MiB (25 of them, each as six kinds of file) a whole search took
+  at most 1.4 s, for 1.7 million lines that each hold one of the names, and the longest stretch
+  between two asks was 56 ms. Of a difference only the lines that can be shown are laid out; the
+  rest is counted.
 - **Nothing reveals a value.** The original text never leaves the worker thread: what the host
   hands the window already holds the plate, so a copy, Find, a screen reader and the test hook get
   the masked text. There is no control that shows a value.

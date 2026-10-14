@@ -194,13 +194,31 @@ export class TurnStore {
     return this.cache
   }
 
-  /** What the cache on disk names of a capture that is kept: the files and lists a later capture will take as stored. */
-  private cacheNeeds(kept: readonly string[]): { blobs: string[]; trees: string[] } | null {
+  /**
+   * What the cache on disk names of a capture that is kept: the files and lists a later capture will take as
+   * stored. Null when there is no cache, or it names no kept capture. `'unreadable'` when a cache is there
+   * and cannot be read now: what it names is then not known, and nothing may be taken from under it. A
+   * cache that can be read and is no cache (cut short, another shape) is removed: no capture can go by it.
+   */
+  private cacheNeeds(kept: readonly string[]): { blobs: string[]; trees: string[] } | null | 'unreadable' {
+    const path = join(this.directory, 'cache.json')
+    let text: string
     try {
-      const saved = JSON.parse(readFileSync(join(this.directory, 'cache.json'), 'utf8')) as { capture?: unknown; files?: Array<[string, SeenFile]>; trees?: string[] }
+      text = readFileSync(path, 'utf8')
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT' ? null : 'unreadable'
+    }
+    try {
+      const saved = JSON.parse(text) as { capture?: unknown; files?: Array<[string, SeenFile]>; trees?: string[] }
       if (typeof saved.capture !== 'string' || !kept.includes(saved.capture)) return null
       return { blobs: (saved.files ?? []).map(([, seen]) => seen[6]), trees: saved.trees ?? [] }
     } catch {
+      try {
+        rmSync(path, { force: true })
+      } catch {
+        return 'unreadable'
+      }
+      this.forget()
       return null
     }
   }
@@ -316,10 +334,14 @@ export class TurnStore {
   /**
    * Removes published captures and every stored byte no remaining capture needs. With no capture left
    * the whole folder goes. Nothing may be staged for this store meanwhile: the caller sees to that.
-   * Returns how many captures are still kept. Throws when something could not be removed.
+   * Returns how many captures are still kept. Throws when something could not be removed, and when a
+   * kept capture, a list of one or the cache could not be read: nothing is then taken from under it, bytes
+   * nothing needs may still be there, and the removal is not done. Asked again, it goes on from there.
    */
   removeCaptures(ids: readonly string[]): number {
-    return this.sweep(ids).kept
+    const swept = this.sweep(ids)
+    if (!swept.complete) throw new Error('what a kept capture needs could not be read, so nothing was taken from under it')
+    return swept.kept
   }
 
   /**
@@ -366,6 +388,7 @@ export class TurnStore {
     }
     // A capture whose time passed keeps the files it read without a list of them: its cache names them.
     const cached = this.cacheNeeds(kept)
+    if (cached === 'unreadable') return { kept: kept.length, complete: false }
     if (cached) {
       for (const hash of cached.blobs) blobs.add(hash)
       for (const hash of cached.trees) trees.add(hash)

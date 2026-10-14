@@ -175,7 +175,9 @@ function keyBlocks(text: string, check: () => void): SecretRange[] {
       continue
     }
     let end = -1
-    for (let at = BEGIN_KEY.lastIndex; end < 0;) {
+    for (let at = BEGIN_KEY.lastIndex, tried = 1; end < 0; tried += 1) {
+      // Many lines may begin like an end and be none.
+      if ((tried & 255) === 0) check()
       const close = text.indexOf('-----END ', at)
       if (close < 0) break
       END_KEY.lastIndex = close
@@ -305,8 +307,12 @@ function carriedOver(text: string, from: number, open: number, found: SecretRang
     state = VALUE
   }
   let to = at
-  if (state === TOKEN) while (to < text.length && bearerCharacter(text.charCodeAt(to))) to += 1
-  else {
+  if (state === TOKEN) {
+    while (to < text.length && bearerCharacter(text.charCodeAt(to))) {
+      to += 1
+      if ((to & ASK_EVERY) === 0) check()
+    }
+  } else {
     while (to < text.length && !space(text.charCodeAt(to))) {
       to += 1
       if ((to & ASK_EVERY) === 0) check()
@@ -538,10 +544,12 @@ class Reading {
       if (at >= n) return n
       const code = text.charCodeAt(at)
       if (d.lines ? code === HASH : code === SLASH && text.charCodeAt(at + 1) === SLASH) {
+        this.tick()
         at = this.lineEnd(at)
         continue
       }
       if (!d.lines && code === SLASH && text.charCodeAt(at + 1) === STAR) {
+        this.tick()
         const close = text.indexOf('*/', at + 2)
         if (close < 0) return n
         at = close + 2
@@ -580,7 +588,8 @@ class Reading {
   private named(from: number, to: number, quoted: boolean): boolean {
     if (to - from > NAME_LIMIT) return true
     const name = this.text.slice(from, to)
-    return NAMED.test(quoted ? unescaped(name) : name)
+    // A name written partly in quotes (`a."to\u006ben"`) is no quoted name and has escapes all the same.
+    return NAMED.test(quoted || name.includes('\\') ? unescaped(name) : name)
   }
 
   /**
@@ -767,10 +776,7 @@ class Reading {
   private plain(v: number, last: number): void {
     const { text } = this
     let to = last
-    if (to > v && text.charCodeAt(to - 1) === COMMA) {
-      to -= 1
-      while (to > v && blank(text.charCodeAt(to - 1))) to -= 1
-    }
+    if (to > v && text.charCodeAt(to - 1) === COMMA) to = this.back(v, to - 1)
     if (to <= v || (to - v <= 5 && PLAIN_WORD.test(text.slice(v, to)))) return
     this.found.push([v, to])
   }
@@ -812,8 +818,8 @@ class Reading {
       let dashed = false
       while (text.charCodeAt(i) === DASH && (i + 1 === last || inline(text.charCodeAt(i + 1)))) {
         dashed = true
-        i += 1
-        while (i < last && inline(text.charCodeAt(i))) i += 1
+        i = this.past(i + 1, last)
+        this.tick()
       }
       // A comment on a line of its own ends nothing: YAML lets it stand at any column.
       const comment = !dashed && text.charCodeAt(i) === HASH
@@ -837,7 +843,8 @@ class Reading {
         if (d.tables && !dashed && first === OPEN_SQUARE && last - i <= NAME_LIMIT) {
           const header = TABLE_HEADER.exec(text.slice(i, last))
           if (header) {
-            table = says(header[1] as string)
+            // A header may write its name with escapes (`["to\u006ben"]`): it is read as it means.
+            table = says(unescaped(header[1] as string))
             continue
           }
         }
@@ -892,7 +899,8 @@ class Reading {
       if (sign >= 0) {
         let nameEnd = sign
         while (nameEnd > i && inline(text.charCodeAt(nameEnd - 1))) nameEnd -= 1
-        secret = table || says(quoteEnd >= 0 && nameEnd === quoteEnd + 1 ? unescaped(text.slice(i + 1, quoteEnd)) : text.slice(i, nameEnd))
+        // Whatever of the name stands in quotes may be written with escapes (`a."to\u006ben"`): all of it is read as it means.
+        secret = table || says(unescaped(text.slice(i, nameEnd)))
         v = this.past(sign + 1, last)
       } else if (literal >= 0) continue
       else if (d.tables && !d.colon) {
@@ -917,8 +925,12 @@ class Reading {
       // YAML's marks before a value (`!!str`, `&anchor`) are passed over: what follows them is the value.
       if (d.colon) {
         while (v < last && (text.charCodeAt(v) === BANG || text.charCodeAt(v) === AMPERSAND)) {
-          while (v < last && !inline(text.charCodeAt(v))) v += 1
-          while (v < last && inline(text.charCodeAt(v))) v += 1
+          while (v < last && !inline(text.charCodeAt(v))) {
+            v += 1
+            if ((v & ASK_EVERY) === 0) this.check()
+          }
+          v = this.past(v, last)
+          this.tick()
         }
       }
       if (v >= last || text.charCodeAt(v) === HASH) {
@@ -966,10 +978,7 @@ class Reading {
       if (i === end || text.charCodeAt(i) === HASH) continue
       const last = this.back(i, end)
       let p = i
-      if (text.startsWith('export', p) && inline(text.charCodeAt(p + 6))) {
-        p += 6
-        while (p < last && inline(text.charCodeAt(p))) p += 1
-      }
+      if (text.startsWith('export', p) && inline(text.charCodeAt(p + 6))) p = this.past(p + 6, last)
       const named = p
       for (; p < last; p += 1) {
         if ((p & ASK_EVERY) === 0) this.check()
@@ -1014,7 +1023,16 @@ class Reading {
       this.byLines()
       // A line ending written as `\r` alone: where the lines end from there on is not certain.
       const lone = this.restFrom < 0 ? this.loneReturn() : -1
-      if (lone >= 0) this.rest(lone)
+      if (lone >= 0) {
+        // What was found past it is hidden with the rest: the ranges stay in rising order.
+        let kept = this.found.length
+        while (kept > 0 && (this.found[kept - 1] as SecretRange)[0] >= lone) {
+          kept -= 1
+          this.tick()
+        }
+        this.found.length = kept
+        this.rest(lone)
+      }
     } else this.flow(0, true, false)
     return this.found
   }
@@ -1042,16 +1060,44 @@ function longRuns(text: string, check: () => void): SecretRange[] {
 }
 
 /** A list in rising order of where its ranges begin. Each list is made in that order; one that is not is put in it. */
-function ordered(list: SecretRange[]): SecretRange[] {
+function ordered(list: SecretRange[], check: () => void): SecretRange[] {
   for (let index = 1; index < list.length; index += 1) {
-    if ((list[index] as SecretRange)[0] < (list[index - 1] as SecretRange)[0]) return list.sort((a, b) => a[0] - b[0])
+    if ((index & 4_095) === 0) check()
+    if ((list[index] as SecretRange)[0] < (list[index - 1] as SecretRange)[0]) return sortedByStart(list, check)
   }
   return list
 }
 
+/** A list put in rising order of where its ranges begin: halves merged from the bottom up, with the caller asked on the way. */
+export function sortedByStart(list: SecretRange[], check: () => void): SecretRange[] {
+  let from = list
+  let into = new Array<SecretRange>(list.length)
+  let moved = 0
+  for (let width = 1; width < list.length; width *= 2) {
+    for (let low = 0; low < list.length; low += 2 * width) {
+      const middle = Math.min(low + width, list.length)
+      const high = Math.min(low + 2 * width, list.length)
+      let left = low
+      let right = middle
+      for (let at = low; at < high; at += 1) {
+        moved += 1
+        if ((moved & 4_095) === 0) check()
+        const takeLeft = left < middle && (right >= high || (from[left] as SecretRange)[0] <= (from[right] as SecretRange)[0])
+        into[at] = (takeLeft ? from[left] : from[right]) as SecretRange
+        if (takeLeft) left += 1
+        else right += 1
+      }
+    }
+    const swap = from
+    from = into
+    into = swap
+  }
+  return from
+}
+
 /** Several lists as one, in order, with ranges that touch or overlap made one. The caller is asked on the way. */
 function mergedLists(lists: SecretRange[][], check: () => void): SecretRange[] {
-  const sorted = lists.filter((list) => list.length > 0).map(ordered)
+  const sorted = lists.filter((list) => list.length > 0).map((list) => ordered(list, check))
   const heads = sorted.map(() => 0)
   const ranges: SecretRange[] = []
   for (let taken = 0; ; taken += 1) {
@@ -1091,7 +1137,11 @@ export function secretRanges(path: string, text: string, options: SecretSearchOp
   const keys = keyBlocks(text, check)
   const shaped: SecretRange[] = []
   const carried: SecretRange[] = []
+  let lines = 0
   for (const start of linesWithShapes(text, check)) {
+    // A line that begins like a shape and holds none asks nothing by itself.
+    lines += 1
+    if ((lines & 63) === 0) check()
     const end = lineShapes(text, start, reach, shaped, check)
     const open = leftOpen(text, start, end, check)
     if (open !== NOTHING) carriedOver(text, end, open, carried, check)

@@ -133,12 +133,14 @@ describe('the turn changes worker thread', () => {
       // Left alone it answers inside its 2 s, with every bound of what is shown kept and no value in it.
       const began = performance.now()
       const whole = await client.difference({ ...pair, path })
-      expect(performance.now() - began, path).toBeLessThan(2_000)
+      const took = performance.now() - began
+      expect(took, path).toBeLessThan(2_000)
       expect(whole.state, path).toBe('text')
       expect(JSON.stringify(whole).length, path).toBeLessThan(2_000_000)
       expect(JSON.stringify(whole), path).not.toMatch(/sk-sk-|eyJeyJ|sk-eyJ/)
-      // Stopped at once, and stopped a moment after it began: heard within 100 ms both times.
-      for (const wait of [0, 20]) {
+      // Stopped at once, and stopped a moment after it began: heard within 100 ms both times. The moment is a
+      // fifth of the time the read took when left alone, 20 ms at most, so that the stop comes while it is at work.
+      for (const wait of [0, Math.min(20, Math.floor(took / 5))]) {
         const controller = new AbortController()
         const answer = client.difference({ ...pair, path }, controller.signal)
         await sleep(wait)
@@ -170,7 +172,9 @@ describe('the turn changes worker thread', () => {
       // value that goes on into lines that are shown; a token and a value on the line after `Bearer` and after a name.
       'list.json': `{"tokens": [\n  "MADEUPctxL"\n],\n "keys": [\n  "MADEUP${was}L"\n],\n "retries": "${was}"}\n`,
       'far.env': `NAME=shop\n${' '.repeat(4_049)}CERT="MADEUPctxF\nsecond MADEUPctxF"\n${' '.repeat(4_049)}OTHER="MADEUP${was}F\ntail MADEUP${was}F"\nRETRIES=${was}\n`,
-      'notes.txt': `Authorization: Bearer\nMADEUPctxNabcdefghijklmn\npassword:\n  MADEUP${was}Nhunter\nretries ${was}\n`
+      'notes.txt': `Authorization: Bearer\nMADEUPctxNabcdefghijklmn\npassword:\n  MADEUP${was}Nhunter\nretries ${was}\n`,
+      // A table whose header writes its name with an escape, and a dotted name written the same way.
+      'table.toml': `name = "shop"\n["to\\u006ben"]\nvalue = "MADEUPctxH"\nlater = "MADEUP${was}H"\n[plain]\na."pass\\u0077ord" = "MADEUPctxH"\nretries = "${was}"\n`
     })
     for (const [name, content] of Object.entries(files('old'))) write(at.repo, name, content)
     const one = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true }))
@@ -178,7 +182,7 @@ describe('the turn changes worker thread', () => {
     for (const [name, content] of Object.entries(files('new'))) write(at.repo, name, content)
     const two = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true, base: one.id }))
     const pair = { session: 's-one', root: at.repo, a: one.id, b: two.id }
-    const changed: Record<string, number> = { 'nested.json': 2, 'block.yaml': 2, 'strings.toml': 2, '.env': 3, 'list.json': 2, 'far.env': 3, 'notes.txt': 2 }
+    const changed: Record<string, number> = { 'nested.json': 2, 'block.yaml': 2, 'strings.toml': 2, '.env': 3, 'list.json': 2, 'far.env': 3, 'notes.txt': 2, 'table.toml': 2 }
     for (const [path, lines] of Object.entries(changed)) {
       const answer = await client.difference({ ...pair, path })
       if (answer.state !== 'text') throw new Error(`${path}: ${answer.state}`)
