@@ -73,6 +73,22 @@ extraResources:
     to: bin/agents-supervised.mjs
   - from: bin/agents-judge.mjs
     to: bin/agents-judge.mjs
+  # Epic 72: a teammate's ask: its container, the measured form of each app, its inputs, the resolver, the
+  # run's own supervisor (started as a program, like agents-supervised.mjs) and the one git a project ask runs.
+  - from: bin/agents-container.mjs
+    to: bin/agents-container.mjs
+  - from: bin/agents-team-forms.mjs
+    to: bin/agents-team-forms.mjs
+  - from: bin/agents-team-inputs.mjs
+    to: bin/agents-team-inputs.mjs
+  - from: bin/agents-team-resolve.mjs
+    to: bin/agents-team-resolve.mjs
+  - from: bin/agents-team-ask.mjs
+    to: bin/agents-team-ask.mjs
+  - from: bin/agents-team-supervisor.mjs
+    to: bin/agents-team-supervisor.mjs
+  - from: bin/ask-git.sh
+    to: bin/ask-git.sh
   # The --self-test stand-in agents draw these recorded dialogs; the packaged smoke runs that phase too.
   - from: src/utility/test-fixtures/remote-answers
     to: self-test/remote-answers

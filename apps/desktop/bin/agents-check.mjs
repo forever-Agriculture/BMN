@@ -9,6 +9,8 @@ import { AgentsUsageError, EXIT, err, failWith, out, readOptions, usage } from '
 import { publicRendering } from './agents-rules.mjs'
 import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, CONTEXT_TEST_SIZE, checkContext, contextItems, contextTestFolder, provenControls, provenPrecedence, wholeNumber } from './agents-context.mjs'
 import { RUN_TEST_APPS, appTools, checkRunTools } from './agents-tools.mjs'
+import { ASK_APPS, ASK_FORMS_PROVEN, ASK_FORM_NAMES, ASK_ACCESS, ASK_RUN_FILES, UNAVAILABLE_WHY, appSearchPath, askArgv, askProgram, formStanding } from './agents-team-forms.mjs'
+import { INSIDE } from './agents-container.mjs'
 import { OPENCODE_FOLDER_SHA256, OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_RESEARCH_AGENT, OPENCODE_SESSION_ID, installOpenCodeFolder, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
 
 export { publicOnlyReasons }
@@ -767,20 +769,21 @@ function settingsEnv(text, name) {
  * The same goes for files it cannot prove are skipped: settings in the folders above the working one,
  * and the machine's managed-settings.d.
  */
-export function resolveClaudeRoute(parsed, environment, cwd) {
+export function resolveClaudeRoute(parsed, environment, cwd, { container = false } = {}) {
   const env = dispatchEnvironment(parsed, environment)
   if (!env.HOME) return { unsupported: NO_HOME }
   const configDir = env.CLAUDE_CONFIG_DIR || `${env.HOME}/.claude`
-  const files = [['managed settings', '/etc/claude-code/managed-settings.json']]
+  // In an ask's container (Epic 72) there is no machine settings folder and nothing above the folder the run starts in.
+  const files = container ? [] : [['managed settings', '/etc/claude-code/managed-settings.json']]
   files.push(['user settings', `${configDir}/settings.json`])
-  files.push(['project settings', `${cwd}/.claude/settings.json`], ['local settings', `${cwd}/.claude/settings.local.json`])
-  for (const dir of [...new Set(spellings(cwd).flatMap((folder) => foldersAbove(folder).slice(1)))]) {
+  if (cwd !== null) files.push(['project settings', `${cwd}/.claude/settings.json`], ['local settings', `${cwd}/.claude/settings.local.json`])
+  for (const dir of container || cwd === null ? [] : [...new Set(spellings(cwd).flatMap((folder) => foldersAbove(folder).slice(1)))]) {
     for (const [label, name] of [['settings', 'settings.json'], ['local settings', 'settings.local.json']]) {
       // The user settings were read above; every other file here is one more source.
       if (join(dir, '.claude', name) !== join(configDir, 'settings.json')) files.push([`${label} in ${dir}`, `${dir}/.claude/${name}`])
     }
   }
-  for (const name of optionalNames('/etc/claude-code/managed-settings.d')) {
+  for (const name of container ? [] : optionalNames('/etc/claude-code/managed-settings.d')) {
     if (name.endsWith('.json')) files.push([`managed settings ${name}`, `/etc/claude-code/managed-settings.d/${name}`])
   }
   const values = []
@@ -2650,6 +2653,220 @@ export function evaluateResearch(inputs, {
     if (error instanceof Refusal) {
       return { verdict: 'REFUSED', code: error.code, message: error.message, next: error.code === 'WORKSPACE_MISMATCH' ? 'start the research from BMN (Team, Models), which writes the prompt and the folder' : NEXT_STEP[error.code], steps, ...(error.detail === undefined ? {} : { detail: error.detail }) }
     }
+    throw error
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// A teammate's ask (Epic 72)
+
+/** Where BMN keeps one folder per ask: its inputs, frozen project, app home and record. */
+export function teamRunsDirectory() {
+  return `${stateDirectory()}/team/runs`
+}
+
+/** What the check says of a mode an app version may not use, from what 72.1 measured. */
+export function askStandingWords(harness, version, mode) {
+  const app = APP_NAMES[harness] ?? harness
+  const standing = formStanding(harness, version, mode)
+  if (standing === 'proven') return null
+  if (standing === 'unavailable' || standing === 'no-history') return UNAVAILABLE_WHY[harness]?.[mode] ?? `${app} ${version} has no confined form for ${mode} asks`
+  const measured = Object.keys(ASK_FORMS_PROVEN[harness] ?? {})
+  return `${mode === 'pictures' ? 'picture' : mode} asks on ${app} ${version ?? '(version unreadable)'} are not measured${measured.length === 0 ? '' : ` (BMN measured ${measured.join(', ')})`}; until they are, that mode is not offered there`
+}
+
+/**
+ * Whether each input of an ask may go to this destination (R72-NFR5, NFR6), decided before anything
+ * leaves. A private ask: the destination's private-work answer, a folder exception counting only for
+ * an input inside its canonical root; an input whose root BMN cannot establish needs the provider's
+ * own permission. A public ask: the asker's declaration, verified: a question carries no project
+ * read; a file or picture is byte-identical to a file of the verified public commit of its project;
+ * a project is that commit's view with its own history. Returns each input with its basis.
+ */
+export function askConsent(data, destination, inputs, label, now = new Date(), note = () => {}) {
+  const decided = []
+  for (const input of inputs) {
+    if (label === 'private') {
+      const answer = privateWorkAnswer(data, destination, input.root ?? null)
+      if (!answer.allowed) refuse('PRIVATE_NOT_ALLOWED', `${input.label} is private work and ${answer.reason}${input.root === null || input.root === undefined ? ' (BMN cannot tell which folder it comes from, so no folder exception covers it)' : ''}`)
+      decided.push({ kind: input.kind, label: input.label, root: input.root ?? null, basis: answer.exception ? `exception ${answer.exception.id}` : 'the provider may see private work' })
+      continue
+    }
+    if (input.kind === 'question') {
+      decided.push({ kind: 'question', label: input.label, root: input.root ?? null, basis: 'declared public by the asker' })
+      continue
+    }
+    if (input.root === null || input.root === undefined) refuse('PUBLIC_NOT_VERIFIED', `${input.label} is in no project BMN knows to be public`)
+    const visibility = workspaceVisibility(input.root, now)
+    if (!visibility.public) refuse('PUBLIC_NOT_VERIFIED', `${input.label} is in ${input.root}, which is not proven public (${visibility.reason}); run bmn roster visibility --refresh`)
+    const commit = visibility.record.commit
+    if (input.kind === 'project') {
+      if (input.public_commit !== commit) refuse('PUBLIC_NOT_VERIFIED', `the frozen copy of ${input.root} is not the view of ${commit.slice(0, 12)}, the commit GitHub serves for ${visibility.record.origin}`)
+      decided.push({ kind: 'project', label: input.label, root: input.root, basis: `the public commit ${commit.slice(0, 12)} of ${visibility.record.origin} and its history` })
+      continue
+    }
+    const blob = committedBlob(input.root, commit, input.relative)
+    if (blob === null || sha256(blob) !== input.sha256) refuse('PUBLIC_NOT_VERIFIED', `${input.label} is not byte-identical to ${input.relative} in commit ${commit.slice(0, 12)}, the one GitHub serves for ${visibility.record.origin}`)
+    decided.push({ kind: input.kind, label: input.label, root: input.root, basis: `byte-identical to ${input.relative} in the public commit ${commit.slice(0, 12)}` })
+  }
+  note(`data ${label}: ${decided.map((entry) => `${entry.label} (${entry.basis})`).join('; ')}`)
+  return decided
+}
+
+/**
+ * What one ask's form is built from: the access mode, the agent's model, the chosen effort, the
+ * instruction snapshot, the pictures' places inside the container, and the agent's context limit
+ * where the owner's test proved its setting on this app version (60.9), as `evaluate` applies it.
+ */
+export function askRequest(agent, version, { access, effort, rules = null, pictures = [], contextTestLog = undefined }) {
+  const proven = agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(agent.harness, version, contextTestLog)
+  const items = contextItems(agent, proven)
+  return { access, model: agent.model, effort, rules, pictures, context: items.state === 'applied' ? { argv: items.argv, env: items.env } : { argv: [], env: [] } }
+}
+
+/**
+ * The destination an agent's ask reaches when the check passes it: its approved host, or the app's
+ * approved default. Used to decide consent before anything is copied (R72-NFR6); the check itself
+ * then reads the run's real destination and refuses any other.
+ */
+export function expectedDestination(data, agent) {
+  if (agent.host !== 'default') return { provider: agent.provider, basis: 'explicit' }
+  const approved = data.harness_routes.find((entry) => entry.harness === agent.harness)
+  return approved === undefined ? { provider: agent.provider, basis: 'owner-declared' } : { provider: approved.provider, basis: approved.basis }
+}
+
+/**
+ * Evaluates one teammate's ask (R72-NFR1): the same approved team, agent, role, destination,
+ * private-work and context answers as `evaluate`, judged for the command BMN built for the ask: the
+ * app's measured form for this access mode inside the run's container, recomputed here from the
+ * run's folder and compared whole, so the receipt is for exactly what will start. `inputs`:
+ * `{ agent, role, effort, access, data, wide, run, argv }`, `run` the folder BMN made for the ask.
+ * The existing entry points are not changed by it; a dispatch command is not an ask and an ask's
+ * command is not a dispatch.
+ */
+export function evaluateAsk(inputs, { environment = process.env, now = new Date(), testedVersions = TESTED_HARNESS_VERSIONS, contextTestLog = undefined, program: givenProgram = undefined, version: givenVersion = undefined } = {}) {
+  const steps = []
+  const note = (text) => steps.push(text)
+  try {
+    const file = readValidRoster()
+    const generation = readApproved()
+    const data = generation.data
+    note(`approved version ${generation.number}`)
+    const agent = activeAgent(generation, inputs.agent)
+    note(`agent ${agent.id}: ${agent.class}, ${agent.harness} ${agent.model}, provider ${agent.provider}`)
+    const role = data.roles.find((candidate) => candidate.id === inputs.role)
+    if (role === undefined) refuse('ROLE_UNKNOWN', `no role ${inputs.role} in the approved ## roles`)
+    if (!agent.roles.includes(role.id)) refuse('ROLE_INELIGIBLE', `${agent.id} does not hold role ${role.id}`)
+    const classRule = classRefusal(agent.class, role.id)
+    if (classRule !== null) refuse(classRule.code, `${agent.id} is a ${agent.class}; ${classRule.rule}`)
+    note(`role ${role.id}: held`)
+    if (!ASK_ACCESS.includes(inputs.access)) refuse('ACCESS_UNAVAILABLE', `${inputs.access} is not an access mode (${ASK_ACCESS.join(', ')})`)
+    if (inputs.wide === true) refuse('WIDE_READ_NOT_ENABLED', 'the owner has not enabled a wider-read mode for any app in the Team view')
+    if (!ASK_APPS.includes(agent.harness)) refuse('ACCESS_UNAVAILABLE', `${appName(agent.harness)} teammates are not asked through BMN yet`)
+
+    // The run's own folder, as BMN made it, and the inputs it holds.
+    const runs = canonicalDirectory(teamRunsDirectory(), '/')
+    const folder = typeof inputs.run === 'string' ? canonicalDirectory(inputs.run, '/') : null
+    if (folder === null || runs === null || dirname(folder) !== runs) refuse('WORKSPACE_MISMATCH', 'an ask runs from the folder BMN made for it')
+    let manifest
+    try {
+      manifest = JSON.parse(readText(`${folder}/${ASK_RUN_FILES.manifest}`))
+    } catch {
+      manifest = null
+    }
+    if (!isObject(manifest) || manifest.version !== 1 || manifest.access !== inputs.access || !Array.isArray(manifest.inputs) || !Array.isArray(manifest.pictures)) {
+      refuse('WORKSPACE_MISMATCH', `${folder} holds no intact ask manifest for ${inputs.access} access`)
+    }
+    const prompt = `${folder}/${ASK_RUN_FILES.prompt}`
+    let promptHash = null
+    try {
+      promptHash = hashFile(prompt)
+    } catch {
+      promptHash = null
+    }
+    if (promptHash === null || promptHash !== manifest.prompt_sha256) refuse('WORKSPACE_MISMATCH', 'the prompt is not the one BMN wrote for this ask')
+    for (const picture of manifest.pictures) {
+      let hash = null
+      try {
+        hash = hashFile(`${folder}/${ASK_RUN_FILES.inputs}/${picture.copy}`)
+      } catch {
+        hash = null
+      }
+      if (hash !== picture.sha256) refuse('WORKSPACE_MISMATCH', `the picture ${picture.label} is not the copy BMN made for this ask`)
+    }
+    const run = { home: `${folder}/${ASK_RUN_FILES.home}`, inputs: `${folder}/${ASK_RUN_FILES.inputs}`, project: `${folder}/${ASK_RUN_FILES.project}` }
+
+    // The app as installed, and what 72.1 measured of this version.
+    const program = givenProgram ?? askProgram(agent.harness, environment)
+    if (program === null) refuse('HARNESS_UNKNOWN', `${appName(agent.harness)} is not on PATH (BMN's own folder left out), so BMN cannot tell which program would run`)
+    const version = givenVersion !== undefined ? givenVersion : harnessVersion(program.launcher, { PATH: appSearchPath(environment), HOME: environment.HOME ?? '' })
+    if (version === null) refuse('HARNESS_UNKNOWN', `${agent.harness}: BMN cannot read this app's version, so it cannot tell which program would run`)
+    const tested = versionStanding(agent.harness, version, testedVersions)
+    note(`${agent.harness} ${version}: ${tested.state}`)
+    const unavailable = askStandingWords(agent.harness, version, inputs.access)
+    if (unavailable !== null) refuse('ACCESS_UNAVAILABLE', unavailable)
+    if (manifest.pictures.length > 0) {
+      const pictures = askStandingWords(agent.harness, version, 'pictures')
+      if (pictures !== null) refuse('ACCESS_UNAVAILABLE', pictures)
+    }
+    note(`ask form: ${inputs.access}${manifest.pictures.length > 0 ? ` with ${manifest.pictures.length} picture(s)` : ''}, measured on ${appName(agent.harness)} ${version}`)
+
+    // The command BMN builds for this ask, recomputed; the one given must be it, whole.
+    const proven = agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(agent.harness, version, contextTestLog)
+    let rules = null
+    try {
+      rules = readText(`${folder}/${ASK_RUN_FILES.rules}`)
+    } catch (error) {
+      if (error.code !== 'ENOENT') refuse('WORKSPACE_MISMATCH', 'the instruction snapshot of this ask cannot be read')
+    }
+    const request = askRequest(agent, version, { access: inputs.access, effort: inputs.effort, rules, pictures: manifest.pictures.map((picture) => `${INSIDE.inputs}/${picture.copy}`), contextTestLog })
+    const built = askArgv(agent.harness, program, run, request, environment)
+    if (!Array.isArray(inputs.argv) || canonicalJson(inputs.argv) !== canonicalJson(built.argv)) {
+      const at = Array.isArray(inputs.argv) ? built.argv.findIndex((value, index) => inputs.argv[index] !== value) : 0
+      refuse('ROUTE_UNSUPPORTED', `the command is not the ask BMN builds for ${agent.id} with ${inputs.access} access${at === -1 ? ' (it carries more)' : ` (it differs at argument ${at})`}`)
+    }
+    note(`the command is BMN's ${inputs.access} form for ${appName(agent.harness)} in the run's container`)
+
+    // Where it goes, as the route readers see the run's own home: the same answers evaluate gives.
+    const assignments = Object.fromEntries(Object.entries(built.form.environment).map(([name, value]) => [name, value.startsWith(INSIDE.home) ? `${run.home}${value.slice(INSIDE.home.length)}` : value]))
+    const parsed = agent.harness === 'codex'
+      ? { harness: 'codex', command: program.payload, envMode: 'clean', assignments, config: [...request.context.argv.filter((_, index) => index % 2 === 1), `model_reasoning_effort="${inputs.effort}"`, 'approval_policy="never"'], disable: [], model: agent.model, sandbox: 'read-only', resume: null }
+      : { harness: 'claude', command: program.payload, envMode: 'clean', assignments, addDir: [], model: agent.model, effort: inputs.effort }
+    const resolution = agent.harness === 'codex' ? resolveCodexRoute(parsed, {}, null) : resolveClaudeRoute(parsed, {}, inputs.access === 'project' ? run.project : null, { container: true })
+    if (resolution.unsupported) refuse('ROUTE_UNSUPPORTED', resolution.unsupported)
+    const { model, effort } = checkModelAndEffort(agent, resolution, note)
+    checkRoleEffort(role, agent, effort, note)
+    const context = checkContext(agent, resolution.context, proven, agent.context_limit === undefined ? [] : provenPrecedence(agent.harness, version, contextTestLog))
+    if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal, context.why)
+    note(context.note)
+    const destination = matchedDestination(data, agent, agent.harness, resolution.route, note)
+
+    const label = inputs.data === 'public' ? 'public' : 'private'
+    if (label === 'public' && inputs.access === 'project' && manifest.project?.public_commit == null) refuse('PUBLIC_NOT_VERIFIED', 'a public project ask reads the verified public commit\'s view, never the working tree')
+    const consent = askConsent(data, destination, manifest.inputs, label, now, note)
+    const answer = privateWorkAnswer(data, destination, null)
+    note(`private work: ${answer.reason}`)
+
+    const body = {
+      version: 1, mode: 'ask', verdict: 'PASS', agent: agent.id, class: agent.class, harness: agent.harness, model: model.value,
+      role: role.id, effort: effort.value, context_limit_applied: context.applied,
+      ...(agent.context_limit !== undefined && context.applied === null ? { context_limit_note: context.note } : {}),
+      access: inputs.access, form: ASK_FORM_NAMES[agent.harness][inputs.access], ...(manifest.pictures.length > 0 ? { pictures: manifest.pictures.length } : {}),
+      sandbox: agent.harness === 'codex' ? { mode: 'read-only', source: '--sandbox', approval_policy: 'never', tools: 'none' }
+        : { mode: 'read-only', source: '--tools', tools: inputs.access === 'project' ? ['Read', 'Grep', 'Glob', 'git log', 'git show', 'git diff', 'git blame'] : [] },
+      run: basename(folder), data: label, consent,
+      inputs_sha256: sha256(canonicalJson(manifest)),
+      argv_sha256: sha256(canonicalJson(built.argv)),
+      harness_version: { version, state: tested.state, form: 'proven' },
+      route: receiptRoute(destination, resolution.route),
+      private_work: receiptAnswer(answer),
+      generation: { number: generation.number, hash: generation.hash },
+      roster_file_hash: file.hash,
+      issued_at: now.toISOString()
+    }
+    return { verdict: 'PASS', receipt: { ...body, receipt_hash: receiptHash(body) }, steps, argv: built.argv }
+  } catch (error) {
+    if (error instanceof Refusal) return { verdict: 'REFUSED', code: error.code, message: error.message, next: NEXT_STEP[error.code], steps, ...(error.detail === undefined ? {} : { detail: error.detail }) }
     throw error
   }
 }
