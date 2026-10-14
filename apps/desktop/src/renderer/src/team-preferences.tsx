@@ -674,7 +674,7 @@ function AgentTop(props: { team: TeamState; data: RosterDataShape; agent: Roster
   return (
     <>
       <PageHead title={<><button type="button" className="crumb" onClick={() => props.go({ name: 'agents' })}>Team</button> <span className="faint">›</span> {agent.name}</>}
-        status={agent.status === 'proposed' ? 'Proposed' : off ? 'Off' : 'Active'}>
+        status={isRetiredApp(agent.harness) ? 'Retired app' : agent.status === 'proposed' ? 'Proposed' : off ? 'Off' : 'Active'}>
         {team.changed.has(agent.id) ? <Dot label="Unapproved change" /> : null}
         {agent.status === 'proposed' ? <button type="button" onClick={() => team.stage(activateAgent(data, agent.id))}>Activate</button>
           : off ? <button type="button" onClick={() => team.stage(setAgentOn(data, agent.id, true))}>Turn on</button>

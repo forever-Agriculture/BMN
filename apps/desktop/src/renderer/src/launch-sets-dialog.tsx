@@ -14,7 +14,8 @@ type StartResult = Awaited<ReturnType<Window['aiTerminal']['startLaunchSet']>>
 /** An entry that would start a retired app says on its line that it opens as a plain terminal (Epic 71). */
 function RetiredEntry(props: { entry: LaunchSetEntry }): React.JSX.Element | null {
   const words = retiredEntryWords(props.entry)
-  return words === null ? null : <span className="muted"> · {words}</span>
+  // The separator stays with its words, so the line wraps before it and never leaves it alone at a line end.
+  return words === null ? null : <> <span className="muted retired-entry">· {words}</span></>
 }
 type Mode = 'manage' | 'edit' | 'preview' | 'result'
 

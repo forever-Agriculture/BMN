@@ -261,6 +261,8 @@ describe('Team › a team file that still names Cursor (Epic 71, 71.2 AC3)', () 
     expect([...appRow.matchAll(/role="radio" aria-checked="(true|false)"[^>]*>([^<]+)</g)].map((match) => `${match[2]} ${match[1]}`))
       .toEqual(['Claude Code false', 'Codex false', 'OpenCode false', 'Called by BMN false'])
     expect(markup).toContain('<p class="preferences-help">Cursor was retired on 14 Oct 2026. Pick an app to keep Composer, or use the proposal on Team to remove it.</p>')
+    // The page head agrees with the card, whose switch is off (Fable's 71.3 check).
+    expect(words(markup).replace(/\s+/g, ' ')).toContain('Composer Retired app')
     expect(markup).toContain('BMN suggests models once an app is picked.')
   })
 })

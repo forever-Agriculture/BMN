@@ -1777,6 +1777,10 @@ input[type='radio'] {
   margin-left: auto;
 }
 
+.launch-sets-dialog .retired-entry {
+  white-space: nowrap;
+}
+
 .launch-sets-dialog {
   width: min(720px, calc(100vw - 32px));
 }
