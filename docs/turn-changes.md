@@ -240,8 +240,10 @@ trace). The app differs from the measured script in these places, each the stric
   confirmation comes; one that is discarded, or confirmed too late, is never published, and one
   whose publication is still going when the time of its call passes or its connection drops is
   stopped there like any other. The time and a word for the connection go with the publication
-  into the worker thread, which reads both at every step, last just before the record appears:
-  neither waits for BMN's main thread to be free.
+  into the worker thread, which reads both at every step, last just before the record appears.
+  The time needs nothing more: it holds even while BMN's main thread is held up. The word is
+  raised by the main thread when it hears the connection close, so a drop is heard once that
+  thread is free.
 - A folder below the root that holds an entry named `.git` is a repository of its own: one entry
   with the commit its own `HEAD` names (none when its `.git` is no repository), never walked,
   also when Git lists files below it as this repository's, which it does for files that were
@@ -540,13 +542,14 @@ the event is a sub-agent's, so that BMN can tell a tool event of the turn from a
   before it lets the app go on. Until then the scan is tentative: when the time passes, the
   connection drops, no confirmation comes, or a tool event of that agent arrives first (the app
   did not wait), BMN cancels it, its staged bytes go at once, and the turn reads "Before
-  snapshot unavailable". The time and the connection hold the scan until it is published, not
-  only until the confirmation arrives: a publication that is still going when the time passes or
-  the connection closes is stopped, what it moved in is taken out, the confirmation is answered
-  `late` and the turn reads the same. The worker thread that publishes it reads the time and the
-  connection's word itself, so a held-up main thread cannot let it run past either; a record that
-  appeared inside them is kept, however late the main thread hears of it. The hook prints
-  nothing for any of this.
+  snapshot unavailable". Once the confirmation has arrived, the time of the call bounds the
+  publication: the worker thread that publishes it reads the clock itself, so a publication still
+  going when the time passes is stopped even while BMN's main thread is held up, what it moved in
+  is taken out, the confirmation is answered `late` and the turn reads the same. A connection that
+  closes meanwhile stops a publication that is still going as soon as the main thread hears of it;
+  while that thread is held up, a publication can end first, inside the time. The scan was read
+  whole before BMN answered `start`, and a record that appeared inside the time is kept, however
+  late the main thread hears of it. The hook prints nothing for any of this.
 - **At an end** the hook sends `end` with its kind: `finished` for `Stop`, `interrupted` for
   Codex's `Interrupt`, and `continues` for a Claude Code `Stop` that lists work in flight, which
   leaves the turn open. `error` is in the list; no measured event sends it. BMN answers `queued`
