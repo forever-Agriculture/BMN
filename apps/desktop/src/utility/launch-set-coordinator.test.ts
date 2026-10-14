@@ -86,18 +86,26 @@ describe('launch set coordinator', () => {
     definitions.entries = [
       { ...definitions.entries[0]!, name: 'Cursor', executable: '/bin/bash', argv: ['-ic', 'cursor-agent; exec bash -i'] },
       { ...definitions.entries[1]!, name: 'Direct', executable: '/home/owner/.local/bin/cursor-agent', argv: ['--model', 'gpt-5'] },
-      { ...definitions.entries[2]!, name: 'Codex', executable: '/bin/bash', argv: ['-ic', 'codex; exec bash -i'] }
+      { ...definitions.entries[2]!, name: 'Codex', executable: '/bin/bash', argv: ['-ic', 'codex; exec bash -i'] },
+      // A prompt that names the program is data, not a launch of it (Astra, Epic 71 review).
+      { ...definitions.entries[0]!, entryId: 'entry-ask', name: 'Ask', executable: 'codex', argv: ['exec', 'Explain cursor-agent'] },
+      { ...definitions.entries[0]!, entryId: 'entry-shell-ask', name: 'ShellAsk', executable: '/bin/bash', argv: ['-ic', 'codex "explain cursor-agent"; exec bash -i'] },
+      // A wrapper that is not a shell opens as the plain terminal, not as the wrapper alone.
+      { ...definitions.entries[1]!, entryId: 'entry-env', name: 'Env', executable: '/usr/bin/env', argv: ['NO_COLOR=1', 'cursor-agent', '--model', 'gpt-5'] }
     ]
     const create = vi.fn(async (params: { name: string; executable: string; argv: readonly string[] }) =>
       ({ sessionId: `session-${params.name}`, incarnationId: `run-${params.name}` }))
     const retired = vi.fn(async () => undefined)
     const coordinator = new LaunchSetCoordinator({ getSet: async () => definitions, listWorkspaces: async () => [workspace], validate: async () => undefined, create, retired })
     const result = await coordinator.start(request)
-    expect(result.entries.map((entry) => entry.outcome)).toEqual(['started', 'started', 'started'])
+    expect(result.entries.map((entry) => entry.outcome)).toEqual(['started', 'started', 'started', 'started', 'started', 'started'])
     expect(create.mock.calls.map(([params]) => [params.name, params.executable, params.argv])).toEqual([
-      ['Cursor', '/bin/bash', []], ['Direct', '/bin/bash', []], ['Codex', '/bin/bash', ['-ic', 'codex; exec bash -i']]
+      ['Cursor', '/bin/bash', []], ['Direct', '/bin/bash', []], ['Codex', '/bin/bash', ['-ic', 'codex; exec bash -i']],
+      ['Ask', 'codex', ['exec', 'Explain cursor-agent']], ['ShellAsk', '/bin/bash', ['-ic', 'codex "explain cursor-agent"; exec bash -i']],
+      ['Env', '/bin/bash', []]
     ])
-    expect(retired.mock.calls).toEqual([[{ sessionId: 'session-Cursor', incarnationId: 'run-Cursor' }], [{ sessionId: 'session-Direct', incarnationId: 'run-Direct' }]])
+    expect(retired.mock.calls).toEqual([[{ sessionId: 'session-Cursor', incarnationId: 'run-Cursor' }], [{ sessionId: 'session-Direct', incarnationId: 'run-Direct' }],
+      [{ sessionId: 'session-Env', incarnationId: 'run-Env' }]])
     // The saved set keeps its entries as they were.
     expect(definitions.entries[0]!.argv).toEqual(['-ic', 'cursor-agent; exec bash -i'])
   })

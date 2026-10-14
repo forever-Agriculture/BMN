@@ -2444,6 +2444,9 @@ async function runHook(args) {
   // Defence in depth: every branch below keys on `hook_event_name`, so nothing that is not an
   // object reaches one. No test can tell this line from its neighbours; it is not claimed as fenced.
   if (!isObject(event)) return 0
+  // Cursor can also run Claude Code's hook files for its own agent (Epic 71: retired, its support kept at the tag
+  // cursor-support-final); such a payload speaks for a Cursor chat, never for a Claude conversation, and BMN takes none.
+  if (agent === 'claude' && Object.hasOwn(event, 'cursor_version')) return 0
   const guarded = await promptVerdict(agent, event, agentPid, procRoot)
   const stopped = guarded !== null && guarded.answer !== null
   // The answer goes out before any socket call: a BMN that is closed or slow never delays the stop.

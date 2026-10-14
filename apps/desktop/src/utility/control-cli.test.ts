@@ -4480,6 +4480,19 @@ describe('Cursor, retired (Epic 71, 71.2 AC2)', () => {
     expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
     expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
   })
+
+  it('ignores a Cursor payload that reaches bmn hook claude through Cursor\'s Claude hook support (Astra, Epic 71 review)', async () => {
+    const fixture = await cliFixture()
+    // cursor-agent's own process holds the terminal; its payloads carry cursor_version (measured 2026-09-26).
+    const foreground = { ...HOLDS_TERMINAL, comm: 'MainThread' }
+    const base = { conversation_id: 'c741bb07-352f-457b-8e7c-ee00517cd9ff', session_id: 'c741bb07-352f-457b-8e7c-ee00517cd9ff', cursor_version: '2026.09.26-dd393fe', workspace_roots: ['/repo'] }
+    for (const event of [{ hook_event_name: 'stop', status: 'completed' }, { hook_event_name: 'sessionStart' }, { hook_event_name: 'postToolUse', tool_name: 'Shell' }, { hook_event_name: 'beforeSubmitPrompt', prompt: 'synthetic prompt' }]) {
+      expect(await runHook(fixture, 'claude', { ...base, ...event }, foreground)).toEqual(QUIET)
+    }
+    for (const handler of [fixture.handlers.openAttention, fixture.handlers.withdrawAttention, fixture.handlers.resolveAttention]) expect(handler).not.toHaveBeenCalled()
+    expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
+    expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
+  })
 })
 
 describe('compaction events (Story 36.1)', () => {

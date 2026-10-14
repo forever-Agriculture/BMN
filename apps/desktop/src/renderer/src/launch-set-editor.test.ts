@@ -21,6 +21,16 @@ describe('saved launch-set form', () => {
     expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-ic', 'cursor-agent; exec bash -i'] })).toBe(words)
     expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-ic', 'codex; exec bash -i'] })).toBeNull()
     expect(retiredEntryWords({ executable: '/bin/echo', argv: ['the cursor moves'] })).toBeNull()
+    // Only where a program is started counts (Astra, Epic 71 review): a shell's commands, the program env runs.
+    expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-lc', 'cd /repo && NO_COLOR=1 exec cursor-agent --model gpt-5'] })).toBe(words)
+    expect(retiredEntryWords({ executable: '/usr/bin/env', argv: ['-u', 'TERM', 'NO_COLOR=1', 'cursor-agent'] })).toBe(words)
+    expect(retiredEntryWords({ executable: '/usr/bin/env', argv: ['bash', '-c', 'cursor-agent'] })).toBe(words)
+    // A prompt, a path or an echo that names it is the command's own data.
+    expect(retiredEntryWords({ executable: 'codex', argv: ['exec', 'Explain cursor-agent'] })).toBeNull()
+    expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-ic', 'codex "explain cursor-agent"; exec bash -i'] })).toBeNull()
+    expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-c', 'echo cursor-agent'] })).toBeNull()
+    expect(retiredEntryWords({ executable: '/bin/bash', argv: ['/repo/cursor-agent'] })).toBeNull()
+    expect(retiredEntryWords({ executable: '/usr/bin/env', argv: ['-u', 'cursor-agent', 'codex'] })).toBeNull()
   })
 
   it('preserves invalid input for correction and warns only about matching live commands', () => {

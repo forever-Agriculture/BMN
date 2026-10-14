@@ -1,7 +1,7 @@
 // MODULE: retired-references.test.mjs - Epic 71 (71.2 AC5): the retired app is named only where the allowlist says why
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -42,7 +42,10 @@ describe('the retired app named in the repository (Epic 71, 71.2 AC5)', () => {
   it('keeps none of its history reader, its recorded payloads or its hook writer', () => {
     assert.equal(existsSync(join(repoRoot, `apps/desktop/src/utility/agent-history-${ID}.ts`)), false)
     assert.equal(existsSync(join(repoRoot, `apps/desktop/src/utility/test-fixtures/${ID}`)), false)
-    // The hook writer lived in bin/bmn; the hook commands there name no retired app any more.
-    assert.equal(findReferences(repoRoot).some((entry) => entry.file === 'apps/desktop/bin/bmn'), false)
+    // The hook writer lived in bin/bmn; what is left there is the refusal of its payloads in bmn hook claude.
+    const bmn = readFileSync(join(repoRoot, 'apps/desktop/bin/bmn'), 'utf8')
+    assert.equal(bmn.includes(`${ID}Requests`), false)
+    assert.deepEqual(findReferences(repoRoot).filter((entry) => entry.file === 'apps/desktop/bin/bmn').map((entry) => entry.line).length, 2)
+    assert.match(bmn, new RegExp(`agent === 'claude' && Object\\.hasOwn\\(event, '${ID}_version'\\)\\) return 0`))
   })
 })

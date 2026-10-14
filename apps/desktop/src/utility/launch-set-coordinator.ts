@@ -1,5 +1,6 @@
 import {
   ERROR_CODES,
+  isCommandShell,
   retiredAppCommand,
   type LaunchSetRecord,
   type LaunchSetStartParams,
@@ -80,7 +81,8 @@ export class LaunchSetCoordinator {
       workspaceId: request.workspaceId,
       name: entry.name,
       cwd: directory,
-      executable: !retired[index] ? entry.executable : retiredAppCommand(entry.executable, []) === null ? entry.executable : PLAIN_TERMINAL,
+      // A shell that would have started it opens as that shell; anything else (the program itself, env) as the plain terminal.
+      executable: !retired[index] ? entry.executable : isCommandShell(entry.executable) ? entry.executable : PLAIN_TERMINAL,
       argv: retired[index] ? [] : entry.argv,
       backgroundChoice: entry.backgroundChoice,
       terminalGraphics: entry.terminalGraphics,

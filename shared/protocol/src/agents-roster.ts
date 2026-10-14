@@ -36,16 +36,65 @@ export function retiredAppProgram(program: string): RosterRetiredHarness | null 
   return Object.hasOwn(RETIRED_APP_PROGRAMS, name) ? RETIRED_APP_PROGRAMS[name]! : null
 }
 
+/** Shells whose `-c` command line a saved entry may start a program through; such an entry opens as that shell. */
+const COMMAND_SHELLS: ReadonlySet<string> = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish'])
+const programName = (path: string): string => path.slice(path.lastIndexOf('/') + 1)
+const isSetting = (word: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)
+
+/** Whether a saved entry's program is a shell, so an entry BMN does not start runs as that shell alone. */
+export function isCommandShell(executable: string): boolean {
+  return COMMAND_SHELLS.has(programName(executable))
+}
+
+/** Where the program `env` runs stands in its arguments: after its options and NAME=value settings. */
+function envProgram(argv: readonly string[]): number {
+  for (let index = 0; index < argv.length; index += 1) {
+    const word = argv[index]!
+    // These two take the next word as their value.
+    if (word === '-u' || word === '-C' || word === '--unset' || word === '--chdir') index += 1
+    else if (!word.startsWith('-') && !isSetting(word)) return index
+  }
+  return -1
+}
+
+/** The programs a shell command line starts, one per command: the first word after settings and `exec`, `command` or `env`. */
+function commandPrograms(line: string): string[] {
+  const programs: string[] = []
+  for (const command of line.split(/;|&&|\|\||\||&|\n|\(|\)/)) {
+    const words = command.trim().split(/\s+/).filter(Boolean).map((word) => word.replace(/^['"]+|['"]+$/g, ''))
+    let index = 0
+    while (index < words.length && (isSetting(words[index]!) || words[index] === 'exec' || words[index] === 'command')) index += 1
+    if (index < words.length && programName(words[index]!) === 'env') {
+      const after = envProgram(words.slice(index + 1))
+      if (after >= 0) programs.push(words[index + 1 + after]!)
+    } else if (index < words.length) {
+      programs.push(words[index]!)
+    }
+  }
+  return programs
+}
+
 /**
- * The retired app a saved command starts, or null: its program, or a command line that names the
- * program as a word, as the New session form writes it (`bash -ic 'cursor-agent; exec bash -i'`).
+ * The retired app a saved command starts, or null. Only where a program is started counts: the
+ * executable itself, the program `env` runs, or a command of a shell's `-c` line, as the New session
+ * form writes it (`bash -ic 'cursor-agent; exec bash -i'`). An argument that only names the program
+ * (a prompt, a path) is the command's own data.
  */
 export function retiredAppCommand(executable: string, argv: readonly string[]): RosterRetiredHarness | null {
-  for (const part of [executable, ...argv]) {
-    for (const word of part.split(/[\s;&|()<>'"`]+/)) {
-      const app = word === '' ? null : retiredAppProgram(word)
-      if (app !== null) return app
-    }
+  const direct = retiredAppProgram(executable)
+  if (direct !== null) return direct
+  const name = programName(executable)
+  if (name === 'env') {
+    const at = envProgram(argv)
+    return at < 0 ? null : retiredAppCommand(argv[at]!, argv.slice(at + 1))
+  }
+  if (!COMMAND_SHELLS.has(name)) return null
+  const flag = argv.findIndex((word) => /^-[A-Za-z]*c[A-Za-z]*$/.test(word))
+  const line = flag < 0 ? undefined : argv[flag + 1]
+  if (line === undefined) return null
+  for (const program of commandPrograms(line)) {
+    const app = retiredAppProgram(program)
+    if (app !== null) return app
   }
   return null
 }

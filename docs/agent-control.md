@@ -419,7 +419,9 @@ tools, prompt-guard warning and the recorded payloads), is kept at the local git
 - Every command asked for Cursor (`bmn hooks`, `bmn hook`, `bmn rules`, `bmn skills`, `bmn tools`)
   says: "Cursor was retired on 2026-10-14; BMN's support for it is kept at the git tag
   cursor-support-final". `bmn hook cursor`, run by a hook file written before, prints that line on
-  stderr, exits 0 and tells BMN nothing. The prompt guard's line for Cursor says the same.
+  stderr, exits 0 and tells BMN nothing. A Cursor payload that reaches `bmn hook claude` through
+  Cursor's support for Claude Code's hook files (it carries `cursor_version`) is ignored the same
+  way. The prompt guard's line for Cursor says the same.
 - A team file that still names Cursor (an agent, its route, a provider, or a skill or tool kept to
   it) is read, with an `APP_RETIRED` warning at each place. An agent on Cursor takes no work:
   `bmn roster check` refuses it with `APP_RETIRED`, and a dispatch of `cursor-agent` is refused
@@ -435,6 +437,9 @@ tools, prompt-guard warning and the recorded payloads), is kept at the local git
   naming it with the retirement line; nothing is written under `~/.cursor`.
 - A saved launch set entry that starts `cursor-agent` opens as a plain terminal, and that session
   gets one notice from BMN: "Cursor was retired on 14 Oct 2026." The saved set is not changed.
+  BMN looks for it where a program starts: the entry's own program, a program `env` starts, or a
+  command in a shell's `-c` line (that entry opens as its shell). The name inside an argument, such
+  as a prompt or a path, starts nothing and changes nothing.
 
 ### Notifications from any program
 
