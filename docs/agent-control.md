@@ -637,14 +637,16 @@ A `turn changes:` line says whether that app's turns are recorded where a worksp
 measured ([turn-changes.md](turn-changes.md#how-a-turn-is-recorded)).
 
 For OpenCode 2 (2.0.28, checked 2026-10-14), `bmn hooks print opencode` prints the terminal plugin
-shipped with this CLI. `install` writes it as `bmn.ts` in OpenCode's config folder (`OPENCODE_CONFIG_DIR`,
-otherwise `~/.config/opencode`) and adds its path to `plugins` in `cli.json` there. OpenCode 2 reads
-terminal plugins only from that list. `check` reports two lines: `plugin` compares `bmn.ts` byte for byte
-(`wired`, `wired (older wording)` or `missing`), and `cli.json` says whether the list names it. A
+shipped with this CLI. `install` writes it as `bmn/tui.ts` in OpenCode's config folder
+(`OPENCODE_CONFIG_DIR`, otherwise `~/.config/opencode`) and adds the `bmn` folder to `plugins` in
+`cli.json` there. OpenCode 2 reads terminal plugins only from that list, and loads a local one only as a
+folder, from its `tui.ts`: an entry naming a file is skipped without a word. `check` reports two lines:
+`plugin` compares `tui.ts` byte for byte (`wired`, `wired (older wording)` or `missing`), and `cli.json`
+says whether the list names the folder. A
 `cli.json` that is not a JSON object with a `plugins` list is reported and left untouched. `install`
 backs up every file before it changes it. It also removes OpenCode 1's BMN plugin from `plugin/` or
 `plugins/`, because OpenCode 2 refuses to load it ("Plugin must export a default definition with an id
-and an effect or setup function"). That copy is kept beside `bmn.ts` as
+and an effect or setup function"). That copy is kept in the `bmn` folder as
 `plugin-bmn.ts.bmn-backup-<time>`, outside the folders OpenCode loads. A file there that is not BMN's
 stays. Restart OpenCode after installing.
 
@@ -655,11 +657,14 @@ terminals, whose events it ignores. It translates OpenCode 2's events into the O
 each killed after 3 seconds. While a question or permission of its session waits, it runs
 `bmn answer take --wait 25` in a loop and sends any answer through its own OpenCode client. It then
 tells BMN what OpenCode said with `--reported <id>=ok|failed`: `ok` for an accepted reply, `failed`
-only for a refused request (4xx, nothing applied), and nothing for a lost connection or a server error,
-as the reply may still have landed. It sends a reject only while that permission is the only one of its
+only for the server's own refusal (for example `PermissionNotFoundError` or `FormAlreadySettledError`:
+nothing applied), and nothing for a lost connection or a decoding error, as the reply may still have
+landed. It sends a reject only while that permission is the only one of its
 session still waiting. It stops when nothing waits and after three failed calls, so an absent BMN costs
-nothing. The translation and answers are tested against a stand-in terminal; delivery in a real
-OpenCode 2 terminal is still unverified.
+nothing. On 2026-10-14 a real OpenCode 2.0.28 terminal, with the plugin put there by `bmn hooks install
+opencode` and a stand-in `bmn`, sent each event in order and carried a permission ("once") and a
+question ("Beta") from the stand-in back to the model, both reported `ok`; those payloads are a test
+fixture (`test-fixtures/remote-answers/opencode-2/`).
 
 For Claude, Codex and Cursor, `install` copies the file to `<file>.bmn-backup-<timestamp>`, adds the missing entries next to the
 hooks already registered for that event, writes the file atomically and prints a unified diff. It

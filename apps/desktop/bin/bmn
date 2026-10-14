@@ -181,11 +181,12 @@ install previews the exact target and diff on stderr and asks Yes (default No) b
         removes, reorders or rewrites an entry, and writes nothing when nothing is
         missing.
 
-OpenCode (2.0.28 and later) loads BMN's terminal plugin, bmn.ts beside cli.json, only
-when cli.json names it in "plugins". check compares bmn.ts with the shipped plugin byte
-for byte and reads that entry. install writes both, each after a backup, and removes
-OpenCode 1's BMN plugin from plugin/ or plugins/ (OpenCode 2 refuses to load it), with
-the copy kept beside bmn.ts; print emits the exact TypeScript install writes.
+OpenCode (2.0.28 and later) loads BMN's terminal plugin, bmn/tui.ts in its config
+folder, only when cli.json there names the bmn folder in "plugins". check compares
+tui.ts with the shipped plugin byte for byte and reads that entry. install writes both,
+each after a backup, and removes OpenCode 1's BMN plugin from plugin/ or plugins/
+(OpenCode 2 refuses to load it), with the copy kept in the bmn folder; print emits the
+exact TypeScript install writes.
 
 Both report what is configured, never whether a hook has fired, and neither needs the
 control socket or a token. --file replaces the agent's own file, for tests.`
@@ -581,8 +582,8 @@ async function call(socketPath, token, method, params, timeoutMs = TIMEOUT_MS) {
 
 const HOOK_AGENTS = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' }
 /**
- * OpenCode 2's terminal plugin, written beside cli.json and named in its "plugins" (2.0.28, measured
- * 2026-10-14). It translates OpenCode 2's events into the OpenCode 1 shapes `bmn hook opencode` reads.
+ * OpenCode 2's terminal plugin, written as bmn/tui.ts and named by its folder in cli.json's "plugins"
+ * (2.0.28, measured 2026-10-14). It translates OpenCode 2's events into the OpenCode 1 shapes `bmn hook opencode` reads.
  */
 const OPENCODE_PLUGIN = `// MODULE: bmn.ts - BMN's OpenCode 2 terminal plugin: tells BMN what this terminal's session asks and answers taps from the phone
 // Shipped by BMN. Reinstall with bmn hooks install opencode.
@@ -610,13 +611,13 @@ const run = (args: string[], env: Record<string, string | undefined>, input?: st
     }
   })
 
-// The HTTP status a refused call carries, where the client says it.
-const statusOf = (error: any): number | undefined => {
-  for (const status of [error?.status, error?.statusCode, error?.response?.status, error?.cause?.status]) {
-    if (typeof status === "number") return status
-  }
-  return undefined
-}
+// The server's own refusals, as the 2.0.28 client names them: nothing was applied. A transport or decoding
+// failure (HttpClientError, ClientError, SchemaError) may hide a reply that landed.
+const REFUSALS = [
+  "LocationNotFoundError", "InvalidRequestError", "UnauthorizedError", "SessionNotFoundError", "PermissionNotFoundError",
+  "FormNotFoundError", "FormAlreadySettledError", "FormInvalidAnswerError",
+]
+const refused = (error: any) => REFUSALS.includes(error?._tag)
 
 export default {
   id: "bmn",
@@ -718,15 +719,13 @@ export default {
       })
     }
 
-    // Only an accepted reply or a refused request (4xx: nothing was applied) is reported; a lost
-    // connection or a server error may still have applied it.
+    // Only an accepted reply or a refused one is reported; any other failure may still have applied it.
     const settle = async (ref: string, request: Promise<unknown>) => {
       try {
         await request
         reports.push(ref + "=ok")
       } catch (error) {
-        const status = statusOf(error)
-        if (status !== undefined && status >= 400 && status < 500) reports.push(ref + "=failed")
+        if (refused(error)) reports.push(ref + "=failed")
       }
     }
 
@@ -1482,9 +1481,10 @@ const HOOK_ENTRY_TIMEOUT = 5
  */
 function hookFilePath(agent) {
   if (agent === 'opencode') {
-    // OpenCode 2's terminal reads cli.json from the same folder, and BMN's plugin sits beside it.
+    // OpenCode 2's terminal reads cli.json from this folder, and loads a local plugin only as a folder
+    // named there, from that folder's tui.ts (2.0.28 skips an entry that is a file).
     const config = process.env.OPENCODE_CONFIG_DIR || `${process.env.XDG_CONFIG_HOME || `${homedir()}/.config`}/opencode`
-    return `${absoluteUncollapsed(config)}/bmn.ts`
+    return `${absoluteUncollapsed(config)}/bmn/tui.ts`
   }
   const [directory, ...rest] = HOOK_FILES[agent].path
   // Cursor's terminal agent reads the one file in the home directory; it has no variable to move it.
@@ -1862,12 +1862,14 @@ async function checkHooksCommand(agents, pathFor, asJson) {
 }
 
 /**
- * OpenCode 2 loads a terminal plugin only when cli.json, beside it, names it in "plugins"; OpenCode 1's
- * server plugin lived in plugin/ or plugins/, where OpenCode 2 refuses to load it (2.0.28).
+ * OpenCode 2 loads a terminal plugin only when cli.json names its folder in "plugins", and reads the
+ * folder's tui.ts; OpenCode 1's server plugin lived in plugin/ or plugins/, where OpenCode 2 refuses to
+ * load it (2.0.28). `path` is the tui.ts: its folder is the entry, and the folder above holds cli.json.
  */
 function openCodeFiles(path) {
-  const config = dirname(path)
-  return { cli: `${config}/cli.json`, older: ['plugin', 'plugins'].map((folder) => `${config}/${folder}/bmn.ts`) }
+  const entry = dirname(path)
+  const config = dirname(entry)
+  return { entry, cli: `${config}/cli.json`, older: ['plugin', 'plugins'].map((folder) => `${config}/${folder}/bmn.ts`) }
 }
 
 /** BMN's own plugin text, from any release. */
@@ -1912,8 +1914,9 @@ function checkOpenCodePlugin(path) {
   }
   const plugin = text === OPENCODE_PLUGIN ? 'wired' : openCodeBMNText(text) ? 'wired (older wording)' : 'missing'
   const older = olderOpenCodePlugins(path)
-  const cli = readOpenCodeCli(openCodeFiles(path).cli)
-  const listed = cli.state === 'read' && cli.plugins.includes(path)
+  const { entry, cli: cliPath } = openCodeFiles(path)
+  const cli = readOpenCodeCli(cliPath)
+  const listed = cli.state === 'read' && cli.plugins.includes(entry)
   const events = [
     { event: 'plugin', optional: false, state: plugin,
       ...(older.length === 0 ? {} : { reason: `OpenCode 1's plugin is still at ${older.map((entry) => entry.file).join(', ')}; install removes it` }) },
@@ -1956,7 +1959,7 @@ function confirmationResult(path, asJson) {
 }
 
 async function installOpenCodePlugin(path, asJson, yes) {
-  const { cli: cliPath } = openCodeFiles(path)
+  const { entry, cli: cliPath } = openCodeFiles(path)
   let before
   let cli
   let older
@@ -1965,7 +1968,7 @@ async function installOpenCodePlugin(path, asJson, yes) {
     before = currentText(path)
     cli = readOpenCodeCli(cliPath)
     older = olderOpenCodePlugins(path)
-    for (const file of [path, cliPath, ...older.map((entry) => entry.file)]) targets.set(file, linkTarget(file))
+    for (const file of [path, cliPath, ...older.map((old) => old.file)]) targets.set(file, linkTarget(file))
   } catch (error) {
     process.stderr.write(`bmn: ${error.code ?? 'IO_ERROR'}: ${error.message}\n`)
     return 1
@@ -1975,8 +1978,8 @@ async function installOpenCodePlugin(path, asJson, yes) {
     return 1
   }
   const writePlugin = before !== OPENCODE_PLUGIN
-  const cliNext = cli.plugins.includes(path) ? null
-    : `${JSON.stringify({ ...cli.data, plugins: [...cli.plugins, path] }, null, cli.text === null ? 2 : jsonIndent(cli.text))}\n`
+  const cliNext = cli.plugins.includes(entry) ? null
+    : `${JSON.stringify({ ...cli.data, plugins: [...cli.plugins, entry] }, null, cli.text === null ? 2 : jsonIndent(cli.text))}\n`
   const installed = [...(writePlugin ? ['plugin'] : []), ...(cliNext === null ? [] : ['cli.json'])]
   if (installed.length === 0 && older.length === 0) {
     const result = { installed: [], backups: [], removed: [], file: path }
@@ -1990,9 +1993,9 @@ async function installOpenCodePlugin(path, asJson, yes) {
   const diff = [
     ...(writePlugin ? [unifiedDiff(before ?? '', OPENCODE_PLUGIN, path)] : []),
     ...(cliNext === null ? [] : [unifiedDiff(cli.text ?? '', cliNext, cliPath)]),
-    ...older.map((entry) => unifiedDiff(entry.text, '', entry.file))
+    ...older.map((old) => unifiedDiff(old.text, '', old.file))
   ].join('\n')
-  const entries = [...installed, ...older.map((entry) => `remove ${entry.file}`)]
+  const entries = [...installed, ...older.map((old) => `remove ${old.file}`)]
   if (!await confirmHookWrite(path, targets.get(path), entries, diff, yes, asJson, writePlugin ? OPENCODE_PLUGIN : null)) {
     return confirmationResult(path, asJson)
   }
@@ -2020,12 +2023,12 @@ async function installOpenCodePlugin(path, asJson, yes) {
       if (cli.text !== null) copy(cliPath, `${cliPath}.bmn-backup-${stamp}`)
       writeAtomically(cliPath, cliNext, unchanged(cliPath, cli.text))
     }
-    for (const entry of older) {
-      unchanged(entry.file, entry.text)()
-      // Kept outside plugin/ and plugins/, where OpenCode would try to load it.
-      copy(entry.file, `${dirname(path)}/${basename(dirname(entry.file))}-bmn.ts.bmn-backup-${stamp}`)
-      unlinkSync(entry.file)
-      removed.push(entry.file)
+    for (const old of older) {
+      unchanged(old.file, old.text)()
+      // Kept in BMN's own folder, outside plugin/ and plugins/, where OpenCode would try to load it.
+      copy(old.file, `${entry}/${basename(dirname(old.file))}-bmn.ts.bmn-backup-${stamp}`)
+      unlinkSync(old.file)
+      removed.push(old.file)
     }
   } catch (error) {
     process.stderr.write(`bmn: ${error.code ?? 'IO_ERROR'}: ${error.message}\n`)

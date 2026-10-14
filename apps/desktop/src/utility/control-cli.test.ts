@@ -2087,6 +2087,16 @@ async function hookFileFixture(contents?: unknown, name = 'settings.json'): Prom
   return path
 }
 
+/** OpenCode's plugin path in a fresh config folder of its own: <root>/opencode/bmn/tui.ts, cli.json in <root>/opencode. */
+async function openCodeFixture(contents?: string): Promise<string> {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'aithooks-')))
+  createdRoots.add(root)
+  const path = join(root, 'opencode', 'bmn', 'tui.ts')
+  await mkdir(dirname(path), { recursive: true })
+  if (contents !== undefined) await writeFile(path, contents)
+  return path
+}
+
 function entryGroup(command: string, timeout = 5): unknown {
   return { hooks: [{ type: 'command', command, timeout }] }
 }
@@ -3124,9 +3134,10 @@ describe('bmn hooks install', () => {
   })
 
   it('shows the full OpenCode replacement and refuses a retargeted plugin link', async () => {
-    const first = await hookFileFixture('// existing plugin\n', 'first.ts')
-    const second = join(dirname(first), 'second.ts')
-    const link = join(dirname(first), 'bmn.ts')
+    const link = await openCodeFixture()
+    const first = join(dirname(link), 'first.ts')
+    const second = join(dirname(link), 'second.ts')
+    await writeFile(first, '// existing plugin\n')
     await writeFile(second, '// existing plugin\n')
     await symlink(first, link)
     const tty = ttyHooks(['install', 'opencode', '--file', link])
@@ -3143,7 +3154,7 @@ describe('bmn hooks install', () => {
     expect(await backupsOf(link)).toEqual([])
   })
   it.each(['claude', 'codex', 'opencode', 'cursor'])('requires explicit approval before a non-interactive %s write', async (agent) => {
-    const path = await hookFileFixture(agent === 'opencode' ? '// older plugin\n' : {}, agent === 'claude' ? 'settings.json' : 'hooks.json')
+    const path = agent === 'opencode' ? await openCodeFixture('// older plugin\n') : await hookFileFixture({}, agent === 'claude' ? 'settings.json' : 'hooks.json')
     const before = await readFile(path, 'utf8')
     for (const args of [['install', agent, '--file', path], ['install', agent, '--file', path, '--json']]) {
       const denied = await runHooks(args)
@@ -3785,13 +3796,13 @@ describe('OpenCode hooks', () => {
     expect(takes[2]).toEqual(report('per_2=ok'))
     emit('permission.replied', { sessionID: OPENCODE_SESSION, requestID: 'per_2', reply: 'once' })
     await answer([], 4)
-    // A server error may still have applied the reply: nothing is reported, so BMN keeps it uncertain.
-    terminal.outcome = () => Promise.reject(Object.assign(new Error('unavailable'), { status: 503 }))
+    // A transport or decoding failure may still have applied the reply: nothing is reported, so BMN keeps it uncertain.
+    terminal.outcome = () => Promise.reject(Object.assign(new Error('connection lost'), { _tag: 'HttpClientError' }))
     await answer([{ requestRef: 'per_1', kind: 'permission', reply: 'reject' }], 5)
     expect(terminal.replies.permission[1]).toEqual(permission('per_1', 'reject'))
     expect(takes[4]).toEqual(waitLong)
-    // A refused request (4xx) applied nothing.
-    terminal.outcome = () => Promise.reject(Object.assign(new Error('gone'), { status: 404 }))
+    // The server's own refusal, as 2.0.28 threw it for an answered permission, applied nothing.
+    terminal.outcome = () => Promise.reject(Object.assign(new Error('Permission request not found: per_1'), { _tag: 'PermissionNotFoundError', requestID: 'per_1' }))
     await answer([{ requestRef: 'per_1', kind: 'permission', reply: 'reject' }], 6)
     expect(takes[5]).toEqual(report('per_1=failed'))
     emit('permission.replied', { sessionID: OPENCODE_SESSION, requestID: 'per_1', reply: 'reject' })
@@ -3981,8 +3992,9 @@ describe('OpenCode hooks', () => {
   })
 
   it('prints, installs, compares, backs up and repairs the exact shipped plugin and its cli.json entry', async () => {
-    const path = await hookFileFixture(undefined, 'bmn.ts')
-    const config = dirname(path)
+    const path = await openCodeFixture()
+    const entry = dirname(path)
+    const config = dirname(entry)
     const cli = join(config, 'cli.json')
     const printed = await runHooks(['print', 'opencode'])
     expect(printed.code).toBe(0)
@@ -4002,12 +4014,12 @@ describe('OpenCode hooks', () => {
     const install = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--file', path, '--json'])).stdout)
     expect(install).toMatchObject({ installed: ['plugin', 'cli.json'], removed: [join(config, 'plugin', 'bmn.ts')], file: path })
     expect(await readFile(path, 'utf8')).toBe(printed.stdout)
-    expect(JSON.parse(await readFile(cli, 'utf8'))).toEqual({ $schema: 'https://opencode.ai/v2/cli.json', plugins: ['owner-plugin', path] })
+    expect(JSON.parse(await readFile(cli, 'utf8'))).toEqual({ $schema: 'https://opencode.ai/v2/cli.json', plugins: ['owner-plugin', entry] })
     expect((await readFile(cli, 'utf8')).split('\n')[1]).toBe('    "$schema": "https://opencode.ai/v2/cli.json",')
     expect(existsSync(join(config, 'plugin', 'bmn.ts'))).toBe(false)
     expect(await readFile(join(config, 'plugins', 'bmn.ts'), 'utf8')).toBe('// the owner\'s own plugin\n')
     const olderCopy = install.backups.find((file: string) => basename(file).startsWith('plugin-bmn.ts.bmn-backup-'))
-    expect(dirname(olderCopy)).toBe(config)
+    expect(dirname(olderCopy)).toBe(entry)
     expect(await readFile(olderCopy, 'utf8')).toBe(olderText)
     expect(install.backups.some((file: string) => basename(file).startsWith('cli.json.bmn-backup-'))).toBe(true)
     expect((await runHooks(['check', 'opencode', '--file', path])).code).toBe(0)
@@ -4023,8 +4035,8 @@ describe('OpenCode hooks', () => {
   })
 
   it('leaves a cli.json it cannot add to untouched and installs nothing', async () => {
-    const path = await hookFileFixture(undefined, 'bmn.ts')
-    const cli = join(dirname(path), 'cli.json')
+    const path = await openCodeFixture()
+    const cli = join(dirname(dirname(path)), 'cli.json')
     for (const [text, reason] of [
       ['{ "plugins": [ // a comment\n] }\n', /is not valid JSON/],
       ['{ "plugins": "one" }\n', /"plugins" in .* is not a list/],
@@ -4041,20 +4053,20 @@ describe('OpenCode hooks', () => {
     }
   })
 
-  it('puts the plugin beside the cli.json of the config folder OpenCode reads', async () => {
+  it('puts the plugin folder beside the cli.json of the config folder OpenCode reads', async () => {
     const fixture = await cliFixture()
     const config = join(fixture.root, 'opencode')
     const env = { OPENCODE_CONFIG_DIR: config }
     const first = JSON.parse((await runHooks(['check', 'opencode', '--json'], env)).stdout)
-    expect(first.agents[0].file).toBe(join(config, 'bmn.ts'))
+    expect(first.agents[0].file).toBe(join(config, 'bmn', 'tui.ts'))
     const fresh = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--json'], env)).stdout)
-    expect(fresh.file).toBe(join(config, 'bmn.ts'))
+    expect(fresh.file).toBe(join(config, 'bmn', 'tui.ts'))
     expect(await readFile(fresh.file, 'utf8')).toContain('id: "bmn"')
     // A new cli.json holds only the entry.
-    expect(JSON.parse(await readFile(join(config, 'cli.json'), 'utf8'))).toEqual({ plugins: [join(config, 'bmn.ts')] })
+    expect(JSON.parse(await readFile(join(config, 'cli.json'), 'utf8'))).toEqual({ plugins: [join(config, 'bmn')] })
     const moved = join(fixture.root, 'xdg')
     const xdg = JSON.parse((await runHooks(['check', 'opencode', '--json'], { XDG_CONFIG_HOME: moved })).stdout)
-    expect(xdg.agents[0].file).toBe(join(moved, 'opencode', 'bmn.ts'))
+    expect(xdg.agents[0].file).toBe(join(moved, 'opencode', 'bmn', 'tui.ts'))
   })
 })
 
@@ -4266,6 +4278,40 @@ describe('evidence of how a prompt ended, from the recorded hooks (Epic 30.2)', 
     const withdrawn = fixture.handlers.withdrawAttention.mock.calls.map(([params]) => params as Record<string, unknown>)
       .find((params) => params.requestKey === 'opencode:permission')
     expect(withdrawn).toMatchObject({ evidence: { requestRef: 'per_0e34b1329001CyMk3xp8kIma9a', permission: 'denied' } })
+  })
+
+  it('reads what BMN\'s plugin sent from a real OpenCode 2.0.28 terminal as requests, their answers and the turn', async () => {
+    // Recorded 2026-10-14: BMN's plugin installed by `bmn hooks install opencode`, a stand-in `bmn` answering
+    // the permission "once" and the question "Beta"; each line is the pinned session and the payload.
+    const lines = (await readFile(join(REMOTE_FIXTURES, 'opencode-2', 'live-run.jsonl'), 'utf8')).split('\n').filter(Boolean)
+    const run = lines.map((line) => JSON.parse(line) as { pin: string; payload: Record<string, unknown> })
+    const session = run[0]!.pin
+    const fixture = await cliFixture()
+    for (const { pin, payload } of run) {
+      const bound = { ...fixture, sessionEnv: { ...fixture.sessionEnv, BMN_OPENCODE_SESSION_ID: pin } }
+      expect(await runHook(bound, 'opencode', payload, OPENCODE_FOREGROUND)).toEqual(QUIET)
+    }
+    const opened = (requestKey: string) => fixture.handlers.openAttention.mock.calls.map(([params]) => params as Record<string, unknown>)
+      .find((params) => params.requestKey === requestKey)
+    // The busy event before each request also resolves its row; the answer is the one its replied event made.
+    const answered = (event: string) => fixture.handlers.resolveAttention.mock.calls.map(([params]) => params as Record<string, unknown>)
+      .find((params) => params.origin === `hook:opencode:${event}`)
+    expect(fixture.handlers.observeConversation).toHaveBeenCalledWith(expect.objectContaining({ agentCli: 'opencode', conversationReference: session, source: 'startup' }))
+    expect(opened('opencode:permission')).toMatchObject({
+      kind: 'permission', title: 'OpenCode asks to shell', body: 'echo *',
+      prompt: { harness: 'opencode', command: 'echo probe-shell-ran', requestRef: 'per_139c07408001JpDHJ2zCSER6L3' }
+    })
+    expect(answered('permission.replied')).toMatchObject({ requestKey: 'opencode:permission', evidence: { requestRef: 'per_139c07408001JpDHJ2zCSER6L3', permission: 'allowed' } })
+    expect(opened('opencode:question')).toMatchObject({
+      kind: 'question',
+      prompt: { type: 'questions', harness: 'opencode', requestRef: 'frm_139c07583001TQMiNCWSr2dGYh', questions: [{
+        text: 'Which made-up option?', header: 'Made-up pick', multiSelect: false,
+        options: [{ label: 'Alpha', description: 'the first' }, { label: 'Beta', description: 'the second' }]
+      }] }
+    })
+    expect(answered('question.replied')).toMatchObject({ requestKey: 'opencode:question', evidence: { requestRef: 'frm_139c07583001TQMiNCWSr2dGYh', answers: [['Beta']] } })
+    expect(opened('opencode:turn')).toMatchObject({ kind: 'notice', title: 'OpenCode finished a turn' })
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledWith(expect.objectContaining({ agent: 'opencode', event: 'message.updated', model: 'standin-model' }))
   })
 })
 

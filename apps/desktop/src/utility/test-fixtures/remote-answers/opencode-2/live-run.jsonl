@@ -1,0 +1,8 @@
+{"pin":"ses_ec63f8d18ffeQjzU3uU4CJd79I","payload":{"hook_event_name":"session.created","sessionID":"ses_ec63f8d18ffeQjzU3uU4CJd79I","info":{"id":"ses_ec63f8d18ffeQjzU3uU4CJd79I"}}}
+{"pin":"ses_ec63f8d18ffeQjzU3uU4CJd79I","payload":{"hook_event_name":"session.status","sessionID":"ses_ec63f8d18ffeQjzU3uU4CJd79I","status":{"type":"busy"}}}
+{"pin":"ses_ec63f8d18ffeQjzU3uU4CJd79I","payload":{"hook_event_name":"message.updated","sessionID":"ses_ec63f8d18ffeQjzU3uU4CJd79I","info":{"sessionID":"ses_ec63f8d18ffeQjzU3uU4CJd79I","role":"assistant","modelID":"standin-model","providerID":"standin"}}}
+{"pin":"ses_ec63f8d18ffeQjzU3uU4CJd79I","payload":{"hook_event_name":"permission.asked","id":"per_139c07408001JpDHJ2zCSER6L3","sessionID":"ses_ec63f8d18ffeQjzU3uU4CJd79I","permission":"shell","patterns":["echo *"],"metadata":{"command":"echo probe-shell-ran"}}}
+{"pin":"ses_ec63f8d18ffeQjzU3uU4CJd79I","payload":{"hook_event_name":"permission.replied","sessionID":"ses_ec63f8d18ffeQjzU3uU4CJd79I","requestID":"per_139c07408001JpDHJ2zCSER6L3","reply":"once"}}
+{"pin":"ses_ec63f8d18ffeQjzU3uU4CJd79I","payload":{"hook_event_name":"question.asked","id":"frm_139c07583001TQMiNCWSr2dGYh","sessionID":"ses_ec63f8d18ffeQjzU3uU4CJd79I","questions":[{"question":"Which made-up option?","header":"Made-up pick","options":[{"label":"Alpha","description":"the first"},{"label":"Beta","description":"the second"}],"multiple":false,"custom":true}]}}
+{"pin":"ses_ec63f8d18ffeQjzU3uU4CJd79I","payload":{"hook_event_name":"question.replied","sessionID":"ses_ec63f8d18ffeQjzU3uU4CJd79I","requestID":"frm_139c07583001TQMiNCWSr2dGYh","answers":[["Beta"]]}}
+{"pin":"ses_ec63f8d18ffeQjzU3uU4CJd79I","payload":{"hook_event_name":"session.idle","sessionID":"ses_ec63f8d18ffeQjzU3uU4CJd79I"}}

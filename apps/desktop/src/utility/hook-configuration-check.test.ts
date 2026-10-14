@@ -99,9 +99,9 @@ describe('runHookConfigurationCheck', () => {
         else resolve({ stdout: stdout as string })
       })
     )
-    const file = join(root, 'opencode', 'bmn.ts')
+    const file = join(root, 'opencode', 'bmn', 'tui.ts')
     await writeHookFile(file, plugin)
-    await writeHookFile(join(root, 'opencode', 'cli.json'), `${JSON.stringify({ plugins: [file] })}\n`)
+    await writeHookFile(join(root, 'opencode', 'cli.json'), `${JSON.stringify({ plugins: [join(root, 'opencode', 'bmn')] })}\n`)
 
     const report = await check(env)
 
@@ -154,7 +154,7 @@ describe('runHookConfigurationCheck', () => {
 
   it('keeps every harness row when the OpenCode plugin cannot be read', async () => {
     const { root, env } = await configFixture()
-    await mkdir(join(root, 'opencode', 'bmn.ts'), { recursive: true })
+    await mkdir(join(root, 'opencode', 'bmn', 'tui.ts'), { recursive: true })
 
     const report = await check(env)
 

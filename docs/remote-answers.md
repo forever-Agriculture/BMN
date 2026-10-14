@@ -174,8 +174,9 @@ Screens and events: `.dev-auto/evidence/epic-31/spike-31-4/opencode/`. Disposabl
 
 OpenCode 2 runs plugins in two places. A server plugin runs in a background service that may serve
 several terminals and does not have the terminal's variables. A terminal plugin, named in `cli.json`'s
-`plugins`, runs in the terminal's own process (docs at opencode.ai "CLI plugins"). BMN's plugin is a
-terminal plugin. It hears every event of the server it is connected to through `data.listen`, and keeps
+`plugins`, runs in the terminal's own process (docs at opencode.ai "CLI plugins"). A local one must be a
+folder, loaded from its `tui.ts`; an entry naming a file is skipped. BMN's plugin is a terminal plugin,
+`bmn/tui.ts`. It hears every event of the server it is connected to through `data.listen`, and keeps
 only the family of the session its terminal shows (`ui.router.current()`, `data.session.root`).
 
 Events recorded from a real run of 2.0.28 on 2026-10-14 (a server plugin on a throwaway profile and a
@@ -206,13 +207,19 @@ shapes above:
 decision: "once" | "reject" })` (the key is `decision`; the server refuses `reply`), and
 `client.session.form.reply({ sessionID, formID, answer })`, where `answer` maps each field's `key` to
 the chosen option's `value`, or to a list of values for `multiselect`. Typed text is sent as it is, and
-only where the field's `custom` is not `false`. A refused call whose error carries a 4xx status is
-reported `failed`; any other failure is reported as nothing.
+only where the field's `custom` is not `false`. A refused call throws the server's typed error, not an
+HTTP status: replying again to an answered permission threw `PermissionNotFoundError` (`_tag`,
+`requestID`, `name`). The server's refusals (`PermissionNotFoundError`, `FormNotFoundError`,
+`FormAlreadySettledError`, `FormInvalidAnswerError`, `SessionNotFoundError`, `LocationNotFoundError`,
+`InvalidRequestError`, `UnauthorizedError`) are reported `failed`. `HttpClientError`, `ClientError` and
+`SchemaError` may hide a reply that landed, and are reported as nothing.
 
-**Unverified on 2.0.28.** It was not yet checked in a terminal that the plugin loads from `cli.json`,
-which error a refused client call carries, or whether a reject still answers every permission waiting in
-a session. A machine with all its inotify watches in use crashes OpenCode 2's terminal before it starts.
-Deny keeps OpenCode 1's rule meanwhile: it is offered only for the one permission waiting.
+**Checked in a real 2.0.28 terminal (2026-10-14).** The plugin loaded from `cli.json`, saw the terminal's
+variables, and both replies worked: the shell command ran and the model received the answer. The run's
+payloads are `apps/desktop/src/utility/test-fixtures/remote-answers/opencode-2/live-run.jsonl`. **Still
+unverified:** whether a reject answers every permission waiting in a session, so Deny keeps OpenCode 1's
+rule and is offered only for the one permission waiting. A machine whose inotify watches are all in use
+crashes OpenCode 2's terminal before it starts (`ENOSPC`, `fs.inotify.max_user_watches`).
 
 ## How BMN uses this
 
@@ -271,7 +278,8 @@ reaches it (a unit test reads the sources to keep it that way).
   (5 s, else `not-delivered` and nothing was sent). A queued Deny is dropped as `changed` if another
   permission has opened meanwhile, and any queued answer is dropped as `changed` if the epoch rose
   before pickup. The plugin posts it to its own server, rechecks that a reject answers only that one
-  permission, and reports the server's response: accepted is `confirmed`; a refused request (4xx) is
+  permission, and reports the server's response: accepted is `confirmed`; a refused request (4xx from
+  OpenCode 1, a typed refusal such as `PermissionNotFoundError` from OpenCode 2) is
   `api-refused` — nothing was applied, so the request is free for another tap (never resent by BMN),
   even when it arrives after the answer was reported `sent-unconfirmed`. A server error or a lost
   connection stays uncertain.
