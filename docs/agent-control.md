@@ -2218,6 +2218,259 @@ session's first prompt was not stopped for want of its saved record in that test
   with a marker line in your rules before you turn on a public-only agent. `accepted_versions` in a team file written under the
   earlier rule is still valid and decides nothing any more; Rules → Health removes it with its ×.
 
+## Asking a teammate: `bmn team ask`
+
+This is the contract of Epic 72, fixed from what Story 72.1 measured on this computer on 2026-10-15
+(Codex 0.162.1, Claude Code 2.1.300, OpenCode 2.0.29, bubblewrap 0.11.1, Linux 7.0, Ubuntu's AppArmor
+restriction of unprivileged user namespaces on). The commands arrive with Stories 72.2–72.5 and 72.8;
+until each one ships, what it describes does not exist yet and dev-auto keeps its own recipes. The
+scripts and raw records are in `_bmad-output/planning-artifacts/reference-72-team-ask/`
+(`RESULT.md` there says which script measured what).
+
+### Commands
+
+```bash
+bmn team ask --role R (--question TEXT | --question-file -) [--agent A] [--effort E] [--small-work]
+  [--recheck-of ID] [--project P] [--access question|files|project] [--file PATH]... [--image PATH]...
+  [--data public] [--wide-read] [--time-limit MINUTES] [--key K] [--background] [--json]
+bmn team ask --features [--json]
+bmn team asks [--json]
+bmn team asks show <id> [--json]
+bmn team asks wait <id> [--timeout SECONDS] [--json]
+bmn team asks stop <id> [--json]
+bmn team asks export <id> --output PATH
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--role R` | The team role whose teammate answers. Required. |
+| `--question TEXT`, `--question-file -` | The question; `-` reads standard input as the other long-text options do (one trailing newline dropped, a terminal refused). Exactly one. |
+| `--agent A` | Ask this teammate; refused with the reason and the eligible alternatives when it is not valid now, never passed over. |
+| `--effort E` | One effort the role's applicable phase allows; several allowed and none given or saved is refused with the list. |
+| `--small-work` | The role's small-work candidate. |
+| `--recheck-of ID` | A recheck of that earlier run: same project and role, its teammate, the role's recheck effort. |
+| `--project P` | The project the ask belongs to (default: the asking session's repository root, else none). Naming it grants no reads. |
+| `--access` | What the teammate may read: `question` (default), `files`, `project`. |
+| `--file PATH` | A regular UTF-8 text file the asker can read: its text goes into the prompt with its path and hash (`files`), or joins the frozen copy (`project`). |
+| `--image PATH` | A picture given to the teammate as image input (PNG, JPEG, WebP or GIF), never as a file it can open. |
+| `--data public` | A declaration BMN verifies (R72-NFR5); refused, never raised, where it does not hold. Without it the ask is private. |
+| `--wide-read` | Selects the owner-enabled wider-read mode of the chosen teammate's app (below); refused where he has not enabled one. |
+| `--time-limit MINUTES` | 1 to 120; default 30. |
+| `--key K` | The retry key. Required for an agent session; the app makes its own. |
+| `--background` | Prints the run id at once and leaves the run going. |
+| `--json` | Versioned JSON on standard output instead of words. |
+
+Foreground, the answer goes to standard output and progress to standard error. Closing the waiting
+command, tool call or window only detaches it: the run's supervisor owns the run (below).
+
+### Access modes and their forms
+
+Every ask runs in a bubblewrap container BMN builds for that one run: a new, empty mount namespace
+with `/usr` and a few named files of `/etc` read-only (name lookup, certificates, time zone), the
+app's launcher and native payload read-only at their own paths, the run's inputs read-only at
+`/ask/inputs`, the frozen project read-only at `/ask/project` (project asks only), the run's own app
+home as the one writable place at `/ask/home`, a private `/tmp`, and nothing else: no other folder of
+the owner's, no BMN command, state or socket. Its PID namespace is its own and it dies with its
+supervisor (`--die-with-parent`), so ending the run ends every process in it, also one that left the
+process group. Its network is the computer's: the app talks to its provider; which tools may reach
+the network is the app's form below. Environment: `--clearenv`, then only what the form names.
+
+| App | `question` and `files` | Pictures | `project` |
+| --- | --- | --- | --- |
+| Codex | `codex exec --skip-git-repo-check --sandbox read-only --strict-config -c approval_policy="never" --ephemeral` with every tool off: `--disable view_image goals image_generation sleep_tool hooks code_mode_host`, `mcp_servers={}`, `web_search="disabled"`, `features.shell_tool`, `unified_exec`, `multi_agent`, `apps`, `plugins` off, skills and app, collaboration and environment instructions off, `project_doc_max_bytes=0`. `--ephemeral` because Codex keeps offering `spawn_agent` whatever is set, and only a run that keeps no session makes every start fail. | `-i /ask/inputs/images/<name>` | **Unavailable here.** Codex runs every command of a restricted run in its own bubblewrap sandbox, and a sandbox nested in BMN's container is refused by AppArmor (`bwrap//&unpriv_bwrap`). With its sandbox off in the container, it reads the run's own sign-in, session and configuration and reaches the network (FAIL). |
+| Claude Code | `claude -p --tools '' --permission-mode dontAsk --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands --no-session-persistence --output-format stream-json --verbose --append-system-prompt <rules>` | `--input-format stream-json`, one user message holding the image blocks and the question | `--tools Read,Grep,Glob,Bash --allowedTools 'Bash(git log:*)' 'Bash(git show:*)' 'Bash(git diff:*)' 'Bash(git blame:*)' --permission-mode dontAsk --restricted`, started in `/ask/project`, with BMN's own `git` first on `PATH` (`bin/ask-git.sh`). `--restricted` keeps Read, Grep and Glob in the working folder; the prefix rules alone let `git blame --contents`, `--ignore-revs-file`, `--output` and `-O` read or write any file the container shows (FAIL), so BMN's `git` (`bin/ask-git.sh`, shipped with 72.3) allows only `log`, `show`, `diff` and `blame` with no option that names a file, runs no external diff, text conversion, pager or hook, and reads no configuration but the frozen copy's own. |
+| OpenCode | `opencode run --standalone --format json --agent bmn-asker` with per-run `HOME` and `XDG_*` folders in `/ask/home`, the agent `"*": deny`, the owner's rules as `config/opencode/AGENTS.md` | not measured (no picture ask for OpenCode) | `--agent bmn-helper` (read, glob, grep, list; everything else denied): reads stay in the project (PASS), but the agent has no history tool; a Git-only shell rule is for 72.5 to measure. |
+
+**Wider-read mode (assumption f).** For Codex project asks the owner may enable, in the Team view, a
+named wider-read mode measured at its own outer boundary: Codex outside BMN's container, its own
+sandbox profile allowing reads of the system (`:minimal`), the frozen copy and Codex's own package,
+and nothing else (`-c 'permissions.ask.filesystem={":minimal"="read","<frozen copy>"="read","<codex package>"="read"}' -c 'default_permissions="ask"'`).
+Measured: no sign-in, configuration, `~/.ssh`, other project or other run read, nothing written, no
+network, project reads and `git log`, `show`, `diff` and `blame` working (PASS). It keeps no PID
+namespace of BMN's (Codex's own sandbox ends its commands). Each caller selects it with
+`--wide-read` and each receipt names it. Today's dev-auto Codex form (`--sandbox read-only` with no
+allowlist) reads the whole home folder, `~/.ssh` included (FAIL), and is not carried over.
+
+**Where the container cannot start, the ask is refused saying so** (`CONTAINER_UNAVAILABLE`, with
+bubblewrap's own words). Measured: from a Codex lead's workspace sandbox bubblewrap cannot create a
+namespace (and that sandbox has no network, so its app could not reach a provider either); the lead
+runs `bmn team ask` escalated, as it runs helpers today (dev-auto `models.md` ~140). From a terminal
+and from a Claude Code session the container starts. Claude Code's auto mode, as the owner runs
+it, let `bmn team ask` command lines for a Codex teammate and for a Claude Code teammate (project
+access) run on 2026-10-15, before the command existed; 72.3 confirms it with the real command, and
+names the narrowest permission rule if auto mode then refuses it.
+
+### Sign-in inside the container
+
+| App | How it is there | Renewal |
+| --- | --- | --- |
+| Codex | the owner's `~/.codex/auth.json` bound read-write at `/ask/home/codex/auth.json` | written in place into his file (same file), as research's link does today |
+| Claude Code | the owner's `~/.claude/.credentials.json` bound read-write at `/ask/home/.claude/.credentials.json` | written in place into his file (same file) |
+| OpenCode | his Go key copied into the run's own folders with `opencode auth export` and `auth import` (70.4) | none: Go signs in with a key |
+
+BMN never reads Codex's or Claude Code's sign-in file; it only names it. A copy is not used: a run
+that renews its copy rotates a token the owner's own file no longer matches (measured for both
+apps). On disk the run's home holds only the empty file the sign-in is bound onto. No key or sign-in
+value is ever in a command line, a recorded environment value or the record: the container's
+arguments go to bubblewrap through `--args` on a file descriptor, never on its command line.
+Claude Code serializes renewals with a lock in its configuration folder, which an ask does not
+share with the owner's own sessions; tokens last hours, so two renewals at once are rare, and a
+failed renewal is the run's sign-in failure (exit 1), never retried by BMN.
+
+### Session, model, effort and usage
+
+| | Codex | Claude Code | OpenCode |
+| --- | --- | --- | --- |
+| Session named | first event `thread.started.thread_id` (1.6–1.8 s after start, before the answer) | first event `system`/`init` `session_id` (1.1–1.4 s) | every event's `sessionID` (`ses_…`) |
+| Two runs in the same second | different ids (UUIDv7) | different ids | different ids (70.3) |
+| Answer | the last `item.completed` agent message; also `-o /ask/home/answer.md` | `result.result` | the last `text` event |
+| Model | the turn span on standard error, `turn{… model=…}` | `init.model` and each assistant message's `model` | the session export |
+| Effort | the same span, `codex.turn.reasoning_effort=…` | not reported: verified from the pinned command (`--effort`) | the session export |
+| Usage | `turn.completed.usage` (input, cached, output, reasoning tokens), at the end only | each assistant message's `usage` while it runs; `result.usage`, `modelUsage` at the end | the session export at the end (output holds only part) |
+| Cost | not reported (subscription) | `result.total_cost_usd` as reported | the session export |
+| Quota | not reported | `rate_limit_event` (status, utilization per window) | not reported |
+
+Codex logs that turn span only with `RUST_LOG=codex_core=info,codex_core::stream_events_utils=debug`;
+that log holds no prompt or answer text. Usage reads as observed tokens, reported cost and billing
+basis (subscription, key), each "unknown" where the app does not record it, never zero. A per-ask
+token ceiling (Preferences) applies to Claude Code only, the one app that reports usage while a run
+goes on; for Codex and OpenCode time and capacity are the only bounds, and the panel says so.
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | answered (foreground), or accepted (`--background`, `stop`, `export`) |
+| 1 | failed: the app ended without an answer (its own error, a sign-in failure, a provider error) |
+| 2 | usage: unknown option, missing or conflicting option |
+| 3–7 | team state, as for every team command: 3 team file missing, 4 invalid, 5 not approved, 6 state corrupt, 7 revision conflict |
+| 10 | refused, with the refusal code and its words (below) |
+| 14 | busy: the capacity limit is reached; nothing is queued |
+| 15 | out of time: the run's time limit ended it |
+| 16 | stopped: Stop, its supervisor ended, or the token ceiling |
+| 17 | answer not attributed: no session, a second different session, or a model or effort that contradicts the request; the answer is kept only as diagnostic evidence |
+
+Refusal codes (exit 10) the commands add: `ROLE_UNKNOWN`, `AGENT_NOT_ELIGIBLE`, `EFFORT_NOT_ALLOWED`,
+`EFFORT_REQUIRED`, `RECHECK_INVALID`, `PROJECT_CHOICE_CONFLICT`, `PROJECT_INVALID`, `ACCESS_UNAVAILABLE`
+(a mode not proven for this app version), `WIDE_READ_NOT_ENABLED`, `CONTAINER_UNAVAILABLE`,
+`INPUT_INVALID` (a link, a non-regular or non-UTF-8 file, a credential or configuration location),
+`INPUT_TOO_LARGE`, `CREDENTIAL_FOUND` (names the file and pattern, never the value), `PUBLIC_NOT_VERIFIED`,
+`PRIVATE_NOT_ALLOWED`, `KEY_REQUIRED`, `KEY_CONFLICT` (same key, different request), `GONE` (a removed
+run's or expired key), `NESTED` (asked from inside a teammate's run), `NOT_YOURS` (another session's
+run), and every refusal of `evaluate`'s ask mode with its existing code.
+
+### JSON
+
+Every `--json` output is one object with `"version": 1`. An ask, `show` and `wait`:
+
+```json
+{
+  "version": 1, "id": "20261015T021500-1a2b3c4d", "state": "answered", "exit": 0,
+  "role": "focused-reviewer", "chosen_by": "chain", "access": "project", "project": "/home/u/code/app", "data": "private",
+  "teammate": { "agent": "astra", "app": "codex", "app_version": "0.162.1", "form": "project",
+    "requested": { "model": "gpt-6-astra", "effort": "medium" },
+    "observed": { "session": "01a13c80-…", "session_source": "thread.started", "model": "gpt-6-astra", "model_source": "turn span",
+      "effort": "medium", "effort_source": "turn span" } },
+  "usage": { "input_tokens": 7817, "cached_input_tokens": 2816, "output_tokens": 33, "reasoning_tokens": 20,
+    "reported_cost": "unknown", "billing": "subscription", "source": "turn.completed" },
+  "answer": "…", "started_at": "…", "ended_at": "…", "time_limit_minutes": 30,
+  "record": "~/.config/bmn/agents/state/team/runs/20261015T021500-1a2b3c4d"
+}
+```
+
+A refusal: `{"version":1,"state":"refused","exit":10,"refusal":{"code":"AGENT_NOT_ELIGIBLE","reason":"…","alternatives":["opus-2@medium"]}}`.
+`--background`: `{"version":1,"id":"…","state":"accepted","exit":0}`. `asks`: `{"version":1,"asks":[{"id","state","role","agent","project","started_at","ended_at"}]}`
+for the asking session's own runs. `stop`: `{"version":1,"id","state":"stopping"}`. `export`:
+`{"version":1,"id","output","files":[…]}`. `--features`: `{"version":1,"platform":"linux","container":{"ok":true},
+"apps":[{"app":"codex","version":"0.162.1","forms":{"question":"proven","files":"proven","project":"unavailable","wide-read":"proven"},
+"pictures":"proven","usage_while_running":false}, …]}`; an app version or tool set not measured shows
+its confinement-dependent modes `"unmeasured"`.
+
+### Limits
+
+| What | Limit | Why |
+| --- | --- | --- |
+| Question | 1 MiB of UTF-8 | dev-auto's largest prompt of the month before 2026-10-14 was 888 KB (1,405 prompts; median 5 KB, 90th percentile 137 KB) |
+| Files | 64 files, each 1 MiB; question and file text together 2 MiB | the same prompts with their packets |
+| Pictures | 8 per ask, each 5 MiB and 8,000 px a side; PNG, JPEG, WebP, GIF | the providers' own image limits |
+| Project | 20,000 tracked files, 200 MiB, each file 10 MiB; history the newest 1,000 commits of the checked-out revision, 500 MiB of objects | an ask reads a project, not a monorepo's every blob |
+| Answer kept | 1 MiB; the app's raw output 64 MiB, over it the run fails | |
+| Run storage | 1 GiB (inputs, frozen copy, home, record) | |
+| Time | 30 minutes; 1 to 120 with `--time-limit` | assumption (b) |
+| Capacity | 4 runs at once across BMN; 1 to 10 in Preferences | assumption (c) |
+| Key window | 7 days from the key's first use | a lead's retries happen within its run |
+| Retention | 30 days after a run ends; a content-free entry (key, request hash, outcome) stays for the key window after removal | assumption (e) |
+
+Over a limit the ask is refused (`INPUT_TOO_LARGE`), never cut.
+
+### Lifecycle
+
+`accepted` (key, request hash and capacity place reserved together) → `starting` (snapshots taken,
+the command judged and its executable checked again, the supervisor started) → `running` → `finishing`
+(answer, attribution and usage read, transient state deleted) → one of `answered`, `failed`,
+`refused`, `out-of-time`, `stopped`, `not-attributed`; `interrupted` when the supervisor ended with
+no record of the end (nothing starts it again); `gone` after removal, for the key window.
+
+The supervisor is started by the asking command, inside its own restrictions, detached and in a
+session of its own (`bin/agents-team-supervisor.mjs`, shipped with 72.3). Measured: closing the waiting command as BMN
+closes a terminal, inside BMN's process scope and outside it, left the run going to its answer;
+Stop, the time limit and the supervisor's own death (killed outright, or asked to end) left no
+process of the run, also ones that left the process group four ways; a run without the container
+kept the one that called `setsid`. Processes of BMN instances that have closed stay in their scope,
+so a run outlives BMN closing.
+
+### Record
+
+`~/.config/bmn/agents/state/team/runs/<id>/`, owner-only, written atomically:
+
+| Path | What | Exported |
+| --- | --- | --- |
+| `request.json` | the request as given, its hash, the key, the asking session, the resolver's rule | yes |
+| `inputs/` | the prompt, the instruction snapshot (his global rules for that app), file copies, pictures | yes |
+| `inputs/manifest.json` | every input with its source path, source root, consent basis and sha256 | yes |
+| `project/`, `project-manifest.json` | the frozen copy; files, commits, trees and blobs with hashes, the included commits and the shallow boundary | manifest only |
+| `snapshots/` | the app's effective configuration, executable identity (launcher and payload hashes), environment names | yes, values never |
+| `receipt.json` | `evaluate`'s verdict, the argv's hash, every snapshot's hash, the form and any wide-read mode | yes |
+| `launch.json`, `state.json`, `exit.json` | the supervisor's input, its state and the container's end | yes |
+| `events.jsonl` | the app's own output events | yes |
+| `stderr.txt` | the app's raw error stream | no |
+| `answer.md`, `outcome.json` | the answer; state, exit, refusal, observed identity with sources, usage with source, times | yes |
+| `home/` | the app's home: the bound sign-in's empty mount point, its sessions and bookkeeping | no; deleted on every outcome |
+
+Export (`asks export`) is the allowlisted bundle above, never a sign-in file, an app database, the
+home folder, raw logs or an environment value.
+
+### Measured (72.1)
+
+Each row ran the installed CLI against a stand-in provider with synthetic credentials and isolated
+homes, in its container and alone; every forbidden read and write was attempted with every tool the
+app offered, and every request to the provider searched for 34 planted markers. PASS: nothing
+forbidden read, written or sent.
+
+| App | Mode | In BMN's container | The app's own form alone |
+| --- | --- | --- | --- |
+| Codex 0.162.1 | question, files | PASS | PASS |
+| Codex 0.162.1 | pictures | PASS (the picture's bytes in every request) | PASS |
+| Codex 0.162.1 | project | unavailable: nested sandbox refused (no tool works); full access FAIL (run's sign-in, session, configuration, network) | today's dev-auto form FAIL (whole home, `~/.ssh`); allowlist sandbox PASS (wider-read candidate) |
+| Claude Code 2.1.300 | question, files | PASS | PASS |
+| Claude Code 2.1.300 | pictures | PASS | PASS |
+| Claude Code 2.1.300 | project | PASS with BMN's `git`; FAIL with prefix rules alone | PASS with BMN's `git` (the container is the layer for `..` and links outside the copy) |
+| OpenCode 2.0.29 | question, files | PASS | PASS |
+| OpenCode 2.0.29 | project | PASS (no history tool) | FAIL (reads outside the project) |
+
+Live probes on the owner's subscription (public made-up questions, in the container): Codex and
+Claude Code each answered twice in the same second with distinct sessions named before their
+answers; a designer on each named all five planted details of a synthetic picture.
+
+Early quality look (72.1 AC9; one synthetic project review, Claude Code `claude-opus-5-5` at medium,
+three runs each way): dev-auto's tools-disabled packet review and the project-ask prototype both
+found the skipped last page and the swallowed store errors every time; only the prototype found the
+critical defect whose cause is in the history (a re-added cache the revert's message explains), three
+times out of three, against none for the packet, whose three answers each said they did not know why
+the cache had been reverted. Reported cost per run: packet $0.04–0.08, prototype $0.06–0.13. No loss.
+Codex has no project form in BMN's container here, so its prototype is a capability failure and was
+not asked. This is an early look; 72.6 is the gate.
+
 ## A brief for agents
 
 `bmn help agents` prints this page from the binary, so an agent can read it without leaving its
