@@ -9,11 +9,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   bindSession, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_TOOLS_SEEN, consequences, evaluate, evaluateResearch, harnessVersion, normalizedGithubOrigin, prepareResearchRun,
   readCodexConfig, refreshVisibility, removeResearchCodexFolders, researchFormHash, setReadTracer, verifyReceipt, visibilityPath, workspaceRoot, workspaceVisibility, type FenceTestEntry,
-  WEB_NEXT_STEP, WEB_TOOLS_NOTE
+  WEB_NEXT_STEP, WEB_TOOLS_NOTE, inspectRoute
 } from '../../bin/agents-check.mjs'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { canonicalJson, namedResearchers, parseRoster, sha256 } from '../../bin/agents-roster.mjs'
 import { approveRoster } from '../main/agents-approval'
+import { OPENCODE_FOLDERS } from './test-fixtures/opencode-destinations'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
@@ -1085,7 +1086,7 @@ describe('receipts and --verify (60.3 AC7)', () => {
     expect(await route('{ "model": "opencode-go/kimi-k3", "agent": { "plan": { "model": "anthropic/claude-sonnet-4-5" } } }'))
       .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, anthropic)' })
     expect(await route('{ "model": "opencode-go/kimi-k3", "agents": { "review": { "model": "kimi-k3" } } }'))
-      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc agents.review.model names no provider' })
+      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc agents.review.model names no model BMN reads as <provider>/<model>' })
     expect(await route('{ "model": "opencode-go/kimi-k3", "agents": { "review": { "model": "opencode-go/kimi-k3" } }, "providers": { "opencode-go": { "models": { "kimi-k3": { "package": "@acme/x" } } } } }'))
       .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc gives opencode-go/kimi-k3 its own address' })
     // A command runs on its own model too, named in the file or in a file beside it.
@@ -1093,33 +1094,32 @@ describe('receipts and --verify (60.3 AC7)', () => {
       .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)' })
     expect(await route('{ "model": "opencode-go/kimi-k3", "command": { "release": { "template": "x", "model": "openrouter/cheap" } } }'))
       .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)' })
-    // Every folder OpenCode 2 reads agent and command files from: its own and OpenCode 1's.
-    for (const folder of ['agent', 'agents', 'mode', 'modes', 'command', 'commands']) {
-      mkdirSync(join(home, '.config/opencode', folder), { recursive: true })
-      writeFileSync(join(home, '.config/opencode', folder, 'review.md'), '---\ndescription: Reviews\nmodel: "openrouter/cheap#low"\n---\nReview it.\n')
-      expect(await route('{ "model": "opencode-go/kimi-k3" }'), folder)
-        .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)', sources: ['opencode.jsonc model', `${folder}/review.md`] })
-      writeFileSync(join(home, '.config/opencode', folder, 'review.md'), '---\ndescription: Reviews\n---\nmodel: openrouter/cheap is only text here.\n')
-      expect(await route('{ "model": "opencode-go/kimi-k3" }'), folder).toMatchObject({ basis: 'default', host: 'default:opencode-go' })
+    // A file beside the configuration names its model too, read whole or not at all (more in the next test).
+    mkdirSync(join(home, '.config/opencode/agents'), { recursive: true })
+    writeFileSync(join(home, '.config/opencode/agents/review.md'), '---\ndescription: Reviews\nmodel: "openrouter/cheap#low"\n---\nReview it.\n')
+    expect(await route('{ "model": "opencode-go/kimi-k3" }'))
+      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)', sources: ['opencode.jsonc model', 'agents/review.md'] })
+    rmSync(join(home, '.config/opencode/agents'), { recursive: true })
+  })
+
+  it('reads an OpenCode folder only where it understands all of it: every agent and command file\'s front matter, the configuration\'s JSON with comments, and one configuration file (consultant, 2026-10-14)', () => {
+    stub('opencode', 'opencode v2.0.28')
+    const folder = join(home, '.config/opencode')
+    for (const { label, files, expected } of OPENCODE_FOLDERS) {
+      rmSync(folder, { recursive: true, force: true })
+      for (const [path, text] of Object.entries(files)) {
+        mkdirSync(dirname(join(folder, path)), { recursive: true })
+        writeFileSync(join(folder, path), text)
+      }
+      const route = inspectRoute({ harness: 'opencode' } as Parameters<typeof inspectRoute>[0], null, env, home)
+      if (expected.basis === 'default') {
+        expect(route, label).toMatchObject({ basis: 'default', provider: 'opencode-go', host: 'default:opencode-go', ...(expected.model === undefined ? {} : { model: expected.model }) })
+      } else {
+        expect(route, label).toMatchObject({ basis: 'unknown', host: null })
+        if (typeof expected.reason === 'string') expect(route.reason, label).toBe(expected.reason)
+        else expect(route.reason, label).toMatch(expected.reason)
+      }
     }
-    // At any depth, as OpenCode reads them, and in every way YAML lets a file name its model: BMN reads one
-    // plain line, and a model named any other way makes the destination unknown.
-    const nested = join(home, '.config/opencode/commands/team/release.md')
-    mkdirSync(join(home, '.config/opencode/commands/team'), { recursive: true })
-    for (const [front, expected] of [
-      ['"model": openrouter/cheap', { basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)' }],
-      ["'model': 'opencode-go/kimi-k3#high'  # the same provider", { basis: 'default', host: 'default:opencode-go' }],
-      ['model: >-\n  openrouter/cheap', { basis: 'unknown', host: null, reason: 'commands/team/release.md names its model in a form BMN does not read', sources: ['commands/team/release.md'] }],
-      ['options:\n  model: openrouter/cheap', { basis: 'unknown', host: null, reason: 'commands/team/release.md names its model in a form BMN does not read', sources: ['commands/team/release.md'] }],
-      ['{ model: openrouter/cheap }', { basis: 'unknown', host: null, reason: 'commands/team/release.md names its model in a form BMN does not read', sources: ['commands/team/release.md'] }],
-      ['model: opencode-go/kimi-k3\nmodel: openrouter/cheap', { basis: 'unknown', host: null, reason: 'commands/team/release.md names its model in a form BMN does not read', sources: ['commands/team/release.md'] }]
-    ] as const) {
-      writeFileSync(nested, `---\n${front}\n---\nShip it.\n`)
-      expect(await route('{ "model": "opencode-go/kimi-k3" }'), front).toMatchObject(expected)
-    }
-    writeFileSync(nested, '\uFEFF---\r\nmodel: openrouter/cheap\r\n---\r\nShip it.\r\n')
-    expect(await route('{ "model": "opencode-go/kimi-k3" }')).toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)' })
-    rmSync(join(home, '.config/opencode/commands/team'), { recursive: true })
   })
 })
 

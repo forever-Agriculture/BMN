@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
-import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, harnessPrivateWork, isCalled, namedResearchers, publicOnlyReasons, resolvedDirectory, roleEfforts, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, harnessPrivateWork, isCalled, namedResearchers, parseYaml, publicOnlyReasons, resolvedDirectory, roleEfforts, sha256 } from './agents-roster.mjs'
 import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, err, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
@@ -840,20 +840,95 @@ export function limitStanding(agent, version, { environment = process.env, cwd =
 }
 
 // Whether a provider, model or variant entry can send data somewhere its provider's prefix does not say.
+// Anything but a map there, or `variants` that are not maps, cannot be read and counts as such an entry.
 function ownAddress(entry) {
-  if (entry === null || typeof entry !== 'object') return true
+  if (!isObject(entry)) return true
   if (['api', 'npm', 'package', 'canonical'].some((field) => entry[field] !== undefined)) return true
   if (entry.options?.baseURL !== undefined || entry.settings?.baseURL !== undefined) return true
-  const variants = entry.variants
-  return variants !== null && typeof variants === 'object' &&
-    Object.values(variants).some((variant) => variant !== null && typeof variant === 'object' && ownAddress(variant))
+  if (entry.variants === undefined) return false
+  return !isObject(entry.variants) || Object.values(entry.variants).some(ownAddress)
 }
 
-// `<provider>/<model>` without a `#variant`, from a string or an object naming `providerID`; null for anything else.
+// `<provider>/<model>` without its `#variant`, from text or from a map naming `providerID` and exactly one of
+// `model` and `id`; null for anything else, an empty provider or model included.
 function openCodeReference(named) {
-  const text = typeof named === 'string' ? named
-    : named !== null && typeof named === 'object' && typeof named.providerID === 'string' ? `${named.providerID}/${named.model ?? named.id ?? ''}` : null
-  return text === null ? null : text.split('#')[0]
+  let text = null
+  if (typeof named === 'string') text = named
+  else if (isObject(named) && typeof named.providerID === 'string' && (named.model === undefined) !== (named.id === undefined)) {
+    const id = named.model ?? named.id
+    if (typeof id === 'string') text = `${named.providerID}/${id}`
+  }
+  const reference = text === null ? null : text.split('#')[0]
+  return reference !== null && /^[^\s/]+\/\S+$/.test(reference) ? reference : null
+}
+
+/**
+ * OpenCode's JSONC as a value: JSON plus comments and trailing commas, both only outside strings. Anything
+ * else, and a key twice in one map (OpenCode's own reader would keep one of them), throws.
+ */
+function parseJsonc(text) {
+  let index = text.charCodeAt(0) === 0xfeff ? 1 : 0
+  const fail = (what) => { throw new SyntaxError(`${what} at character ${index}`) }
+  // eslint-disable-next-line no-control-regex -- JSON refuses a raw control character inside a string
+  const STRING = /"(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"/y
+  const LITERAL = /true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y
+  const skip = () => {
+    for (;;) {
+      const char = text[index]
+      if (char === ' ' || char === '\t' || char === '\n' || char === '\r') index += 1
+      else if (char === '/' && text[index + 1] === '/') {
+        const end = text.indexOf('\n', index)
+        index = end === -1 ? text.length : end
+      } else if (char === '/' && text[index + 1] === '*') {
+        const end = text.indexOf('*/', index + 2)
+        if (end === -1) fail('an unclosed comment')
+        index = end + 2
+      } else return
+    }
+  }
+  const token = (pattern, what) => {
+    pattern.lastIndex = index
+    const match = pattern.exec(text)
+    if (match === null) fail(what)
+    index = pattern.lastIndex
+    return JSON.parse(match[0])
+  }
+  const value = (depth) => {
+    if (depth > 64) fail('nesting deeper than BMN reads')
+    skip()
+    const char = text[index]
+    if (char === '{' || char === '[') {
+      const map = char === '{'
+      const out = map ? {} : []
+      index += 1
+      for (;;) {
+        skip()
+        if (text[index] === (map ? '}' : ']')) {
+          index += 1
+          return out
+        }
+        if (map) {
+          if (text[index] !== '"') fail('a key that is not a string')
+          const key = token(STRING, 'a malformed key')
+          if (Object.hasOwn(out, key)) fail(`the key ${JSON.stringify(key)} twice`)
+          skip()
+          if (text[index] !== ':') fail('a missing ":"')
+          index += 1
+          Object.defineProperty(out, key, { value: value(depth + 1), enumerable: true, writable: true, configurable: true })
+        } else {
+          out.push(value(depth + 1))
+        }
+        skip()
+        if (text[index] === ',') index += 1
+        else if (text[index] !== (map ? '}' : ']')) fail(`a missing "," or "${map ? '}' : ']'}"`)
+      }
+    }
+    return char === '"' ? token(STRING, 'a malformed string') : token(LITERAL, 'text that is not JSON')
+  }
+  const result = value(0)
+  skip()
+  if (index !== text.length) fail('text after the configuration')
+  return result
 }
 
 // OpenCode 2 reads agent and command files from these folders beside the configuration, at any depth: its own
@@ -861,18 +936,43 @@ function openCodeReference(named) {
 const OPENCODE_FILE_FOLDERS = ['agent', 'agents', 'mode', 'modes', 'command', 'commands']
 const OPENCODE_FILE_LIMIT = 2000
 const OPENCODE_FILE_DEPTH = 16
-const FRONT_MATTER = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/
-// A plain top-level `model: <reference>` line, key and value each bare or quoted, with an optional comment.
-// A YAML indicator (a block, an alias, a tag, a flow map) never starts it.
-const PLAIN_MODEL = /^(["']?)model\1[ \t]*:[ \t]*(["']?)([^\s"'#|>&*!%@`{}[\],][^\s"']*)\2[ \t]*(?:#.*)?\r?$/gm
-// Anything YAML could read as a `model` key, anywhere in the front matter.
-const ANY_MODEL_KEY = /(?:^|[\s{,])(["']?)model\1[ \t]*:/gm
+// The openings of a front matter BMN reads as YAML; OpenCode also takes others (JSON, JavaScript).
+const FRONT_MATTER_OPENERS = ['---', '---yaml', '---yml']
 
 /**
- * The model each agent or command file names in its front matter. OpenCode reads that front matter as
- * YAML; BMN reads one plain top-level `model:` line, and a file that names `model` any other way (indented,
- * in a flow map, as a block, twice) is returned as unreadable, so the destination reads as unknown.
+ * What an agent or command file's front matter says about its model: `{ model: null }` when there is no
+ * front matter or it names no model, `{ model: <text> }`, or `{ unreadable: <why> }`. OpenCode reads the
+ * front matter as YAML, or as JSON or JavaScript after another opening. BMN reads only `---`, `---yaml` and
+ * `---yml`, with the team file's YAML subset (agents-roster.mjs `parseYaml`), which refuses anchors,
+ * aliases, tags, block scalars, complex keys, directives, duplicate keys and escapes other than \" \\ \n \t
+ * \/. A front matter it cannot read whole is unreadable: not finding a key does not prove OpenCode finds none.
  */
+function openCodeFrontMatter(text) {
+  const lines = text.replace(/^\uFEFF/, '').split('\n').map((line) => line.replace(/\r$/, ''))
+  let start = 0
+  while (start < lines.length && lines[start].trim() === '') start += 1
+  if (start === lines.length || !lines[start].startsWith('---')) return { model: null }
+  if (!FRONT_MATTER_OPENERS.includes(lines[start].trimEnd())) return { unreadable: `its front matter opens with ${JSON.stringify(lines[start].slice(0, 24))}` }
+  let end = start + 1
+  while (end < lines.length && !lines[end].startsWith('---')) end += 1
+  if (end === lines.length) return { unreadable: 'its front matter does not close' }
+  if (lines[end].trimEnd() !== '---') return { unreadable: `its front matter closes with ${JSON.stringify(lines[end].slice(0, 24))}` }
+  let value
+  try {
+    ;({ value } = parseYaml(lines.slice(start + 1, end).join('\n')))
+  } catch (error) {
+    return { unreadable: `its front matter is not YAML BMN reads (${error.message})` }
+  }
+  // A model below the top, a merge key or a map whose prototype a key replaced may still reach OpenCode.
+  const hidden = (node, depth) => Array.isArray(node) ? node.some((item) => hidden(item, depth + 1))
+    : isObject(node) && (Object.getPrototypeOf(node) !== Object.prototype ||
+      Object.entries(node).some(([key, child]) => key === '<<' || (key === 'model' && depth > 0) || hidden(child, depth + 1)))
+  if (hidden(value, 0)) return { unreadable: 'it names a model below the top of its front matter, or merges a map into it' }
+  if (!Object.hasOwn(value, 'model')) return { model: null }
+  return typeof value.model === 'string' ? { model: value.model } : { unreadable: 'its model is not text' }
+}
+
+/** Each agent or command file's model, or why the file cannot be read for one. */
 function openCodeAgentFiles(folder) {
   const found = []
   let files = 0
@@ -903,13 +1003,9 @@ function openCodeAgentFiles(folder) {
       if (!name.endsWith('.md') || !stats.isFile()) continue
       files += 1
       if (files > OPENCODE_FILE_LIMIT) throw new Refusal('HOST_UNKNOWN', `more than ${OPENCODE_FILE_LIMIT} agent and command files beside the OpenCode configuration`)
-      const front = FRONT_MATTER.exec(optionalText(path) ?? '')?.[1]
-      if (front === undefined) continue
-      const keys = [...front.matchAll(ANY_MODEL_KEY)].length
-      const plain = [...front.matchAll(PLAIN_MODEL)]
-      if (keys === 0) continue
-      if (keys === 1 && plain.length === 1) found.push({ reference: openCodeReference(plain[0][3]), source: `${source}/${name}` })
-      else found.push({ reference: null, unreadable: true, source: `${source}/${name}` })
+      const front = openCodeFrontMatter(optionalText(path) ?? '')
+      if (front.unreadable !== undefined) found.push({ reference: null, unreadable: front.unreadable, source: `${source}/${name}` })
+      else if (front.model !== null) found.push({ reference: openCodeReference(front.model), source: `${source}/${name}` })
     }
   }
   for (const directory of OPENCODE_FILE_FOLDERS) walk(`${folder}/${directory}`, directory, 0)
@@ -920,67 +1016,68 @@ function openCodeAgentFiles(folder) {
  * OpenCode's configured model and provider prefix. Every model the configuration names gets the
  * conversation, not only `model`: the title model (`small_model`) and each agent's, mode's or command's
  * (the `agent`, `agents`, `mode`, `command` and `commands` maps, and the agent and command files beside
- * the configuration), so all of them must name one provider. A configuration named by the environment, or a provider, model or variant
- * entry that carries its own address or runtime (OpenCode 1's `api`, `npm` and `options.baseURL`;
- * OpenCode 2's `package`, `canonical` and `settings.baseURL`, under `provider` or `providers`), could
- * send data somewhere the prefix does not say, so either reads as unknown. OpenCode 2 reads the same
- * files and still writes `model` as `<provider>/<model>`, a variant after `#`; an object naming
- * `providerID` is read too. A project's own opencode.json and agent files are not read.
+ * the configuration), so all of them must name one provider. A configuration named by the environment,
+ * both opencode.json and opencode.jsonc (OpenCode reads both), a file or a map BMN cannot read whole, or a
+ * provider, model or variant entry that carries its own address or runtime (OpenCode 1's `api`, `npm` and
+ * `options.baseURL`; OpenCode 2's `package`, `canonical` and `settings.baseURL`, under `provider` or
+ * `providers`) reads as unknown. OpenCode 2 writes `model` as `<provider>/<model>`, a variant after `#`;
+ * a map naming `providerID` is read too. A project's own opencode.json and agent files are not read.
  */
 function inspectOpenCode(environment) {
+  const unknown = (reason, sources) => ({ basis: 'unknown', provider: null, host: null, reason, sources })
   for (const name of ['OPENCODE_CONFIG', 'OPENCODE_CONFIG_CONTENT']) {
-    if (environment[name]) return { basis: 'unknown', provider: null, host: null, reason: `${name} names another OpenCode configuration`, sources: [name] }
+    if (environment[name]) return unknown(`${name} names another OpenCode configuration`, [name])
   }
   const folder = environment.OPENCODE_CONFIG_DIR || `${environment.XDG_CONFIG_HOME || `${environment.HOME ?? homedir()}/.config`}/opencode`
-  for (const name of ['opencode.json', 'opencode.jsonc']) {
-    const text = optionalText(`${folder}/${name}`)
-    if (text === null) continue
-    const stripped = text.replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (match, string) => string ?? '').replace(/,(\s*[}\]])/g, '$1')
-    let config
-    try {
-      config = JSON.parse(stripped)
-    } catch {
-      return { basis: 'unknown', provider: null, host: null, reason: `${name} cannot be read`, sources: [name] }
-    }
-    const model = openCodeReference(config?.model)
-    if (model === null) return { basis: 'unknown', provider: null, host: null, reason: `${name} names no model`, sources: [name] }
-    const named = [{ reference: model, source: `${name} model` }]
-    if (config.small_model !== undefined) named.push({ reference: openCodeReference(config.small_model), source: `${name} small_model` })
-    for (const key of ['agent', 'agents', 'mode', 'command', 'commands']) {
-      const table = config[key]
-      if (table === null || typeof table !== 'object') continue
-      for (const [agent, entry] of Object.entries(table)) {
-        if (entry !== null && typeof entry === 'object' && entry.model !== undefined) named.push({ reference: openCodeReference(entry.model), source: `${name} ${key}.${agent}.model` })
-      }
-    }
-    named.push(...openCodeAgentFiles(folder))
-    const providers = []
-    for (const { reference, source, unreadable } of named) {
-      if (unreadable) return { basis: 'unknown', provider: null, host: null, reason: `${source} names its model in a form BMN does not read`, sources: [source] }
-      const provider = reference !== null && reference.includes('/') ? reference.slice(0, reference.indexOf('/')) : null
-      if (provider === null || provider === '') return { basis: 'unknown', provider: null, host: null, reason: `${source} names no provider`, sources: [source] }
-      if (!providers.includes(provider)) providers.push(provider)
-      const modelID = reference.slice(provider.length + 1)
-      for (const key of ['provider', 'providers']) {
-        const table = config[key]
-        const entry = table !== null && typeof table === 'object' ? table[provider] : undefined
-        if (entry === undefined) continue
-        const models = entry !== null && typeof entry === 'object' ? entry.models : undefined
-        const modelEntry = models !== null && typeof models === 'object' ? models[modelID] : undefined
-        if (ownAddress(entry)) {
-          return { basis: 'unknown', provider, host: null, reason: `${name} gives ${provider} its own address`, sources: [`${name} ${key}.${provider}`] }
-        }
-        if (modelEntry !== undefined && ownAddress(modelEntry)) {
-          return { basis: 'unknown', provider, host: null, reason: `${name} gives ${reference} its own address`, sources: [`${name} ${key}.${provider}.models.${modelID}`] }
-        }
-      }
-    }
-    if (providers.length > 1) {
-      return { basis: 'unknown', provider: null, host: null, reason: `${name} sends the conversation to more than one provider (${providers.join(', ')})`, sources: named.map((item) => item.source) }
-    }
-    return { basis: 'default', provider: providers[0], host: `default:${providers[0]}`, model, sources: [`${name} model`] }
+  const present = ['opencode.json', 'opencode.jsonc'].map((name) => ({ name, text: optionalText(`${folder}/${name}`) })).filter((file) => file.text !== null)
+  if (present.length === 0) return unknown('no OpenCode configuration names a model', [])
+  if (present.length > 1) return unknown('opencode.json and opencode.jsonc are both there, and OpenCode reads both', ['opencode.json', 'opencode.jsonc'])
+  const { name, text } = present[0]
+  let config
+  try {
+    config = parseJsonc(text)
+  } catch (error) {
+    return unknown(`${name} cannot be read (${error.message})`, [name])
   }
-  return { basis: 'unknown', provider: null, host: null, reason: 'no OpenCode configuration names a model', sources: [] }
+  if (!isObject(config)) return unknown(`${name} does not hold a map`, [name])
+  for (const key of ['provider', 'providers', 'agent', 'agents', 'mode', 'command', 'commands']) {
+    if (config[key] === undefined) continue
+    if (!isObject(config[key])) return unknown(`${name} ${key} is not a map`, [`${name} ${key}`])
+    for (const [entryName, entry] of Object.entries(config[key])) {
+      if (!isObject(entry)) return unknown(`${name} ${key}.${entryName} is not a map`, [`${name} ${key}.${entryName}`])
+    }
+  }
+  const model = openCodeReference(config.model)
+  if (model === null) return unknown(`${name} names no model`, [name])
+  const named = [{ reference: model, source: `${name} model` }]
+  if (config.small_model !== undefined) named.push({ reference: openCodeReference(config.small_model), source: `${name} small_model` })
+  for (const key of ['agent', 'agents', 'mode', 'command', 'commands']) {
+    for (const [entryName, entry] of Object.entries(config[key] ?? {})) {
+      if (entry.model !== undefined) named.push({ reference: openCodeReference(entry.model), source: `${name} ${key}.${entryName}.model` })
+    }
+  }
+  named.push(...openCodeAgentFiles(folder))
+  const providers = []
+  for (const { reference, source, unreadable } of named) {
+    if (unreadable !== undefined) return unknown(`${source}: ${unreadable}`, [source])
+    if (reference === null) return unknown(`${source} names no model BMN reads as <provider>/<model>`, [source])
+    const provider = reference.slice(0, reference.indexOf('/'))
+    if (!providers.includes(provider)) providers.push(provider)
+    const modelID = reference.slice(provider.length + 1)
+    for (const key of ['provider', 'providers']) {
+      if (config[key] === undefined || !Object.hasOwn(config[key], provider)) continue
+      const entry = config[key][provider]
+      if (ownAddress(entry)) return { ...unknown(`${name} gives ${provider} its own address`, [`${name} ${key}.${provider}`]), provider }
+      if (entry.models === undefined) continue
+      if (!isObject(entry.models)) return { ...unknown(`${name} ${key}.${provider}.models is not a map`, [`${name} ${key}.${provider}.models`]), provider }
+      const modelEntry = Object.hasOwn(entry.models, modelID) ? entry.models[modelID] : undefined
+      if (modelEntry !== undefined && ownAddress(modelEntry)) {
+        return { ...unknown(`${name} gives ${reference} its own address`, [`${name} ${key}.${provider}.models.${modelID}`]), provider }
+      }
+    }
+  }
+  if (providers.length > 1) return unknown(`${name} sends the conversation to more than one provider (${providers.join(', ')})`, named.map((item) => item.source))
+  return { basis: 'default', provider: providers[0], host: `default:${providers[0]}`, model, sources: [`${name} model`] }
 }
 
 /**

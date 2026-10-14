@@ -2,7 +2,7 @@
 import { execFile } from 'node:child_process'
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parseRoster, sha256 } from '../../bin/agents-roster.mjs'
@@ -13,6 +13,7 @@ import {
 } from '../../bin/agents-rules.mjs'
 import type { PathState } from '../../bin/safe-config-write.mjs'
 import { approveRoster } from '../main/agents-approval'
+import { OPENCODE_CONFIG, OPENCODE_FOLDERS } from './test-fixtures/opencode-destinations'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
@@ -275,6 +276,39 @@ describe('install transactions and restore (60.4 AC3-AC4)', () => {
     rmSync(join(stubs, 'opencode'))
     expect(await installRules(['opencode'], { yes: true, environment: env })).toMatchObject({ code: 'ROUTE_CHANGED', message: expect.stringContaining('OpenCode is not installed, or its version cannot be read') })
     stub('opencode', 'echo "1.19.0"')
+    expect(await installRules(['opencode'], { yes: true, environment: env })).toMatchObject({ code: 'OK', written: [{ harness: 'opencode', kind: 'full' }] })
+    expect(readFileSync(target.opencode(), 'utf8')).toContain('One more public rule.')
+  })
+
+  it('gives OpenCode no full rules and runs no loading test wherever BMN cannot read its whole folder (consultant, 2026-10-14)', async () => {
+    approve(edit(EXAMPLE, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}'))
+    const calls = join(home, 'opencode-calls')
+    stub('opencode', `echo "$*" >> "${calls}"; case "$1" in --version) echo "opencode v2.0.28";; esac`)
+    const folder = join(home, '.config/opencode')
+    const lay = (files: Record<string, string>): void => {
+      for (const name of ['opencode.json', 'opencode.jsonc', 'agent', 'agents', 'mode', 'modes', 'command', 'commands']) rmSync(join(folder, name), { recursive: true, force: true })
+      for (const [path, text] of Object.entries(files)) {
+        mkdirSync(dirname(join(folder, path)), { recursive: true })
+        writeFileSync(join(folder, path), text)
+      }
+    }
+    lay({ 'opencode.jsonc': OPENCODE_CONFIG })
+    expect(await installRules(['opencode'], { yes: true, environment: env })).toMatchObject({ code: 'OK', written: [{ harness: 'opencode', kind: 'full' }] })
+    const installed = readFileSync(target.opencode())
+    writeMasterFile(MASTER.replace('Answer first, plainly.', 'Answer first, plainly. One more public rule.'))
+    const unknown = OPENCODE_FOLDERS.filter((entry) => entry.expected.basis === 'unknown')
+    expect(unknown.length).toBeGreaterThan(40)
+    for (const { label, files } of unknown) {
+      lay(files)
+      expect(await installRules(['opencode'], { yes: true, environment: env }), label).toMatchObject({ code: 'ROUTE_CHANGED' })
+      expect(readFileSync(target.opencode()).equals(installed), label).toBe(true)
+      writeFileSync(calls, '')
+      expect(await probe('opencode', { environment: env }), label)
+        .toMatchObject({ outcome: 'unavailable', detail: expect.stringContaining('refused: OpenCode now sends data to an unknown destination (') })
+      expect(readFileSync(calls, 'utf8').split('\n').filter((line) => line !== '' && line !== '--version'), label).toEqual([])
+    }
+    // Read whole again, the folder gets the full rules again.
+    lay({ 'opencode.jsonc': OPENCODE_CONFIG, 'agents/review.md': '---\nmodel: opencode-go/kimi-k3\n---\nReview it.\n' })
     expect(await installRules(['opencode'], { yes: true, environment: env })).toMatchObject({ code: 'OK', written: [{ harness: 'opencode', kind: 'full' }] })
     expect(readFileSync(target.opencode(), 'utf8')).toContain('One more public rule.')
   })
