@@ -1,6 +1,6 @@
 // MODULE: agents-team-supervisor.mjs - Epic 72: the supervisor of one teammate's ask. Started by the asking command inside its own restrictions, it outlives that command, holds the deadline and Stop, and ends the whole container with itself
 import { spawn } from 'node:child_process'
-import { closeSync, existsSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { constants } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -27,7 +27,7 @@ export const KILL_AFTER_MS = 3000
 const STOP_POLL_MS = 250
 
 export const RUN_FILES = Object.freeze({
-  launch: 'launch.json', state: 'state.json', stop: 'stop', events: 'events.jsonl', stderr: 'stderr.txt', exit: 'exit.json'
+  launch: 'launch.json', state: 'state.json', stop: 'stop', events: 'events.jsonl', stderr: 'stderr.txt', exit: 'exit.json', args: 'bwrap-args'
 })
 
 /** Writes a file whole: a reader sees the old text or the new one, never a part. */
@@ -48,8 +48,10 @@ export function teamSupervisorScript() {
 
 /**
  * Starts the supervisor of the run in `folder`, whose `launch.json` says what to run:
- * `{ argv, deadline, stdin, finish }` (`finish`: a module path and export name the supervisor calls
- * with the folder once the container has ended, or null). Returns `{ pid, start }` or `{ failed }`.
+ * `{ argv, deadline, stdin, finish, args_fd, output_limit }` (`finish`: a module path and export name the
+ * supervisor calls with the folder once the container has ended, or null; `args_fd`: give bubblewrap its
+ * arguments on a file descriptor; `output_limit`: the bytes of raw output over which the run fails).
+ * Returns `{ pid, start }` or `{ failed }`.
  * The supervisor is detached and in a session of its own: closing the asking command leaves it running.
  */
 export function startTeamSupervisor(folder, { execPath = process.execPath } = {}) {
@@ -91,8 +93,19 @@ export function runState(folder) {
   const state = read(RUN_FILES.state)
   if (state?.state === 'ended') return { state: 'ended', exit }
   if (state === null) return { state: exit === null ? 'unknown' : 'interrupted', exit }
-  if (processLives(state.supervisor)) return { state: state.state, exit }
+  if (supervisorLives(state.supervisor)) return { state: state.state, exit }
   return { state: 'interrupted', exit, was: state.state }
+}
+
+/** Whether a run's supervisor still runs: the very process its state names, and not one that has died but not yet been reaped. */
+export function supervisorLives(identity) {
+  if (!processLives(identity)) return false
+  try {
+    const stat = readFileSync(`/proc/${identity.pid}/stat`, 'utf8')
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] !== 'Z'
+  } catch {
+    return false
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -133,11 +146,23 @@ async function supervise(folder) {
   const input = launch.stdin ? openSync(launch.stdin, 'r') : 'ignore'
   const output = openSync(join(folder, RUN_FILES.events), 'a', 0o600)
   const errors = openSync(join(folder, RUN_FILES.stderr), 'a', 0o600)
+  // bubblewrap reads its own options (what the container shows, its environment) from a file descriptor
+  // (--args), so none of them is on its command line; the app's command after `--` stays there, as the app's own.
+  let args = null
+  let argv = launch.argv.slice(1)
+  const dashes = argv.indexOf('--')
+  if (launch.args_fd === true && dashes !== -1) {
+    const path = join(folder, RUN_FILES.args)
+    writeFileSync(path, argv.slice(0, dashes).map((argument) => `${argument}\0`).join(''), { mode: 0o600 })
+    args = openSync(path, 'r')
+    unlinkSync(path)
+    argv = ['--args', '3', ...argv.slice(dashes)]
+  }
   try {
     // A process group of its own; the container's own namespace holds everything the app starts.
-    child = spawn(launch.argv[0], launch.argv.slice(1), { env: {}, stdio: [input, output, errors], detached: true })
+    child = spawn(launch.argv[0], argv, { env: {}, stdio: args === null ? [input, output, errors] : [input, output, errors, args], detached: true })
   } finally {
-    for (const handle of [input, output, errors]) if (typeof handle === 'number') closeSync(handle)
+    for (const handle of [input, output, errors, args]) if (typeof handle === 'number') closeSync(handle)
   }
   let asked = false
   const group = (signal) => {
@@ -171,6 +196,17 @@ async function supervise(folder) {
   save()
   const watch = setInterval(() => {
     if (existsSync(join(folder, RUN_FILES.stop))) end('stopped')
+    // The app's raw output is bounded: over the bound the run fails, its output kept as it was.
+    if (typeof launch.output_limit === 'number') {
+      const size = [RUN_FILES.events, RUN_FILES.stderr].reduce((sum, name) => {
+        try {
+          return sum + statSync(join(folder, name)).size
+        } catch {
+          return sum
+        }
+      }, 0)
+      if (size > launch.output_limit) end('output')
+    }
   }, STOP_POLL_MS)
   const timer = setTimeout(() => end('limit'), Math.min(Math.max(0, launch.deadline - Date.now()), 2 ** 31 - 1))
   for (const name of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(name, () => end('stopped'))

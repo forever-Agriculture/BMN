@@ -114,14 +114,14 @@ describe('team and rules state has no path into the database, Backup export, Tel
   const imports = (file: string): string[] => [...readFileSync(join(REPOSITORY, file), 'utf8').matchAll(IMPORT)].map((match) => (match[1] ?? match[2] ?? match[3]) as string)
 
   it('searches the modules that hold it, and reads their imports', () => {
-    expect(HOLDERS).toHaveLength(30)
+    expect(HOLDERS).toHaveLength(32)
     expect(imports('apps/desktop/src/main/app-program.ts')).toEqual(['node:fs', 'node:path'])
     expect(imports('apps/desktop/src/main/agents-ipc.ts')).toEqual(expect.arrayContaining(['node:fs', '@bmn/protocol', '../../bin/agents-roster.mjs', './agents-approval', './workspace-ipc']))
     expect(imports('apps/desktop/bin/agents-rules.mjs')).toEqual(expect.arrayContaining(['./agents-check.mjs']))
   })
 
   it('they import only Node, the protocol types, each other and the IPC error type', () => {
-    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check|rules|cli|approval|guard|context|skills|research|ask|fence|supervised|judge|tools|tool-files|opencode|container|team-ask|team-forms|team-inputs|team-resolve|team-supervisor)|safe-config-write|text-diff)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/context-auto|\.\/skills-auto)$/
+    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check|rules|cli|approval|guard|context|skills|research|ask|fence|supervised|judge|tools|tool-files|opencode|container|team-ask|team-cli|team-forms|team-inputs|team-resolve|team-run|team-supervisor)|safe-config-write|text-diff)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/context-auto|\.\/skills-auto)$/
     const hits = HOLDERS.flatMap((file) => imports(file).filter((name) => !allowed.test(name)).map((name) => `${file}: imports ${name}`))
     expect(hits.length === 0 ? 'PASS' : `FAIL\n${hits.join('\n')}`).toBe('PASS')
     // The one Electron import is a type, and the IPC module takes only its error class from the workspace handlers.

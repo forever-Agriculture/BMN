@@ -1,4 +1,6 @@
 // MODULE: agents-team-forms.mjs - Epic 72: the one read-only form of each app for each access mode, as Story 72.1 measured them, and which app versions they are proven on
+import { createHash } from 'node:crypto'
+import { closeSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
 import { INSIDE, appPaths, containerArgv } from './agents-container.mjs'
 
 /**
@@ -35,10 +37,11 @@ export function formStanding(harness, version, mode) {
 /** What a teammate may read: the question only, the named files, or one project read-only (R72-FR2). */
 export const ASK_ACCESS = Object.freeze(['question', 'files', 'project'])
 
-/** The parts of one ask's folder under BMN's state (`team/runs/<id>/`). */
+/** The parts of one ask's folder under BMN's state (`team/runs/<id>/`), as the contract's record table names them. */
 export const ASK_RUN_FILES = Object.freeze({
-  request: 'request.json', manifest: 'manifest.json', prompt: 'prompt.md', rules: 'rules.md', objects: 'history-objects.txt',
-  home: 'home', inputs: 'inputs', project: 'project', receipt: 'receipt.json'
+  request: 'request.json', manifest: 'inputs/manifest.json', prompt: 'inputs/prompt.md', rules: 'inputs/rules.md', files: 'inputs/files',
+  projectManifest: 'project-manifest.json', snapshots: 'snapshots', receipt: 'receipt.json', answer: 'answer.md', outcome: 'outcome.json',
+  home: 'home', inputs: 'inputs', project: 'project'
 })
 
 /** The name a receipt gives each form, per app and access mode. */
@@ -111,6 +114,48 @@ export function askCommand(harness, program, { access, model, effort, rules = nu
     }
   }
   throw new Error(`no ask form for ${harness} yet`)
+}
+
+/** One file of an app's program as it is now: its hash and what tells a replaced or changed file (72.3 AC1). */
+function programFile(path) {
+  const real = realpathSync(path)
+  const hash = createHash('sha256')
+  const buffer = Buffer.allocUnsafe(1024 * 1024)
+  const handle = openSync(real, 'r')
+  try {
+    for (let read = readSync(handle, buffer); read > 0; read = readSync(handle, buffer)) hash.update(buffer.subarray(0, read))
+  } finally {
+    closeSync(handle)
+  }
+  return { path, real, sha256: hash.digest('hex'), ...programStat(path) }
+}
+
+/** What changes when a file is replaced or written: its device, inode, size and times, through any link to it. */
+export function programStat(path) {
+  const link = lstatSync(path, { bigint: true })
+  const stat = statSync(path, { bigint: true })
+  return {
+    real: realpathSync(path), link: link.isSymbolicLink() ? String(link.ino) : null,
+    dev: String(stat.dev), ino: String(stat.ino), size: String(stat.size), mtime_ns: String(stat.mtimeNs), ctime_ns: String(stat.ctimeNs)
+  }
+}
+
+/** The identity of an app's program: its launcher and its native payload, hashed and stated. */
+export function executableIdentity(program) {
+  return { launcher: programFile(program.launcher), payload: programFile(program.payload) }
+}
+
+/** Whether the program is the very one an identity names, by its files' state (cheap enough for the moment before start). */
+export function sameProgram(identity, program) {
+  const same = (recorded, path) => {
+    try {
+      const now = programStat(path)
+      return ['real', 'link', 'dev', 'ino', 'size', 'mtime_ns', 'ctime_ns'].every((key) => now[key] === recorded[key])
+    } catch {
+      return false
+    }
+  }
+  return same(identity.launcher, program.launcher) && same(identity.payload, program.payload)
 }
 
 /** Whether BMN builds an ask form for an app yet: OpenCode's arrives with Story 72.5. */

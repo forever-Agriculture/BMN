@@ -2311,8 +2311,9 @@ names the narrowest permission rule if auto mode then refuses it.
 BMN never reads Codex's or Claude Code's sign-in file; it only names it. A copy is not used: a run
 that renews its copy rotates a token the owner's own file no longer matches (measured for both
 apps). On disk the run's home holds only the empty file the sign-in is bound onto. No key or sign-in
-value is ever in a command line, a recorded environment value or the record: the container's
-arguments go to bubblewrap through `--args` on a file descriptor, never on its command line.
+value is ever in a command line, a recorded environment value or the record: bubblewrap's own
+options (what the container shows, its environment) go to it through `--args` on a file descriptor,
+never on its command line; only the app's command after `--` is there, as the app's own.
 Claude Code serializes renewals with a lock in its configuration folder, which an ask does not
 share with the owner's own sessions; tokens last hours, so two renewals at once are rare, and a
 failed renewal is the run's sign-in failure (exit 1), never retried by BMN.
@@ -2355,7 +2356,8 @@ Refusal codes (exit 10) the commands add: `ROLE_UNKNOWN`, `AGENT_NOT_ELIGIBLE`, 
 (a mode not proven for this app version), `WIDE_READ_NOT_ENABLED`, `CONTAINER_UNAVAILABLE`,
 `INPUT_INVALID` (a link, a non-regular or non-UTF-8 file, a credential or configuration location),
 `INPUT_TOO_LARGE`, `CREDENTIAL_FOUND` (names the file and pattern, never the value), `PUBLIC_NOT_VERIFIED`,
-`PRIVATE_NOT_ALLOWED`, `KEY_REQUIRED`, `KEY_CONFLICT` (same key, different request), `GONE` (a removed
+`PRIVATE_NOT_ALLOWED`, `CHANGED` (the approved team or the app's program changed between the check and
+the start; nothing started), `KEY_REQUIRED`, `KEY_CONFLICT` (same key, different request), `GONE` (a removed
 run's or expired key), `NESTED` (asked from inside a teammate's run), `NOT_YOURS` (another session's
 run), and every refusal of `evaluate`'s ask mode with its existing code.
 
@@ -2428,13 +2430,14 @@ so a run outlives BMN closing.
 | `request.json` | the request as given, its hash, the key, the asking session, the resolver's rule | yes |
 | `inputs/` | the prompt, the instruction snapshot (his global rules for that app), file copies, pictures | yes |
 | `inputs/manifest.json` | every input with its source path, source root, consent basis and sha256 | yes |
-| `project/`, `project-manifest.json` | the frozen copy; files, commits, trees and blobs with hashes, the included commits and the shallow boundary | manifest only |
+| `project/`, `project-manifest.json` | the frozen copy (deleted on every outcome); files, commits, trees and blobs with hashes, the included commits and the shallow boundary | manifest only |
 | `snapshots/` | the app's effective configuration, executable identity (launcher and payload hashes), environment names | yes, values never |
 | `receipt.json` | `evaluate`'s verdict, the argv's hash, every snapshot's hash, the form and any wide-read mode | yes |
 | `launch.json`, `state.json`, `exit.json` | the supervisor's input, its state and the container's end | yes |
 | `events.jsonl` | the app's own output events | yes |
 | `stderr.txt` | the app's raw error stream | no |
 | `answer.md`, `outcome.json` | the answer; state, exit, refusal, observed identity with sources, usage with source, times | yes |
+| `diagnostic-answer.md` | an answer that could not be attributed (exit 17), kept only as evidence, never shown as the answer | no |
 | `home/` | the app's home: the bound sign-in's empty mount point, its sessions and bookkeeping | no; deleted on every outcome |
 
 Export (`asks export`) is the allowlisted bundle above, never a sign-in file, an app database, the

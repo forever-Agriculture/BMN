@@ -9,7 +9,7 @@ import { AgentsUsageError, EXIT, err, failWith, out, readOptions, usage } from '
 import { publicRendering } from './agents-rules.mjs'
 import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, CONTEXT_TEST_SIZE, checkContext, contextItems, contextTestFolder, provenControls, provenPrecedence, wholeNumber } from './agents-context.mjs'
 import { RUN_TEST_APPS, appTools, checkRunTools } from './agents-tools.mjs'
-import { ASK_APPS, ASK_FORMS_PROVEN, ASK_FORM_NAMES, ASK_ACCESS, ASK_RUN_FILES, UNAVAILABLE_WHY, appSearchPath, askArgv, askProgram, formStanding } from './agents-team-forms.mjs'
+import { ASK_APPS, ASK_FORMS_PROVEN, ASK_FORM_NAMES, ASK_ACCESS, ASK_RUN_FILES, UNAVAILABLE_WHY, appSearchPath, askArgv, askProgram, formStanding, sameProgram } from './agents-team-forms.mjs'
 import { INSIDE } from './agents-container.mjs'
 import { OPENCODE_FOLDER_SHA256, OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_RESEARCH_AGENT, OPENCODE_SESSION_ID, installOpenCodeFolder, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
 
@@ -2100,6 +2100,16 @@ export function evaluate(inputs, {
     if (typeof inputs.workspace !== 'string' || inputs.workspace.split('/').includes('..')) refuse('WORKSPACE_UNKNOWN', 'the workspace path contains ..')
     const workspace = canonicalDirectory(inputs.workspace, processCwd)
     if (workspace === null) refuse('WORKSPACE_UNKNOWN', `${inputs.workspace} is not an existing directory`)
+    // The home folder and / hold every project, sign-in and configuration: never one workspace (R72-FR9).
+    const homes = [environment.HOME, homedir()].filter((path) => typeof path === 'string' && isAbsolute(path)).flatMap((path) => {
+      // Only where the home folder really is: no file in it is opened.
+      try {
+        return [realpathSync(path)]
+      } catch {
+        return [path]
+      }
+    })
+    if (workspace === '/' || homes.includes(workspace)) refuse('WORKSPACE_UNKNOWN', `${workspace === '/' ? '/ is the whole file system' : `${workspace} is the home folder`}, never a workspace: name the project folder the dispatch works in`)
     if (cwd === null) refuse('WORKSPACE_MISMATCH', `--cwd ${inputs.cwd} is not an existing directory without ..`)
     // An unreadable packet is a packet refusal, reported in its place in the order, after every earlier one.
     const packet = inputs.packet === undefined ? null : canonicalDirectory(inputs.packet, processCwd)
@@ -2827,6 +2837,34 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     }
     note(`the command is BMN's ${inputs.access} form for ${appName(agent.harness)} in the run's container`)
 
+    // The snapshots this check judges are the ones the start uses (72.3 AC1): the app's configuration as BMN
+    // wrote it into the run's home, its program as it is now, and the environment the command carries.
+    const snapshots = `${folder}/${ASK_RUN_FILES.snapshots}`
+    const configHashes = {}
+    for (const [path, text] of Object.entries(built.form.home)) {
+      let snapshot = null
+      let live = null
+      try {
+        snapshot = readText(`${snapshots}/config/${path}`)
+        live = readText(`${run.home}/${path}`)
+      } catch {
+        snapshot = null
+      }
+      if (snapshot !== text || live !== text) refuse('WORKSPACE_MISMATCH', `the run's ${path} is not the configuration BMN wrote for this ask`)
+      configHashes[path] = sha256(text)
+    }
+    let identity = null
+    let environmentSnapshot = null
+    try {
+      identity = JSON.parse(readText(`${snapshots}/executable.json`))
+      environmentSnapshot = JSON.parse(readText(`${snapshots}/environment.json`))
+    } catch {
+      identity = null
+    }
+    if (!isObject(identity) || !isObject(identity.launcher) || !isObject(identity.payload) || !sameProgram(identity, program)) refuse('HARNESS_UNKNOWN', `${appName(agent.harness)}'s program is not the one BMN recorded for this ask`)
+    if (!isObject(environmentSnapshot) || environmentSnapshot.sha256 !== sha256(JSON.stringify(built.form.environment))) refuse('WORKSPACE_MISMATCH', 'the environment of this ask is not the one BMN recorded')
+    note(`snapshots: configuration ${Object.keys(configHashes).join(', ') || 'none'}, program ${identity.payload.sha256.slice(0, 12)}, environment ${environmentSnapshot.names.join(', ')}`)
+
     // Where it goes, as the route readers see the run's own home: the same answers evaluate gives.
     const assignments = Object.fromEntries(Object.entries(built.form.environment).map(([name, value]) => [name, value.startsWith(INSIDE.home) ? `${run.home}${value.slice(INSIDE.home.length)}` : value]))
     const parsed = agent.harness === 'codex'
@@ -2856,6 +2894,10 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
         : { mode: 'read-only', source: '--tools', tools: inputs.access === 'project' ? ['Read', 'Grep', 'Glob', 'git log', 'git show', 'git diff', 'git blame'] : [] },
       run: basename(folder), data: label, consent,
       inputs_sha256: sha256(canonicalJson(manifest)),
+      snapshots: {
+        config: sha256(canonicalJson(configHashes)), executable: { launcher: identity.launcher.sha256, payload: identity.payload.sha256 },
+        environment: environmentSnapshot.sha256, rules: rules === null ? null : sha256(rules), prompt: promptHash
+      },
       argv_sha256: sha256(canonicalJson(built.argv)),
       harness_version: { version, state: tested.state, form: 'proven' },
       route: receiptRoute(destination, resolution.route),
@@ -3019,7 +3061,7 @@ export async function runCheckCommand(action, argv) {
     if (result.verdict === 'PASS') {
       const receipt = result.receipt
       out(asJson ? JSON.stringify(receipt, null, 2)
-        : `PASS ${receipt.agent} ${receipt.role ?? 'research'} -> ${receipt.route.host} (${receipt.data ?? 'research'}, private work ${receipt.private_work.allowed ? 'allowed' : 'not allowed'}); receipt ${receipt.receipt_hash.slice(0, 12)}${receipt.context_limit_note === undefined ? '' : `\n${receipt.context_limit_note}`}${result.note === undefined ? '' : `\n${result.note}`}`)
+        : `PASS ${receipt.agent} ${receipt.role ?? 'research'} -> ${receipt.route.host} (${receipt.data ?? 'research'}, private work ${receipt.private_work.allowed ? 'allowed' : 'not allowed'}); receipt ${receipt.receipt_hash.slice(0, 12)}; BMN judged this command and does not run it${receipt.context_limit_note === undefined ? '' : `\n${receipt.context_limit_note}`}${result.note === undefined ? '' : `\n${result.note}`}`)
       // With --json standard output is the receipt alone, as a caller saves it; the line goes beside it.
       if (asJson && result.note !== undefined) err(`bmn: ${result.note}`)
       return 0

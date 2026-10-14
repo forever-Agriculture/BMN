@@ -176,6 +176,7 @@ export interface AskInputs { agent: string; role: string; effort: string; access
 export interface AskReceipt extends Omit<ReceiptBase, 'cwd'> {
   mode: 'ask'; role: string; access: 'question' | 'files' | 'project'; form: string; pictures?: number
   run: string; data: 'public' | 'private'; consent: AskConsent[]; inputs_sha256: string
+  snapshots: { config: string; executable: { launcher: string; payload: string }; environment: string; rules: string | null; prompt: string }
   harness_version: { version: string | null; state: string; form: 'proven' }
 }
 export type AskResult = { verdict: 'PASS'; receipt: AskReceipt; steps: string[]; argv: string[]; code?: undefined; message?: undefined; next?: undefined; detail?: undefined } | (Refused & { argv?: undefined })

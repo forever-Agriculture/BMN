@@ -1,13 +1,15 @@
 // MODULE: agents-team-ask.mjs - Epic 72: one teammate's ask made ready to start: the teammate chosen, every input read, scanned and its consent decided before anything is copied, the run's folder built, the command built and judged
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, relative } from 'node:path'
+import { basename, dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { APP_NAMES, agentState, publicOnlyReasons } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { askConsent, askRequest, evaluateAsk, expectedDestination, harnessVersion, teamRunsDirectory, workspaceRoot, workspaceVisibility, askStandingWords } from './agents-check.mjs'
-import { ASK_ACCESS, ASK_APPS, ASK_RUN_FILES, appSearchPath, askArgv, askProgram } from './agents-team-forms.mjs'
+import { ASK_ACCESS, ASK_APPS, ASK_RUN_FILES, appSearchPath, askArgv, askProgram, executableIdentity, signInBind } from './agents-team-forms.mjs'
+import { readMaster, render } from './agents-rules.mjs'
+import { askerOf } from './agents-ask.mjs'
 import { INSIDE } from './agents-container.mjs'
 import { InputRefusal, LIMITS, askProject, checkQuestion, freezeProject, sha256Of, textFile, workingTreeRoot } from './agents-team-inputs.mjs'
 import { AskRefusal, resolveTeammate } from './agents-team-resolve.mjs'
@@ -59,6 +61,15 @@ export function filePrompt(question, files) {
 export function projectPrompt(question, frozen, root) {
   const changed = frozen.files.filter((file) => file.changed !== null).length
   return `${question}\n\nThe project is in your working folder (${INSIDE.project}), read-only: a frozen copy of ${root.split('/').pop()} at commit ${frozen.revision.slice(0, 12)}${frozen.public_commit === null ? '' : ' (its public commit)'}, ${frozen.files.length} files, with its Git history (git log, git show, git diff and git blame answer)${changed === 0 ? '' : `; ${changed} file(s) changed since that commit show as uncommitted changes`}.\n`
+}
+
+/** The owner's global rules for an app as BMN generates them, or null when there is no rules master. */
+export function instructionRules(harness, generation) {
+  try {
+    return render(readMaster(), harness, generation).text
+  } catch {
+    return null
+  }
 }
 
 function writePrivate(path, text, mode = 0o600) {
@@ -130,7 +141,11 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     if (installed === null) return `runs on ${APP_NAMES[agent.harness]}, which is not installed where BMN looks`
     if (installed.version === null) return `runs on ${APP_NAMES[agent.harness]}, whose version BMN cannot read`
     const words = askStandingWords(agent.harness, installed.version, access)
-    return words === null ? 'proven' : `cannot answer here: ${words}`
+    if (words !== null) return `cannot answer here: ${words}`
+    // The owner's sign-in file is bound into the run, never read: without it the app cannot answer.
+    const signIn = signInBind(agent.harness, environment)
+    if (signIn !== null && !existsSync(signIn.from)) return `runs on ${APP_NAMES[agent.harness]}, which is not signed in on this computer (no ${signIn.from})`
+    return 'proven'
   }
   const allowed = (agent) => {
     try {
@@ -161,41 +176,58 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   const installed = versionOf(choice.agent.harness)
   let frozen = null
   let prompt
+  // Each file is copied into the run as it was read and scanned.
+  const copies = texts.map((file, index) => {
+    const copy = `${ASK_RUN_FILES.files.slice(ASK_RUN_FILES.inputs.length + 1)}/${index + 1}-${basename(file.real)}`
+    writePrivate(join(run.inputs, copy), file.bytes)
+    return copy
+  })
   if (access === 'project') {
     frozen = freezeProject(project, run.project, { extraFiles: texts, publicCommit })
-    writePrivate(join(folder, ASK_RUN_FILES.objects), `${frozen.history.objects}\n`)
     // The one git a project ask may run: log, show, diff and blame of the frozen copy (72.1 AC1).
     if (choice.agent.harness === 'claude') writePrivate(join(run.inputs, 'bin/git'), readFileSync(join(here, 'ask-git.sh')), 0o755)
+    writePrivate(join(folder, ASK_RUN_FILES.projectManifest), `${JSON.stringify({ version: 1, ...frozen }, null, 2)}\n`)
     prompt = projectPrompt(request.question, frozen, project)
   } else {
     // A file of the project is named by its path in it; any other by the path the asker gave.
     prompt = filePrompt(request.question, texts.map((file) => ({ ...file, label: project !== null && !relative(project, file.real).startsWith('..') ? relative(project, file.real) : file.path })))
   }
   writePrivate(join(folder, ASK_RUN_FILES.prompt), prompt)
+  // The instruction inputs: a private ask carries the owner's global rules for that app as BMN generates them; a public one none.
+  const rules = label === 'private' ? instructionRules(choice.agent.harness, generation) : null
+  if (rules !== null) writePrivate(join(folder, ASK_RUN_FILES.rules), rules)
   const manifest = {
     version: 1, id, access, data: label,
     question: { bytes: question.bytes, sha256: question.sha256 },
     inputs,
-    files: texts.map((file) => ({ path: file.path, real: file.real, bytes: file.bytes.length, sha256: file.sha256 })),
+    files: texts.map((file, index) => ({ path: file.path, real: file.real, copy: copies[index], bytes: file.bytes.length, sha256: file.sha256 })),
     project: frozen === null ? null : {
-      root: frozen.root, revision: frozen.revision, head: frozen.head, public_commit: frozen.public_commit,
-      files: frozen.files, history: { commits: frozen.history.commits, shallow: frozen.history.shallow, counts: frozen.history.counts, objects_sha256: frozen.history.objects_sha256 }
+      root: frozen.root, revision: frozen.revision, head: frozen.head, public_commit: frozen.public_commit, files: frozen.files.length,
+      files_sha256: sha256Of(Buffer.from(JSON.stringify(frozen.files))), history: { commits: frozen.history.commits.length, shallow: frozen.history.shallow, counts: frozen.history.counts, objects_sha256: frozen.history.objects_sha256 },
+      // The project's own instruction files, as an app reads them in the frozen copy.
+      instructions: frozen.files.filter((file) => file.kind === 'file' && /(^|\/)(CLAUDE|AGENTS)\.md$/u.test(file.path)).map((file) => ({ path: file.path, sha256: file.sha256 }))
     },
+    rules: rules === null ? null : { sha256: sha256Of(Buffer.from(rules)), bytes: Buffer.byteLength(rules) },
     pictures: [],
     prompt_sha256: sha256Of(Buffer.from(prompt))
   }
   writePrivate(join(folder, ASK_RUN_FILES.manifest), `${JSON.stringify(manifest, null, 2)}\n`)
   writePrivate(join(folder, ASK_RUN_FILES.request), `${JSON.stringify({
-    version: 1, id, role: request.role, agent: choice.agent.id, effort: choice.effort, chosen_by: choice.rule, phase: choice.phase,
-    project, access, data: label, ...(request.recheckOf === undefined ? {} : { recheck_of: request.recheckOf }), asked_at: now.toISOString()
+    version: 1, id, role: request.role, agent: choice.agent.id, model: choice.agent.model, aliases: choice.agent.aliases ?? [], effort: choice.effort, chosen_by: choice.rule, phase: choice.phase,
+    billing: choice.agent.paid_by ?? 'unknown', project, access, data: label, ...(request.recheckOf === undefined ? {} : { recheck_of: request.recheckOf }), asked_by: askerOf(environment), asked_at: now.toISOString()
   }, null, 2)}\n`)
 
-  const built = askRequest(choice.agent, installed.version, { access, effort: choice.effort, rules: null, pictures: [], contextTestLog })
+  const built = askRequest(choice.agent, installed.version, { access, effort: choice.effort, rules, pictures: [], contextTestLog })
   const { argv, form } = askArgv(choice.agent.harness, installed.program, run, built, environment)
   // The run's own app home: what the form names, and the empty files the sign-in is bound onto.
   for (const [path, text] of Object.entries(form.home)) writePrivate(join(run.home, path), text)
   for (const path of form.mountPoints) writePrivate(join(run.home, path), '')
+  // The snapshots the check judges and the start uses (72.3 AC1): the app's configuration as BMN wrote it, its program, its environment once.
+  for (const [path, text] of Object.entries(form.home)) writePrivate(join(folder, ASK_RUN_FILES.snapshots, 'config', path), text)
+  writePrivate(join(folder, ASK_RUN_FILES.snapshots, 'executable.json'), `${JSON.stringify(executableIdentity(installed.program), null, 2)}\n`)
+  writePrivate(join(folder, ASK_RUN_FILES.snapshots, 'environment.json'), `${JSON.stringify({ names: Object.keys(form.environment), sha256: sha256Of(Buffer.from(JSON.stringify(form.environment))) }, null, 2)}\n`)
   const verdict = evaluateAsk({ agent: choice.agent.id, role: request.role, effort: choice.effort, access, data: label, wide: request.wide === true, run: folder, argv },
     { environment, now, program: installed.program, version: installed.version, contextTestLog })
-  return { id, folder, choice: { agent: choice.agent.id, effort: choice.effort, rule: choice.rule, phase: choice.phase }, verdict, argv, stdin: form.stdin, manifest }
+  if (verdict.verdict === 'PASS') writePrivate(join(folder, ASK_RUN_FILES.receipt), `${JSON.stringify(verdict.receipt, null, 2)}\n`)
+  return { id, folder, choice: { agent: choice.agent.id, effort: choice.effort, rule: choice.rule, phase: choice.phase }, verdict, argv, stdin: form.stdin, manifest, program: installed.program }
 }

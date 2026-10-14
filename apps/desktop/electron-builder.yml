@@ -85,6 +85,10 @@ extraResources:
     to: bin/agents-team-resolve.mjs
   - from: bin/agents-team-ask.mjs
     to: bin/agents-team-ask.mjs
+  - from: bin/agents-team-run.mjs
+    to: bin/agents-team-run.mjs
+  - from: bin/agents-team-cli.mjs
+    to: bin/agents-team-cli.mjs
   - from: bin/agents-team-supervisor.mjs
     to: bin/agents-team-supervisor.mjs
   - from: bin/ask-git.sh

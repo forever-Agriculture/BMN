@@ -5,7 +5,7 @@ export declare const ASK_FORMS_PROVEN: Readonly<Record<string, Record<string, Re
 export declare const UNAVAILABLE_WHY: Readonly<Record<string, Record<string, string>>>
 export declare function formStanding(harness: string, version: string | null, mode: string): FormStanding
 export declare const ASK_ACCESS: readonly AskAccess[]
-export declare const ASK_RUN_FILES: Readonly<{ request: string; manifest: string; prompt: string; rules: string; objects: string; home: string; inputs: string; project: string; receipt: string }>
+export declare const ASK_RUN_FILES: Readonly<{ request: string; manifest: string; prompt: string; rules: string; files: string; projectManifest: string; snapshots: string; receipt: string; answer: string; outcome: string; home: string; inputs: string; project: string }>
 export declare const ASK_FORM_NAMES: Readonly<Record<string, Record<AskAccess, string>>>
 export declare const CODEX_ASK_NO_TOOLS: readonly string[]
 export declare const CODEX_ASK_LOG: string
@@ -21,3 +21,7 @@ export declare function askProgram(harness: string, environment?: NodeJS.Process
 export declare function askCommand(harness: string, program: AskProgram, request: { access: string; model: string; effort: string; rules?: string | null; pictures?: string[]; context?: { argv: string[]; env: string[] } }): AskForm
 export declare function askArgv(harness: string, program: AskProgram, run: { home: string; inputs: string; project: string }, request: { access: string; model: string; effort: string; rules?: string | null; pictures?: string[]; context?: { argv: string[]; env: string[] } }, environment?: NodeJS.ProcessEnv | Record<string, string>): { argv: string[]; form: AskForm }
 export declare function claudePictureMessage(pictures: { media_type: string; bytes: Buffer }[], prompt: string): string
+export interface ProgramFile { path: string; real: string; sha256: string; link: string | null; dev: string; ino: string; size: string; mtime_ns: string; ctime_ns: string }
+export declare function programStat(path: string): Omit<ProgramFile, 'path' | 'sha256'>
+export declare function executableIdentity(program: AskProgram): { launcher: ProgramFile; payload: ProgramFile }
+export declare function sameProgram(identity: { launcher: ProgramFile; payload: ProgramFile }, program: AskProgram): boolean

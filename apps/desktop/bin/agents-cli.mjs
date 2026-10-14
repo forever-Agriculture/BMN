@@ -77,6 +77,9 @@ export function readOptions(argv, { flags = [], values = [] } = {}) {
 
 export const TEAM_USAGE = `Usage: bmn team [--all] [--json]
 
+       bmn team ask --role R (--question TEXT | --question-file PATH|-) [...]   bmn team ask --help
+       bmn team asks [show|wait|stop|export <id>]
+
 Prints the approved team, one line per enabled active agent in roster order: id, name, class,
 app, model, provider, whether that provider may see private work, roles, efforts and context
 limit. --all adds disabled and proposed agents, marked. Reads only the approved team
@@ -114,6 +117,11 @@ function approvedData() {
 }
 
 export async function runTeam(argv) {
+  // Epic 72: `bmn team ask` and `bmn team asks`; a bare `bmn team` is the team as before.
+  if (argv[0] === 'ask' || argv[0] === 'asks') {
+    const { runTeamAsk, runTeamAsks } = await import('./agents-team-cli.mjs')
+    return argv[0] === 'ask' ? runTeamAsk(argv.slice(1)) : runTeamAsks(argv.slice(1))
+  }
   let parsed
   try {
     parsed = readOptions(argv, { flags: ['all', 'json', 'help'] })

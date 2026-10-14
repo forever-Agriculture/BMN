@@ -12,5 +12,7 @@ export interface AskAsked {
 export interface PreparedAsk {
   id: string; folder: string; choice: { agent: string; effort: string; rule: string; phase: string }
   verdict: AskResult; argv: string[]; stdin: 'text' | 'stream-json'; manifest: Record<string, unknown> & { inputs: import('./agents-check.mjs').AskInput[] }
+  program: import('./agents-team-forms.mjs').AskProgram
 }
+export declare function instructionRules(harness: string, generation: unknown): string | null
 export declare function prepareAsk(request: AskAsked, options?: { environment?: NodeJS.ProcessEnv | Record<string, string>; cwd?: string; home?: string; now?: Date; runs?: string; id?: string; contextTestLog?: import('./agents-context.mjs').ContextTestEntry[] }): PreparedAsk

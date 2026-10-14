@@ -766,6 +766,9 @@ describe('workspaces and their public status (60.3 AC5)', () => {
   it('canonicalizes, and refuses .., nonexistent and outside paths', () => {
     expect(check({ workspace: join(home, 'nope'), argv: ASTRA_REVIEW(workspace) }).code).toBe('WORKSPACE_UNKNOWN')
     expect(check({ workspace: `${workspace}/../work`, argv: ASTRA_REVIEW(workspace) }).code).toBe('WORKSPACE_UNKNOWN')
+    // The home folder and / are never one workspace (R72-FR9).
+    expect(check({ workspace: home, cwd: home, argv: ASTRA_REVIEW(home) })).toMatchObject({ code: 'WORKSPACE_UNKNOWN', message: `${home} is the home folder, never a workspace: name the project folder the dispatch works in` })
+    expect(check({ workspace: '/', cwd: workspace, argv: ASTRA_REVIEW(workspace) })).toMatchObject({ code: 'WORKSPACE_UNKNOWN', message: '/ is the whole file system, never a workspace: name the project folder the dispatch works in' })
     expect(check({ argv: ASTRA_REVIEW(home) }).code).toBe('WORKSPACE_MISMATCH')
     expect(check({ cwd: home, argv: ASTRA_REVIEW(workspace) }).code).toBe('WORKSPACE_MISMATCH')
     symlinkSync(repo, join(home, 'linked'))
@@ -1287,6 +1290,9 @@ describe('receipts and --verify (60.3 AC7)', () => {
     expect(pass.code, pass.stderr).toBe(0)
     const receipt = JSON.parse(pass.stdout)
     expect(receipt).toMatchObject({ version: 1, verdict: 'PASS', class: 'bishop', stdin: { path: join(workspace, 'prompt.md') } })
+    // In words, a PASS says what it is: a judgement of a command BMN does not run (R72-FR9).
+    const words = await runCli(['roster', 'check', '--agent', 'astra', '--role', 'epic-reviewer', '--workspace', workspace, '--data', 'private', '--stdin', 'prompt.md', '--', ...argv])
+    expect(words.stdout).toMatch(/^PASS astra epic-reviewer -> default:openai \(private, private work allowed\); receipt [0-9a-f]{12}; BMN judged this command and does not run it\n/)
     expect(Object.keys(receipt).sort()).toEqual(['agent', 'argv_sha256', 'class', 'context_limit_applied', 'cwd', 'data', 'effort', 'generation', 'harness', 'harness_version',
       'issued_at', 'mode', 'model', 'private_work', 'public_status', 'receipt_hash', 'role', 'roster_file_hash', 'route', 'stdin', 'verdict', 'version', 'workspace'])
     writeFileSync(join(home, 'receipt.json'), pass.stdout)
@@ -1889,6 +1895,8 @@ process.on('exit', () => fs.writeFileSync(${JSON.stringify(join(home, 'reads.log
       /^(\/[^/]+)*\/\.git$/,
       // An exception names a folder; the check resolves it and reads nothing in it.
       /^\/synthetic\/EXCEPTION-SENTINEL-FOLDER$/,
+      // The home folder itself, resolved to tell that it is not the workspace (R72-FR9); nothing in it is opened.
+      new RegExp(`^${home}$`),
       /\/apps\/desktop\/bin\//, /\/node_modules\//, /^\/proc\/self\//, /^\/(usr|lib|etc\/ld)/, new RegExp(`^${stubs}`)
     ]
     const unexpected = reads.filter((path) => path !== '' && !allowed.some((pattern) => pattern.test(path)))

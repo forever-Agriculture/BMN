@@ -111,6 +111,11 @@ beforeEach(() => {
   stubApp('claude', '2.1.300 (Claude Code)')
   stubApp('codex', 'codex-cli 0.162.1')
   env = { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }
+  // Made-up sign-in files: an ask binds them in and never reads them.
+  for (const path of ['.codex/auth.json', '.claude/.credentials.json']) {
+    mkdirSync(join(home, path, '..'), { recursive: true })
+    writeFileSync(join(home, path), '{"synthetic": true}\n')
+  }
   approve(EXAMPLE)
 })
 
@@ -222,7 +227,6 @@ describe('the question and the files (72.2 AC3, AC4)', () => {
     writeFileSync(join(home, 'real.txt'), 'text\n')
     symlinkSync(join(home, 'real.txt'), join(home, 'link.txt'))
     writeFileSync(join(home, 'binary.bin'), Buffer.from([0x89, 0x50, 0x00, 0xff]))
-    mkdirSync(join(home, '.codex'))
     writeFileSync(join(home, '.codex/notes.md'), 'notes\n')
     writeFileSync(join(home, 'leak.env'), `${SECRETS.env}\n`)
     expect(refusal(() => textFile(join(home, 'link.txt'), { home }))).toMatchObject({ code: 'INPUT_INVALID', message: `${join(home, 'link.txt')} is a link; name the file itself` })
@@ -323,8 +327,6 @@ describe('the frozen project (72.2 AC2)', () => {
     git(root, 'commit', '-q', '-m', 'link')
     expect(refusal(() => freezeProject(root, join(home, 'frozen'))).message).toContain('other-readme is a link out of the project')
     git(root, 'rm', '-q', 'other-readme')
-    mkdirSync(join(home, '.codex'), { recursive: true })
-    writeFileSync(join(home, '.codex/auth.json'), '{}')
     symlinkSync(join(home, '.codex/auth.json'), join(root, 'auth.json'))
     git(root, 'add', 'auth.json')
     git(root, 'commit', '-q', '-m', 'link to sign-in')
