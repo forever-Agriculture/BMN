@@ -1662,6 +1662,27 @@ Codex agent is yours to start.
 - Claude Code researchers: their limits are in the command and checked, and not yet tested this
   way on a live run.
 
+#### OpenCode as a helper: what 2.0.29 showed
+
+Before BMN checks an `opencode run` a lead starts, the run was measured on OpenCode 2.0.29 against
+a stand-in model on this computer, in throwaway profiles holding 26 markers where OpenCode could
+pick something up (Story 70.1; scripts, records and details in
+`_bmad-output/planning-artifacts/reference-70-opencode-helpers/RESULT.md`). The form measured:
+`env -i` with a home, configuration, data, state and cache folder of the run's own,
+`OPENCODE_DISABLE_PROJECT_CONFIG=1`, then `opencode run --standalone --format json --agent
+bmn-helper -m <model#variant> --title <title>` with the prompt on standard input. BMN's agent
+denies every action but reading inside the project (`read`, `glob`, `grep`, `list`), and web
+search for a researcher.
+
+| Measured | Verdict | Why |
+| --- | --- | --- |
+| What a run prints, and the shared background service | PASS, with a limit | Every JSON event names the session (`ses_…`); the answer is the `text` events; an error is one `error` event and exit 1. Tokens and cost are not printed: `opencode session export` gives them. `--standalone` never touched the background service. A provider answering with a server error is retried without end and without an event, so a dispatch needs its own time limit. |
+| Read-only | PASS | Only `read`, `glob` and `grep` are offered; writing, editing, the shell, Code Mode (`execute`, which can fetch), MCP tools, sub-agents, the web, questions and skills are refused when asked for anyway, as is a read outside the project; nothing was written, with `--auto` too. A permission that would ask is refused at once in a run nobody watches. Only with `OPENCODE_DISABLE_PROJECT_CONFIG=1`: without it a repository's own `opencode.json` or `.opencode/` folder replaces BMN's agent, and the run wrote files, ran a command, read outside the project, reached this computer, sent requests where the repository chose and ran the repository's plugin. |
+| What reaches the provider | PASS for the run's own folders, FAIL as OpenCode starts by default | By default the provider gets the rules file, agents and skills of the OpenCode configuration and of Claude Code's and `~/.agents`' folders, and his plugins and MCP servers start. With the run's own folders, none of the markers reached it. OpenCode 2.0.29 keeps the sign-in in its database, not in a file, so a folder that only links a sign-in file cannot sign in; which form signs a helper in is the owner's choice. |
+| Model, effort and title | PASS | `-m provider/model#variant` sets the effort (`opencode-go/gpt-6-luna` has none, low, medium, high, xhigh and max); an unknown variant is refused before any request. Without `--title` one more request goes to the configuration's small model; with it, none. |
+| Web search | PASS | Needs the `websearch` permission and a provider named in the run's configuration; without one the search is cancelled, never left waiting. TinyFish and Tavily answer without an account. A search for a local address or file fetched nothing on this computer. |
+| BMN's terminal plugin | PASS | `opencode run` does not load it, so a helper run never reaches `bmn hook` as if it were your session. |
+
 #### Asking the web a question
 
 `bmn research ask` puts one question of your own, or of an agent working for you, to the web
