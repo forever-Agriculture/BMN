@@ -34,11 +34,12 @@ export const APP_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'Ope
 /** Apps whose dispatches BMN never checks: no dispatch check reads their command. */
 export const UNCHECKED_APPS = ['opencode', 'cursor']
 /**
- * Apps that get public work only whatever their destination reads, because the model is picked
- * inside the app. OpenCode left this list by owner decision 2026-10-14: his OpenCode uses only
- * US- and EU-hosted models, so it follows the destination rule of Claude Code and Codex.
+ * Apps that get public work only whatever their destination reads. Cursor picks its model inside
+ * the app. OpenCode converts older configuration shapes BMN does not read (a model entry's own
+ * `provider`, a variant's direct fields, renamed providers), so its reading cannot rule out another
+ * endpoint; it stays here by owner decision 2026-10-14 after the fifth review found one more.
  */
-export const PUBLIC_ONLY_APPS = ['cursor']
+export const PUBLIC_ONLY_APPS = ['opencode', 'cursor']
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 /** The five chess classes: a knight leads an epic/project, a queen may hold any role, a rook designs, a bishop reviews and advises, a pawn does jobs a lead hands off. */
 export const CLASSES = ['knight', 'queen', 'rook', 'bishop', 'pawn']
@@ -1150,7 +1151,7 @@ export function calledParties(data, agent) {
  * words: only an inspected default whose provider answers `allowed`, in an app not in
  * PUBLIC_ONLY_APPS. Missing, owner-declared and public-only destinations get public work only (60.3 AC4,
  * 60.4 AC1), and so does every app in PUBLIC_ONLY_APPS, whatever its configuration reads today
- * (owner decisions 2026-10-10, narrowing 60.4 AC3, and 2026-10-14, which took OpenCode out).
+ * (owner decisions 2026-10-10, narrowing 60.4 AC3, and 2026-10-14, which kept OpenCode on it).
  */
 export function harnessPrivateWork(data, harness) {
   const app = APP_NAMES[harness] ?? harness

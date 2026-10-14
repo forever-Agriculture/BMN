@@ -344,7 +344,7 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
   })
 
-  it('reads OpenCode as unknown on Health and at approval when the app\'s environment names another OpenCode configuration, and plans its full rules only on the inspected destination', async () => {
+  it('reads OpenCode as unknown on Health and at approval when the app\'s environment names another OpenCode configuration, and never plans its full rules', async () => {
     writeFileSync(rosterFile(), FIXTURE.replace('opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}'))
     mkdirSync(join(home, '.config/opencode'), { recursive: true })
     writeFileSync(join(home, '.config/opencode/opencode.json'), '{ "model": "opencode-go/kimi-k3" }')
@@ -360,13 +360,13 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     appEnv = {}
     expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
     expect(await call<RulesOutcome>('rules:save-master', { text: MASTER, expectedHash: null, expectedLink: null })).toMatchObject({ ok: true })
-    // Inspected and allowed private work: OpenCode plans the full rules like Claude Code and Codex (owner decision
-    // 2026-10-14), and its destination is inspected again first, so another configuration refuses the whole plan.
+    // Inspected and allowed private work, and still public: OpenCode gets public work only (owner decisions
+    // 2026-10-10 and 2026-10-14), with OpenCode 2 installed too.
     stub('opencode', 'echo "opencode v2.0.28"')
-    const plan = async () => call<RulesPlan>('rules:plan-install')
-    expect((await plan()).targets.find((target) => target.harness === 'opencode')).toMatchObject({ rendering: 'full' })
+    const planned = async () => (await call<RulesPlan>('rules:plan-install')).targets.find((target) => target.harness === 'opencode')
+    expect(await planned()).toMatchObject({ rendering: 'public' })
     appEnv = { OPENCODE_CONFIG: join(home, 'other.json') }
-    expect(await plan()).toMatchObject({ ok: false, code: 'ROUTE_CHANGED', message: expect.stringContaining('OpenCode cannot get the full rules'), targets: [] })
+    expect(await planned()).toMatchObject({ rendering: 'public' })
     expect(existsSync(join(home, '.config/opencode/AGENTS.md'))).toBe(false)
   })
 

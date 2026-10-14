@@ -815,12 +815,12 @@ if (${JSON.stringify(name)} === 'claude') {
     expect(await loading('cursor')).toMatchObject({ outcome: 'unavailable' })
     expect(existsSync(opencodeFolder())).toBe(false)
     expect(existsSync(join(home, 'calls-opencode.log'))).toBe(false)
-    // OpenCode may get private work where its provider allows it (owner decision 2026-10-14), but BMN cannot tell an
-    // OpenCode run handing a skill to the model from the model reading it: no prompt goes there either.
+    // OpenCode gets public work only, whatever its provider is allowed (owner decisions 2026-10-10 and 2026-10-14): no
+    // prompt goes there, even where its folder reads as OpenCode Go's own servers.
     approve(EXAMPLE.replace('opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}'))
     mkdirSync(join(home, '.config/opencode'), { recursive: true })
     writeFileSync(join(home, '.config/opencode/opencode.json'), '{ "model": "opencode-go/kimi-k3" }')
-    expect(await loading('opencode')).toMatchObject({ outcome: 'inconclusive', detail: expect.stringContaining('no prompt was sent') })
+    expect(await loading('opencode')).toMatchObject({ outcome: 'unavailable', detail: 'BMN does not check what OpenCode sends; a loading test sends a prompt to that provider' })
     expect(existsSync(opencodeFolder())).toBe(false)
     expect(existsSync(join(home, 'calls-opencode.log'))).toBe(false)
   })

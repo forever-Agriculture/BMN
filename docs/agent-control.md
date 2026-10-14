@@ -1066,11 +1066,10 @@ tools include an MCP server therefore cannot take a read-only role through Claud
 `<!-- bmn:public -->` … `<!-- /bmn:public -->` marks a section a public-only destination may
 receive; one `<!-- bmn:team -->`, which may sit inside a sentence, becomes the approved team's
 names by app (at most 400 bytes). An app whose approved destination may not receive private work
-gets only the public sections. So does Cursor, always: BMN checks none of its requests and
-cannot know which model you pick inside it, so no setting gives it the full rules. OpenCode
-follows the rule of Claude Code and Codex (owner decision 2026-10-14: his OpenCode uses only US-
-and EU-hosted models): it gets the full rules when its inspected destination may receive private
-work. Each rendering starts with a line naming the master and its hash;
+gets only the public sections. So do OpenCode and Cursor, always: BMN checks none of their
+requests, Cursor picks its model inside the app, and OpenCode converts older configuration
+shapes BMN's reading does not follow, so no setting gives them the full rules (owner decisions
+2026-10-10 and 2026-10-14). Each rendering starts with a line naming the master and its hash;
 Cursor's file also gets its `.mdc` frontmatter.
 
 **Preferences → Rules** has two pages. **Editor** edits the master with line numbers, dimmed
@@ -1081,10 +1080,8 @@ swapped link made meanwhile, including a link on the way to the folder that hold
 every file's difference, including a link, a hand-written file or an outside edit it replaces,
 and writes them in one step; a file that is a link is replaced by a regular file, and the file it
 pointed to is never written. The full rules are written, updated or sent in a test on any
-installed version of Claude Code, Codex or OpenCode; only one whose version cannot be read (not
-installed, or not on `PATH`) is refused them. Cursor never gets them, so no version is read for it.
-OpenCode's test runs `opencode run --standalone` in a throwaway folder, counts only what it wrote
-before its first tool call, as Codex's does, and deletes the test's session again. Each action confirms against the exact plan it showed, plans again
+installed version of Claude Code or Codex; only one whose version cannot be read (not installed,
+or not on `PATH`) is refused them. OpenCode and Cursor never get them. Each action confirms against the exact plan it showed, plans again
 once you confirm, and refuses if the files changed since. A plan is bound to the folder that
 really holds each file: when a link on the way to a file leads elsewhere, the confirmation names
 that place too, and a link that moves afterwards makes the plan refuse. **Health** reads each file the way the
@@ -2038,10 +2035,11 @@ on Rules → Health: a provider that may see private work passes, any other warn
   read. Tools receive text the model writes, and they are outside this reading for OpenCode as for Claude
   Code and Codex: OpenCode's web search providers and MCP servers can see private material from a
   conversation whatever its destination reads. That reading names OpenCode's destination on Health and
-  in the team file and, since 2026-10-14, decides like Claude Code's and Codex's whether OpenCode gets
-  the full rules; it is read again right before they are written and before a loading test. A later
-  change that makes the destination unknown refuses the next install and test, but does not take back
-  full rules already written.
+  in the team file; it never earns OpenCode the full rules. OpenCode 2 also converts older
+  configuration shapes the reading does not follow (a model entry's own `provider`, a variant's
+  settings written directly in it, a provider renamed on loading such as `azure-cognitive-services`),
+  any of which can give the conversation another address (Astra's fifth review, 2026-10-14), so
+  OpenCode stays on public rules (owner decision 2026-10-14).
 - A packet for a public-only destination relies on Claude Code's `--safe-mode` to keep your rules
   file, memory, skills and hooks out of the call. BMN does not test that itself; run one packet
   with a marker line in your rules before you turn on a public-only agent. `accepted_versions` in a team file written under the
