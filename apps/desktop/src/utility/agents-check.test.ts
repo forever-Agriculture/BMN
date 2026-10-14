@@ -135,6 +135,9 @@ describe('dispatch forms dev-auto documents (60.3 AC1-AC2)', () => {
     const fable = check({ agent: 'fable', argv: FABLE_PACKET('the owner global rules') })
     expect(fable.verdict, JSON.stringify(fable)).toBe('PASS')
     expect(fable.receipt).toMatchObject({ model: 'fable', route: { host: 'default:anthropic', provider: 'anthropic' } })
+    // A Claude Code dispatch binds no session, refused in the words it had before OpenCode (70.2 AC5).
+    writeFileSync(join(home, 'fable.json'), JSON.stringify(fable.receipt))
+    expect(() => bindSession(join(home, 'fable.json'), '019a2f6e-1c2b-7d3e-8f40-123456789abc', { now: NOW })).toThrow(/^only the receipt of a Codex dispatch can be bound to a session$/)
   })
 
   it.each([
@@ -333,7 +336,7 @@ describe('an OpenCode helper run in the one form 70.1 measured (70.2)', () => {
     expect(bindSession(file, 'ses_ec5823af7ffepgpND2nXll0Qbh', { now: NOW })).toMatchObject({ session_id: 'ses_ec5823af7ffepgpND2nXll0Qbh' })
     const codex = check({ argv: ASTRA_REVIEW(workspace) })
     writeFileSync(file, JSON.stringify(codex.receipt))
-    expect(() => bindSession(file, 'ses_ec5823af7ffepgpND2nXll0Qbh', { now: NOW })).toThrow('ses_ec5823af7ffepgpND2nXll0Qbh is not a Codex session id')
+    expect(() => bindSession(file, 'ses_ec5823af7ffepgpND2nXll0Qbh', { now: NOW })).toThrow(/^ses_ec5823af7ffepgpND2nXll0Qbh is not a Codex session id$/)
   })
 
   it('hands a lead the form in roster role and installs BMN\'s folder there', async () => {
@@ -1515,6 +1518,8 @@ describe('research runs (60.3 AC11)', () => {
     writeFileSync(join(home, 'research.json'), JSON.stringify(pass.receipt))
     expect(verifyReceipt(join(home, 'research.json'), RESEARCH(), { environment: env, cwd: run.cwd })).toEqual({ ok: true })
     expect(verifyReceipt(join(home, 'research.json'), RESEARCH(['--add-dir', home]), { environment: env, cwd: run.cwd })).toMatchObject({ ok: false })
+    // Only an OpenCode research run binds its session (70.4 AC4); this one is refused in the words of before (70.2 AC5).
+    expect(() => bindSession(join(home, 'research.json'), '019a2f6e-1c2b-7d3e-8f40-123456789abc', { now: NOW })).toThrow(/^only the receipt of a Codex dispatch can be bound to a session$/)
   })
 
   it.each([

@@ -5,10 +5,11 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { CODEX_RESEARCH_TOOLS_SEEN, OPENCODE_RESEARCH_TOOLS_SEEN, evaluateResearch, fenceStanding, fenceTests, fenceTestsPath, prepareResearchRun, researchFormHash, type FenceTestEntry } from '../../bin/agents-check.mjs'
+import { CODEX_RESEARCH_TOOLS_SEEN, OPENCODE_RESEARCH_TOOLS_SEEN, bindSession, bindingPath, evaluateResearch, fenceStanding, fenceTests, fenceTestsPath, prepareResearchRun, researchFormHash, researchRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import { FENCE_MARKERS, compareUnderProviderList, fenceDirectory, fenceSubjects, markersIn, providerModelList, runFenceTest } from '../../bin/agents-fence.mjs'
-import { answerText, researchArgv, researchers } from '../../bin/agents-research.mjs'
-import { openCodeFolder, openCodeFolderProblem } from '../../bin/agents-opencode.mjs'
+import { readQuestions, runAsk } from '../../bin/agents-ask.mjs'
+import { answerText, researchArgv, researchers, runResearch } from '../../bin/agents-research.mjs'
+import { openCodeFolder, openCodeFolderProblem, openCodeSession } from '../../bin/agents-opencode.mjs'
 import { processLives } from '../../bin/agents-supervised.mjs'
 import type { RosterAgent } from '../../bin/agents-roster.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
@@ -427,6 +428,64 @@ describe('the fence test of an OpenCode research run (70.3)', () => {
     expect(answerText('opencode', events({ type: 'step_start' }), { folder: '' })).toEqual({ ok: false, reason: 'OpenCode printed no answer' })
     expect(answerText('opencode', events({ type: 'error', error: { type: 'provider.auth', message: 'made-up refusal' } }), { folder: '' })).toEqual({ ok: false, reason: 'OpenCode reported an error: made-up refusal' })
     expect(answerText('opencode', 'not json', { folder: '' })).toEqual({ ok: false, reason: 'OpenCode printed a line that is not JSON' })
+  })
+
+  describe('the session of a research run (70.4 AC4)', () => {
+    const SESSION = 'ses_0123456789abFakeOpenCode01'
+    const ANSWER = JSON.stringify({ version: 1, answer: 'People use Jev mostly to route requests by intent.', claims: [], not_found: ['an independent measurement'] })
+    const ask = (now: () => Date = () => NOW) => runAsk({ question: 'How do people use the Jev 1.13 model, according to public pages?', agent: 'luna-go', owner: true, environment: env, now,
+      fetchPage: async () => ({ ok: false, reason: 'no page in this test' }) })
+    const receiptOf = (run: string) => join(researchRunsDirectory(), run, 'receipt.json')
+    const bindingOf = (receipt: string) => JSON.parse(readFileSync(bindingPath(JSON.parse(readFileSync(receipt, 'utf8')).receipt_hash), 'utf8')) as { session_id: string }
+
+    it('is read from the events: the one OpenCode id they all name', () => {
+      const events = (...lines: unknown[]) => lines.map((line) => JSON.stringify(line)).join('\n')
+      expect(openCodeSession(events({ type: 'step_start', sessionID: SESSION }, { type: 'text', sessionID: SESSION, part: { text: 'x' } }))).toBe(SESSION)
+      expect(openCodeSession(events({ type: 'step_start', sessionID: SESSION }, { type: 'text', sessionID: 'ses_0123456789abFakeOpenCode02' }))).toBeNull()
+      expect(openCodeSession(events({ type: 'step_start', sessionID: '019a2f6e-1c2b-7d3e-8f40-123456789abc' }))).toBeNull()
+      expect(openCodeSession(events({ type: 'step_start' }))).toBeNull()
+      expect(openCodeSession(`${events({ type: 'step_start', sessionID: SESSION })}\nnot json`)).toBeNull()
+    })
+
+    it('is bound to the run\'s check and kept with the question; a second binding is refused, as for a dispatch', async () => {
+      expect((await testOpenCode()).verdict).toBe('pass')
+      opencode({ answer: ANSWER })
+      const asked = await ask()
+      expect(asked, JSON.stringify(asked)).toMatchObject({ ok: true, outcome: 'answered', session: SESSION })
+      expect(asked.note).toBeUndefined()
+      const receipt = receiptOf(asked.run!)
+      expect(JSON.parse(readFileSync(receipt, 'utf8'))).toMatchObject({ mode: 'research', harness: 'opencode' })
+      expect(bindingOf(receipt)).toMatchObject({ session_id: SESSION })
+      expect(readQuestions().find((entry) => entry.id === asked.id)).toMatchObject({ outcome: 'answered', session: SESSION })
+      expect(() => bindSession(receipt, SESSION, { now: NOW })).toThrow('this receipt is already bound to a session; a binding is accepted once')
+    }, 60_000)
+
+    it('leaves the answer standing where the session cannot be bound, and says why', async () => {
+      expect((await testOpenCode()).verdict).toBe('pass')
+      opencode({ answer: ANSWER, sessions: true })
+      const two = await ask()
+      expect(two, JSON.stringify(two)).toMatchObject({ ok: true, outcome: 'answered', note: 'OpenCode named no single session, so the run is bound to none.' })
+      expect(two).not.toHaveProperty('session')
+      // The binding comes after the ten minutes its check allows: refused, and the answer stands.
+      opencode({ answer: ANSWER })
+      let calls = 0
+      const late = await ask(() => (calls++ === 0 ? NOW : new Date(NOW.getTime() + 11 * 60_000)))
+      expect(late, JSON.stringify(late)).toMatchObject({ ok: true, outcome: 'answered', session: SESSION,
+        note: `BMN could not bind session ${SESSION} to the run's check: a session is bound within 10 minutes of the check that preceded it; start a fresh checked dispatch.` })
+      expect(existsSync(bindingPath(JSON.parse(readFileSync(receiptOf(late.run!), 'utf8')).receipt_hash))).toBe(false)
+    }, 60_000)
+
+    it('is bound for each run of a Models research', async () => {
+      expect((await testOpenCode()).verdict).toBe('pass')
+      opencode({ answer: JSON.stringify({ version: 1, models: [] }) })
+      const listed = () => (existsSync(researchRunsDirectory()) ? readdirSync(researchRunsDirectory()) : [])
+      const before = new Set(listed())
+      const { run } = await runResearch({ researcher: 'luna-go', environment: env, now: () => NOW, fetchPage: async () => ({ ok: false, reason: 'no page in this test' }) })
+      const runs = listed().filter((name) => !before.has(name))
+      expect(runs.length, JSON.stringify(run)).toBeGreaterThan(0)
+      for (const name of runs) expect(bindingOf(receiptOf(name))).toMatchObject({ session_id: SESSION })
+      expect(run.note ?? '').not.toContain('bind')
+    }, 60_000)
   })
 })
 

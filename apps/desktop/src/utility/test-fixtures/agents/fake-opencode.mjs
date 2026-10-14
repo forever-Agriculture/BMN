@@ -87,6 +87,15 @@ try {
 } catch {
   base = undefined
 }
+// 70.4: `answer` stands for a research run whose provider answered, with no provider reached: the events OpenCode
+// prints, each naming the session (`session` names another one, `sessions` two).
+if (typeof mode.answer === 'string') {
+  readFileSync(0, 'utf8')
+  const named = mode.session ?? 'ses_0123456789abFakeOpenCode01'
+  console.log(JSON.stringify({ type: 'step_start', sessionID: named }))
+  console.log(JSON.stringify({ type: 'text', sessionID: mode.sessions === true ? 'ses_0123456789abFakeOpenCode02' : named, part: { text: mode.answer } }))
+  process.exit(0)
+}
 if (base === undefined) {
   console.log(JSON.stringify({ type: 'error', sessionID: 'ses_0000000000aaFakeOpenCode00', error: { type: 'provider.auth', message: 'no provider this stand-in can reach' } }))
   process.exit(1)

@@ -35,6 +35,7 @@ export interface AnsweredWindow { tokens: number; source: string; as_of: string 
 export interface AnsweredModel { id: string; provider: string; listed: boolean; published_name?: string; price: AnsweredPrice | null; context_window: AnsweredWindow | null }
 export declare function parseAnswer(text: unknown, batch: ResearchBatch, options?: { now?: Date }): { ok: true; models: AnsweredModel[] } | { ok: false; reason: string }
 export declare function answerText(harness: string, stdout: string, run: { folder: string }): { ok: true; text: string } | { ok: false; reason: string }
+export declare function bindResearchSession(harness: string, stdout: string, run: { folder: string }, options?: { now?: Date }): { session: string | null; note?: string } | null
 
 export type PageRead = { ok: true; text: string } | { ok: false; reason: string }
 export type FetchPage = (address: string, limits?: { signal?: AbortSignal; timeoutMs?: number }) => Promise<PageRead>

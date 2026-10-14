@@ -19,6 +19,7 @@ export declare function installOpenCodeFolder(base?: string, options?: { ownerCa
 export declare function openCodeFolderProblem(base?: string): string | null
 export declare function openCodeResearchArgv(agent: { model: string; provider: string }, effort: string, options?: { path?: string; base?: string }): string[]
 export declare function openCodeAnswer(stdout: string): { ok: true; text: string } | { ok: false; reason: string }
+export declare function openCodeSession(stdout: string): string | null
 export declare const OPENCODE_GO_PROVIDER: string
 export declare const LUNA_GO_MODEL: string
 type Environment = NodeJS.ProcessEnv | Record<string, string>

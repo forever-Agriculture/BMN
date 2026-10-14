@@ -8,7 +8,7 @@ import { RosterError, appName, namedResearchers } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { CODEX_RESEARCH_ANSWER, evaluateResearch, prepareResearchRun, removeResearchCodexFolders, researchRunsDirectory } from './agents-check.mjs'
 import {
-  RESEARCH_RUNNING, answerText, appVersion, compareBeforeFirstRun, fetchPublicPage, pageText, researchArgv, researchDirectory, researchLockHolder, researchers,
+  RESEARCH_RUNNING, answerText, appVersion, bindResearchSession, compareBeforeFirstRun, fetchPublicPage, pageText, researchArgv, researchDirectory, researchLockHolder, researchers,
   runOnce, settledResearcher, takeLock, takeResearchLock
 } from './agents-research.mjs'
 import { writePrivate } from './agents-rules.mjs'
@@ -686,13 +686,20 @@ export async function runAsk({
     if (result.ended === 'stopped') return await finish('stopped', { note: 'Stopped before the researcher answered.' })
     if (result.ended === 'limit') return await finish('limit', { note: 'Ended at the time limit before the researcher answered.' })
     if (result.ended === 'failed') return await finish('failed', { note: result.reason })
+    // An OpenCode researcher's session is bound to the run's check and kept with the question (70.4 AC4).
+    const bound = bindResearchSession(agent.harness, result.stdout, run, { now: now() })
+    const session = bound === null || bound.session === null ? {} : { session: bound.session }
+    const notes = (...said) => {
+      const words = [...said, bound?.note].filter((part) => part !== undefined).join(' ')
+      return words === '' ? {} : { note: words }
+    }
     const printed = answerText(agent.harness, result.stdout, run)
     const answer = printed.ok ? parseAskAnswer(printed.text) : printed
-    if (!answer.ok) return await finish('no-answer', { note: `no usable answer: ${answer.reason}` })
+    if (!answer.ok) return await finish('no-answer', { ...session, ...notes(`no usable answer: ${answer.reason}`) })
     const claims = await markClaims(answer.claims, { fetchPage, signal, deadline })
     const cut = signal?.aborted ? 'Stopped while BMN read the cited pages; the pages not read by then are marked not readable.'
       : Date.now() >= deadline ? 'The time limit came while BMN read the cited pages; the pages not read by then are marked not readable.' : undefined
-    return await finish('answered', { answer: answer.answer, claims, not_found: answer.notFound, counts: markCounts(claims), ...(cut === undefined ? {} : { note: cut }) })
+    return await finish('answered', { answer: answer.answer, claims, not_found: answer.notFound, counts: markCounts(claims), ...session, ...notes(cut) })
   } catch (error) {
     if (run !== null) removeResearchCodexFolders(run)
     return await finish('failed', { note: error instanceof Error ? error.message : String(error) })

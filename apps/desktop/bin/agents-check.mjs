@@ -1640,13 +1640,17 @@ export function bindingPath(receiptHashValue) {
 /**
  * Records that the dispatch a receipt checked started `sessionId`. Accepted once per receipt and
  * only within 10 minutes of the receipt's `issued_at`; a later resume passes only for that session.
+ * An OpenCode research run binds its session as well, so its usage is read by the session its check passed (70.4 AC4).
  */
 export function bindSession(receiptFile, sessionId, { now = new Date() } = {}) {
   const receipt = readReceiptFile(receiptFile)
   if (receipt === null) throw new RosterError('RECEIPT_INVALID', `${receiptFile} is not an intact version-1 receipt`)
-  if (receipt.mode !== 'dispatch' || (receipt.harness !== 'codex' && receipt.harness !== 'opencode')) throw new RosterError('RECEIPT_INVALID', 'only the receipt of a Codex or OpenCode dispatch can be bound to a session')
-  if (receipt.harness === 'opencode' ? !OPENCODE_SESSION_ID.test(sessionId) : !SESSION_ID.test(sessionId)) {
-    throw new RosterError('RECEIPT_INVALID', `${sessionId} is not ${receipt.harness === 'opencode' ? 'an OpenCode' : 'a Codex'} session id`)
+  if (receipt.harness === 'opencode') {
+    if (receipt.mode !== 'dispatch' && receipt.mode !== 'research') throw new RosterError('RECEIPT_INVALID', 'only the receipt of an OpenCode dispatch or research run can be bound to a session')
+    if (!OPENCODE_SESSION_ID.test(sessionId)) throw new RosterError('RECEIPT_INVALID', `${sessionId} is not an OpenCode session id`)
+  } else {
+    if (receipt.mode !== 'dispatch' || receipt.harness !== 'codex') throw new RosterError('RECEIPT_INVALID', 'only the receipt of a Codex dispatch can be bound to a session')
+    if (!SESSION_ID.test(sessionId)) throw new RosterError('RECEIPT_INVALID', `${sessionId} is not a Codex session id`)
   }
   const age = now.getTime() - Date.parse(receipt.issued_at)
   if (!(age >= 0 && age <= BINDING_WINDOW_MS)) throw new RosterError('RECEIPT_INVALID', 'a session is bound within 10 minutes of the check that preceded it; start a fresh checked dispatch')

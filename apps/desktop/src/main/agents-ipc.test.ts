@@ -37,7 +37,7 @@ let judgeTestPort: string | null
 let fenceTest: NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]>['fenceTest'] | null
 let researchCompare: NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]>['researchCompare'] | null
 /** What OpenCode answers about Luna through OpenCode Go here (70.4); every call is recorded with the environment it was given. */
-let openCodeGo: { listed: boolean; signedIn: boolean | null; copy: { ok: boolean; copied: boolean; message: string }; calls: Array<{ kind: string; home: string | undefined }> }
+let openCodeGo: { listed: boolean; signedIn: boolean | null; copy: { ok: boolean; copied: boolean; message: string } | Error; calls: Array<{ kind: string; home: string | undefined }> }
 /** What installing the handlers handed back, and the notices BMN itself showed. */
 let ipc: AgentsIpcHandle
 let notices: { title: string; body: string }[]
@@ -89,7 +89,11 @@ beforeEach(() => {
     openCodeGo: {
       lists: async (options) => { openCodeGo.calls.push({ kind: 'lists', home: options?.environment?.HOME }); return { listed: openCodeGo.listed } },
       signedIn: async (options) => { openCodeGo.calls.push({ kind: 'signedIn', home: options?.environment?.HOME }); return { signedIn: openCodeGo.signedIn } },
-      copy: async (options) => { openCodeGo.calls.push({ kind: 'copy', home: options?.environment?.HOME }); return openCodeGo.copy }
+      copy: async (options) => {
+        openCodeGo.calls.push({ kind: 'copy', home: options?.environment?.HOME })
+        if (openCodeGo.copy instanceof Error) throw openCodeGo.copy
+        return openCodeGo.copy
+      }
     }
   })
 })
@@ -1831,6 +1835,19 @@ describe('Luna through OpenCode Go on Team (70.4)', () => {
     expect(await approveProposal()).toMatchObject({ ok: true, openCodeSignIn: missing })
     expect(await call<OpenCodeGoView>('agents:opencode-go')).toMatchObject({ signedIn: false })
     expect(kinds('signedIn')).toEqual([{ kind: 'signedIn', home }])
+    openCodeGo.copy = COPIED
+    expect(await call<OpenCodeGoView>('agents:opencode-go', { copy: true })).toMatchObject({ signedIn: true, copy: COPIED })
+    expect(kinds('copy')).toHaveLength(2)
+  })
+
+  it('keeps the approval where copying the sign-in threw, says why, and Copy sign-in tries again (Astra, Epic 70 review)', async () => {
+    openCodeGo.copy = new Error('EACCES: permission denied, mkdir \'/made-up/bmn/opencode/home\'')
+    openCodeGo.signedIn = false
+    const approved = await approveProposal()
+    expect(approved).toMatchObject({ ok: true, openCodeSignIn: { ok: false, copied: false, message: 'BMN could not copy your OpenCode Go sign-in: EACCES: permission denied, mkdir \'/made-up/bmn/opencode/home\'' } })
+    // The team approved before the copy is the one the snapshot shows.
+    expect((await snapshot()).approved?.generation).toBe((approved as { snapshot: AgentsSnapshot }).snapshot.approved?.generation)
+    expect((approved as { snapshot: AgentsSnapshot }).snapshot.approved?.data.agents.some((agent) => agent.provider === 'opencode-go')).toBe(true)
     openCodeGo.copy = COPIED
     expect(await call<OpenCodeGoView>('agents:opencode-go', { copy: true })).toMatchObject({ signedIn: true, copy: COPIED })
     expect(kinds('copy')).toHaveLength(2)

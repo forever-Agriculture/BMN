@@ -884,7 +884,13 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   // Whether OpenCode lists her model: a yes holds while BMN runs, a no is asked again, since OpenCode may be installed meanwhile.
   let lunaListed: Promise<{ listed: boolean; reason?: string }> | null = null
   const copyGoSignIn = async (): Promise<OpenCodeSignInResult> => {
-    const result = await (options.openCodeGo?.copy ?? copyOpenCodeGoSignIn)({ environment: context().probeEnv })
+    let result: OpenCodeSignInResult
+    try {
+      result = await (options.openCodeGo?.copy ?? copyOpenCodeGoSignIn)({ environment: context().probeEnv })
+    } catch (error) {
+      // A failure on the disk is a sign-in not copied: the approval before it stands, and Copy sign-in tries again.
+      return { ok: false, copied: false, message: `BMN could not copy your OpenCode Go sign-in: ${error instanceof Error ? error.message : String(error)}` }
+    }
     if (result.ok) goSignedIn = true
     return result
   }

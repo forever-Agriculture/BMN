@@ -1721,7 +1721,10 @@ What the check reads and refuses:
   (the 70.2 probe at the end of the 70.1 record).
 - **Binding.** The first JSON event of a run names its session (`ses_` and 26 characters);
   `bmn roster bind --receipt <file> --session <ses_…>` takes that shape for an OpenCode receipt,
-  inside the same ten minutes as for Codex, and no other.
+  inside the same ten minutes as for Codex, and no other. A research run on OpenCode binds its
+  own session to its check: BMN reads the one session id its events name and keeps it with the
+  question (`session`), so its usage can be read by that id. Where it cannot be bound, the answer
+  stands and its note says why. Any other receipt is refused in the words it had before OpenCode.
 
 Tested: the check's cases in `apps/desktop/src/utility/agents-check.test.ts`, and, with
 `BMN_OPENCODE_REAL=1`, one run of the installed OpenCode through the checked command against a

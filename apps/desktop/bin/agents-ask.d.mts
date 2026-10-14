@@ -28,6 +28,8 @@ export interface QuestionRecord {
   question: string | null
   outcome: AskOutcome | 'running' | 'interrupted'
   code?: string; note?: string; run?: string; answer?: string; claims?: MarkedClaim[]; not_found?: string[]; counts?: MarkCounts; took_ms?: number
+  /** The OpenCode session the researcher's run was bound to (70.4 AC4). */
+  session?: string
 }
 export declare function questionsPath(): string
 export declare function readQuestions(): QuestionRecord[]
@@ -46,7 +48,7 @@ export declare function noResearcherWords(named: readonly string[] | null): stri
 
 export interface AskResult {
   ok: boolean; id: string; outcome: AskOutcome; researcher?: string | null; run?: string; code?: string; message?: string; next?: string; note?: string
-  answer?: string; claims?: MarkedClaim[]; not_found?: string[]; counts?: MarkCounts; took_ms?: number
+  answer?: string; claims?: MarkedClaim[]; not_found?: string[]; counts?: MarkCounts; took_ms?: number; session?: string
 }
 export declare function runAsk(options: {
   question: string; agent?: string | null; by?: Asker; owner?: boolean; environment?: Environment; now?: () => Date; signal?: AbortSignal

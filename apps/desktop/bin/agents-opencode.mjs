@@ -161,6 +161,26 @@ export function openCodeAnswer(stdout) {
 }
 
 /**
+ * The session a finished `opencode run --format json` ran in: the one id of OpenCode's shape its
+ * events name, or null where none is named, the events name two, or a line is not JSON.
+ */
+export function openCodeSession(stdout) {
+  const named = new Set()
+  for (const line of stdout.split('\n')) {
+    if (line.trim() === '') continue
+    let event
+    try {
+      event = JSON.parse(line)
+    } catch {
+      return null
+    }
+    if (event !== null && typeof event === 'object' && event.sessionID !== undefined) named.add(event.sessionID)
+  }
+  const [session] = named
+  return named.size === 1 && typeof session === 'string' && OPENCODE_SESSION_ID.test(session) ? session : null
+}
+
+/**
  * What `bmn roster role --json` hands a lead for an OpenCode candidate: the environment and the
  * arguments, then `-m <model>#<effort> --title <title>` and the prompt on standard input.
  */
