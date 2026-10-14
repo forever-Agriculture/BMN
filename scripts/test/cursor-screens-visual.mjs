@@ -16,6 +16,7 @@
 //   default folder: <main checkout>/_bmad-output/planning-artifacts/reference-71-retire-cursor/after (or BMN_CURSOR_SHOTS)
 //   BMN_CURSOR_SCREENS=guard-card,preferences-health  only screens whose name starts with one of these;
 //   BMN_CURSOR_MODES=black  fewer modes. A narrowed run writes its own shots.json, so give it a folder of its own.
+//   BMN_CURSOR_BINARY=<packaged bmn>  the screens of a packaged build (Story 71.3 AC3), as electron-normal-start --binary.
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -30,7 +31,8 @@ const repoRoot = resolve(scriptDirectory, '../..')
 const appDirectory = join(repoRoot, 'apps/desktop')
 const cli = join(appDirectory, 'bin/bmn')
 const fixtures = join(appDirectory, 'src/utility/test-fixtures')
-const electronBinary = createRequire(join(appDirectory, 'package.json'))('electron')
+const packagedBinary = process.env.BMN_CURSOR_BINARY ? resolve(process.env.BMN_CURSOR_BINARY) : undefined
+const electronBinary = packagedBinary ?? createRequire(join(appDirectory, 'package.json'))('electron')
 const git = (...args) => { try { return execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() } catch { return null } }
 // The planning folder is ignored by git and lives in the main checkout only, not in a worktree.
 const mainCheckout = dirname(git('rev-parse', '--path-format=absolute', '--git-common-dir') ?? join(repoRoot, '.git'))
@@ -138,7 +140,7 @@ while :; do [ -e '${quit}' ] && exit 0; sleep 0.2; done`)
 
   const launchApplication = () => electron.launch({
     executablePath: electronBinary,
-    args: [appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
+    args: [...(packagedBinary ? [] : [appDirectory]), '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -192,7 +194,7 @@ while :; do [ -e '${quit}' ] && exit 0; sleep 0.2; done`)
     return [`database ${database}: Cursor conversation ${CHAT} bound to the session (hook-session-start)`, `notices marked as opened by Cursor's stop hook: ${marked}`]
   }
   const manifest = {
-    generatedAt: new Date().toISOString(), commit: git('rev-parse', 'HEAD'), worktree: repoRoot, colorModes: COLOR_MODES,
+    generatedAt: new Date().toISOString(), commit: git('rev-parse', 'HEAD'), worktree: repoRoot, binary: packagedBinary ?? 'development', colorModes: COLOR_MODES,
     defaultSize: DEFAULT_SIZE, preferenceSizes: PREFERENCE_SIZES, setup: [], scan: [], screens: []
   }
   const note = (line) => { manifest.setup.push(line); phase(line) }
