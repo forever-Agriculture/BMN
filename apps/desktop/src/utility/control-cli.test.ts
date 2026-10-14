@@ -3774,7 +3774,7 @@ describe('OpenCode hooks', () => {
 
   it('sends no answer that arrives after OpenCode unloaded the plugin, or after the terminal moved to another session (Astra review)', async () => {
     const answerNext: Array<(answers: unknown[]) => void> = []
-    const { spawn } = fakePluginSpawn(async (call) => {
+    const { spawn, calls } = fakePluginSpawn(async (call) => {
       if (!call.args.includes('take')) return { code: 0 }
       const answers = await new Promise<unknown[]>((resolve) => answerNext.push(resolve))
       return { code: 0, stdout: JSON.stringify({ answers }) }
@@ -3785,12 +3785,14 @@ describe('OpenCode hooks', () => {
     const stop = (await loadOpenCodePlugin({ BMN_CONTROL_SOCKET: '/fixture/socket' }, spawn)).setup(context)
     emit('permission.asked', { id: 'per_1', sessionID: OPENCODE_SESSION, action: 'edit', resources: ['a'] })
     await vi.waitFor(() => expect(answerNext).toHaveLength(1))
-    // The owner opens another session while BMN collects: BMN withdraws the request, and a late tap is not sent.
+    // The owner opens another session while BMN collects, and the answer comes back before any event or the
+    // plugin's next look at the route: it is not sent, and BMN hears of the move.
     terminal.route = { type: 'session', sessionID: OTHER }
-    emit('vcs.branch.updated', {})
     answerNext.shift()!([{ requestRef: 'per_1', kind: 'permission', reply: 'once' }])
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(terminal.replies.permission).toEqual([])
+    expect(calls.filter((call) => call.args.includes('hook')).map((call) => JSON.parse(call.input ?? 'null').hook_event_name))
+      .toContain('tui.session.select')
 
     emit('permission.asked', { id: 'per_2', sessionID: OTHER, action: 'edit', resources: ['b'] })
     await vi.waitFor(() => expect(answerNext).toHaveLength(1))

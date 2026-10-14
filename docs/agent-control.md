@@ -2009,8 +2009,10 @@ on Rules → Health: a provider that may see private work passes, any other warn
   BMN does not read would not be noticed. For OpenCode BMN reads only its own configuration
   folder: the model's provider prefix. Every model the configuration names gets the conversation, so
   the title model (`small_model`) and each agent's, mode's or command's (`agent`, `agents`, `mode`,
-  `command`, `commands`, and the `model:` of the files in `agent/`, `agents/`, `mode/`, `modes/`,
-  `command/` and `commands/`) must name the same provider. It is unknown
+  `command`, `commands`, and the `model:` in the front matter of the files, at any depth, in `agent/`,
+  `agents/`, `mode/`, `modes/`, `command/` and `commands/`) must name the same provider. BMN reads one
+  plain top-level `model:` line there; a model named any other way (indented, in a flow map, as a block,
+  twice) makes it unknown, as does a folder BMN cannot read. It is unknown
   when they do not, when `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT` is set where BMN runs, or
   when the provider entry, the named model's entry or one of its variants carries its own address or
   runtime (OpenCode 1's `api`, `npm` or `options.baseURL`, OpenCode 2's `package`, `canonical` or

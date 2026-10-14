@@ -264,6 +264,13 @@ describe('install transactions and restore (60.4 AC3-AC4)', () => {
       expect(await installRules(['opencode'], { yes: true, environment: { ...env, ...extra } })).toMatchObject({ code: 'ROUTE_CHANGED' })
       expect(readFileSync(target.opencode(), 'utf8')).not.toContain('One more public rule.')
     }
+    // A command file at any depth whose model goes to another provider stops the full rules as well.
+    mkdirSync(join(home, '.config/opencode/commands/team'), { recursive: true })
+    writeFileSync(join(home, '.config/opencode/commands/team/release.md'), '---\n"model": openrouter/cheap\n---\nShip it.\n')
+    writeFileSync(config, '{ "model": "opencode-go/kimi-k3" }')
+    expect(await installRules(['opencode'], { yes: true, environment: env })).toMatchObject({ code: 'ROUTE_CHANGED' })
+    expect(readFileSync(target.opencode(), 'utf8')).not.toContain('One more public rule.')
+    rmSync(join(home, '.config/opencode/commands'), { recursive: true })
     writeFileSync(config, '{ "model": "opencode-go/kimi-k3" }')
     rmSync(join(stubs, 'opencode'))
     expect(await installRules(['opencode'], { yes: true, environment: env })).toMatchObject({ code: 'ROUTE_CHANGED', message: expect.stringContaining('OpenCode is not installed, or its version cannot be read') })

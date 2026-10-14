@@ -740,6 +740,8 @@ export default {
     // An answer BMN already decided from a tap, sent to OpenCode by this terminal's own client.
     const reply = async (answer: Answer) => {
       const ref = answer.requestRef
+      // The terminal may have moved since the answer was collected, with no event yet to say so: look now.
+      follow()
       if (stopped || typeof ref !== "string" || !waiting.has(ref)) return
       const sessionID = waiting.get(ref) as string
       if (answer.kind === "question") {

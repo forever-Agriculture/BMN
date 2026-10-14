@@ -49,6 +49,11 @@ async function versionReads(bin: string): Promise<number> {
   return (await readFile(join(bin, 'opencode-version.log'), 'utf8').catch(() => '')).split('\n').filter(Boolean).length
 }
 
+/** What a look hands the same pass's candidates and deletes (the OpenCode adapter's layout). */
+function passOf(look: Awaited<ReturnType<ReturnType<typeof openCodeHistoryAdapter>['available']>>): unknown {
+  return look.ok ? look.pass : undefined
+}
+
 async function root(): Promise<string> {
   const path = await mkdtemp(join(tmpdir(), 'bmn-history-adapter-'))
   roots.push(path)
@@ -153,10 +158,11 @@ describe('OpenCode history adapter', () => {
     await openCodeStore(home)
     const adapter = openCodeHistoryAdapter({ home, open, env: { PATH: bin } })
 
-    expect(await adapter.available()).toEqual({ ok: true, sessions: 2 })
-    expect(await adapter.candidates(NOW - 30 * DAY)).toEqual([{ id: OPENCODE_IDS[0], updatedAt: NOW - 40 * DAY }])
-    expect(await adapter.remove(OPENCODE_IDS[0]!)).toEqual({ ok: true })
-    expect(await adapter.remove('../../etc')).toEqual({ ok: false, reason: 'not an OpenCode session id' })
+    const look = await adapter.available()
+    expect(look).toMatchObject({ ok: true, sessions: 2 })
+    expect(await adapter.candidates(NOW - 30 * DAY, passOf(look))).toEqual([{ id: OPENCODE_IDS[0], updatedAt: NOW - 40 * DAY }])
+    expect(await adapter.remove(OPENCODE_IDS[0]!, passOf(look))).toEqual({ ok: true })
+    expect(await adapter.remove('../../etc', passOf(look))).toEqual({ ok: false, reason: 'not an OpenCode session id' })
     expect(await readFile(log, 'utf8')).toBe(`${home}|session delete ${OPENCODE_IDS[0]} --pure\n`)
   })
 
@@ -187,10 +193,16 @@ describe('OpenCode history adapter', () => {
     const adapter = openCodeHistoryAdapter({ home, open, env: { PATH: bin } })
 
     // Sessions are counted as the owner sees them: top-level only.
-    expect(await adapter.available()).toEqual({ ok: true, sessions: 5 })
+    const look = await adapter.available({ fresh: true })
+    expect(look).toMatchObject({ ok: true, sessions: 5 })
     // The family is aged by its newest member and named with the candidate, so the runner protects every member.
-    expect(await adapter.candidates(NOW - 30 * DAY)).toEqual([{ id: OPENCODE_IDS[1], updatedAt: NOW - 35 * DAY, family: [child] }])
-    expect(await adapter.remove(OPENCODE_IDS[1]!)).toEqual({ ok: true })
+    expect(await adapter.candidates(NOW - 30 * DAY, passOf(look))).toEqual([{ id: OPENCODE_IDS[1], updatedAt: NOW - 35 * DAY, family: [child] }])
+
+    // A status look that ends later, failed or on another version, changes nothing for this pass.
+    await fakeOpenCode(bin, 'opencode v2.0.28 (broken)', 1)
+    expect(await adapter.available()).toMatchObject({ ok: true, sessions: 2 })
+    expect(await adapter.candidates(NOW - 30 * DAY, passOf(look))).toEqual([{ id: OPENCODE_IDS[1], updatedAt: NOW - 35 * DAY, family: [child] }])
+    expect(await adapter.remove(OPENCODE_IDS[1]!, passOf(look))).toEqual({ ok: true })
     expect(await readFile(log, 'utf8')).toBe(`${home}|session delete ${OPENCODE_IDS[1]} --standalone\n`)
   })
 
@@ -201,10 +213,10 @@ describe('OpenCode history adapter', () => {
     await openCodeStore(home)
     const adapter = openCodeHistoryAdapter({ home, open, env: { PATH: bin } })
 
-    for (let pass = 0; pass < 3; pass += 1) expect(await adapter.available()).toEqual({ ok: true, sessions: 2 })
+    for (let pass = 0; pass < 3; pass += 1) expect(await adapter.available()).toMatchObject({ ok: true, sessions: 2 })
     expect(await versionReads(bin)).toBe(1)
     // A run never trusts a remembered answer: a launcher can start another version from the same file.
-    expect(await adapter.available({ fresh: true })).toEqual({ ok: true, sessions: 2 })
+    expect(await adapter.available({ fresh: true })).toMatchObject({ ok: true, sessions: 2 })
     expect(await versionReads(bin)).toBe(2)
 
     // An upgrade replaces the file; the next pass asks again and moves to OpenCode 2's table.
@@ -212,13 +224,13 @@ describe('OpenCode history adapter', () => {
     const database = new BetterSqlite3(join(home, '.local', 'share', 'opencode', 'opencode.db'))
     database.exec('CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, time_created INTEGER, time_updated INTEGER)')
     openStores.push(database)
-    expect(await adapter.available()).toEqual({ ok: true, sessions: 0 })
+    expect(await adapter.available()).toMatchObject({ ok: true, sessions: 0 })
     expect(await versionReads(bin)).toBe(3)
 
     // A failed read counts as OpenCode 1 for that pass only.
     await fakeOpenCode(bin, 'opencode v2.0.28 (broken)', 1)
-    expect(await adapter.available()).toEqual({ ok: true, sessions: 2 })
-    expect(await adapter.available()).toEqual({ ok: true, sessions: 2 })
+    expect(await adapter.available()).toMatchObject({ ok: true, sessions: 2 })
+    expect(await adapter.available()).toMatchObject({ ok: true, sessions: 2 })
     expect(await versionReads(bin)).toBe(5)
   })
 

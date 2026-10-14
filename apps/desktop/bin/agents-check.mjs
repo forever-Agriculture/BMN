@@ -856,26 +856,63 @@ function openCodeReference(named) {
   return text === null ? null : text.split('#')[0]
 }
 
-// The `model:` of each agent or command file's front matter beside the configuration (OpenCode 2 still reads
-// OpenCode 1's agent/, mode/, modes/ and command/ beside its own agents/ and commands/).
+// OpenCode 2 reads agent and command files from these folders beside the configuration, at any depth: its own
+// agents/ and commands/ and OpenCode 1's agent/, mode/, modes/ and command/.
+const OPENCODE_FILE_FOLDERS = ['agent', 'agents', 'mode', 'modes', 'command', 'commands']
+const OPENCODE_FILE_LIMIT = 2000
+const OPENCODE_FILE_DEPTH = 16
+const FRONT_MATTER = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/
+// A plain top-level `model: <reference>` line, key and value each bare or quoted, with an optional comment.
+// A YAML indicator (a block, an alias, a tag, a flow map) never starts it.
+const PLAIN_MODEL = /^(["']?)model\1[ \t]*:[ \t]*(["']?)([^\s"'#|>&*!%@`{}[\],][^\s"']*)\2[ \t]*(?:#.*)?\r?$/gm
+// Anything YAML could read as a `model` key, anywhere in the front matter.
+const ANY_MODEL_KEY = /(?:^|[\s{,])(["']?)model\1[ \t]*:/gm
+
+/**
+ * The model each agent or command file names in its front matter. OpenCode reads that front matter as
+ * YAML; BMN reads one plain top-level `model:` line, and a file that names `model` any other way (indented,
+ * in a flow map, as a block, twice) is returned as unreadable, so the destination reads as unknown.
+ */
 function openCodeAgentFiles(folder) {
   const found = []
-  for (const directory of ['agent', 'agents', 'mode', 'modes', 'command', 'commands']) {
-    let names
+  let files = 0
+  const walk = (directory, source, depth) => {
+    if (depth > OPENCODE_FILE_DEPTH) throw new Refusal('HOST_UNKNOWN', `${directory} is nested deeper than BMN reads`)
+    let entries
     try {
-      traceRead?.(`${folder}/${directory}`)
-      names = readdirSync(`${folder}/${directory}`)
+      traceRead?.(directory)
+      entries = readdirSync(directory)
     } catch (error) {
-      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') continue
-      throw new Refusal('HOST_UNKNOWN', `cannot read ${folder}/${directory} (${error.code})`)
+      if (depth === 0 && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) return
+      throw new Refusal('HOST_UNKNOWN', `cannot read ${directory} (${error.code})`)
     }
-    for (const name of names.filter((entry) => entry.endsWith('.md')).sort()) {
-      const text = optionalText(`${folder}/${directory}/${name}`)
-      const front = text === null ? undefined : /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1]
-      const model = front === undefined ? undefined : /^model:[ \t]*["']?([^"'\s]+)/m.exec(front)?.[1]
-      if (model !== undefined) found.push({ reference: openCodeReference(model), source: `${directory}/${name}` })
+    for (const name of entries.sort()) {
+      const path = `${directory}/${name}`
+      let stats
+      try {
+        stats = statSync(path)
+      } catch (error) {
+        // A link to nothing is skipped, as OpenCode skips it.
+        if (error.code === 'ENOENT') continue
+        throw new Refusal('HOST_UNKNOWN', `cannot read ${path} (${error.code})`)
+      }
+      if (stats.isDirectory()) {
+        walk(path, `${source}/${name}`, depth + 1)
+        continue
+      }
+      if (!name.endsWith('.md') || !stats.isFile()) continue
+      files += 1
+      if (files > OPENCODE_FILE_LIMIT) throw new Refusal('HOST_UNKNOWN', `more than ${OPENCODE_FILE_LIMIT} agent and command files beside the OpenCode configuration`)
+      const front = FRONT_MATTER.exec(optionalText(path) ?? '')?.[1]
+      if (front === undefined) continue
+      const keys = [...front.matchAll(ANY_MODEL_KEY)].length
+      const plain = [...front.matchAll(PLAIN_MODEL)]
+      if (keys === 0) continue
+      if (keys === 1 && plain.length === 1) found.push({ reference: openCodeReference(plain[0][3]), source: `${source}/${name}` })
+      else found.push({ reference: null, unreadable: true, source: `${source}/${name}` })
     }
   }
+  for (const directory of OPENCODE_FILE_FOLDERS) walk(`${folder}/${directory}`, directory, 0)
   return found
 }
 
@@ -918,7 +955,8 @@ function inspectOpenCode(environment) {
     }
     named.push(...openCodeAgentFiles(folder))
     const providers = []
-    for (const { reference, source } of named) {
+    for (const { reference, source, unreadable } of named) {
+      if (unreadable) return { basis: 'unknown', provider: null, host: null, reason: `${source} names its model in a form BMN does not read`, sources: [source] }
       const provider = reference !== null && reference.includes('/') ? reference.slice(0, reference.indexOf('/')) : null
       if (provider === null || provider === '') return { basis: 'unknown', provider: null, host: null, reason: `${source} names no provider`, sources: [source] }
       if (!providers.includes(provider)) providers.push(provider)

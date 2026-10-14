@@ -296,6 +296,36 @@ describe('agent history limit', () => {
     expect(f.history.isDeleting('child-free')).toBe(false)
   })
 
+  it('hands each adapter back what its own look found, for every candidate read and delete of that pass (Astra recheck)', async () => {
+    const codex = fakeAdapter('codex', [{ id: 'old', updatedAt: daysAgo(40) }])
+    const seen: Array<[string, unknown]> = []
+    let looks = 0
+    const available = codex.available.bind(codex)
+    codex.available = async (look) => {
+      looks += 1
+      const result = await available(look)
+      return result.ok ? { ...result, pass: `look-${looks}` } : result
+    }
+    const candidates = codex.candidates.bind(codex)
+    codex.candidates = async (cutoff, pass) => { seen.push(['candidates', pass]); return candidates(cutoff) }
+    const remove = codex.remove.bind(codex)
+    codex.remove = async (id, pass) => {
+      // A status look in the middle of the run gets a pass of its own.
+      await f.history.status()
+      seen.push(['remove', pass])
+      return remove(id)
+    }
+    const f = await fixture({ adapters: [codex] })
+    await f.history.confirm()
+    await f.history.run()
+    const run = seen.filter(([what]) => what === 'remove').map(([, pass]) => pass)
+    expect(run).toHaveLength(1)
+    // The delete and the re-check before it used the run's own look, whatever the status looks got.
+    const index = seen.findIndex(([what]) => what === 'remove')
+    expect(seen[index - 2]).toEqual(['candidates', run[0]])
+    expect(seen.filter(([what, pass]) => what === 'candidates' && pass === run[0]).length).toBeGreaterThanOrEqual(2)
+  })
+
   it('asks every adapter afresh for a run, and lets a status read reuse what it knows', async () => {
     const looks: Array<boolean | undefined> = []
     const codex = fakeAdapter('codex', [{ id: 'old', updatedAt: daysAgo(40) }])

@@ -206,8 +206,11 @@ shapes above:
   created while the terminal ran, or in the last 30 seconds, is `session.created`; coming back to a
   session this terminal showed before is always `tui.session.select`. Either way BMN withdraws the
   last session's requests from the phone, and the plugin stops answering them, as OpenCode 1's did; the
-  owner, who just switched at the keyboard, answers them there. Requests a session raises while
-  another one is on screen are not sent (as in OpenCode 1).
+  owner, who just switched at the keyboard, answers them there. The plugin also looks at the route just
+  before it sends an answer, so an answer that arrives right after a switch is not sent. Requests a
+  session raises while another one is on screen are not sent: OpenCode 1 forwarded them as a subagent's
+  notice, which no tap could answer, but OpenCode 2's background service is shared by every terminal, so
+  only the family of the session on screen is this terminal's.
 - The home screen keeps the last session: its turn, errors and requests still reach BMN until the
   owner opens another session. Once OpenCode unloads the plugin, an answer still being collected is
   dropped, not sent.

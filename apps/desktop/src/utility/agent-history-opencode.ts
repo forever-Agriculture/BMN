@@ -39,14 +39,15 @@ const OPENCODE_2: Layout = { table: 'session_v2', topLevelOnly: true, deleteFlag
  * included, out of it; OpenCode 2 never loads BMN's terminal plugin for a delete. Each pass starts with
  * `available()`, which picks the layout from the installed version; a version that cannot be read counts
  * as OpenCode 1. A run always asks the binary. The status view, which looks on every read, reuses the
- * last answer while the binary on PATH is the same unchanged file; a failed read is never reused.
+ * last answer while the binary on PATH is the same unchanged file; a failed read is never reused. The layout
+ * travels with each look (`pass`), so a status look that ends while a run is under way cannot change the
+ * table or the delete flags that run uses; a caller that hands no layout back gets OpenCode 1's.
  */
 export function openCodeHistoryAdapter(options: OpenCodeHistoryOptions): AgentHistoryAdapter {
   const env = options.env ?? process.env
   const store = `${env.XDG_DATA_HOME || `${options.home}/.local/share`}/opencode/opencode.db`
   const binary = (): string | null => findOnPath('opencode', env.PATH)
   const query = <T>(work: Parameters<typeof readOnlyQuery<T>>[2]): T => readOnlyQuery(options.open, store, work)
-  let layout = OPENCODE_1
   let known: { binary: string; layout: Layout } | null = null
   const layoutOf = async (executable: string, fresh: boolean): Promise<Layout> => {
     let identity: string
@@ -69,20 +70,21 @@ export function openCodeHistoryAdapter(options: OpenCodeHistoryOptions): AgentHi
       const executable = binary()
       if (executable === null) return { ok: false, reason: 'opencode is not on PATH', absent: true }
       if (!existsSync(store)) return { ok: false, reason: 'no opencode.db yet', absent: true }
-      layout = await layoutOf(executable, look?.fresh === true)
+      const layout = await layoutOf(executable, look?.fresh === true)
       const { table } = layout
       try {
         return query((database) => {
           const missing = missingColumns(database, table, ['id', 'time_updated', ...(layout.topLevelOnly ? ['parent_id'] : [])])
           if (missing.length > 0) return { ok: false as const, reason: `${table} has no ${missing.join(', ')}` }
           const row = database.prepare(`SELECT count(*) AS count FROM ${table}${layout.topLevelOnly ? ' WHERE parent_id IS NULL' : ''}`).get() as { count: number }
-          return { ok: true as const, sessions: row.count }
+          return { ok: true as const, sessions: row.count, pass: layout }
         })
       } catch (error) {
         return { ok: false, reason: error instanceof Error ? error.message.slice(0, 160) : 'cannot read opencode.db' }
       }
     },
-    async candidates(cutoff) {
+    async candidates(cutoff, pass) {
+      const layout = layoutFrom(pass)
       if (layout.topLevelOnly) return familyCandidates(query((database) => database.prepare(familyQuery(layout.table)).all(cutoff)))
       const { table } = layout
       return query((database) => (database
@@ -92,7 +94,8 @@ export function openCodeHistoryAdapter(options: OpenCodeHistoryOptions): AgentHi
           typeof row.id === 'string' && SESSION_ID.test(row.id) && typeof row.time_updated === 'number')
         .map((row): HistoryCandidate => ({ id: row.id, updatedAt: row.time_updated }))
     },
-    async remove(id) {
+    async remove(id, pass) {
+      const layout = layoutFrom(pass)
       const executable = binary()
       if (executable === null) return { ok: false, reason: 'opencode is not on PATH' }
       if (!SESSION_ID.test(id)) return { ok: false, reason: 'not an OpenCode session id' }
@@ -100,6 +103,10 @@ export function openCodeHistoryAdapter(options: OpenCodeHistoryOptions): AgentHi
       return result.code === 0 ? { ok: true } : { ok: false, reason: failureLine(result.output) }
     }
   }
+}
+
+function layoutFrom(pass: unknown): Layout {
+  return pass === OPENCODE_2 ? OPENCODE_2 : OPENCODE_1
 }
 
 /**

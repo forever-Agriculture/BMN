@@ -34,7 +34,11 @@ export interface HistoryCandidate {
 
 /** `absent`: the agent is not installed here, so History does not list it. */
 export type AdapterAvailability =
-  | { ok: true; sessions: number }
+  /**
+   * `pass`: what this look found that the same pass's candidates and deletes must use (OpenCode's layout),
+   * so a look taken meanwhile for another reader cannot change it; the runner hands it back as it came.
+   */
+  | { ok: true; sessions: number; pass?: unknown }
   | { ok: false; reason: string; absent?: true }
   /** Present, but the agent has no command BMN may delete its sessions with; the row says so and nothing runs. */
   | { ok: false; reason: string; own: true }
@@ -45,8 +49,8 @@ export interface AgentHistoryAdapter {
   /** `fresh`: a run's own look, which must not reuse anything an earlier status read learned. */
   available(options?: { fresh?: boolean }): Promise<AdapterAvailability>
   /** Sessions whose last activity is before `cutoff` (epoch ms), in any order. */
-  candidates(cutoff: number): Promise<HistoryCandidate[]>
-  remove(id: string): Promise<{ ok: true } | { ok: false; reason: string }>
+  candidates(cutoff: number, pass?: unknown): Promise<HistoryCandidate[]>
+  remove(id: string, pass?: unknown): Promise<{ ok: true } | { ok: false; reason: string }>
 }
 
 /** What BMN remembers about its own actions, beside the setting (raw settings key, no new table). */
@@ -229,7 +233,7 @@ export class AgentHistory {
           rows.push({ agent: adapter.agent, state: 'unrecognised', detail: available.reason, ...run })
           continue
         }
-        const candidates = keepDays === null ? [] : this.eligible(await adapter.candidates(this.cutoff(keepDays)), protectedIds)
+        const candidates = keepDays === null ? [] : this.eligible(await adapter.candidates(this.cutoff(keepDays), available.pass), protectedIds)
         rows.push({ agent: adapter.agent, state: 'managed', sessions: available.sessions, candidates: candidates.length, ...run })
       } catch (error) {
         rows.push({ agent: adapter.agent, state: 'unrecognised', detail: errorText(error), ...run })
@@ -344,10 +348,12 @@ export class AgentHistory {
     for (const adapter of this.options.adapters) {
       if (this.stopped) break
       let candidates: HistoryCandidate[]
+      let pass: unknown
       try {
         const available = await adapter.available({ fresh: true })
         if (!available.ok) continue
-        candidates = this.eligible(await adapter.candidates(this.cutoff(days)), await this.protectedIds())
+        pass = available.pass
+        candidates = this.eligible(await adapter.candidates(this.cutoff(days), pass), await this.protectedIds())
       } catch (error) {
         summary.push(`${adapter.agent} not recognised (${errorText(error)})`)
         continue
@@ -368,12 +374,12 @@ export class AgentHistory {
           // agent's store is read last, so activity that lands while the rest is read still counts.
           for (const id of [candidate.id, ...(candidate.family ?? [])]) this.deleting.add(id)
           const protectedIds = await this.protectedIds()
-          const still = this.eligible(await adapter.candidates(this.cutoff(days)), protectedIds)
+          const still = this.eligible(await adapter.candidates(this.cutoff(days), pass), protectedIds)
           if (!still.some((next) => next.id === candidate.id)) {
             skipped += 1
             continue
           }
-          result = await adapter.remove(candidate.id)
+          result = await adapter.remove(candidate.id, pass)
         } catch (error) {
           result = { ok: false, reason: errorText(error) }
         } finally {

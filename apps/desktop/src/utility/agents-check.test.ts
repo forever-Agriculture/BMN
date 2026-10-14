@@ -1102,6 +1102,24 @@ describe('receipts and --verify (60.3 AC7)', () => {
       writeFileSync(join(home, '.config/opencode', folder, 'review.md'), '---\ndescription: Reviews\n---\nmodel: openrouter/cheap is only text here.\n')
       expect(await route('{ "model": "opencode-go/kimi-k3" }'), folder).toMatchObject({ basis: 'default', host: 'default:opencode-go' })
     }
+    // At any depth, as OpenCode reads them, and in every way YAML lets a file name its model: BMN reads one
+    // plain line, and a model named any other way makes the destination unknown.
+    const nested = join(home, '.config/opencode/commands/team/release.md')
+    mkdirSync(join(home, '.config/opencode/commands/team'), { recursive: true })
+    for (const [front, expected] of [
+      ['"model": openrouter/cheap', { basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)' }],
+      ["'model': 'opencode-go/kimi-k3#high'  # the same provider", { basis: 'default', host: 'default:opencode-go' }],
+      ['model: >-\n  openrouter/cheap', { basis: 'unknown', host: null, reason: 'commands/team/release.md names its model in a form BMN does not read', sources: ['commands/team/release.md'] }],
+      ['options:\n  model: openrouter/cheap', { basis: 'unknown', host: null, reason: 'commands/team/release.md names its model in a form BMN does not read', sources: ['commands/team/release.md'] }],
+      ['{ model: openrouter/cheap }', { basis: 'unknown', host: null, reason: 'commands/team/release.md names its model in a form BMN does not read', sources: ['commands/team/release.md'] }],
+      ['model: opencode-go/kimi-k3\nmodel: openrouter/cheap', { basis: 'unknown', host: null, reason: 'commands/team/release.md names its model in a form BMN does not read', sources: ['commands/team/release.md'] }]
+    ] as const) {
+      writeFileSync(nested, `---\n${front}\n---\nShip it.\n`)
+      expect(await route('{ "model": "opencode-go/kimi-k3" }'), front).toMatchObject(expected)
+    }
+    writeFileSync(nested, '\uFEFF---\r\nmodel: openrouter/cheap\r\n---\r\nShip it.\r\n')
+    expect(await route('{ "model": "opencode-go/kimi-k3" }')).toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)' })
+    rmSync(join(home, '.config/opencode/commands/team'), { recursive: true })
   })
 })
 
