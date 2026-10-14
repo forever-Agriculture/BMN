@@ -170,6 +170,50 @@ Screens and events: `.dev-auto/evidence/epic-31/spike-31-4/opencode/`. Disposabl
   answer. BMN offers **Other…** only when `custom` is not `false`.
 - **Back:** all questions are answered in one call, so a card's Back is card-only.
 
+## OpenCode 2.0.28
+
+OpenCode 2 runs plugins in two places. A server plugin runs in a background service that may serve
+several terminals and does not have the terminal's variables. A terminal plugin, named in `cli.json`'s
+`plugins`, runs in the terminal's own process (docs at opencode.ai "CLI plugins"). BMN's plugin is a
+terminal plugin. It hears every event of the server it is connected to through `data.listen`, and keeps
+only the family of the session its terminal shows (`ui.router.current()`, `data.session.root`).
+
+Events recorded from a real run of 2.0.28 on 2026-10-14 (a server plugin on a throwaway profile and a
+made-up model; `.dev-auto/evidence/` of that work), then translated by the plugin into the OpenCode 1
+shapes above:
+
+- `permission.asked { id, sessionID, action, resources, save }`. For a shell command `action` is `shell`,
+  `resources` holds the exact command and `save` what "always" would cover. BMN sends
+  `permission: action`, `patterns: save` and, for `shell` with one resource, `metadata.command`.
+- `permission.replied { sessionID, requestID, reply }`, the same as OpenCode 1.
+- A question is a form: `form.created { form: { id: "frm_…", sessionID, metadata: { kind: "question" },
+  fields: [{ key, title, description, type: "string" | "multiselect", options: [{ value, label,
+  description }], custom }] } }`. BMN sends `question.asked` with `question: description`,
+  `header: title`, `multiple` for `multiselect`, and `custom` only when the field says. A form of any
+  other kind (a sign-in, for example) is never sent.
+- `form.replied { id, sessionID, answer: { <key>: value | [values] } }` becomes `question.replied` with
+  each value turned back into its option's label, and `form.cancelled { id }` becomes `question.rejected`.
+- `session.execution.started` becomes `session.status` busy. `session.execution.succeeded`, and
+  `session.execution.interrupted` with `reason: "user"`, become `session.idle`. A run interrupted as
+  `superseded`, `inactivity` or `shutdown` is not a finished turn and is not sent.
+  `session.execution.failed { error: { type, message } }` becomes `session.error`.
+- `session.step.started { model: { id, providerID } }` becomes `message.updated` with `info.modelID`, once
+  per model. `session.compacted` and `session.deleted` keep their names.
+- Moving the terminal to another session is OpenCode 1's `tui.session.select`. Moving to one created
+  while the terminal ran, or in the last 30 seconds, is `session.created`.
+
+**Answers.** The plugin answers through its own client: `client.permission.reply({ sessionID, requestID,
+decision: "once" | "reject" })` (the key is `decision`; the server refuses `reply`), and
+`client.session.form.reply({ sessionID, formID, answer })`, where `answer` maps each field's `key` to
+the chosen option's `value`, or to a list of values for `multiselect`. Typed text is sent as it is, and
+only where the field's `custom` is not `false`. A refused call whose error carries a 4xx status is
+reported `failed`; any other failure is reported as nothing.
+
+**Unverified on 2.0.28.** It was not yet checked in a terminal that the plugin loads from `cli.json`,
+which error a refused client call carries, or whether a reject still answers every permission waiting in
+a session. A machine with all its inotify watches in use crashes OpenCode 2's terminal before it starts.
+Deny keeps OpenCode 1's rule meanwhile: it is offered only for the one permission waiting.
+
 ## How BMN uses this
 
 The answer function lives in the utility process (`apps/desktop/src/utility/remote-answer.ts`) and is

@@ -82,8 +82,8 @@ describe('runHookConfigurationCheck', () => {
     ])
     expect(agentNamed(report, 'opencode')).toMatchObject({
       state: 'missing',
-      entries: [{ event: 'plugin', optional: false, state: 'missing' }],
-      missing: ['plugin']
+      entries: [{ event: 'plugin', optional: false, state: 'missing' }, { event: 'cli.json', optional: false, state: 'missing' }],
+      missing: ['plugin', 'cli.json']
     })
     expect(agentNamed(report, 'cursor')).toMatchObject({
       file: join(root, '.cursor', 'hooks.json'), state: 'missing',
@@ -91,7 +91,7 @@ describe('runHookConfigurationCheck', () => {
     })
   })
 
-  it('reads the shipped OpenCode plugin as wired', async () => {
+  it('reads the shipped OpenCode plugin and its cli.json entry as wired', async () => {
     const { root, env } = await configFixture()
     const { stdout: plugin } = await new Promise<{ stdout: string }>((resolve, reject) =>
       execFile(process.execPath, [CLI, 'hooks', 'print', 'opencode'], { env }, (error, stdout) => {
@@ -99,13 +99,17 @@ describe('runHookConfigurationCheck', () => {
         else resolve({ stdout: stdout as string })
       })
     )
-    await writeHookFile(join(root, 'opencode', 'plugin', 'bmn.ts'), plugin)
+    const file = join(root, 'opencode', 'bmn.ts')
+    await writeHookFile(file, plugin)
+    await writeHookFile(join(root, 'opencode', 'cli.json'), `${JSON.stringify({ plugins: [file] })}\n`)
 
     const report = await check(env)
 
     const opencode = agentNamed(report, 'opencode')
-    expect(opencode).toMatchObject({ state: 'read', missing: [] })
-    expect(opencode.entries).toEqual([{ event: 'plugin', optional: false, state: 'wired' }])
+    expect(opencode).toMatchObject({ file, state: 'read', missing: [] })
+    expect(opencode.entries).toEqual([
+      { event: 'plugin', optional: false, state: 'wired' }, { event: 'cli.json', optional: false, state: 'wired' }
+    ])
   })
 
   it('carries no configuration contents: commands, parse errors and read reasons stay out', async () => {
@@ -150,12 +154,12 @@ describe('runHookConfigurationCheck', () => {
 
   it('keeps every harness row when the OpenCode plugin cannot be read', async () => {
     const { root, env } = await configFixture()
-    await mkdir(join(root, 'opencode', 'plugin', 'bmn.ts'), { recursive: true })
+    await mkdir(join(root, 'opencode', 'bmn.ts'), { recursive: true })
 
     const report = await check(env)
 
     expect(report.state).toBe('checked')
-    expect(agentNamed(report, 'opencode')).toMatchObject({ state: 'unreadable', missing: ['plugin'] })
+    expect(agentNamed(report, 'opencode')).toMatchObject({ state: 'unreadable', missing: ['plugin', 'cli.json'] })
     expect(report.state === 'checked' && report.agents.map((row) => row.agent)).toEqual(['claude', 'codex', 'opencode', 'cursor'])
   })
 

@@ -622,7 +622,7 @@ Two commands do it, and neither needs BMN to be running:
 bmn hooks check              # what each agent's own hook file carries, for every event BMN expects
 bmn hooks install claude     # review the target and diff, then answer Yes
 bmn hooks install codex
-bmn hooks install opencode   # install BMN's plugin in OpenCode's plugin folder
+bmn hooks install opencode   # BMN's terminal plugin beside OpenCode's cli.json, named in it
 bmn hooks install cursor     # ~/.cursor/hooks.json, Cursor's own flat format
 ```
 
@@ -636,21 +636,30 @@ A `turn changes:` line says whether that app's turns are recorded where a worksp
 **Record what each turn changes** is on, and on which version waiting for the prompt hook was
 measured ([turn-changes.md](turn-changes.md#how-a-turn-is-recorded)).
 
-For OpenCode 1.18.31 (checked 2026-09-22), `bmn hooks print opencode` prints the TypeScript plugin
-shipped with this CLI. Both `plugin/` and `plugins/` load in the installed binary; BMN uses an
-existing `plugin/` folder and otherwise installs into `plugins/`. `check` compares `bmn.ts` byte for
-byte and reports `wired`, `wired (older wording)` or `missing`. `install` backs up an older file
-before replacing it. The plugin forwards OpenCode events to `bmn hook opencode` only inside BMN;
-the hook log shows what actually arrived. While a question or permission of the plugin's own main
-session waits, it also runs `bmn answer take --wait 25` in a loop and posts any answer it receives to
-its own OpenCode server by request id (`question/<id>/reply`, `permission/<id>/reply`), then tells
-BMN what the server answered with `--reported <id>=ok|failed`: `ok` for an accepted reply, `failed`
-only for a refused request (4xx, nothing applied), and nothing for a lost connection or a server
-error, as the reply may still have landed. It posts a reject only while that permission is the only one of
-its session still waiting, because OpenCode's reject answers them all. It stops when nothing waits
-and after three failed calls, so an absent BMN costs nothing. A plugin installed before
-Epic 30 shows as `wired (older wording)` until `bmn hooks install opencode` replaces it. This was checked against OpenCode CLI 1.18.31 and locally
-installed plugin SDK 1.4.9 on 2026-09-22; real interactive event delivery is still unverified.
+For OpenCode 2 (2.0.28, checked 2026-10-14), `bmn hooks print opencode` prints the terminal plugin
+shipped with this CLI. `install` writes it as `bmn.ts` in OpenCode's config folder (`OPENCODE_CONFIG_DIR`,
+otherwise `~/.config/opencode`) and adds its path to `plugins` in `cli.json` there. OpenCode 2 reads
+terminal plugins only from that list. `check` reports two lines: `plugin` compares `bmn.ts` byte for byte
+(`wired`, `wired (older wording)` or `missing`), and `cli.json` says whether the list names it. A
+`cli.json` that is not a JSON object with a `plugins` list is reported and left untouched. `install`
+backs up every file before it changes it. It also removes OpenCode 1's BMN plugin from `plugin/` or
+`plugins/`, because OpenCode 2 refuses to load it ("Plugin must export a default definition with an id
+and an effect or setup function"). That copy is kept beside `bmn.ts` as
+`plugin-bmn.ts.bmn-backup-<time>`, outside the folders OpenCode loads. A file there that is not BMN's
+stays. Restart OpenCode after installing.
+
+The plugin runs in the terminal's own process, so it acts only inside BMN. It follows the session the
+terminal shows and that session's subagents; the background service it talks to may serve other
+terminals, whose events it ignores. It translates OpenCode 2's events into the OpenCode 1 shapes
+`bmn hook opencode` reads ([remote-answers.md](remote-answers.md#opencode-2028)), one call at a time,
+each killed after 3 seconds. While a question or permission of its session waits, it runs
+`bmn answer take --wait 25` in a loop and sends any answer through its own OpenCode client. It then
+tells BMN what OpenCode said with `--reported <id>=ok|failed`: `ok` for an accepted reply, `failed`
+only for a refused request (4xx, nothing applied), and nothing for a lost connection or a server error,
+as the reply may still have landed. It sends a reject only while that permission is the only one of its
+session still waiting. It stops when nothing waits and after three failed calls, so an absent BMN costs
+nothing. The translation and answers are tested against a stand-in terminal; delivery in a real
+OpenCode 2 terminal is still unverified.
 
 For Claude, Codex and Cursor, `install` copies the file to `<file>.bmn-backup-<timestamp>`, adds the missing entries next to the
 hooks already registered for that event, writes the file atomically and prints a unified diff. It
