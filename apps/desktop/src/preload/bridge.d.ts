@@ -412,6 +412,7 @@ export interface AiTerminalBridge {
   testContextLimit(harness: ContextLimitApp): Promise<RulesOutcome>
   /** BMN's own context testing: `fresh` makes it look now, without it the call waits for a test under way. */
   contextAuto(fresh: boolean): Promise<RulesSnapshot['contextAuto']>
+  skillsAuto(fresh: boolean): Promise<{ running: RosterHarness | null }>
   setContextAuto(enabled: boolean): Promise<RulesOutcome>
   /** Story 60.11: what a skills install would link, copy or remove in each app, then the install itself, bound to that plan. */
   planSkillsInstall(): Promise<SkillsPlan>

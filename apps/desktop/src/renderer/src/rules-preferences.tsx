@@ -374,13 +374,13 @@ export function useRulesState(): RulesState {
     }
   }
 
-  // BMN is running a context test by itself (63.1): what it found is read once it has ended, never under an open confirmation.
-  const testing = snapshot !== null && snapshot.contextAuto.running !== null ? snapshot : null
+  // BMN is running a context (63.1) or skills test by itself: what it found is read once it has ended, never under an open confirmation.
+  const testing = snapshot !== null && (snapshot.contextAuto.running !== null || snapshot.skills.apps.some((app) => app.testing === true)) ? snapshot : null
   const confirming = pending !== null
   useEffect(() => {
     if (testing === null || confirming) return
     let cancelled = false
-    window.aiTerminal.contextAuto(false).then(() => { if (!cancelled) void load() }).catch(() => undefined)
+    Promise.all([window.aiTerminal.contextAuto(false), window.aiTerminal.skillsAuto(false)]).then(() => { if (!cancelled) void load() }).catch(() => undefined)
     return () => { cancelled = true }
   }, [testing, confirming, load])
 
@@ -788,10 +788,11 @@ export function onUpdateEnded(listener: () => void): () => void {
   return () => { updateEndListeners.delete(listener) }
 }
 
-/** An update command BMN typed has ended: Health reads the machine after it, and BMN looks for a new app version to test (63.1 AC1). */
+/** An update command BMN typed has ended: Health reads the machine after it, and BMN looks for a new app version to test (63.1 AC1, and skills). */
 function updateRunEnded(): void {
   updateEnded()
   void window.aiTerminal.contextAuto(true).catch(() => undefined)
+  void window.aiTerminal.skillsAuto(true).catch(() => undefined)
 }
 
 /** What the sheet says about a press on Update now that did not run the command; null while there is nothing to say. */
@@ -1125,7 +1126,8 @@ export function skillStateHint(state: SkillStateName | undefined, app: Pick<Skil
 }
 
 /** An app's last skills test, or why its skills are not supported yet. */
-export function skillsTestLine(app: Pick<SkillsAppView, 'supported' | 'version' | 'test' | 'listing' | 'loading' | 'kind' | 'testable'>): string {
+export function skillsTestLine(app: Pick<SkillsAppView, 'supported' | 'version' | 'test' | 'listing' | 'loading' | 'kind' | 'testable' | 'testing'>): string {
+  if (app.testing === true) return `BMN is testing ${app.version ?? 'the new version'}…`
   if (!app.supported) {
     if (app.version === null) return 'The app is not found'
     if (!app.testable) return 'BMN has no test for this app'

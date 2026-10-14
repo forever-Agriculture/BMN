@@ -13,8 +13,8 @@ import { parseRoster, rewriteRoster } from '../../bin/agents-roster.mjs'
 import { listTransactions, restoreTransaction } from '../../bin/agents-rules.mjs'
 import {
   appSkills, appStateWord, checkExit, checkSkills, installSkills, lastLoadingTests, planSkillsInstall, skillDescription, skillsPlanView, skillsTests,
-  claudeLoadingVerdict, codexLoadingVerdict, lastListingTests, skillsTestsPath, testSkills, testSkillsFolders, testSkillsListing, testSkillsLoading, treeHash, withHeader,
-  type SkillsRoot, type SkillState
+  claudeLoadingVerdict, codexLoadingVerdict, lastListingTests, skillsAutoPlan, skillsTestsPath, testSkills, testSkillsFolders, testSkillsListing, testSkillsLoading, treeHash, withHeader,
+  type SkillsRoot, type SkillState, type SkillsTestEntry
 } from '../../bin/agents-skills.mjs'
 import { machineDiff, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
@@ -69,6 +69,32 @@ function lister(name: string, version: string, command: string, folders: string[
   ].join('\n'))
 }
 
+/**
+ * A stub OpenCode 2: `serve` says where it listens and stays up until stopped; `api` answers with
+ * a built-in skill and the skills in the given folders under HOME, as JSON, after `emptyFor`
+ * answers with none (the server loads its skills a moment after it starts). `answer` replaces
+ * the JSON with other words.
+ */
+function openCode(version: string, folders: string[], { links = true, fail = false, emptyFor = 0, answer = '', noServer = false } = {}): void {
+  stub('opencode', [
+    `if [ "$1" = "--version" ]; then echo "opencode v${version}"; exit 0; fi`,
+    `echo "$@" >> "${home}/calls-opencode.log"`,
+    `env >> "${home}/env-opencode.log"`,
+    ...(noServer ? ['if [ "$1" = "serve" ]; then echo "port in use" >&2; exit 1; fi'] : []),
+    `if [ "$1" = "serve" ]; then echo $$ > "${home}/opencode-serve.pid"; echo "server listening on http://127.0.0.1:4097"; exec sleep 60; fi`,
+    '[ "$1 $2 $3 $4" = "api --server http://127.0.0.1:4097 skill.list" ] || exit 4',
+    ...(fail ? ['exit 3'] : []),
+    `n=$(cat "${home}/opencode-answers" 2>/dev/null || echo 0); echo $((n + 1)) > "${home}/opencode-answers"`,
+    `if [ "$n" -lt ${emptyFor} ]; then echo '{"location":{},"data":[]}'; exit 0; fi`,
+    ...(answer === '' ? [
+      `printf '{"location":{},"data":[{"id":"opencode","name":"OpenCode","path":"/builtin/opencode.md","content":"${BODY}"}'`,
+      ...folders.map((folder) => `for d in "$HOME"/${folder}/*/; do ${links ? '' : '[ -L "${d%/}" ] && continue; '}[ -f "\${d}SKILL.md" ] && printf ',{"name":"%s","path":"%s","content":"${BODY}"}' "$(basename "$d")" "\${d}SKILL.md"; done`),
+      `printf ']}\n'`
+    ] : [`echo '${answer}'`]),
+    'exit 0'
+  ].join('\n'))
+}
+
 function skill(name: string, { at = source, description = `Synthetic skill ${name}.`, extra = {} as Record<string, string> } = {}): string {
   const folder = join(at, name)
   mkdirSync(folder, { recursive: true })
@@ -101,7 +127,7 @@ beforeEach(() => {
   mkdirSync(stubs)
   lister('codex', CODEX, 'debug prompt-input', ['.agents/skills'])
   lister('claude', CLAUDE, '-p', ['.claude/skills'])
-  lister('opencode', OPENCODE, 'debug skill', ['.config/opencode/skills'])
+  openCode(OPENCODE, ['.config/opencode/skills'])
   env = { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }
   source = join(home, '.claude/skills')
   skill('alpha', { extra: { 'notes/more.md': 'more\n' } })
@@ -174,7 +200,7 @@ describe('where an app reads skills: the owner-run test (60.11 AC1)', () => {
   })
 
   it('records an app that names only real folders as needing copies, and one that reads the skills folder itself', async () => {
-    lister('opencode', OPENCODE, 'debug skill', ['.config/opencode/skills', '.claude/skills'], { links: false })
+    openCode(OPENCODE, ['.config/opencode/skills', '.claude/skills'], { links: false })
     const result = await testSkillsFolders('opencode', { environment: env, now: NOW })
     expect(result.outcome).toBe('pass')
     expect(result.detail).toBe('OpenCode reads skills from ~/.config/opencode/skills (folders only, no links), ~/.claude/skills (folders only, no links)')
@@ -186,13 +212,73 @@ describe('where an app reads skills: the owner-run test (60.11 AC1)', () => {
   it('keeps an app unsupported when it cannot be asked, did not answer, or named nothing', async () => {
     lister('claude', CLAUDE, '-p', ['.claude/skills'], { fail: true })
     expect(await testSkillsFolders('claude', { environment: env, now: NOW })).toMatchObject({ outcome: 'inconclusive', detail: 'claude did not answer in a home folder without its sign-in' })
-    lister('opencode', OPENCODE, 'debug skill', ['.nowhere'])
+    openCode(OPENCODE, ['.nowhere'])
     expect(await testSkillsFolders('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'fail' })
     for (const harness of ['claude', 'opencode']) {
       expect(appSkills(harness, { environment: env, version: VERSIONS[harness as 'claude'] ?? '1.0.0', source }).supported).toBe(false)
     }
     expect(check().apps.find((app) => app.harness === 'opencode')).toMatchObject({ supported: false, skills: [] })
     expect(await planSkillsInstall(['opencode'], { environment: env, versions: VERSIONS })).toMatchObject({ code: 'SKILLS_UNSUPPORTED', targets: [] })
+  })
+
+  it('asks OpenCode 2 through a private server on a free loopback port, with a password made for the run, waits until it has loaded its skills, and stops it', async () => {
+    openCode(OPENCODE, ['.config/opencode/skills', '.agents/skills', '.claude/skills'], { emptyFor: 2 })
+    const result = await testSkillsFolders('opencode', { environment: { ...env, OPENCODE_PASSWORD: 'owner-password' }, now: NOW })
+    expect(result).toMatchObject({ outcome: 'pass', detail: 'OpenCode reads skills from ~/.config/opencode/skills, ~/.agents/skills, ~/.claude/skills' })
+    // Two answers without skills while the server loads them, then two that agree.
+    const api = 'api --server http://127.0.0.1:4097 skill.list'
+    expect(readFileSync(join(home, 'calls-opencode.log'), 'utf8').trim().split('\n')).toEqual(['serve --hostname 127.0.0.1 --port 0', api, api, api, api])
+    const passwords = [...readFileSync(join(home, 'env-opencode.log'), 'utf8').matchAll(/^OPENCODE_PASSWORD=(.*)$/gm)].map((found) => found[1])
+    expect(passwords).toHaveLength(5)
+    expect(new Set(passwords).size).toBe(1)
+    expect(passwords[0]).toMatch(/^[A-Za-z0-9_-]{32}$/)
+    const recorded = readFileSync(skillsTestsPath(), 'utf8')
+    expect(recorded).not.toContain(passwords[0])
+    expect(recorded).not.toContain(BODY)
+    // The server was stopped, and the throwaway home is gone.
+    const pid = Number(readFileSync(join(home, 'opencode-serve.pid'), 'utf8'))
+    expect(() => process.kill(pid, 0)).toThrow()
+    expect(readdirSync(home).filter((name) => name.startsWith('.bmn-skills-test-'))).toEqual([])
+    expect(appSkills('opencode', { environment: env, version: OPENCODE, source })).toMatchObject({ supported: true, reads_source: true, location: opencodeFolder(), format: 'link' })
+  })
+
+  it('says why OpenCode gave no list: its server did not start, did not answer, or answered in a form BMN cannot read', async () => {
+    const why = async (): Promise<string> => (await testSkillsFolders('opencode', { environment: env, now: NOW })).detail
+    openCode(OPENCODE, ['.config/opencode/skills'], { noServer: true })
+    expect(await why()).toBe('opencode did not answer in a home folder without its sign-in (its server did not start)')
+    openCode(OPENCODE, ['.config/opencode/skills'], { fail: true })
+    expect(await why()).toBe('opencode did not answer in a home folder without its sign-in (its server did not answer)')
+    openCode(OPENCODE, ['.config/opencode/skills'], { answer: 'Not JSON' })
+    expect(await why()).toBe('opencode did not answer in a home folder without its sign-in (its server answered in a form BMN cannot read)')
+    expect(appSkills('opencode', { environment: env, version: OPENCODE, source }).supported).toBe(false)
+  })
+
+  it('names for BMN\'s own run only a new version of an app a test once passed on, or a version its own one run showed nothing on', () => {
+    const entry = (harness: string, version: string, outcome: SkillsTestEntry['outcome'], by?: 'bmn'): SkillsTestEntry => ({ harness, kind: 'capability', at: NOW.toISOString(), version, outcome, detail: 'synthetic', ...(by ? { by } : {}) })
+    const versions = { claude: '2.1.300', codex: '0.162.0', opencode: '2.0.29' }
+    expect(skillsAutoPlan({ versions, tests: [] })).toEqual([])
+    // Claude Code never passed, and the owner's own test of this OpenCode waits for him.
+    expect(skillsAutoPlan({ versions, tests: [entry('codex', '0.161.0', 'pass'), entry('claude', '2.1.299', 'fail'), entry('opencode', '1.18.32', 'pass'), entry('opencode', '2.0.29', 'inconclusive')] }))
+      .toEqual([{ harness: 'codex', version: '0.162.0', reason: 'untested' }])
+    const once = [entry('codex', '0.161.0', 'pass'), entry('codex', '0.162.0', 'inconclusive', 'bmn')]
+    expect(skillsAutoPlan({ versions, tests: once })).toEqual([{ harness: 'codex', version: '0.162.0', reason: 'retry' }])
+    expect(skillsAutoPlan({ versions, tests: [...once, entry('codex', '0.162.0', 'inconclusive', 'bmn')] })).toEqual([])
+    expect(skillsAutoPlan({ versions, tests: [entry('codex', '0.161.0', 'pass'), entry('codex', '0.162.0', 'fail', 'bmn')] })).toEqual([])
+    expect(skillsAutoPlan({ versions, tests: [entry('codex', '0.161.0', 'pass'), entry('codex', '0.162.0', 'pass', 'bmn')] })).toEqual([])
+    // A listing is not where the app reads skills, and an app whose version cannot be read is never named.
+    expect(skillsAutoPlan({ versions, tests: [{ ...entry('codex', '0.161.0', 'pass'), kind: 'listing' }] })).toEqual([])
+    expect(skillsAutoPlan({ versions: { ...versions, codex: null }, tests: [entry('codex', '0.161.0', 'pass')] })).toEqual([])
+  })
+
+  it('runs only the folders test when BMN starts it by itself, and marks it as BMN\'s', async () => {
+    rmSync(skillsTestsPath())
+    const result = await run(['skills', 'test', 'codex', '--auto', '--json'])
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout)).toMatchObject({ harness: 'codex', kind: 'capability', version: CODEX, outcome: 'pass', by: 'bmn' })
+    expect(skillsTests().map((entry) => [entry.kind, entry.by])).toEqual([['capability', 'bmn']])
+    // No listing test: nothing was put where Codex keeps its skills.
+    expect(existsSync(codexFolder())).toBe(false)
+    expect(await run(['skills', 'test', 'codex', '--auto', '--prompt'])).toMatchObject({ code: 2, stderr: expect.stringContaining('--prompt or --auto, not both') })
   })
 
   it('counts only a test of exactly the installed version, and the latest one decides', () => {

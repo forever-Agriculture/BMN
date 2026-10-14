@@ -1229,6 +1229,9 @@ describe('skills (60.11 AC5)', () => {
     expect(skillsTestLine(base)).toBe('Not tested on 0.171.0')
     expect(skillsTestLine({ ...base, test: { at: 'x', version: '0.171.0', outcome: 'inconclusive', detail: 'd' } })).toBe('The test was inconclusive on 0.171.0')
     expect(skillsTestLine({ ...base, test: { at: 'x', version: '0.170.0', outcome: 'fail', detail: 'd' } })).toBe('Not tested on 0.171.0')
+    // BMN testing the new version by itself after an update says so, whatever the last test was.
+    expect(skillsTestLine({ ...base, testing: true })).toBe('BMN is testing 0.171.0…')
+    expect(skillsTestLine({ ...base, supported: true, testing: true, test: { at: 'x', version: '0.171.0', outcome: 'pass', detail: 'd', by: 'bmn' } })).toBe('BMN is testing 0.171.0…')
     // A listing is named a listing, and never reads as a loading test; the loading test, once run, is the line.
     const seen = { at: '2026-10-09T20:00:00.000Z', version: '0.171.0', detail: 'd', stale: false }
     const there = { ...base, supported: true }

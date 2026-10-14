@@ -823,6 +823,39 @@ describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
     await expect(call('rules:skills-loading-test', { harness: 'vim' })).rejects.toThrow()
   })
 
+  it('tests a new version of an app whose skills it reached by itself, shows that it is, and tells a failure once', async () => {
+    await approvedAndInstalled()
+    skill('alpha')
+    const lister = (version: string, folder: string): string => codexLister.replace('codex-cli 0.161.0', `codex-cli ${version}`).replace('.agents/skills', folder)
+    stub('codex', codexLister)
+    // An app no test ever passed on is left to the owner.
+    await ipc.skillsAutoAtStart()
+    expect(existsSync(join(home, '.config/bmn/agents/state/skills-tests.jsonl'))).toBe(false)
+    expect(await call<RulesOutcome>('rules:skills-test', { harness: 'codex' })).toMatchObject({ ok: true })
+    const records = (): string[][] => file('.config/bmn/agents/state/skills-tests.jsonl').trim().split('\n').map((line) => JSON.parse(line) as Record<string, string>)
+      .map((entry) => [String(entry.kind), String(entry.version), String(entry.outcome), entry.by ?? 'owner'])
+
+    stub('codex', lister('0.162.0', '.agents/skills'))
+    const reading = await call<RulesSnapshot>('rules:snapshot')
+    expect(reading.skills.apps[1]).toMatchObject({ harness: 'codex', version: '0.162.0', supported: false, testing: true })
+    await call('rules:skills-auto', { fresh: false })
+    const after = (await call<RulesSnapshot>('rules:snapshot')).skills.apps[1]!
+    expect(after).toMatchObject({ supported: true, state: 'Missing', test: { version: '0.162.0', outcome: 'pass', by: 'bmn' } })
+    expect(after.testing).toBeUndefined()
+    // Only where the app reads skills: nothing was put where Codex keeps them.
+    expect(records()).toEqual([['capability', '0.161.0', 'pass', 'owner'], ['listing', '0.161.0', 'pass', 'owner'], ['capability', '0.162.0', 'pass', 'bmn']])
+    expect(notices).toEqual([])
+
+    // The next version reads no folder BMN knows: one test, one notice, and nothing more at the next start.
+    stub('codex', lister('0.163.0', '.nowhere'))
+    await ipc.skillsAutoAtStart()
+    expect(notices).toEqual([{ title: 'Codex skills test failed', body: 'Codex 0.163.0 no longer reads skills from any folder BMN knows, so BMN installs no skills for it. Rules › Skills has the details.' }])
+    await ipc.skillsAutoAtStart()
+    await call('rules:skills-auto', { fresh: true })
+    expect(records().slice(3)).toEqual([['capability', '0.163.0', 'fail', 'bmn']])
+    expect(notices).toHaveLength(1)
+  })
+
   it('previews which apps a staged skills change reaches, and approves it with the team', async () => {
     await approvedAndInstalled()
     skill('alpha')

@@ -1218,11 +1218,24 @@ one empty test skill where the app keeps its skills, asks again, and removes it.
 part is a **listing test**: no prompt is sent, so it shows that the app finds a skill placed
 there, not that a model gets it.
 
+OpenCode 2.0.29 lists a skill once when two of its folders hold the same name, and the one in
+`~/.agents/skills` wins over `~/.claude/skills` (measured 2026-10-14); a link BMN puts there for
+Codex points at the same skill, so OpenCode reads it once.
+
+**After an app update BMN tests by itself.** Once a test of an app has passed on some version, a
+new version of that app is tested by BMN when it starts, when Health reads the machine and when an
+update command it typed ends: only where the app reads skills, in the same empty home folder,
+with no prompt and nothing of yours in it (`bmn skills test <app> --auto`, recorded as BMN's).
+The row says "BMN is testing …" meanwhile. A run that showed nothing is tried once more; a
+failure, or a second run that showed nothing, is told once, and that version then waits for your
+**Test…**. A version you tested yourself is never tested again by BMN, and the listing test is
+never run by itself: it puts a skill where the app keeps yours.
+
 | App | What BMN asks | Folders it looks in | Tested on a live app |
 | --- | --- | --- | --- |
-| Claude Code | the start-up message of `claude -p`, given `/context` | `~/.claude/skills` | not yet |
-| Codex | `codex debug prompt-input` | `~/.agents/skills`, `~/.codex/skills`, `~/.claude/skills` | not yet |
-| OpenCode | `opencode debug skill` | `~/.config/opencode/skills`, `~/.config/opencode/skill`, `~/.agents/skills`, `~/.claude/skills` | not yet |
+| Claude Code | the start-up message of `claude -p`, given `/context` | `~/.claude/skills` | 2.1.300, 2026-10-14 |
+| Codex | `codex debug prompt-input` | `~/.agents/skills`, `~/.codex/skills`, `~/.claude/skills` | 0.162.1, 2026-10-11 |
+| OpenCode | its own server's skill list: `opencode serve --port 0` on loopback with a password made for the run, then `opencode api --server <url> skill.list` until two answers agree (OpenCode 2 has no `debug skill`) | `~/.config/opencode/skills`, `~/.config/opencode/skill`, `~/.agents/skills`, `~/.claude/skills` | 2.0.29, 2026-10-14 |
 
 **Whether a model gets a skill is a second test.** **Loading test…** on the same row, or
 `bmn skills test <app> --prompt`, sends one prompt to the app's provider, so it is offered only

@@ -650,8 +650,11 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
     researchPages: () => (rendererTestMode ? process.env.BMN_SELF_TEST_PAGES ?? null : null),
     judgeTestPort: () => (rendererTestMode ? process.env.BMN_JUDGE_TEST_PORT ?? null : null)
   })
-  // Once the shell's own program path is known, so a new app version is tested with the program a session would start (63.1).
-  void sessionEnvironment.refresh().finally(() => agentsIpc.contextAutoAtStart())
+  // Once the shell's own program path is known, so a new app version is tested with the program a session would start (63.1, and skills).
+  void sessionEnvironment.refresh().finally(() => {
+    void agentsIpc.contextAutoAtStart()
+    void agentsIpc.skillsAutoAtStart()
+  })
   installVoiceIpcHandlers(bridgeIpc, {
     senderIsAllowed,
     // Handlers install before the self-test's taps exist, so its stand-ins are read per call.

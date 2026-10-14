@@ -75,11 +75,12 @@ import { ASK_KEPT, ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, agentsMayAsk, asked
 import { chooseResearcher, fetchPublicPage, processStart, publicHostName, readResearch, resolvesPublic, researchLockHolder, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
 import { fenceSubjects, runFenceTest } from '../../bin/agents-fence.mjs'
 import { OPENCODE_GO_PROVIDER, copyOpenCodeGoSignIn, openCodeGoSignedIn, openCodeListsLuna } from '../../bin/agents-opencode.mjs'
-import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsTests } from '../../bin/agents-skills.mjs'
+import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsAutoPlan, skillsTests, type SkillsOutcome } from '../../bin/agents-skills.mjs'
 import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsTests } from '../../bin/agents-tools.mjs'
 import { allowWorkspace, approveRoster, approveSections, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
 import { findAppProgram } from './app-program'
 import { createContextAuto, type ContextAutoSeams } from './context-auto'
+import { createSkillsAuto } from './skills-auto'
 import { MainIpcError } from './workspace-ipc'
 
 interface AgentsIpcRegistrar {
@@ -133,6 +134,8 @@ export interface AgentsIpcOptions {
 export interface AgentsIpcHandle {
   /** BMN has started: a new app version an agent has a context limit on is tested now (63.1 AC1). Resolves when that is done. */
   contextAutoAtStart(): Promise<void>
+  /** BMN has started: a new version of an app whose skills a test once showed is tested now, where it reads skills. Resolves when that is done. */
+  skillsAutoAtStart(): Promise<void>
 }
 
 /** Variables the rules CLI reads to find each app's file and its destination; nothing else of this process's environment. */
@@ -452,6 +455,8 @@ export interface RulesIpcContext {
   ownEnvironment?: string
   /** BMN's own context testing as it stands now; absent where nothing can start a test. */
   contextAuto?(): RulesSnapshot['contextAuto']
+  /** The app whose skills BMN is testing by itself right now, or null; absent where nothing can start a test. */
+  skillsAuto?(): RosterHarness | null
 }
 
 /** What an inspection resolved: the app's installed version and where it sends data. */
@@ -556,9 +561,10 @@ function skillsView(apps: AgentAppView[], team: ReturnType<typeof approvedForPag
         const test = lastSkillsTest(app.harness, 'capability', tests)
         return {
           harness: app.harness, version: app.version, supported: app.supported, ...(app.reason === undefined ? {} : { reason: app.reason }),
+          ...(context.skillsAuto?.() === app.harness ? { testing: true } : {}),
           testable: SKILL_APPS[app.harness].list !== null, location: app.location, format: app.format, readsSource: app.reads_source,
           kind: app.kind, kindReason: app.kind_reason, state: appStateWord(app, check.source.readable),
-          test: test === null ? null : { at: test.at, version: test.version, outcome: test.outcome, detail: test.detail },
+          test: test === null ? null : { at: test.at, version: test.version, outcome: test.outcome, detail: test.detail, ...(test.by === 'bmn' ? { by: 'bmn' as const } : {}) },
           loadTestable: SKILL_APPS[app.harness].prompt, listing: last(listing, app.harness), loading: last(loading, app.harness)
         }
       })
@@ -792,7 +798,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     return {
       script: options.cliScript(), env: rulesEnvironment(environment), probeEnv: probeEnvironment(environment), now: options.now ?? (() => new Date()),
       ...(session?.source === 'app' ? { ownEnvironment: session.reason ?? 'the shell could not be asked' } : {}),
-      contextAuto: () => auto.view()
+      contextAuto: () => auto.view(),
+      skillsAuto: () => skillsAuto.view().running
     }
   }
   const installedVersion = (harness: ContextLimitApp, ctx: RulesIpcContext): string | null => inspectApp(harness, ctx.env).resolution.version
@@ -837,6 +844,25 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     read: contextAuto,
     write: (change) => { setContextAuto(change) },
     ...(options.contextRetryLater === undefined ? {} : { later: options.contextRetryLater })
+  })
+  /**
+   * BMN's own skills testing: after an app update, the folders test of an app whose skills a test
+   * once showed, in a throwaway home with nothing of the owner's and no prompt (skillsAutoPlan).
+   */
+  const skillsAuto = createSkillsAuto({
+    plan: (known) => {
+      const ctx = context()
+      const versions = Object.fromEntries((HARNESSES as RosterHarness[]).map((harness) => [harness, known !== undefined && harness in known ? known[harness] ?? null : inspectApp(harness, ctx.env).resolution.version]))
+      return skillsAutoPlan({ versions, tests: skillsTests() })
+    },
+    test: async (harness) => {
+      const ctx = context()
+      const result = await runCli(ctx.script, ['skills', 'test', harness, '--auto', '--json'], ctx.probeEnv, PROBE_TIMEOUT_MS)
+      const report = parseJson(result.stdout)
+      if (result.failed || report === null || typeof report.outcome !== 'string') return null
+      return { outcome: report.outcome as SkillsOutcome, version: typeof report.version === 'string' ? report.version : null, detail: String(report.detail ?? '') }
+    },
+    tell: (notice) => options.notifyApp?.(notice)
   })
 
   const inspect = (harness: RosterHarness): AppInspection => {
@@ -1014,7 +1040,13 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const snapshot = await rulesSnapshot(context())
     // Health has read the machine: a new app version is tested from here, with the versions this read found.
     void auto.trigger(Object.fromEntries(snapshot.context.map((row) => [row.harness, row.version])))
-    return { ...snapshot, contextAuto: auto.view() }
+    void skillsAuto.trigger(Object.fromEntries(snapshot.apps.map((app) => [app.harness, app.version])))
+    const testing = skillsAuto.view().running
+    return {
+      ...snapshot, contextAuto: auto.view(),
+      // A mark the page reads after the test ended only makes it wait for nothing and read again.
+      skills: { ...snapshot.skills, apps: snapshot.skills.apps.map((app) => (app.harness === testing ? { ...app, testing: true } : app)) }
+    }
   })
   handle('aiterm:rules:plan-master', (params) => {
     const text = textParam(params, 'text')
@@ -1134,6 +1166,11 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   handle('aiterm:rules:context-auto', async (params) => {
     await (params.fresh === true ? auto.trigger() : auto.settled())
     return auto.view()
+  })
+  // `fresh` makes BMN look now (an update command ended); without it the call only waits for a skills test under way.
+  handle('aiterm:rules:skills-auto', async (params) => {
+    await (params.fresh === true ? skillsAuto.trigger() : skillsAuto.settled())
+    return skillsAuto.view()
   })
   handle('aiterm:rules:context-auto-set', async (params) => {
     if (typeof params.enabled !== 'boolean') invalid('enabled must be true or false')
@@ -1505,7 +1542,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     }
     return { reply, view: judgeView() }
   })
-  return { contextAutoAtStart: () => auto.trigger() }
+  return { contextAutoAtStart: () => auto.trigger(), skillsAutoAtStart: () => skillsAuto.trigger() }
 }
 
 /** The purpose word a call from the judge's own page is counted under. */

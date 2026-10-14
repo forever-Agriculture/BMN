@@ -856,6 +856,10 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   setContextAuto(enabled: boolean): Promise<RulesOutcome> {
     return invokeBridge('aiterm:rules:context-auto-set', { enabled })
   },
+  /** BMN's own skills testing after an app update: `fresh` makes it look now, without it the call waits for a test under way. Resolves when none is. */
+  skillsAuto(fresh: boolean): Promise<{ running: RosterHarness | null }> {
+    return invokeBridge('aiterm:rules:skills-auto', { fresh })
+  },
   planSkillsInstall(): Promise<SkillsPlan> {
     return invokeBridge('aiterm:rules:skills-plan', {})
   },

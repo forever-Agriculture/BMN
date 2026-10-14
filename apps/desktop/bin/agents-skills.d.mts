@@ -11,7 +11,8 @@ export declare class SkillsError extends Error {
   constructor(code: string, message: string)
 }
 
-export declare const SKILL_APPS: Record<SkillsHarness, { command: string; roots: string[]; list: { argv: string[]; input: string } | null; prompt: boolean }>
+/** `list` is the command that names the skills an app sees, or for OpenCode 2 the operation its server answers. */
+export declare const SKILL_APPS: Record<SkillsHarness, { command: string; roots: string[]; list: { argv: string[]; input: string } | { server: string } | null; prompt: boolean }>
 export declare const SETTLED_STATES: SkillState[]
 export declare function rootPath(root: string, environment?: Environment): string
 export declare function skillsTestsPath(): string
@@ -44,6 +45,8 @@ export interface SkillsTestEntry {
   skills_hash?: string
   /** What a loading result rests on: `prompt` is a run with one prompt; `listing` marks an older record that sent none. */
   basis?: 'listing' | 'prompt'
+  /** `bmn`: a folders test BMN ran by itself after an app update (`bmn skills test <app> --auto`). */
+  by?: 'bmn'
 }
 export declare function skillsTests(): SkillsTestEntry[]
 export declare function lastSkillsTest(harness: string, kind: SkillsTestEntry['kind'], tests?: SkillsTestEntry[]): SkillsTestEntry | null
@@ -96,7 +99,7 @@ export declare function installSkills(harnesses?: string[], options?: {
 }): Promise<SkillsInstallResult>
 export declare function restoreSkillsTransaction(manifest: unknown, folder: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string; leftWords?: string[] }): Promise<{ code: string; restored?: string[]; message?: string; plan_hash?: string; targets?: { harness: string; path: string; resolved_path: string; becomes: string; diff: string }[] }>
 
-export declare function testSkillsFolders(harness: string, options?: { environment?: Environment; now?: Date; timeoutMs?: number }): Promise<SkillsTestEntry>
+export declare function testSkillsFolders(harness: string, options?: { environment?: Environment; now?: Date; timeoutMs?: number; by?: 'bmn' }): Promise<SkillsTestEntry>
 type SkillsTestOptions = { environment?: Environment; now?: Date; timeoutMs?: number }
 type LastSkillsTests = (Partial<SkillsTestEntry> & { harness: SkillsHarness; outcome: SkillsOutcome | null; stale?: boolean })[]
 type LastSkillsOptions = { environment?: Environment; tests?: SkillsTestEntry[]; versions?: SkillsVersions; generation?: Generation | null }
@@ -107,5 +110,7 @@ export declare function testSkillsLoading(harness: string, options?: SkillsTestO
 export declare function lastLoadingTests(options?: LastSkillsOptions): LastSkillsTests
 export declare function lastListingTests(options?: LastSkillsOptions): LastSkillsTests
 export declare function testSkills(harness: string, options?: SkillsTestOptions): Promise<{ harness: string; version: string | null; outcome: SkillsOutcome; detail: string; folders: SkillsTestEntry; listing: SkillsTestEntry | null }>
+export interface SkillsAutoPlanEntry { harness: SkillsHarness; version: string; reason: 'untested' | 'retry' }
+export declare function skillsAutoPlan(options?: { versions?: SkillsVersions; tests?: SkillsTestEntry[] }): SkillsAutoPlanEntry[]
 export declare const SKILLS_USAGE: string
 export declare function runSkillsCommand(argv: string[]): Promise<number>

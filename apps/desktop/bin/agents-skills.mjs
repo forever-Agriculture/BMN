@@ -1,5 +1,5 @@
 // MODULE: agents-skills.mjs - Story 60.11: one skills folder for every agent app: where each app reads skills (the owner's test, per version), one state per app and skill, and install, removal and undo as one transaction
-import { spawnSync } from 'node:child_process'
+import { execFile, spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import {
   appendFileSync, chmodSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync,
@@ -36,8 +36,9 @@ export class SkillsError extends Error {
 
 /**
  * Per app: its program, the folders (under the home folder) it may read user-level skills from,
- * in the order BMN prefers to install into, and the command that lists the skills it sees
- * without sending a prompt.
+ * in the order BMN prefers to install into, and how BMN lists the skills it sees without sending
+ * a prompt: a command, or for OpenCode 2 the operation its server answers (`opencode debug skill`
+ * went with 2.0; see openCodeServerList).
  * `prompt` says whether BMN can tell, in a run of that app, the app handing a skill's text to the
  * model from the model reading the file itself; only there does a loading test say pass or fail.
  * These are what BMN asks; what an app answers is recorded by the owner's test, per version.
@@ -45,7 +46,7 @@ export class SkillsError extends Error {
 export const SKILL_APPS = {
   claude: { command: 'claude', roots: ['.claude/skills'], list: { argv: ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence'], input: '/context\n' }, prompt: true },
   codex: { command: 'codex', roots: ['.agents/skills', '.codex/skills', '.claude/skills'], list: { argv: ['debug', 'prompt-input'], input: '' }, prompt: true },
-  opencode: { command: 'opencode', roots: ['.config/opencode/skills', '.config/opencode/skill', '.agents/skills', '.claude/skills'], list: { argv: ['debug', 'skill'], input: '' }, prompt: false }
+  opencode: { command: 'opencode', roots: ['.config/opencode/skills', '.config/opencode/skill', '.agents/skills', '.claude/skills'], list: { server: 'skill.list' }, prompt: false }
 }
 
 /** States that need nothing done: the skill is where it should be, or is rightly absent. */
@@ -746,9 +747,97 @@ function testSkillGone(path, work) {
   return entryOf(path).kind === 'missing'
 }
 
-function listOutput(spec, cwd, environment, timeoutMs) {
+/** What an app answers when asked which skills it sees; `reason` says why an answer is missing, where BMN knows. */
+async function listOutput(spec, cwd, environment, timeoutMs) {
+  if (spec.list.server !== undefined) return openCodeServerList(spec, cwd, environment, timeoutMs)
   const run = spawnSync(spec.command, spec.list.argv, { cwd, env: environment, input: spec.list.input, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 })
   return { finished: !run.error && run.status !== null, ok: !run.error && run.status === 0, text: `${run.stdout ?? ''}\n${run.stderr ?? ''}` }
+}
+
+// OpenCode 2.0.29 (2026-10-14) answers with no skills for about half a second after its server
+// starts, then with every skill of every folder at once.
+const SERVER_POLL_MS = 400
+const SERVER_EMPTY_MS = 10_000
+const SERVER_STOP_MS = 3000
+
+const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
+
+/** The skills in an answer of OpenCode's server, one `name path` line each, or null for an answer BMN cannot read. A skill's text is never kept. */
+function serverSkills(stdout) {
+  let answer
+  try {
+    answer = JSON.parse(stdout)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(answer?.data)) return null
+  return answer.data.map((entry) => `${typeof entry?.name === 'string' ? entry.name : ''} ${typeof entry?.path === 'string' ? entry.path : ''}`).join('\n')
+}
+
+/**
+ * OpenCode 2 lists its skills only through its server. BMN starts a private one on a free
+ * loopback port (`opencode serve --port 0`, never the owner's background service), with a password
+ * made for this run that is never shown or kept, asks it for its skills until two answers in a
+ * row agree and name a skill (or have been empty for ten seconds), and stops it.
+ */
+async function openCodeServerList(spec, cwd, environment, timeoutMs) {
+  const env = { ...environment, OPENCODE_PASSWORD: randomBytes(24).toString('base64url'), OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1' }
+  const deadline = Date.now() + timeoutMs
+  const server = spawn(spec.command, ['serve', '--hostname', '127.0.0.1', '--port', '0'], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
+  let said = ''
+  let ended = false
+  const exited = new Promise((resolve) => {
+    const end = () => {
+      ended = true
+      resolve()
+    }
+    server.once('exit', end)
+    server.once('error', end)
+  })
+  server.stdout.on('data', (chunk) => { said += chunk })
+  server.stderr.on('data', (chunk) => { said += chunk })
+  try {
+    let url = null
+    while (url === null) {
+      url = /server listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(said)?.[1] ?? null
+      if (url !== null) break
+      if (ended) return { finished: true, ok: false, text: said, reason: 'its server did not start' }
+      if (Date.now() >= deadline) return { finished: false, ok: false, text: said }
+      await pause(50)
+    }
+    let previous = null
+    let since = Date.now()
+    while (Date.now() < deadline) {
+      const answer = await new Promise((resolve) => {
+        execFile(spec.command, ['api', '--server', url, spec.list.server], { cwd, env, encoding: 'utf8', timeout: Math.max(1, deadline - Date.now()), maxBuffer: 64 * 1024 * 1024 },
+          (error, stdout) => resolve({ error, stdout: stdout ?? '' }))
+      })
+      if (answer.error?.killed) return { finished: false, ok: false, text: previous ?? '' }
+      if (answer.error) return { finished: true, ok: false, text: answer.stdout, reason: 'its server did not answer' }
+      const skills = serverSkills(answer.stdout)
+      if (skills === null) return { finished: true, ok: false, text: '', reason: 'its server answered in a form BMN cannot read' }
+      if (skills !== previous) {
+        previous = skills
+        since = Date.now()
+      } else if (skills !== '' || Date.now() - since >= SERVER_EMPTY_MS) {
+        return { finished: true, ok: true, text: skills }
+      }
+      await pause(SERVER_POLL_MS)
+    }
+    return { finished: false, ok: false, text: previous ?? '' }
+  } finally {
+    const signal = (name) => {
+      try {
+        process.kill(-server.pid, name)
+      } catch {
+        // Already gone.
+      }
+    }
+    if (!ended) {
+      signal('SIGTERM')
+      if (!(await Promise.race([exited.then(() => true), pause(SERVER_STOP_MS).then(() => false)]))) signal('SIGKILL')
+    }
+  }
 }
 
 /**
@@ -758,11 +847,11 @@ function listOutput(spec, cwd, environment, timeoutMs) {
  * No sign-in is there, so nothing can be sent to a provider; an app that needs one to answer is
  * recorded as inconclusive and stays "not supported yet".
  */
-export async function testSkillsFolders(harness, { environment = process.env, now = new Date(), timeoutMs = 120_000 } = {}) {
+export async function testSkillsFolders(harness, { environment = process.env, now = new Date(), timeoutMs = 120_000, by } = {}) {
   const spec = SKILL_APPS[harness]
   const { harnessVersion } = await import('./agents-check.mjs')
   const version = harnessVersion(spec.command, environment)
-  const done = (outcome, detail, roots = []) => record({ harness, kind: 'capability', at: now.toISOString(), version, outcome, roots, detail })
+  const done = (outcome, detail, roots = []) => record({ harness, kind: 'capability', at: now.toISOString(), version, outcome, roots, detail, ...(by === 'bmn' ? { by } : {}) })
   if (version === null) return done('unavailable', `${spec.command} is not installed or did not answer --version`)
   const folder = mkdtempSync(`${home(environment)}/.bmn-skills-test-`)
   try {
@@ -783,12 +872,12 @@ export async function testSkillsFolders(harness, { environment = process.env, no
     })
     const testEnvironment = Object.fromEntries(Object.entries(environment).filter(([key]) => !/^(XDG_|CLAUDE_|CODEX_|OPENCODE_|ANTHROPIC_|OPENAI_)/.test(key)))
     testEnvironment.HOME = testHome
-    const listed = listOutput(spec, `${folder}/work`, testEnvironment, timeoutMs)
+    const listed = await listOutput(spec, `${folder}/work`, testEnvironment, timeoutMs)
     const roots = names.map((entry) => ({ root: entry.root, folder: listed.text.includes(entry.folderName), link: listed.text.includes(entry.linkName) }))
     const found = roots.filter((entry) => entry.folder || entry.link)
     if (found.length > 0) return done('pass', `${APP_NAMES[harness]} reads skills from ${found.map((entry) => `~/${entry.root}${entry.link ? '' : ' (folders only, no links)'}`).join(', ')}`, roots)
     if (!listed.finished) return done('inconclusive', `${spec.command} did not finish`, roots)
-    if (!listed.ok) return done('inconclusive', `${spec.command} did not answer in a home folder without its sign-in`, roots)
+    if (!listed.ok) return done('inconclusive', `${spec.command} did not answer in a home folder without its sign-in${listed.reason ? ` (${listed.reason})` : ''}`, roots)
     return done('fail', `${APP_NAMES[harness]} named none of the test skills, so it reads no skills folder BMN knows`, roots)
   } finally {
     rmSync(folder, { recursive: true, force: true })
@@ -841,7 +930,7 @@ export async function testSkillsListing(harness, { environment = process.env, no
   try {
     mkdirSync(path, { recursive: true })
     writeFileSync(`${path}/SKILL.md`, SENTINEL_TEXT(name))
-    const listed = listOutput(spec, work, environment, timeoutMs)
+    const listed = await listOutput(spec, work, environment, timeoutMs)
     outcome = listed.text.includes(name) ? ['pass', `${APP_NAMES[harness]} lists a test skill placed in ${location}; no prompt was sent, so this shows the app finds a skill there, not that a model uses it`]
       : !listed.ok ? ['inconclusive', `${spec.command} did not answer (timeout or error)`]
         : ['fail', `${APP_NAMES[harness]} did not list a test skill placed in ${location}`]
@@ -1078,6 +1167,28 @@ export async function testSkills(harness, options = {}) {
   return { harness, version: folders.version, outcome: listing.outcome, detail: `${folders.detail}; ${listing.detail}`, folders, listing }
 }
 
+/**
+ * Which apps BMN tests by itself now, after an app update: the folders test only, in a throwaway
+ * home that holds nothing of the owner's, with no sign-in and no prompt. Only an app whose skills
+ * some test once showed is named, at a version no test has run on (`untested`), or whose one test
+ * of this version was BMN's own and showed nothing (`retry`). A version whose test failed, or that
+ * the owner tested himself, waits for him; so does an app no test ever passed on.
+ */
+export function skillsAutoPlan({ versions, tests = skillsTests() } = {}) {
+  const plan = []
+  for (const harness of HARNESSES) {
+    const version = versions?.[harness]
+    if (typeof version !== 'string' || SKILL_APPS[harness] === undefined) continue
+    const capability = tests.filter((entry) => entry.harness === harness && entry.kind === 'capability')
+    if (!capability.some((entry) => entry.outcome === 'pass')) continue
+    const ofVersion = capability.filter((entry) => entry.version === version)
+    const reason = ofVersion.length === 0 ? 'untested'
+      : ofVersion.length === 1 && ofVersion[0].by === 'bmn' && (ofVersion[0].outcome === 'inconclusive' || ofVersion[0].outcome === 'unavailable') ? 'retry' : null
+    if (reason !== null) plan.push({ harness, version, reason })
+  }
+  return plan
+}
+
 // ---------------------------------------------------------------------------------------------
 // CLI
 
@@ -1085,6 +1196,7 @@ export const SKILLS_USAGE = `Usage: bmn skills check [--json]                   
        bmn skills install [app…] [--plan] [--yes]   Link or copy each app's skills, and remove what an app may no longer have, as one transaction
        bmn skills test <app> [--json]               Owner-run: find where the app reads skills, then whether it lists a skill placed there (no prompt)
        bmn skills test <app> --prompt [--json]      Owner-run: one prompt to that app's provider, to see whether the app hands a test skill to its model
+       bmn skills test <app> --auto [--json]        BMN's own run after an app update: where the app reads skills, only, marked as BMN's
 
 Apps: ${HARNESSES.join(', ')}. The skills come from ~/.claude/skills unless the approved team names another folder.
 Undo an install with: bmn rules restore --transaction <id>`
@@ -1155,10 +1267,12 @@ export async function runSkillsCommand(argv) {
       return result.exposed.length > 0 ? 1 : 0
     }
     if (action === 'test') {
-      const { options, positionals } = readOptions(rest, { flags: ['json', 'prompt'] })
+      const { options, positionals } = readOptions(rest, { flags: ['json', 'prompt', 'auto'] })
       asJson = options.json === true
       if (positionals.length !== 1 || !HARNESSES.includes(positionals[0])) return usage(appRefusal(positionals[0], `skills test expects one app: ${HARNESSES.join(', ')}`))
-      const result = options.prompt === true ? await testSkillsLoading(positionals[0]) : await testSkills(positionals[0])
+      if (options.prompt === true && options.auto === true) return usage('skills test takes --prompt or --auto, not both')
+      const result = options.prompt === true ? await testSkillsLoading(positionals[0])
+        : options.auto === true ? await testSkillsFolders(positionals[0], { by: 'bmn' }) : await testSkills(positionals[0])
       out(asJson ? JSON.stringify(result, null, 2) : `${result.harness}: ${result.outcome} - ${result.detail}${result.version ? ` (${result.version})` : ''}`)
       return result.outcome === 'pass' ? 0 : 1
     }

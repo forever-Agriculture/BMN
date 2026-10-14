@@ -487,8 +487,10 @@ export interface SkillsAppView {
   kindReason: string
   /** Linked, Copied, Reads the source, Differs, Missing, Not supported yet or Exposed. */
   state: string
-  /** The last test of where the app reads skills, whatever version it ran against. */
-  test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string } | null
+  /** The last test of where the app reads skills, whatever version it ran against; `by: 'bmn'` when BMN ran it by itself after an app update. */
+  test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; by?: 'bmn' } | null
+  /** BMN is testing, by itself, where this app reads skills right now (after an app update). */
+  testing?: boolean
   /** Whether BMN can tell, in a run of this app, the app handing a skill to its model from the model reading the file itself. */
   loadTestable: boolean
   /** The last listing test (no prompt): the app lists a skill placed where its skills live. Stale when the app, its destination or a skill changed since. */
