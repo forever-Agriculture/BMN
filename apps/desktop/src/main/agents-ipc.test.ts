@@ -344,7 +344,7 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
   })
 
-  it('reads OpenCode as unknown on Health and at approval when the app\'s environment names another OpenCode configuration, and never plans its full rules', async () => {
+  it('reads OpenCode as unknown on Health and at approval when the app\'s environment names another OpenCode configuration, and plans its full rules only on the inspected destination', async () => {
     writeFileSync(rosterFile(), FIXTURE.replace('opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}'))
     mkdirSync(join(home, '.config/opencode'), { recursive: true })
     writeFileSync(join(home, '.config/opencode/opencode.json'), '{ "model": "opencode-go/kimi-k3" }')
@@ -360,11 +360,13 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     appEnv = {}
     expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
     expect(await call<RulesOutcome>('rules:save-master', { text: MASTER, expectedHash: null, expectedLink: null })).toMatchObject({ ok: true })
-    // Inspected and allowed private work, and still public: BMN checks no OpenCode request (owner decision 2026-10-10).
-    const planned = async () => (await call<RulesPlan>('rules:plan-install')).targets.find((target) => target.harness === 'opencode')
-    expect(await planned()).toMatchObject({ rendering: 'public' })
+    // Inspected and allowed private work: OpenCode plans the full rules like Claude Code and Codex (owner decision
+    // 2026-10-14), and its destination is inspected again first, so another configuration refuses the whole plan.
+    stub('opencode', 'echo "opencode v2.0.28"')
+    const plan = async () => call<RulesPlan>('rules:plan-install')
+    expect((await plan()).targets.find((target) => target.harness === 'opencode')).toMatchObject({ rendering: 'full' })
     appEnv = { OPENCODE_CONFIG: join(home, 'other.json') }
-    expect(await planned()).toMatchObject({ rendering: 'public' })
+    expect(await plan()).toMatchObject({ ok: false, code: 'ROUTE_CHANGED', message: expect.stringContaining('OpenCode cannot get the full rules'), targets: [] })
     expect(existsSync(join(home, '.config/opencode/AGENTS.md'))).toBe(false)
   })
 
@@ -378,7 +380,13 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     const apps = (await call<RulesSnapshot>('rules:snapshot')).apps
     expect(apps[1]).toMatchObject({ version: '0.170.0', versionState: 'newer', versionNote: 'Newer than the version BMN tested (0.161.0). BMN reads where it sends data the same way on every version.', basis: 'default', provider: 'openai' })
     expect(apps[0]).toMatchObject({ version: '2.1.200', versionState: 'other', versionNote: 'Not the version BMN tested (2.1.295). BMN reads where it sends data the same way on every version.' })
-    expect(apps[2]).toMatchObject({ versionState: 'unknown', versionNote: 'BMN does not check OpenCode dispatches.' })
+    expect(apps[2]).toMatchObject({ versionState: 'unknown', versionNote: 'OpenCode is not installed, or its version cannot be read.' })
+    // OpenCode is read like Claude Code and Codex now (owner decision 2026-10-14); Cursor still is not.
+    stub('opencode', 'echo "opencode v2.0.28"')
+    expect((await call<RulesSnapshot>('rules:snapshot')).apps[2]).toMatchObject({ version: '2.0.28', versionState: 'tested', versionNote: 'BMN tested how this version picks where to send data.' })
+    stub('opencode', 'echo "2.1.0"')
+    expect((await call<RulesSnapshot>('rules:snapshot')).apps[2]).toMatchObject({ version: '2.1.0', versionState: 'newer' })
+    expect((await call<RulesSnapshot>('rules:snapshot')).apps[3]).toMatchObject({ versionState: 'unknown', versionNote: 'BMN does not check Cursor dispatches.' })
     stub('codex', 'echo "codex-cli"')
     expect((await call<RulesSnapshot>('rules:snapshot')).apps[1]).toMatchObject({ version: null, versionState: 'unknown', versionNote: 'Codex is not installed, or its version cannot be read.' })
   })

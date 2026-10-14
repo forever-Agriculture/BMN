@@ -1050,6 +1050,25 @@ describe('receipts and --verify (60.3 AC7)', () => {
     const kimi = JSON.parse((await runCli(['roster', 'route', '--agent', 'kimi', '--json'])).stdout)
     expect(kimi).toMatchObject({ agent: 'kimi', harness: 'opencode', inspection_only: true, basis: 'unknown' })
   })
+
+  it('reads OpenCode 2\'s configuration shapes and version for its destination (owner decision 2026-10-14)', async () => {
+    stub('opencode', 'opencode v2.0.28')
+    mkdirSync(join(home, '.config/opencode'), { recursive: true })
+    const route = async (config: string) => {
+      writeFileSync(join(home, '.config/opencode/opencode.jsonc'), config)
+      return JSON.parse((await runCli(['roster', 'route', '--agent', 'kimi', '--json'])).stdout)
+    }
+    // OpenCode's own provider is named by the model's prefix, also where the model is written as an object.
+    expect(await route('{ "model": "opencode-go/kimi-k3" }')).toMatchObject({ basis: 'default', provider: 'opencode-go', host: 'default:opencode-go', version: '2.0.28', version_state: 'tested' })
+    expect(await route('{ "model": { "providerID": "opencode-go", "model": "kimi-k3" } }')).toMatchObject({ basis: 'default', provider: 'opencode-go', model: 'opencode-go/kimi-k3' })
+    // The roster decides, as for Claude Code and Codex: the fixture's OpenCode Go gets public work only.
+    expect(await route('{ "model": "opencode-go/kimi-k3" }')).toMatchObject({ roster_provider: 'opencode-go', private_work: 'public_only' })
+    // A provider entry that can carry data elsewhere makes the destination unknown, in either version's layout.
+    for (const entry of ['"provider": { "opencode-go": { "npm": "x" } }', '"providers": { "opencode-go": { "package": "@acme/provider" } }',
+      '"providers": { "opencode-go": { "canonical": "openai" } }', '"providers": { "opencode-go": { "settings": { "baseURL": "https://proxy.example.test/v1" } } }']) {
+      expect(await route(`{ "model": "opencode-go/kimi-k3", ${entry} }`)).toMatchObject({ basis: 'unknown', host: null, reason: 'opencode.jsonc gives opencode-go its own address' })
+    }
+  })
 })
 
 describe('codex exec resume (60.3 AC8)', () => {

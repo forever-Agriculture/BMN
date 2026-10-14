@@ -29,7 +29,10 @@ A session is never deleted when it is bound to a running BMN session or to a Res
 | Agent | Reads (read-only) | Last activity | Deletes with |
 | --- | --- | --- | --- |
 | Codex | `$CODEX_HOME/state_5.sqlite` (default `~/.codex`), `threads.id` | `threads.updated_at` (epoch s), archived or not | `codex delete --force <uuid>` |
-| OpenCode | `$XDG_DATA_HOME/opencode/opencode.db` (default `~/.local/share`), `session.id`, every project | `session.time_updated` (epoch ms) | `opencode session delete <id> --pure` |
+| OpenCode 1 | `$XDG_DATA_HOME/opencode/opencode.db` (default `~/.local/share`), `session.id`, every project | `session.time_updated` (epoch ms) | `opencode session delete <id> --pure` |
+| OpenCode 2 | the same file, `session_v2.id` of top-level sessions (`parent_id` empty), every project | `session_v2.time_updated` (epoch ms) | `opencode session delete <id> --standalone`, which takes the session's children with it |
+
+`opencode --version` at the start of each run decides which row applies; one that cannot be read counts as OpenCode 1. OpenCode 2 copies 1's sessions into `session_v2` and writes only there, and has no `--pure`; `--standalone` runs the delete on a private server instead of OpenCode's shared background service, and no terminal plugin (BMN's included) loads for it.
 
 Cursor's terminal agent keeps its chats under `~/.cursor/chats/` and has no command to delete one (measured on 2026.09.26-dd393fe, [agent-control.md](agent-control.md#cursors-terminal-agent)), so its row reads "keeps its own history · not managed by BMN" whenever `cursor-agent` is on PATH or that folder exists, and no run touches it.
 
@@ -49,6 +52,8 @@ Disposable stores only: a scratch `CODEX_HOME`, and scratch `XDG_DATA_HOME`/`XDG
 | `codex delete` of a thread a live process outside BMN holds | VERIFIED: refused | while `codex exec resume <id>` ran (`thread-writer-locks/<id>.lock`): rc 1 "failed to delete session", row and file kept; after the process exited, rc 0 |
 | `opencode session delete <id>` from outside the session's project | VERIFIED: works | from a non-project directory: rc 0 "Session … deleted", 1.32 s; `session` row gone |
 | `opencode session delete <id> --pure` | VERIFIED: works | rc 0; `--pure` keeps the owner's plugins (BMN's included) out of the delete |
+| OpenCode 2.0.28 `opencode session delete <id> --pure` | VERIFIED: refused | 2026-10-14: "Unrecognized flag: --pure in command opencode session delete", rc 1 |
+| OpenCode 2.0.28 `opencode session delete <id> --standalone` | VERIFIED: works | 2026-10-14, scratch profile: rc 0 "Session … deleted"; its `session_v2` and `session_message` rows gone |
 | `opencode session delete` of a session a live process holds | VERIFIED: **not refused** | during `opencode run --session <id>`: delete rc 0; the live process then failed (rc 1, UnknownError after an insert into `part` for the deleted session); a next `opencode run --session <id>` → "Session not found". Hence the 24 h and command-line skips. |
 | OpenCode `time_updated` advances on a turn | VERIFIED | …488439 → …708088 during the live turn |
 | Reading a store the agent is writing (WAL) | VERIFIED: `mode=ro` | `file:…?mode=ro` read the current rows; `immutable=1` answered "no such table: threads" because the rows were still in the WAL. BMN opens with better-sqlite3 `readonly: true` (the same SQLite read-only mode). |

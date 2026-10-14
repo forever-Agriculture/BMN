@@ -234,27 +234,42 @@ describe('install transactions and restore (60.4 AC3-AC4)', () => {
     expect(readFileSync(join(home, '.config/bmn/agents/global-rules.md'), 'utf8')).toBe(MASTER)
   })
 
-  it('gives OpenCode and Cursor only the public sections, even on an inspected destination that may see private work (owner decision 2026-10-10)', async () => {
+  it('gives OpenCode the full rules on an inspected destination that may see private work (owner decision 2026-10-14), and Cursor only the public sections (2026-10-10)', async () => {
     approve(edit(edit(EXAMPLE, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}'),
       'cursor: {provider: cursor, basis: owner-declared}', 'cursor: {provider: anthropic, basis: observed-default}'))
+    stub('opencode', 'echo "opencode v2.0.28"')
     mkdirSync(join(home, '.config/opencode'), { recursive: true })
     const config = join(home, '.config/opencode/opencode.json')
     writeFileSync(config, '{ "model": "opencode-go/kimi-k3" }')
-    expect(render(readMaster(), 'opencode', generation())).toMatchObject({ kind: 'public', reason: 'BMN does not check what OpenCode sends' })
+    expect(render(readMaster(), 'opencode', generation())).toMatchObject({ kind: 'full', reason: 'OpenCode Go may see private work' })
     expect(render(readMaster(), 'cursor', generation())).toMatchObject({ kind: 'public', reason: 'BMN does not check what Cursor sends' })
-    expect(await installRules(['opencode', 'cursor'], { yes: true, environment: env })).toMatchObject({ code: 'OK', written: [{ harness: 'opencode', kind: 'public' }, { harness: 'cursor', kind: 'public' }] })
-    for (const file of [target.opencode(), target.cursor()]) {
-      const text = readFileSync(file, 'utf8')
-      expect(text).toContain('Answer first, plainly.')
-      for (const kept of ['PRIVATE-SENTINEL', 'OpenCode-only rule.', 'Plain rule for everyone.']) expect(text).not.toContain(kept)
-    }
-    // A public rendering waits for no inspection: whatever OpenCode's configuration says, nothing private is written.
+    expect(await installRules(['opencode', 'cursor'], { yes: true, environment: env })).toMatchObject({ code: 'OK', written: [{ harness: 'opencode', kind: 'full' }, { harness: 'cursor', kind: 'public' }] })
+    // The full rendering: every untagged section and OpenCode's own, never another app's.
+    const opencode = readFileSync(target.opencode(), 'utf8')
+    for (const kept of ['Answer first, plainly.', 'OpenCode-only rule.', 'Plain rule for everyone.', 'The team:']) expect(opencode).toContain(kept)
+    expect(opencode).not.toContain('PRIVATE-SENTINEL')
+    const cursor = readFileSync(target.cursor(), 'utf8')
+    expect(cursor).toContain('Answer first, plainly.')
+    for (const kept of ['PRIVATE-SENTINEL', 'OpenCode-only rule.', 'Plain rule for everyone.']) expect(cursor).not.toContain(kept)
+    // Like Claude Code and Codex, OpenCode is inspected again right before the full rules leave BMN: a provider
+    // entry with its own address (OpenCode 1's options.baseURL, OpenCode 2's settings.baseURL), another
+    // configuration named by the environment, or no readable version, and nothing is written.
     writeMasterFile(MASTER.replace('Answer first, plainly.', 'Answer first, plainly. One more public rule.'))
-    writeFileSync(config, '{ "model": "opencode-go/kimi-k3", "provider": { "opencode-go": { "options": { "baseURL": "https://proxy.example.test/v1" } } } }')
-    expect(await installRules(['opencode'], { yes: true, environment: { ...env, OPENCODE_CONFIG: join(home, 'other.json') } })).toMatchObject({ code: 'OK', written: [{ harness: 'opencode', kind: 'public' }] })
+    for (const [text, extra] of [
+      ['{ "model": "opencode-go/kimi-k3", "provider": { "opencode-go": { "options": { "baseURL": "https://proxy.example.test/v1" } } } }', {}],
+      ['{ "model": "opencode-go/kimi-k3", "providers": { "opencode-go": { "settings": { "baseURL": "https://proxy.example.test/v1" } } } }', {}],
+      ['{ "model": "opencode-go/kimi-k3" }', { OPENCODE_CONFIG: join(home, 'other.json') }]
+    ] as const) {
+      writeFileSync(config, text)
+      expect(await installRules(['opencode'], { yes: true, environment: { ...env, ...extra } })).toMatchObject({ code: 'ROUTE_CHANGED' })
+      expect(readFileSync(target.opencode(), 'utf8')).not.toContain('One more public rule.')
+    }
+    writeFileSync(config, '{ "model": "opencode-go/kimi-k3" }')
+    rmSync(join(stubs, 'opencode'))
+    expect(await installRules(['opencode'], { yes: true, environment: env })).toMatchObject({ code: 'ROUTE_CHANGED', message: expect.stringContaining('OpenCode is not installed, or its version cannot be read') })
+    stub('opencode', 'echo "1.19.0"')
+    expect(await installRules(['opencode'], { yes: true, environment: env })).toMatchObject({ code: 'OK', written: [{ harness: 'opencode', kind: 'full' }] })
     expect(readFileSync(target.opencode(), 'utf8')).toContain('One more public rule.')
-    expect(readFileSync(target.opencode(), 'utf8')).not.toContain('PRIVATE-SENTINEL')
-    expect(await probe('opencode', { environment: env })).toMatchObject({ outcome: 'unavailable' })
   })
 
   it('refuses a full rendering when the route changed', async () => {
@@ -570,6 +585,25 @@ describe('probes (60.4 AC5)', () => {
     rmSync(join(stubs, 'claude'))
     stub('claude', 'case "$1" in --version) echo "2.1.296 (Claude Code)";; esac')
     expect(await claude()).toMatchObject({ stale: true })
+  })
+
+  it('OpenCode passes when it quotes the rendered hash before any tool ran, and its probe session is deleted again', async () => {
+    approve(edit(EXAMPLE, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}'))
+    mkdirSync(join(home, '.config/opencode'), { recursive: true })
+    writeFileSync(join(home, '.config/opencode/opencode.json'), '{ "model": "opencode-go/kimi-k3" }')
+    stub('opencode', 'echo "opencode v2.0.28"')
+    expect(await installRules(['opencode'], { yes: true, environment: env })).toMatchObject({ code: 'OK', written: [{ harness: 'opencode', kind: 'full' }] })
+    const quoted = `$(grep -o 'master sha256 [0-9a-f]*' "$HOME/.config/opencode/AGENTS.md" | cut -d' ' -f3)`
+    const answer = (before: string) => `case "$1" in --version) echo "opencode v2.0.28";; run) ${before}printf '{"type":"text","sessionID":"ses_f1c0aa11bffeQ2wErTyUiOpAsD","part":{"type":"text","text":"%s"}}\\n' "${quoted}";; session) echo "$*" >> "$HOME/opencode-sessions";; esac`
+    stub('opencode', answer(''))
+    expect(await probe('opencode', { environment: env })).toMatchObject({ outcome: 'pass', version: '2.0.28' })
+    expect(readFileSync(join(home, 'opencode-sessions'), 'utf8')).toBe('session delete --standalone ses_f1c0aa11bffeQ2wErTyUiOpAsD\n')
+    // A tool that ran first may have read the file: the hash then proves nothing.
+    stub('opencode', answer(`printf '{"type":"tool_use","sessionID":"ses_f1c0aa11bffeQ2wErTyUiOpAsD","part":{"type":"tool","tool":"read"}}\\n'; `))
+    expect(await probe('opencode', { environment: env })).toMatchObject({ outcome: 'inconclusive', detail: 'a tool ran before the answer named a sha256' })
+    stub('opencode', 'case "$1" in --version) echo "opencode v2.0.28";; run) echo \'{"type":"text","part":{"type":"text","text":"0000000000000000000000000000000000000000000000000000000000000000"}}\';; esac')
+    expect((await probe('opencode', { environment: env })).outcome).toBe('fail')
+    expect(existsSync(join(home, '.bmn-rules-probe-'))).toBe(false)
   })
 
   it('is unavailable where the destination gets public work only or the CLI is missing, and leaves no throwaway folder', async () => {

@@ -178,7 +178,7 @@ export function teamPhrase(generation) {
 /**
  * Which rendering an app gets and why, from the approved roster: full only when its approved
  * destination may receive private work; public for a public-only, unknown or owner-declared one,
- * and always for an app whose requests BMN does not check (OpenCode, Cursor).
+ * and always for an app in PUBLIC_ONLY_APPS (Cursor).
  */
 export function routeFor(harness, generation) {
   const answer = harnessPrivateWork(generation?.data ?? null, harness)
@@ -902,7 +902,29 @@ export async function probe(harness, { environment = process.env, now = new Date
         ? record('pass', 'the probe run\'s rollout carries the rendered header before any tool ran', version)
         : record('fail', 'the probe run\'s rollout does not carry the rendered header before any tool ran', version)
     }
-    // Only Claude Code is left here: OpenCode and Cursor never hold a full rendering (routeFor).
+    if (harness === 'opencode') {
+      // OpenCode has no switch that turns its tools off, so only words written before its first tool call
+      // count, as for Codex; the run's own private server is used, and its session is deleted again.
+      const run = spawnSync(command, ['run', '--standalone', '--format', 'json', question],
+        { cwd: folder, env: environment, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8', timeout: timeoutMs })
+      const events = String(run.stdout ?? '').split('\n').flatMap((line) => {
+        try {
+          const event = JSON.parse(line)
+          return event !== null && typeof event === 'object' ? [event] : []
+        } catch {
+          return []
+        }
+      })
+      const session = events.find((event) => typeof event.sessionID === 'string')?.sessionID
+      if (session !== undefined) spawnSync(command, ['session', 'delete', '--standalone', session], { cwd: folder, env: environment, stdio: 'ignore', timeout: 30_000 })
+      if (run.error || run.status !== 0) return record('inconclusive', `${command} did not answer (timeout or error)`, version)
+      const firstTool = events.findIndex((event) => event.type === 'tool_use')
+      const words = (firstTool === -1 ? events : events.slice(0, firstTool)).filter((event) => event.type === 'text').map((event) => String(event.part?.text ?? '')).join('\n')
+      const answer = /[0-9a-f]{64}/.exec(words)?.[0] ?? null
+      if (answer === null) return record('inconclusive', firstTool === -1 ? 'the answer named no sha256' : 'a tool ran before the answer named a sha256', version)
+      return answer === master.hash ? record('pass', 'before any tool ran, OpenCode quoted the master hash its rules file carries', version) : record('fail', 'OpenCode quoted a different hash', version)
+    }
+    // Only Claude Code is left here: Cursor never holds a full rendering (routeFor).
     const run = spawnSync(command, ['-p', '--tools', '', '--no-session-persistence', '--output-format', 'text'],
       { cwd: folder, env: environment, input: question, encoding: 'utf8', timeout: timeoutMs })
     if (run.error || run.status !== 0) return record('inconclusive', `${command} did not answer (timeout or error)`, version)

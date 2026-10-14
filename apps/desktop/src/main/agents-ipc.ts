@@ -448,8 +448,8 @@ interface AppInspection { resolution: RouteResolution; reason?: string }
 /** Where an app sends data as inspected now, and its installed version. Inspection only. */
 function inspectApp(harness: RosterHarness, environment: NodeJS.ProcessEnv, probeEnvironment: NodeJS.ProcessEnv): AppInspection {
   const result = inspectRoute({ harness } as never, null, environment, environment.HOME ?? '/')
-  const checked = harness === 'claude' || harness === 'codex'
-  const version = checked ? (result.version as string | null | undefined) ?? null : harnessVersion(APP_COMMANDS[harness], probeEnvironment)
+  const inspected = harness !== 'cursor'
+  const version = inspected ? (result.version as string | null | undefined) ?? null : harnessVersion(APP_COMMANDS[harness], probeEnvironment)
   return {
     resolution: {
       harness, basis: String(result.basis ?? 'unknown'), provider: (result.provider as string | null) ?? null, host: (result.host as string | null) ?? null,
@@ -466,10 +466,9 @@ function inspectApp(harness: RosterHarness, environment: NodeJS.ProcessEnv, prob
 function appView(harness: RosterHarness, context: RulesIpcContext): AgentAppView {
   const { resolution, reason } = inspectApp(harness, context.env, context.probeEnv)
   const app = ROSTER_APP_NAMES[harness]
-  const checked = harness === 'claude' || harness === 'codex'
   const tested = (TESTED_HARNESS_VERSIONS[harness] ?? []).join(', ')
   const same = 'BMN reads where it sends data the same way on every version.'
-  const [versionState, versionNote]: [AgentAppView['versionState'], string] = !checked
+  const [versionState, versionNote]: [AgentAppView['versionState'], string] = harness === 'cursor'
     ? ['unknown', `BMN does not check ${app} dispatches.`]
     : resolution.version === null
       ? ['unknown', `${app} is not installed, or its version cannot be read.`]

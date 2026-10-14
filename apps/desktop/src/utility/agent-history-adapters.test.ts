@@ -32,6 +32,15 @@ async function fakeBinary(bin: string, name: string, code = 0, output = ''): Pro
   return log
 }
 
+/** A stand-in `opencode` that answers `--version` with `version` and otherwise records its call like fakeBinary. */
+async function fakeOpenCode(bin: string, version: string): Promise<string> {
+  await mkdir(bin, { recursive: true })
+  const log = join(bin, 'opencode.log')
+  await writeFile(join(bin, 'opencode'), `#!/bin/sh\nif [ "$1" = --version ]; then echo ${JSON.stringify(version)}; exit 0; fi\nprintf '%s|%s\\n' "$PWD" "$*" >> ${JSON.stringify(log)}\n`)
+  await chmod(join(bin, 'opencode'), 0o755)
+  return log
+}
+
 async function root(): Promise<string> {
   const path = await mkdtemp(join(tmpdir(), 'bmn-history-adapter-'))
   roots.push(path)
@@ -132,7 +141,7 @@ describe('OpenCode history adapter', () => {
   it('reads sessions across every project and removes with `opencode session delete <id> --pure`', async () => {
     const home = await root()
     const bin = join(home, 'bin')
-    const log = await fakeBinary(bin, 'opencode')
+    const log = await fakeOpenCode(bin, '1.19.0')
     await openCodeStore(home)
     const adapter = openCodeHistoryAdapter({ home, open, env: { PATH: bin } })
 
@@ -141,6 +150,28 @@ describe('OpenCode history adapter', () => {
     expect(await adapter.remove(OPENCODE_IDS[0]!)).toEqual({ ok: true })
     expect(await adapter.remove('../../etc')).toEqual({ ok: false, reason: 'not an OpenCode session id' })
     expect(await readFile(log, 'utf8')).toBe(`${home}|session delete ${OPENCODE_IDS[0]} --pure\n`)
+  })
+
+  it('on OpenCode 2 reads top-level sessions from session_v2 and removes with `--standalone`, never `--pure`', async () => {
+    const home = await root()
+    const bin = join(home, 'bin')
+    const log = await fakeOpenCode(bin, 'opencode v2.0.28')
+    // OpenCode 1's table stays behind after the move to 2 and is no longer written: it must not be read.
+    await openCodeStore(home)
+    const database = new BetterSqlite3(join(home, '.local', 'share', 'opencode', 'opencode.db'))
+    database.exec('CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, time_created INTEGER, time_updated INTEGER)')
+    const insert = database.prepare('INSERT INTO session_v2 (id, parent_id, directory, time_created, time_updated) VALUES (?, ?, ?, ?, ?)')
+    const [fresh, child] = ['ses_f1c0aa11bffeQ2wErTyUiOpAsD', 'ses_f1c0aa22cffeZxCvBnMqWeRtYu']
+    insert.run(OPENCODE_IDS[1], null, '/work/b', NOW - 50 * DAY, NOW - 35 * DAY)
+    insert.run(child, OPENCODE_IDS[1], '/work/b', NOW - 50 * DAY, NOW - 36 * DAY)
+    insert.run(fresh, null, '/work/c', NOW - 2 * DAY, NOW - 1 * DAY)
+    openStores.push(database)
+    const adapter = openCodeHistoryAdapter({ home, open, env: { PATH: bin } })
+
+    expect(await adapter.available()).toEqual({ ok: true, sessions: 3 })
+    expect(await adapter.candidates(NOW - 30 * DAY)).toEqual([{ id: OPENCODE_IDS[1], updatedAt: NOW - 35 * DAY }])
+    expect(await adapter.remove(OPENCODE_IDS[1]!)).toEqual({ ok: true })
+    expect(await readFile(log, 'utf8')).toBe(`${home}|session delete ${OPENCODE_IDS[1]} --standalone\n`)
   })
 
   it('follows XDG_DATA_HOME and is not recognised without time_updated', async () => {

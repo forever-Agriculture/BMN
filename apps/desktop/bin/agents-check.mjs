@@ -29,11 +29,13 @@ export const REFUSALS = ['UNKNOWN_AGENT', 'PROPOSED', 'DISABLED', 'NOT_A_RESEARC
 
 /**
  * Harness versions whose destination precedence BMN's tests were written against (Epic 60 spike,
- * 2026-10-09). Any installed version is supported (owner decision 2026-10-10: the apps update
- * faster than BMN can test them); this list only decides the word a receipt and Rules › Health
- * carry beside the version. The destination itself is resolved and checked at every dispatch.
+ * 2026-10-09; OpenCode 2.0.28 on 2026-10-14, whose `opencode debug config` read the model from the
+ * same global file). Any installed version is supported (owner decision 2026-10-10: the apps
+ * update faster than BMN can test them); this list only decides the word a receipt and Rules ›
+ * Health carry beside the version. The destination itself is resolved and checked at every
+ * dispatch, and for OpenCode at every inspection.
  */
-export const TESTED_HARNESS_VERSIONS = { codex: ['0.161.0'], claude: ['2.1.295'] }
+export const TESTED_HARNESS_VERSIONS = { codex: ['0.161.0'], claude: ['2.1.295'], opencode: ['2.0.28'] }
 /**
  * Codex versions on which a test showed that `exec resume` talks to the destination the current
  * configuration resolves, not one saved with the session (60.3 AC8). A resume on any other
@@ -838,9 +840,12 @@ export function limitStanding(agent, version, { environment = process.env, cwd =
 }
 
 /**
- * OpenCode's configured model and provider prefix, for inspection only. A configuration named by
- * the environment, or a provider entry that carries its own address, could send data somewhere
- * the prefix does not say, so either reads as unknown. A project's own opencode.json is not read.
+ * OpenCode's configured model and provider prefix. A configuration named by the environment, or a
+ * provider entry that carries its own address or package (OpenCode 1's `api`, `npm` and
+ * `options.baseURL`; OpenCode 2's `package`, `canonical` and `settings.baseURL`, under `provider`
+ * or `providers`), could send data somewhere the prefix does not say, so either reads as unknown.
+ * OpenCode 2 reads the same files and still writes `model` as `<provider>/<model>`; an object
+ * naming `providerID` is read too. A project's own opencode.json is not read.
  */
 function inspectOpenCode(environment) {
   for (const name of ['OPENCODE_CONFIG', 'OPENCODE_CONFIG_CONTENT']) {
@@ -853,14 +858,20 @@ function inspectOpenCode(environment) {
     const stripped = text.replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (match, string) => string ?? '').replace(/,(\s*[}\]])/g, '$1')
     try {
       const config = JSON.parse(stripped)
-      const model = config?.model
-      if (typeof model !== 'string') return { basis: 'unknown', provider: null, host: null, reason: `${name} names no model`, sources: [name] }
+      const named = config?.model
+      const model = typeof named === 'string' ? named
+        : named !== null && typeof named === 'object' && typeof named.providerID === 'string' ? `${named.providerID}/${named.model ?? named.id ?? ''}` : null
+      if (model === null) return { basis: 'unknown', provider: null, host: null, reason: `${name} names no model`, sources: [name] }
       const provider = model.includes('/') ? model.slice(0, model.indexOf('/')) : null
-      const entry = provider !== null && config.provider !== null && typeof config.provider === 'object' ? config.provider[provider] : undefined
-      if (entry !== undefined && (entry === null || typeof entry !== 'object' || entry.api !== undefined || entry.npm !== undefined || entry.options?.baseURL !== undefined)) {
-        return { basis: 'unknown', provider, host: null, reason: `${name} gives ${provider} its own address`, sources: [`${name} provider.${provider}`] }
+      for (const key of ['provider', 'providers']) {
+        const table = config[key]
+        const entry = provider !== null && table !== null && typeof table === 'object' ? table[provider] : undefined
+        if (entry !== undefined && (entry === null || typeof entry !== 'object' || ['api', 'npm', 'package', 'canonical'].some((field) => entry[field] !== undefined)
+          || entry.options?.baseURL !== undefined || entry.settings?.baseURL !== undefined)) {
+          return { basis: 'unknown', provider, host: null, reason: `${name} gives ${provider} its own address`, sources: [`${name} ${key}.${provider}`] }
+        }
       }
-      return { basis: provider === null ? 'unknown' : 'default', provider, host: provider === null ? null : `default:${provider}`, model, sources: [`${name} model`], inspection_only: true }
+      return { basis: provider === null ? 'unknown' : 'default', provider, host: provider === null ? null : `default:${provider}`, model, sources: [`${name} model`] }
     } catch {
       return { basis: 'unknown', provider: null, host: null, reason: `${name} cannot be read`, sources: [name] }
     }
@@ -2277,7 +2288,8 @@ function sameReceipt(receipt, recomputed) {
 export function inspectRoute(agent, argv, environment, processCwd, data = null) {
   let result
   if (agent.harness === 'opencode') {
-    result = { ...inspectOpenCode(environment), harness: 'opencode', inspection_only: true }
+    const version = harnessVersion('opencode', environment)
+    result = { ...inspectOpenCode(environment), harness: 'opencode', version, version_state: versionStanding('opencode', version).state }
   } else if (agent.harness === 'cursor') {
     result = { harness: 'cursor', basis: 'unknown', provider: null, host: null, reason: 'Cursor reports no destination BMN can read', sources: [], inspection_only: true }
   } else {

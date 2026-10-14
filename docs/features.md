@@ -377,7 +377,8 @@ showing the difference. Both work for Codex and Claude Code, and only on an app 
 Preferences → **Rules** keeps one rules text and writes it into each agent app's own rules file
 (Claude Code, Codex, OpenCode and Cursor), shows each file's difference before it writes, and can
 undo an install. An app whose provider may not see private work receives only the sections you
-marked public, and so do OpenCode and Cursor, whose requests BMN does not check. Details and limits are in [agent-control.md](agent-control.md#the-team-team-file-check-and-rules).
+marked public, and so does Cursor, whose requests BMN does not check; OpenCode follows its
+destination like Claude Code and Codex. Details and limits are in [agent-control.md](agent-control.md#the-team-team-file-check-and-rules).
 
 ## Files and file references
 
