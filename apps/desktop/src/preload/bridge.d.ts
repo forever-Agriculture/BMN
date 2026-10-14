@@ -5,6 +5,7 @@ import type {
   AgentHistoryStatus,
   AgentsApprovalRequest,
   AgentsOutcome,
+  OpenCodeGoView,
   AgentsPreview,
   AgentsShownRevision,
   AgentsSnapshot,
@@ -391,6 +392,8 @@ export interface AiTerminalBridge {
   openTeamFile(): Promise<{ ok: boolean; path: string; message?: string }>
   /** An agent's notes, the owner's own words; never reach an agent. */
   saveAgentNotes(shown: AgentsShownRevision, agent: string, text: string): Promise<AgentsOutcome>
+  /** Luna through OpenCode Go (70.4): whether OpenCode lists her and BMN's folder is signed in; `copy` copies the owner's Go sign-in there. */
+  openCodeGo(copy?: boolean): Promise<OpenCodeGoView>
   /** Epic 60.6: the master, each app's rendering, health from `bmn rules check`, loading tests, the agent apps, installs and history. */
   rulesSnapshot(): Promise<RulesSnapshot>
   planRulesMaster(text: string): Promise<RulesMasterPlan>

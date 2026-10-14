@@ -72,6 +72,17 @@ export interface RosterProviderShape { id: string; name: string; hosts: string[]
 
 export interface RosterExceptionShape { id: string; provider: string; folder: string }
 
+/**
+ * BMN's first OpenCode agent (70.4; the owner's card "Luna via Go", 2026-10-14): Luna's model through
+ * his OpenCode Go plan, a read-only helper and a researcher. OpenCode Go joins the team as a new
+ * provider does, getting public work only until he allows it. Her efforts are those his Codex Luna holds.
+ */
+export const LUNA_GO_PROPOSAL = {
+  provider: { id: 'opencode-go', name: 'OpenCode Go', private_work: 'public_only' },
+  agent: { id: 'luna-go', name: 'Luna (Go)', class: 'pawn', harness: 'opencode', model: 'gpt-6-luna', host: 'default', enabled: true, status: 'active', efforts: ['xhigh', 'max'] },
+  role: 'helper'
+} as const satisfies { provider: Omit<RosterProviderShape, 'hosts'>; agent: Omit<RosterAgentShape, 'provider' | 'roles' | 'efforts'> & { efforts: readonly RosterEffort[] }; role: string }
+
 export interface RosterRouteShape {
   harness: RosterHarness
   provider: string
@@ -206,8 +217,18 @@ export type AgentsApprovalRequest =
 /** What happened to the rules files after an approval that showed them. */
 export interface AgentsRulesUpdate { transaction: string | null; written: RosterHarness[]; skipped: RosterHarness[]; failed?: string }
 
+/** What became of the OpenCode Go sign-in an approval copied into BMN's OpenCode folder (70.4). */
+export interface OpenCodeSignInResult { ok: boolean; copied: boolean; message: string }
+
+/**
+ * Luna through OpenCode Go (70.4), as the Team page asks it: whether the installed OpenCode lists her
+ * model, and whether BMN's OpenCode folder holds a Go sign-in (null where the approved team names no
+ * agent on OpenCode Go, or OpenCode could not be asked). `copy` is what a press of Copy sign-in did.
+ */
+export interface OpenCodeGoView { listed: boolean; signedIn: boolean | null; reason: string | null; copy?: OpenCodeSignInResult }
+
 export type AgentsOutcome =
-  | { ok: true; snapshot: AgentsSnapshot; message: string; rulesUpdate?: AgentsRulesUpdate }
+  | { ok: true; snapshot: AgentsSnapshot; message: string; rulesUpdate?: AgentsRulesUpdate; openCodeSignIn?: OpenCodeSignInResult }
   | { ok: false; code: string; message: string; errors?: RosterIssueShape[]; snapshot: AgentsSnapshot }
 
 /** One agent app as Rules › Health shows it: its version and where it sends data as inspected. */

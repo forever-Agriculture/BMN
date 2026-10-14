@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// MODULE: fake-opencode.mjs - a stand-in for the OpenCode app in the fence tests (70.3): it reads the agent BMN's folder names, offers the tools that agent allows, and talks to the provider its settings name
+// MODULE: fake-opencode.mjs - a stand-in for the OpenCode app in the fence tests (70.3): it reads the agent BMN's folder names, offers the tools that agent allows, and talks to the provider its settings name; it also keeps sign-ins and lists models as OpenCode 2.0.29 does (70.4)
 // Copied to a folder on the test's program path as `opencode`. `opencode-mode.json` beside it changes
 // how it behaves, so one test can stand for an OpenCode version that adds a tool, sends the owner's
 // rules or writes a file. It behaves as OpenCode 2.0.29 did in the 70.3 probe: a tool the agent does
 // not allow comes back "No tool named …", web search goes through the proxy to its search service,
 // and the answer is the last `text` event of `--format json`.
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,6 +20,48 @@ try {
 const args = process.argv.slice(2)
 if (args[0] === '--version') {
   console.log(mode.version ?? '2.0.29')
+  process.exit(0)
+}
+// 70.4: `auth export`, `auth import` and `models` as OpenCode 2.0.29 answered them in the probe. The sign-ins are a
+// file in the data folder of the environment the command runs in; `logsCalls` records where each command ran.
+const dataHome = process.env.XDG_DATA_HOME ?? join(process.env.HOME ?? '', '.local/share')
+const signInFile = join(dataHome, 'opencode', 'fake-sign-ins.json')
+const signIns = () => {
+  try {
+    return JSON.parse(readFileSync(signInFile, 'utf8'))
+  } catch {
+    return []
+  }
+}
+if (mode.logsCalls === true) {
+  appendFileSync(join(here, 'opencode-calls.log'), `${JSON.stringify({ args, cwd: process.cwd(), home: process.env.HOME, data: process.env.XDG_DATA_HOME ?? null, proxy: process.env.HTTPS_PROXY ?? null, content: process.env.OPENCODE_CONFIG_CONTENT ?? null, project: process.env.OPENCODE_DISABLE_PROJECT_CONFIG ?? null })}\n`)
+}
+// The owner's own OpenCode, as against BMN's folder (whose home is `…/opencode/home`): `ownerExport…` modes act there only.
+const owners = !(process.env.HOME ?? '').endsWith('/opencode/home')
+if (args[0] === 'auth' && args[1] === 'export') {
+  if (mode.exportFails === true || (owners && mode.ownerExportFails === true)) process.exit(1)
+  console.log(mode.exportOther === true || (owners && mode.ownerExportOther === true) ? '{"credentials": "not the list"}' : JSON.stringify(signIns(), null, 2))
+  process.exit(0)
+}
+if (args[0] === 'auth' && args[1] === 'import') {
+  if (mode.importFails === true) process.exit(1)
+  const taken = JSON.parse(readFileSync(0, 'utf8'))
+  mkdirSync(dirname(signInFile), { recursive: true })
+  writeFileSync(signInFile, JSON.stringify(mode.importDrops === true ? signIns() : [...signIns(), ...taken]))
+  console.log(`Imported ${taken.length} credentials`)
+  process.exit(0)
+}
+if (args[0] === 'models') {
+  if (mode.modelsFails === true) process.exit(1)
+  let named
+  try {
+    named = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT ?? '{}').provider?.['opencode-go']?.options?.apiKey !== undefined
+  } catch {
+    named = false
+  }
+  // OpenCode lists a provider's models only where a key for it is named or stored.
+  const go = named || signIns().some((entry) => entry.integrationID === 'opencode-go')
+  console.log(['opencode/big-pickle', ...(go ? ['opencode-go/kimi-k3', ...(mode.noLuna === true ? [] : ['opencode-go/gpt-6-luna'])] : [])].join('\n'))
   process.exit(0)
 }
 if (args[0] !== 'run') process.exit(2)

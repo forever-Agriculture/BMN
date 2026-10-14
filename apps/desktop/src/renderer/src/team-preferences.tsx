@@ -8,9 +8,11 @@ import {
   ROSTER_HARNESSES,
   ROSTER_JUDGE_ROLE,
   ROSTER_THEN,
+  LUNA_GO_PROPOSAL,
   rosterApp,
   type AgentAppView,
   type ContextLimitView,
+  type OpenCodeGoView,
   type AgentsGenerationSummary,
   type RosterAgentShape,
   type RosterClass,
@@ -35,6 +37,7 @@ import {
   calledParties,
   isCalled,
   judgeProposal,
+  lunaGoProposal,
   roleBar,
   CLASS_WORDS,
   PRIVATE_WORK_WORDS,
@@ -334,6 +337,78 @@ function JudgeProposal(props: { team: TeamState; data: RosterDataShape }): React
   )
 }
 
+/** What BMN's proposal of Luna (Go) says (70.4): the agent, who gets her work and what happens once the owner approves. */
+export function lunaGoProposalWords(proposed: RosterDataShape): string {
+  const luna = proposed.agents.find((agent) => agent.id === LUNA_GO_PROPOSAL.agent.id)
+  if (luna === undefined) return ''
+  const helper = luna.roles.includes(LUNA_GO_PROPOSAL.role)
+  const researcher = luna.researcher === true || namedResearchers(proposed) === null
+  const roles = helper && researcher ? 'a read-only helper and a researcher' : helper ? 'a read-only helper' : researcher ? 'a researcher' : 'an agent with no role yet'
+  const provider = proposed.providers.find((entry) => entry.id === luna.provider)
+  const work = provider?.private_work === 'allowed' ? `${provider.name} may see private work, as you chose` : `${provider?.name ?? luna.provider} gets public work only until you allow it`
+  return `${luna.name} waits for you. OpenCode on this computer lists Luna's model on OpenCode Go, and BMN's proposal adds her as ${roles}, run by OpenCode; ${work}. Once you approve, BMN copies your OpenCode Go sign-in into its own OpenCode folder. Nothing changes until then.`
+}
+
+/** Why an approved agent on OpenCode Go cannot run yet: BMN's folder holds no Go sign-in. */
+export function openCodeSignInWords(approved: RosterDataShape | null | undefined): string {
+  const names = (approved?.agents ?? []).filter((agent) => agent.harness === 'opencode' && agent.provider === LUNA_GO_PROPOSAL.provider.id).map((agent) => agent.name)
+  const who = names.length === 0 ? 'An agent on OpenCode Go' : names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
+  return `${who} cannot run yet: BMN's OpenCode folder holds no OpenCode Go sign-in. Copy sign-in takes yours from OpenCode on this computer, once, and nothing else of OpenCode's.`
+}
+
+/**
+ * Luna through OpenCode Go (70.4), as the main process answered: BMN's proposal while OpenCode lists
+ * her model and the team holds no OpenCode agent on it, taken with one press and approved like any
+ * other change; and, once the approved team names an agent on OpenCode Go, the sign-in its runs need.
+ */
+export function OpenCodeGoNotes(props: { team: TeamState; data: RosterDataShape; view: OpenCodeGoView | null; copying: boolean; copy(): void }): React.JSX.Element | null {
+  const { team, data, view } = props
+  if (view === null) return null
+  const proposed = view.listed ? lunaGoProposal(data) : null
+  return (
+    <>
+      {proposed === null ? null : (
+        <div className="page-note with-action" role="status">
+          <Dot label="Needs you" />
+          <span className="note-text">{lunaGoProposalWords(proposed)}</span>
+          <button type="button" className="small" onClick={() => team.stage(proposed)}>Use proposal</button>
+        </div>
+      )}
+      {view.signedIn === false ? (
+        <div className="page-note with-action" role="status">
+          <Dot label="Needs you" />
+          <span className="note-text">{openCodeSignInWords(team.snapshot?.approved?.data)}</span>
+          <button type="button" className="small" disabled={props.copying} onClick={props.copy}>{props.copying ? 'Copying…' : 'Copy sign-in'}</button>
+        </div>
+      ) : null}
+    </>
+  )
+}
+
+/** Asks the main process about Luna through OpenCode Go when the page opens and after each approval. */
+function OpenCodeGo(props: { team: TeamState; data: RosterDataShape }): React.JSX.Element | null {
+  const { team } = props
+  const [view, setView] = useState<OpenCodeGoView | null>(null)
+  const [copying, setCopying] = useState(false)
+  const approvedNumber = team.snapshot?.approved?.generation ?? null
+  useEffect(() => {
+    let cancelled = false
+    window.aiTerminal.openCodeGo().then((next) => { if (!cancelled) setView(next) }).catch(() => { if (!cancelled) setView(null) })
+    return () => { cancelled = true }
+  }, [approvedNumber])
+  const copy = (): void => {
+    setCopying(true)
+    window.aiTerminal.openCodeGo(true)
+      .then((next) => {
+        setView(next)
+        if (next.copy !== undefined) team.setNotice({ ok: next.copy.ok, text: next.copy.message })
+      })
+      .catch((error: unknown) => team.setNotice({ ok: false, text: `The sign-in could not be copied: ${error instanceof Error ? error.message : String(error)}` }))
+      .finally(() => setCopying(false))
+  }
+  return <OpenCodeGoNotes team={team} data={props.data} view={view} copying={copying} copy={copy} />
+}
+
 function AgentsPage(props: { team: TeamState; data: RosterDataShape; go(page: TeamPage): void }): React.JSX.Element {
   const { team, data } = props
   const groups = agentGroups(data)
@@ -362,6 +437,7 @@ function AgentsPage(props: { team: TeamState; data: RosterDataShape; go(page: Te
         </p>
       ) : null}
       <JudgeProposal team={team} data={data} />
+      <OpenCodeGo team={team} data={data} />
       {team.outside.groups.length > 0 ? <OutsideHead team={team} /> : null}
       {team.outside.groups.map((group) => <OutsideRow key={group.key} group={group} team={team} />)}
       {data.agents.length === 0 ? <p className="page-note">No agents yet. New agent adds the first one.</p> : null}

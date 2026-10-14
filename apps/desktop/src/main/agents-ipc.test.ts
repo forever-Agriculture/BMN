@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { createServer, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, JudgeTried, JudgeView, ResearchLookup, ResearchSnapshot, WebQuestionAsked, WebQuestionsSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan, ToolProposalView, ToolsPlan } from '@bmn/protocol'
+import { LUNA_GO_PROPOSAL } from '@bmn/protocol'
+import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, OpenCodeGoView, JudgeTried, JudgeView, ResearchLookup, ResearchSnapshot, WebQuestionAsked, WebQuestionsSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan, ToolProposalView, ToolsPlan } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CODEX_RESEARCH_TOOLS_SEEN, fenceTestsPath, researchFormHash, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import { contextAuto, contextTests, setContextAuto } from '../../bin/agents-context.mjs'
@@ -35,6 +36,8 @@ let judgeTestPort: string | null
 /** What the fence test started from Models does here; none is expected unless a test sets one. */
 let fenceTest: NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]>['fenceTest'] | null
 let researchCompare: NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]>['researchCompare'] | null
+/** What OpenCode answers about Luna through OpenCode Go here (70.4); every call is recorded with the environment it was given. */
+let openCodeGo: { listed: boolean; signedIn: boolean | null; copy: { ok: boolean; copied: boolean; message: string }; calls: Array<{ kind: string; home: string | undefined }> }
 /** What installing the handlers handed back, and the notices BMN itself showed. */
 let ipc: AgentsIpcHandle
 let notices: { title: string; body: string }[]
@@ -67,6 +70,7 @@ beforeEach(() => {
   researchCompare = null
   notices = []
   openedInBrowser = []
+  openCodeGo = { listed: false, signedIn: true, copy: { ok: true, copied: false, message: 'BMN\'s OpenCode folder already holds your OpenCode Go sign-in' }, calls: [] }
   // BMN's own context testing is off here, as an owner may have it, so no test starts a stand-in app behind another test's back; its own tests switch it on.
   setContextAuto({ enabled: false })
   ipc = installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
@@ -81,7 +85,12 @@ beforeEach(() => {
       if (researchCompare === null || researchCompare === undefined) throw new Error('no comparison under a provider list is expected here')
       return researchCompare(options)
     },
-    notifyApp: (notice) => { notices.push(notice) }, contextRetryLater: () => {}
+    notifyApp: (notice) => { notices.push(notice) }, contextRetryLater: () => {},
+    openCodeGo: {
+      lists: async (options) => { openCodeGo.calls.push({ kind: 'lists', home: options?.environment?.HOME }); return { listed: openCodeGo.listed } },
+      signedIn: async (options) => { openCodeGo.calls.push({ kind: 'signedIn', home: options?.environment?.HOME }); return { signedIn: openCodeGo.signedIn } },
+      copy: async (options) => { openCodeGo.calls.push({ kind: 'copy', home: options?.environment?.HOME }); return openCodeGo.copy }
+    }
   })
 })
 
@@ -1752,5 +1761,87 @@ describe('the judge on Team: BMN\'s proposal, its calls, the monthly limit and T
     expect(view.calls).toHaveLength(20)
     expect(view.current.calls).toBe(22)
     expect(view.calls[0]!.at >= view.calls[19]!.at).toBe(true)
+  })
+})
+
+/**
+ * A team with BMN's proposal of Luna (Go) taken (70.4), as the Team page's `lunaGoProposal` takes it on a team from
+ * before the researcher mark (its output is pinned in luna-go-proposal.test.ts): OpenCode Go added where missing, with
+ * `privateWork`, and Luna (Go) last in the role helper at her highest effort.
+ */
+function withLunaGo(data: RosterDataShape, privateWork: 'allowed' | 'public_only' = 'public_only'): RosterDataShape {
+  const { provider, agent, role } = LUNA_GO_PROPOSAL
+  const providers = data.providers.some((entry) => entry.id === provider.id) ? data.providers : [...data.providers, { ...provider, hosts: [] }]
+  return {
+    ...data, schema_version: 3,
+    providers: providers.map((entry) => (entry.id === provider.id ? { ...entry, private_work: privateWork } : entry)),
+    agents: [...data.agents, { ...agent, provider: provider.id, efforts: [...agent.efforts], roles: [role] }],
+    roles: data.roles.map((entry) => (entry.id === role ? { ...entry, candidates: [...entry.candidates, `${agent.id}@${agent.efforts.at(-1)}`] } : entry))
+  }
+}
+
+describe('Luna through OpenCode Go on Team (70.4)', () => {
+  const COPIED = { ok: true, copied: true, message: 'BMN copied your OpenCode Go sign-in into its own OpenCode folder' }
+  const kinds = (kind: string) => openCodeGo.calls.filter((entry) => entry.kind === kind)
+  /** The team in the file approved, then BMN's proposal of Luna (Go) taken and approved as the page does it. */
+  const approveProposal = async (): Promise<AgentsOutcome> => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
+    const state = await snapshot()
+    const proposed = withLunaGo(state.approved?.data as RosterDataShape)
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: proposed } })
+    expect(preview.errors).toEqual([])
+    // Nothing is copied before he approves.
+    expect(kinds('copy')).toEqual([])
+    return call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: proposed, teamUpdate: bindings(preview) })
+  }
+
+  it('asks OpenCode about her with the owner\'s environment, and copies nothing for a team that names no agent on OpenCode Go', async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).not.toHaveProperty('openCodeSignIn')
+    openCodeGo.listed = true
+    expect(await call<OpenCodeGoView>('agents:opencode-go')).toEqual({ listed: true, signedIn: null, reason: null })
+    expect(openCodeGo.calls).toEqual([{ kind: 'lists', home }])
+    // A yes holds while BMN runs; a no is asked again.
+    await call('agents:opencode-go')
+    expect(kinds('lists')).toHaveLength(1)
+    expect((await call<OpenCodeGoView>('agents:opencode-go', { copy: true })).copy).toEqual({ ok: false, copied: false, message: 'The approved team names no agent on OpenCode Go, so BMN copies no sign-in' })
+    expect(kinds('copy')).toEqual([])
+  })
+
+  it('copies the Go sign-in when he approves Luna (Go), says so with the approval, and copies once', async () => {
+    openCodeGo.copy = COPIED
+    const saved = await approveProposal()
+    expect(saved).toMatchObject({ ok: true, openCodeSignIn: COPIED })
+    expect(saved.snapshot.approved?.data.agents.at(-1)).toMatchObject({ id: 'luna-go', harness: 'opencode', provider: 'opencode-go', model: 'gpt-6-luna', roles: ['helper'] })
+    expect(kinds('copy')).toEqual([{ kind: 'copy', home }])
+    // A later approval copies nothing again, and the page reads the folder as signed in without asking OpenCode.
+    const state = await snapshot()
+    const approved = state.approved?.data as RosterDataShape
+    const allowed = { ...approved, providers: approved.providers.map((entry) => (entry.id === 'opencode-go' ? { ...entry, private_work: 'allowed' as const } : entry)) }
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: allowed } })
+    expect(await call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: allowed, teamUpdate: bindings(preview) })).not.toHaveProperty('openCodeSignIn')
+    expect(kinds('copy')).toHaveLength(1)
+    expect(await call<OpenCodeGoView>('agents:opencode-go')).toMatchObject({ signedIn: true })
+    expect(kinds('signedIn')).toEqual([])
+  })
+
+  it('says with the approval why the sign-in was not copied, and Copy sign-in tries again', async () => {
+    const missing = { ok: false, copied: false, message: 'OpenCode holds no OpenCode Go sign-in on this computer: sign in with `opencode auth login`, then copy it again' }
+    openCodeGo.copy = missing
+    openCodeGo.signedIn = false
+    expect(await approveProposal()).toMatchObject({ ok: true, openCodeSignIn: missing })
+    expect(await call<OpenCodeGoView>('agents:opencode-go')).toMatchObject({ signedIn: false })
+    expect(kinds('signedIn')).toEqual([{ kind: 'signedIn', home }])
+    openCodeGo.copy = COPIED
+    expect(await call<OpenCodeGoView>('agents:opencode-go', { copy: true })).toMatchObject({ signedIn: true, copy: COPIED })
+    expect(kinds('copy')).toHaveLength(2)
+  })
+
+  it('says nothing with an approval where the folder already held the sign-in', async () => {
+    const saved = await approveProposal()
+    expect(saved).toMatchObject({ ok: true })
+    expect(saved).not.toHaveProperty('openCodeSignIn')
+    expect(kinds('copy')).toHaveLength(1)
   })
 })

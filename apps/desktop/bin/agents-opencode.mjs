@@ -1,6 +1,7 @@
-// MODULE: agents-opencode.mjs - Epic 70: the OpenCode folder BMN keeps for helper runs, its read-only agent, and the one `opencode run` form the check reads
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, writeSync, chmodSync } from 'node:fs'
-import { homedir } from 'node:os'
+// MODULE: agents-opencode.mjs - Epic 70: the OpenCode folder BMN keeps for helper runs, its read-only agent, the one `opencode run` form the check reads, and Luna through OpenCode Go
+import { spawn } from 'node:child_process'
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, writeSync, chmodSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { dirname } from 'node:path'
 import { sha256 } from './agents-roster.mjs'
 import { stateDirectory } from './agents-state.mjs'
@@ -294,4 +295,162 @@ export function openCodeFolderProblem(base = openCodeFolder()) {
   }
   if (readdirSync(folders.home).length > 0) return `${folders.home} is not empty, and OpenCode would read what is there`
   return null
+}
+
+// ---------------------------------------------------------------------------------------------
+// Luna through OpenCode Go (70.4): whether the installed OpenCode lists her, and the sign-in BMN's folder needs
+
+/** OpenCode Go, the owner's plan, as OpenCode names the provider. */
+export const OPENCODE_GO_PROVIDER = 'opencode-go'
+
+/** The model BMN proposes as the first OpenCode agent (the owner's card "Luna via Go", 2026-10-14). */
+export const LUNA_GO_MODEL = 'gpt-6-luna'
+
+/** What a listing names in place of a key: OpenCode lists a provider's models only once a key for it is named, and this one is sent nowhere. */
+const LISTING_KEY = 'bmn-listing-only-not-a-key'
+
+/** A closed port on this computer, as the proxy of a listing: whatever OpenCode tried to fetch would reach nothing. */
+const NOWHERE = 'http://127.0.0.1:9'
+
+/** The most of OpenCode's output BMN reads from one of these commands. */
+const OUTPUT_LIMIT = 4 * 1024 * 1024
+
+/**
+ * Runs `opencode <args>` with exactly `env`, `input` on standard input, and reads standard output
+ * only. Standard error is never read: nothing OpenCode prints there reaches a message. Resolves to
+ * `{ missing: true }` where no opencode is on the PATH, otherwise `{ status, signal, stdout }`.
+ */
+function runOpenCode(args, { env, cwd, input = '', timeoutMs = 30_000 }) {
+  return new Promise((resolve) => {
+    let settled = false
+    const settle = (value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+    const chunks = []
+    let size = 0
+    let child
+    try {
+      child = spawn('opencode', args, { env, cwd, stdio: ['pipe', 'pipe', 'ignore'] })
+    } catch {
+      settle({ missing: true })
+      return
+    }
+    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs)
+    child.stdout.on('data', (chunk) => {
+      size += chunk.length
+      if (size > OUTPUT_LIMIT) child.kill('SIGKILL')
+      else chunks.push(chunk)
+    })
+    child.on('error', (error) => settle(error.code === 'ENOENT' ? { missing: true } : { status: null, signal: null, stdout: '' }))
+    child.on('close', (status, signal) => settle({ status, signal, stdout: size > OUTPUT_LIMIT ? '' : Buffer.concat(chunks).toString('utf8') }))
+    child.stdin.on('error', () => {})
+    child.stdin.end(input)
+  })
+}
+
+const ended = (result) => (result.signal ? `was stopped (${result.signal})` : `ended with ${result.status}`)
+
+/**
+ * Whether the installed OpenCode lists `opencode-go/gpt-6-luna` among OpenCode Go's models (70.4
+ * AC1). OpenCode lists a provider's models only where a key for it is named, and `opencode models`
+ * run in the owner's own folders loads his plugins and starts his MCP servers (70.4 probe), so BMN
+ * asks in an empty folder of its own: a key that is not one, the model list built into OpenCode, every
+ * request sent to a closed port. Nothing of his is read, and the folder is removed after.
+ */
+export async function openCodeListsLuna({ environment = process.env, timeoutMs = 30_000 } = {}) {
+  const base = mkdtempSync(`${tmpdir()}/bmn-opencode-list-`)
+  try {
+    const folders = openCodeFolders(base)
+    for (const folder of Object.values(folders)) mkdirSync(folder, { recursive: true, mode: 0o700 })
+    const env = {
+      ...openCodeEnvironment(base), PATH: environment.PATH ?? '', HTTPS_PROXY: NOWHERE, HTTP_PROXY: NOWHERE, NO_PROXY: '127.0.0.1,localhost',
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider: { [OPENCODE_GO_PROVIDER]: { options: { apiKey: LISTING_KEY } } } })
+    }
+    const result = await runOpenCode(['models', '--standalone'], { env, cwd: folders.home, timeoutMs })
+    if (result.missing) return { listed: false, reason: 'OpenCode is not on this computer' }
+    if (result.status !== 0) return { listed: false, reason: `opencode models ${ended(result)}` }
+    return { listed: result.stdout.split('\n').some((line) => line.trim() === `${OPENCODE_GO_PROVIDER}/${LUNA_GO_MODEL}`) }
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+}
+
+/**
+ * The OpenCode Go sign-ins among what `opencode auth export` printed, or null where that is not the
+ * list OpenCode 2.0.29 writes (`[{id, integrationID, label, active, value: {type, key}}]`, 70.4 probe).
+ * Nothing else of it is kept.
+ */
+function goSignIns(stdout) {
+  let entries
+  try {
+    entries = JSON.parse(stdout)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(entries)) return null
+  return entries.filter((entry) => entry !== null && typeof entry === 'object' && entry.integrationID === OPENCODE_GO_PROVIDER && entry.active !== false
+    && entry.value?.type === 'key' && typeof entry.value.key === 'string' && entry.value.key !== '')
+}
+
+/** BMN's folder's own environment, for OpenCode's sign-in commands there. */
+function folderEnvironment(base, environment) {
+  return { ...openCodeEnvironment(base), PATH: environment.PATH ?? '' }
+}
+
+/**
+ * Whether BMN's folder holds an OpenCode Go sign-in, as OpenCode itself says it there. `signedIn` is
+ * null where OpenCode could not be asked; the folder is not made by asking.
+ */
+export async function openCodeGoSignedIn({ environment = process.env, base = openCodeFolder(), timeoutMs = 30_000 } = {}) {
+  const folders = openCodeFolders(base)
+  if (!existsSync(folders.home) || !existsSync(folders.data)) return { signedIn: false }
+  const result = await runOpenCode(['auth', 'export', '--standalone'], { env: folderEnvironment(base, environment), cwd: folders.home, timeoutMs })
+  if (result.missing) return { signedIn: null, reason: 'OpenCode is not on this computer' }
+  if (result.status !== 0) return { signedIn: null, reason: `opencode auth export ${ended(result)} in BMN's OpenCode folder` }
+  const go = goSignIns(result.stdout)
+  if (go === null) return { signedIn: null, reason: 'OpenCode printed its sign-ins in a form BMN does not read' }
+  return { signedIn: go.length > 0 }
+}
+
+/**
+ * The owner's own OpenCode, for `auth export`: his home and data folders as his environment names
+ * them, the project's configuration switched off, no update and no model list fetched.
+ */
+function ownerEnvironment(environment) {
+  const kept = { HOME: environment.HOME || homedir(), PATH: environment.PATH ?? '' }
+  for (const name of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME']) {
+    if (typeof environment[name] === 'string' && environment[name].startsWith('/')) kept[name] = environment[name]
+  }
+  return { ...kept, OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1' }
+}
+
+/**
+ * Copies the owner's OpenCode Go sign-in into BMN's folder, once (70.4; his card of 2026-10-14: when
+ * he approves Luna (Go), BMN copies his Go key into its own folder with OpenCode's `auth export` and
+ * `auth import`). `auth export` run in his folders prints every sign-in he holds; BMN keeps only
+ * OpenCode Go's, in memory, and hands it to `auth import` in its folder on standard input. Nothing
+ * OpenCode prints is written, logged or said. Unlike `models` and `auth list`, `auth export` loads no
+ * plugin and starts no MCP server of his (70.4 probe). Where the folder already holds a Go sign-in,
+ * nothing is copied.
+ */
+export async function copyOpenCodeGoSignIn({ environment = process.env, base = openCodeFolder(), timeoutMs = 30_000 } = {}) {
+  installOpenCodeFolder(base)
+  const before = await openCodeGoSignedIn({ environment, base, timeoutMs })
+  if (before.signedIn === true) return { ok: true, copied: false, message: 'BMN\'s OpenCode folder already holds your OpenCode Go sign-in' }
+  if (before.signedIn === null) return { ok: false, copied: false, message: `${before.reason}, so nothing was copied` }
+  const folders = openCodeFolders(base)
+  const exported = await runOpenCode(['auth', 'export', '--standalone'], { env: ownerEnvironment(environment), cwd: folders.home, timeoutMs })
+  if (exported.missing) return { ok: false, copied: false, message: 'OpenCode is not on this computer, so nothing was copied' }
+  if (exported.status !== 0) return { ok: false, copied: false, message: `OpenCode could not list your sign-ins (opencode auth export ${ended(exported)}), so nothing was copied` }
+  const go = goSignIns(exported.stdout)
+  if (go === null) return { ok: false, copied: false, message: 'OpenCode printed your sign-ins in a form BMN does not read, so nothing was copied' }
+  if (go.length === 0) return { ok: false, copied: false, message: 'OpenCode holds no OpenCode Go sign-in on this computer: sign in with `opencode auth login`, then copy it again' }
+  const imported = await runOpenCode(['auth', 'import', '--standalone'], { env: folderEnvironment(base, environment), cwd: folders.home, input: JSON.stringify(go), timeoutMs })
+  if (imported.missing || imported.status !== 0) return { ok: false, copied: false, message: `OpenCode did not take the sign-in into BMN's folder (opencode auth import ${imported.missing ? 'was not found' : ended(imported)})` }
+  const after = await openCodeGoSignedIn({ environment, base, timeoutMs })
+  if (after.signedIn !== true) return { ok: false, copied: false, message: 'BMN\'s OpenCode folder holds no OpenCode Go sign-in after the copy' }
+  return { ok: true, copied: true, message: 'BMN copied your OpenCode Go sign-in into its own OpenCode folder' }
 }

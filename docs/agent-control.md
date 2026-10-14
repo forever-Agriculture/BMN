@@ -1730,10 +1730,14 @@ What the check reads and refuses:
   role's) efforts is `EFFORT_UNSUPPORTED`. Which variants a model takes is OpenCode's: on 2.0.29
   `opencode-go/gpt-6-luna` takes none, low, medium, high, xhigh and max, and `opencode-go/kimi-k3`
   only max, so an agent's efforts should name what its model takes.
-- **The destination.** The provider of `-m` at its default address, matched against the approved
-  OpenCode destination like the other two apps (`HOST_MISMATCH`); without `--title` it is unknown
-  (`HOST_UNKNOWN`), because OpenCode would then name the session with a title model the command
-  does not name. Private work follows that provider's answer.
+- **The destination.** The provider of `-m` at its default address, which must be the agent's
+  provider (`HOST_MISMATCH`). BMN's folder names no provider and the run takes the model list
+  built into OpenCode, so `-m` alone decides; where your own OpenCode sends data, which
+  `## harness-routes` records, plays no part in a run from BMN's folder (Story 70.4: a team with
+  no OpenCode destination recorded, or whose own OpenCode reads as unknown, can still hold an
+  OpenCode helper). Without `--title` the destination is unknown (`HOST_UNKNOWN`), because
+  OpenCode would then name the session with a title model the command does not name. Private
+  work follows that provider's answer.
 - **The model list.** With `OPENCODE_DISABLE_MODELS_FETCH=1` a run takes its models from the list
   built into OpenCode, which holds OpenCode Go's models on 2.0.29, and makes no call to
   `models.opencode.ai`. A model newer than the installed OpenCode waits for an OpenCode update. A
@@ -1753,10 +1757,9 @@ for, and only the project file the model asked to read reached it.
 
 **Limits.**
 
-- *Sign-in.* BMN's folder holds no sign-in of its own yet. Your choice (2026-10-14): when you
-  approve an OpenCode Go agent in the Team view, BMN copies your Go key into this folder once,
-  with OpenCode's own `auth export` and `auth import`; helper sessions then stay out of your
-  OpenCode history (Story 70.4).
+- *Sign-in.* BMN's folder holds the OpenCode Go sign-in BMN copied there when you approved an
+  agent on OpenCode Go (see [Luna through OpenCode Go](#luna-through-opencode-go)); helper
+  sessions stay out of your OpenCode history.
 - *Time.* A provider answering with a server error is retried without end and without an event;
   the lead gives a dispatch its own time limit.
 - *Usage.* Tokens and cost are not printed; `opencode session export <id> --standalone` with the
@@ -1764,6 +1767,40 @@ for, and only the project file the model asked to read reached it.
 - *Versions.* The form was measured on 2.0.29; on another version the check says so in its steps.
 - *Your own OpenCode.* None of this changes what BMN writes into your own OpenCode configuration:
   it still gets the public rules only.
+
+#### Luna through OpenCode Go
+
+The first OpenCode agent is BMN's to propose and yours to approve (Story 70.4; your card "Luna via
+Go", 2026-10-14). While your team holds no OpenCode agent on her model and OpenCode lists it, Team
+shows **Luna (Go) waits for you** with **Use proposal**: the agent Luna (Go), a pawn running
+`opencode-go/gpt-6-luna` in OpenCode at the efforts your Codex Luna holds (xhigh, max), last in the
+role helper, named a researcher where your team names its researchers. OpenCode Go joins as a new
+provider does, with public work only until you allow it. Using the proposal only stages it; it is
+approved like any other change, and until then nothing changes.
+
+**Whether OpenCode lists her.** OpenCode lists a provider's models only where a key for it is
+named, and `opencode models` (like `opencode auth list`) run in your own OpenCode folders loads
+your plugins and starts your MCP servers (the 70.4 probe). So BMN asks in an empty folder of its
+own, under the system's temporary folder: the provider is named with a key that is not one,
+`OPENCODE_DISABLE_MODELS_FETCH=1` keeps the list the one built into OpenCode, every request goes
+to a closed port on this computer, and the folder is removed after. Nothing of yours is read.
+
+**The sign-in.** When you approve a team that names an agent on OpenCode Go and BMN's folder holds
+no Go sign-in yet, BMN copies yours there once, and says so beside the approval. OpenCode's own
+`auth export` runs in your OpenCode folders (it loaded no plugin and started no MCP server in the
+probe, unlike `models`), from BMN's empty home folder, and prints every sign-in you hold; BMN keeps
+only OpenCode Go's, in memory, and hands it to `auth import` in its folder on standard input.
+Nothing OpenCode prints is written, logged or shown, and your own OpenCode data is not changed.
+Where the copy could not be made (OpenCode holds no Go sign-in: `opencode auth login` first),
+Team says why and offers **Copy sign-in**. Tested: the cases in
+`apps/desktop/src/utility/agents-opencode-go.test.ts` against a stand-in OpenCode and, with
+`BMN_OPENCODE_REAL=1`, the installed OpenCode on throwaway folders with a plugin and an MCP server
+that note when they run: Luna was listed, only the Go sign-in was copied, neither marker ran, the
+owner-like database kept every byte, and BMN's folder stayed exactly BMN's.
+
+**A lead dispatches her** like any helper: `bmn roster role helper --json` names her with the
+OpenCode form (see [Checking an OpenCode helper run](#checking-an-opencode-helper-run)), and
+`bmn research` offers her once the OpenCode fence test passed for her model.
 
 #### OpenCode behind its fence
 

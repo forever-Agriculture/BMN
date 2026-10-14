@@ -370,6 +370,11 @@ stages the verified prices that differ from your team's, **Add to team…** and 
 new agent with them, and the Model field offers the names research found. Nothing changes until
 you approve it.
 
+Where OpenCode lists Luna's model on your OpenCode Go plan, Team proposes **Luna (Go)**, an OpenCode
+helper and researcher; once you approve her, BMN copies your OpenCode Go sign-in into its own
+OpenCode folder (OpenCode's `auth export` and `auth import`, the Go entry alone), so her runs never
+touch your own OpenCode folders or history.
+
 An agent's context limit, set on its page, is added to each run BMN or dev-auto starts with it
 and checked before the run leaves. Rules → **Health** also shows each app's default limit for the
 sessions you start yourself and can change it, one line of the app's own settings file, after

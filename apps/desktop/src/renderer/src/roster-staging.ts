@@ -7,6 +7,7 @@ import {
   ROSTER_JUDGE_ROLE,
   ROSTER_LEAD_ROLE,
   ROSTER_SCHEMA_VERSION,
+  LUNA_GO_PROPOSAL,
   rosterApp,
   type AgentAppView,
   type RosterAgentShape,
@@ -782,6 +783,28 @@ export function judgeProposal(data: RosterDataShape): RosterDataShape | null {
     agents: [...data.agents, { id, name, class: agentClass, harness, model, provider: receives, run_by: runs, host, enabled, status, efforts: [], roles: [...roles], paid_by: paidBy, price: { ...price } }],
     roles: [...data.roles, { id: ROSTER_JUDGE_ROLE, description: JUDGE_PROPOSAL.description, candidates: [id], then: 'skip' }]
   }
+}
+
+/** The model an OpenCode agent runs, as `-m` names it: `<provider>/<model>`. */
+function openCodeModelOf(agent: RosterAgentShape): string {
+  return agent.model.includes('/') ? agent.model : `${agent.provider}/${agent.model}`
+}
+
+/**
+ * The team with Luna (Go) proposed, or null where there is nothing to propose: the team already
+ * holds an OpenCode agent on her model, or the id. She joins the role helper where the team has one,
+ * at her highest effort, last in its order; she is named a researcher where the team names its
+ * researchers, and researches anyway on a team from before that mark. A proposal only: nothing
+ * changes until the owner approves it.
+ */
+export function lunaGoProposal(data: RosterDataShape): RosterDataShape | null {
+  const { provider, agent, role } = LUNA_GO_PROPOSAL
+  const model = `${provider.id}/${agent.model}`
+  if (data.agents.some((entry) => entry.id === agent.id || (entry.harness === 'opencode' && openCodeModelOf(entry) === model))) return null
+  const providers = data.providers.some((entry) => entry.id === provider.id) ? data.providers : [...data.providers, { ...provider, hosts: [] }]
+  const added: RosterAgentShape = { ...agent, provider: provider.id, efforts: [...agent.efforts], roles: [], ...(namedResearchers(data) === null ? {} : { researcher: true }) }
+  const next: RosterDataShape = { ...data, schema_version: ROSTER_SCHEMA_VERSION, providers, agents: [...data.agents, added] }
+  return data.roles.some((entry) => entry.id === role) ? toggleAgentRole(next, agent.id, role) : next
 }
 
 /**

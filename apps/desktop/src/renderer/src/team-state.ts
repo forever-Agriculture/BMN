@@ -108,6 +108,17 @@ export function rulesUpdateWords(update: NonNullable<Extract<AgentsOutcome, { ok
   return parts.join(' · ')
 }
 
+/** What an approval that went through says: its message, the rules files it updated, and the OpenCode Go sign-in it copied (70.4). */
+export function approvalNotice(result: Extract<AgentsOutcome, { ok: true }>): TeamNotice {
+  const update = result.rulesUpdate
+  const signIn = result.openCodeSignIn
+  return {
+    ok: update?.failed === undefined && signIn?.ok !== false,
+    text: [result.message, ...(update === undefined ? [] : [rulesUpdateWords(update)]), ...(signIn === undefined ? [] : [signIn.message])].join(' · '),
+    ...(update?.transaction ? { undo: update.transaction } : {})
+  }
+}
+
 export function useTeamState(): TeamState {
   const [snapshot, setSnapshot] = useState<AgentsSnapshot | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -204,11 +215,7 @@ export function useTeamState(): TeamState {
       setSnapshot(result.snapshot)
       if (result.ok) {
         discard()
-        const update = result.rulesUpdate
-        setNotice({
-          ok: update?.failed === undefined, text: update === undefined ? result.message : `${result.message} · ${rulesUpdateWords(update)}`,
-          ...(update?.transaction ? { undo: update.transaction } : {})
-        })
+        setNotice(approvalNotice(result))
       } else if (result.code === 'REVISION_CONFLICT') {
         discard()
         setNotice({ ok: false, text: 'The team file changed meanwhile. Reloaded without saving.' })

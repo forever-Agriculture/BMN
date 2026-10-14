@@ -12,7 +12,8 @@ import {
   WEB_NEXT_STEP, WEB_TOOLS_NOTE, inspectRoute
 } from '../../bin/agents-check.mjs'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
-import { canonicalJson, namedResearchers, parseRoster, sha256 } from '../../bin/agents-roster.mjs'
+import { canonicalJson, namedResearchers, parseRoster, rewriteRoster, sha256, starterRoster } from '../../bin/agents-roster.mjs'
+import { LUNA_GO_PROPOSAL, type RosterDataShape } from '@bmn/protocol'
 import { approveRoster } from '../main/agents-approval'
 import { OPENCODE_FOLDERS } from './test-fixtures/opencode-destinations'
 import { startStandin, type Standin } from './test-fixtures/opencode-standin'
@@ -207,6 +208,22 @@ describe('dispatch forms dev-auto documents (60.3 AC1-AC2)', () => {
   })
 })
 
+/**
+ * A team with BMN's proposal of Luna (Go) taken (70.4), as the Team page's `lunaGoProposal` takes it on a team from
+ * before the researcher mark (its output is pinned in luna-go-proposal.test.ts): OpenCode Go added where missing, with
+ * `privateWork`, and Luna (Go) last in the role helper at her highest effort.
+ */
+function withLunaGo(data: RosterDataShape, privateWork: 'allowed' | 'public_only' = 'public_only'): RosterDataShape {
+  const { provider, agent, role } = LUNA_GO_PROPOSAL
+  const providers = data.providers.some((entry) => entry.id === provider.id) ? data.providers : [...data.providers, { ...provider, hosts: [] }]
+  return {
+    ...data, schema_version: 3,
+    providers: providers.map((entry) => (entry.id === provider.id ? { ...entry, private_work: privateWork } : entry)),
+    agents: [...data.agents, { ...agent, provider: provider.id, efforts: [...agent.efforts], roles: [role] }],
+    roles: data.roles.map((entry) => (entry.id === role ? { ...entry, candidates: [...entry.candidates, `${agent.id}@${agent.efforts.at(-1)}`] } : entry))
+  }
+}
+
 /** The OpenCode form `bmn roster role --json` hands out, with Kimi's model and effort; `change` changes one part. */
 const form = (change: (argv: string[]) => string[] = (argv) => argv): string[] => change(['env', '-i',
   ...Object.entries(openCodeEnvironment()).map(([name, value]) => `${name}=${value}`), `PATH=${env.PATH}`,
@@ -332,6 +349,23 @@ describe('an OpenCode helper run in the one form 70.1 measured (70.2)', () => {
     expect(kimi(form()).verdict).toBe('PASS')
     const text = (await runCli(['roster', 'role', 'helper'])).stdout
     expect(text).toContain(`  opencode: env -i ${candidate.opencode.env.join(' ')} PATH=<your PATH> opencode run --standalone --format json --agent bmn-helper -m <provider>/<model>#<effort> --title <title> < <prompt file>`)
+  })
+
+  it('passes Luna (Go) as BMN proposes her, on a team that held no OpenCode before, and keeps private work from OpenCode Go until he allows it (70.4)', async () => {
+    // A team as the owner's stood on 2026-10-14: no OpenCode agent, no OpenCode Go, no destination recorded for OpenCode.
+    const before = parseRoster(edit(edit(EXAMPLE, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\n', ''), 'opencode: {provider: opencode-go, basis: observed-default}\n', ''))
+    expect(before.errors).toEqual([])
+    approve(rewriteRoster(starterRoster(), withLunaGo(before.data as unknown as RosterDataShape) as never))
+    const luna = form((argv) => argv.map((part) => (part === 'opencode-go/kimi-k3#low' ? 'opencode-go/gpt-6-luna#max' : part)))
+    expect(check({ agent: 'luna-go', role: 'helper', argv: luna })).toMatchObject({ code: 'DATA_FORBIDDEN' })
+    approve(rewriteRoster(starterRoster(), withLunaGo(before.data as unknown as RosterDataShape, 'allowed') as never))
+    const passed = check({ agent: 'luna-go', role: 'helper', argv: luna })
+    expect(passed.verdict, JSON.stringify(passed)).toBe('PASS')
+    expect(passed.receipt).toMatchObject({ harness: 'opencode', agent: 'luna-go', model: 'opencode-go/gpt-6-luna', effort: 'max', route: { provider: 'opencode-go', host: 'default:opencode-go' } })
+    // `roster role helper` names her last, with the form; on this team from before the researcher mark every agent researches, she too.
+    const role = JSON.parse((await runCli(['roster', 'role', 'helper', '--json'])).stdout)
+    expect(role.candidates.at(-1)).toMatchObject({ agent: 'luna-go', opencode: { folder: openCodeFolder() } })
+    expect(namedResearchers(readApproved().data)).toBeNull()
   })
 
   it('keeps Cursor unchecked', () => {

@@ -902,9 +902,12 @@ export function resolveOpenCodeRoute(parsed, { agent: wantedAgent = OPENCODE_HEL
   const hash = parsed.model.indexOf('#', reference.length)
   const variant = hash === -1 ? null : parsed.model.slice(hash + 1)
   const provider = reference.slice(0, reference.indexOf('/'))
+  // BMN's folder names no provider and is checked byte for byte, and the run takes the model list built into OpenCode:
+  // the provider in -m is the one the run reaches, at its own servers. Where the owner's own OpenCode sends data, which
+  // `## harness-routes` records, plays no part in it (70.4: his team records none, and his own folder may read as unknown).
   const route = parsed.title === undefined
     ? { basis: 'unknown', provider, host: null, reason: 'without --title OpenCode names the session with a title model the form does not name' }
-    : { basis: 'default', provider, host: `default:${provider}` }
+    : { basis: 'folder', provider, host: `default:${provider}` }
   return {
     ...common, route: { ...route, sources: ['-m'] },
     model: { value: reference, source: '-m' },
@@ -1482,6 +1485,8 @@ export async function refreshVisibility(workspacePath, { now = new Date(), api =
  */
 export function destinationOf(data, harness, route) {
   if (route.basis === 'unknown') return { known: false, reason: route.reason }
+  // An OpenCode run in BMN's own folder: its -m alone decides, and BMN wrote and checked everything else it reads.
+  if (route.basis === 'folder') return { known: true, default: true, provider: route.provider, host: `default:${route.provider}`, basis: 'observed-default', harness_provider: route.provider }
   if (route.basis === 'default') {
     const approved = data.harness_routes.find((entry) => entry.harness === harness)
     if (approved === undefined) return { known: false, reason: `no approved destination for ${harness} in ## harness-routes` }

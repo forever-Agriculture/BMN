@@ -13,6 +13,7 @@ import {
   type AgentHistoryStatus,
   type AgentsApprovalRequest,
   type AgentsOutcome,
+  type OpenCodeGoView,
   type AgentsPreview,
   type AgentsShownRevision,
   type AgentsSnapshot,
@@ -808,6 +809,9 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   saveAgentNotes(shown: AgentsShownRevision, agent: string, text: string): Promise<AgentsOutcome> {
     return invokeBridge('aiterm:agents:notes', { shown, agent, text })
+  },
+  openCodeGo(copy?: boolean): Promise<OpenCodeGoView> {
+    return invokeBridge('aiterm:agents:opencode-go', copy === true ? { copy: true } : {})
   },
   rulesSnapshot(): Promise<RulesSnapshot> {
     return invokeBridge('aiterm:rules:snapshot', {})

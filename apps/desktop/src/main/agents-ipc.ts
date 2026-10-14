@@ -11,6 +11,8 @@ import {
   type AgentsOutcome,
   type AgentsPreview,
   type AgentsRulesUpdate,
+  type OpenCodeGoView,
+  type OpenCodeSignInResult,
   type AgentsShownRevision,
   type AgentsSnapshot,
   type ContextLimitApp,
@@ -69,6 +71,7 @@ import { judgeLimit, judgeTotals, readJudgeRecord, runJudge, setJudgeLimit } fro
 import { ASK_KEPT, ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, agentsMayAsk, askedCount, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord } from '../../bin/agents-ask.mjs'
 import { chooseResearcher, fetchPublicPage, processStart, publicHostName, readResearch, resolvesPublic, researchLockHolder, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
 import { fenceSubjects, runFenceTest } from '../../bin/agents-fence.mjs'
+import { OPENCODE_GO_PROVIDER, copyOpenCodeGoSignIn, openCodeGoSignedIn, openCodeListsLuna } from '../../bin/agents-opencode.mjs'
 import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsTests } from '../../bin/agents-skills.mjs'
 import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsTests } from '../../bin/agents-tools.mjs'
 import { allowWorkspace, approveRoster, approveSections, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
@@ -113,6 +116,8 @@ export interface AgentsIpcOptions {
   researchLimitMs?(): number | undefined
   /** Runs the fence test of the installed Codex; tests replace it. */
   fenceTest?: typeof runFenceTest
+  /** Asks OpenCode about Luna through OpenCode Go and copies the owner's Go sign-in into BMN's folder (70.4); tests replace them. */
+  openCodeGo?: { lists?: typeof openCodeListsLuna; signedIn?: typeof openCodeGoSignedIn; copy?: typeof copyOpenCodeGoSignIn }
   /** Compares a Codex researcher's tools under the provider's own model list before its first run; tests replace it. */
   researchCompare?: NonNullable<Parameters<typeof runResearch>[0]['compare']>
   /** Shows the owner a notice from BMN itself; absent in tests that have nobody to tell. */
@@ -397,6 +402,11 @@ function runCli(script: string, args: string[], env: NodeJS.ProcessEnv, timeoutM
         resolve({ code: null, stdout, stderr, failed: failure.killed ? 'timed out' : 'could not start' })
       })
   })
+}
+
+/** Whether a team names an active agent on OpenCode Go, whose runs need BMN's OpenCode folder signed in there (70.4). */
+function namesOpenCodeGo(data: RosterDataShape | null | undefined): boolean {
+  return (data?.agents ?? []).some((agent) => agent.harness === 'opencode' && agent.provider === OPENCODE_GO_PROVIDER && agent.enabled && agent.status === 'active')
 }
 
 function rulesEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -851,19 +861,67 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   const approving = async (params: Record<string, unknown>, run: () => string): Promise<AgentsOutcome> => {
     const shownTargets = teamUpdateParam(params)
     const result = outcome(run)
-    if (!result.ok || shownTargets.length === 0) return result
+    if (!result.ok) return result
     const ctx = context()
-    let rulesUpdate: AgentsRulesUpdate
-    try {
-      const update = await applyTeamUpdate(shownTargets, { environment: ctx.env, now: ctx.now() })
-      rulesUpdate = { transaction: update.transaction, written: update.written.map((entry) => entry.harness), skipped: update.skipped, ...(update.code === 'OK' ? {} : { failed: update.message ?? update.code }) }
-    } catch (error) {
-      rulesUpdate = { transaction: null, written: [], skipped: shownTargets.map((target) => target.harness), failed: error instanceof Error ? error.message : String(error) }
+    let done: AgentsOutcome = result
+    if (shownTargets.length > 0) {
+      let rulesUpdate: AgentsRulesUpdate
+      try {
+        const update = await applyTeamUpdate(shownTargets, { environment: ctx.env, now: ctx.now() })
+        rulesUpdate = { transaction: update.transaction, written: update.written.map((entry) => entry.harness), skipped: update.skipped, ...(update.code === 'OK' ? {} : { failed: update.message ?? update.code }) }
+      } catch (error) {
+        rulesUpdate = { transaction: null, written: [], skipped: shownTargets.map((target) => target.harness), failed: error instanceof Error ? error.message : String(error) }
+      }
+      done = { ...result, rulesUpdate }
     }
-    return { ...result, rulesUpdate }
+    const signIn = await signInAfterApproval(result.snapshot)
+    return signIn === null ? done : { ...done, openCodeSignIn: signIn }
+  }
+
+  // Luna through OpenCode Go (70.4). Once BMN's folder was seen signed in, it is not asked again while BMN runs.
+  let goSignedIn = false
+  // Whether OpenCode lists her model: a yes holds while BMN runs, a no is asked again, since OpenCode may be installed meanwhile.
+  let lunaListed: Promise<{ listed: boolean; reason?: string }> | null = null
+  const copyGoSignIn = async (): Promise<OpenCodeSignInResult> => {
+    const result = await (options.openCodeGo?.copy ?? copyOpenCodeGoSignIn)({ environment: context().probeEnv })
+    if (result.ok) goSignedIn = true
+    return result
+  }
+  /**
+   * The owner's card of 2026-10-14: when he approves an agent on OpenCode Go, BMN copies his Go sign-in
+   * into its OpenCode folder, once. Null where the approved team names no such agent or the folder
+   * already held one.
+   */
+  const signInAfterApproval = async (snapshot: AgentsSnapshot): Promise<OpenCodeSignInResult | null> => {
+    if (goSignedIn || !namesOpenCodeGo(snapshot.approved?.data)) return null
+    const result = await copyGoSignIn()
+    return result.ok && !result.copied ? null : result
   }
 
   handle('aiterm:agents:snapshot', () => agentsSnapshot())
+  handle('aiterm:agents:opencode-go', async (params): Promise<OpenCodeGoView> => {
+    const approved = approvedOrProblem().generation?.data as RosterDataShape | undefined
+    let copy: OpenCodeSignInResult | undefined
+    if (params.copy === true) {
+      // A sign-in is copied only for a team the owner approved with an agent on OpenCode Go.
+      copy = namesOpenCodeGo(approved) ? await copyGoSignIn() : { ok: false, copied: false, message: 'The approved team names no agent on OpenCode Go, so BMN copies no sign-in' }
+    }
+    lunaListed ??= (options.openCodeGo?.lists ?? openCodeListsLuna)({ environment: context().probeEnv })
+    const listing = await lunaListed
+    if (!listing.listed) lunaListed = null
+    let signedIn: boolean | null = null
+    let reason = listing.reason ?? null
+    if (namesOpenCodeGo(approved)) {
+      if (goSignedIn) signedIn = true
+      else {
+        const asked = await (options.openCodeGo?.signedIn ?? openCodeGoSignedIn)({ environment: context().probeEnv })
+        signedIn = asked.signedIn
+        if (asked.signedIn === true) goSignedIn = true
+        if (asked.reason !== undefined) reason = asked.reason
+      }
+    }
+    return { listed: listing.listed, signedIn, reason, ...(copy === undefined ? {} : { copy }) }
+  })
   handle('aiterm:agents:preview', (params) => previewApproval(requestParam(params), context().env))
   handle('aiterm:agents:approve', (params) => {
     const shown = shownParam(params)
