@@ -1,6 +1,10 @@
 // MODULE: agents-opencode.d.mts - types for the OpenCode helper folder module (Epic 70)
 export declare const OPENCODE_FORM_TESTED: { version: string; on: string }
 export declare const OPENCODE_HELPER_AGENT: string
+export declare const OPENCODE_RESEARCH_AGENT: string
+export declare const OPENCODE_WEBSEARCH_PROVIDER: string
+export declare const OPENCODE_RESEARCH_TITLE: string
+export declare const OPENCODE_FOLDER_SHA256: string
 export declare const OPENCODE_SESSION_ID: RegExp
 export declare const OPENCODE_CONFIG_FILES: Readonly<Record<string, string>>
 export declare const OPENCODE_HELPER_AGENT_SHA256: string
@@ -13,3 +17,5 @@ export declare function openCodeEnvironment(base?: string): Record<string, strin
 export declare function openCodeItems(base?: string): OpenCodeItems
 export declare function installOpenCodeFolder(base?: string, options?: { ownerCache?: string }): OpenCodeItems & { folder: string }
 export declare function openCodeFolderProblem(base?: string): string | null
+export declare function openCodeResearchArgv(agent: { model: string; provider: string }, effort: string, options?: { path?: string; base?: string }): string[]
+export declare function openCodeAnswer(stdout: string): { ok: true; text: string } | { ok: false; reason: string }

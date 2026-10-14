@@ -150,22 +150,22 @@ export function researcherHint(researcher: Pick<ResearcherView, 'harness' | 'fen
 
 /** What research needs, said where no agent on the team can research: `named` is who the team names, null for a team that has not chosen yet. */
 export function noResearcherWords(named: readonly string[] | null): string {
-  const where = 'on Claude Code, or on Codex where its fence test passed, whose provider may see private work'
+  const where = 'on Claude Code, or on Codex or OpenCode where its fence test passed, whose provider may see private work'
   if (named === null) return `Research needs an active agent ${where}.`
   if (named.length === 0) return `Your team names no researcher, so nobody researches. Switch Researcher on on an agent's page: an active agent ${where}.`
   return `Research needs one of the researchers your team names: an active agent ${where}.`
 }
 
-/** The fence test's line on Models: how the installed Codex stands for the team's Codex researchers. */
-export function fenceWords(codex: readonly ResearcherView[]): string {
+/** The fence test's line on Models: how the installed Codex (or OpenCode, 70.3) stands for the team's researchers on it. */
+export function fenceWords(codex: readonly ResearcherView[], app = 'Codex'): string {
   const waiting = codex.filter((entry) => !entry.ok && /fence test|other tools than/.test(entry.why ?? ''))
   const names = (entries: readonly ResearcherView[]): string => {
     const all = entries.map((entry) => entry.name)
     return all.length <= 1 ? all.join('') : `${all.slice(0, -1).join(', ')} and ${all.at(-1) as string}`
   }
-  const about = 'It runs Codex against a stand-in on this computer with made-up files: no provider is called and none of your files is read. About a minute.'
-  if (waiting.length === 0) return `Passed for the installed Codex. ${about}`
-  return `${names(waiting)} research${waiting.length === 1 ? 'es' : ''} only where this test passed for exactly the installed Codex: ${waiting[0]!.why ?? 'it has not passed'}. ${about}`
+  const about = `It runs ${app} against a stand-in on this computer with made-up files: no provider is called and none of your files is read. About a minute.`
+  if (waiting.length === 0) return `Passed for the installed ${app}. ${about}`
+  return `${names(waiting)} research${waiting.length === 1 ? 'es' : ''} only where this test passed for exactly the installed ${app}: ${waiting[0]!.why ?? 'it has not passed'}. ${about}`
 }
 
 type Read = { source: string; as_of: string; verified: boolean; why?: string }
@@ -309,6 +309,7 @@ export function ModelsPage(props: {
   const unable = snapshot.researchers.filter((entry) => !entry.ok)
   const chosen = able.find((entry) => entry.id === snapshot.researcher)
   const codex = snapshot.researchers.filter((entry) => entry.harness === 'codex')
+  const openCode = snapshot.researchers.filter((entry) => entry.harness === 'opencode')
   // The choice waits for the owner while neither the approved team nor what he has staged names anyone (63.3 AC7).
   const proposed = snapshot.choice.named === null && namedResearchers(data) === null ? snapshot.choice.proposed.filter((id) => data.agents.some((agent) => agent.id === id)) : []
   const testing = snapshot.fenceTest.running
@@ -360,6 +361,11 @@ export function ModelsPage(props: {
       {codex.length > 0 ? (
         <Row label="Codex fence test" hint={fenceWords(codex)}>
           <button type="button" className="small" disabled={testing || running || research.busy} onClick={() => void research.testFence()}>{testing ? 'Testing…' : codex.every((entry) => entry.ok) ? 'Run again' : 'Run test'}</button>
+        </Row>
+      ) : null}
+      {openCode.length > 0 ? (
+        <Row label="OpenCode fence test" hint={fenceWords(openCode, 'OpenCode')}>
+          <button type="button" className="small" disabled={testing || running || research.busy} onClick={() => void research.testFence()}>{testing ? 'Testing…' : openCode.every((entry) => entry.ok) ? 'Run again' : 'Run test'}</button>
         </Row>
       ) : null}
       <Row label="Sources" hint="Prices come from provider pages first; other sites are cited and never override. BMN reads each cited page itself and marks what it cannot confirm.">

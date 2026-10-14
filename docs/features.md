@@ -362,7 +362,9 @@ published prices and context windows, in an empty folder, sent nothing but the m
 source list. A Claude Code researcher runs with web tools only. A Codex researcher runs with a
 Codex folder of its own that holds nothing of yours, and is offered only where BMN's fence test
 (`bmn roster fence`, or **Run test** on Models) passed for exactly the installed Codex version;
-Models names the tools Codex keeps offering there. BMN reads each cited page itself and marks what
+Models names the tools Codex keeps offering there. An OpenCode researcher runs from BMN's own
+OpenCode folder with web search only (its searches go to the TinyFish search service), on the same
+terms: a fence test of exactly the installed OpenCode. BMN reads each cited page itself and marks what
 it cannot confirm there. **Apply prices…**
 stages the verified prices that differ from your team's, **Add to team…** and **Look up** fill a
 new agent with them, and the Model field offers the names research found. Nothing changes until

@@ -1,4 +1,4 @@
-// MODULE: agents-fence.d.mts - types for agents-fence.mjs (Story 63.3)
+// MODULE: agents-fence.d.mts - types for agents-fence.mjs (Stories 63.3 and 70.3)
 import type { FenceTestEntry } from './agents-check.mjs'
 import type { RosterAgent, RosterData } from './agents-roster.mjs'
 
@@ -6,14 +6,18 @@ type Environment = NodeJS.ProcessEnv | Record<string, string>
 
 /** Where a marker is planted, in the words the result uses. */
 export declare const FENCE_MARKERS: Record<string, string>
+/** Where a marker is planted for an OpenCode research run (70.3). */
+export declare const OPENCODE_FENCE_MARKERS: Record<string, string>
 export declare const FENCE_USAGE: string
 export declare function fenceDirectory(): string
 /** Which planted markers a text holds, plainly or inside base64. */
 export declare function markersIn(text: string, markers: Record<string, string>): string[]
-/** The approved, active agents on Codex, one per model: what a fence test covers. */
-export declare function fenceSubjects(data: Pick<RosterData, 'agents'>): RosterAgent[]
+/** The approved, active agents on an app (Codex unless named), one per model: what a fence test covers. */
+export declare function fenceSubjects(data: Pick<RosterData, 'agents'>, harness?: 'codex' | 'opencode'): RosterAgent[]
 
 export interface FenceTestOptions {
+  /** The app whose installed version is tested; Codex unless named. */
+  harness?: 'codex' | 'opencode'
   agents?: RosterAgent[]
   environment?: Environment
   now?: Date
@@ -25,7 +29,7 @@ export interface FenceTestOptions {
   entries?: Record<string, string>
   renewal?: boolean
   /** Builds another command than a research run's; such a test counts for nothing. */
-  argvOf?: (agent: RosterAgent, options: { environment: Environment; run: { folder: string; codex?: string } }) => string[]
+  argvOf?: (agent: RosterAgent, options: { environment: Environment; run: { folder: string; codex?: string }; openCodeBase?: string }) => string[]
   record?: boolean
   /** The most one run of the test may take. */
   limitMs?: number

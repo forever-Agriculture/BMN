@@ -42,7 +42,7 @@ function approve(text: string): void {
  * the entry whose key is a model named in the prompt. Claude Code prints a result object; Codex
  * writes its last message to the `-o` file.
  */
-function stubApp(name: 'claude' | 'codex', version: string): void {
+function stubApp(name: 'claude' | 'codex' | 'opencode', version: string): void {
   writeFileSync(join(stubs, name), `#!${process.execPath}
 const fs = require('node:fs')
 const home = process.env.HOME
@@ -194,10 +194,13 @@ describe('who may research (60.10 AC1)', () => {
     stubApp('codex', 'codex-cli 0.162.0')
     expect(researchers({ environment: env, now: NOW, fenceTests: FENCED }).filter((entry) => entry.ok).map((entry) => entry.id)).toEqual(['opus', 'fable'])
     stubApp('codex', 'codex-cli 0.161.0')
-    // Proposed agents are not offered at all; a public-only provider needs a verified fence; OpenCode has no research form.
+    // Proposed agents are not offered at all; a public-only provider needs a verified fence; OpenCode researches once its own fence test passed (70.3).
     expect(found.map((entry) => entry.id)).not.toContain('sonnet')
     expect(found.find((entry) => entry.id === 'glm')).toMatchObject({ ok: false, reason: expect.stringContaining('fence') })
-    expect(found.find((entry) => entry.id === 'kimi')).toMatchObject({ ok: false, reason: 'OpenCode has no research form BMN can check' })
+    expect(found.find((entry) => entry.id === 'kimi')).toMatchObject({ ok: false, reason: 'opencode: BMN cannot read this app\'s version, so it cannot tell which program would run' })
+    stubApp('opencode', '2.0.29')
+    expect(researchers({ environment: env, now: NOW }).find((entry) => entry.id === 'kimi')).toMatchObject({ ok: false, why: 'the fence test has not run for this version of OpenCode yet',
+      reason: 'research runs in OpenCode only on a version whose fence test passed, and none is on record for opencode 2.0.29 with opencode-go/kimi-k3: the owner runs `bmn roster fence`, or picks a researcher on Claude Code' })
   })
 
   it('offers an agent with its own context limit once the owner\'s test showed that limit wins over his default', () => {

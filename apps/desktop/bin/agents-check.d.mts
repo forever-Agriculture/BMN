@@ -143,6 +143,7 @@ export declare const RESEARCH_TOOLS: string
 export declare const WEB_QUESTION_COMMAND: string
 export declare const WEB_NEXT_STEP: string
 export declare const OPENCODE_NEXT_STEP: string
+export declare const OPENCODE_RESEARCH_TOOLS_SEEN: string[]
 export declare const WEB_TOOLS_NOTE: string
 export declare const CODEX_RESEARCH_CONFIG: string[]
 export declare const CODEX_RESEARCH_ANSWER: string

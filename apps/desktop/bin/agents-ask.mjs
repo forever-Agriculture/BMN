@@ -521,7 +521,7 @@ export function markCounts(claims) {
 
 /** What research needs, said where no agent on the team can research now: the words Models uses (models-preferences.tsx noResearcherWords). */
 export function noResearcherWords(named) {
-  const where = 'on Claude Code, or on Codex where its fence test passed, whose provider may see private work'
+  const where = 'on Claude Code, or on Codex or OpenCode where its fence test passed, whose provider may see private work'
   if (named === null) return `Research needs an active agent ${where}.`
   if (named.length === 0) return `Your team names no researcher, so nobody researches. Switch Researcher on on an agent's page: an active agent ${where}.`
   return `Research needs one of the researchers your team names: an active agent ${where}.`

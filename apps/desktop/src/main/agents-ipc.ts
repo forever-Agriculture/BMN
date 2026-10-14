@@ -68,7 +68,7 @@ import {
 import { judgeLimit, judgeTotals, readJudgeRecord, runJudge, setJudgeLimit } from '../../bin/agents-judge.mjs'
 import { ASK_KEPT, ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, agentsMayAsk, askedCount, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord } from '../../bin/agents-ask.mjs'
 import { chooseResearcher, fetchPublicPage, processStart, publicHostName, readResearch, resolvesPublic, researchLockHolder, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
-import { runFenceTest } from '../../bin/agents-fence.mjs'
+import { fenceSubjects, runFenceTest } from '../../bin/agents-fence.mjs'
 import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsTests } from '../../bin/agents-skills.mjs'
 import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsTests } from '../../bin/agents-tools.mjs'
 import { allowWorkspace, approveRoster, approveSections, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
@@ -1220,8 +1220,15 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       researcherList = researchers({ environment: researchEnvironment(ctx), now: ctx.now() }) as ResearcherView[]
       fenceTest = { running: false, ended }
     }
-    void (options.fenceTest ?? runFenceTest)({ environment: researchEnvironment(ctx), now: ctx.now() }).then(
-      (entry) => finish({ ok: entry.verdict === 'pass', text: fenceEndedWords(entry) }),
+    const test = options.fenceTest ?? runFenceTest
+    // Codex as before; OpenCode too where the team has an agent on it (70.3), one after the other.
+    const both = async () => {
+      const entries = [await test({ environment: researchEnvironment(ctx), now: ctx.now() })]
+      if (fenceSubjects(readApproved().data, 'opencode').length > 0) entries.push(await test({ harness: 'opencode', environment: researchEnvironment(ctx), now: ctx.now() }))
+      return entries
+    }
+    void both().then(
+      (entries) => finish({ ok: entries.every((entry) => entry.verdict === 'pass'), text: entries.map(fenceEndedWords).join(' ') }),
       (error: unknown) => finish({ ok: false, text: `The fence test could not run: ${error instanceof Error ? error.message : String(error)}` }))
     return researchSnapshot(false)
   })
@@ -1497,11 +1504,12 @@ function isQuestionCommand(pid: number, start: string): boolean {
 }
 
 /** How a fence test ended, for the page's notice. */
-export function fenceEndedWords(entry: Pick<FenceTestEntry, 'verdict' | 'version' | 'models' | 'reasons'>): string {
-  const app = `${ROSTER_APP_NAMES.codex}${entry.version === null ? '' : ` ${entry.version}`}`
+export function fenceEndedWords(entry: Pick<FenceTestEntry, 'verdict' | 'version' | 'models' | 'reasons'> & { harness?: string }): string {
+  const name = entry.harness === 'opencode' ? ROSTER_APP_NAMES.opencode : ROSTER_APP_NAMES.codex
+  const app = `${name}${entry.version === null ? '' : ` ${entry.version}`}`
   if (entry.verdict === 'pass') return `The fence test of ${app} passed: a research run sends its provider nothing of yours.`
   const why = [...entry.models.flatMap((model) => model.reasons.map((reason) => `${model.model}: ${reason}`)), ...(entry.reasons ?? [])]
-  return `The fence test of ${app} ${entry.verdict === 'fail' ? 'failed' : 'showed nothing'}${why.length === 0 ? '.' : `: ${why.slice(0, 3).join('; ')}.`} No Codex agent is offered as a researcher.`
+  return `The fence test of ${app} ${entry.verdict === 'fail' ? 'failed' : 'showed nothing'}${why.length === 0 ? '.' : `: ${why.slice(0, 3).join('; ')}.`} No ${name} agent is offered as a researcher.`
 }
 
 /** How a research ended, for the page's notice. */

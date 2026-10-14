@@ -9,6 +9,7 @@ import { APP_NAMES, EFFORTS, RESEARCH_APPS, agentState, isCalled, namedResearche
 import { readApproved, stateDirectory } from './agents-state.mjs'
 import { CODEX_RESEARCH_ANSWER, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_HOME, RESEARCH_TOOLS, evaluateResearch, harnessVersion, prepareResearchRun, removeResearchCodexFolders, researchRunsDirectory } from './agents-check.mjs'
 import { contextItems, provenControls } from './agents-context.mjs'
+import { openCodeAnswer, openCodeResearchArgv } from './agents-opencode.mjs'
 import { writePrivate } from './agents-rules.mjs'
 import { NOTHING_STARTED, processLives, processStart, startSupervised } from './agents-supervised.mjs'
 
@@ -131,12 +132,15 @@ export function researchEffort(agent) {
  * The one command a research run is: `env -i` with the home folder and the program path, then the
  * app's research form (60.3 AC11). `run` is the folder BMN made for it, or null for the question
  * "could this agent research at all". A Codex run is also pointed at a Codex folder of its own
- * (63.3): the one in `run`, or `codexHome` where there is no run yet.
+ * (63.3): the one in `run`, or `codexHome` where there is no run yet. An OpenCode run (70.3) starts
+ * from BMN's OpenCode folder, or `openCodeBase` for the fence test's planted one.
  */
-export function researchArgv(agent, { environment = process.env, run = null, version = null, contextTests = undefined, codexHome = undefined } = {}) {
+export function researchArgv(agent, { environment = process.env, run = null, version = null, contextTests = undefined, codexHome = undefined, openCodeBase = undefined } = {}) {
   const effort = researchEffort(agent)
   const proven = agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(agent.harness, version, contextTests)
   const context = contextItems(agent, proven)
+  // An OpenCode run starts from BMN's own OpenCode folder, never the owner's home; OpenCode has no context control BMN applies.
+  if (agent.harness === 'opencode') return openCodeResearchArgv(agent, effort, { path: environment.PATH ?? '', ...(openCodeBase === undefined ? {} : { base: openCodeBase }) })
   const head = ['/usr/bin/env', '-i', `HOME=${environment.HOME ?? ''}`, `PATH=${environment.PATH ?? ''}`]
   if (agent.harness === 'codex') {
     const home = run?.codex ?? codexHome ?? (run === null ? CODEX_RESEARCH_HOME : `${run.folder}/${CODEX_RESEARCH_HOME}`)
@@ -376,8 +380,9 @@ export function parseAnswer(text, batch, { now = new Date() } = {}) {
   return { ok: true, models }
 }
 
-/** The answer text inside what the app printed: Claude Code's result object, or the file Codex wrote. */
+/** The answer text inside what the app printed: Claude Code's result object, OpenCode's last text event, or the file Codex wrote. */
 export function answerText(harness, stdout, run) {
+  if (harness === 'opencode') return openCodeAnswer(stdout)
   if (harness === 'codex') {
     try {
       return { ok: true, text: readFileSync(`${run.folder}/${CODEX_RESEARCH_ANSWER}`, 'utf8') }

@@ -110,7 +110,7 @@ export function readOnlyProposal(data) {
 }
 
 /** The agent apps that have a research form the check admits. */
-export const RESEARCH_APPS = ['claude', 'codex']
+export const RESEARCH_APPS = ['claude', 'codex', 'opencode']
 
 /**
  * The agents the approved team names as researchers (63.3). Null only for a team from before the

@@ -1,4 +1,4 @@
-// MODULE: agents-fence.mjs - Story 63.3: the fence test of a Codex research run: planted markers, a loopback stand-in for the provider, the very command a research run is, and the record the check reads
+// MODULE: agents-fence.mjs - Story 63.3: the fence test of a Codex research run, and Story 70.3's of an OpenCode one: planted markers, a loopback stand-in for the provider, the very command a research run is, and the record the check reads
 import { createHash, randomBytes } from 'node:crypto'
 import { appendFileSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -6,7 +6,8 @@ import { dirname, join } from 'node:path'
 import * as zlib from 'node:zlib'
 import { APP_NAMES, agentState, canonicalJson, sha256 } from './agents-roster.mjs'
 import { readApproved, stateDirectory } from './agents-state.mjs'
-import { CODEX_RESEARCH_HOME, CODEX_RESEARCH_TOOLS_SEEN, CODEX_SIGN_IN, fenceStanding, fenceTestsPath, harnessVersion, parseDispatch, researchFormHash, researchFormProblem } from './agents-check.mjs'
+import { CODEX_RESEARCH_HOME, CODEX_RESEARCH_TOOLS_SEEN, CODEX_SIGN_IN, OPENCODE_RESEARCH_TOOLS_SEEN, fenceStanding, fenceTestsPath, harnessVersion, parseDispatch, researchFormHash, researchFormProblem } from './agents-check.mjs'
+import { OPENCODE_HELPER_AGENT, installOpenCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
 import { researchArgv } from './agents-research.mjs'
 import { NOTHING_STARTED, startSupervised } from './agents-supervised.mjs'
 
@@ -320,7 +321,7 @@ function describe(text, markers) {
  */
 function startStandIn() {
   let markers = {}
-  let session = { seen: [], turn: 0, offered: null, everOffered: new Set(), turns: () => null, catalog: null, canary: null, listed: 0, applied: false, local: 0 }
+  let session = { seen: [], turn: 0, offered: null, everOffered: new Set(), turns: () => null, catalog: null, canary: null, listed: 0, applied: false, local: 0, tunnels: [] }
   const server = createServer((request, response) => {
     const current = session
     const chunks = []
@@ -376,6 +377,12 @@ function startStandIn() {
       response.end('{"error":{"message":"fence stand-in: not served"}}')
     })
   })
+  // A run pointed here as its proxy (OpenCode's, 70.3) asks to reach a host outside this computer: recorded and refused, so nothing leaves.
+  server.on('connect', (request, socket) => {
+    socket.on('error', () => {})
+    session.tunnels.push(request.url ?? '')
+    socket.end('HTTP/1.1 403 Forbidden\r\n\r\n')
+  })
   // A WebSocket attempt is refused, so the app falls back to plain requests the stand-in can read.
   server.on('upgrade', (request, socket) => {
     session.seen.push({ method: 'UPGRADE', path: (request.url ?? '').split('?')[0], markers: [], image: false })
@@ -388,7 +395,7 @@ function startStandIn() {
         port: server.address().port,
         mark: (planted) => { markers = planted },
         begin: (turns, catalog = null, canary = null) => {
-          session = { seen: [], turn: 0, offered: null, everOffered: new Set(), turns, catalog, canary, listed: 0, applied: false, local: 0 }
+          session = { seen: [], turn: 0, offered: null, everOffered: new Set(), turns, catalog, canary, listed: 0, applied: false, local: 0, tunnels: [] }
           return session
         },
         close: () => new Promise((done) => {
@@ -624,10 +631,15 @@ function isRecord(value) {
 // ---------------------------------------------------------------------------------------------
 // The whole test and its record
 
-/** The approved, active agents on Codex, one per model: what a fence test covers. */
-export function fenceSubjects(data) {
+/** The approved, active agents on an app (Codex unless named), one per model: what a fence test covers. */
+export function fenceSubjects(data, harness = 'codex') {
   const seen = new Set()
-  return data.agents.filter((agent) => agent.harness === 'codex' && agentState(agent) === 'active' && !seen.has(agent.model) && seen.add(agent.model))
+  return data.agents.filter((agent) => agent.harness === harness && agentState(agent) === 'active' && !seen.has(openCodeModel(agent)) && seen.add(openCodeModel(agent)))
+}
+
+/** The model as the check names it: an OpenCode agent's is `provider/model`. */
+function openCodeModel(agent) {
+  return agent.harness !== 'opencode' || agent.model.includes('/') ? agent.model : `${agent.provider}/${agent.model}`
 }
 
 function removeLeftBehind(now) {
@@ -660,9 +672,182 @@ const RENEWAL_WORDS = {
   'not-written': 'a sign-in renewal did not reach the sign-in file'
 }
 
+// ---------------------------------------------------------------------------------------------
+// The OpenCode fence test (70.3)
+
+/** Where a marker is planted for an OpenCode research run, in the words the result uses. */
+export const OPENCODE_FENCE_MARKERS = {
+  PROMPT: 'the prompt', RULES: 'the OpenCode rules file', INSTRUCTIONS: 'a rules file the OpenCode settings name', CONFIG: 'the OpenCode settings file',
+  AGENT: 'an agent in the OpenCode folder', SKILL: 'a skill in the OpenCode folder', CLAUDE: 'Claude Code\'s rules file', CLAUDESKILL: 'a skill in Claude Code\'s folder',
+  AGENTSKILL: 'a skill in the home folder', HOME: 'a file in the home folder', HOMEDOC: 'the rules file in the home folder', PARENT: 'a file beside the run\'s folder',
+  PARENTDOC: 'the rules file beside the run\'s folder', SESSION: 'an earlier session in BMN\'s OpenCode folder', PLUGIN: 'a plugin\'s text', MCP: 'an MCP server\'s settings',
+  LOCAL: 'a page on this computer'
+}
+
+/** The address OpenCode reaches the provider at during the test: the stand-in, given as a setting the test adds to the very command. */
+function openCodeStandIn(agent, port) {
+  return JSON.stringify({ provider: { [agent.provider]: { options: { baseURL: `http://127.0.0.1:${port}/v1`, apiKey: 'synthetic-not-a-key' } } } })
+}
+
 /**
- * Runs the fence test of the installed Codex for each agent's model and records the result against
- * that version and the research form as it is built now. `catalog` is the provider's own model list
+ * The owner-like home folder for an OpenCode run: a marker in every place OpenCode could pick one up
+ * (its rules file and the rules file its settings name, its settings, an agent, skills in OpenCode's,
+ * Claude Code's and the home folder's places, a plugin and an MCP server that note when they start,
+ * files in the home folder and beside the run), and BMN's own OpenCode folder under the home's BMN
+ * state, as BMN makes it. The owner's settings send OpenCode to the stand-in too, so a command that
+ * reads them still reaches it.
+ */
+function plantOpenCode(root, port, agent) {
+  const tag = randomBytes(4).toString('hex')
+  const markers = Object.fromEntries(Object.keys(OPENCODE_FENCE_MARKERS).map((name) => [name, `FENCE-${name}-${tag}`]))
+  const home = join(root, 'home')
+  const own = join(home, '.config/opencode')
+  const put = (path, text) => {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+    writeFileSync(path, text)
+  }
+  put(join(own, 'AGENTS.md'), `# Synthetic rules\n\n${markers.RULES}: a rule line only the owner's rules file holds.\n`)
+  put(join(home, 'fence-instructions.md'), `${markers.INSTRUCTIONS}: a rules file the owner's settings name.\n`)
+  put(join(root, 'fence-mcp.mjs'), `import { appendFileSync } from 'node:fs'\nappendFileSync(${JSON.stringify(join(root, 'mcp-ran.log'))}, 'started\\n')\n`)
+  put(join(own, 'opencode.json'), `${JSON.stringify({
+    $schema: 'https://opencode.ai/config.json', instructions: [join(home, 'fence-instructions.md')],
+    agent: { 'fence-config': { description: `${markers.CONFIG} an agent the settings name`, mode: 'subagent' } },
+    mcp: { fence: { type: 'local', command: [process.execPath, join(root, 'fence-mcp.mjs'), markers.MCP], enabled: true } },
+    provider: JSON.parse(openCodeStandIn(agent, port)).provider
+  }, null, 2)}\n`)
+  put(join(own, 'agents/fence-agent.md'), `---\ndescription: ${markers.AGENT} a synthetic agent\nmode: subagent\n---\n\n${markers.AGENT} agent body.\n`)
+  put(join(own, 'skills/fence-probe/SKILL.md'), `---\nname: fence-probe\ndescription: ${markers.SKILL} a synthetic skill description\n---\n\n${markers.SKILL} skill body.\n`)
+  put(join(own, 'plugin/fence.ts'), `import { appendFileSync } from 'node:fs'\nappendFileSync(${JSON.stringify(join(root, 'plugin-ran.log'))}, 'loaded\\n')\nexport const Fence = async () => ({}) // ${markers.PLUGIN}\n`)
+  put(join(home, '.claude/CLAUDE.md'), `${markers.CLAUDE}: Claude Code's rules file.\n`)
+  put(join(home, '.claude/skills/fence-probe-claude/SKILL.md'), `---\nname: fence-probe-claude\ndescription: ${markers.CLAUDESKILL} a synthetic skill description\n---\n\n${markers.CLAUDESKILL} skill body.\n`)
+  put(join(home, '.agents/skills/fence-probe-two/SKILL.md'), `---\nname: fence-probe-two\ndescription: ${markers.AGENTSKILL} a synthetic skill description\n---\n\n${markers.AGENTSKILL} skill body.\n`)
+  put(join(home, 'SENTINEL-HOME.txt'), `${markers.HOME}\n`)
+  put(join(home, 'AGENTS.md'), `${markers.HOMEDOC}: a rules file in the home folder.\n`)
+  writeFileSync(join(home, 'sentinel.png'), picture())
+  const base = join(home, '.config/bmn/agents/state/opencode')
+  // No ripgrep link: a research run searches no file.
+  installOpenCodeFolder(base, { ownerCache: join(root, 'no-cache') })
+  const runs = join(home, '.config/bmn/agents/state/research/runs')
+  mkdirSync(runs, { recursive: true, mode: 0o700 })
+  return { root, home, own, base, runs, markers, target: join(home, 'SENTINEL-HOME.txt'), picture: join(home, 'sentinel.png') }
+}
+
+/** The calls the stand-in makes in the main run: the offered tools on the planted files and this computer, then every tool a research run must not have. */
+function openCodeCalls(planted, cwd, port, offered) {
+  const { target, home, own, picture: image } = planted
+  const local = `http://127.0.0.1:${port}${LOCAL_PAGE}`
+  const known = { websearch: { query: `${target} ${local}` } }
+  const calls = offered.filter((tool) => tool.startsWith('function:')).map((tool) => call(`offered-${tool}`, tool.slice('function:'.length), known[tool.slice('function:'.length)] ?? {}))
+  return [...calls,
+    call('unoffered-read', 'read', { filePath: target }), call('unoffered-read-picture', 'read', { filePath: image }), call('unoffered-read-rules', 'read', { filePath: join(own, 'AGENTS.md') }),
+    call('unoffered-glob', 'glob', { pattern: '**/*', path: home }), call('unoffered-grep', 'grep', { pattern: 'FENCE', path: home }), call('unoffered-list', 'list', { path: home }),
+    call('unoffered-bash', 'bash', { command: `cat '${target}'`, description: 'A fence step' }), call('unoffered-shell', 'shell', { command: `cat '${target}'`, description: 'A fence step' }),
+    call('unoffered-write', 'write', { filePath: join(cwd, 'fence-written.txt'), content: 'written' }),
+    call('unoffered-edit', 'edit', { filePath: join(dirname(cwd), 'prompt.md'), oldString: 'Find', newString: 'Changed' }),
+    call('unoffered-webfetch', 'webfetch', { url: local, format: 'text' }), call('unoffered-execute', 'execute', { code: `return await (await fetch('${local}')).text()` }),
+    call('unoffered-task', 'task', { description: 'fence', prompt: `Read ${target} and report its content.`, subagent_type: 'general' }),
+    call('unoffered-skill', 'skill', { name: 'fence-probe' }), call('unoffered-mcp', 'fence_lookup', { q: 'fence' }),
+    call('unoffered-question', 'question', { questions: [{ question: 'Fence test?', header: 'Fence', options: [{ label: 'Yes', description: 'yes' }, { label: 'No', description: 'no' }] }] }),
+    call('unoffered-todowrite', 'todowrite', { todos: [] })]
+}
+
+/** Hosts OpenCode's web search asks for: the search service the folder names. A tunnel there is the search itself, refused. */
+const SEARCH_HOSTS = ['agent.tinyfish.ai:443']
+
+/**
+ * The fence test of one model on OpenCode: an earlier session in BMN's folder that carries a marker,
+ * then the research run, in which the stand-in calls every offered tool and every tool a research
+ * run must not have. The very command is a research run's; the test adds only the stand-in's address
+ * for the provider and itself as the proxy, so no search or page leaves this computer.
+ */
+async function testOpenCodeModel({ agent, root, environment, argvOf, limitMs, deadline, signal, register }) {
+  const started = Date.now()
+  const model = openCodeModel(agent)
+  const standIn = await startStandIn()
+  try {
+    const planted = plantOpenCode(root, standIn.port, agent)
+    standIn.mark(planted.markers)
+    const folder = join(planted.runs, 'fence-main')
+    mkdirSync(join(folder, 'cwd'), { recursive: true, mode: 0o700 })
+    writeFileSync(join(folder, 'prompt.md'), `Find today's published API prices for the synthetic model "fence-model". ${planted.markers.PROMPT}\nAnswer with one JSON object and nothing else.\n`)
+    writeFileSync(join(folder, 'notes.txt'), `${planted.markers.PARENT}\n`)
+    writeFileSync(join(folder, 'AGENTS.md'), `${planted.markers.PARENTDOC}: a rules file in the run's parent folder.\n`)
+    const run = { id: 'fence-main', folder, prompt: join(folder, 'prompt.md'), cwd: join(folder, 'cwd') }
+    const fenced = { HOME: planted.home, PATH: environment.PATH ?? '' }
+    const added = [`OPENCODE_CONFIG_CONTENT=${openCodeStandIn(agent, standIn.port)}`, `HTTPS_PROXY=http://127.0.0.1:${standIn.port}`,
+      `HTTP_PROXY=http://127.0.0.1:${standIn.port}`, 'NO_PROXY=127.0.0.1,localhost']
+    const base = argvOf(agent, { environment: fenced, run, openCodeBase: planted.base })
+    const at = base.findIndex((item) => item.startsWith('PATH=')) + 1
+    const withAdded = (argv) => [...argv.slice(0, at), ...added, ...argv.slice(at)]
+    let expired = false
+    const start = async (argv, which, turns) => {
+      const session = standIn.begin(turns)
+      const left = deadline === undefined ? limitMs : Math.min(limitMs, deadline - Date.now())
+      if (left <= 0) {
+        expired = true
+        return { session, exit: { code: null, error: 'out of time', stderr: '' } }
+      }
+      const exit = await runCommand(withAdded(argv), which, left, signal, register)
+      if (deadline !== undefined && Date.now() >= deadline) expired = true
+      return { session, exit }
+    }
+    // An earlier session in BMN's folder, as helper runs leave there: the research run must not send it on.
+    const earlierPrompt = join(root, 'earlier.md')
+    writeFileSync(earlierPrompt, `Made-up earlier conversation ${planted.markers.SESSION}\n`)
+    const earlierArgv = base.map((item, index) => (base[index - 1] === '--agent' ? OPENCODE_HELPER_AGENT : base[index - 1] === '--title' ? 'Earlier' : item))
+    const earlier = await start(earlierArgv, { ...run, prompt: earlierPrompt }, () => null)
+    const skip = (path) => [planted.base].some((own) => [openCodeFolders(own).data, openCodeFolders(own).state, openCodeFolders(own).cache].some((folder) => path === folder || path.startsWith(`${folder}/`)))
+    const before = snapshot(planted.home, skip)
+    const main = await start(base, run, (number, offered) => (number === 1 ? openCodeCalls(planted, run.cwd, standIn.port, offered) : null))
+    if (expired) return { model, verdict: 'inconclusive', expired: true, tools: [], reasons: ['the time for the test ran out before it ended'], seconds: Math.round((Date.now() - started) / 100) / 10 }
+    const after = snapshot(planted.home, skip)
+
+    const requests = main.session.seen
+    const asked = requests.filter((entry) => entry.method === 'POST' && /\/responses$/u.test(entry.path))
+    const offered = [...main.session.everOffered].sort()
+    const outputs = new Map()
+    for (const entry of requests) for (const output of entry.outputs ?? []) if (!outputs.has(output.call_id)) outputs.set(output.call_id, output.text)
+
+    const blind = []
+    if (earlier.exit.code !== 0 || !earlier.session.seen.some((entry) => entry.markers.includes('SESSION'))) blind.push('the earlier session did not reach the stand-in, so it was not there to leak')
+    if (main.exit.code !== 0) blind.push(`OpenCode did not finish the run${main.exit.error ? ` (${main.exit.error})` : main.exit.code === null ? ' in time' : ` (code ${main.exit.code}${main.exit.stderr ? `: ${main.exit.stderr.trim().split('\n').at(-1).slice(0, 200)}` : ''})`}`)
+    else if (asked.length === 0) blind.push('OpenCode never asked the stand-in for an answer')
+    else if (!asked.some((entry) => entry.markers.includes('PROMPT'))) blind.push('the stand-in did not find the prompt in what OpenCode sent')
+    if (requests.some((entry) => entry.unreadable)) blind.push('the stand-in could not read a request OpenCode sent')
+    const elsewhere = [...new Set(main.session.tunnels)].filter((host) => !SEARCH_HOSTS.includes(host))
+    if (elsewhere.length > 0) blind.push(`OpenCode asked to reach ${listed(elsewhere)}, which the test refused, so it may not have used the stand-in alone`)
+
+    const reasons = []
+    const reached = [...new Set(requests.flatMap((entry) => entry.markers))].filter((name) => name !== 'PROMPT')
+    if (reached.length > 0) reasons.push(`reached the provider: ${listed(reached.map((name) => OPENCODE_FENCE_MARKERS[name]))}`)
+    if (requests.some((entry) => entry.image)) reasons.push('a picture was sent to the provider')
+    const written = changedFiles(before, after)
+    if (written.length > 0) reasons.push(`written during the run: ${listed(written.slice(0, 6))}${written.length > 6 ? ` and ${written.length - 6} more` : ''}`)
+    const folderNow = openCodeFolderProblem(planted.base)
+    if (folderNow !== null) reasons.push(`BMN's OpenCode folder changed during the run: ${folderNow}`)
+    if (existsSync(join(root, 'plugin-ran.log'))) reasons.push('a plugin of the owner\'s was loaded')
+    if (existsSync(join(root, 'mcp-ran.log'))) reasons.push('an MCP server of the owner\'s was started')
+    const uncalled = offered.filter((tool) => !outputs.has(`offered-${tool}`))
+    if (uncalled.length > 0 && blind.length === 0) reasons.push(`offered but not called: ${listed(uncalled)}`)
+    const telling = [...outputs.entries()].filter(([, text]) => markersIn(text, planted.markers).length > 0 || text.includes(';base64,')).map(([id]) => id)
+    if (telling.length > 0) reasons.push(`a tool gave back a planted file: ${listed(telling)}`)
+    if (main.session.local > 0 || earlier.session.local > 0) reasons.push('a tool fetched an address on this computer')
+    const unseen = offered.filter((tool) => !OPENCODE_RESEARCH_TOOLS_SEEN.includes(tool))
+    if (unseen.length > 0) reasons.push(`a tool BMN has not looked at: ${listed(unseen)}`)
+
+    const verdict = reasons.length > 0 ? 'fail' : blind.length > 0 ? 'inconclusive' : 'pass'
+    return { model, verdict, tools: offered, reasons: [...reasons, ...blind], seconds: Math.round((Date.now() - started) / 100) / 10 }
+  } finally {
+    await standIn.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Runs the fence test of the installed Codex (or, with `harness: 'opencode'`, OpenCode) for each
+ * agent's model and records the result against that version and the research form as it is built
+ * now. OpenCode's run takes its models from the list built into OpenCode (70.2), so its test is
+ * always under that list: no comparison under another one and no sign-in renewal. `catalog` is the provider's own model list
  * for a comparison under it (`expected`: the tools the earlier test saw, per model); without it the
  * app uses the list it was built with and one run also tries a sign-in renewal. `argvOf` builds
  * another command than a research run's, to try a form before it becomes one: such a test is
@@ -672,13 +857,13 @@ const RENEWAL_WORDS = {
  * and a test it cut short is not recorded.
  */
 export async function runFenceTest({
-  agents = undefined, environment = process.env, now = new Date(), catalog = null, expected = {}, entries = {}, renewal = catalog === null,
+  harness = 'codex', agents = undefined, environment = process.env, now = new Date(), catalog = null, expected = {}, entries = {}, renewal = catalog === null && harness === 'codex',
   argvOf = undefined, record = true, limitMs = RUN_LIMIT_MS, deadline = undefined, signal = undefined, register = undefined
 } = {}) {
   const real = { HOME: environment.HOME ?? '', PATH: environment.PATH ?? '' }
-  const version = harnessVersion('codex', real)
+  const version = harnessVersion(harness, real)
   const build = argvOf ?? ((agent, options) => researchArgv(agent, { ...options, version }))
-  const base = { harness: 'codex', at: now.toISOString(), version, form: 'other', catalog: catalog === null ? 'bundled' : 'live' }
+  const base = { harness, at: now.toISOString(), version, form: 'other', catalog: catalog === null ? 'bundled' : 'live' }
   const keep = (entry) => {
     // A test that was stopped saw nothing to the end, so nothing of it is kept.
     if (record && !signal?.aborted) {
@@ -687,22 +872,25 @@ export async function runFenceTest({
     }
     return entry
   }
-  if (version === null) return keep({ ...base, verdict: 'inconclusive', models: [], reasons: ['codex is not installed or did not answer --version'] })
-  const tested = agents ?? fenceSubjects(readApproved().data)
-  if (tested.length === 0) return keep({ ...base, verdict: 'inconclusive', models: [], reasons: ['the approved team has no active agent on Codex'] })
+  if (version === null) return keep({ ...base, verdict: 'inconclusive', models: [], reasons: [`${harness} is not installed or did not answer --version`] })
+  if (harness === 'opencode' && catalog !== null) return { ...base, verdict: 'inconclusive', models: [], reasons: ['an OpenCode research run takes its models from the list built into OpenCode, so there is no other list to test under'] }
+  const tested = agents ?? fenceSubjects(readApproved().data, harness)
+  if (tested.length === 0) return keep({ ...base, verdict: 'inconclusive', models: [], reasons: [`the approved team has no active agent on ${APP_NAMES[harness]}`] })
   const sample = build(tested[0], { environment: real, run: { folder: '/fence', codex: `/fence/${CODEX_RESEARCH_HOME}` } })
   const parsed = parseDispatch(sample, { research: true })
-  const form = parsed.unsupported === undefined && parsed.harness === 'codex' && researchFormProblem(parsed) === null ? researchFormHash('codex') : 'other'
+  const form = parsed.unsupported === undefined && parsed.harness === harness && researchFormProblem(parsed) === null ? researchFormHash(harness) : 'other'
   removeLeftBehind(Date.now())
   mkdirSync(fenceDirectory(), { recursive: true, mode: 0o700 })
   const id = `${now.toISOString().replace(/[-:.]/g, '').slice(0, 15)}-${randomBytes(4).toString('hex')}`
   const started = Date.now()
   // Each model has a home folder and a stand-in of its own, so the models are tested side by side.
-  const models = await Promise.all(tested.map((agent, index) => testModel({
-    agent, root: join(fenceDirectory(), `${id}-${index}`), environment: real, argvOf: build, catalog,
-    expected: expected[agent.model], renewal: renewal && index === 0, limitMs, deadline, signal, register
-  }).then((result) => ({ ...result, ...(entries[agent.model] === undefined ? {} : { catalog_entry: entries[agent.model] }) }),
-    (error) => ({ model: agent.model, verdict: 'inconclusive', tools: [], reasons: [`the test could not run: ${error instanceof Error ? error.message : String(error)}`], seconds: 0 }))))
+  const models = await Promise.all(tested.map((agent, index) => (harness === 'opencode'
+    ? testOpenCodeModel({ agent, root: join(fenceDirectory(), `${id}-${index}`), environment: real, argvOf: build, limitMs, deadline, signal, register })
+    : testModel({
+      agent, root: join(fenceDirectory(), `${id}-${index}`), environment: real, argvOf: build, catalog,
+      expected: expected[agent.model], renewal: renewal && index === 0, limitMs, deadline, signal, register
+    })).then((result) => ({ ...result, ...(entries[agent.model] === undefined ? {} : { catalog_entry: entries[agent.model] }) }),
+    (error) => ({ model: openCodeModel(agent), verdict: 'inconclusive', tools: [], reasons: [`the test could not run: ${error instanceof Error ? error.message : String(error)}`], seconds: 0 }))))
   if (signal?.aborted) return { ...base, form, verdict: 'inconclusive', stopped: true, seconds: Math.round((Date.now() - started) / 100) / 10, models: [], reasons: ['the test was stopped before it ended'] }
   // Cut short by the caller's time limit, it saw nothing to the end either: nothing of it is kept.
   if (models.some((model) => model.expired === true)) return { ...base, form, verdict: 'inconclusive', expired: true, seconds: Math.round((Date.now() - started) / 100) / 10, models: [], reasons: ['the time for the test ran out before it ended'] }
@@ -811,17 +999,21 @@ export const FENCE_USAGE = `Usage: bmn roster fence [--live] [--json]
 Tests, for the installed Codex, that a research run sends its provider nothing of yours. It builds
 a throwaway home folder with planted markers, starts a stand-in for the provider on this computer,
 and runs the very command a research run is against it, once per Codex model on the approved team.
-No provider is called and none of your files is read. It takes about a minute.
+No provider is called and none of your files is read. It takes about a minute. Where the team has
+agents on OpenCode, the installed OpenCode is tested the same way, once per OpenCode model; its web
+searches are refused on this computer, so none leaves it.
 
-A Codex agent is offered as a researcher only where this test is on record as passed for exactly
-the installed Codex version. --live first asks the provider for its model list (a call to the
-provider, no question to a model) and repeats the test under that list; BMN does the same by itself
-before the first research with a Codex agent.
+A Codex or OpenCode agent is offered as a researcher only where this test is on record as passed for
+exactly the installed version. --live first asks the provider for its model list (a call to the
+provider, no question to a model) and repeats the Codex test under that list; BMN does the same by
+itself before the first research with a Codex agent. OpenCode takes its models from the list built
+into it, so --live does not apply to it.
 
 Exit: 0 passed, 10 failed or showed nothing.`
 
 function fenceLines(entry) {
-  const app = `${APP_NAMES.codex} ${entry.version ?? '(not found)'}`
+  const name = APP_NAMES[entry.harness ?? 'codex']
+  const app = `${name} ${entry.version ?? '(not found)'}`
   const lines = [`${app}: the fence test ${entry.verdict === 'pass' ? 'passed' : entry.verdict === 'fail' ? 'FAILED' : 'showed nothing'}${entry.catalog === 'live' ? ' under the provider\'s own model list' : ''}.`]
   for (const model of entry.models) {
     lines.push(`  ${model.model}: ${model.verdict === 'pass' ? 'passed' : model.verdict === 'fail' ? 'FAILED' : 'showed nothing'}${model.reasons.length === 0 ? '' : `: ${model.reasons.join('; ')}`}`)
@@ -829,9 +1021,9 @@ function fenceLines(entry) {
   for (const reason of entry.reasons ?? []) lines.push(`  ${reason}`)
   if (entry.renewal === 'through-link') lines.push(`  ${RENEWAL_WORDS['through-link']}.`)
   const tools = [...new Set(entry.models.flatMap((model) => model.tools))].sort()
-  if (tools.length > 0) lines.push(`  Tools Codex keeps offering: ${tools.join(', ')}.`)
+  if (tools.length > 0) lines.push(`  Tools ${name} keeps offering: ${tools.join(', ')}.`)
   if (entry.form === 'other') lines.push('  This was not the research form as BMN builds it, so the result counts for nothing.')
-  lines.push(entry.verdict === 'pass' ? '  The team\'s Codex researchers are offered on this version.' : '  No Codex agent is offered as a researcher on this version.')
+  lines.push(entry.verdict === 'pass' ? `  The team's ${name} researchers are offered on this version.` : `  No ${name} agent is offered as a researcher on this version.`)
   return lines
 }
 
@@ -851,10 +1043,14 @@ export async function runFenceCommand(argv) {
   }
   const asJson = parsed.options.json === true
   try {
-    const subjects = fenceSubjects(readApproved().data)
-    let entry = await runFenceTest({ agents: subjects })
-    const entries = [entry]
-    if (parsed.options.live === true && entry.verdict === 'pass') {
+    const data = readApproved().data
+    const subjects = fenceSubjects(data)
+    const onOpenCode = fenceSubjects(data, 'opencode')
+    // Codex as before, also with no Codex agent where no other app has one either; OpenCode where the team has an agent on it.
+    const entries = []
+    let entry = subjects.length > 0 || onOpenCode.length === 0 ? await runFenceTest({ agents: subjects }) : null
+    if (entry !== null) entries.push(entry)
+    if (parsed.options.live === true && entry?.verdict === 'pass') {
       const list = await providerModelList()
       if (!list.ok) entry = { ...entry, verdict: 'inconclusive', reasons: [`${list.reason}, so nothing was compared under it`] }
       else {
@@ -867,6 +1063,7 @@ export async function runFenceCommand(argv) {
       }
       entries.push(entry)
     }
+    if (onOpenCode.length > 0) entries.push(await runFenceTest({ harness: 'opencode', agents: onOpenCode }))
     if (asJson) out(JSON.stringify(entries.length === 1 ? entries[0] : entries, null, 2))
     else out(entries.flatMap(fenceLines).join('\n'))
     return entries.every((one) => one.verdict === 'pass') ? 0 : EXIT.refusal

@@ -19,6 +19,16 @@ export const OPENCODE_FORM_TESTED = { version: '2.0.29', on: '2026-10-14' }
 /** BMN's read-only agent, as `--agent` names it. */
 export const OPENCODE_HELPER_AGENT = 'bmn-helper'
 
+/** BMN's research agent (70.3): web search and nothing else. */
+export const OPENCODE_RESEARCH_AGENT = 'bmn-researcher'
+
+/**
+ * The search service OpenCode's `websearch` tool asks. 70.1 showed TinyFish and Tavily answering
+ * without an account; a run that names none turns its first search into a question, which a run
+ * nobody watches cancels. The search text goes to that service, not to the model's provider.
+ */
+export const OPENCODE_WEBSEARCH_PROVIDER = 'tinyfish'
+
 /** An OpenCode session id (`ses_` and 26 characters), the one shape `roster bind` takes for an OpenCode receipt. */
 export const OPENCODE_SESSION_ID = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
 
@@ -52,17 +62,39 @@ permission:
 You are a read-only helper started by BMN. Answer the request; you cannot change anything.
 `
 
-/** OpenCode's own settings for the folder: no update, no sharing, no file snapshots. It names no model or provider. */
-const CONFIG_TEXT = `${JSON.stringify({ $schema: 'https://opencode.ai/config.json', autoupdate: false, share: 'disabled', snapshot: false }, null, 2)}\n`
+/**
+ * The research agent: every action denied but web search. With it OpenCode offers only `websearch`
+ * (70.3 probe); a page is read by BMN itself, never by the run.
+ */
+const RESEARCH_AGENT_TEXT = `---
+description: BMN researcher
+mode: primary
+permission:
+  "*": deny
+  websearch: allow
+---
+
+You are a researcher started by BMN. Search the web and answer the request; you cannot read or change anything on this computer.
+`
+
+/**
+ * OpenCode's own settings for the folder: no update, no sharing, no file snapshots, and the search
+ * service for the research agent. It names no model or provider.
+ */
+const CONFIG_TEXT = `${JSON.stringify({ $schema: 'https://opencode.ai/config.json', autoupdate: false, share: 'disabled', snapshot: false, websearch: { provider: OPENCODE_WEBSEARCH_PROVIDER } }, null, 2)}\n`
 
 /** Every file of BMN's OpenCode configuration folder, by its path inside `config/opencode`. */
 export const OPENCODE_CONFIG_FILES = Object.freeze({
   'opencode.json': CONFIG_TEXT,
-  [`agents/${OPENCODE_HELPER_AGENT}.md`]: HELPER_AGENT_TEXT
+  [`agents/${OPENCODE_HELPER_AGENT}.md`]: HELPER_AGENT_TEXT,
+  [`agents/${OPENCODE_RESEARCH_AGENT}.md`]: RESEARCH_AGENT_TEXT
 })
 
 /** A mark of the agent's text, carried on a receipt. */
 export const OPENCODE_HELPER_AGENT_SHA256 = sha256(HELPER_AGENT_TEXT)
+
+/** A mark of the whole folder as BMN writes it: a fence test counts only for the research form it tested. */
+export const OPENCODE_FOLDER_SHA256 = sha256(JSON.stringify(Object.entries(OPENCODE_CONFIG_FILES).sort(([one], [other]) => one.localeCompare(other))))
 
 /** Where BMN keeps the folder: under its own state, never in the owner's OpenCode folders. */
 export function openCodeFolder() {
@@ -91,6 +123,41 @@ export function openCodeEnvironment(base = openCodeFolder()) {
 
 /** The arguments of the form after `opencode`, model and title left to the lead. */
 export const OPENCODE_RUN_ARGV = ['run', '--standalone', '--format', 'json', '--agent', OPENCODE_HELPER_AGENT]
+
+/** A research run's title: with one named, OpenCode makes no request of its own to name the session. */
+export const OPENCODE_RESEARCH_TITLE = 'BMN research'
+
+/**
+ * The one command a research run on OpenCode is (70.3): BMN's folder, the research agent, the
+ * agent's model at `effort`, a title, the prompt on standard input.
+ */
+export function openCodeResearchArgv(agent, effort, { path = process.env.PATH ?? '', base = openCodeFolder() } = {}) {
+  const model = agent.model.includes('/') ? agent.model : `${agent.provider}/${agent.model}`
+  return ['/usr/bin/env', '-i', ...Object.entries(openCodeEnvironment(base)).map(([name, value]) => `${name}=${value}`), `PATH=${path}`,
+    'opencode', 'run', '--standalone', '--format', 'json', '--agent', OPENCODE_RESEARCH_AGENT, '-m', `${model}#${effort}`, '--title', OPENCODE_RESEARCH_TITLE]
+}
+
+/**
+ * The answer of a finished `opencode run --format json`: the last `text` event's words, or why
+ * there is none (an `error` event, or no text at all).
+ */
+export function openCodeAnswer(stdout) {
+  let text = null
+  let error = null
+  for (const line of stdout.split('\n')) {
+    if (line.trim() === '') continue
+    let event
+    try {
+      event = JSON.parse(line)
+    } catch {
+      return { ok: false, reason: 'OpenCode printed a line that is not JSON' }
+    }
+    if (event?.type === 'text' && typeof event.part?.text === 'string') text = event.part.text
+    if (event?.type === 'error') error = typeof event.error?.message === 'string' ? event.error.message : 'an error'
+  }
+  if (error !== null) return { ok: false, reason: `OpenCode reported an error: ${error.slice(0, 200)}` }
+  return text === null ? { ok: false, reason: 'OpenCode printed no answer' } : { ok: true, text }
+}
 
 /**
  * What `bmn roster role --json` hands a lead for an OpenCode candidate: the environment and the

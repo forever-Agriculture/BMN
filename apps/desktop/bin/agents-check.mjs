@@ -9,7 +9,7 @@ import { AgentsUsageError, EXIT, err, failWith, out, readOptions, usage } from '
 import { publicRendering } from './agents-rules.mjs'
 import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, CONTEXT_TEST_SIZE, checkContext, contextItems, contextTestFolder, provenControls, provenPrecedence, wholeNumber } from './agents-context.mjs'
 import { RUN_TEST_APPS, appTools, checkRunTools } from './agents-tools.mjs'
-import { OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_SESSION_ID, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
+import { OPENCODE_FOLDER_SHA256, OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_RESEARCH_AGENT, OPENCODE_SESSION_ID, installOpenCodeFolder, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
 
 export { publicOnlyReasons }
 
@@ -49,7 +49,7 @@ export const RESUME_TESTED_VERSIONS = { codex: [] }
  * runs only on a version listed here. Codex is not listed by version here at all: its fence is shown
  * by the owner's test of exactly the installed version, kept on record (63.3, `fenceStanding`).
  */
-export const RESEARCH_FENCE_VERSIONS = { claude: [], codex: [] }
+export const RESEARCH_FENCE_VERSIONS = { claude: [], codex: [], opencode: [] }
 /** A visibility record older than this proves nothing (60.3 AC5). */
 export const VISIBILITY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 /** A session is bound to its receipt only this soon after the check (60.3 AC8). */
@@ -868,7 +868,7 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
  * names the session with one more request to a title model the form does not name, so the destination
  * is unknown.
  */
-export function resolveOpenCodeRoute(parsed) {
+export function resolveOpenCodeRoute(parsed, { agent: wantedAgent = OPENCODE_HELPER_AGENT, folder = true } = {}) {
   const base = openCodeFolder()
   const wanted = openCodeEnvironment(base)
   const form = 'the folders and switches `bmn roster role <role> --json` gives'
@@ -887,10 +887,12 @@ export function resolveOpenCodeRoute(parsed) {
     if (name === 'OPENCODE_DISABLE_MODELS_FETCH') return { unsupported: 'env -i must carry OPENCODE_DISABLE_MODELS_FETCH=1, so the run takes the model list built into OpenCode instead of fetching one' }
     return { unsupported: `env -i ${name} must be ${value}, a folder of BMN's own for OpenCode runs` }
   }
-  const problem = openCodeFolderProblem(base)
+  // A dry research question is asked before BMN puts its folder in order for the run; the run's own check reads the folder.
+  const problem = folder ? openCodeFolderProblem(base) : null
   if (problem !== null) return { unsupported: `${problem}; \`bmn roster role <role> --json\` puts BMN's folder back` }
-  if (parsed.agent !== OPENCODE_HELPER_AGENT) {
-    return { unsupported: parsed.agent === undefined ? `opencode run must carry --agent ${OPENCODE_HELPER_AGENT}, BMN's read-only agent` : `--agent ${parsed.agent} is not BMN's agent; the form runs --agent ${OPENCODE_HELPER_AGENT}` }
+  if (parsed.agent !== wantedAgent) {
+    const which = wantedAgent === OPENCODE_HELPER_AGENT ? 'read-only' : 'research'
+    return { unsupported: parsed.agent === undefined ? `opencode run must carry --agent ${wantedAgent}, BMN's ${which} agent` : `--agent ${parsed.agent} is not BMN's agent; the form runs --agent ${wantedAgent}` }
   }
   const folders = openCodeFolders(base)
   const common = { configHome: `${folders.config}/opencode`, context: { limit: null, compact: null, sizes: [] } }
@@ -2258,7 +2260,11 @@ function emptyMcpConfig(text) {
 
 export const RESEARCH_TOOLS = 'WebSearch,WebFetch'
 /** What a research run's `env -i` may carry: where the app lives, how to find it, its destination and the agent's context limit. */
-const RESEARCH_ENVIRONMENT = { claude: ['HOME', 'PATH', 'ANTHROPIC_BASE_URL', CLAUDE_CONTEXT_KEY], codex: ['HOME', 'PATH', 'CODEX_HOME'] }
+const RESEARCH_ENVIRONMENT = {
+  claude: ['HOME', 'PATH', 'ANTHROPIC_BASE_URL', CLAUDE_CONTEXT_KEY], codex: ['HOME', 'PATH', 'CODEX_HOME'],
+  // OpenCode's are BMN's folder and switches, each with its one value, which the route reader holds the run to.
+  opencode: ['PATH', ...Object.keys(openCodeEnvironment('/'))]
+}
 /**
  * The `-c` items every Codex research run carries: no MCP server, live web search, none of the
  * tools that run a command, start another agent or reach a connected app, and none of the texts
@@ -2295,8 +2301,17 @@ export const CODEX_RESEARCH_TOOLS_SEEN = ['custom:functions.exec', 'exec:apply_p
   'function:collaboration.list_agents', 'function:collaboration.send_message', 'function:collaboration.spawn_agent', 'function:collaboration.wait_agent',
   'function:functions.request_user_input', 'function:functions.request_user_input_async', 'function:functions.wait']
 
+/**
+ * The tools OpenCode offers a research run, looked at on OpenCode 2.0.29 (2026-10-14): only its web
+ * search, which sends the search text to the search service its folder names. A tool that is not
+ * here fails the fence test (70.3), as for Codex.
+ */
+export const OPENCODE_RESEARCH_TOOLS_SEEN = ['function:websearch']
+const RESEARCH_TOOLS_SEEN = { codex: CODEX_RESEARCH_TOOLS_SEEN, opencode: OPENCODE_RESEARCH_TOOLS_SEEN }
+
 /** Names the research form of an app as it is built now: a fence test counts only for the form it tested. */
 export function researchFormHash(harness) {
+  if (harness === 'opencode') return sha256(canonicalJson({ environment: RESEARCH_ENVIRONMENT.opencode, agent: OPENCODE_RESEARCH_AGENT, folder: OPENCODE_FOLDER_SHA256, titled: true })).slice(0, 16)
   return sha256(canonicalJson(harness === 'codex'
     ? { environment: RESEARCH_ENVIRONMENT.codex, config: CODEX_RESEARCH_CONFIG, disabled: CODEX_RESEARCH_DISABLED, sandbox: 'read-only', strict: true }
     : { environment: RESEARCH_ENVIRONMENT[harness] ?? [], tools: RESEARCH_TOOLS })).slice(0, 16)
@@ -2337,6 +2352,8 @@ export function prepareResearchRun(prompt, { now = new Date(), id = `${now.toISO
   writeState(`${folder}/prompt.md`, prompt)
   writeState(`${folder}/run.json`, `${JSON.stringify({ version: 1, id, prompt_sha256: sha256(prompt), created_at: now.toISOString() })}\n`)
   const run = { id, folder, prompt: `${folder}/prompt.md`, cwd: `${folder}/cwd` }
+  // An OpenCode run starts from BMN's own OpenCode folder, put in order here as `roster role` does.
+  if (harness === 'opencode') installOpenCodeFolder()
   if (harness !== 'codex') return run
   ensurePrivateDirectory(`${folder}/${CODEX_RESEARCH_HOME}`)
   symlinkSync(codexSignInFile(environment), `${folder}/${CODEX_RESEARCH_HOME}/${CODEX_SIGN_IN}`)
@@ -2418,7 +2435,7 @@ export function fenceStanding(harness, version, model, tests = fenceTests()) {
   const test = last('bundled')
   if (test === null) return { passed: false, why: 'untested', tools: [], live: null }
   const tools = Array.isArray(test.model.tools) ? test.model.tools.filter(isString) : []
-  const unseen = tools.filter((tool) => !CODEX_RESEARCH_TOOLS_SEEN.includes(tool))
+  const unseen = tools.filter((tool) => !(RESEARCH_TOOLS_SEEN[harness] ?? []).includes(tool))
   if (test.entry.verdict !== 'pass' || test.model.verdict !== 'pass' || unseen.length > 0) {
     const reasons = [...(Array.isArray(test.model.reasons) ? test.model.reasons : []), ...(Array.isArray(test.entry.reasons) ? test.entry.reasons : []), ...unseen.map((tool) => `a tool BMN has not looked at: ${tool}`)]
     return { passed: false, why: 'failed', tools, live: null, at: test.entry.at, reasons: reasons.filter(isString) }
@@ -2460,6 +2477,14 @@ export function researchFormProblem(parsed) {
     if (home === undefined || !isAbsolute(home) || home.split('/').includes('..') || basename(home) !== CODEX_RESEARCH_HOME) {
       return 'a research run names the Codex folder BMN made for it (CODEX_HOME), so that Codex reads nothing from the owner\'s own'
     }
+    return null
+  }
+  if (parsed.harness === 'opencode') {
+    // BMN's folder and switches with their one value each; the parser holds --standalone, --format json and no prompt on the line.
+    const off = Object.entries(openCodeEnvironment()).find(([name, value]) => parsed.assignments[name] !== value)
+    if (off !== undefined) return `a research run carries ${off[0]}=${off[1]}, BMN's own folder and switches for OpenCode runs`
+    if (parsed.agent !== OPENCODE_RESEARCH_AGENT) return `a research run runs BMN's research agent (--agent ${OPENCODE_RESEARCH_AGENT})`
+    if (parsed.title === undefined) return 'a research run names its title (--title), so OpenCode makes no request of its own to name the session'
     return null
   }
   if (!parsed.safeMode) return 'a research run needs --safe-mode'
@@ -2513,7 +2538,7 @@ export function evaluateResearch(inputs, {
     // The fixed research switches are not part of where Codex sends data; the route reader sees the rest.
     const resolution = parsed.harness === 'codex'
       ? resolveCodexRoute({ ...parsed, config: parsed.config.filter((entry) => !CODEX_RESEARCH_CONFIG.includes(entry)) }, environment, cwd ?? processCwd)
-      : resolveClaudeRoute(parsed, environment, cwd ?? processCwd)
+      : parsed.harness === 'opencode' ? resolveOpenCodeRoute(parsed, { agent: OPENCODE_RESEARCH_AGENT, folder: inputs.dry !== true }) : resolveClaudeRoute(parsed, environment, cwd ?? processCwd)
     if (resolution.unsupported) refuse('ROUTE_UNSUPPORTED', resolution.unsupported)
     const versionEnvironment = dispatchEnvironment(parsed, environment)
     // Like appVersion and the fence test, query the executable with bare HOME/PATH. Native Codex
@@ -2521,8 +2546,10 @@ export function evaluateResearch(inputs, {
     // The research command retains its own CODEX_HOME and every folder/form restriction below.
     if (parsed.harness === 'codex') delete versionEnvironment.CODEX_HOME
     const version = harnessVersion(parsed.command, versionEnvironment)
-    note(parsed.harness === 'codex' ? 'dispatch form: env -i codex exec from a Codex folder of its own, read-only, web search, no command or app tools' : 'dispatch form: env -i claude -p, web tools only')
-    const { model, effort } = checkModelAndEffort(agent, resolution, note)
+    note(parsed.harness === 'codex' ? 'dispatch form: env -i codex exec from a Codex folder of its own, read-only, web search, no command or app tools'
+      : parsed.harness === 'opencode' ? 'dispatch form: env -i opencode run from BMN\'s OpenCode folder, its research agent, web search only' : 'dispatch form: env -i claude -p, web tools only')
+    // An OpenCode agent's model is named with its provider, as `-m` names it.
+    const { model, effort } = checkModelAndEffort(parsed.harness === 'opencode' && !agent.model.includes('/') ? { ...agent, model: `${agent.provider}/${agent.model}` } : agent, resolution, note)
     const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog),
       agent.context_limit === undefined ? [] : provenPrecedence(parsed.harness, version, contextTestLog))
     if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal, context.why)
@@ -2577,9 +2604,9 @@ export function evaluateResearch(inputs, {
     // Claude Code's research form is the one 60.10 names; Codex researches only on a version whose fence the owner's
     // test showed, for this model and for the form as it is built now (63.3). That its provider may see private work
     // is another question: research must send only what BMN wrote, and only that test shows it.
-    const standing = parsed.harness === 'codex' ? fenceStanding('codex', version, model.value, fenceTestLog) : null
+    const standing = parsed.harness === 'claude' ? null : fenceStanding(parsed.harness, version, model.value, fenceTestLog)
     const fenced = standing === null ? (fenceVersions[parsed.harness] ?? []).includes(version) : standing.passed
-    if (standing !== null) note(`fence test of codex ${version} with ${model.value}: ${standing.passed ? `passed${standing.live === null ? ', not yet compared under the provider\'s own model list' : ''}` : standing.why}`)
+    if (standing !== null) note(`fence test of ${parsed.harness} ${version} with ${model.value}: ${standing.passed ? `passed${standing.live === null && parsed.harness === 'codex' ? ', not yet compared under the provider\'s own model list' : ''}` : standing.why}`)
     if (parsed.harness !== 'claude' && !fenced) {
       const app = APP_NAMES[parsed.harness]
       const reason = standing?.reasons?.[0]
@@ -2598,7 +2625,7 @@ export function evaluateResearch(inputs, {
       cwd,
       argv_sha256: sha256(canonicalJson(inputs.argv)),
       harness_version: { version, state: tested.state },
-      ...(standing === null ? {} : { fence: { form: researchFormHash('codex'), tested_at: standing.at, tools: standing.tools } }),
+      ...(standing === null ? {} : { fence: { form: researchFormHash(parsed.harness), tested_at: standing.at, tools: standing.tools } }),
       route: receiptRoute(destination, route),
       private_work: receiptAnswer(answer),
       generation: { number: generation.number, hash: generation.hash },

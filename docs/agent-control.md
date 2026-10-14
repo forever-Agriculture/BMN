@@ -1521,11 +1521,12 @@ and pawns on Claude Code and Codex whose provider may see private work, the firs
 your team no longer names falls back to none picked: Models says so, selects nobody in its place,
 and **Research now** waits until you pick again.
 
-Research runs in Claude Code and in Codex. BMN starts the run with a command that names its
-limits (the table below) and checks the command. For Claude Code no test has yet measured on a
-live run that the app keeps to them. For Codex one has to, per version: see **Codex behind its
-fence** below. An agent whose provider gets public work only researches only on an app version
-whose limits were tested, so none is offered today; neither is an OpenCode or Cursor agent. When
+Research runs in Claude Code, in Codex and in OpenCode. BMN starts the run with a command that
+names its limits (the table below) and checks the command. For Claude Code no test has yet
+measured on a live run that the app keeps to them. For Codex and OpenCode one has to, per version:
+see **Codex behind its fence** and **OpenCode behind its fence** below. An agent whose provider
+gets public work only researches only on an app version whose limits were tested; a Cursor agent
+never researches. When
 no agent can research the page says so, and a price can still be written in the team file.
 
 **What leaves BMN.** BMN writes the prompt itself: your team's model names, grouped by provider,
@@ -1539,6 +1540,7 @@ only the home folder and the program path in its environment, at the lowest effo
 | --- | --- |
 | Claude Code | `claude -p --safe-mode --tools WebSearch,WebFetch`, no MCP servers, no saved session |
 | Codex | `codex exec --ephemeral --sandbox read-only --strict-config` with a Codex folder of its own (`CODEX_HOME`), web search on, no MCP servers, and every switch of the fence below |
+| OpenCode | `opencode run --standalone --format json --agent bmn-researcher -m <provider>/<model>#<effort> --title "BMN research"`, started like a helper run from BMN's own OpenCode folder (its home, settings, data, state and cache in place of yours); the agent allows web search and nothing else |
 
 The page shows how far it is ("3 of 9 models") and **Stop**. Stop, or the 20-minute limit, ends
 the run that is going with everything it started, and the reading of cited pages too; what the
@@ -1762,6 +1764,48 @@ for, and only the project file the model asked to read reached it.
 - *Versions.* The form was measured on 2.0.29; on another version the check says so in its steps.
 - *Your own OpenCode.* None of this changes what BMN writes into your own OpenCode configuration:
   it still gets the public rules only.
+
+#### OpenCode behind its fence
+
+An OpenCode agent researches only where a fence test of exactly the installed OpenCode passed for
+its model (Story 70.3), as a Codex agent does. `bmn roster fence` runs it, after Codex's, where
+your team has an agent on OpenCode, and **Run test** on Models does the same.
+
+**The run.** A research run starts from BMN's own OpenCode folder (see
+[Checking an OpenCode helper run](#checking-an-opencode-helper-run)) with BMN's research agent
+`bmn-researcher`: every action denied but web search. On OpenCode 2.0.29 the only tool it is
+offered is `websearch`. A search sends its text to the search service the folder names, TinyFish,
+which answers without an account; it is not sent to the model's provider. BMN reads each cited
+page itself, as for every research.
+
+**The test.** It builds a throwaway home folder with a marker in every place OpenCode could pick
+one up: OpenCode's rules file and a rules file its settings name, its settings, an agent and a
+skill in its folder, Claude Code's rules file and a skill in its folder, a skill in the home
+folder's `.agents`, a file and a rules file in the home folder and beside the run, a plugin and an
+MCP server that note when they start, an earlier session in BMN's folder, and a page on this
+computer. The owner-like settings point at a stand-in for the provider on this computer. It then
+runs the very research command against that stand-in, adding only the stand-in's address for the
+provider and the stand-in as the proxy, so no search or page leaves this computer. The stand-in
+calls every tool OpenCode offers (the search with a planted file's path and the local page's
+address) and every tool a research run must not have (reading, listing and searching files, the
+shell, writing, editing, fetching a page, Code Mode, a sub-agent, a skill, the MCP tool, a
+question). The test passes only when no marker but the prompt's reached the stand-in, no picture
+was sent, nothing was written in the home folder, BMN's folder is still exactly BMN's, no plugin
+loaded and no MCP server started, no tool fetched the local page, every offered tool was called
+and gave back no marker, and every offered tool is one BMN has looked at
+(`OPENCODE_RESEARCH_TOOLS_SEEN` in `apps/desktop/bin/agents-check.mjs`: only `websearch`). A run
+that asked to reach any other host than the search service showed nothing. Each test is appended
+to `state/fence-tests.jsonl` with the OpenCode version, the model and a mark of the research form,
+which takes in BMN's whole OpenCode folder: a change to the folder's files starts closed.
+
+**Under another model list.** OpenCode's research run takes its models from the list built into
+OpenCode (`OPENCODE_DISABLE_MODELS_FETCH=1`), the one the test used, so there is no other list to
+compare under and `--live` does not apply. A record that the same version offers a model other
+tools closes its research as it does for Codex.
+
+**What it showed** (2026-10-14, OpenCode 2.0.29, Luna through OpenCode Go): passed, with only
+`websearch` offered. The same run pointed at an owner-like OpenCode folder instead of BMN's failed:
+the owner's plugin loaded and his MCP server started.
 
 #### Asking the web a question
 
