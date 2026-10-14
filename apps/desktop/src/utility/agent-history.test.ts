@@ -274,6 +274,47 @@ describe('agent history limit', () => {
     expect(codex.sessions.map((session) => session.id).sort()).toEqual(['bound-live', 'boundary', 'on-a-command-line'])
   })
 
+  it('keeps a session whose delete would take a bound or running one with it, and marks the whole family while deleting (Astra review)', async () => {
+    const opencode = fakeAdapter('opencode', [
+      { id: 'root-bound-child', updatedAt: daysAgo(60), family: ['child-bound'] },
+      { id: 'root-running-child', updatedAt: daysAgo(60), family: ['child-running'] },
+      { id: 'root-free', updatedAt: daysAgo(50), family: ['child-free'] }
+    ])
+    const f = await fixture({ adapters: [opencode], live: ['child-bound'], commandLines: 'opencode -s child-running\nbash' })
+    const seen: boolean[] = []
+    const remove = opencode.remove.bind(opencode)
+    opencode.remove = async (id) => {
+      seen.push(f.history.isDeleting(id), f.history.isDeleting('child-free'))
+      return remove(id)
+    }
+    expect((await f.history.status()).agents).toEqual([{ agent: 'opencode', state: 'managed', sessions: 3, candidates: 1 }])
+    await f.history.confirm()
+    await f.history.run()
+
+    expect(opencode.removed).toEqual(['root-free'])
+    expect(seen).toEqual([true, true])
+    expect(f.history.isDeleting('child-free')).toBe(false)
+  })
+
+  it('asks every adapter afresh for a run, and lets a status read reuse what it knows', async () => {
+    const looks: Array<boolean | undefined> = []
+    const codex = fakeAdapter('codex', [{ id: 'old', updatedAt: daysAgo(40) }])
+    const available = codex.available.bind(codex)
+    codex.available = async (look) => {
+      looks.push(look?.fresh)
+      return available(look)
+    }
+    const f = await fixture({ adapters: [codex] })
+    await f.history.status()
+    await f.history.confirm()
+    await f.history.run()
+    // The status read may reuse; every look a run takes is fresh.
+    expect(looks[0]).toBeUndefined()
+    expect(looks.length).toBeGreaterThan(1)
+    expect(looks.slice(1).every((fresh) => fresh === true)).toBe(true)
+    expect(codex.removed).toEqual(['old'])
+  })
+
   it('skips anything touched within the last day even under a limit it would pass', async () => {
     const opencode = fakeAdapter('opencode', [{ id: 'today', updatedAt: NOW.getTime() - 1000 }])
     // A candidates() that ignores the cutoff must still not reach a session in use today.

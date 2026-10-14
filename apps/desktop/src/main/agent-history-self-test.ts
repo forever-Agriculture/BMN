@@ -31,7 +31,11 @@ export interface HistoryFixture {
   openCodeLog: string
   /** A stand-in `cursor-agent` on PATH, so Cursor's own-history row shows on any machine; nothing may call it. */
   cursorLog: string
-  ids: { oldCodex: string; recentCodex: string; heldCodex: string; oldOpenCode: string; recentOpenCode: string; heldOpenCode: string }
+  ids: {
+    oldCodex: string; recentCodex: string; heldCodex: string
+    oldOpenCode: string; oldOpenCodeChild: string; recentOpenCode: string; heldOpenCodeParent: string; heldOpenCode: string
+    busyOpenCode: string; busyOpenCodeChild: string
+  }
   holder: ChildProcess
   /** Every file under the two agent stores with its size, so the run can be shown to remove none. */
   storeFiles(): string[]
@@ -39,10 +43,12 @@ export interface HistoryFixture {
 
 type Database = { exec(sql: string): void; prepare(sql: string): { run(...values: unknown[]): unknown }; close(): void }
 
-function recordingBinary(bin: string, name: string): string {
+/** Records each call; with `version`, answers `--version` with it, as OpenCode does. */
+function recordingBinary(bin: string, name: string, version?: string): string {
   const log = join(bin, `${name}.log`)
+  const answer = version === undefined ? '' : `if [ "$1" = --version ]; then echo '${version}'; exit 0; fi\n`
   writeFileSync(join(bin, name),
-    `#!/bin/sh\nprintf '%s|%s\\n' "$PWD" "$*" >> '${log}'\necho "Deleted session $*"\nexit 0\n`)
+    `#!/bin/sh\nprintf '%s|%s\\n' "$PWD" "$*" >> '${log}'\n${answer}echo "Deleted session $*"\nexit 0\n`)
   chmodSync(join(bin, name), 0o755)
   return log
 }
@@ -64,7 +70,8 @@ function listFiles(root: string): string[] {
 
 /**
  * A home with `~/.claude`, two more Claude folders for the stand-in's hook calls to teach BMN, a Codex and
- * an OpenCode store (one old, one recent and one old-but-held session each), and recording binaries.
+ * an OpenCode 2 store (one old, one recent and one old-but-held session each; in OpenCode, held through a
+ * subagent's session, plus an old one whose subagent was busy two days ago), and recording binaries.
  */
 export function prepareHistoryFixture(isolatedCwd: string, now = Date.now()): HistoryFixture {
   const roots = selfTestHistoryRoots()
@@ -84,8 +91,12 @@ export function prepareHistoryFixture(isolatedCwd: string, now = Date.now()): Hi
     recentCodex: '01a0e466-fa1c-77c2-8f99-88f5ace4fe7f',
     heldCodex: '01a0e467-3f6c-7650-8a17-14c32cc71174',
     oldOpenCode: 'ses_f1b971253ffeDV9XIFvU67lmdh',
+    oldOpenCodeChild: 'ses_f1b971254ffeKq2Lw3Mx4Ny5Oz',
     recentOpenCode: 'ses_f1b96fb27ffe706PCFZxEkJQYt',
-    heldOpenCode: 'ses_f1b8c7a8cffe1ljwMNzpE9rw9Q'
+    heldOpenCodeParent: 'ses_f1b8c7a8bffeAp6Bq7Cr8Ds9Et',
+    heldOpenCode: 'ses_f1b8c7a8cffe1ljwMNzpE9rw9Q',
+    busyOpenCode: 'ses_f1b8c7a8dffeFu0Gv1Hw2Ix3Jy',
+    busyOpenCodeChild: 'ses_f1b8c7a8effeKz4La5Mb6Nc7Od'
   }
   const BetterSqlite3 = createRequire(__filename)('better-sqlite3') as new (path: string) => Database
   const codex = new BetterSqlite3(join(codexHome, 'state_5.sqlite'))
@@ -99,15 +110,19 @@ export function prepareHistoryFixture(isolatedCwd: string, now = Date.now()): Hi
   }
   codex.close()
   const opencode = new BetterSqlite3(join(dataHome, 'opencode', 'opencode.db'))
-  opencode.exec('CREATE TABLE IF NOT EXISTS session (id TEXT PRIMARY KEY, project_id TEXT, directory TEXT, time_created INTEGER, time_updated INTEGER)')
-  const session = opencode.prepare('INSERT OR REPLACE INTO session VALUES (?, ?, ?, ?, ?)')
-  for (const [id, age] of [[ids.oldOpenCode, 40], [ids.recentOpenCode, 2], [ids.heldOpenCode, 45]] as const) {
-    session.run(id, 'project', isolatedCwd, now - (age + 5) * DAY_MS, now - age * DAY_MS)
+  opencode.exec('CREATE TABLE IF NOT EXISTS session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, time_created INTEGER, time_updated INTEGER)')
+  const session = opencode.prepare('INSERT OR REPLACE INTO session_v2 VALUES (?, ?, ?, ?, ?)')
+  for (const [id, parent, age] of [
+    [ids.oldOpenCode, null, 40], [ids.oldOpenCodeChild, ids.oldOpenCode, 42], [ids.recentOpenCode, null, 2],
+    [ids.heldOpenCodeParent, null, 45], [ids.heldOpenCode, ids.heldOpenCodeParent, 45],
+    [ids.busyOpenCode, null, 50], [ids.busyOpenCodeChild, ids.busyOpenCode, 2]
+  ] as const) {
+    session.run(id, parent, isolatedCwd, now - (age + 5) * DAY_MS, now - age * DAY_MS)
   }
   opencode.close()
 
   const codexLog = recordingBinary(roots.bin, 'codex')
-  const openCodeLog = recordingBinary(roots.bin, 'opencode')
+  const openCodeLog = recordingBinary(roots.bin, 'opencode', 'opencode v2.0.28')
   const cursorLog = recordingBinary(roots.bin, 'cursor-agent')
   // A process outside BMN that has both held sessions open, as `codex resume <id>` would.
   const holder = spawn('/bin/sh', ['-c', 'sleep 120', 'bmn-history-holder', ids.heldCodex, ids.heldOpenCode], { stdio: 'ignore' })

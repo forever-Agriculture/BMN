@@ -26,8 +26,10 @@ export const RECENT_SESSION_MS = DAY_MS
 
 export interface HistoryCandidate {
   id: string
-  /** Last activity, epoch milliseconds. */
+  /** Last activity, epoch milliseconds: the newest of the session and every session deleted with it. */
   updatedAt: number
+  /** Sessions the agent's delete removes with this one (OpenCode 2's subagent sessions); each is protected like it. */
+  family?: readonly string[]
 }
 
 /** `absent`: the agent is not installed here, so History does not list it. */
@@ -40,7 +42,8 @@ export type AdapterAvailability =
 /** One agent whose sessions BMN deletes through the agent's own command. A new agent adds one of these. */
 export interface AgentHistoryAdapter {
   readonly agent: AgentHistoryAgent
-  available(): Promise<AdapterAvailability>
+  /** `fresh`: a run's own look, which must not reuse anything an earlier status read learned. */
+  available(options?: { fresh?: boolean }): Promise<AdapterAvailability>
   /** Sessions whose last activity is before `cutoff` (epoch ms), in any order. */
   candidates(cutoff: number): Promise<HistoryCandidate[]>
   remove(id: string): Promise<{ ok: true } | { ok: false; reason: string }>
@@ -248,13 +251,16 @@ export class AgentHistory {
     return new Set(await this.options.liveConversationIds())
   }
 
-  /** Oldest first, never a session in use: bound to a live BMN session, recent, or named on a running command line. */
+  /**
+   * Oldest first, never a session in use: bound to a live BMN session, recent, or named on a running command
+   * line, and never one whose delete would take such a session with it.
+   */
   private eligible(candidates: readonly HistoryCandidate[], protectedIds: ReadonlySet<string>): HistoryCandidate[] {
     const recent = this.now().getTime() - RECENT_SESSION_MS
     const commandLines = (this.options.commandLines ?? runningCommandLines)()
     return candidates
-      .filter((candidate) => !protectedIds.has(candidate.id) && candidate.updatedAt < recent &&
-        !commandLines.includes(candidate.id))
+      .filter((candidate) => candidate.updatedAt < recent &&
+        [candidate.id, ...(candidate.family ?? [])].every((id) => !protectedIds.has(id) && !commandLines.includes(id)))
       .sort((a, b) => a.updatedAt - b.updatedAt || a.id.localeCompare(b.id))
   }
 
@@ -339,7 +345,7 @@ export class AgentHistory {
       if (this.stopped) break
       let candidates: HistoryCandidate[]
       try {
-        const available = await adapter.available()
+        const available = await adapter.available({ fresh: true })
         if (!available.ok) continue
         candidates = this.eligible(await adapter.candidates(this.cutoff(days)), await this.protectedIds())
       } catch (error) {
@@ -360,7 +366,7 @@ export class AgentHistory {
           // Checked again just before its delete: a batch takes minutes, and meanwhile a session can be resumed,
           // bound, named on a command line or touched. BMN's own Resume is refused while the id is here; the
           // agent's store is read last, so activity that lands while the rest is read still counts.
-          this.deleting.add(candidate.id)
+          for (const id of [candidate.id, ...(candidate.family ?? [])]) this.deleting.add(id)
           const protectedIds = await this.protectedIds()
           const still = this.eligible(await adapter.candidates(this.cutoff(days)), protectedIds)
           if (!still.some((next) => next.id === candidate.id)) {
@@ -371,7 +377,7 @@ export class AgentHistory {
         } catch (error) {
           result = { ok: false, reason: errorText(error) }
         } finally {
-          this.deleting.delete(candidate.id)
+          for (const id of [candidate.id, ...(candidate.family ?? [])]) this.deleting.delete(id)
         }
         if (result.ok) run.deleted += 1
         else run.failures.push({ id: candidate.id, reason: result.reason })

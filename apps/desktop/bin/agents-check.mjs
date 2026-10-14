@@ -839,13 +839,55 @@ export function limitStanding(agent, version, { environment = process.env, cwd =
   return result.refusal ? { state: 'refused', reason: result.refusal } : { state: 'applied' }
 }
 
+// Whether a provider, model or variant entry can send data somewhere its provider's prefix does not say.
+function ownAddress(entry) {
+  if (entry === null || typeof entry !== 'object') return true
+  if (['api', 'npm', 'package', 'canonical'].some((field) => entry[field] !== undefined)) return true
+  if (entry.options?.baseURL !== undefined || entry.settings?.baseURL !== undefined) return true
+  const variants = entry.variants
+  return variants !== null && typeof variants === 'object' &&
+    Object.values(variants).some((variant) => variant !== null && typeof variant === 'object' && ownAddress(variant))
+}
+
+// `<provider>/<model>` without a `#variant`, from a string or an object naming `providerID`; null for anything else.
+function openCodeReference(named) {
+  const text = typeof named === 'string' ? named
+    : named !== null && typeof named === 'object' && typeof named.providerID === 'string' ? `${named.providerID}/${named.model ?? named.id ?? ''}` : null
+  return text === null ? null : text.split('#')[0]
+}
+
+// The `model:` of each agent file's front matter beside the configuration (OpenCode 1's agent/ and mode/, 2's agents/).
+function openCodeAgentFiles(folder) {
+  const found = []
+  for (const directory of ['agent', 'agents', 'mode']) {
+    let names
+    try {
+      traceRead?.(`${folder}/${directory}`)
+      names = readdirSync(`${folder}/${directory}`)
+    } catch (error) {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') continue
+      throw new Refusal('HOST_UNKNOWN', `cannot read ${folder}/${directory} (${error.code})`)
+    }
+    for (const name of names.filter((entry) => entry.endsWith('.md')).sort()) {
+      const text = optionalText(`${folder}/${directory}/${name}`)
+      const front = text === null ? undefined : /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1]
+      const model = front === undefined ? undefined : /^model:[ \t]*["']?([^"'\s]+)/m.exec(front)?.[1]
+      if (model !== undefined) found.push({ reference: openCodeReference(model), source: `${directory}/${name}` })
+    }
+  }
+  return found
+}
+
 /**
- * OpenCode's configured model and provider prefix. A configuration named by the environment, or a
- * provider entry that carries its own address or package (OpenCode 1's `api`, `npm` and
- * `options.baseURL`; OpenCode 2's `package`, `canonical` and `settings.baseURL`, under `provider`
- * or `providers`), could send data somewhere the prefix does not say, so either reads as unknown.
- * OpenCode 2 reads the same files and still writes `model` as `<provider>/<model>`; an object
- * naming `providerID` is read too. A project's own opencode.json is not read.
+ * OpenCode's configured model and provider prefix. Every model the configuration names gets the
+ * conversation, not only `model`: the title model (`small_model`) and each agent's or mode's (the
+ * `agent`, `agents` and `mode` maps, and the agent files beside the configuration), so all of them
+ * must name one provider. A configuration named by the environment, or a provider, model or variant
+ * entry that carries its own address or runtime (OpenCode 1's `api`, `npm` and `options.baseURL`;
+ * OpenCode 2's `package`, `canonical` and `settings.baseURL`, under `provider` or `providers`), could
+ * send data somewhere the prefix does not say, so either reads as unknown. OpenCode 2 reads the same
+ * files and still writes `model` as `<provider>/<model>`, a variant after `#`; an object naming
+ * `providerID` is read too. A project's own opencode.json and agent files are not read.
  */
 function inspectOpenCode(environment) {
   for (const name of ['OPENCODE_CONFIG', 'OPENCODE_CONFIG_CONTENT']) {
@@ -856,25 +898,48 @@ function inspectOpenCode(environment) {
     const text = optionalText(`${folder}/${name}`)
     if (text === null) continue
     const stripped = text.replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (match, string) => string ?? '').replace(/,(\s*[}\]])/g, '$1')
+    let config
     try {
-      const config = JSON.parse(stripped)
-      const named = config?.model
-      const model = typeof named === 'string' ? named
-        : named !== null && typeof named === 'object' && typeof named.providerID === 'string' ? `${named.providerID}/${named.model ?? named.id ?? ''}` : null
-      if (model === null) return { basis: 'unknown', provider: null, host: null, reason: `${name} names no model`, sources: [name] }
-      const provider = model.includes('/') ? model.slice(0, model.indexOf('/')) : null
-      for (const key of ['provider', 'providers']) {
-        const table = config[key]
-        const entry = provider !== null && table !== null && typeof table === 'object' ? table[provider] : undefined
-        if (entry !== undefined && (entry === null || typeof entry !== 'object' || ['api', 'npm', 'package', 'canonical'].some((field) => entry[field] !== undefined)
-          || entry.options?.baseURL !== undefined || entry.settings?.baseURL !== undefined)) {
-          return { basis: 'unknown', provider, host: null, reason: `${name} gives ${provider} its own address`, sources: [`${name} ${key}.${provider}`] }
-        }
-      }
-      return { basis: provider === null ? 'unknown' : 'default', provider, host: provider === null ? null : `default:${provider}`, model, sources: [`${name} model`] }
+      config = JSON.parse(stripped)
     } catch {
       return { basis: 'unknown', provider: null, host: null, reason: `${name} cannot be read`, sources: [name] }
     }
+    const model = openCodeReference(config?.model)
+    if (model === null) return { basis: 'unknown', provider: null, host: null, reason: `${name} names no model`, sources: [name] }
+    const named = [{ reference: model, source: `${name} model` }]
+    if (config.small_model !== undefined) named.push({ reference: openCodeReference(config.small_model), source: `${name} small_model` })
+    for (const key of ['agent', 'agents', 'mode']) {
+      const table = config[key]
+      if (table === null || typeof table !== 'object') continue
+      for (const [agent, entry] of Object.entries(table)) {
+        if (entry !== null && typeof entry === 'object' && entry.model !== undefined) named.push({ reference: openCodeReference(entry.model), source: `${name} ${key}.${agent}.model` })
+      }
+    }
+    named.push(...openCodeAgentFiles(folder))
+    const providers = []
+    for (const { reference, source } of named) {
+      const provider = reference !== null && reference.includes('/') ? reference.slice(0, reference.indexOf('/')) : null
+      if (provider === null || provider === '') return { basis: 'unknown', provider: null, host: null, reason: `${source} names no provider`, sources: [source] }
+      if (!providers.includes(provider)) providers.push(provider)
+      const modelID = reference.slice(provider.length + 1)
+      for (const key of ['provider', 'providers']) {
+        const table = config[key]
+        const entry = table !== null && typeof table === 'object' ? table[provider] : undefined
+        if (entry === undefined) continue
+        const models = entry !== null && typeof entry === 'object' ? entry.models : undefined
+        const modelEntry = models !== null && typeof models === 'object' ? models[modelID] : undefined
+        if (ownAddress(entry)) {
+          return { basis: 'unknown', provider, host: null, reason: `${name} gives ${provider} its own address`, sources: [`${name} ${key}.${provider}`] }
+        }
+        if (modelEntry !== undefined && ownAddress(modelEntry)) {
+          return { basis: 'unknown', provider, host: null, reason: `${name} gives ${reference} its own address`, sources: [`${name} ${key}.${provider}.models.${modelID}`] }
+        }
+      }
+    }
+    if (providers.length > 1) {
+      return { basis: 'unknown', provider: null, host: null, reason: `${name} sends the conversation to more than one provider (${providers.join(', ')})`, sources: named.map((item) => item.source) }
+    }
+    return { basis: 'default', provider: providers[0], host: `default:${providers[0]}`, model, sources: [`${name} model`] }
   }
   return { basis: 'unknown', provider: null, host: null, reason: 'no OpenCode configuration names a model', sources: [] }
 }

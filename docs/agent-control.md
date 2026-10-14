@@ -2007,11 +2007,14 @@ on Rules → Health: a provider that may see private work passes, any other warn
   0.161.0 and OpenCode 2.0.28. It reads the same named settings on every later version and refuses a changed or
   unknown destination as before, but a version that starts to take its destination from a setting
   BMN does not read would not be noticed. For OpenCode BMN reads only its own configuration
-  folder: the model's provider prefix, unknown when `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT`
-  is set where BMN runs or the provider entry carries its own address (OpenCode 1's `api`, `npm`
-  or `options.baseURL`, OpenCode 2's `package`, `canonical` or `settings.baseURL`, under `provider`
-  or `providers`); a project's `opencode.json` and the environment of the shell you start OpenCode
-  in are not read. That reading names OpenCode's destination on Health and in the team file and,
+  folder: the model's provider prefix. Every model the configuration names gets the conversation, so
+  the title model (`small_model`), each agent's or mode's (`agent`, `agents`, `mode`, and the `model:`
+  of the agent files in `agent/`, `agents/` and `mode/`) must name the same provider. It is unknown
+  when they do not, when `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT` is set where BMN runs, or
+  when the provider entry, the named model's entry or one of its variants carries its own address or
+  runtime (OpenCode 1's `api`, `npm` or `options.baseURL`, OpenCode 2's `package`, `canonical` or
+  `settings.baseURL`, under `provider` or `providers`); a project's `opencode.json` and agent files
+  and the environment of the shell you start OpenCode in are not read. That reading names OpenCode's destination on Health and in the team file and,
   since 2026-10-14, decides like Claude Code's and Codex's whether OpenCode gets the full rules; it
   is read again right before they are written.
 - A packet for a public-only destination relies on Claude Code's `--safe-mode` to keep your rules

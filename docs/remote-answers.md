@@ -199,9 +199,18 @@ shapes above:
   `superseded`, `inactivity` or `shutdown` is not a finished turn and is not sent.
   `session.execution.failed { error: { type, message } }` becomes `session.error`.
 - `session.step.started { model: { id, providerID } }` becomes `message.updated` with `info.modelID`, once
-  per model. `session.compacted` and `session.deleted` keep their names.
-- Moving the terminal to another session is OpenCode 1's `tui.session.select`. Moving to one created
-  while the terminal ran, or in the last 30 seconds, is `session.created`.
+  per model. `session.compaction.ended { sessionID, reason }` (2.0.28's types; OpenCode 2 has no
+  `session.compacted`) becomes `session.compacted`, a subagent's logged as the subagent's.
+  `session.deleted` keeps its name.
+- Moving the terminal to another session is OpenCode 1's `tui.session.select`. The first visit to one
+  created while the terminal ran, or in the last 30 seconds, is `session.created`; coming back to a
+  session this terminal showed before is always `tui.session.select`. Either way BMN withdraws the
+  last session's requests from the phone, and the plugin stops answering them, as OpenCode 1's did; the
+  owner, who just switched at the keyboard, answers them there. Requests a session raises while
+  another one is on screen are not sent (as in OpenCode 1).
+- The home screen keeps the last session: its turn, errors and requests still reach BMN until the
+  owner opens another session. Once OpenCode unloads the plugin, an answer still being collected is
+  dropped, not sent.
 
 **Answers.** The plugin answers through its own client: `client.permission.reply({ sessionID, requestID,
 decision: "once" | "reject" })` (the key is `decision`; the server refuses `reply`), and

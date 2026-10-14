@@ -3183,7 +3183,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     if (!agentHistory.pending.needsConfirmation || !pendingFolder(historyFixture.claudeHome, null) ||
       !pendingFolder(historyFixture.glm, 90) || !pendingFolder(historyFixture.work, null) ||
       JSON.stringify(agentHistory.pending.agents) !== JSON.stringify([
-        { agent: 'codex', state: 'managed', sessions: 3, candidates: 1 }, { agent: 'opencode', state: 'managed', sessions: 3, candidates: 1 },
+        { agent: 'codex', state: 'managed', sessions: 3, candidates: 1 }, { agent: 'opencode', state: 'managed', sessions: 4, candidates: 1 },
         { agent: 'cursor', state: 'own' }]) ||
       !historyPendingView.rows.includes('Cursor | keeps its own history · not managed by BMN') ||
       !historyPendingView.dot || historyPendingView.confirm !== 'Sets 3 Claude folders to 30 days; deletes 2 sessions for good.' ||
@@ -3192,7 +3192,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       JSON.stringify(agentHistory.settled.days) !== '[30,30,30]' || JSON.stringify(agentHistory.settled.backups) !== '[1,1,1]' ||
       !agentHistory.settled.glmEnvKept ||
       JSON.stringify(agentHistory.settled.codexCalls) !== JSON.stringify([`${historyFixture.home}|delete --force ${historyFixture.ids.oldCodex}`]) ||
-      JSON.stringify(agentHistory.settled.openCodeCalls) !== JSON.stringify([`${historyFixture.home}|session delete ${historyFixture.ids.oldOpenCode} --pure`]) ||
+      // OpenCode 2: one version read for every status look, one for the run, then the old family's delete only.
+      JSON.stringify(agentHistory.settled.openCodeCalls) !== JSON.stringify([`${historyFixture.home}|--version`, `${historyFixture.home}|--version`,
+        `${historyFixture.home}|session delete ${historyFixture.ids.oldOpenCode} --standalone`]) ||
       JSON.stringify(agentHistory.settled.runs) !== '[{"agent":"codex","deleted":1,"failures":0},{"agent":"opencode","deleted":1,"failures":0},{"agent":"cursor"}]' ||
       agentHistory.settled.cursorCalls.length !== 0 ||
       !agentHistory.settled.storeUnchanged || learnedFolders.some((folder) => !historySettled.claude.some((row) => row.path === folder && !row.pending))) {

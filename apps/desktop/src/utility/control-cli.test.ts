@@ -3730,14 +3730,21 @@ describe('OpenCode hooks', () => {
     emit('session.execution.failed', { sessionID: OPENCODE_SESSION, error: { type: 'provider', message: 'Provider unavailable' } })
     emit('session.execution.interrupted', { sessionID: OPENCODE_SESSION, reason: 'user' })
     emit('session.execution.succeeded', { sessionID: CHILD })
-    emit('session.compacted', { sessionID: CHILD })
+    // OpenCode 2 ends a compaction with session.compaction.ended; BMN reads OpenCode 1's session.compacted.
+    emit('session.compaction.ended', { sessionID: CHILD, reason: 'auto', text: 'made-up summary', recent: 'msg_1' })
     // Going to a session started earlier is a resume.
     terminal.sessions.set(OLDER, { created: 1 })
     terminal.route = { type: 'session', sessionID: OLDER }
     emit('vcs.branch.updated', {})
     emit('session.deleted', { sessionID: OLDER })
+    // So is coming back to one this terminal started, however recently.
+    terminal.route = { type: 'session', sessionID: OPENCODE_SESSION }
+    emit('vcs.branch.updated', {})
+    // The home screen keeps the last session: its turn still reaches BMN.
+    terminal.route = { type: 'home' }
+    emit('session.execution.started', { sessionID: OPENCODE_SESSION })
     const pinned = { pin: OPENCODE_SESSION }
-    await vi.waitFor(() => expect(hooks()).toHaveLength(14))
+    await vi.waitFor(() => expect(hooks()).toHaveLength(16))
     expect(hooks()).toEqual([
       { hook_event_name: 'session.created', sessionID: OPENCODE_SESSION, info: { id: OPENCODE_SESSION }, ...pinned },
       { hook_event_name: 'session.status', sessionID: OPENCODE_SESSION, status: { type: 'busy' }, ...pinned },
@@ -3755,12 +3762,42 @@ describe('OpenCode hooks', () => {
       { hook_event_name: 'session.idle', sessionID: CHILD, ...pinned },
       { hook_event_name: 'session.compacted', sessionID: CHILD, ...pinned },
       { hook_event_name: 'tui.session.select', sessionID: OLDER, pin: OLDER },
-      { hook_event_name: 'session.deleted', sessionID: OLDER, pin: OLDER }
+      { hook_event_name: 'session.deleted', sessionID: OLDER, pin: OLDER },
+      { hook_event_name: 'tui.session.select', sessionID: OPENCODE_SESSION, ...pinned },
+      { hook_event_name: 'session.status', sessionID: OPENCODE_SESSION, status: { type: 'busy' }, ...pinned }
     ])
     const first = calls.find((call) => call.args.includes('hook'))
     expect([first?.command, ...first?.args ?? []]).toEqual(['timeout', '-s', 'KILL', '3s', 'bmn', 'hook', 'opencode'])
     stop?.()
     expect(listeners).toHaveLength(0)
+  })
+
+  it('sends no answer that arrives after OpenCode unloaded the plugin, or after the terminal moved to another session (Astra review)', async () => {
+    const answerNext: Array<(answers: unknown[]) => void> = []
+    const { spawn } = fakePluginSpawn(async (call) => {
+      if (!call.args.includes('take')) return { code: 0 }
+      const answers = await new Promise<unknown[]>((resolve) => answerNext.push(resolve))
+      return { code: 0, stdout: JSON.stringify({ answers }) }
+    })
+    const OTHER = 'ses_0123456789abSyntheticOthr'
+    const { terminal, context, emit } = fakeOpenCodeTerminal()
+    terminal.route = { type: 'session', sessionID: OPENCODE_SESSION }
+    const stop = (await loadOpenCodePlugin({ BMN_CONTROL_SOCKET: '/fixture/socket' }, spawn)).setup(context)
+    emit('permission.asked', { id: 'per_1', sessionID: OPENCODE_SESSION, action: 'edit', resources: ['a'] })
+    await vi.waitFor(() => expect(answerNext).toHaveLength(1))
+    // The owner opens another session while BMN collects: BMN withdraws the request, and a late tap is not sent.
+    terminal.route = { type: 'session', sessionID: OTHER }
+    emit('vcs.branch.updated', {})
+    answerNext.shift()!([{ requestRef: 'per_1', kind: 'permission', reply: 'once' }])
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(terminal.replies.permission).toEqual([])
+
+    emit('permission.asked', { id: 'per_2', sessionID: OTHER, action: 'edit', resources: ['b'] })
+    await vi.waitFor(() => expect(answerNext).toHaveLength(1))
+    stop?.()
+    answerNext.shift()!([{ requestRef: 'per_2', kind: 'permission', reply: 'once' }])
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(terminal.replies.permission).toEqual([])
   })
 
   it('answers a tap through its own client, sends a Deny only for the one waiting permission, and reports what OpenCode said', async () => {
@@ -3958,13 +3995,15 @@ describe('OpenCode hooks', () => {
       expect(await runCli(['hook', 'opencode'], { env, input: JSON.stringify({
         hook_event_name: 'session.created', sessionID: malformed, info: { id: malformed }
       }) })).toEqual(QUIET)
-      expect(methods).toEqual(['auth', 'hook.observe'])
+      // A new conversation in the terminal withdraws the last one's six kinds of request.
+      const withdrawals = Array<string>(6).fill('attention.withdraw')
+      expect(methods).toEqual(['auth', ...withdrawals, 'hook.observe'])
 
       methods.length = 0
       expect(await runCli(['hook', 'opencode'], { env, input: JSON.stringify({
         hook_event_name: 'session.created', sessionID: OPENCODE_SESSION, info: { id: OPENCODE_SESSION }
       }) })).toEqual(QUIET)
-      expect(methods).toEqual(['auth', 'conversation.observe', 'hook.observe'])
+      expect(methods).toEqual(['auth', ...withdrawals, 'conversation.observe', 'hook.observe'])
     } finally {
       await new Promise<void>((resolve) => rawServer.close(() => resolve()))
     }
@@ -4024,6 +4063,14 @@ describe('OpenCode hooks', () => {
     expect(install.backups.some((file: string) => basename(file).startsWith('cli.json.bmn-backup-'))).toBe(true)
     expect((await runHooks(['check', 'opencode', '--file', path])).code).toBe(0)
     expect(JSON.parse((await runHooks(['install', '--yes', 'opencode', '--file', path, '--json'])).stdout).installed).toEqual([])
+    // OpenCode 2 refuses OpenCode 1's plugin at every start: one left behind beside a correct install needs a repair.
+    await writeFile(join(config, 'plugin', 'bmn.ts'), olderText)
+    const leftover = await runHooks(['check', 'opencode', '--file', path])
+    expect(leftover.code).toBe(1)
+    expect(leftover.stdout).toMatch(/plugin\s+wired \(older wording\)\s+OpenCode 1's plugin is still at .*plugin\/bmn\.ts; install removes it/)
+    const cleared = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--file', path, '--json'])).stdout)
+    expect(cleared.removed).toEqual([join(config, 'plugin', 'bmn.ts')])
+    expect((await runHooks(['check', 'opencode', '--file', path])).code).toBe(0)
     await writeFile(path, '// unrelated plugin\n')
     expect((await runHooks(['check', 'opencode', '--file', path])).stdout).toMatch(/plugin\s+missing/)
     await writeFile(path, '// Shipped by BMN\n// bmn hook opencode\n')

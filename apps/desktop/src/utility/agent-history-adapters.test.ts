@@ -32,13 +32,21 @@ async function fakeBinary(bin: string, name: string, code = 0, output = ''): Pro
   return log
 }
 
-/** A stand-in `opencode` that answers `--version` with `version` and otherwise records its call like fakeBinary. */
-async function fakeOpenCode(bin: string, version: string): Promise<string> {
+/**
+ * A stand-in `opencode` that answers `--version` with `version` (exiting `versionCode`), noting each such
+ * call in opencode-version.log, and otherwise records its call like fakeBinary.
+ */
+async function fakeOpenCode(bin: string, version: string, versionCode = 0): Promise<string> {
   await mkdir(bin, { recursive: true })
   const log = join(bin, 'opencode.log')
-  await writeFile(join(bin, 'opencode'), `#!/bin/sh\nif [ "$1" = --version ]; then echo ${JSON.stringify(version)}; exit 0; fi\nprintf '%s|%s\\n' "$PWD" "$*" >> ${JSON.stringify(log)}\n`)
+  const versions = join(bin, 'opencode-version.log')
+  await writeFile(join(bin, 'opencode'), `#!/bin/sh\nif [ "$1" = --version ]; then echo x >> ${JSON.stringify(versions)}; echo ${JSON.stringify(version)}; exit ${versionCode}; fi\nprintf '%s|%s\\n' "$PWD" "$*" >> ${JSON.stringify(log)}\n`)
   await chmod(join(bin, 'opencode'), 0o755)
   return log
+}
+
+async function versionReads(bin: string): Promise<number> {
+  return (await readFile(join(bin, 'opencode-version.log'), 'utf8').catch(() => '')).split('\n').filter(Boolean).length
 }
 
 async function root(): Promise<string> {
@@ -166,12 +174,52 @@ describe('OpenCode history adapter', () => {
     insert.run(child, OPENCODE_IDS[1], '/work/b', NOW - 50 * DAY, NOW - 36 * DAY)
     insert.run(fresh, null, '/work/c', NOW - 2 * DAY, NOW - 1 * DAY)
     openStores.push(database)
+
+    // A family whose subagent is still at work is kept whole; one whose members carry no time or no session id too.
+    const [busy, busyChild, odd, undated, undatedChild] = ['ses_f1c0aa33dffeAbCdEfGhIjKlMn', 'ses_f1c0aa44effeOpQrStUvWxYzAb',
+      'ses_f1c0aa55fffeCdEfGhIjKlMnOp', 'ses_f1c0aa66affeQrStUvWxYzAbCd', 'ses_f1c0aa77bffeEfGhIjKlMnOpQr']
+    insert.run(busy, null, '/work/d', NOW - 90 * DAY, NOW - 80 * DAY)
+    insert.run(busyChild, busy, '/work/d', NOW - 3 * DAY, NOW - 2 * DAY)
+    insert.run(odd, null, '/work/e', NOW - 90 * DAY, NOW - 80 * DAY)
+    insert.run('not-a-session', odd, '/work/e', NOW - 90 * DAY, NOW - 80 * DAY)
+    insert.run(undated, null, '/work/f', NOW - 90 * DAY, NOW - 80 * DAY)
+    insert.run(undatedChild, undated, '/work/f', NOW - 90 * DAY, null)
     const adapter = openCodeHistoryAdapter({ home, open, env: { PATH: bin } })
 
-    expect(await adapter.available()).toEqual({ ok: true, sessions: 3 })
-    expect(await adapter.candidates(NOW - 30 * DAY)).toEqual([{ id: OPENCODE_IDS[1], updatedAt: NOW - 35 * DAY }])
+    // Sessions are counted as the owner sees them: top-level only.
+    expect(await adapter.available()).toEqual({ ok: true, sessions: 5 })
+    // The family is aged by its newest member and named with the candidate, so the runner protects every member.
+    expect(await adapter.candidates(NOW - 30 * DAY)).toEqual([{ id: OPENCODE_IDS[1], updatedAt: NOW - 35 * DAY, family: [child] }])
     expect(await adapter.remove(OPENCODE_IDS[1]!)).toEqual({ ok: true })
     expect(await readFile(log, 'utf8')).toBe(`${home}|session delete ${OPENCODE_IDS[1]} --standalone\n`)
+  })
+
+  it('reads the version once for status while the binary stays the same, and afresh for a run, a change or after a failed read', async () => {
+    const home = await root()
+    const bin = join(home, 'bin')
+    await fakeOpenCode(bin, '1.19.0')
+    await openCodeStore(home)
+    const adapter = openCodeHistoryAdapter({ home, open, env: { PATH: bin } })
+
+    for (let pass = 0; pass < 3; pass += 1) expect(await adapter.available()).toEqual({ ok: true, sessions: 2 })
+    expect(await versionReads(bin)).toBe(1)
+    // A run never trusts a remembered answer: a launcher can start another version from the same file.
+    expect(await adapter.available({ fresh: true })).toEqual({ ok: true, sessions: 2 })
+    expect(await versionReads(bin)).toBe(2)
+
+    // An upgrade replaces the file; the next pass asks again and moves to OpenCode 2's table.
+    await fakeOpenCode(bin, 'opencode v2.0.28')
+    const database = new BetterSqlite3(join(home, '.local', 'share', 'opencode', 'opencode.db'))
+    database.exec('CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, time_created INTEGER, time_updated INTEGER)')
+    openStores.push(database)
+    expect(await adapter.available()).toEqual({ ok: true, sessions: 0 })
+    expect(await versionReads(bin)).toBe(3)
+
+    // A failed read counts as OpenCode 1 for that pass only.
+    await fakeOpenCode(bin, 'opencode v2.0.28 (broken)', 1)
+    expect(await adapter.available()).toEqual({ ok: true, sessions: 2 })
+    expect(await adapter.available()).toEqual({ ok: true, sessions: 2 })
+    expect(await versionReads(bin)).toBe(5)
   })
 
   it('follows XDG_DATA_HOME and is not recognised without time_updated', async () => {

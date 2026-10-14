@@ -1068,6 +1068,32 @@ describe('receipts and --verify (60.3 AC7)', () => {
       '"providers": { "opencode-go": { "canonical": "openai" } }', '"providers": { "opencode-go": { "settings": { "baseURL": "https://proxy.example.test/v1" } } }']) {
       expect(await route(`{ "model": "opencode-go/kimi-k3", ${entry} }`)).toMatchObject({ basis: 'unknown', host: null, reason: 'opencode.jsonc gives opencode-go its own address' })
     }
+    // So does the chosen model's own entry, or one of its variants (OpenCode 2's model-level package and settings).
+    for (const entry of ['{ "package": "file:///opt/acme" }', '{ "settings": { "baseURL": "https://proxy.example.test/v1" } }',
+      '{ "variants": { "high": { "settings": { "baseURL": "https://proxy.example.test/v1" } } } }', 'null']) {
+      expect(await route(`{ "model": "opencode-go/kimi-k3#high", "providers": { "opencode-go": { "models": { "kimi-k3": ${entry} } } } }`))
+        .toMatchObject({ basis: 'unknown', host: null, reason: 'opencode.jsonc gives opencode-go/kimi-k3 its own address' })
+    }
+    // A model entry that only renames or describes it keeps the provider's destination, and a variant is not a provider.
+    expect(await route('{ "model": "opencode-go/kimi-k3#high", "providers": { "opencode-go": { "models": { "kimi-k3": { "modelID": "kimi-k3-0901", "name": "Kimi" } } } } }'))
+      .toMatchObject({ basis: 'default', host: 'default:opencode-go', model: 'opencode-go/kimi-k3' })
+    // Every model that gets the conversation counts: the title model and each agent's, in the file or beside it.
+    expect(await route('{ "model": "opencode-go/kimi-k3", "small_model": "opencode-go/kimi-mini", "agents": { "review": { "model": "opencode-go/kimi-k3#high" } } }'))
+      .toMatchObject({ basis: 'default', host: 'default:opencode-go' })
+    expect(await route('{ "model": "opencode-go/kimi-k3", "small_model": "openrouter/cheap" }'))
+      .toMatchObject({ basis: 'unknown', host: null, reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)' })
+    expect(await route('{ "model": "opencode-go/kimi-k3", "agent": { "plan": { "model": "anthropic/claude-sonnet-4-5" } } }'))
+      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, anthropic)' })
+    expect(await route('{ "model": "opencode-go/kimi-k3", "agents": { "review": { "model": "kimi-k3" } } }'))
+      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc agents.review.model names no provider' })
+    expect(await route('{ "model": "opencode-go/kimi-k3", "agents": { "review": { "model": "opencode-go/kimi-k3" } }, "providers": { "opencode-go": { "models": { "kimi-k3": { "package": "@acme/x" } } } } }'))
+      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc gives opencode-go/kimi-k3 its own address' })
+    mkdirSync(join(home, '.config/opencode/agents'), { recursive: true })
+    writeFileSync(join(home, '.config/opencode/agents/review.md'), '---\ndescription: Reviews\nmodel: "openrouter/cheap#low"\n---\nReview it.\n')
+    expect(await route('{ "model": "opencode-go/kimi-k3" }'))
+      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)', sources: ['opencode.jsonc model', 'agents/review.md'] })
+    writeFileSync(join(home, '.config/opencode/agents/review.md'), '---\ndescription: Reviews\n---\nmodel: openrouter/cheap is only text here.\n')
+    expect(await route('{ "model": "opencode-go/kimi-k3" }')).toMatchObject({ basis: 'default', host: 'default:opencode-go' })
   })
 })
 
