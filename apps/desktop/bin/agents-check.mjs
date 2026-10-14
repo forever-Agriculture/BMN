@@ -9,6 +9,7 @@ import { AgentsUsageError, EXIT, err, failWith, out, readOptions, usage } from '
 import { publicRendering } from './agents-rules.mjs'
 import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, CONTEXT_TEST_SIZE, checkContext, contextItems, contextTestFolder, provenControls, provenPrecedence, wholeNumber } from './agents-context.mjs'
 import { RUN_TEST_APPS, appTools, checkRunTools } from './agents-tools.mjs'
+import { OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_SESSION_ID, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
 
 export { publicOnlyReasons }
 
@@ -30,12 +31,12 @@ export const REFUSALS = ['UNKNOWN_AGENT', 'PROPOSED', 'DISABLED', 'NOT_A_RESEARC
 /**
  * Harness versions whose destination precedence BMN's tests were written against (Epic 60 spike,
  * 2026-10-09; OpenCode 2.0.28 on 2026-10-14, whose `opencode debug config` read the model from the
- * same global file). Any installed version is supported (owner decision 2026-10-10: the apps
+ * same global file, and 2.0.29 the same day, on which the helper form was measured, Story 70.1). Any installed version is supported (owner decision 2026-10-10: the apps
  * update faster than BMN can test them); this list only decides the word a receipt and Rules ›
  * Health carry beside the version. The destination itself is resolved and checked at every
  * dispatch, and for OpenCode at every inspection.
  */
-export const TESTED_HARNESS_VERSIONS = { codex: ['0.161.0'], claude: ['2.1.295'], opencode: ['2.0.28'] }
+export const TESTED_HARNESS_VERSIONS = { codex: ['0.161.0'], claude: ['2.1.295'], opencode: ['2.0.28', '2.0.29'] }
 /**
  * Codex versions on which a test showed that `exec resume` talks to the destination the current
  * configuration resolves, not one saved with the session (60.3 AC8). A resume on any other
@@ -79,6 +80,9 @@ const NEXT_STEP = {
   DATA_FORBIDDEN: 'move to the next candidate in the role\'s chain (`bmn roster role <role>`); this provider gets public work only',
   PACKET_INVALID: 'build a packet of files the public repository already serves and dispatch it through env -i claude -p --safe-mode --tools \'\''
 }
+
+/** What an OpenCode command refused for its form does next (70.2); the words for Codex and Claude Code stay as they are. */
+export const OPENCODE_NEXT_STEP = 'use the OpenCode form `bmn roster role <role> --json` gives (env -i with BMN\'s folders, then opencode run --standalone --format json --agent bmn-helper -m <model>#<effort> --title <title>, the prompt on standard input), exactly as documented'
 
 /** The one checked way to the web (64.1), in the words every hint uses. */
 export const WEB_QUESTION_COMMAND = 'bmn research ask'
@@ -214,12 +218,13 @@ function harnessOf(command) {
   const name = basename(command)
   if (name === 'codex') return 'codex'
   if (name === 'claude') return 'claude'
+  if (name === 'opencode') return 'opencode'
   return null
 }
 
 /**
- * Parses exactly the dispatch forms dev-auto documents and nothing else: `codex exec [resume <id>]`
- * and `claude -p`, each optionally behind `env -i NAME=value …`. Returns null for anything else.
+ * Parses exactly the dispatch forms dev-auto documents and nothing else: `codex exec [resume <id>]`,
+ * `claude -p` and `opencode run`, each optionally behind `env -i NAME=value …`. Returns null for anything else.
  * `research` also admits the arguments only a research run carries.
  */
 export function parseDispatch(argv, { research = false } = {}) {
@@ -241,7 +246,54 @@ export function parseDispatch(argv, { research = false } = {}) {
   if (harness === null) return { unsupported: `${command ?? 'nothing'} is not a supported dispatch command (codex exec or claude -p)` }
   const rest = argv.slice(index + 1)
   const base = { harness, command, envMode, assignments }
+  if (harness === 'opencode') return parseOpenCode(rest, base)
   return harness === 'codex' ? parseCodex(rest, base, research) : parseClaude(rest, base)
+}
+
+const OPENCODE_VALUE_FLAGS = { '--format': 'format', '--agent': 'agent', '-m': 'model', '--model': 'model', '--title': 'title' }
+/** Arguments of `opencode run` the form refuses, each with what it would do (70.1). */
+const OPENCODE_REFUSED = {
+  '--auto': 'it approves every permission not denied',
+  '--session': 'it continues or creates a session other than the run\'s own', '-s': 'it continues or creates a session other than the run\'s own',
+  '--continue': 'it continues your last session', '-c': 'it continues your last session',
+  '--fork': 'it forks an earlier session into the run',
+  '--server': 'it sends the run to a server BMN does not start',
+  '--file': 'it attaches a file the check does not read', '-f': 'it attaches a file the check does not read'
+}
+
+/**
+ * `opencode run` in the one form 70.1 measured: `--standalone` (a private server, never the background
+ * service that serves the owner's terminals), `--format json` (it names the session the receipt binds),
+ * `--agent`, `-m`/`--model` and `--title`, each once, and the prompt on standard input.
+ */
+function parseOpenCode(args, base) {
+  if (args[0] !== 'run') return { unsupported: 'only `opencode run` is a supported OpenCode dispatch' }
+  const parsed = { ...base, standalone: false }
+  for (let index = 1; index < args.length; index += 1) {
+    const argument = args[index]
+    if (!argument.startsWith('-')) return { unsupported: `opencode run ${argument} is not a supported argument (the prompt goes through standard input, the checked --stdin file)` }
+    const equals = argument.startsWith('--') ? argument.indexOf('=') : -1
+    const flag = equals === -1 ? argument : argument.slice(0, equals)
+    if (flag === '--standalone' && equals === -1) {
+      if (parsed.standalone) return { unsupported: '--standalone given twice' }
+      parsed.standalone = true
+      continue
+    }
+    if (Object.hasOwn(OPENCODE_REFUSED, flag)) return { unsupported: `opencode run ${flag} is not a supported argument: ${OPENCODE_REFUSED[flag]}` }
+    if (Object.hasOwn(OPENCODE_VALUE_FLAGS, flag)) {
+      const value = equals !== -1 ? argument.slice(equals + 1) : args[index + 1]
+      if (value === undefined) return { unsupported: `${flag} needs a value` }
+      if (equals === -1) index += 1
+      const key = OPENCODE_VALUE_FLAGS[flag]
+      if (parsed[key] !== undefined) return { unsupported: `${flag} given twice` }
+      parsed[key] = value
+      continue
+    }
+    return { unsupported: `opencode run ${argument} is not a supported argument` }
+  }
+  if (!parsed.standalone) return { unsupported: 'opencode run must carry --standalone: without it the run goes to the background service that serves your terminals' }
+  if (parsed.format !== 'json') return { unsupported: 'opencode run must carry --format json, which names the session a receipt is bound to' }
+  return parsed
 }
 
 function parseCodex(args, base, research = false) {
@@ -805,6 +857,56 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
     effort: parsed.effort === undefined ? null : { value: parsed.effort, source: '--effort' },
     configHome: configDir,
     context: { limit, compact: null, sizes }
+  }
+}
+
+/**
+ * Where an `opencode run` in the checked form sends the conversation (70.2). It must run behind `env -i`
+ * with exactly BMN's folders and switches (agents-opencode.mjs) and BMN's own agent; BMN's folder holds its
+ * own files only, so no provider, model or agent of anyone else's can change the address, and the model,
+ * its provider and the effort are what `-m <provider>/<model>#<effort>` names. Without `--title` OpenCode
+ * names the session with one more request to a title model the form does not name, so the destination
+ * is unknown.
+ */
+export function resolveOpenCodeRoute(parsed) {
+  const base = openCodeFolder()
+  const wanted = openCodeEnvironment(base)
+  const form = 'the folders and switches `bmn roster role <role> --json` gives'
+  if (parsed.envMode !== 'clean') return { unsupported: `an OpenCode run is checked only behind env -i, with ${form}` }
+  for (const name of Object.keys(parsed.assignments)) {
+    if (name === 'PATH' || Object.hasOwn(wanted, name)) continue
+    return { unsupported: /^OPENCODE_CONFIG/.test(name) ? `env -i ${name} names another OpenCode configuration` : `env -i ${name} is not part of the OpenCode form` }
+  }
+  if (!parsed.assignments.PATH) return { unsupported: 'env -i must carry PATH, so the check and the run find the same opencode' }
+  for (const [name, value] of Object.entries(wanted)) {
+    if (parsed.assignments[name] === value) continue
+    if (name === 'OPENCODE_DISABLE_PROJECT_CONFIG') {
+      return { unsupported: 'without OPENCODE_DISABLE_PROJECT_CONFIG=1 a repository\'s own opencode.json or .opencode folder replaces BMN\'s agent and the address requests go to, and runs its own plugin' }
+    }
+    if (name === 'OPENCODE_DISABLE_AUTOUPDATE') return { unsupported: 'env -i must carry OPENCODE_DISABLE_AUTOUPDATE=1, so the run does not update OpenCode' }
+    if (name === 'OPENCODE_DISABLE_MODELS_FETCH') return { unsupported: 'env -i must carry OPENCODE_DISABLE_MODELS_FETCH=1, so the run takes the model list built into OpenCode instead of fetching one' }
+    return { unsupported: `env -i ${name} must be ${value}, a folder of BMN's own for OpenCode runs` }
+  }
+  const problem = openCodeFolderProblem(base)
+  if (problem !== null) return { unsupported: `${problem}; \`bmn roster role <role> --json\` puts BMN's folder back` }
+  if (parsed.agent !== OPENCODE_HELPER_AGENT) {
+    return { unsupported: parsed.agent === undefined ? `opencode run must carry --agent ${OPENCODE_HELPER_AGENT}, BMN's read-only agent` : `--agent ${parsed.agent} is not BMN's agent; the form runs --agent ${OPENCODE_HELPER_AGENT}` }
+  }
+  const folders = openCodeFolders(base)
+  const common = { configHome: `${folders.config}/opencode`, context: { limit: null, compact: null, sizes: [] } }
+  if (parsed.model === undefined) return { ...common, route: { basis: 'unknown', provider: null, host: null, reason: 'the command names no model', sources: [] }, model: null, effort: null }
+  const reference = openCodeReference(parsed.model)
+  if (reference === null) return { unsupported: `-m ${parsed.model} is not <provider>/<model>#<effort> as OpenCode reads it` }
+  const hash = parsed.model.indexOf('#', reference.length)
+  const variant = hash === -1 ? null : parsed.model.slice(hash + 1)
+  const provider = reference.slice(0, reference.indexOf('/'))
+  const route = parsed.title === undefined
+    ? { basis: 'unknown', provider, host: null, reason: 'without --title OpenCode names the session with a title model the form does not name' }
+    : { basis: 'default', provider, host: `default:${provider}` }
+  return {
+    ...common, route: { ...route, sources: ['-m'] },
+    model: { value: reference, source: '-m' },
+    effort: variant === null ? null : { value: variant, source: '-m #variant' }
   }
 }
 
@@ -1532,8 +1634,10 @@ export function bindingPath(receiptHashValue) {
 export function bindSession(receiptFile, sessionId, { now = new Date() } = {}) {
   const receipt = readReceiptFile(receiptFile)
   if (receipt === null) throw new RosterError('RECEIPT_INVALID', `${receiptFile} is not an intact version-1 receipt`)
-  if (receipt.mode !== 'dispatch' || receipt.harness !== 'codex') throw new RosterError('RECEIPT_INVALID', 'only the receipt of a Codex dispatch can be bound to a session')
-  if (!SESSION_ID.test(sessionId)) throw new RosterError('RECEIPT_INVALID', `${sessionId} is not a Codex session id`)
+  if (receipt.mode !== 'dispatch' || (receipt.harness !== 'codex' && receipt.harness !== 'opencode')) throw new RosterError('RECEIPT_INVALID', 'only the receipt of a Codex or OpenCode dispatch can be bound to a session')
+  if (receipt.harness === 'opencode' ? !OPENCODE_SESSION_ID.test(sessionId) : !SESSION_ID.test(sessionId)) {
+    throw new RosterError('RECEIPT_INVALID', `${sessionId} is not ${receipt.harness === 'opencode' ? 'an OpenCode' : 'a Codex'} session id`)
+  }
   const age = now.getTime() - Date.parse(receipt.issued_at)
   if (!(age >= 0 && age <= BINDING_WINDOW_MS)) throw new RosterError('RECEIPT_INVALID', 'a session is bound within 10 minutes of the check that preceded it; start a fresh checked dispatch')
   const path = bindingPath(receipt.receipt_hash)
@@ -1821,6 +1925,11 @@ export const READ_ONLY_ITEMS = {
  */
 function checkReadOnly(role, parsed, resolution, version, note) {
   const stop = (why, must) => refuse('READ_ONLY_REQUIRED', `${role.id} is a read-only role and ${why}; the command must carry ${must}`)
+  if (parsed.harness === 'opencode') {
+    // The only OpenCode form the check reads runs BMN's own agent from BMN's own folder, both checked whole above.
+    note(`read-only role: BMN's agent ${OPENCODE_HELPER_AGENT} (only reading inside the project; the form shown on OpenCode ${OPENCODE_FORM_TESTED.version}${version === OPENCODE_FORM_TESTED.version ? '' : `; this is ${version ?? 'a version BMN cannot read'}`})`)
+    return { mode: 'read-only', source: `--agent ${OPENCODE_HELPER_AGENT}`, agent_sha256: OPENCODE_HELPER_AGENT_SHA256, form_tested_on: OPENCODE_FORM_TESTED.version }
+  }
   if (parsed.harness === 'codex') {
     const must = '--sandbox read-only and -c approval_policy="never"'
     const { sandbox, approvals } = resolution.access
@@ -1935,13 +2044,13 @@ export function evaluate(inputs, {
     const cwd = canonicalDirectory(inputs.cwd ?? processCwd, processCwd)
     const resolution = parsed.harness === 'codex'
       ? resolveCodexRoute(parsed, environment, cwd ?? processCwd)
-      : resolveClaudeRoute(parsed, environment, cwd ?? processCwd)
+      : parsed.harness === 'opencode' ? resolveOpenCodeRoute(parsed) : resolveClaudeRoute(parsed, environment, cwd ?? processCwd)
     if (resolution.unsupported) refuse('ROUTE_UNSUPPORTED', resolution.unsupported)
     const version = harnessVersion(parsed.command, dispatchEnvironment(parsed, environment))
     if (parsed.resume && !(version !== null && (resumeVersions[parsed.harness] ?? []).includes(version))) {
       refuse('ROUTE_UNSUPPORTED', `resume is not checked on ${parsed.harness} ${version ?? '(version unreadable)'}: BMN has not tested that a resume on this version talks to the current configuration's destination; start a fresh checked dispatch`)
     }
-    note(`dispatch form: ${parsed.envMode === 'clean' ? 'env -i ' : ''}${parsed.harness === 'codex' ? `codex exec${parsed.resume ? ' resume' : ''}` : 'claude -p'}`)
+    note(`dispatch form: ${parsed.envMode === 'clean' ? 'env -i ' : ''}${parsed.harness === 'codex' ? `codex exec${parsed.resume ? ' resume' : ''}` : parsed.harness === 'opencode' ? 'opencode run' : 'claude -p'}`)
     // The tools of this run (60.12 AC5): once the team lists any, the run is kept to exactly its agent's set and
     // shut off from everything else, judged with the run's own environment and the folder it works in (Codex's
     // `-C` where it gives one). The test log is read only then. A version without a run seen kept to its tools,
@@ -1954,7 +2063,9 @@ export function evaluate(inputs, {
         cwd: parsed.cd === undefined ? runFolder : (canonicalDirectory(parsed.cd, runFolder) ?? null), ...(toolsPolicyRoot === undefined ? {} : { policyRoot: toolsPolicyRoot }) })
     if (tools.refusal?.code === 'ROUTE_UNSUPPORTED') refuse('ROUTE_UNSUPPORTED', tools.refusal.message)
 
-    const { model, effort } = checkModelAndEffort(agent, resolution, note)
+    // OpenCode names a model with its provider; an agent that names the model alone is read with its provider.
+    const named = parsed.harness === 'opencode' && !agent.model.includes('/') ? { ...agent, model: `${agent.provider}/${agent.model}` } : agent
+    const { model, effort } = checkModelAndEffort(named, resolution, note)
     checkRoleEffort(role, agent, effort, note)
     // A role that may write is judged as before and its receipt carries nothing more (63.2 AC5).
     const readOnly = role.read_only === true ? checkReadOnly(role, parsed, resolution, version, note) : null
@@ -2118,11 +2229,19 @@ export function evaluate(inputs, {
     return { verdict: 'PASS', receipt: { ...body, receipt_hash: receiptHash(body) }, steps, ...(webNote ? { note: WEB_TOOLS_NOTE } : {}) }
   } catch (error) {
     if (error instanceof Refusal) {
-      const next = error.code === 'ROUTE_UNSUPPORTED' && Array.isArray(inputs.argv) && reachedForWeb(inputs.argv, error.message) ? WEB_NEXT_STEP : NEXT_STEP[error.code]
+      const next = error.code === 'ROUTE_UNSUPPORTED' && Array.isArray(inputs.argv) && reachedForWeb(inputs.argv, error.message) ? WEB_NEXT_STEP
+        : error.code === 'ROUTE_UNSUPPORTED' && openCodeCommand(inputs.argv) ? OPENCODE_NEXT_STEP : NEXT_STEP[error.code]
       return { verdict: 'REFUSED', code: error.code, message: error.message, next, steps, ...(error.detail === undefined ? {} : { detail: error.detail }) }
     }
     throw error
   }
+}
+
+/** Whether a refused command is an OpenCode one, so its next step names the OpenCode form. */
+function openCodeCommand(argv) {
+  if (!Array.isArray(argv)) return false
+  const index = argv.length > 0 && basename(argv[0]) === 'env' ? argv.findIndex((argument, position) => position > 0 && argument !== '-i' && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(argument)) : 0
+  return index >= 0 && typeof argv[index] === 'string' && harnessOf(argv[index]) === 'opencode'
 }
 
 function emptyMcpConfig(text) {

@@ -307,9 +307,18 @@ async function withContext(data, chain) {
   }
   // For a read-only role each candidate carries what its command must hold, by its app (63.2).
   const READ_ONLY_ITEMS = chain.read_only === true ? (await import('./agents-check.mjs')).READ_ONLY_ITEMS : {}
+  // An OpenCode candidate runs only in the one form the check reads (70.2): BMN puts its folder in place
+  // here and hands over the environment and arguments, whatever the role.
+  let openCode
   const held = async (candidate) => {
     const described = await describe(candidate)
-    const items = chain.read_only === true ? READ_ONLY_ITEMS[byId.get(candidate.agent)?.harness] : undefined
+    const harness = byId.get(candidate.agent)?.harness
+    if (harness === 'opencode') {
+      openCode ??= (await import('./agents-opencode.mjs')).installOpenCodeFolder()
+      const { folder, ...items } = openCode
+      return { ...described, opencode: { folder, ...items }, ...(chain.read_only === true ? { read_only: { argv: items.argv.slice(items.argv.indexOf('--agent'), items.argv.indexOf('--agent') + 2), harness: 'opencode' } } : {}) }
+    }
+    const items = chain.read_only === true ? READ_ONLY_ITEMS[harness] : undefined
     return items === undefined ? described : { ...described, read_only: { argv: items } }
   }
   const candidates = []

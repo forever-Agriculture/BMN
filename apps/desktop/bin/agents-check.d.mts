@@ -55,7 +55,7 @@ interface ReceiptBase {
    * What the check saw of a run for a read-only role (63.2): Codex's sandbox and approvals with the sources that
    * named them, or Claude Code's tool list. Absent for a role that may write.
    */
-  sandbox?: { mode: 'read-only'; source: string; approval_policy?: 'never'; approval_source?: string; tools?: string[]; form_tested_on?: string }
+  sandbox?: { mode: 'read-only'; source: string; approval_policy?: 'never'; approval_source?: string; tools?: string[]; agent_sha256?: string; form_tested_on?: string }
   /** The tools this run was given and a hash of their definitions; absent when it was given none. */
   /** The tools the run was kept to, with a hash of their definitions; or `checked: false` for a run whose tools BMN did not judge (Codex) while the team lists tools. */
   tools?: { applied: string[]; sha256: string; checked?: undefined } | { checked: false; applied?: undefined; sha256?: undefined }
@@ -142,6 +142,7 @@ export declare const RESEARCH_FENCE_VERSIONS: Record<string, string[]>
 export declare const RESEARCH_TOOLS: string
 export declare const WEB_QUESTION_COMMAND: string
 export declare const WEB_NEXT_STEP: string
+export declare const OPENCODE_NEXT_STEP: string
 export declare const WEB_TOOLS_NOTE: string
 export declare const CODEX_RESEARCH_CONFIG: string[]
 export declare const CODEX_RESEARCH_ANSWER: string

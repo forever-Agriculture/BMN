@@ -31,8 +31,8 @@ export function isCalled(agent) {
 }
 /** How BMN names each agent app to the owner, in the order they are always listed. */
 export const APP_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' }
-/** Apps whose dispatches BMN never checks: no dispatch check reads their command. */
-export const UNCHECKED_APPS = ['opencode', 'cursor']
+/** Apps whose dispatches BMN never checks: no dispatch check reads their command. OpenCode left the list with Story 70.2. */
+export const UNCHECKED_APPS = ['cursor']
 /**
  * Apps that get public work only whatever their destination reads. Cursor picks its model inside
  * the app. OpenCode converts older configuration shapes BMN does not read (a model entry's own
@@ -1178,7 +1178,7 @@ export function publicOnlyReasons(agent, data) {
   const reasons = []
   const provider = data.providers.find((entry) => entry.id === agent.provider)
   const route = data.harness_routes.find((entry) => entry.harness === agent.harness)
-  if (agent.harness !== 'claude' && agent.harness !== 'codex') reasons.push(`BMN cannot check ${APP_NAMES[agent.harness] ?? agent.harness} dispatches`)
+  if (UNCHECKED_APPS.includes(agent.harness)) reasons.push(`BMN cannot check ${APP_NAMES[agent.harness] ?? agent.harness} dispatches`)
   if (agent.host === null) reasons.push(`${agent.id}'s host is unknown`)
   if (agent.host === 'default' && route === undefined) reasons.push(`no approved destination for ${APP_NAMES[agent.harness] ?? agent.harness}`)
   if (agent.host === 'default' && route?.basis === 'owner-declared') reasons.push(`the ${APP_NAMES[agent.harness] ?? agent.harness} destination is owner-declared`)
@@ -1268,8 +1268,11 @@ export function roleChainText(chain) {
   if (chain.read_only === true) {
     lines.push('  read-only: a run for this role is refused unless it is started so that it cannot write')
     const forms = new Map(chain.candidates.filter((candidate) => candidate.read_only !== undefined).map((candidate) => [candidate.read_only.argv.join(' '), candidate.read_only.argv]))
-    for (const argv of forms.values()) lines.push(`    ${argv[0] === '--sandbox' ? 'codex exec' : 'claude -p'} must carry: ${argv.map((item) => (/^[A-Za-z0-9_=,.:/-]+$/.test(item) ? item : `'${item}'`)).join(' ')}`)
+    for (const argv of forms.values()) lines.push(`    ${argv[0] === '--sandbox' ? 'codex exec' : argv[0] === '--agent' ? 'opencode run' : 'claude -p'} must carry: ${argv.map((item) => (/^[A-Za-z0-9_=,.:/-]+$/.test(item) ? item : `'${item}'`)).join(' ')}`)
   }
+  // An OpenCode candidate runs only in the one form the check reads (70.2), whatever the role.
+  const openCode = chain.candidates.find((candidate) => candidate.opencode !== undefined)?.opencode
+  if (openCode !== undefined) lines.push(`  opencode: env -i ${openCode.env.join(' ')} PATH=<your PATH> opencode ${[...openCode.argv, ...openCode.then].join(' ')} < <prompt file>`)
   return lines.join('\n')
 }
 

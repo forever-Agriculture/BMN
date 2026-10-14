@@ -990,7 +990,9 @@ chain with each candidate's eligibility. Neither prints your notes or prices.
 **The check.** Immediately before work leaves for another agent, `bmn roster check` takes the
 agent, role, workspace, whether the data is private or public and the exact dispatch command, and
 answers PASS with a receipt or the first refusal in a fixed order (exit 10). It parses
-`codex exec [resume <id>]` and `claude -p` (optionally under `env -i`), resolves the destination
+`codex exec [resume <id>]` and `claude -p` (optionally under `env -i`), and `opencode run` in the
+one form described under [Checking an OpenCode helper run](#checking-an-opencode-helper-run); for
+the first two it resolves the destination
 from named, non-secret settings only (Codex `config.toml` model and provider keys and
 `OPENAI_BASE_URL`; Claude's `ANTHROPIC_BASE_URL` from the environment and settings files, an
 unknown host when they disagree; settings are read under `--safe-mode` too, because Claude Code
@@ -1033,9 +1035,11 @@ be checked.
   naming only `Read`, `Grep` and `Glob` (or `''` for none), `--strict-mcp-config`, and
   `--mcp-config` with an empty server list (`'{"mcpServers":{}}'`): that is the form the write
   test showed, and the same command without the empty list was not tried, so it is refused;
-  `--permission-mode bypassPermissions` is refused. A PASS for a
+  `--permission-mode bypassPermissions` is refused. For OpenCode the one form the check reads is
+  read-only already: BMN's agent `bmn-helper` from BMN's own folder, both checked whole. A PASS for a
   read-only role records what the check saw in the receipt's `sandbox` (mode, the source that
-  named it, the approval policy and its source, or the tool list) beside `effort`, so
+  named it, the approval policy and its source, the tool list, or OpenCode's agent and a mark of
+  its text) beside `effort`, so
   `bmn roster bind` and a later reader can tell. `bmn roster role <role>` says that a role is
   read-only, and with `--json` gives each candidate the items its command must carry
   (`read_only.argv`). A role that may write is judged as before and its receipt carries no
@@ -1472,7 +1476,12 @@ candidate a `tools` entry with the items for exactly that set, also when the set
   dev-auto does today with `-c 'mcp_servers={}'`. One Codex run is refused: a run checked with
   `--packet`. A packet run carries no tools, BMN cannot show that of a Codex run, and so, once
   your team lists a tool, the check answers `ROUTE_UNSUPPORTED` whatever the command names.
-- **OpenCode, Cursor.** BMN does not check their dispatches at all.
+- **OpenCode.** A checked `opencode run` starts from BMN's own configuration folder, which names
+  no MCP server, with the repository's own configuration switched off and BMN's agent allowing
+  only reading. The check does not judge its tools as it does Claude Code's: its steps say `tools:
+  not checked` and its receipt carries `"tools": {"checked": false}`, as for Codex. A tool on your
+  list is not handed to an OpenCode helper.
+- **Cursor.** BMN does not check its dispatches at all.
 - **Places the test did not cover.** A Claude Code run is refused when it could take tools from a
   place the test did not see shut out: a `.mcp.json` in a folder above the run's; a plug-in
   switched on (`enabledPlugins`) in any settings the check reads for the run, which are Claude
@@ -1682,6 +1691,77 @@ search for a researcher.
 | Model, effort and title | PASS | `-m provider/model#variant` sets the effort (`opencode-go/gpt-6-luna` has none, low, medium, high, xhigh and max); an unknown variant is refused before any request. Without `--title` one more request goes to the configuration's small model; with it, none. |
 | Web search | PASS | Needs the `websearch` permission and a provider named in the run's configuration; without one the search is cancelled, never left waiting. TinyFish and Tavily answer without an account. A search for a local address or file fetched nothing on this computer. |
 | BMN's terminal plugin | PASS | `opencode run` does not load it, so a helper run never reaches `bmn hook` as if it were your session. |
+
+#### Checking an OpenCode helper run
+
+`bmn roster check` reads one OpenCode command, the form 70.1 measured, and refuses every other
+(Story 70.2). `bmn roster role <role> --json` hands a lead its parts for each OpenCode candidate
+(`opencode`: `env`, `argv`, then `-m` and `--title`, the prompt on standard input) and, for a role
+with one, puts BMN's folder in order first. The command, with the lead's model, effort and title:
+
+```
+env -i HOME=<f>/home XDG_CONFIG_HOME=<f>/config XDG_DATA_HOME=<f>/data XDG_STATE_HOME=<f>/state
+  XDG_CACHE_HOME=<f>/cache OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_DISABLE_AUTOUPDATE=1
+  OPENCODE_DISABLE_MODELS_FETCH=1 PATH=<your PATH>
+  opencode run --standalone --format json --agent bmn-helper -m <provider>/<model>#<effort>
+  --title <title> < <prompt file>
+```
+
+`<f>` is BMN's folder for OpenCode runs, `~/.config/bmn/agents/state/opencode`, never your own
+OpenCode folders. Its configuration holds exactly two files, `opencode.json` (no update, no
+sharing, no snapshots; no provider, model or MCP server) and `agents/bmn-helper.md` (every action
+denied, then reading inside the project allowed), and its home folder is empty. The check refuses
+a run while the configuration holds anything else at any depth, a link, a changed byte of either
+file, or anything in the home folder, and says that `bmn roster role` puts the folder back.
+
+What the check reads and refuses:
+
+- **The form.** `env -i` with exactly these names and values (only PATH is yours), `run`,
+  `--standalone`, `--format json` and `--agent bmn-helper`. Refused with the reason: no `env -i`,
+  a missing or different name (another `OPENCODE_CONFIG…` is "another OpenCode configuration";
+  without `OPENCODE_DISABLE_PROJECT_CONFIG=1` the repository's own configuration replaces BMN's
+  agent), `--auto`, `--session`, `--continue`, `--fork`, `--server`, `--file`, any other flag, a
+  prompt on the command line, and any other subcommand.
+- **Model and effort.** From `-m provider/model#variant`. An OpenCode agent's model is
+  `provider/model` (`opencode-go/kimi-k3` for an agent whose model is `kimi-k3` and provider
+  `opencode-go`); another one is `MODEL_MISMATCH`, no `#variant` or one outside the agent's (and
+  role's) efforts is `EFFORT_UNSUPPORTED`. Which variants a model takes is OpenCode's: on 2.0.29
+  `opencode-go/gpt-6-luna` takes none, low, medium, high, xhigh and max, and `opencode-go/kimi-k3`
+  only max, so an agent's efforts should name what its model takes.
+- **The destination.** The provider of `-m` at its default address, matched against the approved
+  OpenCode destination like the other two apps (`HOST_MISMATCH`); without `--title` it is unknown
+  (`HOST_UNKNOWN`), because OpenCode would then name the session with a title model the command
+  does not name. Private work follows that provider's answer.
+- **The model list.** With `OPENCODE_DISABLE_MODELS_FETCH=1` a run takes its models from the list
+  built into OpenCode, which holds OpenCode Go's models on 2.0.29, and makes no call to
+  `models.opencode.ai`. A model newer than the installed OpenCode waits for an OpenCode update. A
+  model list planted in the run's cache did not move OpenCode Go's address in either mode
+  (the 70.2 probe at the end of the 70.1 record).
+- **Binding.** The first JSON event of a run names its session (`ses_` and 26 characters);
+  `bmn roster bind --receipt <file> --session <ses_…>` takes that shape for an OpenCode receipt,
+  inside the same ten minutes as for Codex, and no other.
+
+Tested: the check's cases in `apps/desktop/src/utility/agents-check.test.ts`, and, with
+`BMN_OPENCODE_REAL=1`, one run of the installed OpenCode through the checked command against a
+stand-in model on this computer, with your kind of files in the home folder, a file outside the
+project and a repository that tries to loosen BMN's agent and start a plugin: only reading tools
+were offered, writing, editing, the shell, the web and sub-agents were refused, as was the read
+outside the project; nothing was written or started, no address outside this computer was asked
+for, and only the project file the model asked to read reached it.
+
+**Limits.**
+
+- *Sign-in.* BMN's folder holds no sign-in of its own yet. Your choice (2026-10-14): when you
+  approve an OpenCode Go agent in the Team view, BMN copies your Go key into this folder once,
+  with OpenCode's own `auth export` and `auth import`; helper sessions then stay out of your
+  OpenCode history (Story 70.4).
+- *Time.* A provider answering with a server error is retried without end and without an event;
+  the lead gives a dispatch its own time limit.
+- *Usage.* Tokens and cost are not printed; `opencode session export <id> --standalone` with the
+  same environment gives them.
+- *Versions.* The form was measured on 2.0.29; on another version the check says so in its steps.
+- *Your own OpenCode.* None of this changes what BMN writes into your own OpenCode configuration:
+  it still gets the public rules only.
 
 #### Asking the web a question
 
