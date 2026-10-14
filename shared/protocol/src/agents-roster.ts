@@ -57,13 +57,87 @@ function envProgram(argv: readonly string[]): number {
   return -1
 }
 
-/** The programs a shell command line starts, one per command: the first word after settings and `exec`, `command` or `env`. */
+/** Words that come before a command's program in a shell line: the program is the word after them. */
+const BEFORE_PROGRAM: ReadonlySet<string> = new Set(['exec', 'command', 'nohup', '{', '!', 'if', 'then', 'else', 'elif', 'do', 'while', 'until'])
+
+/** Where a command substitution that starts at `from` (after `$(` or a backtick) ends: at its `close`, or at the line's end. */
+function substitutionEnd(line: string, from: number, close: string): number {
+  let depth = 0
+  for (let index = from; index < line.length; index += 1) {
+    const char = line[index]!
+    if (char === '\\') index += 1
+    else if (close === ')' && char === '(') depth += 1
+    else if (char === close) {
+      if (depth === 0) return index
+      depth -= 1
+    }
+  }
+  return line.length
+}
+
+/**
+ * A shell command line as its commands, each the list of its words, read as the shell reads them:
+ * `;`, `&`, `|`, a new line and parentheses part commands only outside quotes, quotes and
+ * backslashes are taken away, and a command substitution (`$(…)` or backticks, quoted or not)
+ * holds commands of its own.
+ */
+function shellCommands(line: string): string[][] {
+  const commands: string[][] = []
+  let words: string[] = []
+  let word = ''
+  let started = false
+  let quote: string | null = null
+  const add = (text: string): void => {
+    word += text
+    started = true
+  }
+  const endWord = (): void => {
+    if (started) words.push(word)
+    word = ''
+    started = false
+  }
+  const endCommand = (): void => {
+    endWord()
+    if (words.length > 0) commands.push(words)
+    words = []
+  }
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]!
+    if (quote === "'") {
+      if (char === "'") quote = null
+      else add(char)
+    } else if (char === '"' && quote === '"') {
+      quote = null
+    } else if (quote === null && (char === "'" || char === '"')) {
+      quote = char
+      started = true
+    } else if (char === '\\') {
+      index += 1
+      if (index < line.length && line[index] !== '\n') add(line[index]!)
+    } else if (char === '`' || (char === '$' && line[index + 1] === '(')) {
+      const from = index + (char === '`' ? 1 : 2)
+      const end = substitutionEnd(line, from, char === '`' ? '`' : ')')
+      commands.push(...shellCommands(line.slice(from, end)))
+      add(line.slice(index, end + 1))
+      index = end
+    } else if (quote === null && char !== '\n' && /\s/.test(char)) {
+      endWord()
+    } else if (quote === null && ';&|\n()'.includes(char)) {
+      endCommand()
+    } else {
+      add(char)
+    }
+  }
+  endCommand()
+  return commands
+}
+
+/** The programs a shell command line starts, one per command: the first word after settings and words such as `exec`, or the program `env` runs. */
 function commandPrograms(line: string): string[] {
   const programs: string[] = []
-  for (const command of line.split(/;|&&|\|\||\||&|\n|\(|\)/)) {
-    const words = command.trim().split(/\s+/).filter(Boolean).map((word) => word.replace(/^['"]+|['"]+$/g, ''))
+  for (const words of shellCommands(line)) {
     let index = 0
-    while (index < words.length && (isSetting(words[index]!) || words[index] === 'exec' || words[index] === 'command')) index += 1
+    while (index < words.length && (isSetting(words[index]!) || BEFORE_PROGRAM.has(words[index]!))) index += 1
     if (index < words.length && programName(words[index]!) === 'env') {
       const after = envProgram(words.slice(index + 1))
       if (after >= 0) programs.push(words[index + 1 + after]!)

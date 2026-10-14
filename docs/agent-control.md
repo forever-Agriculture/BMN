@@ -438,8 +438,10 @@ tools, prompt-guard warning and the recorded payloads), is kept at the local git
 - A saved launch set entry that starts `cursor-agent` opens as a plain terminal, and that session
   gets one notice from BMN: "Cursor was retired on 14 Oct 2026." The saved set is not changed.
   BMN looks for it where a program starts: the entry's own program, a program `env` starts, or a
-  command in a shell's `-c` line (that entry opens as its shell). The name inside an argument, such
-  as a prompt or a path, starts nothing and changes nothing.
+  command in a shell's `-c` line (that entry opens as its shell), read as the shell reads it: a
+  `;`, `&` or `|` inside quotes parts nothing, and a `$(…)` or backtick substitution starts commands
+  of its own. The name inside an argument, such as a prompt or a path, starts nothing and changes
+  nothing.
 
 ### Notifications from any program
 

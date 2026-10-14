@@ -31,6 +31,15 @@ describe('saved launch-set form', () => {
     expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-c', 'echo cursor-agent'] })).toBeNull()
     expect(retiredEntryWords({ executable: '/bin/bash', argv: ['/repo/cursor-agent'] })).toBeNull()
     expect(retiredEntryWords({ executable: '/usr/bin/env', argv: ['-u', 'cursor-agent', 'codex'] })).toBeNull()
+    // A separator inside quotes parts nothing; a command substitution starts its own commands (Astra, Epic 71 recheck).
+    expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-ic', 'codex "explain; cursor-agent"; exec bash -i'] })).toBeNull()
+    expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-c', "codex 'a | cursor-agent && b'"] })).toBeNull()
+    expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-c', 'codex "say \\"x; cursor-agent\\""'] })).toBeNull()
+    expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-c', 'codex explain\\;cursor-agent'] })).toBeNull()
+    expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-c', 'echo "$(cursor-agent --version)"'] })).toBe(words)
+    expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-c', 'version=`cursor-agent --version`'] })).toBe(words)
+    expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-c', 'if true; then "cursor-agent"; fi'] })).toBe(words)
+    expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-c', 'codex & { cursor-agent; }'] })).toBe(words)
   })
 
   it('preserves invalid input for correction and warns only about matching live commands', () => {
