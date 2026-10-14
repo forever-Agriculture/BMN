@@ -1088,12 +1088,20 @@ describe('receipts and --verify (60.3 AC7)', () => {
       .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc agents.review.model names no provider' })
     expect(await route('{ "model": "opencode-go/kimi-k3", "agents": { "review": { "model": "opencode-go/kimi-k3" } }, "providers": { "opencode-go": { "models": { "kimi-k3": { "package": "@acme/x" } } } } }'))
       .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc gives opencode-go/kimi-k3 its own address' })
-    mkdirSync(join(home, '.config/opencode/agents'), { recursive: true })
-    writeFileSync(join(home, '.config/opencode/agents/review.md'), '---\ndescription: Reviews\nmodel: "openrouter/cheap#low"\n---\nReview it.\n')
-    expect(await route('{ "model": "opencode-go/kimi-k3" }'))
-      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)', sources: ['opencode.jsonc model', 'agents/review.md'] })
-    writeFileSync(join(home, '.config/opencode/agents/review.md'), '---\ndescription: Reviews\n---\nmodel: openrouter/cheap is only text here.\n')
-    expect(await route('{ "model": "opencode-go/kimi-k3" }')).toMatchObject({ basis: 'default', host: 'default:opencode-go' })
+    // A command runs on its own model too, named in the file or in a file beside it.
+    expect(await route('{ "model": "opencode-go/kimi-k3", "commands": { "release": { "template": "x", "model": "openrouter/cheap#high" } } }'))
+      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)' })
+    expect(await route('{ "model": "opencode-go/kimi-k3", "command": { "release": { "template": "x", "model": "openrouter/cheap" } } }'))
+      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)' })
+    // Every folder OpenCode 2 reads agent and command files from: its own and OpenCode 1's.
+    for (const folder of ['agent', 'agents', 'mode', 'modes', 'command', 'commands']) {
+      mkdirSync(join(home, '.config/opencode', folder), { recursive: true })
+      writeFileSync(join(home, '.config/opencode', folder, 'review.md'), '---\ndescription: Reviews\nmodel: "openrouter/cheap#low"\n---\nReview it.\n')
+      expect(await route('{ "model": "opencode-go/kimi-k3" }'), folder)
+        .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)', sources: ['opencode.jsonc model', `${folder}/review.md`] })
+      writeFileSync(join(home, '.config/opencode', folder, 'review.md'), '---\ndescription: Reviews\n---\nmodel: openrouter/cheap is only text here.\n')
+      expect(await route('{ "model": "opencode-go/kimi-k3" }'), folder).toMatchObject({ basis: 'default', host: 'default:opencode-go' })
+    }
   })
 })
 

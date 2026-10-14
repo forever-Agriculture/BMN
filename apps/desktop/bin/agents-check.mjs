@@ -856,10 +856,11 @@ function openCodeReference(named) {
   return text === null ? null : text.split('#')[0]
 }
 
-// The `model:` of each agent file's front matter beside the configuration (OpenCode 1's agent/ and mode/, 2's agents/).
+// The `model:` of each agent or command file's front matter beside the configuration (OpenCode 2 still reads
+// OpenCode 1's agent/, mode/, modes/ and command/ beside its own agents/ and commands/).
 function openCodeAgentFiles(folder) {
   const found = []
-  for (const directory of ['agent', 'agents', 'mode']) {
+  for (const directory of ['agent', 'agents', 'mode', 'modes', 'command', 'commands']) {
     let names
     try {
       traceRead?.(`${folder}/${directory}`)
@@ -880,9 +881,9 @@ function openCodeAgentFiles(folder) {
 
 /**
  * OpenCode's configured model and provider prefix. Every model the configuration names gets the
- * conversation, not only `model`: the title model (`small_model`) and each agent's or mode's (the
- * `agent`, `agents` and `mode` maps, and the agent files beside the configuration), so all of them
- * must name one provider. A configuration named by the environment, or a provider, model or variant
+ * conversation, not only `model`: the title model (`small_model`) and each agent's, mode's or command's
+ * (the `agent`, `agents`, `mode`, `command` and `commands` maps, and the agent and command files beside
+ * the configuration), so all of them must name one provider. A configuration named by the environment, or a provider, model or variant
  * entry that carries its own address or runtime (OpenCode 1's `api`, `npm` and `options.baseURL`;
  * OpenCode 2's `package`, `canonical` and `settings.baseURL`, under `provider` or `providers`), could
  * send data somewhere the prefix does not say, so either reads as unknown. OpenCode 2 reads the same
@@ -908,7 +909,7 @@ function inspectOpenCode(environment) {
     if (model === null) return { basis: 'unknown', provider: null, host: null, reason: `${name} names no model`, sources: [name] }
     const named = [{ reference: model, source: `${name} model` }]
     if (config.small_model !== undefined) named.push({ reference: openCodeReference(config.small_model), source: `${name} small_model` })
-    for (const key of ['agent', 'agents', 'mode']) {
+    for (const key of ['agent', 'agents', 'mode', 'command', 'commands']) {
       const table = config[key]
       if (table === null || typeof table !== 'object') continue
       for (const [agent, entry] of Object.entries(table)) {
