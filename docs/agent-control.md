@@ -437,11 +437,13 @@ tools, prompt-guard warning and the recorded payloads), is kept at the local git
   naming it with the retirement line; nothing is written under `~/.cursor`.
 - A saved launch set entry that starts `cursor-agent` opens as a plain terminal, and that session
   gets one notice from BMN: "Cursor was retired on 14 Oct 2026." The saved set is not changed.
-  BMN looks for it where a program starts: the entry's own program, a program `env` starts, or a
-  command in a shell's `-c` line (that entry opens as its shell), read as the shell reads it: a
-  `;`, `&` or `|` inside quotes parts nothing, and a `$(…)` or backtick substitution starts commands
-  of its own. The name inside an argument, such as a prompt or a path, starts nothing and changes
-  nothing.
+  An entry is for Cursor when it starts `cursor-agent` first: as its own program, as the program
+  `env` runs, or as the first program of a shell's `-c` line (that entry opens as its shell), as
+  the New session form wrote it (`bash -ic 'cursor-agent; exec bash -i'`). In that line BMN passes
+  over `NAME=value` settings and an `exec` or `command`, and takes quotes and backslashes away; it
+  reads nothing after the first program, and a substitution, redirection or keyword before it
+  means the entry is not for Cursor. Every other entry runs exactly as saved, also one that names
+  `cursor-agent` in a prompt, a path or a later command.
 
 ### Notifications from any program
 

@@ -38,6 +38,8 @@ export function retiredAppProgram(program: string): RosterRetiredHarness | null 
 
 /** Shells whose `-c` command line a saved entry may start a program through; such an entry opens as that shell. */
 const COMMAND_SHELLS: ReadonlySet<string> = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish'])
+/** A shell's long options that take no value; any other long option leaves the command line unread. */
+const SHELL_LONG_OPTIONS: ReadonlySet<string> = new Set(['--login', '--noprofile', '--norc'])
 const programName = (path: string): string => path.slice(path.lastIndexOf('/') + 1)
 const isSetting = (word: string): boolean => /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)
 
@@ -46,113 +48,89 @@ export function isCommandShell(executable: string): boolean {
   return COMMAND_SHELLS.has(programName(executable))
 }
 
-/** Where the program `env` runs stands in its arguments: after its options and NAME=value settings. */
+/** Where the program `env` runs stands in its arguments, after the options BMN reads and NAME=value settings; -1 for any other option. */
 function envProgram(argv: readonly string[]): number {
   for (let index = 0; index < argv.length; index += 1) {
     const word = argv[index]!
     // These two take the next word as their value.
     if (word === '-u' || word === '-C' || word === '--unset' || word === '--chdir') index += 1
-    else if (!word.startsWith('-') && !isSetting(word)) return index
+    else if (word === '--') return index + 1 < argv.length ? index + 1 : -1
+    else if (word === '-i' || word === '-' || word === '--ignore-environment' || /^--(unset|chdir)=/.test(word)) continue
+    else if (word.startsWith('-')) return -1
+    else if (!isSetting(word)) return index
   }
   return -1
 }
 
-/** Words that come before a command's program in a shell line: the program is the word after them. */
-const BEFORE_PROGRAM: ReadonlySet<string> = new Set(['exec', 'command', 'nohup', '{', '!', 'if', 'then', 'else', 'elif', 'do', 'while', 'until'])
-
-/** Where a command substitution that starts at `from` (after `$(` or a backtick) ends: at its `close`, or at the line's end. */
-function substitutionEnd(line: string, from: number, close: string): number {
-  let depth = 0
-  for (let index = from; index < line.length; index += 1) {
-    const char = line[index]!
-    if (char === '\\') index += 1
-    else if (close === ')' && char === '(') depth += 1
-    else if (char === close) {
-      if (depth === 0) return index
-      depth -= 1
-    }
+/** A shell's `-c` command line: the first word after its leading options, where those options hold `c`; null otherwise. */
+function shellCommandLine(argv: readonly string[]): string | null {
+  let commandMode = false
+  for (const word of argv) {
+    if (SHELL_LONG_OPTIONS.has(word)) continue
+    // An option that takes a value (-o, -O), an unknown long one or a + option: the line is not read.
+    if (!/^-[A-Za-z]+$/.test(word)) return commandMode && !word.startsWith('-') && !word.startsWith('+') ? word : null
+    if (/[oO]/.test(word)) return null
+    if (word.includes('c')) commandMode = true
   }
-  return line.length
+  return null
 }
 
 /**
- * A shell command line as its commands, each the list of its words, read as the shell reads them:
- * `;`, `&`, `|`, a new line and parentheses part commands only outside quotes, quotes and
- * backslashes are taken away, and a command substitution (`$(…)` or backticks, quoted or not)
- * holds commands of its own.
+ * The first program a shell command line starts, read only as far as it takes (Epic 71, the
+ * consultant's method after the review): leading unquoted NAME=value settings and an `exec` or
+ * `command` without options are passed over, quotes and backslashes are taken away. Null where
+ * anything else comes first: an expansion or substitution, a redirection, a separator or an
+ * unclosed quote. Nothing after the first program is read.
  */
-function shellCommands(line: string): string[][] {
-  const commands: string[][] = []
-  let words: string[] = []
-  let word = ''
-  let started = false
-  let quote: string | null = null
-  const add = (text: string): void => {
-    word += text
-    started = true
-  }
-  const endWord = (): void => {
-    if (started) words.push(word)
-    word = ''
-    started = false
-  }
-  const endCommand = (): void => {
-    endWord()
-    if (words.length > 0) commands.push(words)
-    words = []
-  }
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index]!
-    if (quote === "'") {
-      if (char === "'") quote = null
-      else add(char)
-    } else if (char === '"' && quote === '"') {
-      quote = null
-    } else if (quote === null && (char === "'" || char === '"')) {
-      quote = char
-      started = true
-    } else if (char === '\\') {
-      index += 1
-      if (index < line.length && line[index] !== '\n') add(line[index]!)
-    } else if (char === '`' || (char === '$' && line[index + 1] === '(')) {
-      const from = index + (char === '`' ? 1 : 2)
-      const end = substitutionEnd(line, from, char === '`' ? '`' : ')')
-      commands.push(...shellCommands(line.slice(from, end)))
-      add(line.slice(index, end + 1))
-      index = end
-    } else if (quote === null && char !== '\n' && /\s/.test(char)) {
-      endWord()
-    } else if (quote === null && ';&|\n()'.includes(char)) {
-      endCommand()
-    } else {
-      add(char)
+function firstShellProgram(line: string): string | null {
+  let index = 0
+  let wrapped = false
+  for (;;) {
+    while (line[index] === ' ' || line[index] === '\t') index += 1
+    const from = index
+    let value = ''
+    let quote: string | null = null
+    for (; index < line.length; index += 1) {
+      const char = line[index]!
+      if (quote === "'") {
+        if (char === "'") quote = null
+        else value += char
+      } else if (char === '$' || char === '`') {
+        return null
+      } else if (quote === '"') {
+        if (char === '"') quote = null
+        else if (char === '\\' && '"\\'.includes(line[index + 1] ?? '')) value += line[++index]
+        else value += char
+      } else if (char === "'" || char === '"') {
+        quote = char
+      } else if (char === '\\') {
+        if (index + 1 >= line.length || line[index + 1] === '\n') return null
+        value += line[++index]
+      } else if (' \t;&|()<>\n'.includes(char)) {
+        break
+      } else {
+        value += char
+      }
     }
-  }
-  endCommand()
-  return commands
-}
-
-/** The programs a shell command line starts, one per command: the first word after settings and words such as `exec`, or the program `env` runs. */
-function commandPrograms(line: string): string[] {
-  const programs: string[] = []
-  for (const words of shellCommands(line)) {
-    let index = 0
-    while (index < words.length && (isSetting(words[index]!) || BEFORE_PROGRAM.has(words[index]!))) index += 1
-    if (index < words.length && programName(words[index]!) === 'env') {
-      const after = envProgram(words.slice(index + 1))
-      if (after >= 0) programs.push(words[index + 1 + after]!)
-    } else if (index < words.length) {
-      programs.push(words[index]!)
+    if (quote !== null || index === from) return null
+    const word = line.slice(from, index)
+    if (!wrapped && isSetting(word)) continue
+    if (!wrapped && (value === 'exec' || value === 'command')) {
+      wrapped = true
+      while (line[index] === ' ' || line[index] === '\t') index += 1
+      if (line[index] === '-') return null
+      continue
     }
+    return value === '' ? null : value
   }
-  return programs
 }
 
 /**
- * The retired app a saved command starts, or null. Only where a program is started counts: the
- * executable itself, the program `env` runs, or a command of a shell's `-c` line, as the New session
- * form writes it (`bash -ic 'cursor-agent; exec bash -i'`). An argument that only names the program
- * (a prompt, a path) is the command's own data.
+ * The retired app a saved entry is for, or null. Only an entry that starts it first counts (assumption
+ * (b) of Epic 71, as the consultant drew it after the review): its own program; the program `env`
+ * runs; or the first program of a shell's `-c` line, as the New session form writes it
+ * (`bash -ic 'cursor-agent; exec bash -i'`). An argument that only names the program (a prompt, a
+ * path, a later command) is the entry's own business, and the entry runs as it was saved.
  */
 export function retiredAppCommand(executable: string, argv: readonly string[]): RosterRetiredHarness | null {
   const direct = retiredAppProgram(executable)
@@ -160,17 +138,12 @@ export function retiredAppCommand(executable: string, argv: readonly string[]): 
   const name = programName(executable)
   if (name === 'env') {
     const at = envProgram(argv)
-    return at < 0 ? null : retiredAppCommand(argv[at]!, argv.slice(at + 1))
+    return at < 0 ? null : retiredAppProgram(argv[at]!)
   }
   if (!COMMAND_SHELLS.has(name)) return null
-  const flag = argv.findIndex((word) => /^-[A-Za-z]*c[A-Za-z]*$/.test(word))
-  const line = flag < 0 ? undefined : argv[flag + 1]
-  if (line === undefined) return null
-  for (const program of commandPrograms(line)) {
-    const app = retiredAppProgram(program)
-    if (app !== null) return app
-  }
-  return null
+  const line = shellCommandLine(argv)
+  const program = line === null ? null : firstShellProgram(line)
+  return program === null ? null : retiredAppProgram(program)
 }
 export const ROSTER_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export type RosterEffort = (typeof ROSTER_EFFORTS)[number]
