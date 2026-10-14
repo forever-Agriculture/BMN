@@ -43,11 +43,16 @@ describe('parseAttentionPrompt', () => {
     expect(parseAttentionPrompt({ ...permission, description: null })).toEqual({ ok: true, value: { ...permission, description: null } })
   })
 
-  it('accepts every harness in the closed list, Cursor included, and nothing else', () => {
-    for (const harness of ['claude', 'codex', 'opencode', 'cursor'] as const) {
+  it('accepts every harness in the closed list and nothing else', () => {
+    for (const harness of ['claude', 'codex', 'opencode'] as const) {
       expect(parseAttentionPrompt({ ...question, harness })).toEqual({ ok: true, value: { ...question, harness } })
     }
     expect(parseAttentionPrompt({ ...question, harness: 'agent' }).ok).toBe(false)
+  })
+
+  it('takes no new Cursor prompt, and reads one saved before Cursor was retired as no prompt, so nothing offers to answer it (Epic 71)', () => {
+    expect(parseAttentionPrompt({ ...question, harness: 'cursor' }).ok).toBe(false)
+    expect(readStoredPrompt(JSON.stringify({ ...question, harness: 'cursor' }))).toBeNull()
   })
 
   it('keeps line breaks in question text and descriptions but no other control', () => {

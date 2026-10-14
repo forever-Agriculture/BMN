@@ -40,8 +40,6 @@ export type AdapterAvailability =
    */
   | { ok: true; sessions: number; pass?: unknown }
   | { ok: false; reason: string; absent?: true }
-  /** Present, but the agent has no command BMN may delete its sessions with; the row says so and nothing runs. */
-  | { ok: false; reason: string; own: true }
 
 /** One agent whose sessions BMN deletes through the agent's own command. A new agent adds one of these. */
 export interface AgentHistoryAdapter {
@@ -62,6 +60,9 @@ export interface AgentHistoryState {
 
 export const AGENT_HISTORY_STATE_KEY = 'agentHistoryState'
 
+/** The apps whose history BMN prunes by their own delete commands. */
+const HISTORY_AGENTS: readonly AgentHistoryAgent[] = ['codex', 'opencode']
+
 export function emptyHistoryState(): AgentHistoryState {
   return { applied: {}, failures: {}, runs: {} }
 }
@@ -80,6 +81,8 @@ export function readHistoryState(value: unknown): AgentHistoryState {
     if (typeof failure === 'string') state.failures[path] = failure
   }
   for (const [agent, entry] of Object.entries(record(raw.runs))) {
+    // A run saved for an app BMN no longer manages (Cursor, retired in Epic 71) is left behind.
+    if (!HISTORY_AGENTS.includes(agent as AgentHistoryAgent)) continue
     const { at, deleted, remaining, failures } = record(entry)
     if (typeof at === 'string' && typeof deleted === 'number' && typeof remaining === 'number' && Array.isArray(failures)) {
       state.runs[agent as AgentHistoryAgent] = {
@@ -226,10 +229,6 @@ export class AgentHistory {
         const available = await adapter.available()
         if (!available.ok) {
           if ('absent' in available) continue
-          if ('own' in available) {
-            rows.push({ agent: adapter.agent, state: 'own', detail: available.reason })
-            continue
-          }
           rows.push({ agent: adapter.agent, state: 'unrecognised', detail: available.reason, ...run })
           continue
         }

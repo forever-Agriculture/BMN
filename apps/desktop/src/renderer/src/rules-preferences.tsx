@@ -2,9 +2,11 @@
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { takesPress, type CommandPress, type CommandStart, type RunInSession } from './session-command'
 import {
+  RETIRED_APP_LINE,
   ROSTER_APP_NAMES,
   ROSTER_APP_UPDATE_ARGUMENTS,
   ROSTER_HARNESSES,
+  appDisplayName,
   type AgentAppView,
   type ContextAgentLimit,
   type ContextLimitApp,
@@ -149,7 +151,7 @@ export function earlierVersions(snapshot: Pick<RulesSnapshot, 'transactions' | '
   const installs: Earlier[] = snapshot.transactions.filter((entry) => entry.reason !== SKILLS_INSTALL && entry.reason !== TOOLS_INSTALL).map((entry) => ({
     kind: 'install', id: entry.id, at: entry.createdAt, usable: entry.valid && entry.state === 'complete',
     title: !entry.valid ? 'An install that cannot be read' : entry.reason === 'team update' ? 'Team line updated' : 'Installed',
-    detail: (entry.targets ?? []).map((harness) => ROSTER_APP_NAMES[harness]).join(', ') + (entry.valid && entry.state !== 'complete' ? ' · did not finish' : '')
+    detail: (entry.targets ?? []).map(appDisplayName).join(', ') + (entry.valid && entry.state !== 'complete' ? ' · did not finish' : '')
   }))
   const saves: Earlier[] = (snapshot.history ?? []).map((entry) => ({
     kind: 'save', revision: entry.revision, at: entry.at, usable: entry.intact, title: entry.intact ? 'Saved' : 'A saved version that cannot be read', detail: kilobytes(entry.bytes)
@@ -538,6 +540,11 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
       return (
         <Sheet {...common} title="Undo this install" action="Undo install" ready={pending.plan.planHash !== null} note="Each file goes back to what it was before that install.">
           <Targets targets={pending.plan.targets} home={home} words={undoWords} />
+          {(pending.plan.left ?? []).map((target) => (
+            <p key={target.path} className="preferences-help">
+              {RETIRED_APP_LINE} <span className="path mono" title={target.path}>{displayPath(target.path, home)}</span> is left as it is.
+            </p>
+          ))}
         </Sheet>
       )
     case 'restore':
@@ -1209,7 +1216,7 @@ function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
         {installs.length === 0 ? <p className="preferences-help">Nothing yet. Every skills install is kept here.</p> : null}
         {installs.map((entry) => (
           <div key={entry.id} className="list-line">
-            <div><b>{entry.valid ? 'Installed' : 'An install that cannot be read'}</b> <span className="line-detail">{shortDate(entry.createdAt)}{entry.targets?.length ? ` · ${entry.targets.map((harness) => ROSTER_APP_NAMES[harness]).join(', ')}` : ''}{entry.valid && entry.state !== 'complete' ? ' · did not finish' : ''}</span></div>
+            <div><b>{entry.valid ? 'Installed' : 'An install that cannot be read'}</b> <span className="line-detail">{shortDate(entry.createdAt)}{entry.targets?.length ? ` · ${entry.targets.map(appDisplayName).join(', ')}` : ''}{entry.valid && entry.state !== 'complete' ? ' · did not finish' : ''}</span></div>
             <button type="button" className="small" disabled={!idle || !entry.valid} aria-label={`Undo the skills install of ${shortDate(entry.createdAt)}`} onClick={() => void rules.beginUndo(entry.id)}>Undo install…</button>
           </div>
         ))}
@@ -1531,7 +1538,7 @@ function ToolsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Ele
         {installs.length === 0 ? <p className="preferences-help">Nothing yet. Every tools install is kept here.</p> : null}
         {installs.map((entry) => (
           <div key={entry.id} className="list-line">
-            <div><b>{entry.valid ? 'Installed' : 'An install that cannot be read'}</b> <span className="line-detail">{shortDate(entry.createdAt)}{entry.targets?.length ? ` · ${entry.targets.map((harness) => ROSTER_APP_NAMES[harness]).join(', ')}` : ''}{entry.valid && entry.state !== 'complete' ? ' · did not finish' : ''}</span></div>
+            <div><b>{entry.valid ? 'Installed' : 'An install that cannot be read'}</b> <span className="line-detail">{shortDate(entry.createdAt)}{entry.targets?.length ? ` · ${entry.targets.map(appDisplayName).join(', ')}` : ''}{entry.valid && entry.state !== 'complete' ? ' · did not finish' : ''}</span></div>
             <button type="button" className="small" disabled={!idle || !entry.valid} aria-label={`Undo the tools install of ${shortDate(entry.createdAt)}`} onClick={() => void rules.beginUndo(entry.id)}>Undo install…</button>
           </div>
         ))}

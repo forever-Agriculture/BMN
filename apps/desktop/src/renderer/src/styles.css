@@ -1897,10 +1897,6 @@ input[type='radio'] {
   gap: 6px;
 }
 
-.agent-picker [data-option='terminal'] {
-  grid-column: 1 / -1;
-}
-
 .agent-picker [role='radio'] {
   position: relative;
   display: flex;

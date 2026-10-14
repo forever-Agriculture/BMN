@@ -1,6 +1,6 @@
 // MODULE: tools-view.ts - Story 60.12: what Rules › Tools shows and stages: a tool's scope and state in words, the plain rows of Add tool and Edit, and the team with a tool set or removed
 import {
-  ROSTER_APP_NAMES, ROSTER_HARNESSES, type RosterDataShape, type RosterHarness, type RosterToolShape, type ToolProposalView, type ToolStateName, type ToolsAppView
+  ROSTER_HARNESSES, appDisplayName, isRetiredApp, type RosterDataShape, type RosterHarness, type RosterToolShape, type ToolProposalView, type ToolStateName, type ToolsAppView
 } from '@bmn/protocol'
 
 export const TOOL_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/
@@ -157,7 +157,8 @@ export function draftFrom(tool: RosterToolShape): ToolDraft {
   return {
     editing: tool.id, id: tool.id, name: tool.name, kind: tool.url !== undefined ? 'address' : 'program', command: tool.command ?? '',
     args: (tool.args ?? []).map((arg) => (typeof arg === 'string' ? arg : `$${arg.env}`)).join('\n'), env: pairs(tool.env), url: tool.url ?? '', headers: pairs(tool.headers),
-    scope: toolScope(tool), apps: [...(tool.apps ?? [])], agents: [...(tool.agents ?? [])], public: tool.public === true
+    // A retired app an old tool still names is not one the owner can choose; saving drops it.
+    scope: toolScope(tool), apps: (tool.apps ?? []).filter((app): app is RosterHarness => !isRetiredApp(app)), agents: [...(tool.agents ?? [])], public: tool.public === true
   }
 }
 
@@ -251,5 +252,5 @@ export function withProposals(data: RosterDataShape, tools: readonly RosterToolS
 /** Who a tool is for, as the review shows it. */
 export function scopeWords(tool: Pick<RosterToolShape, 'apps' | 'agents'>, agentName: (id: string) => string): string {
   if (tool.agents !== undefined) return `the runs of ${tool.agents.map(agentName).join(', ')}`
-  return tool.apps === undefined ? 'every app' : tool.apps.map((harness) => ROSTER_APP_NAMES[harness]).join(', ')
+  return tool.apps === undefined ? 'every app' : tool.apps.map(appDisplayName).join(', ')
 }

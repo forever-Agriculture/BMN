@@ -65,7 +65,7 @@ const QUIET_ALLOW_KINDS: ReadonlyArray<{ kind: AttentionKind; label: string }> =
 ]
 
 const HOOK_CHECK_NAMES: Readonly<Record<HookCheckAgent, string>> = {
-  claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor'
+  claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode'
 }
 
 /** Every page of the dialog. Team and Rules head the navigation and open their sub-pages; the rest are grouped. */

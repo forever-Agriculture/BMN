@@ -1,6 +1,10 @@
 import type { ReportedResumePreview } from './resume-command'
 
-export type AgentCli = 'claude' | 'codex' | 'opencode' | 'cursor' | 'other'
+/** The apps whose conversations BMN binds and resumes. */
+export type LiveAgentCli = 'claude' | 'codex' | 'opencode'
+/** Epic 71: a binding stored before Cursor was retired still names it; it is shown, never resumed. */
+export type RetiredAgentCli = 'cursor'
+export type AgentCli = LiveAgentCli | RetiredAgentCli | 'other'
 
 export interface ConversationLaunchContext {
   cwd: string
@@ -18,22 +22,19 @@ interface ConversationBindingBase {
 }
 
 export interface BoundConversationBinding extends ConversationBindingBase {
-  agentCli: 'claude' | 'codex' | 'opencode' | 'cursor'
+  agentCli: LiveAgentCli | RetiredAgentCli
   status: 'bound'
   conversationReference: string
   captureRoute: 'claude-session-id' | 'explicit-resume-reference' | 'hook-session-start'
 }
 
-/**
- * The harness's own SessionStart word: which conversation the running process is in right now.
- * `prompt` is Cursor's: its sessionStart does not fire on `--resume`, so each submitted prompt names the chat.
- */
-export type ConversationObservationSource = 'startup' | 'resume' | 'clear' | 'fork' | 'prompt'
+/** The harness's own SessionStart word: which conversation the running process is in right now. */
+export type ConversationObservationSource = 'startup' | 'resume' | 'clear' | 'fork'
 
 export interface ConversationObservation {
   sessionId: string
   incarnationId: string | null
-  agentCli: 'claude' | 'codex' | 'opencode' | 'cursor'
+  agentCli: LiveAgentCli
   conversationReference: string
   source: ConversationObservationSource
   transcriptPath?: string
@@ -45,7 +46,7 @@ export interface ConversationObservationResult {
 }
 
 export interface MissingConversationBinding extends ConversationBindingBase {
-  agentCli: 'claude' | 'codex' | 'opencode' | 'cursor'
+  agentCli: LiveAgentCli
   status: 'missing'
   conversationReference: string
   captureRoute: BoundConversationBinding['captureRoute']
@@ -105,7 +106,7 @@ export interface SessionResumeResult {
  */
 export interface ConversationResumePreview {
   sessionId: string
-  agentCli: 'claude' | 'codex' | 'opencode' | 'cursor'
+  agentCli: LiveAgentCli
   conversationReference: string
   command: string
   /** Stored arguments `<cli> resume` will not accept, named for the owner; empty when none. */

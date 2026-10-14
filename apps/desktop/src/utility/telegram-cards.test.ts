@@ -1,6 +1,6 @@
 // MODULE: telegram-cards.test.ts - the Telegram cards checked against the Story 30.3 mock-ups, the escaper and the length rule
 import { describe, expect, it } from 'vitest'
-import type { AttentionPermissionPrompt, AttentionQuestionsPrompt } from '@bmn/protocol'
+import { isAttentionOrigin, retiredOriginApp, type AttentionPermissionPrompt, type AttentionQuestionsPrompt } from '@bmn/protocol'
 import {
   TELEGRAM_TEXT_LIMIT,
   clip,
@@ -310,6 +310,13 @@ Next: expiry &lt;decision&gt;.</blockquote>
       .toBe('⚠ <b>api-server</b> · Claude 🇺🇸\n<b>OpenCode reported an error</b>\n\nx\n\n<i>Reply to this message to answer.</i>')
     expect(exitCard({ session: 'a-very-long-session-name-over-24', agent: 'opencode', flag: null }))
       .toBe('■ <b>a-very-long-session-nam…</b> · OpenCode exited')
+  })
+
+  it('names a request saved before Cursor was retired by the app that opened it (Epic 71)', () => {
+    expect(isAttentionOrigin('hook:cursor:stop')).toBe(true)
+    expect(retiredOriginApp('hook:cursor:stop')).toBe('cursor')
+    expect([retiredOriginApp('hook:codex:Stop'), retiredOriginApp('cli'), retiredOriginApp(null)]).toEqual([null, null, null])
+    expect(exitCard({ session: 's', agent: retiredOriginApp('hook:cursor:stop'), flag: null })).toBe('■ <b>s</b> · Cursor exited')
   })
 })
 

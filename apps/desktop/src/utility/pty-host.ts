@@ -62,7 +62,6 @@ import { routeTerminalSavedOutputGet } from './saved-output-route'
 import { type AgentHistoryAdapter } from './agent-history'
 import { codexHistoryAdapter } from './agent-history-codex'
 import { openCodeHistoryAdapter } from './agent-history-opencode'
-import { cursorHistoryAdapter } from './agent-history-cursor'
 import { conversationReferenceExists } from './conversation-binding'
 import type { OpenReadOnly } from './agent-history-store'
 import { TurnChangesClient } from './turn-changes-client'
@@ -267,12 +266,12 @@ function agentHome(): string {
   return process.env.BMN_SELF_TEST_HOME && process.argv.includes('--self-test-host') ? process.env.BMN_SELF_TEST_HOME : homedir()
 }
 
-/** Codex and OpenCode, pruned by their own delete commands (databases only ever opened read-only); Cursor keeps its own. */
+/** Codex and OpenCode, pruned by their own delete commands (databases only ever opened read-only). */
 function historyAdapters(): AgentHistoryAdapter[] {
   const home = agentHome()
   const open: OpenReadOnly = (path) => new (BetterSqlite3 as unknown as new (path: string, options: { readonly: true; fileMustExist: true }) =>
     ReturnType<OpenReadOnly>)(path, { readonly: true, fileMustExist: true })
-  return [codexHistoryAdapter({ home, open }), openCodeHistoryAdapter({ home, open }), cursorHistoryAdapter({ home })]
+  return [codexHistoryAdapter({ home, open }), openCodeHistoryAdapter({ home, open })]
 }
 
 async function start(): Promise<void> {
@@ -309,7 +308,7 @@ async function start(): Promise<void> {
         encoding: null
       }),
     sendTerminalMessage: (message) => terminalPort?.postMessage(message),
-    conversationReferenceExists: (binding) => conversationReferenceExists(binding, agentHome()),
+    conversationReferenceExists,
     conversationBeingDeleted: (binding) => companionHolder.current?.historyDeleting(binding.conversationReference) ?? false,
     onSessionStateChange: (message) => {
       parentPort.postMessage(message)
@@ -398,6 +397,7 @@ async function start(): Promise<void> {
   }).start()
   const launchSets = new LaunchSetCoordinator({
     getSet: (workspaceId, setId) => database.getLaunchSet(workspaceId, setId),
+    retired: (started) => companionService.retiredLaunchNotice(started.sessionId, started.incarnationId),
     listWorkspaces: () => database.listWorkspaces(),
     validate: validateLaunch,
     create: async (params) => {

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { chmod, mkdir, open, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { HOOK_EVENT_AGENTS, HOOK_EVENT_EFFECTS, HOOK_EVENT_LOG_LIMIT, type HookEventRecord } from '@bmn/protocol'
+import { HOOK_EVENT_EFFECTS, HOOK_EVENT_LOG_LIMIT, HOOK_EVENT_RECORD_AGENTS, type HookEventRecord } from '@bmn/protocol'
 
 export const HOOK_HISTORY_FILE = 'hook-events.json'
 export const HOOK_HISTORY_MAX_BYTES = 1024 * 1024
@@ -28,7 +28,7 @@ function validRow(value: unknown): value is HookEventRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as Record<string, unknown>
   return Object.keys(row).length === FIELDS.length && FIELDS.every(key => key in row) && id(row.sessionId) &&
-    (row.incarnationId === null || id(row.incarnationId)) && (HOOK_EVENT_AGENTS as readonly unknown[]).includes(row.agent) &&
+    (row.incarnationId === null || id(row.incarnationId)) && (HOOK_EVENT_RECORD_AGENTS as readonly unknown[]).includes(row.agent) &&
     typeof row.event === 'string' && EVENTS.has(row.event) &&
     (row.source === null || typeof row.source === 'string' && SOURCES.has(row.source)) &&
     (row.toolName === null || typeof row.toolName === 'string' && TOOLS.has(row.toolName)) &&

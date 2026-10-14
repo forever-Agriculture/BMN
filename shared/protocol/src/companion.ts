@@ -1,5 +1,6 @@
 // MODULE: companion.ts - records, topics and settings for the host-side companion service
 import type { ModelOriginAgent, ModelOriginCountry } from './model-origin'
+import { isRetiredApp, type RosterRetiredHarness } from './agents-roster'
 import type { AttentionPrompt } from './attention-prompt'
 import type { AttentionProducerBinding } from './attention-producer'
 import type { ManualChoices } from './manual-choices'
@@ -126,15 +127,23 @@ export const ATTENTION_ORIGINS = Object.freeze([
   ...TERMINAL_NOTICE_CODES.map(terminalNoticeOrigin),
   'watch:repeat',
   'watch:usage',
-  'watch:messages'
+  'watch:messages',
+  // A launch-set entry that would start a retired app opened as a plain terminal (Epic 71).
+  'launch:retired'
 ] as const)
 
 /** Origins a session's own token may claim: its harness's hook events, and the CLI it runs itself. */
 export const AGENT_ATTENTION_ORIGINS = Object.freeze(['cli'] as const)
 
 /** `terminal` is not a harness: it is what a program's own OSC notification is logged as. */
-export const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex', 'opencode', 'cursor', 'terminal'] as const)
+export const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex', 'opencode', 'terminal'] as const)
 export type HookEventAgent = (typeof HOOK_EVENT_AGENTS)[number]
+/**
+ * What a saved row or request may name: the agents above, and Cursor, which BMN retired (Epic 71).
+ * A row saved before then is read as it was; no new one names Cursor.
+ */
+export const HOOK_EVENT_RECORD_AGENTS = Object.freeze([...HOOK_EVENT_AGENTS, 'cursor'] as const)
+export type HookEventRecordAgent = (typeof HOOK_EVENT_RECORD_AGENTS)[number]
 
 /** `RULES.source` size: the whole origin and a hook event name alike are at most this many characters. */
 const ORIGIN_MAX = 64
@@ -148,8 +157,15 @@ export function isAttentionOrigin(value: string): boolean {
   const rest = value.slice('hook:'.length)
   const separator = rest.indexOf(':')
   if (separator < 0) return false
-  return (HOOK_EVENT_AGENTS as readonly string[]).includes(rest.slice(0, separator)) &&
+  return (HOOK_EVENT_RECORD_AGENTS as readonly string[]).includes(rest.slice(0, separator)) &&
     isHookEventName(rest.slice(separator + 1))
+}
+
+/** The retired app a saved request's origin names (`hook:<app>:<event>`), or null (Epic 71). */
+export function retiredOriginApp(origin: string | null): RosterRetiredHarness | null {
+  if (origin === null || !origin.startsWith('hook:')) return null
+  const agent = origin.slice('hook:'.length).split(':', 1)[0]
+  return isRetiredApp(agent) ? agent : null
 }
 
 /**
@@ -174,7 +190,7 @@ export interface HookEventRecord {
   sessionId: string
   /** The process incarnation that reported it; null for a row recorded before this was tracked. */
   incarnationId: string | null
-  agent: HookEventAgent
+  agent: HookEventRecordAgent
   /** The harness's own event name, for example `PostToolUse`. */
   event: string
   /** The harness's `source` field, when it sent one. */
@@ -223,7 +239,7 @@ export interface HookCompaction {
 /**
  * The agents whose plan use BMN can read without a network call (Story 37.1, docs/usage-sources.md):
  * Claude Code through its status-line input, Codex through the `token_count` lines of its own session
- * file. `claude glm`, OpenCode and Cursor report no plan windows on this machine.
+ * file. `claude glm` and OpenCode report no plan windows on this machine.
  */
 export const USAGE_AGENTS = Object.freeze(['claude', 'codex'] as const)
 export type UsageAgent = (typeof USAGE_AGENTS)[number]
@@ -257,7 +273,7 @@ export interface UsageReading {
 }
 
 /** The apps whose prompt event BMN answers (Story 60.8). */
-export const GUARD_AGENTS = Object.freeze(['claude', 'codex', 'cursor'] as const)
+export const GUARD_AGENTS = Object.freeze(['claude', 'codex'] as const)
 export type GuardAgent = (typeof GUARD_AGENTS)[number]
 
 /**
@@ -277,7 +293,7 @@ export const GUARD_CAUSES = Object.freeze(['public-only', 'declared', 'unknown',
 export type GuardCause = (typeof GUARD_CAUSES)[number]
 
 /**
- * A prompt the guard stopped, or could only warn about, in one session (Story 60.8). It lives in
+ * A prompt the guard stopped in one session (Story 60.8). It lives in
  * memory for the run that reported it and nowhere else: never in the database, a Backup export,
  * Telegram or a notification. It names who and where, never what was typed.
  */
@@ -285,8 +301,8 @@ export interface GuardStop {
   sessionId: string
   incarnationId: string
   agent: GuardAgent
-  /** `stop`: the app was told to stop the prompt. `warn`: the app cannot be told, so the prompt went on. */
-  outcome: 'stop' | 'warn'
+  /** The app was told to stop the prompt. */
+  outcome: 'stop'
   cause: GuardCause
   /** The one line the agent showed. */
   line: string
@@ -308,7 +324,7 @@ export interface GuardStop {
   start: string | null
   conversation: string | null
   at: string
-  /** The owner chose Keep blocked, or closed a warning: the card stays closed, the session's mark stays. */
+  /** The owner chose Keep blocked: the card stays closed, the session's mark stays. */
   kept: boolean
 }
 
@@ -384,7 +400,7 @@ export const MAX_HOOK_EVENT_EFFECTS = 8
  * The harnesses whose own hook files `bmn hooks check` reads. A report says what is *configured*,
  * never that a hook fired; the labels for that limit live with the report, not in the data.
  */
-export const HOOK_CHECK_AGENTS = Object.freeze(['claude', 'codex', 'opencode', 'cursor'] as const)
+export const HOOK_CHECK_AGENTS = Object.freeze(['claude', 'codex', 'opencode'] as const)
 export type HookCheckAgent = (typeof HOOK_CHECK_AGENTS)[number]
 
 /** What the checker could do with one harness's hook file; the reason detail stays out of the window. */
@@ -695,7 +711,7 @@ export interface AgentHistoryClaudeFolder {
   failure?: string
 }
 
-export type AgentHistoryAgent = 'codex' | 'opencode' | 'cursor'
+export type AgentHistoryAgent = 'codex' | 'opencode'
 
 export interface AgentHistoryRun {
   at: string
@@ -708,8 +724,8 @@ export interface AgentHistoryRun {
 /** One agent BMN prunes by the agent's own delete command (Story 31.2). */
 export interface AgentHistoryAgentRow {
   agent: AgentHistoryAgent
-  /** `managed`: BMN counts and deletes; `unrecognised`: the store or command is not what BMN measured; `own`: the agent keeps its own history. */
-  state: 'managed' | 'unrecognised' | 'own'
+  /** `managed`: BMN counts and deletes; `unrecognised`: the store or command is not what BMN measured. */
+  state: 'managed' | 'unrecognised'
   detail?: string
   sessions?: number
   /** Sessions older than the owner's (pending) limit that a run would delete. */

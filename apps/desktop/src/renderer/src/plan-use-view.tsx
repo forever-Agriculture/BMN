@@ -89,7 +89,7 @@ const DIALOG_AGENTS: readonly { agent: UsageAgent; name: string }[] = [
 ]
 
 /** Harnesses with no local source of plan use (docs/usage-sources.md), named so their absence is explained. */
-const NOT_REPORTED = ['claude glm', 'OpenCode', 'Cursor'] as const
+const NOT_REPORTED = ['claude glm', 'OpenCode'] as const
 
 /** The latest reading per agent across all sessions, since a plan belongs to the account. */
 export function PlanUseDialog(props: { now: number; onClose(): void }): React.JSX.Element {

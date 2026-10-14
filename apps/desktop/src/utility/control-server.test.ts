@@ -929,19 +929,17 @@ describe('control server validation', () => {
     }
 
     expect((await client.request('guard.report', stop)).result).toEqual({ recorded: true })
-    expect((await client.request('guard.report', { agent: 'cursor', outcome: 'warn', cause: 'unknown', line: 'BMN cannot tell where Cursor sends work.' })).result).toEqual({ recorded: true })
     expect((await client.request('guard.report', { agent: 'codex', outcome: 'pass' })).result).toEqual({ recorded: true })
     expect(fixture.handlers.reportGuard).toHaveBeenNthCalledWith(1, { sessionId: 'session-1', incarnationId: 'incarnation-1', ...stop })
-    expect(fixture.handlers.reportGuard).toHaveBeenNthCalledWith(2, {
-      sessionId: 'session-1', incarnationId: 'incarnation-1', agent: 'cursor', outcome: 'warn', cause: 'unknown', line: 'BMN cannot tell where Cursor sends work.', allow: false,
-      workspace: null, folder: null, processFolder: null, providerId: null, providerName: null, agentName: null, host: null, pid: null, start: null, conversation: null
-    })
-    expect(fixture.handlers.reportGuard).toHaveBeenNthCalledWith(3, { sessionId: 'session-1', incarnationId: 'incarnation-1', agent: 'codex', outcome: 'pass' })
+    expect(fixture.handlers.reportGuard).toHaveBeenNthCalledWith(2, { sessionId: 'session-1', incarnationId: 'incarnation-1', agent: 'codex', outcome: 'pass' })
+    // Cursor was retired, and with it the guard's warning (Epic 71).
+    expectError(await client.request('guard.report', { ...stop, agent: 'cursor' }), ERROR_CODES.invalidArgument)
+    expectError(await client.request('guard.report', { ...stop, outcome: 'warn' }), ERROR_CODES.invalidArgument)
 
     const owner = await authenticated(fixture, fixture.auth.ownerToken)
     expectError(await owner.request('guard.report', { sessionId: 'session-1', ...stop }), ERROR_CODES.unauthorized)
     expectError(await client.request('guard.report', { sessionId: 'session-2', ...stop }), ERROR_CODES.unauthorized)
-    expect(fixture.handlers.reportGuard).toHaveBeenCalledTimes(3)
+    expect(fixture.handlers.reportGuard).toHaveBeenCalledTimes(2)
   })
 
   it.each([

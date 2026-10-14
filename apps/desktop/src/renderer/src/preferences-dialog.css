@@ -511,8 +511,7 @@
   color: var(--text);
 }
 
-.preferences-dialog .history-rows dd.failure,
-.preferences-dialog .history-rows dd.note {
+.preferences-dialog .history-rows dd.failure {
   grid-column: 2 / -1;
   color: var(--muted);
 }

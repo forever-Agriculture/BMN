@@ -47,8 +47,8 @@ const JUDGE_ROLE_LINE = 'judge: {description: answers typed questions about a te
 /** The example team in the newest layout with a judge on it: who receives its request, who runs its model, the agent and the role. */
 function withJudge({ receives = 'allowed', runs = 'allowed', block = JEV_BLOCK, role = JUDGE_ROLE_LINE }: { receives?: string; runs?: string; block?: string; role?: string } = {}): string {
   let text = edit(EXAMPLE, 'schema_version: 2', 'schema_version: 3')
-  text = edit(text, 'cursor: {name: Cursor, hosts: [], private_work: public_only}\n',
-    `cursor: {name: Cursor, hosts: [], private_work: public_only}\ngateway: {name: Gateway, hosts: [gateway.example.test], private_work: ${receives}}\nmaker: {name: Maker, hosts: [], private_work: ${runs}}\n`)
+  text = edit(text, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\n',
+    `opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\ngateway: {name: Gateway, hosts: [gateway.example.test], private_work: ${receives}}\nmaker: {name: Maker, hosts: [], private_work: ${runs}}\n`)
   text = edit(text, '## roles\n', `## jev\n\n\`\`\`yaml\n${block}\n\`\`\`\n\n## roles\n`)
   return edit(text, 'consultant: {candidates: [astra@medium|high, fable@medium|high], then: blocked}\n',
     `consultant: {candidates: [astra@medium|high, fable@medium|high], then: blocked}\n${role}\n`)

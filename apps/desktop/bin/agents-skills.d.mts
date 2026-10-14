@@ -2,7 +2,7 @@
 import type { Generation } from './agents-state.mjs'
 
 type Environment = NodeJS.ProcessEnv | Record<string, string>
-export type SkillsHarness = 'claude' | 'codex' | 'opencode' | 'cursor'
+export type SkillsHarness = 'claude' | 'codex' | 'opencode'
 export type SkillState = 'unreadable' | 'missing' | 'link' | 'unmanaged' | 'edited-outside' | 'stale' | 'current' | 'read-directly' | 'exposed' | 'excluded'
 export type SkillsOutcome = 'pass' | 'fail' | 'inconclusive' | 'unavailable'
 
@@ -94,7 +94,7 @@ export declare function installSkills(harnesses?: string[], options?: {
   afterConfirm?: () => void; beforeTarget?: (target: { harness: string; skill: string; path: string }, index: number) => void
   afterTarget?: (target: { harness: string; skill: string; path: string }, index: number) => void
 }): Promise<SkillsInstallResult>
-export declare function restoreSkillsTransaction(manifest: unknown, folder: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string }): Promise<{ code: string; restored?: string[]; message?: string; plan_hash?: string; targets?: { harness: string; path: string; resolved_path: string; becomes: string; diff: string }[] }>
+export declare function restoreSkillsTransaction(manifest: unknown, folder: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string; leftWords?: string[] }): Promise<{ code: string; restored?: string[]; message?: string; plan_hash?: string; targets?: { harness: string; path: string; resolved_path: string; becomes: string; diff: string }[] }>
 
 export declare function testSkillsFolders(harness: string, options?: { environment?: Environment; now?: Date; timeoutMs?: number }): Promise<SkillsTestEntry>
 type SkillsTestOptions = { environment?: Environment; now?: Date; timeoutMs?: number }

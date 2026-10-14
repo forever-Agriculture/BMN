@@ -18,7 +18,40 @@ export const OLDEST_SCHEMA_VERSION = 2
 export function schemaSupported(version) {
   return Number.isSafeInteger(version) && version >= OLDEST_SCHEMA_VERSION && version <= SCHEMA_VERSION
 }
-export const HARNESSES = ['claude', 'codex', 'opencode', 'cursor']
+export const HARNESSES = ['claude', 'codex', 'opencode']
+/**
+ * Apps BMN supported once and retired (Epic 71), with how they are named. A team file that still
+ * names one is read, with a note; nothing runs on it, and Team proposes removing it. The support
+ * itself is kept at a git tag, so it can come back.
+ */
+export const RETIRED_APPS = { cursor: 'Cursor' }
+export const RETIRED_ON = '2026-10-14'
+export const RETIRED_TAG = 'cursor-support-final'
+/** The apps a team file's lists may name: the ones BMN serves, then the retired ones, which an old file may still hold. */
+export const LISTED_APPS = [...HARNESSES, ...Object.keys(RETIRED_APPS)]
+/** Whether an app is one BMN retired. */
+export function isRetired(app) {
+  return typeof app === 'string' && Object.hasOwn(RETIRED_APPS, app)
+}
+/** How BMN names an app, a retired one included; an id it does not know is shown as written. */
+export function appName(app) {
+  return APP_NAMES[app] ?? RETIRED_APPS[app] ?? app
+}
+/** What every command says when it is asked for a retired app, in place of "unknown app". */
+export function retiredWords(app) {
+  return `${RETIRED_APPS[app]} was retired on ${RETIRED_ON}; BMN's support for it is kept at the git tag ${RETIRED_TAG}`
+}
+/** Each retired app's program, so a command that starts one is named for what it was. */
+export const RETIRED_PROGRAMS = { 'cursor-agent': 'cursor' }
+/** The retired app a command's program (a name or a path) starts, or null. */
+export function retiredProgram(command) {
+  const name = typeof command === 'string' ? command.slice(command.lastIndexOf('/') + 1) : ''
+  return Object.hasOwn(RETIRED_PROGRAMS, name) ? RETIRED_PROGRAMS[name] : null
+}
+/** What a command says of an app it cannot take: that it was retired, or else its own words. */
+export function appRefusal(app, words) {
+  return isRetired(app) ? retiredWords(app) : words
+}
 /**
  * What an agent's `harness` says in place of an agent app when BMN itself calls the model (65.1):
  * such an agent runs in no app, takes no dispatch, and is asked through a command of BMN's own.
@@ -30,16 +63,14 @@ export function isCalled(agent) {
   return agent?.harness === CALLED_BY_BMN
 }
 /** How BMN names each agent app to the owner, in the order they are always listed. */
-export const APP_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' }
-/** Apps whose dispatches BMN never checks: no dispatch check reads their command. OpenCode left the list with Story 70.2. */
-export const UNCHECKED_APPS = ['cursor']
+export const APP_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' }
 /**
- * Apps that get public work only whatever their destination reads. Cursor picks its model inside
- * the app. OpenCode converts older configuration shapes BMN does not read (a model entry's own
- * `provider`, a variant's direct fields, renamed providers), so its reading cannot rule out another
- * endpoint; it stays here by owner decision 2026-10-14 after the fifth review found one more.
+ * Apps that get public work only whatever their destination reads. OpenCode converts older
+ * configuration shapes BMN does not read (a model entry's own `provider`, a variant's direct
+ * fields, renamed providers), so its reading cannot rule out another endpoint; it stays here by
+ * owner decision 2026-10-14 after the fifth review found one more.
  */
-export const PUBLIC_ONLY_APPS = ['opencode', 'cursor']
+export const PUBLIC_ONLY_APPS = ['opencode']
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 /** The five chess classes: a knight leads an epic/project, a queen may hold any role, a rook designs, a bishop reviews and advises, a pawn does jobs a lead hands off. */
 export const CLASSES = ['knight', 'queen', 'rook', 'bishop', 'pawn']
@@ -616,11 +647,12 @@ export function parseRoster(text) {
   const agentById = new Map(agents.filter(Boolean).map((agent) => [agent.id, agent]))
   const agentIds = new Set([...seen.keys()].filter((id) => !RESERVED_SECTIONS.includes(id)))
 
-  const routes = validateRoutes(blocks.get('harness-routes'), providerIds, add)
+  const warn = (code, line, message) => warnings.push({ code, line, message })
+  const routes = validateRoutes(blocks.get('harness-routes'), providerIds, add, warn)
   const roles = validateRoles(blocks.get('roles'), agentById, agentIds, add, warnings, schema)
-  const exceptions = validateExceptions(blocks.get('exceptions'), providerIds, add, (code, line, message) => warnings.push({ code, line, message }))
-  const skills = validateSkills(blocks.get('skills'), add)
-  const tools = validateTools(blocks.get('tools'), agentIds, add)
+  const exceptions = validateExceptions(blocks.get('exceptions'), providerIds, add, warn)
+  const skills = validateSkills(blocks.get('skills'), add, warn)
+  const tools = validateTools(blocks.get('tools'), agentIds, add, warn)
 
   const providerById = new Map(providers.map((provider) => [provider.id, provider]))
   const roleIds = new Set(roles.map((role) => role.id))
@@ -629,6 +661,7 @@ export function parseRoster(text) {
   const judgeWritten = isMap(rolesBlock?.value) && Object.hasOwn(rolesBlock.value, JUDGE_ROLE)
   for (const agent of agentById.values()) {
     const entry = blocks.get(agent.id)
+    if (isRetired(agent.harness)) warn('APP_RETIRED', entry.lines.get('harness'), `${agent.id} runs in ${retiredWords(agent.harness)}; nothing runs on it, and BMN proposes removing it on Team`)
     const route = routes.find((candidate) => candidate.harness === agent.harness)
     if (isCalled(agent) && !roleIds.has(JUDGE_ROLE) && !judgeWritten && agent.roles.includes(JUDGE_ROLE)) {
       // Said as an error, not as the warning other roles get: without the role nothing could ever ask this agent.
@@ -706,7 +739,8 @@ function validateAgent(id, entry, providerIds, add, schema) {
   const positive = (v) => Number.isSafeInteger(v) && v > 0
   check('name', (v) => isString(v, 40), 'text of 1-40 characters')
   check('class', enumOf(CLASSES), CLASSES.join(' | '))
-  check('harness', enumOf([...HARNESSES, CALLED_BY_BMN]), `${HARNESSES.join(' | ')}, or ${CALLED_BY_BMN} for an agent BMN itself calls`)
+  // A retired app is still read, so an old team file loads; the note and Team's proposal come from parseRoster.
+  check('harness', enumOf([...LISTED_APPS, CALLED_BY_BMN]), `${HARNESSES.join(' | ')}, or ${CALLED_BY_BMN} for an agent BMN itself calls`)
   check('model', (v) => isString(v, 128), 'text of 1-128 characters')
   check('provider', (v) => typeof v === 'string' && ID_PATTERN.test(v), 'a provider id from ## providers')
   check('run_by', (v) => typeof v === 'string' && ID_PATTERN.test(v), 'a provider id from ## providers: who runs the model')
@@ -739,11 +773,11 @@ function validateAgent(id, entry, providerIds, add, schema) {
   }
   if (called) return calledAgent(id, value, at, providerIds, add, schema)
   if (Object.hasOwn(value, 'run_by')) {
-    add('CALLED_ONLY', at('run_by'), `${id}.run_by: only an agent called by BMN (harness: ${CALLED_BY_BMN}) names who runs its model; ${id} runs in ${APP_NAMES[value.harness]}`)
+    add('CALLED_ONLY', at('run_by'), `${id}.run_by: only an agent called by BMN (harness: ${CALLED_BY_BMN}) names who runs its model; ${id} runs in ${appName(value.harness)}`)
     return null
   }
   if (value.roles.includes(JUDGE_ROLE)) {
-    add('JUDGE_NOT_CALLED', at('roles'), `${id} holds role ${JUDGE_ROLE}; only an agent called by BMN (harness: ${CALLED_BY_BMN}) holds it, and ${id} runs in ${APP_NAMES[value.harness]}`)
+    add('JUDGE_NOT_CALLED', at('roles'), `${id} holds role ${JUDGE_ROLE}; only an agent called by BMN (harness: ${CALLED_BY_BMN}) holds it, and ${id} runs in ${appName(value.harness)}`)
     return null
   }
   if (value.efforts.length === 0 && value.enabled) {
@@ -847,12 +881,13 @@ function validateProviders(entry, add) {
   return providers
 }
 
-function validateRoutes(entry, providerIds, add) {
+function validateRoutes(entry, providerIds, add, warn) {
   if (!entry) return []
   const routes = []
   for (const [harness, route] of Object.entries(entry.value)) {
     const line = entry.lines.get(harness)
-    if (!HARNESSES.includes(harness)) {
+    if (isRetired(harness)) warn('APP_RETIRED', line, `## harness-routes.${harness}: ${retiredWords(harness)}; BMN proposes removing this route on Team`)
+    else if (!HARNESSES.includes(harness)) {
       add('UNKNOWN_FIELD', line, `## harness-routes: unknown harness ${harness}`)
       continue
     }
@@ -1030,7 +1065,7 @@ function validateJudge(role, entry, agentById, agentIds, add, warnings, schema) 
       if (!agentIds.has(text)) return fail('UNKNOWN_AGENT', 'candidates', `"${text}" names unknown agent ${text}`)
       const agent = agentById.get(text)
       if (agent === undefined) return undefined // its own section already failed and is reported there
-      if (!isCalled(agent)) return fail('JUDGE_NOT_CALLED', 'candidates', `"${text}": only an agent called by BMN may be a candidate of ${JUDGE_ROLE}, and ${agent.id} runs in ${APP_NAMES[agent.harness]}`)
+      if (!isCalled(agent)) return fail('JUDGE_NOT_CALLED', 'candidates', `"${text}": only an agent called by BMN may be a candidate of ${JUDGE_ROLE}, and ${agent.id} runs in ${appName(agent.harness)}`)
       if (!agent.roles.includes(JUDGE_ROLE)) return fail('ROLE_NOT_HELD', 'candidates', `"${text}": ${agent.id} does not hold role ${JUDGE_ROLE} in its own roles`)
       if (!agent.enabled) warnings.push({ code: 'CANDIDATE_DISABLED', line: entry.lines.get(`${JUDGE_ROLE}.candidates`) ?? line, message: `## roles.${JUDGE_ROLE}: ${agent.id} is disabled` })
       return undefined
@@ -1110,6 +1145,8 @@ function validateExceptions(entry, providerIds, add, warn) {
 // Queries over validated (or approved) machine data
 
 export function agentState(agent) {
+  // An agent on a retired app takes no work, whatever the file says of it (Epic 71).
+  if (isRetired(agent.harness)) return 'retired'
   if (agent.status === 'proposed') return 'proposed'
   if (!agent.enabled) return 'disabled'
   return 'active'
@@ -1154,7 +1191,7 @@ export function calledParties(data, agent) {
  * (owner decisions 2026-10-10, narrowing 60.4 AC3, and 2026-10-14, which kept OpenCode on it).
  */
 export function harnessPrivateWork(data, harness) {
-  const app = APP_NAMES[harness] ?? harness
+  const app = appName(harness)
   const route = data?.harness_routes.find((entry) => entry.harness === harness)
   if (route === undefined) return { allowed: false, reason: data ? `BMN has no approved destination for ${app}` : 'nothing is approved yet', route: null, provider: null }
   const provider = data.providers.find((entry) => entry.id === route.provider) ?? null
@@ -1178,10 +1215,9 @@ export function publicOnlyReasons(agent, data) {
   const reasons = []
   const provider = data.providers.find((entry) => entry.id === agent.provider)
   const route = data.harness_routes.find((entry) => entry.harness === agent.harness)
-  if (UNCHECKED_APPS.includes(agent.harness)) reasons.push(`BMN cannot check ${APP_NAMES[agent.harness] ?? agent.harness} dispatches`)
   if (agent.host === null) reasons.push(`${agent.id}'s host is unknown`)
-  if (agent.host === 'default' && route === undefined) reasons.push(`no approved destination for ${APP_NAMES[agent.harness] ?? agent.harness}`)
-  if (agent.host === 'default' && route?.basis === 'owner-declared') reasons.push(`the ${APP_NAMES[agent.harness] ?? agent.harness} destination is owner-declared`)
+  if (agent.host === 'default' && route === undefined) reasons.push(`no approved destination for ${appName(agent.harness)}`)
+  if (agent.host === 'default' && route?.basis === 'owner-declared') reasons.push(`the ${appName(agent.harness)} destination is owner-declared`)
   if (provider?.private_work !== 'allowed') reasons.push(`${provider?.name ?? agent.provider} gets public work only`)
   return reasons
 }
@@ -1303,7 +1339,7 @@ function yamlFlow(value) {
  * The data holds one entry per skill that has either mark, in name order, and nothing at all when
  * the section says nothing, so a team file without the section keeps the hash it always had.
  */
-function validateSkills(entry, add) {
+function validateSkills(entry, add, warn) {
   if (!entry) return {}
   const where = entry.block.startLine
   for (const key of Object.keys(entry.value)) {
@@ -1338,12 +1374,14 @@ function validateSkills(entry, add) {
       const line = entry.lines.get('only') ?? where
       if (!SKILL_PATTERN.test(name)) {
         add('INVALID_VALUE', line, `## skills.only: ${name} is not a skill name (lowercase letters, digits and hyphens)`)
-      } else if (!Array.isArray(apps) || apps.length === 0 || apps.some((app) => !HARNESSES.includes(app))) {
+      } else if (!Array.isArray(apps) || apps.length === 0 || apps.some((app) => !LISTED_APPS.includes(app))) {
         add('INVALID_VALUE', line, `## skills.only.${name} must be a list of one or more of ${HARNESSES.join(', ')}`)
       } else if (new Set(apps).size !== apps.length) {
         add('DUPLICATE_ID', line, `## skills.only.${name} names an app twice`)
       } else {
-        mark(name).only = HARNESSES.filter((app) => apps.includes(app))
+        // A retired app stays in the list as written and reaches nothing: no app BMN serves is added in its place.
+        for (const app of apps.filter(isRetired)) warn('APP_RETIRED', line, `## skills.only.${name}: ${retiredWords(app)}`)
+        mark(name).only = LISTED_APPS.filter((app) => apps.includes(app))
       }
     }
   }
@@ -1379,7 +1417,7 @@ function toolUrlProblem(value) {
  * `agents` keeps it to the runs of some agents, in which case it is installed in no app. The data
  * holds nothing at all when the section says nothing, so a team file without it keeps its hash.
  */
-function validateTools(entry, agentIds, add) {
+function validateTools(entry, agentIds, add, warn) {
   if (!entry) return {}
   const tools = []
   for (const [id, tool] of Object.entries(entry.value)) {
@@ -1431,9 +1469,12 @@ function validateTools(entry, agentIds, add) {
     }
     if (Object.hasOwn(tool, 'apps') && Object.hasOwn(tool, 'agents')) fail('INVALID_VALUE', 'agents', 'a tool is kept to some apps or to some agents, not both')
     else if (Object.hasOwn(tool, 'apps')) {
-      if (!Array.isArray(tool.apps) || tool.apps.length === 0 || tool.apps.some((app) => !HARNESSES.includes(app))) fail('INVALID_VALUE', 'apps', `apps must be a list of one or more of ${HARNESSES.join(', ')}`)
+      if (!Array.isArray(tool.apps) || tool.apps.length === 0 || tool.apps.some((app) => !LISTED_APPS.includes(app))) fail('INVALID_VALUE', 'apps', `apps must be a list of one or more of ${HARNESSES.join(', ')}`)
       else if (new Set(tool.apps).size !== tool.apps.length) fail('DUPLICATE_ID', 'apps', 'apps names an app twice')
-      else out.apps = HARNESSES.filter((app) => tool.apps.includes(app))
+      else {
+        for (const app of tool.apps.filter(isRetired)) warn('APP_RETIRED', entry.lines.get(`${id}.apps`) ?? line, `## tools.${id}.apps: ${retiredWords(app)}`)
+        out.apps = LISTED_APPS.filter((app) => tool.apps.includes(app))
+      }
     } else if (Object.hasOwn(tool, 'agents')) {
       if (!Array.isArray(tool.agents) || tool.agents.length === 0 || tool.agents.some((agent) => typeof agent !== 'string' || !ID_PATTERN.test(agent))) fail('INVALID_VALUE', 'agents', 'agents must be a list of one or more agent ids')
       else if (new Set(tool.agents).size !== tool.agents.length) fail('DUPLICATE_ID', 'agents', 'agents names an agent twice')

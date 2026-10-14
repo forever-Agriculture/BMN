@@ -9,6 +9,10 @@ import {
   ROSTER_JUDGE_ROLE,
   ROSTER_THEN,
   LUNA_GO_PROPOSAL,
+  RETIRED_APP_LINE,
+  RETIRED_APP_NAMES,
+  appDisplayName,
+  isRetiredApp,
   rosterApp,
   type AgentAppView,
   type ContextLimitView,
@@ -38,7 +42,9 @@ import {
   isCalled,
   judgeProposal,
   lunaGoProposal,
+  retiredAppProposal,
   roleBar,
+  type RetiredRemoval,
   CLASS_WORDS,
   PRIVATE_WORK_WORDS,
   THEN_WORDS,
@@ -385,6 +391,31 @@ export function OpenCodeGoNotes(props: { team: TeamState; data: RosterDataShape;
   )
 }
 
+/** "a", "a and b", "a, b and c". */
+function joined(names: readonly string[]): string {
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`
+}
+
+/** What the Team note says of a team file that still names a retired app (71.2 AC3, the 71.1 design notes). */
+export function retiredAppProposalWords(removed: RetiredRemoval): string {
+  const parts = [...removed.agents, ...removed.routes.map((app) => `the ${appDisplayName(app)} route`), ...removed.providers.map((name) => `the ${name} provider`),
+    ...(removed.lists ? [`${joined(Object.values(RETIRED_APP_NAMES))} from the apps a skill or tool is kept to`] : [])]
+  return `${RETIRED_APP_LINE} BMN's proposal removes ${joined(parts)} from the team file. Nothing changes until you approve it.`
+}
+
+/** The note a team file that still names a retired app gets, with BMN's proposal to take it out. */
+export function RetiredAppNote(props: { team: TeamState; data: RosterDataShape }): React.JSX.Element | null {
+  const proposal = retiredAppProposal(props.data)
+  if (proposal === null) return null
+  return (
+    <div className="page-note with-action" role="status">
+      <Dot label="Needs you" />
+      <span className="note-text">{retiredAppProposalWords(proposal.removed)}</span>
+      <button type="button" className="small" onClick={() => props.team.stage(proposal.data)}>Use proposal</button>
+    </div>
+  )
+}
+
 /** Asks the main process about Luna through OpenCode Go when the page opens and after each approval. */
 function OpenCodeGo(props: { team: TeamState; data: RosterDataShape }): React.JSX.Element | null {
   const { team } = props
@@ -438,6 +469,7 @@ function AgentsPage(props: { team: TeamState; data: RosterDataShape; go(page: Te
       ) : null}
       <JudgeProposal team={team} data={data} />
       <OpenCodeGo team={team} data={data} />
+      <RetiredAppNote team={team} data={data} />
       {team.outside.groups.length > 0 ? <OutsideHead team={team} /> : null}
       {team.outside.groups.map((group) => <OutsideRow key={group.key} group={group} team={team} />)}
       {data.agents.length === 0 ? <p className="page-note">No agents yet. New agent adds the first one.</p> : null}
@@ -532,7 +564,7 @@ function HostRow(props: { team: TeamState; data: RosterDataShape; agent: RosterA
   const [host, setHost] = useState(custom ? agent.host ?? '' : '')
   const [answer, setAnswer] = useState<RosterPrivateWork>('public_only')
   const answerId = useId()
-  const app = rosterApp(agent) ?? 'claude'
+  const app = liveApp(agent) ?? 'claude'
   const landing = landingFor(data, app, kind === 'custom' ? host : '')
   const pending = kind === 'custom' && host.trim() !== '' && host.trim().toLowerCase() !== agent.host
   return (
@@ -614,6 +646,11 @@ export function compactHint(agent: Pick<RosterAgentShape, 'harness'>, context: C
 
 /** What the app choice offers: the agent apps, and "Called by BMN" only for an agent that holds no role (65.1 AC5): one that holds a role runs in an app. */
 type AppChoice = RosterHarness | typeof ROSTER_CALLED_BY_BMN
+/** The app an agent runs in, when it is one BMN serves: null for an agent BMN calls or one on a retired app. */
+function liveApp(agent: Pick<RosterAgentShape, 'harness'>): RosterHarness | null {
+  const app = rosterApp(agent)
+  return app === null || isRetiredApp(app) ? null : app
+}
 export function appChoices(agent: Pick<RosterAgentShape, 'roles'>): readonly AppChoice[] {
   return agent.roles.length === 0 ? [...ROSTER_HARNESSES, ROSTER_CALLED_BY_BMN] : ROSTER_HARNESSES
 }
@@ -709,21 +746,24 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
   const researcherId = useId()
   const price = priceWords(agent)
   const patch = (change: Parameters<typeof updateAgent>[2]): void => team.stage(updateAgent(data, agent.id, change))
-  const app = rosterApp(agent)
-  if (app === null) return <CalledAgentPage team={team} data={data} agent={agent} sessionName={props.sessionName} go={props.go} />
+  if (rosterApp(agent) === null) return <CalledAgentPage team={team} data={data} agent={agent} sessionName={props.sessionName} go={props.go} />
+  // Epic 71: an agent on a retired app keeps its page, with no app chosen until the owner picks one.
+  const app = liveApp(agent)
+  const appHint = app === null ? `${RETIRED_APP_LINE} Pick an app to keep ${agent.name}, or use the proposal on Team to remove it.`
+    : agent.roles.length === 0 ? `${CALLED_WORDS}: BMN asks the model itself, and it runs in no agent app. Such an agent holds the role Judge only.` : undefined
   return (
     <>
       <AgentTop team={team} data={data} agent={agent} go={props.go} />
 
       <h4 className="group-head">Model</h4>
-      <Row label="Agent app" id={appId} hint={agent.roles.length === 0 ? `${CALLED_WORDS}: BMN asks the model itself, and it runs in no agent app. Such an agent holds the role Judge only.` : undefined}>
-        <Segmented<AppChoice> labelledBy={appId} fit options={appChoices(agent)} value={app} optionLabel={(harness) => (harness === ROSTER_CALLED_BY_BMN ? CALLED_WORDS : ROSTER_APP_NAMES[harness])}
-          onChange={(harness) => team.stage(harness === ROSTER_CALLED_BY_BMN ? callByBmn(data, agent.id)
+      <Row label="Agent app" id={appId} hint={appHint}>
+        <Segmented<AppChoice | null> labelledBy={appId} fit options={appChoices(agent)} value={app} optionLabel={(harness) => (harness === ROSTER_CALLED_BY_BMN ? CALLED_WORDS : harness === null ? '' : ROSTER_APP_NAMES[harness])}
+          onChange={(harness) => harness === null ? undefined : team.stage(harness === ROSTER_CALLED_BY_BMN ? callByBmn(data, agent.id)
             : moveAgent(data, agent.id, harness, agent.host === 'default' || agent.host === null ? '' : agent.host, 'public_only', props.apps))} />
       </Row>
       <Row label="Model">
-        <ModelField value={agent.model} hint={modelSourceWords(agent.model, data, app, props.reported, { self: agent.id, ...(before ? { approved: before.model } : {}), ...(researched ? { research: researched } : {}) })}
-          suggest={(query) => modelSuggestions(data, app, props.reported, query, agent.id, researched)} onChange={(model) => team.stage(changeModel(data, agent.id, model, before))} />
+        <ModelField value={agent.model} hint={app === null ? 'BMN suggests models once an app is picked.' : modelSourceWords(agent.model, data, app, props.reported, { self: agent.id, ...(before ? { approved: before.model } : {}), ...(researched ? { research: researched } : {}) })}
+          suggest={(query) => (app === null ? [] : modelSuggestions(data, app, props.reported, query, agent.id, researched))} onChange={(model) => team.stage(changeModel(data, agent.id, model, before))} />
       </Row>
       <PrivateWorkRow team={team} data={data} agent={agent} />
       <Row label="Price" hint={twinPrice && twin ? `Taken from ${twin.name}, which uses the same model.`
@@ -761,7 +801,7 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
             <NumberField label="Compact at" value={agent.compact_at} placeholder="App default" refuse={(value) => compactRefusal(agent, value)} onChange={(next) => patch({ compact_at: next })} />
           </Row>
         ) : null}
-        <HostRow key={`${agent.id}-${agent.host}`} team={team} data={data} agent={agent} apps={props.apps} />
+        {app === null ? null : <HostRow key={`${agent.id}-${agent.host}`} team={team} data={data} agent={agent} apps={props.apps} />}
         <AlsoCalled team={team} data={data} agent={agent} />
         {publicOnly(data, agent) || data.exceptions.some((entry) => entry.provider === agent.provider) ? (
           <Row label="Allowed workspaces" hint={`Where ${providerOf(data, agent)?.name ?? agent.provider} may see private work although it otherwise may not. One is added from the card a stopped prompt shows.`}>

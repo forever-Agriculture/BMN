@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto'
 import { appendFileSync, chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute } from 'node:path'
-import { APP_NAMES, HARNESSES, RosterError, TOOL_PATTERN, agentsDirectory, canonicalJson, harnessPrivateWork, publicOnlyReasons, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, HARNESSES, RosterError, TOOL_PATTERN, agentsDirectory, appName, appRefusal, canonicalJson, harnessPrivateWork, publicOnlyReasons, sha256 } from './agents-roster.mjs'
 import { approvedIfAny } from './agents-state.mjs'
 import { ToolFileError, editJsonEntry, editTomlEntry, readJsonEntries, readTomlEntries, renderTomlEntry } from './agents-tool-files.mjs'
 import { ConfigWriteError, pathState, replaceFileSafely } from './safe-config-write.mjs'
@@ -54,11 +54,6 @@ export const TOOL_APPS = {
   opencode: {
     command: 'opencode', format: 'json', path: ['mcp'], reference: (name) => `{env:${name}}`, referencePattern: /^\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/,
     file: (environment) => `${environment.XDG_CONFIG_HOME || `${home(environment)}/.config`}/opencode/opencode.jsonc`,
-    list: ['mcp', 'list'], add: null, remove: null
-  },
-  cursor: {
-    command: 'cursor-agent', format: 'json', path: ['mcpServers'], reference: (name) => `\${env:${name}}`, referencePattern: /^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/,
-    file: (environment) => `${home(environment)}/.cursor/mcp.json`,
     list: ['mcp', 'list'], add: null, remove: null
   }
 }
@@ -778,7 +773,7 @@ export async function installTools(harnesses = [], { yes = false, asJson = false
  * entry the install wrote without getting to record it as done is undone too, known by that same
  * note; one it never began, or began and did not change, is left out.
  */
-export async function restoreToolsTransaction(manifest, _folder, { yes = false, asJson = false, planOnly = false, expectedPlanHash } = {}) {
+export async function restoreToolsTransaction(manifest, _folder, { yes = false, asJson = false, planOnly = false, expectedPlanHash, leftWords = [] } = {}) {
   const { confirm, writePrivate } = await import('./agents-rules.mjs')
   // Each entry is looked for in the file the install changed, wherever the apps' settings are now.
   const plans = [...manifest.targets].reverse().flatMap((target) => {
@@ -801,7 +796,7 @@ export async function restoreToolsTransaction(manifest, _folder, { yes = false, 
   const hash = sha256(canonicalJson(plans.map((plan) => ({ harness: plan.harness, tool: plan.tool, current: plan.current_hash, current_text: plan.current_text, directory: plan.current_directory, prior: plan.prior_hash }))))
   if (planOnly) return { code: 'OK', plan_hash: hash, targets }
   if (expectedPlanHash !== undefined && expectedPlanHash !== hash) return { code: 'REVISION_CONFLICT', message: 'the entries changed since the restore was shown; review it again' }
-  const details = targets.map((target) => `${target.harness}: ${target.tool} in ${target.path} -> ${target.becomes}`).join('\n')
+  const details = [...targets.map((target) => `${target.harness}: ${target.tool} in ${target.path} -> ${target.becomes}`), ...leftWords].join('\n')
   if (!await confirm(`Restore transaction ${manifest.id}?`, details, { yes, asJson })) return { code: 'NOT_CONFIRMED' }
   const restored = []
   for (const plan of plans) {
@@ -958,7 +953,7 @@ export function toolItems(agent, data, proven) {
   if ((data?.tools ?? []).length === 0) return { state: 'none' }
   const tools = runTools(data, agent)
   const ids = tools.map((tool) => tool.id)
-  const app = APP_NAMES[agent.harness] ?? agent.harness
+  const app = appName(agent.harness)
   if (!RUN_TEST_APPS.includes(agent.harness)) return { state: 'not-supported-yet', tools: ids, reason: noRunTest(app) }
   if (!proven.isolation || (tools.length === 0 && !proven.empty)) return { state: 'not-supported-yet', tools: ids, reason: `no test on this ${app} version showed a run kept to ${tools.length === 0 ? 'no tools' : 'its own tools'} (bmn tools test ${agent.harness})` }
   const rendered = runEntries(tools, agent.harness, proven)
@@ -1043,7 +1038,7 @@ function pluginsIn(text) {
  * folder only whether it holds anything is looked at, never what. Only Claude Code has a run test.
  */
 export function uncoveredSources(harness, { environment = process.env, cwd = null, covers = [], policyRoot = CLAUDE_POLICY_ROOT, settings } = {}) {
-  if (harness !== 'claude') return [`the places ${APP_NAMES[harness] ?? harness} takes tools from besides its settings`]
+  if (harness !== 'claude') return [`the places ${appName(harness)} takes tools from besides its settings`]
   const found = []
   // The run's folder under each of its spellings, each with the folders above it.
   const chains = cwd === null ? [] : spellings(cwd).map(foldersUp)
@@ -1303,7 +1298,7 @@ export async function testTools(harness, { environment = process.env, now = new 
     writeFileSync(`${folder}/tool.cjs`, STAND_IN)
     writeFileSync(program, `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec ${shellWord(process.execPath)} ${shellWord(`${folder}/tool.cjs`)} ${shellWord(log)} "$@"\n`)
     chmodSync(program, 0o755)
-    const testEnvironment = Object.fromEntries(Object.entries(environment).filter(([key]) => !/^(XDG_|CLAUDE_|CODEX_|OPENCODE_|CURSOR_|ANTHROPIC_|OPENAI_)/.test(key)))
+    const testEnvironment = Object.fromEntries(Object.entries(environment).filter(([key]) => !/^(XDG_|CLAUDE_|CODEX_|OPENCODE_|ANTHROPIC_|OPENAI_)/.test(key)))
     testEnvironment.HOME = testHome
     // Codex passes a variable only under its own name, and never as an argument; the other apps are asked for both.
     const from = harness === 'codex' ? 'BMN_TOOL_TEST_GIVEN' : 'BMN_TOOL_TEST_VALUE'
@@ -1494,7 +1489,7 @@ export async function runToolsCommand(argv) {
       const { options, positionals } = readOptions(rest, { flags: ['json', 'plan', 'yes', 'remove-unlisted'], values: ['expect-plan'] })
       asJson = options.json === true
       const unknown = positionals.filter((name) => !HARNESSES.includes(name))
-      if (unknown.length > 0) return usage(`tools install expects apps from ${HARNESSES.join(', ')}, not ${unknown.join(', ')}`)
+      if (unknown.length > 0) return usage(appRefusal(unknown[0], `tools install expects apps from ${HARNESSES.join(', ')}, not ${unknown.join(', ')}`))
       const versions = await installedVersions()
       const removeUnlisted = options['remove-unlisted'] === true
       if (options.plan) {
@@ -1534,7 +1529,7 @@ export async function runToolsCommand(argv) {
     if (action === 'test') {
       const { options, positionals } = readOptions(rest, { flags: ['json'] })
       asJson = options.json === true
-      if (positionals.length !== 1 || !HARNESSES.includes(positionals[0])) return usage(`tools test expects one app: ${HARNESSES.join(', ')}`)
+      if (positionals.length !== 1 || !HARNESSES.includes(positionals[0])) return usage(appRefusal(positionals[0], `tools test expects one app: ${HARNESSES.join(', ')}`))
       const result = await testTools(positionals[0])
       out(asJson ? JSON.stringify(result, null, 2) : `${result.harness}: ${result.outcome} - ${result.detail}${result.version ? ` (${result.version})` : ''}`)
       return result.outcome === 'pass' ? 0 : 1

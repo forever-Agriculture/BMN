@@ -36,23 +36,14 @@ export function guardTitle(stop: GuardStop): string {
  */
 export const GUARD_STOP_WORDS = 'Told to stop'
 
-/** The words on the session's own mark, in its pane header. */
-export function guardMark(stop: GuardStop): string {
-  if (stop.outcome === 'stop') return GUARD_STOP_WORDS
-  return stop.cause === 'public-only' || stop.cause === 'declared' ? 'Public-only provider on private work' : 'Unknown destination on private work'
-}
-
 /** What happens next, in one sentence under the agent's own line. */
 export function guardNote(stop: GuardStop): string {
-  const app = ROSTER_APP_NAMES[stop.agent]
-  if (stop.outcome === 'warn') return `${app} cannot be told to stop a prompt, so this one went on. BMN only warns in ${app}.`
   if (stop.allow) return `Allow here adds this one workspace for ${stop.providerName ?? 'this provider'} to your team as a new version. Then send the prompt again.`
   return 'Send the prompt again once this is fixed.'
 }
 
-/** What a stop is, and what is known about it; nothing for a warning, whose note already says the prompt went on. */
-export function guardCaveat(stop: GuardStop): string | null {
-  if (stop.outcome !== 'stop') return null
+/** What a stop is, and what is known about it. */
+export function guardCaveat(stop: GuardStop): string {
   const app = ROSTER_APP_NAMES[stop.agent]
   const measured = GUARD_MEASURED[stop.agent]
   return measured === undefined
@@ -96,7 +87,7 @@ export function SessionGuardCard(props: {
     onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); props.onClose(true) }
     }}>
-    <header><strong>{stop.outcome === 'stop' ? GUARD_STOP_WORDS : 'Prompt went on'}</strong><span>stays on this computer</span>
+    <header><strong>{GUARD_STOP_WORDS}</strong><span>stays on this computer</span>
       <button type="button" aria-label="Close prompt guard" onClick={() => props.onClose(true)}>×</button></header>
     <article className={`attention-item ${stop.kept ? 'update' : 'request'}`} aria-label={`${title} · ${props.place.workspace} › ${props.place.session}`}>
       <div className="where">
@@ -111,14 +102,14 @@ export function SessionGuardCard(props: {
         <dt>Workspace</dt><dd className="mono" title={stop.workspace}>{guardPath(stop.workspace, props.home)}</dd>
         {stop.host && !stop.host.startsWith('default:') ? <><dt>Address</dt><dd className="mono">{stop.host}</dd></> : null}
       </dl> : null}
-      {guardCaveat(stop) ? <p className="seen">{guardCaveat(stop)}</p> : null}
+      <p className="seen">{guardCaveat(stop)}</p>
       <p className="seen">{guardNote(stop)}</p>
       {props.refusal ? <p className="guard-refusal" role="alert">{props.refusal}</p> : null}
       <div className="actions">
         {stop.allow ? <button type="button" className="primary" disabled={props.busy} onClick={props.onAllow}>Allow here</button> : null}
         {stop.kept ? null
           : <button type="button" className={stop.allow ? undefined : 'primary'} disabled={props.busy} onClick={props.onKeep}
-            title="Close this card; the session keeps its mark.">{stop.outcome === 'warn' ? 'Dismiss' : stop.allow ? 'Keep blocked' : 'Close'}</button>}
+            title="Close this card; the session keeps its mark.">{stop.allow ? 'Keep blocked' : 'Close'}</button>}
       </div>
     </article>
   </section>

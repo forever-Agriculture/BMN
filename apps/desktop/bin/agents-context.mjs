@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { appendFileSync, chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname } from 'node:path'
-import { APP_NAMES, RosterError, agentState, agentsDirectory, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, RosterError, agentState, agentsDirectory, appName, sha256 } from './agents-roster.mjs'
 import { absoluteUncollapsed, jsonIndent, pathState, replaceFileSafely, resolvedPath, writeAtomically } from './safe-config-write.mjs'
 import { unifiedDiff } from './text-diff.mjs'
 
@@ -176,7 +176,7 @@ function untestedReason(app, harness, standing, auto) {
 export function contextItems(agent, proven) {
   if (agent.context_limit === undefined) return { state: 'app-default' }
   const controls = CONTEXT_CONTROLS[agent.harness]
-  const app = APP_NAMES[agent.harness] ?? agent.harness
+  const app = appName(agent.harness)
   const base = { limit: agent.context_limit, ...(agent.compact_at === undefined ? {} : { compact_at: agent.compact_at }) }
   if (controls === undefined) return { state: 'not-supported-yet', ...base, reason: `BMN has no context setting for ${app}` }
   if (!proven.limit) return { state: 'not-supported-yet', ...base, reason: untestedReason(app, agent.harness, proven.standing, proven.auto ?? contextAuto().enabled) }
@@ -246,7 +246,7 @@ export function contextFile(harness, environment = process.env) {
   const home = environment.HOME || homedir()
   if (harness === 'codex') return `${absoluteUncollapsed(environment.CODEX_HOME || `${home}/.codex`)}/config.toml`
   if (harness === 'claude') return `${absoluteUncollapsed(environment.CLAUDE_CONFIG_DIR || `${home}/.claude`)}/settings.json`
-  throw new ContextError('APP_UNSUPPORTED', `BMN has no context setting for ${APP_NAMES[harness] ?? harness}`)
+  throw new ContextError('APP_UNSUPPORTED', `BMN has no context setting for ${appName(harness)}`)
 }
 
 function lineParts(text) {
@@ -584,7 +584,7 @@ function validSize(value, what) {
  */
 export function planContextDefault(harness, { limit, compact = null }, { environment = process.env, version = null, tests = contextTests() } = {}) {
   const controls = CONTEXT_CONTROLS[harness]
-  if (controls === undefined) throw new ContextError('APP_UNSUPPORTED', `BMN has no context setting for ${APP_NAMES[harness] ?? harness}`)
+  if (controls === undefined) throw new ContextError('APP_UNSUPPORTED', `BMN has no context setting for ${appName(harness)}`)
   const app = APP_NAMES[harness]
   const proven = provenControls(harness, version, tests)
   if (!proven.limit) throw new ContextError('NOT_SUPPORTED_YET', `The context setting is not tested on ${app} ${version ?? '(version not read)'} yet; run its test first (bmn context test ${harness})`)
@@ -692,7 +692,7 @@ export const CLAUDE_TEST_ARGUMENTS = ['-p', '--no-session-persistence', '--outpu
  */
 export async function testContext(harness, { environment = process.env, now = new Date(), timeoutMs = 180_000, by = undefined } = {}) {
   const controls = CONTEXT_CONTROLS[harness]
-  if (controls === undefined) throw new ContextError('APP_UNSUPPORTED', `BMN has no context setting for ${APP_NAMES[harness] ?? harness}`)
+  if (controls === undefined) throw new ContextError('APP_UNSUPPORTED', `BMN has no context setting for ${appName(harness)}`)
   const asked = CONTEXT_TEST_SIZE[harness]
   const record = (limit, detail, version = null, observed = null, rivals = undefined) => {
     // `by` is set where BMN started the test by itself (63.1); the owner's own test carries none.
@@ -862,7 +862,7 @@ function sizeOption(value, name) {
 }
 
 function defaultLine(row) {
-  const app = (APP_NAMES[row.harness] ?? row.harness).padEnd(12)
+  const app = (appName(row.harness)).padEnd(12)
   const value = row.unreadable ? `cannot be read (${row.unreadable})`
     : row.limit === null ? 'app default' : `${row.limit} tokens${row.compact === null ? '' : `, compacts at ${row.compact}`}`
   const tested = row.proven.limit ? 'setting tested on this version' : `not supported yet: run bmn context test ${row.harness}`

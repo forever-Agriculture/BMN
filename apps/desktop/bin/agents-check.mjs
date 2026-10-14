@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
-import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, harnessPrivateWork, isCalled, namedResearchers, parseYaml, publicOnlyReasons, resolvedDirectory, roleEfforts, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, agentState, appName, canonicalJson, classRefusal, harnessPrivateWork, isCalled, isRetired, namedResearchers, parseYaml, publicOnlyReasons, resolvedDirectory, retiredProgram, retiredWords, roleEfforts, sha256 } from './agents-roster.mjs'
 import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, err, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
@@ -24,7 +24,7 @@ export { publicOnlyReasons }
  */
 
 /** Refusals, checked in this order; the first one found is reported (shared contract). */
-export const REFUSALS = ['UNKNOWN_AGENT', 'PROPOSED', 'DISABLED', 'NOT_A_RESEARCHER', 'ROLE_UNKNOWN', 'ROLE_INELIGIBLE', 'CLASS_CANNOT_LEAD', 'CLASS_CANNOT_DESIGN',
+export const REFUSALS = ['UNKNOWN_AGENT', 'APP_RETIRED', 'PROPOSED', 'DISABLED', 'NOT_A_RESEARCHER', 'ROLE_UNKNOWN', 'ROLE_INELIGIBLE', 'CLASS_CANNOT_LEAD', 'CLASS_CANNOT_DESIGN',
   'ROUTE_UNSUPPORTED', 'MODEL_MISMATCH', 'EFFORT_UNSUPPORTED', 'READ_ONLY_REQUIRED', 'CONTEXT_MISMATCH', 'TOOL_MISMATCH', 'HOST_UNKNOWN', 'HOST_MISMATCH',
   'WORKSPACE_UNKNOWN', 'WORKSPACE_MISMATCH', 'RESUME_UNBOUND', 'HARNESS_UNKNOWN', 'DATA_FORBIDDEN', 'PACKET_INVALID']
 
@@ -243,7 +243,10 @@ export function parseDispatch(argv, { research = false } = {}) {
   }
   const command = argv[index]
   const harness = command === undefined ? null : harnessOf(command)
-  if (harness === null) return { unsupported: `${command ?? 'nothing'} is not a supported dispatch command (codex exec or claude -p)` }
+  if (harness === null) {
+    const retired = command === undefined ? null : retiredProgram(command)
+    return { unsupported: retired === null ? `${command ?? 'nothing'} is not a supported dispatch command (codex exec or claude -p)` : retiredWords(retired) }
+  }
   const rest = argv.slice(index + 1)
   const base = { harness, command, envMode, assignments }
   if (harness === 'opencode') return parseOpenCode(rest, base)
@@ -1806,7 +1809,7 @@ export function consequences(before, after) {
   }
   const oldRoutes = new Map(prior.harness_routes.map((route) => [route.harness, route]))
   for (const route of after.harness_routes) {
-    const app = APP_NAMES[route.harness] ?? route.harness
+    const app = appName(route.harness)
     const previous = oldRoutes.get(route.harness)
     if (previous !== undefined && (previous.provider !== route.provider || previous.basis !== route.basis)) {
       out.push(route.basis === 'owner-declared'
@@ -1858,7 +1861,7 @@ export function consequences(before, after) {
     if (loses.length > 0) out.push(`Tool ${title} would no longer reach ${listed(loses)}`)
     if (changes.length > 0) out.push(`Tool ${title} would change in ${listed(changes)}`)
     if (given.length > 0) out.push(`Tool ${title} would be given to the runs of ${listed(given)}`)
-    for (const agent of waiting) out.push(`Tool ${title} is for the runs of ${name(agent)}, and BMN cannot give a ${APP_NAMES[appOf(agent)] ?? appOf(agent)} run a tool yet`)
+    for (const agent of waiting) out.push(`Tool ${title} is for the runs of ${name(agent)}, and BMN cannot give a ${appName(appOf(agent))} run a tool yet`)
     if (taken.length > 0) out.push(`Tool ${title} would no longer be given to the runs of ${listed(taken)}`)
     if (out.length === said) out.push(`Tool ${title}: no app gains or loses it`)
   }
@@ -1878,6 +1881,7 @@ function activeAgent(generation, id) {
   // An agent BMN itself calls runs in no agent app: there is no command of it to check (65.1 AC4).
   if (isCalled(agent)) refuse('CALLED_BY_BMN', `${agent.id} is called by BMN itself and runs in no agent app, so no dispatch command is checked for it`)
   const state = agentState(agent)
+  if (state === 'retired') refuse('APP_RETIRED', `${agent.id} runs in ${retiredWords(agent.harness)}`)
   if (state === 'proposed') refuse('PROPOSED', `${agent.id} is proposed, not approved as active`)
   if (state === 'disabled') refuse('DISABLED', `${agent.id} is disabled`)
   return agent
@@ -2045,8 +2049,7 @@ export function evaluate(inputs, {
     if (parsed.unsupported) refuse('ROUTE_UNSUPPORTED', parsed.unsupported)
     if (parsed.ephemeral) refuse('ROUTE_UNSUPPORTED', 'codex exec --ephemeral belongs to a research run (bmn roster check --research)')
     if (agent.harness !== parsed.harness) {
-      refuse('ROUTE_UNSUPPORTED', UNCHECKED_APPS.includes(agent.harness)
-        ? `BMN does not check ${APP_NAMES[agent.harness]} dispatches` : `${agent.id} runs on ${agent.harness}, the command is ${parsed.harness}`)
+      refuse('ROUTE_UNSUPPORTED', `${agent.id} runs on ${agent.harness}, the command is ${parsed.harness}`)
     }
     const cwd = canonicalDirectory(inputs.cwd ?? processCwd, processCwd)
     const resolution = parsed.harness === 'codex'
@@ -2703,8 +2706,8 @@ export function inspectRoute(agent, argv, environment, processCwd, data = null) 
   if (agent.harness === 'opencode') {
     const version = harnessVersion('opencode', environment)
     result = { ...inspectOpenCode(environment), harness: 'opencode', version, version_state: versionStanding('opencode', version).state }
-  } else if (agent.harness === 'cursor') {
-    result = { harness: 'cursor', basis: 'unknown', provider: null, host: null, reason: 'Cursor reports no destination BMN can read', sources: [], inspection_only: true }
+  } else if (isRetired(agent.harness)) {
+    result = { harness: agent.harness, basis: 'unknown', provider: null, host: null, reason: retiredWords(agent.harness), sources: [], inspection_only: true }
   } else {
     const parsed = argv === null
       ? (agent.harness === 'codex' ? { harness: 'codex', command: 'codex', envMode: 'inherit', assignments: {}, config: [] } : { harness: 'claude', command: 'claude', envMode: 'inherit', assignments: {}, addDir: [] })

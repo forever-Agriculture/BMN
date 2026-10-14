@@ -11,12 +11,14 @@ import {
   exactAbsoluteFileReference,
   HOOK_EVENT_LOG_LIMIT,
   isAttentionOrigin,
+  retiredOriginApp,
   hasDisallowedHandoffControl,
   hasControlOrFormatCharacter,
   METHOD_REGISTRY,
   countryFlag,
   modelOrigin,
   PROGRESS_STALE_AFTER_MS,
+  RETIRED_APP_LINE,
   TERMINAL_NOTICE_BODY_MAX,
   TERMINAL_NOTICE_CODES,
   TERMINAL_NOTICE_TITLE_MAX,
@@ -47,6 +49,7 @@ import {
   type HookEventEffect,
   type HookObservation,
   type HookOriginRecord,
+  type HookEventAgent,
   type HookEventRecord,
   type InputDraftRecord,
   type FileReferencePasteReceipt,
@@ -405,7 +408,7 @@ export class CompanionService {
   private readonly hookObservations = new Map<string, {
     sessionId: string
     incarnationId: string
-    agent: Exclude<HookEventRecord['agent'], 'terminal'>
+    agent: Exclude<HookEventAgent, 'terminal'>
     event: string
     observedAt: string
   }>()
@@ -616,7 +619,8 @@ export class CompanionService {
         const live = origin !== undefined && origin.incarnationId === options.manager.liveIncarnationId(sessionId)
         return {
           session: this.knownSessions.get(sessionId)?.name ?? 'Session',
-          agent: live ? origin.agent : record?.prompt?.harness ?? null,
+          // A request a retired app opened before its retirement still names it (Epic 71).
+          agent: live ? origin.agent : record?.prompt?.harness ?? retiredOriginApp(record?.openedBy ?? null),
           flag: live && origin.country ? countryFlag(origin.country) : null
         }
       },
@@ -1330,6 +1334,14 @@ export class CompanionService {
     return difference.state === 'text' || difference.state === 'binary' ? { kept: true, difference } : { kept: true, unavailable: turnUnavailable(difference.reason) }
   }
 
+  /** Epic 71: the one Notice on a session a launch-set entry for a retired app opened as a plain terminal. */
+  async retiredLaunchNotice(sessionId: string, incarnationId: string): Promise<void> {
+    await this.openAttention({
+      sessionId, incarnationId, requestKey: 'launch:retired', kind: 'notice', origin: 'launch:retired',
+      title: RETIRED_APP_LINE, body: 'This entry of the launch set opened as a plain terminal. Edit the set to remove it.'
+    })
+  }
+
   /** Epic 69: the sweep removed a turn, or a removal now waits or no longer does; the window reads again. */
   turnsChanged(): void {
     this.emit('turns', null)
@@ -1697,12 +1709,11 @@ export class CompanionService {
     const correlated = !!held?.prompt && !!evidence && (
       !!evidence.requestRef && evidence.requestRef === held.prompt.requestRef ||
       !!evidence.toolUseId && evidence.toolUseId === held.prompt.toolUseId)
-    // OpenCode/Cursor keep their existing exact-key hook cleanup. Their unbound legacy
-    // notices are independent of the lightweight Claude/Codex conversation slot.
+    // OpenCode keeps its existing exact-key hook cleanup. Its unbound legacy notices are
+    // independent of the lightweight Claude/Codex conversation slot.
     const legacyHookCleanup = !!held && !held.producer && !held.manualChoices && (
       held.prompt?.harness === 'opencode' && !!origin?.startsWith('hook:opencode:') ||
-      (['opencode', 'cursor'] as const).some(agent =>
-        origin?.startsWith(`hook:${agent}:`) && held.openedBy?.startsWith(`hook:${agent}:`)))
+      !!origin?.startsWith('hook:opencode:') && !!held.openedBy?.startsWith('hook:opencode:'))
     if (held && !legacyHookCleanup && origin?.startsWith('hook:') &&
       !this.producers.canClose(held, producer, correlated, !!origin?.endsWith(':SessionEnd') || !!origin?.endsWith(':Interrupt'))) {
       this.emit('attention', sessionId)
@@ -1916,7 +1927,7 @@ export class CompanionService {
   private async observeHookEvent(p: {
     sessionId: string
     incarnationId: string | null
-    agent: HookEventRecord['agent']
+    agent: HookEventAgent
     event: string
     source: string | null
     toolName: string | null
@@ -1983,7 +1994,9 @@ export class CompanionService {
     return this.repeatWrites
   }
 
-  private recordHookEvent(p: Omit<HookEventRecord, 'observedAt'> & {
+  private recordHookEvent(p: Omit<HookEventRecord, 'observedAt' | 'agent'> & {
+    /** Only a live agent reports; a saved row may still name a retired one. */
+    agent: HookEventAgent
     apiHost?: string | undefined
     model?: string | undefined
   }): { recorded: true } {
@@ -2018,15 +2031,14 @@ export class CompanionService {
         // so the same agent's last model still speaks within its session; a new agent, or a new
         // session in it (SessionStart other than compaction), starts from what it reports itself.
         const previous = this.hookOrigins.get(p.sessionId)
-        // Cursor names its events in camel case and never compacts into a new session.
-        const newSession = (p.event === 'SessionStart' && p.source !== 'compact') || (p.agent === 'cursor' && p.event === 'sessionStart')
+        const newSession = p.event === 'SessionStart' && p.source !== 'compact'
         const carried = previous !== undefined && previous.incarnationId === p.incarnationId &&
           previous.agent === p.agent && !newSession ? previous : null
         const model = p.model ?? carried?.model ?? null
         const apiHost = p.apiHost ?? null
         // An agent that ended leaves a plain shell behind in the same run, and a shell has no flag;
         // a late end from an agent that has already been replaced leaves the newer one's facts.
-        const ended = p.event === 'SessionEnd' || (p.agent === 'cursor' && p.event === 'sessionEnd')
+        const ended = p.event === 'SessionEnd'
         const staleEnd = ended && previous !== undefined && previous.incarnationId === p.incarnationId &&
           previous.agent !== p.agent
         const next: HookOriginRecord | null | undefined = staleEnd ? previous : ended ? null : {
@@ -2140,24 +2152,20 @@ export class CompanionService {
   }
 
   /**
-   * Story 60.8: keeps the last thing a session's prompt guard stopped or warned about, for the run
-   * that sent it. A prompt that passed clears it. A stopped prompt sent again opens its card again;
-   * a warning the owner closed stays closed while nothing about it changed.
+   * Story 60.8: keeps the last prompt a session's prompt guard stopped, for the run that sent it.
+   * A prompt that passed clears it. A stopped prompt sent again opens its card again.
    */
   private recordGuard(p: GuardReport): { recorded: boolean } {
     // Only the live run speaks for the session, as with hook observations.
     if (this.options.manager.liveIncarnationId(p.sessionId) !== p.incarnationId) return { recorded: false }
-    const earlier = this.guardStops.get(p.sessionId)
     if (p.outcome === 'pass') {
-      if (earlier !== undefined) {
+      if (this.guardStops.has(p.sessionId)) {
         this.guardStops.delete(p.sessionId)
         this.emit('guard', p.sessionId)
       }
       return { recorded: true }
     }
-    const same = earlier !== undefined && earlier.incarnationId === p.incarnationId && earlier.outcome === p.outcome && earlier.cause === p.cause &&
-      earlier.providerId === p.providerId && earlier.workspace === p.workspace && earlier.host === p.host
-    this.guardStops.set(p.sessionId, { ...p, at: this.iso(), kept: p.outcome === 'warn' && same && earlier.kept })
+    this.guardStops.set(p.sessionId, { ...p, at: this.iso(), kept: false })
     this.emit('guard', p.sessionId)
     return { recorded: true }
   }

@@ -38,7 +38,7 @@ import {
   type GuardReport,
   type HookEventAgent,
   type HookEventEffect,
-  type AgentCli,
+  type LiveAgentCli,
   type ProgressState,
   type ProtocolErrorCode,
   type TurnEndKind,
@@ -57,7 +57,7 @@ export class ControlError extends Error {
 }
 
 /** The narrowing this server does on purpose: a conversation belongs to an agent CLI, not to a shell. */
-export type ConversationAgentCli = Exclude<AgentCli, 'other'>
+export type ConversationAgentCli = LiveAgentCli
 
 export interface ControlHandlers {
   /** Revocation: session tokens are valid only while their incarnation is the current live one. */
@@ -312,14 +312,12 @@ const ATTENTION_KINDS: readonly AttentionKind[] = ['question', 'permission', 're
  * The harnesses a session token may report as. `terminal` is BMN's own label for a notification the
  * window read out of a session's output, so nothing on the socket may wear it.
  */
-const HOOK_EVENT_AGENTS: readonly HookEventAgent[] = ['claude', 'codex', 'opencode', 'cursor']
+const HOOK_EVENT_AGENTS: readonly HookEventAgent[] = ['claude', 'codex', 'opencode']
 const HOOK_EVENT_EFFECTS: readonly HookEventEffect[] = ['opened', 'withdrew', 'answered']
 const MAX_HOOK_EVENT_EFFECTS = 8
-const CONVERSATION_AGENT_CLIS: readonly ConversationAgentCli[] = ['claude', 'codex', 'opencode', 'cursor']
-const CONVERSATION_OBSERVATION_SOURCES: readonly ConversationObservationSource[] = [
-  'startup', 'resume', 'clear', 'fork', 'prompt'
-]
-/** 8-4-4-4-12 hex, the shape Claude Code session ids, Codex rollout ids and Cursor chat ids use. */
+const CONVERSATION_AGENT_CLIS: readonly ConversationAgentCli[] = ['claude', 'codex', 'opencode']
+const CONVERSATION_OBSERVATION_SOURCES: readonly ConversationObservationSource[] = ['startup', 'resume', 'clear', 'fork']
+/** 8-4-4-4-12 hex, the shape Claude Code session ids and Codex rollout ids use. */
 const CONVERSATION_REFERENCE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 /** A turn's id as an app gives it (Epic 69): Claude Code's `prompt_id`, Codex's `turn_id`. */
 const TURN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
@@ -1342,7 +1340,7 @@ export class ControlServer {
         const agent = params.agent
         if (typeof agent !== 'string' || !(GUARD_AGENTS as readonly string[]).includes(agent)) throw invalid(`agent must be one of ${GUARD_AGENTS.join(', ')}`)
         const outcome = params.outcome
-        if (outcome !== 'pass' && outcome !== 'stop' && outcome !== 'warn') throw invalid('outcome must be pass, stop or warn')
+        if (outcome !== 'pass' && outcome !== 'stop') throw invalid('outcome must be pass or stop')
         const sessionId = this.target(scope, params)
         if (outcome === 'pass') {
           if (Object.keys(params).some((key) => !['sessionId', 'agent', 'outcome'].includes(key))) throw invalid('a pass carries nothing else')
@@ -1367,7 +1365,7 @@ export class ControlServer {
         const workspace = folderPath('workspace')
         const allow = readBoolean(params, 'allow') ?? false
         // Allow here names a provider and a workspace; a report that offers it without both is not one BMN can act on.
-        if (allow && (cause !== 'public-only' || outcome !== 'stop' || workspace === null || providerId === null || pid === undefined || start === null)) {
+        if (allow && (cause !== 'public-only' || workspace === null || providerId === null || pid === undefined || start === null)) {
           throw invalid('allow needs a stopped public-only prompt with its provider, workspace and process')
         }
         return handlers.reportGuard({

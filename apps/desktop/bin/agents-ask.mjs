@@ -4,7 +4,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rea
 import { userInfo } from 'node:os'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { APP_NAMES, RosterError, namedResearchers } from './agents-roster.mjs'
+import { RosterError, appName, namedResearchers } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { CODEX_RESEARCH_ANSWER, evaluateResearch, prepareResearchRun, removeResearchCodexFolders, researchRunsDirectory } from './agents-check.mjs'
 import {
@@ -124,7 +124,7 @@ export function questionProblem(question, { home = process.env.HOME ?? '' } = {}
 // ---------------------------------------------------------------------------------------------
 // Who asked
 
-const APP_OF_PROGRAM = { claude: 'claude', codex: 'codex', opencode: 'opencode', 'cursor-agent': 'cursor' }
+const APP_OF_PROGRAM = { claude: 'claude', codex: 'codex', opencode: 'opencode' }
 
 /** The names of the programs this one was started under, nearest first. */
 function programsAbove(pid = process.ppid) {
@@ -157,7 +157,7 @@ export function askerWords(by, sessionName = undefined) {
   if (by?.kind === 'owner') return 'you, on Models'
   if (by?.kind !== 'session') return 'from a shell'
   const where = sessionName ?? `session ${by.session}`
-  return by.app === undefined ? `the shell of ${where}` : `${APP_NAMES[by.app] ?? by.app} in ${where}`
+  return by.app === undefined ? `the shell of ${where}` : `${appName(by.app)} in ${where}`
 }
 
 // ---------------------------------------------------------------------------------------------

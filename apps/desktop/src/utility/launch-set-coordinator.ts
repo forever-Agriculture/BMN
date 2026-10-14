@@ -1,5 +1,6 @@
 import {
   ERROR_CODES,
+  retiredAppCommand,
   type LaunchSetRecord,
   type LaunchSetStartParams,
   type LaunchSetStartResult,
@@ -26,7 +27,12 @@ interface LaunchSetDependencies {
   listWorkspaces(): Promise<WorkspaceRecord[]>
   validate(params: CreateSessionParams): Promise<void>
   create(params: CreateSessionParams): Promise<StartedEntry>
+  /** Says once, on the session, that an entry for a retired app opened as a plain terminal. */
+  retired(started: StartedEntry): Promise<void>
 }
+
+/** The shell a retired app's entry opens instead, when the entry itself starts that app. */
+const PLAIN_TERMINAL = '/bin/bash'
 
 /** One utility-process action per key, including a running action and its final partial result. */
 export class LaunchSetCoordinator {
@@ -68,12 +74,14 @@ export class LaunchSetCoordinator {
     if (entries.length < 1 || entries.length > 8) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'A launch set must have 1–8 entries')
     }
-    const launches: CreateSessionParams[] = entries.map((entry) => ({
+    // Epic 71: an entry that would start a retired app opens as a plain terminal; its saved command stays as it was.
+    const retired = entries.map((entry) => retiredAppCommand(entry.executable, entry.argv) !== null)
+    const launches: CreateSessionParams[] = entries.map((entry, index) => ({
       workspaceId: request.workspaceId,
       name: entry.name,
       cwd: directory,
-      executable: entry.executable,
-      argv: entry.argv,
+      executable: !retired[index] ? entry.executable : retiredAppCommand(entry.executable, []) === null ? entry.executable : PLAIN_TERMINAL,
+      argv: retired[index] ? [] : entry.argv,
       backgroundChoice: entry.backgroundChoice,
       terminalGraphics: entry.terminalGraphics,
       cols: request.cols,
@@ -98,6 +106,7 @@ export class LaunchSetCoordinator {
       }
       try {
         const started = await this.dependencies.create(launches[index]!)
+        if (retired[index]) await this.dependencies.retired(started).catch(() => undefined)
         result.entries.push({
           entryId: entry.entryId,
           name: entry.name,

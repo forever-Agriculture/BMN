@@ -7,6 +7,7 @@ import { kill as signalProcessByPid } from 'node:process'
 import {
   ERROR_CODES,
   MAX_TERMINAL_CHUNK_BYTES,
+  RETIRED_APP_LINE,
   TERMINAL_UNDELIVERED_OUTPUT_BYTES,
   TERMINAL_SAVED_OUTPUT_BYTES,
   TERMINAL_SCROLLBACK_LINES,
@@ -87,7 +88,6 @@ import {
   isConversationReference,
   isLowercaseConversationReference,
   opencodeResumeArguments,
-  cursorResumeArguments,
   parseBoundBinding,
   parseClaudeHelpOptionGrammar,
   prepareConversationLaunch,
@@ -721,10 +721,12 @@ export class SessionManager {
       }
     }
     this.conversationBindings.set(sessionId, binding)
-    if (binding.status === 'unsupported' || this.sessions.has(sessionId)) return binding
+    // Epic 71: BMN no longer looks for a retired app's conversation; its binding is shown as stored.
+    if (binding.status === 'unsupported' || this.sessions.has(sessionId) || binding.agentCli === 'cursor') return binding
     if (await this.referenceExists(binding)) return binding
     return {
       ...binding,
+      agentCli: binding.agentCli,
       status: 'missing',
       detail: `The bound ${binding.agentCli} conversation reference is missing; no process was started`
     }
@@ -824,12 +826,6 @@ export class SessionManager {
     if (holder && holder !== live.conversationReservation) {
       const name = await this.storedSessionName(holder.sessionId)
       return refuse(`already resumed in ${JSON.stringify(name)}`)
-    }
-    // Cursor names its chat with every prompt; the same chat again changes nothing and is not rewritten.
-    if (observation.source === 'prompt' && current.status === 'bound' && current.agentCli === observation.agentCli &&
-      current.conversationReference === observation.conversationReference) {
-      this.swapConversationClaim(live, identity)
-      return { accepted: true, detail: current.detail }
     }
     const binding = bindingFromObservation(observation, current, new Date().toISOString())
     const restoreClaim = this.swapConversationClaim(live, identity)
@@ -1282,6 +1278,8 @@ export class SessionManager {
     if (binding.status === 'unsupported') {
       return Promise.reject(new HostControlError(ERROR_CODES.invalidArgument, binding.detail))
     }
+    // Epic 71: a conversation of a retired app is shown, never resumed.
+    if (binding.agentCli === 'cursor') return Promise.reject(new HostControlError(ERROR_CODES.invalidArgument, RETIRED_APP_LINE))
     const bindingIdentity = conversationIdentity(binding)!
     let reservation: ConversationReservation
     let releaseLaunch: () => void
@@ -1362,14 +1360,14 @@ export class SessionManager {
         binding?.detail ?? 'No conversation binding was captured for this session'
       )
     }
+    // Epic 71: a conversation of a retired app is shown, never resumed.
+    if (binding.agentCli === 'cursor') throw new HostControlError(ERROR_CODES.invalidArgument, RETIRED_APP_LINE)
     const { launch } = await this.prepareResumeLaunch(binding)
     const dropped = binding.agentCli === 'codex' && binding.captureRoute === 'hook-session-start'
       ? describeDroppedCodexArguments(codexResumeArguments(binding.launchContext.argv))
       : binding.agentCli === 'opencode'
         ? describeDroppedOpenCodeArguments(opencodeResumeArguments(binding.launchContext.argv))
-      : binding.agentCli === 'cursor'
-        ? describeDroppedCodexArguments(cursorResumeArguments(binding.launchContext.argv))
-      : undefined
+        : undefined
     return {
       sessionId,
       agentCli: binding.agentCli,
@@ -1412,9 +1410,7 @@ export class SessionManager {
       startedAt,
       stored,
       (record) => this.store.createResuming(record),
-      binding.agentCli === 'claude' ? ['--resume']
-        : binding.agentCli === 'opencode' ? ['--session']
-          : binding.agentCli === 'cursor' ? ['--resume'] : ['resume'],
+      binding.agentCli === 'claude' ? ['--resume'] : binding.agentCli === 'opencode' ? ['--session'] : ['resume'],
       reservation
     )
     try {

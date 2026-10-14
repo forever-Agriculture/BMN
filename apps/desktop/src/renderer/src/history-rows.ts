@@ -13,8 +13,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 
 export const AGENT_NAMES: Readonly<Record<AgentHistoryAgent, string>> = Object.freeze({
   codex: 'Codex',
-  opencode: 'OpenCode',
-  cursor: 'Cursor'
+  opencode: 'OpenCode'
 })
 
 /** `28 Sep`, in the owner's local time. */
@@ -62,7 +61,6 @@ export function folderValue(folder: AgentHistoryClaudeFolder): HistoryValue {
 }
 
 export function agentValue(row: AgentHistoryAgentRow, status: AgentHistoryStatus): HistoryValue {
-  if (row.state === 'own') return { kind: 'settled', text: 'keeps its own history · not managed by BMN', ...(row.detail ? { title: row.detail } : {}) }
   if (row.state === 'unrecognised') return { kind: 'settled', text: 'not recognised' }
   const candidates = row.candidates ?? 0
   if (status.needsConfirmation && status.keepDays !== null) {

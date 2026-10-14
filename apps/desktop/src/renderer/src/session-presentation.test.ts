@@ -706,8 +706,7 @@ describe('model origin presentation', () => {
     expect(observedAgentName('claude')).toBe('Claude')
     expect(observedAgentName('codex')).toBe('Codex')
     expect(observedAgentName('opencode')).toBe('OpenCode')
-    expect(observedAgentName('cursor')).toBe('Cursor')
-    // cursor-agent launched directly, or typed into a shell the launcher started.
+    // Epic 71: a session saved to run cursor-agent, directly or typed into a launcher shell, keeps its tag after Cursor was retired.
     expect(agentTag('/home/owner/.local/bin/cursor-agent')).toBe('Cursor')
     expect(agentTag('/bin/bash', ['-ic', 'cursor-agent; exec bash -i'])).toBe('Cursor')
   })
@@ -772,7 +771,6 @@ describe('plan use wording (Story 37.2)', () => {
 
   it('says whose report is missing when a run has no plan reading', () => {
     expect(planUseMissingWords({ agent: 'opencode', reading: null })).toBe('Not reported by OpenCode')
-    expect(planUseMissingWords({ agent: 'cursor', reading: null })).toBe('Not reported by Cursor')
     expect(planUseMissingWords({ agent: 'claude', reading: null })).toContain('bmn statusline install')
     expect(planUseMissingWords({ agent: null, reading: null })).toBe('No reading yet')
     expect(planUseMissingWords({ agent: 'claude', reading: reading([], 12) })).toBe("No plan limits in Claude's last status line")

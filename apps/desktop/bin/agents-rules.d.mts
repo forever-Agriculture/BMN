@@ -1,8 +1,8 @@
 // MODULE: agents-rules.d.mts - types for the Epic 60.4 rules module so the main process and tests can import it
-import type { RosterData, RosterProvider, RosterRoute } from './agents-roster.mjs'
+import type { RetiredApp, RosterData, RosterProvider, RosterRoute } from './agents-roster.mjs'
 import type { Generation } from './agents-state.mjs'
 import type { PathState } from './safe-config-write.mjs'
-export type RulesHarness = 'claude' | 'codex' | 'opencode' | 'cursor'
+export type RulesHarness = 'claude' | 'codex' | 'opencode'
 export interface MasterIssue { code: string; line: number; message: string }
 export interface Master { path: string; text: string; hash: string; parts: { kind: string; [key: string]: unknown }[] }
 export type RenderingKind = 'full' | 'public'
@@ -42,8 +42,9 @@ export declare function checkTargets(environment?: NodeJS.ProcessEnv | Record<st
 export declare function installRules(harnesses: RulesHarness[], options?: { yes?: boolean; asJson?: boolean; environment?: NodeJS.ProcessEnv | Record<string, string>; now?: Date; afterConfirm?: () => void; beforeTarget?: (harness: RulesHarness, index: number) => void; expectedPlanHash?: string }): Promise<InstallResult>
 export declare function planInstall(harnesses: RulesHarness[], options?: { environment?: NodeJS.ProcessEnv | Record<string, string> }): Promise<{ code: string; message?: string; planHash: string | null; plans: unknown[] }>
 export declare function planView(result: Awaited<ReturnType<typeof planInstall>>): { code: string; message?: string; plan_hash: string | null; targets: { harness: RulesHarness; path: string; resolved_path: string; kind: string; change: string; rendering: RenderingKind; reason: string; team_form: string; link_target?: string; diff: string; fold: string[] }[] }
-export declare function listTransactions(): { id: string; valid: boolean; created_at?: string; state?: string; reason?: string; targets?: RulesHarness[] }[]
-export declare function restoreTransaction(id: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string }): Promise<{ code: string; restored?: RulesHarness[]; message?: string; plan_hash?: string; targets?: { harness: RulesHarness; path: string; resolved_path: string; becomes: string; diff: string }[] }>
+/** An old transaction may name an app BMN retired (Epic 71); it is listed as it was saved. */
+export declare function listTransactions(): { id: string; valid: boolean; created_at?: string; state?: string; reason?: string; targets?: (RulesHarness | RetiredApp)[] }[]
+export declare function restoreTransaction(id: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string }): Promise<{ code: string; restored?: RulesHarness[]; message?: string; plan_hash?: string; targets?: { harness: RulesHarness; path: string; resolved_path: string; becomes: string; diff: string }[]; left?: { harness: RetiredApp; path: string; reason: string }[] }>
 export declare function masterHistory(): { revision: number; hash: string; bytes: number; at: string; reason: string; intact: boolean }[]
 export declare function writeMaster(expected: PathState, text: string, reason: string, options?: { now?: Date }): PathState
 export declare function revertMaster(revision: number, options?: { yes?: boolean; asJson?: boolean }): Promise<{ code: string; revision?: number }>

@@ -3,7 +3,7 @@ import type { RosterAgent, RosterData, RosterTool } from './agents-roster.mjs'
 import type { Generation } from './agents-state.mjs'
 
 type Environment = NodeJS.ProcessEnv | Record<string, string>
-export type ToolsHarness = 'claude' | 'codex' | 'opencode' | 'cursor'
+export type ToolsHarness = 'claude' | 'codex' | 'opencode'
 export type ToolState = 'unreadable' | 'missing' | 'unmanaged' | 'edited-outside' | 'stale' | 'current' | 'exposed' | 'excluded' | 'blocked'
 export type ToolsOutcome = 'pass' | 'fail' | 'inconclusive' | 'unavailable'
 type Versions = Partial<Record<ToolsHarness, string | null>>
@@ -127,7 +127,7 @@ export declare function installTools(harnesses?: string[], options?: InstallOpti
   beforeTarget?: (target: ToolsTarget, index: number) => void; beforeCommit?: (target: ToolsTarget, index: number) => void
   afterTarget?: (target: ToolsTarget, index: number) => void
 }): Promise<ToolsInstallResult>
-export declare function restoreToolsTransaction(manifest: unknown, folder: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string }): Promise<Record<string, unknown>>
+export declare function restoreToolsTransaction(manifest: unknown, folder: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string; leftWords?: string[] }): Promise<Record<string, unknown>>
 
 export interface ToolProposal { id: string; state: 'ready' | 'secret' | 'known' | 'conflict' | 'unreadable'; apps: ToolsHarness[]; tool?: RosterTool; notes: string[] }
 export declare function proposeTools(options?: { environment?: Environment; generation?: Generation | null }): { files: { harness: ToolsHarness; path: string; readable: boolean; detail?: string }[]; proposals: ToolProposal[] }

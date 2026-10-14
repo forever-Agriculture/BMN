@@ -26,7 +26,7 @@ const without = (text: string, part: string): string => {
   return `${text.slice(0, at)}${text.slice(at + part.length)}`
 }
 
-describe('a JSON settings file (Claude Code, Cursor, OpenCode)', () => {
+describe('a JSON settings file (Claude Code, OpenCode)', () => {
   it('reads each entry with its value and its exact text, through comments and trailing commas, and only under the given key', () => {
     const entries = readJsonEntries(JSON_FILE, ['mcpServers'])
     expect([...entries.keys()]).toEqual(['alpha', 'beta'])

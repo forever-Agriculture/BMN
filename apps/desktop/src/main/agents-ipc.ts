@@ -5,7 +5,9 @@ import { homedir } from 'node:os'
 import { basename, dirname } from 'node:path'
 import {
   ERROR_CODES,
+  RETIRED_APP_LINE,
   ROSTER_APP_NAMES,
+  isRetiredApp,
   type AgentAppView,
   type AgentsApprovalRequest,
   type AgentsOutcome,
@@ -38,6 +40,7 @@ import {
   type WebQuestionsSnapshot,
   type RosterDataShape,
   type RosterHarness,
+  type RosterRetiredHarness,
   type RulesOutcome,
   type RulesPlan,
   type RulesProbeView,
@@ -56,7 +59,7 @@ import {
 import type { IpcMainInvokeEvent } from 'electron'
 import { HARNESSES, RosterError, agentsDirectory, parseRoster, proseOf, readOnlyProposal, rewriteProse, rewriteRoster, rosterPath, sha256, starterRoster, type RosterData } from '../../bin/agents-roster.mjs'
 import { approvedIfAny, listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
-import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, harnessVersion, inspectRoute, limitStanding, privateWorkAnswer, versionStanding, workspaceRoot, type FenceTestEntry } from '../../bin/agents-check.mjs'
+import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, inspectRoute, limitStanding, privateWorkAnswer, versionStanding, workspaceRoot, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import {
   applyTeamUpdate, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planTeamUpdate, probeInspector, render, writeMaster, type RulesHarness
 } from '../../bin/agents-rules.mjs'
@@ -139,7 +142,7 @@ const RULES_ENV = ['HOME', 'PATH', 'XDG_CONFIG_HOME', 'CLAUDE_CONFIG_DIR', 'CODE
 const RULES_ENV_MARKS = ['OPENCODE_CONFIG_CONTENT'] as const
 const PROBE_OUTCOME_WORDS: Readonly<Record<string, string>> = { pass: 'passed', fail: 'failed', inconclusive: 'was inconclusive', unavailable: 'was unavailable' }
 /** The command whose `--version` names each app's installed version. */
-const APP_COMMANDS: Readonly<Record<RosterHarness, string>> = { claude: 'claude', codex: 'codex', opencode: 'opencode', cursor: 'cursor-agent' }
+const APP_COMMANDS: Readonly<Record<RosterHarness, string>> = { claude: 'claude', codex: 'codex', opencode: 'opencode' }
 /** How many approved versions Team › Changes describes; older ones stay in `bmn roster status`. */
 const HISTORY_LIMIT = 40
 const CLI_TIMEOUT_MS = 30_000
@@ -185,7 +188,7 @@ function scopeParam(params: Record<string, unknown>): string[] | null {
 }
 
 function harnessParam(value: unknown): RosterHarness {
-  if (typeof value !== 'string' || !(HARNESSES as readonly string[]).includes(value)) invalid('harness is not one of claude, codex, opencode, cursor')
+  if (typeof value !== 'string' || !(HARNESSES as readonly string[]).includes(value)) invalid(`harness is not one of ${HARNESSES.join(', ')}`)
   return value as RosterHarness
 }
 
@@ -456,10 +459,9 @@ interface RouteResolution { harness: RosterHarness; version: string | null; prov
 interface AppInspection { resolution: RouteResolution; reason?: string }
 
 /** Where an app sends data as inspected now, and its installed version. Inspection only. */
-function inspectApp(harness: RosterHarness, environment: NodeJS.ProcessEnv, probeEnvironment: NodeJS.ProcessEnv): AppInspection {
+function inspectApp(harness: RosterHarness, environment: NodeJS.ProcessEnv): AppInspection {
   const result = inspectRoute({ harness } as never, null, environment, environment.HOME ?? '/')
-  const inspected = harness !== 'cursor'
-  const version = inspected ? (result.version as string | null | undefined) ?? null : harnessVersion(APP_COMMANDS[harness], probeEnvironment)
+  const version = (result.version as string | null | undefined) ?? null
   return {
     resolution: {
       harness, basis: String(result.basis ?? 'unknown'), provider: (result.provider as string | null) ?? null, host: (result.host as string | null) ?? null,
@@ -474,19 +476,17 @@ function inspectApp(harness: RosterHarness, environment: NodeJS.ProcessEnv, prob
  * decision 2026-10-10); the row only says whether BMN's tests ran against it.
  */
 function appView(harness: RosterHarness, context: RulesIpcContext): AgentAppView {
-  const { resolution, reason } = inspectApp(harness, context.env, context.probeEnv)
+  const { resolution, reason } = inspectApp(harness, context.env)
   const app = ROSTER_APP_NAMES[harness]
   const tested = (TESTED_HARNESS_VERSIONS[harness] ?? []).join(', ')
   const same = 'BMN reads where it sends data the same way on every version.'
-  const [versionState, versionNote]: [AgentAppView['versionState'], string] = harness === 'cursor'
-    ? ['unknown', `BMN does not check ${app} dispatches.`]
-    : resolution.version === null
-      ? ['unknown', `${app} is not installed, or its version cannot be read.`]
-      : versionStanding(harness, resolution.version).tested
-        ? ['tested', 'BMN tested how this version picks where to send data.']
-        : versionStanding(harness, resolution.version).state === 'newer than BMN tested'
-          ? ['newer', `Newer than the version BMN tested (${tested}). ${same}`]
-          : ['other', `Not the version BMN tested (${tested}). ${same}`]
+  const [versionState, versionNote]: [AgentAppView['versionState'], string] = resolution.version === null
+    ? ['unknown', `${app} is not installed, or its version cannot be read.`]
+    : versionStanding(harness, resolution.version).tested
+      ? ['tested', 'BMN tested how this version picks where to send data.']
+      : versionStanding(harness, resolution.version).state === 'newer than BMN tested'
+        ? ['newer', `Newer than the version BMN tested (${tested}). ${same}`]
+        : ['other', `Not the version BMN tested (${tested}). ${same}`]
   // The same PATH the version was read through, so the program shown is the one that answered.
   const program = findAppProgram(APP_COMMANDS[harness], context.probeEnv.PATH, dirname(context.script))
   return {
@@ -734,7 +734,8 @@ function planFrom(result: CliResult, kind: 'install' | 'restore'): RulesPlan {
     ...(typeof row.tool === 'string' ? { entry: row.tool } : {}),
     ...(Array.isArray(row.fold) ? { fold: (row.fold as unknown[]).map(String) } : {})
   })) : []
-  return { ok: true, code: 'OK', planHash: typeof report.plan_hash === 'string' ? report.plan_hash : null, targets }
+  const left = Array.isArray(report.left) ? (report.left as Record<string, unknown>[]).filter((row) => isRetiredApp(row.harness)).map((row) => ({ harness: row.harness as RosterRetiredHarness, path: String(row.path) })) : []
+  return { ok: true, code: 'OK', planHash: typeof report.plan_hash === 'string' ? report.plan_hash : null, targets, ...(left.length > 0 ? { left } : {}) }
 }
 
 async function rulesOutcome(context: RulesIpcContext, result: CliResult, success: (report: Record<string, unknown>) => string): Promise<RulesOutcome> {
@@ -794,7 +795,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       contextAuto: () => auto.view()
     }
   }
-  const installedVersion = (harness: ContextLimitApp, ctx: RulesIpcContext): string | null => inspectApp(harness, ctx.env, ctx.probeEnv).resolution.version
+  const installedVersion = (harness: ContextLimitApp, ctx: RulesIpcContext): string | null => inspectApp(harness, ctx.env).resolution.version
   /**
    * BMN's own context testing (63.1). What to test is decided from the approved team, the installed
    * versions and the sources a test would meet today; the test itself is the owner's own, `bmn context
@@ -840,7 +841,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
 
   const inspect = (harness: RosterHarness): AppInspection => {
     const ctx = context()
-    return inspectApp(harness, ctx.env, ctx.probeEnv)
+    return inspectApp(harness, ctx.env)
   }
   /** Approval seams: what an approval newly records as inspected is inspected again at commit (60.6 AC4). */
   const seams: ApprovalSeams = {
@@ -1065,7 +1066,10 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const result = await runCli(ctx.script, ['rules', 'restore', '--transaction', id, '--expect-plan', planHash, '--yes', '--json'], ctx.env)
     return rulesOutcome(ctx, result, (report) => {
       const apps = ((report.restored as RosterHarness[] | undefined) ?? []).map((harness) => ROSTER_APP_NAMES[harness] ?? harness)
-      return `Put back the ${report.kind === 'skills' ? 'skills' : report.kind === 'tools' ? 'tools' : 'rules'} in ${apps.length <= 1 ? apps.join('') : `${apps.slice(0, -1).join(', ')} and ${apps.at(-1) as string}`}`
+      // A retired app's files are left as they are (Epic 71), and the message says so.
+      const left = Array.isArray(report.left) && report.left.length > 0 ? ` ${RETIRED_APP_LINE} Its files are left as they are.` : ''
+      if (apps.length === 0) return `Nothing was put back.${left}`
+      return `Put back the ${report.kind === 'skills' ? 'skills' : report.kind === 'tools' ? 'tools' : 'rules'} in ${apps.length <= 1 ? apps.join('') : `${apps.slice(0, -1).join(', ')} and ${apps.at(-1) as string}`}${left === '' ? '' : `.${left}`}`
     })
   })
   handle('aiterm:rules:plan-revert-master', (params) => {

@@ -4,6 +4,7 @@ import {
   countryFlag,
   MODEL_ORIGIN_COUNTRY_NAMES,
   PROGRESS_STALE_AFTER_MS,
+  RETIRED_APP_NAMES,
   USAGE_NOTICE_PERCENT,
   usageClock,
   usagePercent,
@@ -11,7 +12,7 @@ import {
   type AttentionKind,
   type AttentionRecord,
   type HookCompaction,
-  type HookEventAgent,
+  type HookEventRecordAgent,
   type HookOriginRecord,
   type InputDraftRecord,
   type ProgressEvidence,
@@ -78,8 +79,9 @@ const AGENT_TAGS: Readonly<Record<string, string>> = Object.freeze({
   claude: 'Claude',
   codex: 'Codex',
   opencode: 'OpenCode',
-  cursor: 'Cursor',
-  'cursor-agent': 'Cursor',
+  // Cursor was retired (Epic 71); an old session that ran it, or a saved set that still starts it, keeps its name.
+  cursor: RETIRED_APP_NAMES.cursor,
+  'cursor-agent': RETIRED_APP_NAMES.cursor,
   gemini: 'Gemini',
   aider: 'Aider',
   bash: 'Shell',
@@ -230,7 +232,6 @@ export function planUseMissingWords(usage: Pick<SessionUsage, 'agent' | 'reading
     case 'claude': return 'No reading yet. Run `bmn statusline install` once.'
     case 'codex': return 'No reading yet; Codex writes one after its first reply.'
     case 'opencode': return 'Not reported by OpenCode'
-    case 'cursor': return 'Not reported by Cursor'
     default: return 'No reading yet'
   }
 }
@@ -273,11 +274,12 @@ export function expiryText(expiresAt: string | null, now: number): string | null
   return `expires in ${Math.ceil(left / 60_000)} min`
 }
 
-const ORIGIN_AGENT_NAMES: Readonly<Record<HookEventAgent, string>> = Object.freeze({
+const ORIGIN_AGENT_NAMES: Readonly<Record<HookEventRecordAgent, string>> = Object.freeze({
   claude: 'Claude',
   codex: 'Codex',
   opencode: 'OpenCode',
-  cursor: 'Cursor',
+  // A request saved before Cursor was retired still reads "from Cursor stop" (Epic 71).
+  cursor: RETIRED_APP_NAMES.cursor,
   terminal: 'the terminal'
 })
 
@@ -302,6 +304,7 @@ function originName(origin: string | null, action: 'opened' | 'closed'): string 
     case 'watch:repeat': return "BMN's repeat watch"
     case 'watch:usage': return "BMN's plan-use watch"
     case 'watch:messages': return "BMN's message limit"
+    case 'launch:retired': return 'BMN'
     case 'expiry': return 'expiry'
     default: return origin
   }

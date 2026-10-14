@@ -54,7 +54,7 @@ describe('model suggestions (60.5: the Model field)', () => {
     ])
     expect(rows(modelSuggestions(DATA, 'codex', REPORTED, null))).toEqual(['On your team | synthetic-sol-6 | Sol', 'Reported by Codex | synthetic-sol-7 | in an open session'])
     // An app with no agent and no report offers nothing: the field then never opens a panel.
-    expect(modelSuggestions(DATA, 'cursor', REPORTED, null)).toEqual([])
+    expect(modelSuggestions(DATA, 'opencode', REPORTED, null)).toEqual([])
   })
 
   it('narrows by the name and by what its agents are also called, ignoring case, and keeps the spelling of what it offers', () => {
@@ -134,8 +134,8 @@ describe('names research found (60.10: the Model field\'s third group)', () => {
       'Found in research, Oct 10 | synthetic-far-9 | Z.ai · $0.60 / $2.50'
     ])
     expect(rows(modelSuggestions(DATA, 'codex', [], null, undefined, RESEARCH))[1]).toBe('Found in research, Oct 10 | synthetic-sol-8 | OpenAI · $2.00 / $8.00')
-    expect(rows(modelSuggestions(DATA, 'cursor', [], 'grand', undefined, RESEARCH))).toEqual(['Found in research, Oct 10 | synthetic-large-7 | Anthropic · unverified price'])
-    expect(modelSuggestions(DATA, 'cursor', [], null, undefined, { day: null, models: RESEARCH.models })[0]!.label).toBe('Found in research')
+    expect(rows(modelSuggestions(DATA, 'opencode', [], 'grand', undefined, RESEARCH))).toEqual(['Found in research, Oct 10 | synthetic-large-7 | Anthropic · unverified price'])
+    expect(modelSuggestions(DATA, 'opencode', [], null, undefined, { day: null, models: RESEARCH.models })[0]!.label).toBe('Found in research')
     expect(modelSuggestions(DATA, 'claude', [], null, undefined, { day: 'Oct 10', models: [found('synthetic-new-1', 'anthropic', 'Anthropic')] }).at(-1)!.rows[0]!.context).toBe('Anthropic · no price found')
   })
 

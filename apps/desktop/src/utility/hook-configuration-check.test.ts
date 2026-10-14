@@ -27,7 +27,7 @@ async function configFixture(): Promise<{ root: string; env: Record<string, stri
   const root = await mkdtemp(join(tmpdir(), 'bmn-hookcheck-'))
   roots.add(root)
   const env = {
-    // Cursor's file sits in the home directory, so the home is the fixture's too.
+    // No app's file is read from the real home.
     HOME: root,
     CLAUDE_CONFIG_DIR: join(root, 'claude'),
     CODEX_HOME: join(root, 'codex'),
@@ -67,7 +67,7 @@ describe('runHookConfigurationCheck', () => {
     const report = await check(env)
 
     expect(report).toMatchObject({ state: 'checked', checkedAt, ok: false })
-    expect(report.state === 'checked' && report.agents.map((row) => row.agent)).toEqual(['claude', 'codex', 'opencode', 'cursor'])
+    expect(report.state === 'checked' && report.agents.map((row) => row.agent)).toEqual(['claude', 'codex', 'opencode'])
     const claude = agentNamed(report, 'claude')
     expect(claude).toMatchObject({ state: 'read', missing: [] })
     expect(claude.entries).toEqual(CLAUDE_EVENTS.map((event) => ({ event, optional: false, state: 'wired (older wording)' })))
@@ -84,10 +84,6 @@ describe('runHookConfigurationCheck', () => {
       state: 'missing',
       entries: [{ event: 'plugin', optional: false, state: 'missing' }, { event: 'cli.json', optional: false, state: 'missing' }],
       missing: ['plugin', 'cli.json']
-    })
-    expect(agentNamed(report, 'cursor')).toMatchObject({
-      file: join(root, '.cursor', 'hooks.json'), state: 'missing',
-      missing: ['sessionStart', 'beforeSubmitPrompt', 'postToolUse', 'stop', 'sessionEnd']
     })
   })
 
@@ -160,7 +156,7 @@ describe('runHookConfigurationCheck', () => {
 
     expect(report.state).toBe('checked')
     expect(agentNamed(report, 'opencode')).toMatchObject({ state: 'unreadable', missing: ['plugin', 'cli.json'] })
-    expect(report.state === 'checked' && report.agents.map((row) => row.agent)).toEqual(['claude', 'codex', 'opencode', 'cursor'])
+    expect(report.state === 'checked' && report.agents.map((row) => row.agent)).toEqual(['claude', 'codex', 'opencode'])
   })
 
   it('leaves every hook file byte-for-byte unchanged', async () => {

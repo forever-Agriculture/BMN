@@ -383,27 +383,16 @@ describe('a destination that is only the owner\'s word (60.8 AC2)', () => {
     expect(prompt('claude', session(['claude']))).toMatchObject({ outcome: 'pass', cause: 'allowed' })
   })
 
-  it('decides Cursor from what the owner recorded for it, offers no Allow, and only warns there', () => {
+  it('stands for nothing in Cursor, which was retired, and says so (Epic 71)', () => {
     approve(team())
-    const pid = session(['cursor-agent'])
-
-    const verdict = prompt('cursor', pid)
-    expect(verdict).toMatchObject({ outcome: 'stop', cause: 'declared', allow: false, provider: { id: 'cursor', name: 'Cursor' } })
-    expect(verdict.line).toBe("Cursor can't see private work in ~/code/app: where Cursor sends work is your word, not something BMN inspected. Record it as inspected in BMN Preferences › Rules › Health.")
-    expect(GUARD_APPS.cursor).toEqual({ event: 'beforeSubmitPrompt', stops: false })
+    expect(Object.keys(GUARD_APPS)).toEqual(['claude', 'codex'])
     expect(stopAnswer('cursor', 'anything')).toBeNull()
-    expect(guardStanding('cursor')).toBe('prompt guard: active, only warns in Cursor')
+    expect(guardStanding('cursor')).toBe("prompt guard: Cursor was retired on 2026-10-14; BMN's support for it is kept at the git tag cursor-support-final")
     // The live stop test of 2026-10-11; the card reads the same record from the protocol package.
     expect(guardStanding('claude')).toBe('prompt guard: active, stops a prompt that would send private work to a provider that may not see it (measured on Claude Code 2.1.296)')
     expect(guardStanding('codex')).toBe('prompt guard: active, stops a prompt that would send private work to a provider that may not see it (measured on Codex 0.162.1)')
     expect(GUARD_MEASURED).toEqual(PROTOCOL_GUARD_MEASURED)
     expect(guardStanding('opencode')).toMatch(/not available in OpenCode/)
-
-    approve(team((text) => edit(text, 'cursor: {name: Cursor, hosts: [], private_work: public_only}', 'cursor: {name: Cursor, hosts: [], private_work: allowed}')))
-    expect(prompt('cursor', pid)).toMatchObject({ outcome: 'pass', cause: 'allowed' })
-
-    approve(team((text) => edit(text, 'cursor: {provider: cursor, basis: owner-declared}\n', '')))
-    expect(prompt('cursor', pid).line).toMatch(/Cursor does not report where it sends work, and nothing is recorded for it\)\. Say where Cursor sends work in BMN Preferences › Rules › Health\./)
   })
 })
 
@@ -576,7 +565,6 @@ describe('where a receiving agent sends work, for a message (Epic 66.4)', () => 
     expect(messageStanding('codex')).toBe('messages: handed to a working agent by this hook after a tool call (measured on Codex 0.162.1)')
     expect(messageStanding('claude')).toBe('messages: handed to a working agent by this hook after a tool call (measured on Claude Code 2.1.296)')
     expect(messageStanding('opencode')).toBe('messages: not handed over by a hook in OpenCode; your Paste in Messages delivers them')
-    expect(messageStanding('cursor')).toBe('messages: not handed over by a hook in Cursor; your Paste in Messages delivers them')
   })
 })
 
@@ -616,7 +604,7 @@ describe('whether a receiving agent\'s provider may see the sender\'s work (Epic
 
   it('gives nothing to a destination that is only the owner\'s word, or to a provider the team does not name', () => {
     approve(team())
-    expect(messageProviderAnswer({ provider: 'cursor', host: 'default:cursor', basis: 'owner-declared', default: true }, workspace))
+    expect(messageProviderAnswer({ provider: 'opencode-go', host: 'default:opencode', basis: 'owner-declared', default: true }, workspace))
       .toMatchObject({ allowed: false })
     expect(messageProviderAnswer({ ...OPENAI, basis: 'owner-declared' }, workspace)).toMatchObject({ allowed: false })
     expect(messageProviderAnswer({ provider: 'nobody', host: 'api.nobody.example', basis: 'explicit', default: false }, workspace))

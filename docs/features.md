@@ -30,7 +30,7 @@ keyboard focus and remain available to the keyboard and screen readers.
 A session is one command in one working directory: a shell, Claude Code, Codex, OpenCode, or
 anything else installed. **New session…** opens the launcher beside the terminal:
 
-- **Terminal, Claude Code, Codex, OpenCode, Cursor** — one click picks what runs. An agent starts inside an
+- **Terminal, Claude Code, Codex, OpenCode** — one click picks what runs. An agent starts inside an
   interactive bash (`bash -ic 'claude; exec bash -i'`), so your shell stays open when the agent
   exits. Saved templates appear as further cards; a template whose command is missing is marked
   unavailable and cannot be picked.
@@ -70,12 +70,11 @@ either: BMN strips agent session variables such as `CLAUDE_CODE_SESSION_ID` and 
 from the environment the command runs in, so the new session starts clean. BMN tags common
 commands — Claude, Codex, OpenCode, Gemini, Aider, Shell — but the deeper
 integration (attention hooks and conversation resume) is built for Claude Code, Codex and OpenCode.
-Cursor's terminal agent (`cursor-agent`) gets its finished-turn notice, its agent name and Resume through
-its hooks (`bmn hooks install cursor`); it reports no question or permission prompt, so those stay in
-its terminal ([Agent control](agent-control.md#cursors-terminal-agent)).
-Any other CLI still runs as a normal terminal session, without those.
+Any other CLI still runs as a normal terminal session, without those. Cursor was retired on
+2026-10-14 ([Agent control](agent-control.md#cursor-retired)): a saved launch set entry that starts
+it opens as a plain terminal and says so once.
 
-**Model origin flag.** While a Claude Code, Codex, OpenCode or Cursor run reports through its own hooks,
+**Model origin flag.** While a Claude Code, Codex or OpenCode run reports through its own hooks,
 its sidebar row, pane heading and Session details show the agent it really is (not "Shell") and
 a small flag for the country of the company that made its model — 🇺🇸 for Anthropic, OpenAI and
 other US labs, 🇨🇳 for GLM, Kimi, Qwen, DeepSeek, MiniMax or Xiaomi MiMo, and the flag of the main
@@ -87,8 +86,7 @@ unrecognised model shows no flag rather than a guess. How it is decided:
 **Agent history.** Preferences → History → Keep agent history (10, 30 or 90 days, or Never; default
 30) is one limit for every agent: Claude Code and `claude glm` get it as their own
 `cleanupPeriodDays`, and BMN deletes Codex and OpenCode sessions untouched for longer through their
-own delete commands, at most 200 per agent per daily run. Cursor has no delete command, so its row
-reads "keeps its own history · not managed by BMN". Nothing is written or deleted until you
+own delete commands, at most 200 per agent per daily run. Nothing is written or deleted until you
 press Start cleanup once; the Preferences button shows the attention dot while it waits. Sessions in
 use are never deleted. See [Agent history](agent-history.md).
 
@@ -154,8 +152,7 @@ never replayed into a terminal. **Start again** runs the stored command fresh. O
 before a crash, after the last snapshot, can be lost; BMN says so when it recovers.
 
 **Resume** reopens the conversation a stopped agent was in. For Claude Code and Codex it goes
-through each CLI's own resume; for OpenCode through `opencode --session <id>`; for Cursor through
-`cursor-agent --resume=<id>`. It works only for a
+through each CLI's own resume; for OpenCode through `opencode --session <id>`. It works only for a
 session whose conversation BMN knows: one pinned at launch, one you located by hand, or one the
 harness reported. Any other program can report its own resume command with `bmn resume-command`
 ([agent-control.md](agent-control.md#resume-for-any-program)); where BMN has no conversation of its
@@ -336,8 +333,7 @@ A lead you start yourself is checked too, at each prompt: when its app sends wor
 that may not see private work, BMN tells the app to stop the prompt before it leaves and the
 session shows a card with **Allow here** (that provider, that workspace only) and **Keep
 blocked**. Claude Code and Codex take that answer through their prompt hook; that your installed
-versions obey has not been tested live yet, and the card says so. Cursor only warns, and OpenCode
-is not covered.
+versions obey has not been tested live yet, and the card says so. OpenCode is not covered.
 
 Rules → **Skills** gives every agent app the skills you keep in one folder: a link, or a copy
 where the app does not follow links, installed and undone as one step after you saw the list. A
@@ -382,9 +378,9 @@ showing the difference. Both work for Codex and Claude Code, and only on an app 
 **Test…** there showed that the app takes the setting; until then the limit is kept but not applied.
 
 Preferences → **Rules** keeps one rules text and writes it into each agent app's own rules file
-(Claude Code, Codex, OpenCode and Cursor), shows each file's difference before it writes, and can
+(Claude Code, Codex and OpenCode), shows each file's difference before it writes, and can
 undo an install. An app whose provider may not see private work receives only the sections you
-marked public, and so do OpenCode, whose own configuration BMN does not read in full, and Cursor, whose requests BMN does not check. Details and limits are in [agent-control.md](agent-control.md#the-team-team-file-check-and-rules).
+marked public, and so does OpenCode, whose own configuration BMN does not read in full. Details and limits are in [agent-control.md](agent-control.md#the-team-team-file-check-and-rules).
 
 ## Files and file references
 

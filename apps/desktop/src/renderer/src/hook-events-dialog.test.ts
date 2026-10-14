@@ -23,6 +23,7 @@ describe('hook event words', () => {
     expect(words('codex', 'PreCompact', 'manual')).toBe('PreCompact · manual')
     expect(words('opencode', 'session.compacted', 'subagent')).toBe('session.compacted · subagent')
     expect(words('claude', 'SessionStart', 'startup')).toBe('SessionStart · startup')
+    // A row saved from Cursor before it was retired keeps its own words (Epic 71).
     expect(words('cursor', 'SessionStart', 'compact')).toBe('SessionStart · compact')
   })
 

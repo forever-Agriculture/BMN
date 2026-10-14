@@ -18,7 +18,6 @@ raw records are kept under `_bmad-output/planning-artifacts/reference-66-session
 | Codex | **PASS**: five of five runs, the whole stamped text once, read before the next action | codex-cli 0.162.1 |
 | Claude Code | **PASS**: five of five runs, the whole stamped text once, read before the next action | Claude Code 2.1.296 |
 | OpenCode | no hand-over: BMN cannot tell where they send work | does not apply |
-| Cursor | no hand-over: BMN cannot tell where they send work | does not apply |
 
 A PASS needs five runs with no doubled, cut or lost text. An agent of an app without PASS can
 send, and receives only through the owner's **Paste** in **Messages…**.

@@ -25,7 +25,7 @@ const NOW = new Date('2026-10-10T12:00:00.000Z')
 const CODEX = '0.161.0'
 const CLAUDE = '2.1.295'
 const OPENCODE = '1.18.31'
-const VERSIONS = { codex: CODEX, claude: CLAUDE, opencode: OPENCODE, cursor: null }
+const VERSIONS = { codex: CODEX, claude: CLAUDE, opencode: OPENCODE }
 /** A line only a skill's own text holds: no plan, result or record may carry it. */
 const BODY = 'SYNTHETIC-SKILL-BODY-7f3a'
 
@@ -184,13 +184,11 @@ describe('where an app reads skills: the owner-run test (60.11 AC1)', () => {
   })
 
   it('keeps an app unsupported when it cannot be asked, did not answer, or named nothing', async () => {
-    stub('cursor-agent', 'echo "2026.09.26-dd393fe"; echo "$@" >> "' + home + '/calls-cursor.log"')
-    expect(await testSkillsFolders('cursor', { environment: env, now: NOW })).toMatchObject({ outcome: 'unavailable' })
     lister('claude', CLAUDE, '-p', ['.claude/skills'], { fail: true })
     expect(await testSkillsFolders('claude', { environment: env, now: NOW })).toMatchObject({ outcome: 'inconclusive', detail: 'claude did not answer in a home folder without its sign-in' })
     lister('opencode', OPENCODE, 'debug skill', ['.nowhere'])
     expect(await testSkillsFolders('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'fail' })
-    for (const harness of ['cursor', 'claude', 'opencode']) {
+    for (const harness of ['claude', 'opencode']) {
       expect(appSkills(harness, { environment: env, version: VERSIONS[harness as 'claude'] ?? '1.0.0', source }).supported).toBe(false)
     }
     expect(check().apps.find((app) => app.harness === 'opencode')).toMatchObject({ supported: false, skills: [] })
@@ -260,6 +258,23 @@ describe('check and install with links (60.11 AC2-AC4)', () => {
     expect(readlinkSync(join(mine, 'alias'))).toBe('own.md')
     expect(existsSync(join(codexFolder(), 'gamma'))).toBe(false)
     expect(states('codex')).toEqual({ alpha: 'link', beta: 'unmanaged', gamma: 'missing' })
+  })
+
+  it('lists a skills install made before Cursor was retired as saved, and its undo leaves the Cursor folder as it is (Epic 71)', async () => {
+    const result = await install(['codex'])
+    const manifestPath = join(home, '.config/bmn/agents/state/rules/transactions', result.transaction!, 'manifest.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    const cursorFolder = join(home, '.cursor/skills/alpha')
+    manifest.targets.push({ ...manifest.targets[0], harness: 'cursor', path: cursorFolder })
+    writeFileSync(manifestPath, JSON.stringify(manifest))
+    expect(listTransactions()[0]).toMatchObject({ id: result.transaction, targets: ['codex', 'cursor'] })
+
+    const shown = await restoreTransaction(result.transaction!, { planOnly: true })
+    expect(shown.targets!.map((target) => target.harness)).toEqual(['codex', 'codex', 'codex'])
+    expect(shown.left).toEqual([{ harness: 'cursor', path: cursorFolder, reason: "Cursor was retired on 2026-10-14; BMN's support for it is kept at the git tag cursor-support-final" }])
+    expect(await restoreTransaction(result.transaction!, { yes: true, expectedPlanHash: shown.plan_hash! })).toMatchObject({ code: 'OK', left: shown.left })
+    expect(states('codex')).toEqual({ alpha: 'missing', beta: 'missing', gamma: 'missing' })
+    expect(existsSync(join(home, '.cursor'))).toBe(false)
   })
 
   it('adopts a link that already points at the skill only through an install', async () => {
@@ -496,7 +511,7 @@ describe('which skills an app may have (60.11 AC2, AC3)', () => {
 
   it('gives an app on a public-only route only the public skills, and a scoped skill only to its apps', async () => {
     approve(withSkills('public: [alpha, beta]\nonly: {beta: [codex]}'))
-    expect(check().apps.map((app) => [app.harness, app.kind])).toEqual([['claude', 'full'], ['codex', 'full'], ['opencode', 'public'], ['cursor', 'public']])
+    expect(check().apps.map((app) => [app.harness, app.kind])).toEqual([['claude', 'full'], ['codex', 'full'], ['opencode', 'public']])
     expect(states('opencode')).toEqual({ alpha: 'missing', beta: 'excluded', gamma: 'excluded' })
     const result = await install()
     expect(result.written.map((entry) => `${entry.harness}:${entry.skill}`)).toEqual(['codex:alpha', 'codex:beta', 'codex:gamma', 'opencode:alpha'])
@@ -812,7 +827,6 @@ if (${JSON.stringify(name)} === 'claude') {
     tested('opencode', OPENCODE, [{ root: '.config/opencode/skills', folder: true, link: true }])
     expect(await loading('opencode')).toMatchObject({ outcome: 'unavailable', detail: expect.stringContaining('a loading test sends a prompt to that provider') })
     expect(await loading('claude')).toMatchObject({ outcome: 'unavailable', detail: expect.stringContaining('skills not supported yet') })
-    expect(await loading('cursor')).toMatchObject({ outcome: 'unavailable' })
     expect(existsSync(opencodeFolder())).toBe(false)
     expect(existsSync(join(home, 'calls-opencode.log'))).toBe(false)
     // OpenCode gets public work only, whatever its provider is allowed (owner decisions 2026-10-10 and 2026-10-14): no
@@ -855,12 +869,18 @@ describe('bmn skills (60.11 AC2, AC3)', () => {
     const after = await run(['skills', 'check'])
     expect(after.code).toBe(0)
     expect(after.stdout).toContain(`Codex ${CODEX}: Linked - ${codexFolder()} (links); every skill it may have\n  current: 3`)
-    expect(after.stdout).toContain('Cursor: skills not supported yet')
+    expect(after.stdout).not.toContain('Cursor')
     const id = /transaction ([0-9TZ-]+-\d+)/.exec(installed.stdout)![1]!
     expect((await run(['rules', 'restore', '--transaction', id, '--yes'])).code).toBe(0)
     expect(readdirSync(codexFolder())).toEqual([])
     expect((await run(['skills', 'frobnicate'])).code).toBe(2)
     expect((await run(['skills', 'install', 'vim'])).code).toBe(2)
+    // Epic 71: asked for Cursor, it says Cursor was retired and where its support is kept.
+    for (const args of [['skills', 'install', 'cursor'], ['skills', 'test', 'cursor']]) {
+      const retired = await run(args)
+      expect(retired.code).toBe(2)
+      expect(retired.stderr).toContain("Cursor was retired on 2026-10-14; BMN's support for it is kept at the git tag cursor-support-final")
+    }
   })
 })
 

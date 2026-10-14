@@ -34,8 +34,6 @@ A session is never deleted when it is bound to a running BMN session or to a Res
 
 `opencode --version` at the start of each run decides which row applies; one that cannot be read counts as OpenCode 1. The Preferences view reuses the last answer while the `opencode` on PATH is the same unchanged file; a run always asks again, because a launcher can start another version from the same file. Because a delete on OpenCode 2 takes the subagent sessions below it, a session is offered only with its whole family: the family's newest activity decides its age, and the session is kept while any member is bound to a live BMN session, named on a running command line or was active within the last day. OpenCode 2 copies 1's sessions into `session_v2` and writes only there, and has no `--pure`; `--standalone` runs the delete on a private server instead of OpenCode's shared background service, and no terminal plugin (BMN's included) loads for it.
 
-Cursor's terminal agent keeps its chats under `~/.cursor/chats/` and has no command to delete one (measured on 2026.09.26-dd393fe, [agent-control.md](agent-control.md#cursors-terminal-agent)), so its row reads "keeps its own history · not managed by BMN" whenever `cursor-agent` is on PATH or that folder exists, and no run touches it.
-
 A missing binary or store hides the agent's row (BMN has never seen it). A table without the expected columns reads "not recognised: reason" and deletes nothing.
 
 ## Spike (Story 31.2 AC1), 2026-09-27

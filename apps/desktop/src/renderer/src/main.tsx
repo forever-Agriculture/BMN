@@ -88,7 +88,7 @@ import {
   type SessionLaunchForm
 } from './launch-template'
 import { SessionRequestCard, type ClearedNotice } from './session-request-card'
-import { SessionGuardCard, guardMark } from './session-guard-card'
+import { GUARD_STOP_WORDS, SessionGuardCard } from './session-guard-card'
 import { TurnChangesSwitchDialog, TurnPauseCard } from './turn-changes-card'
 import { TurnChangesDialog } from './turn-changes-dialog'
 import { dismissAttentionReminder, noticesWhenNavigating, applyAttentionWithdrawal } from './attention-actions'
@@ -1922,7 +1922,7 @@ function App(): React.JSX.Element {
       onClick={event => {
         const anchor = event.currentTarget
         setGuardCard(current => current?.sessionId === sessionId ? null : { sessionId, anchor, busy: false, refusal: null })
-      }}>{guardMark(stop)}</button>
+      }}>{GUARD_STOP_WORDS}</button>
   }
   const paneControls = (sessionId: string): React.JSX.Element | null => {
     // Each mark keeps its own element: one that goes away must not hand its button, and a card's anchor, to another.

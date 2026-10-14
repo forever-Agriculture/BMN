@@ -3,7 +3,7 @@ import type { GuardStop } from '@bmn/protocol'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { SessionGuardCard, guardMark, guardNote, guardPath, guardTitle } from './session-guard-card'
+import { SessionGuardCard, guardNote, guardPath, guardTitle } from './session-guard-card'
 
 const STOP: GuardStop = {
   sessionId: 's1', incarnationId: 'incarnation-1', agent: 'claude', outcome: 'stop', cause: 'public-only',
@@ -71,22 +71,6 @@ describe('the card a stopped prompt raises (60.8 AC3)', () => {
   })
 })
 
-describe('an app BMN can only warn in (60.8 AC4)', () => {
-  const WARNING: GuardStop = { ...STOP, agent: 'cursor', outcome: 'warn', cause: 'declared', allow: false, providerId: 'cursor', providerName: 'Cursor', agentName: null, host: 'default:cursor' }
-
-  it('marks the session and says the prompt went on', () => {
-    const html = markup(WARNING)
-
-    expect(guardMark(WARNING)).toBe('Public-only provider on private work')
-    expect(guardMark({ ...WARNING, cause: 'unknown' })).toBe('Unknown destination on private work')
-    expect(guardMark(STOP)).toBe('Told to stop')
-    expect(guardNote(WARNING)).toBe('Cursor cannot be told to stop a prompt, so this one went on. BMN only warns in Cursor.')
-    expect(html).toContain('<strong>Prompt went on</strong>')
-    expect(html).not.toContain('<dt>Address</dt>')
-    expect(buttons(html)).toEqual(['×', 'Dismiss'])
-  })
-})
-
 describe('the words of the card (R60-NFR8)', () => {
   it('writes a path under the home folder with ~ and leaves any other as it is', () => {
     expect(guardPath('/home/synthetic/code/app', '/home/synthetic')).toBe('~/code/app')
@@ -95,8 +79,13 @@ describe('the words of the card (R60-NFR8)', () => {
     expect(guardPath('/srv/app', null)).toBe('/srv/app')
   })
 
+  it('says what happens next: Allow adds the workspace, otherwise the prompt is sent again once fixed', () => {
+    expect(guardNote(STOP)).toBe('Allow here adds this one workspace for Moonshot AI to your team as a new version. Then send the prompt again.')
+    expect(guardNote({ ...STOP, allow: false })).toBe('Send the prompt again once this is fixed.')
+  })
+
   it('uses none of the words the owner is never shown', () => {
-    const text = [markup(STOP), markup({ ...STOP, cause: 'unknown', allow: false }), markup({ ...STOP, agent: 'cursor', outcome: 'warn', allow: false })].join(' ').replace(/<[^>]*>/g, ' ')
+    const text = [markup(STOP), markup({ ...STOP, cause: 'unknown', allow: false })].join(' ').replace(/<[^>]*>/g, ' ')
 
     expect(text).not.toMatch(/\b(harness|roster|route|generation|packet|seal|trust|exception)\b/i)
   })

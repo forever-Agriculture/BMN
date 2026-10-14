@@ -986,7 +986,6 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
   it('hands nothing to an app without a measured hand-over, or to a process the session no longer runs', async () => {
     const sent = await tell('a', 'b')
     expect((await take('b', OPENAI, { app: 'opencode' })).message).toBeNull()
-    expect((await take('b', OPENAI, { app: 'cursor' })).message).toBeNull()
     expect((await take('b', OPENAI, { incarnationId: 'run-earlier' })).message).toBeNull()
     expect(stored(sent.messageId).state).toBe('waiting')
   })
@@ -1000,7 +999,7 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
     expect(await ask({ agent: 'claude' })).toBe(true)
     expect(await ask({ event: 'Stop' })).toBe(false)
     expect(await ask({ agent: 'claude', event: 'PostToolUseFailure' })).toBe(false)
-    expect(await ask({ agent: 'cursor' })).toBe(false)
+    expect(await ask({ agent: 'opencode' })).toBe(false)
     expect(await ask({ incarnationId: 'run-earlier' })).toBe(false)
     expect(await ask({ incarnationId: null })).toBe(false)
     expect(await ask({ sessionId: 'a', incarnationId: 'run-a' })).toBe(false)

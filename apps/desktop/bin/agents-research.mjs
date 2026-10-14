@@ -5,7 +5,7 @@ import { closeSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, read
 import { basename, dirname } from 'node:path'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
-import { APP_NAMES, EFFORTS, RESEARCH_APPS, agentState, isCalled, namedResearchers, researcherProposal } from './agents-roster.mjs'
+import { EFFORTS, RESEARCH_APPS, agentState, appName, isCalled, namedResearchers, researcherProposal } from './agents-roster.mjs'
 import { readApproved, stateDirectory } from './agents-state.mjs'
 import { CODEX_RESEARCH_ANSWER, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_HOME, RESEARCH_TOOLS, evaluateResearch, harnessVersion, prepareResearchRun, removeResearchCodexFolders, researchRunsDirectory } from './agents-check.mjs'
 import { contextItems, provenControls } from './agents-context.mjs'
@@ -167,7 +167,7 @@ export function appVersion(agent, environment) {
 
 /** Why an agent is not offered as the researcher, in a few plain words; the check's own message stays beside it. */
 function whyNot(agent, code, detail = undefined) {
-  const app = APP_NAMES[agent.harness] ?? agent.harness
+  const app = appName(agent.harness)
   if (code === 'PACKET_INVALID') return 'its provider gets public work only'
   if (code === 'CONTEXT_MISMATCH') {
     // Not "not supported yet": an untested limit is simply left out. What stops a run is a limit that cannot be what the app gets.
@@ -228,7 +228,7 @@ export function researchers({ environment = process.env, now = new Date(), fence
     // An agent called by BMN writes no text and runs in no app: it is never offered as a researcher.
     if (agentState(agent) !== 'active' || isCalled(agent) || (named !== null && !named.includes(agent.id))) continue
     if (!RESEARCH_APPS.includes(agent.harness)) {
-      found.push({ id: agent.id, name: agent.name, harness: agent.harness, ok: false, why: `its app is ${APP_NAMES[agent.harness] ?? agent.harness}`, reason: `${APP_NAMES[agent.harness] ?? agent.harness} has no research form BMN can check` })
+      found.push({ id: agent.id, name: agent.name, harness: agent.harness, ok: false, why: `its app is ${appName(agent.harness)}`, reason: `${appName(agent.harness)} has no research form BMN can check` })
       continue
     }
     let result

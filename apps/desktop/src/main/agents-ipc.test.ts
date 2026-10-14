@@ -118,7 +118,7 @@ async function approvedAndInstalled(): Promise<AgentsSnapshot> {
   expect(first).toMatchObject({ ok: true, message: 'Approved · version 1' })
   expect(await call<RulesOutcome>('rules:save-master', { text: MASTER, expectedHash: null, expectedLink: null })).toMatchObject({ ok: true })
   const plan = await call<RulesPlan>('rules:plan-install')
-  expect(plan.targets.map((target) => [target.harness, target.rendering])).toEqual([['claude', 'full'], ['codex', 'full'], ['opencode', 'public'], ['cursor', 'public']])
+  expect(plan.targets.map((target) => [target.harness, target.rendering])).toEqual([['claude', 'full'], ['codex', 'full'], ['opencode', 'public']])
   expect(await call<RulesOutcome>('rules:install', { planHash: plan.planHash })).toMatchObject({ ok: true })
   expect(file('.claude/CLAUDE.md')).toContain('The team: Claude Code (Opus, Fable), Codex (Sol, Astra, Luna) (roles, efforts and limits: `bmn team`).')
   return snapshot()
@@ -383,36 +383,35 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     writeFileSync(rosterFile(), EXAMPLE)
     await call<AgentsOutcome>('agents:approve', { shown: await shown() })
     const rows = async () => (await call<RulesSnapshot>('rules:snapshot')).apps.map((app) => [app.harness, app.version, app.versionState])
-    expect(await rows()).toEqual([['claude', '2.1.295', 'tested'], ['codex', '0.161.0', 'tested'], ['opencode', null, 'unknown'], ['cursor', null, 'unknown']])
+    expect(await rows()).toEqual([['claude', '2.1.295', 'tested'], ['codex', '0.161.0', 'tested'], ['opencode', null, 'unknown']])
     stub('codex', 'echo "codex-cli 0.170.0"')
     stub('claude', 'echo "2.1.200 (Claude Code)"')
     const apps = (await call<RulesSnapshot>('rules:snapshot')).apps
     expect(apps[1]).toMatchObject({ version: '0.170.0', versionState: 'newer', versionNote: 'Newer than the version BMN tested (0.161.0). BMN reads where it sends data the same way on every version.', basis: 'default', provider: 'openai' })
     expect(apps[0]).toMatchObject({ version: '2.1.200', versionState: 'other', versionNote: 'Not the version BMN tested (2.1.295). BMN reads where it sends data the same way on every version.' })
     expect(apps[2]).toMatchObject({ versionState: 'unknown', versionNote: 'OpenCode is not installed, or its version cannot be read.' })
-    // OpenCode is read like Claude Code and Codex now (owner decision 2026-10-14); Cursor still is not.
+    // OpenCode is read like Claude Code and Codex now (owner decision 2026-10-14).
     stub('opencode', 'echo "opencode v2.0.28"')
     expect((await call<RulesSnapshot>('rules:snapshot')).apps[2]).toMatchObject({ version: '2.0.28', versionState: 'tested', versionNote: 'BMN tested how this version picks where to send data.' })
     stub('opencode', 'echo "2.1.0"')
     expect((await call<RulesSnapshot>('rules:snapshot')).apps[2]).toMatchObject({ version: '2.1.0', versionState: 'newer' })
-    expect((await call<RulesSnapshot>('rules:snapshot')).apps[3]).toMatchObject({ versionState: 'unknown', versionNote: 'BMN does not check Cursor dispatches.' })
     stub('codex', 'echo "codex-cli"')
     expect((await call<RulesSnapshot>('rules:snapshot')).apps[1]).toMatchObject({ version: null, versionState: 'unknown', versionNote: 'Codex is not installed, or its version cannot be read.' })
   })
 
   it('names the program PATH selects for each app, past BMN\'s own commands, and none where the app is not installed (60.6: Update…)', async () => {
     const programs = async () => (await call<RulesSnapshot>('rules:snapshot')).apps.map((app) => [app.harness, app.program, app.programTarget])
-    expect(await programs()).toEqual([['claude', join(stubs, 'claude'), undefined], ['codex', join(stubs, 'codex'), undefined], ['opencode', null, undefined], ['cursor', null, undefined]])
+    expect(await programs()).toEqual([['claude', join(stubs, 'claude'), undefined], ['codex', join(stubs, 'codex'), undefined], ['opencode', null, undefined]])
     // BMN's own folder holds a `codex` that only hands over to the next one: the program updated is the one after it.
     appEnv = { PATH: `${dirname(SCRIPT)}:${stubs}:/usr/bin:/bin` }
     expect(existsSync(join(dirname(SCRIPT), 'codex'))).toBe(true)
     expect((await programs())[1]).toEqual(['codex', join(stubs, 'codex'), undefined])
     // An app installed as a link is shown with where the link leads.
     mkdirSync(join(home, 'versions'))
-    writeFileSync(join(home, 'versions/cursor-1.2.3'), '#!/bin/sh\necho "1.2.3"\n')
-    chmodSync(join(home, 'versions/cursor-1.2.3'), 0o755)
-    symlinkSync(join(home, 'versions/cursor-1.2.3'), join(stubs, 'cursor-agent'))
-    expect((await programs())[3]).toEqual(['cursor', join(stubs, 'cursor-agent'), join(home, 'versions/cursor-1.2.3')])
+    writeFileSync(join(home, 'versions/opencode-1.2.3'), '#!/bin/sh\necho "1.2.3"\n')
+    chmodSync(join(home, 'versions/opencode-1.2.3'), 0o755)
+    symlinkSync(join(home, 'versions/opencode-1.2.3'), join(stubs, 'opencode'))
+    expect((await programs())[2]).toEqual(['opencode', join(stubs, 'opencode'), join(home, 'versions/opencode-1.2.3')])
   })
 
   it('inspects with the environment a session\'s shell ends up with, read again before each call (60.6/60.7: an app found only through the shell\'s settings)', async () => {
@@ -651,7 +650,7 @@ describe('context limits on Rules › Health (60.9 AC1, AC3)', () => {
   it('refuses an app BMN has no setting for and a size that is not a number of tokens', async () => {
     await expect(call('rules:context-plan', { harness: 'opencode', limit: 1, compact: null })).rejects.toThrow(/codex, claude/)
     await expect(call('rules:context-plan', { harness: 'codex', limit: -5, compact: null })).rejects.toThrow(/positive whole number/)
-    await expect(call('rules:context-test', { harness: 'cursor' })).rejects.toThrow(/codex, claude/)
+    await expect(call('rules:context-test', { harness: 'opencode' })).rejects.toThrow(/codex, claude/)
   })
 })
 
@@ -775,7 +774,7 @@ describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
     expect(before.source).toEqual({ path: join(home, '.claude/skills'), readable: true })
     expect(before.skills.map((entry) => [entry.name, entry.description, entry.states])).toEqual([['alpha', 'Synthetic skill alpha.', {}], ['beta', 'Synthetic skill beta.', {}]])
     expect(before.apps.map((app) => [app.harness, app.supported, app.state, app.testable])).toEqual([
-      ['claude', false, 'Not supported yet', true], ['codex', false, 'Not supported yet', true], ['opencode', false, 'Not supported yet', true], ['cursor', false, 'Not supported yet', false]
+      ['claude', false, 'Not supported yet', true], ['codex', false, 'Not supported yet', true], ['opencode', false, 'Not supported yet', true]
     ])
     expect(await call<SkillsPlan>('rules:skills-plan')).toMatchObject({ ok: false, code: 'SKILLS_UNSUPPORTED', targets: [] })
 
@@ -861,8 +860,7 @@ describe('tools on Rules › Tools and Health (60.12 AC1-AC6)', () => {
     expect(before.apps.map((app) => [app.harness, app.supported, app.state, app.reason, app.path.replace(home, '~'), app.kind])).toEqual([
       ['claude', false, 'Not supported yet', 'no test has run on Claude Code 2.1.295', '~/.claude.json', 'full'],
       ['codex', false, 'Not supported yet', 'no test has run on Codex 0.161.0', '~/.codex/config.toml', 'full'],
-      ['opencode', false, 'Not supported yet', 'OpenCode is not installed, or its version cannot be read', '~/.config/opencode/opencode.jsonc', 'public'],
-      ['cursor', false, 'Not supported yet', 'Cursor is not installed, or its version cannot be read', '~/.cursor/mcp.json', 'public']
+      ['opencode', false, 'Not supported yet', 'OpenCode is not installed, or its version cannot be read', '~/.config/opencode/opencode.jsonc', 'public']
     ])
 
     // What Codex already holds is proposed as a tool kept to Codex, without the value its entry held.
@@ -877,7 +875,7 @@ describe('tools on Rules › Tools and Health (60.12 AC1-AC6)', () => {
     const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: staged } })
     expect(preview.valid).toBe(true)
     expect(preview.differences.map((diff) => [diff.scope, diff.id, diff.kind])).toEqual([['tools', 'docs', 'added'], ['tools', 'search', 'added']])
-    expect(preview.consequences).toEqual(['Tool Docs would reach Claude Code, Codex, OpenCode and Cursor', 'Tool Search would reach Codex',
+    expect(preview.consequences).toEqual(['Tool Docs would reach Claude Code, Codex and OpenCode', 'Tool Search would reach Codex',
       'With a tool on the list, the check keeps every Claude Code run to exactly its own tools, once its tools test passed there; it does not judge the tools of a Codex run'])
     expect(await call<AgentsOutcome>('agents:save', { shown: await shown(), data: staged, teamUpdate: bindings(preview) })).toMatchObject({ ok: true })
     expect(file('.config/bmn/agents/roster.md')).toContain('## tools\n\n```yaml\ndocs: {name: Docs, url: "https://docs.example.test/mcp", public: true}\nsearch: {name: Search, command: search-tool, apps: [codex]}\n```')
@@ -1555,8 +1553,8 @@ describe('the judge on Team: BMN\'s proposal, its calls, the monthly limit and T
       return text.replace(from, to)
     }
     let text = once(EXAMPLE, 'schema_version: 2', 'schema_version: 3')
-    text = once(text, 'cursor: {name: Cursor, hosts: [], private_work: public_only}\n',
-      `cursor: {name: Cursor, hosts: [], private_work: public_only}\ngateway: {name: Gateway, hosts: [${HOST}], private_work: allowed}\nmaker: {name: Maker, hosts: [], private_work: ${runs}}\n`)
+    text = once(text, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\n',
+      `opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\ngateway: {name: Gateway, hosts: [${HOST}], private_work: allowed}\nmaker: {name: Maker, hosts: [], private_work: ${runs}}\n`)
     text = once(text, '## roles\n', `## jev\n\n\`\`\`yaml\n${[
       'name: Jev', 'class: bishop', 'harness: bmn', 'model: jev-1.13', 'provider: gateway', 'run_by: maker', `host: ${HOST}`, 'enabled: true', 'status: active', 'roles: [judge]',
       'paid_by: per_token', 'price: {input: 0.042, output: 0, source: "https://prices.example.test/jev", as_of: 2026-10-12}'

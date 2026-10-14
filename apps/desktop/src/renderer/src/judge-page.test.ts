@@ -119,8 +119,8 @@ describe('the team file\'s own rules, kept the same on the Team pages (65.1)', (
   })
 
   it('an agent with no role can be turned into one BMN calls; one that holds a role cannot', () => {
-    expect(appChoices(agent('haiku'))).toEqual(['claude', 'codex', 'opencode', 'cursor', 'bmn'])
-    expect(appChoices(agent('sol', { roles: ['lead'] }))).toEqual(['claude', 'codex', 'opencode', 'cursor'])
+    expect(appChoices(agent('haiku'))).toEqual(['claude', 'codex', 'opencode', 'bmn'])
+    expect(appChoices(agent('sol', { roles: ['lead'] }))).toEqual(['claude', 'codex', 'opencode'])
     expect(callByBmn(BEFORE, 'sol')).toBe(BEFORE)
     const withFields = { ...BEFORE, agents: BEFORE.agents.map((entry) => (entry.id === 'haiku' ? { ...entry, context_window: 200_000, context_limit: 150_000, compact_at: 100_000, researcher: true } : entry)) }
     const turned = callByBmn(withFields, 'haiku')

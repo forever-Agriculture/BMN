@@ -34,7 +34,7 @@ describe('launch set coordinator', () => {
     const definitions = set()
     const coordinator = new LaunchSetCoordinator({
       getSet: async () => definitions,
-      listWorkspaces: async () => [workspace], validate, create
+      listWorkspaces: async () => [workspace], validate, create, retired: async () => undefined
     })
     await expect(coordinator.start(request)).rejects.toThrow('invalid third command')
     expect(validate).toHaveBeenCalledTimes(3)
@@ -52,6 +52,7 @@ describe('launch set coordinator', () => {
     const coordinator = new LaunchSetCoordinator({
       getSet: async () => definitions,
       listWorkspaces: async () => [workspace],
+      retired: async () => undefined,
       validate: async (params) => { calls.push(`validate:${params.argv[0]}`) },
       create: async (params) => {
         calls.push(`create:${params.argv[0]}`)
@@ -78,5 +79,26 @@ describe('launch set coordinator', () => {
       'validate:A', 'validate:B', 'validate:C', 'create:A', 'create:B'
     ])
     expect(await coordinator.start(request)).toBe(result)
+  })
+
+  it('opens an entry that would start Cursor as a plain terminal and says so once on it (Epic 71)', async () => {
+    const definitions = set()
+    definitions.entries = [
+      { ...definitions.entries[0]!, name: 'Cursor', executable: '/bin/bash', argv: ['-ic', 'cursor-agent; exec bash -i'] },
+      { ...definitions.entries[1]!, name: 'Direct', executable: '/home/owner/.local/bin/cursor-agent', argv: ['--model', 'gpt-5'] },
+      { ...definitions.entries[2]!, name: 'Codex', executable: '/bin/bash', argv: ['-ic', 'codex; exec bash -i'] }
+    ]
+    const create = vi.fn(async (params: { name: string; executable: string; argv: readonly string[] }) =>
+      ({ sessionId: `session-${params.name}`, incarnationId: `run-${params.name}` }))
+    const retired = vi.fn(async () => undefined)
+    const coordinator = new LaunchSetCoordinator({ getSet: async () => definitions, listWorkspaces: async () => [workspace], validate: async () => undefined, create, retired })
+    const result = await coordinator.start(request)
+    expect(result.entries.map((entry) => entry.outcome)).toEqual(['started', 'started', 'started'])
+    expect(create.mock.calls.map(([params]) => [params.name, params.executable, params.argv])).toEqual([
+      ['Cursor', '/bin/bash', []], ['Direct', '/bin/bash', []], ['Codex', '/bin/bash', ['-ic', 'codex; exec bash -i']]
+    ])
+    expect(retired.mock.calls).toEqual([[{ sessionId: 'session-Cursor', incarnationId: 'run-Cursor' }], [{ sessionId: 'session-Direct', incarnationId: 'run-Direct' }]])
+    // The saved set keeps its entries as they were.
+    expect(definitions.entries[0]!.argv).toEqual(['-ic', 'cursor-agent; exec bash -i'])
   })
 })

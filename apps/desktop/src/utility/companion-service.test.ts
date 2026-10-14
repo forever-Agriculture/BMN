@@ -156,10 +156,10 @@ beforeEach(() => {
 })
 
 describe('foreground question lifecycle ownership', () => {
-  it.each(['opencode', 'cursor'] as const)('preserves exact legacy %s cleanup after observing its unsupported producer', async agent => {
+  it.each(['opencode'] as const)('preserves exact legacy %s cleanup after observing its unsupported producer', async agent => {
     service['options'].manager.observeConversation = vi.fn(async () => ({ accepted: false as const, detail: 'Synthetic shell' }))
     await service['control']['options'].handlers.observeConversation({ sessionId: 's1', incarnationId: 'incarnation-1', agentCli: agent,
-      conversationReference: agent === 'opencode' ? 'ses_synthetic_main' : 'cccccccc-cccc-cccc-cccc-cccccccccccc', source: 'startup' })
+      conversationReference: 'ses_synthetic_main', source: 'startup' })
     const requestKey = `${agent}:permission`
     const opened = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey,
       kind: 'permission', title: 'Synthetic legacy permission', origin: `hook:${agent}:PermissionRequest` })
@@ -2390,7 +2390,6 @@ describe('hook observation summary', () => {
       await observe({ sessionId: 's1', event: 'SessionStart', source })
       await observe({ sessionId: 's1', agent: 'codex', event: 'SessionStart', source })
     }
-    await observe({ sessionId: 's1', agent: 'cursor', event: 'sessionStart', source: 'compact' })
 
     await expect(observation({ sessionId: 's1' })).resolves.toMatchObject({ state: 'observed', compaction: null })
   })
@@ -3623,17 +3622,6 @@ describe('the prompt guard\'s stops (Story 60.8)', () => {
     report()
     await expect(stops()).resolves.toMatchObject([{ kept: false }])
     await expect(service.route(METHOD_REGISTRY.guardKeep, { sessionId: 's2' })).resolves.toEqual({ kept: false })
-  })
-
-  it('a warning the owner closed stays closed while nothing about it changed, and comes back when it does', async () => {
-    const warning = { agent: 'cursor', outcome: 'warn', cause: 'declared', allow: false, providerId: 'cursor', providerName: 'Cursor', agentName: null, host: 'default:cursor' }
-    report(warning)
-    await service.route(METHOD_REGISTRY.guardKeep, { sessionId: 's1' })
-    report(warning)
-    await expect(stops()).resolves.toMatchObject([{ outcome: 'warn', kept: true }])
-
-    report({ ...warning, workspace: '/synthetic/code/other' })
-    await expect(stops()).resolves.toMatchObject([{ kept: false, workspace: '/synthetic/code/other' }])
   })
 
   it('clears a stop once its workspace was allowed, and keeps it out of everything that leaves the computer or is stored', async () => {

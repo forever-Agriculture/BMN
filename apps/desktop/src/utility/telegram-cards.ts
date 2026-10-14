@@ -1,10 +1,12 @@
 // MODULE: telegram-cards.ts - the Telegram card for a page: escaped HTML, the length rule, buttons and outcome lines (Story 30.3)
 import {
+  RETIRED_APP_NAMES,
   stripFormatCharacters,
   type AttentionPermissionPrompt,
   type AttentionQuestionsPrompt,
   type AttentionRecord,
-  type ModelOriginAgent
+  type ModelOriginAgent,
+  type RosterRetiredHarness
 } from '@bmn/protocol'
 import type { AnswerOutcome, AnswerRefusal } from './remote-answer'
 import { SECRET_FOOTNOTE, SECRET_MASK, maskSecrets } from './secret-mask'
@@ -31,7 +33,8 @@ export type InlineKeyboard = InlineButton[][]
 /** What the first line names: never the model, and the flag only when Epic 29 observed it. */
 export interface CardHeader {
   session: string
-  agent: ModelOriginAgent | null
+  /** A request saved before an app was retired still names it (Epic 71). */
+  agent: ModelOriginAgent | RosterRetiredHarness | null
   flag: string | null
 }
 
@@ -45,11 +48,11 @@ export interface RenderedCard {
   base: string
 }
 
-const AGENT_NAMES: Readonly<Record<ModelOriginAgent, string>> = Object.freeze({
+const AGENT_NAMES: Readonly<Record<ModelOriginAgent | RosterRetiredHarness, string>> = Object.freeze({
   claude: 'Claude',
   codex: 'Codex',
   opencode: 'OpenCode',
-  cursor: 'Cursor'
+  ...RETIRED_APP_NAMES
 })
 
 export function escapeHtml(text: string): string {

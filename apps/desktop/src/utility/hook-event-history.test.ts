@@ -66,6 +66,12 @@ describe('bounded retained hook metadata', () => {
     expect(f.history.unavailable).toBe(true); expect(f.history.history(sid)).toEqual([])
     f.live.push(row()); f.history.markDirty(); await f.history.flush(); expect((await f.saved()).rows).toEqual([row()]); await f.history.close()
   })
+  it('loads a snapshot holding a row Cursor reported before it was retired, and keeps it as saved (Epic 71)', async () => {
+    const cursor: HookEventRecord = { ...row(1), agent: 'cursor', event: 'stop', toolName: null }
+    const f = await fixture(); await writeFile(f.path, JSON.stringify({ version: 1, rows: [row(), cursor] })); await f.history.load()
+    expect(f.history.unavailable).toBe(false); expect(f.history.history(sid)).toEqual([row(), cursor])
+    await f.history.flush(); expect((await f.saved()).rows).toEqual([row(), cursor]); await f.history.close()
+  })
   it('refuses oversize files and links before reading unbounded bytes', async () => {
     const f = await fixture(); await writeFile(f.path, ' '.repeat(HOOK_HISTORY_MAX_BYTES + 1)); await f.history.load()
     expect(f.history.unavailable).toBe(true); await f.history.close()

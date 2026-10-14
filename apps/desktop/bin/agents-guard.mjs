@@ -2,7 +2,7 @@
 import { readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs'
 import { basename, isAbsolute } from 'node:path'
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads'
-import { APP_NAMES, RosterError } from './agents-roster.mjs'
+import { APP_NAMES, RosterError, appName, isRetired, retiredWords } from './agents-roster.mjs'
 import { everApproved, neverApproved, readApproved } from './agents-state.mjs'
 import { destinationOf, privateWorkAnswer, resolveClaudeRoute, resolveCodexRoute, sessionRecordAt, sessionRecordFiles, workspaceRoot } from './agents-check.mjs'
 
@@ -21,14 +21,12 @@ import { destinationOf, privateWorkAnswer, resolveClaudeRoute, resolveCodexRoute
 export const GUARD_LIMIT_MS = 2000
 
 /**
- * The event that carries a prompt in each app, and what BMN does with a "stop" there. Claude Code
- * and Codex document a prompt hook that answers `decision: block`; Cursor's terminal agent has no
- * measured way to stop a prompt, so the guard only warns in it. OpenCode has no prompt event.
+ * The event that carries a prompt in each app. Claude Code and Codex document a prompt hook that
+ * answers `decision: block`, which stops the prompt. OpenCode has no prompt event.
  */
 export const GUARD_APPS = {
-  claude: { event: 'UserPromptSubmit', stops: true },
-  codex: { event: 'UserPromptSubmit', stops: true },
-  cursor: { event: 'beforeSubmitPrompt', stops: false }
+  claude: { event: 'UserPromptSubmit' },
+  codex: { event: 'UserPromptSubmit' }
 }
 
 /**
@@ -191,12 +189,6 @@ function codexSession(event, codexHome) {
 
 /** Where the session sends work: `{ destination }`, or `{ unknown }` with the reason in the owner's words. */
 function sessionDestination(agent, data, event, agentProcess, folders) {
-  if (agent === 'cursor') {
-    // Cursor reports nothing BMN can read, so only what the owner said on Rules › Health counts.
-    const said = data.harness_routes.find((entry) => entry.harness === 'cursor')
-    if (said === undefined) return { unknown: 'Cursor does not report where it sends work, and nothing is recorded for it', fix: 'Say where Cursor sends work in BMN Preferences › Rules › Health.' }
-    return { destination: { known: true, default: true, provider: said.provider, host: `default:${said.provider}`, basis: said.basis } }
-  }
   if (!agentProcess.env.HOME) return { unknown: 'the session has no HOME, so BMN cannot tell which settings the app reads' }
   const parsed = parseLaunch(agent, agentProcess.argv)
   if (parsed.unknown !== undefined) return { unknown: parsed.unknown }
@@ -252,7 +244,7 @@ export function decide(input) {
 /** `decide`, with the destination the resolver found beside the verdict (null where it found none). */
 function decision(input) {
   const { agent, event, pid, procRoot = '/proc' } = input
-  const app = APP_NAMES[agent] ?? agent
+  const app = appName(agent)
   const base = { agent, app, pid: pid || null, start: null, folder: null, processFolder: null, workspace: null, provider: null, host: null, name: null }
   const none = (verdict) => ({ verdict, destination: null })
   const state = guardState()
@@ -349,7 +341,7 @@ function claudeConversation(input) {
 
 /** One line for `bmn hooks check`: whether this app's hook hands messages over, and on which version that was measured. */
 export function messageStanding(agent) {
-  const app = APP_NAMES[agent] ?? agent
+  const app = appName(agent)
   const measured = MESSAGE_HANDOVER[agent]
   if (measured === undefined) return `messages: not handed over by a hook in ${app}; your Paste in Messages delivers them`
   if (guardState().state !== 'active') return `messages: not handed over until a team is approved (measured on ${app} ${measured.version})`
@@ -357,7 +349,7 @@ export function messageStanding(agent) {
 }
 
 function slow(input) {
-  const app = APP_NAMES[input.agent] ?? input.agent
+  const app = appName(input.agent)
   return {
     agent: input.agent, app, pid: input.pid || null, start: null, folder: null, workspace: null, provider: null, host: null, name: null,
     outcome: 'stop', cause: 'slow', allow: false,
@@ -367,7 +359,7 @@ function slow(input) {
 
 /** The thread that decides could not start or ended without an answer: the prompt is stopped, never decided on this thread, whose reads the limit could not end. */
 function unchecked(input) {
-  const app = APP_NAMES[input.agent] ?? input.agent
+  const app = appName(input.agent)
   return {
     agent: input.agent, app, pid: input.pid || null, start: null, folder: null, workspace: null, provider: null, host: null, name: null,
     outcome: 'stop', cause: 'state', allow: false,
@@ -410,7 +402,7 @@ export function decideWithin(input, limitMs = GUARD_LIMIT_MS, { startThread = de
     }
     neverApproved().then((never) => {
       if (!never) return onThread()
-      const app = APP_NAMES[input.agent] ?? input.agent
+      const app = appName(input.agent)
       return finish({ agent: input.agent, app, pid: input.pid || null, start: null, folder: null, processFolder: null, workspace: null, provider: null, host: null, name: null, outcome: 'pass', cause: 'inactive' })
     }, onThread)
   })
@@ -445,18 +437,17 @@ export function messageDestinationWithin(input, limitMs = MESSAGE_LIMIT_MS, { st
 
 /** What the hook prints for the app to stop the prompt and show `line`; null where the app has no such answer. */
 export function stopAnswer(agent, line) {
-  return GUARD_APPS[agent]?.stops ? JSON.stringify({ decision: 'block', reason: line }) : null
+  return GUARD_APPS[agent] === undefined ? null : JSON.stringify({ decision: 'block', reason: line })
 }
 
 /** One line for `bmn hooks check`: whether prompts are checked at all, and what the guard does in this app. */
 export function guardStanding(agent) {
+  if (isRetired(agent)) return `prompt guard: ${retiredWords(agent)}`
   const state = guardState()
-  const app = APP_NAMES[agent] ?? agent
+  const app = appName(agent)
   if (GUARD_APPS[agent] === undefined) return `prompt guard: not available in ${app} (it has no prompt event BMN can answer)`
   if (state.state === 'inactive') return 'prompt guard: inactive (no team has been approved, so no prompt is checked)'
-  const does = GUARD_APPS[agent].stops
-    ? `stops a prompt that would send private work to a provider that may not see it${GUARD_MEASURED[agent] ? ` (measured on ${app} ${GUARD_MEASURED[agent]})` : ` (not yet measured on a live ${app})`}`
-    : `only warns in ${app}`
+  const does = `stops a prompt that would send private work to a provider that may not see it${GUARD_MEASURED[agent] ? ` (measured on ${app} ${GUARD_MEASURED[agent]})` : ` (not yet measured on a live ${app})`}`
   return state.state === 'broken' ? `prompt guard: stopping every prompt. ${state.fix}` : `prompt guard: active, ${does}`
 }
 

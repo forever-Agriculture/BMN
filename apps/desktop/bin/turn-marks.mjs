@@ -22,7 +22,7 @@ export const TURN_MARK_LIMIT_MS = 300
 /** The statuses after which the hook confirms that the answer arrived: a "before" that waits for that word. */
 export const TURN_MARK_CONFIRMED = ['captured', 'incomplete']
 
-const APP_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' }
+const APP_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' }
 const CONVERSATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const TURN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 /** The event field that names the turn, per app. */

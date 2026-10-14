@@ -1,10 +1,54 @@
 // MODULE: agents-roster.ts - Epic 60 shapes the Preferences Team and Rules pages exchange with the main process
-export const ROSTER_HARNESSES = ['claude', 'codex', 'opencode', 'cursor'] as const
+export const ROSTER_HARNESSES = ['claude', 'codex', 'opencode'] as const
 export type RosterHarness = (typeof ROSTER_HARNESSES)[number]
 /** How each agent app is named to the owner. */
-export const ROSTER_APP_NAMES: Readonly<Record<RosterHarness, string>> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' }
+export const ROSTER_APP_NAMES: Readonly<Record<RosterHarness, string>> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' }
 /** What each app's own updater is started with. BMN shows the command; the updater itself decides what it does. */
-export const ROSTER_APP_UPDATE_ARGUMENTS: Readonly<Record<RosterHarness, readonly string[]>> = { claude: ['update'], codex: ['update'], opencode: ['upgrade'], cursor: ['update'] }
+export const ROSTER_APP_UPDATE_ARGUMENTS: Readonly<Record<RosterHarness, readonly string[]>> = { claude: ['update'], codex: ['update'], opencode: ['upgrade'] }
+/**
+ * Apps BMN retired (Epic 71), named as they always were. An old team file or a stored record may
+ * still name one: it is read and shown by this name, and nothing runs on it.
+ */
+export const ROSTER_RETIRED_HARNESSES = ['cursor'] as const
+export type RosterRetiredHarness = (typeof ROSTER_RETIRED_HARNESSES)[number]
+/** What a team file's app fields and lists may hold: an app BMN serves, or one it retired. */
+export type RosterListedApp = RosterHarness | RosterRetiredHarness
+export const RETIRED_APP_NAMES: Readonly<Record<RosterRetiredHarness, string>> = { cursor: 'Cursor' }
+/** Each retired app's program, so a saved command that starts one is recognised. */
+export const RETIRED_APP_PROGRAMS: Readonly<Record<string, RosterRetiredHarness>> = { 'cursor-agent': 'cursor' }
+/** The one sentence a screen gives where an old record names a retired app (71.1 design notes). */
+export const RETIRED_APP_LINE = 'Cursor was retired on 14 Oct 2026.'
+
+/** Whether a value names an app BMN retired. */
+export function isRetiredApp(value: unknown): value is RosterRetiredHarness {
+  return typeof value === 'string' && (ROSTER_RETIRED_HARNESSES as readonly string[]).includes(value)
+}
+
+/** How an app is named to the owner, a retired one included; anything else is shown as written. */
+export function appDisplayName(value: string): string {
+  if ((ROSTER_HARNESSES as readonly string[]).includes(value)) return ROSTER_APP_NAMES[value as RosterHarness]
+  return isRetiredApp(value) ? RETIRED_APP_NAMES[value] : value
+}
+
+/** The retired app a command's program (a name or a path) starts, or null. */
+export function retiredAppProgram(program: string): RosterRetiredHarness | null {
+  const name = program.slice(program.lastIndexOf('/') + 1)
+  return Object.hasOwn(RETIRED_APP_PROGRAMS, name) ? RETIRED_APP_PROGRAMS[name]! : null
+}
+
+/**
+ * The retired app a saved command starts, or null: its program, or a command line that names the
+ * program as a word, as the New session form writes it (`bash -ic 'cursor-agent; exec bash -i'`).
+ */
+export function retiredAppCommand(executable: string, argv: readonly string[]): RosterRetiredHarness | null {
+  for (const part of [executable, ...argv]) {
+    for (const word of part.split(/[\s;&|()<>'"`]+/)) {
+      const app = word === '' ? null : retiredAppProgram(word)
+      if (app !== null) return app
+    }
+  }
+  return null
+}
 export const ROSTER_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export type RosterEffort = (typeof ROSTER_EFFORTS)[number]
 export const ROSTER_THEN = ['lead', 'skip', 'blocked', 'owner-chooses'] as const
@@ -30,7 +74,7 @@ export interface RosterAgentShape {
   name: string
   class: RosterClass
   /** The app the agent runs in, or `bmn` for an agent BMN itself calls. */
-  harness: RosterHarness | typeof ROSTER_CALLED_BY_BMN
+  harness: RosterListedApp | typeof ROSTER_CALLED_BY_BMN
   model: string
   /** Who receives the request. */
   provider: string
@@ -53,7 +97,7 @@ export interface RosterAgentShape {
 }
 
 /** The app an agent runs in, or null for an agent BMN itself calls. */
-export function rosterApp(agent: Pick<RosterAgentShape, 'harness'>): RosterHarness | null {
+export function rosterApp(agent: Pick<RosterAgentShape, 'harness'>): RosterListedApp | null {
   return agent.harness === ROSTER_CALLED_BY_BMN ? null : agent.harness
 }
 
@@ -84,7 +128,7 @@ export const LUNA_GO_PROPOSAL = {
 } as const satisfies { provider: Omit<RosterProviderShape, 'hosts'>; agent: Omit<RosterAgentShape, 'provider' | 'roles' | 'efforts'> & { efforts: readonly RosterEffort[] }; role: string }
 
 export interface RosterRouteShape {
-  harness: RosterHarness
+  harness: RosterListedApp
   provider: string
   basis: 'observed-default' | 'owner-declared'
   accepted_versions?: string[]
@@ -119,13 +163,13 @@ export interface RosterToolShape {
   /** Whether an app that gets public work only may have it. */
   public?: true
   /** Kept to these apps; absent with `agents` absent means every app. */
-  apps?: RosterHarness[]
+  apps?: RosterListedApp[]
   /** Kept to the runs of these agents: then no app's settings hold it. */
   agents?: string[]
 }
 
 /** One skill's marks: `public` lets an app on a public-only route have it, `only` keeps it to some apps. */
-export interface RosterSkillShape { id: string; public?: true; only?: RosterHarness[] }
+export interface RosterSkillShape { id: string; public?: true; only?: RosterListedApp[] }
 
 export interface RosterIssueShape { code: string; line?: number; message: string }
 
@@ -622,7 +666,8 @@ export interface RulesSnapshot {
    * environment instead: why, in words. A session may then find other programs than BMN does.
    */
   ownEnvironment?: string
-  transactions: { id: string; createdAt?: string; state?: string; reason?: string; targets?: RosterHarness[]; valid: boolean }[]
+  /** An old install may name an app BMN retired (Epic 71); it is listed as it was saved. */
+  transactions: { id: string; createdAt?: string; state?: string; reason?: string; targets?: RosterListedApp[]; valid: boolean }[]
   history: { revision: number; at: string; hash: string; bytes: number; reason: string; intact: boolean }[] | null
 }
 
@@ -659,6 +704,10 @@ export interface RulesMasterPlan {
 
 export interface RulesRevertPlan { ok: boolean; diff: string; expectedHash: string | null; expectedLink?: string | null; expectedDirectory?: string; text?: string; message?: string }
 
-export interface RulesPlan { ok: boolean; code: string; message?: string; planHash: string | null; targets: RulesPlanTarget[] }
+export interface RulesPlan {
+  ok: boolean; code: string; message?: string; planHash: string | null; targets: RulesPlanTarget[]
+  /** An undo's targets in an app BMN retired (Epic 71): left as they are, never written. */
+  left?: { harness: RosterRetiredHarness; path: string }[]
+}
 
 export type RulesOutcome = { ok: true; message: string; snapshot: RulesSnapshot } | { ok: false; code: string; message: string; snapshot: RulesSnapshot }

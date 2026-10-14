@@ -1,5 +1,5 @@
 // MODULE: research-view.ts - Story 60.10: what Team › Models shows of a research, worked out against the team as drafted; kept pure for tests
-import { rosterApp, type ResearchModelView, type ResearchPrice, type ResearchSnapshot, type RosterAgentShape, type RosterDataShape, type RosterHarness, type RosterPriceShape } from '@bmn/protocol'
+import { isRetiredApp, rosterApp, type ResearchModelView, type ResearchPrice, type ResearchSnapshot, type RosterAgentShape, type RosterDataShape, type RosterHarness, type RosterPriceShape } from '@bmn/protocol'
 import { dayWords, priceText, siteOf, updateAgent } from './roster-staging'
 
 export { dayWords, priceText, siteOf }
@@ -96,12 +96,13 @@ export function unverifiedWords(why: string | undefined): string {
 
 /** The app whose own provider serves a researched model, so Add to team can start on it; null when no app's destination is that provider. */
 export function appFor(data: RosterDataShape, providerId: string): RosterHarness | null {
-  const route = data.harness_routes.find((entry) => entry.provider === providerId)
-  if (route !== undefined) return route.harness
+  // A retired app takes no new agent, so neither its route nor its agents speak for one.
+  const route = data.harness_routes.find((entry) => entry.provider === providerId && !isRetiredApp(entry.harness))
+  if (route !== undefined && !isRetiredApp(route.harness)) return route.harness
   // An agent BMN itself calls runs in no app, so its provider says nothing about one.
   for (const agent of data.agents) {
     const app = agent.provider === providerId ? rosterApp(agent) : null
-    if (app !== null) return app
+    if (app !== null && !isRetiredApp(app)) return app
   }
   return null
 }

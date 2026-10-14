@@ -8,6 +8,7 @@ import {
 } from '@bmn/protocol'
 import {
   INITIAL_SESSION_FORM,
+  LAUNCH_AGENTS,
   applyLaunchAgent,
   applyLaunchTemplate,
   launchAgentOf,
@@ -104,14 +105,20 @@ describe('launch template application', () => {
 })
 
 describe('launch agents', () => {
-  it('offers Cursor and preserves its launch when reopening the form', () => {
-    const form = applyLaunchAgent({ ...INITIAL_SESSION_FORM, cwd: '/work', terminalGraphics: 'sixel' }, 'cursor')
-    expect(form).toMatchObject({ name: 'Cursor', executable: '/bin/bash', cwd: '/work', terminalGraphics: 'sixel' })
+  it('offers OpenCode and preserves its launch when reopening the form', () => {
+    const form = applyLaunchAgent({ ...INITIAL_SESSION_FORM, cwd: '/work', terminalGraphics: 'sixel' }, 'opencode')
+    expect(form).toMatchObject({ name: 'OpenCode', executable: '/bin/bash', cwd: '/work', terminalGraphics: 'sixel' })
     const params = sessionCreateParams('workspace-1', form, { cols: 80, rows: 24 })
-    expect(params.argv).toEqual(['-ic', 'cursor-agent; exec bash -i'])
-    expect(launchAgentOf(form)).toBe('cursor')
-    expect(applyLaunchAgent({ ...form, name: 'My review' }, 'cursor').name).toBe('My review')
+    expect(params.argv).toEqual(['-ic', 'opencode; exec bash -i'])
+    expect(launchAgentOf(form)).toBe('opencode')
+    expect(applyLaunchAgent({ ...form, name: 'My review' }, 'opencode').name).toBe('My review')
     expect(applyLaunchAgent(form, 'codex').name).toBe('Codex')
+  })
+
+  it('offers the four choices with no Cursor, and reads a form saved for Cursor as a custom launch (Epic 71)', () => {
+    expect(LAUNCH_AGENTS.map((agent) => agent.label)).toEqual(['Terminal', 'Claude Code', 'Codex', 'OpenCode'])
+    const saved = { ...INITIAL_SESSION_FORM, name: 'Cursor', executable: '/bin/bash', argv: quoteArgv(['-ic', 'cursor-agent; exec bash -i']) }
+    expect(launchAgentOf(saved)).toBeNull()
   })
 
   it('runs an agent inside an interactive shell that survives the agent exiting', () => {

@@ -27,7 +27,7 @@ export interface GuardVerdict {
   exception?: string | null
 }
 export declare const GUARD_LIMIT_MS: number
-export declare const GUARD_APPS: Record<string, { event: string; stops: boolean }>
+export declare const GUARD_APPS: Record<string, { event: string }>
 export declare const GUARD_MEASURED: Record<string, string | null>
 export declare function guardState(): { state: 'inactive' } | { state: 'active'; data: import('./agents-roster.mjs').RosterData } | { state: 'broken'; fix: string }
 export declare function readAgentProcess(procRoot: string, pid: number): { argv: string[]; env: Record<string, string>; cwd: string | null; start: string | null } | null

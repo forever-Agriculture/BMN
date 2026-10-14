@@ -10,7 +10,7 @@ import { _electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const evidence = process.env.BMN_NOTIFICATION_EVIDENCE ?? join(repo, '.dev-auto/evidence/cursor-launch/notifications')
+const evidence = process.env.BMN_NOTIFICATION_EVIDENCE ?? join(repo, '.dev-auto/evidence/notifications')
 mkdirSync(evidence, { recursive: true })
 assert.ok(process.env.DISPLAY && !process.env.WAYLAND_DISPLAY, 'Use a private X display')
 const failures = [], observations = []

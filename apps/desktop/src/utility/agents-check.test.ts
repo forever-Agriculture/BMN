@@ -368,9 +368,13 @@ describe('an OpenCode helper run in the one form 70.1 measured (70.2)', () => {
     expect(namedResearchers(readApproved().data)).toBeNull()
   })
 
-  it('keeps Cursor unchecked', () => {
-    approve(roster((text) => edit(text, '## roles', '## curs\n\n```yaml\nname: Curs\nclass: pawn\nharness: cursor\nmodel: composer-2\nprovider: cursor\nhost: default\nenabled: true\nstatus: active\nefforts: [low]\nroles: [helper]\n```\n\n## roles')))
-    expect(check({ agent: 'curs', role: 'helper', argv: form() })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: 'BMN does not check Cursor dispatches' })
+  it('refuses an agent a team file still names on Cursor, and a cursor-agent dispatch, saying Cursor was retired (Epic 71)', () => {
+    const retired = "Cursor was retired on 2026-10-14; BMN's support for it is kept at the git tag cursor-support-final"
+    approve(roster((text) => edit(edit(text, '## roles', '## curs\n\n```yaml\nname: Curs\nclass: pawn\nharness: cursor\nmodel: composer-2\nprovider: cursor\nhost: default\nenabled: true\nstatus: active\nefforts: [low]\nroles: []\n```\n\n## roles'),
+      'opencode-go: {name: OpenCode Go', 'cursor: {name: Cursor, hosts: [], private_work: allowed}\nopencode-go: {name: OpenCode Go')))
+    expect(check({ agent: 'curs', role: 'helper', argv: form() })).toMatchObject({ verdict: 'REFUSED', code: 'APP_RETIRED', message: `curs runs in ${retired}` })
+    expect(check({ agent: 'kimi', role: 'helper', argv: ['cursor-agent', '-p', '--model', 'composer-2', 'x'] })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: retired })
+    expect(check({ agent: 'kimi', role: 'helper', argv: ['env', '-i', '/home/owner/.local/bin/cursor-agent', '-p'] })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: retired })
   })
 })
 
@@ -737,7 +741,7 @@ describe('private work, providers and exceptions (60.3 AC4)', () => {
 
   it('no exception applies to an owner-declared destination, and none changes the host check or the need for a readable app version', () => {
     approve(roster((text) => edit(edit(text, 'folder: /synthetic/EXCEPTION-SENTINEL-FOLDER', `folder: ${workspace}`),
-      'zai-synthetic: {provider: zai', 'cursor-here: {provider: cursor, folder: ' + workspace + '}\nzai-synthetic: {provider: zai')))
+      'zai-synthetic: {provider: zai', 'opencode-here: {provider: opencode-go, folder: ' + workspace + '}\nzai-synthetic: {provider: zai')))
     expect(check({ agent: 'glm', role: 'helper', argv: GLM().map((part) => part.replace('api.z.ai', 'api.other.example')) }).code).toBe('HOST_MISMATCH')
     stub('claude', '2.9.0 (Claude Code)')
     expect(check({ agent: 'glm', role: 'helper', argv: GLM() }).receipt?.harness_version).toEqual({ version: '2.9.0', state: 'newer than BMN tested' })
@@ -1935,15 +1939,15 @@ describe('consequences in words (60.5 AC7; the same sentences `bmn roster status
     ['a context limit set and one removed', EXAMPLE, (text: string) => edit(edit(text, 'context_window: 400000\ncontext_limit: 272000', 'context_window: 400000'),
       'efforts: [low, medium, high]\nroles: [focused-reviewer, epic-reviewer, final-reviewer, consultant]', 'efforts: [low, medium, high]\nroles: [focused-reviewer, epic-reviewer, final-reviewer, consultant]\ncontext_limit: 272000'),
     ['Sol: context limit 272 000 → app default', 'Astra: context limit app default → 272 000']],
-    ['an exception added, never naming its folder', EXAMPLE, (text: string) => edit(text, 'zai-synthetic: {provider: zai', 'cursor-app: {provider: cursor, folder: /synthetic/EXCEPTION-SENTINEL-NEW}\nzai-synthetic: {provider: zai'),
-      ['Cursor could receive private work in one more workspace']],
+    ['an exception added, never naming its folder', EXAMPLE, (text: string) => edit(text, 'zai-synthetic: {provider: zai', 'opencode-app: {provider: opencode-go, folder: /synthetic/EXCEPTION-SENTINEL-NEW}\nzai-synthetic: {provider: zai'),
+      ['OpenCode Go could receive private work in one more workspace']],
     ['an exception removed', EXAMPLE, (text: string) => edit(text, '## exceptions\n\n```yaml\nzai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}\n```\n\n', ''),
       ['Z.ai could no longer receive private work in one workspace']],
     ['a destination declared on the owner\'s word', EXAMPLE, (text: string) => edit(text, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: owner-declared}'),
       ['Sol could no longer receive private work', 'Astra could no longer receive private work', 'Luna could no longer receive private work',
         'Codex would count as sending data to OpenAI on your word, so it gets public work only']],
     ['a tool added for every app: the apps that may have it, never one that gets public work only', EXAMPLE, (text: string) => `${text}\n## tools\n\n\`\`\`yaml\nnotes: {name: Notes, command: notes-tool}\ndocs: {name: Docs, url: "https://docs.example.test/mcp", public: true}\n\`\`\`\n`,
-      ['Tool Docs would reach Claude Code, Codex, OpenCode and Cursor', 'Tool Notes would reach Claude Code and Codex',
+      ['Tool Docs would reach Claude Code, Codex and OpenCode', 'Tool Notes would reach Claude Code and Codex',
         'With a tool on the list, the check keeps every Claude Code run to exactly its own tools, once its tools test passed there; it does not judge the tools of a Codex run']],
     ['the last tool taken off the list', `${EXAMPLE}\n## tools\n\n\`\`\`yaml\nnotes: {name: Notes, command: notes-tool}\n\`\`\`\n`, () => EXAMPLE,
       ['Tool Notes would no longer reach Claude Code and Codex', 'With no tool on the list, the check no longer looks at which tools a run has']],

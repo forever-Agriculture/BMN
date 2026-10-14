@@ -1,9 +1,12 @@
-import type {
-  ConversationBindingState,
-  ConversationResumePreview,
-  ReportedResumeCommand,
-  ReportedResumePreview,
-  SessionRecord
+import {
+  RETIRED_APP_LINE,
+  RETIRED_APP_NAMES,
+  isRetiredApp,
+  type ConversationBindingState,
+  type ConversationResumePreview,
+  type ReportedResumeCommand,
+  type ReportedResumePreview,
+  type SessionRecord
 } from '@bmn/protocol'
 import { quoteArgv } from './launch-template'
 
@@ -30,6 +33,16 @@ export function conversationBindingPresentation(
   const cli = binding.agentCli === 'other'
     ? 'CLI'
     : `${binding.agentCli[0]!.toUpperCase()}${binding.agentCli.slice(1)}`
+  // Epic 71: a conversation BMN bound before its app was retired is named, never resumed.
+  if (binding.status === 'bound' && isRetiredApp(binding.agentCli)) {
+    return {
+      label: `${RETIRED_APP_NAMES[binding.agentCli]} conversation`,
+      detail: `${RETIRED_APP_LINE} Reference ${binding.conversationReference}.`,
+      canResume: false,
+      canLocate: false,
+      canStartNew: false
+    }
+  }
   if (binding.status === 'bound') {
     return {
       label: `${cli} conversation bound`,
@@ -153,20 +166,13 @@ export function resumeConfirmationPresentation(
   preview: ConversationResumePreview,
   sessionName: string
 ): ResumeConfirmationPresentation {
-  const cli = preview.agentCli === 'claude' ? 'Claude Code'
-    : preview.agentCli === 'opencode' ? 'OpenCode'
-      : preview.agentCli === 'cursor' ? 'Cursor' : 'Codex'
+  const cli = preview.agentCli === 'claude' ? 'Claude Code' : preview.agentCli === 'opencode' ? 'OpenCode' : 'Codex'
   return {
     message: `Resume the ${cli} conversation in "${sessionName}". This command runs:`,
     command: preview.command,
     // Saying why keeps a dropped argument from reading as something BMN mislaid.
     notCarried: preview.notCarried === ''
       ? null
-      : {
-          names: preview.notCarried,
-          reason: preview.agentCli === 'cursor'
-            ? 'BMN carries only --model and --workspace into cursor-agent --resume.'
-            : `${preview.agentCli} resume does not accept them.`
-        }
+      : { names: preview.notCarried, reason: `${preview.agentCli} resume does not accept them.` }
   }
 }

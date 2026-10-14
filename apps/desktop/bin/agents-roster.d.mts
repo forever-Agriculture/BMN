@@ -1,5 +1,9 @@
 // MODULE: agents-roster.d.mts - types for the Epic 60 roster module so the main process can import it
-export type Harness = 'claude' | 'codex' | 'opencode' | 'cursor'
+export type Harness = 'claude' | 'codex' | 'opencode'
+/** An app BMN retired (Epic 71): an old team file may still name it; nothing runs on it. */
+export type RetiredApp = 'cursor'
+/** What a team file's app fields and lists may hold. */
+export type ListedApp = Harness | RetiredApp
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type AgentClass = 'knight' | 'queen' | 'rook' | 'bishop' | 'pawn'
 export type PrivateWork = 'allowed' | 'public_only'
@@ -10,7 +14,7 @@ export interface RosterAgent {
   id: string
   name: string
   class: AgentClass
-  harness: Harness | CalledByBmn
+  harness: ListedApp | CalledByBmn
   model: string
   provider: string
   /** Only for an agent called by BMN: the provider that runs the model (`provider` is who receives the request). */
@@ -49,7 +53,7 @@ export interface RosterProvider {
 }
 export interface RosterException { id: string; provider: string; folder: string }
 export interface RosterRoute {
-  harness: Harness
+  harness: ListedApp
   provider: string
   basis: 'observed-default' | 'owner-declared'
   accepted_versions?: string[]
@@ -68,7 +72,7 @@ export interface RosterData {
   /** The owner's MCP tools, in id order; absent when there are none. */
   tools?: RosterTool[]
 }
-export interface RosterSkill { id: string; public?: true; only?: Harness[] }
+export interface RosterSkill { id: string; public?: true; only?: ListedApp[] }
 /** One MCP tool: a program with arguments or an address, the environment variables it names (never a value), and who gets it. */
 export interface RosterTool {
   id: string
@@ -81,7 +85,7 @@ export interface RosterTool {
   /** A request header -> the environment variable it comes from. */
   headers?: Record<string, string>
   public?: true
-  apps?: Harness[]
+  apps?: ListedApp[]
   agents?: string[]
 }
 export interface RosterIssue { code: string; line?: number; message: string }
@@ -109,6 +113,16 @@ export interface CalledParty { id: string; name: string; private_work: PrivateWo
 /** Who receives a called agent's request and who runs its model, and whether both allow private work. */
 export declare function calledParties(data: Pick<RosterData, 'providers'>, agent: RosterAgent): { receives: CalledParty; runs: CalledParty; allowed: boolean; reason: string }
 export declare const HARNESSES: Harness[]
+export declare const LISTED_APPS: ListedApp[]
+export declare const RETIRED_APPS: Record<RetiredApp, string>
+export declare const RETIRED_ON: string
+export declare const RETIRED_TAG: string
+export declare function isRetired(app: unknown): app is RetiredApp
+export declare function retiredWords(app: RetiredApp): string
+export declare function appRefusal(app: unknown, words: string): string
+export declare const RETIRED_PROGRAMS: Record<string, RetiredApp>
+export declare function retiredProgram(command: unknown): RetiredApp | null
+export declare function appName(app: string): string
 export declare const EFFORTS: Effort[]
 export declare const THEN: RosterRole['then'][]
 export declare const CLASSES: AgentClass[]
@@ -144,15 +158,14 @@ export declare function sha256(text: string): string
 export declare function splitSections(text: string): RosterSection[]
 export declare function parseRoster(text: string): { data: RosterData | null; errors: RosterIssue[]; warnings: RosterIssue[]; sections: RosterSection[] }
 export declare function parseCandidate(text: string): { agent: string; efforts: Effort[]; choice: boolean } | null
-export declare function agentState(agent: RosterAgent): 'active' | 'disabled' | 'proposed'
+export declare function agentState(agent: RosterAgent): 'active' | 'disabled' | 'proposed' | 'retired'
 export interface TeamEntry {
   id: string; name: string; class: AgentClass; harness: string; model: string; provider: string; private_work: PrivateWork
-  roles: string[]; efforts: string[]; state: 'active' | 'proposed' | 'disabled'; context_limit?: number
+  roles: string[]; efforts: string[]; state: 'active' | 'proposed' | 'disabled' | 'retired'; context_limit?: number
   /** Only for an agent called by BMN: said in place of an app, with who runs the model. */
   called_by?: CalledByBmn; run_by?: string
 }
-export declare const APP_NAMES: Record<'claude' | 'codex' | 'opencode' | 'cursor', string>
-export declare const UNCHECKED_APPS: Harness[]
+export declare const APP_NAMES: Record<Harness, string>
 export declare const PUBLIC_ONLY_APPS: Harness[]
 export declare function harnessPrivateWork(data: RosterData | null, harness: string): { allowed: boolean; reason: string; route: RosterRoute | null; provider: RosterProvider | null }
 export declare function publicOnlyReasons(agent: RosterAgent, data: RosterData): string[]

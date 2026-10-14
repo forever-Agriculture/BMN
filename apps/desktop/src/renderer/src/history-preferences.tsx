@@ -183,15 +183,8 @@ export function HistoryPreferences(props: {
             return (
               <div className="history-row" key={row.agent}>
                 <dt>{AGENT_NAMES[row.agent]}</dt>
-                {row.state === 'own' && value.kind === 'settled' ? (
-                  // A statement, not a value: it takes the path and value columns so it never widens the value column.
-                  <dd className="note" title={value.title}>{value.text}</dd>
-                ) : (
-                  <>
-                    <dd>{row.sessions === undefined ? '' : sessionsLabel(row.sessions)}</dd>
-                    <Value value={value} />
-                  </>
-                )}
+                <dd>{row.sessions === undefined ? '' : sessionsLabel(row.sessions)}</dd>
+                <Value value={value} />
                 {failure && <dd className="failure" title={failure.title}>{failure.text}</dd>}
               </div>
             )

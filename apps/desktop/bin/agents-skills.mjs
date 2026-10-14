@@ -7,7 +7,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname } from 'node:path'
-import { APP_NAMES, HARNESSES, RosterError, SKILL_PATTERN, agentsDirectory, canonicalJson, harnessPrivateWork, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, HARNESSES, RosterError, SKILL_PATTERN, agentsDirectory, appRefusal, canonicalJson, harnessPrivateWork, sha256 } from './agents-roster.mjs'
 import { approvedIfAny } from './agents-state.mjs'
 import { linkTarget } from './safe-config-write.mjs'
 
@@ -37,7 +37,7 @@ export class SkillsError extends Error {
 /**
  * Per app: its program, the folders (under the home folder) it may read user-level skills from,
  * in the order BMN prefers to install into, and the command that lists the skills it sees
- * without sending a prompt. Cursor has no such command, so its skills stay "not supported yet".
+ * without sending a prompt.
  * `prompt` says whether BMN can tell, in a run of that app, the app handing a skill's text to the
  * model from the model reading the file itself; only there does a loading test say pass or fail.
  * These are what BMN asks; what an app answers is recorded by the owner's test, per version.
@@ -45,8 +45,7 @@ export class SkillsError extends Error {
 export const SKILL_APPS = {
   claude: { command: 'claude', roots: ['.claude/skills'], list: { argv: ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence'], input: '/context\n' }, prompt: true },
   codex: { command: 'codex', roots: ['.agents/skills', '.codex/skills', '.claude/skills'], list: { argv: ['debug', 'prompt-input'], input: '' }, prompt: true },
-  opencode: { command: 'opencode', roots: ['.config/opencode/skills', '.config/opencode/skill', '.agents/skills', '.claude/skills'], list: { argv: ['debug', 'skill'], input: '' }, prompt: false },
-  cursor: { command: 'cursor-agent', roots: ['.cursor/skills', '.agents/skills', '.claude/skills', '.codex/skills'], list: null, prompt: false }
+  opencode: { command: 'opencode', roots: ['.config/opencode/skills', '.config/opencode/skill', '.agents/skills', '.claude/skills'], list: { argv: ['debug', 'skill'], input: '' }, prompt: false }
 }
 
 /** States that need nothing done: the skill is where it should be, or is rightly absent. */
@@ -683,7 +682,7 @@ function holdsWritten(current, wanted) {
  * restore there and stays. An entry the install changed without getting to record it as done is
  * undone too, known the same way; one it never began, or began and did not change, is left out.
  */
-export async function restoreSkillsTransaction(manifest, folder, { yes = false, asJson = false, planOnly = false, expectedPlanHash } = {}) {
+export async function restoreSkillsTransaction(manifest, folder, { yes = false, asJson = false, planOnly = false, expectedPlanHash, leftWords = [] } = {}) {
   const { confirm, writePrivate } = await import('./agents-rules.mjs')
   const plans = manifest.targets.map((target) => ({ ...target, current: entryOf(target.path) })).filter((plan) => {
     if (plan.done === true) return true
@@ -696,7 +695,7 @@ export async function restoreSkillsTransaction(manifest, folder, { yes = false, 
   const hash = sha256(canonicalJson(plans.map((plan) => ({ path: plan.path, current: plan.current, prior: plan.prior }))))
   if (planOnly) return { code: 'OK', plan_hash: hash, targets }
   if (expectedPlanHash !== undefined && expectedPlanHash !== hash) return { code: 'REVISION_CONFLICT', message: 'the entries changed since the restore was shown; review it again' }
-  const details = targets.map((target) => `${target.harness}: ${target.path}${target.resolved_path === target.path ? '' : ` (written at ${target.resolved_path})`} -> ${target.becomes}`).join('\n')
+  const details = [...targets.map((target) => `${target.harness}: ${target.path}${target.resolved_path === target.path ? '' : ` (written at ${target.resolved_path})`} -> ${target.becomes}`), ...leftWords].join('\n')
   if (!await confirm(`Restore transaction ${manifest.id}?`, details, { yes, asJson })) return { code: 'NOT_CONFIRMED' }
   const restored = []
   for (const plan of plans) {
@@ -765,7 +764,6 @@ export async function testSkillsFolders(harness, { environment = process.env, no
   const version = harnessVersion(spec.command, environment)
   const done = (outcome, detail, roots = []) => record({ harness, kind: 'capability', at: now.toISOString(), version, outcome, roots, detail })
   if (version === null) return done('unavailable', `${spec.command} is not installed or did not answer --version`)
-  if (spec.list === null) return done('unavailable', `BMN knows no way to ask ${APP_NAMES[harness]} which skills it sees without sending a prompt`)
   const folder = mkdtempSync(`${home(environment)}/.bmn-skills-test-`)
   try {
     const testHome = `${folder}/home`
@@ -783,7 +781,7 @@ export async function testSkillsFolders(harness, { environment = process.env, no
       symlinkSync(`${folder}/kept/${linkName}`, `${at}/${linkName}`)
       return { root, folderName, linkName }
     })
-    const testEnvironment = Object.fromEntries(Object.entries(environment).filter(([key]) => !/^(XDG_|CLAUDE_|CODEX_|OPENCODE_|CURSOR_|ANTHROPIC_|OPENAI_)/.test(key)))
+    const testEnvironment = Object.fromEntries(Object.entries(environment).filter(([key]) => !/^(XDG_|CLAUDE_|CODEX_|OPENCODE_|ANTHROPIC_|OPENAI_)/.test(key)))
     testEnvironment.HOME = testHome
     const listed = listOutput(spec, `${folder}/work`, testEnvironment, timeoutMs)
     const roots = names.map((entry) => ({ root: entry.root, folder: listed.text.includes(entry.folderName), link: listed.text.includes(entry.linkName) }))
@@ -985,7 +983,7 @@ const LOADING_SKILL = (name, token) => `---\nname: ${name}\ndescription: BMN tes
  * show the skill's words in a message given to the model before any tool was called, and the run
  * come to its end. A run that ended in an error, a report BMN cannot read or that stops before the
  * run's end, or a tool that may have read the file is inconclusive. In
- * OpenCode and Cursor BMN has no way to tell the two apart, so the result is inconclusive and no
+ * OpenCode BMN has no way to tell the two apart, so the result is inconclusive and no
  * prompt is sent. The prompt goes to the app's provider, so the test runs only where the approved
  * destination may receive private work; it is bound like a listing test.
  */
@@ -1136,7 +1134,7 @@ export async function runSkillsCommand(argv) {
       const { options, positionals } = readOptions(rest, { flags: ['json', 'plan', 'yes'], values: ['expect-plan'] })
       asJson = options.json === true
       const unknown = positionals.filter((name) => !HARNESSES.includes(name))
-      if (unknown.length > 0) return usage(`skills install expects apps from ${HARNESSES.join(', ')}, not ${unknown.join(', ')}`)
+      if (unknown.length > 0) return usage(appRefusal(unknown[0], `skills install expects apps from ${HARNESSES.join(', ')}, not ${unknown.join(', ')}`))
       const versions = await installedVersions()
       if (options.plan) {
         const planned = await planSkillsInstall(positionals, { versions })
@@ -1159,7 +1157,7 @@ export async function runSkillsCommand(argv) {
     if (action === 'test') {
       const { options, positionals } = readOptions(rest, { flags: ['json', 'prompt'] })
       asJson = options.json === true
-      if (positionals.length !== 1 || !HARNESSES.includes(positionals[0])) return usage(`skills test expects one app: ${HARNESSES.join(', ')}`)
+      if (positionals.length !== 1 || !HARNESSES.includes(positionals[0])) return usage(appRefusal(positionals[0], `skills test expects one app: ${HARNESSES.join(', ')}`))
       const result = options.prompt === true ? await testSkillsLoading(positionals[0]) : await testSkills(positionals[0])
       out(asJson ? JSON.stringify(result, null, 2) : `${result.harness}: ${result.outcome} - ${result.detail}${result.version ? ` (${result.version})` : ''}`)
       return result.outcome === 'pass' ? 0 : 1

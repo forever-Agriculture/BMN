@@ -21,8 +21,7 @@ const NOW = new Date('2026-10-10T12:00:00.000Z')
 const CODEX = '0.161.0'
 const CLAUDE = '2.1.295'
 const OPENCODE = '1.18.31'
-const CURSOR = '2026.10.01'
-const VERSIONS = { codex: CODEX, claude: CLAUDE, opencode: OPENCODE, cursor: CURSOR }
+const VERSIONS = { codex: CODEX, claude: CLAUDE, opencode: OPENCODE }
 /** A value only an app's own entry holds: no plan, result, record or team file may carry it. */
 const SECRET = 'sk-SYNTHETIC-SECRET-9f8e7d6c5b4a'
 
@@ -72,7 +71,7 @@ function approve(text: string): void {
  * the settings' tools whatever it is told, `leakyFolder` one that keeps the folder's.
  */
 function app(name: string, version: string, { reads = true, starts = false, leaky = false, signIn = false, folders = false, leakyFolder = false, listFails = false } = {}): void {
-  const kind = name === 'cursor-agent' ? 'cursor' : name
+  const kind = name
   writeFileSync(join(stubs, name), `#!${process.execPath}
 const fs = require('fs'); const cp = require('child_process'); const path = require('path')
 const argv = process.argv.slice(2)
@@ -80,7 +79,7 @@ if (argv[0] === '--version') { console.log('${name} ${version}'); process.exit(0
 fs.appendFileSync(${JSON.stringify(join(home, `calls-${name}.log`))}, JSON.stringify({ argv, env: Object.keys(process.env).sort(), home: process.env.HOME }) + '\\n')
 if (${signIn}) { console.error('Please sign in'); process.exit(1) }
 const HOME = process.env.HOME
-const file = { claude: HOME + '/.claude.json', codex: HOME + '/.codex/config.toml', opencode: HOME + '/.config/opencode/opencode.jsonc', cursor: HOME + '/.cursor/mcp.json' }['${kind}']
+const file = { claude: HOME + '/.claude.json', codex: HOME + '/.codex/config.toml', opencode: HOME + '/.config/opencode/opencode.jsonc' }['${kind}']
 const text = (() => { try { return fs.readFileSync(file, 'utf8') } catch { return '' } })()
 const fromEnv = (value) => String(value).replace(/\\$\\{(?:env:)?(\\w+)\\}|\\{env:(\\w+)\\}/g, (_all, a, b) => process.env[a || b] || '')
 let servers = {}
@@ -168,7 +167,6 @@ function tested(harness: string, version: string, fields: Partial<ToolsTestEntry
 const claudeFile = (): string => join(home, '.claude.json')
 const codexFile = (): string => join(home, '.codex/config.toml')
 const opencodeFile = (): string => join(home, '.config/opencode/opencode.jsonc')
-const cursorFile = (): string => join(home, '.cursor/mcp.json')
 const put = (path: string, text: string): void => {
   mkdirSync(join(path, '..'), { recursive: true })
   writeFileSync(path, text, { mode: 0o600 })
@@ -205,7 +203,6 @@ beforeEach(() => {
   app('claude', CLAUDE, { starts: true })
   app('codex', CODEX)
   app('opencode', OPENCODE, { starts: true })
-  app('cursor-agent', CURSOR)
   workspace = join(home, 'work')
   mkdirSync(workspace, { recursive: true })
   env = { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }
@@ -225,10 +222,10 @@ describe('the tools section of the team file (60.12 AC2)', () => {
   it('reads each tool with its program or address, the variables it names and who gets it; a team file without the section keeps its data', () => {
     const plain = parseRoster(EXAMPLE).data!
     expect(Object.keys(plain)).not.toContain('tools')
-    const parsed = parseRoster(withTools([...TOOLS, 'args-tool: {name: Args, command: a, args: ["--key", {env: A_KEY}], public: false, apps: [cursor, claude]}']))
+    const parsed = parseRoster(withTools([...TOOLS, 'args-tool: {name: Args, command: a, args: ["--key", {env: A_KEY}], public: false, apps: [opencode, claude]}']))
     expect(parsed.errors).toEqual([])
     expect(parsed.data!.tools).toEqual([
-      { id: 'args-tool', name: 'Args', command: 'a', args: ['--key', { env: 'A_KEY' }], apps: ['claude', 'cursor'] },
+      { id: 'args-tool', name: 'Args', command: 'a', args: ['--key', { env: 'A_KEY' }], apps: ['claude', 'opencode'] },
       { id: 'browser', name: 'Browser', command: 'npx', args: ['--offline', '@synthetic/browser-mcp@1.0.0'], agents: ['luna'] },
       { id: 'docs', name: 'Docs', url: 'https://docs.example.test/mcp', headers: { Authorization: 'DOCS_TOKEN' }, public: true },
       { id: 'files', name: 'Files', command: 'files-tool', args: ['--root', '/srv/files'], env: { FILES_KEY: 'FILES_KEY' }, apps: ['claude', 'codex'] },
@@ -318,7 +315,7 @@ describe('what the owner\'s test proved for a version (60.12 AC1)', () => {
     rmSync(toolsTestsPath())
     tested('codex', CODEX)
     const result = check()
-    expect(result.apps.map((entry) => [entry.harness, entry.supported])).toEqual([['claude', false], ['codex', true], ['opencode', false], ['cursor', false]])
+    expect(result.apps.map((entry) => [entry.harness, entry.supported])).toEqual([['claude', false], ['codex', true], ['opencode', false]])
     expect(appOf('claude')).toMatchObject({ tools: [], unlisted: [], reason: `no test has run on Claude Code ${CLAUDE}` })
     expect(appStateWord(appOf('claude'))).toBe('Not supported yet')
     expect(await install(['claude'])).toMatchObject({ code: 'TOOLS_UNSUPPORTED', transaction: null, written: [] })
@@ -341,7 +338,6 @@ describe('a tool as each app writes it', () => {
 
   it('names each variable the way that app does, and never a value', () => {
     expect(renderTool(docs, 'claude', SEEN).entry).toEqual({ type: 'http', url: 'https://docs.example.test/mcp', headers: { Authorization: '${DOCS_TOKEN}' } })
-    expect(renderTool(docs, 'cursor', SEEN).entry).toEqual({ url: 'https://docs.example.test/mcp', headers: { Authorization: '${env:DOCS_TOKEN}' } })
     expect(renderTool(docs, 'opencode', SEEN).entry).toEqual({ type: 'remote', url: 'https://docs.example.test/mcp', headers: { Authorization: '{env:DOCS_TOKEN}' }, enabled: true })
     expect(renderTool(docs, 'codex', SEEN).entry).toEqual({ url: 'https://docs.example.test/mcp', env_http_headers: { Authorization: 'DOCS_TOKEN' } })
     expect(renderTool(local, 'claude', SEEN).entry).toEqual({ type: 'stdio', command: 'local-tool', args: ['--root', '/srv', '${LOCAL_ARG}'], env: { LOCAL_KEY: '${OWNER_KEY}' } })
@@ -363,7 +359,7 @@ describe('a tool as each app writes it', () => {
   })
 
   it('reads an app\'s entry back as a tool, and names what holds a value inline without keeping it', () => {
-    for (const harness of ['claude', 'cursor', 'opencode', 'codex']) {
+    for (const harness of ['claude', 'opencode', 'codex']) {
       for (const tool of [docs, plain, { ...plain, env: { SAME: 'SAME' } }]) {
         const { entry } = renderTool(tool, harness, SEEN)
         const definition = Object.fromEntries(Object.entries(tool).filter(([key]) => key !== 'id' && key !== 'name'))
@@ -382,7 +378,7 @@ describe('a tool as each app writes it', () => {
       [{ command: 'x', env: { X_KEY: SECRET }, args: [`--token=${SECRET}`] }, 'codex'],
       [{ url: 'https://x.example.test', http_headers: { Authorization: `Bearer ${SECRET}` } }, 'codex'],
       [{ type: 'local', command: ['x', '--token', SECRET], environment: { X_KEY: SECRET } }, 'opencode'],
-      [{ url: `https://name:${SECRET}@x.example.test/mcp` }, 'cursor']
+      [{ type: 'remote', url: `https://name:${SECRET}@x.example.test/mcp` }, 'opencode']
     ] as const) {
       const shown = JSON.stringify(maskedEntry(value, harness))
       expect(shown, `${harness} ${shown}`).not.toContain(SECRET)
@@ -445,12 +441,12 @@ describe('one state per app and per tool (60.12 AC4)', () => {
   it('starts with every tool an app may have missing, the rest rightly absent, and nothing for a tool kept to agents', () => {
     expect(states('claude')).toEqual({ browser: 'excluded', docs: 'missing', files: 'missing', notes: 'missing', review: 'excluded' })
     expect(states('codex')).toEqual({ browser: 'excluded', docs: 'missing', files: 'missing', notes: 'missing', review: 'excluded' })
-    // OpenCode and Cursor get public work only: of this list, the public tool.
+    // OpenCode gets public work only: of this list, the public tool.
     expect(states('opencode')).toEqual({ browser: 'excluded', docs: 'missing', files: 'excluded', notes: 'excluded', review: 'excluded' })
     expect(appOf('opencode').kind).toBe('public')
     expect(appStateWord(appOf('claude'))).toBe('Missing')
     expect(checkExit(check())).toBe(1)
-    expect(pendingCounts(check())).toEqual({ pending: 8, exposed: 0, blocked: 0 })
+    expect(pendingCounts(check())).toEqual({ pending: 7, exposed: 0, blocked: 0 })
     expect(check().tools.find((tool) => tool.id === 'browser')).toEqual({ id: 'browser', name: 'Browser', transport: 'npx @synthetic/browser-mcp@1.0.0', public: false, apps: null, agents: ['luna'] })
   })
 
@@ -468,9 +464,9 @@ describe('one state per app and per tool (60.12 AC4)', () => {
     put(codexFile(), readFileSync(codexFile(), 'utf8').replace('url = "https://docs.example.test/mcp"', 'url = "https://docs.example.test/v2"'))
     expect(states('codex').docs).toBe('edited-outside')
     // Entries that are not on the list at all: exposed where the app gets public work only, unmanaged elsewhere.
-    put(cursorFile(), JSON.stringify({ mcpServers: { docs: { url: 'https://docs.example.test/mcp' }, own: { command: 'own-tool' } } }, null, 2))
-    expect(states('cursor').docs).toBe('edited-outside')
-    expect(appOf('cursor').unlisted).toEqual([{ id: 'own', state: 'exposed', managed: false }])
+    put(opencodeFile(), JSON.stringify({ mcp: { docs: { type: 'remote', url: 'https://docs.example.test/mcp', enabled: true }, own: { type: 'local', command: ['own-tool'], enabled: true } } }, null, 2))
+    expect(states('opencode').docs).toBe('edited-outside')
+    expect(appOf('opencode').unlisted).toEqual([{ id: 'own', state: 'exposed', managed: false }])
     put(claudeFile(), readFileSync(claudeFile(), 'utf8').replace(/\n}\s*$/, ',\n  "extra": 1\n}\n').replace('"mcpServers": {', '"mcpServers": {\n    "mine": { "command": "mine-tool" },'))
     expect(appOf('claude').unlisted).toEqual([{ id: 'mine', state: 'unmanaged', managed: false }])
     // A tool the app may not have, held by it: BMN's own entry after the team narrowed, and somebody else's.
@@ -483,9 +479,9 @@ describe('one state per app and per tool (60.12 AC4)', () => {
     // An entry BMN cannot read, and a file it cannot read.
     put(codexFile(), `${readFileSync(codexFile(), 'utf8')}\n[other]\nx = 1\n\n[mcp_servers.notes.env]\nK = "v"\n`)
     expect(appOf('codex').tools.find((row) => row.id === 'notes')).toMatchObject({ state: 'unreadable', detail: 'BMN cannot read the entry there: its tables stand apart from each other' })
-    put(cursorFile(), '{ "mcpServers": [')
-    expect(appOf('cursor')).toMatchObject({ readable: false, tools: expect.arrayContaining([{ id: 'docs', state: 'unreadable', detail: expect.any(String) }]) })
-    expect(appStateWord(appOf('cursor'))).toBe('Differs')
+    put(opencodeFile(), '{ "mcp": [')
+    expect(appOf('opencode')).toMatchObject({ readable: false, tools: expect.arrayContaining([{ id: 'docs', state: 'unreadable', detail: expect.any(String) }]) })
+    expect(appStateWord(appOf('opencode'))).toBe('Differs')
   })
 
   it('takes an entry that is exactly the approved tool as holding nothing unapproved, whatever its arguments look like', async () => {
@@ -525,13 +521,13 @@ describe('install and undo (60.12 AC4)', () => {
     const planned = await planToolsInstall([], { environment: env, versions: VERSIONS })
     expect(planned.code).toBe('OK')
     expect(planned.targets.map((target) => `${target.harness} ${target.tool} ${target.action}`)).toEqual([
-      'claude docs set', 'claude files set', 'claude notes set', 'codex docs set', 'codex files set', 'codex notes set', 'opencode docs set', 'cursor docs set'
+      'claude docs set', 'claude files set', 'claude notes set', 'codex docs set', 'codex files set', 'codex notes set', 'opencode docs set'
     ])
     expect(planned.targets[0]).toMatchObject({ path: claudeFile(), change: 'missing', words: 'adds the tool', before: null })
     expect(planned.targets[0]!.after).toContain('"Authorization": "${DOCS_TOKEN}"')
     const result = await install([], { expectedPlanHash: planned.planHash! })
     expect(result).toMatchObject({ code: 'OK', exposed: [], blocked: [] })
-    expect(result.written).toHaveLength(8)
+    expect(result.written).toHaveLength(7)
     // Claude Code: the entries joined the list; everything before and after it is the same bytes.
     const claudeAfter = readFileSync(claudeFile(), 'utf8')
     const mine = '    "mine": { "command": "mine-tool", "env": { "MINE_KEY": "' + SECRET + '" } }'
@@ -548,7 +544,6 @@ describe('install and undo (60.12 AC4)', () => {
       '[mcp_servers.files]', 'command = "files-tool"', 'args = ["--root", "/srv/files"]', 'env_vars = ["FILES_KEY"]', '', '[mcp_servers.notes]', 'command = "notes-tool"', ''
     ].join('\n'))
     expect(JSON.parse(readFileSync(opencodeFile(), 'utf8'))).toEqual({ mcp: { docs: { type: 'remote', url: 'https://docs.example.test/mcp', headers: { Authorization: '{env:DOCS_TOKEN}' }, enabled: true } } })
-    expect(JSON.parse(readFileSync(cursorFile(), 'utf8'))).toEqual({ mcpServers: { docs: { url: 'https://docs.example.test/mcp', headers: { Authorization: '${env:DOCS_TOKEN}' } } } })
     // Entries BMN did not write stay, and stay named.
     expect(appOf('claude').unlisted).toEqual([{ id: 'mine', state: 'unmanaged', managed: false, secret: true }])
     expect(checkExit(check())).toBe(0)
@@ -569,13 +564,30 @@ describe('install and undo (60.12 AC4)', () => {
     expect(listTransactions().find((entry) => entry.id === result.transaction)).toMatchObject({ reason: 'tools install', state: 'complete' })
   })
 
+  it('lists a tools install made before Cursor was retired as saved, and its undo leaves the Cursor file as it is (Epic 71)', async () => {
+    const result = await install(['codex'])
+    const manifestPath = join(home, '.config/bmn/agents/state/rules/transactions', result.transaction!, 'manifest.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    const cursorFile = join(home, '.cursor/mcp.json')
+    manifest.targets.push({ ...manifest.targets[0], harness: 'cursor', path: cursorFile })
+    writeFileSync(manifestPath, JSON.stringify(manifest))
+    expect(listTransactions().find((entry) => entry.id === result.transaction)?.targets).toEqual(['codex', 'cursor'])
+
+    const shown = await restoreTransaction(result.transaction!, { planOnly: true })
+    expect(new Set(shown.targets!.map((target) => target.harness))).toEqual(new Set(['codex']))
+    expect(shown.left).toEqual([{ harness: 'cursor', path: cursorFile, reason: "Cursor was retired on 2026-10-14; BMN's support for it is kept at the git tag cursor-support-final" }])
+    expect(await restoreTransaction(result.transaction!, { yes: true, expectedPlanHash: shown.plan_hash! })).toMatchObject({ code: 'OK', kind: 'tools', left: shown.left })
+    expect(readAppTools('codex', env).entries.size).toBe(0)
+    expect(existsSync(join(home, '.cursor'))).toBe(false)
+  })
+
   it('installs for the named apps only, and for a tool kept to some apps only there', async () => {
     const result = await install(['codex'])
     expect(result.written.map((entry) => `${entry.harness} ${entry.tool}`)).toEqual(['codex docs', 'codex files', 'codex notes'])
     expect(existsSync(claudeFile())).toBe(false)
     approve(withTools(TOOLS.map((line) => line.replace('apps: [claude, codex]', 'apps: [claude]'))))
     const next = await install()
-    expect(next.written.map((entry) => `${entry.harness} ${entry.tool} ${entry.action}`)).toEqual(['claude docs set', 'claude files set', 'claude notes set', 'codex files remove', 'opencode docs set', 'cursor docs set'])
+    expect(next.written.map((entry) => `${entry.harness} ${entry.tool} ${entry.action}`)).toEqual(['claude docs set', 'claude files set', 'claude notes set', 'codex files remove', 'opencode docs set'])
     expect([...readAppTools('codex', env).entries.keys()]).toEqual(['docs', 'notes'])
     expect(checkExit(check())).toBe(0)
     // The removal is undone with the rest.
@@ -644,8 +656,8 @@ describe('install and undo (60.12 AC4)', () => {
     expect(appOf('claude')).toMatchObject({ readable: true, link: join(home, 'dotfiles/claude.json') })
     expect(await install(['claude'])).toMatchObject({ code: 'TOOL_FILE_LINK', written: [] })
     expect(readFileSync(join(home, 'dotfiles/claude.json'), 'utf8')).toBe('{}\n')
-    put(cursorFile(), '{ "mcpServers": [')
-    expect(await install(['cursor'])).toMatchObject({ code: 'TOOL_FILE_UNREADABLE', written: [] })
+    put(opencodeFile(), '{ "mcp": [')
+    expect(await install(['opencode'])).toMatchObject({ code: 'TOOL_FILE_UNREADABLE', written: [] })
     // Codex now talks to another destination than the approved team says.
     put(codexFile(), 'openai_base_url = "https://elsewhere.example.test/v1"\n')
     expect(await install(['codex'])).toMatchObject({ code: 'ROUTE_CHANGED', written: [] })
@@ -850,7 +862,7 @@ describe('install and undo (60.12 AC4)', () => {
       ['notes', `BMN did not write this entry in ${opencodeFile()}: remove it there, or let OpenCode have the tool`],
       ['stray', 'OpenCode gets public work only and holds an entry that is not on your list: remove it there, or add it to the list and mark it Public']
     ])
-    expect(pendingCounts(check())).toEqual({ pending: 7, exposed: 2, blocked: 0 })
+    expect(pendingCounts(check())).toEqual({ pending: 6, exposed: 2, blocked: 0 })
   })
 })
 
@@ -868,7 +880,7 @@ describe('import of what the apps already hold (60.12 AC3)', () => {
     put(codexFile(), '[mcp_servers.playwright]\ncommand = "npx"\nargs = ["--offline", "@synthetic/browser-mcp@1.0.0"]\n\n[mcp_servers.differs]\ncommand = "differs-b"\n\n[mcp_servers]\ninline = { command = "x" }\n')
     put(opencodeFile(), '{\n  // SYNTHETIC\n  "mcp": { "playwright": { "type": "local", "command": ["npx", "--offline", "@synthetic/browser-mcp@1.0.0"], "enabled": true } },\n}\n')
     const result = proposeTools({ environment: env })
-    expect(result.files.map((file) => [file.harness, file.readable])).toEqual([['claude', true], ['codex', true], ['opencode', true], ['cursor', true]])
+    expect(result.files.map((file) => [file.harness, file.readable])).toEqual([['claude', true], ['codex', true], ['opencode', true]])
     const byId = (id: string) => result.proposals.filter((proposal) => proposal.id === id)
     expect(byId('playwright')).toEqual([{ id: 'playwright', state: 'ready', apps: ['claude', 'codex', 'opencode'], notes: [],
       tool: { id: 'playwright', name: 'Playwright', command: 'npx', args: ['--offline', '@synthetic/browser-mcp@1.0.0'], apps: ['claude', 'codex', 'opencode'] } }])
@@ -1334,9 +1346,9 @@ describe('the owner\'s test of where an app reads its tools (60.12 AC1)', () => 
     rmSync(toolsTestsPath())
     app('claude', CLAUDE, { starts: false })
     expect(await testTools('claude', { environment: env, now: NOW })).toMatchObject({ outcome: 'pass', variable: 'unproven', detail: expect.stringContaining('BMN did not see it pass an environment variable to a tool') })
-    app('cursor-agent', CURSOR, { reads: false })
-    expect(await testTools('cursor', { environment: env, now: NOW })).toMatchObject({ outcome: 'fail', detail: 'Cursor did not name a tool written to ~/.cursor/mcp.json, so it reads its tools somewhere BMN does not know' })
-    expect(appTools('cursor', { version: CURSOR })).toMatchObject({ supported: false })
+    app('opencode', OPENCODE, { reads: false })
+    expect(await testTools('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'fail', detail: 'OpenCode did not name a tool written to ~/.config/opencode/opencode.jsonc, so it reads its tools somewhere BMN does not know' })
+    expect(appTools('opencode', { version: OPENCODE })).toMatchObject({ supported: false })
     app('opencode', OPENCODE, { signIn: true })
     expect(await testTools('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'inconclusive', detail: 'opencode did not answer in a home folder without its sign-in' })
     rmSync(join(stubs, 'opencode'))
@@ -1371,7 +1383,7 @@ describe('bmn tools', () => {
     expect(plan.stdout).toContain(`claude: docs in ${claudeFile()}\n  adds the tool\n  + "docs": {`)
     expect(plan.stdout).toContain('not changed: claude files - it holds a value inline (env.FILES_KEY)')
     const planJson = JSON.parse((await call(['tools', 'install', '--plan', '--json'])).stdout)
-    expect(planJson.targets).toHaveLength(7)
+    expect(planJson.targets).toHaveLength(6)
     // Without a terminal and without --yes nothing is written.
     const unconfirmed = await call(['tools', 'install', 'codex'])
     expect(unconfirmed.code).toBe(1)
@@ -1381,7 +1393,7 @@ describe('bmn tools', () => {
     const installed = await call(['tools', 'install', '--yes'])
     // The install changed what it could and says what it could not: that is not a success.
     expect(installed.code).toBe(1)
-    expect(installed.stdout).toMatch(/^Changed 7 entries \(transaction [0-9TZ-]+-\d+\)\.$/m)
+    expect(installed.stdout).toMatch(/^Changed 6 entries \(transaction [0-9TZ-]+-\d+\)\.$/m)
     expect(installed.stdout).toContain('Sessions started before this keep the tools they had.')
     const id = /transaction ([0-9TZ-]+-\d+)/.exec(installed.stdout)![1]!
     expect((await call(['tools', 'check'])).stdout).toContain('  unmanaged: files')
@@ -1389,6 +1401,12 @@ describe('bmn tools', () => {
     expect(restored.code, restored.stderr).toBe(0)
     expect(readAppTools('codex', env).entries.size).toBe(0)
     expect((await call(['tools', 'install', 'vim'])).code).toBe(2)
+    // Epic 71: asked for Cursor, it says Cursor was retired and where its support is kept.
+    for (const args of [['tools', 'install', 'cursor'], ['tools', 'test', 'cursor']]) {
+      const retired = await call(args)
+      expect(retired.code).toBe(2)
+      expect(retired.stderr).toContain("Cursor was retired on 2026-10-14; BMN's support for it is kept at the git tag cursor-support-final")
+    }
     expect((await call(['tools', 'frobnicate'])).code).toBe(2)
     expect((await call(['tools', '--help'])).stdout).toContain('bmn tools check [--json]')
     expect((await call(['help'])).stdout).toContain('tools check|install|import|test')

@@ -53,8 +53,8 @@ function teamWithJudge({ receives = 'allowed', runs = 'allowed', model = 'jev-1.
     'roles: [judge]', 'paid_by: per_token', ...(price === null ? [] : [`price: ${price}`])
   ].join('\n')
   let text = edit(EXAMPLE, 'schema_version: 2', 'schema_version: 3')
-  text = edit(text, 'cursor: {name: Cursor, hosts: [], private_work: public_only}\n',
-    `cursor: {name: Cursor, hosts: [], private_work: public_only}\ngateway: {name: Gateway, hosts: [${hosts}], private_work: ${receives}}\nmaker: {name: Maker, hosts: [], private_work: ${runs}}\n`)
+  text = edit(text, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\n',
+    `opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\ngateway: {name: Gateway, hosts: [${hosts}], private_work: ${receives}}\nmaker: {name: Maker, hosts: [], private_work: ${runs}}\n`)
   text = edit(text, '## roles\n', `## jev\n\n\`\`\`yaml\n${block}\n\`\`\`\n\n## roles\n`)
   return edit(text, 'consultant: {candidates: [astra@medium|high, fable@medium|high], then: blocked}\n',
     'consultant: {candidates: [astra@medium|high, fable@medium|high], then: blocked}\njudge: {description: answers typed questions about a text with numbers; advice only, candidates: [jev], then: skip}\n')

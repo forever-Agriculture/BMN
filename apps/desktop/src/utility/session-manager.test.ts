@@ -4526,43 +4526,29 @@ describe('conversation identity reported by the harness', () => {
     expect([spawned.executable, ...spawned.argv].join(' ')).toBe(preview.command)
   })
 
-  it('binds Cursor from its first report, leaves a repeated prompt report unwritten and resumes with --resume=<id>', async () => {
-    const fixture = await codexFixture(['--model', 'sonnet-4', '--force'], ['Cursor'], 'cursor-agent')
-    const [created] = fixture.sessions
-    const chat = 'c741bb07-352f-457b-8e7c-ee00517cd9ff'
-    const observe = (source: 'startup' | 'prompt', conversationReference = chat) => fixture.manager.observeConversation({
-      sessionId: created!.sessionId, incarnationId: created!.incarnationId, agentCli: 'cursor', conversationReference, source
-    })
-    expect(created!.binding).toMatchObject({ agentCli: 'cursor', status: 'unsupported' })
+  it('loads a conversation bound before Cursor was retired as stored, never looks for it and never resumes it (Epic 71)', async () => {
+    const fixture = await codexFixture([], [])
+    const sessionId = 'cursor-before-retirement'
+    const bound: PersistedConversationBinding = {
+      sessionId, agentCli: 'cursor', status: 'bound', conversationReference: 'c741bb07-352f-457b-8e7c-ee00517cd9ff',
+      captureRoute: 'hook-session-start', detail: 'Reported by Cursor at session start', capturedAt: '2026-09-28T10:00:00.000Z',
+      launchContext: {
+        cwd: fixture.cwd, executable: '/home/owner/.local/bin/cursor-agent', argv: ['--model', 'sonnet-4'],
+        environment: captureRelevantLaunchEnvironment({})
+      }
+    }
+    fixture.store.bindings.set(sessionId, structuredClone(bound))
+    const looked = vi.fn(async () => true)
+    referenceCheck = looked
 
-    const first = await observe('prompt')
-    expect(first).toEqual({ accepted: true, detail: `Reported by Cursor when a prompt was sent; Resume runs: ${fixture.executable} --resume=${chat} --model sonnet-4; not carried: --force` })
-    // The same chat again is not rewritten; a session start still is.
-    const writes = vi.spyOn(fixture.store, 'replaceConversationBinding')
-    expect(await observe('prompt')).toEqual(first)
-    expect(writes).not.toHaveBeenCalled()
-    expect(await observe('startup')).toMatchObject({ accepted: true, detail: expect.stringContaining('Reported by Cursor at session start') })
-    expect(writes).toHaveBeenCalledTimes(1)
-    // A different chat from a prompt replaces the binding, as `/resume` inside Cursor would.
-    const other = '9f0c7a3e-1b2d-4c5e-8f6a-7b8c9d0e1f2a'
-    expect(await observe('prompt', other)).toMatchObject({ accepted: true, detail: expect.stringContaining(`replaces ${chat}`) })
-
-    const preview = await fixture.manager.conversationResumePreview(created!.sessionId)
-    expect(preview).toMatchObject({ agentCli: 'cursor', command: `${fixture.executable} --resume=${other} --model sonnet-4`, notCarried: '--force' })
-    fixture.ptys[0]!.emitExit({ exitCode: 0 })
-    await vi.waitFor(async () => {
-      await expect(fixture.manager.health()).resolves.toMatchObject({ liveSessions: 0 })
-    })
-    // While history cleanup deletes this chat, Resume is refused and starts nothing (Astra recheck, R2).
-    deletingReferences.add(other)
-    const spawnsBefore = fixture.spawns.length
-    await expect(fixture.manager.resume({ sessionId: created!.sessionId, cols: 80, rows: 24 }))
-      .rejects.toThrow("BMN is cleaning up this cursor conversation's history right now; try again in a moment")
-    expect(fixture.spawns).toHaveLength(spawnsBefore)
-    deletingReferences.delete(other)
-    await fixture.manager.resume({ sessionId: created!.sessionId, cols: 80, rows: 24 })
-    const spawned = fixture.spawns.at(-1)!
-    expect([spawned.executable, ...spawned.argv].join(' ')).toBe(preview.command)
+    await expect(fixture.manager.conversationBinding(sessionId)).resolves.toEqual(bound)
+    expect(looked).not.toHaveBeenCalled()
+    await expect(fixture.manager.conversationResumePreview(sessionId)).rejects.toThrow('Cursor was retired on 14 Oct 2026.')
+    await expect(fixture.manager.resume({ sessionId, cols: 80, rows: 24 })).rejects.toThrow('Cursor was retired on 14 Oct 2026.')
+    expect(fixture.spawns).toHaveLength(0)
+    expect(fixture.store.resuming).toEqual([])
+    expect(fixture.store.bindings.get(sessionId)).toEqual(bound)
+    referenceCheck = async () => true
   })
 
   it('keeps a conversation BMN is resuming out of history cleanup, and refuses Resume while cleanup deletes it', async () => {
@@ -4654,14 +4640,14 @@ describe('conversation identity reported by the harness', () => {
     expect(fixture.spawns).toHaveLength(1)
   })
 
-  it('refuses a Cursor report from a session that runs a shell, as for every agent', async () => {
+  it('refuses an OpenCode report from a session that runs a shell, as for every agent', async () => {
     const fixture = await codexFixture([], ['Shell'], 'bash')
     const [created] = fixture.sessions
 
     expect(await fixture.manager.observeConversation({
-      sessionId: created!.sessionId, incarnationId: created!.incarnationId, agentCli: 'cursor',
-      conversationReference: 'c741bb07-352f-457b-8e7c-ee00517cd9ff', source: 'startup'
-    })).toEqual({ accepted: false, detail: 'Reported by Cursor at session start; refused: the session was launched as other, not cursor' })
+      sessionId: created!.sessionId, incarnationId: created!.incarnationId, agentCli: 'opencode',
+      conversationReference: 'ses_3a1f0c2b7ffeJ1nQx9kD4mZ0aB', source: 'startup'
+    })).toMatchObject({ accepted: false, detail: expect.stringContaining('refused: the session was launched as other, not opencode') })
   })
 
   it('refuses a preview for a session whose conversation it never learned', async () => {

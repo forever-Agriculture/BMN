@@ -122,11 +122,8 @@ describe('the Paste button (Story 66.2)', () => {
       expect(handover.byHook).toContain(`measured on ${app === 'codex' ? 'Codex' : 'Claude Code'} ${measured!.version}`)
     }
     expect(handover.byHook).toBe('Claude Code (measured on Claude Code 2.1.296), Codex (measured on Codex 0.162.1)')
-    expect(handover.byPaste).toContain('OpenCode')
-    expect(handover.byPaste).toContain('Cursor')
-    expect(handover.byPaste).not.toContain('Claude Code')
+    expect(handover.byPaste).toBe('OpenCode')
     expect(handover.byHook).not.toContain('OpenCode')
-    expect(handover.byHook).not.toContain('Cursor')
   })
 })
 

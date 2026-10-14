@@ -18,7 +18,6 @@ openai: {name: OpenAI, hosts: [api.openai.com], sites: [openai.com], private_wor
 anthropic: {name: Anthropic, hosts: [api.anthropic.com], sites: [anthropic.com], private_work: allowed}
 zai: {name: Z.ai, hosts: [api.z.ai], private_work: public_only}
 opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}
-cursor: {name: Cursor, hosts: [], private_work: public_only}
 ```
 
 ## sol
@@ -184,5 +183,4 @@ zai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}
 claude: {provider: anthropic, basis: observed-default}
 codex: {provider: openai, basis: observed-default}
 opencode: {provider: opencode-go, basis: observed-default}
-cursor: {provider: cursor, basis: owner-declared}
 ```

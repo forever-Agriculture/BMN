@@ -49,6 +49,29 @@ describe('visible conversation resume decisions', () => {
     })
     expect(resume).not.toHaveBeenCalled()
   })
+
+  it('names a conversation bound before Cursor was retired and offers nothing for it (Epic 71)', () => {
+    const binding: ConversationBindingState = {
+      sessionId: 'session-1',
+      agentCli: 'cursor',
+      status: 'bound',
+      conversationReference: 'c741bb07-352f-457b-8e7c-ee00517cd9ff',
+      captureRoute: 'hook-session-start',
+      launchContext: { cwd: '/workspace', executable: '/home/owner/.local/bin/cursor-agent', argv: [], environment: {} },
+      detail: 'Reported by Cursor at session start',
+      capturedAt: '2026-09-28T10:00:00.000Z'
+    }
+    expect(conversationBindingPresentation(binding)).toEqual({
+      label: 'Cursor conversation',
+      detail: 'Cursor was retired on 14 Oct 2026. Reference c741bb07-352f-457b-8e7c-ee00517cd9ff.',
+      canResume: false,
+      canLocate: false,
+      canStartNew: false
+    })
+    // A command the program reported is not offered either: it would start Cursor.
+    const reported = { reportedResume: { argv: ['cursor-agent', '--resume=c741bb07-352f-457b-8e7c-ee00517cd9ff'], reportedAt: '2026-09-28T10:05:00.000Z' }, lastProcess: null }
+    expect(resumeAvailable(binding, reported, undefined)).toBe(false)
+  })
 })
 
 describe('the confirmation shown before Resume starts anything', () => {
@@ -76,15 +99,6 @@ describe('the confirmation shown before Resume starts anything', () => {
   it('names Claude Code by the name the owner knows it by', () => {
     expect(resumeConfirmationPresentation({ ...preview, agentCli: 'claude' }, 'Review').message)
       .toBe('Resume the Claude Code conversation in "Review". This command runs:')
-  })
-
-  it('names Cursor and says BMN chose what to leave behind', () => {
-    const cursor = { ...preview, agentCli: 'cursor' as const, command: '/usr/bin/cursor-agent --resume=c741bb07-352f-457b-8e7c-ee00517cd9ff', notCarried: '--force' }
-    expect(resumeConfirmationPresentation(cursor, 'Cursor')).toEqual({
-      message: 'Resume the Cursor conversation in "Cursor". This command runs:',
-      command: cursor.command,
-      notCarried: { names: '--force', reason: 'BMN carries only --model and --workspace into cursor-agent --resume.' }
-    })
   })
 
   it('names OpenCode and shows its own session command', () => {

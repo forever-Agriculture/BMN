@@ -48,7 +48,6 @@ they do not, or that the case could not be produced. The sections below hold eac
 | OpenCode 1.19.0 | Waits for its prompt hook | FAIL | 0 of 15 runs on `session.status`, the event BMN's plugin gets. In the nine runs that measured anything the model was asked 867 to 3,911 ms before the hook let go, and in seven the write landed while it held |
 | OpenCode 1.19.0 | When its prompt event arrives | FAIL | `session.status` comes 144 to 261 ms after Enter, when the model is already being asked |
 | OpenCode 1.19.0 | Each kind of end | FAIL: not measured | Without a prompt event that holds there is no "before", so no turn is recorded. `session.idle` came 712 and 786 ms after the last write of a turn that ended by itself; the other ends were not measured |
-| Cursor 2026.09.26 | Waits for its prompt hook | FAIL | It cannot be pointed at a stand-in: it speaks only to its own service and starts by exchanging a sign-in |
 
 A PASS needs every run. An app without PASS in its first row is not recorded.
 
@@ -474,17 +473,10 @@ hook entries: BMN's plugin is handed events after they happened.
   measured.
 - **Reading the version:** `--version` answers `1.19.0` and takes 637 to 1,517 ms.
 
-### Cursor 2026.09.26
-
-Record: `records/edges/cursor-2026.09.26-dd393fe/not-pointable.json`. Without a sign-in the
-agent stops before any request. With a made-up key its first call exchanges that key at Cursor's
-own service; `--endpoint` moves the address, not the protocol, and there is no setting for
-another model. An app that cannot be pointed at a stand-in does not pass.
-
 ### What follows for recording
 
 - Claude Code 2.1.296 and Codex 0.162.1 hold PASS for waiting, so both are recorded. OpenCode
-  and Cursor are not. A turn's totals are shown as complete only when BMN read that the app runs
+  is not. A turn's totals are shown as complete only when BMN read that the app runs
   the measured version, which it can for Claude Code and not for Codex: see
   [The app's version](#the-apps-version).
 - Both apps name the turn. A prompt event that carries the open turn's id was typed into that

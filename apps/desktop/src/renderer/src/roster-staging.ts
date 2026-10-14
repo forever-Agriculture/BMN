@@ -1,5 +1,6 @@
 // MODULE: roster-staging.ts - Epic 60.5: the Team pages' staged edits, review rows and their words, kept pure for tests
 import {
+  RETIRED_APP_NAMES,
   ROSTER_APP_NAMES,
   ROSTER_CALLED_BY_BMN,
   ROSTER_DESIGNER_ROLE,
@@ -8,6 +9,8 @@ import {
   ROSTER_LEAD_ROLE,
   ROSTER_SCHEMA_VERSION,
   LUNA_GO_PROPOSAL,
+  appDisplayName,
+  isRetiredApp,
   rosterApp,
   type AgentAppView,
   type RosterAgentShape,
@@ -80,7 +83,7 @@ const FIELD_WORDS: Readonly<Record<string, string>> = {
 
 const VALUE_WORDS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   class: Object.fromEntries(Object.entries(CLASS_WORDS).map(([key, words]) => [key, words.name])),
-  harness: { ...ROSTER_APP_NAMES, [ROSTER_CALLED_BY_BMN]: 'none, called by BMN' },
+  harness: { ...ROSTER_APP_NAMES, ...RETIRED_APP_NAMES, [ROSTER_CALLED_BY_BMN]: 'none, called by BMN' },
   then: THEN_WORDS,
   private_work: PRIVATE_WORK_WORDS,
   paid_by: { per_token: 'Per token', subscription: 'Subscription' },
@@ -175,7 +178,7 @@ function formatPlain(value: unknown, field: string | undefined, names: Names): s
     if (value.length === 0) return 'none'
     if (field === 'candidates') return value.map((entry) => candidateWords(String(entry), names)).join(', ')
     if (field === 'roles') return value.map((entry) => roleName(String(entry))).join(', ')
-    if (field === 'only' || field === 'apps') return value.map((entry) => ROSTER_APP_NAMES[entry as RosterHarness] ?? String(entry)).join(', ')
+    if (field === 'only' || field === 'apps') return value.map((entry) => appDisplayName(String(entry))).join(', ')
     if (field === 'agents') return value.map((entry) => names.agents.get(String(entry)) ?? String(entry)).join(', ')
     // A tool's arguments, as they would be typed; one that comes from a variable shows the variable, never a value.
     if (field === 'args') return value.map((entry) => (typeof entry === 'object' && entry !== null ? `$${String((entry as { env?: unknown }).env)}` : String(entry))).join(' ')
@@ -219,7 +222,7 @@ function fieldWords(diff: RosterDiffShape, names: Names, called = false): string
   if (diff.scope === 'skills' && diff.id === SKILLS_SOURCE_ID) return 'Skills folder'
   const provider = (id: string): string => names.providers.get(id) ?? id
   const subject = diff.scope === 'roles' ? roleName(diff.id)
-    : diff.scope === 'harness-routes' ? ROSTER_APP_NAMES[diff.id as RosterHarness] ?? diff.id
+    : diff.scope === 'harness-routes' ? appDisplayName(diff.id)
       : diff.scope === 'providers' ? provider(diff.id)
         : diff.scope === 'exceptions' ? provider(names.exceptions.get(diff.id) ?? diff.id) : diff.id
   return word === '' ? subject : `${subject} · ${word.toLowerCase()}`
@@ -460,7 +463,7 @@ export function isCalled(agent: Pick<RosterAgentShape, 'harness'>): boolean {
 export const CALLED_WORDS = 'Called by BMN'
 export function appWords(agent: Pick<RosterAgentShape, 'harness'>): string {
   const app = rosterApp(agent)
-  return app === null ? CALLED_WORDS : ROSTER_APP_NAMES[app]
+  return app === null ? CALLED_WORDS : appDisplayName(app)
 }
 
 /**
@@ -807,6 +810,52 @@ export function lunaGoProposal(data: RosterDataShape): RosterDataShape | null {
   return data.roles.some((entry) => entry.id === role) ? toggleAgentRole(next, agent.id, role) : next
 }
 
+/** What BMN's proposal takes out of a team file that still names a retired app. */
+export interface RetiredRemoval { agents: string[]; routes: string[]; providers: string[]; lists: boolean }
+
+/**
+ * Epic 71 (71.2 AC3): the team file without the app BMN retired. Its agents go, with their places
+ * in every role and tool; its route goes; a provider goes once something removed named it and
+ * nothing left does. A skill or tool kept to some apps loses the retired one where another app
+ * stays; a list naming only the retired app already reaches no app, and stays as written. Null
+ * when there is nothing to remove. A proposal only: nothing changes until the owner approves it.
+ */
+export function retiredAppProposal(data: RosterDataShape): { data: RosterDataShape; removed: RetiredRemoval } | null {
+  const gone = data.agents.filter((agent) => isRetiredApp(agent.harness))
+  const goneIds = new Set(gone.map((agent) => agent.id))
+  const goneRoutes = data.harness_routes.filter((route) => isRetiredApp(route.harness))
+  const trim = <T extends string>(apps: T[]): T[] => (apps.every(isRetiredApp) ? apps : apps.filter((app) => !isRetiredApp(app)))
+  const skills = data.skills?.map((mark) => (mark.only === undefined ? mark : { ...mark, only: trim(mark.only) }))
+  const tools = data.tools?.flatMap((tool) => {
+    if (tool.apps !== undefined) return [{ ...tool, apps: trim(tool.apps) }]
+    if (tool.agents === undefined || !tool.agents.some((id) => goneIds.has(id))) return [tool]
+    const agents = tool.agents.filter((id) => !goneIds.has(id))
+    // A tool kept to the runs of the removed agents alone was theirs.
+    return agents.length === 0 ? [] : [{ ...tool, agents }]
+  })
+  const kept = data.agents.filter((agent) => !goneIds.has(agent.id))
+  const routes = data.harness_routes.filter((route) => !isRetiredApp(route.harness))
+  const named = new Set([...kept.flatMap((agent) => [agent.provider, ...(agent.run_by === undefined ? [] : [agent.run_by])]),
+    ...routes.map((route) => route.provider), ...data.exceptions.map((entry) => entry.provider)])
+  const touched = new Set([...gone.map((agent) => agent.provider), ...goneRoutes.map((route) => route.provider)])
+  const goneProviders = data.providers.filter((provider) => touched.has(provider.id) && !named.has(provider.id))
+  const next: RosterDataShape = {
+    ...data,
+    agents: kept,
+    roles: data.roles.map((role) => [...goneIds].reduce(withoutAgent, role)),
+    providers: data.providers.filter((provider) => !goneProviders.includes(provider)),
+    harness_routes: routes,
+    ...(skills === undefined ? {} : { skills }),
+    ...(tools === undefined ? {} : { tools })
+  }
+  const lists = JSON.stringify([skills, tools]) !== JSON.stringify([data.skills, data.tools])
+  if (gone.length === 0 && goneRoutes.length === 0 && !lists) return null
+  return {
+    data: { ...next, schema_version: ROSTER_SCHEMA_VERSION },
+    removed: { agents: gone.map((agent) => agent.name), routes: goneRoutes.map((route) => route.harness), providers: goneProviders.map((provider) => provider.name), lists }
+  }
+}
+
 /**
  * An agent with no role, turned into one BMN calls: it runs in no app, so what belongs to an app
  * leaves it (efforts, context fields, the researcher mark) and its provider is named as the one
@@ -830,7 +879,7 @@ export function idFor(name: string, taken: readonly string[]): string {
 /** The provider each app reaches when nothing overrides it; the roster's own record wins when it has one. */
 const APP_PROVIDERS: Readonly<Record<RosterHarness, { id: string; name: string }>> = {
   claude: { id: 'anthropic', name: 'Anthropic' }, codex: { id: 'openai', name: 'OpenAI' },
-  opencode: { id: 'opencode-go', name: 'OpenCode Go' }, cursor: { id: 'cursor', name: 'Cursor' }
+  opencode: { id: 'opencode-go', name: 'OpenCode Go' }
 }
 
 export interface Landing {

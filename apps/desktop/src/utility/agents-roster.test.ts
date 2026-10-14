@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { parseRoster, proseOf, rewriteProse, rewriteRoster, starterRoster } from '../../bin/agents-roster.mjs'
+import { agentState, parseRoster, proseOf, rewriteProse, rewriteRoster, starterRoster } from '../../bin/agents-roster.mjs'
 import { approveRoster } from '../main/agents-approval'
 import { buildGeneration, currentPointerPath, generationPath, listGenerations, machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 
@@ -80,9 +80,9 @@ describe('roster validation (60.1 AC1, AC2)', () => {
     expect(parsed.data?.agents.map((agent) => agent.class)).toEqual(['knight', 'knight', 'bishop', 'rook', 'pawn', 'bishop', 'pawn', 'pawn'])
     expect(parsed.data?.roles).toHaveLength(10)
     expect(parsed.data?.providers.map((provider) => `${provider.id}:${provider.private_work}`))
-      .toEqual(['openai:allowed', 'anthropic:allowed', 'zai:public_only', 'opencode-go:public_only', 'cursor:public_only'])
+      .toEqual(['openai:allowed', 'anthropic:allowed', 'zai:public_only', 'opencode-go:public_only'])
     expect(parsed.data?.exceptions).toEqual([{ id: 'zai-synthetic', provider: 'zai', folder: '/synthetic/EXCEPTION-SENTINEL-FOLDER' }])
-    expect(parsed.data?.harness_routes.map((route) => route.harness)).toEqual(['claude', 'codex', 'opencode', 'cursor'])
+    expect(parsed.data?.harness_routes.map((route) => route.harness)).toEqual(['claude', 'codex', 'opencode'])
     expect(parsed.data?.agents.find((agent) => agent.id === 'sol')).toMatchObject({
       context_window: 400000, context_limit: 272000, paid_by: 'subscription',
       price: { input: 1.25, cached_input: 0.125, output: 10, as_of: '2026-10-01' }
@@ -134,7 +134,7 @@ describe('roster validation (60.1 AC1, AC2)', () => {
     ['a bishop in the lead chain', (t) => edit(t, 'candidates: [sol@xhigh, opus@xhigh]', 'candidates: [sol@xhigh, opus@xhigh, astra@high]'), 'ROLE_NOT_HELD'],
     ['candidate naming an unknown agent', (t) => edit(t, 'browser: {candidates: [luna@max]', 'browser: {candidates: [nova@max]'), 'UNKNOWN_AGENT'],
     ['agent naming an unknown provider', (t) => edit(t, 'model: gpt-6-luna\nprovider: openai', 'model: gpt-6-luna\nprovider: nowhere'), 'UNKNOWN_PROVIDER'],
-    ['harness route naming an unknown provider', (t) => edit(t, 'cursor: {provider: cursor, basis: owner-declared}', 'cursor: {provider: nowhere, basis: owner-declared}'), 'UNKNOWN_PROVIDER'],
+    ['harness route naming an unknown provider', (t) => edit(t, 'opencode: {provider: opencode-go, basis: observed-default}', 'opencode: {provider: nowhere, basis: owner-declared}'), 'UNKNOWN_PROVIDER'],
     ['one host listed by two providers', (t) => edit(t, 'hosts: [api.z.ai]', 'hosts: [api.z.ai, API.OpenAI.com]'), 'DUPLICATE_HOST'],
     ['provider answer outside its enum', (t) => edit(t, 'hosts: [api.z.ai], private_work: public_only', 'hosts: [api.z.ai], private_work: sometimes'), 'INVALID_VALUE'],
     ['too many provider hosts', (t) => edit(t, 'hosts: [api.z.ai]', `hosts: [${Array.from({ length: 9 }, (_, n) => `h${n}.z.ai`).join(', ')}]`), 'INVALID_VALUE'],
@@ -178,7 +178,7 @@ describe('roster validation (60.1 AC1, AC2)', () => {
     const one = 'zai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}'
     expect(codes(edit(EXAMPLE, one, `a: {provider: zai, folder: ${home}/work/app}\nb: {provider: zai, folder: ${home}/alias}`))).toEqual(['EXCEPTION_COLLISION'])
     // The same folder for another provider is a different exception.
-    expect(codes(edit(EXAMPLE, one, `a: {provider: zai, folder: ${home}/work/app}\nb: {provider: cursor, folder: ${home}/alias}`))).toEqual([])
+    expect(codes(edit(EXAMPLE, one, `a: {provider: zai, folder: ${home}/work/app}\nb: {provider: opencode-go, folder: ${home}/alias}`))).toEqual([])
     const many = Array.from({ length: 65 }, (_, n) => `e${n}: {provider: zai, folder: /synthetic/f${n}}`).join('\n')
     expect(codes(edit(EXAMPLE, one, many))).toEqual(['INVALID_VALUE'])
   })
@@ -207,6 +207,34 @@ const MODELS_TABLE: Record<string, { candidates: string[]; then: string; recheck
   'final-reviewer': { candidates: ['astra@high', 'fable@high'], then: 'blocked', recheck: { same_reviewer: true, efforts: { astra: 'low' } } },
   consultant: { candidates: ['astra@medium|high', 'fable@medium|high'], then: 'blocked' } // Consultant | Astra medium or high | Fable medium or high | BLOCKED
 }
+
+describe('a team file that still names Cursor (Epic 71, 71.2 AC3)', () => {
+  /** A file written while Cursor was supported: its provider, its route, an agent on it, and a skill and a tool kept to it. */
+  const namesCursor = (): string => {
+    let text = edit(EXAMPLE, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\n',
+      'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\ncursor: {name: Cursor, hosts: [], private_work: public_only}\n')
+    text = edit(text, 'opencode: {provider: opencode-go, basis: observed-default}\n', 'opencode: {provider: opencode-go, basis: observed-default}\ncursor: {provider: cursor, basis: owner-declared}\n')
+    text = edit(text, '## roles\n', '## composer\n\n```yaml\nname: Composer\nclass: pawn\nharness: cursor\nmodel: composer-2\nprovider: cursor\nhost: default\nenabled: true\nstatus: active\nefforts: [low]\nroles: []\n```\n\n## roles\n')
+    const fence = '```'
+    return `${text}\n## skills\n\n${fence}yaml\nonly: {alpha: [claude, cursor]}\n${fence}\n\n## tools\n\n${fence}yaml\ndocs: {name: Docs, url: "https://docs.example.test/mcp", apps: [codex, cursor]}\n${fence}\n`
+  }
+
+  it('is read without failing, with a warning at each line that names Cursor, and its agent takes no work', async () => {
+    const parsed = parseRoster(namesCursor())
+    expect(parsed.errors).toEqual([])
+    const retired = "Cursor was retired on 2026-10-14; BMN's support for it is kept at the git tag cursor-support-final"
+    expect(parsed.warnings.filter((warning) => warning.code === 'APP_RETIRED').map((warning) => warning.message).sort()).toEqual([
+      `## harness-routes.cursor: ${retired}; BMN proposes removing this route on Team`,
+      `## skills.only.alpha: ${retired}`,
+      `## tools.docs.apps: ${retired}`,
+      `composer runs in ${retired}; nothing runs on it, and BMN proposes removing it on Team`
+    ])
+    expect(agentState(parsed.data!.agents.find((agent) => agent.id === 'composer')!)).toBe('retired')
+    approveFile(namesCursor())
+    expect((await runCli(['team'])).stdout).not.toContain('composer')
+    expect((await runCli(['team', '--all'])).stdout).toMatch(/composer {2}Composer {2}pawn {2}cursor {2}composer-2 .*\[retired\]/)
+  })
+})
 
 describe('bmn roster role (60.1 AC3, golden table)', () => {
   it('reproduces every row and rule of the dev-auto table', async () => {
@@ -387,12 +415,12 @@ describe('machine differences (60.5 AC2)', () => {
     const changed = {
       ...approved,
       providers: approved.providers.map((provider) => (provider.id === 'zai' ? { ...provider, private_work: 'allowed' as const } : provider)),
-      exceptions: [...approved.exceptions, { id: 'cursor-app', provider: 'cursor', folder: '/synthetic/EXCEPTION-SENTINEL-NEW' }]
+      exceptions: [...approved.exceptions, { id: 'opencode-app', provider: 'opencode-go', folder: '/synthetic/EXCEPTION-SENTINEL-NEW' }]
     }
     const diff = machineDiff(approved, changed)
     expect(diff).toEqual([
       expect.objectContaining({ scope: 'providers', id: 'zai', field: 'private_work', before: { present: true, value: 'public_only' }, after: { present: true, value: 'allowed' } }),
-      expect.objectContaining({ scope: 'exceptions', id: 'cursor-app', field: null, kind: 'added' })
+      expect.objectContaining({ scope: 'exceptions', id: 'opencode-app', field: null, kind: 'added' })
     ])
     expect(JSON.stringify(diff)).not.toContain('EXCEPTION-SENTINEL')
   })

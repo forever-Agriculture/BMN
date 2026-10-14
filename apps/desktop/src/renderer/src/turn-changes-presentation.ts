@@ -1,11 +1,11 @@
 // MODULE: turn-changes-presentation.ts - the words the window shows for turn changes (Story 69.5): a turn's time, end and totals, the state of recording, the header plate in both its widths, a file's sizes and a hunk's range
-import { TURN_APP_NAMES, TURN_PAUSE_REASONS, type TurnSessionView, type TurnShownHunk, type TurnSummary } from '@bmn/protocol'
+import { RETIRED_APP_NAMES, TURN_APP_NAMES, TURN_PAUSE_REASONS, type TurnSessionView, type TurnShownHunk, type TurnSummary } from '@bmn/protocol'
 import { shortDate } from './history-rows'
 
 /** The sign of a removed line and of a count of removed lines: a real minus, as wide as the plus. */
 export const MINUS = '−'
 
-const APP_NAMES: Readonly<Record<string, string | undefined>> = Object.freeze({ opencode: 'OpenCode', cursor: 'Cursor', gemini: 'Gemini', aider: 'Aider' })
+const APP_NAMES: Readonly<Record<string, string | undefined>> = Object.freeze({ opencode: 'OpenCode', ...RETIRED_APP_NAMES, gemini: 'Gemini', aider: 'Aider' })
 
 /** How an app is named beside a turn; one BMN has no name for keeps its own. */
 export function turnAppName(app: string): string {

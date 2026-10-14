@@ -7,7 +7,7 @@
  * with certainty is reported as unreadable and left alone.
  *
  * Two shapes are read: a JSON object of entries under a key path (Claude Code `mcpServers`,
- * Cursor `mcpServers`, OpenCode `mcp`; comments and trailing commas allowed), and Codex's TOML
+ * OpenCode `mcp`; comments and trailing commas allowed), and Codex's TOML
  * tables `[mcp_servers.<id>]` with their sub-tables.
  */
 

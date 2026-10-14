@@ -1,7 +1,7 @@
 /* global window, document, HTMLElement, getComputedStyle */
 // MODULE: hierarchy-fit-visual.mjs - Epic 40: the sidebar row, the Needs you card and every select fit the plate standard
-// The app runs in test mode with scratch XDG folders. Synthetic agent stand-ins are shells named claude, codex, opencode
-// and cursor-agent, so each row carries its agent chip; the Claude one reports a z.ai origin and a permission request
+// The app runs in test mode with scratch XDG folders. Synthetic agent stand-ins are shells named claude, codex and
+// opencode, so each of their rows carries its agent chip; the Claude one reports a z.ai origin and a permission request
 // through `bmn hook claude`. No agent runs and nothing leaves the machine. Each colour mode asserts the layout facts
 // below; screenshots land in .dev-auto/evidence/epic-40/shots/ (ignored).
 import { sessionRequestControl } from './session-request-helpers.mjs'
@@ -65,7 +65,7 @@ function writeAgents(directory) {
     'exec bash --noprofile --norc'
   ].join('\n')
   const plain = '#!/bin/bash\nexec bash --noprofile --norc'
-  for (const [name, text] of Object.entries({ claude, codex: plain, opencode: plain, 'cursor-agent': plain })) {
+  for (const [name, text] of Object.entries({ claude, codex: plain, opencode: plain })) {
     writeFileSync(join(directory, name), `${text}\n`)
     chmodSync(join(directory, name), 0o755)
   }
@@ -206,16 +206,16 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       ['Claude — renderer hierarchy review', join(agents, 'claude')],
       ['Codex — cross-epic architecture alignment', join(agents, 'codex')],
       ['OpenCode — a deliberately long session name for truncation', join(agents, 'opencode')],
-      ['Cursor — sidebar layout', join(agents, 'cursor-agent')],
+      ['Shell — sidebar layout', '/bin/bash'],
       ['Build watcher', '/bin/bash']
     ], cwd })
-    const [, codex, , cursor, watcher] = fixture
+    const [, codex, , late, watcher] = fixture
     await page.reload({ waitUntil: 'domcontentloaded' })
     await until(() => page.evaluate(() => document.querySelectorAll('.session-row').length >= 6), 'six rows')
     // Typing into a session answers its own requests, so each session gets one thing only.
     await runControlCli(roots, watcher, 'send', "printf '\\033]9;Nightly build finished on the watcher\\007'", '--submit')
     await runControlCli(roots, codex, 'ask', 'e40-question', 'Which migration order should I use?', '--kind', 'question')
-    await runControlCli(roots, cursor, 'send', "(sleep 4; printf 'CURSOR-LATE-OUTPUT\\n') &", '--submit')
+    await runControlCli(roots, late, 'send', "(sleep 4; printf 'LATE-OUTPUT\\n') &", '--submit')
     await until(() => page.evaluate(() => document.querySelector('.origin-flag') !== null), 'the origin flag', 30_000)
     await until(() => page.evaluate(async () => (await window.aiTerminal.listAttention())
       .filter((row) => row.state === 'open').length >= 3), 'three open requests', 30_000)

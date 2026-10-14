@@ -52,7 +52,6 @@ describe('the hook\'s turn marks', () => {
     const event = { hook_event_name: 'UserPromptSubmit', session_id: CONVERSATION, prompt_id: 'p-1' }
     expect(turnMark('claude', { ...event, agent_id: 'a-1' })).toBeNull()
     expect(turnMark('opencode', event)).toBeNull()
-    expect(turnMark('cursor', event)).toBeNull()
     expect(turnMark('constructor', event)).toBeNull()
     expect(turnMark('claude', { ...event, hook_event_name: 'PostToolUse' })).toBeNull()
     expect(turnMark('claude', { ...event, session_id: 'no reference' })).toBeNull()
