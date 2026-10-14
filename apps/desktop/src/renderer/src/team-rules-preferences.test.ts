@@ -247,6 +247,9 @@ describe('Team › a team file that still names Cursor (Epic 71, 71.2 AC3)', () 
     expect(words(markup).replace(/\s+/g, ' ')).toContain('Cursor was retired on 14 Oct 2026. BMN&#x27;s proposal removes Composer, the Cursor route and the Cursor provider from the team file. Nothing changes until you approve it. Use proposal')
     // The agent is still shown as the file has it.
     expect(markup).toContain('<div class="agent-app">Cursor · <span class="mono">composer-2</span> · public work only</div>')
+    // An agent on a retired app cannot be on: its switch shows off and takes no press (71.3).
+    expect(markup).toContain('<button type="button" class="switch" role="switch" aria-checked="false" aria-label="Composer on" disabled="">')
+    expect(markup).toContain('aria-checked="true" aria-label="Sol on">')
     expect(pageMarkup({ name: 'agents' })).not.toContain('was retired')
     expect(retiredAppProposalWords({ agents: [], routes: [], providers: [], lists: true }))
       .toBe("Cursor was retired on 14 Oct 2026. BMN's proposal removes Cursor from the apps a skill or tool is kept to from the team file. Nothing changes until you approve it.")

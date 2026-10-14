@@ -3,13 +3,19 @@ import type { LaunchSetEntry, LaunchSetRecord, LaunchTemplateRecord, SessionReco
 import { failureDetail } from './bridge-error'
 import { Dialog } from './dialog'
 import {
-  entryForm, exactCommand, launchSetParams, matchingLiveCommands, seededEntry,
+  entryForm, exactCommand, launchSetParams, matchingLiveCommands, retiredEntryWords, seededEntry,
   type LaunchSetEntryForm
 } from './launch-set-editor'
 import { RepositoryIdentityView, identityChanged, useRepositoryIdentity } from './repository-identity'
 import { CheckoutPeerWarning, newlyDiscoveredCheckoutRisk, useCheckoutPeers } from './checkout-peers'
 
 type StartResult = Awaited<ReturnType<Window['aiTerminal']['startLaunchSet']>>
+
+/** An entry that would start a retired app says on its line that it opens as a plain terminal (Epic 71). */
+function RetiredEntry(props: { entry: LaunchSetEntry }): React.JSX.Element | null {
+  const words = retiredEntryWords(props.entry)
+  return words === null ? null : <span className="muted"> · {words}</span>
+}
 type Mode = 'manage' | 'edit' | 'preview' | 'result'
 
 export function LaunchSetsDialog({
@@ -242,7 +248,7 @@ export function LaunchSetsDialog({
         }}>{sets.map((set) => <option key={set.setId} value={set.setId}>{set.name}</option>)}</select>
       </label>}
       {selected ? <ol>{selected.entries.map((entry) => <li key={entry.entryId}>
-        {entry.name} <code>{exactCommand(entry.executable, entry.argv)}</code>
+        {entry.name} <code>{exactCommand(entry.executable, entry.argv)}</code><RetiredEntry entry={entry} />
       </li>)}</ol> : null}
       <div className="actions">
         <button type="button" onClick={newSet}>New set</button>
@@ -307,7 +313,7 @@ export function LaunchSetsDialog({
       <h3>{selected.name}</h3>
       <p>{selected.entries.length} fresh sessions in {workspace.name}. Existing sessions stay open.</p>
       <ol>{selected.entries.map((entry: LaunchSetEntry) => <li key={entry.entryId}>
-        <strong>{entry.name}</strong> <code>{exactCommand(entry.executable, entry.argv)}</code>
+        <strong>{entry.name}</strong> <code>{exactCommand(entry.executable, entry.argv)}</code><RetiredEntry entry={entry} />
       </li>)}</ol>
       <label>One directory for every entry <input aria-label="Set launch directory" value={directory}
         onChange={(event) => setDirectory(event.target.value)} /></label>

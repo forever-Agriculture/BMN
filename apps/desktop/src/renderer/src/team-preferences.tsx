@@ -267,9 +267,12 @@ function AgentCard(props: { agent: RosterAgentShape; data: RosterDataShape; note
         {asking ? <TurnOff agent={agent} onDone={(reason) => { setAsking(false); if (reason !== null) team.stage(setAgentOn(data, agent.id, false, reason)) }} /> : null}
       </div>
       <div className="agent-side">
-        {agent.status === 'proposed'
-          ? <button type="button" className="small" onClick={(event) => { event.stopPropagation(); team.stage(activateAgent(data, agent.id)) }}>Activate</button>
-          : <Switch label={`${agent.name} on`} on={agent.enabled} onChange={(on) => { if (on) team.stage(setAgentOn(data, agent.id, true)); else setAsking(true) }} />}
+        {/* An agent on a retired app cannot be on (Epic 71): its switch shows off and takes no press. */}
+        {isRetiredApp(agent.harness)
+          ? <Switch label={`${agent.name} on`} on={false} disabled onChange={() => undefined} />
+          : agent.status === 'proposed'
+            ? <button type="button" className="small" onClick={(event) => { event.stopPropagation(); team.stage(activateAgent(data, agent.id)) }}>Activate</button>
+            : <Switch label={`${agent.name} on`} on={agent.enabled} onChange={(on) => { if (on) team.stage(setAgentOn(data, agent.id, true)); else setAsking(true) }} />}
         {price ? <span className="price mono">{price}</span> : null}
       </div>
     </article>

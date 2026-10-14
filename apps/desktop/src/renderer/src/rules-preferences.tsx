@@ -40,7 +40,7 @@ import { createMachineReads, endedSince, type MachineReads } from './machine-rea
 import { Segmented } from './history-preferences'
 import { quoteArgv } from './launch-template'
 import { Dot } from './roster-marks'
-import { diffBody, diffSummary, listedRoles, revokeVersion, setDestination, setSkillPublic, skillForApp, skillMark, thousands, toggleSkillApp, undoWords } from './roster-staging'
+import { destinationProviders, diffBody, diffSummary, listedRoles, revokeVersion, setDestination, setSkillPublic, skillForApp, skillMark, thousands, toggleSkillApp, undoWords } from './roster-staging'
 import { displayPath } from './session-presentation'
 import { Issues, NumberField, PageHead, Row, Switch, TargetPath, shortDate } from './team-preferences'
 import type { TeamState } from './team-state'
@@ -893,8 +893,10 @@ function DestinationSheet(props: { app: AgentAppView; data: RosterDataShape; onD
   const name = ROSTER_APP_NAMES[app.harness]
   const inspected = app.basis === 'default' && app.provider ? data.providers.find((provider) => provider.id === app.provider) ?? { id: app.provider, name: app.provider } : null
   const recorded = data.harness_routes.find((route) => route.harness === app.harness)
-  const [choice, setChoice] = useState<string>(inspected ? 'inspected' : recorded?.provider ?? data.providers[0]?.id ?? '')
-  const declared = data.providers.find((provider) => provider.id === choice)
+  // A provider only a retired app's lines name is not offered as anyone's destination (Epic 71).
+  const providers = destinationProviders(data)
+  const [choice, setChoice] = useState<string>(inspected ? 'inspected' : recorded?.provider ?? providers[0]?.id ?? '')
+  const declared = providers.find((provider) => provider.id === choice)
   return (
     <Sheet title={`Where ${name} sends data`} action="Set destination" busy={false} ready={choice === 'inspected' ? inspected !== null : declared !== undefined}
       note="This waits for your approval like any other change to the team."
@@ -909,7 +911,7 @@ function DestinationSheet(props: { app: AgentAppView; data: RosterDataShape; onD
           </label>
         ) : <p className="preferences-help">BMN can't confirm where {name} sends data{app.reason ? ` (${app.reason})` : ''}, so only your word can be recorded.</p>}
         {/* The inspected provider on the owner's word would only take private work away from the app; it is offered once, as inspected. */}
-        {data.providers.filter((provider) => provider.id !== inspected?.id).map((provider) => (
+        {providers.filter((provider) => provider.id !== inspected?.id).map((provider) => (
           <label key={provider.id} className="choice">
             <input type="radio" name={`destination-${app.harness}`} checked={choice === provider.id} onChange={() => setChoice(provider.id)} />
             {provider.name} <span className="choice-line">on your word</span>

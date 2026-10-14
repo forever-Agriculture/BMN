@@ -1,5 +1,7 @@
 import {
+  RETIRED_APP_LINE,
   isLaunchSetCreateParams,
+  retiredAppCommand,
   type BackgroundChoice,
   type LaunchSetCreateParams,
   type LaunchSetEntry,
@@ -57,6 +59,14 @@ export function launchSetParams(
 /** JSON array is exact argv data, without suggesting shell quoting or expansion. */
 export function exactCommand(executable: string, argv: readonly string[]): string {
   return JSON.stringify([executable, ...argv])
+}
+
+/**
+ * What a saved entry that starts a retired app does, said on its line before the owner launches the
+ * set (Epic 71, the 71.1 design notes); null for any other entry.
+ */
+export function retiredEntryWords(entry: Pick<LaunchSetEntry, 'executable' | 'argv'>): string | null {
+  return retiredAppCommand(entry.executable, entry.argv) === null ? null : `opens as a terminal: ${RETIRED_APP_LINE.replace(/\.$/, '')}`
 }
 
 export function matchingLiveCommands(

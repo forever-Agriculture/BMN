@@ -12,6 +12,7 @@ import {
   changedSections,
   classBar,
   consequenceWords,
+  destinationProviders,
   diffBody,
   differenceLine,
   effortWords,
@@ -362,6 +363,13 @@ describe('a team file that still names Cursor (Epic 71, 71.2 AC3)', () => {
     expect(retiredAppProposal(DATA)).toBeNull()
     // Lists that name only Cursor change nothing, so there is nothing to propose.
     expect(retiredAppProposal({ ...DATA, skills: [{ id: 'composer-only', only: ['cursor'] }] })).toBeNull()
+  })
+
+  it('offers no provider only its lines name as another app\'s destination (71.3, design notes screen 27)', () => {
+    expect(destinationProviders(OLD)).toEqual(DATA.providers)
+    expect(destinationProviders(DATA)).toEqual(DATA.providers)
+    const shared = { ...OLD, harness_routes: OLD.harness_routes.map((route) => (route.harness === 'claude' ? { ...route, provider: 'cursor' } : route)) }
+    expect(destinationProviders(shared)).toEqual(OLD.providers)
   })
 })
 

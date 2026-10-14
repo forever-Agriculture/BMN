@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { LaunchTemplateRecord, SessionRecord } from '@bmn/protocol'
-import { exactCommand, launchSetParams, matchingLiveCommands, seededEntry } from './launch-set-editor'
+import { exactCommand, launchSetParams, matchingLiveCommands, retiredEntryWords, seededEntry } from './launch-set-editor'
 
 describe('saved launch-set form', () => {
   it('copies template argv exactly without its cwd and preserves argument boundaries', () => {
@@ -13,6 +13,14 @@ describe('saved launch-set form', () => {
     expect(form).not.toHaveProperty('cwd')
     expect(launchSetParams('workspace-1', 'Daily', [form]).entries[0]?.argv).toEqual(['one value', '--flag'])
     expect(exactCommand(template.executable, template.argv)).toBe('["/bin/echo","one value","--flag"]')
+  })
+
+  it('says on its line that an entry starting Cursor opens as a terminal, and nothing on any other (Epic 71)', () => {
+    const words = 'opens as a terminal: Cursor was retired on 14 Oct 2026'
+    expect(retiredEntryWords({ executable: '/usr/local/bin/cursor-agent', argv: [] })).toBe(words)
+    expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-ic', 'cursor-agent; exec bash -i'] })).toBe(words)
+    expect(retiredEntryWords({ executable: '/bin/bash', argv: ['-ic', 'codex; exec bash -i'] })).toBeNull()
+    expect(retiredEntryWords({ executable: '/bin/echo', argv: ['the cursor moves'] })).toBeNull()
   })
 
   it('preserves invalid input for correction and warns only about matching live commands', () => {

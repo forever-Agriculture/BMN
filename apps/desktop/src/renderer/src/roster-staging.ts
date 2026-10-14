@@ -856,6 +856,12 @@ export function retiredAppProposal(data: RosterDataShape): { data: RosterDataSha
   }
 }
 
+/** The providers a destination may be set to: none that only a retired app's lines name (Epic 71, the 71.1 design notes). */
+export function destinationProviders(data: RosterDataShape): RosterProviderShape[] {
+  const proposal = retiredAppProposal(data)
+  return proposal === null ? data.providers : data.providers.filter((provider) => proposal.data.providers.some((kept) => kept.id === provider.id))
+}
+
 /**
  * An agent with no role, turned into one BMN calls: it runs in no app, so what belongs to an app
  * leaves it (efforts, context fields, the researcher mark) and its provider is named as the one

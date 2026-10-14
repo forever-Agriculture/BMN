@@ -1,21 +1,23 @@
 /* global window, document, getComputedStyle, NodeFilter, innerWidth, innerHeight */
-// MODULE: cursor-screens-visual.mjs - Epic 71.1: every BMN screen that names Cursor, captured in each colour mode on synthetic data
+// MODULE: cursor-screens-visual.mjs - Epic 71.1/71.3: every BMN screen that named Cursor, captured in each colour mode on synthetic data
 // The app runs in test mode with a temporary HOME and XDG folders (removed at the end). The temporary home holds a
-// synthetic team with all four apps (the unit-test roster plus a Cursor and an OpenCode agent), a synthetic rules
-// master, two synthetic skills, BMN's Cursor hook file, and one Cursor chat folder. Stand-ins for claude, codex and
-// cursor-agent sit on the PATH the home's shell settings add; nothing named opencode is installed. The cursor-agent
-// stand-in reports through `bmn hook cursor` exactly as cursor-agent's hooks do (src/utility/test-fixtures/cursor), so
-// BMN binds its chat, shows its notice and its prompt warning. No agent runs, nothing leaves the machine and no file
-// of the owner's is read. The script asserts nothing about Cursor: it opens each screen, saves what the window shows in
-// steel, brown, dark and black, and writes shots.json naming the Cursor words each capture held, so the same run after
-// Cursor's removal makes the "after" set. Preferences pages are taken at 540x700, 1000x700 and 1280x900, the rest at the
-// window's default 1000x700; a page taller than the window is taken in parts, top to bottom.
+// synthetic team file written while Cursor was supported (the unit-test roster plus a Cursor and an OpenCode agent), a
+// synthetic rules master and two synthetic skills. Stand-ins for claude, codex and cursor-agent sit on the PATH the
+// home's shell settings add; nothing named opencode is installed. Since Cursor was retired (Story 71.2) cursor-agent is
+// a plain program to BMN, so the old records a Cursor session left are written into BMN's saved state while it is
+// closed (seedOldRecords: the conversation its hook bound, the notice its stop hook opened) and BMN is started again
+// on them. No agent runs, nothing leaves the machine and no file of the owner's is read. The script asserts nothing
+// about Cursor: it opens each screen, saves what the window shows in steel, brown, dark and black, and writes
+// shots.json naming the Cursor words each capture held. The "before" set (Story 71.1) was made at 042d662, when
+// cursor-agent's measured hooks still reported; this version makes the "after" set. Preferences pages are taken at
+// 540x700, 1000x700 and 1280x900, the rest at the window's default 1000x700; a page taller than the window is taken in
+// parts, top to bottom. A screen that no longer exists is listed with the reason it could not be opened.
 // Usage: node scripts/test/cursor-screens-visual.mjs [output folder]
-//   default folder: <main checkout>/_bmad-output/planning-artifacts/reference-71-retire-cursor/before (or BMN_CURSOR_SHOTS)
+//   default folder: <main checkout>/_bmad-output/planning-artifacts/reference-71-retire-cursor/after (or BMN_CURSOR_SHOTS)
 //   BMN_CURSOR_SCREENS=guard-card,preferences-health  only screens whose name starts with one of these;
 //   BMN_CURSOR_MODES=black  fewer modes. A narrowed run writes its own shots.json, so give it a folder of its own.
 import { execFileSync } from 'node:child_process'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -33,7 +35,7 @@ const git = (...args) => { try { return execFileSync('git', ['-C', repoRoot, ...
 // The planning folder is ignored by git and lives in the main checkout only, not in a worktree.
 const mainCheckout = dirname(git('rev-parse', '--path-format=absolute', '--git-common-dir') ?? join(repoRoot, '.git'))
 const outDirectory = resolve(process.argv[2] ?? process.env.BMN_CURSOR_SHOTS ??
-  join(mainCheckout, '_bmad-output/planning-artifacts/reference-71-retire-cursor/before'))
+  join(mainCheckout, '_bmad-output/planning-artifacts/reference-71-retire-cursor/after'))
 const COLOR_MODES = (process.env.BMN_CURSOR_MODES?.split(',') ?? ['steel', 'brown', 'dark', 'black']).filter(Boolean)
 const ONLY = process.env.BMN_CURSOR_SCREENS?.split(',').filter(Boolean) ?? null
 const DEFAULT_SIZE = [1000, 700]
@@ -67,7 +69,7 @@ A rule only apps that may see private work get.
 <!-- /bmn:apps -->
 `
 
-/** The unit-test roster with one agent on each app it lacks; OpenCode's destination is the owner's word, as nothing here configures it. */
+/** The unit-test roster with one agent on each app it lacks, and Cursor's provider and route; OpenCode's destination is the owner's word, as nothing here configures it. */
 function roster() {
   const agent = (id, name, harness, model, provider) => `## ${id}
 
@@ -86,7 +88,9 @@ roles: []
 
 `
   return readFileSync(join(fixtures, 'agents/roster-example.md'), 'utf8')
-    .replace('opencode: {provider: opencode-go, basis: observed-default}', 'opencode: {provider: opencode-go, basis: owner-declared}')
+    .replace('opencode: {provider: opencode-go, basis: observed-default}', 'opencode: {provider: opencode-go, basis: owner-declared}\ncursor: {provider: cursor, basis: owner-declared}')
+    // The Cursor provider and route as a team file written while Cursor was supported holds them.
+    .replace('opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\n', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\ncursor: {name: Cursor, hosts: [], private_work: public_only}\n')
     .replace('## roles\n', `${agent('composer', 'Composer', 'cursor', 'composer-2', 'cursor')}${agent('kimi', 'Kimi', 'opencode', 'opencode-go/kimi-k3', 'opencode-go')}## roles\n`)
 }
 
@@ -95,16 +99,15 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const home = join(root, 'home')
   const work = join(root, 'work')
   const stubs = join(root, 'stubs')
-  const events = join(root, 'cursor-events')
   const quit = join(root, 'quit-stand-ins')
   const agentsDir = join(home, '.config/bmn/agents')
-  for (const folder of [agentsDir, join(agentsDir, 'state'), work, stubs, events]) mkdirSync(folder, { recursive: true, mode: 0o700 })
+  for (const folder of [agentsDir, join(agentsDir, 'state'), work, stubs]) mkdirSync(folder, { recursive: true, mode: 0o700 })
   // BMN's own context testing stays off, so nothing starts a test behind a screen.
   writeFileSync(join(agentsDir, 'state/context-auto.json'), '{"version":1,"enabled":false,"told":{}}\n')
   writeFileSync(join(agentsDir, 'roster.md'), roster())
   writeFileSync(join(agentsDir, 'global-rules.md'), MASTER)
   writeFileSync(join(home, '.bashrc'), `export PATH="${stubs}:$PATH"\n`)
-  // Claude's rules file is a link to a file kept elsewhere; Codex's is hand-written; OpenCode and Cursor have none.
+  // Claude's rules file is a link to a file kept elsewhere; Codex's is hand-written; OpenCode has none.
   mkdirSync(join(home, 'dotfiles'))
   mkdirSync(join(home, '.claude'))
   writeFileSync(join(home, 'dotfiles/CLAUDE.md'), '# hand-kept rules\n')
@@ -115,46 +118,25 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     mkdirSync(join(home, '.claude/skills', name), { recursive: true })
     writeFileSync(join(home, '.claude/skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\n\nSynthetic skill text.\n`)
   }
-  // Cursor keeps a chat at ~/.cursor/chats/<md5 of its workspace>/<chat id>/; Resume and History look there.
-  mkdirSync(join(home, '.cursor/chats', createHash('md5').update(work).digest('hex'), CHAT), { recursive: true })
-  const hookFile = join(home, '.cursor/hooks.json')
-  try {
-    execFileSync(process.execPath, [cli, 'hooks', 'install', 'cursor', '--file', hookFile, '--yes'],
-      { env: { HOME: home, PATH: '/usr/bin:/bin' }, stdio: 'ignore' })
-  } catch { phase('bmn hooks install cursor refused; Local control shows the file as it is') }
-  // One tool in Cursor's own tools file, as Health and Tools read it; no value is held.
-  writeFileSync(join(home, '.cursor/mcp.json'), `${JSON.stringify({ mcpServers: { 'docs-search': { command: 'docs-search', args: ['--stdio'] } } }, null, 2)}\n`)
-
   const stub = (name, body) => {
     writeFileSync(join(stubs, name), `#!/bin/sh\n${body}\n`)
     chmodSync(join(stubs, name), 0o755)
   }
   stub('claude', 'case "$1" in --version) echo "2.1.296 (Claude Code)";; *) echo "synthetic claude"; cat > /dev/null;; esac')
   stub('codex', 'case "$1" in --version) echo "codex-cli 0.162.1";; *) echo "synthetic codex";; esac')
-  // cursor-agent's own hook events, from the measured fixtures, naming this chat and the work folder.
-  for (const event of ['sessionStart', 'beforeSubmitPrompt', 'stop']) {
-    const payload = JSON.parse(readFileSync(join(fixtures, `cursor/${event}.json`), 'utf8'))
-    writeFileSync(join(events, `${event}.json`), JSON.stringify({ ...payload, conversation_id: CHAT, session_id: CHAT,
-      workspace_roots: [work], user_email: 'owner@example.test', transcript_path: null,
-      ...(event === 'beforeSubmitPrompt' ? { prompt: 'synthetic prompt' } : {}) }))
-  }
-  // The hook line BMN installs for Cursor, falling back to this checkout's CLI when the session's PATH has no bmn.
-  const hook = (event) => `if command -v bmn >/dev/null; then bmn hook cursor < '${join(events, `${event}.json`)}' >/dev/null 2>&1; ` +
-    `else '${process.execPath}' '${cli}' hook cursor < '${join(events, `${event}.json`)}' >/dev/null 2>&1; fi`
-  // Outside a BMN session (a version read, a test BMN might start) it does nothing and says so.
+  // cursor-agent's stand-in: a plain program to BMN since Cursor was retired. Inside a BMN session it opens one notice
+  // through `bmn ask`, which seedOldRecords then marks as opened by Cursor's stop hook, as one saved before the retirement.
+  const ask = `bmn ask stop 'Cursor finished its turn' --kind notice >/dev/null 2>&1`
   stub('cursor-agent', `case "$1" in --version|-v) echo "2026.09.26-dd393fe"; exit 0;; esac
 [ -n "$BMN_CONTROL_SOCKET" ] || { echo "synthetic stand-in: nothing to do outside a BMN session"; exit 0; }
 echo "synthetic agent stand-in: nothing is sent anywhere"
-${hook('sessionStart')}
-sleep 1
 echo "> synthetic prompt"
-${hook('beforeSubmitPrompt')}
 sleep 1
 echo "synthetic reply: done"
-${hook('stop')}
+if command -v bmn >/dev/null; then ${ask}; else '${process.execPath}' '${cli}' ${ask.slice('bmn '.length)}; fi
 while :; do [ -e '${quit}' ] && exit 0; sleep 0.2; done`)
 
-  const application = await electron.launch({
+  const launchApplication = () => electron.launch({
     executablePath: electronBinary,
     args: [appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     cwd: repoRoot,
@@ -176,6 +158,39 @@ while :; do [ -e '${quit}' ] && exit 0; sleep 0.2; done`)
       ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
     }
   })
+  let application = await launchApplication()
+  const closeApplication = async () => {
+    await Promise.race([application.close(), sleep(10_000)])
+    try { application.process().kill('SIGKILL') } catch { /* already gone */ }
+  }
+  /** BMN's own database in this run's folders: the file that holds the conversation bindings. */
+  const databaseFile = () => {
+    const files = execFileSync('find', [roots.data, roots.state, roots.config, '-type', 'f'], { encoding: 'utf8' }).split('\n').filter(Boolean)
+    const found = files.find((file) => {
+      try { return execFileSync('sqlite3', [file, "SELECT name FROM sqlite_master WHERE name = 'conversation_binding'"], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() !== '' } catch { return false }
+    })
+    if (found === undefined) throw new Error('BMN\'s database was not found in this run\'s folders')
+    return found
+  }
+  const quoted = (value) => (value === null ? 'NULL' : `'${String(value).replaceAll("'", "''")}'`)
+  /**
+   * What a Cursor session left in BMN before the retirement, written while BMN is closed: the conversation its
+   * sessionStart hook bound (in the shape BMN stores, with exactly the launch settings it keeps) and the notice its
+   * stop hook opened. Returns what was written, for the manifest.
+   */
+  const seedOldRecords = (sessionId) => {
+    const database = databaseFile()
+    const keys = [...readFileSync(join(appDirectory, 'src/utility/conversation-binding.ts'), 'utf8')
+      .match(/RELEVANT_ENVIRONMENT_KEYS: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\)/)[1].matchAll(/'([A-Z_]+)'/g)].map((match) => match[1])
+    const environment = Object.fromEntries(keys.map((key) => [key, key === 'TERM' ? 'xterm-256color' : null]))
+    const values = [sessionId, 'cursor', 'bound', CHAT, 'hook-session-start', work, join(stubs, 'cursor-agent'),
+      JSON.stringify(['--model', 'gpt-5', '--sandbox', 'enabled']), JSON.stringify(environment), 'Reported by Cursor at session start', '2026-10-13T10:00:00.000Z']
+    const sql = (statement) => execFileSync('sqlite3', [database, statement], { encoding: 'utf8' }).trim()
+    sql(`INSERT OR REPLACE INTO conversation_binding(session_id, agent_cli, status, conversation_reference, capture_route, launch_cwd,
+      launch_executable, launch_argv_json, launch_environment_json, detail, captured_at) VALUES (${values.map(quoted).join(', ')})`)
+    const marked = sql(`UPDATE attention_request SET opened_by = 'hook:cursor:stop' WHERE session_id = ${quoted(sessionId)} AND title = 'Cursor finished its turn'; SELECT changes();`)
+    return [`database ${database}: Cursor conversation ${CHAT} bound to the session (hook-session-start)`, `notices marked as opened by Cursor's stop hook: ${marked}`]
+  }
   const manifest = {
     generatedAt: new Date().toISOString(), commit: git('rev-parse', 'HEAD'), worktree: repoRoot, colorModes: COLOR_MODES,
     defaultSize: DEFAULT_SIZE, preferenceSizes: PREFERENCE_SIZES, setup: [], scan: [], screens: []
@@ -184,16 +199,19 @@ while :; do [ -e '${quit}' ] && exit 0; sleep 0.2; done`)
   let page
   const written = []
   try {
-    page = await application.firstWindow()
-    page.setDefaultTimeout(15_000)
-    await page.waitForSelector('.session-row')
-    // A background test window may never paint without being shown.
-    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].show())
     const resize = async ([width, height]) => {
       await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size[0], size[1]), [width, height])
       await sleep(350)
     }
-    await resize(DEFAULT_SIZE)
+    const showWindow = async () => {
+      page = await application.firstWindow()
+      page.setDefaultTimeout(15_000)
+      await page.waitForSelector('.session-row')
+      // A background test window may never paint without being shown.
+      await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].show())
+      await resize(DEFAULT_SIZE)
+    }
+    await showWindow()
 
     const setColorMode = async (colorMode) => {
       await page.evaluate(async (colorMode) => {
@@ -305,6 +323,55 @@ while :; do [ -e '${quit}' ] && exit 0; sleep 0.2; done`)
       if (close) await close().catch(() => undefined)
     }
 
+    phase('workspace data: a launch set and a template that name Cursor, turn changes on, then a Cursor session')
+    const workspace = await page.evaluate(async () => (await window.aiTerminal.listWorkspaces()).find((item) => !item.archivedAt))
+    const inShell = (command) => ['-ic', `${command}; exec bash -i`]
+    try {
+      await page.evaluate(async ({ workspaceId, entries }) => window.aiTerminal.createLaunchSet({ workspaceId, name: 'Review trio', entries }), {
+        workspaceId: workspace.workspaceId,
+        entries: [['Claude', 'claude'], ['Codex', 'codex'], ['Cursor', 'cursor-agent']].map(([name, command]) => ({
+          entryId: randomUUID(), name, executable: '/bin/bash', argv: inShell(command), backgroundChoice: null, terminalGraphics: null
+        }))
+      })
+      note('launch set "Review trio" saved with Claude, Codex and Cursor entries')
+    } catch (error) { note(`launch set not saved: ${String(error?.message ?? error).split('\n')[0]}`) }
+    try {
+      await page.evaluate(async ({ cwd, argv }) => window.aiTerminal.createTemplate({ name: 'Cursor review', executable: '/bin/bash', argv, cwd }),
+        { cwd: work, argv: inShell('cursor-agent --model gpt-5') })
+      note('template "Cursor review" saved')
+    } catch (error) { note(`template not saved: ${String(error?.message ?? error).split('\n')[0]}`) }
+    try {
+      await page.evaluate(async (workspace) => window.aiTerminal.updateWorkspace({ workspaceId: workspace.workspaceId, expectedRevision: workspace.revision, turnChanges: true }), workspace)
+      note('turn changes switched on for the workspace')
+    } catch (error) { note(`turn changes not switched on: ${String(error?.message ?? error).split('\n')[0]}`) }
+    const created = await page.evaluate(async ({ workspaceId, cwd, executable }) => {
+      try {
+        return { session: (await window.aiTerminal.createSession({
+          workspaceId, name: 'Refactor', cwd, executable, argv: ['--model', 'gpt-5', '--sandbox', 'enabled'], cols: 100, rows: 24, backgroundChoice: 'stop'
+        })).session }
+      } catch (error) {
+        return { failed: JSON.stringify(error, Object.getOwnPropertyNames(error ?? {})) }
+      }
+    }, { workspaceId: workspace.workspaceId, cwd: work, executable: join(stubs, 'cursor-agent') })
+    if (created.failed) throw new Error(`the Cursor session was not started: ${created.failed}`)
+    const cursorSession = created.session
+    note(`Cursor session "Refactor" started: ${join(stubs, 'cursor-agent')} --model gpt-5 --sandbox enabled in ${work}`)
+    // The stand-in opens its request at once; then BMN is closed and its saved state is given what a Cursor session
+    // left before the retirement, and BMN is started again on it (seedOldRecords).
+    await sleep(4_000)
+    await closeApplication()
+    for (const line of seedOldRecords(cursorSession.sessionId)) note(line)
+    application = await launchApplication()
+    await showWindow()
+    // A restart rebuilds the live pane's view, and BMN says so once; that notice is the restart's, not a screen's.
+    await page.locator('button[aria-label="Dismiss notice"]').click({ timeout: 5_000 }).catch(() => undefined)
+    const row = page.locator(`.session-row > button[data-session-id="${cursorSession.sessionId}"]`)
+    await row.waitFor()
+    await row.click()
+    const binding = await page.evaluate((id) => window.aiTerminal.getConversationBinding(id), cursorSession.sessionId).catch((error) => ({ status: String(error?.message ?? error) }))
+    note(`the stored Cursor binding as BMN reads it: ${binding?.status ?? 'unknown'}${binding?.status === 'bound' ? ` (${binding.agentCli} ${binding.conversationReference})` : ''}`)
+    await sleep(2_500)
+
     // ---- Preferences helpers (the same locators as agents-rules-visual.mjs) -------------------------------------
     const dialog = page.locator('.preferences-dialog')
     const nav = dialog.locator('.preferences-nav')
@@ -344,47 +411,6 @@ while :; do [ -e '${quit}' ] && exit 0; sleep 0.2; done`)
     }
     await closePreferences()
 
-    phase('workspace data: a launch set and a template that name Cursor, turn changes on, then a Cursor session')
-    const workspace = await page.evaluate(async () => (await window.aiTerminal.listWorkspaces()).find((item) => !item.archivedAt))
-    const inShell = (command) => ['-ic', `${command}; exec bash -i`]
-    try {
-      await page.evaluate(async ({ workspaceId, entries }) => window.aiTerminal.createLaunchSet({ workspaceId, name: 'Review trio', entries }), {
-        workspaceId: workspace.workspaceId,
-        entries: [['Claude', 'claude'], ['Codex', 'codex'], ['Cursor', 'cursor-agent']].map(([name, command]) => ({
-          entryId: randomUUID(), name, executable: '/bin/bash', argv: inShell(command), backgroundChoice: null, terminalGraphics: null
-        }))
-      })
-      note('launch set "Review trio" saved with Claude, Codex and Cursor entries')
-    } catch (error) { note(`launch set not saved: ${String(error?.message ?? error).split('\n')[0]}`) }
-    try {
-      await page.evaluate(async ({ cwd, argv }) => window.aiTerminal.createTemplate({ name: 'Cursor review', executable: '/bin/bash', argv, cwd }),
-        { cwd: work, argv: inShell('cursor-agent --model gpt-5') })
-      note('template "Cursor review" saved')
-    } catch (error) { note(`template not saved: ${String(error?.message ?? error).split('\n')[0]}`) }
-    try {
-      await page.evaluate(async (workspace) => window.aiTerminal.updateWorkspace({ workspaceId: workspace.workspaceId, expectedRevision: workspace.revision, turnChanges: true }), workspace)
-      note('turn changes switched on for the workspace')
-    } catch (error) { note(`turn changes not switched on: ${String(error?.message ?? error).split('\n')[0]}`) }
-    const cursorSession = await page.evaluate(async ({ workspaceId, cwd, executable }) => (await window.aiTerminal.createSession({
-      workspaceId, name: 'Refactor', cwd, executable, argv: ['--model', 'gpt-5', '--sandbox', 'enabled'], cols: 100, rows: 24, backgroundChoice: 'stop'
-    })).session, { workspaceId: workspace.workspaceId, cwd: work, executable: join(stubs, 'cursor-agent') })
-    note(`Cursor session "Refactor" started: ${join(stubs, 'cursor-agent')} --model gpt-5 --sandbox enabled in ${work}`)
-    await page.reload()
-    // The reload rebuilds the live pane's view, and BMN says so once; that notice is the reload's, not a screen's.
-    await page.locator('button[aria-label="Dismiss notice"]').click({ timeout: 5_000 }).catch(() => undefined)
-    const row = page.locator(`.session-row > button[data-session-id="${cursorSession.sessionId}"]`)
-    await row.waitFor()
-    await row.click()
-    const binding = await (async () => {
-      const end = Date.now() + 20_000
-      for (;;) {
-        const value = await page.evaluate((id) => window.aiTerminal.getConversationBinding(id), cursorSession.sessionId).catch(() => null)
-        if (value?.status === 'bound' || Date.now() > end) return value
-        await sleep(250)
-      }
-    })()
-    note(`Cursor binding: ${binding?.status ?? 'unknown'}${binding?.status === 'bound' ? ` (${binding.agentCli} ${binding.conversationReference})` : ''}`)
-    await sleep(2_500)
 
     // ---- main window screens, at the default size ------------------------------------------------------------
     await resize(DEFAULT_SIZE)
@@ -565,6 +591,12 @@ while :; do [ -e '${quit}' ] && exit 0; sleep 0.2; done`)
       ['preferences-health-cursor-destination', 'Preferences › Rules › Health › Set destination… on the Cursor row (one view, scrolled to the sheet; cancelled)', async () => {
         await go('Rules', 'Health')
         await main.getByRole('button', { name: 'Set the destination of Cursor' }).click()
+        await main.locator('.sheet').first().waitFor()
+        await main.locator('.sheet').first().scrollIntoViewIfNeeded()
+      }, async () => { await pickIfOffered(main.locator('.sheet').getByRole('button', { name: 'Cancel' })) }, true],
+      ['preferences-health-opencode-destination', 'Preferences › Rules › Health › Set destination… on the OpenCode row: the providers offered, none that only the Cursor lines name (after set only; one view, cancelled)', async () => {
+        await go('Rules', 'Health')
+        await main.getByRole('button', { name: 'Set the destination of OpenCode' }).click()
         await main.locator('.sheet').first().waitFor()
         await main.locator('.sheet').first().scrollIntoViewIfNeeded()
       }, async () => { await pickIfOffered(main.locator('.sheet').getByRole('button', { name: 'Cancel' })) }, true],
