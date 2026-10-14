@@ -64,6 +64,12 @@ export const FRONT_MATTER_FOLDERS: readonly OpenCodeFolder[] = [
   unread('a front matter that never closes', '---\nmodel: opencode-go/kimi-k3\nShip it.\n', 'its front matter does not close'),
   unread('a closing-prefix line before a later close', '---\nmodel: opencode-go/kimi-k3\n---unexpected\nmodel: openrouter/cheap\n---\nShip it.\n', 'its front matter closes with "---unexpected"'),
   unread('a closing-prefix line with a BOM and CRLF', `${BOM}---\r\nmodel: opencode-go/kimi-k3\r\n---unexpected\r\n---\r\n`, 'its front matter closes with "---unexpected"'),
+  // OpenCode's YAML reader ends a line at a carriage return alone too (Astra recheck 3): a key after one is refused.
+  unread('a comment ended by a carriage return alone', '---\n# metadata\rmodel: openrouter/cheap\n---\nShip it.\n', 'its front matter ends a line with a carriage return alone'),
+  unread('a nested comment ended by a carriage return alone', '---\npermission:\n  edit: deny # metadata\rmodel: openrouter/cheap\n---\nShip it.\n', 'its front matter ends a line with a carriage return alone'),
+  unread('a value ended by a carriage return alone', '---\ndescription: Reviews\rmodel: openrouter/cheap\n---\nShip it.\n', 'its front matter ends a line with a carriage return alone'),
+  unread('a close hidden after a carriage return alone', '---\ndescription: Reviews\r---\nmodel: openrouter/cheap\n---\nShip it.\n', 'its front matter ends a line with a carriage return alone'),
+  known('a carriage return alone in the body', release('---\ndescription: Reviews\n---\nShip\rmodel: openrouter/cheap\n')),
   // Every folder OpenCode 2 reads agent and command files from, its own and OpenCode 1's, at any depth.
   ...['agent', 'agents', 'mode', 'modes', 'command', 'commands'].flatMap((folder) => [`${folder}/review.md`, `${folder}/team/review.md`].map((path) =>
     unknown(`another provider in ${path}`, { 'opencode.jsonc': OPENCODE_CONFIG, [path]: front('description: Reviews\nmodel: "openrouter/cheap#low"') }, TWO_PROVIDERS)))
@@ -74,12 +80,17 @@ export const CONFIGURATION_FOLDERS: readonly OpenCodeFolder[] = [
   known('comments and trailing commas outside strings', config('{\n  // the model\n  "model": "opencode-go/kimi-k3", /* the title model */ "small_model": "opencode-go/kimi-mini",\n  "agents": { "review": { "model": "opencode-go/kimi-k3", }, },\n}\n')),
   known('strings that hold comment, comma and quote text', config(`{ "model": "opencode-go/k//x/*y*/,},]${BACKSLASH}"q", "agents": { "review": { "description": "see https://example.test/a,} and /* this */", "prompt": "a // b ,]" } } }`), 'opencode-go/k//x/*y*/,},]"q'),
   known('an escaped model key', config(`{ "${escaped('006d')}odel": "opencode-go/kimi-k3" }`), 'opencode-go/kimi-k3'),
+  known('a line comment ended by a carriage return alone, before the model', config('{ // the model\r "model": "opencode-go/kimi-k3" }')),
+  unknown('a line comment ended by a carriage return alone, before another provider', config('{"model":"opencode-go/kimi-k3",// metadata\r"agents":{"review":{"model":"openrouter/cheap"}}\n}'), TWO_PROVIDERS),
+  unknown('a line comment ended by CRLF, before another provider', config('{"model":"opencode-go/kimi-k3",// metadata\r\n"agents":{"review":{"model":"openrouter/cheap"}}\n}'), TWO_PROVIDERS),
   unknown('an escaped title-model key', config(`{ "model": "opencode-go/kimi-k3", "small_${escaped('006d')}odel": "openrouter/cheap" }`), TWO_PROVIDERS),
   unknown('an escaped map name', config(`{ "model": "opencode-go/kimi-k3", "${escaped('0061')}gents": { "review": { "model": "openrouter/cheap" } } }`), TWO_PROVIDERS),
   unknown('an escaped providerID', config(`{ "model": "opencode-go/kimi-k3", "small_model": { "provider${escaped('0049')}D": "openrouter", "id": "cheap" } }`), TWO_PROVIDERS),
   unknown('an escaped baseURL', config(`{ "model": "opencode-go/kimi-k3", "providers": { "opencode-go": { "settings": { "base${escaped('0055')}RL": "https://proxy.example.test/v1" } } } }`), 'opencode.jsonc gives opencode-go its own address'),
   unknown('a model entry whose escaped name a comma rewrite would miss', config(`{ "model": "opencode-go/main,}", "providers": { "opencode-go": { "models": { "main${escaped('002c')}}": { "settings": { "baseURL": "https://proxy.example.test/v1" } } } } } }`), 'opencode.jsonc gives opencode-go/main,} its own address'),
   unknown('a key twice once decoded', config(`{ "model": "opencode-go/kimi-k3", "${escaped('006d')}odel": "openrouter/cheap" }`), /^opencode\.jsonc cannot be read \(the key "model" twice at character \d+\)$/),
+  unknown('a __proto__ key', config('{ "model": "opencode-go/kimi-k3", "__proto__": { "small_model": "openrouter/cheap" } }'), /^opencode\.jsonc cannot be read \(the key "__proto__" at character \d+\)$/),
+  unknown('an escaped __proto__ key', config(`{ "model": "opencode-go/kimi-k3", "__pr${escaped('006f')}to__": { "small_model": "openrouter/cheap" } }`), /^opencode\.jsonc cannot be read \(the key "__proto__" at character \d+\)$/),
   unknown('an unclosed map', config('{ "model": "opencode-go/kimi-k3"'), /^opencode\.jsonc cannot be read \(a missing "," or "}" at character \d+\)$/),
   unknown('single quotes', config("{ 'model': 'opencode-go/kimi-k3' }"), /^opencode\.jsonc cannot be read \(a key that is not a string at character \d+\)$/),
   unknown('an unclosed comment', config('{ "model": "opencode-go/kimi-k3" } /* the end'), /^opencode\.jsonc cannot be read \(an unclosed comment at character \d+\)$/),

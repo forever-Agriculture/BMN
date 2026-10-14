@@ -864,7 +864,7 @@ function openCodeReference(named) {
 
 /**
  * OpenCode's JSONC as a value: JSON plus comments and trailing commas, both only outside strings. Anything
- * else, and a key twice in one map (OpenCode's own reader would keep one of them), throws.
+ * else, a key twice in one map (OpenCode's own reader would keep one of them) and a `__proto__` key throw.
  */
 function parseJsonc(text) {
   let index = text.charCodeAt(0) === 0xfeff ? 1 : 0
@@ -877,8 +877,8 @@ function parseJsonc(text) {
       const char = text[index]
       if (char === ' ' || char === '\t' || char === '\n' || char === '\r') index += 1
       else if (char === '/' && text[index + 1] === '/') {
-        const end = text.indexOf('\n', index)
-        index = end === -1 ? text.length : end
+        // OpenCode's reader ends a line comment at a carriage return as well as a line feed.
+        while (index < text.length && text[index] !== '\n' && text[index] !== '\r') index += 1
       } else if (char === '/' && text[index + 1] === '*') {
         const end = text.indexOf('*/', index + 2)
         if (end === -1) fail('an unclosed comment')
@@ -911,6 +911,8 @@ function parseJsonc(text) {
           if (text[index] !== '"') fail('a key that is not a string')
           const key = token(STRING, 'a malformed key')
           if (Object.hasOwn(out, key)) fail(`the key ${JSON.stringify(key)} twice`)
+          // OpenCode's reader assigns keys, so this one would replace the map's prototype rather than name a field.
+          if (key === '__proto__') fail('the key "__proto__"')
           skip()
           if (text[index] !== ':') fail('a missing ":"')
           index += 1
@@ -945,7 +947,8 @@ const FRONT_MATTER_OPENERS = ['---', '---yaml', '---yml']
  * front matter as YAML, or as JSON or JavaScript after another opening. BMN reads only `---`, `---yaml` and
  * `---yml`, with the team file's YAML subset (agents-roster.mjs `parseYaml`), which refuses anchors,
  * aliases, tags, block scalars, complex keys, directives, duplicate keys and escapes other than \" \\ \n \t
- * \/. A front matter it cannot read whole is unreadable: not finding a key does not prove OpenCode finds none.
+ * \/, and a carriage return alone is refused before it. A front matter it cannot read whole is unreadable:
+ * not finding a key does not prove OpenCode finds none.
  */
 function openCodeFrontMatter(text) {
   const lines = text.replace(/^\uFEFF/, '').split('\n').map((line) => line.replace(/\r$/, ''))
@@ -957,6 +960,9 @@ function openCodeFrontMatter(text) {
   while (end < lines.length && !lines[end].startsWith('---')) end += 1
   if (end === lines.length) return { unreadable: 'its front matter does not close' }
   if (lines[end].trimEnd() !== '---') return { unreadable: `its front matter closes with ${JSON.stringify(lines[end].slice(0, 24))}` }
+  // OpenCode's YAML reader also ends a line at a carriage return alone; BMN splits only at line feeds, so such
+  // a line could hold a key BMN reads as part of a comment or a value.
+  if (lines.slice(start, end + 1).some((line) => line.includes('\r'))) return { unreadable: 'its front matter ends a line with a carriage return alone' }
   let value
   try {
     ;({ value } = parseYaml(lines.slice(start + 1, end).join('\n')))

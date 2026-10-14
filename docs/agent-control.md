@@ -2012,19 +2012,23 @@ on Rules → Health: a provider that may see private work passes, any other warn
   mode's or command's (`agent`, `agents`, `mode`, `command`, `commands`, and the `model` in the front
   matter of the files, at any depth, in `agent/`, `agents/`, `mode/`, `modes/`, `command/` and
   `commands/`) must name the same provider, each as `<provider>/<model>`. BMN reads the configuration as
-  JSON with comments and trailing commas, both only outside strings, and a front matter that opens with
+  JSON with comments and trailing commas, both only outside strings (a `//` comment ends at a line feed
+  or a carriage return, as in OpenCode), and a front matter that opens with
   `---`, `---yaml` or `---yml` and closes on the next line starting with `---`, in the team file's YAML
   (no anchors, aliases, tags, block scalars, complex keys, directives, repeated keys, or escapes other
   than `\"`, `\\`, `\n`, `\t` and `\/`), with `model` only at its top. Anything else makes the destination
   unknown, because not finding a model does not prove OpenCode finds none: a front matter in JSON or
-  JavaScript, one that never closes or closes on another `---` line, a key written twice, a map of
+  JavaScript, one that never closes or closes on another `---` line, a line in it ended by a carriage
+  return alone (OpenCode's YAML reader breaks lines there too), a key written twice or named
+  `__proto__`, a map of
   another shape, a file or folder BMN cannot read, and `opencode.json` beside `opencode.jsonc`
   (OpenCode reads both). It is unknown when the models name more than one provider, when
   `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT` is set where BMN runs, or
   when the provider entry, the named model's entry or one of its variants carries its own address or
   runtime (OpenCode 1's `api`, `npm` or `options.baseURL`, OpenCode 2's `package`, `canonical` or
-  `settings.baseURL`, under `provider` or `providers`); a project's `opencode.json` and agent files,
-  the machine-wide `/etc/opencode`, plugins, and the environment of the shell you start OpenCode in are
+  `settings.baseURL`, under `provider` or `providers`); a project's `opencode.json`, the `.opencode`,
+  `.claude` and `.agents` folders OpenCode reads in and above the project (your home's included), the
+  machine-wide `/etc/opencode`, plugins, and the environment of the shell you start OpenCode in are
   not read. That reading names OpenCode's destination on Health and in the team file and,
   since 2026-10-14, decides like Claude Code's and Codex's whether OpenCode gets the full rules; it
   is read again right before they are written and before a loading test. A later change that makes
