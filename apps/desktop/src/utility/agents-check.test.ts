@@ -1897,6 +1897,8 @@ process.on('exit', () => fs.writeFileSync(${JSON.stringify(join(home, 'reads.log
       /^\/synthetic\/EXCEPTION-SENTINEL-FOLDER$/,
       // The home folder itself, resolved to tell that it is not the workspace (R72-FR9); nothing in it is opened.
       new RegExp(`^${home}$`),
+      // Whether this command runs inside a teammate's ask: its own PID namespace looked up, and whether HOME holds BMN's folder (R72-NFR4).
+      new RegExp(`^${home}/\\.config/bmn/agents(/state/team/runs/\\.namespaces/\\d+)?$`),
       /\/apps\/desktop\/bin\//, /\/node_modules\//, /^\/proc\/self\//, /^\/(usr|lib|etc\/ld)/, new RegExp(`^${stubs}`)
     ]
     const unexpected = reads.filter((path) => path !== '' && !allowed.some((pattern) => pattern.test(path)))

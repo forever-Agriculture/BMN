@@ -2256,7 +2256,7 @@ bmn team asks export <id> --output PATH
 | `--data public` | A declaration BMN verifies (R72-NFR5); refused, never raised, where it does not hold. Without it the ask is private. |
 | `--wide-read` | Selects the owner-enabled wider-read mode of the chosen teammate's app (below); refused where he has not enabled one. |
 | `--time-limit MINUTES` | 1 to 120; default 30. |
-| `--key K` | The retry key. Required for an agent session; the app makes its own. |
+| `--key K` | The retry key: the UTC day it was issued and a name of yours, `20261015-review-1` (letters, digits, `.`, `_`, `-`; at most 64 after the day). Required in a BMN session, which every agent runs in; a plain shell may leave it out and BMN makes one; the app makes its own. (Keys, below.) |
 | `--background` | Prints the run id at once and leaves the run going. |
 | `--json` | Versioned JSON on standard output instead of words. |
 
@@ -2335,7 +2335,10 @@ Codex logs that turn span only with `RUST_LOG=codex_core=info,codex_core::stream
 that log holds no prompt or answer text. Usage reads as observed tokens, reported cost and billing
 basis (subscription, key), each "unknown" where the app does not record it, never zero. A per-ask
 token ceiling (Preferences) applies to Claude Code only, the one app that reports usage while a run
-goes on; for Codex and OpenCode time and capacity are the only bounds, and the panel says so.
+goes on: its supervisor counts each model call's input, cache and output tokens at that call's last
+report, about once a second, and over the ceiling the run is stopped (exit 16) with the count and the
+ceiling as its reason. For Codex and OpenCode time and capacity are the only bounds, and the panel
+says so.
 
 ### Exit codes
 
@@ -2346,7 +2349,7 @@ goes on; for Codex and OpenCode time and capacity are the only bounds, and the p
 | 2 | usage: unknown option, missing or conflicting option |
 | 3–7 | team state, as for every team command: 3 team file missing, 4 invalid, 5 not approved, 6 state corrupt, 7 revision conflict |
 | 10 | refused, with the refusal code and its words (below) |
-| 14 | busy: the capacity limit is reached; nothing is queued |
+| 14 | busy (`BUSY`): the capacity limit is reached; nothing is queued |
 | 15 | out of time: the run's time limit ended it |
 | 16 | stopped: Stop, its supervisor ended, or the token ceiling |
 | 17 | answer not attributed: no session, a second different session, or a model or effort that contradicts the request; the answer is kept only as diagnostic evidence |
@@ -2381,12 +2384,14 @@ Every `--json` output is one object with `"version": 1`. An ask, `show` and `wai
 ```
 
 A refusal: `{"version":1,"state":"refused","exit":10,"refusal":{"code":"AGENT_NOT_ELIGIBLE","reason":"…","alternatives":["opus-2@medium"]}}`.
-`--background`: `{"version":1,"id":"…","state":"accepted","exit":0}`. `asks`: `{"version":1,"asks":[{"id","state","role","agent","project","started_at","ended_at"}]}`
+`--background`: `{"version":1,"id":"…","state":"accepted","exit":0,"key":"20261015-review-1"}`; a retry that found its run adds `"existing":true` and gives that run's state. `asks`: `{"version":1,"asks":[{"id","state","role","agent","project","started_at","ended_at"}]}`
 for the asking session's own runs. `stop`: `{"version":1,"id","state":"stopping"}`. `export`:
 `{"version":1,"id","output","files":[…]}`. `--features`: `{"version":1,"platform":"linux","container":{"ok":true},
-"apps":[{"app":"codex","version":"0.162.1","forms":{"question":"proven","files":"proven","project":"unavailable","wide-read":"proven"},
-"pictures":"proven","usage_while_running":false}, …]}`; an app version or tool set not measured shows
-its confinement-dependent modes `"unmeasured"`.
+"apps":[{"app":"codex","installed":true,"version":"0.162.1","measured":["0.162.1"],"forms":{"question":"proven","files":"proven",
+"project":"unavailable","wide-read":"not-enabled"},"pictures":"not-offered","usage_while_running":false}, …]}`. Each mode is
+`proven`, `unavailable` (measured, and no confined form here), `no-history` or `unmeasured`; an app version or tool set not
+measured shows its confinement-dependent modes `"unmeasured"`, and an app BMN does not find, `"not-installed"`. `wide-read`
+says `not-enabled` until the owner enables one in the Team view, `pictures` `not-offered` until picture asks ship (72.8).
 
 ### Limits
 
@@ -2399,8 +2404,8 @@ its confinement-dependent modes `"unmeasured"`.
 | Answer kept | 1 MiB; the app's raw output 64 MiB, over it the run fails | |
 | Run storage | 1 GiB (inputs, frozen copy, home, record) | |
 | Time | 30 minutes; 1 to 120 with `--time-limit` | assumption (b) |
-| Capacity | 4 runs at once across BMN; 1 to 10 in Preferences | assumption (c) |
-| Key window | 7 days from the key's first use | a lead's retries happen within its run |
+| Capacity | 4 runs at once across BMN; 1 to 10 in Preferences (`team/asks-settings.json` `capacity`) | assumption (c) |
+| Key window | until the end of the 8th UTC day after the day the key names: at least 7 days from its first use | a lead's retries happen within its run |
 | Retention | 30 days after a run ends; a content-free entry (key, request hash, outcome) stays for the key window after removal | assumption (e) |
 
 Over a limit the ask is refused (`INPUT_TOO_LARGE`), never cut.
@@ -2410,8 +2415,47 @@ Over a limit the ask is refused (`INPUT_TOO_LARGE`), never cut.
 `accepted` (key, request hash and capacity place reserved together) → `starting` (snapshots taken,
 the command judged and its executable checked again, the supervisor started) → `running` → `finishing`
 (answer, attribution and usage read, transient state deleted) → one of `answered`, `failed`,
-`refused`, `out-of-time`, `stopped`, `not-attributed`; `interrupted` when the supervisor ended with
-no record of the end (nothing starts it again); `gone` after removal, for the key window.
+`refused`, `out-of-time`, `stopped`, `not-attributed`; `interrupted` (exit 1) when the supervisor ended with
+no record of the end, or the asking command ended after the reservation and before the start (nothing
+starts it again, and its transient state is deleted when BMN next looks); `gone` after removal, for the key window.
+
+### Keys
+
+Every ask has a key, and before anything is copied BMN reserves three things together under one
+short lock that separate commands and the app share: the key, the request's hash and one capacity
+place. A refusal before the start gives all three back, so the key may then be used again.
+
+- **Scope.** A key is the asking session's (`BMN_SESSION_ID`), the plain shell's, or the owner's in the
+  app: the same words in another session are another key.
+- **Request hash.** sha256 over the role, the question's own hash, the named agent and effort,
+  `--small-work`, `--recheck-of`, the project as resolved, the access mode, each file's path and the hash
+  of its bytes, each picture's, `--data`, `--wide-read` and the time limit. Never the question's text.
+- **Retry.** The same key and hash find the first run, whatever its state: a foreground retry waits for
+  it and prints its answer, a background one prints its id; nothing starts again. The same key with
+  another hash is `KEY_CONFLICT`.
+- **Crash.** An asking command that ended after the reservation and before the start leaves its run
+  `interrupted`: its retry says so (exit 1), and a supervisor that comes late reads the outcome and
+  runs nothing. One that ended after the start leaves the run to its supervisor, and the retry finds it.
+- **Window.** A key carries the UTC day it was issued; at its first use it must name today, yesterday
+  or tomorrow (a local date counts). After the window it is `GONE`, with or without its record.
+- **Removal.** The retention end (or the owner, in the app) removes a run's whole record and keeps
+  only its key's content-free entry (the key, the scope, the request's hash, the run's id and outcome)
+  for the window: a retry is `GONE`, never a launch. Then nothing of it is left.
+
+### Who sees and controls an ask
+
+A session sees, waits for, stops and exports only its own asks; a plain shell those asked from a
+plain shell. A session id that the `BMN_TOKEN` BMN gave the session does not name is a forged label:
+it sees nothing and asks nothing (`NOT_YOURS`). No flag, label or environment value gives the owner's
+view of every ask: only his action in the app does. Like every owner-only file, the records stay
+readable to his other programs; BMN's commands keep sessions apart, not the file system.
+
+Inside a teammate's run nothing of BMN is reachable: the container holds no BMN command, state
+folder, app socket or token. As a second wall, each run's supervisor writes its container's PID
+namespace into BMN's state (`team/runs/.namespaces/<number>`) while the run goes on, and every `bmn`
+command looks up its own namespace there, under HOME and under the account's home from the user
+database, first of all: from inside it says `NESTED` (exit 10), however the environment is cleared or
+labelled, and a hook does nothing. Outside teammate runs those commands behave as before.
 
 The supervisor is started by the asking command, inside its own restrictions, detached and in a
 session of its own (`bin/agents-team-supervisor.mjs`, shipped with 72.3). Measured: closing the waiting command as BMN

@@ -1,21 +1,26 @@
 // MODULE: agents-team-cli.mjs - Epic 72: `bmn team ask` and `bmn team asks`, one bounded question to one approved teammate, its run listed, waited on, stopped and exported
-import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
-import { RosterError } from './agents-roster.mjs'
+import { APP_NAMES, RosterError } from './agents-roster.mjs'
 import { AgentsUsageError, EXIT, err, failWith, out, usage } from './agents-cli.mjs'
 import { askerOf } from './agents-ask.mjs'
-import { teamRunsDirectory } from './agents-check.mjs'
+import { harnessVersion, teamRunsDirectory } from './agents-check.mjs'
 import { containerStarts } from './agents-container.mjs'
-import { ASK_RUN_FILES } from './agents-team-forms.mjs'
-import { InputRefusal, LIMITS } from './agents-team-inputs.mjs'
+import { ASK_APPS, ASK_FORMS_PROVEN, ASK_OFFERED, ASK_RUN_FILES, appSearchPath, askProgram, formStanding } from './agents-team-forms.mjs'
+import { InputRefusal, LIMITS, askProject } from './agents-team-inputs.mjs'
 import { AskRefusal } from './agents-team-resolve.mjs'
-import { AskUsageError, prepareAsk } from './agents-team-ask.mjs'
+import { AskUsageError, askRunId, prepareAsk } from './agents-team-ask.mjs'
 import { OUTCOME_EXIT, StartRefusal, TIME_LIMIT, askOutcome, exportAsk, startAsk, stopAsk, waitAsk } from './agents-team-run.mjs'
 import { writeWhole } from './agents-team-supervisor.mjs'
+import { nestedAsk } from './agents-team-nested.mjs'
+import { askSettings, keyDay, keyPath, keyScope, keyedRun, makeKey, recordInterrupted, releaseReservation, requestHash, reserveAsk } from './agents-team-places.mjs'
 
-export const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --question-file PATH|-) [--agent A] [--effort E] [--small-work]
-         [--recheck-of ID] [--project P] [--access question|files|project] [--file PATH]...
+export const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --question-file PATH|-) --key K [--agent A] [--effort E]
+         [--small-work] [--recheck-of ID] [--project P] [--access question|files|project] [--file PATH]...
          [--data public] [--time-limit MINUTES] [--background] [--json]
+       bmn team ask --features [--json]             What each installed app may be asked here, as BMN measured it
        bmn team asks [--json]                       Your asks, newest first
        bmn team asks show <id> [--json]             One ask: its state, who answered, the answer
        bmn team asks wait <id> [--timeout SECONDS] [--json]
@@ -24,15 +29,17 @@ export const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | -
 
 Asks one approved teammate in a role, read-only, in a container BMN builds for that one run
 (docs/agent-control.md, "Asking a teammate"). --access says what it may read: the question only
-(default), the --file texts, or one project's frozen copy with its Git history. The answer goes to
-standard output, progress to standard error; closing the command only detaches it, and the run goes
-on. Exit: 0 answered, 1 failed, 2 usage, 3-7 team state, 10 refused, 15 out of time, 16 stopped,
-17 answer not attributed.`
+(default), the --file texts, or one project's frozen copy with its Git history. --key is required in
+a session: today's UTC day and a name of yours (20261015-review-1); a retry with the same key and
+request finds the first ask, never starts a second. The answer goes to standard output, progress to
+standard error; closing the command only detaches it, and the run goes on. Exit: 0 answered,
+1 failed, 2 usage, 3-7 team state, 10 refused, 14 busy, 15 out of time, 16 stopped, 17 answer not
+attributed.`
 
 const RUN_ID = /^\d{8}T\d{6}-[0-9a-f]{8}$/u
-const VALUES = ['role', 'question', 'question-file', 'agent', 'effort', 'recheck-of', 'project', 'access', 'data', 'time-limit']
+const VALUES = ['role', 'question', 'question-file', 'agent', 'effort', 'recheck-of', 'project', 'access', 'data', 'time-limit', 'key']
 const REPEATED = ['file']
-const FLAGS = ['small-work', 'background', 'json', 'help', 'wide-read']
+const FLAGS = ['small-work', 'background', 'json', 'help', 'wide-read', 'features']
 
 /** The options of `team ask`: values once each, `--file` as often as needed, nothing positional. */
 export function readAskOptions(argv) {
@@ -134,7 +141,63 @@ function recordRefusal(prepared) {
   return { code, message }
 }
 
-export async function runTeamAsk(argv, { environment = process.env, cwd = process.cwd() } = {}) {
+/** Exit 14: the capacity limit is reached and nothing is queued (the contract's "Exit codes"). */
+export const BUSY_EXIT = 14
+
+/**
+ * Who asks, as BMN's commands see it: a session (its id and, where BMN gave one, its token naming
+ * the same session), a plain shell, or `forged` when the session id and the token BMN gave name two
+ * different sessions. Owner rights never come from here: only the app's owner action has them.
+ */
+export function teamAsker(environment) {
+  const asker = askerOf(environment)
+  if (asker.kind !== 'session') return asker
+  const token = environment.BMN_TOKEN ?? environment.AITERM_TOKEN
+  const named = typeof token === 'string' ? /^s1\.([A-Za-z0-9_:-]{1,128})\./u.exec(token)?.[1] ?? null : null
+  if (typeof token === 'string' && named !== asker.session) return { kind: 'forged', reason: `BMN_SESSION_ID names session ${asker.session}, but the BMN_TOKEN BMN gave this session ${named === null ? 'names none' : `is session ${named}'s`}` }
+  return asker
+}
+
+/** A file's bytes by their hash, for the request's hash; a file BMN will refuse later counts by what it is. */
+function fileHash(path) {
+  try {
+    const size = statSync(path).size
+    if (size > LIMITS.file) return `over-limit:${size}`
+    return createHash('sha256').update(readFileSync(path)).digest('hex')
+  } catch {
+    return 'unreadable'
+  }
+}
+
+/** What `bmn team ask --features` says: per app version, each mode's standing as 72.1 measured it, and the platform. */
+export function askFeatures(environment = process.env) {
+  const container = containerStarts()
+  const apps = ASK_APPS.map((harness) => {
+    const program = askProgram(harness, environment)
+    const version = program === null ? null : harnessVersion(program.launcher, { PATH: appSearchPath(environment), HOME: environment.HOME ?? '' })
+    const standing = (mode) => (program === null ? 'not-installed' : formStanding(harness, version, mode))
+    return {
+      app: harness, installed: program !== null, version, measured: Object.keys(ASK_FORMS_PROVEN[harness] ?? {}),
+      forms: { question: standing('question'), files: standing('files'), project: standing('project'), 'wide-read': 'not-enabled' },
+      pictures: ASK_OFFERED.pictures ? standing('pictures') : 'not-offered', usage_while_running: harness === 'claude'
+    }
+  })
+  return { version: 1, platform: process.platform, container: container.ok ? { ok: true } : { ok: false, reason: container.reason }, apps }
+}
+
+function printFeatures(asJson, environment) {
+  const shown = askFeatures(environment)
+  if (asJson) {
+    out(JSON.stringify(shown, null, 2))
+    return EXIT.ok
+  }
+  const words = (value) => value.replaceAll('-', ' ')
+  out([`Teammates' asks on ${shown.platform}; BMN's container ${shown.container.ok ? 'starts here' : `cannot start here: ${shown.container.reason}`}.`,
+    ...shown.apps.map((app) => !app.installed ? `${APP_NAMES[app.app]}: not installed where BMN looks` : `${APP_NAMES[app.app]} ${app.version ?? '(version unreadable)'}: ${Object.entries(app.forms).map(([mode, value]) => `${mode} ${words(value)}`).join(', ')}; pictures ${words(app.pictures)}; usage ${app.usage_while_running ? 'while it runs' : 'at the end only'}${app.measured.includes(app.version) ? '' : ` (BMN measured ${app.measured.join(', ')})`}`)].join('\n'))
+  return EXIT.ok
+}
+
+export async function runTeamAsk(argv, { environment = process.env, cwd = process.cwd(), now = () => new Date() } = {}) {
   let options
   try {
     options = readAskOptions(argv)
@@ -142,17 +205,29 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
       out(TEAM_ASK_USAGE)
       return EXIT.ok
     }
-    if (options.role === undefined) throw new AgentsUsageError('team ask needs --role')
-    if ((options.question === undefined) === (options['question-file'] === undefined)) throw new AgentsUsageError('team ask takes exactly one of --question and --question-file')
-    if (options['time-limit'] !== undefined && !/^\d{1,3}$/u.test(options['time-limit'])) throw new AgentsUsageError(`--time-limit takes minutes, ${TIME_LIMIT.min} to ${TIME_LIMIT.max}`)
+    if (options.features) {
+      if (Object.keys(options).some((name) => !['features', 'json', ...REPEATED].includes(name)) || REPEATED.some((name) => options[name].length > 0)) throw new AgentsUsageError('--features takes only --json')
+    } else {
+      if (options.role === undefined) throw new AgentsUsageError('team ask needs --role')
+      if ((options.question === undefined) === (options['question-file'] === undefined)) throw new AgentsUsageError('team ask takes exactly one of --question and --question-file')
+      if (options['time-limit'] !== undefined && !/^\d{1,3}$/u.test(options['time-limit'])) throw new AgentsUsageError(`--time-limit takes minutes, ${TIME_LIMIT.min} to ${TIME_LIMIT.max}`)
+    }
   } catch (error) {
     if (error instanceof AgentsUsageError) return usage(error.message)
     throw error
   }
   const asJson = options.json === true
+  const nested = nestedAsk()
+  if (nested !== null) return refused(asJson, 'NESTED', `this runs inside teammate ask ${nested}; a teammate's run may not ask the team`)
+  if (options.features) return printFeatures(asJson, environment)
   const minutes = options['time-limit'] === undefined ? TIME_LIMIT.default : Number(options['time-limit'])
   if (minutes < TIME_LIMIT.min || minutes > TIME_LIMIT.max) return usage(`--time-limit takes minutes, ${TIME_LIMIT.min} to ${TIME_LIMIT.max}`)
   if (options['recheck-of'] !== undefined && !RUN_ID.test(options['recheck-of'])) return refused(asJson, 'RECHECK_INVALID', `${options['recheck-of']} is not the id of an ask`)
+  const asker = teamAsker(environment)
+  if (asker.kind === 'forged') return refused(asJson, 'NOT_YOURS', `${asker.reason}; ask from your own session`)
+  // A session must name its key, so that its retry finds this ask; a plain shell may leave it to BMN.
+  if (options.key === undefined && asker.kind === 'session') return refused(asJson, 'KEY_REQUIRED', `an ask from a session needs --key: today's UTC day and a name of yours, as ${makeKey('review-1', now())}; keep it, and a retry with the same key and request finds this ask`)
+  if (options.key !== undefined && keyDay(options.key) === null) return usage(`--key ${options.key} is not a key: today's UTC day and a name (letters, digits, . _ -), as ${makeKey('review-1', now())}`)
   let question
   try {
     question = options.question ?? readText(options['question-file'] === '-' ? '-' : resolve(cwd, options['question-file']), LIMITS.question)
@@ -160,56 +235,120 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     if (error instanceof AgentsUsageError) return usage(error.message)
     return usage(`cannot read the question from ${options['question-file'] === '-' ? 'standard input' : options['question-file']}`)
   }
-  // Where the container cannot start, nothing is read or copied: the ask is refused in bubblewrap's own words.
-  const container = containerStarts()
-  if (!container.ok) return refused(asJson, 'CONTAINER_UNAVAILABLE', `BMN's container cannot start from here: ${container.reason}; ask from where it can (a terminal, or escalated as a sandboxed lead runs helpers)`)
+  const home = environment.HOME ?? homedir()
+  const files = options.file.map((path) => (isAbsolute(path) ? path : resolve(cwd, path)))
+  let project
+  try {
+    project = askProject(options.project, { cwd, home })
+  } catch (error) {
+    if (error instanceof InputRefusal) return refused(asJson, error.code, error.message)
+    throw error
+  }
+  const request = {
+    role: options.role, question, agent: options.agent, effort: options.effort, smallWork: options['small-work'] === true, recheckOf: options['recheck-of'],
+    project: options.project, access: options.access, files, data: options.data, wide: options['wide-read'] === true
+  }
+  const runs = teamRunsDirectory()
+  const key = options.key ?? makeKey('shell', now())
+  const scope = keyScope(asker)
+  const hash = requestHash({ ...request, project, files: files.map((path) => ({ path, sha256: fileHash(path) })), timeLimitMinutes: minutes })
+  let reservation
+  try {
+    reservation = await reserveAsk(runs, { scope, key, hash, id: askRunId(now()) }, { now: now() })
+  } catch (error) {
+    if (error instanceof AskRefusal) {
+      if (error.code === 'USAGE') return usage(error.message)
+      return refused(asJson, error.code, error.message, undefined, error.code === 'BUSY' ? BUSY_EXIT : EXIT.refusal)
+    }
+    throw error
+  }
+  if (reservation.existing !== undefined) return followKeyed(runs, reservation.entry, { asJson, background: options.background === true })
+  const id = reservation.reserved
+  let started = null
   let prepared
   try {
-    prepared = prepareAsk({
-      role: options.role, question, agent: options.agent, effort: options.effort, smallWork: options['small-work'] === true, recheckOf: options['recheck-of'],
-      project: options.project, access: options.access, files: options.file.map((path) => (isAbsolute(path) ? path : resolve(cwd, path))), data: options.data, wide: options['wide-read'] === true
-    }, { environment, cwd })
-  } catch (error) {
-    if (error instanceof AskUsageError) return usage(error.message)
-    if (error instanceof AskRefusal) return error.code === 'USAGE' ? usage(error.message) : refused(asJson, error.code, error.message, error.alternatives)
-    if (error instanceof InputRefusal) return refused(asJson, error.code, error.message)
-    if (error instanceof RosterError) return failWith(error, asJson)
-    throw error
-  }
-  if (prepared.verdict.verdict !== 'PASS') {
-    const { code, message } = recordRefusal(prepared)
-    return refused(asJson, code, message)
-  }
-  let started
-  try {
-    started = startAsk(prepared, { timeLimitMinutes: minutes })
-  } catch (error) {
-    if (error instanceof StartRefusal) return refused(asJson, error.code, error.message)
-    if (error instanceof RosterError) return failWith(error, asJson)
-    throw error
+    // Where the container cannot start, nothing is read or copied: the ask is refused in bubblewrap's own words.
+    const container = containerStarts()
+    if (!container.ok) return refused(asJson, 'CONTAINER_UNAVAILABLE', `BMN's container cannot start from here: ${container.reason}; ask from where it can (a terminal, or escalated as a sandboxed lead runs helpers)`)
+    try {
+      prepared = prepareAsk({ ...request, key, keyScope: scope, requestSha256: hash, askedBy: asker }, { environment, cwd, id, now: now() })
+    } catch (error) {
+      if (error instanceof AskUsageError) return usage(error.message)
+      if (error instanceof AskRefusal) return error.code === 'USAGE' ? usage(error.message) : refused(asJson, error.code, error.message, error.alternatives)
+      if (error instanceof InputRefusal) return refused(asJson, error.code, error.message)
+      if (error instanceof RosterError) return failWith(error, asJson)
+      throw error
+    }
+    if (prepared.verdict.verdict !== 'PASS') {
+      const { code, message } = recordRefusal(prepared)
+      return refused(asJson, code, message)
+    }
+    try {
+      started = startAsk(prepared, { timeLimitMinutes: minutes, tokenCeiling: askSettings(runs).token_ceiling })
+    } catch (error) {
+      if (error instanceof StartRefusal) {
+        recordRefusal({ ...prepared, verdict: { code: error.code, message: error.message } })
+        return refused(asJson, error.code, error.message)
+      }
+      if (error instanceof RosterError) return failWith(error, asJson)
+      throw error
+    }
+  } finally {
+    // An ask refused before its start gives its key and place back: nothing ran, and the key may be used again.
+    if (started === null) await releaseReservation(runs, { scope, key, id })
   }
   const receipt = prepared.verdict.receipt
   if (options.background) {
-    if (asJson) out(JSON.stringify({ version: 1, id: prepared.id, state: 'accepted', exit: 0 }))
-    else out(prepared.id)
+    if (asJson) out(JSON.stringify({ version: 1, id, state: 'accepted', exit: 0, key }))
+    else out(id)
     return EXIT.ok
   }
-  err(`bmn: asked ${receipt.agent} (${receipt.harness} ${receipt.model}, ${receipt.effort}; chosen by ${prepared.choice.rule}), ${receipt.access} access; run ${prepared.id}, supervisor ${started.pid}`)
-  // Closing this command only detaches it: the run's supervisor owns the run.
+  err(`bmn: asked ${receipt.agent} (${receipt.harness} ${receipt.model}, ${receipt.effort}; chosen by ${prepared.choice.rule}), ${receipt.access} access; run ${id}, key ${key}, supervisor ${started.pid}`)
+  return followRun(prepared.folder, id, asJson)
+}
+
+/** Waits for a run in the foreground: closing this command only detaches it, and the run's supervisor goes on. */
+async function followRun(folder, id, asJson) {
   const controller = new AbortController()
   const detach = () => controller.abort()
   for (const name of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(name, detach)
   let outcome
   try {
-    outcome = await waitAsk(prepared.folder, { signal: controller.signal })
+    outcome = await waitAsk(folder, { signal: controller.signal })
   } finally {
     for (const name of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.removeListener(name, detach)
   }
-  if (outcome.exit === null) {
-    err(`bmn: detached; the run goes on: bmn team asks wait ${prepared.id}`)
-    return outcome.state === 'interrupted' ? 1 : 130
+  if (outcome.exit === null && outcome.state === 'interrupted') recordInterrupted(folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
+  else if (outcome.exit === null) {
+    err(`bmn: detached; the run goes on: bmn team asks wait ${id}`)
+    return 130
   }
-  return printOutcome(prepared.folder, asJson)
+  return printOutcome(folder, asJson)
+}
+
+/**
+ * A retry: the key and request found the first run, which is followed as the first command would
+ * have followed it, whatever its state; nothing is started again.
+ */
+async function followKeyed(runs, entry, { asJson, background }) {
+  let found = keyedRun(runs, entry)
+  while (found.state === 'preparing') {
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    found = keyedRun(runs, JSON.parse(readFileSync(keyPath(runs, entry.scope, entry.key), 'utf8')))
+  }
+  if (found.state === 'interrupted') {
+    if (asJson) out(JSON.stringify({ version: 1, id: entry.id, state: 'interrupted', exit: 1, reason: found.reason }))
+    else err(`bmn: interrupted: ${found.reason}; ask again with a new key`)
+    return 1
+  }
+  if (background) {
+    const shown = askJson(found.folder)
+    if (asJson) out(JSON.stringify({ version: 1, id: entry.id, state: shown.state, exit: 0, key: entry.key, existing: true }))
+    else out(entry.id)
+    return EXIT.ok
+  }
+  err(`bmn: the key ${entry.key} found run ${entry.id}, asked before; nothing started again`)
+  return followRun(found.folder, entry.id, asJson)
 }
 
 function printOutcome(folder, asJson) {
@@ -224,9 +363,10 @@ function printOutcome(folder, asJson) {
   return shown.exit ?? 1
 }
 
-/** The asks of whoever asks now: a session sees its own; a shell sees those asked from a shell. */
+/** The asks of whoever asks now: a session sees its own; a shell sees those asked from a shell; a forged session none. */
 function ownAsks(environment) {
-  const asker = askerOf(environment)
+  const asker = teamAsker(environment)
+  if (asker.kind === 'forged') return []
   let names
   try {
     names = readdirSync(teamRunsDirectory()).filter((name) => RUN_ID.test(name)).sort().reverse()
@@ -247,7 +387,12 @@ function runFolder(id, environment) {
   if (!RUN_ID.test(id ?? '')) throw new AgentsUsageError('name an ask by its id, as `bmn team asks` lists it')
   const folder = join(teamRunsDirectory(), id)
   if (!existsSync(folder)) throw new AskRefusal('GONE', `no ask ${id} on this computer`)
-  if (!ownAsks(environment).includes(folder)) throw new AskRefusal('NOT_YOURS', `ask ${id} was asked by another session; the owner sees every ask in the app`)
+  if (!ownAsks(environment).includes(folder)) {
+    const asker = teamAsker(environment)
+    throw new AskRefusal('NOT_YOURS', asker.kind === 'forged' ? `${asker.reason}; a session sees only its own asks` : `ask ${id} was asked by another session; the owner sees every ask in the app`)
+  }
+  // A run whose supervisor died is recorded as interrupted when it is looked at, its transient state deleted.
+  if (askOutcome(folder).state === 'interrupted') recordInterrupted(folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
   return folder
 }
 
@@ -255,6 +400,8 @@ export async function runTeamAsks(argv, { environment = process.env, cwd = proce
   const [action, ...rest] = argv[0] !== undefined && !argv[0].startsWith('--') ? argv : [undefined, ...argv]
   const flags = rest.filter((entry) => entry.startsWith('--'))
   const asJson = flags.includes('--json')
+  const nested = nestedAsk()
+  if (nested !== null) return refused(asJson, 'NESTED', `this runs inside teammate ask ${nested}; a teammate's run may not see or control asks`)
   try {
     if (action === undefined) {
       if (flags.some((flag) => flag !== '--json')) throw new AgentsUsageError(`unknown option ${flags.find((flag) => flag !== '--json')}`)

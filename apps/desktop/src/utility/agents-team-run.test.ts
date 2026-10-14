@@ -1,7 +1,6 @@
 // MODULE: agents-team-run.test.ts - Story 72.3: an ask started exactly as judged in BMN's real bubblewrap container, attributed from its own output, finished into its record and exported by its allowlist; stand-in apps written in sh, a synthetic team, made-up sign-in files; no provider is reached
 import { execFileSync, spawn } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -10,13 +9,9 @@ import { ASK_RUN_FILES } from '../../bin/agents-team-forms.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { StartRefusal, askOutcome, exportAsk, observeAsk, startAsk, stopAsk, waitAsk } from '../../bin/agents-team-run.mjs'
 import { runState } from '../../bin/agents-team-supervisor.mjs'
-import { readValidRoster } from '../../bin/agents-state.mjs'
-import { approveRoster } from '../main/agents-approval'
+import { ENV_SENTINEL, EXAMPLE, SIGN_IN_SENTINEL, approve as harnessApprove, leftovers as harnessLeftovers, settle, stubCodex as harnessStubCodex, teamAskHome } from './test-fixtures/team-ask-harness'
 
-const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 const CLI = fileURLToPath(new URL('../../bin/agents-team-cli.mjs', import.meta.url))
-const SIGN_IN_SENTINEL = 'SIGN-IN-SENTINEL-not-a-real-token'
-const ENV_SENTINEL = 'ENVIRONMENT-SENTINEL-value'
 const RULES = '# Global rules\n\nRULES-SENTINEL: answer plainly and cite files.\n'
 const canContain = containerStarts().ok
 
@@ -24,97 +19,14 @@ let home: string
 let stubs: string
 let env: Record<string, string>
 const savedHome = process.env.HOME
+const approve = (text: string): void => harnessApprove(home, text)
+const stubCodex = (): void => harnessStubCodex(stubs)
+const leftovers = (): string[] => harnessLeftovers(home)
 
-function approve(text: string): void {
-  mkdirSync(join(home, '.config/bmn/agents'), { recursive: true })
-  writeFileSync(join(home, '.config/bmn/agents/roster.md'), text)
-  let generation: number | null
-  try {
-    generation = JSON.parse(readFileSync(join(home, '.config/bmn/agents/state/current'), 'utf8')).generation
-  } catch {
-    generation = null
-  }
-  approveRoster({ generation, fileHash: readValidRoster().hash }, { checkInspectedRoutes: () => {} })
-}
-
-/**
- * Stand-in apps that run inside the container with nothing but /usr: they read the prompt, take the
- * model and effort from their own arguments and answer as each app does. Words in the question
- * steer them: SLEEP, MISMATCH, SECOND, NOSESSION, FAIL.
- */
-const STEER = `question=$(cat)
-id=$(printf %s "$question" | md5sum | cut -c1-8)
-case $question in *SLEEP*) sleep 60;; esac
-case $question in *NAP*) sleep 2;; esac
-case $question in *FAIL*) echo 'provider error' >&2; exit 3;; esac
-`
-function stubCodex(): void {
-  writeFileSync(join(stubs, 'codex'), `#!/bin/sh
-[ "$1" = --version ] && echo "codex-cli 0.162.1" && exit 0
-model=; effort=; prev=
-for a in "$@"; do
-  [ "$prev" = -m ] && model=$a
-  case $a in model_reasoning_effort=*) effort=$(printf %s "$a" | sed 's/.*="\\(.*\\)"/\\1/');; esac
-  prev=$a
-done
-${STEER}thread=$id-0000-7000-8000-000000000000
-case $question in *MISMATCH*) model=gpt-6-other;; esac
-case $question in *NOSESSION*) ;; *) printf '{"type":"thread.started","thread_id":"%s"}\\n' "$thread";; esac
-printf '{"type":"turn.started"}\\n'
-printf 'INFO turn{otel.name="session_task.turn" thread.id=%s turn.id=t-1 model=%s codex.turn.reasoning_effort=%s}: started\\n' "$thread" "$model" "$effort" >&2
-case $question in *SECOND*) printf '{"type":"thread.started","thread_id":"ffffffff-0000-7000-8000-000000000000"}\\n';; esac
-printf '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"codex answer %s from %s"}}\\n' "$id" "$(ls /ask | tr '\\n' ' ')"
-printf '{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":10,"output_tokens":5,"reasoning_output_tokens":2}}\\n'
-`)
-  chmodSync(join(stubs, 'codex'), 0o755)
-}
-function stubClaude(): void {
-  writeFileSync(join(stubs, 'claude'), `#!/bin/sh
-[ "$1" = --version ] && echo "2.1.300 (Claude Code)" && exit 0
-model=; effort=; prev=
-for a in "$@"; do [ "$prev" = --model ] && model=$a; [ "$prev" = --effort ] && effort=$a; prev=$a; done
-rules=no
-for a in "$@"; do case $a in *RULES-SENTINEL*) rules=yes;; esac; done
-${STEER}sid=$id-0000-4000-8000-000000000000
-printf '{"type":"system","subtype":"init","session_id":"%s","model":"%s","apiKeySource":"none","tools":[]}\\n' "$sid" "$model"
-printf '{"type":"assistant","session_id":"%s","message":{"model":"%s","usage":{"input_tokens":3,"output_tokens":4}}}\\n' "$sid" "$model"
-printf '{"type":"result","subtype":"success","is_error":false,"result":"claude answer %s rules=%s","session_id":"%s","total_cost_usd":0.0123,"usage":{"input_tokens":3,"cache_creation_input_tokens":7,"cache_read_input_tokens":11,"output_tokens":4}}\\n' "$id" "$rules" "$sid"
-`)
-  chmodSync(join(stubs, 'claude'), 0o755)
-}
 
 const ask = (request: Partial<Parameters<typeof prepareAsk>[0]>) => prepareAsk({ role: 'epic-reviewer', question: 'Is the loop bounded?', ...request }, { environment: env, cwd: home, home })
-/** Every process whose command line names this test's home: none may outlive a run. */
-const leftovers = (): string[] => {
-  const found: string[] = []
-  for (const pid of readdirSync('/proc').filter((name) => /^\d+$/.test(name))) {
-    try {
-      const line = readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ')
-      if (line.includes(home) && !line.includes('vitest')) found.push(`${pid} ${line.slice(0, 160)}`)
-    } catch {
-      // Gone already.
-    }
-  }
-  return found
-}
-const settle = async (check: () => boolean, ms = 8000): Promise<void> => {
-  const until = Date.now() + ms
-  while (!check() && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 100))
-}
-
 beforeEach(() => {
-  home = realpathSync(mkdtempSync(join(tmpdir(), 'bmn-team-run-')))
-  process.env.HOME = home
-  stubs = join(home, 'stubs')
-  mkdirSync(stubs)
-  stubCodex()
-  stubClaude()
-  env = { HOME: home, PATH: `${stubs}:/usr/bin:/bin`, SECRET_LOOKING_VARIABLE: ENV_SENTINEL }
-  for (const path of ['.codex/auth.json', '.claude/.credentials.json']) {
-    mkdirSync(join(home, path, '..'), { recursive: true })
-    writeFileSync(join(home, path), `{"token": "${SIGN_IN_SENTINEL}"}\n`)
-  }
-  approve(EXAMPLE)
+  ({ home, stubs, env } = teamAskHome('bmn-team-run-'))
 })
 
 afterEach(async () => {
@@ -292,7 +204,7 @@ describe.skipIf(!canContain)('bmn team ask and bmn team asks (72.3 AC3)', () => 
     const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question-file', '-'], 'Is the loop bounded?\n')
     expect(asked.code, asked.stderr).toBe(0)
     expect(asked.stdout).toMatch(/^codex answer [0-9a-f]{8} from home inputs work \n$/)
-    expect(asked.stderr).toMatch(/^bmn: asked astra \(codex gpt-6-astra, medium; chosen by chain\), question access; run (\d{8}T\d{6}-[0-9a-f]{8}), supervisor \d+\n$/)
+    expect(asked.stderr).toMatch(/^bmn: asked astra \(codex gpt-6-astra, medium; chosen by chain\), question access; run (\d{8}T\d{6}-[0-9a-f]{8}), key \d{8}-shell-[0-9a-f]{8}, supervisor \d+\n$/)
     const id = /run (\S+),/.exec(asked.stderr)![1]!
     const json = await bmn(['team', 'ask', '--role', 'designer', '--question', 'And the other loop?', '--json'])
     expect(JSON.parse(json.stdout)).toMatchObject({ version: 1, state: 'answered', exit: 0, role: 'designer', chosen_by: 'chain', access: 'question', data: 'private',

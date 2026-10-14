@@ -18,6 +18,9 @@ export const ASK_FORMS_PROVEN = Object.freeze({
   opencode: { '2.0.29': { question: 'proven', files: 'proven', project: 'no-history', pictures: 'unmeasured' } }
 })
 
+/** What BMN offers beyond its access modes: picture asks arrive with Story 72.8. */
+export const ASK_OFFERED = Object.freeze({ pictures: false })
+
 /** Why a measured mode is unavailable, in the words the refusal gives. */
 export const UNAVAILABLE_WHY = Object.freeze({
   codex: {

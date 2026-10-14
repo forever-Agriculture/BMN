@@ -91,6 +91,11 @@ extraResources:
     to: bin/agents-team-cli.mjs
   - from: bin/agents-team-supervisor.mjs
     to: bin/agents-team-supervisor.mjs
+  - from: bin/agents-team-places.mjs
+    to: bin/agents-team-places.mjs
+  # bmn.mjs loads it first for every command: a command inside a teammate's run is refused.
+  - from: bin/agents-team-nested.mjs
+    to: bin/agents-team-nested.mjs
   - from: bin/ask-git.sh
     to: bin/ask-git.sh
   # The --self-test stand-in agents draw these recorded dialogs; the packaged smoke runs that phase too.

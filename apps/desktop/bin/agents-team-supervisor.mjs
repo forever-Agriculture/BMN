@@ -5,6 +5,7 @@ import { constants } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { processLives, processStart } from './agents-supervised.mjs'
+import { childNamespace, forgetNamespace, nameNamespace } from './agents-team-nested.mjs'
 
 /**
  * An ask can run for many minutes, and the command, tool call or window that asked may close long
@@ -25,6 +26,8 @@ const SUPERVISE = '--supervise-ask'
 export const KILL_AFTER_MS = 3000
 /** How often the supervisor looks for the run's Stop file. */
 const STOP_POLL_MS = 250
+/** How often it calls the run's watch step (a token ceiling), in Stop polls. */
+const WATCH_EVERY = 4
 
 export const RUN_FILES = Object.freeze({
   launch: 'launch.json', state: 'state.json', stop: 'stop', events: 'events.jsonl', stderr: 'stderr.txt', exit: 'exit.json', args: 'bwrap-args'
@@ -113,13 +116,18 @@ export function supervisorLives(identity) {
 
 async function supervise(folder) {
   const launch = readJson(join(folder, RUN_FILES.launch))
+  // A run already given its outcome (recorded as interrupted after its asking command ended) is never started.
+  if (existsSync(join(folder, 'outcome.json'))) process.exit(0)
   const state = { version: 1, state: 'starting', supervisor: { pid: process.pid, start: processStart(process.pid) }, started_at: new Date().toISOString() }
   const save = () => writeWhole(join(folder, RUN_FILES.state), `${JSON.stringify(state)}\n`)
   save()
   let ended = null
+  let endedReason = null
   let child = null
+  let namespace = null
   const finish = async (exit) => {
-    writeWhole(join(folder, RUN_FILES.exit), `${JSON.stringify({ version: 1, ...exit, ended: ended ?? (exit.code === 0 ? 'done' : 'failed'), at: new Date().toISOString() })}\n`)
+    writeWhole(join(folder, RUN_FILES.exit), `${JSON.stringify({ version: 1, ...exit, ended: ended ?? (exit.code === 0 ? 'done' : 'failed'), ...(endedReason === null ? {} : { reason: endedReason }), at: new Date().toISOString() })}\n`)
+    if (namespace !== null) forgetNamespace(dirname(folder), namespace)
     state.state = 'finishing'
     save()
     if (launch.finish) {
@@ -143,6 +151,8 @@ async function supervise(folder) {
     ended = 'limit'
     return finish({ code: null, signal: null, started: false })
   }
+  // The run's own watch step, loaded once before the start: it reads the run's output and says when to end it (a token ceiling).
+  const watcher = launch.watch ? await import(launch.watch.module).then((module) => module[launch.watch.export] ?? null).catch(() => null) : null
   const input = launch.stdin ? openSync(launch.stdin, 'r') : 'ignore'
   const output = openSync(join(folder, RUN_FILES.events), 'a', 0o600)
   const errors = openSync(join(folder, RUN_FILES.stderr), 'a', 0o600)
@@ -172,7 +182,8 @@ async function supervise(folder) {
       // Already gone.
     }
   }
-  const end = (why) => {
+  const end = (why, reason = null) => {
+    if (ended === null && reason !== null) endedReason = reason
     ended ??= why
     if (asked) return
     asked = true
@@ -194,8 +205,31 @@ async function supervise(folder) {
   state.state = 'running'
   state.child = { pid: child.pid, start: processStart(child.pid) }
   save()
+  // The container's PID namespace, named in BMN's state while the run goes on: a BMN command from inside it is refused.
+  const nameIt = () => {
+    if (namespace !== null || ended !== null) return
+    const found = childNamespace(child.pid)
+    if (found !== null && nameNamespace(dirname(folder), found, basename(folder)) !== null) {
+      namespace = found
+      state.container = { pid_namespace: found }
+      save()
+    }
+  }
+  for (const after of [5, 25, 100]) setTimeout(nameIt, after).unref()
+  let polls = 0
   const watch = setInterval(() => {
+    polls += 1
     if (existsSync(join(folder, RUN_FILES.stop))) end('stopped')
+    if (polls <= 40) nameIt()
+    if (watcher !== null && polls % WATCH_EVERY === 0) {
+      let reason = null
+      try {
+        reason = watcher(folder, launch)
+      } catch {
+        // A watch step that fails ends nothing.
+      }
+      if (typeof reason === 'string') end(launch.watch.ends ?? 'ceiling', reason)
+    }
     // The app's raw output is bounded: over the bound the run fails, its output kept as it was.
     if (typeof launch.output_limit === 'number') {
       const size = [RUN_FILES.events, RUN_FILES.stderr].reduce((sum, name) => {

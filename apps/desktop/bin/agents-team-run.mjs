@@ -1,6 +1,6 @@
 // MODULE: agents-team-run.mjs - Epic 72: an ask started exactly as it was judged, attributed from its own output, finished into its record, and exported only as its allowlist says
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readApproved } from './agents-state.mjs'
 import { ASK_RUN_FILES, sameProgram } from './agents-team-forms.mjs'
@@ -21,7 +21,7 @@ export const TIME_LIMIT = Object.freeze({ default: 30, min: 1, max: 120 })
 export const OUTPUT_LIMIT = 64 * 1024 * 1024
 export const ANSWER_LIMIT = 1024 * 1024
 /** Each final state and its exit code (the contract's "Exit codes"). */
-export const OUTCOME_EXIT = Object.freeze({ answered: 0, failed: 1, refused: 10, 'out-of-time': 15, stopped: 16, 'not-attributed': 17 })
+export const OUTCOME_EXIT = Object.freeze({ answered: 0, failed: 1, interrupted: 1, refused: 10, 'out-of-time': 15, stopped: 16, 'not-attributed': 17 })
 
 export class StartRefusal extends Error {
   constructor(code, message) {
@@ -44,7 +44,7 @@ const readJsonOrNull = (path) => {
  * app's program must still be the ones the check saw; otherwise nothing starts (CHANGED). Returns
  * `{ pid, start }` of the supervisor; the run goes on whatever happens to the caller.
  */
-export function startAsk(prepared, { now = new Date(), timeLimitMinutes = TIME_LIMIT.default, start = startTeamSupervisor } = {}) {
+export function startAsk(prepared, { now = new Date(), timeLimitMinutes = TIME_LIMIT.default, start = startTeamSupervisor, tokenCeiling = null } = {}) {
   const receipt = prepared.verdict.receipt
   const folder = prepared.folder
   const generation = readApproved()
@@ -57,7 +57,9 @@ export function startAsk(prepared, { now = new Date(), timeLimitMinutes = TIME_L
   }
   const launch = {
     version: 1, argv: prepared.argv, deadline: now.getTime() + timeLimitMinutes * 60_000, time_limit_minutes: timeLimitMinutes,
-    stdin: join(folder, ASK_RUN_FILES.prompt), finish: { module: fileURLToPath(import.meta.url), export: 'finishAsk' }, args_fd: true, output_limit: OUTPUT_LIMIT
+    stdin: join(folder, ASK_RUN_FILES.prompt), finish: { module: fileURLToPath(import.meta.url), export: 'finishAsk' }, args_fd: true, output_limit: OUTPUT_LIMIT,
+    // The owner's per-ask token ceiling holds where the app reports usage while it runs: Claude Code alone (72.1).
+    ...(tokenCeiling !== null && receipt.harness === 'claude' ? { token_ceiling: tokenCeiling, watch: { module: fileURLToPath(import.meta.url), export: 'watchAsk', ends: 'ceiling' } } : {})
   }
   writeWhole(join(folder, RUN_FILES.launch), `${JSON.stringify(launch, null, 2)}\n`)
   const started = start(folder)
@@ -223,7 +225,10 @@ export function finishAsk(folder) {
   let outcome
   let reason = null
   if (exit.ended === 'stopped') outcome = 'stopped'
-  else if (exit.ended === 'limit') outcome = 'out-of-time'
+  else if (exit.ended === 'ceiling') {
+    outcome = 'stopped'
+    reason = exit.reason ?? 'the run reached the owner\'s token ceiling'
+  } else if (exit.ended === 'limit') outcome = 'out-of-time'
   else if (exit.ended === 'output') {
     outcome = 'failed'
     reason = `the app's output went over ${OUTPUT_LIMIT / 1024 / 1024} MiB`
@@ -252,6 +257,48 @@ export function finishAsk(folder) {
   // The transient state goes on every outcome: the run's app home (its sign-in's mount point, sessions, bookkeeping) and its frozen project.
   for (const part of [ASK_RUN_FILES.home, ASK_RUN_FILES.project]) rmSync(join(folder, part), { recursive: true, force: true })
   rmSync(join(folder, RUN_FILES.stop), { force: true })
+  // Its capacity place is given back (agents-team-places.mjs placePath), once its outcome is written.
+  rmSync(join(dirname(folder), '.places', `${basename(folder)}.json`), { force: true })
+}
+
+/** What the token ceiling has seen of each run this process watches: where it read to, and each model call's tokens. */
+const watched = new Map()
+
+/**
+ * The supervisor's watch step for a Claude Code run under the owner's token ceiling: reads the
+ * output added since the last call, counts each model call's input, cache and output tokens as
+ * Claude Code reports them while it runs (the last report of each message counts), and returns why
+ * the run must end once the total is over the ceiling, else null.
+ */
+export function watchAsk(folder, launch) {
+  const limit = launch?.token_ceiling
+  if (!Number.isInteger(limit)) return null
+  const seen = watched.get(folder) ?? { offset: 0, rest: '', calls: new Map(), unnamed: 0 }
+  watched.set(folder, seen)
+  let text
+  try {
+    const buffer = readFileSync(join(folder, RUN_FILES.events))
+    text = seen.rest + buffer.subarray(seen.offset).toString('utf8')
+    seen.offset = buffer.length
+  } catch {
+    return null
+  }
+  const lines = text.split('\n')
+  seen.rest = lines.pop() ?? ''
+  for (const line of lines) {
+    let event
+    try {
+      event = JSON.parse(line)
+    } catch {
+      continue
+    }
+    const usage = event?.type === 'assistant' ? event.message?.usage : null
+    if (usage === null || typeof usage !== 'object') continue
+    const tokens = ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'output_tokens'].reduce((sum, name) => sum + (Number.isFinite(usage[name]) ? usage[name] : 0), 0)
+    seen.calls.set(typeof event.message.id === 'string' ? event.message.id : `unnamed-${(seen.unnamed += 1)}`, tokens)
+  }
+  const total = [...seen.calls.values()].reduce((sum, tokens) => sum + tokens, 0)
+  return total > limit ? `the run reached the owner's token ceiling: ${total} tokens, over ${limit}` : null
 }
 
 /** The outcome of a run once it has one; otherwise its state now (running, interrupted, …). */

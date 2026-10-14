@@ -2,6 +2,14 @@
 export declare const TEAM_ASK_USAGE: string
 export declare function readAskOptions(argv: string[]): Record<string, string | boolean | string[]> & { file: string[] }
 export declare function askJson(folder: string): Record<string, unknown>
-export declare function runTeamAsk(argv: string[], options?: { environment?: NodeJS.ProcessEnv | Record<string, string>; cwd?: string }): Promise<number>
+export declare const BUSY_EXIT: number
+export type TeamAsker = { kind: 'shell' } | { kind: 'owner' } | { kind: 'session'; session: string; app?: string } | { kind: 'forged'; reason: string }
+export declare function teamAsker(environment: NodeJS.ProcessEnv | Record<string, string | undefined>): TeamAsker
+export interface AskFeatures {
+  version: 1; platform: string; container: { ok: boolean; reason?: string }
+  apps: Array<{ app: string; installed: boolean; version: string | null; measured: string[]; forms: Record<'question' | 'files' | 'project' | 'wide-read', string>; pictures: string; usage_while_running: boolean }>
+}
+export declare function askFeatures(environment?: NodeJS.ProcessEnv | Record<string, string>): AskFeatures
+export declare function runTeamAsk(argv: string[], options?: { environment?: NodeJS.ProcessEnv | Record<string, string>; cwd?: string; now?: () => Date }): Promise<number>
 export declare function runTeamAsks(argv: string[], options?: { environment?: NodeJS.ProcessEnv | Record<string, string>; cwd?: string }): Promise<number>
 export declare const OUTCOME_EXIT: Readonly<Record<string, number>>

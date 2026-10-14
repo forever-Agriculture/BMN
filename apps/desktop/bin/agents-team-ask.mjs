@@ -79,7 +79,8 @@ function writePrivate(path, text, mode = 0o600) {
 
 /**
  * Makes one ask ready. `request`: `{ role, question, agent, effort, smallWork, recheckOf, project,
- * access, files, data, wide }` as the asker gave them, `cwd` the asking session's folder.
+ * access, files, data, wide }` as the asker gave them, with the reservation's `{ key, keyScope,
+ * requestSha256, askedBy }` (72.4), `cwd` the asking session's folder.
  * Returns `{ id, folder, choice, verdict, argv, stdin }`, `verdict` the check's answer for the
  * command; a refusal before the folder exists throws AskRefusal, InputRefusal or AskUsageError.
  */
@@ -214,7 +215,10 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   writePrivate(join(folder, ASK_RUN_FILES.manifest), `${JSON.stringify(manifest, null, 2)}\n`)
   writePrivate(join(folder, ASK_RUN_FILES.request), `${JSON.stringify({
     version: 1, id, role: request.role, agent: choice.agent.id, model: choice.agent.model, aliases: choice.agent.aliases ?? [], effort: choice.effort, chosen_by: choice.rule, phase: choice.phase,
-    billing: choice.agent.paid_by ?? 'unknown', project, access, data: label, ...(request.recheckOf === undefined ? {} : { recheck_of: request.recheckOf }), asked_by: askerOf(environment), asked_at: now.toISOString()
+    billing: choice.agent.paid_by ?? 'unknown', project, access, data: label, ...(request.recheckOf === undefined ? {} : { recheck_of: request.recheckOf }),
+    // The retry key, whose it is and the request's hash (72.4): a retry with the same three finds this run.
+    ...(request.key === undefined ? {} : { key: request.key, key_scope: request.keyScope, request_sha256: request.requestSha256 }),
+    asked_by: request.askedBy ?? askerOf(environment), asked_at: now.toISOString()
   }, null, 2)}\n`)
 
   const built = askRequest(choice.agent, installed.version, { access, effort: choice.effort, rules, pictures: [], contextTestLog })

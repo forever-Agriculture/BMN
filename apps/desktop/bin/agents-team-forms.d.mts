@@ -3,6 +3,7 @@ export type AskAccess = 'question' | 'files' | 'project'
 export type FormStanding = 'proven' | 'unavailable' | 'no-history' | 'unmeasured'
 export declare const ASK_FORMS_PROVEN: Readonly<Record<string, Record<string, Record<string, FormStanding>>>>
 export declare const UNAVAILABLE_WHY: Readonly<Record<string, Record<string, string>>>
+export declare const ASK_OFFERED: Readonly<{ pictures: boolean }>
 export declare function formStanding(harness: string, version: string | null, mode: string): FormStanding
 export declare const ASK_ACCESS: readonly AskAccess[]
 export declare const ASK_RUN_FILES: Readonly<{ request: string; manifest: string; prompt: string; rules: string; files: string; projectManifest: string; snapshots: string; receipt: string; answer: string; outcome: string; home: string; inputs: string; project: string }>
