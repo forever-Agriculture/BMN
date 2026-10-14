@@ -93,12 +93,24 @@ function loadPair(store: TurnStore, a: string, b: string): Pair | TurnRefusal {
   return { one, other } as Pair
 }
 
+/**
+ * What a walk over stored trees calls so that it can be stopped where nothing differs and nothing is found:
+ * `folder` before and after every folder's list is read, `entry` at every entry it meets. Either stops the walk by throwing.
+ */
+interface Walk {
+  folder: () => void
+  entry: () => void
+}
+
 /** Pairs of entries that differ between two trees; a side a path is not on is null. */
-function* differing(store: TurnStore, a: string | null, b: string | null, prefix = ''): Generator<{ path: string; a: Leaf | null; b: Leaf | null }> {
+function* differing(store: TurnStore, a: string | null, b: string | null, walk: Walk, prefix = ''): Generator<{ path: string; a: Leaf | null; b: Leaf | null }> {
   if (a === b) return
+  walk.folder()
   const one = a ? store.tree(a) : new Map<string, TreeRow>()
   const other = b ? store.tree(b) : new Map<string, TreeRow>()
+  walk.folder()
   for (const name of [...new Set([...one.keys(), ...other.keys()])].sort()) {
+    walk.entry()
     const ea = one.get(name) ?? null
     const eb = other.get(name) ?? null
     const path = `${prefix}${name}`
@@ -107,7 +119,7 @@ function* differing(store: TurnStore, a: string | null, b: string | null, prefix
     if (folderA || folderB) {
       if (ea && !folderA) yield { path, a: ea as Leaf, b: null }
       if (eb && !folderB) yield { path, a: null, b: eb as Leaf }
-      yield* differing(store, folderA ? ea[2] : null, folderB ? eb[2] : null, `${path}/`)
+      yield* differing(store, folderA ? ea[2] : null, folderB ? eb[2] : null, walk, `${path}/`)
     } else if (JSON.stringify(ea) !== JSON.stringify(eb)) {
       yield { path, a: ea as Leaf | null, b: eb as Leaf | null }
     }
@@ -122,9 +134,13 @@ function textOf(store: TurnStore, row: Leaf): string | null {
 }
 
 /** Every entry of a stored tree that was not read, with why. */
-function* unread(store: TurnStore, hash: string, prefix = ''): Generator<{ path: string; why: string }> {
-  for (const [name, row] of store.tree(hash)) {
-    if (row[1] === 'd') yield* unread(store, row[2], `${prefix}${name}/`)
+function* unread(store: TurnStore, hash: string, walk: Walk, prefix = ''): Generator<{ path: string; why: string }> {
+  walk.folder()
+  const rows = store.tree(hash)
+  walk.folder()
+  for (const [name, row] of rows) {
+    walk.entry()
+    if (row[1] === 'd') yield* unread(store, row[2], walk, `${prefix}${name}/`)
     else {
       const why = whyNotRead(row as Leaf)
       if (why !== null) yield { path: `${prefix}${name}`, why }
@@ -134,6 +150,13 @@ function* unread(store: TurnStore, hash: string, prefix = ''): Generator<{ path:
 
 const whyNotRead = (row: Leaf): string | null => (row[1] === 'u' ? row[2] : row[1] === 'x' ? TOO_LARGE : null)
 const sizeOf = (row: Leaf | null): number | null => (row !== null && row[1] === 'f' ? row[3] : null)
+
+/**
+ * When the work of a comparison or of one file's difference ends: a little before its limit. The stop is
+ * asked between stretches of work that can take tens of milliseconds, so the answer "limit reached" is
+ * given inside the limit and not after it.
+ */
+const workEnds = (limitMs: number): number => limitMs - Math.min(100, limitMs / 20)
 
 /**
  * What differs between two captures of one store. `cancelled` is asked while lines are compared; a
@@ -146,7 +169,18 @@ export function compareCaptures(store: TurnStore, a: string, b: string, options:
   const limitMs = options.limitMs ?? TURN_LIMITS.compareMs
   const cancelled = options.cancelled ?? (() => false)
   const began = performance.now()
-  const stop = (): boolean => cancelled() || performance.now() - began > limitMs
+  const stop = (): boolean => cancelled() || performance.now() - began > workEnds(limitMs)
+  // Asked at every folder that is read and at every 256th entry met, whether or not anything differs there.
+  let met = 0
+  const walk: Walk = {
+    folder: () => {
+      if (stop()) throw new DiffStopped()
+    },
+    entry: () => {
+      met += 1
+      if ((met & 255) === 0 && stop()) throw new DiffStopped()
+    }
+  }
   // Only a capture taken to be compared with the earlier one looked at that one's paths.
   const decided = other.base === one.id
   const gone = new Set(decided ? other.gone : [])
@@ -159,7 +193,7 @@ export function compareCaptures(store: TurnStore, a: string, b: string, options:
     return row
   }
   try {
-    for (const { path, a: ea, b: eb } of differing(store, one.tree, other.tree)) {
+    for (const { path, a: ea, b: eb } of differing(store, one.tree, other.tree, walk)) {
       // At every file: one file may be 10 MiB to read and to count.
       if (stop()) throw new DiffStopped()
       let row: TurnFileRow
@@ -207,15 +241,14 @@ export function compareCaptures(store: TurnStore, a: string, b: string, options:
     // only then is its tree walked for them.
     if (other.counts.tooLarge + other.counts.notRead > 0) {
       const listed = new Set(files.map((row) => row.path))
-      let walked = 0
-      for (const { path, why } of unread(store, other.tree)) {
-        walked += 1
-        if ((walked & 255) === 0 && stop()) throw new DiffStopped()
+      for (const { path, why } of unread(store, other.tree as string, walk)) {
         if (listed.has(path)) continue
         files.push(uncounted({ path, state: 'not read', why }))
         totals.files += 1
       }
     }
+    // A comparison that was stopped, or whose time passed, in its last stretch is not given as done.
+    if (stop()) throw new DiffStopped()
   } catch (error) {
     if (error instanceof DiffStopped) return cancelled() ? refusal('cancelled', 'cancelled') : refusal('unavailable', LIMIT_REACHED)
     return refusal('unavailable', 'a stored capture cannot be read')
@@ -252,7 +285,7 @@ function differenceAt<Made>(
   const limitMs = options.limitMs ?? TURN_LIMITS.compareMs
   const cancelled = options.cancelled ?? (() => false)
   const began = performance.now()
-  const stop = (): boolean => cancelled() || performance.now() - began > limitMs
+  const stop = (): boolean => cancelled() || performance.now() - began > workEnds(limitMs)
   try {
     const ea = entryAt(store, pair.one.tree, path)
     const eb = entryAt(store, pair.other.tree, path)

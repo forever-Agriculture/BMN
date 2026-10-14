@@ -75,26 +75,18 @@ describe('the Git commands of turn changes', () => {
     }
   })
 
-  it('is the only place of the feature that starts a process, but for the one question to an agent\'s own program', () => {
+  it('is the only place of the feature that starts a process', () => {
     const sources = readdirSync(here).filter((name) => name.startsWith('turn-changes-') && name.endsWith('.ts') && !name.endsWith('.test.ts'))
     expect(sources).toContain('turn-changes-capture.ts')
     for (const name of sources) {
       const text = readFileSync(join(here, name), 'utf8')
-      if (name !== 'turn-changes-git.ts' && name !== 'turn-changes-version.ts') expect(text, name).not.toMatch(/child_process|repositoryGit|execFile|\bexec\(|\bspawn\(/)
+      if (name !== 'turn-changes-git.ts') expect(text, name).not.toMatch(/child_process|repositoryGit|execFile|\bexec\(|\bspawn\(/)
     }
     const git = readFileSync(join(here, 'turn-changes-git.ts'), 'utf8')
     expect(git.match(/\bspawn\(/g)).toHaveLength(1)
     expect(git).not.toMatch(/execFile|\bexec\(|shell:/)
-    // Story 69.4 reads a foreground agent's version by asking the program that process already is, and nothing
-    // else: never Git, never a path anybody names, never through a shell, and only after `mayAskProgram`. What
-    // runs is the file it opened from `/proc/<pid>/exe` and compared, through that same open file.
-    const version = readFileSync(join(here, 'turn-changes-version.ts'), 'utf8')
-    expect(version.match(/\bexecFile\(/g)).toHaveLength(1)
-    expect(version).toMatch(/held = openSync\(`\/proc\/\$\{pid\}\/exe`, constants\.O_RDONLY\)\n\s+const program = fstatSync\(held, \{ bigint: true \}\)/)
-    expect(version).toMatch(/execFile\(`\/proc\/\$\{process\.pid\}\/fd\/\$\{held\}`, \['--version'\], /)
-    expect(version).toMatch(/if \(!mayAskProgram\(identity\)\) return Promise\.resolve\(null\)\n\s+return new Promise/)
-    // `.exec(` is a regular expression's; a bare `exec(` would be a shell's.
-    expect(version).not.toMatch(/\bspawn\(|(?<!\.)\bexec\(|shell:|repositoryGit|turn-changes-git/)
+    // An agent's version is read from where its program lies. Its program is never run to ask, and nothing of it is opened.
+    expect(readFileSync(join(here, 'turn-changes-version.ts'), 'utf8')).not.toMatch(/shell:|openSync|readFileSync|createReadStream|\bopen\(/)
   })
 
   it('is the list docs/turn-changes.md shows the owner', () => {

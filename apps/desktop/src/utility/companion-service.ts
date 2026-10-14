@@ -178,7 +178,7 @@ export interface CompanionServiceOptions {
   /** Epic 69: the thread that scans and compares work trees. Without it no turn is recorded. */
   turnChanges?: TurnChangesPort & Pick<TurnStoreKeeper, 'removeCaptures'>
   /** Epic 69: reads an app's version from a foreground process; a test gives its own. */
-  turnVersion?: (identity: string, app: string) => Promise<string | null>
+  turnVersion?: (identity: string, app: string) => string | null | Promise<string | null>
   /** Epic 69: the folder Linux reports for a foreground process; a test gives its own. */
   turnForegroundFolder?: (identity: string) => string | null
   /** How long a question or permission waits before it is paged; only the self-test host shortens it. */
@@ -664,7 +664,7 @@ export class CompanionService {
         nextTurnNumber: (sessionId) => options.database.companion('nextTurnNumber', sessionId),
         listUnclosedTurns: () => options.database.companion('listUnclosedTurns')
       },
-      version: options.turnVersion ?? readAppVersion,
+      version: options.turnVersion ?? ((identity, app) => readAppVersion(identity, app)),
       shared: (sessionId, root) => this.startedInWorkTree(sessionId, root),
       hintFolder: join(dirname(this.socketPath), TURN_SWITCH_FOLDER),
       changed: (sessionId) => this.emit('turns', sessionId),

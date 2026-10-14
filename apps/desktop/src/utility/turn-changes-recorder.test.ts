@@ -1,7 +1,8 @@
 // MODULE: turn-changes-recorder.test.ts - every move of a turn on a real store, a real database and made-up repositories: the confirmation, the ends, overlapping prompts, the last scan, the wordings and labels, the pause, the switch and a restart
-import { existsSync, mkdirSync, readdirSync, renameSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TURN_LABELS, TURN_PAUSE_REASONS, TURN_WORDINGS } from '@bmn/protocol'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
@@ -11,7 +12,7 @@ import { refusal, type TurnLimits } from './turn-changes-capture'
 import { TurnChangesEngine, inProcessKeeper, inProcessPort, type TurnChangesPort } from './turn-changes-engine'
 import { TurnRecorder, turnLabelTime, type TurnMarkCall, type TurnObservation } from './turn-changes-recorder'
 import { TURN_STORE_FOLDER } from './turn-changes-store'
-import { mayAskProgram, readAppVersion, startedPrograms, turnAppVersion, type VersionSeams } from './turn-changes-version'
+import { readAppVersion, type VersionPlaces } from './turn-changes-version'
 import { filesUnder, scratch, sleep, write, type Place } from './test-fixtures/turn-changes/fixtures'
 
 const testRequire = createRequire(import.meta.url)
@@ -19,6 +20,7 @@ const BetterSqlite3 = testRequire('better-sqlite3') as new (path: string) => Dat
 const CONVERSATION = '01a0b657-21a8-7f00-addd-b73646828f5b'
 const OTHER = '11a0b657-21a8-7f00-addd-b73646828f5b'
 const SESSION = 's-one'
+const here = dirname(fileURLToPath(import.meta.url))
 const AGENT = '34817:7001:555:1:2'
 /** Generous for a loaded machine; the tests of the limit give their own. */
 const ROOMY = 5_000
@@ -29,7 +31,7 @@ interface World {
   engine: TurnChangesEngine
   recorder: TurnRecorder
   foreground: { identity: string | null; folder: string }
-  version: { value: string | null }
+  version: { value: string | null; calls: number }
   shared: { value: boolean }
   changes: Array<string | null>
   hints: string
@@ -46,7 +48,7 @@ interface World {
 
 const worlds: World[] = []
 let requests = 0
-function world(name: string, options: { app?: string; limits?: Partial<TurnLimits>; port?: (port: TurnChangesPort) => TurnChangesPort; limitMs?: number } = {}): World {
+function world(name: string, options: { app?: string; limits?: Partial<TurnLimits>; port?: (port: TurnChangesPort) => TurnChangesPort; limitMs?: number; defer?: (work: () => void) => void } = {}): World {
   const at = scratch(name)
   const database = new BetterSqlite3(':memory:')
   initializeDatabase(database, new Date().toISOString())
@@ -57,7 +59,7 @@ function world(name: string, options: { app?: string; limits?: Partial<TurnLimit
   const engine = new TurnChangesEngine({ dataRoot: at.dataRoot, home: at.home, ...(options.limits ? { limits: options.limits } : {}) })
   const app = options.app ?? 'codex'
   const foreground: World['foreground'] = { identity: AGENT, folder: at.repo }
-  const version: World['version'] = { value: app === 'codex' ? '0.162.1' : '2.1.296' }
+  const version: World['version'] = { value: app === 'codex' ? '0.162.1' : '2.1.296', calls: 0 }
   const shared = { value: false }
   const changes: Array<string | null> = []
   const hints = join(at.base, 'hints')
@@ -72,7 +74,11 @@ function world(name: string, options: { app?: string; limits?: Partial<TurnLimit
       nextTurnNumber: (sessionId) => once(() => nextTurnNumber(database, sessionId)),
       listUnclosedTurns: () => once(() => listUnclosedTurns(database))
     },
-    version: () => Promise.resolve(version.value),
+    version: () => {
+      version.calls += 1
+      return version.value
+    },
+    ...(options.defer ? { defer: options.defer } : {}),
     shared: () => shared.value,
     hintFolder: hints,
     changed: (sessionId) => changes.push(sessionId),
@@ -376,141 +382,146 @@ describe('the version of the app', () => {
     expect(first?.labels).toContain(label)
   })
 
-  it('reads the version only from an answer of the app itself', () => {
-    expect(turnAppVersion('claude', '2.1.296 (Claude Code)\n')).toBe('2.1.296')
-    expect(turnAppVersion('codex', 'codex-cli 0.162.1\n')).toBe('0.162.1')
-    expect(turnAppVersion('claude', 'v24.14.0\n')).toBeNull()
-    expect(turnAppVersion('codex', '2.1.296 (Claude Code)\n')).toBeNull()
-    expect(turnAppVersion('opencode', '1.19.0\n')).toBeNull()
+  it('reads the version away from the prompt\'s path: not in the call that asks, not while a mark is answered, and not while a "before" waits for its confirmation', async () => {
+    const w = world('version-away')
+    requests += 1
+    const requestId = `p-${requests}`
+    // An ordinary event of the app asks for the version while a prompt is on its way: nothing is read.
+    const started = w.mark('start', { requestId })
+    w.recorder.observe({ sessionId: SESSION, app: 'codex', event: 'PostToolUse', source: null, conversation: CONVERSATION, turn: 't-1', nested: false })
+    expect(w.version.calls).toBe(0)
+    expect(await started).toBe('captured')
+    // The mark is answered and its "before" waits for the confirmation: still nothing, however long that takes.
+    await sleep(40)
+    expect(w.version.calls).toBe(0)
+    const confirmed = w.mark('confirm', { requestId, folder: null, until: null })
+    expect(w.version.calls).toBe(0)
+    expect(await confirmed).toBe('confirmed')
+    // The prompt is through. The version is read once, and the open turn says what it found.
+    await w.recorder.idle()
+    expect(w.version.calls).toBe(1)
+    // Once per foreground process: neither the end nor the next turn reads it again.
+    await w.edit('a.txt', 'one\n')
+    expect(await w.end()).toBe('queued')
+    await turn(w, 'b.txt', 'two\n', { turn: 't-2' })
+    expect(w.version.calls).toBe(1)
+    // Another process in the agent's place is read anew.
+    w.foreground.identity = '34817:7002:556:1:2'
+    await turn(w, 'c.txt', 'three\n', { turn: 't-3' })
+    expect(w.version.calls).toBe(2)
   })
 
-  /** A made-up process table: BMN itself and one process, each with what Linux says confines it. */
-  interface Confined { namespace?: string; users?: string; privileges?: number; filter?: number; label?: string | null }
-  const processes = (name: string, other: Confined = {}, own: Confined = {}): { root: string; identity: string; done: () => void } => {
-    const at = scratch(name, { commit: false })
-    const root = join(at.base, 'proc')
-    const put = (pid: string, told: Confined): void => {
-      mkdirSync(join(root, pid, 'ns'), { recursive: true })
-      mkdirSync(join(root, pid, 'attr'), { recursive: true })
-      writeFileSync(join(root, pid, 'status'), `Name:\tmade-up\nNoNewPrivs:\t${told.privileges ?? 0}\nSeccomp:\t${told.filter ?? 0}\nSeccomp_filters:\t0\n`)
-      symlinkSync(told.namespace ?? 'mnt:[4026531832]', join(root, pid, 'ns', 'mnt'))
-      symlinkSync(told.users ?? 'user:[4026531837]', join(root, pid, 'ns', 'user'))
-      symlinkSync('pid:[4026531836]', join(root, pid, 'ns', 'pid'))
-      if (told.label !== null) writeFileSync(join(root, pid, 'attr', 'current'), `${told.label ?? 'unconfined'}\n`)
-      writeFileSync(join(root, pid, 'exe'), '')
-    }
-    put('self', own)
-    put('7001', other)
-    const program = statSync(join(root, '7001', 'exe'), { bigint: true })
-    return { root, identity: `34817:7001:555:${program.dev}:${program.ino}`, done: at.done }
-  }
+  it('reads the version once a "before" nobody confirmed was let go', async () => {
+    const w = world('version-let-go')
+    expect(await w.mark('start', { requestId: 'let-go' })).toBe('captured')
+    // An event that is no tool's: a tool's would itself say that the app did not wait, and let the "before" go.
+    w.recorder.observe({ sessionId: SESSION, app: 'codex', event: 'Notification', source: null, conversation: CONVERSATION, turn: 't-1', nested: false })
+    await sleep(40)
+    expect(w.version.calls).toBe(0)
+    // The hook's connection closed before it confirmed.
+    w.recorder.dropped(SESSION, 'let-go')
+    await w.recorder.idle()
+    await sleep(20)
+    expect(w.version.calls).toBe(1)
+    expect(w.staged()).toBe(0)
+  })
 
-  it('asks only the program of a process Linux reports as unconfined, in the views and under the label BMN has itself', () => {
-    const free = processes('ask-free')
-    const noModule = processes('ask-no-module', { label: null }, { label: null })
-    const elsewhere = processes('ask-namespace', { namespace: 'mnt:[4026532999]' })
-    const otherUsers = processes('ask-users', { users: 'user:[4026532888]' })
-    const landlocked = processes('ask-privileges', { privileges: 1 })
-    const filtered = processes('ask-filter', { filter: 2 })
-    const labelled = processes('ask-label', { label: 'snap.made-up (enforce)' })
-    const unreadLabel = processes('ask-label-unread', { label: null })
-    // BMN itself gave up new privileges and carries a filter, and so does the process, with the very same flags:
-    // a tighter filter or a Landlock rule set on the process reads no differently, so nobody is asked.
-    const bothConfined = processes('ask-both', { privileges: 1, filter: 2 }, { privileges: 1, filter: 2 })
-    const ownFilter = processes('ask-own-filter', {}, { filter: 2 })
-    const all = [free, noModule, elsewhere, otherUsers, landlocked, filtered, labelled, unreadLabel, bothConfined, ownFilter]
+  it('never reads it in the call that asks: the read goes through the scheduler', async () => {
+    const later: Array<() => void> = []
+    const w = world('version-scheduler', { defer: (work) => void later.push(work) })
+    w.recorder.observe({ sessionId: SESSION, app: 'codex', event: 'PostToolUse', source: null, conversation: CONVERSATION, turn: 't-1', nested: false })
+    await sleep(20)
+    expect(w.version.calls).toBe(0)
+    expect(later).toHaveLength(1)
+    for (const work of later.splice(0)) work()
+    await sleep(5)
+    expect(w.version.calls).toBe(1)
+  })
+
+  /** A made-up `/proc` and home folder: BMN itself, and one process whose program lies where `program` says. */
+  interface Told { view?: string; root?: 'own' | 'other'; link?: string }
+  const installed = (name: string, program: string, told: Told = {}): { places: VersionPlaces; identity: string; home: string; file: string; done: () => void } => {
+    const at = scratch(name, { commit: false })
+    const proc = join(at.base, 'proc')
+    const home = join(at.base, 'home')
+    const file = join(home, program)
+    mkdirSync(join(file, '..'), { recursive: true })
+    writeFileSync(file, '#!/bin/sh\n')
+    mkdirSync(join(at.base, 'elsewhere'))
+    for (const pid of ['self', '7001']) {
+      mkdirSync(join(proc, pid, 'ns'), { recursive: true })
+      symlinkSync(pid === '7001' ? told.view ?? 'mnt:[4026531832]' : 'mnt:[4026531832]', join(proc, pid, 'ns', 'mnt'))
+      symlinkSync(pid === '7001' && told.root === 'other' ? join(at.base, 'elsewhere') : at.base, join(proc, pid, 'root'))
+    }
+    symlinkSync(told.link ?? file, join(proc, '7001', 'exe'))
+    const stat = statSync(file, { bigint: true })
+    return { places: { procRoot: proc, home }, identity: `34817:7001:555:${stat.dev}:${stat.ino}`, home, file, done: at.done }
+  }
+  const CLAUDE = '.local/share/claude/versions'
+
+  it('takes Claude Code\'s version from the name of the file its installer put the program in, and Codex\'s from nowhere', () => {
+    const made = installed('version-claude', `${CLAUDE}/2.1.296`)
+    const beta = installed('version-beta', `${CLAUDE}/2.2.0-beta.1`)
     try {
-      expect(mayAskProgram(free.identity, free.root)).toBe(true)
-      expect(mayAskProgram(noModule.identity, noModule.root)).toBe(true)
-      // Another view of the file system or of users, new privileges given up (Landlock asks for that), a
-      // system-call filter, another security label: each may be a sandbox, and a program BMN starts would run outside it.
-      for (const confined of [elsewhere, otherUsers, landlocked, filtered, labelled, unreadLabel, bothConfined, ownFilter]) {
-        expect(mayAskProgram(confined.identity, confined.root)).toBe(false)
+      expect(readAppVersion(made.identity, 'claude', made.places)).toBe('2.1.296')
+      expect(readAppVersion(beta.identity, 'claude', beta.places)).toBe('2.2.0-beta.1')
+      // No name says Codex's version, wherever its program lies; and an app that is not recorded has none.
+      expect(readAppVersion(made.identity, 'codex', made.places)).toBeNull()
+      expect(readAppVersion(made.identity, 'opencode', made.places)).toBeNull()
+      // The process is gone, or the identity names none.
+      expect(readAppVersion(made.identity.replace(':7001:', ':7002:'), 'claude', made.places)).toBeNull()
+      expect(readAppVersion('34817:0:555:1:2', 'claude', made.places)).toBeNull()
+      expect(readAppVersion('', 'claude', made.places)).toBeNull()
+    } finally {
+      made.done()
+      beta.done()
+    }
+  })
+
+  it('takes no version from a program that lies elsewhere, is named otherwise, is no longer that file, or is seen from another view or root', () => {
+    const elsewhere = installed('version-elsewhere', 'tools/claude/versions/2.1.296')
+    const deeper = installed('version-deeper', `${CLAUDE}/extra/2.1.296`)
+    const unnamed = installed('version-unnamed', `${CLAUDE}/latest`)
+    const short = installed('version-short', `${CLAUDE}/2.1`)
+    const removed = installed('version-removed', `${CLAUDE}/2.1.296 (deleted)`)
+    const otherView = installed('version-view', `${CLAUDE}/2.1.296`, { view: 'mnt:[4026532999]' })
+    const otherRoot = installed('version-root', `${CLAUDE}/2.1.296`, { root: 'other' })
+    const replaced = installed('version-replaced', `${CLAUDE}/2.1.296`)
+    const linked = installed('version-linked', 'tools/real-program')
+    const all = [elsewhere, deeper, unnamed, short, removed, otherView, otherRoot, replaced, linked]
+    try {
+      for (const made of [elsewhere, deeper, unnamed, short, removed, otherView, otherRoot]) {
+        expect(readAppVersion(made.identity, 'claude', made.places)).toBeNull()
       }
-      // The program is no longer the file the identity names, the process is gone, or the identity names none.
-      expect(mayAskProgram(free.identity.replace(/:\d+$/, ':1'), free.root)).toBe(false)
-      expect(mayAskProgram('34817:7002:555:1:2', free.root)).toBe(false)
-      expect(mayAskProgram('34817:0:555:1:2', free.root)).toBe(false)
-      expect(mayAskProgram('', free.root)).toBe(false)
+      // The process runs another file by now than the one the identity names.
+      expect(readAppVersion(replaced.identity.replace(/:\d+$/, ':1'), 'claude', replaced.places)).toBeNull()
+      // A link that reads like an installed version and points at another program: the name is the link's, not the program's.
+      mkdirSync(join(linked.home, CLAUDE), { recursive: true })
+      symlinkSync(linked.file, join(linked.home, CLAUDE, '9.9.9'))
+      rmSync(join(linked.places.procRoot as string, '7001', 'exe'))
+      symlinkSync(join(linked.home, CLAUDE, '9.9.9'), join(linked.places.procRoot as string, '7001', 'exe'))
+      expect(readAppVersion(linked.identity, 'claude', linked.places)).toBeNull()
     } finally {
       for (const made of all) made.done()
     }
   })
 
-  it('takes no version from a program that is not the app, and asks nothing of a process the identity does not name', async () => {
-    const program = statSync(`/proc/${process.pid}/exe`, { bigint: true })
-    // This very test process: its program answers `--version` in Node's words, which are neither app's.
-    expect(await readAppVersion(`0:${process.pid}:0:${program.dev}:${program.ino}`, 'codex')).toBeNull()
-    expect(await readAppVersion(`0:${process.pid}:0:${program.dev}:${program.ino}`, 'opencode')).toBeNull()
-    expect(await readAppVersion(`0:${process.pid}:0:1:2`, 'codex')).toBeNull()
-  })
-
-  it('names the programs a foreground process started itself and that still share the terminal\'s foreground with it', () => {
-    const at = scratch('started-programs', { commit: false })
-    const root = join(at.base, 'proc')
-    const put = (pid: number, parent: number, group: number, tty: number, start: number, state = 'S'): void => {
-      mkdirSync(join(root, String(pid)), { recursive: true })
-      // What Linux writes: the name may hold spaces and brackets, the fields after its last bracket are fixed.
-      writeFileSync(join(root, String(pid), 'stat'), `${pid} (made (up)) ${state} ${parent} ${group} ${group} ${tty} ${group} 0 0 0 0 0 0 0 0 0 20 0 1 0 ${start} 0 0\n`)
-      writeFileSync(join(root, String(pid), 'exe'), '')
-    }
+  it('runs nothing and opens nothing: a program that would leave a mark when run or read leaves none', () => {
+    const made = installed('version-marker', `${CLAUDE}/9.9.9`)
+    const mark = join(made.home, 'ran')
     try {
-      // 7001 is a launcher with two threads. One started the app's own program (7005), a job in a group of its
-      // own (7003) and a process that is gone (7009); the other a stopped one (7004) and one on another terminal (7006).
-      for (const [task, children] of [['7001', '7005 7003 7009 7007 '], ['7002', '7004 7006 ']] as const) {
-        mkdirSync(join(root, '7001', 'task', task), { recursive: true })
-        writeFileSync(join(root, '7001', 'task', task, 'children'), children)
-      }
-      put(7005, 7001, 7001, 34817, 900)
-      put(7003, 7001, 7003, 34817, 901)
-      put(7004, 7001, 7001, 34817, 902, 'T')
-      put(7006, 7001, 7001, 34999, 903)
-      // Listed as a child, but its parent is another process by now.
-      put(7007, 1, 7001, 34817, 904)
-      const program = statSync(join(root, '7005', 'exe'), { bigint: true })
-      expect(startedPrograms('34817:7001:555:1:2', root)).toEqual([`34817:7005:900:${program.dev}:${program.ino}`])
-      // A process that started nothing, one that is gone, and an identity that names none.
-      expect(startedPrograms('34817:7005:900:1:2', root)).toEqual([])
-      expect(startedPrograms('34817:7999:555:1:2', root)).toEqual([])
-      expect(startedPrograms('34817:0:555:1:2', root)).toEqual([])
-      expect(startedPrograms('', root)).toEqual([])
-      // At most eight, the lowest process ids first.
-      mkdirSync(join(root, '8000', 'task', '8000'), { recursive: true })
-      const many = Array.from({ length: 11 }, (_unused, at) => 8111 - at)
-      writeFileSync(join(root, '8000', 'task', '8000', 'children'), `${many.join(' ')} `)
-      for (const pid of many) put(pid, 8000, 8000, 34817, pid)
-      expect(startedPrograms('34817:8000:555:1:2', root).map((identity) => Number(identity.split(':')[1]))).toEqual([8101, 8102, 8103, 8104, 8105, 8106, 8107, 8108])
+      // Run, it writes a file. Opened for reading, a pipe in its place would hold the reader for ever: it is not opened.
+      writeFileSync(made.file, `#!/bin/sh\necho ran > '${mark}'\n`)
+      chmodSync(made.file, 0o755)
+      expect(readAppVersion(made.identity, 'claude', made.places)).toBe('9.9.9')
+      expect(readAppVersion(made.identity, 'codex', made.places)).toBeNull()
+      expect(existsSync(mark)).toBe(false)
+      const source = readFileSync(join(here, 'turn-changes-version.ts'), 'utf8')
+      expect(source).not.toMatch(/child_process|execFile|\bexec\(|\bspawn\(|openSync|readFileSync|createReadStream|readdirSync|\bopen\(/)
+      expect([...source.matchAll(/import \{([^}]+)\} from 'node:fs'/g)].map((match) => match[1]?.trim())).toEqual(['lstatSync, readlinkSync, realpathSync, statSync'])
     } finally {
-      at.done()
+      made.done()
     }
-  })
-
-  it('asks the programs a launcher started when the launcher\'s own answer is not the app\'s', async () => {
-    const asked: string[] = []
-    const answers: Record<string, string> = { leader: 'v24.14.0\n', tool: 'ripgrep 14.1.0\n', real: 'codex-cli 0.162.1\n' }
-    /** `listed` is what the launcher's own children are at each look: before the questions, then after an answer. */
-    const seams = (...listed: string[][]): VersionSeams => {
-      let look = 0
-      return {
-        ask: async (identity) => { asked.push(identity); return answers[identity] ?? null },
-        started: () => listed[Math.min(look++, listed.length - 1)] ?? []
-      }
-    }
-    // Codex from npm: Node answers for the launcher, the native program for the launcher's child.
-    expect(await readAppVersion('leader', 'codex', 2_000, seams(['tool', 'real']))).toBe('0.162.1')
-    expect(asked).toEqual(['leader', 'tool', 'real'])
-    // An app that answers for itself is asked alone.
-    asked.length = 0
-    expect(await readAppVersion('real', 'codex', 2_000, seams(['tool']))).toBe('0.162.1')
-    expect(asked).toEqual(['real'])
-    // No answer is the app's; the program that answered is no longer the launcher's own; the answer is another app's.
-    expect(await readAppVersion('leader', 'codex', 2_000, seams(['tool', 'gone']))).toBeNull()
-    expect(await readAppVersion('leader', 'codex', 2_000, seams(['real'], []))).toBeNull()
-    expect(await readAppVersion('leader', 'claude', 2_000, seams(['real']))).toBeNull()
-    // The time is one for all the questions: with none left, a started program is not asked.
-    asked.length = 0
-    expect(await readAppVersion('leader', 'codex', 0, seams(['real']))).toBeNull()
-    expect(asked).toEqual(['leader'])
   })
 })
 

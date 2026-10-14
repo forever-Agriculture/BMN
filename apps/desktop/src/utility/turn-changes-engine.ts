@@ -5,7 +5,7 @@
 // confirmed the answer, or discards it, and a staged capture nobody settles is discarded by itself.
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { TURN_LIMITS, capture, isRefusal, refusal, type CaptureSeams, type StagedCapture, type TurnLimits, type TurnRefusal, type TurnRootIdentity } from './turn-changes-capture'
+import { TURN_LIMITS, capture, isRefusal, refusal, type CaptureSeams, type PublishedCapture, type StagedCapture, type TurnLimits, type TurnRefusal, type TurnRootIdentity } from './turn-changes-capture'
 import type { TurnShownDifference } from '@bmn/protocol'
 import { compareCaptures, shownFileDifference, type TurnComparison } from './turn-changes-compare'
 import type { TurnGitCall } from './turn-changes-git'
@@ -38,7 +38,7 @@ export interface TurnCaptureRequest {
 
 export type TurnCaptureAnswer =
   | TurnRefusal
-  /** `adds`: how many bytes publishing this capture puts on disk (its files and lists, its record, what its cache grows by). */
+  /** `adds`: for a published capture, how many bytes the store grew by (files and lists moved in, the record, the new cache less the old one); for a staged one, the most its publication needs. */
   | { state: 'whole' | 'incomplete'; record: TurnCaptureRecord; published: boolean; tookMs: number; adds: number }
 
 export interface TurnPairRequest {
@@ -65,7 +65,7 @@ export interface TurnStoreInventory {
   captures: Array<{ id: string; endedAt: number }>
 }
 
-/** Bytes the stores keep on disk (files, lists, records of captures, caches), per session and in all. */
+/** Bytes the stores hold on disk (files, lists, records of captures, caches, and anything a failure left there), per session and in all. */
 export interface TurnStoreUsage {
   sessions: Record<string, number>
   all: number
@@ -86,7 +86,7 @@ export interface TurnStoreKeeper {
 interface Held {
   staged: StagedCapture
   session: string
-  store: TurnStore | null
+  job: string
   timer: NodeJS.Timeout
   done: () => void
 }
@@ -109,12 +109,20 @@ export class TurnChangesEngine {
   private readonly heldByJob = new Map<string, string>()
   private readonly tails = new Map<string, Promise<void>>()
   private readonly stores = new Map<string, TurnStore>()
-  /** Bytes on disk per session and store folder: counted from the disk once, then kept as captures are published and removed. */
+  /**
+   * Bytes on disk per session and store folder: counted from the whole folder once, then kept by what each
+   * publication really added (which can be less than nothing, when a cache shrank) and counted from the disk
+   * again after every removal and clearing.
+   */
   private counted: Map<string, Map<string, number>> | null = null
-  /** The room each running capture was given: it is held for that capture until its bytes are kept or gone. */
+  /** The room each running capture was given: it is held for that capture until its bytes are kept or on their way out. */
   private readonly granted = new Map<string, Reserved>()
-  /** Bytes of discarded captures that are still being removed. */
+  /** Bytes that left `staging/` without being kept and are not yet gone from the disk. */
   private readonly leaving = new Set<Reserved>()
+  /** Per session: resolves when everything of it that was on its way out is settled. */
+  private readonly going = new Map<string, Promise<void>>()
+  /** Staged captures that are being published now, each with the word that stops it. */
+  private readonly publishing = new Map<string, { stopped: boolean }>()
 
   constructor(options: TurnEngineOptions) {
     this.options = options
@@ -125,11 +133,24 @@ export class TurnChangesEngine {
     const counted = new Map<string, Map<string, number>>()
     for (const { session, key } of listTurnStores(this.options.dataRoot)) {
       const stores = counted.get(session) ?? new Map<string, number>()
-      stores.set(key, new TurnStore(this.options.dataRoot, session, '', key).keptBytes())
+      stores.set(key, this.onDisk(new TurnStore(this.options.dataRoot, session, '', key)) ?? 0)
       counted.set(session, stores)
     }
     this.counted = counted
     return counted
+  }
+
+  /**
+   * Every byte under one store's folder; null when the folder is gone. A store that cannot be counted (one of
+   * its folders cannot be listed) counts as full: a number that passed bytes over would let the bound be passed.
+   */
+  private onDisk(store: TurnStore): number | null {
+    if (!store.exists()) return null
+    try {
+      return store.diskBytes()
+    } catch {
+      return { ...TURN_LIMITS, ...this.options.limits }.storeBytes
+    }
   }
 
   private count(session: string, key: string, change: (before: number) => number | null): void {
@@ -165,18 +186,31 @@ export class TurnChangesEngine {
     return Math.max(0, Math.min(limits.storeBytes - own, limits.allStoresBytes - all, most))
   }
 
-  private published(session: string, staged: StagedCapture): TurnCaptureRecord {
-    const record = staged.publish()
-    this.count(session, workTreeKey(record.root), (before) => before + staged.adds)
-    return record
+  /** Publishes a staged capture and counts what the store really grew by. Null when `stop` said so meanwhile: nothing of it is kept. */
+  private async published(session: string, staged: StagedCapture, stop: () => boolean): Promise<PublishedCapture | null> {
+    const done = await staged.publish(stop)
+    if (done) this.count(session, workTreeKey(done.record.root), (before) => before + done.added)
+    return done
   }
 
-  /** Bytes that left `staging/` for the way out are on disk until their removal is done. */
-  private goes(session: string, bytes: number, store: TurnStore | null): void {
-    if (bytes <= 0 || store === null) return
+  /**
+   * Bytes that left `staging/` without being kept are on disk until their removal is done: they count until
+   * then. A removal that failed leaves them there, so they are counted with the store from then on, until
+   * the store is counted from the disk again.
+   */
+  private goes(session: string, key: string, bytes: number, gone: Promise<boolean>): void {
+    if (bytes <= 0) return
     const reserved = { session, bytes }
     this.leaving.add(reserved)
-    void store.settled().then(() => this.leaving.delete(reserved))
+    const settled = gone.then((removed) => {
+      this.leaving.delete(reserved)
+      if (!removed) this.count(session, key, (before) => before + bytes)
+    })
+    const all = Promise.all([this.going.get(session), settled]).then(() => undefined)
+    this.going.set(session, all)
+    void all.then(() => {
+      if (this.going.get(session) === all) this.going.delete(session)
+    })
   }
 
   /** A place in the session's line: `earlier` resolves when everything asked before is settled, `done` lets the next one go. */
@@ -222,7 +256,7 @@ export class TurnChangesEngine {
     // earlier one was published, discarded, refused or cancelled.
     const { earlier, done } = this.enter(request.session)
     let settledHere = true
-    let used: TurnStore | null = null
+    let key = ''
     try {
       await earlier
       if (controller.signal.aborted) return refusal('cancelled', 'cancelled')
@@ -236,9 +270,11 @@ export class TurnChangesEngine {
         ...(this.options.observeGit ? { observeGit: this.options.observeGit } : {}),
         // The root is known only once the capture established it.
         storeFor: (root) => {
-          used = this.store(request.session, root)
-          return used
-        }
+          key = workTreeKey(root)
+          return this.store(request.session, root)
+        },
+        // Whatever the capture drops from `staging/` counts, to the byte, until it is gone from the disk.
+        dropped: (bytes, gone) => this.goes(request.session, key, bytes, gone)
       })
       if (isRefusal(outcome)) return outcome
       if (controller.signal.aborted) {
@@ -246,14 +282,15 @@ export class TurnChangesEngine {
         return refusal('cancelled', 'cancelled')
       }
       if (request.publish) {
-        const record = this.published(request.session, outcome)
-        this.granted.delete(request.job)
-        return { state: outcome.state, record, published: true, tookMs: outcome.tookMs, adds: outcome.adds }
+        // The room stays held and the job can be cancelled until the publication is done one way or the other.
+        const made = await this.published(request.session, outcome, () => controller.signal.aborted)
+        if (made === null) return refusal('cancelled', 'cancelled')
+        return { state: made.record.state, record: made.record, published: true, tookMs: made.tookMs, adds: made.added }
       }
       const id = outcome.record.id
-      const timer = setTimeout(() => this.settle(id, false), this.options.holdMs ?? DEFAULT_HOLD_MS)
+      const timer = setTimeout(() => void this.settle(id, false), this.options.holdMs ?? DEFAULT_HOLD_MS)
       // From here its bytes are counted as staged, no longer as room held for it.
-      this.held.set(id, { staged: outcome, session: request.session, store: used, timer, done })
+      this.held.set(id, { staged: outcome, session: request.session, job: request.job, timer, done })
       this.granted.delete(request.job)
       this.heldByJob.set(request.job, id)
       settledHere = false
@@ -261,44 +298,53 @@ export class TurnChangesEngine {
     } finally {
       this.running.delete(request.job)
       if (settledHere) done()
-      // A capture that ended without being kept may have left bytes on their way out: its room stays held until they are gone.
-      const reserved = this.granted.get(request.job)
-      if (reserved) {
-        this.granted.delete(request.job)
-        this.goes(reserved.session, reserved.bytes, used)
-      }
+      // What it dropped on the way is counted by itself; the room it was given is free again.
+      this.granted.delete(request.job)
     }
   }
 
-  private settle(capture: string, publish: boolean): TurnCaptureRecord | null {
+  /**
+   * Publishes or discards a staged capture. While it is being published it still counts as staged and can
+   * still be stopped: by its job's cancel, by a discard, by the worker's end. A stopped publication keeps nothing.
+   */
+  private async settle(capture: string, publish: boolean): Promise<TurnCaptureRecord | null> {
+    const stopping = this.publishing.get(capture)
+    if (stopping) {
+      if (!publish) stopping.stopped = true
+      return null
+    }
     const held = this.held.get(capture)
     if (!held) return null
-    this.held.delete(capture)
-    for (const [job, id] of this.heldByJob) if (id === capture) this.heldByJob.delete(job)
     clearTimeout(held.timer)
+    const word = { stopped: false }
     try {
-      if (publish) return this.published(held.session, held.staged)
-      held.staged.discard()
-      this.goes(held.session, held.staged.adds, held.store)
-      return null
+      if (!publish) {
+        held.staged.discard()
+        return null
+      }
+      this.publishing.set(capture, word)
+      return (await this.published(held.session, held.staged, () => word.stopped))?.record ?? null
     } finally {
+      this.publishing.delete(capture)
+      this.held.delete(capture)
+      this.heldByJob.delete(held.job)
       held.done()
     }
   }
 
-  publish(capture: string): TurnCaptureRecord | null {
+  publish(capture: string): Promise<TurnCaptureRecord | null> {
     return this.settle(capture, true)
   }
 
-  discard(capture: string): void {
-    this.settle(capture, false)
+  async discard(capture: string): Promise<void> {
+    await this.settle(capture, false)
   }
 
-  /** Stops a capture that is waiting or running, and discards it when it is already staged. */
+  /** Stops a capture that is waiting, running or being published, and discards it when it is staged. */
   cancel(job: string): void {
     this.running.get(job)?.abort()
     const staged = this.heldByJob.get(job)
-    if (staged) this.settle(staged, false)
+    if (staged) void this.settle(staged, false)
   }
 
   compare(request: TurnPairRequest, cancelled?: () => boolean): TurnComparison | TurnRefusal {
@@ -330,12 +376,14 @@ export class TurnChangesEngine {
     const { earlier, done } = this.enter(request.session)
     try {
       await earlier
+      // What this session dropped is gone or known to have stayed before the disk is counted, so nothing is counted twice.
+      await this.going.get(request.session)
       this.forget(request.session)
       const store = new TurnStore(this.options.dataRoot, request.session, '', request.key)
       try {
         store.removeCaptures(request.captures)
       } finally {
-        this.count(request.session, request.key, () => (store.exists() ? store.keptBytes() : null))
+        this.count(request.session, request.key, () => this.onDisk(store))
       }
     } finally {
       done()
@@ -370,10 +418,14 @@ export class TurnChangesEngine {
     for (const { session, key } of listTurnStores(this.options.dataRoot)) {
       if (this.tails.has(session)) continue
       this.forget(session)
-      new TurnStore(this.options.dataRoot, session, '', key).clearLeftovers()
+      const store = new TurnStore(this.options.dataRoot, session, '', key)
+      try {
+        store.clearLeftovers()
+      } finally {
+        // Bytes may have gone, and what could not be removed is still there: this store is counted from the disk again.
+        this.count(session, key, () => this.onDisk(store))
+      }
     }
-    // Bytes may have gone: everything is counted from the disk again.
-    this.counted = null
   }
 
   inventory(): TurnStoreInventory[] {
@@ -397,7 +449,7 @@ export class TurnChangesEngine {
   /** Discards everything staged; for the worker's end. */
   close(): void {
     for (const controller of this.running.values()) controller.abort()
-    for (const capture of [...this.held.keys()]) this.settle(capture, false)
+    for (const capture of [...this.held.keys()]) void this.settle(capture, false)
   }
 }
 
@@ -421,8 +473,8 @@ export function inProcessPort(engine: TurnChangesEngine): TurnChangesPort {
       signal?.addEventListener('abort', cancel, { once: true })
       return engine.capture(request).finally(() => signal?.removeEventListener('abort', cancel))
     },
-    publish: (capture) => Promise.resolve(engine.publish(capture)),
-    discard: (capture) => Promise.resolve(engine.discard(capture)),
+    publish: (capture) => engine.publish(capture),
+    discard: (capture) => engine.discard(capture),
     compare: (request, signal) => Promise.resolve(signal?.aborted ? refusal('cancelled', 'cancelled') : engine.compare(request, () => signal?.aborted === true)),
     difference: (request, signal) => Promise.resolve(signal?.aborted ? refusal('cancelled', 'cancelled') : engine.difference(request, () => signal?.aborted === true))
   }

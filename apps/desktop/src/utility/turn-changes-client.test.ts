@@ -108,7 +108,8 @@ describe('the turn changes worker thread', () => {
       }
       const started = performance.now()
       expect(await client.compare(pair)).toEqual({ state: 'unavailable', reason: 'Difference unavailable: limit reached' })
-      expect(performance.now() - started).toBeLessThan(2_600)
+      // Its work ends a little before its 2 s, so that this answer is given inside them.
+      expect(performance.now() - started).toBeLessThan(2_000)
     } finally {
       clearInterval(ticking)
     }
@@ -118,22 +119,24 @@ describe('the turn changes worker thread', () => {
   it('stops within 100 ms where no line is compared: a file that is all new, millions of short lines, and text made to be slow to search for secrets', async () => {
     const { at, client } = setup('worker-bounds')
     const one = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true }))
-    // About 9 MiB of short lines, all new; and one line of 2 MiB that is secret-shaped from end to end.
+    // About 9 MiB of short lines, all new; one line of 2 MiB that is secret-shaped from end to end; and one line
+    // of 9 MiB that opens a quote and never closes it, in a file whose names and brackets are read to its end.
     write(at.repo, 'lines.txt', Array.from({ length: 1_500_000 }, (_value, n) => `r${n % 977}`).join('\n') + '\n')
     write(at.repo, 'keys.txt', `${'sk-'.repeat(700_000)}\nplain\n`)
     write(at.repo, 'config.yaml', `${'a-'.repeat(400_000)}\ntoken: "${'eyJ'.repeat(200_000)}\n`)
+    write(at.repo, 'huge.json', `{"note": "${'sk-eyJ '.repeat(1_300_000)}\n`)
     const two = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true, base: one.id }))
     const pair = { session: 's-one', root: at.repo, a: one.id, b: two.id }
     const compared = await client.compare(pair)
-    expect(compared).toMatchObject({ state: 'compared', totals: { files: 3, partial: false } })
-    for (const path of ['lines.txt', 'keys.txt', 'config.yaml']) {
+    expect(compared).toMatchObject({ state: 'compared', totals: { files: 4, partial: false } })
+    for (const path of ['lines.txt', 'keys.txt', 'config.yaml', 'huge.json']) {
       // Left alone it answers inside its 2 s, with every bound of what is shown kept and no value in it.
       const began = performance.now()
       const whole = await client.difference({ ...pair, path })
-      expect(performance.now() - began, path).toBeLessThan(2_600)
+      expect(performance.now() - began, path).toBeLessThan(2_000)
       expect(whole.state, path).toBe('text')
       expect(JSON.stringify(whole).length, path).toBeLessThan(2_000_000)
-      expect(JSON.stringify(whole), path).not.toMatch(/sk-sk-|eyJeyJ/)
+      expect(JSON.stringify(whole), path).not.toMatch(/sk-sk-|eyJeyJ|sk-eyJ/)
       // Stopped at once, and stopped a moment after it began: heard within 100 ms both times.
       for (const wait of [0, 20]) {
         const controller = new AbortController()
@@ -162,7 +165,12 @@ describe('the turn changes worker thread', () => {
       'nested.json': `{"db": {"user": "shop", "password": "MADEUPctxJ"},\n "auth": {"client": {"key": "MADEUP${was}J"}},\n "retries": "${was}"}\n`,
       'block.yaml': `service: shop\nprivate_key: |\n  MADEUPctxY one\n  MADEUPctxY two\nsigning_secret: >-\n  MADEUP${was}Y folded\nretries: ${was}\n`,
       'strings.toml': `name = "shop"\napi_token = """\nMADEUPctxT\nmore MADEUPctxT"""\nsession_secret = """MADEUP${was}T"""\nretries = "${was}"\n`,
-      '.env': `NAME=shop\nCERT="MADEUPctxE\nsecond MADEUPctxE"\nOTHER="MADEUP${was}E\ntail MADEUP${was}E"\nRETRIES=${was}\n`
+      '.env': `NAME=shop\nCERT="MADEUPctxE\nsecond MADEUPctxE"\nOTHER="MADEUP${was}E\ntail MADEUP${was}E"\nRETRIES=${was}\n`,
+      // A list begun inside a map written on one line; a name that stands past what is shown of its line, with a
+      // value that goes on into lines that are shown; a token and a value on the line after `Bearer` and after a name.
+      'list.json': `{"tokens": [\n  "MADEUPctxL"\n],\n "keys": [\n  "MADEUP${was}L"\n],\n "retries": "${was}"}\n`,
+      'far.env': `NAME=shop\n${' '.repeat(4_049)}CERT="MADEUPctxF\nsecond MADEUPctxF"\n${' '.repeat(4_049)}OTHER="MADEUP${was}F\ntail MADEUP${was}F"\nRETRIES=${was}\n`,
+      'notes.txt': `Authorization: Bearer\nMADEUPctxNabcdefghijklmn\npassword:\n  MADEUP${was}Nhunter\nretries ${was}\n`
     })
     for (const [name, content] of Object.entries(files('old'))) write(at.repo, name, content)
     const one = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true }))
@@ -170,7 +178,7 @@ describe('the turn changes worker thread', () => {
     for (const [name, content] of Object.entries(files('new'))) write(at.repo, name, content)
     const two = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true, base: one.id }))
     const pair = { session: 's-one', root: at.repo, a: one.id, b: two.id }
-    const changed: Record<string, number> = { 'nested.json': 2, 'block.yaml': 2, 'strings.toml': 2, '.env': 3 }
+    const changed: Record<string, number> = { 'nested.json': 2, 'block.yaml': 2, 'strings.toml': 2, '.env': 3, 'list.json': 2, 'far.env': 3, 'notes.txt': 2 }
     for (const [path, lines] of Object.entries(changed)) {
       const answer = await client.difference({ ...pair, path })
       if (answer.state !== 'text') throw new Error(`${path}: ${answer.state}`)

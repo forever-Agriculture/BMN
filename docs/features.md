@@ -226,24 +226,27 @@ lists the latest 50 turns still kept, newest first: time, app, how the turn ende
 A turn opens to its files by path, 2,000 at a time when it has more, each with its state and the
 lines it gained and lost, and a file opens to its difference under its own row.
 
-Read it by one rule: it is what differs between two scans of that work tree, not a list of what
-the agent did. Another program's changes in between are included, and each turn says under its
-heading what its numbers cover. A turn whose totals are not complete says so in gold with the one
-reason that applies, such as "Partial: 3 files" or "Before snapshot unavailable"; in a narrow pane
-the button reads Partial, Not complete or No totals and its tooltip gives the reason. While
-recording is off, paused or not possible for the app now running, the button and the dialog say
-"Recording off", "Paused" or "Not supported for <app>" beside the earlier turn, so an old number
+Read it by one rule: it is what differs between two scans of that work tree, not a list of what the
+agent did. Another program's changes in between are included, and each turn says under its heading
+what its numbers cover. A turn whose totals are not complete says so in gold with the one reason
+that applies, such as "Partial: 3 files" or "Before snapshot unavailable"; in a narrow pane the
+button reads Partial, Not complete or No totals and its tooltip gives the reason. Every Codex turn
+is one of them, with "Ordering unverified on Codex (version not read)": BMN runs no program to ask
+its version, reads Claude Code's from where its program lies, and finds no such place for Codex.
+While recording is off, paused or not possible for the app now running, the button and the dialog
+say "Recording off", "Paused" or "Not supported for <app>" beside the earlier turn, so an old number
 is not read as the latest. While a pane says it waits for you, as it does with the notice of a
 finished turn, the button is away until you go to that session; the menu entry stays.
 
 A difference shows at most 5,000 lines or 256 KiB, and says how many lines it left out. Secret
-values in it are masked before it reaches the window, in added, removed and unchanged lines
-alike: every value of an `.env` file, values named like a key, token or password in JSON, YAML
-and TOML files, and the known shapes of keys anywhere. Nothing in this dialog reveals one; a
-change that is only a masked value reads "Secret value changed". Three scans in a row that fail
-or read nothing new pause recording for that work tree; a card says so once, and **Resume
-recording in <work tree>** in the workspace's menu starts it again. How turns are recorded, the
-limits and each wording: [turn-changes.md](turn-changes.md).
+values in it are masked before it reaches the window, in added, removed and unchanged lines alike:
+every value of an `.env` file, values named like a key, token or password in JSON, YAML and TOML
+files, and the known shapes of keys anywhere. Under such a name the whole value goes, and where a
+file leaves BMN unsure where a value ends it hides more. Nothing in this dialog reveals one; a
+change that is only a masked value reads "Secret value changed". Three scans in a row that fail or
+read nothing new pause recording for that work tree; a card says so once, and **Resume recording in
+<work tree>** in the workspace's menu starts it again. How turns are recorded, the limits and each
+wording: [turn-changes.md](turn-changes.md).
 
 **Handoffs.** An agent can prepare a package for another session — text plus up to ten of its
 published files — but cannot deliver it. The handoff opens in the source session's Needs you queue;

@@ -8,7 +8,7 @@
 // ends as "not read". Measured in Story 69.1 (`docs/turn-changes.md`).
 import { randomBytes } from 'node:crypto'
 import {
-  closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readSync, readdirSync, readlinkSync, realpathSync,
+  closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readSync, readlinkSync, realpathSync,
   renameSync, rmSync, statSync, writeFileSync, type Stats
 } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
@@ -16,7 +16,7 @@ import { decodeText } from './turn-changes-diff'
 import { runTurnGit, turnGitExecutable, type TurnGitCall, type TurnGitContext } from './turn-changes-git'
 import {
   TURN_STORE_FORMAT, TurnStore, privateFolder, sha256,
-  type NotReadEntry, type NotReadReason, type SeenFile, type TreeRow, type TurnCaptureCounts, type TurnCaptureRecord, type TurnEntry
+  type NotReadEntry, type NotReadReason, type SeenFile, type TreeRow, type TurnCache, type TurnCaptureCounts, type TurnCaptureRecord, type TurnEntry
 } from './turn-changes-store'
 
 const MiB = 1024 * 1024
@@ -89,6 +89,12 @@ export interface CaptureSeams {
   beforeProbes?: () => void | Promise<void>
   /** After the last Git command, before the lists are written. */
   beforeLists?: () => void | Promise<void>
+  /** After the lists, before the capture's record and its cache are made. */
+  beforeRecord?: () => void | Promise<void>
+  /** Before a staged file or list is moved into the store, with how many were moved so far. */
+  beforeMove?: (moved: number) => void | Promise<void>
+  /** After everything was moved in and the cache was written, before the last look at the clock. */
+  beforeLastLook?: () => void | Promise<void>
 }
 
 export interface CaptureOptions {
@@ -119,6 +125,11 @@ export interface CaptureOptions {
    * cache grows by all count. Without it, only this one store is counted.
    */
   room?: number
+  /**
+   * Called whenever staged bytes of this capture leave `staging/` without being kept: how many, and a promise
+   * that says whether they are gone (true) or could not be removed and are still on disk (false).
+   */
+  dropped?: (bytes: number, gone: Promise<boolean>) => void
   observeGit?: (call: TurnGitCall) => void
 }
 
@@ -129,15 +140,34 @@ export interface TurnRootIdentity {
   inode: number
 }
 
+/** A capture as it was published: its record as it stands on disk, what the store really grew by, and its whole time. */
+export interface PublishedCapture {
+  record: TurnCaptureRecord
+  /** Bytes the store grew by: files and lists moved in, the record, and the new cache less the old one (so it can be negative). */
+  added: number
+  /** From the capture's start through the step that published it, the wait between staging and publishing left out. */
+  tookMs: number
+}
+
 /** A capture that is whole or incomplete and not yet real: `publish` makes it so in one step, `discard` removes its bytes at once. */
 export interface StagedCapture {
   state: 'whole' | 'incomplete'
   record: TurnCaptureRecord
   tookMs: number
   phases: Record<string, number>
-  /** How many bytes publishing it puts on disk: its files and lists, its record, and what the cache grows by. */
+  /**
+   * The most publishing it needs on disk: its staged files and lists, its record, and its whole new cache,
+   * because the old cache is still there while the new one is written.
+   */
   adds: number
-  publish: () => TurnCaptureRecord
+  /**
+   * Moves the staged files and lists in, a few at a time, and then makes the capture real in one step: its
+   * record appears under `captures/`. `stop` is asked between the slices: a publication that is stopped
+   * takes out again what it moved in and resolves null. The capture's time goes on counting: when it passes
+   * while files are moved, what was moved is kept, the rest is dropped and the record reads incomplete; when
+   * it has passed at the last step, the record reads incomplete too.
+   */
+  publish: (stop?: () => boolean) => Promise<PublishedCapture | null>
   discard: () => void
 }
 
@@ -440,12 +470,16 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
   }
   const caller = options.signal
   const cancelled = (): boolean => caller?.aborted === true
-  const overtime = (): boolean => performance.now() - startedClock > limits.captureMs
   // Reading ends a little before the capture's time, so that what was read is still listed and written
   // inside it. A capture is whole only when everything, its last Git command and its lists included, was
   // done in its time.
   const closing = Math.min(250, limits.captureMs / 8)
   const readingOver = (): boolean => performance.now() - startedClock > limits.captureMs - closing
+  // Everything done in slices after the reading (looking at an earlier capture's paths, the lists, moving
+  // staged files in) ends this much before the capture's time. What is left for after it is not sliced and
+  // is bounded by the limit of entries: making the record and the cache, writing them, the renames.
+  const tail = Math.min(100, limits.captureMs / 20)
+  const slicedOver = (): boolean => performance.now() - startedClock > limits.captureMs - tail
   /** The signal of one Git command: the caller's cancel, and what is left of the capture's time. */
   const gitSignal = (): AbortSignal => {
     const left = limits.captureMs - (performance.now() - startedClock)
@@ -492,9 +526,16 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
     }
     busy.delete(root)
   }
+  // Bytes of this capture that lie in `staging/` now.
+  let inStaging = 0
   const drop = (): void => {
-    if (staged) store.discardStaging(id)
+    if (staged) {
+      // The removal starts whether or not anybody counts its bytes.
+      const gone = store.discardStaging(id)
+      options.dropped?.(inStaging, gone)
+    }
     staged = false
+    inStaging = 0
   }
   const end = (state: TurnRefusal['state'], reason: TurnRefusalReason): TurnRefusal => {
     drop()
@@ -550,6 +591,77 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
     const entered: string[] = []
     const waiting: Waiting[] = []
     const unmerged = new Set<string>()
+    // A folder below the root that holds an entry named `.git` is a repository of its own: one entry, never
+    // walked (R69-NFR4), also when Git lists files below it as the outer repository's, which it does for
+    // files that were tracked there before. Every folder a listed path lies in is looked at once, from the
+    // top down, before anything below it is counted, read or taken from the cache. `boundaryOf` gives the
+    // topmost such folder at or above a folder. It only looks (`lstat`), as the listing does for every
+    // path: a folder swapped meanwhile can at worst hide a boundary, and what is then read below it is
+    // read through the confined reader, which refuses a swapped folder.
+    const boundaries = new Map<string, string | null>([['', null]])
+    const boundaryOf = (folder: string): string | null => {
+      const known = boundaries.get(folder)
+      if (known !== undefined) return known
+      const cut = folder.lastIndexOf('/')
+      let found = boundaryOf(cut < 0 ? '' : folder.slice(0, cut))
+      if (found === null) {
+        try {
+          if (lstatSync(`${prefix}${folder}/.git`, { throwIfNoEntry: false })) found = folder
+        } catch (error) {
+          // A folder that cannot be looked into is not walked either. What is no folder has nothing below it.
+          if ((error as NodeJS.ErrnoException).code !== 'ENOTDIR') found = folder
+        }
+      }
+      boundaries.set(folder, found)
+      return found
+    }
+    const folderOf = (path: string): string => {
+      const cut = path.lastIndexOf('/')
+      return cut < 0 ? '' : path.slice(0, cut)
+    }
+    /** Entries that stand for a whole folder (a submodule, a repository of its own), each placed once. */
+    const standing = new Set<string>()
+    // What the earlier capture held, for a change of what is covered: the folders its paths lay in, and
+    // which of its entries stood for a whole folder. Neither is worked out unless a path asks.
+    let baseFolders: Set<string> | null = null
+    const hadBelow = (folder: string): boolean => {
+      if (!basePaths) return false
+      if (!baseFolders) {
+        baseFolders = new Set()
+        for (const path of basePaths) {
+          for (let at = folderOf(path); at !== '' && !baseFolders.has(at); at = folderOf(at)) baseFolders.add(at)
+        }
+      }
+      return baseFolders.has(folder)
+    }
+    const stoodBefore = new Map<string, boolean>([['', false]])
+    /** Whether a folder was, or lay below, one entry that stood for a whole folder in the earlier capture. */
+    const stoodFor = (folder: string): boolean => {
+      const known = stoodBefore.get(folder)
+      if (known !== undefined) return known
+      let stood = stoodFor(folderOf(folder))
+      if (!stood && base?.tree && basePaths?.has(folder)) {
+        try {
+          let rows = store.tree(base.tree)
+          const parts = folder.split('/')
+          for (const part of parts.slice(0, -1)) rows = store.tree((rows.get(part) as TreeRow)[2] as string)
+          stood = rows.get(parts.at(-1) as string)?.[1] === 's'
+        } catch {
+          // The earlier capture's lists cannot be read: nothing is said about it.
+        }
+      }
+      stoodBefore.set(folder, stood)
+      return stood
+    }
+    /** Whether a path that the earlier capture did not hold came into what is covered, as against was made since. */
+    const cameIn = (path: string, stat: Stats, standsForFolder: boolean): boolean => {
+      if (!base || !basePaths || basePaths.has(path)) return false
+      // What is covered changed around it: files below what was one entry, or one entry where files were. Its birth says nothing then.
+      if (stoodFor(folderOf(path)) || (standsForFolder && hadBelow(path))) return true
+      // Made after the earlier scan began: added. Older, or with no birth time: it was there and not covered.
+      // The scan's start is a whole millisecond, rounded down, so a file made in that same millisecond counts as older.
+      return !(stat.birthtimeMs > 0 && stat.birthtimeMs >= base.startedAt + 1)
+    }
     let pending: Buffer = Buffer.alloc(0)
     // What the listing met. One object, because `take` writes it from inside a callback.
     const met: { refused: TurnRefusal | null; bound: string | null } = { refused: null, bound: null }
@@ -565,12 +677,20 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
         met.refused = refusal('not-supported', 'a sparse checkout')
         return false
       }
-      const { path } = parsed
+      let { path } = parsed
       if (parsed.tag === 'M') {
         if (unmerged.has(path)) return true
         unmerged.add(path)
       }
-      if (parsed.unreadableName) {
+      const top = boundaryOf(folderOf(path))
+      let boundary = false
+      if (top !== null) {
+        // Below a repository of its own: that folder is the entry, once, and this path is nothing.
+        if (standing.has(top)) return true
+        path = top
+        boundary = true
+      } else if (standing.has(path)) return true
+      if (parsed.unreadableName && !boundary) {
         if (count >= limits.entries) {
           met.bound = entriesBound
           return false
@@ -581,15 +701,18 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
       }
       const stat = lstatSync(prefix + path, { throwIfNoEntry: false })
       if (!stat) return true
-      if (stat.isDirectory() && !parsed.folder && parsed.mode !== '160000') return true
+      if (stat.isDirectory() && !boundary && !parsed.folder && parsed.mode !== '160000') return true
       if (count >= limits.entries) {
         met.bound = entriesBound
         return false
       }
       count += 1
-      // Made after the earlier scan began: added. Older, or with no birth time: it was there and not covered.
-      // The scan's start is a whole millisecond, rounded down, so a file made in that same millisecond counts as older.
-      if (base && basePaths && !basePaths.has(path) && !(stat.birthtimeMs > 0 && stat.birthtimeMs >= base.startedAt + 1)) entered.push(path)
+      if (boundary || stat.isDirectory()) standing.add(path)
+      if (cameIn(path, stat, boundary || stat.isDirectory())) entered.push(path)
+      if (boundary) {
+        waiting.push({ path, stat, gitlink: false })
+        return true
+      }
       if (stat.isFile()) {
         const known = cache?.files.get(path)
         // A file is taken as read before only when everything Linux tells of it is the same and it had
@@ -631,7 +754,8 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
     await options.seams?.afterList?.(root)
 
     // 2. The rest: links as their text, submodules and nested repositories as one entry, files by their bytes.
-    const stagedObjects = new Set<string>()
+    // What this capture staged, by kind: a file's bytes and a folder's list may hash alike and are still two things.
+    const stagedSizes = { blobs: new Map<string, number>(), trees: new Map<string, number>() }
     let bytesRead = 0
     let bytesStored = 0
     let slice = performance.now()
@@ -644,7 +768,8 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
       }
       writeFileSync(join(staging, kind, hash), bytes, { mode: 0o600 })
       bytesStored += bytes.length
-      stagedObjects.add(hash)
+      inStaging += bytes.length
+      stagedSizes[kind].set(hash, bytes.length)
       return true
     }
     const beforeEntry = options.seams?.beforeEntry
@@ -696,7 +821,7 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
           if (read.entry) entry = read.entry
           else {
             const hash = sha256(read.bytes)
-            if (!stagedObjects.has(hash) && !store.hasObject('blobs', hash) && !stage('blobs', hash, read.bytes)) {
+            if (!stagedSizes.blobs.has(hash) && !store.hasObject('blobs', hash) && !stage('blobs', hash, read.bytes)) {
               met.bound = STORE_FULL
               break
             }
@@ -729,12 +854,17 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
           await yieldNow()
           slice = performance.now()
           if (cancelled()) return end('cancelled', 'cancelled')
-          if (overtime()) {
+          if (slicedOver()) {
             met.bound = timeBound
             break
           }
         }
         if (paths.has(path)) continue
+        // Below a repository of its own nothing is looked at: what was there is no longer covered, and that is all BMN can say.
+        if (boundaryOf(folderOf(path)) !== null) {
+          left.push(path)
+          continue
+        }
         // Looking only: a path that still names something was not removed, whatever it now is.
         if (lstatSync(prefix + path, { throwIfNoEntry: false }) === undefined) gone.push(path)
         else left.push(path)
@@ -745,7 +875,7 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
     const head = await runTurnGit(git(gitSignal()), root, 'head')
     if (cancelled()) return end('cancelled', 'cancelled')
     if (!sameFolder(root, { dev: established.device, ino: established.inode })) return end('unavailable', 'the root changed while it was captured')
-    if (met.bound === null && (head.stopped || overtime())) met.bound = timeBound
+    if (met.bound === null && (head.stopped || slicedOver())) met.bound = timeBound
     phase('head')
     await options.seams?.beforeLists?.()
     if (cancelled()) return end('cancelled', 'cancelled')
@@ -753,7 +883,11 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
     // 4. One list per folder, the deepest first, each named by the SHA-256 of its text. A folder in which
     // every entry is as it was, with as many entries as before, keeps the list it had. A capture that
     // met the limit of entries, a cut listing or a full store keeps nothing: it could never be compared.
+    // A capture whose time passed keeps the files it read and no list of them (`treeless`): the lists are
+    // sliced work, and no sliced work goes on past the capture's time. Its cache names those files, so the
+    // next capture has that much less to read.
     let hollow = listingCut || met.bound === STORE_FULL || met.bound === entriesBound
+    let treeless = met.bound === timeBound
     const trees = new Set<string>()
     const hashes = new Map<string, string>()
     const lists = new Map<string, [string, number]>()
@@ -772,11 +906,16 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
           }
         }
       }
-      for (const relative of [...folders.keys()].sort((one, other) => other.length - one.length)) {
+      for (const relative of treeless ? [] : [...folders.keys()].sort((one, other) => other.length - one.length)) {
         if (performance.now() - slice > 4) {
           await yieldNow()
           slice = performance.now()
           if (cancelled()) return end('cancelled', 'cancelled')
+          if (slicedOver()) {
+            met.bound = timeBound
+            treeless = true
+            break
+          }
         }
         const rows = folders.get(relative) as Map<string, TurnEntry | null>
         const kept = cache?.folders.get(relative)
@@ -791,7 +930,7 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
           list.sort((one, other) => (one[0] < other[0] ? -1 : one[0] > other[0] ? 1 : 0))
           const text = Buffer.from(JSON.stringify(list))
           hash = sha256(text)
-          if (!cache?.trees.has(hash) && !stagedObjects.has(hash) && !store.hasObject('trees', hash) && !stage('trees', hash, text)) {
+          if (!cache?.trees.has(hash) && !stagedSizes.trees.has(hash) && !store.hasObject('trees', hash) && !stage('trees', hash, text)) {
             met.bound = STORE_FULL
             hollow = true
             break
@@ -806,9 +945,6 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
         trees.add(hash)
       }
     }
-    // The lists are written whatever the clock says, so that what was read counts for the next capture; a
-    // capture whose time passed while they were written is not whole.
-    if (met.bound === null && overtime()) met.bound = timeBound
     const nothingKept = (): void => {
       hollow = true
       Object.assign(counts, { entries: count, files: 0, links: 0, submodules: 0, tooLarge: 0, notRead: 0 })
@@ -821,72 +957,152 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
       counts.entries = counts.files + counts.links + counts.submodules + counts.tooLarge + counts.notRead
     } else nothingKept()
     phase('lists')
+    await options.seams?.beforeRecord?.()
+    if (cancelled()) return end('cancelled', 'cancelled')
 
     const headEnd = head.stdout.trim()
     const endedAt = Date.now()
-    const describe = (): TurnCaptureRecord => ({
+    // A capture without lists keeps no list it staged before its time passed: they stay in `staging/` and go with it.
+    const keeps = (): number => (hollow ? 0 : treeless ? [...stagedSizes.blobs.values()].reduce((sum, size) => sum + size, 0) : bytesStored)
+    const describe = (stored: number): TurnCaptureRecord => ({
       format: TURN_STORE_FORMAT, id, root, rootDevice: established.device, rootInode: established.inode, objectFormat: established.objectFormat,
       startedAt, endedAt, headStart: established.head, headEnd: head.code === 0 && COMMIT.test(headEnd) ? headEnd : null,
-      state: met.bound === null ? 'whole' : 'incomplete', bound: met.bound, tree: hollow ? null : (hashes.get('') ?? null), counts, bytesRead, bytesStored,
+      state: met.bound === null ? 'whole' : 'incomplete', bound: met.bound, tree: hollow || treeless ? null : (hashes.get('') ?? null), counts, bytesRead,
+      bytesStored: stored,
       base: met.bound === null ? (base?.id ?? null) : null, gone: met.bound === null ? gone : [], left: met.bound === null ? left : [],
       entered: met.bound === null ? entered : []
     })
-    // What publishing puts on disk beside the staged bytes: the record itself, and what the cache grows by.
-    // All of it counts against the room, so the store's bound is a bound on what is on disk.
-    let record = describe()
-    let cacheText = hollow ? null : store.cacheText({ capture: id, startedAt, files, paths, trees, folders: lists })
-    const beside = (): number =>
-      Buffer.byteLength(JSON.stringify(record)) + (cacheText === null ? 0 : Math.max(0, Buffer.byteLength(cacheText) - store.cacheBytes()))
-    if (!hollow && bytesStored + beside() > room) {
+    const cached = (): TurnCache => ({ capture: id, startedAt, files, paths, trees: treeless ? new Set() : trees, folders: treeless ? new Map() : lists })
+    // What publishing needs on disk at its most: the staged bytes it keeps, the record itself, and the whole
+    // new cache, because the old one is still there while the new one is written. All of it counts against
+    // the room, so the store's bound is a bound on what is on disk.
+    if (met.bound === null && slicedOver()) {
+      met.bound = timeBound
+      treeless = true
+    }
+    let record = describe(keeps())
+    let cacheText = hollow ? null : store.cacheText(cached())
+    const beside = (): number => Buffer.byteLength(JSON.stringify(record)) + (cacheText === null ? 0 : Buffer.byteLength(cacheText))
+    if (!hollow && keeps() + beside() > room) {
       met.bound = STORE_FULL
       nothingKept()
       cacheText = null
-      record = describe()
+      record = describe(0)
     }
     // A store with no room even for the few bytes of this record gets nothing: the caller still has the record.
     const written = beside() <= room
-    const adds = written ? bytesStored + beside() : 0
+    const adds = written ? keeps() + beside() : 0
     phase('record')
+    const stagedTook = performance.now() - startedClock
     let settled = false
     return {
       state: record.state,
       record,
-      tookMs: performance.now() - startedClock,
+      tookMs: stagedTook,
       phases,
       adds,
-      /**
-       * One step makes the capture real: its record appears under `captures/`. Its files and lists are moved
-       * in first; should BMN end between the two, the folder in `staging/` is still there at the next start,
-       * and the start then removes every byte no published capture needs (`TurnStore.clearLeftovers`).
-       */
-      publish(): TurnCaptureRecord {
+      async publish(stop?: () => boolean): Promise<PublishedCapture | null> {
         if (settled) throw new Error('this capture was already published or discarded')
         settled = true
+        // The capture's clock goes on from where staging left it; a wait between the two is nobody's work.
+        const began = performance.now()
+        const spent = (): number => stagedTook + (performance.now() - began)
+        const moved: string[] = []
+        let movedBytes = 0
+        let real = false
+        // Exactly what was moved in is taken out again, and the folder in `staging/` stays until that is done:
+        // should BMN end meanwhile, the next start finds it and removes every byte no published capture needs.
+        const undo = (): void => {
+          store.dropWritten(id)
+          const gone = store.undoMoves(id, moved)
+          options.dropped?.(inStaging + movedBytes, gone)
+          staged = false
+          inStaging = 0
+        }
         try {
-          if (!written) return record
+          if (!written) return { record, added: 0, tookMs: spent() }
           privateFolder(join(store.directory, 'captures'))
+          // 1. The staged files and lists are moved in, a few at a time. Until the record appears nothing names them.
+          const landed = new Set<string>()
+          let cut = false
+          const beforeMove = options.seams?.beforeMove
           if (staged) {
             const made = new Set<string>()
-            for (const kind of ['blobs', 'trees'] as const) {
-              for (const hash of readdirSync(join(staging, kind))) {
-                const target = store.objectPath(kind, hash)
-                if (!made.has(dirname(target))) {
-                  privateFolder(dirname(target))
-                  made.add(dirname(target))
+            let turn = performance.now()
+            moving: for (const kind of treeless ? (['blobs'] as const) : (['blobs', 'trees'] as const)) {
+              for (const [hash, size] of stagedSizes[kind]) {
+                if (beforeMove) await beforeMove(moved.length)
+                if (performance.now() - turn > 4) {
+                  await yieldNow()
+                  turn = performance.now()
                 }
-                renameSync(join(staging, kind, hash), target)
+                if (stop?.()) {
+                  undo()
+                  return null
+                }
+                if (spent() > limits.captureMs - tail) {
+                  cut = true
+                  break moving
+                }
+                const target = store.objectPath(kind, hash)
+                // Already in the store: nothing is moved and nothing is new. Its staged copy goes with the folder.
+                if (!existsSync(target)) {
+                  if (!made.has(dirname(target))) {
+                    privateFolder(dirname(target))
+                    made.add(dirname(target))
+                  }
+                  renameSync(join(staging, kind, hash), target)
+                  moved.push(target)
+                  movedBytes += size
+                  inStaging -= size
+                }
+                if (kind === 'blobs') landed.add(hash)
               }
             }
-          } else privateFolder(staging)
-          writeFileSync(join(staging, 'capture.json'), JSON.stringify(record), { mode: 0o600 })
-          renameSync(join(staging, 'capture.json'), store.capturePath(id))
-          rmSync(staging, { recursive: true, force: true })
-          staged = false
-          if (cacheText !== null) store.saveCache({ capture: id, startedAt, files, paths, trees, folders: lists }, cacheText)
+          }
+          if (cut) {
+            // The capture's time passed while its files were moved in: what is in the store stays and is named
+            // by the cache, the rest is dropped, and without its lists the capture is not whole.
+            if (met.bound === null) met.bound = timeBound
+            treeless = true
+            for (const [path, seen] of files) if (stagedSizes.blobs.has(seen[6]) && !landed.has(seen[6])) files.delete(path)
+            cacheText = store.cacheText(cached())
+          }
+          // 2. The cache is written beside its place; it takes that place once the record is there.
+          const cacheBefore = cacheText === null ? 0 : store.cacheBytes()
+          if (cacheText !== null) store.writeCache(cacheText)
+          record = describe(movedBytes)
+          let text = JSON.stringify(record)
+          await options.seams?.beforeLastLook?.()
+          if (stop?.()) {
+            undo()
+            return null
+          }
+          // 3. The last look at the clock, and then the one step that makes the capture real: its record appears under `captures/`.
+          if (met.bound === null && spent() > limits.captureMs) {
+            met.bound = timeBound
+            record = describe(movedBytes)
+            text = JSON.stringify(record)
+          }
+          const recordPath = store.capturePath(id)
+          writeFileSync(`${recordPath}.new`, text, { mode: 0o600 })
+          renameSync(`${recordPath}.new`, recordPath)
+          real = true
+          // What is left in `staging/` (a list of a capture that keeps none, a copy of what the store had) goes now, not before.
+          if (staged) {
+            if (inStaging > 0) drop()
+            else rmSync(staging, { recursive: true, force: true })
+            staged = false
+          }
+          const cacheAdded = cacheText !== null && store.adoptCache(cached()) ? Buffer.byteLength(cacheText) - cacheBefore : 0
+          return { record, added: movedBytes + Buffer.byteLength(text) + cacheAdded, tookMs: spent() }
+        } catch (error) {
+          // Before the record appeared nothing may stay of it; once it is there the capture is real, whatever failed after.
+          if (!real) undo()
+          throw error
         } finally {
           release()
         }
-        return record
       },
       /** A capture that was cancelled or not confirmed: its staged bytes go at once. */
       discard(): void {

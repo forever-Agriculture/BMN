@@ -1,9 +1,19 @@
-// MODULE: secret-ranges.test.ts - where secret values are found in a text, by shape and by the rule that goes by a file's name (R67-NFR7), wherever a value stands and however far it goes, inside bounded work; on made-up values
+// MODULE: secret-ranges.test.ts - where secret values are found in a text, by shape and by the rule that goes by a file's name (R67-NFR7): a value under a name that says so is hidden whole, an uncertain file hides more, and the work is bounded and can be stopped; on made-up values
 import { describe, expect, it } from 'vitest'
 import { secretFileKind, secretRanges, secretShapeRanges } from './secret-ranges'
 
 /** The stretches a rule hides, as text. */
 const hidden = (path: string, text: string): string[] => secretRanges(path, text).map(([start, end]) => text.slice(start, end))
+/** The text as it may be read: every hidden stretch replaced by one mark. */
+function readable(path: string, text: string, shown?: number): string {
+  let out = ''
+  let at = 0
+  for (const [start, end] of secretRanges(path, text, shown === undefined ? {} : { shown })) {
+    out += `${text.slice(at, start)}\u2022`
+    at = end
+  }
+  return out + text.slice(at)
+}
 const RUN = 'Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4MTIzNDU2'
 const OPENAI = 'sk-madeupmadeupmadeupmadeup1234'
 const PEM = ['-----BEGIN OPENSSH PRIVATE KEY-----', 'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW', '-----END OPENSSH PRIVATE KEY-----'].join('\n')
@@ -64,6 +74,41 @@ describe('known shapes', () => {
   ])('are the same in a file\'s text as in a short text: %s', (text) => {
     expect(secretRanges('notes.txt', text)).toEqual(secretShapeRanges(text))
   })
+
+  // Two shapes hold a space in their pattern and so go on over a line ending in a short text. A file's text is
+  // searched line by line, and finds them all the same: over `\r\n`, over any number of empty lines, and
+  // whatever stands before them.
+  it.each([
+    'Authorization: Bearer\nabcdefghijklmnop1234\n',
+    'Authorization: Bearer\r\n\r\n   abc.DEF-ghi_jkl~mno+pq/r=  tail\r\n',
+    'bearer\n\n\n\n\t0123456789abcdefXYZ',
+    'Bearer\nshort\n0123456789abcdefXYZ\n',
+    'xBearer\n0123456789abcdefXYZ\n',
+    'password:\n  hunter2hunter2\n',
+    'password:\r\n\r\n\r\n  hunter2hunter2\r\nnext\r\n',
+    'the api_key =\n\n"abcdefgh12345678"\n',
+    '"token":\n"abcdefgh"\n',
+    'my secret\n: swordfish99\n',
+    'my secret\n\n=\n\n  swordfish99 and more\n',
+    'PASSWD"\n   =swordfish99\n',
+    'password:\nshort\nlonger-than-eight\n',
+    'token: =\nabcdefgh12345678\n',
+    'token\nabcdefgh12345678\n',
+    'a token\n',
+    'password:',
+    `${'word '.repeat(2_000)}password:\n${'\n'.repeat(300)}hunter2hunter2 ${OPENAI}\n`,
+    `first ${OPENAI} and a secret:\nsk-madeupmadeupmadeupmadeup5678 Bearer\n\nabcdefghijklmnop1234 token=\nabcdefgh\n`
+  ])('are found over a line ending as in a short text: %j', (text) => {
+    expect(secretRanges('notes.txt', text)).toEqual(secretShapeRanges(text))
+  })
+
+  it('are found over a line ending however long the line before is, also past what is searched of it', () => {
+    const far = `${'x '.repeat(40_000)}Authorization: Bearer\n\nabcdefghijklmnop1234\nthe password =\nhunter2hunter2\n`
+    const read = readable('notes.txt', far, 2_000)
+    expect(read).not.toContain('abcdefghijklmnop1234')
+    expect(read).not.toContain('hunter2hunter2')
+    expect(read).toContain('the password =')
+  })
 })
 
 describe('a .env file', () => {
@@ -78,6 +123,24 @@ describe('a .env file', () => {
   })
 })
 
+describe('a .env file, however it is written', () => {
+  it('reads a name wherever it stands in its line, also past what is shown of it', () => {
+    const text = `${' '.repeat(4_049)}CERT="first-part\nsecond-part"\nNEXT=plain\n`
+    expect(hidden('.env', text)).toEqual(['first-part\nsecond-part', 'plain'])
+    expect(secretRanges('.env', text, { shown: 2_000 })).toEqual(secretRanges('.env', text))
+  })
+
+  it('hides a line that is neither a comment nor NAME=value whole, and what follows a quote that closed', () => {
+    expect(hidden('.env', 'just words\nexport NAME\nA=1\n')).toEqual(['just words', 'export NAME', '1'])
+    // A quote that was never closed closes at the next one: what follows on that line is not certain.
+    expect(readable('.env', 'A="never closed\nB="hunter2"\nC=plain\n')).toBe('A="•"•\nC=•\n')
+  })
+
+  it('hides the rest of the file after a quote that is never closed', () => {
+    expect(readable('.env', "A='never closed\nB=two\nC=three\n")).toBe("A='•\n")
+  })
+})
+
 describe('a config file', () => {
   it('hides a value whose name says so, in JSON, YAML and TOML, and keeps the quotes and the comma', () => {
     expect(hidden('config.json', '{\n  "apiKey": "abc",\n  "port": 5173,\n  "auth_cookie": "c1"\n}\n')).toEqual(['abc', 'c1'])
@@ -88,43 +151,154 @@ describe('a config file', () => {
   it('hides it wherever the name stands in a line: a map written on one line, however deep', () => {
     expect(hidden('a.json', '{"key":"abc"}')).toEqual(['abc'])
     expect(hidden('a.json', '{"a":{"key":"t1","n":1},"b":2,"cookie":c2}\n')).toEqual(['t1', 'c2'])
-    expect(hidden('a.toml', 'auth = { token = "x1", user = "bob" }\n')).toEqual(['x1'])
+    expect(hidden('a.toml', 'server = { token = "x1", user = "bob" }\n')).toEqual(['x1'])
     expect(hidden('a.yaml', 'database: { host: db, password: p-1 }\n')).toEqual(['p-1'])
   })
 
   it('takes nothing inside another value for a name', () => {
     expect(hidden('a.json', '{\n  "description": "use key: value, token: later",\n  "url": "https://example.test/a?b=1"\n}\n')).toEqual([])
+    expect(hidden('a.yaml', 'description: use key: value, token: later\nurl: https://example.test/a?b=1\n')).toEqual([])
+    expect(hidden('a.toml', 'description = "token = later"\nat = 07:32:00\n')).toEqual([])
   })
 
-  it('hides a YAML block under such a name, every line of it', () => {
-    expect(hidden('a.yaml', 'private_key: |\n  line one\n  line two\nport: 1\n')).toEqual(['line one', 'line two'])
-    expect(hidden('a.yaml', 'items:\n  - secret: >-\n      abc\n\n      def\n  - name: x\n')).toEqual(['abc', 'def'])
+  it('hides all that stands in brackets under such a name, whatever names stand there and wherever the brackets close', () => {
+    expect(hidden('a.toml', 'auth = { token = "x1", user = "bob" }\n')).toEqual(['token = "x1", user = "bob"'])
+    expect(hidden('a.yaml', 'tokens: ["t1", \'t2\', t3]\nname: x\n')).toEqual(['"t1", \'t2\', t3'])
+    expect(hidden('package.json', '{\n  "auth": {\n    "user": "bob"\n  }\n}\n')).toEqual(['"user": "bob"'])
+    // A list begun inside a map written on one line.
+    expect(hidden('config.json', '{"tokens": [\n  "short-secret"\n]}\n')).toEqual(['"short-secret"'])
+    expect(hidden('config.json', '"tokens": [\n  "short-secret"\n]\n')).toEqual(['"short-secret"'])
+    // A value on the line after its name, a list whose items are not set in, a map before a plain item.
+    expect(hidden('a.json', '{"token":\n"abc"}\n')).toEqual(['abc'])
+    expect(hidden('a.toml', 'tokens = [\n"a",\n"b"\n]\nname = "x"\n')).toEqual(['"a",\n"b"'])
+    expect(hidden('a.yaml', 'tokens: [\n"a",\n"b"\n]\nname: x\n')).toEqual(['"a",\n"b"'])
+    expect(hidden('a.json', '{"tokens": [{"a": 1}, "plain"], "n": 1}\n')).toEqual(['{"a": 1}, "plain"'])
+    // Brackets and quotes inside it do not end it early.
+    expect(hidden('a.json', '{"keys": ["]", {"x": "}"}, [1, [2]]], "n": 1}\n')).toEqual(['"]", {"x": "}"}, [1, [2]]'])
+  })
+
+  it('reads a name written with escapes, and comments and a comma before a closing bracket in JSONC', () => {
+    expect(hidden('a.json', '{"to\\u006ben": "t1", "\\u0061uth": {"a": "b"}, "pa\\x73sword": "p1", "n\\u0061me": "x"}\n')).toEqual(['t1', '"a": "b"', 'p1'])
+    expect(hidden('a.yaml', '"to\\u006ben": t1\n"n\\u0061me": x\n')).toEqual(['t1'])
+    expect(hidden('settings.jsonc', '{\n  // "token": "in a comment"\n  "name": "x", /* "key": "y" */\n  "token": "t1", // the "token"\n  "keys": ["a", /* ] */ "b",],\n}\n')).toEqual(['t1', '"a", /* ] */ "b",'])
+  })
+
+  it('hides every line set in deeper below such a name, whatever stands there', () => {
+    expect(hidden('a.yaml', 'private_key: |\n  line one\n  line two\nport: 1\n')).toEqual(['line one\n  line two'])
+    expect(hidden('a.yaml', 'items:\n  - secret: >-\n      abc\n\n      def\n  - name: x\n')).toEqual(['abc\n\n      def'])
+    expect(hidden('a.yaml', 'api_keys:\n  - k1\n  - k2\nother: 1\n')).toEqual(['- k1\n  - k2'])
+    expect(hidden('a.yaml', 'tokens:\n- t1\n- t2\nname: x\n')).toEqual(['- t1\n- t2'])
+    expect(hidden('a.yaml', 'password:\n  hunter2\nport: 1\n')).toEqual(['hunter2'])
+    expect(hidden('a.yaml', 'password: abc\n  def\nport: 1\n')).toEqual(['abc', 'def'])
+    expect(hidden('a.yaml', 'auth:\n  user: bob\n  token: t9\nport: 1\n')).toEqual(['user: bob\n  token: t9'])
+    expect(hidden('a.yaml', 'secrets:\n  - name: db\n    password: p1\n  - name: api\nport: 1\n')).toEqual(['- name: db\n    password: p1\n  - name: api'])
+    // A name beside it, at its own column, is no part of it.
+    expect(hidden('a.yaml', '- token: t1\n  user: bob\n- tokens:\n  - t2\n  user: eve\n')).toEqual(['t1', '- t2'])
+    // A comment ends nothing, at whatever column it stands.
+    expect(hidden('a.yaml', 'password:\n# a comment\n  hunter2\nport: 1\n')).toEqual(['hunter2'])
+    // A bracket or a quote opened on such a line is followed to where it closes, however the lines between are set in.
+    expect(readable('a.yaml', 'secrets:\n  list: [\n"a",\n"b"\n]\nport: 1\n')).toBe('secrets:\n  •\nport: 1\n')
+    expect(readable('a.yaml', 'secrets:\n  note: "a\nb" c\n  more: m\nport: 1\n')).toBe('secrets:\n  •\nport: 1\n')
+    expect(readable('a.yaml', 'secrets:\n  text: |\n    [ no list\n    "no quote\n  more: m\nport: 1\n')).toBe('secrets:\n  •\nport: 1\n')
+    expect(readable('a.yaml', 'secrets:\n  list: [\n"a"\nport: 1\n')).toBe('secrets:\n  •\n')
+    // TOML does not go by how deep a line is set in.
+    expect(hidden('a.toml', 'api_key = "x"\n  port = 5\n')).toEqual(['x'])
+    // YAML's marks before a value do not hide what the value is.
+    expect(hidden('a.yaml', 'password: !!str "abc\n def"\nsecret: &s [\n"x"\n]\nvault_key: !vault |\n  3132\nport: 1\n')).toEqual(['abc\n def', '"x"', '3132'])
+  })
+
+  it('hides every value of a TOML table whose header says so, to the next header', () => {
+    expect(hidden('a.toml', '[server]\nhost = "h"\n[server.auth]\nuser = "bob"\nport = 5\nlist = [\n1,\n2\n]\n[other]\nname = "x"\n')).toEqual(['bob', '5', '1,\n2'])
+    expect(hidden('a.toml', '[[tokens]]\nvalue = "t1"\n[[tokens]]\nvalue = "t2"\n\n[plain] # the rest\nvalue = "v"\n')).toEqual(['t1', 't2'])
   })
 
   it('hides a TOML string between three quotes, on one line or over several', () => {
     expect(hidden('a.toml', 'signing_key = """abc"""\nname = "x"\n')).toEqual(['abc'])
-    expect(hidden('a.toml', 'token = """\nabc\ndef\n"""\nname = "x"\n')).toEqual(['\nabc\ndef\n'])
-    expect(hidden('a.toml', "password = '''\nabc'''\n")).toEqual(['\nabc'])
+    expect(hidden('a.toml', 'token = """\nabc\ndef\n"""\nname = "x"\n')).toEqual(['abc\ndef'])
+    expect(hidden('a.toml', "password = '''\nabc'''\n")).toEqual(['abc'])
+    // A quote behind a backslash closes nothing, and up to two quotes may stand before the three that close.
+    expect(hidden('a.toml', 'signing_key = """a\\"""b"" """\nname = "x"\n')).toEqual(['a\\"""b""'])
+    expect(hidden('a.toml', 'signing_key = """a""""\nname = "x"\n')).toEqual(['a"'])
   })
 
-  it('hides a quoted value that goes on over lines set in deeper, and stops where a line is not', () => {
+  it('hides a quoted value that goes on over a line ending, whatever its name: nothing tells it from a quote never closed', () => {
     expect(hidden('a.yaml', 'password: "abc\n  def"\nport: 1\n')).toEqual(['abc\n  def'])
-    // A string that was never closed does not swallow what follows it.
-    expect(hidden('a.json', '{\n  "token": "abc\n  "next": "v"\n}\n')).toEqual(['abc\n'])
+    expect(hidden('a.yaml', 'title: "one\n  two"\nport: 1\n')).toEqual(['one\n  two'])
+    expect(hidden('a.toml', 'about = """\nline one\nline two"""\nname = "x"\n')).toEqual(['line one\nline two'])
+    // On one line it is certain, and is read.
+    expect(hidden('a.toml', 'about = """one line"""\ntitle = "t"\n')).toEqual([])
+    // A quote that was never closed closes at the next one: what follows there is not certain either.
+    expect(readable('a.yaml', 'title: "never closed\nnext: "hunter2"\nport: 1\n')).toBe('title: "• "•\nport: 1\n')
+    expect(readable('a.toml', 'title = "never closed\nnext = "hunter2"\nport = 1\n')).toBe('title = "• "•\nport = 1\n')
+    expect(readable('a.toml', 'about = """never closed\nname = "x"\nlater = """\nhunter2\n"""\n')).toBe('about = """• """\n•\n')
   })
 
-  it('hides the items of a list under such a name, on one line or below it', () => {
-    expect(hidden('a.yaml', 'tokens: ["t1", \'t2\', t3]\nname: x\n')).toEqual(['t1', 't2', 't3'])
-    expect(hidden('a.yaml', 'api_keys:\n  - k1\n  - k2\nother: 1\n')).toEqual(['k1', 'k2'])
-    expect(hidden('a.yaml', 'tokens:\n- t1\n- t2\nname: x\n')).toEqual(['t1', 't2'])
-    expect(hidden('a.json', '{\n  "tokens": [\n    "t1",\n    "t2"\n  ],\n  "n": 1\n}\n')).toEqual(['t1', 't2'])
-    expect(hidden('a.yaml', 'password:\n  hunter2\nport: 1\n')).toEqual(['hunter2'])
+  it('hides the rest of the file where it is no longer certain what a value is', () => {
+    // A string never closed, in a file where brackets hold everything.
+    expect(readable('a.json', '{\n  "token": "abc\n  "next": "v",\n  "password": "p"\n}\n')).toBe('{\n  "token": "•\n  "•\n')
+    expect(readable('a.json', '{\n  "name": "abc\n  "next": "v",\n  "password": "p"\n}\n')).toBe('{\n  "name": "•\n  "•\n')
+    expect(readable('a.json', '{"name": "never closed, "password": 5}\n')).toBe('{"name": "never closed, "•\n')
+    // A value right after a value.
+    expect(readable('a.json', '{"a": "x" "password": "p"}\n')).toBe('{"a": "x" •\n')
+    expect(readable('a.yaml', 'list: [a, "b" c, d]\npassword: p\n')).toBe('list: [a, "b" •\n')
+    // A bracket that closes nothing, or the wrong one.
+    expect(readable('a.json', '{"a": [1, 2}}, "password": "p"]\n')).toBe('{"a": [1, 2•\n')
+    expect(readable('a.json', '{"a": 1}}\n{"password": "p"}\n')).toBe('{"a": 1}•\n')
+    expect(readable('a.yaml', 'a: 1\n]\npassword: p\n')).toBe('a: 1\n•\n')
+    expect(readable('a.yaml', 'a: }\npassword: p\n')).toBe('a: •\n')
+    // A quote, three quotes or a bracket never closed.
+    expect(readable('a.yaml', "a: 'never closed\npassword: p\n")).toBe("a: '•\n")
+    expect(readable('a.toml', 'a = """never closed\npassword = "p"\n')).toBe('a = """•\n')
+    expect(readable('a.toml', 'tokens = [\n"a",\n"b"\n')).toBe('tokens = [\n•\n')
+    expect(readable('a.yaml', 'list: [a, b\nauth:\n  user: bob\n')).toBe('list: [a, b\n•\n')
+    expect(readable('a.yaml', 'list: [a,\nb,\n')).toBe('list: [•\n')
+    // TOML has no line without a name; YAML's `? name` puts a name where this reading does not look.
+    expect(readable('a.toml', 'a = 1\njust words\npassword = "p"\n')).toBe('a = 1\n•\n')
+    expect(readable('a.yaml', 'a: 1\n? password\n: p\n')).toBe('a: 1\n•\n')
+    // Brackets nested deeper than any file nests them.
+    expect(readable('a.json', `${'['.repeat(2_000)}"password"`)).toBe(`${'['.repeat(1_024)}•`)
   })
 
-  it('leaves what stands under such a name with a name of its own to that name', () => {
-    expect(hidden('a.yaml', 'auth:\n  user: bob\n  token: t9\nport: 1\n')).toEqual(['t9'])
-    expect(hidden('a.yaml', 'secrets:\n  - name: db\n    password: p1\n  - name: api\n')).toEqual(['p1'])
-    expect(hidden('package.json', '{\n  "auth": {\n    "user": "bob"\n  }\n}\n')).toEqual([])
+  it('hides what follows a closed value on its line and is no comment', () => {
+    expect(readable('a.yaml', 'a: "x" password: p\nb: [1] rest\nc: "y" # said\nd: {e: 1}, # said\n')).toBe('a: "x" •\nb: [1] •\nc: "y" # said\nd: {e: 1}, # said\n')
+  })
+
+  it('reads a block of text under another name for names only: brackets and quotes in it open nothing', () => {
+    const text = 'run: |\n  if [ -f x ; then echo "it\'s\n  password: abc\n  TOKEN=t1\nprivate_key: |\n  line one\nname: x\n'
+    expect(hidden('ci.yaml', text)).toEqual(['abc', 't1', 'line one'])
+    expect(hidden('map.yaml', 'data:\n  app.yaml: |\n    db:\n      password: p1\n      host: h\n  other: "o"\n')).toEqual(['p1'])
+    expect(hidden('a.yaml', '- |\n  token: t1\n  [ not a list\n- name: x\n')).toEqual(['t1'])
+  })
+
+  it('takes NAME=value in a YAML list for a name and its value, and no name out of words with a space', () => {
+    expect(hidden('compose.yaml', 'environment:\n  - POSTGRES_PASSWORD=example\n  - POSTGRES_USER=shop\n')).toEqual(['example'])
+    expect(hidden('a.yaml', 'note: a token = b\n- a secret thing = x\n')).toEqual([])
+  })
+
+  it('hides what a value written as NAME=value sets when that name says so: quoted in a list, after another name, and inside brackets', () => {
+    expect(hidden('compose.yaml', 'environment:\n  - "DB_PASSWORD=p1"\n  - \'APP_SECRET=s1\'\n  - "DB_USER=shop"\n')).toEqual(['p1', 's1'])
+    expect(hidden('ci.yaml', 'steps:\n  - run: API_TOKEN=t1 make\n  - run: MODE=fast make\n')).toEqual(['t1 make'])
+    expect(hidden('a.yaml', 'env: ["API_KEY=k1", MODE=fast, DB_PASSWORD=p1]\nargs: "--auth=basic"\n')).toEqual(['k1', 'p1', 'basic'])
+    expect(hidden('a.json', '{"Env": ["PATH=/bin", "API_TOKEN=t1"], "n": "API_KEY=k1"}')).toEqual(['t1', 'k1'])
+    expect(hidden('a.toml', 'args = ["DB_PASSWORD=p1", "MODE=fast"]\nrun = "API_TOKEN=t1"\n')).toEqual(['p1', 't1'])
+    // A name is letters, digits, `_`, `.` and `-`: a longer text with a sign in it sets nothing, and neither does a checksum's end.
+    expect(hidden('a.yaml', 'note: "the token = b"\nurl: "https://example.com/?page=2"\nsum: "sha1-keyAUTHtoken0=="\n')).toEqual([])
+    // What a `:` or `=` follows is a name, whatever it holds: nothing of it is hidden.
+    expect(hidden('a.json', '{"API_TOKEN=x": true, "n": 2}')).toEqual([])
+  })
+
+  it('takes name:value with nothing after the colon for a name where the word says so: YAML takes it for none, so the line is not certain', () => {
+    expect(hidden('a.yaml', 'token:t1\nhost:h\nport: 1\n')).toEqual(['t1'])
+    expect(hidden('a.yaml', 'list:\n  - password:p1\n  - http://example.com/token\n  - [secret:s1, plain:x]\n')).toEqual(['p1', 's1'])
+    expect(hidden('a.yaml', 'image: registry.example.com:5000/app:1.2\n')).toEqual([])
+  })
+
+  it('hides all that follows a line ending written as a return alone: where the lines end from there on is not certain', () => {
+    expect(readable('a.yaml', 'n: v\rtoken: t1\rm: w\r')).toBe('n: v\r•\r')
+    expect(readable('a.toml', 'n = "v"\rtoken = "t1"\r')).toBe('n = "v"\r•\r')
+    // `\r\n` is a line ending like any other, also at the end of the text.
+    expect(readable('a.yaml', 'n: v\r\ntoken: t1\r\nm: w\r\n')).toBe('n: v\r\ntoken: •\r\nm: w\r\n')
+    expect(readable('a.yaml', 'n: v\r')).toBe('n: v\r')
   })
 
   it('does not hide a plain yes, no or nothing', () => {
@@ -132,8 +306,14 @@ describe('a config file', () => {
     expect(hidden('a.yaml', 'password: ~\nsecret: false\n')).toEqual([])
   })
 
+  it('reads one value after another where brackets hold everything, and a file that begins with a byte order mark', () => {
+    expect(hidden('log.json', '{"a": 1}\n{"token": "t1"}\n{"b": [2]}\n["c"]\n"d"\n{"key": "k1"}\n')).toEqual(['t1', 'k1'])
+    expect(hidden('a.json', '﻿{"token": "t1"}\n')).toEqual(['t1'])
+  })
+
   it('hides one unbroken run of 32 or more letters, digits, -, _, + or =, and a shorter one not', () => {
     expect(hidden('config.yaml', `checksum: ${RUN}\nshort: ${RUN.slice(0, 31)}\npath: a/b/${RUN.slice(0, 20)}/c\n`)).toEqual([RUN])
+    expect(hidden('config.yaml', `${RUN}\n${RUN}.${RUN.slice(0, 32)} ${RUN.slice(0, 31)}`)).toEqual([RUN, RUN, RUN.slice(0, 32)])
   })
 
   it('still hides a known shape under any name', () => {
@@ -141,10 +321,112 @@ describe('a config file', () => {
   })
 })
 
+// A file of JSON made from a seed, written four ways, read back by JSON.parse: that says which values stand
+// under a name that says "secret", however deep. None of those may be readable, and every other one must be.
+describe('JSON made from a seed', () => {
+  // The first four are also words of the known shapes, which hide on their own whatever follows such a name
+  // up to the next space: with them in a file, a value beside a secret can be hidden too.
+  const SECRET_NAMES = ['token', 'apiKey', 'client_secret', 'PASSWORD', 'auth', 'cookies', 'private', 'credentials', 'signing_key', 'Keys']
+  const PLAIN_NAMES = ['name', 'port', 'items', 'hosts', 'retries', 'mode', 'tags', 'region']
+  const says = /key|token|secret|password|passwd|auth|credential|cookie|private/i
+
+  function seeded(seed: number): () => number {
+    let state = seed >>> 0
+    return () => {
+      state = (state + 0x6d2b79f5) >>> 0
+      let mixed = Math.imul(state ^ (state >>> 15), 1 | state)
+      mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed
+      return ((mixed ^ (mixed >>> 14)) >>> 0) / 4_294_967_296
+    }
+  }
+
+  function made(random: () => number, depth: number, next: { id: number; names: readonly string[] }): unknown {
+    const roll = random()
+    if (depth >= 5 || roll < 0.45) {
+      next.id += 1
+      if (roll < 0.25) return `v${next.id}q`
+      if (roll < 0.35) return 7_000_000 + next.id
+      return [true, false, null][Math.floor(random() * 3)]
+    }
+    const size = Math.floor(random() * 4)
+    if (roll < 0.65) return Array.from({ length: size }, () => made(random, depth + 1, next))
+    const map: Record<string, unknown> = {}
+    for (let index = 0; index <= size; index += 1) {
+      const names = random() < 0.35 ? next.names : PLAIN_NAMES
+      map[`${names[Math.floor(random() * names.length)] as string}${random() < 0.5 ? '' : `_${index}`}`] = made(random, depth + 1, next)
+    }
+    return map
+  }
+
+  /** Every string and number of a value, sorted by whether a name above it says "secret". */
+  function sorted(value: unknown, below: boolean, into: { secret: string[]; plain: string[] }): void {
+    if (typeof value === 'string' || typeof value === 'number') (below ? into.secret : into.plain).push(String(value))
+    else if (Array.isArray(value)) for (const item of value) sorted(item, below, into)
+    else if (value !== null && typeof value === 'object') for (const [name, item] of Object.entries(value)) sorted(item, below || says.test(name), into)
+  }
+
+  it('hides every value under a name that says so and no other, on one line, set in, not set in and with \\r\\n, with names written with escapes', () => {
+    let secrets = 0
+    let plains = 0
+    for (let seed = 1; seed <= 300; seed += 1) {
+      const random = seeded(seed)
+      // Half the seeds keep to names no known shape goes by: there every other value must be readable.
+      const exact = seed % 2 === 0
+      const names = exact ? SECRET_NAMES.slice(4) : SECRET_NAMES
+      const value = { root: made(random, 0, { id: seed * 1_000, names }), list: made(random, 1, { id: seed * 1_000 + 500, names }) }
+      // One character of some names is written as an escape.
+      const escaped = (text: string): string => text.replace(/"([A-Za-z_0-9]+)"(?=\s*:)/g, (all, name: string) => {
+        if (random() < 0.6) return all
+        const at = Math.floor(random() * name.length)
+        return `"${name.slice(0, at)}\\u${name.charCodeAt(at).toString(16).padStart(4, '0')}${name.slice(at + 1)}"`
+      })
+      const setIn = escaped(JSON.stringify(value, null, 2))
+      const written = {
+        'on one line': escaped(JSON.stringify(value)),
+        'set in': setIn,
+        'not set in': setIn.split('\n').map((line) => line.trimStart()).join('\n'),
+        'with \\r\\n': setIn.replaceAll('\n', '\r\n')
+      }
+      const expected = { secret: [] as string[], plain: [] as string[] }
+      sorted(value, false, expected)
+      secrets += expected.secret.length
+      plains += expected.plain.length
+      for (const [how, text] of Object.entries(written)) {
+        expect(JSON.parse(text), `seed ${seed} ${how}`).toEqual(value)
+        // The same text in a file read as JSON, as YAML and as a lock file of a form of its own.
+        for (const path of ['made.json', 'made.yaml', 'made.lock']) {
+          const read = readable(path, text)
+          for (const marker of expected.secret) {
+            if (read.includes(marker)) throw new Error(`seed ${seed}, ${how}, ${path}: ${marker} is readable in\n${text}`)
+          }
+          for (const marker of exact ? expected.plain : []) {
+            if (!read.includes(marker)) throw new Error(`seed ${seed}, ${how}, ${path}: ${marker} is hidden in\n${text}`)
+          }
+        }
+      }
+    }
+    // The seeds made plenty of both.
+    expect(secrets).toBeGreaterThan(500)
+    expect(plains).toBeGreaterThan(500)
+  })
+})
+
 describe('a lock file', () => {
   it('is spared the rule of the long run, and keeps the other two', () => {
     const text = `{\n  "integrity": "${RUN}",\n  "authToken": "t-1",\n  "resolved": "${OPENAI}"\n}\n`
     expect(hidden('package-lock.json', text)).toEqual(['t-1', OPENAI])
+  })
+
+  it('is read in its own form, whichever that is, and a checksum that ends in = names nothing', () => {
+    const yarn = `# yarn lockfile v1\n\n"@scope/a@^1.0.0", "@scope/a@^1.1.0":\n  version "1.1.0"\n  resolved "https://registry.example/a/-/a-1.1.0.tgz#f4ad435a"\n  integrity sha512-${RUN}Key+token/x==\n  dependencies:\n    "@scope/b" "^2.0.0"\n\nb@^2.0.0:\n  version "2.0.0"\n`
+    expect(hidden('yarn.lock', yarn)).toEqual([])
+    const cargo = '# made by Cargo\nversion = 3\n\n[[package]]\nname = "a"\nchecksum = "b2969dcb958b36655471fc61f7e416fa76033bdd4bfed0678d9fee1e2ed7a1c0"\ndependencies = [\n "b",\n]\n\n[package.auth]\nuser = "bob"\n'
+    expect(hidden('Cargo.lock', cargo)).toEqual(['bob'])
+    const composer = '{\n    "content-hash": "0123",\n    "packages": [\n        {\n            "name": "a/b",\n            "authToken": "t-1",\n            "require": {"php": ">=8.1"}\n        }\n    ]\n}\n'
+    expect(hidden('composer.lock', composer)).toEqual(['t-1'])
+    const pnpm = `lockfileVersion: '9.0'\npackages:\n  'a@1.0.0':\n    resolution: {integrity: sha512-${RUN}==}\n    engines: {node: '>=18'}\n  'js-tokens@4.0.0':\n    resolution: {integrity: sha512-${RUN}==}\nsnapshots: {}\n`
+    // A package whose name holds one of the words is a name that says so, and all it holds is hidden.
+    expect(hidden('pnpm-lock.yaml', pnpm)).toEqual([`resolution: {integrity: sha512-${RUN}==}`])
   })
 })
 
@@ -181,6 +463,31 @@ describe('bounded work', () => {
     expect(() => secretRanges('a.yaml', 'name: x\n'.repeat(5_000), { check })).toThrow('stopped')
   })
 
+  it('reads a run of any length, and brackets nested however deep, without running out of stack', () => {
+    const run = 'k'.repeat(10 * 1024 * 1024)
+    expect(secretRanges('a.yaml', run, { shown: 2_000 })).toEqual([[0, run.length]])
+    expect(secretRanges('.env', `A=${run}`, { shown: 2_000 })).toEqual([[2, run.length + 2]])
+    expect(secretRanges('a.json', `{"a": ${'['.repeat(3_000_000)}`, { shown: 2_000 })).toEqual([[6 + 1_023, 6 + 3_000_000]])
+  })
+
+  it('reads one line of 8 MiB to its end, whatever the line holds and however its file is read', () => {
+    const size = 8 * 1024 * 1024
+    const lines = [
+      `{"a": "${'x'.repeat(size)}`,
+      `${' '.repeat(size)}token: abcdefgh`,
+      '"a",'.repeat(size / 4),
+      `"${'\\'.repeat(size)}"`,
+      'token: "'.repeat(size / 8),
+      `password:\n${'\n'.repeat(size)}hunter2hunter2`,
+      'toke secre passwor beare api_ke '.repeat(size / 32)
+    ]
+    for (const path of ['notes.txt', 'a.json', 'a.yaml', 'a.toml', '.env', 'yarn.lock']) {
+      for (const [index, text] of lines.entries()) {
+        expect(() => secretRanges(path, text, { shown: 2_000 }), `${path}, line ${index}`).not.toThrow()
+      }
+    }
+  }, 60_000)
+
   it('asks its caller often: text made to be slow to search never runs long between two calls', () => {
     const texts = [
       'sk-'.repeat(400_000),
@@ -188,9 +495,15 @@ describe('bounded work', () => {
       'a-'.repeat(600_000),
       `${'-----BEGIN PRIVATE KEY-----\n'.repeat(40_000)}`,
       `${'token: "'.repeat(100_000)}`,
-      'k: v\n'.repeat(400_000)
+      'k: v\n'.repeat(400_000),
+      'KEY=value\n'.repeat(200_000),
+      `{"a": "${'x'.repeat(2_000_000)}`,
+      `${' '.repeat(2_000_000)}token: abcdefgh`,
+      `"${'\\'.repeat(2_000_000)}"`,
+      `${'['.repeat(1_000)}${'"a",'.repeat(400_000)}`,
+      `password:\n${'\n'.repeat(2_000_000)}hunter2hunter2`
     ]
-    for (const path of ['notes.txt', 'a.yaml', '.env']) {
+    for (const path of ['notes.txt', 'a.json', 'a.yaml', 'a.toml', '.env', 'yarn.lock']) {
       for (const text of texts) {
         let last = performance.now()
         let longest = 0

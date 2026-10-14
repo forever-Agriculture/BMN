@@ -79,12 +79,12 @@ work tree than the folder BMN found, the capture is refused.
 
 **What belongs** is listed anew at every capture: every tracked path, ignored or not, and every
 untracked path Git does not ignore. A link is stored as its text, the executable bit is stored,
-and a submodule or nested repository is one entry with the commit Git reports for it. Git's list
-decides which is which, and BMN adds no rule of its own: a folder Git lists as one entry (a
-submodule, or an untracked folder with a repository of its own) is never walked, and files the
-repository itself tracks stay its files, read as before, also when their folder later gets a
-`.git` of its own; Git lists them one by one, and its `status` shows a change in them as a change
-of this repository.
+and a submodule or nested repository is one entry with the commit Git reports for it. A folder
+Git lists as one entry (a submodule, or an untracked folder with a repository of its own) is
+never walked. The measured script goes by Git's list alone, so files this repository tracked
+before their folder got a `.git` of its own stayed its files there, read one by one. The app does
+not: in it every folder below the root that holds a `.git` is one entry, as
+[In the app](#in-the-app) says.
 
 **Only new bytes are read.** A file whose size, times, file number and device are what they
 were when it was last read, and that had been still for a moment then, is not read again; a
@@ -198,25 +198,58 @@ cancelled at another moment.
 ### In the app
 
 The app runs this mechanism from `apps/desktop/src/utility/turn-changes-*.ts`: the Git commands
-(`turn-changes-git.ts`, the only file of the feature that starts Git; the one other program
-BMN starts is told under [The app's version](#the-apps-version)), the store, the
+(`turn-changes-git.ts`, the only file of the feature that starts a program: BMN starts nothing
+but Git for it, and a test holds that), the store, the
 capture, the comparison, and an engine that runs in a worker thread of its own
 (`turn-changes-worker.ts`), so that no scan and no comparison runs on the thread that keeps
 terminals flowing. Its tests repeat what this page proves on made-up repositories at every run of
 `pnpm run test:unit`, the hostile repository under its trace included
 (`turn-changes-hostile.test.ts`; it needs `strace` and fails, never passes over, where it cannot
-trace). The app differs from the measured script in three places, each the stricter way:
+trace). The app differs from the measured script in these places, each the stricter way:
 
 - A bare repository reads "not supported here: a bare repository"; the script said
   "unavailable".
 - The 2 s limit holds for every capture, the first one too, and a listing cut short by it keeps
-  nothing. It holds for all of a capture's work: reading ends 250 ms before the capture's time
-  (an eighth of that time when it is shorter), so that `HEAD` at the scan's end, the commits of
-  nested repositories, one look at what became of the earlier scan's paths and the folder lists
-  are done inside it. No Git command is given time of its own past the capture's. A capture
-  whose time passes in any of these is "incomplete: 2 s" and never whole, and a cancel is heard
-  in each of them. What is left after that is one step: the staged files and the record are
-  moved into place.
+  nothing. It holds for all of a capture's work, its publication included. Reading ends 250 ms
+  before the capture's time (an eighth of that time when it is shorter), so that `HEAD` at the
+  scan's end, the commits of nested repositories, one look at what became of the earlier scan's
+  paths and the folder lists are done inside it. No Git command is given time of its own past the
+  capture's. Everything that is done a slice at a time after the reading, moving the staged files
+  into the store included, ends 100 ms before the capture's time (a twentieth of it when it is
+  shorter). What is left for those 100 ms is not sliced: the record and the note of what was read
+  are made and written, the clock is looked at one last time, and the record is renamed into
+  place. On 20,000 entries that end took at most 33 ms: 26 ms to make the record and the note,
+  7 ms from the last file moved to the published record (three rounds of a first scan, one after
+  every file changed and one after half of them were removed).
+- A capture whose time passes is "incomplete: 2 s" and never whole, wherever it passes: in the
+  reading, in a Git command, in the lists, while its files are moved in, or before that last look
+  at the clock. Such a capture keeps the files it read and no folder list, so nothing is compared
+  with it; the note of what was read names exactly the files that are in the store, and the next
+  capture has that much less to read. A file that is already in the store is not moved and not
+  counted again.
+- A cancel is heard in every one of these steps, the publication too. BMN then answers
+  "cancelled", no record appears, exactly the files this publication moved in are unlinked, and
+  the capture's folder under `staging/` stays until they are gone, so that a start after a crash
+  in between still finds it. A "before" held for its confirmation is staged inside the capture's
+  time and published the same way when the confirmation comes; one that is discarded, or
+  confirmed too late, is never published.
+- A folder below the root that holds an entry named `.git` is a repository of its own: one entry
+  with the commit its own `HEAD` names (none when its `.git` is no repository), never walked,
+  also when Git lists files below it as this repository's, which it does for files that were
+  tracked there before. BMN looks at every folder a listed path lies in, once per capture and
+  from the top down, before anything below it is counted, read or taken from the note of what
+  was read; a folder it cannot look into is one entry too. When a folder becomes one entry, the
+  files the earlier scan held below it "left what is covered", without a look at the disk, and
+  the entry "entered what is covered"; when its `.git` goes, the entry left and the files below
+  it entered, whatever their age. Either way the totals are partial and no line counts as added
+  or removed. The look is one `lstat` per folder. On the repository the owner named (6,344
+  entries in 380 folders, none with a `.git` of its own) all of them took 0.8 ms (median of
+  twenty, longest 1.5 ms), and twenty warm scans took 94 to 128 ms with the look and 93 to
+  122 ms at the revision before it.
+- The comparison of two captures asks whether it was stopped, or its 2 s have nearly passed, at
+  every folder it reads and at every 256th entry it meets, whether or not anything differs
+  there, also while it only looks for files neither scan could read. A comparison that was
+  stopped or ran out of time is "unavailable", never zero.
 - A file that neither scan could read (too large, or not readable) is listed in the turn as "not
   read" and makes its totals partial, also when it reads the same in both scans and nothing else
   differs: a turn there never shows complete totals of zero.
@@ -244,19 +277,29 @@ no row holds a file's name or content).
   its whole folder.
 - **At a start**, what a crash left of a capture that was never published is removed. A capture is
   published by moving its files into place and then its record; a crash between the two leaves
-  files no record names, with the record still under `staging/`. So a start that finds anything
-  under `staging/` also removes every stored byte that no published capture needs. A published
-  capture that no row names, as after a database restore, is left until it is older than the keep
-  limit by the time written in its own record, and is then removed.
-- **Space.** One session's stores hold at most 1 GiB and all stores 5 GiB, counted as everything a
-  store keeps on disk: files, folder lists, the records of captures and the note of what was
-  already read. Bytes that are staged, and bytes of a discarded capture until they are unlinked,
-  count too; two sessions in one repository each count their own copy. Room is held for every
-  capture while it runs, so two sessions that capture at once cannot both take the same last
-  bytes; near a bound one of them ends "incomplete: store full" where, alone, it would have
-  fitted. A capture that would pass either bound ends "incomplete: store full", its record
-  included; one for whose record there is no room either writes nothing. Nothing is removed
-  before its time to make room, and nothing outside `<data root>/turn-changes/` is touched.
+  files no record names, with the capture's folder still under `staging/`. So a start that finds
+  anything under `staging/` first removes every stored byte that no published capture needs, and
+  removes `staging/` only when that was done completely. When a kept capture or one of its lists
+  cannot be read, nothing is taken from under it and `staging/` stays, so the next start or
+  sweep tries again. A store without a published capture goes whole, `staging/` last. What a
+  cancelled capture left on its way out (`trash/`) goes at any start, and half-written files go
+  with `staging/`. A published capture that no row names, as after a database restore, is left until it is older
+  than the keep limit by the time written in its own record, and is then removed.
+- **Space.** One session's stores hold at most 1 GiB and all stores 5 GiB. A store is counted
+  from the disk: every byte under its folder, the files, folder lists, records of captures and
+  the note of what was already read, and also what is staged, what is on its way out and what a
+  write left half done. After that BMN adds what each publication really put there, which is
+  less than nothing when the note shrank, and counts the store from the disk again after every
+  removal and every clearing. A store that cannot be counted counts as full. Bytes of a capture
+  that was dropped count until their removal succeeded; one that failed leaves them counted
+  with the store. Two sessions in one repository each count their own copy. Room is held for
+  every capture while it runs, so two sessions that capture at once cannot both take the same
+  last bytes; near a bound one of them ends "incomplete: store full" where, alone, it would have
+  fitted. A capture must fit at its most: its files, its record and the whole new note, since
+  the old note is still there while the new one is written. A capture that would pass either
+  bound ends "incomplete: store full", its record included; one for whose record there is no
+  room either writes nothing. Nothing is removed before its time to make room, and nothing
+  outside `<data root>/turn-changes/` is touched.
 
 ## The apps
 
@@ -419,7 +462,9 @@ another model. An app that cannot be pointed at a stand-in does not pass.
 ### What follows for recording
 
 - Claude Code 2.1.296 and Codex 0.162.1 hold PASS for waiting, so both are recorded. OpenCode
-  and Cursor are not.
+  and Cursor are not. A turn's totals are shown as complete only when BMN read that the app runs
+  the measured version, which it can for Claude Code and not for Codex: see
+  [The app's version](#the-apps-version).
 - Both apps name the turn. A prompt event that carries the open turn's id was typed into that
   turn. In Claude Code such an event comes when the prompt is typed; in Codex it comes when the
   prompt is taken into the turn.
@@ -524,33 +569,34 @@ and its labels. No row holds a file's name or content.
 
 ### The app's version
 
-BMN reads the version once per foreground process, away from the prompt's path, by running the
-program that process is (`/proc/<its process>/exe`) with `--version`. It opens that program first,
-compares the open file with the one it identified, and runs that same open file, so a process that
-becomes another program in between cannot have that one run instead; a program BMN cannot open for
-reading is not asked. When the answer is another
-program's, the process is a launcher: Codex from npm is a Node script whose one child is the
-native `codex`. BMN then asks, the same way and inside the same 2 s, the programs that process
-started itself and that still share the terminal's foreground with it, at most eight, and never
-what those start in turn (an agent's commands). With the Git commands above these are the only
-programs the feature starts, always as `/proc/<a process>/exe --version` and never by a path
-anybody names (`turn-changes-version.ts`; a test holds both lists). BMN asks only where Linux
-reports no confinement on either side: the process and BMN itself both show `NoNewPrivs: 0` (no
-given-up privileges; Landlock asks for that) and `Seccomp: 0` (no system-call filter), live in
-the same views of the file system, of users and of processes, and carry the same label of the
-security module (AppArmor, SELinux). Any other process may be a sandboxed agent's own, and a
-program BMN starts would run outside that sandbox. Equal flags are not taken for equal
-restrictions: when BMN itself runs confined it asks nobody, since a tighter filter or a Landlock
-rule set on the process would read no differently, and every turn then reads "Ordering
-unverified". The program must also still be the file BMN identified. Only an answer in the
-app's own shape counts (`2.1.296 (Claude
-Code)`, `codex-cli 0.162.1`). An app that an interpreter runs without a program of its own has
-none to ask (Claude Code installed from npm would be one; not tried here), and its turns read
-"Ordering unverified".
+BMN runs no program to learn a version and opens no file for it. It reads the version from where
+the foreground process's program lies, with `readlink` and `stat` only
+(`turn-changes-version.ts`), once per foreground process and away from the prompt's path: never
+in the call that asks for it, and not while a prompt is on its way through BMN (a start mark or
+a confirmation is being answered, or a "before" waits for its confirmation). A read asked for
+meanwhile waits until the prompt is through.
+
+- **Claude Code.** Its installer puts the program in a file named after the version,
+  `~/.local/share/claude/versions/2.1.296`, as measured above. BMN takes that name as the version
+  only when all of this holds: the process lives in BMN's own view of the file system and under
+  BMN's own root folder (in a container or a sandbox the same path names another file); its
+  program is still the very file BMN identified; the link to its program reads exactly
+  `<home>/.local/share/claude/versions/<version>` (a program that was removed or replaced reads
+  "… (deleted)"); and that path, looked at from BMN, is a plain file and that very file, not a
+  link put there since. Checked on three running Claude Code 2.1.296 processes.
+- **Codex.** Its program lies where no name says the version, and the only way measured above to
+  learn it is to run the program. BMN does not: it cannot know that a program an agent's process
+  names may be run outside whatever confines that process. So Codex's version is not read, and
+  every Codex turn reads "Ordering unverified on Codex (version not read); early writes may be
+  missed", with totals shown as not complete. Reading it from the `package.json` of Codex's npm
+  package is possible and is the owner's to decide.
+- **Anything else** has no version BMN reads: Claude Code installed another way (from npm, not
+  tried here), or a program in any other place.
 
 A turn on another version than the measured one, or on one BMN could not read, is still
-recorded. It reads "Ordering unverified on <app> <version>; early writes may be missed", and
-its totals are shown as not complete.
+recorded. It reads "Ordering unverified on <app> <version>; early writes may be missed", with
+"(version not read)" in the version's place where there is none, and its totals are shown as
+not complete.
 
 ### The wordings
 
@@ -682,19 +728,52 @@ three lines of context, a `+` or `−` before each changed line and three neutra
   files and lock files, a value whose name contains key, token, secret, password, passwd, auth,
   credential, cookie or private; in those config files and not in lock files, any unbroken run of
   32 or more letters, digits, `-`, `_`, `+` or `=`; and in every file the known shapes of keys,
-  tokens and private key blocks. A named value is taken whole wherever its name stands and
-  however far it goes: at a line's start or inside a map written on one line
-  (`{"db": {"password": "…"}}`, `auth = { token = "…" }`), a quoted value that runs over several
-  lines (in a `.env` file too), a YAML block (`key: |`), a TOML string between three quotes, and
-  the plain items of a list under such a name. Not hidden: true, false, null and `~` (in a
-  config file; a `.env` file hides every value), and a map under such a name, whose own names
-  decide for their values. The rule is blunt on purpose: `"keywords": ["a"]` is hidden too.
-- **Bounded work.** The search is linear and asks, often enough for a stop to be heard within
-  100 ms, whether the read was stopped or its 2 s have passed, as do splitting the texts into
-  lines and laying out the hunks; an all-new file of a million lines stops like any other. A line is searched as far
-  as it can be shown and 2,048 characters further, and where that cut falls inside a run of 32
-  or more characters a token is made of, the run is hidden. Of a difference only the lines that
-  can be shown are laid out; the rest is counted.
+  tokens and private key blocks. The two shapes that can go on over a line ending are found over
+  it: after `Bearer`, or after a name such as `password` with or without its `:` or `=`, at a
+  line's end, the token or value at the start of the next line that holds text is hidden,
+  however many empty lines lie between and however long the line before is.
+- **Certain, or hidden.** BMN reads a `.env`, config or lock file character by character and
+  follows its quotes, brackets and comments over line endings. It is no parser of these formats:
+  wherever a file leaves it unsure where a value ends, it hides more, and it never reads on as if
+  nothing had happened.
+  - Under a name that says so, all of the value is hidden, wherever the name stands: a plain
+    value, a quoted one, everything inside its brackets whatever names stand there
+    (`"auth": {"user": "…"}` hides the user too), a YAML block (`key: |`), a TOML string between
+    three quotes, every value under a TOML table whose header says so, and in YAML every line set
+    in deeper below the name, with whatever a quote or a bracket opened on those lines goes on
+    to. The escapes of a quoted name are taken out first (`"token"` is `token`). True,
+    false, null and `~` are spared in a config file.
+  - A quoted value that goes on over a line ending is hidden whole, whatever its name: nothing
+    tells a long value from a quote that was never closed.
+  - What follows a closed value on its line and is neither a comma, a bracket nor a comment is
+    hidden.
+  - A value that is itself written as `NAME=value`, as an environment list has it
+    (`- "DB_PASSWORD=…"`, `run: API_TOKEN=… make`, `"Env": ["API_TOKEN=…"]`), is hidden after its
+    sign when that name says so; the name is letters, digits, `_`, `.` and `-` only. In YAML a
+    line or an item written `token:value`, with nothing after the colon, is taken the same way,
+    though YAML reads no name there.
+  - The rest of the file is hidden after a bracket that closes nothing, a quote that is never
+    closed, brackets nested deeper than 1,024, a TOML line without a name, a YAML line that
+    begins `? `, and a line ending written as `\r` alone. Where names also stand at the start of
+    lines (YAML, TOML, lock files), a bracket that is never closed hides all that follows it.
+  - In a `.env` file every value is hidden, a quoted one to where its quote closes, and a line
+    that is neither a comment nor `NAME=value` is hidden whole.
+  - TOML does not go by how deep a line is set in; only YAML and what is written like it does. A
+    lock file with a form of its own (`yarn.lock`, `Cargo.lock`, `composer.lock`) is read as
+    YAML and TOML at once.
+
+  The rule is blunt on purpose, since over-hiding can be seen and a leak cannot:
+  `"keywords": ["a"]` is hidden, and so is a lock file's whole entry for a package whose name
+  holds one of those words.
+- **Bounded work.** The search is linear, made of loops over characters that ask, often enough
+  for a stop to be heard within 100 ms, whether the read was stopped or its 2 s have passed, as
+  do splitting the texts into lines and laying out the hunks. An all-new file of a million lines
+  stops like any other, and so does one line of 10 MiB, one run of 10 MiB or three million
+  brackets. A file's form (its names, quotes and brackets) is read over each whole line. The
+  known shapes are searched in a line as far as it can be shown and 2,048 characters further,
+  and where that cut falls inside a run of 32 or more characters a token is made of, the run is
+  hidden. On made-up texts of 10 MiB a whole search took at most 0.6 s. Of a difference only the
+  lines that can be shown are laid out; the rest is counted.
 - **Nothing reveals a value.** The original text never leaves the worker thread: what the host
   hands the window already holds the plate, so a copy, Find, a screen reader and the test hook get
   the masked text. There is no control that shows a value.

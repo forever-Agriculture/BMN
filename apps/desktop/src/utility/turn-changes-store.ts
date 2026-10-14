@@ -3,7 +3,8 @@
 // `<data root>/turn-changes/<session>/<work tree>/` holds `captures/<id>.json` (one published capture
 // each), `objects/blobs` and `objects/trees` (bytes named by their SHA-256), `staging/<id>/` (a capture
 // not yet published), `trash/<id>/` (a cancelled capture on its way out) and `cache.json` (what the
-// newest published capture saw of each file, so that only new bytes are read). It is not a Git
+// newest published capture saw of each file, so that only new bytes are read). A record and the cache
+// are written beside their place as `<name>.new` and renamed into it. It is not a Git
 // repository and borrows nothing from one, so a kept capture reads whole after the owner's repository
 // is moved, deleted or garbage-collected (R69-NFR3).
 import { createHash } from 'node:crypto'
@@ -193,6 +194,17 @@ export class TurnStore {
     return this.cache
   }
 
+  /** What the cache on disk names of a capture that is kept: the files and lists a later capture will take as stored. */
+  private cacheNeeds(kept: readonly string[]): { blobs: string[]; trees: string[] } | null {
+    try {
+      const saved = JSON.parse(readFileSync(join(this.directory, 'cache.json'), 'utf8')) as { capture?: unknown; files?: Array<[string, SeenFile]>; trees?: string[] }
+      if (typeof saved.capture !== 'string' || !kept.includes(saved.capture)) return null
+      return { blobs: (saved.files ?? []).map(([, seen]) => seen[6]), trees: saved.trees ?? [] }
+    } catch {
+      return null
+    }
+  }
+
   /** The cache as it is written to disk. Made before a capture is published, so that its size can be counted first. */
   cacheText(cache: TurnCache): string {
     return JSON.stringify({
@@ -206,11 +218,38 @@ export class TurnStore {
     return lstatSync(join(this.directory, 'cache.json'), { throwIfNoEntry: false })?.size ?? 0
   }
 
-  saveCache(cache: TurnCache, text: string = this.cacheText(cache)): void {
-    this.cache = cache
+  /** The cache's new text, written beside its place: the old cache stays until the capture this one names is published. */
+  writeCache(text: string): void {
+    writeFileSync(join(this.directory, 'cache.json.new'), text, { mode: 0o600 })
+  }
+
+  /** The written cache takes its place. False when it could not: the old one stays, and what was written is removed. */
+  adoptCache(cache: TurnCache): boolean {
     const path = join(this.directory, 'cache.json')
-    writeFileSync(`${path}.new`, text, { mode: 0o600 })
-    renameSync(`${path}.new`, path)
+    try {
+      renameSync(`${path}.new`, path)
+    } catch {
+      rmSync(`${path}.new`, { force: true })
+      return false
+    }
+    this.cache = cache
+    return true
+  }
+
+  /** What a publication wrote beside the record's and the cache's place and will not rename into it. */
+  dropWritten(id: string): void {
+    for (const path of [`${this.capturePath(id)}.new`, join(this.directory, 'cache.json.new')]) {
+      try {
+        rmSync(path, { force: true })
+      } catch {
+        // Left for the next start, which removes every half-written file.
+      }
+    }
+  }
+
+  saveCache(cache: TurnCache, text: string = this.cacheText(cache)): void {
+    this.writeCache(text)
+    if (!this.adoptCache(cache)) throw new Error('the cache could not be written')
   }
 
   /** Forget what is held in memory: something under the store was removed. */
@@ -227,16 +266,51 @@ export class TurnStore {
   }
 
   /**
+   * Bytes on disk of everything under the store's folder: what it keeps, what is staged, what is on its way
+   * out and what a write left half done. Throws when a folder cannot be listed: a count that passed it over
+   * would be too low.
+   */
+  diskBytes(): number {
+    return this.exists() ? this.size('', true) : 0
+  }
+
+  /**
    * A capture that will not be published. One rename takes it out of `staging/` at once; its files
    * are then unlinked without holding anything up (20,000 small files take a moment to unlink).
+   * Resolves true when its bytes are gone, false when they could not be removed and are still on disk.
    */
-  discardStaging(id: string): void {
+  discardStaging(id: string): Promise<boolean> {
     const from = this.stagingPath(id)
-    if (!existsSync(from)) return
-    privateFolder(join(this.directory, 'trash'))
+    if (!existsSync(from)) return Promise.resolve(true)
     const to = join(this.directory, 'trash', id)
-    renameSync(from, to)
-    this.removing = this.removing.then(() => rm(to, { recursive: true, force: true })).catch(() => undefined)
+    try {
+      privateFolder(join(this.directory, 'trash'))
+      renameSync(from, to)
+    } catch {
+      return Promise.resolve(false)
+    }
+    const gone = this.removing.then(() => rm(to, { recursive: true, force: true })).then(() => true, () => false)
+    this.removing = gone.then(() => undefined)
+    return gone
+  }
+
+  /**
+   * A publication that was stopped after some of its files and lists were moved in: exactly those are
+   * unlinked, a few at a time, and only then does the capture's folder in `staging/` go. Until then that
+   * folder says a publication was interrupted, so a start in between removes what no record names.
+   * Resolves true when everything is gone.
+   */
+  undoMoves(id: string, moved: readonly string[]): Promise<boolean> {
+    const gone = this.removing.then(async () => {
+      for (let at = 0; at < moved.length; at += 1) {
+        rmSync(moved[at] as string, { force: true })
+        if ((at & 63) === 63) await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+      await rm(this.stagingPath(id), { recursive: true, force: true })
+      return true
+    }).catch(() => false)
+    this.removing = gone.then(() => undefined)
+    return gone
   }
 
   /**
@@ -245,12 +319,29 @@ export class TurnStore {
    * Returns how many captures are still kept. Throws when something could not be removed.
    */
   removeCaptures(ids: readonly string[]): number {
+    return this.sweep(ids).kept
+  }
+
+  /**
+   * The same, saying also whether the sweep was complete: every kept capture and each of its lists was read,
+   * so that every byte nothing needs is known and gone. `complete` is false when a kept capture or a list
+   * could not be read: nothing is then taken from under it, and bytes nothing needs may still be there.
+   */
+  private sweep(ids: readonly string[]): { kept: number; complete: boolean } {
     for (const id of ids) if (SEGMENT.test(id)) rmSync(this.capturePath(id), { force: true })
     this.forget()
     const kept = this.captures()
     if (kept.length === 0) {
+      // `staging/` goes last: while it is there, a start that follows an interruption here still knows.
+      let names: string[] = []
+      try {
+        names = readdirSync(this.directory)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+      for (const name of names) if (name !== 'staging') rmSync(join(this.directory, name), { recursive: true, force: true })
       rmSync(this.directory, { recursive: true, force: true })
-      return 0
+      return { kept: 0, complete: true }
     }
     // What the kept captures need: every folder list and every file's bytes reachable from their trees.
     const trees = new Set<string>()
@@ -266,12 +357,18 @@ export class TurnStore {
     try {
       for (const id of kept) {
         const record = this.record(id)
-        if (!record) return kept.length
+        if (!record) return { kept: kept.length, complete: false }
         if (record.tree) walk(record.tree)
       }
     } catch {
       // A kept capture or one of its lists cannot be read: what it needs is not known, so no byte is taken from under it.
-      return kept.length
+      return { kept: kept.length, complete: false }
+    }
+    // A capture whose time passed keeps the files it read without a list of them: its cache names them.
+    const cached = this.cacheNeeds(kept)
+    if (cached) {
+      for (const hash of cached.blobs) blobs.add(hash)
+      for (const hash of cached.trees) trees.add(hash)
     }
     for (const [kind, needed] of [['trees', trees], ['blobs', blobs]] as const) {
       const base = join(this.directory, 'objects', kind)
@@ -289,24 +386,51 @@ export class TurnStore {
     } catch {
       rmSync(cachePath, { force: true })
     }
-    return kept.length
+    return { kept: kept.length, complete: true }
   }
 
   /**
-   * What a crash left behind: captures that were never published, and cancelled ones on their way out. Only
-   * when none is being taken. A folder still in `staging/` may be a publication that was interrupted after
-   * some of its files and lists were moved in and before its record appeared: no record names those bytes,
-   * so every byte no published capture needs is removed with it, and a store that has no capture goes whole.
+   * What a crash left behind: captures that were never published, cancelled ones on their way out and
+   * half-written files. Only when none is being taken. A folder still in `staging/` may be a publication
+   * that was interrupted after some of its files and lists were moved in and before its record appeared: no
+   * record names those bytes, so every byte no published capture needs is removed first, and `staging/` goes
+   * only when that was done completely. Until then it stays, and the next start or sweep tries again.
+   * Returns whether nothing is left to do.
    */
-  clearLeftovers(): void {
+  clearLeftovers(): boolean {
+    let done = true
+    const remove = (path: string): void => {
+      try {
+        rmSync(path, { recursive: true, force: true })
+      } catch {
+        done = false
+      }
+    }
+    remove(join(this.directory, 'trash'))
     let interrupted = false
     try {
       interrupted = readdirSync(join(this.directory, 'staging')).length > 0
-    } catch {
-      // No staging folder: nothing was being published.
+    } catch (error) {
+      // No staging folder: nothing was being published. One that cannot be listed is left for the next try.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false
     }
-    for (const part of ['staging', 'trash']) rmSync(join(this.directory, part), { recursive: true, force: true })
-    if (interrupted) this.removeCaptures([])
+    if (interrupted) {
+      let complete = false
+      try {
+        complete = this.sweep([]).complete
+      } catch {
+        // Something could not be removed: the folder in `staging/` stays as the reason to try again.
+      }
+      if (!complete) return false
+    }
+    remove(join(this.directory, 'staging'))
+    remove(join(this.directory, 'cache.json.new'))
+    try {
+      for (const name of readdirSync(join(this.directory, 'captures'))) if (name.endsWith('.new')) remove(join(this.directory, 'captures', name))
+    } catch {
+      // No capture was ever published here.
+    }
+    return done
   }
 
   /** Resolves when every discarded capture's bytes are gone. */
@@ -314,14 +438,15 @@ export class TurnStore {
     return this.removing
   }
 
-  /** Bytes on disk under the store (or one folder of it), every file once. */
-  size(part = ''): number {
+  /** Bytes on disk under the store (or one folder of it), every file once. `strict`: a folder that is there and cannot be listed is an error, not nothing. */
+  size(part = '', strict = false): number {
     let total = 0
     const walk = (folder: string): void => {
       let names
       try {
         names = readdirSync(folder, { withFileTypes: true })
-      } catch {
+      } catch (error) {
+        if (strict && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
         return
       }
       for (const entry of names) {

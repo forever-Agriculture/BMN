@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { capture, isRefusal, type CaptureOptions, type CaptureOutcome } from '../../turn-changes-capture'
+import { capture, isRefusal, type CaptureOptions, type CaptureOutcome, type StagedCapture } from '../../turn-changes-capture'
 import { compareCaptures, type TurnComparison, type TurnFileRow } from '../../turn-changes-compare'
 import { turnGitExecutable } from '../../turn-changes-git'
 import { TurnStore, type TurnCaptureRecord } from '../../turn-changes-store'
@@ -65,6 +65,13 @@ export interface Around {
 
 const told = (outcome: CaptureOutcome): string => (isRefusal(outcome) ? `${outcome.state}: ${outcome.reason}` : `${outcome.state}: ${outcome.record.bound ?? ''}`)
 
+/** Publishes a staged capture and gives its record as it stands on disk. Throws when the publication was stopped. */
+export async function published(staged: StagedCapture): Promise<TurnCaptureRecord> {
+  const done = await staged.publish()
+  if (done === null) throw new Error('the publication was stopped')
+  return done.record
+}
+
 /** Two published captures around `change`, compared. Throws when either is not whole. */
 export async function around(
   place: Place,
@@ -73,13 +80,13 @@ export async function around(
 ): Promise<Around> {
   const first = await capture(folder, place.options)
   if (isRefusal(first) || first.state !== 'whole') throw new Error(`first capture: ${told(first)}`)
-  const one = first.publish()
+  const one = await published(first)
   // A file is taken as read before only when it had been still for a moment when it was read.
   await sleep(25)
   await change()
   const second = await capture(folder, { ...place.options, base: one.id, ...secondOptions })
   if (isRefusal(second) || second.state !== 'whole') throw new Error(`second capture: ${told(second)}`)
-  const two = second.publish()
+  const two = await published(second)
   const store = new TurnStore(place.dataRoot, place.options.session, one.root)
   const compared = compareCaptures(store, one.id, two.id)
   if (compared.state !== 'compared') throw new Error(`comparison: ${compared.state}: ${compared.reason}`)
@@ -122,6 +129,16 @@ export function holds(folder: string, needle: string | Buffer): boolean {
     if (entry.isFile() && readFileSync(join(entry.parentPath, entry.name)).includes(needle)) return true
   }
   return false
+}
+
+/** Bytes of every file under a folder, counted here and by nothing of BMN's own. */
+export function bytesUnder(folder: string): number {
+  if (!existsSync(folder)) return 0
+  let total = 0
+  for (const entry of readdirSync(folder, { recursive: true, withFileTypes: true })) {
+    if (!entry.isDirectory()) total += lstatSync(join(entry.parentPath, entry.name)).size
+  }
+  return total
 }
 
 export function filesUnder(folder: string): number {

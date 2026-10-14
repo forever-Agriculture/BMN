@@ -61,8 +61,10 @@ export interface TurnRecorderOptions {
   keeper?: Pick<TurnStoreKeeper, 'removeCaptures'>
   foreground: SessionForeground
   database: TurnRecorderDatabase
-  /** The version of the app a foreground process runs, read once and away from a prompt's path; null when it cannot be read. */
-  version: (identity: string, app: string) => Promise<string | null>
+  /** The version of the app a foreground process runs; null when it cannot be read. The recorder asks once per process, and never while a prompt is on its way through BMN. */
+  version: (identity: string, app: string) => string | null | Promise<string | null>
+  /** Runs work later, off the call that asked for it. A test puts its own in place. */
+  defer?: (work: () => void) => void
   /** Whether another BMN session was started in this work tree. */
   shared: (sessionId: string, root: string) => boolean
   /** The folder in which a file named after a session says "recording is on" to that session's hook. */
@@ -145,6 +147,11 @@ export class TurnRecorder {
   private readonly on = new Set<string>()
   private readonly sessions = new Map<string, SessionTurns>()
   private readonly versions = new Map<string, Promise<string | null>>()
+  /** Start marks and confirmations that are being answered right now. */
+  private answering = 0
+  /** Version reads that wait until no prompt is on its way through BMN. */
+  private readonly waiting: Array<() => void> = []
+  private readonly defer: (work: () => void) => void
   private readonly work = new Set<Promise<unknown>>()
   private readonly now: () => number
   private readonly setTimer: (run: () => void, ms: number) => unknown
@@ -161,6 +168,7 @@ export class TurnRecorder {
       return timer
     })
     this.clearTimer = options.clearTimer ?? ((timer) => clearTimeout(timer as NodeJS.Timeout))
+    this.defer = options.defer ?? ((work) => void setImmediate(work))
   }
 
   // ---- what the host tells it ---------------------------------------------------------------------
@@ -281,11 +289,15 @@ export class TurnRecorder {
       this.track(this.enqueue(state, () => this.end(state, call)))
       return Promise.resolve('queued')
     }
+    this.answering += 1
     return this.enqueue(state, async () => {
       if (state.requests.has(key)) return 'repeated'
       const status = call.edge === 'start' ? await this.begin(state, call) : await this.confirm(state, call)
       this.remember(state, key, status)
       return status
+    }).finally(() => {
+      this.answering -= 1
+      this.wake()
     })
   }
 
@@ -334,7 +346,6 @@ export class TurnRecorder {
     if (identity === null) return 'unavailable'
     state.app = call.app
     state.appIdentity = identity
-    void this.version(identity, call.app)
     // An earlier "before" that nobody confirmed, and turns of another agent or conversation.
     await this.dropPending(state)
     this.leave(state, identity, call.conversation)
@@ -855,8 +866,23 @@ export class TurnRecorder {
 
   private enqueue<Result>(state: SessionTurns, run: () => Promise<Result>): Promise<Result> {
     const result = state.queue.then(run)
-    state.queue = result.then(() => undefined, () => undefined)
+    // Every step may have let go of a "before" that waited for its confirmation.
+    const done = (): void => this.wake()
+    state.queue = result.then(done, done)
     return result
+  }
+
+  /** Whether a prompt is on its way through BMN: a start mark or a confirmation is being answered, or a "before" waits for its confirmation. */
+  private prompted(): boolean {
+    if (this.answering > 0) return true
+    for (const state of this.sessions.values()) if (state.pending !== null) return true
+    return false
+  }
+
+  /** Lets the version reads that waited for a prompt go on, once none is on its way. */
+  private wake(): void {
+    if (this.waiting.length === 0 || this.prompted()) return
+    for (const read of this.waiting.splice(0)) this.defer(read)
   }
 
   private track(work: Promise<unknown>): void {
@@ -869,10 +895,21 @@ export class TurnRecorder {
     if (state.requests.size > REQUESTS_KEPT) state.requests.delete(state.requests.keys().next().value as string)
   }
 
+  /**
+   * The app's version, read once per foreground process and away from a prompt's path (69.4 criterion 4): never
+   * in the call that asks for it, and not while a prompt is on its way through BMN. A read asked for meanwhile
+   * waits until the prompt is through.
+   */
   private version(identity: string, app: string): Promise<string | null> {
     let reading = this.versions.get(identity)
     if (!reading) {
-      reading = this.options.version(identity, app).catch(() => null)
+      reading = new Promise<string | null>((resolve) => {
+        const read = (): void => {
+          if (this.prompted()) this.waiting.push(read)
+          else resolve(Promise.resolve().then(() => this.options.version(identity, app)).catch(() => null))
+        }
+        this.defer(read)
+      })
       this.versions.set(identity, reading)
       if (this.versions.size > VERSIONS_KEPT) this.versions.delete(this.versions.keys().next().value as string)
     }

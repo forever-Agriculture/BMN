@@ -16,11 +16,11 @@ const options = { home: spec.home, dataRoot: spec.dataRoot, session: 's-hostile'
 const lines = createInterface({ input: process.stdin })[Symbol.asyncIterator]()
 
 const first = await capture(spec.repo, options)
-const one: TurnCaptureRecord | null = !isRefusal(first) && first.state === 'whole' ? first.publish() : null
+const one: TurnCaptureRecord | null = !isRefusal(first) && first.state === 'whole' ? ((await first.publish())?.record ?? null) : null
 process.stdout.write('PAUSE\n')
 await lines.next()
 const second = one ? await capture(spec.repo, { ...options, base: one.id }) : null
-const two: TurnCaptureRecord | null = second && !isRefusal(second) && second.state === 'whole' ? second.publish() : null
+const two: TurnCaptureRecord | null = second && !isRefusal(second) && second.state === 'whole' ? ((await second.publish())?.record ?? null) : null
 const store = one ? new TurnStore(spec.dataRoot, 's-hostile', one.root) : null
 const compared = store && one && two ? compareCaptures(store, one.id, two.id) : null
 const differences = store && one && two && compared?.state === 'compared'
