@@ -327,7 +327,8 @@ export function parseBoundBinding(input: unknown): PersistedConversationBinding 
   ) {
     return invalidBoundBinding(input, 'stored agent CLI is invalid')
   }
-  if (storedAgentCli(launchContext.executable) !== candidate.agentCli) {
+  // A retired app's program is named by its app in a binding saved before the retirement, and `other` in one saved since.
+  if (agentCli(launchContext.executable) !== candidate.agentCli && storedAgentCli(launchContext.executable) !== candidate.agentCli) {
     return invalidBoundBinding(input, 'stored executable identity does not match the bound agent CLI')
   }
   if (

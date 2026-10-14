@@ -726,6 +726,8 @@ describe('a conversation bound before Cursor was retired (Epic 71)', () => {
     const capability = vi.fn(supportedCapability)
     const result = await prepareConversationLaunch('bmn-session', context, {}, () => conversationId, capturedAt, capability)
     expect(result.binding).toMatchObject({ agentCli: 'other', status: 'unsupported' })
+    // The store reads it back as written, so the session's record is saved (found by the 71.3 screens run).
+    expect(parseBoundBinding(result.binding)).toEqual(result.binding)
     expect(result.injectedArguments).toEqual([])
     expect(capability).not.toHaveBeenCalled()
   })
