@@ -839,27 +839,60 @@ export function limitStanding(agent, version, { environment = process.env, cwd =
   return result.refusal ? { state: 'refused', reason: result.refusal } : { state: 'applied' }
 }
 
-// Whether a provider, model or variant entry can send data somewhere its provider's prefix does not say.
-// Anything but a map there, or `variants` that are not maps, cannot be read and counts as such an entry.
-function ownAddress(entry) {
-  if (!isObject(entry)) return true
-  if (['api', 'npm', 'package', 'canonical'].some((field) => entry[field] !== undefined)) return true
-  if (entry.options?.baseURL !== undefined || entry.settings?.baseURL !== undefined) return true
-  if (entry.variants === undefined) return false
-  return !isObject(entry.variants) || Object.values(entry.variants).some(ownAddress)
+// The `settings` (OpenCode 2) and `options` (OpenCode 1) BMN knows cannot move where a request goes, with the
+// values each takes; a settings field is package-specific (Azure's `resourceName`, a region, `baseURL`), so any
+// other field, or a known one with another value, counts as an address of its own. Timeouts apply provider-wide.
+// OpenCode 2 turns an OpenCode 1 `options.reasoningEffort` into `settings.reasoningEffort`, a word for how hard
+// the model thinks.
+const timeoutValue = (value) => value === false || (typeof value === 'number' && Number.isFinite(value) && value >= 0)
+const compactionValue = (value) => isObject(value) && Object.keys(value).length === 1 && (value.type === 'summary' || value.type === 'native')
+const effortValue = (value) => typeof value === 'string' && /^[a-z]+$/.test(value)
+const KNOWN_SETTINGS = {
+  provider: {
+    settings: {
+      compaction: compactionValue, transport: (value) => value === 'http' || value === 'websocket',
+      encoding: (value) => value === 'none' || value === 'gzip' || value === 'zstd',
+      timeout: timeoutValue, headerTimeout: timeoutValue, chunkTimeout: timeoutValue, reasoningEffort: effortValue
+    },
+    options: { apiKey: (value) => typeof value === 'string', timeout: timeoutValue, reasoningEffort: effortValue }
+  },
+  model: { settings: { compaction: compactionValue, reasoningEffort: effortValue }, options: { reasoningEffort: effortValue } }
 }
 
-// `<provider>/<model>` without its `#variant`, from text or from a map naming `providerID` and exactly one of
-// `model` and `id`; null for anything else, an empty provider or model included.
+// Whether a provider (`level` 'provider'), model or variant ('model') entry can send data somewhere its
+// provider's prefix does not say. Anything but a map there, settings BMN does not know, or `variants` that are
+// not a map of maps cannot be read and count as such an entry.
+function ownAddress(entry, level) {
+  if (!isObject(entry)) return true
+  if (['api', 'npm', 'package', 'canonical'].some((field) => entry[field] !== undefined)) return true
+  for (const [field, known] of Object.entries(KNOWN_SETTINGS[level])) {
+    const value = entry[field]
+    if (value === undefined) continue
+    if (!isObject(value) || Object.entries(value).some(([key, setting]) => !Object.hasOwn(known, key) || !known[key](setting))) return true
+  }
+  if (entry.variants === undefined) return false
+  return !isObject(entry.variants) || Object.values(entry.variants).some((variant) => ownAddress(variant, 'model'))
+}
+
+// `<provider>/<model>` without its `#variant`, read as OpenCode reads it (the provider before the first `/`, the
+// model up to the first `#` after it, a variant neither empty nor holding `#`), from text or from a map naming
+// `providerID` and exactly one of `model` and `id`; null for anything else, and for any space in either part.
 function openCodeReference(named) {
   let text = null
   if (typeof named === 'string') text = named
   else if (isObject(named) && typeof named.providerID === 'string' && (named.model === undefined) !== (named.id === undefined)) {
     const id = named.model ?? named.id
-    if (typeof id === 'string') text = `${named.providerID}/${id}`
+    if (typeof id === 'string' && !id.includes('#')) text = `${named.providerID}/${id}`
   }
-  const reference = text === null ? null : text.split('#')[0]
-  return reference !== null && /^[^\s/]+\/\S+$/.test(reference) ? reference : null
+  if (text === null) return null
+  const slash = text.indexOf('/')
+  if (slash <= 0) return null
+  const hash = text.indexOf('#', slash + 1)
+  const provider = text.slice(0, slash)
+  const variant = hash === -1 ? undefined : text.slice(hash + 1)
+  if (provider.includes('#') || (variant !== undefined && (variant === '' || variant.includes('#')))) return null
+  const reference = hash === -1 ? text : text.slice(0, hash)
+  return /^[^\s/]+\/\S+$/.test(reference) ? reference : null
 }
 
 /**
@@ -947,8 +980,9 @@ const FRONT_MATTER_OPENERS = ['---', '---yaml', '---yml']
  * front matter as YAML, or as JSON or JavaScript after another opening. BMN reads only `---`, `---yaml` and
  * `---yml`, with the team file's YAML subset (agents-roster.mjs `parseYaml`), which refuses anchors,
  * aliases, tags, block scalars, complex keys, directives, duplicate keys and escapes other than \" \\ \n \t
- * \/, and a carriage return alone is refused before it. A front matter it cannot read whole is unreadable:
- * not finding a key does not prove OpenCode finds none.
+ * \/; before it, a carriage return alone, a space character YAML does not count as one, and a line OpenCode
+ * would rewrite on a second reading are refused. A front matter it cannot read whole is unreadable: not finding a
+ * key does not prove OpenCode finds none.
  */
 function openCodeFrontMatter(text) {
   const lines = text.replace(/^\uFEFF/, '').split('\n').map((line) => line.replace(/\r$/, ''))
@@ -960,9 +994,16 @@ function openCodeFrontMatter(text) {
   while (end < lines.length && !lines[end].startsWith('---')) end += 1
   if (end === lines.length) return { unreadable: 'its front matter does not close' }
   if (lines[end].trimEnd() !== '---') return { unreadable: `its front matter closes with ${JSON.stringify(lines[end].slice(0, 24))}` }
+  const region = lines.slice(start, end + 1)
   // OpenCode's YAML reader also ends a line at a carriage return alone; BMN splits only at line feeds, so such
   // a line could hold a key BMN reads as part of a comment or a value.
-  if (lines.slice(start, end + 1).some((line) => line.includes('\r'))) return { unreadable: 'its front matter ends a line with a carriage return alone' }
+  if (region.some((line) => line.includes('\r'))) return { unreadable: 'its front matter ends a line with a carriage return alone' }
+  // JavaScript counts more characters as space than YAML does (a no-break space, a byte order mark, a form feed):
+  // BMN's reading would trim them where OpenCode keeps them, so the front matter must hold none.
+  if (region.some((line) => /[^\S \t\n\r]/.test(line))) return { unreadable: 'its front matter holds a space character YAML does not treat as one' }
+  if (lines.slice(start + 1, end).some(rewrittenOnRetry)) {
+    return { unreadable: 'its front matter has an unquoted value holding ":", which OpenCode may read again with its comment (quote the value)' }
+  }
   let value
   try {
     ;({ value } = parseYaml(lines.slice(start + 1, end).join('\n')))
@@ -976,6 +1017,20 @@ function openCodeFrontMatter(text) {
   if (hidden(value, 0)) return { unreadable: 'it names a model below the top of its front matter, or merges a map into it' }
   if (!Object.hasOwn(value, 'model')) return { model: null }
   return typeof value.model === 'string' ? { model: value.model } : { unreadable: 'its model is not text' }
+}
+
+/**
+ * Whether OpenCode would rewrite this front-matter line when it reads the front matter again after a first reading
+ * failed: a top-level `key: value` whose unquoted value holds a `:` becomes a block of the raw text, its comment
+ * included. BMN does not follow that second reading, so a front matter holding such a line is not read.
+ */
+function rewrittenOnRetry(line) {
+  const text = line.trim()
+  if (text === '' || text.startsWith('#') || /^\s/.test(line)) return false
+  const match = /^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$/.exec(line)
+  if (match === null) return false
+  const value = match[2].trim()
+  return value !== '' && value !== '>' && value !== '|' && !value.startsWith('"') && !value.startsWith("'") && value.includes(':')
 }
 
 /** Each agent or command file's model, or why the file cannot be read for one. */
@@ -1073,11 +1128,11 @@ function inspectOpenCode(environment) {
     for (const key of ['provider', 'providers']) {
       if (config[key] === undefined || !Object.hasOwn(config[key], provider)) continue
       const entry = config[key][provider]
-      if (ownAddress(entry)) return { ...unknown(`${name} gives ${provider} its own address`, [`${name} ${key}.${provider}`]), provider }
+      if (ownAddress(entry, 'provider')) return { ...unknown(`${name} gives ${provider} its own address`, [`${name} ${key}.${provider}`]), provider }
       if (entry.models === undefined) continue
       if (!isObject(entry.models)) return { ...unknown(`${name} ${key}.${provider}.models is not a map`, [`${name} ${key}.${provider}.models`]), provider }
       const modelEntry = Object.hasOwn(entry.models, modelID) ? entry.models[modelID] : undefined
-      if (modelEntry !== undefined && ownAddress(modelEntry)) {
+      if (modelEntry !== undefined && ownAddress(modelEntry, 'model')) {
         return { ...unknown(`${name} gives ${reference} its own address`, [`${name} ${key}.${provider}.models.${modelID}`]), provider }
       }
     }

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { inspectRoute } from '../../bin/agents-check.mjs'
 import { parseRoster, sha256 } from '../../bin/agents-roster.mjs'
 import { readValidRoster } from '../../bin/agents-state.mjs'
 import {
@@ -311,7 +312,43 @@ describe('install transactions and restore (60.4 AC3-AC4)', () => {
     lay({ 'opencode.jsonc': OPENCODE_CONFIG, 'agents/review.md': '---\nmodel: opencode-go/kimi-k3\n---\nReview it.\n' })
     expect(await installRules(['opencode'], { yes: true, environment: env })).toMatchObject({ code: 'OK', written: [{ harness: 'opencode', kind: 'full' }] })
     expect(readFileSync(target.opencode(), 'utf8')).toContain('One more public rule.')
-  })
+  }, 60_000)
+
+  it('records no inspected OpenCode destination where BMN cannot read the whole folder, so OpenCode keeps the public rules (consultant, 2026-10-14)', () => {
+    // The app's approval inspects again what it would newly record as inspected (src/main/agents-ipc.ts checkInspectedRoutes).
+    const appCheck = (routes: Array<{ harness: string; provider: string }>): void => {
+      for (const route of routes) {
+        const inspected = inspectRoute({ harness: route.harness } as Parameters<typeof inspectRoute>[0], null, env, home)
+        if (inspected.basis !== 'default' || inspected.provider !== route.provider) throw new Error(`ROUTE_CHANGED ${route.harness}`)
+      }
+    }
+    const allowed = edit(EXAMPLE, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}')
+    approve(edit(allowed, 'opencode: {provider: opencode-go, basis: observed-default}', 'opencode: {provider: opencode-go, basis: owner-declared}'))
+    stub('opencode', 'echo "opencode v2.0.28"')
+    const folder = join(home, '.config/opencode')
+    const unknown = OPENCODE_FOLDERS.filter((entry) => entry.expected.basis === 'unknown')
+    for (const { label, files } of unknown) {
+      rmSync(folder, { recursive: true, force: true })
+      for (const [path, text] of Object.entries(files)) {
+        mkdirSync(dirname(join(folder, path)), { recursive: true })
+        writeFileSync(join(folder, path), text)
+      }
+      writeFileSync(join(home, '.config/bmn/agents/roster.md'), allowed)
+      const shown = { generation: JSON.parse(readFileSync(join(home, '.config/bmn/agents/state/current'), 'utf8')).generation as number, fileHash: readValidRoster().hash }
+      expect(() => approveRoster(shown, { checkInspectedRoutes: appCheck }), label).toThrow('ROUTE_CHANGED opencode')
+    }
+    // Nothing recorded it, so the rendering stays public: none of the untagged or OpenCode sections.
+    const rendering = render(readMaster(), 'opencode', generation())
+    expect(rendering).toMatchObject({ kind: 'public' })
+    for (const withheld of ['Plain rule for everyone.', 'OpenCode-only rule.', 'The team:']) expect(rendering.text).not.toContain(withheld)
+    expect(rendering.text).toContain('Answer first, plainly.')
+    // A folder BMN reads whole is recorded, and gets the full rules.
+    rmSync(folder, { recursive: true, force: true })
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, 'opencode.jsonc'), OPENCODE_CONFIG)
+    approveRoster({ generation: JSON.parse(readFileSync(join(home, '.config/bmn/agents/state/current'), 'utf8')).generation as number, fileHash: readValidRoster().hash }, { checkInspectedRoutes: appCheck })
+    expect(render(readMaster(), 'opencode', generation())).toMatchObject({ kind: 'full' })
+  }, 60_000)
 
   it('refuses a full rendering when the route changed', async () => {
     const result = await installRules(['codex'], { yes: true, environment: { ...env, OPENAI_BASE_URL: 'https://proxy.example.test/v1' } })

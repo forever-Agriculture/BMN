@@ -2011,29 +2011,37 @@ on Rules → Health: a provider that may see private work passes, any other warn
   the configuration names gets the conversation, so the title model (`small_model`) and each agent's,
   mode's or command's (`agent`, `agents`, `mode`, `command`, `commands`, and the `model` in the front
   matter of the files, at any depth, in `agent/`, `agents/`, `mode/`, `modes/`, `command/` and
-  `commands/`) must name the same provider, each as `<provider>/<model>`. BMN reads the configuration as
+  `commands/`) must name the same provider, each as `<provider>/<model>` read as OpenCode reads it (the
+  model up to the first `#`, a variant neither empty nor holding `#`). BMN reads the configuration as
   JSON with comments and trailing commas, both only outside strings (a `//` comment ends at a line feed
-  or a carriage return, as in OpenCode), and a front matter that opens with
-  `---`, `---yaml` or `---yml` and closes on the next line starting with `---`, in the team file's YAML
-  (no anchors, aliases, tags, block scalars, complex keys, directives, repeated keys, or escapes other
-  than `\"`, `\\`, `\n`, `\t` and `\/`), with `model` only at its top. Anything else makes the destination
-  unknown, because not finding a model does not prove OpenCode finds none: a front matter in JSON or
-  JavaScript, one that never closes or closes on another `---` line, a line in it ended by a carriage
-  return alone (OpenCode's YAML reader breaks lines there too), a key written twice or named
-  `__proto__`, a map of
-  another shape, a file or folder BMN cannot read, and `opencode.json` beside `opencode.jsonc`
-  (OpenCode reads both). It is unknown when the models name more than one provider, when
-  `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT` is set where BMN runs, or
-  when the provider entry, the named model's entry or one of its variants carries its own address or
-  runtime (OpenCode 1's `api`, `npm` or `options.baseURL`, OpenCode 2's `package`, `canonical` or
-  `settings.baseURL`, under `provider` or `providers`); a project's `opencode.json`, the `.opencode`,
+  or a carriage return, as in OpenCode), and a front matter that opens with `---`, `---yaml` or `---yml`
+  and closes on the next line starting with `---`, in the team file's YAML (no anchors, aliases, tags,
+  block scalars, complex keys, directives, repeated keys, or escapes other than `\"`, `\\`, `\n`, `\t`
+  and `\/`), with `model` only at its top. Anything else makes the destination unknown, because not
+  finding a model does not prove OpenCode finds none: a front matter in JSON or JavaScript, one that
+  never closes or closes on another `---` line, a carriage return alone in it (OpenCode's YAML reader
+  breaks lines there too), a space character YAML does not count as one (a no-break space, say), an
+  unquoted value holding `:` (when its first reading fails, OpenCode reads such a line again with its
+  comment; quote the value), a key written twice or named `__proto__`, a map of another shape, a file or
+  folder BMN cannot read, and `opencode.json` beside `opencode.jsonc` (OpenCode reads both). It is
+  unknown when the models name more than one provider, when `OPENCODE_CONFIG` or
+  `OPENCODE_CONFIG_CONTENT` is set where BMN runs, or when the provider entry, the named model's entry or
+  one of its variants, under `provider` or `providers`, carries its own runtime (`api`, `npm`, `package`,
+  `canonical`), `variants` other than a map, or a `settings` (OpenCode 2) or `options` (OpenCode 1) field
+  other than those that cannot move a request, each with its documented values: for a provider
+  `compaction`, `transport`, `encoding`, `timeout`, `headerTimeout`, `chunkTimeout`, `reasoningEffort`
+  and OpenCode 1's `apiKey`; for a model or variant `compaction` and `reasoningEffort`. A settings field
+  belongs to the provider's package, so `baseURL`, Azure's `resourceName` or a region, and any field BMN
+  does not know, count as an address of their own. A project's `opencode.json`, the `.opencode`,
   `.claude` and `.agents` folders OpenCode reads in and above the project (your home's included), the
-  machine-wide `/etc/opencode`, plugins, and the environment of the shell you start OpenCode in are
-  not read. That reading names OpenCode's destination on Health and in the team file and,
-  since 2026-10-14, decides like Claude Code's and Codex's whether OpenCode gets the full rules; it
-  is read again right before they are written and before a loading test. A later change that makes
-  the destination unknown refuses the next install and test, but does not take back full rules
-  already written.
+  machine-wide `/etc/opencode`, plugins, and the environment of the shell you start OpenCode in are not
+  read. Tools receive text the model writes, and they are outside this reading for OpenCode as for Claude
+  Code and Codex: OpenCode's web search providers and MCP servers can see private material from a
+  conversation whatever its destination reads. That reading names OpenCode's destination on Health and
+  in the team file and, since 2026-10-14, decides like Claude Code's and Codex's whether OpenCode gets
+  the full rules; it is read again right before they are written and before a loading test. A later
+  change that makes the destination unknown refuses the next install and test, but does not take back
+  full rules already written.
 - A packet for a public-only destination relies on Claude Code's `--safe-mode` to keep your rules
   file, memory, skills and hooks out of the call. BMN does not test that itself; run one packet
   with a marker line in your rules before you turn on a public-only agent. `accepted_versions` in a team file written under the

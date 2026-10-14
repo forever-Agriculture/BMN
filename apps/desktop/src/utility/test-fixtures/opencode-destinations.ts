@@ -26,6 +26,8 @@ const known = (label: string, files: Record<string, string>, model?: string): Op
 const unknown = (label: string, files: Record<string, string>, reason: string | RegExp): OpenCodeFolder => ({ label, files, expected: { basis: 'unknown', reason } })
 const unread = (label: string, text: string, why: string): OpenCodeFolder => unknown(label, release(text), `${RELEASE}: ${why}`)
 const notYaml = (detail: string): string => `its front matter is not YAML BMN reads (${detail})`
+const RETRY = 'its front matter has an unquoted value holding ":", which OpenCode may read again with its comment (quote the value)'
+const PROXY = 'https://proxy.example.test/v1'
 
 /** Agent and command files: BMN reads a front matter whole, in the YAML it knows, or not at all. */
 export const FRONT_MATTER_FOLDERS: readonly OpenCodeFolder[] = [
@@ -51,12 +53,12 @@ export const FRONT_MATTER_FOLDERS: readonly OpenCodeFolder[] = [
   unread('a block scalar', front('model: >-\n  openrouter/cheap'), notYaml('unsupported YAML at ">-": anchors, aliases, tags and block scalars are not read')),
   unread('a value on the next line', front('model:\n  openrouter/cheap'), notYaml('expected ":" after key openrouter/cheap')),
   unread('a model below the top', front('options:\n  model: openrouter/cheap'), 'it names a model below the top of its front matter, or merges a map into it'),
-  unread('a flow map below the top', front('options: {model: openrouter/cheap}'), 'it names a model below the top of its front matter, or merges a map into it'),
+  unread('a flow map below the top', front('options: {model: openrouter/cheap}'), RETRY),
   unread('a flow map as the whole front matter', front('{model: openrouter/cheap}'), notYaml('unsupported or empty key "{model"')),
   unread('a model twice', front('model: opencode-go/kimi-k3\n"model": openrouter/cheap'), notYaml('duplicate key model')),
   unread('a complex key', front('? model\n: openrouter/cheap'), notYaml('unsupported or empty key "? model"')),
   unread('a tag', front('model: !!str openrouter/cheap'), notYaml('unsupported YAML at "!!str openrouter/che": anchors, aliases, tags and block scalars are not read')),
-  unread('an anchor and a merge', front('base: &b {model: openrouter/cheap}\n<<: *b'), notYaml('unsupported YAML at "&b {model: openroute": anchors, aliases, tags and block scalars are not read')),
+  unread('an anchor and a merge', front('base: &b {model: openrouter/cheap}\n<<: *b'), RETRY),
   unread('a merge key', front('<<: {model: openrouter/cheap}'), 'it names a model below the top of its front matter, or merges a map into it'),
   unread('a prototype key', front('__proto__:\n  model: openrouter/cheap'), 'it names a model below the top of its front matter, or merges a map into it'),
   unread('a directive', front('%YAML 1.2\nmodel: openrouter/cheap'), notYaml('unsupported or empty key "%YAML 1.2"')),
@@ -107,8 +109,99 @@ export const CONFIGURATION_FOLDERS: readonly OpenCodeFolder[] = [
   unknown('a model with an empty name', config('{ "model": "opencode-go/" }'), 'opencode.jsonc names no model'),
   unknown('a model with a space', config('{ "model": "opencode-go/kimi k3" }'), 'opencode.jsonc names no model'),
   unknown('a model map with both model and id', config('{ "model": { "providerID": "opencode-go", "model": "kimi-k3", "id": "kimi-k2" } }'), 'opencode.jsonc names no model'),
+  // OpenCode's reference: the provider before the first `/`, the model up to the first `#`, a variant neither empty nor holding `#`.
+  unknown('an empty variant', config('{ "model": "opencode-go/kimi-k3#" }'), 'opencode.jsonc names no model'),
+  unknown('a variant holding #', config('{ "model": "opencode-go/kimi-k3#a#b" }'), 'opencode.jsonc names no model'),
+  unknown('a model map whose id holds #', config('{ "model": { "providerID": "opencode-go", "id": "kimi-k3#high" } }'), 'opencode.jsonc names no model'),
   unknown('an agent model without a provider', config('{ "model": "opencode-go/kimi-k3", "agents": { "review": { "model": "kimi-k3" } } }'), 'opencode.jsonc agents.review.model names no model BMN reads as <provider>/<model>'),
   unknown('both configuration files', { 'opencode.json': OPENCODE_CONFIG, 'opencode.jsonc': OPENCODE_CONFIG }, 'opencode.json and opencode.jsonc are both there, and OpenCode reads both')
 ]
 
-export const OPENCODE_FOLDERS: readonly OpenCodeFolder[] = [...FRONT_MATTER_FOLDERS, ...CONFIGURATION_FOLDERS]
+/** Every character JavaScript counts as a space and YAML does not, wherever it stands in a front matter (Astra recheck 4). */
+const NON_YAML_SPACES = [0x0b, 0x0c, 0xa0, 0x1680, ...Array.from({ length: 11 }, (_, index) => 0x2000 + index), 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff]
+const SPACE = 'its front matter holds a space character YAML does not treat as one'
+export const SPACE_FOLDERS: readonly OpenCodeFolder[] = [
+  known('ordinary spaces around a value', release(front('model:   opencode-go/kimi-k3   \ndescription: Re views'))),
+  known('a tab inside a value', release(front('description: Re\tviews'))),
+  ...NON_YAML_SPACES.flatMap((code) => {
+    const space = String.fromCharCode(code)
+    const name = `U+${code.toString(16).toUpperCase().padStart(4, '0')}`
+    const entry = JSON.stringify({ model: 'opencode-go/kimi-k3', providers: { 'opencode-go': { models: { [`kimi-k3${space}`]: { modelID: 'kimi-k3', settings: { baseURL: PROXY } } } } } })
+    return [
+      unknown(`${name} after the model, naming an entry with its own address`, { 'opencode.jsonc': entry, [RELEASE]: front(`model: opencode-go/kimi-k3${space}\ndescription: Reviews`) }, `${RELEASE}: ${SPACE}`),
+      unread(`${name} before a key`, front(`${space}model: opencode-go/kimi-k3`), SPACE),
+      unread(`${name} in quoted text`, front(`description: "Re${space}views"`), SPACE),
+      unread(`${name} in a comment`, front(`description: Reviews # a${space}b`), SPACE),
+      unread(`${name} after the opening line`, `---${space}\nmodel: opencode-go/kimi-k3\n---\nShip it.\n`, SPACE),
+      unread(`${name} after the closing line`, `---\nmodel: opencode-go/kimi-k3\n---${space}\nShip it.\n`, SPACE),
+      known(`${name} in the body only`, release(`---\ndescription: Reviews\n---\nShip${space}it.\n`))
+    ]
+  })
+]
+
+/** OpenCode reads a top-level `key: value` whose unquoted value holds `:` again, comment included, after a failed first reading. */
+export const RETRY_FOLDERS: readonly OpenCodeFolder[] = [
+  unknown('a model OpenCode reads with its comment after the retry (the consultant\'s reproduction)', {
+    'opencode.jsonc': JSON.stringify({ model: 'opencode-go/kimi-k3', providers: { 'opencode-go': { models: { 'kimi-k3:alias ': { modelID: 'kimi-k3', settings: { baseURL: PROXY }, variants: [{ id: 'high' }] } } } } }),
+    [RELEASE]: front('model: opencode-go/kimi-k3:alias #high\ndescription: note: detail')
+  }, `${RELEASE}: ${RETRY}`),
+  unknown('a colon only in the model\'s comment', {
+    'opencode.jsonc': JSON.stringify({ model: 'opencode-go/kimi-k3', providers: { 'opencode-go': { models: { 'kimi-k3 ': { settings: { baseURL: PROXY }, variants: { 'high:extra': {} } } } } } }),
+    [RELEASE]: front('model: opencode-go/kimi-k3 #high:extra\ndescription: note: detail')
+  }, `${RELEASE}: ${RETRY}`),
+  unread('a value holding a colon', front('description: note: detail'), RETRY),
+  unread('a value holding a colon, with a comment', front('description: note: detail # aside'), RETRY),
+  unread('a value holding a colon, with CRLF', '---\r\ndescription: note: detail\r\n---\r\nShip it.\r\n', RETRY),
+  known('quoted values holding colons', release(front('model: "opencode-go/kimi-k3:alias"\ndescription: "note: detail"')))
+]
+
+/**
+ * `settings` and `options` that may move where a request goes, at a provider, the named model and its variant, under
+ * OpenCode 1's `provider` and OpenCode 2's `providers`: only the known fields with their values keep the destination.
+ */
+type Level = 'provider' | 'model' | 'variant'
+const at = (table: string, level: Level, field: string, value: unknown): string => {
+  const entry = { [field]: value }
+  const provider = level === 'provider' ? entry : { models: { 'kimi-k3': level === 'model' ? entry : { variants: { high: entry } } } }
+  return JSON.stringify({ model: 'opencode-go/kimi-k3#high', [table]: { 'opencode-go': provider } })
+}
+const READ_NOWHERE: readonly unknown[] = [{ baseURL: PROXY }, { resourceName: 'synthetic' }, { region: 'ap-southeast-1' }, { futureField: true }, null, 'x', 1, []]
+const KNOWN: Record<'provider' | 'model', Record<'settings' | 'options', readonly unknown[]>> = {
+  provider: {
+    settings: [{ compaction: { type: 'summary' } }, { compaction: { type: 'native' } }, { transport: 'http' }, { transport: 'websocket' }, { encoding: 'none' }, { encoding: 'gzip' },
+      { encoding: 'zstd' }, { timeout: 0 }, { timeout: 120000 }, { timeout: false }, { headerTimeout: 30000 }, { chunkTimeout: false }, { reasoningEffort: 'high' }],
+    options: [{ apiKey: 'synthetic' }, { timeout: 30000 }, { timeout: false }, { reasoningEffort: 'high' }]
+  },
+  model: { settings: [{ compaction: { type: 'summary' } }, { reasoningEffort: 'high' }], options: [{ reasoningEffort: 'high' }] }
+}
+const MISSHAPEN: Record<'provider' | 'model', Record<'settings' | 'options', readonly unknown[]>> = {
+  provider: {
+    settings: [{ compaction: 'summary' }, { compaction: { type: 'other' } }, { compaction: { type: 'summary', baseURL: PROXY } }, { transport: 'tcp' }, { transport: {} }, { encoding: 'br' },
+      { encoding: [] }, { timeout: '30s' }, { timeout: -1 }, { timeout: {} }, { reasoningEffort: 'High' }, { reasoningEffort: {} }],
+    options: [{ apiKey: 1 }, { timeout: '30s' }]
+  },
+  model: {
+    settings: [{ transport: 'http' }, { timeout: 1000 }, { compaction: { type: 'summary', baseURL: PROXY } }, { reasoningEffort: 'high effort' }],
+    options: [{ apiKey: 'synthetic' }, { timeout: 1000 }]
+  }
+}
+export const SETTINGS_FOLDERS: readonly OpenCodeFolder[] = [
+  ...['provider', 'providers'].flatMap((table) => (['provider', 'model', 'variant'] as const).flatMap((level) => {
+    const reason = level === 'provider' ? 'opencode.jsonc gives opencode-go its own address' : 'opencode.jsonc gives opencode-go/kimi-k3 its own address'
+    const kind = level === 'provider' ? 'provider' : 'model'
+    return (['settings', 'options'] as const).flatMap((field) => [
+      ...READ_NOWHERE.map((value) => unknown(`${table} ${level} ${field} ${JSON.stringify(value)}`, config(at(table, level, field, value)), reason)),
+      unknown(`${table} ${level} ${field} with an escaped baseURL key`, config(at(table, level, field, { baseURL: PROXY }).replace('"baseURL"', `"base${escaped('0055')}RL"`)), reason),
+      ...KNOWN[kind][field].map((value) => known(`${table} ${level} ${field} ${JSON.stringify(value)}`, config(at(table, level, field, value)))),
+      ...MISSHAPEN[kind][field].map((value) => unknown(`${table} ${level} ${field} ${JSON.stringify(value)}`, config(at(table, level, field, value)), reason))
+    ])
+  })),
+  unknown('a safe variant beside one with its own address', config(JSON.stringify({ model: 'opencode-go/kimi-k3#high', providers: { 'opencode-go': { models: { 'kimi-k3': { variants: { high: {}, low: { settings: { baseURL: PROXY } } } } } } } })),
+    'opencode.jsonc gives opencode-go/kimi-k3 its own address'),
+  // OpenCode 2 also writes variants as a list; BMN reads only a map of them.
+  ...[[], [{ id: 'high' }], [{ id: 'high', settings: { baseURL: PROXY } }], ['high']].map((variants) =>
+    unknown(`variants as the list ${JSON.stringify(variants)}`, config(JSON.stringify({ model: 'opencode-go/kimi-k3#high', providers: { 'opencode-go': { models: { 'kimi-k3': { variants } } } } })),
+      'opencode.jsonc gives opencode-go/kimi-k3 its own address'))
+]
+
+export const OPENCODE_FOLDERS: readonly OpenCodeFolder[] = [...FRONT_MATTER_FOLDERS, ...CONFIGURATION_FOLDERS, ...SPACE_FOLDERS, ...RETRY_FOLDERS, ...SETTINGS_FOLDERS]

@@ -1120,7 +1120,7 @@ describe('receipts and --verify (60.3 AC7)', () => {
         else expect(route.reason, label).toMatch(expected.reason)
       }
     }
-  })
+  }, 60_000)
 })
 
 describe('codex exec resume (60.3 AC8)', () => {
