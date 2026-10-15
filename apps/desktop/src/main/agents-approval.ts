@@ -12,6 +12,7 @@ import {
   readApproved, readGeneration, restoreProblem, stateDirectory, type Generation
 } from '../../bin/agents-state.mjs'
 import { pathState, replaceFileSafely, type PathState } from '../../bin/safe-config-write.mjs'
+import { mainWorktree } from '../../bin/agents-team-inputs.mjs'
 
 /**
  * Approval is workflow protection against same-user processes, not an OS boundary
@@ -238,6 +239,8 @@ export function judgeProjectChoices(previous: RosterData | null, next: RosterDat
     if (choiceEnded(choice, now)) throw new RosterError('PROJECT_CHOICE_UNAVAILABLE', `the project choice ${choice.id} ended on ${choice.ends}; nothing was approved`)
     // An ask finds its project by its real path, so a choice written through a link would be approved and never apply.
     if (resolvedDirectory(choice.project) !== choice.project) throw new RosterError('PROJECT_CHOICE_UNAVAILABLE', `the project choice ${choice.id} names its project through a link; a choice counts only for a project's real path, so write that path; nothing was approved`)
+    // A linked worktree is the repository's project, not one of its own: its choice is the repository's, so two never claim one project (epic review).
+    if (mainWorktree(choice.project) !== null) throw new RosterError('PROJECT_CHOICE_UNAVAILABLE', `the project choice ${choice.id} names a linked worktree; a choice names its repository's main folder, whose linked worktrees count as it; nothing was approved`)
   }
 }
 

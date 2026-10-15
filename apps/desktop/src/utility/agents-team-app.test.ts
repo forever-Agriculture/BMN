@@ -8,6 +8,8 @@ import { containerStarts } from '../../bin/agents-container.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { appAskDetail, appAskExport, appAskRemove, appAskStop, appAsks } from '../../bin/agents-team-app.mjs'
 import { teamRunsDirectory } from '../../bin/agents-check.mjs'
+import { placePath } from '../../bin/agents-team-places.mjs'
+import { processStart } from '../../bin/agents-supervised.mjs'
 import { startAsk, waitAsk } from '../../bin/agents-team-run.mjs'
 import { SIGN_IN_SENTINEL, leftovers as harnessLeftovers, settle, teamAskHome } from './test-fixtures/team-ask-harness'
 
@@ -149,6 +151,23 @@ describe('what an ended run\'s record says (73.1 AC2)', () => {
     record('20261015T090000-0000000a', { asked_by: SESSION, asked_at: '2026-10-15T09:00:00.000Z' },
       { state: 'refused', exit: 10, refusal: { code: 'CHECK_FAILED', reason: 'the check refused the command: made-up reason' }, ended_at: '2026-10-15T09:00:01.000Z' })
     expect(appAsks().asks[0]).toMatchObject({ state: 'refused', refusalCode: 'CHECK_FAILED', reason: 'the check refused the command: made-up reason', usage: null })
+  })
+
+  it('an ask whose asking command ended before its supervisor started is interrupted when the page reads it, and can then be removed (epic review)', () => {
+    const id = '20261015T090000-0000000d'
+    record(id, { asked_by: SESSION, asked_at: '2026-10-15T09:00:00.000Z' }, null)
+    // Its place names the command that reserved it, which has ended: no process has that start.
+    mkdirSync(join(runs(), '.places'), { recursive: true })
+    writeFileSync(placePath(runs(), id), JSON.stringify({ version: 1, id, holder: { pid: process.pid, start: 'made-up-ended-start' }, reserved_at: '2026-10-15T09:00:00.000Z' }))
+    expect(appAsks().asks[0]).toMatchObject({ id, state: 'interrupted', reason: 'the asking command ended before the run started; nothing started, and BMN never starts it again' })
+    expect(appAskRemove(id)).toBe(1)
+    expect(existsSync(join(runs(), id))).toBe(false)
+    // One whose command still lives is left going.
+    const going = '20261015T090000-0000000e'
+    record(going, { asked_by: SESSION, asked_at: '2026-10-15T09:00:00.000Z' }, null)
+    writeFileSync(placePath(runs(), going), JSON.stringify({ version: 1, id: going, holder: { pid: process.pid, start: processStart(process.pid) }, reserved_at: '2026-10-15T09:00:00.000Z' }))
+    expect(appAsks().asks.find((line) => line.id === going)).toMatchObject({ state: 'running' })
+    expect(existsSync(join(runs(), going, 'outcome.json'))).toBe(false)
   })
 
   it('a run made before the question had its own record shows its prompt\'s first line, and says only that is known; a not-attributed answer is not shown as the teammate\'s', () => {

@@ -482,6 +482,17 @@ describe('differences in words (60.5 AC7)', () => {
     expect(firstApprovalGroups(DATA, ['Sol could be given work']).groups.map((group) => group.key)).toEqual(['sol'])
   })
 
+  it('a first approval names each project choice with its folder, role, teammate, effort and end date (73.2 AC2, epic review)', () => {
+    const data = { ...DATA, project_choices: [{ id: 'shop-review', project: '/home/synthetic/shop', role: 'epic-reviewer', agent: 'fable', effort: 'medium' as const, ends: '2026-12-31' }, { id: 'docs-review', project: '/home/synthetic/docs', role: 'epic-reviewer', agent: 'astra' }] }
+    const sentences = ['epic-reviewer asks in one project would reach Fable at medium instead of the role\'s chain (Astra first)', 'epic-reviewer asks in one project would reach Astra instead of the role\'s chain (Astra first)']
+    const { groups, general } = firstApprovalGroups(data, sentences)
+    expect(groups[0]).toEqual({
+      key: 'project-choices', subject: 'Project choices', consequences: sentences.map((sentence) => consequenceWords(sentence, new Set(DATA.roles.map((role) => role.id)))),
+      lines: [{ field: 'Epic reviewer · shop-review', before: '—', after: '/home/synthetic/shop → Fable at medium until 2026-12-31' }, { field: 'Epic reviewer · docs-review', before: '—', after: '/home/synthetic/docs → Astra' }]
+    })
+    expect(general).toEqual([])
+  })
+
   it('reviews a first approval as one row per agent and one per role', () => {
     const { groups, general } = firstApprovalGroups(DATA, [
       'Sol could be given work', 'Sol could lead', 'Sol could receive private work', 'Astra could be given work', 'Fable could be given work', 'Fable could design',

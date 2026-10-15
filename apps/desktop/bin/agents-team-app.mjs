@@ -1,13 +1,13 @@
 // MODULE: agents-team-app.mjs - Story 73.1: Team › Asks: every ask on this computer listed for the owner (his agents' and any made from a shell), one opened with its answer as the teammate's words, stopped, removed or exported
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { APP_NAMES } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { teamRunsDirectory } from './agents-check.mjs'
 import { ASK_ACCESS, ASK_RUN_FILES } from './agents-team-forms.mjs'
 import { LIMITS } from './agents-team-inputs.mjs'
 import { AskRefusal } from './agents-team-resolve.mjs'
-import { RETENTION_DAYS, askSettings, placePath, recordInterrupted, removeRun, sweepRuns } from './agents-team-places.mjs'
+import { RETENTION_DAYS, askSettings, placePath, recordInterrupted, removeRun, runHolds, sweepRuns } from './agents-team-places.mjs'
 import { ANSWER_LIMIT, askOutcome, exportAsk, stopAsk } from './agents-team-run.mjs'
 import { RUN_FILES } from './agents-team-supervisor.mjs'
 
@@ -84,11 +84,17 @@ const reasonOf = (outcome) => text(outcome.reason, 2000) ?? text(outcome.refusal
 
 /**
  * One run as the Asks page lists it. `names`: the approved team's names by agent id. A run whose
- * supervisor died is recorded as interrupted when it is looked at, as the command does.
+ * supervisor died, or whose asking command ended before its supervisor started, is recorded as
+ * interrupted when it is looked at, as the next ask would record it.
  */
 export function askLine(folder, names = new Map(), now = new Date()) {
-  if (askOutcome(folder).state === 'interrupted' && !existsSync(join(folder, ASK_RUN_FILES.outcome))) {
+  const before = askOutcome(folder)
+  if (before.state === 'interrupted' && !existsSync(join(folder, ASK_RUN_FILES.outcome))) {
     recordInterrupted(folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
+  } else if (before.state === 'accepted' && !existsSync(join(folder, ASK_RUN_FILES.outcome))) {
+    // Before its supervisor, the command that reserved the run holds it while it lives (agents-team-places.mjs runHolds).
+    const place = readJson(placePath(dirname(folder), basename(folder)))
+    if (place !== null) runHolds(dirname(folder), basename(folder), place.holder, now.getTime())
   }
   const request = readJson(join(folder, ASK_RUN_FILES.request)) ?? {}
   const manifest = readJson(join(folder, ASK_RUN_FILES.manifest))

@@ -984,15 +984,20 @@ shop-review: {project: /home/you/code/shop, role: reviewer, agent: astra, effort
 ```
 
 `project` is the project's real folder, written out (no `~`, `.` or `..`; a path through a link
-counts for nothing, as with an exception). The repository's linked worktrees count as it; any
-other folder, a subfolder included, does not. `effort` and `ends` are optional: without an effort,
+counts for nothing, as with an exception): a repository's main folder, never one of its linked
+worktrees. The repository's linked worktrees count as it, each only where the repository itself
+records that worktree (a copy of a linked checkout does not); any other folder, a subfolder
+included, does not. Where a worktree's own folder had a choice too (an older approved version),
+the choice for the folder asked from comes before the repository's, and one that ended gives way
+to the next; the order of the file never decides. `effort` and `ends` are optional: without an effort,
 the efforts the role gives that agent apply; a choice applies through the day `ends` names. One
 choice per project and role. A choice takes effect like every edit of the team file, once you
 approve it in BMN (Preferences, Team), whose review says who that role's asks in the project would
 reach before and after; no command approves one. The approval refuses a new or changed choice
 whose agent is not active, does not hold the role, is of a class the role refuses or is given an
-effort the role does not allow it, one that already ended, and one whose project passes through a
-link (`PROJECT_CHOICE_UNAVAILABLE`). A
+effort the role does not allow it, one that already ended, one whose project passes through a
+link, and one naming a linked worktree (`PROJECT_CHOICE_UNAVAILABLE`). A first approval's review
+names each choice with its folder, role, teammate, effort and end date. A
 choice picks who answers and grants nothing: what data may reach that agent, its tools and what it
 can read stay the team's.
 

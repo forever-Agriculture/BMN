@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { consequences } from '../../bin/agents-check.mjs'
-import { RETIRED_APPS, parseRoster, projectChoiceProblem, rewriteRoster } from '../../bin/agents-roster.mjs'
+import { RETIRED_APPS, parseRoster, projectChoiceFor, projectChoiceProblem, rewriteRoster } from '../../bin/agents-roster.mjs'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { AskRefusal } from '../../bin/agents-team-resolve.mjs'
@@ -267,6 +267,44 @@ describe('asks in the project and its worktrees (73.2 AC1, AC3, AC4)', () => {
     const copy = join(home, 'code/shop-copy')
     execFileSync('cp', ['-r', shop, copy])
     expect(ask({ project: realpathSync(copy) }).choice).toMatchObject({ agent: 'astra', rule: 'chain' })
+  })
+
+  it('a copy of a linked worktree, or a folder whose .git file points into the repository, does not count as it (epic review)', () => {
+    const shop = makeProject('shop')
+    approve(withChoices(`shop-review: {project: ${shop}, role: epic-reviewer, agent: fable}`))
+    const worktree = join(home, 'worktrees/shop-feature')
+    git(shop, 'worktree', 'add', '-q', '-b', 'feature', worktree)
+    const copy = join(home, 'worktrees/shop-feature-copy')
+    execFileSync('cp', ['-r', worktree, copy])
+    expect(readFileSync(join(copy, '.git'), 'utf8')).toContain(join(shop, '.git/worktrees/'))
+    expect(ask({ project: realpathSync(copy) }).choice).toMatchObject({ agent: 'astra', rule: 'chain' })
+    const forged = join(home, 'code/forged')
+    mkdirSync(forged, { recursive: true })
+    writeFileSync(join(forged, '.git'), `gitdir: ${join(shop, '.git/worktrees/shop-feature')}\n`)
+    expect(ask({ project: realpathSync(forged) }).choice).toMatchObject({ agent: 'astra', rule: 'chain' })
+    expect(ask({ project: realpathSync(worktree) }).choice).toMatchObject({ agent: 'fable', rule: 'project-choice' })
+  })
+
+  it('a choice naming a linked worktree is never approved: the repository\'s main folder holds it (epic review)', () => {
+    const shop = makeProject('shop')
+    const worktree = join(home, 'worktrees/shop-feature')
+    git(shop, 'worktree', 'add', '-q', '-b', 'feature', worktree)
+    writeFileSync(rosterFile(), withChoices(`main: {project: ${shop}, role: epic-reviewer, agent: fable}`, `tree: {project: ${realpathSync(worktree)}, role: epic-reviewer, agent: astra}`))
+    expect(() => approveRoster(shown(), { checkInspectedRoutes: () => {}, now: () => NOW })).toThrow('the project choice tree names a linked worktree; a choice names its repository\'s main folder, whose linked worktrees count as it; nothing was approved')
+    expect(readApproved().data.project_choices).toBeUndefined()
+  })
+
+  it('the first folder with a choice that has not ended decides, whatever the team file\'s order (epic review)', () => {
+    const data = parseRoster(EXAMPLE).data!
+    const main = { id: 'main', project: '/synthetic/shop', role: 'epic-reviewer', agent: 'fable' }
+    const tree = { id: 'tree', project: '/synthetic/shop-feature', role: 'epic-reviewer', agent: 'astra' }
+    const folders = ['/synthetic/shop-feature', '/synthetic/shop']
+    for (const order of [[main, tree], [tree, main]]) {
+      expect(projectChoiceFor({ ...data, project_choices: order }, folders, 'epic-reviewer', NOW)).toEqual({ choice: tree, ended: false })
+      expect(projectChoiceFor({ ...data, project_choices: order.map((choice) => (choice.id === 'tree' ? { ...choice, ends: '2026-10-14' } : choice)) }, folders, 'epic-reviewer', NOW)).toEqual({ choice: main, ended: false })
+    }
+    const both = [{ ...main, ends: '2026-10-13' }, { ...tree, ends: '2026-10-14' }]
+    expect(projectChoiceFor({ ...data, project_choices: both }, folders, 'epic-reviewer', NOW)).toEqual({ choice: both[1], ended: true })
   })
 
   it('an ended choice no longer applies; one whose agent cannot answer is refused with the reason, never sent to another', () => {

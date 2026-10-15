@@ -214,14 +214,21 @@ export function workingTreeRoot(folder) {
 /**
  * For a linked worktree's top folder, the main folder of the repository it belongs to; null for a
  * main working tree, a bare repository, a folder that is not a working tree's top, or no repository.
- * A project choice made for the repository covers its worktrees (73.2 AC1).
+ * A project choice made for the repository covers its worktrees (73.2 AC1). A folder counts only
+ * where the repository itself records that worktree there: a copy of a linked checkout, or a folder
+ * whose `.git` file points into another repository, keeps that pointer but not the repository's
+ * record of it (epic review).
  */
 export function mainWorktree(top) {
   try {
-    const [shown, common] = git(top, ['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir']).trim().split('\n')
-    if (shown === undefined || common === undefined || realpathSync(shown) !== top || basename(common) !== '.git') return null
+    const [shown, common, own] = git(top, ['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir', '--git-dir']).trim().split('\n')
+    if (shown === undefined || common === undefined || own === undefined || realpathSync(shown) !== top || basename(common) !== '.git') return null
     const main = realpathSync(dirname(common))
-    return main === top ? null : main
+    if (main === top) return null
+    // The repository's record of this worktree (.git/worktrees/<name>/gitdir) names the .git file of this very folder.
+    if (realpathSync(dirname(own)) !== join(realpathSync(common), 'worktrees')) return null
+    const recorded = readFileSync(join(own, 'gitdir'), 'utf8').trim()
+    return isAbsolute(recorded) && realpathSync(dirname(recorded)) === top ? main : null
   } catch {
     return null
   }

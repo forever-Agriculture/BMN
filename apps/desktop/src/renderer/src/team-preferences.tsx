@@ -1430,7 +1430,8 @@ export function TargetPath(props: { target: { path: string; resolvedPath?: strin
 export function firstApprovalWords(data: RosterDataShape | null): string {
   const agents = agentGroups(data ?? { schema_version: 2, agents: [], roles: [], providers: [], exceptions: [], harness_routes: [] }).active.length
   const roles = data?.roles.length ?? 0
-  return `${agents} active agent${agents === 1 ? '' : 's'} and ${roles} role${roles === 1 ? '' : 's'} take effect`
+  const choices = data?.project_choices?.length ?? 0
+  return `${agents} active agent${agents === 1 ? '' : 's'}${choices === 0 ? ' and' : ','} ${roles} role${roles === 1 ? '' : 's'}${choices === 0 ? '' : ` and ${choices} project choice${choices === 1 ? '' : 's'}`} take effect`
 }
 
 /** The footer's one line of meaning: the first consequence, else the first changed value. */

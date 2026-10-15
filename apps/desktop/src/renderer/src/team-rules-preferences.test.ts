@@ -187,6 +187,7 @@ describe('Team › Agents (60.5 AC2)', () => {
     expect(first).toContain('Nothing here takes effect until you approve the team for the first time.')
     expect(first).toContain('>Approve…</button>')
     expect(firstApprovalWords(DATA)).toBe('3 active agents and 3 roles take effect')
+    expect(firstApprovalWords({ ...DATA, project_choices: [{ id: 'shop-review', project: '/home/synthetic/shop', role: 'epic-reviewer', agent: 'fable' }] })).toBe('3 active agents, 3 roles and 1 project choice take effect')
   })
 
   it('offers to start a team when there is no team file, and names the file when it cannot be read', () => {

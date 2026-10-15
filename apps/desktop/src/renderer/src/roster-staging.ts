@@ -337,8 +337,9 @@ const ABILITY_WORDS: Readonly<Record<string, string>> = {
 /**
  * A first approval has nothing to differ from, so its review is the consequences themselves, one
  * row per agent ("Can be given work, can lead, may receive private work") and one per role, whose
- * chain the page draws; and one row naming, in full, every folder where a provider that otherwise
- * gets public work only would be allowed private work. Sentences about none of these stay in `general`.
+ * chain the page draws; one row naming, in full, every folder where a provider that otherwise
+ * gets public work only would be allowed private work; and one naming each project choice with its
+ * folder, role, teammate, effort and end date (73.2 AC2). Sentences about none of these stay in `general`.
  */
 export function firstApprovalGroups(data: RosterDataShape, sentences: readonly string[]): { groups: DiffGroup[]; general: string[] } {
   const roleIds = roleIdsOf(data)
@@ -365,6 +366,20 @@ export function firstApprovalGroups(data: RosterDataShape, sentences: readonly s
     groups.unshift({
       key: 'exceptions', subject: SECTION_SUBJECTS.exceptions ?? 'exceptions', consequences: mine,
       lines: data.exceptions.map((exception) => ({ field: `${names.providers.get(exception.provider) ?? exception.provider} · workspace`, before: '—', after: exception.folder }))
+    })
+  }
+  const choices = data.project_choices ?? []
+  if (choices.length > 0) {
+    const names = namesOf(data)
+    const mine = sentences.filter((sentence) => /^[a-z0-9-]+ asks in one project would reach /.test(sentence))
+    for (const sentence of mine) left.delete(sentence)
+    // Each choice says where it binds and to whom, as BMN's own review names a folder (73.2 AC2).
+    groups.unshift({
+      key: 'project-choices', subject: SECTION_SUBJECTS['project-choices'] ?? 'Project choices', consequences: mine.map((sentence) => consequenceWords(sentence, roleIds)),
+      lines: choices.map((choice) => ({
+        field: `${roleName(choice.role)} · ${choice.id}`, before: '—',
+        after: `${choice.project} → ${names.agents.get(choice.agent) ?? choice.agent}${choice.effort === undefined ? '' : ` at ${choice.effort}`}${choice.ends === undefined ? '' : ` until ${choice.ends}`}`
+      }))
     })
   }
   return { groups, general: sentences.filter((sentence) => left.has(sentence)).map((sentence) => consequenceWords(sentence, roleIds)) }

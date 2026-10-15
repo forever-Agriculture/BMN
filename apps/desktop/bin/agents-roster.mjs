@@ -272,12 +272,20 @@ export function choiceEnded(choice, now = new Date()) {
 
 /**
  * The project choice for a role in a project, or null. `folders` are the ask's project and, for a
- * linked worktree, its repository's main folder: a choice for the repository covers its worktrees
- * and no other folder (73.2 AC1). `ended` says the choice's end date has passed, so it no longer applies.
+ * linked worktree, its repository's main folder, in that order: a choice for the repository covers
+ * its worktrees and no other folder (73.2 AC1). The first folder with a choice that has not ended
+ * decides, never the order of the team file; `ended` is true only when every choice that matches has
+ * ended, so it no longer applies.
  */
 export function projectChoiceFor(data, folders, roleId, now = new Date()) {
-  const choice = (data.project_choices ?? []).find((entry) => entry.role === roleId && folders.includes(entry.project))
-  return choice === undefined ? null : { choice, ended: choiceEnded(choice, now) }
+  let ended = null
+  for (const folder of folders) {
+    const choice = (data.project_choices ?? []).find((entry) => entry.role === roleId && entry.project === folder)
+    if (choice === undefined) continue
+    if (!choiceEnded(choice, now)) return { choice, ended: false }
+    ended ??= choice
+  }
+  return ended === null ? null : { choice: ended, ended: true }
 }
 
 export function roleEfforts(role, agentId) {
