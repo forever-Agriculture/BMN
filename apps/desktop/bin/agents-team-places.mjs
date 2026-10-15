@@ -96,7 +96,12 @@ export function requestHash(request) {
     version: 2, role: request.role, question_sha256: sha256(request.question ?? ''), agent: request.agent ?? null, effort: request.effort ?? null,
     small_work: request.smallWork === true, recheck_of: request.recheckOf ?? null, project: request.project ?? null,
     files: (request.files ?? []).map((file) => ({ path: file.path, sha256: file.sha256 })), images: (request.images ?? []).map((image) => ({ path: image.path, sha256: image.sha256 })),
-    data: request.data === 'public' ? 'public' : 'private', time_limit_minutes: request.timeLimitMinutes
+    data: request.data === 'public' ? 'public' : 'private', time_limit_minutes: request.timeLimitMinutes,
+    // A browser ask (74.3): where the app answers, whether the teammate may click, and the asker's statement.
+    // Only a browser ask carries it, so every other ask's hash stays the one it had.
+    ...(request.browser === undefined || request.browser === null ? {} : {
+      browser: { origin: request.browser.origin ?? null, interact: request.browser.interact === true, disposable: request.browser.disposable === true }
+    })
   }
   return sha256(JSON.stringify(canonical))
 }

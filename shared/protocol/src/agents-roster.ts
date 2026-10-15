@@ -708,6 +708,8 @@ export interface TeamAskReads {
   folder: string | null
   files: number
   pictures: number
+  /** A browser ask (74.3): the asker's app it checked, and whether it could click and type there. */
+  browser?: { origin: string; interact: boolean }
 }
 /** How a run stands: `running` until its outcome, then the contract's outcome word. */
 export type TeamAskState = 'running' | 'answered' | 'failed' | 'refused' | 'out-of-time' | 'stopped' | 'not-attributed' | 'interrupted'
@@ -777,6 +779,8 @@ export interface TeamAskDetail {
   pictures: Array<{ label: string; bytes: number; mediaType: string; width: number | null; height: number | null; removed: string[] }>
   /** The project it worked in, with its state at the start and the end (72.9 AC6); a run made before 72.9 gives the revision it copied as its start. */
   project: { root: string | null; start: TeamAskProjectState | null; end: TeamAskProjectState | null } | null
+  /** A browser ask's record (74.3 AC3): the pages it visited and its screenshots, the app's own words; null for any other ask. */
+  browser: { origin: string; interact: boolean; pages: Array<{ url: string; title: string | null }>; screenshots: Array<{ name: string; bytes: number }> } | null
   teammate: { app: string | null; appName: string | null; appVersion: string | null; model: string | null; session: string | null; sessionSource: string | null }
   subagents: TeamAskSubagentView[]
   /** The names of the credentials BMN masked in the answer and the app's output, none where it masked nothing. */

@@ -89,9 +89,10 @@ Commands:
                                             its plan use reaches BMN; the command itself is kept unchanged
   team [--all] [--json]                     The owner-approved team: one line per enabled active agent
   team ask --role R --question-file - --key K [--project P] [--file P]... [--image P]...
+           [--origin http://127.0.0.1:PORT --disposable [--interact]]
                                             Ask one teammate in a role, in its own app's read-only mode with
-                                            its tools; the answer is advice. team asks lists your asks
-                                            (bmn team ask --help)
+                                            its tools; --origin gives it a browser for your local app; the
+                                            answer is advice. team asks lists your asks (bmn team ask --help)
   roster validate|status|role|route|visibility|check|explain|bind|fence
                                             The team file in ~/.config/bmn/agents: validate it, list pending
                                             differences, print a role's chain, and check a dispatch
@@ -2282,6 +2283,8 @@ measurements, and `RESULT.md` holds 72.1's measurements of the container engine 
 bmn team ask --role R (--question TEXT | --question-file -) [--agent A] [--effort E] [--small-work]
   [--recheck-of ID] [--project P] [--file PATH]... [--image PATH]... [--data public]
   [--time-limit MINUTES] [--key K] [--background] [--json]
+bmn team ask [--role R] (--question TEXT | --question-file -) --origin http://127.0.0.1:PORT --disposable
+  [--interact] [other options as above]
 bmn team ask --features [--json]
 bmn team asks [--json]
 bmn team asks show <id> [--json]
@@ -2292,7 +2295,7 @@ bmn team asks export <id> --output PATH
 
 | Option | Meaning |
 | --- | --- |
-| `--role R` | The team role whose teammate answers. Required, except with `--image`: a picture ask goes to the `designer` unless a role is named. |
+| `--role R` | The team role whose teammate answers. Required, except with `--image`: a picture ask goes to the `designer` unless a role is named; and with `--origin`: a browser ask goes to `browser`. |
 | `--question TEXT`, `--question-file -` | The question; `-` reads standard input as the other long-text options do (one trailing newline dropped, a terminal refused). Exactly one. |
 | `--agent A` | Ask this teammate; refused with the reason and the eligible alternatives when it is not valid now, never passed over. Where the owner approved a choice for the role in the project, it answers, and naming someone else is refused (`PROJECT_CHOICE_CONFLICT`; "Your teammate for a project"). |
 | `--effort E` | One effort the role's applicable phase allows; several allowed and none given or saved is refused with the list. |
@@ -2302,6 +2305,9 @@ bmn team asks export <id> --output PATH
 | `--file PATH` | A regular UTF-8 text file the asker can read: its text goes into the prompt with its path and hash. |
 | `--image PATH` | A PNG, JPEG or WebP picture given to the teammate as image input, never as a file it can open, its metadata taken out first (Pictures, below). |
 | `--data public` | A declaration BMN verifies (R72-NFR5); refused, never raised, where it does not hold. Without it the ask is private. |
+| `--origin URL` | A browser for the web app you started at this loopback address, `http://127.0.0.1:PORT` (or `localhost`, `[::1]`) (A browser for your local app, below). |
+| `--disposable` | Required with `--origin`: your statement that the app and its services are disposable test instances with synthetic data and no production backend or credentials. |
+| `--interact` | With `--origin`: the teammate may also click, type, fill in, select, press keys and hover. |
 | `--time-limit MINUTES` | 1 to 120; default 30. |
 | `--key K` | The retry key: the UTC day it was issued and a name of yours, `20261015-review-1` (letters, digits, `.`, `_`, `-`; at most 64 after the day). Required in a BMN session, which every agent runs in; a plain shell may leave it out and BMN makes one. (Keys, below.) |
 | `--background` | Prints the run id at once and leaves the run going. |
@@ -2413,6 +2419,50 @@ check). Codex gets each picture with `-i`, Claude Code as image blocks in one st
 (`inputs/message.jsonl`, its standard input). OpenCode is not asked about pictures (never measured);
 such an ask is refused saying so.
 
+### A browser for your local app (Story 74.3)
+
+`--origin http://127.0.0.1:PORT --disposable [--interact]` asks a teammate to check a web app you
+started. For that one ask BMN adds Playwright's MCP server (`@playwright/mcp@0.0.75`, the version
+dev-auto's `luna-browse.sh` runs, from npx's cache, offline) to the teammate's own app, and nothing
+else of MCP:
+
+- **Codex:** `-c mcp_servers={playwright={…, enabled_tools=[…], default_tools_approval_mode="approve",
+  startup_timeout_sec=60, tool_timeout_sec=240}}`: the model is offered only the ask's tools.
+- **Claude Code:** the server alone in `--strict-mcp-config --mcp-config`, its tools added to
+  `--allowedTools` by their MCP names (`mcp__playwright__browser_navigate`, …); under `dontAsk` every
+  other tool of the server is refused.
+- **OpenCode:** not offered; such an ask is refused saying so.
+
+A look may navigate, go back, read the page (snapshot), wait, take screenshots, read the console and
+the network requests, use tabs, resize and close. `--interact` adds click, type, fill in a form,
+select, press a key and hover. Never offered: script evaluation (`browser_evaluate`,
+`browser_run_code_unsafe`), file upload, drag and drop, dialogs and one request's body.
+
+The server runs headless with its profile in memory (`--isolated`), Chrome's own sandbox on
+(`--sandbox`), its requests limited to the origin (`--allowed-origins`) and its files and session log
+in the run's `browser/` folder (`--output-dir`, `--save-session`). It starts through BMN's relay
+(`bin/ask-browser-relay.mjs`, on the `node` that runs npx): Playwright writes a file the model names
+(a screenshot, a snapshot, a console or network log) inside the client's first workspace root, and
+Codex or Claude Code may give the project as that root. The relay starts the server in `browser/`
+and takes the client's offer of roots out of its start, so every such file lands in `browser/` and a
+name reaching out of it is refused by Playwright (measured, below).
+
+Playwright's origin limit, in its own words, "does not serve as a security boundary": it does not
+stop redirects or every request a page makes itself. So every browser ask needs `--disposable`,
+recorded with the ask; without it the ask is refused (`DISPOSABLE_REQUIRED`). The origin must be a
+loopback `http` address with a port (`INPUT_INVALID` otherwise), and the server must be in npx's
+cache (`BROWSER_UNAVAILABLE` says how to put it there). A browser ask is private: what the browser
+shows is your app.
+
+When the run ends, or when a crashed run is finished as interrupted, BMN reads the server's session
+log, every completed call and the page it left, and writes `browser.json`: the origin, look or
+interact, the tools, the statement, the number of calls, the pages in order (a page repeated at once
+counted once; at most 200, addresses 2,000 characters, titles 300, credentials masked) and the
+screenshots the log names (at most 20 of 5 MiB, regular PNG or JPEG files, each with its size and
+sha256). Everything else the server left in `browser/` (the log, page snapshots, console logs,
+downloads, a picture the log does not name as a screenshot, links) is deleted. `asks show`, the JSON,
+Team › Asks and the export give the pages and screenshots; the app's text in them stays plain text.
+
 ### Sign-in
 
 Codex and Claude Code use the owner's own sign-in in their own homes, exactly as his sessions do,
@@ -2511,7 +2561,9 @@ Every `--json` output is one object with a version. An ask, `show` and `wait` (`
 }
 ```
 
-`credentials_masked: {answer: [names], output: [names]}` is there when BMN masked any. A refusal:
+`credentials_masked: {answer: [names], output: [names]}` is there when BMN masked any. A browser ask
+adds `"browser": {"origin","interact","statement","recorded","calls","pages":[{"url","title"}],
+"screenshots":[{"name","bytes","sha256","path"}]}`, `recorded` false until the run has ended. A refusal:
 `{"version":1,"state":"refused","exit":10,"refusal":{"code":"AGENT_NOT_ELIGIBLE","reason":"…","alternatives":["opus-2@medium"]}}`.
 `--background`: `{"version":1,"id":"…","state":"accepted","exit":0,"key":"20261015-review-1"}`; a retry
 that found its run adds `"existing":true` and gives that run's state. `asks`:
@@ -2520,7 +2572,7 @@ session's own runs. `stop`: `{"version":1,"id","state":"stopping"}`. `export`:
 `{"version":1,"id","output","files":[…]}`. `--features` (`"version": 2`):
 `{"version":2,"platform":"linux","scope":{"ok":true},"apps":[{"app":"codex","installed":true,"version":"0.162.1",
 "form_checked_on":{"version":"0.162.1","on":"2026-10-15"},"forms":{"project":{"form":"codex-read-only","reads":"…"},
-"no-project":{…},"public":{"form":null,"reads":"not offered: …"}},"pictures":"offered","usage_while_running":false}, …]}`.
+"no-project":{…},"public":{"form":null,"reads":"not offered: …"}},"pictures":"offered","browser":"offered","usage_while_running":false}, …]}`.
 `scope` says whether a run's systemd user scope can start here, with the reason when it cannot;
 `forms` gives each kind of ask the form it gets and what that form reads; an app BMN does not find
 is `"installed": false`.
@@ -2533,6 +2585,7 @@ is `"installed": false`.
 | Files | 64 files, each 1 MiB; question and file text together 2 MiB | the same prompts with their packets |
 | Pictures | 8 per ask, each 5 MiB, 8,000 px a side and 33.2 million pixels once drawn (an 8K screen, 7680x4320); PNG, JPEG, WebP | the providers' own image limits; the pixel bound keeps a small file from unfolding into gigabytes in the app |
 | Answer kept | 1 MiB; the app's raw output 64 MiB, over it the run fails | |
+| Browser record | 200 pages (addresses 2,000 characters, titles 300); 20 screenshots of 5 MiB | a review visits tens of pages; Pictures' 5 MiB |
 | Time | 30 minutes; 1 to 120 with `--time-limit` | assumption (b) |
 | Capacity | 4 runs at once across BMN; 1 to 10 as `capacity` in `team/asks-settings.json` in BMN's state folder, beside `team/runs`; no screen sets it (owner, 2026-10-15: asks are the agents' layer). The same file's `token_ceiling` sets Claude Code's per-ask token ceiling; none by default | assumption (c) |
 | Key window | until the end of the 8th UTC day after the day the key names: at least 7 days from its first use | a lead's retries happen within its run |
@@ -2639,6 +2692,8 @@ with it (above), and the run is recorded `interrupted`.
 | `events.jsonl` | the app's own output events, credentials masked | yes |
 | `session-info.json` | OpenCode only: the session exports' info (id, agent, model and variant, tokens, cost, title, parent) for the teammate and each sub-agent, never their messages | yes |
 | `project-start.json` | a project ask: the project's commit and clean state immediately before the app started | yes |
+| `browser/` | a browser ask: the server's folder; once the run has ended, only the screenshots `browser.json` names | the named screenshots only |
+| `browser.json` | a browser ask: the pages it visited and its screenshots, from the server's session log | yes |
 | `stderr.txt` | the app's raw error stream | no |
 | `answer.md`, `outcome.json` | the answer, credentials masked; state, exit, refusal, observed identity with sources, sub-agents, usage with its source and basis, the project's start and end state, what was masked, times | yes |
 | `diagnostic-answer.md` | an answer that could not be attributed (exit 17), kept only as evidence, never shown as the answer | no |
@@ -2657,7 +2712,7 @@ against its limit, the outcome with its reason on the line, and the usage ("unkn
 records none, "incomplete" with why where a record could not be read). An opened ask shows its whole
 question, the files and pictures it was given, what its mode could read and where it worked, who
 answered with the session BMN observed, its sub-agents with their own usage, the project's commit and
-state at the start and the end, what BMN masked, and the answer as plain text: nothing in it becomes a
+state at the start and the end, a browser ask's pages and screenshots, what BMN masked, and the answer as plain text: nothing in it becomes a
 link, a picture or markup, and an answer that could not be attributed is not shown. The owner may Stop
 any running ask (its supervisor records it stopped), Export one as the bundle above, Copy an answer,
 and Remove one ended ask or all of them; a running ask is never removed. Records are removed 30 days
@@ -2687,6 +2742,16 @@ Rejected: Claude Code's plan mode (with nobody to approve it denies sub-agents a
 auto mode's classifier), and OpenCode's reader without the redirection rule (`git log -1 > file`
 wrote). AC2: one live call per app with its own home and sign-in, each answer right and each
 sub-agent's session and usage found. AC3: the scope's Stop, time limit and supervisor death, above.
+
+### Measured (74.3)
+
+Against the real Playwright MCP 0.0.75 server, scripted without a provider (2026-10-15): an
+off-origin navigation fails `ERR_BLOCKED_BY_CLIENT` and the other server counts no request (an image
+from it included); `file://` is refused; a download lands in the output folder; the session log
+holds each completed call with its page and screenshot links. A client that offers its project as
+a root had a named screenshot, a named network log and a file named by `_meta.cwd` written into the
+project; through BMN's relay the project stayed empty, the named screenshot landed in `browser/`,
+and names reaching out (`../`, an absolute path, `_meta.cwd`) were refused.
 
 ### Measured (72.1), the engine 72.9 replaced
 

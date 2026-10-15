@@ -14,6 +14,7 @@ import { InputRefusal, LIMITS, askProject, canonicalProject, checkQuestion, sha2
 import { AskRefusal, resolveTeammate } from './agents-team-resolve.mjs'
 import { pictureFile } from './agents-team-pictures.mjs'
 import { ASK_GIT } from './agents-team-run.mjs'
+import { BROWSER_STATEMENT, browserInstalled, browserOrigin, browserPrompt, browserTools } from './agents-team-browser.mjs'
 
 /**
  * Making an ask ready follows one order, so that nothing is written before it is allowed: the
@@ -108,6 +109,16 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   if (images.length > LIMITS.pictures) throw new InputRefusal('INPUT_TOO_LARGE', `${images.length} pictures, over the limit of ${LIMITS.pictures}`)
   if (request.data !== undefined && request.data !== 'public') throw new AskUsageError('--data takes only public; without it the ask is private')
   const label = request.data === 'public' ? 'public' : 'private'
+  // A browser ask (74.3): the asker's own app at a loopback origin, stated disposable, and the browser's server where npx keeps it.
+  let browser = null
+  if (request.browser !== undefined && request.browser !== null) {
+    const origin = browserOrigin(request.browser.origin)
+    if (origin.reason !== undefined) throw new InputRefusal('INPUT_INVALID', origin.reason)
+    if (request.browser.disposable !== true) throw new AskRefusal('DISPOSABLE_REQUIRED', `a browser ask needs --disposable: your statement that ${BROWSER_STATEMENT}; Playwright's origin limit does not stop redirects or requests the page makes itself`)
+    const ready = browserInstalled({ PATH: appSearchPath(environment), HOME: environment.HOME ?? '' })
+    if (ready.reason !== undefined) throw new AskRefusal('BROWSER_UNAVAILABLE', ready.reason)
+    browser = { origin: origin.origin, interact: request.browser.interact === true }
+  }
 
   // Everything the asker gave is read and scanned before anything else happens.
   const question = checkQuestion(request.question)
@@ -137,6 +148,8 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     const root = workspaceRoot(dirname(picture.real))
     named.push({ kind: 'picture', label: picture.path, root, relative: relative(root, picture.real), sha256: picture.sha256 })
   }
+  // What the browser shows is the asker's app: private work no folder exception names (74.3).
+  if (browser !== null) named.push({ kind: 'browser', label: `the app at ${browser.origin}`, root: null })
   // What a candidate's form reads besides: the project it works in, and whatever its mode reaches beyond (72.9 AC1).
   // A teammate whose provider takes public work only reads only the text its folder exceptions can cover.
   const formOf = (agent) => askFormName(agent.harness, { project, label, textOnly: publicOnlyReasons(agent, data).length > 0 })
@@ -160,6 +173,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     if (installed.version === null) return `runs on ${APP_NAMES[agent.harness]}, whose version BMN cannot read`
     // What an app's form does not offer stays unavailable and says why (R72-NFR12).
     if (pictures.length > 0 && ASK_UNSUPPORTED[agent.harness]?.pictures !== undefined) return `cannot answer here: ${ASK_UNSUPPORTED[agent.harness].pictures}`
+    if (browser !== null && ASK_UNSUPPORTED[agent.harness]?.browser !== undefined) return `cannot answer here: ${ASK_UNSUPPORTED[agent.harness].browser}`
     // OpenCode runs in BMN's own OpenCode folder, with the OpenCode Go sign-in BMN copied there (70.4).
     if (agent.harness === 'opencode' && !existsSync(openCodeFolders().data)) return 'runs on OpenCode, and BMN\'s OpenCode folder holds no sign-in yet: BMN copies your OpenCode Go sign-in when you approve an OpenCode teammate in the Team view'
     return 'proven'
@@ -223,6 +237,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   const nameOf = (file) => (project !== null && !relative(project, file.real).startsWith('..') ? relative(project, file.real) : file.path)
   let prompt = picturePrompt(filePrompt(request.question, texts.map((file) => ({ ...file, label: nameOf(file) }))), pictures.map((picture) => ({ ...picture, label: nameOf(picture) })))
   if (project !== null && ASK_READS[form].scope !== 'text') prompt = projectPrompt(prompt, project)
+  if (browser !== null) prompt = browserPrompt(prompt, browser)
   writePrivate(join(folder, ASK_RUN_FILES.prompt), prompt)
   // The question alone, as the asker wrote it, for the record and Team › Asks (73.1); the prompt above is what is sent.
   writePrivate(join(folder, ASK_RUN_FILES.question), request.question)
@@ -231,6 +246,8 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   // Codex and Claude Code read the owner's own rules in their own homes; a private OpenCode ask carries them in its agent (BMN's folder holds none).
   const rules = harness === 'opencode' && label === 'private' ? instructionRules(harness, generation) : null
   if (rules !== null) writePrivate(join(folder, ASK_RUN_FILES.rules), rules)
+  // The browser's server saves its files here, its session log among them; BMN reads its record from it (74.3 AC3).
+  if (browser !== null) mkdirSync(join(folder, ASK_RUN_FILES.browser), { mode: 0o700 })
   const manifest = {
     version: 2, id, data: label, form, reads: { scope: ASK_READS[form].scope, words: ASK_READS[form].words, folder: workIn },
     project: project === null ? null : { root: project },
@@ -243,19 +260,21 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
       label: picture.path, real: picture.real, copy: pictureCopies[index], media_type: picture.media_type, width: picture.width, height: picture.height,
       before: picture.before, bytes: picture.bytes.length, sha256: picture.sha256, removed: picture.removed, kept: picture.kept
     })),
+    ...(browser === null ? {} : { browser: { ...browser, tools: browserTools(browser.interact), statement: BROWSER_STATEMENT } }),
     prompt_sha256: sha256Of(Buffer.from(prompt))
   }
   writePrivate(join(folder, ASK_RUN_FILES.manifest), `${JSON.stringify(manifest, null, 2)}\n`)
   writePrivate(join(folder, ASK_RUN_FILES.request), `${JSON.stringify({
     version: 1, id, role: request.role, agent: choice.agent.id, model: choice.agent.model, provider: choice.agent.provider, aliases: choice.agent.aliases ?? [], effort: choice.effort, chosen_by: choice.rule, phase: choice.phase, ...(choice.choice === undefined ? {} : { project_choice: choice.choice }),
     billing: choice.agent.paid_by ?? 'unknown', project, form, reads: ASK_READS[form].words, data: label, app_version: installed.version, ...(request.recheckOf === undefined ? {} : { recheck_of: request.recheckOf }),
+    ...(browser === null ? {} : { browser: { origin: browser.origin, interact: browser.interact, statement: BROWSER_STATEMENT } }),
     // The retry key, whose it is and the request's hash (72.4): a retry with the same three finds this run.
     ...(request.key === undefined ? {} : { key: request.key, key_scope: request.keyScope, request_sha256: request.requestSha256 }),
     asked_by: request.askedBy ?? askerOf(environment), asked_at: now.toISOString()
   }, null, 2)}\n`)
 
   const built = askCommand(harness, installed.program, askRequest(choice.agent, installed.version, {
-    form, effort: choice.effort, cwd: workIn, folder, rules, pictures: pictureCopies.map((copy) => join(inputs, copy)), environment, contextTestLog
+    form, effort: choice.effort, cwd: workIn, folder, rules, pictures: pictureCopies.map((copy) => join(inputs, copy)), browser, environment, contextTestLog
   }))
   // Claude Code takes its pictures as one user message on standard input, the pictures first, then the prompt.
   if (built.stdin === 'stream-json') writePrivate(join(folder, ASK_RUN_FILES.message), claudePictureMessage(pictures, prompt))

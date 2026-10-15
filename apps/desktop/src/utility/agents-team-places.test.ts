@@ -451,10 +451,10 @@ describe('what may be asked here (72.4 AC5)', () => {
     const notPublic = { form: null, reads: 'not offered: its tools read beyond your text, so its asks are private' }
     expect(features).toMatchObject({ version: 2, platform: 'linux', scope: { ok: SCOPES } })
     expect(features.apps).toEqual([
-      { app: 'codex', installed: true, version: '0.162.1', form_checked_on: { version: '0.162.1', on: '2026-10-15' }, forms: { project: form('codex-read-only'), 'no-project': form('codex-read-only'), public: notPublic }, pictures: 'offered', usage_while_running: false },
-      { app: 'claude', installed: true, version: '2.1.300', form_checked_on: { version: '2.1.300', on: '2026-10-15' }, forms: { project: form('claude-read-tools'), 'no-project': form('claude-read-tools'), public: notPublic }, pictures: 'offered', usage_while_running: true },
+      { app: 'codex', installed: true, version: '0.162.1', form_checked_on: { version: '0.162.1', on: '2026-10-15' }, forms: { project: form('codex-read-only'), 'no-project': form('codex-read-only'), public: notPublic }, pictures: 'offered', browser: 'offered', usage_while_running: false },
+      { app: 'claude', installed: true, version: '2.1.300', form_checked_on: { version: '2.1.300', on: '2026-10-15' }, forms: { project: form('claude-read-tools'), 'no-project': form('claude-read-tools'), public: notPublic }, pictures: 'offered', browser: 'offered', usage_while_running: true },
       { app: 'opencode', installed: false, version: null, form_checked_on: { version: '2.0.29', on: '2026-10-15' }, forms: { project: form('opencode-reader'), 'no-project': form('opencode-asker'), public: form('opencode-asker') },
-        pictures: expect.stringMatching(/^not offered: /u), usage_while_running: false }
+        pictures: expect.stringMatching(/^not offered: /u), browser: expect.stringContaining('not offered: BMN adds a browser only to Codex and Claude Code'), usage_while_running: false }
     ])
     // A newer app is asked as it is: the form was last checked on another version, and that is all.
     stubCodex(stubs, '0.170.0')
@@ -467,7 +467,7 @@ describe('what may be asked here (72.4 AC5)', () => {
     expect(shown.code).toBe(0)
     expect(JSON.parse(shown.stdout).apps[0]).toMatchObject({ version: '0.170.0' })
     const words = await bmn(['team', 'ask', '--features'])
-    expect(words.stdout).toContain(`Codex 0.170.0 (form last checked on 0.162.1, 2026-10-15): ${ASK_READS['codex-read-only'].words}; pictures offered; usage at the end only`)
+    expect(words.stdout).toContain(`Codex 0.170.0 (form last checked on 0.162.1, 2026-10-15): ${ASK_READS['codex-read-only'].words}; pictures offered; browser offered; usage at the end only`)
     expect((await bmn(['team', 'ask', '--features', '--role', 'designer'])).code).toBe(2)
     if (SCOPES) {
       const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Newer app?', '--key', key('newer')])

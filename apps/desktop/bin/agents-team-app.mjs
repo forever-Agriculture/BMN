@@ -10,6 +10,7 @@ import { AskRefusal } from './agents-team-resolve.mjs'
 import { RETENTION_DAYS, askSettings, placePath, recordInterrupted, removeRun, runHolds, sweepRuns } from './agents-team-places.mjs'
 import { ANSWER_LIMIT, askOutcome, exportAsk, stopAsk } from './agents-team-run.mjs'
 import { RUN_FILES } from './agents-team-supervisor.mjs'
+import { BROWSER_LIMITS } from './agents-team-browser.mjs'
 
 /**
  * The app reads the same run folders `bmn team ask` writes, and the owner sees them all: an ask
@@ -82,15 +83,17 @@ const BEFORE_FORMS = Object.freeze({ project: { scope: 'folder', reach: 'a copy 
 function readsView(request, manifest) {
   const files = Array.isArray(manifest?.files) ? manifest.files.length : 0
   const pictures = Array.isArray(manifest?.pictures) ? manifest.pictures.length : 0
+  const origin = text(request.browser?.origin, 64)
+  const browser = origin === null ? {} : { browser: { origin, interact: request.browser.interact === true } }
   const form = typeof manifest?.form === 'string' && Object.hasOwn(ASK_READS, manifest.form) ? manifest.form : null
   if (form === null) {
     const before = BEFORE_FORMS[request.access]
-    return { form: null, scope: before?.scope ?? 'text', reach: before?.reach ?? null, words: null, folder: before === undefined ? null : text(manifest?.project?.root, 4096), files, pictures }
+    return { form: null, scope: before?.scope ?? 'text', reach: before?.reach ?? null, words: null, folder: before === undefined ? null : text(manifest?.project?.root, 4096), files, pictures, ...browser }
   }
   const reads = ASK_READS[form]
   return {
     form, scope: reads.scope, reach: reads.scope === 'text' ? null : reads.reach, words: text(manifest.reads?.words, 1000) ?? reads.words,
-    folder: reads.scope === 'text' ? null : text(manifest.reads?.folder, 4096), files, pictures
+    folder: reads.scope === 'text' ? null : text(manifest.reads?.folder, 4096), files, pictures, ...browser
   }
 }
 
@@ -240,12 +243,31 @@ export function appAskDetail(id, { runs = teamRunsDirectory(), now = new Date() 
       width: count(picture.width), height: count(picture.height), removed: Array.isArray(picture.removed) ? picture.removed.filter((name) => typeof name === 'string').slice(0, 40) : []
     })),
     project: projectView(outcome, manifest),
+    browser: browserView(folder, request),
     teammate: {
       app: text(receipt.harness, 32), appName: APP_NAMES[receipt.harness] ?? null, appVersion: text(receipt.harness_version?.version, 64), model: text(observed.model, 128) ?? text(request.model, 128),
       session: text(observed.session, 128), sessionSource: text(observed.session_source, 64)
     },
     subagents: (Array.isArray(outcome.subagents) ? outcome.subagents : []).filter((entry) => entry !== null && typeof entry === 'object').slice(0, 100).map((entry) => subagentView(entry, request.billing)),
     masked: [...new Set([outcome.credentials_masked?.answer, outcome.credentials_masked?.output].flatMap((names) => (Array.isArray(names) ? names : [])).filter((name) => typeof name === 'string').map((name) => name.slice(0, 64)))]
+  }
+}
+
+/** A browser ask's record as the page lists it (74.3 AC3): its pages and screenshots, everything in them the app's own text. */
+function browserView(folder, request) {
+  const origin = text(request.browser?.origin, 64)
+  if (origin === null) return null
+  const record = readJson(join(folder, ASK_RUN_FILES.browserRecord)) ?? {}
+  const list = (value, limit) => (Array.isArray(value) ? value.slice(0, limit) : [])
+  const pageView = (page) => {
+    const url = text(page?.url, BROWSER_LIMITS.url)
+    const title = text(page?.title, BROWSER_LIMITS.pageTitle)
+    return url === null ? [] : [{ url, title }]
+  }
+  return {
+    origin, interact: request.browser.interact === true,
+    pages: list(record.pages, BROWSER_LIMITS.pages).flatMap(pageView),
+    screenshots: list(record.screenshots, BROWSER_LIMITS.screenshots).flatMap((shot) => (text(shot?.name, 255) === null ? [] : [{ name: text(shot.name, 255), bytes: count(shot.bytes) ?? 0 }]))
   }
 }
 

@@ -35,6 +35,12 @@ systemd user scope of its own that Stop and the time limit end. The teammate wri
   you name another role. BMN takes the pictures' metadata out first (GPS, camera, text fields).
 - **Its tools.** Web search and its app's sub-agents; each sub-agent is named in the record and its
   usage counted.
+- **`--origin http://127.0.0.1:PORT --disposable`** gives a Codex or Claude Code teammate a browser
+  for a web app you started (the `browser` role unless you name another): it may look (navigate,
+  read, screenshots, console, network requests), and with `--interact` also click and type. Only
+  that origin loads, but a page's own requests and redirects are not stopped: `--disposable` states
+  the app and its services are disposable test instances with synthetic data and no production
+  backend or credentials; never use it otherwise. Pages and screenshots go in the record.
 
 Everything is private unless you declare `--data public` and BMN can verify it; only a teammate whose
 mode reads nothing beyond your text may get a public ask. Never put a credential in a question or a
@@ -57,6 +63,8 @@ Review the uncommitted change in this repository for correctness. Cite file:line
 EOF
 bmn team ask --role designer --key 20261015-screens-1 --question 'What reads badly here?' --image shot.png
 bmn team ask --role consultant --key 20261015-cache-1 --file src/cache.ts --question-file q.txt --json
+bmn team ask --key 20261015-checkout-1 --origin http://127.0.0.1:4173 --disposable --interact \
+  --question 'Add an item to the cart and check out: does the total match the cart?'
 ```
 
 The answer goes to standard output, progress to standard error. Closing the command only detaches

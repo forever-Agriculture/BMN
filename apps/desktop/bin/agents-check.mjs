@@ -12,6 +12,7 @@ import { publicRendering } from './agents-rules.mjs'
 import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, CONTEXT_TEST_SIZE, checkContext, contextItems, contextTestFolder, provenControls, provenPrecedence, wholeNumber } from './agents-context.mjs'
 import { RUN_TEST_APPS, appTools, checkRunTools } from './agents-tools.mjs'
 import { ASK_APPS, ASK_FORMS_CHECKED, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askCommand, askFormName, askProgram, claudePictureMessage, sameProgram } from './agents-team-forms.mjs'
+import { BROWSER_STATEMENT, browserOrigin } from './agents-team-browser.mjs'
 import { OPENCODE_ASK_AGENTS, OPENCODE_FOLDER_SHA256, OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_RESEARCH_AGENT, OPENCODE_SESSION_ID, installOpenCodeFolder, openCodeAskConfig, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
 
 export { publicOnlyReasons }
@@ -2774,7 +2775,7 @@ export function askConsent(data, destination, inputs, label, now = new Date(), n
       decided.push({ kind: 'question', label: input.label, root: input.root ?? null, basis: 'declared public by the asker' })
       continue
     }
-    if (input.kind === 'project' || input.kind === 'mode') refuse('PUBLIC_NOT_VERIFIED', `${input.label} is read with the app's own tools, beyond what you hand over, so the ask is private`)
+    if (input.kind === 'project' || input.kind === 'mode' || input.kind === 'browser') refuse('PUBLIC_NOT_VERIFIED', `${input.label} is read with the app's own tools, beyond what you hand over, so the ask is private`)
     if (input.root === null || input.root === undefined) refuse('PUBLIC_NOT_VERIFIED', `${input.label} is in no project BMN knows to be public`)
     const visibility = workspaceVisibility(input.root, now)
     if (!visibility.public) refuse('PUBLIC_NOT_VERIFIED', `${input.label} is in ${input.root}, which is not proven public (${visibility.reason}); run bmn roster visibility --refresh`)
@@ -2792,10 +2793,10 @@ export function askConsent(data, destination, inputs, label, now = new Date(), n
  * works in, the pictures' paths, the owner's rules where the form carries them, and the agent's context
  * limit where the owner's test proved its setting on this app version (60.9), as `evaluate` applies it.
  */
-export function askRequest(agent, version, { form, effort, cwd, folder, rules = null, pictures = [], environment = process.env, contextTestLog = undefined }) {
+export function askRequest(agent, version, { form, effort, cwd, folder, rules = null, pictures = [], browser = null, environment = process.env, contextTestLog = undefined }) {
   const proven = agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(agent.harness, version, contextTestLog)
   const items = contextItems(agent, proven)
-  return { form, model: agent.model, provider: agent.provider, effort, cwd, folder, rules, pictures, environment, context: items.state === 'applied' ? { argv: items.argv, env: items.env } : { argv: [], env: [] } }
+  return { form, model: agent.model, provider: agent.provider, effort, cwd, folder, rules, pictures, browser, environment, context: items.state === 'applied' ? { argv: items.argv, env: items.env } : { argv: [], env: [] } }
 }
 
 /**
@@ -2893,6 +2894,13 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     const checked = ASK_FORMS_CHECKED[agent.harness]
     note(`${agent.harness} ${version}: ${tested.state}; its ask form was last checked on ${checked.version} (${checked.on})`)
     if (manifest.pictures.length > 0 && ASK_UNSUPPORTED[agent.harness]?.pictures !== undefined) refuse('ACCESS_UNAVAILABLE', ASK_UNSUPPORTED[agent.harness].pictures)
+    // A browser ask (74.3): the asker's loopback origin, stated disposable, on an app that takes the browser's server.
+    const browser = manifest.browser ?? null
+    if (browser !== null) {
+      if (ASK_UNSUPPORTED[agent.harness]?.browser !== undefined) refuse('ACCESS_UNAVAILABLE', ASK_UNSUPPORTED[agent.harness].browser)
+      if (browserOrigin(browser.origin).origin !== browser.origin || typeof browser.interact !== 'boolean') refuse('WORKSPACE_MISMATCH', 'the ask\'s browser is not a loopback origin BMN wrote')
+      if (browser.statement !== BROWSER_STATEMENT) refuse('WORKSPACE_MISMATCH', 'a browser ask needs the asker\'s statement that the app is a disposable test instance')
+    }
 
     // The form: the app's one read-only form, OpenCode's asker where it may read nothing but the asker's text.
     const form = askFormName(agent.harness, { project, label, textOnly: publicOnlyReasons(agent, data).length > 0 })
@@ -2911,13 +2919,14 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       if (error.code !== 'ENOENT') refuse('WORKSPACE_MISMATCH', 'the instruction snapshot of this ask cannot be read')
     }
     if (rules !== null && (agent.harness !== 'opencode' || label !== 'private')) refuse('WORKSPACE_MISMATCH', 'only a private OpenCode ask carries the owner\'s rules: Codex and Claude Code read their own')
-    const request = askRequest(agent, version, { form, effort: inputs.effort, cwd, folder, rules, pictures: manifest.pictures.map((picture) => `${folder}/${ASK_RUN_FILES.inputs}/${picture.copy}`), environment, contextTestLog })
+    const request = askRequest(agent, version, { form, effort: inputs.effort, cwd, folder, rules, pictures: manifest.pictures.map((picture) => `${folder}/${ASK_RUN_FILES.inputs}/${picture.copy}`), browser: browser === null ? null : { origin: browser.origin, interact: browser.interact }, environment, contextTestLog })
     const built = askCommand(agent.harness, program, request)
     if (!Array.isArray(inputs.argv) || canonicalJson(inputs.argv) !== canonicalJson(built.argv)) {
       const at = Array.isArray(inputs.argv) ? built.argv.findIndex((value, index) => inputs.argv[index] !== value) : 0
       refuse('ROUTE_UNSUPPORTED', `the command is not the ask BMN builds for ${agent.id}${at === -1 ? ' (it carries more)' : ` (it differs at argument ${at})`}`)
     }
     note(`the command is BMN's ${form} form for ${appName(agent.harness)}, in ${cwd}`)
+    if (browser !== null) note(`with the browser for ${browser.origin}${browser.interact ? ', looking and interacting' : ', looking only'}`)
     // Claude Code reads its pictures from one message on standard input: that message must be the pictures and the prompt, whole.
     let message = null
     if (built.stdin === 'stream-json') {

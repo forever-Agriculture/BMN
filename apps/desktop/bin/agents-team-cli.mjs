@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { createConnection } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
-import { isAbsolute, join, resolve } from 'node:path'
+import { basename, isAbsolute, join, resolve } from 'node:path'
 import { APP_NAMES, DESIGNER_ROLE, RosterError } from './agents-roster.mjs'
 import { AgentsUsageError, EXIT, err, failWith, out, usage } from './agents-cli.mjs'
 import { askerOf } from './agents-ask.mjs'
@@ -15,11 +15,14 @@ import { ACCESS_GONE, AskUsageError, WIDE_READ_GONE, askRunId, prepareAsk } from
 import { OUTCOME_EXIT, StartRefusal, TIME_LIMIT, TRANSIENT, askOutcome, exportAsk, startAsk, stopAsk, waitAsk } from './agents-team-run.mjs'
 import { scopeStarts, startTeamSupervisor, writeWhole } from './agents-team-supervisor.mjs'
 import { nestedAsk } from './agents-team-nested.mjs'
+import { BROWSER_ROLE } from './agents-team-browser.mjs'
 import { askSettings, keyDay, keyPath, keyScope, keyedRun, makeKey, recordInterrupted, releaseReservation, requestHash, reserveAsk } from './agents-team-places.mjs'
 
 export const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --question-file PATH|-) --key K [--agent A] [--effort E]
          [--small-work] [--recheck-of ID] [--project P] [--file PATH]... [--image PATH]...
          [--data public] [--time-limit MINUTES] [--background] [--json]
+       bmn team ask [--role R] (--question TEXT | --question-file PATH|-) --key K
+         --origin http://127.0.0.1:PORT --disposable [--interact] [other options as above]
        bmn team ask --features [--json]             What each installed app is asked with here, and what its mode reads
        bmn team asks [--json]                       Your asks, newest first
        bmn team asks show <id> [--json]             One ask: its state, who answered, the answer
@@ -33,7 +36,14 @@ read-only agent (docs/agent-control.md, "Asking a teammate"). It works in the pr
 the default is your repository, else an empty folder of the run's own) and writes nothing; what its
 mode can read is in the record. --file gives whole text files in the prompt; --image gives PNG, JPEG
 or WebP pictures as images, their metadata taken out, to the designer unless --role names another
-role. The run has a systemd user scope of its own: Stop and the time limit end everything it
+role. --origin gives the teammate (the browser role unless --role names another) a browser for your
+web app at that loopback address: Playwright's tools in its own app, only that origin loading; it may
+navigate, read, take screenshots and read the console and network requests, and with --interact also
+click, type, fill in, select, press keys and hover; the pages it visited and its screenshots stay in
+the record. Playwright's limit does not stop redirects or requests a page makes itself: --disposable
+is your statement that the app and its services are disposable test instances with synthetic data
+and no production backend or credentials; without it the ask is refused. Codex and Claude Code
+teammates only. The run has a systemd user scope of its own: Stop and the time limit end everything it
 started. --key is required in a session: today's UTC day and a name of yours (20261015-review-1);
 a retry with the same key and request finds the first ask, never starts a second. The answer goes
 to standard output, progress to standard error; closing the command only detaches it, and the run
@@ -41,9 +51,9 @@ goes on. Exit: 0 answered, 1 failed, 2 usage, 3-7 team state, 10 refused, 14 bus
 16 stopped, 17 answer not attributed.`
 
 const RUN_ID = /^\d{8}T\d{6}-[0-9a-f]{8}$/u
-const VALUES = ['role', 'question', 'question-file', 'agent', 'effort', 'recheck-of', 'project', 'data', 'time-limit', 'key']
+const VALUES = ['role', 'question', 'question-file', 'agent', 'effort', 'recheck-of', 'project', 'data', 'time-limit', 'key', 'origin']
 const REPEATED = ['file', 'image']
-const FLAGS = ['small-work', 'background', 'json', 'help', 'features']
+const FLAGS = ['small-work', 'background', 'json', 'help', 'features', 'disposable', 'interact']
 /** Options an ask no longer takes, each refused with the new spelling (72.9 AC4). */
 const GONE = { access: ACCESS_GONE, 'wide-read': WIDE_READ_GONE }
 
@@ -140,8 +150,33 @@ export function askJson(folder) {
     },
     subagents: outcome.subagents ?? [], usage: outcome.usage ?? null, ...(outcome.project === undefined ? {} : { project_state: outcome.project }),
     ...(outcome.credentials_masked === undefined ? {} : { credentials_masked: outcome.credentials_masked }), answer, started_at: outcome.started_at ?? null, ended_at: outcome.ended_at ?? null,
-    time_limit_minutes: outcome.time_limit_minutes ?? null, record: folder
+    time_limit_minutes: outcome.time_limit_minutes ?? null, record: folder,
+    ...(request.browser === undefined ? {} : { browser: browserJson(folder, request.browser, read(ASK_RUN_FILES.browserRecord)) })
   }
+}
+
+/**
+ * A browser ask's part of its JSON (74.3 AC3): the app it checked and, once the run has ended, the
+ * pages it visited and its screenshots with where each is kept. Addresses and titles are the app's own text.
+ */
+function browserJson(folder, browser, record) {
+  return {
+    origin: browser.origin ?? null, interact: browser.interact === true, statement: browser.statement ?? null, recorded: record !== null,
+    calls: record?.calls ?? 0, pages: Array.isArray(record?.pages) ? record.pages : [],
+    screenshots: (Array.isArray(record?.screenshots) ? record.screenshots : []).map((shot) => ({ ...shot, path: join(folder, ASK_RUN_FILES.browser, basename(String(shot.name))) }))
+  }
+}
+
+/** A browser ask's lines in `team asks show`: the app, each page visited and each screenshot, one line each, the app's own text kept plain. */
+function browserLines(browser) {
+  if (browser === undefined) return []
+  // eslint-disable-next-line no-control-regex -- the control characters are what is taken out
+  const plain = (value) => String(value).replace(/[\u0000-\u001f\u007f-\u009f]/gu, ' ')
+  const mode = browser.interact ? 'look and interact' : 'look only'
+  if (!browser.recorded) return [`Browser: ${browser.origin} (${mode}); its pages and screenshots are recorded when the run ends`]
+  return [`Browser: ${browser.origin} (${mode}); ${browser.pages.length} page${browser.pages.length === 1 ? '' : 's'} and ${browser.screenshots.length} screenshot${browser.screenshots.length === 1 ? '' : 's'}; addresses and titles are the app's own text:`,
+    ...browser.pages.map((page) => `  page ${plain(page.url)}${page.title ? `  ${plain(page.title)}` : ''}`),
+    ...browser.screenshots.map((shot) => `  screenshot ${shot.path} (${shot.bytes} bytes)`)]
 }
 
 /** A project's state in words: its commit and whether its tree was clean. */
@@ -161,6 +196,7 @@ export function showWords(shown) {
     `${shown.id}  ${shown.state}${shown.reason ? `: ${shown.reason}` : ''}`,
     `${shown.role} -> ${shown.teammate.agent} (${shown.teammate.app ?? '?'}${shown.teammate.app_version ? ` ${shown.teammate.app_version}` : ''} ${shown.teammate.requested.model ?? '?'}, ${shown.teammate.requested.effort ?? '?'}), chosen by ${shown.chosen_by}`,
     `Could read: ${shown.teammate.could_read ?? 'not recorded'}${shown.teammate.works_in ? `; worked in ${shown.teammate.works_in}` : ''}`,
+    ...browserLines(shown.browser),
     ...(shown.subagents.length === 0 ? [] : [`Sub-agents: ${shown.subagents.map((entry) => `${entry.name ?? entry.session} (${entry.kind}${entry.model ? `, ${entry.model}` : ''})`).join('; ')}`]),
     ...(project === undefined ? [] : [`Project ${project.root}: at the start ${stateWords(project.start)}; at the end ${stateWords(project.end)}`]),
     ...(shown.credentials_masked === undefined ? [] : [`Credentials masked: ${[...new Set([...shown.credentials_masked.answer, ...shown.credentials_masked.output])].join(', ')}`]),
@@ -296,7 +332,8 @@ export function askFeatures(environment = process.env) {
     return {
       app: harness, installed: program !== null, version, form_checked_on: ASK_FORMS_CHECKED[harness],
       forms: { project: form('project', 'private'), 'no-project': form(null, 'private'), public: harness === 'opencode' ? form(null, 'public') : { form: null, reads: 'not offered: its tools read beyond your text, so its asks are private' } },
-      pictures: ASK_UNSUPPORTED[harness]?.pictures === undefined ? 'offered' : `not offered: ${ASK_UNSUPPORTED[harness].pictures}`, usage_while_running: harness === 'claude'
+      pictures: ASK_UNSUPPORTED[harness]?.pictures === undefined ? 'offered' : `not offered: ${ASK_UNSUPPORTED[harness].pictures}`,
+      browser: ASK_UNSUPPORTED[harness]?.browser === undefined ? 'offered' : `not offered: ${ASK_UNSUPPORTED[harness].browser}`, usage_while_running: harness === 'claude'
     }
   })
   return { version: 2, platform: process.platform, scope: scope.ok ? { ok: true } : { ok: false, reason: scope.reason }, apps }
@@ -310,7 +347,7 @@ function printFeatures(asJson, environment) {
   }
   out([`Teammates' asks on ${shown.platform}; a run's systemd user scope ${shown.scope.ok ? 'starts here' : `cannot start here: ${shown.scope.reason}`}.`,
     ...shown.apps.map((app) => !app.installed ? `${APP_NAMES[app.app]}: not installed where BMN looks`
-      : `${APP_NAMES[app.app]} ${app.version ?? '(version unreadable)'} (form last checked on ${app.form_checked_on.version}, ${app.form_checked_on.on}): ${app.forms.project.reads}${app.forms.project.form === app.forms['no-project'].form ? '' : `; with no project, ${app.forms['no-project'].reads}`}; pictures ${app.pictures === 'offered' ? 'offered' : 'not offered'}; usage ${app.usage_while_running ? 'while it runs' : 'at the end only'}`)].join('\n'))
+      : `${APP_NAMES[app.app]} ${app.version ?? '(version unreadable)'} (form last checked on ${app.form_checked_on.version}, ${app.form_checked_on.on}): ${app.forms.project.reads}${app.forms.project.form === app.forms['no-project'].form ? '' : `; with no project, ${app.forms['no-project'].reads}`}; pictures ${app.pictures === 'offered' ? 'offered' : 'not offered'}; browser ${app.browser === 'offered' ? 'offered' : 'not offered'}; usage ${app.usage_while_running ? 'while it runs' : 'at the end only'}`)].join('\n'))
   return EXIT.ok
 }
 
@@ -325,8 +362,9 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     if (options.features) {
       if (Object.keys(options).some((name) => !['features', 'json', ...REPEATED].includes(name)) || REPEATED.some((name) => options[name].length > 0)) throw new AgentsUsageError('--features takes only --json')
     } else {
-      // A picture ask goes to the designer unless the asker names another role (72.8 AC1).
-      if (options.role === undefined && options.image.length === 0) throw new AgentsUsageError('team ask needs --role')
+      // A picture ask goes to the designer unless the asker names another role (72.8 AC1); a browser ask to the browser role (74.3).
+      if (options.role === undefined && options.image.length === 0 && options.origin === undefined) throw new AgentsUsageError('team ask needs --role')
+      for (const name of ['disposable', 'interact']) if (options[name] !== undefined && options.origin === undefined) throw new AgentsUsageError(`--${name} goes with --origin, the address of the app to check`)
       if ((options.question === undefined) === (options['question-file'] === undefined)) throw new AgentsUsageError('team ask takes exactly one of --question and --question-file')
       if (options['time-limit'] !== undefined && !/^\d{1,3}$/u.test(options['time-limit'])) throw new AgentsUsageError(`--time-limit takes minutes, ${TIME_LIMIT.min} to ${TIME_LIMIT.max}`)
     }
@@ -367,8 +405,9 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     throw error
   }
   const request = {
-    role: options.role ?? DESIGNER_ROLE, question, agent: options.agent, effort: options.effort, smallWork: options['small-work'] === true, recheckOf: options['recheck-of'],
-    project: options.project, files, images, data: options.data
+    role: options.role ?? (options.origin !== undefined ? BROWSER_ROLE : DESIGNER_ROLE), question, agent: options.agent, effort: options.effort, smallWork: options['small-work'] === true, recheckOf: options['recheck-of'],
+    project: options.project, files, images, data: options.data,
+    ...(options.origin === undefined ? {} : { browser: { origin: options.origin, disposable: options.disposable === true, interact: options.interact === true } })
   }
   const runs = teamRunsDirectory()
   const key = options.key ?? makeKey('shell', now())
@@ -429,7 +468,7 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     else out(id)
     return EXIT.ok
   }
-  err(`bmn: asked ${receipt.agent} (${receipt.harness} ${receipt.model}, ${receipt.effort}; chosen by ${prepared.choice.rule}) in ${receipt.cwd}; it can read ${receipt.reads.words.replace(/^[^:]*: /u, '')}; run ${id}, key ${key}, supervisor ${started.pid}`)
+  err(`bmn: asked ${receipt.agent} (${receipt.harness} ${receipt.model}, ${receipt.effort}; chosen by ${prepared.choice.rule}) in ${receipt.cwd}; it can read ${receipt.reads.words.replace(/^[^:]*: /u, '')}${request.browser === undefined ? '' : `; it has a browser for ${request.browser.origin}${request.browser.interact ? ', to look and interact' : ', to look only'}`}; run ${id}, key ${key}, supervisor ${started.pid}`)
   return followRun(prepared.folder, id, asJson)
 }
 
@@ -493,6 +532,7 @@ function printOutcome(folder, asJson) {
     if (shown.answer !== null && shown.state === 'answered') out(shown.answer)
     const line = words.outcome(shown)
     if (line !== null) err(line)
+    if (shown.browser?.recorded) err(`bmn: ${shown.browser.pages.length} page${shown.browser.pages.length === 1 ? '' : 's'} and ${shown.browser.screenshots.length} screenshot${shown.browser.screenshots.length === 1 ? '' : 's'} recorded: bmn team asks show ${shown.id}`)
   }
   return shown.exit ?? 1
 }

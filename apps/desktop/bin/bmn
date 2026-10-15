@@ -118,9 +118,10 @@ Commands:
                                             its plan use reaches BMN; the command itself is kept unchanged
   team [--all] [--json]                     The owner-approved team: one line per enabled active agent
   team ask --role R --question-file - --key K [--project P] [--file P]... [--image P]...
+           [--origin http://127.0.0.1:PORT --disposable [--interact]]
                                             Ask one teammate in a role, in its own app's read-only mode with
-                                            its tools; the answer is advice. team asks lists your asks
-                                            (bmn team ask --help)
+                                            its tools; --origin gives it a browser for your local app; the
+                                            answer is advice. team asks lists your asks (bmn team ask --help)
   roster validate|status|role|route|visibility|check|explain|bind|fence
                                             The team file in ~/.config/bmn/agents: validate it, list pending
                                             differences, print a role's chain, and check a dispatch

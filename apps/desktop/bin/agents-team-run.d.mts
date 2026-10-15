@@ -37,5 +37,6 @@ export declare function watchAsk(folder: string, launch: { token_ceiling?: numbe
 export declare function askOutcome(folder: string): Outcome
 export declare function waitAsk(folder: string, options?: { timeoutMs?: number; pollMs?: number; signal?: AbortSignal }): Promise<Outcome>
 export declare function stopAsk(folder: string): void
+export declare function finishBrowser(folder: string): import('./agents-team-browser.mjs').BrowserRecord | null
 export declare const EXPORTED: readonly string[]
 export declare function exportAsk(folder: string, output: string): string[]

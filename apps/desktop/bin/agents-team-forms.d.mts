@@ -3,13 +3,13 @@ export type AskFormName = 'codex-read-only' | 'claude-read-tools' | 'opencode-re
 export declare const ASK_APPS: readonly string[]
 export declare const ASK_FORMS_CHECKED: Readonly<Record<string, { version: string; on: string }>>
 export declare const ASK_UNSUPPORTED: Readonly<Record<string, Record<string, string>>>
-export declare const ASK_RUN_FILES: Readonly<{ request: string; manifest: string; prompt: string; rules: string; files: string; pictures: string; message: string; inputs: string; snapshots: string; receipt: string; answer: string; outcome: string; question: string; work: string; bin: string; codexAnswer: string; projectStart: string }>
+export declare const ASK_RUN_FILES: Readonly<{ request: string; manifest: string; prompt: string; rules: string; files: string; pictures: string; message: string; inputs: string; snapshots: string; receipt: string; answer: string; outcome: string; question: string; work: string; bin: string; codexAnswer: string; projectStart: string; browser: string; browserRecord: string }>
 export declare const ASK_READS: Readonly<Record<AskFormName, { scope: 'computer' | 'folder' | 'text'; reach: string; words: string }>>
 export declare const OPENCODE_ASK_TITLE: string
 export declare const CODEX_ASK_LOG: string
 export declare const CLAUDE_ASK_TOOLS: readonly string[]
 export interface AskProgram { launcher: string; payload: string }
-export interface AskCommandRequest { form: AskFormName; model: string; provider?: string; effort: string; cwd: string; folder: string; pictures?: string[]; rules?: string | null; context?: { argv: string[]; env: string[] }; environment?: NodeJS.ProcessEnv | Record<string, string> }
+export interface AskCommandRequest { form: AskFormName; model: string; provider?: string; effort: string; cwd: string; folder: string; pictures?: string[]; rules?: string | null; context?: { argv: string[]; env: string[] }; environment?: NodeJS.ProcessEnv | Record<string, string>; browser?: { origin: string; interact: boolean } | null }
 export interface AskCommand { argv: string[]; environment: Record<string, string>; command: string[]; cwd: string; stdin: 'text' | 'stream-json' }
 export declare function appSearchPath(environment?: NodeJS.ProcessEnv | Record<string, string>): string
 export declare function askProgram(harness: string, environment?: NodeJS.ProcessEnv | Record<string, string>): AskProgram | null

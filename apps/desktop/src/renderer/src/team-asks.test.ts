@@ -36,7 +36,7 @@ const words = (html: string): string => html.replace(/<[^>]+>/g, ' ').replace(/&
 const HOSTILE = 'Both round differently (src/api/invoice.ts:88).\n\n[the fix](javascript:alert(1)) <img src="https://x.test/p.png"> <script>alert(1)</script> **bold** <a href="https://x.test">link</a>'
 const detail = (fields: Partial<TeamAskDetail> = {}): TeamAskDetail => ({
   line: ANSWERED, question: 'Does the invoice total round the same way in the PDF and the API?\nOrders with a coupon differ by one cent.', questionWhole: true, answer: HOSTILE,
-  files: [{ path: '/home/made-up/code/shop/src/invoice/total.ts', bytes: 4100 }, { path: '/home/made-up/code/shop/src/api/invoice.ts', bytes: 6800 }], pictures: [], project: null,
+  files: [{ path: '/home/made-up/code/shop/src/invoice/total.ts', bytes: 4100 }, { path: '/home/made-up/code/shop/src/api/invoice.ts', bytes: 6800 }], pictures: [], project: null, browser: null,
   teammate: { app: 'codex', appName: 'Codex', appVersion: '0.162.1', model: 'gpt-6-astra', session: '01a13c80-made-up', sessionSource: 'thread.started' }, subagents: [], masked: [], ...fields
 })
 
@@ -136,6 +136,28 @@ describe('Team › Asks', () => {
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
     expect(html).toContain('[the fix](javascript:alert(1))')
     expect(html).toContain('**bold**')
+  })
+
+  it('an opened browser ask lists its pages and screenshots as plain lines: a hostile title or address makes no link, picture or markup (74.3 AC3)', () => {
+    const browser = { origin: 'http://127.0.0.1:4173', interact: false,
+      pages: [{ url: 'http://127.0.0.1:4173/?q=<script>alert(1)</script>', title: '<img src=x onerror=alert(1)> [pay](javascript:alert(1)) **Shop**' }, { url: 'http://127.0.0.1:4173/empty', title: null }],
+      screenshots: [{ name: 'page-<b>1</b>.png', bytes: 14_336 }] }
+    const browsing = line({ reads: { ...CODEX(), browser: { origin: browser.origin, interact: false } } })
+    const html = render({ snapshot: snapshot({ asks: [browsing] }), initiallyOpen: browsing.id, initialDetail: detail({ line: browsing, files: [], browser }) })
+    expect(html).not.toMatch(/<img|<script|<a |<strong|<b>1/u)
+    expect(html).not.toContain('href="javascript')
+    expect(html).toContain('http://127.0.0.1:4173/?q=&lt;script&gt;alert(1)&lt;/script&gt; · &lt;img src=x onerror=alert(1)&gt; [pay](javascript:alert(1)) **Shop**')
+    expect(html).toContain('page-&lt;b&gt;1&lt;/b&gt;.png')
+    const text = words(html)
+    expect(text).toContain('the question, any file your user can read and the app at http://127.0.0.1:4173, looking only')
+    expect(text).toContain('http://127.0.0.1:4173/empty')
+    expect(text).toContain("The app's own text, shown as plain text")
+    expect(text).toContain('page-<b>1</b>.png 14 KB')
+    // While it runs, the record of pages is not written yet, and says so.
+    const going = line({ ...RUNNING, reads: { ...CODEX(), browser: { origin: browser.origin, interact: true } } })
+    const running = words(render({ snapshot: snapshot({ asks: [going] }), initiallyOpen: going.id, initialDetail: detail({ line: going, answer: null, files: [], browser: { ...browser, interact: true, pages: [], screenshots: [] } }) }))
+    expect(running).toContain('the app at http://127.0.0.1:4173, clicking and typing')
+    expect(running).toContain('Pages Recorded when the ask ends. Screenshots Recorded when the ask ends.')
   })
 
   it('an opened refused or lost ask shows why and no answer; a running one says it is answering and cannot be removed', () => {

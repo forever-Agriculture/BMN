@@ -30,9 +30,15 @@ const listWords = (parts: string[]): string => (parts.length <= 1 ? parts.join('
 
 /** What the teammate could read, as one phrase: "the question only", "the question and 3 files", "the question, 1 file and its working folder", "… · public". */
 export function readsWords(reads: TeamAskLine['reads'], data: 'public' | 'private'): string {
-  const parts = [reads.files > 0 ? plural(reads.files, 'file') : null, reads.pictures > 0 ? plural(reads.pictures, 'picture') : null, reads.reach].filter((part): part is string => part !== null)
+  const parts = [reads.files > 0 ? plural(reads.files, 'file') : null, reads.pictures > 0 ? plural(reads.pictures, 'picture') : null, reads.reach,
+    reads.browser === undefined ? null : `the app at ${reads.browser.origin}${reads.browser.interact ? ', clicking and typing' : ', looking only'}`].filter((part): part is string => part !== null)
   const words = parts.length === 0 ? 'the question only' : listWords(['the question', ...parts])
   return data === 'public' ? `${words} · public` : words
+}
+
+/** One page a browser ask visited: its address and the title the app gave it, both the app's own text. */
+export function pageWords(page: NonNullable<TeamAskDetail['browser']>['pages'][number]): string {
+  return page.title === null || page.title === '' ? page.url : `${page.url} · ${page.title}`
 }
 
 /** A project's state at one end of an ask: "a1b2c3d4e5f6, clean", "a1b2c3d4e5f6, 2 changes", "not a Git working tree". */
@@ -344,6 +350,27 @@ function AskBody(props: {
               <ul className="plain-lines" aria-label="Pictures it saw">
                 {detail.pictures.map((picture, index) => <li key={index}>{pictureWords(picture)}</li>)}
               </ul>
+            </dd>
+          </>
+        ) : null}
+        {detail.browser !== null ? (
+          <>
+            <dt>Pages</dt>
+            <dd className="wrap">
+              {going ? <span className="muted">Recorded when the ask ends.</span> : detail.browser.pages.length === 0 ? <span className="muted">No page was visited.</span> : (
+                <ul className="plain-lines" aria-label="Pages it visited">
+                  {detail.browser.pages.map((page, index) => <li key={index} className="mono">{pageWords(page)}</li>)}
+                </ul>
+              )}
+              {!going && detail.browser.pages.length > 0 ? <span className="faint">The app&apos;s own text, shown as plain text</span> : null}
+            </dd>
+            <dt>Screenshots</dt>
+            <dd className="wrap">
+              {going ? <span className="muted">Recorded when the ask ends.</span> : detail.browser.screenshots.length === 0 ? <span className="muted">None taken.</span> : (
+                <ul className="plain-lines" aria-label="Screenshots it took">
+                  {detail.browser.screenshots.map((shot) => <li key={shot.name}><span className="mono">{shot.name}</span> {sizeWords(shot.bytes)}</li>)}
+                </ul>
+              )}
             </dd>
           </>
         ) : null}

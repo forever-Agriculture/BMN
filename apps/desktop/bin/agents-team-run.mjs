@@ -9,6 +9,7 @@ import { readApproved } from './agents-state.mjs'
 import { openCodeFolder, openCodeSessionInfo } from './agents-opencode.mjs'
 import { ASK_RUN_FILES, sameProgram } from './agents-team-forms.mjs'
 import { maskCredentials, maskedNames } from './agents-team-inputs.mjs'
+import { browserRecord } from './agents-team-browser.mjs'
 import { askSettings } from './agents-team-places.mjs'
 import { RUN_FILES, requestStop, runState, startTeamSupervisor, writeWhole } from './agents-team-supervisor.mjs'
 
@@ -598,10 +599,25 @@ export function finishAsk(folder) {
     throw error
   } finally {
     for (const part of TRANSIENT) rmSync(join(folder, part), { recursive: true, force: true })
+    // However the finish ended, no page snapshot or download of a browser ask stays (74.3 AC3).
+    if (!existsSync(join(folder, ASK_RUN_FILES.browserRecord))) finishBrowser(folder)
     rmSync(join(folder, RUN_FILES.stop), { force: true })
     // Its capacity place is given back (agents-team-places.mjs placePath), once its outcome is written.
     rmSync(join(dirname(folder), '.places', `${basename(folder)}.json`), { force: true })
   }
+}
+
+/**
+ * A browser ask's record (74.3 AC3): its pages and screenshots from the server's own session log,
+ * written as `browser.json`; everything else the server left in `browser/` (page snapshots, downloads,
+ * the log) is deleted. Nothing for any other ask.
+ */
+export function finishBrowser(folder) {
+  const browser = readJsonOrNull(join(folder, ASK_RUN_FILES.manifest))?.browser
+  if (browser === undefined || browser === null) return null
+  const { record } = browserRecord(folder, browser)
+  writeWhole(join(folder, ASK_RUN_FILES.browserRecord), `${JSON.stringify(record, null, 2)}\n`)
+  return record
 }
 
 /** Finishes a run: from its supervisor's exit record, or, after a crash, from `interrupted` with its reason (recovery). */
@@ -615,6 +631,8 @@ export function finishRun(folder, { interrupted = null } = {}) {
   // OpenCode keeps its usage in each session's own record: read in BMN's folder (72.5 AC2, 72.9 AC5).
   if (harness === 'opencode' && started) recordOpenCodeSessions(folder)
   const masked = { output: started ? maskOutput(folder) : [], answer: [] }
+  // A browser ask's record, once the scope (and the browser's server in it) has ended: pages and screenshots kept, the rest gone (74.3 AC3).
+  finishBrowser(folder)
   let seen
   try {
     seen = observeAsk(folder, harness, request, { startedAt: Date.parse(state.started_at ?? '') || null, endedAt: Date.parse(exit.at ?? '') || Date.now() })
@@ -754,7 +772,7 @@ export function stopAsk(folder) {
 // The export
 
 /** What an export carries (the contract's record table): never the app's raw error stream or a session record of the app's own. */
-export const EXPORTED = Object.freeze(['request.json', 'question.md', 'inputs', 'snapshots', 'receipt.json', 'launch.json', 'state.json', 'exit.json', 'events.jsonl', 'session-info.json', 'project-start.json', 'answer.md', 'outcome.json'])
+export const EXPORTED = Object.freeze(['request.json', 'question.md', 'inputs', 'snapshots', 'receipt.json', 'launch.json', 'state.json', 'exit.json', 'events.jsonl', 'session-info.json', 'project-start.json', 'browser.json', 'browser', 'answer.md', 'outcome.json'])
 
 /** The launch with every environment value the app is given left out: names only. */
 function launchWithoutValues(launch) {
@@ -776,6 +794,14 @@ export function exportAsk(folder, output) {
     if (!existsSync(source)) continue
     if (name === 'launch.json') {
       writeFileSync(join(output, name), `${JSON.stringify(launchWithoutValues(readJson(source)), null, 2)}\n`, { mode: 0o600 })
+    } else if (name === ASK_RUN_FILES.browser) {
+      // Only the screenshots the record names: never a page snapshot or download of a run still going (74.3 AC3).
+      const shots = readJsonOrNull(join(folder, ASK_RUN_FILES.browserRecord))?.screenshots ?? []
+      if (shots.length > 0) mkdirSync(join(output, name), { mode: 0o700 })
+      for (const shot of shots) {
+        const path = join(source, basename(String(shot.name)))
+        if (existsSync(path) && statSync(path).isFile()) cpSync(path, join(output, name, basename(String(shot.name))))
+      }
     } else if (statSync(source).isDirectory()) {
       cpSync(source, join(output, name), { recursive: true, verbatimSymlinks: true })
     } else {
