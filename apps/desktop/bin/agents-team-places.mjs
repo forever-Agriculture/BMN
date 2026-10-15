@@ -5,7 +5,6 @@ import { dirname, join } from 'node:path'
 import { takeLock } from './agents-research.mjs'
 import { processLives, processStart } from './agents-supervised.mjs'
 import { INSIDE } from './agents-container.mjs'
-import { removeOverlay } from './agents-team-browser.mjs'
 import { ASK_RUN_FILES } from './agents-team-forms.mjs'
 import { forgetNamespace } from './agents-team-nested.mjs'
 import { AskRefusal } from './agents-team-resolve.mjs'
@@ -98,15 +97,7 @@ export function requestHash(request) {
     version: 1, role: request.role, question_sha256: sha256(request.question ?? ''), agent: request.agent ?? null, effort: request.effort ?? null,
     small_work: request.smallWork === true, recheck_of: request.recheckOf ?? null, project: request.project ?? null, access: request.access ?? 'question',
     files: (request.files ?? []).map((file) => ({ path: file.path, sha256: file.sha256 })), images: (request.images ?? []).map((image) => ({ path: image.path, sha256: image.sha256 })),
-    data: request.data === 'public' ? 'public' : 'private', wide_read: request.wide === true, time_limit_minutes: request.timeLimitMinutes,
-    // A browser ask (74.3): what starts the app and its services, where it answers, whether the teammate may click, and the asker's
-    // statement. Only a browser ask carries it, so every other ask's hash stays the one it had.
-    ...(request.browser === undefined || request.browser === null ? {} : {
-      browser: {
-        serve: request.browser.serve ?? null, origin: request.browser.origin ?? null, services: [...(request.browser.services ?? [])],
-        interact: request.browser.interact === true, disposable: request.browser.disposable === true
-      }
-    })
+    data: request.data === 'public' ? 'public' : 'private', wide_read: request.wide === true, time_limit_minutes: request.timeLimitMinutes
   }
   return sha256(JSON.stringify(canonical))
 }
@@ -379,7 +370,6 @@ export function removeRun(runs, id, now = new Date()) {
       writeWhole(path, `${JSON.stringify({ version: 1, key: entry.key, scope: entry.scope, request_sha256: entry.request_sha256, id, state: 'gone', outcome: outcome?.state ?? null, removed_at: now.toISOString() })}\n`)
     }
   }
-  removeOverlay(folder)
   rmSync(folder, { recursive: true, force: true })
   releasePlace(runs, id)
   return true
@@ -401,10 +391,7 @@ export function sweepRuns(runs, now = new Date()) {
     const ended = endedAt(folder)
     if (ended !== null && now.getTime() - ended > RETENTION_DAYS * DAY_MS) removeRun(runs, id, now)
     // A run with an outcome holds no transient state: what a crash between its outcome and that deletion left goes now.
-    else if (ended !== null) {
-      for (const part of [ASK_RUN_FILES.home, ASK_RUN_FILES.project]) if (existsSync(join(folder, part))) rmSync(join(folder, part), { recursive: true, force: true })
-      removeOverlay(folder)
-    }
+    else if (ended !== null) for (const part of [ASK_RUN_FILES.home, ASK_RUN_FILES.project]) if (existsSync(join(folder, part))) rmSync(join(folder, part), { recursive: true, force: true })
   }
   let keys
   try {

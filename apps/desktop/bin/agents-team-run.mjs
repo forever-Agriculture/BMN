@@ -8,7 +8,6 @@ import { ASK_RUN_FILES, sameProgram } from './agents-team-forms.mjs'
 import { askSettings } from './agents-team-places.mjs'
 import { RUN_FILES, requestStop, runState, startTeamSupervisor, writeWhole } from './agents-team-supervisor.mjs'
 import { treeChange } from './agents-team-tree.mjs'
-import { BROWSER_FILES, browserExportFiles, browserRecord, removeOverlay } from './agents-team-browser.mjs'
 
 /**
  * An ask starts only as it was judged (R72-FR3, 72.3 AC1): the approved team and the app's program
@@ -137,8 +136,6 @@ function launchChange(folder, launch, receipt, now) {
     return 'the launch\'s standard input is not the one the check judged'
   }
   if (launch.args_fd !== true) return 'the launch puts bubblewrap\'s options on its command line'
-  // A browser ask's spaces start only as the check judged them, and an ask without them starts none (74.3).
-  if ((launch.browser ?? null) !== (receipt.browser?.spec_sha256 ?? null)) return 'the launch\'s browser is not the one the check judged'
   if (!(Number.isFinite(launch.deadline) && launch.deadline <= now + TIME_LIMIT.max * 60_000)) return 'the launch\'s time limit is not within BMN\'s'
   if (!(Number.isFinite(launch.output_limit) && launch.output_limit <= OUTPUT_LIMIT)) return 'the launch\'s output limit is not within BMN\'s'
   if (!(Number.isFinite(launch.storage_limit) && launch.storage_limit <= STORAGE_LIMIT)) return 'the launch\'s storage limit is not within BMN\'s'
@@ -196,8 +193,6 @@ export function startAsk(prepared, { now = new Date(), timeLimitMinutes = TIME_L
     stdin, stdin_sha256: receipt.snapshots?.message ?? receipt.snapshots?.prompt, args_fd: true, output_limit: OUTPUT_LIMIT,
     // The run's storage, all of its folder; the supervisor's last check (launchCheck, always run) holds every field here to the receipt and the limits.
     storage_limit: STORAGE_LIMIT,
-    // A browser ask's spaces, by the hash of their judged specification: the supervisor starts them before the container and ends them after it.
-    ...(receipt.browser === undefined ? {} : { browser: receipt.browser.spec_sha256 }),
     // The owner's per-ask token ceiling holds where the app reports usage while it runs: Claude Code alone (72.1); the supervisor watches it with watchAsk.
     ...(tokenCeiling !== null && receipt.harness === 'claude' ? { token_ceiling: tokenCeiling } : {})
   }
@@ -407,12 +402,6 @@ export function finishAsk(folder) {
   } finally {
     for (const part of TRANSIENT) rmSync(join(folder, part), { recursive: true, force: true })
     rmSync(join(folder, RUN_FILES.stop), { force: true })
-    // A browser ask's writes to its project, when its spaces' own end did not remove them (a supervisor that died).
-    try {
-      removeOverlay(folder)
-    } catch {
-      // The sweep and Remove try again (agents-team-places.mjs).
-    }
     // Its capacity place is given back (agents-team-places.mjs placePath), once its outcome is written.
     rmSync(join(dirname(folder), '.places', `${basename(folder)}.json`), { force: true })
   }
@@ -426,8 +415,6 @@ function finishRun(folder) {
   const harness = receipt.harness ?? null
   // OpenCode keeps its usage in the session's own record: read in the run's own folders before they are deleted (72.5 AC2).
   if (harness === 'opencode') recordOpenCodeSession(folder)
-  // A browser ask's record: the pages it visited, its screenshots and every refused call, from the filter's own log (74.3 AC5, AC6).
-  if (existsSync(join(folder, BROWSER_FILES.spec))) finishBrowser(folder)
   let seen
   try {
     seen = observeAsk(folder, harness, request)
@@ -453,10 +440,6 @@ function finishRun(folder) {
   } else if (exit.ended === 'storage') {
     outcome = 'failed'
     reason = `the run's storage went over ${STORAGE_LIMIT / 1024 / 1024 / 1024} GiB`
-  } else if (exit.ended === 'app') {
-    // A browser ask whose app or browser did not come up: the teammate was never started (74.3).
-    outcome = 'failed'
-    reason = exit.reason ?? 'the app or the browser did not start'
   } else if (exit.ended === 'changed') {
     outcome = 'refused'
     reason = exit.reason ?? 'what was judged changed before the start; nothing started'
@@ -559,17 +542,6 @@ export function stopAsk(folder) {
 // The export
 
 /** What an export carries (the contract's record table): never the app's home, its raw error stream or the frozen copy. */
-/** A browser ask's record, written once its spaces ended; the browser's other files (page texts it saved) go, its screenshots stay. */
-function finishBrowser(folder) {
-  const files = join(folder, BROWSER_FILES.files)
-  try {
-    for (const name of readdirSync(files)) if (!/\.(png|jpe?g)$/u.test(name)) rmSync(join(files, name), { recursive: true, force: true })
-  } catch {
-    // No files.
-  }
-  writeWhole(join(folder, BROWSER_FILES.record), `${JSON.stringify(browserRecord(folder), null, 2)}\n`)
-}
-
 export const EXPORTED = Object.freeze(['request.json', 'question.md', 'inputs', 'project-manifest.json', 'snapshots', 'receipt.json', 'launch.json', 'state.json', 'exit.json', 'events.jsonl', 'session-info.json', 'answer.md', 'outcome.json'])
 
 /** The launch with every environment value the container is given left out: names only. */
@@ -600,11 +572,6 @@ export function exportAsk(folder, output) {
     } else {
       cpSync(source, join(output, name))
     }
-  }
-  // A browser ask's record, the filter's log, how its spaces ended and its screenshots: never the spaces' own logs (74.3 AC6).
-  for (const path of browserExportFiles(folder)) {
-    mkdirSync(dirname(join(output, path)), { recursive: true, mode: 0o700 })
-    cpSync(join(folder, path), join(output, path))
   }
   const walk = (base, prefix) => {
     for (const entry of readdirSync(base, { withFileTypes: true })) {

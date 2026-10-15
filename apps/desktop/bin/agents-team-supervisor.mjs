@@ -24,8 +24,6 @@ import { childNamespace, forgetNamespace, nameNamespace } from './agents-team-ne
 const NAME = 'agents-team-supervisor.mjs'
 /** BMN's own run module: its `launchCheck` every run passes immediately before its container, its `finishAsk` and `watchAsk` the only finish and watch steps. */
 const RUN_MODULE = fileURLToPath(new URL('./agents-team-run.mjs', import.meta.url))
-/** BMN's own browser module: a browser ask's spaces, started before the container and ended after it (74.3). */
-const BROWSER_MODULE = fileURLToPath(new URL('./agents-team-browser.mjs', import.meta.url))
 const SUPERVISE = '--supervise-ask'
 /** How long a container asked to end may take before it is made to. */
 export const KILL_AFTER_MS = 3000
@@ -51,9 +49,8 @@ const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 /**
  * The bytes a folder's files hold, everything under it, links not followed. A file or folder gone
  * meanwhile counts nothing; any other error is thrown, never counted as nothing (epic review R12).
- * `unmeasured` names folders not entered: a browser ask's overlay work folder, overlayfs's own and unreadable.
  */
-export function folderBytes(folder, unmeasured = new Set()) {
+export function folderBytes(folder) {
   let total = 0
   let entries
   try {
@@ -64,7 +61,7 @@ export function folderBytes(folder, unmeasured = new Set()) {
   }
   for (const entry of entries) {
     const path = join(folder, entry.name)
-    if (entry.isDirectory()) total += unmeasured.has(path) ? 0 : folderBytes(path, unmeasured)
+    if (entry.isDirectory()) total += folderBytes(path)
     else if (entry.isFile()) {
       try {
         total += lstatSync(path).size
@@ -165,21 +162,7 @@ async function supervise(folder) {
   let endedReason = null
   let child = null
   let namespace = null
-  // A browser ask's two spaces and BMN's module that runs them; null for any other ask.
-  let spaces = null
-  let browserModule = null
   const finish = async (exit) => {
-    // Everything BMN started for a browser ask ends before the run's record is written, and the record says what was left (74.3 AC1).
-    if (spaces !== null) {
-      const stopping = spaces
-      spaces = null
-      try {
-        const ended = await browserModule.stopBrowserSpaces(folder, stopping)
-        writeWhole(join(folder, 'browser/spaces.json'), `${JSON.stringify({ version: 1, ...ended, at: new Date().toISOString() })}\n`)
-      } catch (error) {
-        state.browser_error = error instanceof Error ? error.message : String(error)
-      }
-    }
     writeWhole(join(folder, RUN_FILES.exit), `${JSON.stringify({ version: 1, ...exit, ended: ended ?? (exit.code === 0 ? 'done' : 'failed'), ...(endedReason === null ? {} : { reason: endedReason }), at: new Date().toISOString() })}\n`)
     if (namespace !== null) forgetNamespace(dirname(folder), namespace)
     state.state = 'finishing'
@@ -236,13 +219,12 @@ async function supervise(folder) {
     return finish({ code: null, signal: null, started: false })
   }
   // The run's storage: all of its folder, the record, its logs and its transient state together (the contract's "Limits"),
-  // before the start, about once a second while a browser ask's app starts, every few polls while it runs and once more when the container has ended.
-  let unmeasured = new Set()
+  // before the start, every few polls while it runs and once more when the container has ended.
   const storageOver = () => {
     if (typeof launch.storage_limit !== 'number') return null
     let used
     try {
-      used = folderBytes(folder, unmeasured)
+      used = folderBytes(folder)
     } catch (error) {
       return `the run's storage could not be measured (${error.code ?? error.message})`
     }
@@ -253,47 +235,6 @@ async function supervise(folder) {
     ended = 'storage'
     endedReason = before
     return finish({ code: null, signal: null, started: false })
-  }
-  // A browser ask: the app and its services, and the browser behind BMN's filter, each in a network space of its own, started
-  // from the judged specification and ready before the teammate's container starts; then the run's last check once more.
-  if (typeof launch.browser === 'string') {
-    const stopped = () => existsSync(join(folder, RUN_FILES.stop))
-    let over = null
-    let why
-    try {
-      browserModule = await import(BROWSER_MODULE)
-      unmeasured = new Set([join(folder, browserModule.BROWSER_FILES.work)])
-      const spec = browserModule.judgedSpec(folder, launch.browser)
-      why = browserModule.browserProgramChange(spec.identity)
-      if (why !== null) {
-        ended = 'changed'
-        endedReason = `${why}; nothing started`
-        return finish({ code: null, signal: null, started: false })
-      }
-      spaces = browserModule.startBrowserSpaces(folder, spec)
-      // Still `starting` for every reader: the app and the browser come up first.
-      state.browser = { app: { pid: spaces.app.pid, start: processStart(spaces.app.pid) }, browser: { pid: spaces.browser.pid, start: processStart(spaces.browser.pid) } }
-      save()
-      why = await browserModule.browserReady(folder, spec, spaces, { until: Math.min(Date.now() + spec.ready_ms, launch.deadline), stopped, storage: () => (over = storageOver()) })
-    } catch (error) {
-      why = `BMN could not start the app and the browser (${error instanceof Error ? error.message : String(error)})`
-    }
-    if (why !== null) {
-      ended = over !== null ? 'storage' : stopped() ? 'stopped' : Date.now() >= launch.deadline ? 'limit' : 'app'
-      endedReason = why
-      return finish({ code: null, signal: null, started: false })
-    }
-    let again
-    try {
-      again = await (await import(RUN_MODULE)).launchCheck(folder, launch)
-    } catch (error) {
-      again = `BMN could not check the run before its start (${error instanceof Error ? error.message : String(error)})`
-    }
-    if (again !== null) {
-      ended = 'changed'
-      endedReason = `${again}; nothing started`
-      return finish({ code: null, signal: null, started: false })
-    }
   }
   // BMN's own watch step under the owner's token ceiling, loaded once before the start: it reads the run's output and says when to end it.
   const watcher = Number.isInteger(launch.token_ceiling) ? await import(RUN_MODULE).then((module) => module.watchAsk).catch(() => null) : null

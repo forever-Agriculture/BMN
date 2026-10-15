@@ -15,16 +15,13 @@ import { openCodeAskHome, openCodeEnvironment } from './agents-opencode.mjs'
  * computer. `no-history`: confined, with no tool that reads the project's Git history.
  */
 export const ASK_FORMS_PROVEN = Object.freeze({
-  codex: { '0.162.1': { question: 'proven', files: 'proven', project: 'unavailable', pictures: 'proven', browser: 'proven' } },
-  claude: { '2.1.300': { question: 'proven', files: 'proven', project: 'proven', pictures: 'proven', browser: 'proven' } },
+  codex: { '0.162.1': { question: 'proven', files: 'proven', project: 'unavailable', pictures: 'proven' } },
+  claude: { '2.1.300': { question: 'proven', files: 'proven', project: 'proven', pictures: 'proven' } },
   opencode: { '2.0.29': { question: 'proven', files: 'proven', project: 'no-history', pictures: 'unmeasured' } }
 })
 
-/**
- * What BMN offers beyond its access modes: picture asks, since Story 72.8, where 72.1 proved them; browser asks, since
- * Story 74.3, where 74.1 measured an app's browser tool inside its containment (records in reference-74-browser/RESULT.md).
- */
-export const ASK_OFFERED = Object.freeze({ pictures: true, browser: true })
+/** What BMN offers beyond its access modes: picture asks, since Story 72.8, where 72.1 proved them. */
+export const ASK_OFFERED = Object.freeze({ pictures: true })
 
 /** Why a measured mode is unavailable, in the words the refusal gives. */
 export const UNAVAILABLE_WHY = Object.freeze({
@@ -33,8 +30,7 @@ export const UNAVAILABLE_WHY = Object.freeze({
   },
   opencode: {
     project: 'OpenCode\'s read-only agent has no tool that reads the project\'s Git history, so its project form is not offered (72.1, 72.5); ask it with --access files and the files it needs',
-    pictures: 'BMN never measured a picture ask on OpenCode (72.1 measured Codex and Claude Code), so OpenCode teammates are not asked about pictures; ask a Codex or Claude Code teammate',
-    browser: 'BMN never measured a browser ask on OpenCode (74.1 measured Codex and Claude Code), so OpenCode teammates are not asked to check an app; ask a Codex or Claude Code teammate'
+    pictures: 'BMN never measured a picture ask on OpenCode (72.1 measured Codex and Claude Code), so OpenCode teammates are not asked about pictures; ask a Codex or Claude Code teammate'
   }
 })
 
@@ -60,51 +56,11 @@ export const ASK_FORM_NAMES = Object.freeze({
   claude: { question: 'claude-no-tools', files: 'claude-no-tools', project: 'claude-project-read' },
   opencode: { question: 'opencode-asker', files: 'opencode-asker', project: 'opencode-project-read' }
 })
-/** The name a receipt gives a browser ask's form (74.3): the app's question form with BMN's filtered browser tools. */
-export const ASK_BROWSER_FORM_NAMES = Object.freeze({ codex: 'codex-browser', claude: 'claude-browser' })
-
-/** Where a browser ask's own files are inside the container: BMN's script that connects to the filter's socket, and the socket's folder. */
-export const BROWSER_INSIDE = Object.freeze({ folder: `${INSIDE.root}/browser`, socket: `${INSIDE.root}/browser/mcp.sock`, script: `${INSIDE.inputs}/browser/ask-browser-space.mjs` })
-/** How long the app waits for the browser to start and for one of its tools to answer (as 74.1 ran them). */
-const BROWSER_START_SECONDS = 60
-const BROWSER_TOOL_SECONDS = 240
-
-/** The browser as a teammate's MCP server: BMN's script on Node, one connection to the filter in front of the browser. */
-function browserServer(browser) {
-  return { command: browser.node, args: [BROWSER_INSIDE.script, 'connect', BROWSER_INSIDE.socket] }
-}
-
-/**
- * A question form with the browser's tools (74.3): Codex with its code-mode host on, the one way 0.162.1 offers MCP tools
- * to the model (74.1 measured that the host has no network, file or process API), the browser the only MCP server and only
- * the ask's tools enabled; Claude Code with the browser as its only MCP server and only those tools allowed. BMN's filter
- * offers and allows no other tool whatever the app is told (agents-team-browser.mjs).
- */
-function withBrowser(harness, command, environment, browser) {
-  const server = browserServer(browser)
-  const out = [...command]
-  if (harness === 'codex') {
-    const host = out.indexOf('code_mode_host')
-    if (host < 1 || out[host - 1] !== '--disable') throw new Error('the Codex question form has no --disable code_mode_host')
-    out.splice(host - 1, 2)
-    const at = out.indexOf('mcp_servers={}')
-    if (at < 0) throw new Error('the Codex question form has no mcp_servers={}')
-    const list = (values) => `[${values.map((value) => JSON.stringify(value)).join(',')}]`
-    out[at] = `mcp_servers={browser={command=${JSON.stringify(server.command)},args=${list(server.args)},enabled_tools=${list(browser.tools)},default_tools_approval_mode="approve",startup_timeout_sec=${BROWSER_START_SECONDS},tool_timeout_sec=${BROWSER_TOOL_SECONDS}}}`
-    return { command: out, environment }
-  }
-  const at = out.indexOf('{"mcpServers":{}}')
-  if (at < 0) throw new Error('the Claude Code form has no empty MCP configuration')
-  out[at] = JSON.stringify({ mcpServers: { browser: server } })
-  const mode = out.indexOf('--permission-mode')
-  out.splice(mode, 0, '--allowedTools', browser.tools.map((tool) => `mcp__browser__${tool}`).join(','))
-  return { command: out, environment: { ...environment, MCP_TIMEOUT: String(BROWSER_START_SECONDS * 1000), MCP_TOOL_TIMEOUT: String(BROWSER_TOOL_SECONDS * 1000) } }
-}
 
 /** An ask's OpenCode session title: with one named, OpenCode makes no request of its own to name the session (70.3). */
 export const OPENCODE_ASK_TITLE = 'BMN ask'
 
-/** Codex with every tool off that a setting turns off, as its research form and the 72.1 question/files form; `--ephemeral` keeps no session. Six sub-agent tools stay offered on 0.162.1 and a sub-agent does start (74.3): its own session in the turn log leaves the ask not attributed. */
+/** Codex with every tool off, as its research form and the 72.1 question/files form; `--ephemeral`, because only a run that keeps no session makes every sub-agent start fail. */
 export const CODEX_ASK_NO_TOOLS = Object.freeze(['--ephemeral', '--disable', 'view_image', '--disable', 'goals', '--disable', 'image_generation', '--disable', 'sleep_tool', '--disable', 'hooks', '--disable', 'code_mode_host',
   '-c', 'mcp_servers={}', '-c', 'web_search="disabled"', '-c', 'features.shell_tool=false', '-c', 'features.unified_exec=false', '-c', 'features.multi_agent=false',
   '-c', 'features.apps=false', '-c', 'features.plugins=false', '-c', 'skills.include_instructions=false', '-c', 'skills.bundled.enabled=false', '-c', 'include_apps_instructions=false',
@@ -156,17 +112,11 @@ export function askProgram(harness, environment = process.env) {
 
 /**
  * The app's command inside the container for one ask, and what its home must hold. `request`:
- * `{ access, model, effort, rules, pictures, browser }` with `pictures` the inside paths of the pictures and `browser`,
- * for a browser ask, `{ tools, node }`: the tools BMN's filter offers and the Node that runs BMN's connection to it.
+ * `{ access, model, effort, rules, pictures }` with `pictures` the inside paths of the pictures.
  * Returns `{ command, environment, cwd, home: { [relative path]: text }, mountPoints, stdin }`;
  * `stdin` is `text` (the prompt as it is) or `stream-json` (one user message with the pictures).
  */
-export function askCommand(harness, program, { access, model, provider = null, effort, rules = null, pictures = [], context = { argv: [], env: [] }, browser = null }) {
-  if (browser !== null) {
-    if (access !== 'question' || pictures.length > 0 || (harness !== 'codex' && harness !== 'claude')) throw new Error(`no browser form for ${harness} with ${access} access`)
-    const form = askCommand(harness, program, { access, model, provider, effort, rules, pictures, context })
-    return { ...form, ...withBrowser(harness, form.command, form.environment, browser) }
-  }
+export function askCommand(harness, program, { access, model, provider = null, effort, rules = null, pictures = [], context = { argv: [], env: [] } }) {
   // The agent's context limit, where the owner's test proved the setting on this app version (60.9): `-c` items for Codex, environment for Claude Code.
   const contextEnvironment = Object.fromEntries(context.env.map((pair) => [pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1)]))
   if (harness === 'codex') {
@@ -260,11 +210,9 @@ export function askArgv(harness, program, run, request, environment = process.en
   const signIn = signInBind(harness, environment)
   // The configuration BMN wrote for the app is read-only inside the container: the app writes only its own runtime files there (epic review R6).
   const configuration = Object.keys(form.home).map((path) => ({ from: join(run.home, path), to: `${INSIDE.home}/${path}`, writable: false }))
-  // A browser ask's container has Node, to run BMN's connection to the filter, and the filter's socket folder, both read-only (74.3).
-  const browser = request.browser == null ? [] : [{ from: request.browser.node, to: request.browser.node, writable: false }, { from: join(dirname(run.home), 'browser/mcp'), to: BROWSER_INSIDE.folder, writable: false }]
   const argv = containerArgv({
     app: program.paths, home: run.home, inputs: run.inputs, project: request.access === 'project' ? run.project : null,
-    binds: [...configuration, ...(signIn === null ? [] : [signIn]), ...browser], environment: form.environment, cwd: form.cwd, command: form.command,
+    binds: [...configuration, ...(signIn === null ? [] : [signIn])], environment: form.environment, cwd: form.cwd, command: form.command,
     hosts: form.hosts === undefined ? null : join(dirname(run.home), ASK_RUN_FILES.snapshots, 'hosts')
   })
   return { argv, form }

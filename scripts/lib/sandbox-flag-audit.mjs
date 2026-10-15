@@ -128,30 +128,6 @@ async function sourceFiles(path, isRoot = false) {
   return files
 }
 
-/**
- * The owner's named exceptions: one file and one exact line each, with why. That line is left out of its file's scan only when
- * the file holds it exactly once, as written; the same text anywhere else, a changed line, and any other sandbox-off text in
- * that file are still found. The line is spelled in parts so this file does not hold it.
- */
-export const SANDBOX_EXCEPTIONS = Object.freeze([
-  Object.freeze({
-    file: 'apps/desktop/bin/ask-browser-space.mjs',
-    line: ['      launchOptions: { headless: true, executablePath: spec.chromium, ', ['chromium', 'Sandbox'].join(''), ': ', disabledBoolean, ' },'].join(''),
-    why: 'owner, 2026-10-15: Chromium cannot sandbox itself inside a browser ask\'s space, where AppArmor refuses the nested user namespace it needs; BMN\'s space is the boundary (Story 74.3)'
-  })
-])
-
-/** A file's text as the audit reads it: without the one line an exception names, when that line is there exactly once. */
-function withoutExcepted(relativePath, content) {
-  let text = content
-  for (const exception of SANDBOX_EXCEPTIONS) {
-    if (exception.file !== relativePath) continue
-    const lines = text.split('\n')
-    if (lines.filter((line) => line === exception.line).length === 1) text = lines.filter((line) => line !== exception.line).join('\n')
-  }
-  return text
-}
-
 export async function scanForSandboxDisablingFlags(repoRoot) {
   const roots = ['apps', 'shared', 'scripts']
   const files = []
@@ -179,7 +155,7 @@ export async function scanForSandboxDisablingFlags(repoRoot) {
       if (isMissingRootFile) continue
       throw error
     }
-    for (const rule of findSandboxDisablingText(withoutExcepted(relative(repoRoot, file), content))) {
+    for (const rule of findSandboxDisablingText(content)) {
       findings.push({ file: relative(repoRoot, file), rule })
     }
   }

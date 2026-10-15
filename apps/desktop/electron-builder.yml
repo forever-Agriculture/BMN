@@ -97,11 +97,6 @@ extraResources:
     to: bin/agents-team-pictures.mjs
   - from: bin/agents-team-tree.mjs
     to: bin/agents-team-tree.mjs
-  # A browser ask's spaces (74.3): BMN's module that starts and ends them, and its script inside them (copied into each ask).
-  - from: bin/agents-team-browser.mjs
-    to: bin/agents-team-browser.mjs
-  - from: bin/ask-browser-space.mjs
-    to: bin/ask-browser-space.mjs
   # bmn.mjs loads it first for every command: a command inside a teammate's run is refused.
   - from: bin/agents-team-nested.mjs
     to: bin/agents-team-nested.mjs

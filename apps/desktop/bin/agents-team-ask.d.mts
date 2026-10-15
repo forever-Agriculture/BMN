@@ -7,8 +7,7 @@ export declare function filePrompt(question: string, files: { label: string; sha
 export declare function picturePrompt(prompt: string, pictures: { label: string; media_type: string; width: number; height: number }[]): string
 export declare function projectPrompt(question: string, frozen: import('./agents-team-inputs.mjs').FrozenProject, root: string): string
 export interface AskAsked {
-  role: string; question: string; agent?: string; effort?: string; smallWork?: boolean; recheckOf?: string; project?: string | undefined
-  browser?: import('./agents-team-browser.mjs').BrowserRequest
+  role: string; question: string; agent?: string; effort?: string; smallWork?: boolean; recheckOf?: string; project?: string
   access?: string; files?: string[]; images?: string[]; data?: string; wide?: boolean
   key?: string; keyScope?: string; requestSha256?: string; askedBy?: { kind: string; session?: string; app?: string }; inputHashes?: { files?: string[]; images?: string[] }
 }

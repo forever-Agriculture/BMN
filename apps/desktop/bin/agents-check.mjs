@@ -10,8 +10,7 @@ import { AgentsUsageError, EXIT, err, failWith, out, readOptions, usage } from '
 import { publicRendering } from './agents-rules.mjs'
 import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, CONTEXT_TEST_SIZE, checkContext, contextItems, contextTestFolder, provenControls, provenPrecedence, wholeNumber } from './agents-context.mjs'
 import { RUN_TEST_APPS, appTools, checkRunTools } from './agents-tools.mjs'
-import { ASK_APPS, ASK_BROWSER_FORM_NAMES, ASK_FORMS_PROVEN, ASK_FORM_NAMES, ASK_ACCESS, ASK_RUN_FILES, UNAVAILABLE_WHY, appSearchPath, askArgv, askProgram, claudePictureMessage, formStanding, sameProgram } from './agents-team-forms.mjs'
-import { BROWSER_FILES, BROWSER_STATEMENT, CHROMIUM_REVISION, SPACE_SCRIPT, browserContainment, browserIdentity, browserSetup, browserSpec, readBrowserRequest } from './agents-team-browser.mjs'
+import { ASK_APPS, ASK_FORMS_PROVEN, ASK_FORM_NAMES, ASK_ACCESS, ASK_RUN_FILES, UNAVAILABLE_WHY, appSearchPath, askArgv, askProgram, claudePictureMessage, formStanding, sameProgram } from './agents-team-forms.mjs'
 import { INSIDE } from './agents-container.mjs'
 import { TreeUnreadable, treeDigests } from './agents-team-tree.mjs'
 import { OPENCODE_ASKER_AGENT, OPENCODE_FOLDER_SHA256, OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_RESEARCH_AGENT, OPENCODE_SESSION_ID, installOpenCodeFolder, openCodeAskHome, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
@@ -2805,10 +2804,10 @@ export function askConsent(data, destination, inputs, label, now = new Date(), n
  * instruction snapshot, the pictures' places inside the container, and the agent's context limit
  * where the owner's test proved its setting on this app version (60.9), as `evaluate` applies it.
  */
-export function askRequest(agent, version, { access, effort, rules = null, pictures = [], contextTestLog = undefined, browser = null }) {
+export function askRequest(agent, version, { access, effort, rules = null, pictures = [], contextTestLog = undefined }) {
   const proven = agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(agent.harness, version, contextTestLog)
   const items = contextItems(agent, proven)
-  return { access, model: agent.model, provider: agent.provider, effort, rules, pictures, context: items.state === 'applied' ? { argv: items.argv, env: items.env } : { argv: [], env: [] }, browser }
+  return { access, model: agent.model, provider: agent.provider, effort, rules, pictures, context: items.state === 'applied' ? { argv: items.argv, env: items.env } : { argv: [], env: [] } }
 }
 
 /**
@@ -2898,40 +2897,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       const pictures = askStandingWords(agent.harness, version, 'pictures')
       if (pictures !== null) refuse('ACCESS_UNAVAILABLE', pictures)
     }
-    // A browser ask (74.3): the spaces' specification recomputed from the request, the programs as they are now and the run's folder, and compared whole.
-    const browser = manifest.browser ?? null
-    let spec = null
-    let specHash = null
-    if (browser !== null) {
-      if (!isObject(browser) || inputs.access !== 'question' || manifest.pictures.length > 0 || inputs.data === 'public') refuse('WORKSPACE_MISMATCH', 'a browser ask is a private question ask with no pictures')
-      const words = askStandingWords(agent.harness, version, 'browser')
-      if (words !== null) refuse('ACCESS_UNAVAILABLE', words)
-      const contained = browserContainment()
-      if (!contained.ok) refuse('ACCESS_UNAVAILABLE', `BMN cannot seal a browser ask's network on this computer (${contained.reason})`)
-      const setup = browserSetup(environment)
-      if (setup.unavailable !== undefined) refuse('ACCESS_UNAVAILABLE', setup.unavailable)
-      let recorded = null
-      try {
-        const text = readText(`${folder}/${BROWSER_FILES.spec}`)
-        specHash = sha256(text)
-        recorded = JSON.parse(text)
-      } catch {
-        recorded = null
-      }
-      const read = readBrowserRequest({ ...browser, disposable: browser.statement === BROWSER_STATEMENT })
-      if (read.request === undefined || read.request.port !== browser.port) refuse('WORKSPACE_MISMATCH', 'the browser ask\'s request is not one BMN accepts')
-      spec = browserSpec(folder, read.request, browser.project, setup, browserIdentity(setup))
-      if (recorded === null || specHash !== browser.spec_sha256 || canonicalJson(recorded) !== canonicalJson(spec)) refuse('WORKSPACE_MISMATCH', 'the browser ask\'s spaces are not the ones BMN built for this request, or its programs changed')
-      let script = null
-      try {
-        script = hashFile(`${folder}/${BROWSER_FILES.script}`)
-      } catch {
-        script = null
-      }
-      if (script === null || script !== hashFile(SPACE_SCRIPT)) refuse('WORKSPACE_MISMATCH', 'the browser ask\'s script is not BMN\'s own')
-      note(`browser: ${browser.origin}, ${browser.interact ? 'look and interact' : 'look'} (${spec.tools.length} tools), ${browser.services.length} service(s), Playwright MCP ${spec.mcp.version}, Chromium ${CHROMIUM_REVISION}`)
-    }
-    note(`ask form: ${inputs.access}${manifest.pictures.length > 0 ? ` with ${manifest.pictures.length} picture(s)` : ''}${browser === null ? '' : ' with the browser'}, measured on ${appName(agent.harness)} ${version}`)
+    note(`ask form: ${inputs.access}${manifest.pictures.length > 0 ? ` with ${manifest.pictures.length} picture(s)` : ''}, measured on ${appName(agent.harness)} ${version}`)
 
     // The command BMN builds for this ask, recomputed; the one given must be it, whole.
     const proven = agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(agent.harness, version, contextTestLog)
@@ -2941,8 +2907,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     } catch (error) {
       if (error.code !== 'ENOENT') refuse('WORKSPACE_MISMATCH', 'the instruction snapshot of this ask cannot be read')
     }
-    const request = askRequest(agent, version, { access: inputs.access, effort: inputs.effort, rules, pictures: manifest.pictures.map((picture) => `${INSIDE.inputs}/${picture.copy}`), contextTestLog,
-      browser: spec === null ? null : { tools: spec.tools, node: spec.node } })
+    const request = askRequest(agent, version, { access: inputs.access, effort: inputs.effort, rules, pictures: manifest.pictures.map((picture) => `${INSIDE.inputs}/${picture.copy}`), contextTestLog })
     const built = askArgv(agent.harness, program, run, request, environment)
     if (!Array.isArray(inputs.argv) || canonicalJson(inputs.argv) !== canonicalJson(built.argv)) {
       const at = Array.isArray(inputs.argv) ? built.argv.findIndex((value, index) => inputs.argv[index] !== value) : 0
@@ -3042,10 +3007,9 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       version: 1, mode: 'ask', verdict: 'PASS', agent: agent.id, class: agent.class, harness: agent.harness, model: model.value,
       role: role.id, effort: effort.value, context_limit_applied: context.applied,
       ...(agent.context_limit !== undefined && context.applied === null ? { context_limit_note: context.note } : {}),
-      access: inputs.access, form: browser === null ? ASK_FORM_NAMES[agent.harness][inputs.access] : ASK_BROWSER_FORM_NAMES[agent.harness], ...(manifest.pictures.length > 0 ? { pictures: manifest.pictures.length } : {}),
-      ...(browser === null ? {} : { browser: { origin: browser.origin, interact: browser.interact, services: browser.services.length, tools: spec.tools, spec_sha256: specHash, mcp: spec.mcp.version, chromium: CHROMIUM_REVISION } }),
-      sandbox: agent.harness === 'codex' ? { mode: 'read-only', source: '--sandbox', approval_policy: 'never', tools: browser === null ? 'none' : spec.tools.map((tool) => `browser.${tool}`) }
-        : agent.harness === 'claude' ? { mode: 'read-only', source: '--tools', tools: inputs.access === 'project' ? ['Read', 'Grep', 'Glob', 'git log', 'git show', 'git diff', 'git blame'] : browser === null ? [] : spec.tools.map((tool) => `browser.${tool}`) }
+      access: inputs.access, form: ASK_FORM_NAMES[agent.harness][inputs.access], ...(manifest.pictures.length > 0 ? { pictures: manifest.pictures.length } : {}),
+      sandbox: agent.harness === 'codex' ? { mode: 'read-only', source: '--sandbox', approval_policy: 'never', tools: 'none' }
+        : agent.harness === 'claude' ? { mode: 'read-only', source: '--tools', tools: inputs.access === 'project' ? ['Read', 'Grep', 'Glob', 'git log', 'git show', 'git diff', 'git blame'] : [] }
           : { mode: 'read-only', source: '--agent', agent: openCodeAskHome(inputs.access).agent, tools: inputs.access === 'project' ? ['read', 'glob', 'grep', 'list'] : [] },
       run: basename(folder), data: label, consent,
       inputs_sha256: sha256(canonicalJson(manifest)),

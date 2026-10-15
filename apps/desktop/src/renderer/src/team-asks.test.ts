@@ -31,7 +31,7 @@ const words = (html: string): string => html.replace(/<[^>]+>/g, ' ').replace(/&
 const HOSTILE = 'Both round differently (src/api/invoice.ts:88).\n\n[the fix](javascript:alert(1)) <img src="https://x.test/p.png"> <script>alert(1)</script> **bold** <a href="https://x.test">link</a>'
 const detail = (fields: Partial<TeamAskDetail> = {}): TeamAskDetail => ({
   line: ANSWERED, question: 'Does the invoice total round the same way in the PDF and the API?\nOrders with a coupon differ by one cent.', questionWhole: true, answer: HOSTILE,
-  files: [{ path: '/home/made-up/code/shop/src/invoice/total.ts', bytes: 4100 }, { path: '/home/made-up/code/shop/src/api/invoice.ts', bytes: 6800 }], pictures: [], project: null, browser: null,
+  files: [{ path: '/home/made-up/code/shop/src/invoice/total.ts', bytes: 4100 }, { path: '/home/made-up/code/shop/src/api/invoice.ts', bytes: 6800 }], pictures: [], project: null,
   teammate: { app: 'codex', appName: 'Codex', appVersion: '0.162.1', model: 'gpt-6-astra', session: '01a13c80-made-up', sessionSource: 'thread.started' }, ...fields
 })
 

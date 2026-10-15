@@ -33,13 +33,6 @@ Choose the least that answers the question; `--access` says which:
   asked here, as BMN measured it.
 - `--image PATH` gives PNG, JPEG or WebP pictures (up to 8) as images; the designer answers unless
   you name another role. BMN takes the pictures' metadata out first (GPS, camera, text fields).
-- `--serve COMMAND --origin http://127.0.0.1:PORT [--service COMMAND]... --disposable` asks the
-  browser role to check a web app of the project: BMN starts the app and its services from the
-  project and a browser that reaches only that address, and the teammate looks (navigates, reads,
-  takes screenshots); `--interact` lets it also click, type and submit there. `--disposable` is
-  your statement that the app and its services are disposable test instances with synthetic data
-  and no production backend or credentials; give it only when that is true. Pages visited and
-  screenshots stay in the ask's record.
 
 Everything is private unless you declare `--data public` and BMN can verify it. Never put a
 credential in a question or a file: BMN refuses what it recognises, and the rest is yours.
@@ -60,8 +53,6 @@ Review the uncommitted change in this repository for correctness. Cite file:line
 EOF
 bmn team ask --role designer --key 20261015-screens-1 --question 'What reads badly here?' --image shot.png
 bmn team ask --role consultant --key 20261015-cache-1 --access files --file src/cache.ts --question-file q.txt --json
-bmn team ask --key 20261015-checkout-1 --serve 'pnpm dev --port 4173' --origin http://127.0.0.1:4173 \
-  --disposable --question 'Does the checkout page show the cart total and a working Pay button?'
 ```
 
 The answer goes to standard output, progress to standard error. Closing the command only detaches

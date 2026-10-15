@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { describe, it } from 'vitest'
 import {
-  SANDBOX_EXCEPTIONS,
   findSandboxDisablingText,
   scanForSandboxDisablingFlags
 } from '../lib/sandbox-flag-audit.mjs'
@@ -110,34 +109,6 @@ describe('sandbox flag repository audit', () => {
     const root = await temporaryRepo()
     try {
       assert.deepEqual(await scanForSandboxDisablingFlags(root), [])
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
-  it('leaves out only the one line the owner named, in its own file, there exactly once', async () => {
-    assert.equal(SANDBOX_EXCEPTIONS.length, 1)
-    const [exception] = SANDBOX_EXCEPTIONS
-    assert.equal(exception.file, 'apps/desktop/bin/ask-browser-space.mjs')
-    assert.notDeepEqual(findSandboxDisablingText(exception.line), [])
-    const root = await temporaryRepo()
-    const write = async (path, text) => {
-      await mkdir(dirname(join(root, path)), { recursive: true })
-      await writeFile(join(root, path), text)
-    }
-    try {
-      await write(exception.file, `const a = 1\n${exception.line}\n`)
-      assert.deepEqual(await scanForSandboxDisablingFlags(root), [])
-      // The line twice, the line changed, the same line in another file, and other sandbox-off text beside it are all found.
-      await write(exception.file, `${exception.line}\n${exception.line}\n`)
-      assert.deepEqual(await scanForSandboxDisablingFlags(root), [{ file: exception.file, rule: 'disabled sandbox assignment' }])
-      await write(exception.file, `${exception.line.replace(' },', ', args: [] },')}\n`)
-      assert.deepEqual(await scanForSandboxDisablingFlags(root), [{ file: exception.file, rule: 'disabled sandbox assignment' }])
-      await write(exception.file, `${exception.line}\n${bypassOption}\n`)
-      assert.deepEqual(await scanForSandboxDisablingFlags(root), [{ file: exception.file, rule: 'sandbox bypass command-line option' }])
-      await write(exception.file, `${exception.line}\n`)
-      await write('apps/desktop/bin/other.mjs', `${exception.line}\n`)
-      assert.deepEqual(await scanForSandboxDisablingFlags(root), [{ file: 'apps/desktop/bin/other.mjs', rule: 'disabled sandbox assignment' }])
     } finally {
       await rm(root, { recursive: true, force: true })
     }
