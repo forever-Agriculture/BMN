@@ -9,7 +9,7 @@ import { readApproved } from './agents-state.mjs'
 import { openCodeFolder, openCodeSessionInfo } from './agents-opencode.mjs'
 import { ASK_RUN_FILES, sameProgram } from './agents-team-forms.mjs'
 import { maskCredentials, maskedNames } from './agents-team-inputs.mjs'
-import { browserRecord } from './agents-team-browser.mjs'
+import { browserRecord, browserTemporary } from './agents-team-browser.mjs'
 import { askSettings } from './agents-team-places.mjs'
 import { RUN_FILES, requestStop, runState, startTeamSupervisor, writeWhole } from './agents-team-supervisor.mjs'
 
@@ -613,8 +613,12 @@ export function finishAsk(folder) {
     throw error
   } finally {
     for (const part of TRANSIENT) rmSync(join(folder, part), { recursive: true, force: true })
-    // However the finish ended, no page snapshot or download of a browser ask stays (74.3 AC3).
-    if (!existsSync(join(folder, ASK_RUN_FILES.browserRecord))) finishBrowser(folder)
+    // However the finish ended, no page snapshot or browser profile of a browser ask stays (74.3 AC3): finished again, from its record if written.
+    try {
+      finishBrowser(folder)
+    } catch {
+      // What could not be read or deleted here is no reason to leave the run without its outcome.
+    }
     rmSync(join(folder, RUN_FILES.stop), { force: true })
     // Its capacity place is given back (agents-team-places.mjs placePath), once its outcome is written.
     rmSync(join(dirname(folder), '.places', `${basename(folder)}.json`), { force: true })
@@ -623,14 +627,19 @@ export function finishAsk(folder) {
 
 /**
  * A browser ask's record (74.3 AC3): its pages and screenshots from the server's own session log,
- * written as `browser.json`; everything else the server left in `browser/` (page snapshots, downloads,
- * the log) is deleted. Nothing for any other ask.
+ * written as `browser.json`; then everything else the server left in `browser/` (page snapshots, the
+ * log) and its temporary folder (the browser's profile, Playwright's working files) are deleted. The
+ * record goes first, so a finish a crash ends is finished again from it, never from an emptied folder:
+ * its pages stand, and its screenshots where the file is still the one it recorded. Nothing for any other ask.
  */
 export function finishBrowser(folder) {
   const browser = readJsonOrNull(join(folder, ASK_RUN_FILES.manifest))?.browser
   if (browser === undefined || browser === null) return null
-  const { record } = browserRecord(folder, browser)
-  writeWhole(join(folder, ASK_RUN_FILES.browserRecord), `${JSON.stringify(record, null, 2)}\n`)
+  const path = join(folder, ASK_RUN_FILES.browserRecord)
+  const { record, removed } = browserRecord(folder, browser, readJsonOrNull(path))
+  writeWhole(path, `${JSON.stringify(record, null, 2)}\n`)
+  for (const name of removed) rmSync(join(folder, ASK_RUN_FILES.browser, name), { recursive: true, force: true })
+  rmSync(browserTemporary(folder), { recursive: true, force: true })
   return record
 }
 

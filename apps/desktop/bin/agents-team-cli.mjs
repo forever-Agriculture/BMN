@@ -15,7 +15,7 @@ import { ACCESS_GONE, AskUsageError, WIDE_READ_GONE, askRunId, prepareAsk } from
 import { OUTCOME_EXIT, StartRefusal, TIME_LIMIT, TRANSIENT, askOutcome, exportAsk, startAsk, stopAsk, waitAsk } from './agents-team-run.mjs'
 import { scopeStarts, startTeamSupervisor, writeWhole } from './agents-team-supervisor.mjs'
 import { nestedAsk } from './agents-team-nested.mjs'
-import { BROWSER_ROLE } from './agents-team-browser.mjs'
+import { BROWSER_LIMIT_WORDS, BROWSER_ROLE } from './agents-team-browser.mjs'
 import { askSettings, keyDay, keyPath, keyScope, keyedRun, makeKey, recordInterrupted, releaseReservation, requestHash, reserveAsk } from './agents-team-places.mjs'
 
 export const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --question-file PATH|-) --key K [--agent A] [--effort E]
@@ -161,7 +161,7 @@ export function askJson(folder) {
  */
 function browserJson(folder, browser, record) {
   return {
-    origin: browser.origin ?? null, interact: browser.interact === true, statement: browser.statement ?? null, recorded: record !== null,
+    origin: browser.origin ?? null, interact: browser.interact === true, statement: browser.statement ?? null, limit: BROWSER_LIMIT_WORDS, recorded: record !== null,
     calls: record?.calls ?? 0, pages: Array.isArray(record?.pages) ? record.pages : [],
     screenshots: (Array.isArray(record?.screenshots) ? record.screenshots : []).map((shot) => ({ ...shot, path: join(folder, ASK_RUN_FILES.browser, basename(String(shot.name))) }))
   }
@@ -173,10 +173,10 @@ function browserLines(browser) {
   // eslint-disable-next-line no-control-regex -- the control characters are what is taken out
   const plain = (value) => String(value).replace(/[\u0000-\u001f\u007f-\u009f]/gu, ' ')
   const mode = browser.interact ? 'look and interact' : 'look only'
-  if (!browser.recorded) return [`Browser: ${browser.origin} (${mode}); its pages and screenshots are recorded when the run ends`]
+  if (!browser.recorded) return [`Browser: ${browser.origin} (${mode}); its pages and screenshots are recorded when the run ends`, `  ${browser.limit}`]
   return [`Browser: ${browser.origin} (${mode}); ${browser.pages.length} page${browser.pages.length === 1 ? '' : 's'} and ${browser.screenshots.length} screenshot${browser.screenshots.length === 1 ? '' : 's'}; addresses and titles are the app's own text:`,
     ...browser.pages.map((page) => `  page ${plain(page.url)}${page.title ? `  ${plain(page.title)}` : ''}`),
-    ...browser.screenshots.map((shot) => `  screenshot ${shot.path} (${shot.bytes} bytes)`)]
+    ...browser.screenshots.map((shot) => `  screenshot ${shot.path} (${shot.bytes} bytes)`), `  ${browser.limit}`]
 }
 
 /** A project's state in words: its commit and whether its tree was clean. */

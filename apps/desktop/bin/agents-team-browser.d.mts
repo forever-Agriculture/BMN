@@ -11,6 +11,10 @@ export declare const LOOK_TOOLS: readonly string[]
 export declare const INTERACT_TOOLS: readonly string[]
 export declare const BROWSER_LIMITS: Readonly<{ pages: number; url: number; pageTitle: number; screenshots: number; screenshot: number }>
 export declare const BROWSER_RELAY: string
+export declare const BROWSER_CONFIG: string
+export declare const BROWSER_LIMIT_WORDS: string
+export declare function browserRuntime(): string
+export declare function browserTemporary(folder: string): string
 export declare const BROWSER_FILES: Readonly<{ folder: string; record: string }>
 export declare function browserOrigin(value: string | undefined): { origin: string } | { reason: string }
 export declare function browserInstalled(environment: { PATH?: string; HOME?: string }, options?: { timeoutMs?: number }): { reason?: string }
@@ -18,4 +22,4 @@ export declare function browserTools(interact: boolean): string[]
 export declare function browserServer(browser: AskBrowser, folder: string): { command: string; args: string[] }
 export declare function browserPrompt(prompt: string, browser: AskBrowser): string
 export declare function sessionCalls(text: string): Array<{ tool: string | null; args: unknown; page: { url: string; title: string | null } | null; shots: string[] }>
-export declare function browserRecord(folder: string, browser: AskBrowser): { record: BrowserRecord; removed: string[] }
+export declare function browserRecord(folder: string, browser: AskBrowser, prior?: BrowserRecord | null): { record: BrowserRecord; removed: string[] }

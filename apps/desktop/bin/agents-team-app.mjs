@@ -10,7 +10,7 @@ import { AskRefusal } from './agents-team-resolve.mjs'
 import { RETENTION_DAYS, askSettings, placePath, recordInterrupted, removeRun, runHolds, sweepRuns } from './agents-team-places.mjs'
 import { ANSWER_LIMIT, StartRefusal, askOutcome, exportAsk, stopAsk } from './agents-team-run.mjs'
 import { RUN_FILES } from './agents-team-supervisor.mjs'
-import { BROWSER_LIMITS } from './agents-team-browser.mjs'
+import { BROWSER_LIMITS, BROWSER_LIMIT_WORDS } from './agents-team-browser.mjs'
 
 /**
  * The app reads the same run folders `bmn team ask` writes, and the owner sees them all: an ask
@@ -265,7 +265,7 @@ function browserView(folder, request) {
     return url === null ? [] : [{ url, title }]
   }
   return {
-    origin, interact: request.browser.interact === true,
+    origin, interact: request.browser.interact === true, limit: BROWSER_LIMIT_WORDS,
     pages: list(record.pages, BROWSER_LIMITS.pages).flatMap(pageView),
     screenshots: list(record.screenshots, BROWSER_LIMITS.screenshots).flatMap((shot) => (text(shot?.name, 255) === null ? [] : [{ name: text(shot.name, 255), bytes: count(shot.bytes) ?? 0 }]))
   }

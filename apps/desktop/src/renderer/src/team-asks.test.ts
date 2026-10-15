@@ -139,7 +139,7 @@ describe('Team › Asks', () => {
   })
 
   it('an opened browser ask lists its pages and screenshots as plain lines: a hostile title or address makes no link, picture or markup (74.3 AC3)', () => {
-    const browser = { origin: 'http://127.0.0.1:4173', interact: false,
+    const browser = { origin: 'http://127.0.0.1:4173', interact: false, limit: 'Playwright keeps the browser\'s requests to this address, but it is not a security boundary: a redirect can leave it. Downloads are refused.',
       pages: [{ url: 'http://127.0.0.1:4173/?q=<script>alert(1)</script>', title: '<img src=x onerror=alert(1)> [pay](javascript:alert(1)) **Shop**' }, { url: 'http://127.0.0.1:4173/empty', title: null }],
       screenshots: [{ name: 'page-<b>1</b>.png', bytes: 14_336 }] }
     const browsing = line({ reads: { ...CODEX(), browser: { origin: browser.origin, interact: false } } })
@@ -153,6 +153,8 @@ describe('Team › Asks', () => {
     expect(text).toContain('http://127.0.0.1:4173/empty')
     expect(text).toContain("The app's own text, shown as plain text")
     expect(text).toContain('page-<b>1</b>.png 14 KB')
+    // The origin limit is said where the owner reads the ask (full review).
+    expect(text).toContain('Its limit Playwright keeps the browser\'s requests to this address, but it is not a security boundary: a redirect can leave it. Downloads are refused.')
     // While it runs, the record of pages is not written yet, and says so.
     const going = line({ ...RUNNING, reads: { ...CODEX(), browser: { origin: browser.origin, interact: true } } })
     const running = words(render({ snapshot: snapshot({ asks: [going] }), initiallyOpen: going.id, initialDetail: detail({ line: going, answer: null, files: [], browser: { ...browser, interact: true, pages: [], screenshots: [] } }) }))

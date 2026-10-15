@@ -1,14 +1,14 @@
 // MODULE: agents-team-browser.test.ts - Story 74.3: a browser ask: the loopback origin and --disposable, Playwright's MCP server added to Codex and Claude Code through BMN's relay with the look or --interact tools only, refused for OpenCode, a public ask or a missing server, and the record of pages and screenshots read from the server's own session log with everything else removed, after a normal end and after a crash, shown and exported; a synthetic team, stand-in apps and a stand-in npx; no browser starts and no provider is reached
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { BROWSER_LIMITS, BROWSER_MCP_PACKAGE, BROWSER_RELAY, BROWSER_STATEMENT, INTERACT_TOOLS, LOOK_TOOLS, browserOrigin, browserRecord, browserServer, browserTools, sessionCalls } from '../../bin/agents-team-browser.mjs'
+import { BROWSER_CONFIG, BROWSER_LIMITS, BROWSER_LIMIT_WORDS, BROWSER_MCP_PACKAGE, BROWSER_RELAY, BROWSER_STATEMENT, INTERACT_TOOLS, LOOK_TOOLS, browserOrigin, browserRecord, browserServer, browserTemporary, browserTools, sessionCalls } from '../../bin/agents-team-browser.mjs'
 import { ASK_RUN_FILES } from '../../bin/agents-team-forms.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
-import { askOutcome, exportAsk, startAsk, waitAsk } from '../../bin/agents-team-run.mjs'
+import { askOutcome, exportAsk, finishBrowser, startAsk, waitAsk } from '../../bin/agents-team-run.mjs'
 import { askJson, showWords } from '../../bin/agents-team-cli.mjs'
 import { recordInterrupted, requestHash } from '../../bin/agents-team-places.mjs'
 import { appAskDetail } from '../../bin/agents-team-app.mjs'
@@ -68,6 +68,12 @@ function serverFiles(folder: string): void {
   writeFileSync(join(folder, 'console-2026-10-15T15-40-09-392Z.log'), 'made-up console\n')
   writeFileSync(join(folder, 'made-up.png'), Buffer.from('89504e470d0a1a0a2222', 'hex'))
   writeFileSync(join(folder, 'made-up.bin'), 'made-up payload')
+}
+
+/** A run's manifest naming its browser, as an ask writes it: what the finish reads. */
+function browserManifest(folder: string, interact = false): void {
+  mkdirSync(join(folder, 'inputs'), { recursive: true })
+  writeFileSync(join(folder, ASK_RUN_FILES.manifest), JSON.stringify({ browser: { origin: ORIGIN, interact } }))
 }
 
 /** The record every test of a finished browser ask expects of `serverFiles`. */
@@ -141,13 +147,18 @@ describe('the app\'s address and the tools a browser ask offers (74.3 AC1, AC4)'
     }
   })
 
-  it('the server runs through BMN\'s relay from the ask\'s own browser folder, headless, profile in memory, Chrome\'s own sandbox on, limited to the origin, saving its session there', () => {
+  it('the server runs through BMN\'s relay from the ask\'s own browser folder, its temporary files in the run\'s own, headless, profile in memory, Chrome\'s own sandbox on, downloads refused, limited to the origin, saving its session there', () => {
     const folder = '/runs/20261015T034100-7c2e91ab'
+    const temporary = `/run/user/${process.getuid?.()}/bmn-ask-20261015T034100-7c2e91ab`
+    expect(browserTemporary(folder)).toBe(temporary)
     expect(browserServer({ origin: ORIGIN, interact: false }, folder)).toEqual({
       command: 'node',
-      args: [BROWSER_RELAY, `${folder}/browser`, 'npx', '--offline', '@playwright/mcp@0.0.75', '--headless', '--isolated', '--sandbox', '--allowed-origins', ORIGIN, '--output-dir', `${folder}/browser`, '--save-session']
+      args: [BROWSER_RELAY, `${folder}/browser`, temporary, 'npx', '--offline', '@playwright/mcp@0.0.75', '--headless', '--isolated', '--sandbox', '--config', BROWSER_CONFIG,
+        '--allowed-origins', ORIGIN, '--output-dir', `${folder}/browser`, '--save-session']
     })
     expect(existsSync(BROWSER_RELAY)).toBe(true)
+    // Playwright's own configuration: downloads refused, nothing else (measured: a download could take a screenshot's name).
+    expect(JSON.parse(readFileSync(BROWSER_CONFIG, 'utf8'))).toEqual({ browser: { contextOptions: { acceptDownloads: false } } })
   })
 })
 
@@ -216,19 +227,49 @@ describe('the record of a browser ask (74.3 AC3)', () => {
     expect(sessionCalls('no log here')).toEqual([])
   })
 
-  it('keeps the pages in order and the screenshots the log names, bounded; removes the log, page snapshots, downloads, links and anything oversized', () => {
+  it('keeps the pages in order and the screenshots the log names, bounded; removes the log, page snapshots, downloads, links and anything oversized, the record written first', () => {
     const folder = mkdtempSync(join(home, 'run-'))
     serverFiles(join(folder, 'browser'))
     const { record, removed } = browserRecord(folder, { origin: ORIGIN, interact: false })
     expect([...removed].sort()).toEqual(['big.png', 'console-2026-10-15T15-40-09-392Z.log', 'link.png', 'made-up.bin', 'made-up.png', 'page-2026-10-15T15-40-09-516Z.yml', 'session-1792078809142'])
-    writeFileSync(join(folder, ASK_RUN_FILES.browserRecord), JSON.stringify(record))
     expect(record.removed).toBe(removed.length)
+    // Reading deletes nothing: the finish writes the record, then deletes.
+    expect(readdirSync(join(folder, 'browser'))).toHaveLength(9)
+    browserManifest(folder)
+    finishBrowser(folder)
     expectRecord(folder)
     // The link's target is untouched.
     expect(existsSync('/etc/hostname')).toBe(true)
     // An ask whose server never started leaves an empty record.
     const empty = mkdtempSync(join(home, 'run-'))
     expect(browserRecord(empty, { origin: ORIGIN, interact: true }).record).toMatchObject({ calls: 0, pages: [], screenshots: [], removed: 0, interact: true })
+  })
+})
+
+describe('a finish a crash ended is finished again from its record (74.3 AC3, full review)', () => {
+  it('after the record and before the deletions, and after both: the same pages and screenshots, recovered twice; a screenshot replaced since is not kept; the temporary folder goes', () => {
+    const folder = mkdtempSync(join(home, '20261015T190000-'))
+    const temporary = browserTemporary(folder)
+    try {
+      serverFiles(join(folder, 'browser'))
+      browserManifest(folder)
+      // The record written, the crash before the deletions.
+      const { record } = browserRecord(folder, { origin: ORIGIN, interact: false })
+      writeFileSync(join(folder, ASK_RUN_FILES.browserRecord), JSON.stringify(record))
+      mkdirSync(join(temporary, 'playwright_chromiumdev_profile-made-up'), { recursive: true })
+      writeFileSync(join(temporary, 'playwright_chromiumdev_profile-made-up', 'Cookies'), 'made-up')
+      for (let time = 0; time < 2; time += 1) {
+        expect(finishBrowser(folder)).toEqual(record)
+        expectRecord(folder)
+        expect(existsSync(temporary)).toBe(false)
+      }
+      // A screenshot replaced after the record (its bytes no longer the recorded ones) is neither kept nor shown.
+      writeFileSync(join(folder, 'browser', 'named.png'), 'DOWNLOAD-PAYLOAD made-up')
+      expect(finishBrowser(folder)?.screenshots.map((shot: { name: string }) => shot.name)).toEqual(['page-2026-10-15T15-40-09-594Z.png'])
+      expect(readdirSync(join(folder, 'browser'))).toEqual(['page-2026-10-15T15-40-09-594Z.png'])
+    } finally {
+      rmSync(temporary, { recursive: true, force: true })
+    }
   })
 })
 
@@ -240,6 +281,7 @@ describe('BMN\'s relay between the app and the browser\'s server (74.3 AC1)', ()
       const server = join(browser, 'server.mjs')
       writeFileSync(server, `import { appendFileSync, writeFileSync } from 'node:fs'
 writeFileSync('cwd.txt', process.cwd())
+writeFileSync('tmpdir.txt', process.env.TMPDIR ?? '')
 let buffer = ''
 process.stdin.setEncoding('utf8')
 process.stdin.on('data', (chunk) => {
@@ -253,7 +295,8 @@ process.stdin.on('data', (chunk) => {
 })
 process.stdin.on('end', () => process.exit(7))
 `)
-      const relay = spawn(process.execPath, [BROWSER_RELAY, browser, process.execPath, server], { cwd: home, stdio: ['pipe', 'pipe', 'inherit'] })
+      const temporary = join(browser, 'temporary')
+      const relay = spawn(process.execPath, [BROWSER_RELAY, browser, temporary, process.execPath, server], { cwd: home, stdio: ['pipe', 'pipe', 'inherit'] })
       let output = ''
       relay.stdout.setEncoding('utf8')
       relay.stdout.on('data', (chunk) => { output += chunk })
@@ -264,6 +307,9 @@ process.stdin.on('end', () => process.exit(7))
       const code = await new Promise<number | null>((done) => relay.on('exit', done))
       expect(code).toBe(7)
       expect(readFileSync(join(browser, 'cwd.txt'), 'utf8')).toBe(browser)
+      // The browser's profile and Playwright's working files go to the run's own temporary folder, owner-only.
+      expect(readFileSync(join(browser, 'tmpdir.txt'), 'utf8')).toBe(temporary)
+      expect(statSync(temporary).mode & 0o777).toBe(0o700)
       const received = readFileSync(join(browser, 'received.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line))
       expect(received).toEqual([{ ...initialize, params: { ...initialize.params, capabilities: { elicitation: {} } } }, call])
       expect(output.trim().split('\n').map((line) => JSON.parse(line).id)).toEqual([1, 2])
@@ -291,9 +337,12 @@ describe.skipIf(!SCOPES)('a browser ask run whole (74.3 AC3)', { timeout: 30_000
       expect(words).toContain(`  page ${ORIGIN}/two  Second page`)
       expect(words).toContain(`  screenshot ${join(prepared.folder, 'browser', 'named.png')} (10 bytes)`)
       expect(words).not.toContain(ANSWER_KEY)
+      expect(words).toContain(`  ${BROWSER_LIMIT_WORDS}`)
+      expect(shown.browser).toMatchObject({ limit: BROWSER_LIMIT_WORDS })
       const detail = appAskDetail(prepared.id)
       expect(detail.browser).toMatchObject({ origin: ORIGIN, interact: role === 'designer', pages: expect.arrayContaining([{ url: `${ORIGIN}/two`, title: 'Second page' }]), screenshots: [{ name: 'named.png', bytes: 10 }, { name: 'page-2026-10-15T15-40-09-594Z.png', bytes: 10 }] })
       expect(detail.line.reads.browser).toEqual({ origin: ORIGIN, interact: role === 'designer' })
+      expect(detail.browser?.limit).toBe(BROWSER_LIMIT_WORDS)
       const output = join(home, `export-${role}`)
       const files = exportAsk(prepared.folder, output)
       expect(files).toEqual(expect.arrayContaining(['browser.json', 'browser/named.png', 'browser/page-2026-10-15T15-40-09-594Z.png']))
@@ -303,6 +352,8 @@ describe.skipIf(!SCOPES)('a browser ask run whole (74.3 AC3)', { timeout: 30_000
 
   it('after a crash, whoever finishes the record keeps the pages and screenshots and removes every download and snapshot', async () => {
     const prepared = ask({ question: 'Does the checkout page load? SLEEP' })
+    // What the browser's profile leaves in the run's temporary folder: recovery removes it.
+    mkdirSync(join(browserTemporary(prepared.folder), 'playwright-artifacts-made-up'), { recursive: true })
     const started = startAsk(prepared, { timeLimitMinutes: 2 })
     await settle(() => existsSync(join(prepared.folder, 'browser', 'made-up.bin')))
     const cgroup = JSON.parse(readFileSync(join(prepared.folder, 'state.json'), 'utf8')).scope?.cgroup
@@ -312,6 +363,7 @@ describe.skipIf(!SCOPES)('a browser ask run whole (74.3 AC3)', { timeout: 30_000
     recordInterrupted(prepared.folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
     expect(askOutcome(prepared.folder)).toMatchObject({ state: 'interrupted', exit: 1 })
     expectRecord(prepared.folder)
+    expect(existsSync(browserTemporary(prepared.folder))).toBe(false)
   })
 })
 

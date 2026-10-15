@@ -1,8 +1,8 @@
 // MODULE: agents-team-browser.mjs - Story 74.3: a teammate checks the asker's local web app with Playwright's MCP server added to its own app, limited to that loopback origin: the tools a look or an --interact ask offers, the server's command, and the record of the pages it visited and its screenshots, read from the server's own session log
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { lstatSync, readFileSync, readdirSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { maskCredentials } from './agents-team-inputs.mjs'
 
@@ -18,7 +18,9 @@ import { maskCredentials } from './agents-team-inputs.mjs'
  * workspace roots from it, so every file it writes lands there.
  * Playwright's origin list does not stop redirects or requests a page makes itself (its own words:
  * "does not serve as a security boundary"), so every browser ask states that the app is a disposable
- * test instance with synthetic data.
+ * test instance with synthetic data. Downloads are refused by Playwright's own configuration, so no
+ * downloaded payload is saved anywhere, and the browser's profile and Playwright's working files go to a
+ * temporary folder of the run's own, removed with the record after a normal end and a crash.
  */
 
 /** The browser tool and the name the apps know it by. */
@@ -43,6 +45,24 @@ const SCREENSHOT = /^[A-Za-z0-9._-]{1,200}\.(png|jpe?g)$/u
 
 /** BMN's relay between the app and the server: it starts the server in the run's browser folder, without the app's workspace roots. */
 export const BROWSER_RELAY = fileURLToPath(new URL('./ask-browser-relay.mjs', import.meta.url))
+/** Playwright's configuration for every browser ask: downloads refused (measured: a download could otherwise take a screenshot's name). */
+export const BROWSER_CONFIG = fileURLToPath(new URL('./ask-browser-config.json', import.meta.url))
+/** What every view of a browser ask says of the origin limit (74.3 AC5's known limit). */
+export const BROWSER_LIMIT_WORDS = 'Playwright keeps the browser\'s requests to this address, but it is not a security boundary: a redirect can leave it. Downloads are refused.'
+
+/** The owner's private runtime folder, where each browser ask's temporary folder goes. */
+export function browserRuntime() {
+  return join('/run/user', String(process.getuid()))
+}
+
+/**
+ * One ask's temporary folder for the server: the browser's profile and Playwright's working files.
+ * A run folder's path is too long for the sockets Chrome makes there (measured: it does not start), so
+ * it is in the owner's runtime folder, named for the run, and removed with the record.
+ */
+export function browserTemporary(folder) {
+  return join(browserRuntime(), `bmn-ask-${basename(folder)}`)
+}
 
 const ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):([1-9][0-9]{0,4})\/?$/u
 
@@ -61,6 +81,7 @@ export function browserInstalled(environment, { timeoutMs = 60_000 } = {}) {
   const result = spawnSync('npx', ['--offline', BROWSER_MCP_PACKAGE, '--version'], { env: { PATH: environment.PATH ?? '', HOME: environment.HOME ?? '' }, encoding: 'utf8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'pipe'] })
   if (result.error?.code === 'ENOENT') return { reason: 'npx is not on your PATH, so BMN cannot start the browser\'s server (Playwright\'s MCP server)' }
   if (result.status !== 0) return { reason: `the browser's server, ${BROWSER_MCP_PACKAGE}, is not in npx's cache here: run \`npx ${BROWSER_MCP_PACKAGE} --version\` once, then ask again` }
+  if (!existsSync(browserRuntime())) return { reason: `${browserRuntime()} does not exist: the browser's temporary files need your private runtime folder (a systemd user session)` }
   return {}
 }
 
@@ -77,14 +98,15 @@ export function browserServer(browser, folder) {
   const own = join(folder, BROWSER_FILES.folder)
   return {
     command: 'node',
-    args: [BROWSER_RELAY, own, 'npx', '--offline', BROWSER_MCP_PACKAGE, '--headless', '--isolated', '--sandbox', '--allowed-origins', browser.origin, '--output-dir', own, '--save-session']
+    args: [BROWSER_RELAY, own, browserTemporary(folder), 'npx', '--offline', BROWSER_MCP_PACKAGE, '--headless', '--isolated', '--sandbox', '--config', BROWSER_CONFIG,
+      '--allowed-origins', browser.origin, '--output-dir', own, '--save-session']
   }
 }
 
 /** The prompt's part that tells the teammate the app's address and what it may do there. */
 export function browserPrompt(prompt, browser) {
   const may = browser.interact ? 'look at it and use it: navigate, read, take screenshots, click, type, fill in, select, press keys and hover' : 'look at it: navigate, read, take screenshots, and read its console and network requests; you cannot click or type'
-  return `${prompt.replace(/\n?$/u, '\n')}\nThe asker started a web app at ${browser.origin} and gave you a browser (Playwright's tools) for it. You may ${may}. Only that address loads; the app is a disposable test instance with synthetic data. Say which pages you visited and what you saw.\n`
+  return `${prompt.replace(/\n?$/u, '\n')}\nThe asker started a web app at ${browser.origin} and gave you a browser (Playwright's tools) for it. You may ${may}. Playwright keeps the browser's requests to that address, though a redirect can leave it, and downloads are refused; the app is a disposable test instance with synthetic data. Say which pages you visited and what you saw.\n`
 }
 
 /** The calls in the server's session log: each completed call's tool, its arguments, the page it left and the screenshots it saved (by file name). */
@@ -114,58 +136,66 @@ const bounded = (value, limit) => (typeof value === 'string' ? maskCredentials(v
 /**
  * A browser ask's record, once its app has ended or its run was recorded interrupted (74.3 AC3): the
  * pages from the server's session log in the order visited, its screenshots (bounded in count and
- * size, kept in `browser/`), and nothing else: page snapshots, downloads and the log itself go.
- * Writes nothing; returns `{ record, removed }` for the caller to write.
+ * size, kept in `browser/`), and what else of `browser/` goes: page snapshots, the log itself and
+ * anything a screenshot is not. Deletes nothing: the caller writes the record first, then deletes
+ * `removed`. With `prior`, a record written before (a finish a crash ended), its pages stand and its
+ * screenshots where the file is still the one it recorded.
  */
-export function browserRecord(folder, browser) {
+export function browserRecord(folder, browser, prior = null) {
   const own = join(folder, BROWSER_FILES.folder)
   let entries
   try {
-    entries = readdirSync(own)
+    entries = readdirSync(own).sort()
   } catch {
     entries = []
   }
-  const pages = []
-  // Only a file the server's log names as a screenshot is one: a download of the same type is not.
-  const shots = new Set()
+  const sizeOf = (name) => {
+    try {
+      const stat = lstatSync(join(own, name))
+      return stat.isFile() ? stat.size : null
+    } catch {
+      return null
+    }
+  }
+  const digest = (name) => createHash('sha256').update(readFileSync(join(own, name))).digest('hex')
+  let pages = []
   let calls = 0
-  for (const entry of entries.filter((name) => /^session-[0-9]+$/u.test(name)).sort()) {
-    let text = ''
-    try {
-      if (lstatSync(join(own, entry, 'session.md')).isFile()) text = readFileSync(join(own, entry, 'session.md'), 'utf8')
-    } catch {
-      text = ''
-    }
-    for (const call of sessionCalls(text)) {
-      calls += 1
-      for (const shot of call.shots) shots.add(shot)
-      if (call.page === null || pages.length >= BROWSER_LIMITS.pages) continue
-      const last = pages.at(-1)
-      const title = bounded(call.page.title, BROWSER_LIMITS.pageTitle)
-      const page = { url: bounded(call.page.url, BROWSER_LIMITS.url), title }
-      if (last === undefined || last.url !== page.url || last.title !== page.title) pages.push(page)
-    }
-  }
   const screenshots = []
-  const removed = []
-  for (const name of entries.sort()) {
-    const path = join(own, name)
-    let stat
-    try {
-      stat = lstatSync(path)
-    } catch {
-      stat = null
+  if (prior !== null) {
+    pages = Array.isArray(prior.pages) ? prior.pages : []
+    calls = Number.isInteger(prior.calls) ? prior.calls : 0
+    for (const shot of Array.isArray(prior.screenshots) ? prior.screenshots : []) {
+      const name = typeof shot?.name === 'string' && SCREENSHOT.test(shot.name) ? shot.name : null
+      if (name !== null && entries.includes(name) && sizeOf(name) === shot.bytes && digest(name) === shot.sha256) screenshots.push(shot)
     }
-    const keep = stat !== null && stat.isFile() && SCREENSHOT.test(name) && shots.has(name) && stat.size <= BROWSER_LIMITS.screenshot && screenshots.length < BROWSER_LIMITS.screenshots
-    if (keep) {
-      screenshots.push({ name, bytes: stat.size, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') })
-      continue
+  } else {
+    // Only a file the server's log names as a screenshot is one: a download of the same type is not.
+    const shots = new Set()
+    for (const entry of entries.filter((name) => /^session-[0-9]+$/u.test(name))) {
+      let text = ''
+      try {
+        if (lstatSync(join(own, entry, 'session.md')).isFile()) text = readFileSync(join(own, entry, 'session.md'), 'utf8')
+      } catch {
+        text = ''
+      }
+      for (const call of sessionCalls(text)) {
+        calls += 1
+        for (const shot of call.shots) shots.add(shot)
+        if (call.page === null || pages.length >= BROWSER_LIMITS.pages) continue
+        const last = pages.at(-1)
+        const title = bounded(call.page.title, BROWSER_LIMITS.pageTitle)
+        const page = { url: bounded(call.page.url, BROWSER_LIMITS.url), title }
+        if (last === undefined || last.url !== page.url || last.title !== page.title) pages.push(page)
+      }
     }
-    removed.push(name)
-    rmSync(path, { recursive: true, force: true })
+    for (const name of entries) {
+      const size = sizeOf(name)
+      if (size !== null && SCREENSHOT.test(name) && shots.has(name) && size <= BROWSER_LIMITS.screenshot && screenshots.length < BROWSER_LIMITS.screenshots) screenshots.push({ name, bytes: size, sha256: digest(name) })
+    }
   }
+  const removed = entries.filter((name) => !screenshots.some((shot) => shot.name === name))
   return {
-    record: { version: 1, origin: browser.origin, interact: browser.interact === true, tools: browserTools(browser.interact === true), statement: BROWSER_STATEMENT, calls, pages, screenshots, removed: removed.length },
+    record: { version: 1, origin: browser.origin, interact: browser.interact === true, tools: browserTools(browser.interact === true), statement: BROWSER_STATEMENT, calls, pages, screenshots, removed: prior?.removed ?? removed.length },
     removed
   }
 }

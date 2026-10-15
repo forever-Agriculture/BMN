@@ -2442,8 +2442,12 @@ select, press a key and hover. Never offered: script evaluation (`browser_evalua
 `browser_run_code_unsafe`), file upload, drag and drop, dialogs and one request's body.
 
 The server runs headless with its profile in memory (`--isolated`), Chrome's own sandbox on
-(`--sandbox`), its requests limited to the origin (`--allowed-origins`) and its files and session log
-in the run's `browser/` folder (`--output-dir`, `--save-session`). It starts through BMN's relay
+(`--sandbox`), downloads refused (`--config bin/ask-browser-config.json`: Playwright's
+`acceptDownloads: false`), its requests limited to the origin (`--allowed-origins`) and its files and
+session log in the run's `browser/` folder (`--output-dir`, `--save-session`). The browser's profile
+and Playwright's working files go to the run's own temporary folder,
+`/run/user/<uid>/bmn-ask-<run id>` (the relay sets `TMPDIR`; a run folder's path is too long for the
+sockets Chrome makes there), which BMN removes with the record. It starts through BMN's relay
 (`bin/ask-browser-relay.mjs`, on the `node` that runs npx): Playwright writes a file the model names
 (a screenshot, a snapshot, a console or network log) inside the client's first workspace root, and
 Codex or Claude Code may give the project as that root. The relay starts the server in `browser/`
@@ -2458,13 +2462,17 @@ cache (`BROWSER_UNAVAILABLE` says how to put it there). A browser ask is private
 shows is your app.
 
 When the run ends, or when a crashed run is finished as interrupted, BMN reads the server's session
-log, every completed call and the page it left, and writes `browser.json`: the origin, look or
+log, every completed call and the page it left, and writes `browser.json` first: the origin, look or
 interact, the tools, the statement, the number of calls, the pages in order (a page repeated at once
 counted once; at most 200, addresses 2,000 characters, titles 300, credentials masked) and the
 screenshots the log names (at most 20 of 5 MiB, regular PNG or JPEG files, each with its size and
-sha256). Everything else the server left in `browser/` (the log, page snapshots, console logs,
-downloads, a picture the log does not name as a screenshot, links) is deleted. `asks show`, the JSON,
-Team › Asks and the export give the pages and screenshots; the app's text in them stays plain text.
+sha256). Then everything else the server left in `browser/` (the log, page snapshots, console logs,
+a picture the log does not name as a screenshot, links) and the run's temporary folder are deleted.
+A finish a crash ended is finished again from `browser.json`, never from an emptied folder: its pages
+stand, and its screenshots where the file is still the one it recorded. `asks show`, the JSON,
+Team › Asks and the export give the pages and screenshots, and each says the origin limit
+("Playwright keeps the browser's requests to this address, but it is not a security boundary: a
+redirect can leave it. Downloads are refused."); the app's text in them stays plain text.
 
 ### Sign-in
 
@@ -2568,7 +2576,7 @@ Every `--json` output is one object with a version. An ask, `show` and `wait` (`
 ```
 
 `credentials_masked: {answer: [names], output: [names]}` is there when BMN masked any. A browser ask
-adds `"browser": {"origin","interact","statement","recorded","calls","pages":[{"url","title"}],
+adds `"browser": {"origin","interact","statement","limit","recorded","calls","pages":[{"url","title"}],
 "screenshots":[{"name","bytes","sha256","path"}]}`, `recorded` false until the run has ended. A refusal:
 `{"version":1,"state":"refused","exit":10,"refusal":{"code":"AGENT_NOT_ELIGIBLE","reason":"…","alternatives":["opus-2@medium"]}}`.
 `--background`: `{"version":1,"id":"…","state":"accepted","exit":0,"key":"20261015-review-1"}`; a retry
@@ -2753,11 +2761,26 @@ sub-agent's session and usage found. AC3: the scope's Stop, time limit and super
 
 Against the real Playwright MCP 0.0.75 server, scripted without a provider (2026-10-15): an
 off-origin navigation fails `ERR_BLOCKED_BY_CLIENT` and the other server counts no request (an image
-from it included); `file://` is refused; a download lands in the output folder; the session log
-holds each completed call with its page and screenshot links. A client that offers its project as
+from it included); `file://` is refused; a download lands in the output folder under the name the
+app suggests, so a download named as a screenshot replaced it, and after the server was killed the
+download's bytes stayed in Playwright's temporary folder with the browser's profile; with
+`acceptDownloads: false` the download fails, the screenshot stays and no payload is anywhere, and
+Chrome does not start with `TMPDIR` on a path as long as a run folder's; the session log holds each
+completed call with its page and screenshot links. A client that offers its project as
 a root had a named screenshot, a named network log and a file named by `_meta.cwd` written into the
 project; through BMN's relay the project stayed empty, the named screenshot landed in `browser/`,
 and names reaching out (`../`, an absolute path, `_meta.cwd`) were refused.
+
+Forced calls (AC2), real Codex 0.162.1 and Claude Code 2.1.300 started with BMN's own command against
+a stand-in provider: in a look ask every interaction tool, script evaluation, file upload, drag and
+`browser_run_code_unsafe` were refused (Codex: not in its code-mode host, "unsupported call" by name;
+Claude Code: denied by `dontAsk`) and the server ran only navigate; with `--interact` the six
+interaction tools ran and the other four did not; no request reached the forbidden server and the
+project was untouched. Live asks (AC5), Luna on Codex and Haiku on Claude Code, look and interact, on a
+synthetic app: each gave the right answer in 13 to 28 seconds, with its page and screenshot in the
+record, `asks show`, Team › Asks and the export; the page's fetches off the origin were blocked, and
+an image whose address redirected off it reached the forbidden server once per ask: the known limit
+above (`reference-74-browser/RESULT-v8.md`).
 
 ### Measured (72.1), the engine 72.9 replaced
 

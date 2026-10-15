@@ -102,6 +102,8 @@ extraResources:
     to: bin/agents-team-browser.mjs
   - from: bin/ask-browser-relay.mjs
     to: bin/ask-browser-relay.mjs
+  - from: bin/ask-browser-config.json
+    to: bin/ask-browser-config.json
   # The --self-test stand-in agents draw these recorded dialogs; the packaged smoke runs that phase too.
   - from: src/utility/test-fixtures/remote-answers
     to: self-test/remote-answers

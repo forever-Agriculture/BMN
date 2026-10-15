@@ -780,7 +780,7 @@ export interface TeamAskDetail {
   /** The project it worked in, with its state at the start and the end (72.9 AC6); a run made before 72.9 gives the revision it copied as its start. */
   project: { root: string | null; start: TeamAskProjectState | null; end: TeamAskProjectState | null } | null
   /** A browser ask's record (74.3 AC3): the pages it visited and its screenshots, the app's own words; null for any other ask. */
-  browser: { origin: string; interact: boolean; pages: Array<{ url: string; title: string | null }>; screenshots: Array<{ name: string; bytes: number }> } | null
+  browser: { origin: string; interact: boolean; limit: string; pages: Array<{ url: string; title: string | null }>; screenshots: Array<{ name: string; bytes: number }> } | null
   teammate: { app: string | null; appName: string | null; appVersion: string | null; model: string | null; session: string | null; sessionSource: string | null }
   subagents: TeamAskSubagentView[]
   /** The names of the credentials BMN masked in the answer and the app's output, none where it masked nothing. */

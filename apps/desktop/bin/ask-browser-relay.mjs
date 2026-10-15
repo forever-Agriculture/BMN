@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// MODULE: ask-browser-relay.mjs - Story 74.3: starts a browser ask's MCP server (Playwright's) in the run's own browser folder and passes its messages both ways, keeping the app's workspace roots from it, so every file the server writes (a named screenshot, snapshot or log as much as a download) lands in that folder and never in the asker's project
-// node ask-browser-relay.mjs <folder> <command> [args...]
+// MODULE: ask-browser-relay.mjs - Story 74.3: starts a browser ask's MCP server (Playwright's) in the run's own browser folder, its temporary files in the run's own temporary folder, and passes its messages both ways, keeping the app's workspace roots from it, so every file the server writes (a named screenshot, snapshot or log) lands in that folder and never in the asker's project
+// node ask-browser-relay.mjs <folder> <temporary> <command> [args...]
 import { spawn } from 'node:child_process'
+import { mkdirSync } from 'node:fs'
 
 /**
  * Playwright's MCP server (0.0.75) writes a file the model names inside the client's first workspace
@@ -23,12 +24,14 @@ function withoutRoots(line) {
   return JSON.stringify({ ...message, params: { ...message.params, capabilities } })
 }
 
-const [folder, command, ...args] = process.argv.slice(2)
-if (folder === undefined || command === undefined) {
-  process.stderr.write('usage: ask-browser-relay.mjs <folder> <command> [args...]\n')
+const [folder, temporary, command, ...args] = process.argv.slice(2)
+if (folder === undefined || temporary === undefined || command === undefined) {
+  process.stderr.write('usage: ask-browser-relay.mjs <folder> <temporary> <command> [args...]\n')
   process.exit(2)
 }
-const server = spawn(command, args, { cwd: folder, stdio: ['pipe', 'inherit', 'inherit'] })
+// The browser's profile and Playwright's working files (TMPDIR): the run's own folder, owner-only, which BMN removes with the record.
+mkdirSync(temporary, { recursive: true, mode: 0o700 })
+const server = spawn(command, args, { cwd: folder, env: { ...process.env, TMPDIR: temporary }, stdio: ['pipe', 'inherit', 'inherit'] })
 server.on('error', (error) => {
   process.stderr.write(`ask-browser-relay: ${error.message}\n`)
   process.exit(1)

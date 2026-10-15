@@ -37,10 +37,11 @@ systemd user scope of its own that Stop and the time limit end. The teammate wri
   usage counted.
 - **`--origin http://127.0.0.1:PORT --disposable`** gives a Codex or Claude Code teammate a browser
   for a web app you started (the `browser` role unless you name another): it may look (navigate,
-  read, screenshots, console, network requests), and with `--interact` also click and type. Only
-  that origin loads, but a page's own requests and redirects are not stopped: `--disposable` states
-  the app and its services are disposable test instances with synthetic data and no production
-  backend or credentials; never use it otherwise. Pages and screenshots go in the record.
+  read, screenshots, console, network requests), and with `--interact` also click and type.
+  Playwright keeps its requests to that origin, but a redirect or a page's own request can leave it,
+  and downloads are refused: `--disposable` states the app and its services are disposable test
+  instances with synthetic data and no production backend or credentials; never use it otherwise.
+  Pages and screenshots go in the record.
 
 Everything is private unless you declare `--data public` and BMN can verify it; only a teammate whose
 mode reads nothing beyond your text may get a public ask. Never put a credential in a question or a

@@ -372,6 +372,8 @@ function AskBody(props: {
                 </ul>
               )}
             </dd>
+            <dt>Its limit</dt>
+            <dd className="wrap">{detail.browser.limit}</dd>
           </>
         ) : null}
         <dt>Teammate</dt>
