@@ -2243,7 +2243,7 @@ bmn team asks export <id> --output PATH
 
 | Option | Meaning |
 | --- | --- |
-| `--role R` | The team role whose teammate answers. Required. |
+| `--role R` | The team role whose teammate answers. Required, except with `--image`: a picture ask goes to the `designer` unless a role is named. |
 | `--question TEXT`, `--question-file -` | The question; `-` reads standard input as the other long-text options do (one trailing newline dropped, a terminal refused). Exactly one. |
 | `--agent A` | Ask this teammate; refused with the reason and the eligible alternatives when it is not valid now, never passed over. |
 | `--effort E` | One effort the role's applicable phase allows; several allowed and none given or saved is refused with the list. |
@@ -2252,7 +2252,7 @@ bmn team asks export <id> --output PATH
 | `--project P` | The project the ask belongs to (default: the asking session's repository root, else none). Naming it grants no reads. |
 | `--access` | What the teammate may read: `question` (default), `files`, `project`. |
 | `--file PATH` | A regular UTF-8 text file the asker can read: its text goes into the prompt with its path and hash (`files`), or joins the frozen copy (`project`). |
-| `--image PATH` | A picture given to the teammate as image input (PNG, JPEG, WebP or GIF), never as a file it can open. |
+| `--image PATH` | A PNG, JPEG or WebP picture given to the teammate as image input, never as a file it can open, its metadata taken out first (Pictures, below). With `question` or `files` access, never `project`; `--project` with it names whose pictures they are and grants no other reads. |
 | `--data public` | A declaration BMN verifies (R72-NFR5); refused, never raised, where it does not hold. Without it the ask is private. |
 | `--wide-read` | Selects the owner-enabled wider-read mode of the chosen teammate's app (below); refused where he has not enabled one. |
 | `--time-limit MINUTES` | 1 to 120; default 30. |
@@ -2277,9 +2277,9 @@ the network is the app's form below. Environment: `--clearenv`, then only what t
 
 | App | `question` and `files` | Pictures | `project` |
 | --- | --- | --- | --- |
-| Codex | `codex exec --skip-git-repo-check --sandbox read-only --strict-config -c approval_policy="never" --ephemeral` with every tool off: `--disable view_image goals image_generation sleep_tool hooks code_mode_host`, `mcp_servers={}`, `web_search="disabled"`, `features.shell_tool`, `unified_exec`, `multi_agent`, `apps`, `plugins` off, skills and app, collaboration and environment instructions off, `project_doc_max_bytes=0`. `--ephemeral` because Codex keeps offering `spawn_agent` whatever is set, and only a run that keeps no session makes every start fail. | `-i /ask/inputs/images/<name>` | **Unavailable here.** Codex runs every command of a restricted run in its own bubblewrap sandbox, and a sandbox nested in BMN's container is refused by AppArmor (`bwrap//&unpriv_bwrap`). With its sandbox off in the container, it reads the run's own sign-in, session and configuration and reaches the network (FAIL). |
-| Claude Code | `claude -p --tools '' --permission-mode dontAsk --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands --no-session-persistence --output-format stream-json --verbose --append-system-prompt <rules>` | `--input-format stream-json`, one user message holding the image blocks and the question | `--tools Read,Grep,Glob,Bash --allowedTools 'Bash(git log:*)' 'Bash(git show:*)' 'Bash(git diff:*)' 'Bash(git blame:*)' --permission-mode dontAsk --restricted`, started in `/ask/project`, with BMN's own `git` first on `PATH` (`bin/ask-git.sh`). `--restricted` keeps Read, Grep and Glob in the working folder; the prefix rules alone let `git blame --contents`, `--ignore-revs-file`, `--output` and `-O` read or write any file the container shows (FAIL), so BMN's `git` (`bin/ask-git.sh`, shipped with 72.3) allows only `log`, `show`, `diff` and `blame` with no option that names a file, runs no external diff, text conversion, pager or hook, and reads no configuration but the frozen copy's own. |
-| OpenCode | `opencode run --standalone --format json --agent bmn-asker -m <provider>/<model>#<effort> --title 'BMN ask'` with the run's own `HOME` and `XDG_*` folders in `/ask/home/oc`, the project's own configuration, updates and the model list fetch off (`OPENCODE_DISABLE_*`), the agent `"*": deny`, BMN's settings (no update, sharing or snapshots, no search service), the owner's rules as `config/opencode/AGENTS.md` for a private ask, ripgrep copied from BMN's OpenCode folder | not measured (no picture ask for OpenCode) | **Not offered.** `--agent bmn-helper` (read, glob, grep, list; everything else denied) keeps reads in the project (PASS), but it has no tool that reads Git history; whether to offer a project ask without history is the owner's call. |
+| Codex | `codex exec --skip-git-repo-check --sandbox read-only --strict-config -c approval_policy="never" --ephemeral` with every tool off: `--disable view_image goals image_generation sleep_tool hooks code_mode_host`, `mcp_servers={}`, `web_search="disabled"`, `features.shell_tool`, `unified_exec`, `multi_agent`, `apps`, `plugins` off, skills and app, collaboration and environment instructions off, `project_doc_max_bytes=0`. `--ephemeral` because Codex keeps offering `spawn_agent` whatever is set, and only a run that keeps no session makes every start fail. | `-i /ask/inputs/pictures/<n>.<ext>`, one per picture in order; the picture tool `view_image` stays off | **Unavailable here.** Codex runs every command of a restricted run in its own bubblewrap sandbox, and a sandbox nested in BMN's container is refused by AppArmor (`bwrap//&unpriv_bwrap`). With its sandbox off in the container, it reads the run's own sign-in, session and configuration and reaches the network (FAIL). |
+| Claude Code | `claude -p --tools '' --permission-mode dontAsk --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands --no-session-persistence --output-format stream-json --verbose --append-system-prompt <rules>` | `--input-format stream-json`: standard input is one user message (`inputs/message.jsonl`) holding the image blocks, then the prompt, every tool still off | `--tools Read,Grep,Glob,Bash --allowedTools 'Bash(git log:*)' 'Bash(git show:*)' 'Bash(git diff:*)' 'Bash(git blame:*)' --permission-mode dontAsk --restricted`, started in `/ask/project`, with BMN's own `git` first on `PATH` (`bin/ask-git.sh`). `--restricted` keeps Read, Grep and Glob in the working folder; the prefix rules alone let `git blame --contents`, `--ignore-revs-file`, `--output` and `-O` read or write any file the container shows (FAIL), so BMN's `git` (`bin/ask-git.sh`, shipped with 72.3) allows only `log`, `show`, `diff` and `blame` with no option that names a file, runs no external diff, text conversion, pager or hook, and reads no configuration but the frozen copy's own. |
+| OpenCode | `opencode run --standalone --format json --agent bmn-asker -m <provider>/<model>#<effort> --title 'BMN ask'` with the run's own `HOME` and `XDG_*` folders in `/ask/home/oc`, the project's own configuration, updates and the model list fetch off (`OPENCODE_DISABLE_*`), the agent `"*": deny`, BMN's settings (no update, sharing or snapshots, no search service), the owner's rules as `config/opencode/AGENTS.md` for a private ask, ripgrep copied from BMN's OpenCode folder | not measured: a picture ask to an OpenCode teammate is refused saying so | **Not offered.** `--agent bmn-helper` (read, glob, grep, list; everything else denied) keeps reads in the project (PASS), but it has no tool that reads Git history; whether to offer a project ask without history is the owner's call. |
 
 **Wider-read mode (assumption f).** For Codex project asks the owner may enable, in the Team view, a
 named wider-read mode measured at its own outer boundary: Codex outside BMN's container, its own
@@ -2299,6 +2299,32 @@ and from a Claude Code session the container starts. Claude Code's auto mode, as
 it, let `bmn team ask` command lines for a Codex teammate and for a Claude Code teammate (project
 access) run on 2026-10-15, before the command existed; 72.3 confirms it with the real command, and
 names the narrowest permission rule if auto mode then refuses it.
+
+### Pictures
+
+A picture reaches the teammate as its pixels look to the asker and nothing else the file carries
+(R72-FR11, NFR5). BMN has no image library, so it never decodes or re-encodes: it walks the file's
+own structure to its end and cuts parts out whole. Kept: the picture data and every part a viewer
+needs to draw it as it looks: PNG `IHDR`, `PLTE`, `IDAT`, `IEND`, `tRNS`, `iCCP`, `sRGB`, `gAMA`, `cHRM`,
+`cICP`, `mDCV`, `cLLI`, `sBIT`, `pHYs`, `bKGD`; JPEG frame, tables, scans, the JFIF header without its
+thumbnail, `ICC_PROFILE` and Adobe's colour segment; WebP `VP8X` (its flags rewritten), `ICCP`, `ALPH`,
+`VP8 ` or `VP8L`. EXIF is rewritten to the Orientation tag alone, in its own byte order, or left out
+when it has none. Everything else goes: every other EXIF field (GPS, camera make, model and serial
+numbers, dates, text fields, the maker's notes, the thumbnail), XMP, IPTC, comments, text chunks,
+other chunks and segments, and anything after the picture's end (a second picture, a video).
+
+Refused, never sent half-treated (`PICTURE_UNTREATABLE`): an animated picture (APNG, animated WebP), a
+damaged chunk (PNG checksums are checked), a part a viewer must understand that BMN does not know (a
+PNG critical chunk, a hierarchical JPEG, a second frame, a height given only after the data), EXIF
+whose first directory cannot be read (BMN could not tell the orientation it keeps), a canvas of
+another size than its picture. A GIF is refused (`INPUT_INVALID`): it may be animated and keeps its
+text where BMN does not take it out. The record keeps, per picture, its hashes before and after and
+the fields taken out and kept, by name, never by value. A picture is private unless the bytes sent
+are a file of the verified public commit of its project, so one BMN changed is private. Verified on
+2026-10-15 against Pillow 12.1.1: every treated picture of 9 kinds (baseline, progressive and restart
+JPEG, RGBA and palette PNG, lossy and lossless WebP with alpha) decodes to the same pixels,
+orientation, colour profile and transparency, with nothing planted left (Story 72.8's decoder
+check).
 
 ### Sign-in inside the container
 
@@ -2357,8 +2383,8 @@ says so.
 Refusal codes (exit 10) the commands add: `ROLE_UNKNOWN`, `AGENT_NOT_ELIGIBLE`, `EFFORT_NOT_ALLOWED`,
 `EFFORT_REQUIRED`, `RECHECK_INVALID`, `PROJECT_CHOICE_CONFLICT`, `PROJECT_INVALID`, `ACCESS_UNAVAILABLE`
 (a mode not proven for this app version), `WIDE_READ_NOT_ENABLED`, `CONTAINER_UNAVAILABLE`,
-`INPUT_INVALID` (a link, a non-regular or non-UTF-8 file, a credential or configuration location),
-`INPUT_TOO_LARGE`, `CREDENTIAL_FOUND` (names the file and pattern, never the value), `PUBLIC_NOT_VERIFIED`,
+`INPUT_INVALID` (a link, a non-regular or non-UTF-8 file, a credential or configuration location, a
+picture that is not PNG, JPEG or WebP), `INPUT_TOO_LARGE`, `PICTURE_UNTREATABLE` (Pictures, above), `CREDENTIAL_FOUND` (names the file and pattern, never the value), `PUBLIC_NOT_VERIFIED`,
 `PRIVATE_NOT_ALLOWED`, `CHANGED` (the approved team or the app's program changed between the check and
 the start; nothing started), `SIGN_IN_UNAVAILABLE` (OpenCode: BMN's folder holds no Go sign-in to copy; nothing started), `KEY_REQUIRED`, `KEY_CONFLICT` (same key, different request), `GONE` (a removed
 run's or expired key), `NESTED` (asked from inside a teammate's run), `NOT_YOURS` (another session's
@@ -2388,10 +2414,10 @@ A refusal: `{"version":1,"state":"refused","exit":10,"refusal":{"code":"AGENT_NO
 for the asking session's own runs. `stop`: `{"version":1,"id","state":"stopping"}`. `export`:
 `{"version":1,"id","output","files":[…]}`. `--features`: `{"version":1,"platform":"linux","container":{"ok":true},
 "apps":[{"app":"codex","installed":true,"version":"0.162.1","measured":["0.162.1"],"forms":{"question":"proven","files":"proven",
-"project":"unavailable","wide-read":"not-enabled"},"pictures":"not-offered","usage_while_running":false}, …]}`. Each mode is
+"project":"unavailable","wide-read":"not-enabled"},"pictures":"proven","usage_while_running":false}, …]}`. Each mode is
 `proven`, `unavailable` (measured, and no confined form here), `no-history` or `unmeasured`; an app version or tool set not
 measured shows its confinement-dependent modes `"unmeasured"`, and an app BMN does not find, `"not-installed"`. `wide-read`
-says `not-enabled` until the owner enables one in the Team view, `pictures` `not-offered` until picture asks ship (72.8).
+says `not-enabled` until the owner enables one in the Team view; `pictures` is the version's picture row (72.8): `proven` for Codex and Claude Code as measured, `unmeasured` for OpenCode.
 
 ### Limits
 
@@ -2399,7 +2425,7 @@ says `not-enabled` until the owner enables one in the Team view, `pictures` `not
 | --- | --- | --- |
 | Question | 1 MiB of UTF-8 | dev-auto's largest prompt of the month before 2026-10-14 was 888 KB (1,405 prompts; median 5 KB, 90th percentile 137 KB) |
 | Files | 64 files, each 1 MiB; question and file text together 2 MiB | the same prompts with their packets |
-| Pictures | 8 per ask, each 5 MiB and 8,000 px a side; PNG, JPEG, WebP, GIF | the providers' own image limits |
+| Pictures | 8 per ask, each 5 MiB, 8,000 px a side and 33.2 million pixels once drawn (an 8K screen, 7680x4320); PNG, JPEG, WebP | the providers' own image limits; the pixel bound keeps a small file from unfolding into gigabytes in the app |
 | Project | 20,000 tracked files, 200 MiB, each file 10 MiB; history the newest 1,000 commits of the checked-out revision, 500 MiB of objects | an ask reads a project, not a monorepo's every blob |
 | Answer kept | 1 MiB; the app's raw output 64 MiB, over it the run fails | |
 | Run storage | 1 GiB (inputs, frozen copy, home, record) | |
@@ -2472,8 +2498,8 @@ so a run outlives BMN closing.
 | Path | What | Exported |
 | --- | --- | --- |
 | `request.json` | the request as given, its hash, the key, the asking session, the resolver's rule | yes |
-| `inputs/` | the prompt, the instruction snapshot (his global rules for that app), file copies, pictures | yes |
-| `inputs/manifest.json` | every input with its source path, source root, consent basis and sha256 | yes |
+| `inputs/` | the prompt, the instruction snapshot (his global rules for that app), file copies, `pictures/<n>.<ext>` as sent, and for Claude Code `message.jsonl`, its standard input | yes |
+| `inputs/manifest.json` | every input with its source path, source root, consent basis and sha256; each picture's hashes before and after and the fields taken out and kept, by name | yes |
 | `project/`, `project-manifest.json` | the frozen copy (deleted on every outcome); files, commits, trees and blobs with hashes, the included commits and the shallow boundary | manifest only |
 | `snapshots/` | the app's effective configuration, executable identity (launcher and payload hashes), environment names | yes, values never |
 | `receipt.json` | `evaluate`'s verdict, the argv's hash, every snapshot's hash, the form and any wide-read mode | yes |

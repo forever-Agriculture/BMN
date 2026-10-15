@@ -9,7 +9,7 @@ import { AgentsUsageError, EXIT, err, failWith, out, readOptions, usage } from '
 import { publicRendering } from './agents-rules.mjs'
 import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, CONTEXT_TEST_SIZE, checkContext, contextItems, contextTestFolder, provenControls, provenPrecedence, wholeNumber } from './agents-context.mjs'
 import { RUN_TEST_APPS, appTools, checkRunTools } from './agents-tools.mjs'
-import { ASK_APPS, ASK_FORMS_PROVEN, ASK_FORM_NAMES, ASK_ACCESS, ASK_RUN_FILES, UNAVAILABLE_WHY, appSearchPath, askArgv, askProgram, formStanding, sameProgram } from './agents-team-forms.mjs'
+import { ASK_APPS, ASK_FORMS_PROVEN, ASK_FORM_NAMES, ASK_ACCESS, ASK_RUN_FILES, UNAVAILABLE_WHY, appSearchPath, askArgv, askProgram, claudePictureMessage, formStanding, sameProgram } from './agents-team-forms.mjs'
 import { INSIDE } from './agents-container.mjs'
 import { OPENCODE_ASKER_AGENT, OPENCODE_FOLDER_SHA256, OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_RESEARCH_AGENT, OPENCODE_SESSION_ID, installOpenCodeFolder, openCodeAskHome, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
 
@@ -2680,6 +2680,8 @@ export function askStandingWords(harness, version, mode) {
   const standing = formStanding(harness, version, mode)
   if (standing === 'proven') return null
   if (standing === 'unavailable' || standing === 'no-history') return UNAVAILABLE_WHY[harness]?.[mode] ?? `${app} ${version} has no confined form for ${mode} asks`
+  // A version 72.1 measured, whose row leaves this mode out: that mode was never measured on it.
+  if (ASK_FORMS_PROVEN[harness]?.[version] !== undefined) return UNAVAILABLE_WHY[harness]?.[mode] ?? `${mode === 'pictures' ? 'picture' : mode} asks on ${app} ${version} were not measured; until they are, that mode is not offered there`
   const measured = Object.keys(ASK_FORMS_PROVEN[harness] ?? {})
   return `${mode === 'pictures' ? 'picture' : mode} asks on ${app} ${version ?? '(version unreadable)'} are not measured${measured.length === 0 ? '' : ` (BMN measured ${measured.join(', ')})`}; until they are, that mode is not offered there`
 }
@@ -2794,14 +2796,16 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       promptHash = null
     }
     if (promptHash === null || promptHash !== manifest.prompt_sha256) refuse('WORKSPACE_MISMATCH', 'the prompt is not the one BMN wrote for this ask')
+    // Each picture is the treated copy BMN made, in its own place under the run's inputs (72.8 AC2).
     for (const picture of manifest.pictures) {
       let hash = null
       try {
+        if (!isObject(picture) || typeof picture.copy !== 'string' || !/^pictures\/\d+\.(png|jpg|webp)$/u.test(picture.copy)) throw new Error('not a picture place')
         hash = hashFile(`${folder}/${ASK_RUN_FILES.inputs}/${picture.copy}`)
       } catch {
         hash = null
       }
-      if (hash !== picture.sha256) refuse('WORKSPACE_MISMATCH', `the picture ${picture.label} is not the copy BMN made for this ask`)
+      if (hash === null || hash !== picture.sha256) refuse('WORKSPACE_MISMATCH', `the picture ${picture.label} is not the copy BMN made for this ask`)
     }
     const run = { home: `${folder}/${ASK_RUN_FILES.home}`, inputs: `${folder}/${ASK_RUN_FILES.inputs}`, project: `${folder}/${ASK_RUN_FILES.project}` }
 
@@ -2835,6 +2839,20 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       refuse('ROUTE_UNSUPPORTED', `the command is not the ask BMN builds for ${agent.id} with ${inputs.access} access${at === -1 ? ' (it carries more)' : ` (it differs at argument ${at})`}`)
     }
     note(`the command is BMN's ${inputs.access} form for ${appName(agent.harness)} in the run's container`)
+    // Claude Code reads its pictures from one message on standard input: that message must be the pictures and the prompt, whole.
+    let message = null
+    if (built.form.stdin === 'stream-json') {
+      let expected = null
+      try {
+        const pictures = manifest.pictures.map((picture) => ({ media_type: picture.media_type, bytes: readFileSync(`${folder}/${ASK_RUN_FILES.inputs}/${picture.copy}`) }))
+        expected = sha256(claudePictureMessage(pictures, readText(prompt)))
+        message = hashFile(`${folder}/${ASK_RUN_FILES.message}`)
+      } catch {
+        message = null
+      }
+      if (message === null || message !== expected) refuse('WORKSPACE_MISMATCH', 'the picture message on standard input is not the pictures and the prompt BMN wrote for this ask')
+      note(`standard input: one message, ${manifest.pictures.length} picture(s) and the prompt`)
+    }
 
     // The snapshots this check judges are the ones the start uses (72.3 AC1): the app's configuration as BMN
     // wrote it into the run's home, its program as it is now, and the environment the command carries.
@@ -2904,7 +2922,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       inputs_sha256: sha256(canonicalJson(manifest)),
       snapshots: {
         config: sha256(canonicalJson(configHashes)), executable: { launcher: identity.launcher.sha256, payload: identity.payload.sha256 },
-        environment: environmentSnapshot.sha256, rules: rules === null ? null : sha256(rules), prompt: promptHash
+        environment: environmentSnapshot.sha256, rules: rules === null ? null : sha256(rules), prompt: promptHash, ...(message === null ? {} : { message })
       },
       argv_sha256: sha256(canonicalJson(built.argv)),
       harness_version: { version, state: tested.state, form: 'proven' },

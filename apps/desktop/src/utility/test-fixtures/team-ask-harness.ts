@@ -27,7 +27,8 @@ export function approve(home: string, text: string): void {
  * Stand-in apps that run inside the container with nothing but /usr: they read the prompt, take the
  * model and effort from their own arguments and answer as each app does. Words in the question
  * steer them: SLEEP, NAP, MISMATCH, SECOND, NOSESSION, FAIL, CEILING (Claude Code: model calls that
- * keep reporting usage while it runs).
+ * keep reporting usage while it runs). Pictures are reported by hash as each app received them:
+ * Codex the `-i` files it can open, Claude Code the stream-json message on its standard input.
  */
 const STEER = `question=$(cat)
 id=$(printf %s "$question" | md5sum | cut -c1-8)
@@ -39,8 +40,10 @@ export function stubCodex(stubs: string, version = '0.162.1'): void {
   writeFileSync(join(stubs, 'codex'), `#!/bin/sh
 [ "$1" = --version ] && echo "codex-cli ${version}" && exit 0
 model=; effort=; prev=
+pictures=
 for a in "$@"; do
   [ "$prev" = -m ] && model=$a
+  [ "$prev" = -i ] && pictures="$pictures $(sha256sum "$a" | cut -c1-64)"
   case $a in model_reasoning_effort=*) effort=$(printf %s "$a" | sed 's/.*="\\(.*\\)"/\\1/');; esac
   prev=$a
 done
@@ -50,7 +53,7 @@ case $question in *NOSESSION*) ;; *) printf '{"type":"thread.started","thread_id
 printf '{"type":"turn.started"}\\n'
 printf 'INFO turn{otel.name="session_task.turn" thread.id=%s turn.id=t-1 model=%s codex.turn.reasoning_effort=%s}: started\\n' "$thread" "$model" "$effort" >&2
 case $question in *SECOND*) printf '{"type":"thread.started","thread_id":"ffffffff-0000-7000-8000-000000000000"}\\n';; esac
-printf '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"codex answer %s from %s"}}\\n' "$id" "$(ls /ask | tr '\\n' ' ')"
+printf '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"codex answer %s from %s%s"}}\\n' "$id" "$(ls /ask | tr '\\n' ' ')" "\${pictures:+pictures$pictures}"
 printf '{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":10,"output_tokens":5,"reasoning_output_tokens":2}}\\n'
 `)
   chmodSync(join(stubs, 'codex'), 0o755)
@@ -60,9 +63,11 @@ export function stubClaude(stubs: string, version = '2.1.300'): void {
 [ "$1" = --version ] && echo "${version} (Claude Code)" && exit 0
 model=; effort=; prev=
 for a in "$@"; do [ "$prev" = --model ] && model=$a; [ "$prev" = --effort ] && effort=$a; prev=$a; done
-rules=no
-for a in "$@"; do case $a in *RULES-SENTINEL*) rules=yes;; esac; done
+rules=no; format=text; prev=
+for a in "$@"; do case $a in *RULES-SENTINEL*) rules=yes;; esac; [ "$prev" = --input-format ] && format=$a; prev=$a; done
 ${STEER}sid=$id-0000-4000-8000-000000000000
+input=
+[ $format = stream-json ] && input=" stdin=$(printf '%s\\n' "$question" | sha256sum | cut -c1-64)"
 printf '{"type":"system","subtype":"init","session_id":"%s","model":"%s","apiKeySource":"none","tools":[]}\\n' "$sid" "$model"
 case $question in *CEILING*)
   n=0
@@ -73,7 +78,7 @@ case $question in *CEILING*)
   done;;
 esac
 printf '{"type":"assistant","session_id":"%s","message":{"model":"%s","usage":{"input_tokens":3,"output_tokens":4}}}\\n' "$sid" "$model"
-printf '{"type":"result","subtype":"success","is_error":false,"result":"claude answer %s rules=%s","session_id":"%s","total_cost_usd":0.0123,"usage":{"input_tokens":3,"cache_creation_input_tokens":7,"cache_read_input_tokens":11,"output_tokens":4}}\\n' "$id" "$rules" "$sid"
+printf '{"type":"result","subtype":"success","is_error":false,"result":"claude answer %s rules=%s%s","session_id":"%s","total_cost_usd":0.0123,"usage":{"input_tokens":3,"cache_creation_input_tokens":7,"cache_read_input_tokens":11,"output_tokens":4}}\\n' "$id" "$rules" "$input" "$sid"
 `)
   chmodSync(join(stubs, 'claude'), 0o755)
 }

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
-import { APP_NAMES, RosterError } from './agents-roster.mjs'
+import { APP_NAMES, DESIGNER_ROLE, RosterError } from './agents-roster.mjs'
 import { AgentsUsageError, EXIT, err, failWith, out, usage } from './agents-cli.mjs'
 import { askerOf } from './agents-ask.mjs'
 import { harnessVersion, teamRunsDirectory } from './agents-check.mjs'
@@ -19,7 +19,7 @@ import { askSettings, keyDay, keyPath, keyScope, keyedRun, makeKey, recordInterr
 
 export const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --question-file PATH|-) --key K [--agent A] [--effort E]
          [--small-work] [--recheck-of ID] [--project P] [--access question|files|project] [--file PATH]...
-         [--data public] [--time-limit MINUTES] [--background] [--json]
+         [--image PATH]... [--data public] [--time-limit MINUTES] [--background] [--json]
        bmn team ask --features [--json]             What each installed app may be asked here, as BMN measured it
        bmn team asks [--json]                       Your asks, newest first
        bmn team asks show <id> [--json]             One ask: its state, who answered, the answer
@@ -29,7 +29,9 @@ export const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | -
 
 Asks one approved teammate in a role, read-only, in a container BMN builds for that one run
 (docs/agent-control.md, "Asking a teammate"). --access says what it may read: the question only
-(default), the --file texts, or one project's frozen copy with its Git history. --key is required in
+(default), the --file texts, or one project's frozen copy with its Git history; --image gives PNG, JPEG
+or WebP pictures as images, their metadata taken out, to the designer unless --role names another
+role. --key is required in
 a session: today's UTC day and a name of yours (20261015-review-1); a retry with the same key and
 request finds the first ask, never starts a second. The answer goes to standard output, progress to
 standard error; closing the command only detaches it, and the run goes on. Exit: 0 answered,
@@ -38,7 +40,7 @@ attributed.`
 
 const RUN_ID = /^\d{8}T\d{6}-[0-9a-f]{8}$/u
 const VALUES = ['role', 'question', 'question-file', 'agent', 'effort', 'recheck-of', 'project', 'access', 'data', 'time-limit', 'key']
-const REPEATED = ['file']
+const REPEATED = ['file', 'image']
 const FLAGS = ['small-work', 'background', 'json', 'help', 'wide-read', 'features']
 
 /** The options of `team ask`: values once each, `--file` as often as needed, nothing positional. */
@@ -159,10 +161,10 @@ export function teamAsker(environment) {
 }
 
 /** A file's bytes by their hash, for the request's hash; a file BMN will refuse later counts by what it is. */
-function fileHash(path) {
+function fileHash(path, limit = LIMITS.file) {
   try {
     const size = statSync(path).size
-    if (size > LIMITS.file) return `over-limit:${size}`
+    if (size > limit) return `over-limit:${size}`
     return createHash('sha256').update(readFileSync(path)).digest('hex')
   } catch {
     return 'unreadable'
@@ -208,7 +210,8 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     if (options.features) {
       if (Object.keys(options).some((name) => !['features', 'json', ...REPEATED].includes(name)) || REPEATED.some((name) => options[name].length > 0)) throw new AgentsUsageError('--features takes only --json')
     } else {
-      if (options.role === undefined) throw new AgentsUsageError('team ask needs --role')
+      // A picture ask goes to the designer unless the asker names another role (72.8 AC1).
+      if (options.role === undefined && options.image.length === 0) throw new AgentsUsageError('team ask needs --role')
       if ((options.question === undefined) === (options['question-file'] === undefined)) throw new AgentsUsageError('team ask takes exactly one of --question and --question-file')
       if (options['time-limit'] !== undefined && !/^\d{1,3}$/u.test(options['time-limit'])) throw new AgentsUsageError(`--time-limit takes minutes, ${TIME_LIMIT.min} to ${TIME_LIMIT.max}`)
     }
@@ -237,6 +240,7 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
   }
   const home = environment.HOME ?? homedir()
   const files = options.file.map((path) => (isAbsolute(path) ? path : resolve(cwd, path)))
+  const images = options.image.map((path) => (isAbsolute(path) ? path : resolve(cwd, path)))
   let project
   try {
     project = askProject(options.project, { cwd, home })
@@ -245,13 +249,13 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     throw error
   }
   const request = {
-    role: options.role, question, agent: options.agent, effort: options.effort, smallWork: options['small-work'] === true, recheckOf: options['recheck-of'],
-    project: options.project, access: options.access, files, data: options.data, wide: options['wide-read'] === true
+    role: options.role ?? DESIGNER_ROLE, question, agent: options.agent, effort: options.effort, smallWork: options['small-work'] === true, recheckOf: options['recheck-of'],
+    project: options.project, access: options.access, files, images, data: options.data, wide: options['wide-read'] === true
   }
   const runs = teamRunsDirectory()
   const key = options.key ?? makeKey('shell', now())
   const scope = keyScope(asker)
-  const hash = requestHash({ ...request, project, files: files.map((path) => ({ path, sha256: fileHash(path) })), timeLimitMinutes: minutes })
+  const hash = requestHash({ ...request, project, files: files.map((path) => ({ path, sha256: fileHash(path) })), images: images.map((path) => ({ path, sha256: fileHash(path, LIMITS.picture) })), timeLimitMinutes: minutes })
   let reservation
   try {
     reservation = await reserveAsk(runs, { scope, key, hash, id: askRunId(now()) }, { now: now() })

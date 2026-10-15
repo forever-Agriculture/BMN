@@ -93,6 +93,8 @@ extraResources:
     to: bin/agents-team-supervisor.mjs
   - from: bin/agents-team-places.mjs
     to: bin/agents-team-places.mjs
+  - from: bin/agents-team-pictures.mjs
+    to: bin/agents-team-pictures.mjs
   # bmn.mjs loads it first for every command: a command inside a teammate's run is refused.
   - from: bin/agents-team-nested.mjs
     to: bin/agents-team-nested.mjs

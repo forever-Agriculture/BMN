@@ -4,10 +4,11 @@ export declare function askRunId(now?: Date): string
 export declare class AskUsageError extends Error {}
 export declare function earlierRun(id: string, runs?: string): { role: string; project: string | null; agent: string } | null
 export declare function filePrompt(question: string, files: { label: string; sha256: string; bytes: Buffer }[]): string
+export declare function picturePrompt(prompt: string, pictures: { label: string; media_type: string; width: number; height: number }[]): string
 export declare function projectPrompt(question: string, frozen: import('./agents-team-inputs.mjs').FrozenProject, root: string): string
 export interface AskAsked {
   role: string; question: string; agent?: string; effort?: string; smallWork?: boolean; recheckOf?: string; project?: string
-  access?: string; files?: string[]; data?: string; wide?: boolean
+  access?: string; files?: string[]; images?: string[]; data?: string; wide?: boolean
   key?: string; keyScope?: string; requestSha256?: string; askedBy?: { kind: string; session?: string; app?: string }
 }
 export interface PreparedAsk {

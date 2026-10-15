@@ -1,4 +1,4 @@
-// MODULE: agents-team-inputs.mjs - Epic 72: what a teammate may read, built for one ask: the question, file copies, pictures, or a frozen, bounded copy of one project with a self-contained Git history, each hashed, scanned for credentials and bounded
+// MODULE: agents-team-inputs.mjs - Epic 72: what a teammate may read, built for one ask: the question, file copies, or a frozen, bounded copy of one project with a self-contained Git history, each hashed, scanned for credentials and bounded
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -14,6 +14,8 @@ export const LIMITS = Object.freeze({
   pictures: 8,
   picture: 5 * 1024 * 1024,
   pictureSide: 8000,
+  // Decoded pixels: an 8K screen (7680x4320); a small file may unfold into far more.
+  picturePixels: 7680 * 4320,
   projectFiles: 20_000,
   projectBytes: 200 * 1024 * 1024,
   projectFile: 10 * 1024 * 1024,
@@ -183,50 +185,6 @@ export function textFile(path, options = {}) {
   const hits = credentialHits(file.bytes.toString('utf8'))
   if (hits.length > 0) refuse('CREDENTIAL_FOUND', `${path} holds ${hits.join(' and ')}; nothing was sent`)
   return { ...file, sha256: sha256Of(file.bytes) }
-}
-
-/** The type and size of a picture from its own bytes, or null when it is none of PNG, JPEG, GIF and WebP. */
-export function pictureFormat(bytes) {
-  if (bytes.length >= 24 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && bytes.subarray(12, 16).toString('latin1') === 'IHDR') {
-    return { media_type: 'image/png', width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) }
-  }
-  if (bytes.length >= 10 && (bytes.subarray(0, 6).toString('latin1') === 'GIF87a' || bytes.subarray(0, 6).toString('latin1') === 'GIF89a')) {
-    return { media_type: 'image/gif', width: bytes.readUInt16LE(6), height: bytes.readUInt16LE(8) }
-  }
-  if (bytes.length >= 30 && bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP') {
-    const chunk = bytes.subarray(12, 16).toString('latin1')
-    if (chunk === 'VP8X') return { media_type: 'image/webp', width: 1 + bytes.readUIntLE(24, 3), height: 1 + bytes.readUIntLE(27, 3) }
-    if (chunk === 'VP8L') {
-      const bits = bytes.readUInt32LE(21)
-      return { media_type: 'image/webp', width: 1 + (bits & 0x3fff), height: 1 + ((bits >> 14) & 0x3fff) }
-    }
-    if (chunk === 'VP8 ') return { media_type: 'image/webp', width: bytes.readUInt16LE(26) & 0x3fff, height: bytes.readUInt16LE(28) & 0x3fff }
-    return null
-  }
-  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
-    let at = 2
-    while (at + 9 < bytes.length) {
-      if (bytes[at] !== 0xff) return null
-      const marker = bytes[at + 1]
-      const length = bytes.readUInt16BE(at + 2)
-      // Start-of-frame markers carry the size; 0xC4 (Huffman), 0xC8 and 0xCC are not frames.
-      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) return { media_type: 'image/jpeg', width: bytes.readUInt16BE(at + 7), height: bytes.readUInt16BE(at + 5) }
-      at += 2 + length
-    }
-    return null
-  }
-  return null
-}
-
-/** A `--image`: a PNG, JPEG, GIF or WebP inside the picture limits. */
-export function pictureFile(path, options = {}) {
-  const file = readInputFile(path, { ...options, kind: 'image', limit: LIMITS.picture })
-  const format = pictureFormat(file.bytes)
-  if (format === null) refuse('INPUT_INVALID', `${path} is not a PNG, JPEG, GIF or WebP picture`)
-  if (format.width > LIMITS.pictureSide || format.height > LIMITS.pictureSide || format.width < 1 || format.height < 1) {
-    refuse('INPUT_TOO_LARGE', `${path} is ${format.width}x${format.height} pixels; a side may be at most ${LIMITS.pictureSide}`)
-  }
-  return { ...file, ...format, sha256: sha256Of(file.bytes) }
 }
 
 // ---------------------------------------------------------------------------------------------

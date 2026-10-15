@@ -7,13 +7,14 @@ import { fileURLToPath } from 'node:url'
 import { APP_NAMES, agentState, publicOnlyReasons } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { askConsent, askRequest, evaluateAsk, expectedDestination, harnessVersion, teamRunsDirectory, workspaceRoot, workspaceVisibility, askStandingWords } from './agents-check.mjs'
-import { ASK_ACCESS, ASK_APPS, ASK_RUN_FILES, appSearchPath, askArgv, askProgram, executableIdentity, signInBind } from './agents-team-forms.mjs'
+import { ASK_ACCESS, ASK_APPS, ASK_RUN_FILES, appSearchPath, askArgv, askProgram, claudePictureMessage, executableIdentity, signInBind } from './agents-team-forms.mjs'
 import { readMaster, render } from './agents-rules.mjs'
 import { openCodeFolders } from './agents-opencode.mjs'
 import { askerOf } from './agents-ask.mjs'
 import { INSIDE } from './agents-container.mjs'
 import { InputRefusal, LIMITS, askProject, checkQuestion, freezeProject, sha256Of, textFile, workingTreeRoot } from './agents-team-inputs.mjs'
 import { AskRefusal, resolveTeammate } from './agents-team-resolve.mjs'
+import { pictureFile } from './agents-team-pictures.mjs'
 
 /**
  * Making an ask ready follows one order, so that nothing is copied before it is allowed: the
@@ -25,6 +26,7 @@ import { AskRefusal, resolveTeammate } from './agents-team-resolve.mjs'
  */
 
 const RUN_ID = /^\d{8}T\d{6}-[0-9a-f]{8}$/
+const PICTURE_EXTENSIONS = Object.freeze({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' })
 const here = dirname(fileURLToPath(import.meta.url))
 
 /** A run's id: when it was made (UTC, to the second) and eight random hex digits. */
@@ -64,6 +66,13 @@ export function projectPrompt(question, frozen, root) {
   return `${question}\n\nThe project is in your working folder (${INSIDE.project}), read-only: a frozen copy of ${root.split('/').pop()} at commit ${frozen.revision.slice(0, 12)}${frozen.public_commit === null ? '' : ' (its public commit)'}, ${frozen.files.length} files, with its Git history (git log, git show, git diff and git blame answer)${changed === 0 ? '' : `; ${changed} file(s) changed since that commit show as uncommitted changes`}.\n`
 }
 
+/** A prompt with the pictures named in the order they are attached: by label, type and size, never by what was taken out of them. */
+export function picturePrompt(prompt, pictures) {
+  if (pictures.length === 0) return prompt
+  const lines = pictures.map((picture, index) => `${index + 1}. ${picture.label} (${picture.media_type.slice(6).toUpperCase()}, ${picture.width}x${picture.height})`)
+  return `${prompt.replace(/\n?$/u, '\n')}\nThe asker gave you ${pictures.length === 1 ? 'this picture' : `these ${pictures.length} pictures`}, attached as ${pictures.length === 1 ? 'an image' : 'images in this order'}:\n${lines.join('\n')}\n`
+}
+
 /** The owner's global rules for an app as BMN generates them, or null when there is no rules master. */
 export function instructionRules(harness, generation) {
   try {
@@ -80,7 +89,7 @@ function writePrivate(path, text, mode = 0o600) {
 
 /**
  * Makes one ask ready. `request`: `{ role, question, agent, effort, smallWork, recheckOf, project,
- * access, files, data, wide }` as the asker gave them, with the reservation's `{ key, keyScope,
+ * access, files, images, data, wide }` as the asker gave them, with the reservation's `{ key, keyScope,
  * requestSha256, askedBy }` (72.4), `cwd` the asking session's folder.
  * Returns `{ id, folder, choice, verdict, argv, stdin }`, `verdict` the check's answer for the
  * command; a refusal before the folder exists throws AskRefusal, InputRefusal or AskUsageError.
@@ -88,10 +97,14 @@ function writePrivate(path, text, mode = 0o600) {
 export function prepareAsk(request, { environment = process.env, cwd = process.cwd(), home = environment.HOME ?? homedir(), now = new Date(), runs = teamRunsDirectory(), id = askRunId(now), contextTestLog = undefined } = {}) {
   const access = request.access ?? 'question'
   const files = request.files ?? []
+  const images = request.images ?? []
   if (!ASK_ACCESS.includes(access)) throw new AskUsageError(`--access takes question, files or project, not ${access}`)
   if (access === 'question' && files.length > 0) throw new AskUsageError('--file goes with --access files or --access project')
   if (access === 'files' && files.length === 0) throw new AskUsageError('--access files needs at least one --file')
   if (files.length > LIMITS.files) throw new InputRefusal('INPUT_TOO_LARGE', `${files.length} files, over the limit of ${LIMITS.files}`)
+  // A picture is image input to a teammate with no tool that reads a file; a project names whose pictures they are and grants no other reads (72.8 AC1).
+  if (images.length > 0 && access === 'project') throw new AskUsageError('--image goes with --access question or files: a picture ask gives the teammate no tool that reads the project; ask about the project in an ask of its own')
+  if (images.length > LIMITS.pictures) throw new InputRefusal('INPUT_TOO_LARGE', `${images.length} pictures, over the limit of ${LIMITS.pictures}`)
   if (request.data !== undefined && request.data !== 'public') throw new AskUsageError('--data takes only public; without it the ask is private')
   if (request.wide === true) throw new AskRefusal('WIDE_READ_NOT_ENABLED', 'the owner has not enabled a wider-read mode for any app in the Team view')
   const label = request.data === 'public' ? 'public' : 'private'
@@ -102,6 +115,8 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   const promptBytes = Buffer.byteLength(request.question) + texts.reduce((sum, file) => sum + file.bytes.length, 0)
   if (promptBytes > LIMITS.prompt) throw new InputRefusal('INPUT_TOO_LARGE', `the question and the files' text are ${Math.round(promptBytes / 1024)} KiB together, over the limit of ${LIMITS.prompt / 1024 / 1024} MiB`)
   const project = askProject(request.project, { cwd, home })
+  // Each picture is read, bounded and its metadata taken out before anything else: what may leave is what is sent (72.8 AC2).
+  const pictures = images.map((path) => pictureFile(path, { cwd, home }))
   if (access === 'project') {
     if (project === null) throw new InputRefusal('PROJECT_INVALID', 'a project ask needs a project: name it with --project, or ask from inside its repository')
     if (workingTreeRoot(project) !== project) throw new InputRefusal('PROJECT_INVALID', `${project} is not a Git working tree's top folder; to give it files, ask with --access files and --file`)
@@ -115,6 +130,11 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   for (const file of texts) {
     const root = workspaceRoot(dirname(file.real))
     inputs.push({ kind: 'file', label: file.path, root, relative: relative(root, file.real), sha256: file.sha256 })
+  }
+  // A picture is public only when the bytes sent are a file of the verified public commit.
+  for (const picture of pictures) {
+    const root = workspaceRoot(dirname(picture.real))
+    inputs.push({ kind: 'picture', label: picture.path, root, relative: relative(root, picture.real), sha256: picture.sha256 })
   }
   let publicCommit = null
   if (access === 'project') {
@@ -144,6 +164,9 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     if (installed.version === null) return `runs on ${APP_NAMES[agent.harness]}, whose version BMN cannot read`
     const words = askStandingWords(agent.harness, installed.version, access)
     if (words !== null) return `cannot answer here: ${words}`
+    // An app whose picture rows 72.1 did not pass is not asked about pictures (72.8 AC3).
+    const seeing = pictures.length === 0 ? null : askStandingWords(agent.harness, installed.version, 'pictures')
+    if (seeing !== null) return `cannot answer here: ${seeing}`
     // The owner's sign-in file is bound into the run, never read: without it the app cannot answer.
     const signIn = signInBind(agent.harness, environment)
     if (signIn !== null && !existsSync(signIn.from)) return `runs on ${APP_NAMES[agent.harness]}, which is not signed in on this computer (no ${signIn.from})`
@@ -186,6 +209,12 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     writePrivate(join(run.inputs, copy), file.bytes)
     return copy
   })
+  // Each picture as it is sent, named by its place: the asker's file name stays in the record, not in the container.
+  const pictureCopies = pictures.map((picture, index) => {
+    const copy = `${ASK_RUN_FILES.pictures.slice(ASK_RUN_FILES.inputs.length + 1)}/${index + 1}.${PICTURE_EXTENSIONS[picture.media_type]}`
+    writePrivate(join(run.inputs, copy), picture.bytes)
+    return copy
+  })
   if (access === 'project') {
     frozen = freezeProject(project, run.project, { extraFiles: texts, publicCommit })
     // The one git a project ask may run: log, show, diff and blame of the frozen copy (72.1 AC1).
@@ -194,7 +223,8 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     prompt = projectPrompt(request.question, frozen, project)
   } else {
     // A file of the project is named by its path in it; any other by the path the asker gave.
-    prompt = filePrompt(request.question, texts.map((file) => ({ ...file, label: project !== null && !relative(project, file.real).startsWith('..') ? relative(project, file.real) : file.path })))
+    const named = (file) => project !== null && !relative(project, file.real).startsWith('..') ? relative(project, file.real) : file.path
+    prompt = picturePrompt(filePrompt(request.question, texts.map((file) => ({ ...file, label: named(file) }))), pictures.map((picture) => ({ ...picture, label: named(picture) })))
   }
   writePrivate(join(folder, ASK_RUN_FILES.prompt), prompt)
   // The instruction inputs: a private ask carries the owner's global rules for that app as BMN generates them; a public one none.
@@ -212,7 +242,11 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
       instructions: frozen.files.filter((file) => file.kind === 'file' && /(^|\/)(CLAUDE|AGENTS)\.md$/u.test(file.path)).map((file) => ({ path: file.path, sha256: file.sha256 }))
     },
     rules: rules === null ? null : { sha256: sha256Of(Buffer.from(rules)), bytes: Buffer.byteLength(rules) },
-    pictures: [],
+    // Each picture with its hashes before and after and what was taken out and kept, by name (72.8 AC2).
+    pictures: pictures.map((picture, index) => ({
+      label: picture.path, real: picture.real, copy: pictureCopies[index], media_type: picture.media_type, width: picture.width, height: picture.height,
+      before: picture.before, bytes: picture.bytes.length, sha256: picture.sha256, removed: picture.removed, kept: picture.kept
+    })),
     prompt_sha256: sha256Of(Buffer.from(prompt))
   }
   writePrivate(join(folder, ASK_RUN_FILES.manifest), `${JSON.stringify(manifest, null, 2)}\n`)
@@ -224,8 +258,10 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     asked_by: request.askedBy ?? askerOf(environment), asked_at: now.toISOString()
   }, null, 2)}\n`)
 
-  const built = askRequest(choice.agent, installed.version, { access, effort: choice.effort, rules, pictures: [], contextTestLog })
+  const built = askRequest(choice.agent, installed.version, { access, effort: choice.effort, rules, pictures: pictureCopies.map((copy) => `${INSIDE.inputs}/${copy}`), contextTestLog })
   const { argv, form } = askArgv(choice.agent.harness, installed.program, run, built, environment)
+  // Claude Code takes its pictures as one user message on standard input, the pictures first, then the prompt.
+  if (form.stdin === 'stream-json') writePrivate(join(folder, ASK_RUN_FILES.message), claudePictureMessage(pictures, prompt))
   // The run's own app home: what the form names, and the empty files the sign-in is bound onto.
   for (const [path, text] of Object.entries(form.home)) writePrivate(join(run.home, path), text)
   for (const path of form.mountPoints) writePrivate(join(run.home, path), '')

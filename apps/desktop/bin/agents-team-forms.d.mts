@@ -6,7 +6,7 @@ export declare const UNAVAILABLE_WHY: Readonly<Record<string, Record<string, str
 export declare const ASK_OFFERED: Readonly<{ pictures: boolean }>
 export declare function formStanding(harness: string, version: string | null, mode: string): FormStanding
 export declare const ASK_ACCESS: readonly AskAccess[]
-export declare const ASK_RUN_FILES: Readonly<{ request: string; manifest: string; prompt: string; rules: string; files: string; projectManifest: string; snapshots: string; receipt: string; answer: string; outcome: string; home: string; inputs: string; project: string }>
+export declare const ASK_RUN_FILES: Readonly<{ request: string; manifest: string; prompt: string; rules: string; files: string; pictures: string; message: string; projectManifest: string; snapshots: string; receipt: string; answer: string; outcome: string; home: string; inputs: string; project: string }>
 export declare const ASK_FORM_NAMES: Readonly<Record<string, Record<AskAccess, string>>>
 export declare const CODEX_ASK_NO_TOOLS: readonly string[]
 export declare const CODEX_ASK_LOG: string

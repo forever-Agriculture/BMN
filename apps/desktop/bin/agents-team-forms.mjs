@@ -19,8 +19,8 @@ export const ASK_FORMS_PROVEN = Object.freeze({
   opencode: { '2.0.29': { question: 'proven', files: 'proven', project: 'no-history', pictures: 'unmeasured' } }
 })
 
-/** What BMN offers beyond its access modes: picture asks arrive with Story 72.8. */
-export const ASK_OFFERED = Object.freeze({ pictures: false })
+/** What BMN offers beyond its access modes: picture asks, since Story 72.8, where 72.1 proved them. */
+export const ASK_OFFERED = Object.freeze({ pictures: true })
 
 /** Why a measured mode is unavailable, in the words the refusal gives. */
 export const UNAVAILABLE_WHY = Object.freeze({
@@ -29,7 +29,7 @@ export const UNAVAILABLE_WHY = Object.freeze({
   },
   opencode: {
     project: 'OpenCode\'s read-only agent has no tool that reads the project\'s Git history, so its project form is not offered (72.1, 72.5); ask it with --access files and the files it needs',
-    pictures: 'pictures for OpenCode teammates are not measured'
+    pictures: 'BMN never measured a picture ask on OpenCode (72.1 measured Codex and Claude Code), so OpenCode teammates are not asked about pictures; ask a Codex or Claude Code teammate'
   }
 })
 
@@ -44,6 +44,7 @@ export const ASK_ACCESS = Object.freeze(['question', 'files', 'project'])
 /** The parts of one ask's folder under BMN's state (`team/runs/<id>/`), as the contract's record table names them. */
 export const ASK_RUN_FILES = Object.freeze({
   request: 'request.json', manifest: 'inputs/manifest.json', prompt: 'inputs/prompt.md', rules: 'inputs/rules.md', files: 'inputs/files',
+  pictures: 'inputs/pictures', message: 'inputs/message.jsonl',
   projectManifest: 'project-manifest.json', snapshots: 'snapshots', receipt: 'receipt.json', answer: 'answer.md', outcome: 'outcome.json',
   home: 'home', inputs: 'inputs', project: 'project'
 })

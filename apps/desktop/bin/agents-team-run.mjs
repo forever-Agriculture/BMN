@@ -65,7 +65,8 @@ export function startAsk(prepared, { now = new Date(), timeLimitMinutes = TIME_L
   }
   const launch = {
     version: 1, argv: prepared.argv, deadline: now.getTime() + timeLimitMinutes * 60_000, time_limit_minutes: timeLimitMinutes,
-    stdin: join(folder, ASK_RUN_FILES.prompt), finish: { module: fileURLToPath(import.meta.url), export: 'finishAsk' }, args_fd: true, output_limit: OUTPUT_LIMIT,
+    // A picture ask on Claude Code reads the one message the check judged; any other ask its prompt.
+    stdin: join(folder, receipt.snapshots?.message === undefined ? ASK_RUN_FILES.prompt : ASK_RUN_FILES.message), finish: { module: fileURLToPath(import.meta.url), export: 'finishAsk' }, args_fd: true, output_limit: OUTPUT_LIMIT,
     // The owner's per-ask token ceiling holds where the app reports usage while it runs: Claude Code alone (72.1).
     ...(tokenCeiling !== null && receipt.harness === 'claude' ? { token_ceiling: tokenCeiling, watch: { module: fileURLToPath(import.meta.url), export: 'watchAsk', ends: 'ceiling' } } : {})
   }

@@ -377,9 +377,9 @@ describe('what may be asked here (72.4 AC5)', () => {
     const features = askFeatures(env)
     expect(features).toMatchObject({ version: 1, platform: 'linux', container: { ok: canContain } })
     expect(features.apps).toEqual([
-      { app: 'codex', installed: true, version: '0.162.1', measured: ['0.162.1'], forms: { question: 'proven', files: 'proven', project: 'unavailable', 'wide-read': 'not-enabled' }, pictures: 'not-offered', usage_while_running: false },
-      { app: 'claude', installed: true, version: '2.1.300', measured: ['2.1.300'], forms: { question: 'proven', files: 'proven', project: 'proven', 'wide-read': 'not-enabled' }, pictures: 'not-offered', usage_while_running: true },
-      { app: 'opencode', installed: false, version: null, measured: ['2.0.29'], forms: { question: 'not-installed', files: 'not-installed', project: 'not-installed', 'wide-read': 'not-enabled' }, pictures: 'not-offered', usage_while_running: false }
+      { app: 'codex', installed: true, version: '0.162.1', measured: ['0.162.1'], forms: { question: 'proven', files: 'proven', project: 'unavailable', 'wide-read': 'not-enabled' }, pictures: 'proven', usage_while_running: false },
+      { app: 'claude', installed: true, version: '2.1.300', measured: ['2.1.300'], forms: { question: 'proven', files: 'proven', project: 'proven', 'wide-read': 'not-enabled' }, pictures: 'proven', usage_while_running: true },
+      { app: 'opencode', installed: false, version: null, measured: ['2.0.29'], forms: { question: 'not-installed', files: 'not-installed', project: 'not-installed', 'wide-read': 'not-enabled' }, pictures: 'not-installed', usage_while_running: false }
     ])
     stubCodex(stubs, '0.170.0')
     rmSync(join(stubs, 'claude'))
@@ -391,7 +391,7 @@ describe('what may be asked here (72.4 AC5)', () => {
     expect(shown.code).toBe(0)
     expect(JSON.parse(shown.stdout).apps[0].forms.question).toBe('unmeasured')
     const words = await bmn(['team', 'ask', '--features'])
-    expect(words.stdout).toContain('Codex 0.170.0: question unmeasured, files unmeasured, project unmeasured, wide-read not enabled; pictures not offered; usage at the end only (BMN measured 0.162.1)')
+    expect(words.stdout).toContain('Codex 0.170.0: question unmeasured, files unmeasured, project unmeasured, wide-read not enabled; pictures unmeasured; usage at the end only (BMN measured 0.162.1)')
     expect((await bmn(['team', 'ask', '--features', '--role', 'designer'])).code).toBe(2)
   })
 })
