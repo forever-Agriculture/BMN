@@ -35,6 +35,7 @@ import {
   type JudgeTryReply,
   type JudgeView,
   type WebQuestionAsked,
+  type TeamAsksSnapshot,
   type WebQuestionAsker,
   type WebQuestionView,
   type WebQuestionsSnapshot,
@@ -74,6 +75,8 @@ import { judgeLimit, judgeTotals, readJudgeRecord, runJudge, setJudgeLimit } fro
 import { ASK_KEPT, ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, agentsMayAsk, askedCount, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord } from '../../bin/agents-ask.mjs'
 import { chooseResearcher, fetchPublicPage, processStart, publicHostName, readResearch, resolvesPublic, researchLockHolder, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
 import { fenceSubjects, runFenceTest } from '../../bin/agents-fence.mjs'
+import { appAskDetail, appAskExport, appAskRemove, appAskStop, appAsks } from '../../bin/agents-team-app.mjs'
+import { AskRefusal } from '../../bin/agents-team-resolve.mjs'
 import { OPENCODE_GO_PROVIDER, copyOpenCodeGoSignIn, openCodeGoSignedIn, openCodeListsLuna } from '../../bin/agents-opencode.mjs'
 import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsAutoPlan, skillsTests, type SkillsOutcome } from '../../bin/agents-skills.mjs'
 import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsTests } from '../../bin/agents-tools.mjs'
@@ -128,6 +131,8 @@ export interface AgentsIpcOptions {
   notifyApp?(notice: { title: string; body: string }): void
   /** The timer BMN's own context testing waits on before it tries once more; tests replace it. */
   contextRetryLater?: ContextAutoSeams['later']
+  /** Team › Asks (73.1): the folder the owner exports an ask into; null when he cancels. Absent where there is no window. */
+  chooseAskExportFolder?(event: IpcMainInvokeEvent): Promise<string | null>
 }
 
 /** What installing the handlers hands back to the app. */
@@ -784,10 +789,10 @@ export function messageTeamAnswer(question: MessageTeamQuestion): MessageTeamAns
 }
 
 export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: AgentsIpcOptions): AgentsIpcHandle {
-  const handle = (channel: `aiterm:${string}`, listener: (params: Record<string, unknown>) => unknown): void => {
+  const handle = (channel: `aiterm:${string}`, listener: (params: Record<string, unknown>, event: IpcMainInvokeEvent) => unknown): void => {
     ipc.handle(channel, (event, params) => {
       if (!options.senderIsAllowed(event)) throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
-      const run = (): unknown => listener(objectParams(params))
+      const run = (): unknown => listener(objectParams(params), event)
       // Every call inspects with the shell's settings as they are now, not as they were when BMN started.
       return options.sessionEnvironment ? options.sessionEnvironment.refresh().then(run) : run()
     })
@@ -1479,6 +1484,35 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     await removeQuestions(params.id, context().now())
     return questionsSnapshot()
   })
+  // Team › Asks (73.1). Every ask on this computer is read from its record, whoever asked; asking is the agents' (`bmn team ask`),
+  // and the owner here reads, stops, removes and exports.
+  const asksSnapshot = (): TeamAsksSnapshot => appAsks({ now: context().now() })
+  /** An engine refusal of one ask (gone, still running, exists) is told in its own words. */
+  const refusing = <T>(run: () => T): T => {
+    try {
+      return run()
+    } catch (error) {
+      if (error instanceof AskRefusal) invalid(error.message)
+      throw error
+    }
+  }
+  handle('aiterm:asks:load', () => asksSnapshot())
+  handle('aiterm:asks:detail', (params) => refusing(() => appAskDetail(askIdParam(params), { now: context().now() })))
+  handle('aiterm:asks:stop', (params) => {
+    refusing(() => appAskStop(askIdParam(params)))
+    return asksSnapshot()
+  })
+  handle('aiterm:asks:remove', (params) => {
+    refusing(() => appAskRemove(params.id === null ? null : askIdParam(params), { now: context().now() }))
+    return asksSnapshot()
+  })
+  handle('aiterm:asks:export', async (params, event) => {
+    const id = askIdParam(params)
+    const into = await options.chooseAskExportFolder?.(event) ?? null
+    if (into === null) return { output: null, files: 0 }
+    const exported = refusing(() => appAskExport(id, into))
+    return { output: exported.output, files: exported.files.length }
+  })
   // Team › the judge's page (65.3): its calls, the monthly limit and Try it. Try it goes by the route of `bmn judge ask`, in this process.
   const judgeView = (): JudgeView => {
     const now = context().now()
@@ -1543,6 +1577,14 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     return { reply, view: judgeView() }
   })
   return { contextAutoAtStart: () => auto.trigger(), skillsAutoAtStart: () => skillsAuto.trigger() }
+}
+
+const TEAM_ASK_ID = /^\d{8}T\d{6}-[0-9a-f]{8}$/u
+
+function askIdParam(params: Record<string, unknown>): string {
+  const id = params.id
+  if (typeof id !== 'string' || !TEAM_ASK_ID.test(id)) invalid('id must be the id of an ask')
+  return id
 }
 
 /** The purpose word a call from the judge's own page is counted under. */

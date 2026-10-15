@@ -68,7 +68,7 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
     // Inside, the container shows only the run's own places.
     expect(readFileSync(join(prepared.folder, ASK_RUN_FILES.answer), 'utf8')).toMatch(/^codex answer [0-9a-f]{8} from home inputs work \n$/)
     expect(existsSync(join(prepared.folder, ASK_RUN_FILES.home))).toBe(false)
-    expect(readdirSync(prepared.folder).sort()).toEqual(['answer.md', 'events.jsonl', 'exit.json', 'inputs', 'launch.json', 'outcome.json', 'receipt.json', 'request.json', 'snapshots', 'state.json', 'stderr.txt', 'tree.json'])
+    expect(readdirSync(prepared.folder).sort()).toEqual(['answer.md', 'events.jsonl', 'exit.json', 'inputs', 'launch.json', 'outcome.json', 'question.md', 'receipt.json', 'request.json', 'snapshots', 'state.json', 'stderr.txt', 'tree.json'])
     // bubblewrap took its arguments from a descriptor: no argument file is left, and the launch says so.
     expect(JSON.parse(readFileSync(join(prepared.folder, 'launch.json'), 'utf8'))).toMatchObject({ args_fd: true })
     expect(runState(prepared.folder).state).toBe('ended')

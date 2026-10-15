@@ -542,7 +542,7 @@ export function stopAsk(folder) {
 // The export
 
 /** What an export carries (the contract's record table): never the app's home, its raw error stream or the frozen copy. */
-export const EXPORTED = Object.freeze(['request.json', 'inputs', 'project-manifest.json', 'snapshots', 'receipt.json', 'launch.json', 'state.json', 'exit.json', 'events.jsonl', 'session-info.json', 'answer.md', 'outcome.json'])
+export const EXPORTED = Object.freeze(['request.json', 'question.md', 'inputs', 'project-manifest.json', 'snapshots', 'receipt.json', 'launch.json', 'state.json', 'exit.json', 'events.jsonl', 'session-info.json', 'answer.md', 'outcome.json'])
 
 /** The launch with every environment value the container is given left out: names only. */
 function launchWithoutValues(launch) {

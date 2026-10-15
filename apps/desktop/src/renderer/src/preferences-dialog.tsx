@@ -69,7 +69,7 @@ const HOOK_CHECK_NAMES: Readonly<Record<HookCheckAgent, string>> = {
 }
 
 /** Every page of the dialog. Team and Rules head the navigation and open their sub-pages; the rest are grouped. */
-export type PreferencesPage = 'team' | 'roles' | 'models' | 'changes' | 'rules' | 'skills' | 'tools' | 'health' | 'appearance' | 'terminal' | 'notifications' | 'voice' | 'telegram' | 'control' | 'history' | 'backup'
+export type PreferencesPage = 'team' | 'roles' | 'asks' | 'models' | 'changes' | 'rules' | 'skills' | 'tools' | 'health' | 'appearance' | 'terminal' | 'notifications' | 'voice' | 'telegram' | 'control' | 'history' | 'backup'
 
 /** The page Preferences last showed, kept while BMN runs; a new start opens on Team. */
 let lastPage: PreferencesPage = 'team'
@@ -78,7 +78,7 @@ export const PREFERENCES_NAVIGATION: ReadonlyArray<
   | { parent: 'team' | 'rules'; label: string; pages: ReadonlyArray<{ page: PreferencesPage; label: string }> }
   | { group: string; pages: ReadonlyArray<{ page: PreferencesPage; label: string }> }
 > = [
-  { parent: 'team', label: 'Team', pages: [{ page: 'team', label: 'Agents' }, { page: 'roles', label: 'Roles' }, { page: 'models', label: 'Models' }, { page: 'changes', label: 'Changes' }] },
+  { parent: 'team', label: 'Team', pages: [{ page: 'team', label: 'Agents' }, { page: 'roles', label: 'Roles' }, { page: 'asks', label: 'Asks' }, { page: 'models', label: 'Models' }, { page: 'changes', label: 'Changes' }] },
   { parent: 'rules', label: 'Rules', pages: [{ page: 'rules', label: 'Editor' }, { page: 'skills', label: 'Skills' }, { page: 'tools', label: 'Tools' }, { page: 'health', label: 'Health' }] },
   { group: 'Workspace', pages: [{ page: 'appearance', label: 'Appearance' }, { page: 'terminal', label: 'Terminal' }, { page: 'notifications', label: 'Notifications' }, { page: 'voice', label: 'Voice' }] },
   { group: 'Phone', pages: [{ page: 'telegram', label: 'Telegram' }] },
@@ -87,7 +87,7 @@ export const PREFERENCES_NAVIGATION: ReadonlyArray<
 
 /** The navigation parent a page sits under, or null for a grouped page. */
 export function pageParent(page: PreferencesPage): 'team' | 'rules' | null {
-  return page === 'team' || page === 'roles' || page === 'models' || page === 'changes' ? 'team' : page === 'rules' || page === 'skills' || page === 'tools' || page === 'health' ? 'rules' : null
+  return page === 'team' || page === 'roles' || page === 'asks' || page === 'models' || page === 'changes' ? 'team' : page === 'rules' || page === 'skills' || page === 'tools' || page === 'health' ? 'rules' : null
 }
 
 /**
@@ -161,11 +161,11 @@ export function PreferencesDialog(props: {
 
   function goTeam(next: TeamPage): void {
     setTeamPage(next)
-    setPage(next.name === 'roles' ? 'roles' : next.name === 'models' ? 'models' : next.name === 'changes' ? 'changes' : 'team')
+    setPage(next.name === 'roles' ? 'roles' : next.name === 'asks' ? 'asks' : next.name === 'models' ? 'models' : next.name === 'changes' ? 'changes' : 'team')
     main.current?.scrollTo({ top: 0 })
   }
 
-  const shownTeamPage: TeamPage = page === 'roles' ? { name: 'roles' } : page === 'models' ? { name: 'models' } : page === 'changes' ? { name: 'changes' } : teamPage
+  const shownTeamPage: TeamPage = page === 'roles' ? { name: 'roles' } : page === 'asks' ? { name: 'asks' } : page === 'models' ? { name: 'models' } : page === 'changes' ? { name: 'changes' } : teamPage
   // An agent's app or host is recorded as BMN inspected that app, so the pages that stage one read the apps once.
   const stagesDestination = parent === 'team' && (shownTeamPage.name === 'agent' || shownTeamPage.name === 'new')
   const ensureRules = rules.ensure

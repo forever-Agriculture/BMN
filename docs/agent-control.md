@@ -2260,7 +2260,7 @@ bmn team asks export <id> --output PATH
 | `--data public` | A declaration BMN verifies (R72-NFR5); refused, never raised, where it does not hold. Without it the ask is private. |
 | `--wide-read` | Selects the owner-enabled wider-read mode of the chosen teammate's app (below); refused where he has not enabled one. |
 | `--time-limit MINUTES` | 1 to 120; default 30. |
-| `--key K` | The retry key: the UTC day it was issued and a name of yours, `20261015-review-1` (letters, digits, `.`, `_`, `-`; at most 64 after the day). Required in a BMN session, which every agent runs in; a plain shell may leave it out and BMN makes one; the app makes its own. (Keys, below.) |
+| `--key K` | The retry key: the UTC day it was issued and a name of yours, `20261015-review-1` (letters, digits, `.`, `_`, `-`; at most 64 after the day). Required in a BMN session, which every agent runs in; a plain shell may leave it out and BMN makes one. (Keys, below.) |
 | `--background` | Prints the run id at once and leaves the run going. |
 | `--json` | Versioned JSON on standard output instead of words. |
 
@@ -2383,8 +2383,7 @@ basis (subscription, key), each "unknown" where the app does not record it, neve
 token ceiling (Preferences) applies to Claude Code only, the one app that reports usage while a run
 goes on: its supervisor counts each model call's input, cache and output tokens at that call's last
 report, about once a second, and over the ceiling the run is stopped (exit 16) with the count and the
-ceiling as its reason. For Codex and OpenCode time and capacity are the only bounds, and the panel
-says so.
+ceiling as its reason. For Codex and OpenCode time and capacity are the only bounds.
 
 ### Exit codes
 
@@ -2545,6 +2544,7 @@ so a run outlives BMN closing.
 | Path | What | Exported |
 | --- | --- | --- |
 | `request.json` | the request as given, its hash, the key, the asking session, the resolver's rule | yes |
+| `question.md` | the question alone, as the asker wrote it; the prompt in `inputs/` is what was sent | yes |
 | `inputs/` | the prompt, the instruction snapshot (his global rules for that app), file copies, `pictures/<n>.<ext>` as sent, and for Claude Code `message.jsonl`, its standard input | yes |
 | `inputs/manifest.json` | every input with its source path, source root, consent basis and sha256; each picture's hashes before and after and the fields taken out and kept, by name | yes |
 | `project/`, `project-manifest.json` | the frozen copy (deleted on every outcome); files, commits, trees and blobs with hashes, the included commits and the shallow boundary | manifest only |
@@ -2561,6 +2561,18 @@ so a run outlives BMN closing.
 
 Export (`asks export`) is the allowlisted bundle above, never a sign-in file, an app database, the
 home folder, raw logs or an environment value.
+
+### The owner's view (Team › Asks)
+
+Asking is the agents' (and the command's); the app does not ask. Preferences › Team › Asks lists every
+ask on this computer, newest first by when it was asked: who asked (a session by its name and app, or a
+shell), the teammate and effort, the role, the project, what was readable, the time against its limit,
+the outcome with its reason on the line, and the usage ("unknown" where the app records none). An
+opened ask shows its whole question, the files and pictures it could read, who answered with the
+session BMN observed, and the answer as plain text: nothing in it becomes a link, a picture or markup,
+and an answer that could not be attributed is not shown. The owner may Stop any running ask (its
+supervisor records it stopped), Export one as the bundle above, Copy an answer, and Remove one ended
+ask or all of them; a running ask is never removed. Records are removed 30 days after they end.
 
 ### How agents learn it
 

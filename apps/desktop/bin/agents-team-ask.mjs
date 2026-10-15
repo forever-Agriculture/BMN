@@ -239,6 +239,8 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     prompt = picturePrompt(filePrompt(request.question, texts.map((file) => ({ ...file, label: named(file) }))), pictures.map((picture) => ({ ...picture, label: named(picture) })))
   }
   writePrivate(join(folder, ASK_RUN_FILES.prompt), prompt)
+  // The question alone, as the asker wrote it, for the record and Team › Asks (73.1); the prompt above is what is sent.
+  writePrivate(join(folder, ASK_RUN_FILES.question), request.question)
   // The instruction inputs: a private ask carries the owner's global rules for that app as BMN generates them; a public one none.
   const rules = label === 'private' ? instructionRules(choice.agent.harness, generation) : null
   if (rules !== null) writePrivate(join(folder, ASK_RUN_FILES.rules), rules)

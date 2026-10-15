@@ -648,7 +648,15 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
     senderIsAllowed, cliScript: bmnCliScript, sessionEnvironment, openPath: (path) => shell.openPath(path), openExternal: (address) => shell.openExternal(address), notifyApp: showAppNotice,
     // Only the app's own self-test, started in test mode, serves made-up pages, and only for site names ending in `.test`.
     researchPages: () => (rendererTestMode ? process.env.BMN_SELF_TEST_PAGES ?? null : null),
-    judgeTestPort: () => (rendererTestMode ? process.env.BMN_JUDGE_TEST_PORT ?? null : null)
+    judgeTestPort: () => (rendererTestMode ? process.env.BMN_JUDGE_TEST_PORT ?? null : null),
+    // Team › Asks (73.1): the folder he exports an ask into.
+    chooseAskExportFolder: async (event) => {
+      if (selfTestTaps?.headless) throw new MainIpcError(ERROR_CODES.invalidArgument, 'File dialogs are unavailable in this run')
+      const dialogOptions = { title: 'Export the ask into…', properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'> }
+      const owner = BrowserWindow.fromWebContents(event.sender)
+      const picked = owner ? await dialog.showOpenDialog(owner, dialogOptions) : await dialog.showOpenDialog(dialogOptions)
+      return picked.canceled ? null : picked.filePaths[0] ?? null
+    }
   })
   // Once the shell's own program path is known, so a new app version is tested with the program a session would start (63.1, and skills).
   void sessionEnvironment.refresh().finally(() => {

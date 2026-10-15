@@ -19,6 +19,8 @@ import type {
   JudgeView,
   WebQuestionAsked,
   WebQuestionsSnapshot,
+  TeamAskDetail,
+  TeamAsksSnapshot,
   ResearchSnapshot,
   SkillsPlan,
   ToolProposalView,
@@ -444,6 +446,15 @@ export interface AiTerminalBridge {
   setJudgeLimit(limit: { on: boolean; usd: number }): Promise<JudgeView>
   tryJudge(text: string, statement: string, data: 'public' | 'private'): Promise<JudgeTried>
   webQuestions(): Promise<WebQuestionsSnapshot>
+  /** Story 73.1: every ask on this computer (his agents' and any from a shell), newest first. */
+  teamAsks(): Promise<TeamAsksSnapshot>
+  /** One ask opened: the whole question, what it read, who answered, and the answer as the teammate's own words. */
+  teamAskDetail(id: string): Promise<TeamAskDetail>
+  stopTeamAsk(id: string): Promise<TeamAsksSnapshot>
+  /** Removes one ended ask, or every ended one with null. */
+  removeTeamAsks(id: string | null): Promise<TeamAsksSnapshot>
+  /** Exports one ask's allowlisted record into a folder he picks; `output` null when he cancels. */
+  exportTeamAsk(id: string): Promise<{ output: string | null; files: number }>
   /** Owner-run: asks the web one question through the researcher picked on Models. It runs in the background; a refusal comes back in the command's own words. */
   askWebQuestion(question: string): Promise<WebQuestionAsked>
   /** Ends the research or question that is under way, whoever started it. */

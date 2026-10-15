@@ -1,0 +1,8 @@
+// MODULE: agents-team-app.d.mts - types for Team › Asks (Story 73.1): the list, one opened, stop, remove and export
+import type { TeamAskDetail, TeamAskLine, TeamAsksSnapshot } from '@bmn/protocol'
+export declare function askLine(folder: string, names?: ReadonlyMap<string, string>, now?: Date): TeamAskLine
+export declare function appAsks(options?: { runs?: string; now?: Date }): TeamAsksSnapshot
+export declare function appAskDetail(id: string, options?: { runs?: string; now?: Date }): TeamAskDetail
+export declare function appAskStop(id: string, options?: { runs?: string }): void
+export declare function appAskRemove(id: string | null, options?: { runs?: string; now?: Date }): number
+export declare function appAskExport(id: string, into: string, options?: { runs?: string }): { output: string; files: string[] }

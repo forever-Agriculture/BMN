@@ -98,6 +98,7 @@ import {
 } from './roster-staging'
 import { displayPath } from './session-presentation'
 import type { TeamState } from './team-state'
+import { TeamAsks, useTeamAsksState } from './team-asks'
 
 /** Each agent app as BMN inspected it (Rules › Health), or null while that was not read. */
 type Apps = readonly AgentAppView[] | null
@@ -106,7 +107,7 @@ type Context = readonly ContextLimitView[] | null
 /** What the apps reported in sessions that are running now. */
 type Reported = readonly ReportedModel[]
 
-export type TeamPage = { name: 'agents' } | { name: 'agent'; id: string } | { name: 'new'; fill?: ResearchFill } | { name: 'roles' } | { name: 'models' } | { name: 'changes' }
+export type TeamPage = { name: 'agents' } | { name: 'agent'; id: string } | { name: 'new'; fill?: ResearchFill } | { name: 'roles' } | { name: 'asks' } | { name: 'models' } | { name: 'changes' }
 
 /** "Oct 9, 22:13": the short date every Team and Rules page uses. */
 export function shortDate(iso: string | undefined): string {
@@ -1204,6 +1205,21 @@ function VersionView(props: { number: number; earlier: boolean }): React.JSX.Ele
   )
 }
 
+/** Team › Asks (73.1): the asks on this computer, read again while the page is open. */
+function AsksPage(props: { home: string | null; sessionName(id: string): string | undefined }): React.JSX.Element {
+  const asks = useTeamAsksState()
+  if (asks.snapshot === null) {
+    return <><PageHead title="Asks" />{asks.loadError ? <p className="preferences-error" role="alert">{asks.loadError}</p> : <p className="page-note">Reading the asks…</p>}</>
+  }
+  return (
+    <>
+      {asks.loadError ? <p className="preferences-error" role="alert">{asks.loadError}</p> : null}
+      <TeamAsks snapshot={asks.snapshot} busy={asks.busy} notice={asks.notice} home={props.home} sessionName={props.sessionName}
+        detail={asks.detail} stop={asks.stop} remove={asks.remove} exportAsk={asks.exportAsk} copy={asks.copy} />
+    </>
+  )
+}
+
 function ChangesPage(props: { team: TeamState }): React.JSX.Element {
   const { team } = props
   const [viewing, setViewing] = useState<number | null>(null)
@@ -1252,6 +1268,8 @@ function ChangesPage(props: { team: TeamState }): React.JSX.Element {
 export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?: Apps; context?: Context; reported?: Reported; research?: ResearchState; sessionName?(id: string): string | undefined; go(page: TeamPage): void }): React.JSX.Element {
   const { team, page } = props
   const snapshot = team.snapshot
+  // Every ask on this computer is listed whatever state the team file is in: an agent's ask was made with the team it had then.
+  if (page.name === 'asks') return <AsksPage home={snapshot?.home ?? null} sessionName={props.sessionName ?? (() => undefined)} />
   if (team.loadError) return <><PageHead title="Team" /><p className="preferences-error" role="alert">{team.loadError}</p></>
   if (snapshot === null) return <><PageHead title="Team" /><p className="page-note">Reading the team…</p></>
   if (!snapshot.file.exists) {

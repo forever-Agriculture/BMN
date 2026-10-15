@@ -46,7 +46,7 @@ export const ASK_ACCESS = Object.freeze(['question', 'files', 'project'])
 export const ASK_RUN_FILES = Object.freeze({
   request: 'request.json', manifest: 'inputs/manifest.json', prompt: 'inputs/prompt.md', rules: 'inputs/rules.md', files: 'inputs/files',
   pictures: 'inputs/pictures', message: 'inputs/message.jsonl',
-  projectManifest: 'project-manifest.json', snapshots: 'snapshots', receipt: 'receipt.json', answer: 'answer.md', outcome: 'outcome.json',
+  projectManifest: 'project-manifest.json', snapshots: 'snapshots', receipt: 'receipt.json', answer: 'answer.md', outcome: 'outcome.json', question: 'question.md',
   home: 'home', inputs: 'inputs', project: 'project'
 })
 

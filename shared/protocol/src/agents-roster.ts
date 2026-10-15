@@ -683,6 +683,53 @@ export interface WebQuestionsSnapshot {
 /** How an Ask from Models went on: started (the list shows it running), or refused in the command's own words. */
 export interface WebQuestionAsked { ok: boolean; message: string | null; snapshot: WebQuestionsSnapshot }
 
+/** Story 73.1: who asked a teammate, as the run recorded it: a BMN session (with its agent app), a shell, or the owner. */
+export type TeamAskAsker = { kind: 'owner' } | { kind: 'shell' } | { kind: 'session'; session: string; app?: string }
+export type TeamAskAccess = 'question' | 'files' | 'project'
+/** How a run stands: `running` until its outcome, then the contract's outcome word. */
+export type TeamAskState = 'running' | 'answered' | 'failed' | 'refused' | 'out-of-time' | 'stopped' | 'not-attributed' | 'interrupted'
+/** A run's usage as the app reported it; null for a count or cost it did not report. */
+export interface TeamAskUsageView { input: number | null; cached: number | null; output: number | null; reasoning: number | null; cost: number | null; billing: string }
+/** One ask as Team › Asks lists it, whoever asked. */
+export interface TeamAskLine {
+  id: string
+  /** The question's first line; null where the record holds none. */
+  question: string | null
+  by: TeamAskAsker
+  agent: string | null
+  agentName: string | null
+  effort: string | null
+  role: string | null
+  project: string | null
+  data: 'public' | 'private'
+  reads: { access: TeamAskAccess; files: number; pictures: number }
+  askedAt: string | null
+  startedAt: string | null
+  endedAt: string | null
+  timeLimitMinutes: number | null
+  state: TeamAskState | string
+  reason?: string
+  refusalCode?: string
+  usage: TeamAskUsageView | null
+  /** When BMN removes it: 30 days after it ended. */
+  keptUntil: string | null
+  /** For a running ask: the main process's clock when the line was read, so elapsed time is the computer's. */
+  now?: string
+}
+/** Team › Asks: every ask on this computer, newest first, the places in use and how long an answer is kept. */
+export interface TeamAsksSnapshot { asks: TeamAskLine[]; places: { used: number; capacity: number }; keptDays: number }
+/** One ask opened in place: the whole question, what it read, who answered, and the answer as the teammate's own words. */
+export interface TeamAskDetail {
+  line: TeamAskLine
+  question: string | null
+  /** False for a run made before the question had a record of its own: then only its first line is known. */
+  questionWhole: boolean
+  answer: string | null
+  files: Array<{ path: string; bytes: number }>
+  pictures: Array<{ label: string; bytes: number; mediaType: string; width: number | null; height: number | null; removed: string[] }>
+  project: { root: string | null; revision: string | null; files: number | null } | null
+  teammate: { app: string | null; appName: string | null; appVersion: string | null; model: string | null; session: string | null; sessionSource: string | null }
+}
 /** Epic 65: what the judge's page on Team shows of its calls. Sums count every call that made a request; a refused call costs nothing and is counted apart. */
 export interface JudgeTotalsView { calls: number; input_tokens: number; cost_usd: number }
 /** `estimated`: how many of the month's calls are counted by the size of their request, because the gateway gave no count of their tokens. */

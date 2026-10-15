@@ -27,6 +27,8 @@ import {
   type JudgeView,
   type WebQuestionAsked,
   type WebQuestionsSnapshot,
+  type TeamAskDetail,
+  type TeamAsksSnapshot,
   type ResearchSnapshot,
   type SkillsPlan,
   type ToolProposalView,
@@ -904,6 +906,21 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   webQuestions(): Promise<WebQuestionsSnapshot> {
     return invokeBridge('aiterm:questions:load', {})
+  },
+  teamAsks(): Promise<TeamAsksSnapshot> {
+    return invokeBridge('aiterm:asks:load', {})
+  },
+  teamAskDetail(id: string): Promise<TeamAskDetail> {
+    return invokeBridge('aiterm:asks:detail', { id })
+  },
+  stopTeamAsk(id: string): Promise<TeamAsksSnapshot> {
+    return invokeBridge('aiterm:asks:stop', { id })
+  },
+  removeTeamAsks(id: string | null): Promise<TeamAsksSnapshot> {
+    return invokeBridge('aiterm:asks:remove', { id })
+  },
+  exportTeamAsk(id: string): Promise<{ output: string | null; files: number }> {
+    return invokeBridge('aiterm:asks:export', { id })
   },
   askWebQuestion(question: string): Promise<WebQuestionAsked> {
     return invokeBridge('aiterm:questions:ask', { question })
