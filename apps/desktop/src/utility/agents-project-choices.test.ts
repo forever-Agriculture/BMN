@@ -11,6 +11,7 @@ import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-sta
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { AskRefusal } from '../../bin/agents-team-resolve.mjs'
 import { approveRoster, approveSections } from '../main/agents-approval'
+import { previewApproval } from '../main/agents-ipc'
 
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 const BMN = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
@@ -184,6 +185,18 @@ describe('approving a choice in the Team view (73.2 AC2)', () => {
     expect(consequences(readApproved().data, file)).toContain('epic-reviewer asks in one project would reach Fable at medium instead of the role\'s chain (Astra first)')
     approveSections(shown(), ['project-choices'], { checkInspectedRoutes: () => {}, now: () => NOW })
     expect(readApproved().data.project_choices).toEqual([{ id: 'shop-review', project: shop, role: 'epic-reviewer', agent: 'fable', effort: 'medium' }])
+  })
+
+  it('the Team view\'s preview refuses a choice its agent cannot answer, with the reason, before he approves', async () => {
+    const shop = makeProject('shop')
+    writeFileSync(rosterFile(), withChoices(`shop-review: {project: ${shop}, role: epic-reviewer, agent: luna}`))
+    expect(await previewApproval({ kind: 'sections', scope: ['project-choices'] }, env)).toMatchObject({
+      valid: false, errors: [{ code: 'PROJECT_CHOICE_UNAVAILABLE', message: 'the project choice shop-review cannot be kept: luna does not hold the role epic-reviewer; nothing was approved' }]
+    })
+    writeFileSync(rosterFile(), withChoices(`shop-review: {project: ${shop}, role: epic-reviewer, agent: fable}`))
+    const preview = await previewApproval({ kind: 'sections', scope: ['project-choices'] }, env)
+    expect(preview).toMatchObject({ valid: true, differences: [{ scope: 'project-choices', id: 'shop-review', kind: 'added' }] })
+    expect(preview.consequences).toContain('epic-reviewer asks in one project would reach Fable instead of the role\'s chain (Astra first)')
   })
 
   it('says a changed, an extended and a removed choice in the same words', () => {
