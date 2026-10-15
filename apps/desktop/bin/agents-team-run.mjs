@@ -1,12 +1,11 @@
 // MODULE: agents-team-run.mjs - Epic 72: an ask started exactly as it was judged, attributed from its own output, finished into its record, and exported only as its allowlist says
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { canonicalJson, sha256 } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { copyGoSignInToRun, openCodeSessionInfo } from './agents-opencode.mjs'
 import { ASK_RUN_FILES, sameProgram } from './agents-team-forms.mjs'
+import { askSettings } from './agents-team-places.mjs'
 import { RUN_FILES, requestStop, runState, startTeamSupervisor, writeWhole } from './agents-team-supervisor.mjs'
 import { treeChange } from './agents-team-tree.mjs'
 
@@ -126,15 +125,37 @@ export function startChange(prepared, phase = 'check') {
 }
 
 /**
- * The supervisor's last check before the container, run for every launch: the run's receipt as
- * the check wrote it, the command the launch holds, the team read from the asker's own home, and the
- * program at the paths its identity names. Returns why it may not start, or null.
+ * Why the launch is not one `startAsk` writes for this run, or null: everything in it the supervisor
+ * acts on is held to the run's receipt or to BMN's fixed limits and the owner's, so no field of it,
+ * present, changed or left out, starts more than the check judged.
  */
-export function launchCheck(folder, launch) {
+function launchChange(folder, launch, receipt, now) {
+  const message = receipt.snapshots?.message !== undefined
+  if (launch.argv_sha256 !== receipt.argv_sha256) return 'the launch\'s command is not the one the check judged'
+  if (launch.stdin !== join(folder, message ? ASK_RUN_FILES.message : ASK_RUN_FILES.prompt) || launch.stdin_sha256 !== (message ? receipt.snapshots.message : receipt.snapshots?.prompt)) {
+    return 'the launch\'s standard input is not the one the check judged'
+  }
+  if (launch.args_fd !== true) return 'the launch puts bubblewrap\'s options on its command line'
+  if (!(Number.isFinite(launch.deadline) && launch.deadline <= now + TIME_LIMIT.max * 60_000)) return 'the launch\'s time limit is not within BMN\'s'
+  if (!(Number.isFinite(launch.output_limit) && launch.output_limit <= OUTPUT_LIMIT)) return 'the launch\'s output limit is not within BMN\'s'
+  if (!(Number.isFinite(launch.storage_limit) && launch.storage_limit <= STORAGE_LIMIT)) return 'the launch\'s storage limit is not within BMN\'s'
+  // Claude Code's runs keep the owner's per-ask token ceiling as he has it set.
+  const ceiling = receipt.harness === 'claude' ? askSettings(dirname(folder)).token_ceiling : null
+  if (ceiling !== null && !(Number.isInteger(launch.token_ceiling) && launch.token_ceiling <= ceiling)) return 'the launch\'s token ceiling is not within the owner\'s'
+  return null
+}
+
+/**
+ * The supervisor's last check before the container, run for every launch: the run's receipt as
+ * the check wrote it, the launch held to it (launchChange), the team read from the asker's home
+ * (the supervisor's environment holds it, never the launch), and the program at the paths its
+ * identity names. Returns why it may not start, or null.
+ */
+export function launchCheck(folder, launch, { now = Date.now() } = {}) {
   const receipt = readJsonOrNull(join(folder, ASK_RUN_FILES.receipt))
   if (receipt === null) return 'the run holds no receipt of its check'
-  // The supervisor runs with an empty environment; the team is the asker's, in the home it named.
-  if (typeof launch.state_home === 'string') process.env.HOME = launch.state_home
+  const launched = launchChange(folder, launch, receipt, now)
+  if (launched !== null) return launched
   const identity = readJsonOrNull(join(folder, ASK_RUN_FILES.snapshots, 'executable.json'))
   const program = typeof identity?.launcher?.path === 'string' && typeof identity?.payload?.path === 'string' ? { launcher: identity.launcher.path, payload: identity.payload.path } : null
   return startChange({ folder, argv: launch.argv, verdict: { receipt }, program }, 'started')
@@ -169,11 +190,11 @@ export function startAsk(prepared, { now = new Date(), timeLimitMinutes = TIME_L
     // The supervisor checks the command and standard input against these hashes again just before it starts them.
     version: 1, argv: prepared.argv, argv_sha256: receipt.argv_sha256, deadline: now.getTime() + timeLimitMinutes * 60_000, time_limit_minutes: timeLimitMinutes,
     // A picture ask on Claude Code reads the one message the check judged; any other ask its prompt.
-    stdin, stdin_sha256: receipt.snapshots?.message ?? receipt.snapshots?.prompt, finish: { module: fileURLToPath(import.meta.url), export: 'finishAsk' }, args_fd: true, output_limit: OUTPUT_LIMIT,
-    // The home where the supervisor's last check (launchCheck, always run) reads the team; the run's storage, all of its folder.
-    state_home: homedir(), storage_limit: STORAGE_LIMIT,
-    // The owner's per-ask token ceiling holds where the app reports usage while it runs: Claude Code alone (72.1).
-    ...(tokenCeiling !== null && receipt.harness === 'claude' ? { token_ceiling: tokenCeiling, watch: { module: fileURLToPath(import.meta.url), export: 'watchAsk', ends: 'ceiling' } } : {})
+    stdin, stdin_sha256: receipt.snapshots?.message ?? receipt.snapshots?.prompt, args_fd: true, output_limit: OUTPUT_LIMIT,
+    // The run's storage, all of its folder; the supervisor's last check (launchCheck, always run) holds every field here to the receipt and the limits.
+    storage_limit: STORAGE_LIMIT,
+    // The owner's per-ask token ceiling holds where the app reports usage while it runs: Claude Code alone (72.1); the supervisor watches it with watchAsk.
+    ...(tokenCeiling !== null && receipt.harness === 'claude' ? { token_ceiling: tokenCeiling } : {})
   }
   writeWhole(join(folder, RUN_FILES.launch), `${JSON.stringify(launch, null, 2)}\n`)
   const started = start(folder)

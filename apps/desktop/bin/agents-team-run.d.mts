@@ -19,7 +19,7 @@ export declare const TRANSIENT: readonly string[]
 /** Why what is about to start is not what the check judged, or null. */
 export declare function judgedChange(prepared: { folder: string; argv: string[]; verdict: { receipt?: unknown } }): string | null
 export declare function startChange(prepared: { folder: string; argv: string[]; verdict: { receipt?: unknown }; program?: { launcher: string; payload: string } | null }, phase?: "check" | "started"): string | null
-export declare function launchCheck(folder: string, launch: Record<string, unknown>): string | null
+export declare function launchCheck(folder: string, launch: Record<string, unknown>, options?: { now?: number }): string | null
 export declare function watchAsk(folder: string, launch: { token_ceiling?: number } | null): string | null
 export declare function askOutcome(folder: string): Outcome
 export declare function waitAsk(folder: string, options?: { timeoutMs?: number; pollMs?: number; signal?: AbortSignal }): Promise<Outcome>

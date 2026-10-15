@@ -2466,8 +2466,10 @@ approved team and the executable checked again, and the command, the prompt or p
 inputs' manifest, each picture and project file, the run's configuration and that whole manifest
 against the receipt's hashes; OpenCode's sign-in import may then add only its database, its log and
 empty folders; the supervisor started, which checks the command and standard input once more, and,
-immediately before the container, the team, the program and the whole manifest again, and gives the app
-the very bytes it checked; inside the container the configuration BMN wrote is read-only) → `running` → `finishing`
+immediately before the container, the team, the program and the whole manifest again, and every field of
+its launch (the command, the standard input file and its hash, the time, output, storage and token limits)
+against the receipt, BMN's limits and the owner's ceiling; it runs only BMN's own check, finish and watch
+steps, whatever the launch names, and gives the app the very bytes it checked; inside the container the configuration BMN wrote is read-only) → `running` → `finishing`
 (answer, attribution and usage read, transient state deleted, then the outcome written; a finish that
 fails still writes a failed outcome and deletes the transient state) → one of `answered`, `failed`,
 `refused`, `out-of-time`, `stopped`, `not-attributed`; `interrupted` (exit 1) when the supervisor ended with

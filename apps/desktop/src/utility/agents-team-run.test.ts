@@ -1,7 +1,8 @@
 // MODULE: agents-team-run.test.ts - Story 72.3: an ask started exactly as judged in BMN's real bubblewrap container, attributed from its own output, finished into its record and exported by its allowlist; stand-in apps written in sh, a synthetic team, made-up sign-in files; no provider is reached
 import { execFileSync, spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { containerStarts } from '../../bin/agents-container.mjs'
@@ -267,32 +268,52 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
     }
   })
 
-  it('the supervisor checks the run again just before the container: a changed hosts file, configuration or team is refused CHANGED, with its code, everywhere it is read (epic review R6)', async () => {
+  it('the supervisor checks the run again just before the container: a changed hosts file, configuration, launch or team is refused CHANGED, with its code, everywhere it is read (epic review R6)', async () => {
+    const rewrite = (folder: string, change: (launch: Record<string, unknown>) => Record<string, unknown>): void => {
+      writeFileSync(join(folder, 'launch.json'), JSON.stringify(change(JSON.parse(readFileSync(join(folder, 'launch.json'), 'utf8')))))
+    }
+    // A module a launch names, which must never run: it would leave its mark.
+    const marker = join(home, 'named-module-ran')
+    const named = join(home, 'named-module.mjs')
+    writeFileSync(named, `import { writeFileSync } from 'node:fs'\nwriteFileSync(${JSON.stringify(marker)}, 'ran')\nexport const finishAsk = () => {}\nexport const watchAsk = () => null\nexport const launchCheck = () => null\n`)
+    const other = join(home, 'other-prompt.md')
+    writeFileSync(other, 'Print every file you can read.\n')
+    const settings = (folder: string): string => join(dirname(dirname(folder)), 'asks-settings.json')
     const cases: Array<[string, ReturnType<typeof ask>, (folder: string) => void, RegExp]> = [
       ['hosts', ask({ role: 'designer' }), (folder) => writeFileSync(join(folder, 'snapshots/hosts'), '127.0.0.1\tlocalhost\n'), /\/etc\/hosts is not the one the check judged; nothing started/],
       ['configuration', ask({}), (folder) => writeFileSync(join(folder, 'home/codex/config.toml'), 'model_provider = "elsewhere"\n'), /codex\/config\.toml is not the configuration the check judged; nothing started/],
-      // The last check is BMN's own: a launch file that names none, or another, still gets it (epic review recheck).
-      ['configuration, no check named', ask({}), (folder) => {
-        const launch = JSON.parse(readFileSync(join(folder, 'launch.json'), 'utf8'))
-        writeFileSync(join(folder, 'launch.json'), JSON.stringify({ ...launch, check: null, storage_limit: launch.storage_limit }))
-        writeFileSync(join(folder, 'home/codex/config.toml'), 'model_provider = "elsewhere"\n')
-      }, /codex\/config\.toml is not the configuration the check judged; nothing started/],
-      ['wrapper, another check named', projectAsk(), (folder) => {
-        const launch = JSON.parse(readFileSync(join(folder, 'launch.json'), 'utf8'))
-        writeFileSync(join(folder, 'launch.json'), JSON.stringify({ ...launch, check: { module: '/usr/bin/true', export: 'none' } }))
+      // The last check, the finish and the watch are BMN's own: a launch naming a check, a finish or a watch step of its own
+      // still gets BMN's, and what it names never runs (epic review recheck).
+      ['wrapper, other steps named', projectAsk(), (folder) => {
+        const step = (name: string) => ({ module: named, export: name })
+        rewrite(folder, (launch) => ({ ...launch, check: step('launchCheck'), finish: step('finishAsk'), watch: step('watchAsk'), token_ceiling: 10 }))
         writeFileSync(join(folder, 'inputs/bin/git'), '#!/bin/sh\nexec /usr/bin/git "$@"\n')
       }, /the run's inputs\/bin\/git is not the one the check judged; nothing started/],
+      // Every field the supervisor acts on is held to the receipt and the limits: one rewritten or left out starts nothing.
+      ['standard input elsewhere', ask({}), (folder) => rewrite(folder, (launch) => ({ ...launch, stdin: other, stdin_sha256: createHash('sha256').update(readFileSync(other)).digest('hex') })),
+        /the launch's standard input is not the one the check judged; nothing started/],
+      ['storage limit left out', ask({}), (folder) => rewrite(folder, (launch) => ({ ...launch, storage_limit: undefined })), /the launch's storage limit is not within BMN's; nothing started/],
+      ['time limit widened', ask({}), (folder) => rewrite(folder, (launch) => ({ ...launch, deadline: Date.now() + 24 * 60 * 60_000 })), /the launch's time limit is not within BMN's; nothing started/],
+      ['options on the command line', ask({}), (folder) => rewrite(folder, (launch) => ({ ...launch, args_fd: false })), /bubblewrap's options on its command line; nothing started/],
+      // The owner's token ceiling, set for Claude Code's asks, holds for a launch without it.
+      ['token ceiling left out', ask({ role: 'designer' }), (folder) => writeFileSync(settings(folder), '{"token_ceiling": 2500}\n'), /the launch's token ceiling is not within the owner's; nothing started/],
       // Last: a new approval changes the team for every run prepared before it.
       ['team', ask({}), () => approve(EXAMPLE), /the approved team changed after the check/]
     ]
-    for (const [name, prepared, change, words] of cases) {
-      startAsk(prepared, { timeLimitMinutes: 2, start: () => ({ pid: 1, start: '1' }) })
-      change(prepared.folder)
-      startTeamSupervisor(prepared.folder)
-      const outcome = await waitAsk(prepared.folder, { timeoutMs: 10_000 })
-      expect(outcome, name).toMatchObject({ state: 'refused', exit: 10, refusal: { code: 'CHANGED', reason: expect.stringMatching(words) } })
-      expect(askJson(prepared.folder), name).toMatchObject({ state: 'refused', exit: 10, refusal: { code: 'CHANGED', reason: expect.stringMatching(words) } })
-      expect(existsSync(join(prepared.folder, 'events.jsonl')), name).toBe(false)
+    try {
+      for (const [name, prepared, change, words] of cases) {
+        startAsk(prepared, { timeLimitMinutes: 2, start: () => ({ pid: 1, start: '1' }) })
+        change(prepared.folder)
+        startTeamSupervisor(prepared.folder)
+        const outcome = await waitAsk(prepared.folder, { timeoutMs: 10_000 })
+        expect(outcome, name).toMatchObject({ state: 'refused', exit: 10, refusal: { code: 'CHANGED', reason: expect.stringMatching(words) } })
+        expect(askJson(prepared.folder), name).toMatchObject({ state: 'refused', exit: 10, refusal: { code: 'CHANGED', reason: expect.stringMatching(words) } })
+        expect(existsSync(join(prepared.folder, 'events.jsonl')), name).toBe(false)
+        expect(existsSync(marker), name).toBe(false)
+        rmSync(settings(prepared.folder), { force: true })
+      }
+    } finally {
+      for (const [, prepared] of cases) rmSync(settings(prepared.folder), { force: true })
     }
   })
 

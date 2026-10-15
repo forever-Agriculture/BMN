@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { closeSync, existsSync, lstatSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { constants } from 'node:os'
+import { constants, homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { processLives, processStart } from './agents-supervised.mjs'
@@ -22,7 +22,7 @@ import { childNamespace, forgetNamespace, nameNamespace } from './agents-team-ne
  */
 
 const NAME = 'agents-team-supervisor.mjs'
-/** The module whose `launchCheck` every run passes immediately before its container. */
+/** BMN's own run module: its `launchCheck` every run passes immediately before its container, its `finishAsk` and `watchAsk` the only finish and watch steps. */
 const RUN_MODULE = fileURLToPath(new URL('./agents-team-run.mjs', import.meta.url))
 const SUPERVISE = '--supervise-ask'
 /** How long a container asked to end may take before it is made to. */
@@ -82,13 +82,15 @@ export function teamSupervisorScript() {
 
 /**
  * Starts the supervisor of the run in `folder`, whose `launch.json` says what to run:
- * `{ argv, argv_sha256, deadline, stdin, stdin_sha256, state_home, finish, args_fd, output_limit, storage_limit }`
+ * `{ argv, argv_sha256, deadline, stdin, stdin_sha256, args_fd, output_limit, storage_limit, token_ceiling? }`
  * (`*_sha256`: what the check judged, compared just before the start, a difference starting nothing; every run
- * also passes agents-team-run.mjs's `launchCheck` immediately before the container, its reason starting nothing;
- * `state_home`: the asker's home, where that check reads the team;
- * `finish`: a module path and export name the supervisor calls with the folder once the container has ended,
- * or null; `args_fd`: give bubblewrap its arguments on a file descriptor; `output_limit`: the bytes of raw output
- * over which the run fails; `storage_limit`: the bytes the run's whole folder may hold).
+ * also passes agents-team-run.mjs's `launchCheck` immediately before the container, which holds each of these
+ * to the run's receipt and to BMN's and the owner's limits, its reason starting nothing; `args_fd`: give
+ * bubblewrap its arguments on a file descriptor; `output_limit`: the bytes of raw output over which the run
+ * fails; `storage_limit`: the bytes the run's whole folder may hold; `token_ceiling`: the owner's, watched by
+ * the run module's `watchAsk`). Once the container has ended the supervisor calls the run module's `finishAsk`
+ * with the folder; nothing the launch names is ever loaded. Its environment holds only the asker's HOME, where
+ * the last check reads the team.
  * Returns `{ pid, start }` or `{ failed }`.
  * The supervisor is detached and in a session of its own: closing the asking command leaves it running.
  */
@@ -98,7 +100,7 @@ export function startTeamSupervisor(folder, { execPath = process.execPath } = {}
   let child
   try {
     child = spawn(execPath, [script, SUPERVISE, folder], {
-      cwd: folder, detached: true, stdio: 'ignore', env: process.versions.electron === undefined ? {} : { ELECTRON_RUN_AS_NODE: '1' }
+      cwd: folder, detached: true, stdio: 'ignore', env: { HOME: homedir(), ...(process.versions.electron === undefined ? {} : { ELECTRON_RUN_AS_NODE: '1' }) }
     })
   } catch (error) {
     return { failed: error instanceof Error ? error.message : String(error) }
@@ -165,13 +167,10 @@ async function supervise(folder) {
     if (namespace !== null) forgetNamespace(dirname(folder), namespace)
     state.state = 'finishing'
     save()
-    if (launch.finish) {
-      try {
-        const module = await import(launch.finish.module)
-        await module[launch.finish.export](folder)
-      } catch (error) {
-        state.finish_error = error instanceof Error ? error.message : String(error)
-      }
+    try {
+      await (await import(RUN_MODULE)).finishAsk(folder)
+    } catch (error) {
+      state.finish_error = error instanceof Error ? error.message : String(error)
     }
     state.state = 'ended'
     state.ended_at = new Date().toISOString()
@@ -237,8 +236,8 @@ async function supervise(folder) {
     endedReason = before
     return finish({ code: null, signal: null, started: false })
   }
-  // The run's own watch step, loaded once before the start: it reads the run's output and says when to end it (a token ceiling).
-  const watcher = launch.watch ? await import(launch.watch.module).then((module) => module[launch.watch.export] ?? null).catch(() => null) : null
+  // BMN's own watch step under the owner's token ceiling, loaded once before the start: it reads the run's output and says when to end it.
+  const watcher = Number.isInteger(launch.token_ceiling) ? await import(RUN_MODULE).then((module) => module.watchAsk).catch(() => null) : null
   // Standard input is the very bytes checked above, given through a pipe: a file changed after the check is never read.
   const input = stdinBytes === null ? 'ignore' : 'pipe'
   const output = openSync(join(folder, RUN_FILES.events), 'a', 0o600)
@@ -329,7 +328,7 @@ async function supervise(folder) {
       } catch {
         // A watch step that fails ends nothing.
       }
-      if (typeof reason === 'string') end(launch.watch.ends ?? 'ceiling', reason)
+      if (typeof reason === 'string') end('ceiling', reason)
     }
     // The app's raw output is bounded: over the bound the run fails, its output kept as it was.
     if (typeof launch.output_limit === 'number') {
