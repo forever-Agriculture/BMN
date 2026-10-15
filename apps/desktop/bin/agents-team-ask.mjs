@@ -4,7 +4,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFile
 import { homedir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { APP_NAMES, agentState, publicOnlyReasons } from './agents-roster.mjs'
+import { APP_NAMES, agentState, projectChoiceFor, publicOnlyReasons } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { askConsent, askRequest, evaluateAsk, expectedDestination, harnessVersion, teamRunsDirectory, workspaceRoot, workspaceVisibility, askStandingWords } from './agents-check.mjs'
 import { ASK_ACCESS, ASK_APPS, ASK_RUN_FILES, appSearchPath, askArgv, askProgram, claudePictureMessage, executableIdentity, signInBind } from './agents-team-forms.mjs'
@@ -12,7 +12,7 @@ import { readMaster, render } from './agents-rules.mjs'
 import { openCodeFolders } from './agents-opencode.mjs'
 import { askerOf } from './agents-ask.mjs'
 import { INSIDE } from './agents-container.mjs'
-import { InputRefusal, LIMITS, askProject, checkQuestion, freezeProject, sha256Of, textFile, workingTreeRoot } from './agents-team-inputs.mjs'
+import { InputRefusal, LIMITS, askProject, checkQuestion, freezeProject, mainWorktree, sha256Of, textFile, workingTreeRoot } from './agents-team-inputs.mjs'
 import { AskRefusal, resolveTeammate } from './agents-team-resolve.mjs'
 import { pictureFile } from './agents-team-pictures.mjs'
 import { TREE_FILE, runTree } from './agents-team-tree.mjs'
@@ -198,8 +198,15 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     }
   }
   const recheck = request.recheckOf === undefined ? undefined : { id: request.recheckOf, run: earlierRun(request.recheckOf, runs) }
+  // The owner's approved choice for the role in this project (73.2): made for the project, or for the repository a linked worktree belongs to; an ended one no longer applies.
+  const projectChoice = (role) => {
+    if (project === null || (data.project_choices ?? []).length === 0) return null
+    const linked = mainWorktree(project)
+    const found = projectChoiceFor(data, linked === null ? [project] : [project, linked], role.id, now)
+    return found === null || found.ended ? null : found.choice
+  }
   const choice = resolveTeammate(data, { role: request.role, agent: request.agent, effort: request.effort, smallWork: request.smallWork === true, recheck },
-    { project, standing, allowed, projectChoice: () => null })
+    { project, standing, allowed, projectChoice })
   // A teammate the data may not reach is refused for that reason: the asker's data decides, not who else is on the team.
   const consent = allowed(choice.agent)
   if (!consent.allowed) throw new AskRefusal(consent.code, consent.reason)
@@ -265,7 +272,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   }
   writePrivate(join(folder, ASK_RUN_FILES.manifest), `${JSON.stringify(manifest, null, 2)}\n`)
   writePrivate(join(folder, ASK_RUN_FILES.request), `${JSON.stringify({
-    version: 1, id, role: request.role, agent: choice.agent.id, model: choice.agent.model, provider: choice.agent.provider, aliases: choice.agent.aliases ?? [], effort: choice.effort, chosen_by: choice.rule, phase: choice.phase,
+    version: 1, id, role: request.role, agent: choice.agent.id, model: choice.agent.model, provider: choice.agent.provider, aliases: choice.agent.aliases ?? [], effort: choice.effort, chosen_by: choice.rule, phase: choice.phase, ...(choice.choice === undefined ? {} : { project_choice: choice.choice }),
     billing: choice.agent.paid_by ?? 'unknown', project, access, data: label, ...(request.recheckOf === undefined ? {} : { recheck_of: request.recheckOf }),
     // The retry key, whose it is and the request's hash (72.4): a retry with the same three finds this run.
     ...(request.key === undefined ? {} : { key: request.key, key_scope: request.keyScope, request_sha256: request.requestSha256 }),
@@ -302,5 +309,5 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     // The judged manifest, beside the run's roots, so a later change names the entry that changed (agents-team-tree.mjs).
     writePrivate(join(folder, TREE_FILE), `${JSON.stringify(runTree(folder).entries)}\n`)
   }
-  return { id, folder, choice: { agent: choice.agent.id, effort: choice.effort, rule: choice.rule, phase: choice.phase }, verdict, argv, stdin: form.stdin, manifest, program: installed.program }
+  return { id, folder, choice: { agent: choice.agent.id, effort: choice.effort, rule: choice.rule, phase: choice.phase, ...(choice.choice === undefined ? {} : { project_choice: choice.choice }) }, verdict, argv, stdin: form.stdin, manifest, program: installed.program }
 }

@@ -1,10 +1,10 @@
 // MODULE: agents-team-resolve.mjs - Epic 72: the one resolver that picks who answers an ask and at which effort: a recheck's teammate, else the project's approved choice, else a named agent, else the small-work candidate, else the role's chain
-import { agentState, classRefusal, isCalled, parseCandidate, roleEfforts } from './agents-roster.mjs'
+import { agentState, classRefusal, initialEfforts, isCalled, parseCandidate, roleEfforts } from './agents-roster.mjs'
 
 /**
  * Who answers is decided by rules the asker can predict (R72-FR3, 72.2 AC1), in this order: a valid
  * recheck asks the earlier run's teammate at the role's recheck effort; an approved project choice
- * binds (73.2 adds them; until then there are none); a named agent; the role's small-work candidate;
+ * binds (73.2): asking someone else there needs the owner to change the choice first; a named agent; the role's small-work candidate;
  * the chain's first candidate that is active, has a proven form for this access mode and may get
  * this data. A recheck, a project choice or a named agent that is not valid now is refused with the
  * reason and the eligible alternatives, never passed over (R72-NFR7). The result says which rule chose.
@@ -49,13 +49,7 @@ export function phaseEfforts(role, agent, phase) {
     const small = role.small_work === undefined ? null : parseCandidate(role.small_work)
     if (small?.agent === agent.id) return small.efforts
   }
-  for (const text of role.candidates) {
-    const candidate = parseCandidate(text)
-    if (candidate?.agent === agent.id) return candidate.efforts
-  }
-  const small = role.small_work === undefined ? null : parseCandidate(role.small_work)
-  if (small?.agent === agent.id) return small.efforts
-  return agent.efforts
+  return initialEfforts(role, agent)
 }
 
 /** The effort of an ask: the one asked for, if the phase allows it; the phase's one; else the asker must choose. */
@@ -87,8 +81,9 @@ export function alternatives(data, role, context) {
 /**
  * Picks the teammate. `request`: `{ role, agent, effort, smallWork, recheck }`, where `recheck` is
  * `{ id, run }` (`run` null when the earlier run is gone) and `run` is `{ role, project, agent }`.
- * `context`: `{ project, standing(agent), allowed(agent), projectChoice(role) }`. Returns
- * `{ agent, effort, rule, phase }`.
+ * `context`: `{ project, standing(agent), allowed(agent), projectChoice(role) }`, where
+ * `projectChoice` gives the approved choice that applies (`{ id, agent, effort? }`) or null. Returns
+ * `{ agent, effort, rule, phase }`, and `choice` (its id) when a project choice chose.
  */
 export function resolveTeammate(data, request, context) {
   const role = data.roles.find((candidate) => candidate.id === request.role)
@@ -110,7 +105,7 @@ export function resolveTeammate(data, request, context) {
     if (earlier === null) {
       // The earlier run is gone: the asker names its teammate and an effort the role allows, judged as a named agent.
       if (request.agent === undefined || request.effort === undefined) refuse('RECHECK_INVALID', `run ${request.recheck.id} is gone; name its teammate with --agent and an effort the role allows with --effort`)
-      if (choice !== null && choice.agent !== request.agent) refuse('PROJECT_CHOICE_CONFLICT', `this project's approved choice for ${role.id} is ${choice.agent}; the owner decides a recheck by someone else`, [choice.agent])
+      if (choice !== null && choice.agent !== request.agent) refuse('PROJECT_CHOICE_CONFLICT', `this project's approved choice for ${role.id} is ${choice.agent} (${choice.id}); a recheck by ${request.agent} there needs the owner to change the choice first`, [choice.agent])
       return named(request.agent, 'recheck', 'recheck-named')
     }
     if (earlier.role !== role.id) refuse('RECHECK_INVALID', `run ${request.recheck.id} was for the role ${earlier.role}, not ${role.id}`)
@@ -119,13 +114,16 @@ export function resolveTeammate(data, request, context) {
     return named(earlier.agent, 'recheck', 'recheck')
   }
   if (choice !== null) {
-    if (request.agent !== undefined && request.agent !== choice.agent) refuse('PROJECT_CHOICE_CONFLICT', `this project's approved choice for ${role.id} is ${choice.agent}, not ${request.agent}`, [choice.agent])
-    if (request.smallWork) refuse('PROJECT_CHOICE_CONFLICT', `this project's approved choice for ${role.id} is ${choice.agent}; --small-work does not change it`, [choice.agent])
+    if (request.agent !== undefined && request.agent !== choice.agent) refuse('PROJECT_CHOICE_CONFLICT', `this project's approved choice for ${role.id} is ${choice.agent} (${choice.id}), not ${request.agent}; asking someone else there needs the owner to change the choice first`, [choice.agent])
+    if (request.smallWork) refuse('PROJECT_CHOICE_CONFLICT', `this project's approved choice for ${role.id} is ${choice.agent} (${choice.id}); --small-work does not change it`, [choice.agent])
     const agent = byId.get(choice.agent)
+    // An unavailable choice is refused with its reason, never passed to another (73.2 AC4).
     const why = notEligible(data, role, agent, context)
-    if (why !== null) refuse('AGENT_NOT_ELIGIBLE', `this project's approved choice ${choice.agent} ${why}`, others())
-    const efforts = choice.effort !== undefined ? [choice.effort] : phaseEfforts(role, agent, 'initial')
-    return { agent, effort: pickEffort(efforts, request.effort, agent, 'initial'), rule: 'project-choice', phase: 'initial' }
+    if (why !== null) refuse('AGENT_NOT_ELIGIBLE', `this project's approved choice ${choice.agent} (${choice.id}) ${why}; asks for ${role.id} here are refused until the owner changes the choice`, others())
+    const allowed = phaseEfforts(role, agent, 'initial')
+    if (choice.effort !== undefined && !allowed.includes(choice.effort)) refuse('AGENT_NOT_ELIGIBLE', `this project's approved choice ${choice.agent} (${choice.id}) is at ${choice.effort}, which ${role.id} no longer allows it (${allowed.join(' or ')}); asks for ${role.id} here are refused until the owner changes the choice`, others())
+    const efforts = choice.effort !== undefined ? [choice.effort] : allowed
+    return { agent, effort: pickEffort(efforts, request.effort, agent, 'initial'), rule: 'project-choice', phase: 'initial', choice: choice.id }
   }
   if (request.agent !== undefined) {
     if (request.smallWork) refuse('USAGE', '--agent and --small-work name two ways to choose; give one')

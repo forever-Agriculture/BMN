@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { access, readdir } from 'node:fs/promises'
 import {
-  AGENT_FIELDS, FREE_TEXT_FIELDS, ROLE_FIELDS, OLDEST_SCHEMA_VERSION, RosterError, TOOL_FIELDS, agentsDirectory, canonicalJson, parseRoster, rosterPath, schemaSupported, sha256
+  AGENT_FIELDS, FREE_TEXT_FIELDS, ROLE_FIELDS, OLDEST_SCHEMA_VERSION, PROJECT_CHOICE_FIELDS, RosterError, TOOL_FIELDS, agentsDirectory, canonicalJson, parseRoster, rosterPath, schemaSupported, sha256
 } from './agents-roster.mjs'
 
 /**
@@ -82,6 +82,7 @@ function wellFormed(data) {
     && (data.skills === undefined || (Array.isArray(data.skills) && data.skills.every((skill) => isObject(skill) && typeof skill.id === 'string')))
     && (data.skills_source === undefined || typeof data.skills_source === 'string')
     && (data.tools === undefined || (Array.isArray(data.tools) && data.tools.every((tool) => isObject(tool) && typeof tool.id === 'string')))
+    && (data.project_choices === undefined || (Array.isArray(data.project_choices) && data.project_choices.every((choice) => isObject(choice) && typeof choice.id === 'string' && typeof choice.project === 'string' && typeof choice.role === 'string' && typeof choice.agent === 'string')))
 }
 
 /** A generation file whose hash verifies, whatever its schema; null when missing, unreadable or altered. */
@@ -313,8 +314,11 @@ export function restoreProblem(number) {
 // ---------------------------------------------------------------------------------------------
 // Differences between approved machine data and the file
 
-/** Fields status shows only as changed, with a short hash: the owner's free text and exception folders. */
-const HASHED_FIELDS = [...FREE_TEXT_FIELDS, 'folder']
+/** Folders: an exception's and a project choice's. BMN's own review shows them; status only says one changed. */
+const FOLDER_FIELDS = ['folder', 'project']
+
+/** Fields status shows only as changed, with a short hash: the owner's free text and folders. */
+const HASHED_FIELDS = [...FREE_TEXT_FIELDS, ...FOLDER_FIELDS]
 
 function shown(field, value, hashed = HASHED_FIELDS.includes(field)) {
   if (value === undefined) return { present: false }
@@ -337,16 +341,18 @@ const DIFF_SCOPES = [
   { scope: 'exceptions', list: 'exceptions', key: 'id', fields: ['provider', 'folder'] },
   { scope: 'harness-routes', list: 'harness_routes', key: 'harness', fields: ['provider', 'basis', 'accepted_versions'] },
   { scope: 'skills', list: 'skills', key: 'id', fields: ['public', 'only'] },
-  { scope: 'tools', list: 'tools', key: 'id', fields: TOOL_FIELDS }
+  { scope: 'tools', list: 'tools', key: 'id', fields: TOOL_FIELDS },
+  { scope: 'project-choices', list: 'project_choices', key: 'id', fields: PROJECT_CHOICE_FIELDS }
 ]
 
 /**
  * Every machine difference, approved → file. Free-text fields and exception folders carry only a
  * short hash on each side, so `status` can say one changed without printing it. `folders` is for
- * the owner's own review in BMN, which must show the exact folder an exception would allow.
+ * the owner's own review in BMN, which must show the exact folder an exception would allow or a
+ * project choice would bind.
  */
 export function machineDiff(approved, file, { folders = false } = {}) {
-  const hashed = (field) => HASHED_FIELDS.includes(field) && !(folders && field === 'folder')
+  const hashed = (field) => HASHED_FIELDS.includes(field) && !(folders && FOLDER_FIELDS.includes(field))
   const out = []
   for (const { scope, list, key, fields } of DIFF_SCOPES) {
     const before = new Map((approved[list] ?? []).map((item) => [item[key], item]))

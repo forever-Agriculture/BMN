@@ -69,7 +69,8 @@ const SECTION_SUBJECTS: Readonly<Record<string, string>> = {
   exceptions: 'Allowed workspaces',
   'harness-routes': 'Agent apps',
   skills: 'Skills',
-  tools: 'Tools'
+  tools: 'Tools',
+  'project-choices': 'Project choices'
 }
 
 const FIELD_WORDS: Readonly<Record<string, string>> = {
@@ -78,7 +79,8 @@ const FIELD_WORDS: Readonly<Record<string, string>> = {
   compact_at: 'Compact at', paid_by: 'Paid by', price: 'Price', description: 'Line', candidates: 'Order', then: 'If all fail', recheck: 'Recheck',
   small_work: 'Small work', read_only: 'Read-only', researcher: 'Researcher', hosts: 'Hosts', sites: 'Sites', private_work: 'Private work', folder: 'Workspace', basis: 'Destination', accepted_versions: 'Accepted versions',
   input: 'In', cached_input: 'Cached in', output: 'Out', source: 'Source', as_of: 'As of', public: 'Public', only: 'Only in',
-  command: 'Program', args: 'Arguments', url: 'Address', env: 'Variables', headers: 'Headers', apps: 'Only in', agents: 'Only for the runs of'
+  command: 'Program', args: 'Arguments', url: 'Address', env: 'Variables', headers: 'Headers', apps: 'Only in', agents: 'Only for the runs of',
+  project: 'Project', role: 'Role', agent: 'Teammate', effort: 'Effort', ends: 'Until'
 }
 
 const VALUE_WORDS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
@@ -258,6 +260,7 @@ function claimant(sentence: string, groups: DiffGroup[], roleIds: ReadonlySet<st
   if (/^Skills? /.test(sentence)) return section('skills')
   if (/^(Tool |With (a|no) tool on the list)/.test(sentence)) return section('tools')
   if (/ could (no longer )?receive private work in /.test(sentence)) return section('exceptions')
+  if (/^[a-z0-9-]+ asks in one project would reach /.test(sentence)) return section('project-choices')
   if (/ could (no longer )?carry private work/.test(sentence) || sentence.includes(' would count as sending data ')) return section('harness-routes')
   const roleWord = /^(?:when every |the )?([a-z0-9-]+) /.exec(sentence)?.[1]
   if (roleWord !== undefined && roleIds.has(roleWord)) return section('roles')
@@ -279,6 +282,8 @@ export function consequenceWords(sentence: string, roleIds: ReadonlySet<string>)
   if (fails && known(fails[1])) return `When every ${spaced(fails[1])} candidate fails: ${thenWords(fails[2] as string)} instead of ${thenWords(fails[3] as string)}`
   const runs = /^([a-z0-9-]+) runs (would be refused unless they are started so that they cannot write|could be started with write access again)$/.exec(sentence)
   if (runs && known(runs[1])) return `${roleName(runs[1])} runs ${runs[2] as string}`
+  const choice = /^([a-z0-9-]+) asks in one project (would reach .*)$/.exec(sentence)
+  if (choice && known(choice[1])) return `${roleName(choice[1])} asks in one project ${choice[2] as string}`
   const removed = /^the ([a-z0-9-]+) role would be removed$/.exec(sentence)
   if (removed && known(removed[1])) return `The ${spaced(removed[1])} role would be removed`
   return sentence.replace(/ take the ([a-z0-9-]+) role$/, (whole, id: string) => (roleIds.has(id) ? ` take the ${spaced(id)} role` : whole))

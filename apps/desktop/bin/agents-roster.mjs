@@ -80,8 +80,11 @@ export const PRIVATE_WORK = ['allowed', 'public_only']
 export const PAID_BY = ['per_token', 'subscription']
 export const BASES = ['observed-default', 'owner-declared']
 /** Sections that are not agents. */
-export const RESERVED_SECTIONS = ['roster', 'roles', 'providers', 'exceptions', 'harness-routes', 'skills', 'tools']
+export const RESERVED_SECTIONS = ['roster', 'roles', 'providers', 'exceptions', 'harness-routes', 'skills', 'tools', 'project-choices']
 export const MAX_EXCEPTIONS = 64
+export const MAX_PROJECT_CHOICES = 256
+/** A project choice (73.2): who answers a role's asks in one project, at an effort, until an end date. */
+export const PROJECT_CHOICE_FIELDS = ['project', 'role', 'agent', 'effort', 'ends']
 export const MAX_SKILLS = 256
 export const MAX_TOOLS = 64
 /** A tool's id: the name its entry carries in each app's own settings. */
@@ -229,6 +232,54 @@ export function judges(data) {
 }
 
 /** The efforts a role names for an agent: its candidate entry, its effort for a recheck and the one for small work. Empty where the role does not name the agent. */
+/** The efforts a first ask of a role may use with an agent: its efforts in the chain, else as the small-work candidate, else its own. */
+export function initialEfforts(role, agent) {
+  for (const text of role.candidates) {
+    const candidate = parseCandidate(text)
+    if (candidate?.agent === agent.id) return candidate.efforts
+  }
+  const small = role.small_work === undefined ? null : parseCandidate(role.small_work)
+  if (small?.agent === agent.id) return small.efforts
+  return agent.efforts
+}
+
+/** Why a project choice cannot be asked now, or null: its role or agent is gone, the agent cannot take the role, or the effort is not one the role allows it (73.2). */
+export function projectChoiceProblem(data, choice) {
+  const role = data.roles.find((candidate) => candidate.id === choice.role)
+  if (role === undefined) return `the role ${choice.role} is not in the team`
+  const agent = data.agents.find((candidate) => candidate.id === choice.agent)
+  if (agent === undefined) return `${choice.agent} is not on the team`
+  const state = agentState(agent)
+  if (state !== 'active') return `${choice.agent} is ${state}`
+  if (isCalled(agent)) return `${choice.agent} is called by BMN itself and answers no asks`
+  if (!agent.roles.includes(role.id)) return `${choice.agent} does not hold the role ${role.id}`
+  const rule = classRefusal(agent.class, role.id)
+  if (rule !== null) return `${choice.agent} is a ${agent.class}; ${rule.rule}`
+  const efforts = initialEfforts(role, agent)
+  if (choice.effort !== undefined && !efforts.includes(choice.effort)) return `${choice.agent} is asked at ${efforts.join(' or ') || 'no effort'} for ${role.id}, not ${choice.effort}`
+  return null
+}
+
+/** The day `now` is on this computer, written YYYY-MM-DD. */
+function localDay(now) {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
+/** Whether a choice's end date has passed: it applies through the day it names. */
+export function choiceEnded(choice, now = new Date()) {
+  return choice.ends !== undefined && localDay(now) > choice.ends
+}
+
+/**
+ * The project choice for a role in a project, or null. `folders` are the ask's project and, for a
+ * linked worktree, its repository's main folder: a choice for the repository covers its worktrees
+ * and no other folder (73.2 AC1). `ended` says the choice's end date has passed, so it no longer applies.
+ */
+export function projectChoiceFor(data, folders, roleId, now = new Date()) {
+  const choice = (data.project_choices ?? []).find((entry) => entry.role === roleId && folders.includes(entry.project))
+  return choice === undefined ? null : { choice, ended: choiceEnded(choice, now) }
+}
+
 export function roleEfforts(role, agentId) {
   const efforts = []
   const add = (effort) => { if (typeof effort === 'string' && !efforts.includes(effort)) efforts.push(effort) }
@@ -576,7 +627,7 @@ export { parseCandidate }
  * machine data in a canonical shape and is null whenever any error was found, so nothing invalid
  * is ever approved or printed as a team.
  */
-export function parseRoster(text) {
+export function parseRoster(text, { now = new Date() } = {}) {
   const errors = []
   const warnings = []
   const add = (code, line, message) => errors.push({ code, line, message })
@@ -653,6 +704,7 @@ export function parseRoster(text) {
   const exceptions = validateExceptions(blocks.get('exceptions'), providerIds, add, warn)
   const skills = validateSkills(blocks.get('skills'), add, warn)
   const tools = validateTools(blocks.get('tools'), agentIds, add, warn)
+  const projectChoices = validateProjectChoices(blocks.get('project-choices'), add, warn)
 
   const providerById = new Map(providers.map((provider) => [provider.id, provider]))
   const roleIds = new Set(roles.map((role) => role.id))
@@ -681,9 +733,18 @@ export function parseRoster(text) {
     }
   }
 
+  // A choice whose agent can no longer answer, or that ended, leaves the team valid: the check says so, and asks there are refused (73.2 AC4).
+  const choiceData = { agents: agents.filter(Boolean), roles }
+  for (const choice of projectChoices.project_choices ?? []) {
+    const line = blocks.get('project-choices').lines.get(choice.id)
+    const problem = projectChoiceProblem(choiceData, choice)
+    if (problem !== null) warn('PROJECT_CHOICE_UNAVAILABLE', line, `## project-choices.${choice.id}: ${problem}; ${choice.role} asks in that project are refused until the choice is changed`)
+    if (choiceEnded(choice, now)) warn('PROJECT_CHOICE_ENDED', line, `## project-choices.${choice.id} ended on ${choice.ends}; it no longer applies`)
+  }
+
   if (errors.length > 0) return { data: null, errors: errors.sort((a, b) => (a.line ?? 0) - (b.line ?? 0)), warnings, sections }
   return {
-    data: { schema_version: schema, agents: agents.filter(Boolean), roles, providers, exceptions, harness_routes: routes, ...skills, ...tools },
+    data: { schema_version: schema, agents: agents.filter(Boolean), roles, providers, exceptions, harness_routes: routes, ...skills, ...tools, ...projectChoices },
     errors, warnings, sections
   }
 }
@@ -1141,6 +1202,70 @@ function validateExceptions(entry, providerIds, add, warn) {
   return exceptions
 }
 
+/**
+ * `## project-choices` (73.2): the owner's teammate for one role in one project, keyed by an id.
+ * Only its shape is an error here; whether its agent can answer now is a warning (`parseRoster`),
+ * so a choice whose agent is later turned off leaves the team valid. A choice picks who answers and
+ * grants nothing: private work, tools and reach stay the team's.
+ */
+function validateProjectChoices(entry, add, warn) {
+  if (!entry || !isMap(entry.value)) return {}
+  const choices = []
+  const taken = new Map()
+  const ids = Object.keys(entry.value)
+  if (ids.length > MAX_PROJECT_CHOICES) add('INVALID_VALUE', entry.block.startLine, `## project-choices holds ${ids.length} entries; at most ${MAX_PROJECT_CHOICES}`)
+  for (const [id, choice] of Object.entries(entry.value)) {
+    const line = entry.lines.get(id) ?? entry.block.startLine
+    const where = `## project-choices.${id}`
+    if (!ID_PATTERN.test(id)) {
+      add('INVALID_VALUE', line, `## project-choices: id ${id} must match [a-z0-9-]{1,32}`)
+      continue
+    }
+    if (!isMap(choice)) {
+      add('INVALID_VALUE', line, `${where} must be a map of project, role, agent and optionally effort and ends`)
+      continue
+    }
+    const unknown = Object.keys(choice).filter((key) => !PROJECT_CHOICE_FIELDS.includes(key))
+    if (unknown.length > 0) {
+      add('UNKNOWN_FIELD', line, `${where}: unknown field ${unknown.join(', ')}`)
+      continue
+    }
+    const folder = choice.project
+    const parts = typeof folder === 'string' ? folder.split('/') : []
+    if (!isString(folder, 4096) || !folder.startsWith('/') || folder === '/' || parts.includes('..') || parts.includes('.')) {
+      add('PROJECT_CHOICE_PATH', line, `${where}: project must be the project's absolute folder, without . or .. (nothing is expanded, not even ~)`)
+      continue
+    }
+    if (typeof choice.role !== 'string' || !ID_PATTERN.test(choice.role)) {
+      add('INVALID_VALUE', line, `${where}: role must be a role id from ## roles`)
+      continue
+    }
+    if (typeof choice.agent !== 'string' || !ID_PATTERN.test(choice.agent)) {
+      add('INVALID_VALUE', line, `${where}: agent must be an agent id`)
+      continue
+    }
+    if (Object.hasOwn(choice, 'effort') && !EFFORTS.includes(choice.effort)) {
+      add('INVALID_VALUE', line, `${where}: effort must be one of ${EFFORTS.join(', ')}`)
+      continue
+    }
+    if (Object.hasOwn(choice, 'ends') && !isDate(choice.ends)) {
+      add('INVALID_VALUE', line, `${where}: ends must be a date written YYYY-MM-DD`)
+      continue
+    }
+    const project = folder.replace(/\/+$/, '')
+    // Like an exception, a choice counts only for a project's real path: what was approved never comes to mean another folder.
+    if (resolvedDirectory(project) !== project) warn('PROJECT_CHOICE_LINK', line, `${where}: project passes through a link; a choice counts only for a project's real path, so write that path`)
+    const key = `${project}\n${choice.role}`
+    if (taken.has(key)) {
+      add('PROJECT_CHOICE_COLLISION', line, `${where} names the same project and role as ${taken.get(key)}: one choice per project and role`)
+      continue
+    }
+    taken.set(key, id)
+    choices.push({ id, project, role: choice.role, agent: choice.agent, ...(Object.hasOwn(choice, 'effort') ? { effort: choice.effort } : {}), ...(Object.hasOwn(choice, 'ends') ? { ends: choice.ends } : {}) })
+  }
+  return choices.length > 0 ? { project_choices: choices } : {}
+}
+
 // ---------------------------------------------------------------------------------------------
 // Queries over validated (or approved) machine data
 
@@ -1549,6 +1674,10 @@ export function routesYaml(routes) {
   return keyedYaml(routes, 'harness')
 }
 
+export function projectChoicesYaml(choices) {
+  return keyedYaml(choices.map((choice) => Object.fromEntries(['id', ...PROJECT_CHOICE_FIELDS].filter((key) => Object.hasOwn(choice, key)).map((key) => [key, choice[key]]))), 'id')
+}
+
 export function headerYaml(version = SCHEMA_VERSION) {
   return `schema_version: ${version}`
 }
@@ -1621,7 +1750,9 @@ const SHARED = [
   { id: 'roles', key: 'id', field: 'roles', yaml: rolesYaml },
   { id: 'providers', key: 'id', field: 'providers', yaml: providersYaml },
   { id: 'exceptions', key: 'id', field: 'exceptions', yaml: exceptionsYaml },
-  { id: 'harness-routes', key: 'harness', field: 'harness_routes', yaml: routesYaml }
+  { id: 'harness-routes', key: 'harness', field: 'harness_routes', yaml: routesYaml },
+  // An optional key, like the tools: a team without choices holds none.
+  { id: 'project-choices', key: 'id', field: 'project_choices', yaml: projectChoicesYaml }
 ]
 export const SHARED_SECTIONS = [...SHARED.map((entry) => entry.id), 'skills', 'tools']
 
@@ -1665,8 +1796,8 @@ export function rewriteRoster(text, data, { scope = null } = {}) {
       wanted = toolsYaml(data) || '# no tools'
       current = same(toolsFromBlock(blockValue(section), new Set(data.agents.map((agent) => agent.id))), data.tools ?? []) ? wanted : undefined
     } else if (shared !== undefined) {
-      wanted = shared.yaml(data[shared.field])
-      current = same(keyedFromBlock(blockValue(section), shared.key), data[shared.field]) ? wanted : undefined
+      wanted = shared.yaml(data[shared.field] ?? [])
+      current = same(keyedFromBlock(blockValue(section), shared.key), data[shared.field] ?? []) ? wanted : undefined
     } else if (!targets.has(id)) {
       edits.push({ start: section.start, end: sectionEnd, text: '' })
       return
@@ -1694,7 +1825,7 @@ export function rewriteRoster(text, data, { scope = null } = {}) {
   if (data.providers.length > 0) ensure('providers', providersYaml(data.providers))
   for (const agent of data.agents) ensure(agent.id, agentYaml(agent))
   for (const shared of SHARED) {
-    if (shared.id !== 'providers' && data[shared.field].length > 0) ensure(shared.id, shared.yaml(data[shared.field]))
+    if (shared.id !== 'providers' && (data[shared.field] ?? []).length > 0) ensure(shared.id, shared.yaml(data[shared.field]))
   }
   if (skillsYaml(data) !== '') ensure('skills', skillsYaml(data))
   if (toolsYaml(data) !== '') ensure('tools', toolsYaml(data))

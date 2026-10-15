@@ -12,7 +12,7 @@ export interface AskAsked {
   key?: string; keyScope?: string; requestSha256?: string; askedBy?: { kind: string; session?: string; app?: string }; inputHashes?: { files?: string[]; images?: string[] }
 }
 export interface PreparedAsk {
-  id: string; folder: string; choice: { agent: string; effort: string; rule: string; phase: string }
+  id: string; folder: string; choice: { agent: string; effort: string; rule: string; phase: string; project_choice?: string }
   verdict: AskResult; argv: string[]; stdin: 'text' | 'stream-json'; manifest: Record<string, unknown> & { inputs: import('./agents-check.mjs').AskInput[] }
   program: import('./agents-team-forms.mjs').AskProgram
 }

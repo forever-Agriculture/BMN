@@ -52,6 +52,8 @@ export interface RosterProvider {
   private_work: PrivateWork
 }
 export interface RosterException { id: string; provider: string; folder: string }
+/** The owner's teammate for one role in one project (73.2): the project's real folder, the role, the agent, an optional effort and end date. */
+export interface RosterProjectChoice { id: string; project: string; role: string; agent: string; effort?: Effort; ends?: string }
 export interface RosterRoute {
   harness: ListedApp
   provider: string
@@ -71,6 +73,8 @@ export interface RosterData {
   skills_source?: string
   /** The owner's MCP tools, in id order; absent when there are none. */
   tools?: RosterTool[]
+  /** The owner's project choices (73.2); absent when there are none. */
+  project_choices?: RosterProjectChoice[]
 }
 export interface RosterSkill { id: string; public?: true; only?: ListedApp[] }
 /** One MCP tool: a program with arguments or an address, the environment variables it names (never a value), and who gets it. */
@@ -156,7 +160,7 @@ export declare class RosterError extends Error {
 export declare function canonicalJson(value: unknown): string
 export declare function sha256(text: string): string
 export declare function splitSections(text: string): RosterSection[]
-export declare function parseRoster(text: string): { data: RosterData | null; errors: RosterIssue[]; warnings: RosterIssue[]; sections: RosterSection[] }
+export declare function parseRoster(text: string, options?: { now?: Date }): { data: RosterData | null; errors: RosterIssue[]; warnings: RosterIssue[]; sections: RosterSection[] }
 export declare function parseCandidate(text: string): { agent: string; efforts: Effort[]; choice: boolean } | null
 export declare function agentState(agent: RosterAgent): 'active' | 'disabled' | 'proposed' | 'retired'
 export interface TeamEntry {
@@ -187,6 +191,13 @@ export declare function readOnlyProposed(roleId: string): boolean
 export declare function readOnlyProposal(data: Pick<RosterData, 'roles'> | null | undefined): string[]
 /** The efforts a role names for an agent; empty where it does not name the agent. */
 export declare function roleEfforts(role: RosterRole, agentId: string): string[]
+export declare function initialEfforts(role: RosterRole, agent: RosterAgent): string[]
+export declare const PROJECT_CHOICE_FIELDS: readonly string[]
+export declare const MAX_PROJECT_CHOICES: number
+export declare function projectChoiceProblem(data: Pick<RosterData, 'agents' | 'roles'>, choice: RosterProjectChoice): string | null
+export declare function choiceEnded(choice: RosterProjectChoice, now?: Date): boolean
+export declare function projectChoiceFor(data: Pick<RosterData, 'project_choices'>, folders: readonly string[], roleId: string, now?: Date): { choice: RosterProjectChoice; ended: boolean } | null
+export declare function projectChoicesYaml(choices: RosterProjectChoice[]): string
 export declare function agentYaml(agent: RosterAgent): string
 export declare function rolesYaml(roles: RosterRole[]): string
 export declare function providersYaml(providers: RosterProvider[]): string

@@ -880,7 +880,8 @@ and BMN's own data, so updates and uninstall never touch them:
   the lead chooses), what happens when every candidate fails, and `read_only: true` where a run
   for the role must not be able to write. `## exceptions` lists a
   public-only provider you allowed in one named folder, and `## harness-routes` records where each
-  agent app sends data and whether BMN observed that or you declared it.
+  agent app sends data and whether BMN observed that or you declared it. `## project-choices`
+  names your teammate for a role in one project (below, "Your teammate for a project").
 - `global-rules.md`, the rules master BMN renders into each agent app's own rules file.
 
 **An agent BMN itself calls.** Layout 3 adds one kind of agent that runs in no agent app: in
@@ -974,6 +975,35 @@ into effect (BMN stopped between the two) is listed as never having taken effect
 
 **Asking the team.** `bmn team` prints the approved team; `bmn roster role <role>` the ordered
 chain with each candidate's eligibility. Neither prints your notes or prices.
+
+**Your teammate for a project.** `## project-choices` holds, keyed by an id you pick, the teammate
+you chose for one role in one project:
+
+```yaml
+shop-review: {project: /home/you/code/shop, role: reviewer, agent: astra, effort: medium, ends: 2026-12-31}
+```
+
+`project` is the project's real folder, written out (no `~`, `.` or `..`; a path through a link
+counts for nothing, as with an exception). The repository's linked worktrees count as it; any
+other folder, a subfolder included, does not. `effort` and `ends` are optional: without an effort,
+the efforts the role gives that agent apply; a choice applies through the day `ends` names. One
+choice per project and role. A choice takes effect like every edit of the team file, once you
+approve it in BMN (Preferences, Team), whose review says who that role's asks in the project would
+reach before and after; no command approves one. The approval refuses a new or changed choice
+whose agent is not active, does not hold the role, is of a class the role refuses or is given an
+effort the role does not allow it, and one that already ended (`PROJECT_CHOICE_UNAVAILABLE`). A
+choice picks who answers and grants nothing: what data may reach that agent, its tools and what it
+can read stay the team's.
+
+With an approved choice, `bmn team ask` in that project asks the chosen agent (the run's
+`request.json` says `chosen_by: project-choice` and the choice's id); an agent naming someone else
+there is refused naming the choice (`PROJECT_CHOICE_CONFLICT`), and a different teammate there
+needs you to change the choice first. `bmn roster role <role> --project <path>` says whether a
+choice applies there. When the chosen agent is later turned off, retired or taken out of the role,
+the team stays valid: `bmn roster validate` notes it (`PROJECT_CHOICE_UNAVAILABLE`), `bmn roster
+role --project` says the choice cannot be asked and why, and asks there are refused with that
+reason, never sent to someone else. A choice past its end date is noted as ended
+(`PROJECT_CHOICE_ENDED`) and no longer applies.
 
 **The check.** Immediately before work leaves for another agent, `bmn roster check` takes the
 agent, role, workspace, whether the data is private or public and the exact dispatch command, and
@@ -2249,7 +2279,7 @@ bmn team asks export <id> --output PATH
 | --- | --- |
 | `--role R` | The team role whose teammate answers. Required, except with `--image`: a picture ask goes to the `designer` unless a role is named. |
 | `--question TEXT`, `--question-file -` | The question; `-` reads standard input as the other long-text options do (one trailing newline dropped, a terminal refused). Exactly one. |
-| `--agent A` | Ask this teammate; refused with the reason and the eligible alternatives when it is not valid now, never passed over. |
+| `--agent A` | Ask this teammate; refused with the reason and the eligible alternatives when it is not valid now, never passed over. Where the owner approved a choice for the role in the project, it answers, and naming someone else is refused (`PROJECT_CHOICE_CONFLICT`; "Your teammate for a project"). |
 | `--effort E` | One effort the role's applicable phase allows; several allowed and none given or saved is refused with the list. |
 | `--small-work` | The role's small-work candidate. |
 | `--recheck-of ID` | A recheck of that earlier run: same project and role, its teammate, the role's recheck effort. |

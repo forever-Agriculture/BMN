@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { appendFileSync, chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
 import {
-  ID_PATTERN, RESERVED_SECTIONS, RosterError, SHARED_SECTIONS, agentsDirectory, outsideYamlBlocks, parseRoster, rewriteRoster, rosterPath, sha256,
+  ID_PATTERN, RESERVED_SECTIONS, RosterError, SHARED_SECTIONS, agentsDirectory, choiceEnded, outsideYamlBlocks, parseRoster, projectChoiceProblem, rewriteRoster, rosterPath, sha256,
   splitSections, type RosterData
 } from '../../bin/agents-roster.mjs'
 import {
@@ -222,6 +222,23 @@ function readFileState(): { state: PathState; text: string; hash: string } {
   return { state, text, hash: sha256(text) }
 }
 
+/**
+ * A project choice is made only for an agent that can answer it now (73.2 AC1): one the approval
+ * adds or changes is refused when its agent is not active, does not hold the role or is not allowed
+ * that effort, or when its end date has passed. A choice already approved that later became
+ * unavailable is not: the team stays valid and asks there are refused with the reason (AC4).
+ */
+export function judgeProjectChoices(previous: RosterData | null, next: RosterData, now: Date = new Date()): void {
+  const before = new Map((previous?.project_choices ?? []).map((choice) => [choice.id, choice]))
+  for (const choice of next.project_choices ?? []) {
+    const was = before.get(choice.id)
+    if (was !== undefined && was.project === choice.project && was.role === choice.role && was.agent === choice.agent && was.effort === choice.effort && was.ends === choice.ends) continue
+    const problem = projectChoiceProblem(next, choice)
+    if (problem !== null) throw new RosterError('PROJECT_CHOICE_UNAVAILABLE', `the project choice ${choice.id} cannot be kept: ${problem}; nothing was approved`)
+    if (choiceEnded(choice, now)) throw new RosterError('PROJECT_CHOICE_UNAVAILABLE', `the project choice ${choice.id} ended on ${choice.ends}; nothing was approved`)
+  }
+}
+
 function validData(text: string): RosterData {
   const parsed = parseRoster(text)
   if (parsed.data === null) {
@@ -239,6 +256,7 @@ export function approveRoster(shown: ShownRevision, seams: ApprovalSeams = {}): 
     checkShown(shown, current, file.hash, file.state)
     const data = validData(file.text)
     judgeInspected(current?.data ?? null, data, seams)
+    judgeProjectChoices(current?.data ?? null, data, (seams.now ?? (() => new Date()))())
     return publish(data, file.hash, current, seams)
   })
 }
@@ -250,10 +268,11 @@ export function mergeSections(approved: RosterData, file: RosterData, scope: rea
   const agents = [...new Set([...file.agents.map((agent) => agent.id), ...approved.agents.map((agent) => agent.id)])]
     .map((id) => (scope.includes(id) ? fromFile.get(id) : fromApproved.get(id)))
     .filter((agent): agent is RosterData['agents'][number] => agent !== undefined)
-  // The skills marks and the tools are optional keys: one that is absent stays absent, so the data's hash does not move.
-  const rest = Object.fromEntries(Object.entries(approved).filter(([key]) => key !== 'skills' && key !== 'skills_source' && key !== 'tools')) as Omit<RosterData, 'skills' | 'skills_source' | 'tools'>
+  // The skills marks, the tools and the project choices are optional keys: one that is absent stays absent, so the data's hash does not move.
+  const rest = Object.fromEntries(Object.entries(approved).filter(([key]) => key !== 'skills' && key !== 'skills_source' && key !== 'tools' && key !== 'project_choices')) as Omit<RosterData, 'skills' | 'skills_source' | 'tools' | 'project_choices'>
   const marks = scope.includes('skills') ? file : approved
   const tools = (scope.includes('tools') ? file : approved).tools
+  const choices = (scope.includes('project-choices') ? file : approved).project_choices
   return {
     ...rest,
     agents,
@@ -263,7 +282,8 @@ export function mergeSections(approved: RosterData, file: RosterData, scope: rea
     harness_routes: scope.includes('harness-routes') ? file.harness_routes : approved.harness_routes,
     ...(marks.skills === undefined ? {} : { skills: marks.skills }),
     ...(marks.skills_source === undefined ? {} : { skills_source: marks.skills_source }),
-    ...(tools === undefined ? {} : { tools })
+    ...(tools === undefined ? {} : { tools }),
+    ...(choices === undefined ? {} : { project_choices: choices })
   }
 }
 
@@ -281,6 +301,7 @@ export function approveSections(shown: ShownRevision, scope: string[], seams: Ap
     const fileData = validData(file.text)
     if (current === null) {
       judgeInspected(null, fileData, seams)
+      judgeProjectChoices(null, fileData, (seams.now ?? (() => new Date()))())
       return publish(fileData, file.hash, current, seams)
     }
     const unknown = scope.filter((id) => !SHARED_SECTIONS.includes(id)
@@ -291,6 +312,7 @@ export function approveSections(shown: ShownRevision, scope: string[], seams: Ap
       throw new RosterError('ROSTER_INVALID', 'this change depends on another pending change; approve them together or revert one', { errors: parsed.errors })
     }
     judgeInspected(current.data, parsed.data, seams)
+    judgeProjectChoices(current.data, parsed.data, (seams.now ?? (() => new Date()))())
     return publish(parsed.data, file.hash, current, seams)
   })
 }
@@ -316,6 +338,7 @@ export function saveAndApprove(shown: ShownRevision, data: RosterData, seams: Ap
     const nextText = rewriteRoster(file.text, data)
     const nextData = validData(nextText)
     judgeInspected(current?.data ?? null, nextData, seams)
+    judgeProjectChoices(current?.data ?? null, nextData, (seams.now ?? (() => new Date()))())
     if (nextText !== file.text) {
       keepPriorState(file.state, (seams.now ?? (() => new Date()))())
       assertLockHeld()

@@ -188,21 +188,24 @@ describe('who answers (72.2 AC1)', () => {
     expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer', recheck: gone, agent: 'astra' }, context())).code).toBe('RECHECK_INVALID')
     expect(resolveTeammate(data(), { role: 'epic-reviewer', recheck: gone, agent: 'astra', effort: 'low' }, context())).toMatchObject({ agent: { id: 'astra' }, effort: 'low', rule: 'recheck' })
     expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer', recheck: gone, agent: 'astra', effort: 'xhigh' }, context())).code).toBe('EFFORT_NOT_ALLOWED')
-    // Where the project's approved choice names someone else, the owner decides.
-    const chosen = context({ projectChoice: () => ({ agent: 'fable', effort: 'medium' }) })
+    // Where the project's approved choice names someone else, the owner changes the choice first.
+    const chosen = context({ projectChoice: () => ({ id: 'shop-review', agent: 'fable', effort: 'medium' }) })
     expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer', recheck: gone, agent: 'astra', effort: 'low' }, chosen))).toMatchObject({ code: 'PROJECT_CHOICE_CONFLICT', alternatives: ['fable'] })
   })
 
   it('an approved project choice binds, at its saved effort; a conflicting agent or small work is refused naming it', () => {
-    const chosen = context({ projectChoice: () => ({ agent: 'fable', effort: 'high' }) })
-    expect(resolveTeammate(data(), { role: 'epic-reviewer' }, chosen)).toMatchObject({ agent: { id: 'fable' }, effort: 'high', rule: 'project-choice' })
+    const chosen = context({ projectChoice: () => ({ id: 'shop-review', agent: 'fable', effort: 'medium' }) })
+    expect(resolveTeammate(data(), { role: 'epic-reviewer' }, chosen)).toMatchObject({ agent: { id: 'fable' }, effort: 'medium', rule: 'project-choice', choice: 'shop-review' })
     expect(resolveTeammate(data(), { role: 'epic-reviewer', agent: 'fable' }, chosen)).toMatchObject({ rule: 'project-choice' })
     expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer', agent: 'astra' }, chosen))).toMatchObject({ code: 'PROJECT_CHOICE_CONFLICT', alternatives: ['fable'] })
+    expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer', agent: 'astra' }, chosen)).message).toMatch(/is fable \(shop-review\), not astra; asking someone else there needs the owner to change the choice first/u)
     expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer', smallWork: true }, chosen)).code).toBe('PROJECT_CHOICE_CONFLICT')
     expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer', effort: 'low' }, chosen)).code).toBe('EFFORT_NOT_ALLOWED')
     // Without a saved effort the candidate's own apply; a choice that cannot answer now is refused, not passed over.
-    expect(resolveTeammate(data(), { role: 'epic-reviewer' }, context({ projectChoice: () => ({ agent: 'fable' }) }))).toMatchObject({ effort: 'medium' })
-    expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer' }, context({ projectChoice: () => ({ agent: 'fable' }), standing: (agent: { id: string }) => (agent.id === 'fable' ? 'cannot answer here: no form' : 'proven') }))).code).toBe('AGENT_NOT_ELIGIBLE')
+    expect(resolveTeammate(data(), { role: 'epic-reviewer' }, context({ projectChoice: () => ({ id: 'shop-review', agent: 'fable' }) }))).toMatchObject({ effort: 'medium' })
+    expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer' }, context({ projectChoice: () => ({ id: 'shop-review', agent: 'fable' }), standing: (agent: { id: string }) => (agent.id === 'fable' ? 'cannot answer here: no form' : 'proven') }))).code).toBe('AGENT_NOT_ELIGIBLE')
+    // A saved effort the role no longer allows the agent is refused with the reason, never asked at another (73.2 AC4).
+    expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer' }, context({ projectChoice: () => ({ id: 'shop-review', agent: 'fable', effort: 'max' }) })))).toMatchObject({ code: 'AGENT_NOT_ELIGIBLE', message: expect.stringMatching(/is at max, which epic-reviewer no longer allows it/u) })
   })
 })
 

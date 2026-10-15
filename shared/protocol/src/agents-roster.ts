@@ -212,6 +212,9 @@ export interface RosterProviderShape { id: string; name: string; hosts: string[]
 
 export interface RosterExceptionShape { id: string; provider: string; folder: string }
 
+/** The owner's teammate for one role in one project (73.2): the project's real folder, the role, the agent, an optional effort and end date. */
+export interface RosterProjectChoiceShape { id: string; project: string; role: string; agent: string; effort?: RosterEffort; ends?: string }
+
 /**
  * BMN's first OpenCode agent (70.4; the owner's card "Luna via Go", 2026-10-14): Luna's model through
  * his OpenCode Go plan, a read-only helper and a researcher. OpenCode Go joins the team as a new
@@ -243,6 +246,8 @@ export interface RosterDataShape {
   skills_source?: string
   /** The owner's MCP tools, in id order; absent when there are none. */
   tools?: RosterToolShape[]
+  /** The owner's project choices (73.2); absent when there are none. */
+  project_choices?: RosterProjectChoiceShape[]
 }
 
 /** One MCP tool: a program with arguments or an address, the environment variables it names (never a value), and who gets it. */
@@ -270,7 +275,7 @@ export interface RosterSkillShape { id: string; public?: true; only?: RosterList
 export interface RosterIssueShape { code: string; line?: number; message: string }
 
 export interface RosterDiffShape {
-  scope: 'agent' | 'roles' | 'providers' | 'exceptions' | 'harness-routes' | 'skills' | 'tools'
+  scope: 'agent' | 'roles' | 'providers' | 'exceptions' | 'harness-routes' | 'skills' | 'tools' | 'project-choices'
   id: string
   field: string | null
   kind: 'added' | 'removed' | 'changed'

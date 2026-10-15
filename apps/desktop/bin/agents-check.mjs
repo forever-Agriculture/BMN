@@ -1788,6 +1788,27 @@ export function consequences(before, after) {
     if (role.read_only !== true && heldBefore) out.push(`${role.id} runs could be started with write access again`)
   }
   for (const role of prior.roles) if (!after.roles.some((entry) => entry.id === role.id)) out.push(`the ${role.id} role would be removed`)
+  // A project choice (73.2): who a role's asks in that project would reach, before and after. The folder is named only in BMN's own review.
+  const chosen = (choice) => `${name(choice.agent)}${choice.effort === undefined ? '' : ` at ${choice.effort}`}`
+  const chain = (data, roleId) => {
+    const role = data.roles.find((entry) => entry.id === roleId)
+    const first = role === undefined ? null : firstEligible(data, role)
+    return first === null ? "the role's chain, which has no agent to start with" : `the role's chain (${name(first)} first)`
+  }
+  const oldChoices = new Map((prior.project_choices ?? []).map((choice) => [choice.id, choice]))
+  const newChoices = new Map((after.project_choices ?? []).map((choice) => [choice.id, choice]))
+  for (const id of new Set([...oldChoices.keys(), ...newChoices.keys()])) {
+    const was = oldChoices.get(id)
+    const now = newChoices.get(id)
+    const moved = was === undefined || now === undefined || was.project !== now.project || was.role !== now.role
+    if (moved) {
+      if (was !== undefined) out.push(`${was.role} asks in one project would reach ${chain(after, was.role)} instead of ${chosen(was)}`)
+      if (now !== undefined) out.push(`${now.role} asks in one project would reach ${chosen(now)} instead of ${chain(prior.roles.some((role) => role.id === now.role) ? prior : after, now.role)}`)
+      continue
+    }
+    if (was.agent !== now.agent || was.effort !== now.effort) out.push(`${now.role} asks in one project would reach ${chosen(now)} instead of ${chosen(was)}`)
+    if (was.ends !== now.ends) out.push(`${now.role} asks in one project would reach ${chosen(now)} ${now.ends === undefined ? 'with no end date' : `until ${now.ends}`} instead of ${was.ends === undefined ? 'with no end date' : `until ${was.ends}`}`)
+  }
   // Who researches (63.3): naming the first researcher closes the offer to every other agent; after that only the named ones change.
   const researched = namedResearchers(prior)
   const researching = namedResearchers(after)

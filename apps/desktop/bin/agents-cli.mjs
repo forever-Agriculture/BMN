@@ -1,6 +1,6 @@
 // MODULE: agents-cli.mjs - Epic 60: `bmn team`, `bmn roster …` and `bmn rules …`, owner commands that need no control socket
 import { writeSync } from 'node:fs'
-import { RosterError, roleChain, roleChainText, rosterPath, team, teamLine } from './agents-roster.mjs'
+import { RosterError, projectChoiceFor, projectChoiceProblem, roleChain, roleChainText, rosterPath, team, teamLine } from './agents-roster.mjs'
 import { diffLine, listGenerations, machineDiff, readApproved, readApprovedWithFile, readValidRoster } from './agents-state.mjs'
 
 /** Exit codes shared by every Epic 60 command (the epic's shared contract). */
@@ -88,7 +88,9 @@ nothing is approved yet, 6 when approved state is corrupt.`
 
 export const ROSTER_USAGE = `Usage: bmn roster validate [--json]          Check ~/.config/bmn/agents/roster.md; exit 4 lists each error and line
        bmn roster status [--json]            Approved version and every pending file difference
-       bmn roster role <role> [--json]       The approved chain: ordered candidates, eligibility, then, rules
+       bmn roster role <role> [--project <path>] [--json]
+                                             The approved chain: ordered candidates, eligibility, then, rules;
+                                             with --project, the owner's choice for the role there
        bmn roster route --agent <id> [--json] [-- <dispatch argv>]
                                              Which provider and host a dispatch would reach (inspection only)
        bmn roster visibility <workspace> [--refresh] [--json]
@@ -338,10 +340,38 @@ async function withContext(data, chain) {
 export const WEB_QUESTION_ROLES = ['helper', 'browser']
 export const WEB_QUESTION_LINE = 'to search the web, ask with `bmn research ask` (the question on standard input, or --question-file)'
 
+/**
+ * What the project's approved choice for a role means now (73.2 AC3, AC4): who it names and whether
+ * it applies, cannot be asked, or ended. A choice for a repository covers its linked worktrees.
+ */
+async function projectChoiceView(data, roleId, named) {
+  const { askProject, mainWorktree } = await import('./agents-team-inputs.mjs')
+  const project = askProject(named)
+  const linked = mainWorktree(project)
+  const found = projectChoiceFor(data, linked === null ? [project] : [project, linked], roleId)
+  if (found === null) return { project, project_choice: null }
+  const { choice, ended } = found
+  const problem = ended ? null : projectChoiceProblem(data, choice)
+  return {
+    project,
+    project_choice: { ...choice, state: ended ? 'ended' : problem === null ? 'applies' : 'unavailable', ...(problem === null ? {} : { reason: problem }), ...(choice.project === linked ? { worktree_of: linked } : {}) }
+  }
+}
+
+function projectChoiceText(view) {
+  const choice = view.project_choice
+  const where = `  project ${view.project}: `
+  if (choice === null) return `${where}no choice of the owner's; the chain applies`
+  const named = `${choice.agent}${choice.effort === undefined ? '' : `@${choice.effort}`}`
+  if (choice.state === 'ended') return `${where}the owner's choice ${choice.id} (${named}) ended on ${choice.ends}; the chain applies`
+  if (choice.state === 'unavailable') return `${where}the owner's choice ${choice.id} names ${named}, which cannot be asked now: ${choice.reason}; asks for the role there are refused until the owner changes the choice`
+  return `${where}${named} by the owner's choice ${choice.id}${choice.ends === undefined ? '' : ` until ${choice.ends}`}; asks there go to ${choice.agent}, and naming someone else is refused (whether its app can answer and the ask's data may reach it is judged per ask)`
+}
+
 async function rosterRole(argv) {
   let parsed
   try {
-    parsed = readOptions(argv, { flags: ['json'] })
+    parsed = readOptions(argv, { flags: ['json'], values: ['project'] })
     if (parsed.positionals.length !== 1 || parsed.rest !== null) throw new AgentsUsageError('roster role expects exactly one role id')
   } catch (error) {
     if (error instanceof AgentsUsageError) return usage(error.message)
@@ -361,10 +391,21 @@ async function rosterRole(argv) {
       }
       throw error
     }
+    let choice
+    try {
+      choice = parsed.options.project === undefined ? undefined : await projectChoiceView(generation.data, chain.role, parsed.options.project)
+    } catch (error) {
+      if (error?.code === 'PROJECT_INVALID') {
+        if (asJson) out(JSON.stringify({ ok: false, verdict: 'REFUSED', code: error.code, message: error.message }, null, 2))
+        else err(`bmn: ${error.code}: ${error.message}`)
+        return EXIT.refusal
+      }
+      throw error
+    }
     // A run for one of these roles is the one that goes looking things up (64.2 AC3).
     const web = WEB_QUESTION_ROLES.includes(chain.role) ? WEB_QUESTION_LINE : undefined
-    if (asJson) out(JSON.stringify({ ok: true, generation: generation.number, ...chain, ...(web === undefined ? {} : { web_question: web }) }, null, 2))
-    else out(`${roleChainText(chain)}${web === undefined ? '' : `\n  web: ${web}`}\n(approved version ${generation.number})`)
+    if (asJson) out(JSON.stringify({ ok: true, generation: generation.number, ...chain, ...(web === undefined ? {} : { web_question: web }), ...(choice ?? {}) }, null, 2))
+    else out(`${roleChainText(chain)}${web === undefined ? '' : `\n  web: ${web}`}${choice === undefined ? '' : `\n${projectChoiceText(choice)}`}\n(approved version ${generation.number})`)
     return 0
   } catch (error) {
     return failWith(error, asJson)

@@ -211,6 +211,22 @@ export function workingTreeRoot(folder) {
   }
 }
 
+/**
+ * For a linked worktree's top folder, the main folder of the repository it belongs to; null for a
+ * main working tree, a bare repository, a folder that is not a working tree's top, or no repository.
+ * A project choice made for the repository covers its worktrees (73.2 AC1).
+ */
+export function mainWorktree(top) {
+  try {
+    const [shown, common] = git(top, ['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-common-dir']).trim().split('\n')
+    if (shown === undefined || common === undefined || realpathSync(shown) !== top || basename(common) !== '.git') return null
+    const main = realpathSync(dirname(common))
+    return main === top ? null : main
+  } catch {
+    return null
+  }
+}
+
 /** Why a folder can never be a project: the home folder, `/`, or the apps' and BMN's configuration folders. */
 export function notAProject(real, home = homedir()) {
   if (real === '/') return '/ is not a project'

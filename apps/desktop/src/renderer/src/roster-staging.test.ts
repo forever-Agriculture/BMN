@@ -411,6 +411,18 @@ describe('differences in words (60.5 AC7)', () => {
     expect(changedSections(diffs)).toEqual(new Set(['astra', 'providers', 'roles', 'harness-routes']))
   })
 
+  it('a project choice is one row, "Project choices", and says who that role\'s asks there would reach (73.2 AC2)', () => {
+    const added: RosterDiffShape = { scope: 'project-choices', id: 'shop-review', field: null, kind: 'added', after: { present: true, value: { project: '/synthetic/code/shop', role: 'epic-reviewer', agent: 'fable', effort: 'medium' } } }
+    const sentences = ["epic-reviewer asks in one project would reach Fable at medium instead of the role's chain (Astra first)"]
+    const { groups, general } = groupDifferences([added], DATA, DATA, sentences)
+    expect(groups.map((group) => [group.key, group.subject, group.consequences])).toEqual([
+      ['project-choices', 'Project choices', ["Epic reviewer asks in one project would reach Fable at medium instead of the role's chain (Astra first)"]]
+    ])
+    expect(general).toEqual([])
+    // BMN's own review names the exact folder the choice binds.
+    expect(groups[0]?.lines.map((line) => `${line.field}: ${line.after}`)).toEqual(expect.arrayContaining(['shop-review · project: /synthetic/code/shop', 'shop-review · teammate: fable', 'shop-review · effort: medium']))
+  })
+
   it('an added agent shows every value in Review and one word on its outside-change row', () => {
     const added: RosterDiffShape = { scope: 'agent', id: 'kimi', field: null, kind: 'added', after: { present: true, value: { id: 'kimi', name: 'Kimi', class: 'pawn', harness: 'claude', enabled: true } } }
     const group = groupDifferences([added], { ...DATA, agents: [...DATA.agents, agent('kimi', { class: 'pawn' })] }, DATA, []).groups[0]
