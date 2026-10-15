@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
-import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, agentState, appName, canonicalJson, classRefusal, harnessPrivateWork, isCalled, isRetired, namedResearchers, parseYaml, projectChoiceCollisions, projectChoiceFor, publicOnlyReasons, resolvedDirectory, retiredProgram, retiredWords, roleEfforts, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, agentState, appName, canonicalJson, classRefusal, harnessPrivateWork, isCalled, isRetired, namedResearchers, parseYaml, projectChoiceCollisions, projectChoiceFor, projectChoiceProblem, publicOnlyReasons, resolvedDirectory, retiredProgram, retiredWords, roleEfforts, sha256 } from './agents-roster.mjs'
 import { canonicalProject } from './agents-team-inputs.mjs'
 import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, err, failWith, out, readOptions, usage } from './agents-cli.mjs'
@@ -1810,9 +1810,16 @@ export function consequences(before, after) {
       const found = projectChoiceFor(data, group.project, group.role, canonicalProject, today)
       return found === null || found.ended ? chain(data, group.role) : found.collision !== undefined ? null : chosen(found.choice)
     }
+    // The choice left may name an agent that can no longer be asked: its asks stay refused, for that reason (AC4).
+    const leftWords = (group) => {
+      const found = projectChoiceFor(after, group.project, group.role, canonicalProject, today)
+      const problem = found !== null && !found.ended && found.collision === undefined ? projectChoiceProblem(after, found.choice) : null
+      return problem === null ? `would reach ${reached(after, group)} instead of being refused for two choices there`
+        : `would stay refused: the choice left, ${found.choice.id}, names ${chosen(found.choice)}, who cannot be asked now (${problem}), instead of being refused for two choices there`
+    }
     for (const [key, group] of pairsBefore) {
       if (pairsAfter.has(key)) continue
-      out.push(`${group.role} asks in one project would reach ${reached(after, group)} instead of being refused for two choices there`)
+      out.push(`${group.role} asks in one project ${leftWords(group)}`)
       for (const choice of group.choices) said.add(choice.id)
     }
     for (const [key, group] of pairsAfter) {

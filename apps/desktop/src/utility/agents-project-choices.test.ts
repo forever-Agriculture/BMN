@@ -400,6 +400,8 @@ describe('asks in the project and its worktrees (73.2 AC1, AC3, AC4)', () => {
     const text = withChoices(tree, `main: {project: ${shop}, role: epic-reviewer, agent: fable}`)
     writeFileSync(rosterFile(), text)
     expect(await previewApproval({ kind: 'sections', scope: ['project-choices'] }, env)).toMatchObject({ valid: false, errors: [{ code: 'PROJECT_CHOICE_COLLISION' }] })
+    expect(await previewApproval({ kind: 'file' }, env)).toMatchObject({ valid: false, errors: [{ code: 'PROJECT_CHOICE_COLLISION' }] })
+    expect(await previewApproval({ kind: 'staged', data: readValidRoster().data as never }, env)).toMatchObject({ valid: false, errors: [{ code: 'PROJECT_CHOICE_COLLISION' }] })
     expect(() => approveSections(shown(), ['project-choices'], { checkInspectedRoutes: () => {}, now: () => NOW })).toThrow('both choose for epic-reviewer')
     expect(() => saveAndApprove(shown(), readValidRoster().data, { checkInspectedRoutes: () => {}, now: () => NOW })).toThrow('both choose for epic-reviewer')
     expect(generation()).toBe(approvedBefore)
@@ -432,11 +434,34 @@ describe('asks in the project and its worktrees (73.2 AC1, AC3, AC4)', () => {
 
   it('a restore whose choices do not collide keeps an unavailable choice as it was approved (AC4, epic recheck 2)', () => {
     const shop = makeProject('shop')
-    approve(withChoices(`shop-review: {project: ${shop}, role: epic-reviewer, agent: fable}`))
-    const withChoice = generation()!
+    const choice = `shop-review: {project: ${shop}, role: epic-reviewer, agent: fable}`
+    approve(withChoices(choice))
+    // Fable turned off with the choice kept: the version restored holds an unavailable choice.
+    approve(fableOff(withChoices(choice)))
+    const unavailable = generation()!
+    expect(readApproved().data.agents.find((agent) => agent.id === 'fable')?.enabled).toBe(false)
     approve(fableOff(EXAMPLE))
-    restoreGeneration(shown(), withChoice, { checkInspectedRoutes: () => {}, now: () => NOW })
+    expect(readApproved().data.project_choices).toBeUndefined()
+    restoreGeneration(shown(), unavailable, { checkInspectedRoutes: () => {}, now: () => NOW })
     expect(readApproved().data.project_choices).toEqual([{ id: 'shop-review', project: shop, role: 'epic-reviewer', agent: 'fable' }])
+    expect(readApproved().data.agents.find((agent) => agent.id === 'fable')?.enabled).toBe(false)
+    expect(refusal(() => ask({ project: shop }))).toMatchObject({ code: 'AGENT_NOT_ELIGIBLE', message: expect.stringContaining('(shop-review) is disabled') })
+  })
+
+  it('removing one of two choices whose other names an agent turned off: the review says asks stay refused and why, and they do (epic recheck 3)', async () => {
+    const shop = makeProject('shop')
+    const worktree = join(home, 'worktrees/shop-feature')
+    mkdirSync(worktree, { recursive: true })
+    const main = `main: {project: ${shop}, role: epic-reviewer, agent: fable}`
+    approve(withChoices(main, `tree: {project: ${realpathSync(worktree)}, role: epic-reviewer, agent: astra}`))
+    approve(fableOff(readFileSync(rosterFile(), 'utf8')))
+    git(shop, 'worktree', 'add', '-q', '-b', 'feature', worktree)
+    writeFileSync(rosterFile(), fableOff(withChoices(main)))
+    const preview = await previewApproval({ kind: 'sections', scope: ['project-choices'] }, env)
+    expect(preview).toMatchObject({ valid: true, consequences: expect.arrayContaining([expect.stringMatching(/^epic-reviewer asks in one project would stay refused: the choice left, main, names Fable, who cannot be asked now \(fable is disabled\), instead of being refused for two choices there$/u)]) })
+    expect(preview.consequences?.some((line) => /would reach Fable/u.test(line))).toBe(false)
+    approveSections(shown(), ['project-choices'], { checkInspectedRoutes: () => {}, now: () => NOW })
+    expect(refusal(() => ask({ project: shop }))).toMatchObject({ code: 'AGENT_NOT_ELIGIBLE', message: expect.stringContaining('(main) is disabled') })
   })
 
   it('an ended choice no longer applies; one whose agent cannot answer is refused with the reason, never sent to another', () => {
