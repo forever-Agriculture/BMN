@@ -73,10 +73,8 @@ extraResources:
     to: bin/agents-supervised.mjs
   - from: bin/agents-judge.mjs
     to: bin/agents-judge.mjs
-  # Epic 72: a teammate's ask: its container, the measured form of each app, its inputs, the resolver, the
-  # run's own supervisor (started as a program, like agents-supervised.mjs) and the one git a project ask runs.
-  - from: bin/agents-container.mjs
-    to: bin/agents-container.mjs
+  # Epic 72: a teammate's ask: the measured form of each app, its inputs, the resolver, the run's own
+  # supervisor (started as a program, like agents-supervised.mjs) and the one git a teammate's history reads run.
   - from: bin/agents-team-forms.mjs
     to: bin/agents-team-forms.mjs
   - from: bin/agents-team-inputs.mjs
@@ -95,8 +93,6 @@ extraResources:
     to: bin/agents-team-places.mjs
   - from: bin/agents-team-pictures.mjs
     to: bin/agents-team-pictures.mjs
-  - from: bin/agents-team-tree.mjs
-    to: bin/agents-team-tree.mjs
   # bmn.mjs loads it first for every command: a command inside a teammate's run is refused.
   - from: bin/agents-team-nested.mjs
     to: bin/agents-team-nested.mjs

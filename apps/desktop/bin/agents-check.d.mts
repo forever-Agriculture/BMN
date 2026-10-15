@@ -169,24 +169,24 @@ export declare function readCodexConfig(text: string | null): { top: Record<stri
   access: { top: Record<string, string>; profiles: Record<string, Record<string, string>>; unreadable: string | null } }
 export declare function evaluate(inputs: CheckInputs, options?: CheckOptions): CheckResult
 export declare function evaluateResearch(inputs: ResearchInputs, options?: ResearchOptions): ResearchResult
-/** One input of an ask with the folder it comes from: a folder exception counts only inside it (R72-NFR6). */
-export interface AskInput { kind: 'question' | 'file' | 'project' | 'picture'; label: string; root: string | null; relative?: string; sha256?: string; public_commit?: string | null }
+/** One input of an ask with the folder it comes from: a folder exception counts only inside it (R72-NFR6); `mode` is what the form's own mode can read. */
+export interface AskInput { kind: 'question' | 'file' | 'project' | 'picture' | 'mode'; label: string; root: string | null; relative?: string; sha256?: string; public_commit?: string | null }
 export interface AskConsent { kind: AskInput['kind']; label: string; root: string | null; basis: string }
-export interface AskInputs { agent: string; role: string; effort: string; access: 'question' | 'files' | 'project'; data: 'private' | 'public'; wide?: boolean; run: string; argv: string[] }
+export interface AskInputs { agent: string; role: string; effort: string; data: 'private' | 'public'; run: string; argv: string[]; cwd: string }
 export interface AskReceipt extends Omit<ReceiptBase, 'cwd'> {
-  mode: 'ask'; role: string; access: 'question' | 'files' | 'project'; form: string; pictures?: number
+  mode: 'ask'; role: string; form: import('./agents-team-forms.mjs').AskFormName; reads: { scope: string; words: string; folder: string }; project: string | null; cwd: string; pictures?: number
   run: string; data: 'public' | 'private'; consent: AskConsent[]; inputs_sha256: string
-  snapshots: { config: string; executable: { launcher: string; payload: string }; environment: string; rules: string | null; prompt: string }
-  harness_version: { version: string | null; state: string; form: 'proven' }
+  snapshots: { executable: { launcher: string; payload: string }; environment: string; rules: string | null; prompt: string; message?: string; git?: string }
+  harness_version: { version: string | null; state: string; form_checked_on: { version: string; on: string } }
 }
-export type AskResult = { verdict: 'PASS'; receipt: AskReceipt; steps: string[]; argv: string[]; code?: undefined; message?: undefined; next?: undefined; detail?: undefined } | (Refused & { argv?: undefined })
-export interface AskRequest { access: string; model: string; effort: string; rules: string | null; pictures: string[]; context: { argv: string[]; env: string[] } }
+export type AskResult = { verdict: 'PASS'; receipt: AskReceipt; steps: string[]; argv: string[]; form: import('./agents-team-forms.mjs').AskCommand; code?: undefined; message?: undefined; next?: undefined; detail?: undefined } | (Refused & { argv?: undefined; form?: undefined })
+export type AskRequest = import('./agents-team-forms.mjs').AskCommandRequest & { context: { argv: string[]; env: string[] } }
 export declare function teamRunsDirectory(): string
-export declare function askStandingWords(harness: string, version: string | null, mode: string): string | null
 export declare function askConsent(data: RosterData, destination: { provider: string | null; basis: string }, inputs: AskInput[], label: 'private' | 'public', now?: Date, note?: (text: string) => void): AskConsent[]
 export declare function expectedDestination(data: RosterData, agent: RosterAgent): { provider: string; basis: string }
-export declare function askRequest(agent: RosterAgent, version: string | null, request: { access: string; effort: string; rules?: string | null; pictures?: string[]; contextTestLog?: import('./agents-context.mjs').ContextTestEntry[] }): AskRequest
-export declare function evaluateAsk(inputs: AskInputs, options?: { environment?: Environment; now?: Date; testedVersions?: Record<string, string[]>; contextTestLog?: import('./agents-context.mjs').ContextTestEntry[]; program?: { launcher: string; payload: string; root: string; paths: string[] }; version?: string | null }): AskResult
+export declare function askRequest(agent: RosterAgent, version: string | null, request: { form: import('./agents-team-forms.mjs').AskFormName; effort: string; cwd: string; folder: string; rules?: string | null; pictures?: string[]; environment?: Environment; contextTestLog?: import('./agents-context.mjs').ContextTestEntry[] }): AskRequest
+export declare function modeInput(form: import('./agents-team-forms.mjs').AskFormName, appWords: string, project: string | null): AskInput | null
+export declare function evaluateAsk(inputs: AskInputs, options?: { environment?: Environment; now?: Date; testedVersions?: Record<string, string[]>; contextTestLog?: import('./agents-context.mjs').ContextTestEntry[]; program?: import('./agents-team-forms.mjs').AskProgram; version?: string | null }): AskResult
 export declare function verifyReceipt(path: string, argv: string[], options?: CheckOptions): { ok: boolean; reason?: string }
 export declare function workspaceRoot(directory: string): string
 export declare function sessionRecord(codexHome: string | null, id: string): { id?: unknown; cwd?: unknown; provider?: unknown; cli_version?: unknown } | null

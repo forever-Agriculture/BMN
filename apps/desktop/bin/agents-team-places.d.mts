@@ -9,15 +9,14 @@ export declare function keyFresh(key: string, now?: Date): boolean
 export declare function makeKey(by: string, now?: Date): string
 export declare function keyScope(asker: { kind: string; session?: string }): string
 export interface HashedRequest {
-  role: string; question: string; agent?: string | undefined; effort?: string | undefined; smallWork?: boolean; recheckOf?: string | undefined; project?: string | null | undefined; access?: string | undefined
-  files?: Array<{ path: string; sha256: string }>; images?: Array<{ path: string; sha256: string }>; data?: string | undefined; wide?: boolean; timeLimitMinutes: number
+  role: string; question: string; agent?: string | undefined; effort?: string | undefined; smallWork?: boolean; recheckOf?: string | undefined; project?: string | null | undefined
+  files?: Array<{ path: string; sha256: string }>; images?: Array<{ path: string; sha256: string }>; data?: string | undefined; timeLimitMinutes: number
 }
 export declare function requestHash(request: HashedRequest): string
 export declare function keyPath(runs: string, scope: string, key: string): string
 export declare function placePath(runs: string, id: string): string
 export declare function askSettings(runs: string): { capacity: number; token_ceiling: number | null }
 export declare function recordInterrupted(folder: string, reason: string): void
-export declare function mountIdentity(path: string): { device: string, folder: string } | null
 export interface Holder { pid: number; start: string | null }
 export declare function runHolds(runs: string, id: string, holder: Holder | null | undefined, now?: number): boolean
 export declare function releasePlace(runs: string, id: string): void

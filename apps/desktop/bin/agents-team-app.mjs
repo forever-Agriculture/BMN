@@ -4,7 +4,7 @@ import { basename, dirname, join } from 'node:path'
 import { APP_NAMES } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { teamRunsDirectory } from './agents-check.mjs'
-import { ASK_ACCESS, ASK_RUN_FILES } from './agents-team-forms.mjs'
+import { ASK_READS, ASK_RUN_FILES } from './agents-team-forms.mjs'
 import { LIMITS } from './agents-team-inputs.mjs'
 import { AskRefusal } from './agents-team-resolve.mjs'
 import { RETENTION_DAYS, askSettings, placePath, recordInterrupted, removeRun, runHolds, sweepRuns } from './agents-team-places.mjs'
@@ -64,20 +64,62 @@ function questionOf(folder) {
   return prompt === null ? null : { text: prompt.split('\n')[0], whole: false }
 }
 
-/** A run's usage as the page shows it: tokens, the cost the app reported or null for unknown, and the billing basis. */
+/** A run's usage as the page shows it: tokens, the cost the app reported or null for unknown, the billing basis, and whether every usage record was read. */
 function usageView(usage, billing) {
   if (usage === null || typeof usage !== 'object') return null
   const reportedCost = typeof usage.reported_cost === 'number' && Number.isFinite(usage.reported_cost) ? usage.reported_cost : null
   return {
     input: count(usage.input_tokens), cached: count(usage.cached_input_tokens), output: count(usage.output_tokens), reasoning: count(usage.reasoning_tokens),
-    reportedCost, billing: text(usage.billing, 32) ?? text(billing, 32) ?? 'unknown'
+    reportedCost, billing: text(usage.billing, 32) ?? text(billing, 32) ?? 'unknown',
+    complete: typeof usage.complete === 'boolean' ? usage.complete : null, incompleteReason: text(usage.incomplete_reason, 400), basis: text(usage.aggregation, 400)
   }
 }
 
-/** What a run read, as one phrase's parts: its access mode and how many files and pictures went with the question. */
+/** A run made before 72.9 read the question and its files, or a copy of the project (`request.access`). */
+const BEFORE_FORMS = Object.freeze({ project: { scope: 'folder', reach: 'a copy of the project as it was' } })
+
+/** What a run's teammate could read: its app's mode with its reach and words, the folder it worked in, and how many files and pictures went with the question (72.9 AC6). */
 function readsView(request, manifest) {
-  const access = ASK_ACCESS.includes(request.access) ? request.access : 'question'
-  return { access, files: Array.isArray(manifest?.files) ? manifest.files.length : 0, pictures: Array.isArray(manifest?.pictures) ? manifest.pictures.length : 0 }
+  const files = Array.isArray(manifest?.files) ? manifest.files.length : 0
+  const pictures = Array.isArray(manifest?.pictures) ? manifest.pictures.length : 0
+  const form = typeof manifest?.form === 'string' && Object.hasOwn(ASK_READS, manifest.form) ? manifest.form : null
+  if (form === null) {
+    const before = BEFORE_FORMS[request.access]
+    return { form: null, scope: before?.scope ?? 'text', reach: before?.reach ?? null, words: null, folder: before === undefined ? null : text(manifest?.project?.root, 4096), files, pictures }
+  }
+  const reads = ASK_READS[form]
+  return {
+    form, scope: reads.scope, reach: reads.scope === 'text' ? null : reads.reach, words: text(manifest.reads?.words, 1000) ?? reads.words,
+    folder: reads.scope === 'text' ? null : text(manifest.reads?.folder, 4096), files, pictures
+  }
+}
+
+/** A project's state at one end of a run, as the outcome recorded it (72.9 AC6). */
+function projectStateView(state) {
+  if (state === null || typeof state !== 'object') return null
+  return { commit: text(state.commit, 64), clean: typeof state.clean === 'boolean' ? state.clean : null, changed: count(state.changed), reason: text(state.reason, 400) }
+}
+
+/** The project a run worked in, with its state at the start and the end; a run made before 72.9 gives the revision it copied. */
+function projectView(outcome, manifest) {
+  if (outcome.project !== null && typeof outcome.project === 'object') {
+    return { root: text(outcome.project.root, 4096), start: projectStateView(outcome.project.start), end: projectStateView(outcome.project.end) }
+  }
+  const project = manifest.project
+  if (project === null || typeof project !== 'object') return null
+  const revision = text(project.revision, 64)
+  return { root: text(project.root, 4096), start: revision === null ? null : { commit: revision, clean: null, changed: null, reason: null }, end: null }
+}
+
+/** A sub-agent the teammate started, as the outcome named it: its own counts where they were added, else why not (72.9 AC5). */
+function subagentView(entry, billing) {
+  const counted = entry.usage !== null && typeof entry.usage === 'object'
+  return {
+    session: text(entry.session, 128) ?? '', name: text(entry.name, 200), role: text(entry.role, 64), kind: text(entry.kind, 64) ?? 'sub-agent', model: text(entry.model, 128), effort: text(entry.effort, 16),
+    usage: counted ? usageView({ ...entry.usage, complete: true }, billing) : null,
+    usageNote: counted ? null : entry.usage === 'incomplete' ? `usage incomplete: ${text(entry.usage_reason, 400) ?? 'it could not be read'}` : text(entry.usage, 200),
+    ownTokens: count(entry.own_tokens)
+  }
 }
 
 const reasonOf = (outcome) => text(outcome.reason, 2000) ?? text(outcome.refusal?.reason, 2000)
@@ -197,15 +239,17 @@ export function appAskDetail(id, { runs = teamRunsDirectory(), now = new Date() 
       label: text(picture.label, 4096) ?? text(picture.path, 4096) ?? '', bytes: count(picture.bytes) ?? 0, mediaType: text(picture.media_type, 32) ?? '',
       width: count(picture.width), height: count(picture.height), removed: Array.isArray(picture.removed) ? picture.removed.filter((name) => typeof name === 'string').slice(0, 40) : []
     })),
-    project: manifest.project === null || typeof manifest.project !== 'object' ? null : { root: text(manifest.project.root, 4096), revision: text(manifest.project.revision, 64), files: count(manifest.project.files) },
+    project: projectView(outcome, manifest),
     teammate: {
       app: text(receipt.harness, 32), appName: APP_NAMES[receipt.harness] ?? null, appVersion: text(receipt.harness_version?.version, 64), model: text(observed.model, 128) ?? text(request.model, 128),
       session: text(observed.session, 128), sessionSource: text(observed.session_source, 64)
-    }
+    },
+    subagents: (Array.isArray(outcome.subagents) ? outcome.subagents : []).filter((entry) => entry !== null && typeof entry === 'object').slice(0, 100).map((entry) => subagentView(entry, request.billing)),
+    masked: [...new Set([outcome.credentials_masked?.answer, outcome.credentials_masked?.output].flatMap((names) => (Array.isArray(names) ? names : [])).filter((name) => typeof name === 'string').map((name) => name.slice(0, 64)))]
   }
 }
 
-/** Stops a running ask: its supervisor ends the container and records it stopped. */
+/** Stops a running ask: its supervisor ends every process of its scope and records it stopped. */
 export function appAskStop(id, { runs = teamRunsDirectory() } = {}) {
   const folder = runFolder(runs, id)
   if (askOutcome(folder).exit === null) stopAsk(folder)

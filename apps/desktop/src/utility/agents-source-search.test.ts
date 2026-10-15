@@ -116,7 +116,8 @@ describe('team and rules state has no path into the database, Backup export, Tel
   const imports = (file: string): string[] => [...readFileSync(join(REPOSITORY, file), 'utf8').matchAll(IMPORT)].map((match) => (match[1] ?? match[2] ?? match[3]) as string)
 
   it('searches the modules that hold it, and reads their imports', () => {
-    expect(HOLDERS).toHaveLength(37)
+    // Story 72.9 removed the container and frozen-copy modules (agents-container, agents-team-tree).
+    expect(HOLDERS).toHaveLength(35)
     expect(imports('apps/desktop/src/main/app-program.ts')).toEqual(['node:fs', 'node:path'])
     expect(imports('apps/desktop/src/main/agents-ipc.ts')).toEqual(expect.arrayContaining(['node:fs', '@bmn/protocol', '../../bin/agents-roster.mjs', './agents-approval', './workspace-ipc']))
     expect(imports('apps/desktop/bin/agents-rules.mjs')).toEqual(expect.arrayContaining(['./agents-check.mjs']))

@@ -1,20 +1,18 @@
-// MODULE: agents-team-app.test.ts - Story 73.1: Team › Asks reads every ask his agents and the command made: who asked, what was readable, who answered, the answer, the usage and why a run ended as it did, newest first; the owner's Stop of any ask, removal, export and 30-day retention; stand-in apps in BMN's real container, a synthetic team
-import { spawn } from 'node:child_process'
+// MODULE: agents-team-app.test.ts - Story 73.1, 72.9: Team › Asks reads every ask his agents and the command made: who asked, what was readable and what the teammate's own mode could read, who answered and its sub-agents, the answer with any credential masked, the project's state, the usage and why a run ended as it did, newest first; the owner's Stop of any ask, removal, export and 30-day retention; stand-in apps in BMN's real systemd scope, a synthetic team
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { containerStarts } from '../../bin/agents-container.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { appAskDetail, appAskExport, appAskRemove, appAskStop, appAsks } from '../../bin/agents-team-app.mjs'
 import { teamRunsDirectory } from '../../bin/agents-check.mjs'
 import { placePath } from '../../bin/agents-team-places.mjs'
 import { processStart } from '../../bin/agents-supervised.mjs'
 import { startAsk, waitAsk } from '../../bin/agents-team-run.mjs'
-import { SIGN_IN_SENTINEL, leftovers as harnessLeftovers, settle, teamAskHome } from './test-fixtures/team-ask-harness'
+import { ANSWER_KEY, SCOPES, SIGN_IN_SENTINEL, leftovers as harnessLeftovers, ownSystemd, settle, teamAskHome } from './test-fixtures/team-ask-harness'
 
 const BMN = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
-const canContain = containerStarts().ok
 const savedHome = process.env.HOME
 let home: string
 let stubs: string
@@ -50,7 +48,7 @@ const agentAsk = (question: string, fields: Partial<Parameters<typeof prepareAsk
 
 /** `bmn team ask` from a shell, as an agent's command runs it; it ends when the ask ends. */
 const commandAsk = (question: string): Promise<{ code: number | null; stderr: string }> => new Promise((done) => {
-  const child = spawn(process.execPath, [BMN, 'team', 'ask', '--role', 'epic-reviewer', '--question', question], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }, cwd: home, stdio: ['ignore', 'ignore', 'pipe'] })
+  const child = spawn(process.execPath, [BMN, 'team', 'ask', '--role', 'epic-reviewer', '--question', question], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...ownSystemd() }, cwd: home, stdio: ['ignore', 'ignore', 'pipe'] })
   let stderr = ''
   child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
   child.on('exit', (code) => done({ code, stderr }))
@@ -66,15 +64,31 @@ const record = (id: string, request: Record<string, unknown>, outcome: Record<st
   return folder
 }
 
-describe.skipIf(!canContain)('Team › Asks reads his agents\' asks (73.1)', { timeout: 40_000 }, () => {
+/** A made-up Git project with one commit. */
+const project = (): string => {
+  const root = join(home, 'code/shop')
+  mkdirSync(join(root, 'src'), { recursive: true })
+  writeFileSync(join(root, 'src/retry.ts'), 'export const retries = 3\n')
+  const git = (...args: string[]): void => {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', env: { HOME: home, PATH: '/usr/bin:/bin', GIT_AUTHOR_NAME: 'made-up', GIT_AUTHOR_EMAIL: 'made-up@example.invalid', GIT_COMMITTER_NAME: 'made-up', GIT_COMMITTER_EMAIL: 'made-up@example.invalid' } })
+    if (result.status !== 0) throw new Error(result.stderr)
+  }
+  git('init', '-q')
+  git('add', '.')
+  git('commit', '-qm', 'made-up')
+  return root
+}
+
+describe.skipIf(!SCOPES)('Team › Asks reads his agents\' asks (73.1)', { timeout: 40_000 }, () => {
   it('lists an agent\'s ask with who asked, what was readable, who answered and its usage; opened, its whole question and the teammate\'s answer', async () => {
     const retry = file('retry.ts', 'export const retries = 3\n')
-    const prepared = agentAsk('Is the retry bounded?\nIt loops on 503.', { access: 'files', files: [retry] })
+    const prepared = agentAsk('Is the retry bounded?\nIt loops on 503.', { files: [retry] })
     await waitAsk(prepared.folder, { timeoutMs: 20_000 })
     const listed = appAsks()
     expect(listed.asks[0]).toMatchObject({
       id: prepared.id, question: 'Is the retry bounded?', by: SESSION, agent: 'astra', agentName: 'Astra', effort: 'medium', role: 'epic-reviewer', data: 'private',
-      reads: { access: 'files', files: 1, pictures: 0 }, state: 'answered', usage: { input: 100, cached: 10, output: 5, reasoning: 2, reportedCost: null }, timeLimitMinutes: 2
+      reads: { form: 'codex-read-only', scope: 'computer', reach: 'any file your user can read', folder: join(prepared.folder, 'work'), files: 1, pictures: 0 }, state: 'answered',
+      usage: { input: 100, cached: 10, output: 5, reasoning: 2, reportedCost: null, complete: true, incompleteReason: null }, timeLimitMinutes: 2
     })
     const line = listed.asks[0]!
     expect(Date.parse(line.keptUntil!) - Date.parse(line.endedAt!)).toBe(30 * 24 * 60 * 60 * 1000)
@@ -82,11 +96,29 @@ describe.skipIf(!canContain)('Team › Asks reads his agents\' asks (73.1)', { t
     const opened = appAskDetail(prepared.id)
     expect(opened).toMatchObject({
       question: 'Is the retry bounded?\nIt loops on 503.', questionWhole: true, files: [{ path: retry, bytes: 25 }], pictures: [], project: null,
-      teammate: { app: 'codex', appName: 'Codex', appVersion: '0.162.1', model: 'gpt-6-astra', sessionSource: 'thread.started' }
+      teammate: { app: 'codex', appName: 'Codex', appVersion: '0.162.1', model: 'gpt-6-astra', sessionSource: 'thread.started' }, subagents: [], masked: []
     })
-    expect(opened.answer).toMatch(/^codex answer [0-9a-f]{8} from /u)
+    expect(listed.asks[0]!.reads.words).toMatch(/^Codex's read-only sandbox: any file your user can read/u)
+    // With no project, the teammate works in an empty folder of the run's own.
+    expect(opened.answer).toBe(`codex answer ${opened.answer!.slice(13, 21)} in ${join(prepared.folder, 'work')}\n`)
     // Nothing of his sign-in is in what the app reads.
     expect(JSON.stringify([listed, opened])).not.toContain(SIGN_IN_SENTINEL)
+  })
+
+  it('opens a project ask with where it worked, the project\'s commit and tree at the start and the end, its sub-agent and the answer\'s key masked (72.9 AC5, AC6)', async () => {
+    const root = project()
+    const prepared = agentAsk('Is the retry bounded? SUBAGENT CREDANSWER', { project: root })
+    await waitAsk(prepared.folder, { timeoutMs: 20_000 })
+    const line = appAsks().asks[0]!
+    expect(line).toMatchObject({ state: 'answered', reads: { form: 'codex-read-only', folder: root }, usage: { input: 140, output: 8, complete: true } })
+    const opened = appAskDetail(prepared.id)
+    const commit = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim()
+    expect(opened.project).toEqual({ root, start: { commit, clean: true, changed: 0, reason: null }, end: { commit, clean: true, changed: 0, reason: null } })
+    expect(opened.subagents).toEqual([{ session: 'eeeeeeee-0000-7000-8000-000000000000', name: 'Ada', role: 'explorer', kind: 'Codex sub-agent', model: 'gpt-6-astra', effort: 'low',
+      usage: expect.objectContaining({ input: 40, cached: 4, output: 3, reasoning: 1 }), usageNote: null, ownTokens: null }])
+    expect(opened.answer).toContain(`in ${root} key [credential masked by BMN: an OpenAI key]`)
+    expect(opened.masked).toEqual(['an OpenAI key'])
+    expect(JSON.stringify([line, opened])).not.toContain(ANSWER_KEY)
   })
 
   it('lists the newest first by when each was asked, also within one second, whoever asked', async () => {

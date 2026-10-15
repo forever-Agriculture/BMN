@@ -690,11 +690,54 @@ export interface WebQuestionAsked { ok: boolean; message: string | null; snapsho
 
 /** Story 73.1: who asked a teammate, as the run recorded it: a BMN session (with its agent app), a shell, or the owner. */
 export type TeamAskAsker = { kind: 'owner' } | { kind: 'shell' } | { kind: 'session'; session: string; app?: string }
-export type TeamAskAccess = 'question' | 'files' | 'project'
+/**
+ * Story 72.9: how far a teammate's own app could read, by the mode it ran in: `computer` (any file the owner's user can read),
+ * `folder` (its working folder), `text` (only the question and the files' text). A run made before 72.9 says `text`, or `folder` for its copy of the project.
+ */
+export type TeamAskScope = 'computer' | 'folder' | 'text'
+/** What a run's teammate could read: the mode its app ran in, in its own words, where it worked, and what went with the question. */
+export interface TeamAskReads {
+  /** The app's mode (`codex-read-only`, `claude-read-tools`, `opencode-reader`, `opencode-asker`); null for a run made before 72.9. */
+  form: string | null
+  scope: TeamAskScope
+  /** Its reach in a few words ("any file your user can read"); null where it read only the text. */
+  reach: string | null
+  /** The mode in a sentence, its tools included; null for a run made before 72.9. */
+  words: string | null
+  /** The folder it worked in; null where it read only the text. */
+  folder: string | null
+  files: number
+  pictures: number
+}
 /** How a run stands: `running` until its outcome, then the contract's outcome word. */
 export type TeamAskState = 'running' | 'answered' | 'failed' | 'refused' | 'out-of-time' | 'stopped' | 'not-attributed' | 'interrupted'
 /** A run's usage as the app reported it; null for a count or cost it did not report. */
-export interface TeamAskUsageView { input: number | null; cached: number | null; output: number | null; reasoning: number | null; reportedCost: number | null; billing: string }
+export interface TeamAskUsageView {
+  input: number | null; cached: number | null; output: number | null; reasoning: number | null; reportedCost: number | null; billing: string
+  /** Every usage record of the run (the teammate's and each sub-agent's) was read; null for a run made before 72.9. */
+  complete: boolean | null
+  incompleteReason: string | null
+  /** How the counts were added up, in the app's terms (72.9 AC5). */
+  basis: string | null
+}
+/** Story 72.9: a sub-agent the teammate started, named in the record, with its own usage or why there is none to add. */
+export interface TeamAskSubagentView {
+  session: string
+  name: string | null
+  role: string | null
+  /** "Codex sub-agent", "Claude Code sub-agent", "OpenCode sub-agent". */
+  kind: string
+  model: string | null
+  effort: string | null
+  /** Its own counts where they are added to the run's; null where they are already in the run's total or could not be read. */
+  usage: TeamAskUsageView | null
+  /** Where `usage` is null: "counted in the run's total" or why its usage could not be read. */
+  usageNote: string | null
+  /** Claude Code's own count for the sub-agent, shown and never added. */
+  ownTokens: number | null
+}
+/** A project's state at one end of an ask: its commit and whether its tree was clean. */
+export interface TeamAskProjectState { commit: string | null; clean: boolean | null; changed: number | null; reason: string | null }
 /** One ask as Team › Asks lists it, whoever asked. */
 export interface TeamAskLine {
   id: string
@@ -707,7 +750,7 @@ export interface TeamAskLine {
   role: string | null
   project: string | null
   data: 'public' | 'private'
-  reads: { access: TeamAskAccess; files: number; pictures: number }
+  reads: TeamAskReads
   askedAt: string | null
   startedAt: string | null
   endedAt: string | null
@@ -732,8 +775,12 @@ export interface TeamAskDetail {
   answer: string | null
   files: Array<{ path: string; bytes: number }>
   pictures: Array<{ label: string; bytes: number; mediaType: string; width: number | null; height: number | null; removed: string[] }>
-  project: { root: string | null; revision: string | null; files: number | null } | null
+  /** The project it worked in, with its state at the start and the end (72.9 AC6); a run made before 72.9 gives the revision it copied as its start. */
+  project: { root: string | null; start: TeamAskProjectState | null; end: TeamAskProjectState | null } | null
   teammate: { app: string | null; appName: string | null; appVersion: string | null; model: string | null; session: string | null; sessionSource: string | null }
+  subagents: TeamAskSubagentView[]
+  /** The names of the credentials BMN masked in the answer and the app's output, none where it masked nothing. */
+  masked: string[]
 }
 /** Epic 65: what the judge's page on Team shows of its calls. Sums count every call that made a request; a refused call costs nothing and is counted apart. */
 export interface JudgeTotalsView { calls: number; input_tokens: number; cost_usd: number }

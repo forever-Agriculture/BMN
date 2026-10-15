@@ -1,156 +1,157 @@
-// MODULE: agents-team-forms.mjs - Epic 72: the one read-only form of each app for each access mode, as Story 72.1 measured them, and which app versions they are proven on
+// MODULE: agents-team-forms.mjs - Epic 72: each app's own read-only command for an ask, as Story 72.9 measured it: Codex's sandbox, Claude Code's tool permissions and OpenCode's agent permissions, each with every tool its mode keeps read-only
 import { createHash } from 'node:crypto'
-import { closeSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
+import { closeSync, existsSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { INSIDE, appPaths, containerArgv } from './agents-container.mjs'
-import { openCodeAskHome, openCodeEnvironment } from './agents-opencode.mjs'
+import { openCodeAskConfig, openCodeEnvironment, openCodeFolder } from './agents-opencode.mjs'
 
 /**
- * A teammate's ask runs its app in exactly one form per access mode (R72-NFR2), each one measured
- * in its container against a stand-in provider (72.1, `reference-72-team-ask/RESULT.md`). Only
- * the app versions measured here may use a mode that depends on that proof (R72-NFR10): another
- * version shows the mode unmeasured until its rows are measured again.
- *
- * `proven`: confined and working. `unavailable`: measured, and no form keeps it confined on this
- * computer. `no-history`: confined, with no tool that reads the project's Git history.
+ * A teammate's ask runs its app in that app's own read-only mode, with all the tools the mode keeps
+ * read-only (R72-NFR2): the command dev-auto builds by hand for a helper, checked and launched by BMN.
+ * Each form was measured in 72.9 against a stand-in provider, the parent and a forced sub-agent trying
+ * every write (`reference-72-team-ask/RESULT-v8.md`). The app runs as the owner's user with its own
+ * home, sign-in and session records; BMN adds no container, copy or sign-in of its own (R72-NFR3).
+ * An app version BMN has not checked still runs, and its record names that version (R72-FR8, NFR10).
  */
-export const ASK_FORMS_PROVEN = Object.freeze({
-  codex: { '0.162.1': { question: 'proven', files: 'proven', project: 'unavailable', pictures: 'proven' } },
-  claude: { '2.1.300': { question: 'proven', files: 'proven', project: 'proven', pictures: 'proven' } },
-  opencode: { '2.0.29': { question: 'proven', files: 'proven', project: 'no-history', pictures: 'unmeasured' } }
+
+/** The apps whose teammates BMN asks. */
+export const ASK_APPS = Object.freeze(['codex', 'claude', 'opencode'])
+
+/** The app version each form was last checked on with 72.9's measurement script, and when (R72-FR8). Never a gate. */
+export const ASK_FORMS_CHECKED = Object.freeze({
+  codex: { version: '0.162.1', on: '2026-10-15' },
+  claude: { version: '2.1.300', on: '2026-10-15' },
+  opencode: { version: '2.0.29', on: '2026-10-15' }
 })
 
-/** What BMN offers beyond its access modes: picture asks, since Story 72.8, where 72.1 proved them. */
-export const ASK_OFFERED = Object.freeze({ pictures: true })
-
-/** Why a measured mode is unavailable, in the words the refusal gives. */
-export const UNAVAILABLE_WHY = Object.freeze({
-  codex: {
-    project: 'Codex runs every command of a project ask in its own bubblewrap sandbox, and on this computer a sandbox inside BMN\'s container is refused (AppArmor\'s unprivileged-namespace restriction); without that sandbox Codex would read its own sign-in, so project asks on Codex are unavailable here (72.1)'
-  },
+/** What an app's form does not offer, and why, in the words a refusal gives (R72-NFR12). */
+export const ASK_UNSUPPORTED = Object.freeze({
   opencode: {
-    project: 'OpenCode\'s read-only agent has no tool that reads the project\'s Git history, so its project form is not offered (72.1, 72.5); ask it with --access files and the files it needs',
     pictures: 'BMN never measured a picture ask on OpenCode (72.1 measured Codex and Claude Code), so OpenCode teammates are not asked about pictures; ask a Codex or Claude Code teammate'
   }
 })
 
-/** The standing of one app version's mode: `proven`, `unavailable`, `no-history` or `unmeasured`. */
-export function formStanding(harness, version, mode) {
-  return ASK_FORMS_PROVEN[harness]?.[version]?.[mode] ?? 'unmeasured'
-}
-
-/** What a teammate may read: the question only, the named files, or one project read-only (R72-FR2). */
-export const ASK_ACCESS = Object.freeze(['question', 'files', 'project'])
-
 /** The parts of one ask's folder under BMN's state (`team/runs/<id>/`), as the contract's record table names them. */
 export const ASK_RUN_FILES = Object.freeze({
   request: 'request.json', manifest: 'inputs/manifest.json', prompt: 'inputs/prompt.md', rules: 'inputs/rules.md', files: 'inputs/files',
-  pictures: 'inputs/pictures', message: 'inputs/message.jsonl',
-  projectManifest: 'project-manifest.json', snapshots: 'snapshots', receipt: 'receipt.json', answer: 'answer.md', outcome: 'outcome.json', question: 'question.md',
-  home: 'home', inputs: 'inputs', project: 'project'
+  pictures: 'inputs/pictures', message: 'inputs/message.jsonl', inputs: 'inputs',
+  snapshots: 'snapshots', receipt: 'receipt.json', answer: 'answer.md', outcome: 'outcome.json', question: 'question.md',
+  // The empty folder a teammate works in when the ask names no project, BMN's git for the forms that read history, Codex's last message.
+  work: 'work', bin: 'bin', codexAnswer: 'codex-answer.md', projectStart: 'project-start.json'
 })
 
-/** The name a receipt gives each form, per app and access mode. */
-export const ASK_FORM_NAMES = Object.freeze({
-  codex: { question: 'codex-no-tools', files: 'codex-no-tools', project: 'codex-project' },
-  claude: { question: 'claude-no-tools', files: 'claude-no-tools', project: 'claude-project-read' },
-  opencode: { question: 'opencode-asker', files: 'opencode-asker', project: 'opencode-project-read' }
+/**
+ * What each form's own mode can read, as 72.9 AC1 recorded it: the record, `bmn team asks show` and
+ * Team › Asks say it, and consent is judged for it (R72-NFR6): `computer` reads any file the owner's
+ * user can read, `folder` only its working folder, `text` nothing beyond the asker's text.
+ */
+export const ASK_READS = Object.freeze({
+  'codex-read-only': { scope: 'computer', reach: 'any file your user can read', words: 'Codex\'s read-only sandbox: any file your user can read, with its shell, Git, web search and sub-agents; it writes nothing' },
+  'claude-read-tools': { scope: 'folder', reach: 'its working folder', words: 'Claude Code with --restricted: its working folder only, with Read, Grep, Glob, Git history through BMN\'s git, web search and sub-agents; it writes nothing' },
+  'opencode-reader': { scope: 'computer', reach: 'the project and wherever its tracked links lead', words: 'OpenCode\'s read-only agent: the project, and wherever its tracked links lead, with read, glob, grep, Git history through BMN\'s git, web search and BMN\'s read-only sub-agent; it writes nothing' },
+  'opencode-asker': { scope: 'text', reach: 'nothing beyond your text', words: 'only your question and the files\' text: OpenCode with every action denied' }
 })
 
 /** An ask's OpenCode session title: with one named, OpenCode makes no request of its own to name the session (70.3). */
 export const OPENCODE_ASK_TITLE = 'BMN ask'
 
-/** Codex with every tool off, as its research form and the 72.1 question/files form; `--ephemeral`, because only a run that keeps no session makes every sub-agent start fail. */
-export const CODEX_ASK_NO_TOOLS = Object.freeze(['--ephemeral', '--disable', 'view_image', '--disable', 'goals', '--disable', 'image_generation', '--disable', 'sleep_tool', '--disable', 'hooks', '--disable', 'code_mode_host',
-  '-c', 'mcp_servers={}', '-c', 'web_search="disabled"', '-c', 'features.shell_tool=false', '-c', 'features.unified_exec=false', '-c', 'features.multi_agent=false',
-  '-c', 'features.apps=false', '-c', 'features.plugins=false', '-c', 'skills.include_instructions=false', '-c', 'skills.bundled.enabled=false', '-c', 'include_apps_instructions=false',
-  '-c', 'include_collaboration_mode_instructions=false', '-c', 'include_environment_context=false', '-c', 'project_doc_max_bytes=0'])
-
-/** Codex logs the turn span that names its model and effort only at this level; the log holds no prompt or answer text (72.1 AC2). */
+/** Codex logs the turn span that names each thread's model and effort only at this level; the log holds no prompt or answer text (72.1 AC2). */
 export const CODEX_ASK_LOG = 'codex_core=info,codex_core::stream_events_utils=debug'
 
-export const CLAUDE_ASK_NO_TOOLS = Object.freeze(['--tools', '', '--permission-mode', 'dontAsk'])
-/** Claude Code's project form: its read tools kept in the working folder, history only through BMN's own git (bin/ask-git.sh) first on PATH. */
-export const CLAUDE_ASK_PROJECT = Object.freeze(['--tools', 'Read,Grep,Glob,Bash', '--allowedTools', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git diff:*)', 'Bash(git blame:*)',
-  '--permission-mode', 'dontAsk', '--restricted'])
-export const CLAUDE_ASK_COMMON = Object.freeze(['--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-session-persistence',
-  '--output-format', 'stream-json', '--verbose'])
-
-/**
- * Where an app's sign-in is inside the run's home: the owner's own file bound there read-only. An ask
- * never renews his sign-in: a renewal spends his single-use refresh token outside the lock his own
- * sessions share, and a lost race wipes his file (measured 2026-10-15, records/signin/renewal-race-*).
- * So the app's renewal cannot reach its host (Codex: its renewal address; Claude Code: the sign-in
- * hosts in the run's own /etc/hosts), and an ask whose token has expired fails as a sign-in failure
- * until one of his own sessions renews it.
- */
-export function signInBind(harness, environment = process.env) {
-  const home = environment.HOME ?? ''
-  if (harness === 'codex') return { from: `${environment.CODEX_HOME || `${home}/.codex`}/auth.json`, to: `${INSIDE.home}/codex/auth.json`, writable: false }
-  if (harness === 'claude') return { from: `${environment.CLAUDE_CONFIG_DIR || `${home}/.claude`}/.credentials.json`, to: `${INSIDE.home}/.claude/.credentials.json`, writable: false }
-  return null
-}
-
-/** Where Codex sends a renewal in an ask: a port nothing listens on, so it never spends the owner's refresh token. */
-export const CODEX_ASK_NO_RENEWAL = 'http://127.0.0.1:1/oauth/token'
-/**
- * The /etc/hosts of a Claude Code ask: the sign-in hosts at an address nothing answers on, so Claude
- * Code never renews the owner's sign-in (its local sign-in settings do not move the token host; the
- * hosts file does, measured on 2.1.300). The model host is looked up as always.
- */
-export const CLAUDE_ASK_HOSTS = '127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n127.0.1.1\task\n127.0.0.2\tplatform.claude.com console.anthropic.com claude.ai\n'
+/** Claude Code's read tools, web search and sub-agents; Bash only for Git's four read commands, through BMN's git first on PATH (72.9 AC1). */
+export const CLAUDE_ASK_TOOLS = Object.freeze(['--restricted', '--tools', 'Read,Grep,Glob,Bash,WebSearch,Agent',
+  '--allowedTools', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git diff:*)', 'Bash(git blame:*)', 'WebSearch', 'Agent',
+  '--permission-mode', 'dontAsk', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--output-format', 'stream-json', '--verbose'])
 
 /** PATH without BMN's own wrappers, so the app found is the one the owner installed. */
 export function appSearchPath(environment = process.env) {
   return (environment.PATH ?? '').split(':').filter((entry) => entry !== '' && !entry.includes('/resources/bin') && !entry.endsWith('/apps/desktop/bin')).join(':')
 }
 
-/** The installed program of an app, as the container binds it: `{ launcher, payload, root, paths }` or null. */
-export function askProgram(harness, environment = process.env) {
-  return appPaths(harness, { PATH: appSearchPath(environment) })
+function realOrNull(path) {
+  try {
+    return realpathSync(path)
+  } catch {
+    return null
+  }
+}
+
+function onPath(name, path) {
+  for (const folder of path.split(':')) {
+    if (folder === '') continue
+    const candidate = `${folder}/${name}`
+    if (existsSync(candidate)) return candidate
+  }
+  return null
 }
 
 /**
- * The app's command inside the container for one ask, and what its home must hold. `request`:
- * `{ access, model, effort, rules, pictures }` with `pictures` the inside paths of the pictures.
- * Returns `{ command, environment, cwd, home: { [relative path]: text }, mountPoints, stdin }`;
- * `stdin` is `text` (the prompt as it is) or `stream-json` (one user message with the pictures).
+ * The installed program of an app, from the owner's PATH (BMN's own folders left out): the launcher
+ * an ask runs and, for Codex's npm launcher, the native payload it starts. Returns `{ launcher, payload }` or null.
  */
-export function askCommand(harness, program, { access, model, provider = null, effort, rules = null, pictures = [], context = { argv: [], env: [] } }) {
+export function askProgram(harness, environment = process.env) {
+  const name = harness === 'claude' ? 'claude' : harness === 'opencode' ? 'opencode' : 'codex'
+  const launcher = onPath(name, appSearchPath(environment))
+  if (launcher === null) return null
+  const real = realOrNull(launcher)
+  if (real === null) return null
+  if (harness === 'codex' && real.endsWith('/bin/codex.js')) {
+    const payload = `${dirname(dirname(real))}/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex`
+    return existsSync(payload) ? { launcher, payload } : null
+  }
+  return { launcher, payload: real }
+}
+
+/** The name of the form an ask gets: the app's one form, and OpenCode's asker where it may read nothing but the asker's text. */
+export function askFormName(harness, { project, label }) {
+  if (harness === 'codex') return 'codex-read-only'
+  if (harness === 'claude') return 'claude-read-tools'
+  return project !== null && label === 'private' ? 'opencode-reader' : 'opencode-asker'
+}
+
+const pairs = (environment) => Object.entries(environment).map(([name, value]) => `${name}=${value}`)
+
+/**
+ * The command of one ask: `env -i` with the app's environment, then the app in its form. `request`:
+ * `{ form, model, provider, effort, cwd, folder, pictures, rules, context, environment }`: `cwd` the
+ * project or the run's empty work folder, `folder` the run's folder, `pictures` their paths in it,
+ * `rules` the owner's rules for an OpenCode private ask (Codex and Claude Code read their own),
+ * `environment` the asker's, for HOME, PATH and the apps' own home folders. Returns
+ * `{ argv, environment, cwd, stdin }`; `stdin` is `text` (the prompt) or `stream-json` (Claude
+ * Code's one user message with the pictures).
+ */
+export function askCommand(harness, program, request) {
+  const asker = request.environment ?? process.env
+  const home = asker.HOME ?? ''
+  const path = appSearchPath(asker)
   // The agent's context limit, where the owner's test proved the setting on this app version (60.9): `-c` items for Codex, environment for Claude Code.
+  const context = request.context ?? { argv: [], env: [] }
   const contextEnvironment = Object.fromEntries(context.env.map((pair) => [pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1)]))
+  const pictures = request.pictures ?? []
+  let environment
+  let command
+  let stdin = 'text'
   if (harness === 'codex') {
-    const home = { 'codex/config.toml': '' }
-    if (rules !== null) home['codex/AGENTS.md'] = rules
-    return {
-      command: [program.payload, 'exec', '--skip-git-repo-check', '--sandbox', 'read-only', '--strict-config', '-c', 'approval_policy="never"', ...CODEX_ASK_NO_TOOLS,
-        ...pictures.flatMap((path) => ['-i', path]), ...context.argv, '-m', model, '-c', `model_reasoning_effort="${effort}"`, '--json', '-C', INSIDE.work, '-o', `${INSIDE.home}/answer.md`, '-'],
-      environment: { HOME: INSIDE.home, CODEX_HOME: `${INSIDE.home}/codex`, PATH: '/usr/bin:/bin', CODEX_MANAGED_BY_NPM: '1', CODEX_MANAGED_PACKAGE_ROOT: program.root, RUST_LOG: CODEX_ASK_LOG,
-        CODEX_REFRESH_TOKEN_URL_OVERRIDE: CODEX_ASK_NO_RENEWAL },
-      cwd: INSIDE.work, home, mountPoints: ['codex/auth.json'], stdin: 'text'
-    }
+    // dev-auto's command (models.md:154-160), without --ephemeral, in the owner's own Codex home.
+    environment = { HOME: home, PATH: path, RUST_LOG: CODEX_ASK_LOG, ...(asker.CODEX_HOME ? { CODEX_HOME: asker.CODEX_HOME } : {}) }
+    command = [program.launcher, 'exec', '--skip-git-repo-check', '-C', request.cwd, '-m', request.model, '-c', `model_reasoning_effort=${request.effort}`,
+      '-c', 'mcp_servers={}', '-c', 'approval_policy="never"', '--sandbox', 'read-only', ...pictures.flatMap((picture) => ['-i', picture]), ...context.argv,
+      '--json', '-o', join(request.folder, ASK_RUN_FILES.codexAnswer), '-']
+  } else if (harness === 'claude') {
+    environment = { HOME: home, PATH: `${join(request.folder, ASK_RUN_FILES.bin)}:${path}`, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      ...(asker.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: asker.CLAUDE_CONFIG_DIR } : {}), ...contextEnvironment }
+    command = [program.launcher, '-p', '--model', request.model, '--effort', request.effort, ...CLAUDE_ASK_TOOLS, ...(pictures.length > 0 ? ['--input-format', 'stream-json'] : [])]
+    if (pictures.length > 0) stdin = 'stream-json'
+  } else if (harness === 'opencode') {
+    // BMN's own OpenCode folder (its OpenCode Go sign-in), the form's agents given inline: the folder's files stay as they are.
+    const reader = request.form === 'opencode-reader'
+    const own = openCodeAskConfig(reader ? 'reader' : 'asker', request.rules ?? null)
+    environment = { ...openCodeEnvironment(openCodeFolder()), PATH: reader ? `${join(request.folder, ASK_RUN_FILES.bin)}:${path}` : path, OPENCODE_CONFIG_CONTENT: own.content }
+    const reference = request.model.includes('/') ? request.model : `${request.provider}/${request.model}`
+    command = [program.launcher, 'run', '--standalone', '--format', 'json', '--agent', own.agent, '-m', `${reference}#${request.effort}`, '--title', OPENCODE_ASK_TITLE]
+  } else {
+    throw new Error(`no ask form for ${harness}`)
   }
-  if (harness === 'claude') {
-    const project = access === 'project'
-    return {
-      command: [program.payload, '-p', '--model', model, '--effort', effort, ...(project ? CLAUDE_ASK_PROJECT : CLAUDE_ASK_NO_TOOLS), ...CLAUDE_ASK_COMMON,
-        ...(pictures.length > 0 ? ['--input-format', 'stream-json'] : []), ...(rules === null ? [] : ['--append-system-prompt', rules])],
-      environment: { HOME: INSIDE.home, CLAUDE_CONFIG_DIR: `${INSIDE.home}/.claude`, PATH: project ? `${INSIDE.inputs}/bin:/usr/bin:/bin` : '/usr/bin:/bin',
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1', ...contextEnvironment },
-      cwd: project ? INSIDE.project : INSIDE.work, home: {}, mountPoints: ['.claude/.credentials.json'], stdin: pictures.length > 0 ? 'stream-json' : 'text', hosts: CLAUDE_ASK_HOSTS
-    }
-  }
-  if (harness === 'opencode') {
-    // 72.1's OpenCode form: the run's own five folders in its home, BMN's agent, the project's own configuration off.
-    const own = openCodeAskHome(access, rules)
-    const reference = model.includes('/') ? model : `${provider}/${model}`
-    return {
-      command: [program.payload, 'run', '--standalone', '--format', 'json', '--agent', own.agent, '-m', `${reference}#${effort}`, '--title', OPENCODE_ASK_TITLE],
-      environment: { ...openCodeEnvironment(`${INSIDE.home}/oc`), PATH: '/usr/bin:/bin' },
-      cwd: access === 'project' ? INSIDE.project : INSIDE.work, home: own.files, folders: own.folders, mountPoints: [], stdin: 'text'
-    }
-  }
-  throw new Error(`no ask form for ${harness} yet`)
+  return { argv: ['/usr/bin/env', '-i', ...pairs(environment), ...command], environment, command, cwd: request.cwd, stdin }
 }
 
 /** One file of an app's program as it is now: its hash and what tells a replaced or changed file (72.3 AC1). */
@@ -193,29 +194,6 @@ export function sameProgram(identity, program) {
     }
   }
   return same(identity.launcher, program.launcher) && same(identity.payload, program.payload)
-}
-
-/** The apps whose teammates BMN asks: OpenCode's form arrived with Story 72.5. */
-export const ASK_APPS = Object.freeze(['codex', 'claude', 'opencode'])
-
-/**
- * The whole command of one ask: the app's form inside the run's container. `run`: the run's own
- * `{ home, inputs, project }` folders on this computer. The owner's sign-in file is bound read-only
- * onto the empty file the run's home holds at its place (72.1 AC5), the configuration BMN wrote for the app
- * bound read-only over itself; a form with its own `hosts` gets
- * the run's `snapshots/hosts` as /etc/hosts. Returns `{ argv, form }`.
- */
-export function askArgv(harness, program, run, request, environment = process.env) {
-  const form = askCommand(harness, program, request)
-  const signIn = signInBind(harness, environment)
-  // The configuration BMN wrote for the app is read-only inside the container: the app writes only its own runtime files there (epic review R6).
-  const configuration = Object.keys(form.home).map((path) => ({ from: join(run.home, path), to: `${INSIDE.home}/${path}`, writable: false }))
-  const argv = containerArgv({
-    app: program.paths, home: run.home, inputs: run.inputs, project: request.access === 'project' ? run.project : null,
-    binds: [...configuration, ...(signIn === null ? [] : [signIn])], environment: form.environment, cwd: form.cwd, command: form.command,
-    hosts: form.hosts === undefined ? null : join(dirname(run.home), ASK_RUN_FILES.snapshots, 'hosts')
-  })
-  return { argv, form }
 }
 
 /** Standard input for a picture ask on Claude Code: one user message, the pictures first, then the question. */

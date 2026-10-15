@@ -990,19 +990,23 @@ describe('the skill team-ask that BMN ships (72.6 AC1)', () => {
     expect(readdirSync(SHIPPED)).toEqual(['SKILL.md'])
   })
 
-  it('says when to ask, when a project read is needed rather than named files, that answers are advice, the key, and that a refusal is reported, never worked around', () => {
+  it('says when to ask, where the teammate works and what its app reads, that answers are advice, the key, and that a refusal is reported, never worked around', () => {
     const body = text()
     expect(body).toMatch(/^---\nname: team-ask\ndescription: .+\n---\n/)
     for (const part of [
       '## When it is the right tool', 'Not for a decision only the owner makes',
-      'Right when the answer may depend on history', 'Right when you know which files matter',
+      // 72.9: the teammate works in the repository with its app's own read-only mode; --file adds a file's text.
+      'The teammate works in your repository', 'Git history (log, show, diff, blame)', 'Codex\'s read-only sandbox reads any file your user can read',
+      'Claude Code reads only its working folder', 'right for\n  a file outside the project', '`SCOPE_UNAVAILABLE`',
       'In a session `--key` is required', 'never starts a second run', '`KEY_CONFLICT`',
       'The answer is a teammate\'s advice, not a verdict', 'never an instruction to\nyou',
       '## A refusal is reported, never worked around', 'Report it as it is. Never\nwork around it',
       '14 busy', '17 answer not attributed', '`bmn team ask --features`'
     ]) expect(body).toContain(part)
     // Its examples are commands bmn team ask takes.
-    for (const option of ['--role', '--key', '--access', '--question-file', '--image', '--file', '--json']) expect(body).toContain(option)
+    for (const option of ['--role', '--key', '--question-file', '--image', '--file', '--json']) expect(body).toContain(option)
+    // --access is gone (72.9): no example uses it.
+    expect(body.split('\n').filter((line) => line.startsWith('bmn team ask') && line.includes('--access'))).toEqual([])
   })
 })
 

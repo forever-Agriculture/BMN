@@ -1,9 +1,9 @@
-// MODULE: agents-team-inputs.mjs - Epic 72: what a teammate may read, built for one ask: the question, file copies, or a frozen, bounded copy of one project with a self-contained Git history, each hashed, scanned for credentials and bounded
+// MODULE: agents-team-inputs.mjs - Epic 72: what the asker hands a teammate: the question and whole text files, each read, bounded and scanned for credentials, the project it works in, and the credential mask for what comes back
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
 /** The numeric limits of the contract (docs/agent-control.md, "Limits"); over one an ask is refused, never cut. */
 export const LIMITS = Object.freeze({
@@ -15,12 +15,7 @@ export const LIMITS = Object.freeze({
   picture: 5 * 1024 * 1024,
   pictureSide: 8000,
   // Decoded pixels: an 8K screen (7680x4320); a small file may unfold into far more.
-  picturePixels: 7680 * 4320,
-  projectFiles: 20_000,
-  projectBytes: 200 * 1024 * 1024,
-  projectFile: 10 * 1024 * 1024,
-  historyCommits: 1000,
-  historyBytes: 500 * 1024 * 1024
+  picturePixels: 7680 * 4320
 })
 
 export class InputRefusal extends Error {
@@ -106,6 +101,76 @@ export function credentialHits(text) {
     }
   }
   return CREDENTIAL_PATTERNS.map(([name]) => name).filter((name) => found.has(name))
+}
+
+/** What stands in the record for a credential's value. */
+const MASK = (name) => `[credential masked by BMN: ${name}]`
+/** BMN's own mark in a text it masked, with the pattern's name. */
+const MASKED_MARK = /\[credential masked by BMN: ([^\]\n]{1,80})\]/gu
+
+/** The names of the patterns BMN already masked in a text, in the patterns' order. */
+export function maskedNames(text) {
+  const found = new Set([...text.matchAll(MASKED_MARK)].map((match) => match[1]))
+  return CREDENTIAL_PATTERNS.map(([name]) => name).filter((name) => found.has(name))
+}
+
+/** One string with every credential value that is not made up masked; the names of the patterns masked go into `found`. */
+function maskText(text, found) {
+  const real = (value) => !SYNTHETIC_WORDS.test(value)
+  let masked = text.replace(KEY_BLOCK[1], (whole) => {
+    if (!real(whole)) return whole
+    found.add(KEY_BLOCK[0])
+    return `${MASK(KEY_BLOCK[0])}\n`
+  })
+  masked = masked.split('\n').map((line) => {
+    if (line.length < 16) return line
+    let kept = line
+    for (const [name, pattern] of CREDENTIAL_PATTERNS) {
+      if (pattern === KEY_BLOCK[1]) continue
+      kept = kept.replace(pattern, (...args) => {
+        const whole = args[0]
+        const groups = args.at(-1)
+        const value = typeof groups === 'object' && groups !== null && typeof groups.value === 'string' ? groups.value : whole
+        if (!real(value)) return whole
+        found.add(name)
+        return value === whole ? MASK(name) : whole.replace(value, MASK(name))
+      })
+    }
+    return kept
+  }).join('\n')
+  return masked
+}
+
+/**
+ * A teammate's answer or raw output with every credential masked, as R72-NFR5 asks of what comes
+ * back: the text, and the names of the patterns masked (never a value). A JSON line is masked inside
+ * its strings and written again, so an escaped key block is found and the line stays JSON.
+ */
+export function maskCredentials(text, { jsonLines = false } = {}) {
+  const found = new Set()
+  if (!jsonLines) {
+    const masked = maskText(text, found)
+    return { text: masked, masked: CREDENTIAL_PATTERNS.map(([name]) => name).filter((name) => found.has(name)) }
+  }
+  const walk = (value) => {
+    if (typeof value === 'string') return maskText(value, found)
+    if (Array.isArray(value)) return value.map(walk)
+    if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, walk(entry)]))
+    return value
+  }
+  const lines = text.split('\n').map((line) => {
+    if (line.trim() === '') return line
+    let event
+    try {
+      event = JSON.parse(line)
+    } catch {
+      return maskText(line, found)
+    }
+    const before = found.size
+    const masked = walk(event)
+    return found.size === before && JSON.stringify(masked) === JSON.stringify(event) ? line : JSON.stringify(masked)
+  })
+  return { text: lines.join('\n'), masked: CREDENTIAL_PATTERNS.map(([name]) => name).filter((name) => found.has(name)) }
 }
 
 /** File names that are key stores or sign-in files whatever they hold. */
@@ -280,296 +345,3 @@ export function askProject(named, { cwd = process.cwd(), home = homedir() } = {}
   if (why !== null) refuse('PROJECT_INVALID', why)
   return folder
 }
-
-/** The status of each tracked path that differs from the revision: modified, added, deleted or type-changed. */
-function changedPaths(root) {
-  const text = git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=no', '--no-renames'])
-  const changed = new Map()
-  for (const entry of text.split('\0').filter(Boolean)) {
-    const code = entry.slice(0, 2)
-    const path = entry.slice(3)
-    changed.set(path, code.includes('D') ? 'deleted' : code.includes('A') ? 'added' : code.includes('T') ? 'type-changed' : 'modified')
-  }
-  return changed
-}
-
-/**
- * Builds the frozen copy of a project for one run in `target` (an empty folder): the tracked,
- * non-ignored files as they are in the working tree, links kept as links only where they stay in
- * the project, the extra `--file` copies inside the project (Git-ignored or untracked ones the
- * asker named), and a self-contained Git history of the checked-out revision, the newest commits
- * up to the bound, fetched into a new object database: no copied packs, alternates, reflogs,
- * replacement refs, remotes, hooks, configuration or other branch names. `publicCommit` builds the
- * copy from that commit's tree instead of the working tree (a public ask). Returns the manifest.
- */
-export function freezeProject(root, target, { extraFiles = [], publicCommit = null, limits = LIMITS } = {}) {
-  if (workingTreeRoot(root) !== root) {
-    refuse('PROJECT_INVALID', `${root} is not a Git working tree; to give it files, ask with --access files and --file`)
-  }
-  let head
-  try {
-    head = git(root, ['rev-parse', '--verify', 'HEAD^{commit}']).trim()
-  } catch {
-    refuse('PROJECT_INVALID', `${root} has no commit yet; to give it files, ask with --access files and --file`)
-  }
-  const revision = publicCommit ?? head
-  const changed = publicCommit === null ? changedPaths(root) : new Map()
-  const tracked = (publicCommit === null ? git(root, ['ls-files', '-z', '--cached']) : git(root, ['ls-tree', '-r', '-z', '--name-only', publicCommit])).split('\0').filter(Boolean)
-  const unique = [...new Set(tracked)]
-  if (unique.length > limits.projectFiles) refuse('INPUT_TOO_LARGE', `${root} tracks ${unique.length} files, over the project limit of ${limits.projectFiles}`)
-
-  // The asker's extra files count against the project's own limits, and none may name the frozen repository's Git folder.
-  const extras = extraFiles.filter((extra) => !unique.includes(relative(root, extra.real)))
-  for (const extra of extraFiles) {
-    const path = relative(root, extra.real)
-    if (path.startsWith('..') || isAbsolute(path)) refuse('INPUT_INVALID', `${extra.path} is outside the project ${root}; files from elsewhere go with --access files`)
-    if (path.split(sep).some((part) => part.toLowerCase() === '.git')) refuse('INPUT_INVALID', `${extra.path} is inside a Git folder; a project ask never carries Git's own files`)
-  }
-  if (unique.length + extras.length > limits.projectFiles) refuse('INPUT_TOO_LARGE', `${root} tracks ${unique.length} files and ${extras.length} more were named, over the project limit of ${limits.projectFiles}`)
-
-  mkdirSync(target, { recursive: true, mode: 0o700 })
-  // The history first, into an empty repository of the run's own: the newest commits of the revision,
-  // at most the bound. A depth counts commits along each line of history, so where lines branch it
-  // holds more; the depth is then made smaller until the count is inside the bound.
-  let depth = limits.historyCommits
-  for (let attempt = 0; ; attempt += 1) {
-    rmSync(join(target, '.git'), { recursive: true, force: true })
-    git(target, ['init', '-q', '-b', 'ask'])
-    try {
-      git(target, ['fetch', '-q', '--no-tags', '--no-write-fetch-head', '--update-head-ok', '--no-recurse-submodules', `--depth=${depth}`, `file://${root}`, `+${revision}:refs/heads/ask`],
-        { env: { GIT_ALLOW_PROTOCOL: 'file' } })
-    } catch (error) {
-      refuse('PROJECT_INVALID', `the history of ${root} could not be copied (${String(error.stderr ?? error.message).trim().split('\n').pop()})`)
-    }
-    const count = Number(git(target, ['rev-list', '--count', 'refs/heads/ask']).trim())
-    if (count <= limits.historyCommits) break
-    if (depth === 1 || attempt >= 8) refuse('INPUT_TOO_LARGE', `the newest history of ${root} holds ${count} commits, over the limit of ${limits.historyCommits}`)
-    depth = Math.max(1, Math.min(depth - 1, Math.floor((depth * limits.historyCommits) / count)))
-  }
-  git(target, ['symbolic-ref', 'HEAD', 'refs/heads/ask'])
-  for (const path of ['hooks', 'logs', 'FETCH_HEAD', 'description', 'info', 'ORIG_HEAD', 'objects/info/alternates']) rmSync(join(target, '.git', path), { recursive: true, force: true })
-  writeFileSync(join(target, '.git/config'), '[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = false\n')
-  const objectBytes = folderBytes(join(target, '.git/objects'))
-  if (objectBytes > limits.historyBytes) refuse('INPUT_TOO_LARGE', `the history of ${root} is ${mib(objectBytes)}, over the limit of ${mib(limits.historyBytes)}`)
-
-  // The files, as they are now (or as the public commit has them).
-  const files = []
-  let total = 0
-  for (const path of unique) {
-    const state = changed.get(path) ?? null
-    const source = join(root, path)
-    const copy = join(target, path)
-    if (publicCommit !== null) {
-      const mode = git(root, ['ls-tree', '-z', publicCommit, '--', path]).split(' ')[0]
-      if (mode === '160000') continue
-      const bytes = git(root, ['cat-file', 'blob', `${publicCommit}:${path}`], { encoding: 'buffer' })
-      if (mode === '120000') {
-        linkInside(root, path, bytes.toString('utf8'))
-        mkdirSync(dirname(copy), { recursive: true })
-        symlinkSync(bytes.toString('utf8'), copy)
-        files.push({ path, kind: 'link', target: bytes.toString('utf8'), changed: null })
-        continue
-      }
-      total += bytes.length
-      if (bytes.length > limits.projectFile) refuse('INPUT_TOO_LARGE', `${path} is ${mib(bytes.length)}, over the project file limit of ${mib(limits.projectFile)}`)
-      mkdirSync(dirname(copy), { recursive: true })
-      writeFileSync(copy, bytes, { mode: mode === '100755' ? 0o755 : 0o644 })
-      files.push({ path, kind: 'file', bytes: bytes.length, sha256: sha256Of(bytes), changed: null })
-      continue
-    }
-    let stat
-    try {
-      stat = lstatSync(source)
-    } catch {
-      files.push({ path, kind: 'deleted', changed: 'deleted' })
-      continue
-    }
-    if (stat.isDirectory()) continue
-    // Its folder must be the project's own: a folder of the path replaced by a link to elsewhere is refused, never followed.
-    folderInside(root, path)
-    if (stat.isSymbolicLink()) {
-      const link = readlinkSync(source)
-      linkInside(root, path, link)
-      mkdirSync(dirname(copy), { recursive: true })
-      symlinkSync(link, copy)
-      files.push({ path, kind: 'link', target: link, changed: state })
-      continue
-    }
-    if (!stat.isFile()) continue
-    if (stat.size > limits.projectFile) refuse('INPUT_TOO_LARGE', `${path} is ${mib(stat.size)}, over the project file limit of ${mib(limits.projectFile)}`)
-    if (secretName(path)) refuse('CREDENTIAL_FOUND', `${path} is a key store or sign-in file; nothing was sent`)
-    const bytes = readInside(root, path, limits.projectFile)
-    total += bytes.length
-    if (total > limits.projectBytes) refuse('INPUT_TOO_LARGE', `${root}'s tracked files are over the project limit of ${mib(limits.projectBytes)}`)
-    mkdirSync(dirname(copy), { recursive: true })
-    writeFileSync(copy, bytes, { mode: stat.mode & 0o111 ? 0o755 : 0o644 })
-    files.push({ path, kind: 'file', bytes: bytes.length, sha256: sha256Of(bytes), changed: state })
-  }
-  // The asker's own extra files, inside the project only (checked above), counted with the tracked ones.
-  for (const extra of extras) {
-    const path = relative(root, extra.real)
-    if (files.some((file) => file.path === path)) continue
-    total += extra.bytes.length
-    const copy = join(target, path)
-    mkdirSync(dirname(copy), { recursive: true })
-    writeFileSync(copy, extra.bytes, { mode: 0o644 })
-    files.push({ path, kind: 'file', bytes: extra.bytes.length, sha256: extra.sha256, changed: 'named' })
-  }
-  if (total > limits.projectBytes) refuse('INPUT_TOO_LARGE', `${root}'s tracked files${extras.length > 0 ? ' and the named ones' : ''} are over the project limit of ${mib(limits.projectBytes)}`)
-  // The index is the revision's, so the working tree's changes show as uncommitted. Git here runs
-  // outside the container: no repository setting may start a program.
-  git(target, ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', 'read-tree', 'HEAD'])
-  try {
-    git(target, ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', 'update-index', '-q', '--refresh'])
-  } catch {
-    // Differences are what update-index reports; the index itself is written.
-  }
-  const history = historyManifest(target)
-  scanProject(target, files, history)
-  return { root, revision, head, public_commit: publicCommit, files, history }
-}
-
-/** The folder a tracked path lies in must be the project's own folder of that name, not a link out of it. */
-function folderInside(root, path) {
-  const folder = dirname(join(root, path))
-  let real
-  try {
-    real = realpathSync(folder)
-  } catch {
-    refuse('INPUT_INVALID', `the folder of ${path} cannot be read`)
-  }
-  if (real !== folder) refuse('INPUT_INVALID', `the folder of ${path} is a link (to ${real}); a project's files are read only from its own folders, never through a link`)
-}
-
-/**
- * A tracked file's bytes, read through one descriptor opened without following a link, whose real
- * path is then checked: a folder of the path replaced by a link while the copy is made reads nothing
- * from outside the project.
- */
-export function readInside(root, path, limit = LIMITS.projectFile) {
-  const expected = join(root, path)
-  let handle
-  try {
-    handle = openSync(expected, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-  } catch {
-    refuse('INPUT_INVALID', `${path} changed while the project was copied; ask again`)
-  }
-  try {
-    let real = null
-    try {
-      real = readlinkSync(`/proc/self/fd/${handle}`)
-    } catch {
-      real = null
-    }
-    if (real !== expected) refuse('INPUT_INVALID', `${path} is not where the project has it${real === null ? '' : ` (it is ${real})`}; a project's files are read only from its own folders, never through a link`)
-    const stat = fstatSync(handle)
-    if (!stat.isFile()) refuse('INPUT_INVALID', `${path} changed while the project was copied; ask again`)
-    if (stat.size > limit) refuse('INPUT_TOO_LARGE', `${path} is ${mib(stat.size)}, over the project file limit of ${mib(limit)}`)
-    const bytes = Buffer.alloc(stat.size)
-    let at = 0
-    while (at < bytes.length) {
-      const read = readSync(handle, bytes, at, bytes.length - at, at)
-      if (read === 0) break
-      at += read
-    }
-    return bytes.subarray(0, at)
-  } finally {
-    closeSync(handle)
-  }
-}
-
-/** A tracked link may point only inside the project, and at something that is there. */
-function linkInside(root, path, link) {
-  const resolved = resolve(dirname(join(root, path)), link)
-  let real
-  try {
-    real = realpathSync(resolved)
-  } catch {
-    refuse('INPUT_INVALID', `${path} is a link to ${link}, which is not there; links are kept only where they stay in the project`)
-  }
-  if (!within(real, root)) refuse('INPUT_INVALID', `${path} is a link out of the project (to ${link}); it is never followed or copied`)
-}
-
-function folderBytes(folder) {
-  let total = 0
-  for (const entry of readdirSync(folder, { withFileTypes: true })) {
-    const path = join(folder, entry.name)
-    if (entry.isDirectory()) total += folderBytes(path)
-    else if (entry.isFile()) total += statSync(path).size
-  }
-  return total
-}
-
-/** The copied history: the included commits newest first, the shallow boundary, and every object by type with a hash over the list. */
-function historyManifest(target) {
-  const commits = git(target, ['rev-list', 'HEAD']).split('\n').filter(Boolean)
-  const shallow = existsSync(join(target, '.git/shallow')) ? readFileSync(join(target, '.git/shallow'), 'utf8').split('\n').filter(Boolean) : []
-  const listed = git(target, ['cat-file', '--batch-all-objects', '--batch-check=%(objecttype) %(objectname) %(objectsize)']).split('\n').filter(Boolean).map((line) => line.split(' '))
-  const objects = { commit: [], tree: [], blob: [], tag: [] }
-  for (const [type, name, size] of listed) objects[type]?.push({ name, size: Number(size) })
-  const list = listed.map(([type, name]) => `${type} ${name}`).sort().join('\n')
-  return {
-    commits, shallow, counts: { commits: objects.commit.length, trees: objects.tree.length, blobs: objects.blob.length },
-    objects_sha256: sha256Of(Buffer.from(list)), objects: list, blobs: objects.blob
-  }
-}
-
-/**
- * The credential scan over everything a project ask exposes (R72-NFR5): every current file, every
- * blob of the copied history and every commit message, and the names of every path in that
- * history. A hit refuses the ask, naming where and which pattern.
- */
-function scanProject(target, files, history) {
-  for (const file of files) {
-    if (file.kind !== 'file') continue
-    const bytes = readFileSync(join(target, file.path))
-    if (!isText(bytes.subarray(0, 8192))) continue
-    const hits = credentialHits(bytes.toString('utf8'))
-    if (hits.length > 0) refuse('CREDENTIAL_FOUND', `${file.path} holds ${hits.join(' and ')}; nothing was sent`)
-  }
-  const paths = git(target, ['log', '--format=', '--name-only', '-z', 'HEAD']).split('\0').map((entry) => entry.trim()).filter(Boolean)
-  const secret = paths.find((path) => secretName(path))
-  if (secret !== undefined) refuse('CREDENTIAL_FOUND', `the history holds ${secret}, a key store or sign-in file; nothing was sent`)
-  // Commit messages, then every blob through one cat-file process.
-  const messages = git(target, ['log', '--format=%H%x00%B%x00', 'HEAD']).split('\0')
-  for (let at = 0; at + 1 < messages.length; at += 2) {
-    const hits = credentialHits(messages[at + 1])
-    if (hits.length > 0) refuse('CREDENTIAL_FOUND', `the message of commit ${messages[at].trim().slice(0, 12)} holds ${hits.join(' and ')}; nothing was sent`)
-  }
-  const blobs = history.blobs.filter((blob) => blob.size > 0)
-  if (blobs.length === 0) return
-  const output = git(target, ['cat-file', '--batch'], { input: `${blobs.map((blob) => blob.name).join('\n')}\n`, encoding: 'buffer' })
-  let at = 0
-  while (at < output.length) {
-    const newline = output.indexOf(10, at)
-    const [name, , size] = output.subarray(at, newline).toString('latin1').split(' ')
-    const start = newline + 1
-    const bytes = output.subarray(start, start + Number(size))
-    at = start + Number(size) + 1
-    if (!isText(bytes.subarray(0, 8192))) continue
-    const hits = credentialHits(bytes.toString('utf8'))
-    if (hits.length > 0) {
-      const where = historyPathOf(target, name)
-      refuse('CREDENTIAL_FOUND', `the history holds ${hits.join(' and ')} in ${where ?? `blob ${name.slice(0, 12)}`}; nothing was sent`)
-    }
-  }
-}
-
-/** A path a blob had somewhere in the copied history, for a refusal's words. */
-function historyPathOf(target, blob) {
-  const line = git(target, ['rev-list', '--objects', 'HEAD']).split('\n').find((entry) => entry.startsWith(`${blob} `))
-  return line === undefined ? null : line.slice(blob.length + 1)
-}
-
-/** Reads the first bytes of a file without reading it all. */
-export function headBytes(path, count = 8192) {
-  const handle = openSync(path, 'r')
-  try {
-    const buffer = Buffer.alloc(count)
-    const read = readSync(handle, buffer, 0, count, 0)
-    return buffer.subarray(0, read)
-  } finally {
-    closeSync(handle)
-  }
-}
-

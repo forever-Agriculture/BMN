@@ -5,7 +5,7 @@ import { agentState, classRefusal, initialEfforts, isCalled, parseCandidate, rol
  * Who answers is decided by rules the asker can predict (R72-FR3, 72.2 AC1), in this order: a valid
  * recheck asks the earlier run's teammate at the role's recheck effort; an approved project choice
  * binds (73.2): asking someone else there, a recheck by another teammate included, needs the owner to change the choice first; a named agent; the role's small-work candidate;
- * the chain's first candidate that is active, has a proven form for this access mode and may get
+ * the chain's first candidate that is active, whose app can run this ask (72.9: pictures, sign-in) and may get
  * this data. A recheck, a project choice or a named agent that is not valid now is refused with the
  * reason and the eligible alternatives, never passed over (R72-NFR7). The result says which rule chose.
  */
@@ -24,7 +24,7 @@ const refuse = (code, message, alternatives) => {
 
 /**
  * Why an agent cannot answer this ask now, or null. `context.standing(agent)` says whether its app
- * has a proven form for this mode (`proven`, or the words of why not); `context.allowed(agent)`
+ * can run this ask (`proven`, or the words of why not: pictures it is not given, a missing sign-in); `context.allowed(agent)`
  * whether it may get this data (`{ allowed, reason }`).
  */
 export function notEligible(data, role, agent, context) {

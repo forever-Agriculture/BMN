@@ -78,38 +78,34 @@ permission:
 You are a researcher started by BMN. Search the web and answer the request; you cannot read or change anything on this computer.
 `
 
-/** BMN's agent for an asked teammate (72.1's question and files form): every action denied; the question and the files' text are in the prompt. */
-export const OPENCODE_ASKER_AGENT = 'bmn-asker'
+/** The read-only permissions 72.9 measured on OpenCode 2.0.29 (`readersafe`): read, history through BMN's git, web search and BMN's own sub-agent. */
+const ASK_READER_PERMISSION = Object.freeze({
+  '*': 'deny', read: 'allow', glob: 'allow', grep: 'allow', list: 'allow', external_directory: 'deny', edit: 'deny', webfetch: 'deny', websearch: 'allow',
+  todowrite: 'deny', question: 'deny', lsp: 'deny', skill: 'deny',
+  // OpenCode matches a command's whole text and splits chains, substitutions and pipes but not redirections: `git log -1 > file`
+  // passed `git log*` until every command holding a redirection was refused (72.9 AC1).
+  bash: { '*': 'deny', 'git log*': 'allow', 'git show*': 'allow', 'git diff*': 'allow', 'git blame*': 'allow', '*>*': 'deny' },
+  task: { '*': 'deny', 'bmn-reader': 'allow' }
+})
 
-const ASKER_AGENT_TEXT = `---
-description: BMN asked teammate, no tools
-mode: primary
-permission:
-  "*": deny
----
-
-You are a teammate asked one question by BMN; you have no tools.
-`
-
-/** An ask's own OpenCode settings, as 72.1 measured them: no update, no sharing, no file snapshots, and no search service. */
-const ASK_CONFIG_TEXT = `${JSON.stringify({ $schema: 'https://opencode.ai/config.json', autoupdate: false, share: 'disabled', snapshot: false }, null, 2)}\n`
+/** BMN's agents for an asked teammate: the project reader with its read-only sub-agent, and the asker with every action denied (72.5). */
+export const OPENCODE_ASK_AGENTS = Object.freeze({ reader: 'bmn-ask-reader', asker: 'bmn-ask-asker', subagent: 'bmn-reader' })
 
 /**
- * What one ask's own OpenCode configuration holds (72.5), by each file's path in the run's home: its
- * settings, its one agent and, for a private ask, the owner's rules where OpenCode reads its global
- * rules. Its five folders are `oc/home`, `oc/config`, `oc/data`, `oc/state` and `oc/cache` there.
+ * The agents of one ask on OpenCode, given in OPENCODE_CONFIG_CONTENT so that BMN's OpenCode folder
+ * (its OpenCode Go sign-in) is used as it is, its files unchanged (72.9 AC1): `reader` for a private
+ * project ask, `asker` for any other. A private ask carries the owner's rules in the agent's prompt;
+ * BMN's folder holds no rules file. Returns `{ agent, content }`.
  */
-export function openCodeAskHome(access, rules = null) {
-  const agent = access === 'project' ? OPENCODE_HELPER_AGENT : OPENCODE_ASKER_AGENT
-  return {
-    agent,
-    folders: ['oc/home', 'oc/data', 'oc/state', 'oc/cache'],
-    files: {
-      'oc/config/opencode/opencode.json': ASK_CONFIG_TEXT,
-      [`oc/config/opencode/agents/${agent}.md`]: agent === OPENCODE_HELPER_AGENT ? HELPER_AGENT_TEXT : ASKER_AGENT_TEXT,
-      ...(rules === null ? {} : { 'oc/config/opencode/AGENTS.md': rules })
-    }
-  }
+export function openCodeAskConfig(kind, rules = null) {
+  const own = (text) => (rules === null ? text : `${text}\n\n${rules}`)
+  const agent = kind === 'reader'
+    ? {
+        [OPENCODE_ASK_AGENTS.reader]: { description: 'BMN asked teammate, read-only', mode: 'primary', prompt: own('You are a read-only teammate asked by BMN.'), permission: ASK_READER_PERMISSION },
+        [OPENCODE_ASK_AGENTS.subagent]: { description: 'BMN read-only sub-agent', mode: 'subagent', prompt: 'You are a read-only sub-agent started by BMN\'s teammate.', permission: { ...ASK_READER_PERMISSION, task: 'deny' } }
+      }
+    : { [OPENCODE_ASK_AGENTS.asker]: { description: 'BMN asked teammate, no tools', mode: 'primary', prompt: own('You are a teammate asked one question by BMN; you have no tools.'), permission: { '*': 'deny' } } }
+  return { agent: kind === 'reader' ? OPENCODE_ASK_AGENTS.reader : OPENCODE_ASK_AGENTS.asker, content: JSON.stringify({ agent }) }
 }
 
 /**
@@ -510,7 +506,7 @@ export async function copyOpenCodeGoSignIn({ environment = process.env, base = o
 }
 
 // ---------------------------------------------------------------------------------------------
-// A teammate's ask on OpenCode (72.5): its sign-in copied in for the run alone, and its session's own record after
+// A teammate's ask on OpenCode (72.5, 72.9): its sessions' own records, read after the run
 
 function runSync(launcher, args, { env, cwd, input = '', timeoutMs = 30_000, limit = OUTPUT_LIMIT }) {
   const result = spawnSync(launcher, args, { env, cwd, input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'], timeout: timeoutMs, maxBuffer: limit })
@@ -519,32 +515,12 @@ function runSync(launcher, args, { env, cwd, input = '', timeoutMs = 30_000, lim
 }
 
 /**
- * Copies the OpenCode Go sign-in BMN keeps in its own folder (70.4) into one ask's folders, for that
- * run alone: `auth export` in BMN's folder, OpenCode Go's entries kept in memory only, handed to
- * `auth import` in the run's folders on standard input. Nothing OpenCode prints is written or said;
- * the run's home, and the copy with it, is deleted on every outcome. Returns `{ ok }` or `{ ok: false, reason }`.
+ * What OpenCode recorded of one of an ask's sessions (70.4): `opencode session export <id>
+ * --standalone` in BMN's folder, of which only the session's info is kept: its id, its parent session
+ * (a sub-agent's), agent, model and variant, tokens and reported spend, never its messages. `{ info }`
+ * or `{ failed }`.
  */
-export function copyGoSignInToRun(runBase, { launcher = 'opencode', environment = process.env, base = openCodeFolder(), timeoutMs = 30_000 } = {}) {
-  const folders = openCodeFolders(base)
-  if (!existsSync(folders.data)) return { ok: false, reason: 'BMN\'s OpenCode folder holds no OpenCode Go sign-in: BMN copies yours when you approve an OpenCode teammate in the Team view' }
-  const exported = runSync(launcher, ['auth', 'export', '--standalone'], { env: folderEnvironment(base, environment), cwd: folders.home, timeoutMs })
-  if (exported.missing) return { ok: false, reason: 'OpenCode is not on this computer' }
-  if (exported.status !== 0) return { ok: false, reason: `opencode auth export ${ended(exported)} in BMN's OpenCode folder` }
-  const go = goSignIns(exported.stdout)
-  if (go === null) return { ok: false, reason: 'OpenCode printed the sign-ins of BMN\'s folder in a form BMN does not read' }
-  if (go.length === 0) return { ok: false, reason: 'BMN\'s OpenCode folder holds no OpenCode Go sign-in: BMN copies yours when you approve an OpenCode teammate in the Team view' }
-  const run = openCodeFolders(runBase)
-  const imported = runSync(launcher, ['auth', 'import', '--standalone'], { env: folderEnvironment(runBase, environment), cwd: run.home, input: JSON.stringify(go), timeoutMs })
-  if (imported.missing || imported.status !== 0) return { ok: false, reason: `OpenCode did not take the sign-in into the ask's own folders (opencode auth import ${imported.missing ? 'was not found' : ended(imported)})` }
-  return { ok: true }
-}
-
-/**
- * What OpenCode recorded of a finished ask's session (70.4): `opencode session export <id>
- * --standalone` in the run's own folders, of which only the session's info is kept: its id, agent,
- * model and variant, tokens and reported spend, never its messages. `{ info }` or `{ failed }`.
- */
-export function openCodeSessionInfo(session, runBase, { launcher = 'opencode', environment = process.env, timeoutMs = 30_000 } = {}) {
+export function openCodeSessionInfo(session, runBase = openCodeFolder(), { launcher = 'opencode', environment = process.env, timeoutMs = 30_000 } = {}) {
   if (!OPENCODE_SESSION_ID.test(session ?? '')) return { failed: 'the run named no OpenCode session' }
   const result = runSync(launcher, ['session', 'export', session, '--standalone'], { env: folderEnvironment(runBase, environment), cwd: openCodeFolders(runBase).home, timeoutMs, limit: 64 * 1024 * 1024 })
   if (result.missing) return { failed: 'OpenCode is not on this computer' }
@@ -559,7 +535,7 @@ export function openCodeSessionInfo(session, runBase, { launcher = 'opencode', e
   const number = (value) => (Number.isFinite(value) ? value : 'unknown')
   return {
     info: {
-      id: info.id, agent: typeof info.agent === 'string' ? info.agent : null,
+      id: info.id, parent: typeof info.parentID === 'string' ? info.parentID : null, agent: typeof info.agent === 'string' ? info.agent : null,
       model: { id: info.model?.id ?? null, provider: info.model?.providerID ?? null, variant: info.model?.variant ?? null },
       tokens: { input: number(info.tokens?.input), output: number(info.tokens?.output), reasoning: number(info.tokens?.reasoning), cache_read: number(info.tokens?.cache?.read), cache_write: number(info.tokens?.cache?.write) },
       // OpenCode's own name for what the session spent; BMN keeps it as the reported cost.

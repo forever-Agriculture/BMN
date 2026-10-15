@@ -8,41 +8,44 @@ import { APP_NAMES, DESIGNER_ROLE, RosterError } from './agents-roster.mjs'
 import { AgentsUsageError, EXIT, err, failWith, out, usage } from './agents-cli.mjs'
 import { askerOf } from './agents-ask.mjs'
 import { harnessVersion, teamRunsDirectory } from './agents-check.mjs'
-import { containerStarts } from './agents-container.mjs'
-import { ASK_APPS, ASK_FORMS_PROVEN, ASK_OFFERED, ASK_RUN_FILES, appSearchPath, askProgram, formStanding } from './agents-team-forms.mjs'
+import { ASK_APPS, ASK_FORMS_CHECKED, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askFormName, askProgram } from './agents-team-forms.mjs'
 import { InputRefusal, LIMITS, askProject } from './agents-team-inputs.mjs'
 import { AskRefusal } from './agents-team-resolve.mjs'
-import { AskUsageError, askRunId, prepareAsk } from './agents-team-ask.mjs'
+import { ACCESS_GONE, AskUsageError, WIDE_READ_GONE, askRunId, prepareAsk } from './agents-team-ask.mjs'
 import { OUTCOME_EXIT, StartRefusal, TIME_LIMIT, TRANSIENT, askOutcome, exportAsk, startAsk, stopAsk, waitAsk } from './agents-team-run.mjs'
-import { writeWhole } from './agents-team-supervisor.mjs'
+import { scopeStarts, startTeamSupervisor, writeWhole } from './agents-team-supervisor.mjs'
 import { nestedAsk } from './agents-team-nested.mjs'
 import { askSettings, keyDay, keyPath, keyScope, keyedRun, makeKey, recordInterrupted, releaseReservation, requestHash, reserveAsk } from './agents-team-places.mjs'
 
 export const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --question-file PATH|-) --key K [--agent A] [--effort E]
-         [--small-work] [--recheck-of ID] [--project P] [--access question|files|project] [--file PATH]...
-         [--image PATH]... [--data public] [--time-limit MINUTES] [--background] [--json]
-       bmn team ask --features [--json]             What each installed app may be asked here, as BMN measured it
+         [--small-work] [--recheck-of ID] [--project P] [--file PATH]... [--image PATH]...
+         [--data public] [--time-limit MINUTES] [--background] [--json]
+       bmn team ask --features [--json]             What each installed app is asked with here, and what its mode reads
        bmn team asks [--json]                       Your asks, newest first
        bmn team asks show <id> [--json]             One ask: its state, who answered, the answer
        bmn team asks wait <id> [--timeout SECONDS] [--json]
        bmn team asks stop <id> [--json]
        bmn team asks export <id> --output PATH      The allowlisted record, never a sign-in, a home or raw logs
 
-Asks one approved teammate in a role, read-only, in a container BMN builds for that one run
-(docs/agent-control.md, "Asking a teammate"). --access says what it may read: the question only
-(default), the --file texts, or one project's frozen copy with its Git history; --image gives PNG, JPEG
+Asks one approved teammate in a role, in its own app's read-only mode with that mode's tools: Codex's
+read-only sandbox, Claude Code's read tools, Git history, web search and sub-agents, OpenCode's
+read-only agent (docs/agent-control.md, "Asking a teammate"). It works in the project (--project;
+the default is your repository, else an empty folder of the run's own) and writes nothing; what its
+mode can read is in the record. --file gives whole text files in the prompt; --image gives PNG, JPEG
 or WebP pictures as images, their metadata taken out, to the designer unless --role names another
-role. --key is required in
-a session: today's UTC day and a name of yours (20261015-review-1); a retry with the same key and
-request finds the first ask, never starts a second. The answer goes to standard output, progress to
-standard error; closing the command only detaches it, and the run goes on. Exit: 0 answered,
-1 failed, 2 usage, 3-7 team state, 10 refused, 14 busy, 15 out of time, 16 stopped, 17 answer not
-attributed.`
+role. The run has a systemd user scope of its own: Stop and the time limit end everything it
+started. --key is required in a session: today's UTC day and a name of yours (20261015-review-1);
+a retry with the same key and request finds the first ask, never starts a second. The answer goes
+to standard output, progress to standard error; closing the command only detaches it, and the run
+goes on. Exit: 0 answered, 1 failed, 2 usage, 3-7 team state, 10 refused, 14 busy, 15 out of time,
+16 stopped, 17 answer not attributed.`
 
 const RUN_ID = /^\d{8}T\d{6}-[0-9a-f]{8}$/u
-const VALUES = ['role', 'question', 'question-file', 'agent', 'effort', 'recheck-of', 'project', 'access', 'data', 'time-limit', 'key']
+const VALUES = ['role', 'question', 'question-file', 'agent', 'effort', 'recheck-of', 'project', 'data', 'time-limit', 'key']
 const REPEATED = ['file', 'image']
-const FLAGS = ['small-work', 'background', 'json', 'help', 'wide-read', 'features']
+const FLAGS = ['small-work', 'background', 'json', 'help', 'features']
+/** Options an ask no longer takes, each refused with the new spelling (72.9 AC4). */
+const GONE = { access: ACCESS_GONE, 'wide-read': WIDE_READ_GONE }
 
 /** The options of `team ask`: values once each, `--file` as often as needed, nothing positional. */
 export function readAskOptions(argv) {
@@ -53,6 +56,7 @@ export function readAskOptions(argv) {
     if (!argument.startsWith('--')) throw new AgentsUsageError(`team ask takes no ${argument === '-' ? 'lone -; use --question-file -' : `argument ${argument}`}`)
     const equals = argument.indexOf('=')
     const name = argument.slice(2, equals === -1 ? undefined : equals)
+    if (Object.hasOwn(GONE, name)) throw new AgentsUsageError(GONE[name])
     if (FLAGS.includes(name)) {
       if (equals !== -1) throw new AgentsUsageError(`--${name} does not take a value`)
       if (options[name] !== undefined) throw new AgentsUsageError(`--${name} given more than once`)
@@ -127,14 +131,42 @@ export function askJson(folder) {
   return {
     version: 1, id: request.id ?? null, state: outcome.state, exit: outcome.exit ?? null, ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
     ...(outcome.refusal === undefined ? {} : { refusal: outcome.refusal }),
-    role: request.role ?? null, chosen_by: request.chosen_by ?? null, access: request.access ?? null, project: request.project ?? null, data: request.data ?? null,
+    role: request.role ?? null, chosen_by: request.chosen_by ?? null, project: request.project ?? null, data: request.data ?? null,
     teammate: {
-      agent: request.agent ?? null, app: receipt.harness ?? null, app_version: receipt.harness_version?.version ?? null, form: receipt.form ?? null,
+      agent: request.agent ?? null, app: receipt.harness ?? null, app_version: receipt.harness_version?.version ?? request.app_version ?? null, form: receipt.form ?? request.form ?? null,
+      // What the teammate's own mode could read (72.9 AC1, AC6).
+      could_read: receipt.reads?.words ?? request.reads ?? null, works_in: receipt.cwd ?? null,
       requested: { model: request.model ?? null, effort: request.effort ?? null }, observed: outcome.observed ?? null
     },
-    usage: outcome.usage ?? null, answer, started_at: outcome.started_at ?? null, ended_at: outcome.ended_at ?? null,
+    subagents: outcome.subagents ?? [], usage: outcome.usage ?? null, ...(outcome.project === undefined ? {} : { project_state: outcome.project }),
+    ...(outcome.credentials_masked === undefined ? {} : { credentials_masked: outcome.credentials_masked }), answer, started_at: outcome.started_at ?? null, ended_at: outcome.ended_at ?? null,
     time_limit_minutes: outcome.time_limit_minutes ?? null, record: folder
   }
+}
+
+/** A project's state in words: its commit and whether its tree was clean. */
+function stateWords(state) {
+  if (state === null || state === undefined) return 'not read'
+  if (state.commit === null && state.clean === null) return 'not a Git working tree'
+  return `${state.commit === null ? 'no commit' : state.commit.slice(0, 12)}, ${state.clean === null ? 'its tree unread' : state.clean ? 'clean' : `${state.changed} change${state.changed === 1 ? '' : 's'}`}`
+}
+
+/** `bmn team asks show` in words: the state, who answered and how they were chosen, what its mode could read, its sub-agents, the project's state, the usage and the answer. */
+export function showWords(shown) {
+  const usage = shown.usage
+  const tokens = usage === null || usage === undefined ? 'unknown'
+    : `${usage.input_tokens} in, ${usage.output_tokens} out${usage.reported_cost === 'unknown' || usage.reported_cost === undefined ? '' : `, reported $${usage.reported_cost}`}${usage.complete === false ? ` (incomplete: ${usage.incomplete_reason ?? 'not every usage record was read'})` : ''}`
+  const project = shown.project_state
+  return [
+    `${shown.id}  ${shown.state}${shown.reason ? `: ${shown.reason}` : ''}`,
+    `${shown.role} -> ${shown.teammate.agent} (${shown.teammate.app ?? '?'}${shown.teammate.app_version ? ` ${shown.teammate.app_version}` : ''} ${shown.teammate.requested.model ?? '?'}, ${shown.teammate.requested.effort ?? '?'}), chosen by ${shown.chosen_by}`,
+    `Could read: ${shown.teammate.could_read ?? 'not recorded'}${shown.teammate.works_in ? `; worked in ${shown.teammate.works_in}` : ''}`,
+    ...(shown.subagents.length === 0 ? [] : [`Sub-agents: ${shown.subagents.map((entry) => `${entry.name ?? entry.session} (${entry.kind}${entry.model ? `, ${entry.model}` : ''})`).join('; ')}`]),
+    ...(project === undefined ? [] : [`Project ${project.root}: at the start ${stateWords(project.start)}; at the end ${stateWords(project.end)}`]),
+    ...(shown.credentials_masked === undefined ? [] : [`Credentials masked: ${[...new Set([...shown.credentials_masked.answer, ...shown.credentials_masked.output])].join(', ')}`]),
+    `Usage: ${tokens}`,
+    ...(shown.answer === null ? [] : ['', shown.answer.replace(/\n$/u, '')])
+  ].join('\n')
 }
 
 /** Ends a run that the check refused: its record says so, and its transient state goes. */
@@ -251,20 +283,23 @@ function fileHash(path, limit = LIMITS.file) {
   }
 }
 
-/** What `bmn team ask --features` says: per app version, each mode's standing as 72.1 measured it, and the platform. */
+/** What `bmn team ask --features` says: per app its version, the form it is asked with and what that form reads, the version the form was last checked on, and whether a scope starts here. */
 export function askFeatures(environment = process.env) {
-  const container = containerStarts()
+  const scope = scopeStarts({ environment })
   const apps = ASK_APPS.map((harness) => {
     const program = askProgram(harness, environment)
     const version = program === null ? null : harnessVersion(program.launcher, { PATH: appSearchPath(environment), HOME: environment.HOME ?? '' })
-    const standing = (mode) => (program === null ? 'not-installed' : formStanding(harness, version, mode))
+    const form = (project, label) => {
+      const name = askFormName(harness, { project, label })
+      return { form: name, reads: ASK_READS[name].words }
+    }
     return {
-      app: harness, installed: program !== null, version, measured: Object.keys(ASK_FORMS_PROVEN[harness] ?? {}),
-      forms: { question: standing('question'), files: standing('files'), project: standing('project'), 'wide-read': 'not-enabled' },
-      pictures: ASK_OFFERED.pictures ? standing('pictures') : 'not-offered', usage_while_running: harness === 'claude'
+      app: harness, installed: program !== null, version, form_checked_on: ASK_FORMS_CHECKED[harness],
+      forms: { project: form('project', 'private'), 'no-project': form(null, 'private'), public: harness === 'opencode' ? form(null, 'public') : { form: null, reads: 'not offered: its tools read beyond your text, so its asks are private' } },
+      pictures: ASK_UNSUPPORTED[harness]?.pictures === undefined ? 'offered' : `not offered: ${ASK_UNSUPPORTED[harness].pictures}`, usage_while_running: harness === 'claude'
     }
   })
-  return { version: 1, platform: process.platform, container: container.ok ? { ok: true } : { ok: false, reason: container.reason }, apps }
+  return { version: 2, platform: process.platform, scope: scope.ok ? { ok: true } : { ok: false, reason: scope.reason }, apps }
 }
 
 function printFeatures(asJson, environment) {
@@ -273,9 +308,9 @@ function printFeatures(asJson, environment) {
     out(JSON.stringify(shown, null, 2))
     return EXIT.ok
   }
-  const words = (value) => value.replaceAll('-', ' ')
-  out([`Teammates' asks on ${shown.platform}; BMN's container ${shown.container.ok ? 'starts here' : `cannot start here: ${shown.container.reason}`}.`,
-    ...shown.apps.map((app) => !app.installed ? `${APP_NAMES[app.app]}: not installed where BMN looks` : `${APP_NAMES[app.app]} ${app.version ?? '(version unreadable)'}: ${Object.entries(app.forms).map(([mode, value]) => `${mode} ${words(value)}`).join(', ')}; pictures ${words(app.pictures)}; usage ${app.usage_while_running ? 'while it runs' : 'at the end only'}${app.measured.includes(app.version) ? '' : ` (BMN measured ${app.measured.join(', ')})`}`)].join('\n'))
+  out([`Teammates' asks on ${shown.platform}; a run's systemd user scope ${shown.scope.ok ? 'starts here' : `cannot start here: ${shown.scope.reason}`}.`,
+    ...shown.apps.map((app) => !app.installed ? `${APP_NAMES[app.app]}: not installed where BMN looks`
+      : `${APP_NAMES[app.app]} ${app.version ?? '(version unreadable)'} (form last checked on ${app.form_checked_on.version}, ${app.form_checked_on.on}): ${app.forms.project.reads}${app.forms.project.form === app.forms['no-project'].form ? '' : `; with no project, ${app.forms['no-project'].reads}`}; pictures ${app.pictures === 'offered' ? 'offered' : 'not offered'}; usage ${app.usage_while_running ? 'while it runs' : 'at the end only'}`)].join('\n'))
   return EXIT.ok
 }
 
@@ -333,7 +368,7 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
   }
   const request = {
     role: options.role ?? DESIGNER_ROLE, question, agent: options.agent, effort: options.effort, smallWork: options['small-work'] === true, recheckOf: options['recheck-of'],
-    project: options.project, access: options.access, files, images, data: options.data, wide: options['wide-read'] === true
+    project: options.project, files, images, data: options.data
   }
   const runs = teamRunsDirectory()
   const key = options.key ?? makeKey('shell', now())
@@ -356,13 +391,13 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
   let started = null
   let prepared
   try {
-    // Where the container cannot start, nothing is read or copied: the ask is refused in bubblewrap's own words.
-    const container = containerStarts()
-    if (!container.ok) return refused(asJson, 'CONTAINER_UNAVAILABLE', `BMN's container cannot start from here: ${container.reason}; ask from where it can (a terminal, or escalated as a sandboxed lead runs helpers)`)
+    // Where the run's scope cannot start, nothing is read or written: the ask is refused saying why (R72-NFR3).
+    const systemd = scopeStarts({ environment })
+    if (!systemd.ok) return refused(asJson, 'SCOPE_UNAVAILABLE', `the ask's systemd user scope cannot start from here: ${systemd.reason}; ask from where it can (a terminal, or escalated as a sandboxed lead runs helpers)`)
     try {
       prepared = prepareAsk({ ...request, key, keyScope: scope, requestSha256: hash, askedBy: asker, inputHashes }, { environment, cwd, id, now: now() })
     } catch (error) {
-      // Nothing was sent and the key is given back: whatever preparing had copied (a frozen history, file copies) goes with it.
+      // Nothing was sent and the key is given back: whatever preparing had written (file copies, pictures) goes with it.
       rmSync(join(runs, id), { recursive: true, force: true })
       if (error instanceof AskUsageError) return usage(error.message)
       if (error instanceof AskRefusal) return error.code === 'USAGE' ? usage(error.message) : refused(asJson, error.code, error.message, error.alternatives)
@@ -375,7 +410,7 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
       return refused(asJson, code, message)
     }
     try {
-      started = startAsk(prepared, { timeLimitMinutes: minutes, tokenCeiling: askSettings(runs).token_ceiling })
+      started = startAsk(prepared, { timeLimitMinutes: minutes, tokenCeiling: askSettings(runs).token_ceiling, start: (folder) => startTeamSupervisor(folder, { environment }) })
     } catch (error) {
       if (error instanceof StartRefusal) {
         recordRefusal({ ...prepared, verdict: { code: error.code, message: error.message } })
@@ -394,7 +429,7 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     else out(id)
     return EXIT.ok
   }
-  err(`bmn: asked ${receipt.agent} (${receipt.harness} ${receipt.model}, ${receipt.effort}; chosen by ${prepared.choice.rule}), ${receipt.access} access; run ${id}, key ${key}, supervisor ${started.pid}`)
+  err(`bmn: asked ${receipt.agent} (${receipt.harness} ${receipt.model}, ${receipt.effort}; chosen by ${prepared.choice.rule}) in ${receipt.cwd}; it can read ${receipt.reads.words.replace(/^[^:]*: /u, '')}; run ${id}, key ${key}, supervisor ${started.pid}`)
   return followRun(prepared.folder, id, asJson)
 }
 
@@ -518,8 +553,7 @@ export async function runTeamAsks(argv, { environment = process.env, cwd = proce
     if (action === 'show') {
       const shown = askJson(folder)
       if (asJson) out(JSON.stringify(shown, null, 2))
-      else out([`${shown.id}  ${shown.state}${shown.reason ? `: ${shown.reason}` : ''}`, `${shown.role} -> ${shown.teammate.agent} (${shown.teammate.app ?? '?'} ${shown.teammate.requested.model ?? '?'}, ${shown.teammate.requested.effort ?? '?'}), chosen by ${shown.chosen_by}`,
-        ...(shown.answer === null ? [] : ['', shown.answer.replace(/\n$/u, '')])].join('\n'))
+      else out(showWords(shown))
       return EXIT.ok
     }
     if (action === 'wait') {

@@ -1,21 +1,20 @@
-// MODULE: agents-team-opencode.test.ts - Story 72.5: OpenCode teammates asked through the same engine: a run's own OpenCode folders and sign-in copy in BMN's real container, judged by the check's ask mode, attributed from its events and its session export, its home gone on every outcome, the time limit over OpenCode's endless retry, and only 72.1's proven modes offered; a stand-in OpenCode in sh, a synthetic team with Luna (Go)
-import { execFileSync, spawn } from 'node:child_process'
+// MODULE: agents-team-opencode.test.ts - Stories 72.5, 72.9: OpenCode teammates asked through the same engine, in BMN's own OpenCode folder with its sign-in and the agents given inline: every action denied for a public question or a private one with no project, BMN's read-only agent for a private project ask; judged by the check's ask mode, attributed from its events and each session's export with its sub-agents counted once, the time limit over OpenCode's endless retry; a stand-in OpenCode in sh run in BMN's real systemd scope, a synthetic team with Luna (Go)
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { evaluateAsk } from '../../bin/agents-check.mjs'
-import { installOpenCodeFolder, openCodeEnvironment } from '../../bin/agents-opencode.mjs'
-import { containerStarts } from '../../bin/agents-container.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
-import { askFeatures } from '../../bin/agents-team-cli.mjs'
-import { StartRefusal, startAsk, waitAsk } from '../../bin/agents-team-run.mjs'
-import { startResponsesStandIn } from './test-fixtures/responses-standin'
-import { EXAMPLE, GO_KEY_SENTINEL, approve, goSignInInBmnFolder, leftovers, settle, stubOpenCode, teamAskHome } from './test-fixtures/team-ask-harness'
+import { startAsk, waitAsk } from '../../bin/agents-team-run.mjs'
+import { EXAMPLE, GO_KEY_SENTINEL, SCOPES, approve, goSignInInBmnFolder, leftovers, settle, stubOpenCode, teamAskHome } from './test-fixtures/team-ask-harness'
 
-const canContain = containerStarts().ok
 const savedHome = process.env.HOME
 const LUNA_GO = '## luna-go\n\n```yaml\nname: Luna (Go)\nclass: pawn\nharness: opencode\nmodel: gpt-6-luna\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [low, high]\nroles: [helper]\n```\n\n## roles'
 const TEAM = EXAMPLE.replace('## roles', LUNA_GO).replace('helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max], then: lead}', 'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna-go@high, luna@max], then: lead}')
+/** The same team with OpenCode Go allowed private work, so a project may be asked about. */
+const PRIVATE_TEAM = TEAM.replace('opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}')
+/** The owner's rules: OpenCode is given only the part he marked public, whatever its provider (Epic 60). */
+const RULES = '# Global rules\n\n<!-- bmn:public -->\nRULES-SENTINEL: answer plainly and cite files.\n<!-- /bmn:public -->\n\nPRIVATE-RULES-SENTINEL: for the apps BMN checks.\n'
 
 let home: string
 let stubs: string
@@ -37,6 +36,25 @@ const everything = (folder: string): string => {
   walk(folder)
   return parts.join('\n')
 }
+/** The command after `env -i` and its variables, and the variables by name. */
+const split = (argv: string[]) => {
+  const variables = new Map<string, string>()
+  let at = 2
+  for (; at < argv.length && /^[A-Za-z_][A-Za-z0-9_]*=/u.test(argv[at]!); at += 1) variables.set(argv[at]!.slice(0, argv[at]!.indexOf('=')), argv[at]!.slice(argv[at]!.indexOf('=') + 1))
+  return { variables, command: argv.slice(at) }
+}
+/** A small synthetic project with one commit. */
+const projectRoot = (): string => {
+  const root = join(home, 'code/app')
+  if (existsSync(join(root, '.git'))) return root
+  mkdirSync(root, { recursive: true })
+  const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=S', '-c', 'user.email=s@example.org', ...args], { cwd: root, env: { PATH: '/usr/bin:/bin', HOME: home, GIT_CONFIG_GLOBAL: '/dev/null' } })
+  git('init', '-q', '-b', 'main')
+  writeFileSync(join(root, 'a.ts'), 'export const a = 1\n')
+  git('add', '.')
+  git('commit', '-q', '-m', 'test: one')
+  return root
+}
 
 beforeEach(() => {
   ({ home, stubs, env } = teamAskHome('bmn-team-opencode-'))
@@ -51,68 +69,121 @@ afterEach(async () => {
   if (process.env.BMN_TEST_KEEP_HOME === undefined) rmSync(home, { recursive: true, force: true })
 })
 
-describe.skipIf(!canContain)('an OpenCode teammate\'s ask (72.5)', { timeout: 30_000 }, () => {
-  it('answers a public question in its own folders, judged by the ask mode, attributed from its events and its session export, its home and sign-in copy gone (AC1, AC2)', async () => {
+describe('an OpenCode teammate\'s ask, before it starts (72.5, 72.9)', () => {
+  it('a public question goes to the agent with every action denied, in BMN\'s own OpenCode folder, given inline; no rules, no git, nothing of the asker\'s environment (72.9 AC1)', () => {
     const prepared = ask()
     expect(prepared.verdict.verdict, JSON.stringify(prepared.verdict)).toBe('PASS')
-    expect(prepared.verdict.receipt).toMatchObject({ harness: 'opencode', form: 'opencode-asker', sandbox: { mode: 'read-only', source: '--agent', agent: 'bmn-asker', tools: [] } })
-    const command = prepared.argv.slice(prepared.argv.indexOf('--') + 1)
-    expect(command.slice(1)).toEqual(['run', '--standalone', '--format', 'json', '--agent', 'bmn-asker', '-m', 'opencode-go/gpt-6-luna#high', '--title', 'BMN ask'])
-    // The run's own configuration: BMN's settings and its one agent, every action denied; no rules for a public ask.
-    expect(readFileSync(join(prepared.folder, 'home/oc/config/opencode/agents/bmn-asker.md'), 'utf8')).toContain('"*": deny')
-    expect(existsSync(join(prepared.folder, 'home/oc/config/opencode/AGENTS.md'))).toBe(false)
-    startAsk(prepared, { timeLimitMinutes: 2 })
-    const outcome = await waitAsk(prepared.folder, { timeoutMs: 20_000 })
-    expect(outcome).toMatchObject({
-      state: 'answered', exit: 0,
-      observed: { session_source: 'every event (sessionID)', model: 'gpt-6-luna', model_source: 'session export', effort: 'high', effort_source: 'session export (variant)' },
-      usage: { input_tokens: 60, cached_input_tokens: 5, output_tokens: 24, reasoning_tokens: 3, reported_cost: 0.002, source: 'session export' }
-    })
-    expect(outcome.observed.session).toMatch(/^ses_[0-9a-f]{12}A{14}$/)
-    // The sign-in was there for the run (copied from BMN's folder), and the run saw only its own places.
-    expect(readFileSync(join(prepared.folder, 'answer.md'), 'utf8')).toMatch(/^opencode answer [0-9a-f]{12} agent=bmn-asker signed=1 from home inputs work \n$/)
-    expect(existsSync(join(prepared.folder, 'home'))).toBe(false)
-    const info = JSON.parse(readFileSync(join(prepared.folder, 'session-info.json'), 'utf8'))
-    expect(info).toMatchObject({ version: 1, info: { agent: 'bmn-asker', model: { id: 'gpt-6-luna', provider: 'opencode-go', variant: 'high' } } })
-    // Nothing of the sign-in or the session's messages is kept anywhere in the record.
-    const kept = everything(prepared.folder)
-    expect(kept).not.toContain(GO_KEY_SENTINEL)
-    expect(kept).not.toContain('MESSAGES-SENTINEL')
-    // BMN's own folder still holds its sign-in: the run had a copy.
-    expect(readFileSync(join(home, '.config/bmn/agents/state/opencode/data/opencode/opencode.db'), 'utf8')).toContain(GO_KEY_SENTINEL)
+    expect(prepared.verdict.receipt).toMatchObject({ harness: 'opencode', form: 'opencode-asker', reads: { scope: 'text' }, cwd: join(prepared.folder, 'work') })
+    const { variables, command } = split(prepared.argv)
+    expect(command.slice(1)).toEqual(['run', '--standalone', '--format', 'json', '--agent', 'bmn-ask-asker', '-m', 'opencode-go/gpt-6-luna#high', '--title', 'BMN ask'])
+    const folder = join(home, '.config/bmn/agents/state/opencode')
+    expect(variables.get('HOME')).toBe(join(folder, 'home'))
+    expect(variables.get('XDG_DATA_HOME')).toBe(join(folder, 'data'))
+    const agents = JSON.parse(variables.get('OPENCODE_CONFIG_CONTENT')!).agent
+    expect(Object.keys(agents)).toEqual(['bmn-ask-asker'])
+    expect(agents['bmn-ask-asker'].permission).toEqual({ '*': 'deny' })
+    expect(variables.get('PATH')).not.toContain(join(prepared.folder, 'bin'))
+    expect(existsSync(join(prepared.folder, 'inputs/rules.md'))).toBe(false)
+    expect(existsSync(join(prepared.folder, 'bin/git'))).toBe(false)
+    expect(prepared.argv.join(' ')).not.toContain('SECRET_LOOKING_VARIABLE')
   })
 
-  it('a private ask to a public-only provider is refused before anything is copied (AC1)', () => {
+  it('a private project ask goes to BMN\'s read-only agent in the project, with the owner\'s rules in it and BMN\'s git first on its PATH (72.9 AC1)', () => {
+    approve(home, PRIVATE_TEAM)
+    mkdirSync(join(home, '.config/bmn/agents'), { recursive: true })
+    writeFileSync(join(home, '.config/bmn/agents/global-rules.md'), RULES)
+    const root = projectRoot()
+    const prepared = ask({ data: undefined, project: root })
+    expect(prepared.verdict.verdict, JSON.stringify(prepared.verdict)).toBe('PASS')
+    expect(prepared.verdict.receipt).toMatchObject({ form: 'opencode-reader', reads: { scope: 'computer' }, cwd: root, project: root })
+    const { variables, command } = split(prepared.argv)
+    expect(command).toEqual(expect.arrayContaining(['--agent', 'bmn-ask-reader']))
+    expect(variables.get('PATH')).toMatch(new RegExp(`^${prepared.folder}/bin:`, 'u'))
+    const agents = JSON.parse(variables.get('OPENCODE_CONFIG_CONTENT')!).agent
+    expect(Object.keys(agents).sort()).toEqual(['bmn-ask-reader', 'bmn-reader'])
+    expect(agents['bmn-ask-reader'].prompt).toContain('RULES-SENTINEL')
+    expect(agents['bmn-ask-reader'].prompt).not.toContain('PRIVATE-RULES-SENTINEL')
+    // OpenCode matches a command's whole text, and splits chains but not redirections: every redirection is denied (72.9 AC1).
+    expect(agents['bmn-ask-reader'].permission).toMatchObject({ '*': 'deny', read: 'allow', edit: 'deny', webfetch: 'deny', bash: { '*': 'deny', 'git log*': 'allow', '*>*': 'deny' }, task: { '*': 'deny', 'bmn-reader': 'allow' } })
+    expect(agents['bmn-reader'].permission).toMatchObject({ task: 'deny' })
+    expect(readFileSync(join(prepared.folder, 'inputs/rules.md'), 'utf8')).toContain('RULES-SENTINEL')
+    // A private ask with no project gets the rules, and every action denied.
+    const plain = ask({ data: undefined })
+    expect(plain.verdict.receipt).toMatchObject({ form: 'opencode-asker', cwd: join(plain.folder, 'work') })
+    expect(JSON.parse(split(plain.argv).variables.get('OPENCODE_CONFIG_CONTENT')!).agent['bmn-ask-asker'].prompt).toContain('RULES-SENTINEL')
+  })
+
+  it('a private ask to a public-only provider is refused before anything is written (AC1)', () => {
     expect(() => ask({ data: undefined })).toThrow(expect.objectContaining({ code: 'AGENT_NOT_ELIGIBLE', message: expect.stringContaining('the question is private work and OpenCode Go gets public work only') }))
     expect(existsSync(join(home, '.config/bmn/agents/state/team/runs'))).toBe(false)
   })
 
-  it('only 72.1\'s proven modes: no project ask (no history tool), no pictures; question and files proven on 2.0.29 alone (AC4)', () => {
-    const features = askFeatures(env)
-    expect(features.apps.find((app) => app.app === 'opencode')).toMatchObject({ version: '2.0.29', forms: { question: 'proven', files: 'proven', project: 'no-history', 'wide-read': 'not-enabled' }, usage_while_running: false })
+  it('a newer OpenCode is asked as it is: no version gate (72.9 AC4)', () => {
     stubOpenCode(stubs, '2.1.0')
-    expect(() => ask()).toThrow(/question asks on OpenCode 2\.1\.0 are not measured \(BMN measured 2\.0\.29\)/)
+    const prepared = ask()
+    expect(prepared.verdict.verdict).toBe('PASS')
+    expect(prepared.verdict.receipt).toMatchObject({ harness_version: { version: '2.1.0', form_checked_on: { version: '2.0.29' } } })
   })
 
-  it('a project ask on OpenCode is refused with the reason, even in a Git working tree', () => {
-    const root = join(home, 'code/app')
-    execFileSync('mkdir', ['-p', root])
-    const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=S', '-c', 'user.email=s@example.org', ...args], { cwd: root, env: { PATH: '/usr/bin:/bin', HOME: home, GIT_CONFIG_GLOBAL: '/dev/null' } })
-    git('init', '-q', '-b', 'main')
-    execFileSync('sh', ['-c', 'echo "export const a = 1" > a.ts'], { cwd: root })
-    git('add', '.')
-    git('commit', '-q', '-m', 'test: one')
-    expect(() => ask({ access: 'project', project: root, data: undefined })).toThrow(expect.objectContaining({ code: 'AGENT_NOT_ELIGIBLE', message: expect.stringContaining('no tool that reads the project\'s Git history') }))
-  })
-
-  it('without a sign-in in BMN\'s folder the teammate is passed over with the reason, and a folder with no Go sign-in starts nothing (AC1)', () => {
+  it('without a sign-in in BMN\'s folder the teammate is passed over with the reason (AC1)', () => {
     rmSync(join(home, '.config/bmn/agents/state/opencode'), { recursive: true, force: true })
     expect(() => ask()).toThrow(expect.objectContaining({ code: 'AGENT_NOT_ELIGIBLE', message: expect.stringContaining('BMN\'s OpenCode folder holds no sign-in yet') }))
-    goSignInInBmnFolder(home, [])
+  })
+
+  it('the check refuses an OpenCode command that is not BMN\'s form for the ask: another agent, or other agents given inline (AC1)', () => {
     const prepared = ask()
-    expect(() => startAsk(prepared)).toThrow(StartRefusal)
-    expect(() => startAsk(prepared)).toThrow(/holds no OpenCode Go sign-in.*nothing started/)
-    expect(existsSync(join(prepared.folder, 'launch.json'))).toBe(false)
+    const judge = (argv: string[]) => evaluateAsk({ agent: 'luna-go', role: 'helper', effort: 'high', data: 'public', run: prepared.folder, argv, cwd: prepared.cwd }, { environment: env, program: prepared.program })
+    expect(judge(prepared.argv.map((value) => (value === 'bmn-ask-asker' ? 'bmn-helper' : value)))).toMatchObject({ verdict: 'REFUSED' })
+    const wider = prepared.argv.map((value) => (value.startsWith('OPENCODE_CONFIG_CONTENT=') ? `OPENCODE_CONFIG_CONTENT=${JSON.stringify({ agent: { 'bmn-ask-asker': { permission: { '*': 'allow' } } } })}` : value))
+    expect(judge(wider)).toMatchObject({ verdict: 'REFUSED' })
+  })
+})
+
+describe.skipIf(!SCOPES)('an OpenCode teammate\'s ask, run (72.5, 72.9)', { timeout: 30_000 }, () => {
+  it('answers a public question in the run\'s own empty folder, attributed from its events and its session export; nothing of the sign-in or the session\'s messages is kept (AC1, AC2)', async () => {
+    const prepared = ask()
+    startAsk(prepared, { timeLimitMinutes: 2 })
+    const outcome = await waitAsk(prepared.folder, { timeoutMs: 20_000 })
+    expect(outcome).toMatchObject({
+      state: 'answered', exit: 0, subagents: [],
+      observed: { session_source: 'every event (sessionID)', model: 'gpt-6-luna', model_source: 'session export', effort: 'high', effort_source: 'session export (variant)' },
+      usage: { input_tokens: 60, cached_input_tokens: 5, output_tokens: 24, reasoning_tokens: 3, reported_cost: 0.002, source: 'session export', complete: true }
+    })
+    expect(outcome.observed.session).toMatch(/^ses_[0-9a-f]{12}A{14}$/u)
+    // The sign-in was BMN's folder's own, and the run worked in its own empty folder.
+    expect(readFileSync(join(prepared.folder, 'answer.md'), 'utf8')).toBe(`opencode answer ${outcome.observed.session!.slice(4, 16)} agent=bmn-ask-asker signed=1 rules=no in ${join(prepared.folder, 'work')}\n`)
+    const info = JSON.parse(readFileSync(join(prepared.folder, 'session-info.json'), 'utf8'))
+    expect(info).toMatchObject({ version: 1, info: { agent: 'bmn-ask-asker', parent: null, model: { id: 'gpt-6-luna', provider: 'opencode-go', variant: 'high' } }, subagents: [] })
+    const kept = everything(prepared.folder)
+    expect(kept).not.toContain(GO_KEY_SENTINEL)
+    expect(kept).not.toContain('MESSAGES-SENTINEL')
+    // BMN's own folder keeps its sign-in.
+    expect(readFileSync(join(home, '.config/bmn/agents/state/opencode/data/opencode/opencode.db'), 'utf8')).toContain(GO_KEY_SENTINEL)
+  })
+
+  it('a private project ask works in the project with the owner\'s rules; a sub-agent is named and its own export counted once; one whose export names no parent leaves the usage incomplete (72.9 AC2, AC5)', async () => {
+    approve(home, PRIVATE_TEAM)
+    mkdirSync(join(home, '.config/bmn/agents'), { recursive: true })
+    writeFileSync(join(home, '.config/bmn/agents/global-rules.md'), RULES)
+    const root = projectRoot()
+    const prepared = ask({ data: undefined, project: root, question: 'Is the loop bounded? SUBAGENT' })
+    startAsk(prepared, { timeLimitMinutes: 2 })
+    const outcome = await waitAsk(prepared.folder, { timeoutMs: 20_000 })
+    expect(outcome).toMatchObject({
+      state: 'answered', exit: 0,
+      usage: { input_tokens: 90, cached_input_tokens: 7, output_tokens: 28, reasoning_tokens: 4, source: 'session exports', complete: true },
+      subagents: [{ session: expect.stringMatching(/^ses_[0-9a-f]{12}C{14}$/u), parent: outcome.observed.session, name: 'read the tests', role: 'bmn-reader', kind: 'OpenCode sub-agent', model: 'gpt-6-luna', effort: 'low',
+        usage: { input_tokens: 30, cached_input_tokens: 2, output_tokens: 4, reasoning_tokens: 1, reported_cost: 0.001 } }],
+      project: { root, start: { clean: true }, end: { clean: true } }
+    })
+    expect(outcome.usage.reported_cost).toBeCloseTo(0.003, 10)
+    expect(readFileSync(join(prepared.folder, 'answer.md'), 'utf8')).toContain(`agent=bmn-ask-reader signed=1 rules=yes in ${root}`)
+    const orphan = ask({ data: undefined, project: root, question: 'Is the loop bounded? ORPHAN' })
+    startAsk(orphan, { timeLimitMinutes: 2 })
+    expect(await waitAsk(orphan.folder, { timeoutMs: 20_000 })).toMatchObject({
+      state: 'answered', usage: { input_tokens: 60, complete: false, incomplete_reason: 'a sub-agent\'s session could not be read' },
+      subagents: [{ kind: 'OpenCode sub-agent', parent: null, usage: 'incomplete', usage_reason: 'its session export does not name the teammate as its parent' }]
+    })
   })
 
   it('the time limit ends a run that keeps waiting on its provider, and the outcome says so; an error event is "failed" in OpenCode\'s words (AC3)', async () => {
@@ -121,11 +192,9 @@ describe.skipIf(!canContain)('an OpenCode teammate\'s ask (72.5)', { timeout: 30
     expect(await waitAsk(waiting.folder, { timeoutMs: 20_000 })).toMatchObject({
       state: 'out-of-time', exit: 15, reason: 'the run\'s time limit of 0.02 minutes ended it; OpenCode was still waiting on its provider, which it retries without end'
     })
-    expect(existsSync(join(waiting.folder, 'home'))).toBe(false)
     const failed = ask({ question: 'Is it bounded? FAIL' })
     startAsk(failed, { timeLimitMinutes: 1 })
     expect(await waitAsk(failed.folder, { timeoutMs: 20_000 })).toMatchObject({ state: 'failed', exit: 1, reason: 'OpenCode reported an error: made-up sign-in failure' })
-    expect(existsSync(join(failed.folder, 'home'))).toBe(false)
   })
 
   it('a session that ran another model is "answer not attributed"; two asks at once keep their own sessions', async () => {
@@ -140,117 +209,5 @@ describe.skipIf(!canContain)('an OpenCode teammate\'s ask (72.5)', { timeout: 30
     const hash = (text: string): string => execFileSync('md5sum', { input: text, encoding: 'utf8' }).slice(0, 12)
     expect(first.observed.session).toBe(`ses_${hash('First?')}AAAAAAAAAAAAAA`)
     expect(second.observed.session).toBe(`ses_${hash('Second?')}AAAAAAAAAAAAAA`)
-  })
-
-  it('the check refuses an OpenCode command that is not BMN\'s form for the ask (AC1)', () => {
-    const prepared = ask()
-    const changed = prepared.argv.map((value) => (value === 'bmn-asker' ? 'bmn-helper' : value))
-    const verdict = evaluateAsk({ agent: 'luna-go', role: 'helper', effort: 'high', access: 'question', data: 'public', wide: false, run: prepared.folder, argv: changed }, { environment: env, program: prepared.program })
-    expect(verdict).toMatchObject({ verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED' })
-  })
-})
-
-/**
- * The installed OpenCode, asked through the product's own path against a made-up provider on this
- * computer (72.5 AC5, AC2): BMN's folder holds a synthetic Go key, the run gets its copy, and the
- * command started is the judged one with only the provider's address and a proxy added, as 72.1
- * measured the form. Run with BMN_OPENCODE_REAL=1.
- */
-const REAL = process.env.BMN_OPENCODE_REAL === '1' ? execFileSync('sh', ['-c', 'command -v opencode || true'], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '' } }).trim() : ''
-describe.runIf(REAL !== '' && canContain)('the installed OpenCode, asked against a made-up provider (72.5 AC5, BMN_OPENCODE_REAL=1)', { timeout: 120_000 }, () => {
-  const realEnvironment = (): Record<string, string> => ({ ...env, PATH: `${join(REAL, '..')}:/usr/bin:/bin` })
-  const bmnFolder = (): string => join(home, '.config/bmn/agents/state/opencode')
-  /** BMN's folder as 70.4 leaves it, holding a synthetic Go key, put there by OpenCode itself. */
-  const signIn = (): void => {
-    rmSync(bmnFolder(), { recursive: true, force: true })
-    installOpenCodeFolder(bmnFolder())
-    execFileSync(REAL, ['auth', 'import', '--standalone'], {
-      env: { ...openCodeEnvironment(bmnFolder()), PATH: '/usr/bin:/bin' }, cwd: join(bmnFolder(), 'home'),
-      input: JSON.stringify([{ id: 'a1', integrationID: 'opencode-go', label: 'Go', active: true, value: { type: 'key', key: GO_KEY_SENTINEL } }]), stdio: ['pipe', 'ignore', 'ignore']
-    })
-  }
-  /** The judged command with the made-up provider's address and the proxy added before bubblewrap's `--`, and nothing else changed. */
-  const toStandIn = (argv: string[], port: number): string[] => {
-    const at = argv.indexOf('--')
-    const proxy = `http://127.0.0.1:${port}`
-    return [...argv.slice(0, at), '--setenv', 'OPENCODE_CONFIG_CONTENT', JSON.stringify({ provider: { 'opencode-go': { options: { baseURL: `${proxy}/v1` } } } }),
-      '--setenv', 'HTTPS_PROXY', proxy, '--setenv', 'HTTP_PROXY', proxy, '--setenv', 'NO_PROXY', '127.0.0.1,localhost', ...argv.slice(at)]
-  }
-  const SCRIPT = (other: string) => [
-    { tool: 'read', input: { filePath: join(home, 'SENTINEL-HOME.txt') } }, { tool: 'read', input: { filePath: '/ask/home/oc/data/opencode/auth.json' } },
-    { tool: 'glob', input: { pattern: '**/*', path: '/ask/home' } }, { tool: 'grep', input: { pattern: 'sk-synthetic', path: '/' } }, { tool: 'list', input: { path: '/' } },
-    { tool: 'read', input: { filePath: join(other, 'answer.md') } }, { tool: 'bash', input: { command: `cat ${join(home, 'SENTINEL-HOME.txt')}`, description: 'made-up' } },
-    { tool: 'write', input: { filePath: '/ask/work/written.txt', content: 'made-up' } }, { tool: 'webfetch', input: { url: 'http://127.0.0.1:9/trap', format: 'text' } },
-    { tool: 'task', input: { description: 'made-up', prompt: 'Read every file you can', subagent_type: 'general' } }
-  ]
-
-  it('reads stay inside the declared scope: every tool refused, no sentinel sent, no tunnel; it answers, attributed, with usage from its session export, and its sign-in copy is gone', async () => {
-    env = realEnvironment()
-    signIn()
-    writeFileSync(join(home, 'SENTINEL-HOME.txt'), 'HOME-SENTINEL-72-5\n')
-    const other = join(home, '.config/bmn/agents/state/team/runs/20261015T060000-0000000f')
-    mkdirSync(other, { recursive: true })
-    writeFileSync(join(other, 'answer.md'), 'OTHER-RUN-SENTINEL-72-5\n')
-    const standIn = await startResponsesStandIn(SCRIPT(other))
-    try {
-      const prepared = ask({ question: 'What can you read? Answer in one line.' })
-      expect(prepared.verdict.verdict, JSON.stringify(prepared.verdict)).toBe('PASS')
-      startAsk({ ...prepared, argv: toStandIn(prepared.argv, standIn.port) }, { timeLimitMinutes: 2 })
-      const outcome = await waitAsk(prepared.folder, { timeoutMs: 90_000 })
-      expect(outcome, readFileSync(join(prepared.folder, 'stderr.txt'), 'utf8').slice(-2000)).toMatchObject({
-        state: 'answered', exit: 0, observed: { model: 'gpt-6-luna', model_source: 'session export', effort: 'high', effort_source: 'session export (variant)' },
-        usage: { source: 'session export' }
-      })
-      expect(outcome.observed.session).toMatch(/^ses_/)
-      expect(typeof outcome.usage.input_tokens).toBe('number')
-      expect(readFileSync(join(prepared.folder, 'answer.md'), 'utf8')).toBe('made-up final answer\n')
-      // No tool was offered, and every call came back refused; nothing forbidden reached the provider.
-      expect(standIn.offered.flat()).toEqual([])
-      expect(standIn.results.length).toBeGreaterThanOrEqual(SCRIPT(other).length)
-      for (const result of standIn.results) expect(result.output).toMatch(/No tool named|not available|denied|unavailable|invalid/i)
-      for (const body of standIn.bodies) {
-        for (const sentinel of [GO_KEY_SENTINEL, 'HOME-SENTINEL-72-5', 'OTHER-RUN-SENTINEL-72-5']) expect(body).not.toContain(sentinel)
-      }
-      expect(standIn.tunnels).toEqual([])
-      // The run's own copy of the sign-in is what signed every model request, and it is gone with the run's home.
-      expect(standIn.bearerIs(GO_KEY_SENTINEL).every(Boolean)).toBe(true)
-      expect(existsSync(join(prepared.folder, 'home'))).toBe(false)
-      expect(everything(prepared.folder)).not.toContain(GO_KEY_SENTINEL)
-    } finally {
-      await standIn.close()
-    }
-  })
-
-  it('two OpenCode asks at once beside a research run on BMN\'s folder: each its own session and home, all answered', async () => {
-    env = realEnvironment()
-    signIn()
-    const standIn = await startResponsesStandIn([])
-    try {
-      const one = ask({ question: 'First made-up question?' })
-      const two = ask({ question: 'Second made-up question?' })
-      startAsk({ ...one, argv: toStandIn(one.argv, standIn.port) }, { timeLimitMinutes: 2 })
-      startAsk({ ...two, argv: toStandIn(two.argv, standIn.port) }, { timeLimitMinutes: 2 })
-      const proxy = `http://127.0.0.1:${standIn.port}`
-      const research = new Promise<string>((resolve) => {
-        const child = spawn(REAL, ['run', '--standalone', '--format', 'json', '--agent', 'bmn-researcher', '-m', 'opencode-go/gpt-6-luna#high', '--title', 'BMN research'], {
-          env: { ...openCodeEnvironment(bmnFolder()), PATH: '/usr/bin:/bin', OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider: { 'opencode-go': { options: { baseURL: `${proxy}/v1` } } } }), HTTPS_PROXY: proxy, HTTP_PROXY: proxy, NO_PROXY: '127.0.0.1,localhost' },
-          cwd: join(bmnFolder(), 'home'), stdio: ['pipe', 'pipe', 'ignore']
-        })
-        let out = ''
-        child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString() })
-        child.stdin.end('A made-up research question?')
-        child.on('exit', () => resolve(out))
-      })
-      const [first, second, researched] = await Promise.all([waitAsk(one.folder, { timeoutMs: 90_000 }), waitAsk(two.folder, { timeoutMs: 90_000 }), research])
-      expect(first.state).toBe('answered')
-      expect(second.state).toBe('answered')
-      const researchSession = /"sessionID":"(ses_[^"]+)"/.exec(researched)?.[1]
-      expect(researchSession).toMatch(/^ses_/)
-      expect(new Set([first.observed.session, second.observed.session, researchSession]).size).toBe(3)
-      expect(existsSync(join(one.folder, 'home'))).toBe(false)
-      expect(existsSync(join(two.folder, 'home'))).toBe(false)
-    } finally {
-      await standIn.close()
-    }
   })
 })

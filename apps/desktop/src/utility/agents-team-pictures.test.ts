@@ -1,4 +1,4 @@
-// MODULE: agents-team-pictures.test.ts - Story 72.8: a picture made ready to send: its type and bounds, its metadata taken out of PNG, JPEG and WebP by byte edits (oriented pictures, colour profiles, transparency, decoded size) or the picture refused; then asked about in BMN's real container, Codex given it with -i and Claude Code as one stream-json message; synthetic pictures, stand-in apps, no provider reached
+// MODULE: agents-team-pictures.test.ts - Story 72.8: a picture made ready to send: its type and bounds, its metadata taken out of PNG, JPEG and WebP by byte edits (oriented pictures, colour profiles, transparency, decoded size) or the picture refused; then asked about in each app's own read-only mode in BMN's real systemd scope, Codex given it with -i and Claude Code as one stream-json message; synthetic pictures, stand-in apps, no provider reached
 import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -7,14 +7,13 @@ import { createHash } from 'node:crypto'
 import { crc32, deflateSync } from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { evaluateAsk } from '../../bin/agents-check.mjs'
-import { containerStarts } from '../../bin/agents-container.mjs'
 import { ASK_RUN_FILES, claudePictureMessage } from '../../bin/agents-team-forms.mjs'
 import { LIMITS } from '../../bin/agents-team-inputs.mjs'
 import { pictureFile, pictureType, treatExif, treatPicture } from '../../bin/agents-team-pictures.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { exportAsk, startAsk, waitAsk } from '../../bin/agents-team-run.mjs'
 import { askFeatures } from '../../bin/agents-team-cli.mjs'
-import { EXAMPLE, approve, leftovers, settle, stubOpenCode, goSignInInBmnFolder, teamAskHome } from './test-fixtures/team-ask-harness'
+import { EXAMPLE, SCOPES, approve, leftovers, ownSystemd, settle, stubOpenCode, goSignInInBmnFolder, teamAskHome } from './test-fixtures/team-ask-harness'
 
 // Synthetic pictures Pillow made once (16x8, a red square): a JPEG with its JFIF header only, a lossy WebP and a lossless WebP with alpha.
 const JPEG = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAAIABADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD0zVvDXim58eJqdnrXlaKLiCQ2n2qVcooXeuwDbzhuM855rv6KK5YxUb2O6tiJVlFSt7qtovzP/9k=', 'base64')
@@ -310,7 +309,6 @@ describe('a picture made ready to send (72.8 AC1, AC2)', () => {
 
 // ---------------------------------------------------------------------------------------------
 
-const canContain = containerStarts().ok
 const savedHome = process.env.HOME
 let home: string
 let stubs: string
@@ -345,20 +343,19 @@ describe('a --image as the asker names it (72.8 AC1)', () => {
     expect(pictureFile('shots/screen.png', { cwd: home, home })).toMatchObject({ path: join(home, 'shots/screen.png'), real: realpathSync(join(home, 'shots/screen.png')), removed: ['PNG text "Author"'] })
   })
 
-  it('goes with question or files access, never project access, at most eight per ask', () => {
-    expect(code(() => ask({ access: 'project', images: [join(home, 'shots/screen.png')] }))).toMatch(/^undefined: --image goes with --access question or files/)
+  it('at most eight per ask; the old --access is refused with the new spelling (72.9 AC4)', () => {
+    expect(code(() => ask({ access: 'files', images: [join(home, 'shots/screen.png')] } as Partial<Asked>))).toMatch(/^undefined: --access is gone: /u)
     expect(code(() => ask({ images: Array.from({ length: 9 }, () => join(home, 'shots/screen.png')) }))).toBe('INPUT_TOO_LARGE: 9 pictures, over the limit of 8')
   })
 })
 
-describe.skipIf(!canContain)('a picture ask in BMN\'s container (72.8)', { timeout: 30_000 }, () => {
-  it('Claude Code: the designer gets the treated pictures as one stream-json message with every tool off; the record keeps both hashes, what was taken out and the answer (AC1, AC2)', async () => {
+describe.skipIf(!SCOPES)('a picture ask in each app\'s own read-only mode (72.8, 72.9)', { timeout: 30_000 }, () => {
+  it('Claude Code: the designer gets the treated pictures as one stream-json message, in its read tools; the record keeps both hashes, what was taken out and the answer (AC1, AC2)', async () => {
     const prepared = ask({ images: [join(home, 'shots/photo.jpg'), 'shots/screen.png'] })
     expect(prepared.verdict.verdict, JSON.stringify(prepared.verdict)).toBe('PASS')
     expect(prepared.choice).toMatchObject({ agent: 'fable' })
-    expect(prepared.verdict.receipt).toMatchObject({ harness: 'claude', form: 'claude-no-tools', pictures: 2, sandbox: { tools: [] } })
-    const command = prepared.argv.slice(prepared.argv.indexOf('--') + 1)
-    expect(command).toEqual(expect.arrayContaining(['--input-format', 'stream-json', '--tools', '']))
+    expect(prepared.verdict.receipt).toMatchObject({ harness: 'claude', form: 'claude-read-tools' })
+    expect(prepared.argv).toEqual(expect.arrayContaining(['--input-format', 'stream-json', '--restricted']))
     const manifest = JSON.parse(readFileSync(join(prepared.folder, ASK_RUN_FILES.manifest), 'utf8'))
     const photo = treatPicture(ORIENTED(), 'x')
     expect(manifest.pictures).toEqual([
@@ -386,23 +383,23 @@ describe.skipIf(!canContain)('a picture ask in BMN\'s container (72.8)', { timeo
     expect(sha(readFileSync(join(home, 'bundle/inputs/pictures/1.jpg')))).toBe(photo.sha256)
   })
 
-  it('Codex: another role named takes the pictures with -i from the run\'s inputs, its picture tool still off (AC1, AC2)', async () => {
+  it('Codex: another role named takes the pictures with -i from the run\'s inputs (AC1, AC2)', async () => {
     const prepared = ask({ role: 'helper', images: [join(home, 'shots/screen.png')] })
     expect(prepared.verdict.verdict, JSON.stringify(prepared.verdict)).toBe('PASS')
     expect(prepared.choice).toMatchObject({ agent: 'luna' })
-    const command = prepared.argv.slice(prepared.argv.indexOf('--') + 1)
-    expect(command.slice(command.indexOf('-i'), command.indexOf('-i') + 2)).toEqual(['-i', '/ask/inputs/pictures/1.png'])
-    expect(command).toEqual(expect.arrayContaining(['--disable', 'view_image']))
+    // The last -i is Codex's (the first is env's).
+    const command = prepared.argv
+    expect(command.slice(command.lastIndexOf('-i'), command.lastIndexOf('-i') + 2)).toEqual(['-i', join(prepared.folder, 'inputs/pictures/1.png')])
     expect(prepared.verdict.receipt?.snapshots).not.toHaveProperty('message')
     startAsk(prepared, { timeLimitMinutes: 2 })
     expect(await waitAsk(prepared.folder, { timeoutMs: 20_000 })).toMatchObject({ state: 'answered' })
     expect(readFileSync(join(prepared.folder, ASK_RUN_FILES.answer), 'utf8')).toContain(`pictures ${treatPicture(SHOT(), 'x').sha256}`)
   })
 
-  it('a picture or message changed after it was made is refused by the check; an app whose pictures 72.1 did not pass is refused with that reason (AC2, AC3)', () => {
+  it('a picture or message changed after it was made is refused by the check; an app not given pictures is refused with that reason (AC2, AC3)', () => {
     const prepared = ask({ images: [join(home, 'shots/screen.png')] })
     expect(prepared.verdict.verdict).toBe('PASS')
-    const judge = () => evaluateAsk({ agent: 'fable', role: 'designer', effort: 'medium', access: 'question', data: 'private', run: prepared.folder, argv: prepared.argv }, { environment: env })
+    const judge = () => evaluateAsk({ agent: 'fable', role: 'designer', effort: 'medium', data: 'private', run: prepared.folder, argv: prepared.argv, cwd: prepared.cwd }, { environment: env })
     writeFileSync(join(prepared.folder, ASK_RUN_FILES.message), readFileSync(join(prepared.folder, ASK_RUN_FILES.message), 'utf8').replace('"text":"What', '"text":"Also what'))
     expect(judge()).toMatchObject({ verdict: 'REFUSED', code: 'WORKSPACE_MISMATCH', message: 'the picture message on standard input is not the pictures and the prompt BMN wrote for this ask' })
     writeFileSync(join(prepared.folder, 'inputs/pictures/1.png'), SHOT())
@@ -412,15 +409,15 @@ describe.skipIf(!canContain)('a picture ask in BMN\'s container (72.8)', { timeo
     goSignInInBmnFolder(home)
     approve(home, EXAMPLE.replace('## roles', '## luna-go\n\n```yaml\nname: Luna (Go)\nclass: rook\nharness: opencode\nmodel: gpt-6-luna\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [high]\nroles: [designer]\n```\n\n## roles').replace('designer: {candidates: [fable@medium], then: lead}', 'designer: {candidates: [luna-go@high], then: lead}'))
     expect(code(() => ask({ agent: 'luna-go', data: 'public', images: [join(home, 'shots/screen.png')] }))).toBe('AGENT_NOT_ELIGIBLE: luna-go cannot answer here: BMN never measured a picture ask on OpenCode (72.1 measured Codex and Claude Code), so OpenCode teammates are not asked about pictures; ask a Codex or Claude Code teammate')
-    expect(askFeatures(env).apps.find((app: { app: string }) => app.app === 'opencode')).toMatchObject({ pictures: 'unmeasured' })
-    expect(askFeatures(env).apps.find((app: { app: string }) => app.app === 'claude')).toMatchObject({ pictures: 'proven' })
+    expect(askFeatures(env).apps.find((app: { app: string }) => app.app === 'opencode')).toMatchObject({ pictures: expect.stringMatching(/^not offered: BMN never measured a picture ask on OpenCode/u) })
+    expect(askFeatures(env).apps.find((app: { app: string }) => app.app === 'claude')).toMatchObject({ pictures: 'offered' })
   })
 })
 
-describe.skipIf(!canContain)('bmn team ask --image (72.8 AC1)', { timeout: 30_000 }, () => {
+describe.skipIf(!SCOPES)('bmn team ask --image (72.8 AC1)', { timeout: 30_000 }, () => {
   const BMN = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
   const bmn = (args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> => new Promise((done) => {
-    const child = spawn(process.execPath, [BMN, ...args], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }, cwd: home, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, [BMN, ...args], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...ownSystemd() }, cwd: home, stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
@@ -432,7 +429,7 @@ describe.skipIf(!canContain)('bmn team ask --image (72.8 AC1)', { timeout: 30_00
     const asked = await bmn(['team', 'ask', '--question', 'What do you see?', '--image', 'shots/screen.png', '--json'])
     expect(asked.code, asked.stderr).toBe(0)
     const shown = JSON.parse(asked.stdout)
-    expect(shown).toMatchObject({ state: 'answered', role: 'designer', access: 'question', teammate: { agent: 'fable', app: 'claude' } })
+    expect(shown).toMatchObject({ state: 'answered', role: 'designer', teammate: { agent: 'fable', app: 'claude', form: 'claude-read-tools' } })
     expect(shown.answer).toMatch(/ stdin=[0-9a-f]{64}/)
     const runs = join(home, '.config/bmn/agents/state/team/runs')
     expect(JSON.parse(readFileSync(join(runs, shown.id, ASK_RUN_FILES.manifest), 'utf8')).pictures[0]).toMatchObject({ copy: 'pictures/1.png', removed: ['PNG text "Author"'] })
@@ -490,11 +487,11 @@ const named = (answer: string): Record<string, boolean> => {
 
 /**
  * One live designer ask per app 72.1 proved pictures on (Claude Code, Codex), on the planted picture,
- * through the engine as it ships: a synthetic team in an isolated BMN home, the owner's sign-in files
- * bound into each run as the product binds them, never read. Two at once at most. Run with
+ * through the engine as it ships: a synthetic team in an isolated BMN home, each app in the owner's own
+ * home and sign-in, as the product runs it, never read by BMN. Two at once at most. Run with
  * BMN_PICTURES_LIVE=1 (and BMN_TEST_KEEP_HOME=1 to keep the records).
  */
-describe.runIf(LIVE && canContain)('live designer asks on a synthetic picture (72.8 AC4, BMN_PICTURES_LIVE=1)', { timeout: 300_000 }, () => {
+describe.runIf(LIVE && SCOPES)('live designer asks on a synthetic picture (72.8 AC4, BMN_PICTURES_LIVE=1)', { timeout: 300_000 }, () => {
   it('a Claude Code and a Codex designer each name the five planted details; each record holds the hashes, what was taken out and the answer', async () => {
     approve(home, EXAMPLE.replace('class: pawn\nharness: codex\nmodel: gpt-6-luna\nprovider: openai\nhost: default\nenabled: true\nstatus: active\nefforts: [max]\nroles: [helper, focused-reviewer, browser, pre-reviewer, project-pre-reviewer]',
       'class: rook\nharness: codex\nmodel: gpt-6-luna\nprovider: openai\nhost: default\nenabled: true\nstatus: active\nefforts: [max, xhigh]\nroles: [designer, helper, focused-reviewer, browser, pre-reviewer, project-pre-reviewer]')

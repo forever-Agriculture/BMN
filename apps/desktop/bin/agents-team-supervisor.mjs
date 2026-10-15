@@ -1,40 +1,66 @@
-// MODULE: agents-team-supervisor.mjs - Epic 72: the supervisor of one teammate's ask. Started by the asking command inside its own restrictions, it outlives that command, holds the deadline and Stop, and ends the whole container with itself
-import { spawn } from 'node:child_process'
+// MODULE: agents-team-supervisor.mjs - Epic 72: the supervisor of one teammate's ask. Started by the asking command inside its own restrictions, it outlives that command, holds the deadline and Stop, and runs the app in a systemd user scope of its own that ends with it
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, lstatSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { constants, homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { processLives, processStart } from './agents-supervised.mjs'
-import { childNamespace, forgetNamespace, nameNamespace } from './agents-team-nested.mjs'
+import { ASK_SCOPE_PREFIX, scopeAsk } from './agents-team-nested.mjs'
 
 /**
  * An ask can run for many minutes, and the command, tool call or window that asked may close long
  * before (R72-FR4, 72.3 AC3). So the asking command never runs the app itself: it writes the run's
  * launch into the run's folder and starts this supervisor, detached, in a session of its own. The
  * supervisor is a child of the asking process, so it has exactly the asker's restrictions: a
- * sandboxed asker's supervisor cannot do more than the asker could (R72-NFR4). It starts the
- * container, holds the deadline and Stop, keeps the run's output in the run's folder, and when the
- * container ends it calls the run's finish step and ends itself. The container's first process lives
- * in a PID namespace of its own and dies with its parent (bwrap --die-with-parent), so the end of the
- * supervisor, however it ends, ends every process of the run, also one that left the process group.
- * A supervisor that died leaves its state saying so; nobody starts the run again (72.4 AC2).
+ * sandboxed asker's supervisor cannot do more than the asker could (R72-NFR4). It runs the app in a
+ * systemd user scope of its own (72.9 AC3), `bmn-ask-<run id>.scope`: a cgroup everything the app
+ * starts stays in, whether it leaves its process group, double forks or ignores TERM. The scope's
+ * first process is a small wrapper with a parent-death signal: when the app ends it ends what the
+ * app left in the scope, and when the supervisor dies, however it dies, the kernel signals the
+ * wrapper and it ends the scope. Stop and the time limit end the scope the same way. When the app has
+ * ended the supervisor calls the run's finish step and ends itself. A supervisor that died leaves its
+ * state saying so; nobody starts the run again (72.4 AC2).
  */
 
 const NAME = 'agents-team-supervisor.mjs'
-/** BMN's own run module: its `launchCheck` every run passes immediately before its container, its `finishAsk` and `watchAsk` the only finish and watch steps. */
+/** BMN's own run module: its `launchCheck` every run passes immediately before the app, its `finishAsk` and `watchAsk` the only finish and watch steps. */
 const RUN_MODULE = fileURLToPath(new URL('./agents-team-run.mjs', import.meta.url))
 const SUPERVISE = '--supervise-ask'
-/** How long a container asked to end may take before it is made to. */
+/** How long a run asked to end may take before its scope is killed. */
 export const KILL_AFTER_MS = 3000
 /** How often the supervisor looks for the run's Stop file. */
 const STOP_POLL_MS = 250
-/** How often it calls the run's watch step (a token ceiling) and measures the run's storage, in Stop polls. */
+/** How often it calls the run's watch step (a token ceiling), in Stop polls. */
 const WATCH_EVERY = 4
+/** How long the run's scope may take to appear once systemd-run is started. */
+const SCOPE_WAIT_MS = 5000
 
 export const RUN_FILES = Object.freeze({
-  launch: 'launch.json', state: 'state.json', stop: 'stop', events: 'events.jsonl', stderr: 'stderr.txt', exit: 'exit.json', args: 'bwrap-args'
+  launch: 'launch.json', state: 'state.json', stop: 'stop', events: 'events.jsonl', stderr: 'stderr.txt', exit: 'exit.json', status: 'app-status'
 })
+
+export const SYSTEMD_RUN = '/usr/bin/systemd-run'
+const SETPRIV = '/usr/bin/setpriv'
+
+/**
+ * The run's first process in its scope (72.9 AC3): the app in the background with the prompt on its
+ * standard input (dash gives a background job /dev/null unless it is handed the input on another
+ * descriptor), its exit status written, and the whole scope ended when the app ends or when the
+ * wrapper is signalled: by Stop, the time limit, or the supervisor's death through its parent-death
+ * signal.
+ */
+export const SCOPE_WRAPPER = `status=$1
+shift
+cg=/sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)
+end() { echo 1 > "$cg/cgroup.kill"; }
+trap end TERM HUP INT
+exec 3<&0
+"$@" <&3 3<&- &
+wait $!
+printf '%s\\n' "$?" > "$status"
+end
+`
 
 /** Writes a file whole: a reader sees the old text or the new one, never a part. */
 export function writeWhole(path, text) {
@@ -46,31 +72,65 @@ export function writeWhole(path, text) {
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'))
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 
+/** The environment systemd-run needs to reach the owner's own systemd: his runtime folder and session bus, nothing else of the asker's. */
+export function scopeEnvironment(environment = process.env) {
+  return {
+    PATH: '/usr/bin:/bin', HOME: environment.HOME ?? homedir(),
+    ...(environment.XDG_RUNTIME_DIR ? { XDG_RUNTIME_DIR: environment.XDG_RUNTIME_DIR } : {}),
+    ...(environment.DBUS_SESSION_BUS_ADDRESS ? { DBUS_SESSION_BUS_ADDRESS: environment.DBUS_SESSION_BUS_ADDRESS } : {})
+  }
+}
+
+/** The scope unit of one run. */
+export function scopeUnit(id) {
+  return `${ASK_SCOPE_PREFIX}${id}`
+}
+
 /**
- * The bytes a folder's files hold, everything under it, links not followed. A file or folder gone
- * meanwhile counts nothing; any other error is thrown, never counted as nothing (epic review R12).
+ * Whether an ask's scope starts from this process, as it is restricted now: without a systemd user
+ * manager (or, in a sandbox, without its bus) the ask is refused saying why (R72-NFR3). Returns
+ * `{ ok }` or `{ ok: false, reason }` with systemd-run's own words.
  */
-export function folderBytes(folder) {
-  let total = 0
-  let entries
+export function scopeStarts({ environment = process.env, timeoutMs = 10_000, systemdRun = SYSTEMD_RUN } = {}) {
+  if (!existsSync(systemdRun)) return { ok: false, reason: `${systemdRun} is not installed, so BMN cannot give the ask a systemd user scope` }
+  if (!existsSync(SETPRIV)) return { ok: false, reason: `${SETPRIV} is not installed` }
+  const result = spawnSync(systemdRun, ['--user', '--scope', '--quiet', '--collect', '--', '/bin/true'], { encoding: 'utf8', timeout: timeoutMs, env: scopeEnvironment(environment) })
+  if (result.status === 0) return { ok: true }
+  const said = `${result.stderr ?? ''}`.trim().split('\n').pop() || (result.error ? result.error.message : `systemd-run ended with code ${result.status}`)
+  return { ok: false, reason: `no systemd user manager answered (${said})` }
+}
+
+/** The cgroup folder a process is in, or null once it is gone. */
+export function cgroupOf(pid) {
   try {
-    entries = readdirSync(folder, { withFileTypes: true })
-  } catch (error) {
-    if (error.code === 'ENOENT') return 0
-    throw error
+    const line = readFileSync(`/proc/${pid}/cgroup`, 'utf8').split('\n').find((entry) => entry.startsWith('0::'))
+    return line === undefined ? null : `/sys/fs/cgroup${line.slice(3)}`
+  } catch {
+    return null
   }
-  for (const entry of entries) {
-    const path = join(folder, entry.name)
-    if (entry.isDirectory()) total += folderBytes(path)
-    else if (entry.isFile()) {
-      try {
-        total += lstatSync(path).size
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw error
-      }
-    }
+}
+
+/**
+ * Ends every process of a run's scope: its cgroup.kill, which the owner's user may write in his own
+ * systemd's tree. Only a scope of this very run is ever killed. Returns whether a scope was there.
+ */
+export function endScope(cgroup, id) {
+  if (typeof cgroup !== 'string' || !cgroup.startsWith('/sys/fs/cgroup/') || scopeAsk(cgroup) !== id || cgroup.includes('/..')) return false
+  try {
+    writeFileSync(join(cgroup, 'cgroup.kill'), '1')
+    return true
+  } catch {
+    return false
   }
-  return total
+}
+
+/** The processes in a run's scope now. */
+function scopeProcesses(cgroup) {
+  try {
+    return readFileSync(join(cgroup, 'cgroup.procs'), 'utf8').split('\n').filter(Boolean).map(Number)
+  } catch {
+    return []
+  }
 }
 
 /** Where this file lies as a program, as agents-supervised.mjs finds its own. */
@@ -82,25 +142,24 @@ export function teamSupervisorScript() {
 
 /**
  * Starts the supervisor of the run in `folder`, whose `launch.json` says what to run:
- * `{ argv, argv_sha256, deadline, stdin, stdin_sha256, args_fd, output_limit, storage_limit, token_ceiling? }`
+ * `{ argv, argv_sha256, cwd, deadline, stdin, stdin_sha256, output_limit, token_ceiling? }`
  * (`*_sha256`: what the check judged, compared just before the start, a difference starting nothing; every run
- * also passes agents-team-run.mjs's `launchCheck` immediately before the container, which holds each of these
- * to the run's receipt and to BMN's and the owner's limits, its reason starting nothing; `args_fd`: give
- * bubblewrap its arguments on a file descriptor; `output_limit`: the bytes of raw output over which the run
- * fails; `storage_limit`: the bytes the run's whole folder may hold; `token_ceiling`: the owner's, watched by
- * the run module's `watchAsk`). Once the container has ended the supervisor calls the run module's `finishAsk`
- * with the folder; nothing the launch names is ever loaded. Its environment holds only the asker's HOME, where
- * the last check reads the team.
- * Returns `{ pid, start }` or `{ failed }`.
+ * also passes agents-team-run.mjs's `launchCheck` immediately before the app, which holds each of these to the
+ * run's receipt and to BMN's and the owner's limits, its reason starting nothing; `output_limit`: the bytes of raw
+ * output over which the run fails; `token_ceiling`: the owner's, watched by the run module's `watchAsk`). Once the
+ * app has ended the supervisor calls the run module's `finishAsk` with the folder; nothing the launch names is ever
+ * loaded. Its environment holds only the asker's HOME, where the last check reads the team, and what systemd-run
+ * needs to reach the owner's systemd. Returns `{ pid, start }` or `{ failed }`.
  * The supervisor is detached and in a session of its own: closing the asking command leaves it running.
  */
-export function startTeamSupervisor(folder, { execPath = process.execPath } = {}) {
+export function startTeamSupervisor(folder, { execPath = process.execPath, environment = process.env } = {}) {
   const script = teamSupervisorScript()
   if (script === null) return { failed: 'BMN\'s ask supervisor file is missing' }
   let child
   try {
     child = spawn(execPath, [script, SUPERVISE, folder], {
-      cwd: folder, detached: true, stdio: 'ignore', env: { HOME: homedir(), ...(process.versions.electron === undefined ? {} : { ELECTRON_RUN_AS_NODE: '1' }) }
+      cwd: folder, detached: true, stdio: 'ignore',
+      env: { ...scopeEnvironment(environment), HOME: homedir(), ...(process.versions.electron === undefined ? {} : { ELECTRON_RUN_AS_NODE: '1' }) }
     })
   } catch (error) {
     return { failed: error instanceof Error ? error.message : String(error) }
@@ -148,6 +207,22 @@ export function supervisorLives(identity) {
   }
 }
 
+/** The app's own exit, from the status its wrapper wrote: a code, or the signal that ended it (the shell's 128 + n). */
+function appExit(folder) {
+  let text
+  try {
+    text = readFileSync(join(folder, RUN_FILES.status), 'utf8').trim()
+  } catch {
+    return null
+  }
+  if (!/^\d+$/u.test(text)) return null
+  const status = Number(text)
+  if (status <= 128) return { code: status, signal: null, signal_number: null }
+  const number = status - 128
+  const name = Object.entries(constants.signals).find(([, value]) => value === number)?.[0] ?? null
+  return { code: null, signal: name, signal_number: number }
+}
+
 // ---------------------------------------------------------------------------------------------
 // The supervisor
 
@@ -155,16 +230,17 @@ async function supervise(folder) {
   const launch = readJson(join(folder, RUN_FILES.launch))
   // A run already given its outcome (recorded as interrupted after its asking command ended) is never started.
   if (existsSync(join(folder, 'outcome.json'))) process.exit(0)
+  const id = basename(folder)
   const state = { version: 1, state: 'starting', supervisor: { pid: process.pid, start: processStart(process.pid) }, started_at: new Date().toISOString() }
   const save = () => writeWhole(join(folder, RUN_FILES.state), `${JSON.stringify(state)}\n`)
   save()
   let ended = null
   let endedReason = null
-  let child = null
-  let namespace = null
+  let finishing = false
   const finish = async (exit) => {
+    if (finishing) return
+    finishing = true
     writeWhole(join(folder, RUN_FILES.exit), `${JSON.stringify({ version: 1, ...exit, ended: ended ?? (exit.code === 0 ? 'done' : 'failed'), ...(endedReason === null ? {} : { reason: endedReason }), at: new Date().toISOString() })}\n`)
-    if (namespace !== null) forgetNamespace(dirname(folder), namespace)
     state.state = 'finishing'
     save()
     try {
@@ -177,20 +253,16 @@ async function supervise(folder) {
     save()
     process.exit(0)
   }
-  if (existsSync(join(folder, RUN_FILES.stop))) {
-    ended = 'stopped'
+  const notStarted = (why, reason = null) => {
+    ended = why
+    endedReason = reason
     return finish({ code: null, signal: null, started: false })
   }
-  if (!(launch.deadline > Date.now())) {
-    ended = 'limit'
-    return finish({ code: null, signal: null, started: false })
-  }
+  // Stop and the time limit: before anything, and once more immediately before the app (72.9 AC4).
+  const stopOrLimit = () => (existsSync(join(folder, RUN_FILES.stop)) ? 'stopped' : !(launch.deadline > Date.now()) ? 'limit' : null)
+  if (stopOrLimit() !== null) return notStarted(stopOrLimit())
   // The command and standard input are the ones the check judged, read now, just before the start (72.3 AC1).
-  if (typeof launch.argv_sha256 === 'string' && sha256(JSON.stringify(launch.argv)) !== launch.argv_sha256) {
-    ended = 'changed'
-    endedReason = 'the command changed after the check; nothing started'
-    return finish({ code: null, signal: null, started: false })
-  }
+  if (typeof launch.argv_sha256 === 'string' && sha256(JSON.stringify(launch.argv)) !== launch.argv_sha256) return notStarted('changed', 'the command changed after the check; nothing started')
   let stdinBytes = null
   if (launch.stdin) {
     try {
@@ -198,129 +270,110 @@ async function supervise(folder) {
     } catch {
       stdinBytes = null
     }
-    if (stdinBytes === null || (typeof launch.stdin_sha256 === 'string' && sha256(stdinBytes) !== launch.stdin_sha256)) {
-      ended = 'changed'
-      endedReason = 'the prompt changed after the check; nothing started'
-      return finish({ code: null, signal: null, started: false })
-    }
+    if (stdinBytes === null || (typeof launch.stdin_sha256 === 'string' && sha256(stdinBytes) !== launch.stdin_sha256)) return notStarted('changed', 'the prompt changed after the check; nothing started')
   }
-  // The run's last check, immediately before the container: the run's receipt, the team, the program and every file the
-  // container binds, as the check judged them (72.3 AC1, epic review R6). It is BMN's own, beside this file, for every run,
-  // never one the launch names; a check that cannot run starts nothing either.
+  // The run's last check, immediately before the app: the run's receipt, the team, the program and the inputs as the check
+  // judged them (72.3 AC1). It is BMN's own, beside this file, for every run, never one the launch names; a check that
+  // cannot run starts nothing either. It also notes the project's commit and state at the start (72.9 AC6).
   let reason
   try {
     reason = await (await import(RUN_MODULE)).launchCheck(folder, launch)
   } catch (error) {
     reason = `BMN could not check the run before its start (${error instanceof Error ? error.message : String(error)})`
   }
-  if (reason !== null) {
-    ended = 'changed'
-    endedReason = `${reason}; nothing started`
-    return finish({ code: null, signal: null, started: false })
-  }
-  // The run's storage: all of its folder, the record, its logs and its transient state together (the contract's "Limits"),
-  // before the start, every few polls while it runs and once more when the container has ended.
-  const storageOver = () => {
-    if (typeof launch.storage_limit !== 'number') return null
-    let used
-    try {
-      used = folderBytes(folder)
-    } catch (error) {
-      return `the run's storage could not be measured (${error.code ?? error.message})`
-    }
-    return used > launch.storage_limit ? `the run's storage reached ${used} bytes, over ${launch.storage_limit}` : null
-  }
-  const before = storageOver()
-  if (before !== null) {
-    ended = 'storage'
-    endedReason = before
-    return finish({ code: null, signal: null, started: false })
-  }
+  if (reason !== null) return notStarted('changed', `${reason}; nothing started`)
   // BMN's own watch step under the owner's token ceiling, loaded once before the start: it reads the run's output and says when to end it.
   const watcher = Number.isInteger(launch.token_ceiling) ? await import(RUN_MODULE).then((module) => module.watchAsk).catch(() => null) : null
-  // Standard input is the very bytes checked above, given through a pipe: a file changed after the check is never read.
+  if (stopOrLimit() !== null) return notStarted(stopOrLimit())
   const input = stdinBytes === null ? 'ignore' : 'pipe'
   const output = openSync(join(folder, RUN_FILES.events), 'a', 0o600)
   const errors = openSync(join(folder, RUN_FILES.stderr), 'a', 0o600)
-  // bubblewrap reads its own options (what the container shows, its environment) from a file descriptor
-  // (--args), so none of them is on its command line; the app's command after `--` stays there, as the app's own.
-  let args = null
-  let argv = launch.argv.slice(1)
-  const dashes = argv.indexOf('--')
-  if (launch.args_fd === true && dashes !== -1) {
-    const path = join(folder, RUN_FILES.args)
-    writeFileSync(path, argv.slice(0, dashes).map((argument) => `${argument}\0`).join(''), { mode: 0o600 })
-    args = openSync(path, 'r')
-    unlinkSync(path)
-    argv = ['--args', '3', ...argv.slice(dashes)]
-  }
+  let child
   try {
-    // A process group of its own; the container's own namespace holds everything the app starts.
-    child = spawn(launch.argv[0], argv, { env: {}, stdio: args === null ? [input, output, errors] : [input, output, errors, args], detached: true })
+    // The app runs in its own scope; systemd-run --scope runs it as this process's own child, inside this process's restrictions.
+    child = spawn(SYSTEMD_RUN, ['--user', '--scope', '--quiet', '--collect', `--unit=${scopeUnit(id)}`, '--', SETPRIV, '--pdeathsig', 'TERM', '--',
+      '/bin/sh', '-c', SCOPE_WRAPPER, 'bmn-ask', join(folder, RUN_FILES.status), ...launch.argv],
+    { cwd: launch.cwd, env: scopeEnvironment(process.env), stdio: [input, output, errors], detached: true })
   } finally {
-    for (const handle of [output, errors, args]) if (typeof handle === 'number') closeSync(handle)
+    closeSync(output)
+    closeSync(errors)
   }
   if (stdinBytes !== null && child.stdin) {
     child.stdin.on('error', () => undefined)
     child.stdin.end(stdinBytes)
   }
+  let scope = null
   let asked = false
-  const group = (signal) => {
-    try {
-      process.kill(-child.pid, signal)
-    } catch {
-      // Already gone.
-    }
-  }
   const end = (why, reason = null) => {
     if (ended === null && reason !== null) endedReason = reason
     ended ??= why
     if (asked) return
     asked = true
-    group('SIGTERM')
-    setTimeout(() => group('SIGKILL'), KILL_AFTER_MS).unref()
+    // TERM to every process of the scope (the wrapper's own trap ends the scope at once), then the scope's kill after a grace.
+    if (scope !== null) for (const pid of scopeProcesses(scope)) {
+      try {
+        process.kill(pid, 'SIGTERM')
+      } catch {
+        // Gone already.
+      }
+    } else {
+      try {
+        process.kill(-child.pid, 'SIGTERM')
+      } catch {
+        // Gone already.
+      }
+    }
+    setTimeout(() => {
+      if (scope !== null) endScope(scope, id)
+      try {
+        process.kill(-child.pid, 'SIGKILL')
+      } catch {
+        // Gone already.
+      }
+    }, KILL_AFTER_MS).unref()
   }
   child.on('error', (error) => {
     ended ??= 'failed'
+    endedReason ??= `the run's scope could not start: ${error.message}`
     state.launch_error = error.message
     void finish({ code: null, signal: null, started: false })
   })
   child.on('exit', (code, signal) => {
     clearInterval(watch)
     clearTimeout(timer)
-    // A short run can end between two measurements: its storage is measured once more at its end.
-    const after = ended === null ? storageOver() : null
-    if (after !== null) {
-      ended = 'storage'
-      endedReason = after
+    // Whatever the app left in its scope goes with it: the wrapper ends the scope, and the supervisor once more.
+    if (scope !== null) endScope(scope, id)
+    const app = appExit(folder)
+    if (scope === null && app === null) {
+      // systemd-run never gave the run a scope: nothing of the app ran.
+      ended ??= 'failed'
+      endedReason ??= 'the run\'s systemd scope could not start (systemd-run\'s words are in the run\'s stderr.txt)'
+      return void finish({ code, signal: signal ?? null, started: false })
     }
-    // What the container left goes with it: its namespace ends with its first process, and the group is killed besides.
-    group('SIGKILL')
-    void finish({ code, signal: signal ?? null, signal_number: signal ? constants.signals[signal] ?? null : null, started: true })
+    void finish({ ...(app ?? { code: null, signal: signal ?? null, signal_number: signal ? constants.signals[signal] ?? null : null }), started: true })
   })
   state.state = 'running'
   state.child = { pid: child.pid, start: processStart(child.pid) }
   save()
-  // The container's PID namespace, named in BMN's state while the run goes on: a BMN command from inside it is refused.
-  const nameIt = () => {
-    if (namespace !== null || ended !== null) return
-    const found = childNamespace(child.pid)
-    if (found !== null && nameNamespace(dirname(folder), found, basename(folder)) !== null) {
-      namespace = found
-      state.container = { pid_namespace: found }
+  // The run's scope, named in its state: Stop, the time limit and crash recovery end exactly it.
+  const until = Date.now() + SCOPE_WAIT_MS
+  const findScope = () => {
+    if (scope !== null || finishing) return
+    const found = cgroupOf(child.pid)
+    if (found !== null && scopeAsk(found) === id) {
+      scope = found
+      state.scope = { unit: `${scopeUnit(id)}.scope`, cgroup: found }
       save()
+      if (asked) endScope(scope, id)
+      return
     }
+    if (Date.now() < until) setTimeout(findScope, 20).unref()
   }
-  for (const after of [5, 25, 100]) setTimeout(nameIt, after).unref()
+  findScope()
   let polls = 0
   const watch = setInterval(() => {
     polls += 1
     if (existsSync(join(folder, RUN_FILES.stop))) end('stopped')
-    if (polls <= 40) nameIt()
-    if (polls % WATCH_EVERY === 0) {
-      const over = storageOver()
-      if (over !== null) end('storage', over)
-    }
     if (watcher !== null && polls % WATCH_EVERY === 0) {
       let reason = null
       try {

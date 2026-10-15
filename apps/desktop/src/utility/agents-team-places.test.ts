@@ -1,22 +1,20 @@
-// MODULE: agents-team-places.test.ts - Story 72.4: many asks, safely: a key, the request's hash and a capacity place reserved together across processes, crashes on either side of the start, capacity edges, nesting told from an ask's own PID namespace with a cleared environment and forged labels, sessions kept apart, retention and the key window, the token ceiling and the features list; BMN's real container, stand-in apps, a synthetic team, no provider reached
-import { execFileSync, spawn } from 'node:child_process'
+// MODULE: agents-team-places.test.ts - Stories 72.4, 72.9: many asks, safely: a key, the request's hash and a capacity place reserved together across processes, crashes on either side of the start, capacity edges, nesting told from an ask's own systemd scope with a cleared environment and forged labels, sessions kept apart, credentials refused before anything starts, retention and the key window, the token ceiling and the features list; BMN's real systemd user scope, stand-in apps, a synthetic team, no provider reached
+import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { userInfo } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { containerStarts } from '../../bin/agents-container.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { askFeatures, teamAsker } from '../../bin/agents-team-cli.mjs'
 import type { Server } from 'node:net'
-import { childNamespace, forgetNamespace, nameNamespace, nestedAsk } from '../../bin/agents-team-nested.mjs'
+import { ASK_READS } from '../../bin/agents-team-forms.mjs'
+import { nestedAsk, scopeAsk } from '../../bin/agents-team-nested.mjs'
 import { keyDay, keyExpired, keyFresh, keyPath, keyedRun, makeKey, releaseReservation, removeRun, requestHash, reserveAsk, sweepRuns } from '../../bin/agents-team-places.mjs'
 import { askOutcome, startAsk, stopAsk, waitAsk, watchAsk } from '../../bin/agents-team-run.mjs'
 import { startTeamSupervisor } from '../../bin/agents-team-supervisor.mjs'
-import { TOKEN_MAC, leftovers, settle, standInControl, stubClaude, stubCodex, teamAskHome } from './test-fixtures/team-ask-harness'
+import { SCOPES, TOKEN_MAC, leftovers, ownSystemd, settle, standInControl, stubClaude, stubCodex, teamAskHome } from './test-fixtures/team-ask-harness'
 
 const BMN = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
-const canContain = containerStarts().ok
 const savedHome = process.env.HOME
 const DEAD = { pid: 4_194_000, start: '1' }
 
@@ -38,7 +36,7 @@ const shellHash = (question: string, extra: Record<string, unknown> = {}): strin
 
 function bmn(args: string[], extra: Record<string, string> = {}, input = ''): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((done) => {
-    const child = spawn(process.execPath, [BMN, ...args], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...extra }, cwd: home, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, [BMN, ...args], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...ownSystemd(), ...extra }, cwd: home, stdio: ['pipe', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
@@ -96,11 +94,11 @@ describe('keys and the request\'s hash (72.4 AC2)', () => {
   })
 
   it('the same request has the same hash; any part that decides what is asked, or of whom, changes it', () => {
-    const base = { role: 'epic-reviewer', question: 'Is the loop bounded?', project: '/p', access: 'files', files: [{ path: '/p/a.ts', sha256: 'f'.repeat(64) }], timeLimitMinutes: 30 }
+    const base = { role: 'epic-reviewer', question: 'Is the loop bounded?', project: '/p', files: [{ path: '/p/a.ts', sha256: 'f'.repeat(64) }], timeLimitMinutes: 30 }
     expect(requestHash(base)).toBe(requestHash({ ...base, files: [...base.files] }))
-    expect(requestHash(base)).toBe(requestHash({ ...base, data: undefined, wide: false }))
+    expect(requestHash(base)).toBe(requestHash({ ...base, data: undefined }))
     for (const changed of [{ question: 'Is it bounded?' }, { role: 'designer' }, { agent: 'astra' }, { effort: 'high' }, { smallWork: true }, { project: '/q' },
-      { access: 'project' }, { files: [{ path: '/p/a.ts', sha256: 'e'.repeat(64) }] }, { data: 'public' }, { wide: true }, { timeLimitMinutes: 31 }, { recheckOf: '20261015T000000-00000000' }]) {
+      { files: [{ path: '/p/a.ts', sha256: 'e'.repeat(64) }] }, { images: [{ path: '/p/a.png', sha256: 'e'.repeat(64) }] }, { data: 'public' }, { timeLimitMinutes: 31 }, { recheckOf: '20261015T000000-00000000' }]) {
       expect(requestHash({ ...base, ...changed })).not.toBe(requestHash(base))
     }
   })
@@ -137,7 +135,7 @@ describe('keys and the request\'s hash (72.4 AC2)', () => {
   })
 })
 
-describe.skipIf(!canContain)('crashes on either side of the start (72.4 AC2)', { timeout: 30_000 }, () => {
+describe.skipIf(!SCOPES)('crashes on either side of the start (72.4 AC2)', { timeout: 30_000 }, () => {
   it('before the start: the run is recorded interrupted, never launched, and its supervisor, should it come, starts nothing', async () => {
     const question = 'Is the loop bounded?'
     const reserved = await reserveAsk(runs(), { scope: 'shell', key: key('crash-before'), hash: shellHash(question), id: '20261015T010000-0000000a' }, { holder: DEAD })
@@ -148,7 +146,6 @@ describe.skipIf(!canContain)('crashes on either side of the start (72.4 AC2)', {
     expect(retry.code, retry.stderr).toBe(1)
     expect(JSON.parse(retry.stdout)).toMatchObject({ id: prepared.id, state: 'interrupted', exit: 1 })
     expect(JSON.parse(readFileSync(join(prepared.folder, 'outcome.json'), 'utf8'))).toMatchObject({ state: 'interrupted', reason: expect.stringContaining('nothing started') })
-    expect(existsSync(join(prepared.folder, 'home'))).toBe(false)
     expect(existsSync(join(prepared.folder, 'launch.json'))).toBe(false)
     // Its start is refused, and a supervisor that comes late reads the outcome and runs nothing.
     expect(() => startAsk(prepared, { timeLimitMinutes: 1 })).toThrow(/already ended .*nothing started/)
@@ -168,7 +165,7 @@ describe.skipIf(!canContain)('crashes on either side of the start (72.4 AC2)', {
     const retry = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', question, '--key', key('crash-after')])
     expect(retry.code, retry.stderr).toBe(0)
     expect(retry.stderr).toContain(`found run ${prepared.id}, asked before; nothing started again`)
-    expect(retry.stdout).toMatch(/^codex answer [0-9a-f]{8} from home inputs work \n$/)
+    expect(retry.stdout).toMatch(/^codex answer [0-9a-f]{8} in \S+\/work\n$/u)
     expect(runFolders()).toEqual([prepared.id])
     expect(readFileSync(join(prepared.folder, 'events.jsonl'), 'utf8').match(/thread\.started/g)).toHaveLength(1)
     // Its place is given back with its outcome.
@@ -176,7 +173,7 @@ describe.skipIf(!canContain)('crashes on either side of the start (72.4 AC2)', {
   })
 })
 
-describe.skipIf(!canContain)('many asks at once (72.4 AC1, AC3)', { timeout: 30_000 }, () => {
+describe.skipIf(!SCOPES)('many asks at once (72.4 AC1, AC3)', { timeout: 30_000 }, () => {
   it('separate commands submitting together never exceed the capacity; one more is busy (exit 14), and a freed place is taken again', async () => {
     settings('{"capacity": 3}\n')
     const results = await Promise.all([1, 2, 3, 4, 5].map((n) => bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', `Bounded ${n}? SLEEP`, '--key', key(`load-${n}`), '--background', '--json'])))
@@ -205,7 +202,7 @@ describe.skipIf(!canContain)('many asks at once (72.4 AC1, AC3)', { timeout: 30_
   })
 })
 
-describe.skipIf(!canContain)('who sees and controls an ask (72.4 AC2, AC4)', { timeout: 30_000 }, () => {
+describe.skipIf(!SCOPES)('who sees and controls an ask (72.4 AC2, AC4)', { timeout: 30_000 }, () => {
   it('a session must pass --key; it sees and stops only its own asks, and a forged session label sees nothing', async () => {
     const a = session('sess-a')
     const required = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'x', '--json'], a)
@@ -268,34 +265,29 @@ describe.skipIf(!canContain)('who sees and controls an ask (72.4 AC2, AC4)', { t
   })
 })
 
-describe.skipIf(!canContain)('refusals, crashes and retries leave nothing behind (epic review)', { timeout: 30_000 }, () => {
-  it('a refusal while preparing deletes what was copied and gives the key back; a crash after the outcome leaves nothing the next reservation does not take away', async () => {
+describe.skipIf(!SCOPES)('refusals, crashes and retries leave nothing behind (epic review)', { timeout: 30_000 }, () => {
+  it('a credential in the question or a named file is refused before anything is written, and the key is given back; a crash after the outcome leaves nothing the next reservation does not take away (72.9 AC6)', async () => {
     const root = join(home, 'code/app')
     mkdirSync(root, { recursive: true })
-    const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=S', '-c', 'user.email=s@example.org', '-c', 'commit.gpgsign=false', ...args], { cwd: root, env: { PATH: '/usr/bin:/bin', HOME: home, GIT_CONFIG_GLOBAL: '/dev/null' } })
-    git('init', '-q', '-b', 'main')
-    // A credential only in the history: the frozen copy finds it after the history is copied.
-    writeFileSync(join(root, 'config.ts'), `export const token = 'gh${'p'}_${'7Kq2'.repeat(9)}'\n`)
-    git('add', '.')
-    git('commit', '-q', '-m', 'add config')
-    git('rm', '-q', 'config.ts')
-    writeFileSync(join(root, 'README.md'), '# app\n')
-    git('add', '.')
-    git('commit', '-q', '-m', 'remove config')
-    const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Is the history clean?', '--access', 'project', '--project', root, '--key', key('history'), '--json'])
-    expect(asked.code, asked.stderr).toBe(10)
-    expect(JSON.parse(asked.stdout).refusal).toMatchObject({ code: 'CREDENTIAL_FOUND' })
+    const token = `gh${'p'}_${'7Kq2'.repeat(9)}`
+    writeFileSync(join(root, 'config.ts'), `export const token = '${token}'\n`)
+    const named = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Is the config safe?', '--file', join(root, 'config.ts'), '--key', key('credential'), '--json'])
+    expect(named.code, named.stderr).toBe(10)
+    expect(JSON.parse(named.stdout).refusal).toMatchObject({ code: 'CREDENTIAL_FOUND', reason: expect.stringContaining('a GitHub token') })
+    const said = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', `Is ${token} still valid?`, '--key', key('said'), '--json'])
+    expect(said.code, said.stderr).toBe(10)
+    expect(JSON.parse(said.stdout).refusal).toMatchObject({ code: 'CREDENTIAL_FOUND' })
+    expect(named.stdout + said.stdout + named.stderr + said.stderr).not.toContain(token)
     expect(runFolders()).toEqual([])
     // The key was given back: the same key may be used for another request.
-    const again = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Another question?', '--key', key('history'), '--background'])
+    const again = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Another question?', '--key', key('credential'), '--background'])
     expect(again.code, again.stderr).toBe(0)
     const id = again.stdout.trim()
     await waitAsk(join(runs(), id), { timeoutMs: 20_000 })
     // A crash between the outcome and the deletion of the transient state: the next reservation's sweep deletes it.
-    mkdirSync(join(runs(), id, 'home/.claude'), { recursive: true })
-    writeFileSync(join(runs(), id, 'home/.claude/.credentials.json'), '{"left": "behind"}\n')
+    for (const name of ['app-status', 'codex-answer.md']) writeFileSync(join(runs(), id, name), 'left behind\n')
     await reserveAsk(runs(), { scope: 'shell', key: key('sweep'), hash: 'h-sweep', id: '20261015T060000-0000000f' })
-    expect(existsSync(join(runs(), id, 'home'))).toBe(false)
+    for (const name of ['app-status', 'codex-answer.md']) expect(existsSync(join(runs(), id, name))).toBe(false)
     expect(existsSync(join(runs(), id, 'outcome.json'))).toBe(true)
   })
 
@@ -314,7 +306,7 @@ describe.skipIf(!canContain)('refusals, crashes and retries leave nothing behind
   })
 })
 
-describe.skipIf(!canContain)('retention and the key window (72.4 AC2)', { timeout: 30_000 }, () => {
+describe.skipIf(!SCOPES)('retention and the key window (72.4 AC2)', { timeout: 30_000 }, () => {
   it('a removed run keeps a content-free entry, and a retry is GONE, during the window and after it', async () => {
     const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Remove me?', '--key', key('removed')])
     expect(asked.code, asked.stderr).toBe(0)
@@ -351,7 +343,7 @@ describe.skipIf(!canContain)('retention and the key window (72.4 AC2)', { timeou
   })
 })
 
-describe.skipIf(!canContain)('the owner\'s token ceiling (72.4 AC3)', { timeout: 30_000 }, () => {
+describe.skipIf(!SCOPES)('the owner\'s token ceiling (72.4 AC3)', { timeout: 30_000 }, () => {
   it('a Claude Code run reaching it is stopped with that reason (exit 16)', async () => {
     settings('{"token_ceiling": 2500}\n')
     const asked = await bmn(['team', 'ask', '--role', 'designer', '--question', 'Look closely. CEILING', '--key', key('ceiling'), '--json'])
@@ -372,19 +364,28 @@ describe.skipIf(!canContain)('the owner\'s token ceiling (72.4 AC3)', { timeout:
   })
 })
 
-describe.skipIf(!canContain)('nesting (72.4 AC4)', { timeout: 30_000 }, () => {
-  it('inside an ask\'s PID namespace every BMN command is refused, its environment cleared or its labels forged; a hook does nothing', async () => {
-    // A child in a PID namespace of its own that sees the whole file system, with this test's BMN state where the
-    // account's own is (the owner's stays out of reach), tries every BMN path and reports what each said.
-    const own = userInfo().homedir
+describe('telling an ask\'s scope (72.4 AC4, 72.9 AC4)', () => {
+  it('a process in an ask\'s scope, or a cgroup under it, is inside that ask; any other is not', () => {
+    const id = '20261015T040000-0000000d'
+    const unit = `/user.slice/user-1000.slice/user@1000.service/app.slice/bmn-ask-${id}.scope`
+    expect(scopeAsk(unit)).toBe(id)
+    expect(scopeAsk(`${unit}/sandbox`)).toBe(id)
+    for (const other of ['/user.slice/user-1000.slice/user@1000.service/app.slice/bmn-ask-x.scope.d', '/user.slice/bmn-asks.scope', '/user.slice/user-1000.slice/session-2.scope', '']) expect(scopeAsk(other)).toBeNull()
+    const file = join(home, 'cgroup')
+    writeFileSync(file, `0::${unit}\n`)
+    expect(nestedAsk(file)).toBe(id)
+    writeFileSync(file, '0::/user.slice/user-1000.slice/session-2.scope\n')
+    expect(nestedAsk(file)).toBeNull()
+    expect(nestedAsk(join(home, 'no-such-file'))).toBeNull()
+  })
+})
+
+describe.skipIf(!SCOPES)('nesting (72.4 AC4)', { timeout: 30_000 }, () => {
+  it('inside an ask\'s scope every BMN command is refused, its environment cleared or its labels forged; a hook does nothing', async () => {
+    // A child in a scope named as an ask's runs every BMN path and reports what each said.
+    const id = '20261015T040000-0000000d'
     const script = join(home, 'nested.mjs')
-    writeFileSync(script, `import { existsSync, readlinkSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
-import { homedir } from 'node:os'
-const number = /\\[(\\d+)\\]/.exec(readlinkSync('/proc/self/ns/pid'))[1]
-const index = homedir() + '/.config/bmn/agents/state/team/runs/.namespaces/' + number
-const until = Date.now() + 5000
-while (!existsSync(index) && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 20))
+    writeFileSync(script, `import { spawnSync } from 'node:child_process'
 const commands = [
   ['team', 'ask', '--role', 'epic-reviewer', '--question', 'x', '--key', '${key('nested')}'], ['team', 'asks'], ['team', 'asks', 'show', '20261015T000000-00000000'],
   ['team'], ['roster', 'check', '--agent', 'astra', '--role', 'epic-reviewer', '--', 'codex', 'exec', 'x'], ['research', 'ask', 'x'], ['judge', 'ask', 'x'], ['peers'], ['hook', 'session-start']
@@ -397,18 +398,13 @@ for (const environment of environments) for (const argv of commands) {
 }
 process.stdout.write(JSON.stringify(results))
 `)
-    const child = spawn('bwrap', ['--unshare-user', '--unshare-pid', '--die-with-parent', '--dev-bind', '/', '/', '--bind', join(home, '.config/bmn'), join(own, '.config/bmn'), '--proc', '/proc', '--', process.execPath, script],
-      { stdio: ['ignore', 'pipe', 'pipe'], env: {} })
+    const child = spawn('/usr/bin/systemd-run', ['--user', '--scope', '--quiet', '--collect', `--unit=bmn-ask-${id}`, '--', process.execPath, script],
+      { stdio: ['ignore', 'pipe', 'pipe'], env: { PATH: '/usr/bin:/bin', HOME: home, ...ownSystemd() } })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
-    let link: string | null = null
-    await settle(() => (link = childNamespace(child.pid!)) !== null, 5000)
-    expect(link).toMatch(/^pid:\[\d+\]$/)
-    nameNamespace(runs(), link!, '20261015T040000-0000000d')
     await new Promise((resolve) => child.on('exit', resolve))
-    forgetNamespace(runs(), link!)
     const results = JSON.parse(stdout || '[]') as Array<{ argv: string; forged: boolean; code: number; stderr: string; stdout: string }>
     expect(results, stderr).toHaveLength(18)
     for (const result of results) {
@@ -417,28 +413,26 @@ process.stdout.write(JSON.stringify(results))
         continue
       }
       expect(result.code, `${result.argv} ${result.forged ? 'forged' : 'cleared'}: ${result.stderr}`).toBe(10)
-      expect(result.stderr).toContain('bmn: NESTED: this runs inside teammate ask 20261015T040000-0000000d')
+      expect(result.stderr).toContain(`bmn: NESTED: this runs inside teammate ask ${id}`)
     }
     // Outside it the same commands behave as before.
-    expect(nestedAsk(runs())).toBeNull()
+    expect(nestedAsk()).toBeNull()
     expect((await bmn(['team'])).code).toBe(0)
   })
 
-  it('the container itself holds no BMN command, state, socket, token or other run: the app finds none of them', async () => {
-    const other = join(runs(), '20261015T050000-0000000e')
-    mkdirSync(other, { recursive: true })
-    writeFileSync(join(other, 'answer.md'), 'OTHER-RUN-SENTINEL\n')
-    const socket = controlSocket()
+  it('the teammate\'s app gets none of BMN\'s environment, and a BMN command it runs is refused as nested', async () => {
     writeFileSync(join(stubs, 'codex'), `#!/bin/sh
 [ "$1" = --version ] && echo "codex-cli 0.162.1" && exit 0
 model=; effort=; prev=
 for a in "$@"; do
   [ "$prev" = -m ] && model=$a
-  case $a in model_reasoning_effort=*) effort=$(printf %s "$a" | sed 's/.*="\\(.*\\)"/\\1/');; esac
+  case $a in model_reasoning_effort=*) effort=$(printf %s "$a" | sed 's/.*=//; s/"//g');; esac
   prev=$a
 done
 cat >/dev/null
-seen="bmn=$(command -v bmn || echo none);state=$(ls ${home}/.config/bmn 2>/dev/null | wc -l);other=$(cat ${other}/answer.md 2>/dev/null || echo none);socket=$(test -e ${socket} && echo yes || echo no);env=$(env | grep -c '^BMN_')"
+out=$(${process.execPath} ${BMN} team asks 2>&1)
+code=$?
+seen="env=$(env | grep -c -e '^BMN_' -e 'TOKEN');code=$code;said=$(printf %s "$out" | grep -o 'bmn: NESTED' | head -n 1)"
 printf '{"type":"thread.started","thread_id":"aaaaaaaa-0000-7000-8000-000000000000"}\\n'
 printf 'INFO turn{thread.id=aaaaaaaa-0000-7000-8000-000000000000 model=%s codex.turn.reasoning_effort=%s}: started\\n' "$model" "$effort" >&2
 printf '{"type":"item.completed","item":{"type":"agent_message","text":"%s"}}\\n' "$seen"
@@ -446,31 +440,38 @@ printf '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens"
 `)
     const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'What do you see?', '--key', key('inside')], session('sess-in'))
     expect(asked.code, asked.stderr).toBe(0)
-    expect(asked.stdout).toBe('bmn=none;state=0;other=none;socket=no;env=0\n')
-    rmSync(other, { recursive: true, force: true })
+    expect(asked.stdout).toBe('env=0;code=10;said=bmn: NESTED\n')
   })
 })
 
 describe('what may be asked here (72.4 AC5)', () => {
-  it('lists each installed app\'s forms per version as 72.1 measured them; an unmeasured version shows its confined modes unmeasured', async () => {
+  it('lists each installed app with the form it is asked in and what that form can read, when the form was last checked, and no version gate (72.9 AC4)', async () => {
     const features = askFeatures(env)
-    expect(features).toMatchObject({ version: 1, platform: 'linux', container: { ok: canContain } })
+    const form = (name: keyof typeof ASK_READS) => ({ form: name, reads: ASK_READS[name].words })
+    const notPublic = { form: null, reads: 'not offered: its tools read beyond your text, so its asks are private' }
+    expect(features).toMatchObject({ version: 2, platform: 'linux', scope: { ok: SCOPES } })
     expect(features.apps).toEqual([
-      { app: 'codex', installed: true, version: '0.162.1', measured: ['0.162.1'], forms: { question: 'proven', files: 'proven', project: 'unavailable', 'wide-read': 'not-enabled' }, pictures: 'proven', usage_while_running: false },
-      { app: 'claude', installed: true, version: '2.1.300', measured: ['2.1.300'], forms: { question: 'proven', files: 'proven', project: 'proven', 'wide-read': 'not-enabled' }, pictures: 'proven', usage_while_running: true },
-      { app: 'opencode', installed: false, version: null, measured: ['2.0.29'], forms: { question: 'not-installed', files: 'not-installed', project: 'not-installed', 'wide-read': 'not-enabled' }, pictures: 'not-installed', usage_while_running: false }
+      { app: 'codex', installed: true, version: '0.162.1', form_checked_on: { version: '0.162.1', on: '2026-10-15' }, forms: { project: form('codex-read-only'), 'no-project': form('codex-read-only'), public: notPublic }, pictures: 'offered', usage_while_running: false },
+      { app: 'claude', installed: true, version: '2.1.300', form_checked_on: { version: '2.1.300', on: '2026-10-15' }, forms: { project: form('claude-read-tools'), 'no-project': form('claude-read-tools'), public: notPublic }, pictures: 'offered', usage_while_running: true },
+      { app: 'opencode', installed: false, version: null, form_checked_on: { version: '2.0.29', on: '2026-10-15' }, forms: { project: form('opencode-reader'), 'no-project': form('opencode-asker'), public: form('opencode-asker') },
+        pictures: expect.stringMatching(/^not offered: /u), usage_while_running: false }
     ])
+    // A newer app is asked as it is: the form was last checked on another version, and that is all.
     stubCodex(stubs, '0.170.0')
     rmSync(join(stubs, 'claude'))
     const changed = askFeatures(env)
-    expect(changed.apps[0]).toMatchObject({ version: '0.170.0', forms: { question: 'unmeasured', files: 'unmeasured', project: 'unmeasured' } })
-    expect(changed.apps[1]).toMatchObject({ installed: false, forms: { question: 'not-installed' } })
+    expect(changed.apps[0]).toMatchObject({ version: '0.170.0', form_checked_on: { version: '0.162.1' }, forms: { project: form('codex-read-only') } })
+    expect(changed.apps[1]).toMatchObject({ installed: false })
     stubClaude(stubs)
     const shown = await bmn(['team', 'ask', '--features', '--json'])
     expect(shown.code).toBe(0)
-    expect(JSON.parse(shown.stdout).apps[0].forms.question).toBe('unmeasured')
+    expect(JSON.parse(shown.stdout).apps[0]).toMatchObject({ version: '0.170.0' })
     const words = await bmn(['team', 'ask', '--features'])
-    expect(words.stdout).toContain('Codex 0.170.0: question unmeasured, files unmeasured, project unmeasured, wide-read not enabled; pictures unmeasured; usage at the end only (BMN measured 0.162.1)')
+    expect(words.stdout).toContain(`Codex 0.170.0 (form last checked on 0.162.1, 2026-10-15): ${ASK_READS['codex-read-only'].words}; pictures offered; usage at the end only`)
     expect((await bmn(['team', 'ask', '--features', '--role', 'designer'])).code).toBe(2)
+    if (SCOPES) {
+      const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Newer app?', '--key', key('newer')])
+      expect(asked.code, asked.stderr).toBe(0)
+    }
   })
 })

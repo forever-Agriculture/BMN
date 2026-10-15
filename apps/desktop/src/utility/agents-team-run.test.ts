@@ -1,23 +1,22 @@
-// MODULE: agents-team-run.test.ts - Story 72.3: an ask started exactly as judged in BMN's real bubblewrap container, attributed from its own output, finished into its record and exported by its allowlist; stand-in apps written in sh, a synthetic team, made-up sign-in files; no provider is reached
+// MODULE: agents-team-run.test.ts - Stories 72.3, 72.9: an ask started exactly as judged, in its app's own read-only mode and a systemd user scope of its own that Stop, the time limit and the supervisor's death end whole; attributed from its own output with its sub-agents named and counted once, any credential masked, the project's state at both ends, finished into its record and exported by its allowlist; stand-in apps written in sh, a synthetic team, made-up sign-in files; no provider is reached
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { containerStarts } from '../../bin/agents-container.mjs'
 import { ASK_RUN_FILES } from '../../bin/agents-team-forms.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { StartRefusal, askOutcome, exportAsk, finishAsk, observeAsk, startAsk, stopAsk, waitAsk } from '../../bin/agents-team-run.mjs'
 import { runState, startTeamSupervisor } from '../../bin/agents-team-supervisor.mjs'
 import { askJson } from '../../bin/agents-team-cli.mjs'
-import { mountIdentity, recordInterrupted } from '../../bin/agents-team-places.mjs'
-import { processStart } from '../../bin/agents-supervised.mjs'
-import { ENV_SENTINEL, EXAMPLE, SIGN_IN_SENTINEL, approve as harnessApprove, leftovers as harnessLeftovers, settle, stubCodex as harnessStubCodex, teamAskHome } from './test-fixtures/team-ask-harness'
+import { recordInterrupted } from '../../bin/agents-team-places.mjs'
+import {
+  ANSWER_KEY, CODEX_CHILD, CODEX_STRANGER, ENV_SENTINEL, EXAMPLE, SCOPES, SIGN_IN_SENTINEL, approve as harnessApprove, leftovers as harnessLeftovers, ownSystemd, scopeGone, settle,
+  stubCodex as harnessStubCodex, teamAskHome
+} from './test-fixtures/team-ask-harness'
 
 const CLI = fileURLToPath(new URL('../../bin/agents-team-cli.mjs', import.meta.url))
-const RULES = '# Global rules\n\nRULES-SENTINEL: answer plainly and cite files.\n'
-const canContain = containerStarts().ok
 
 let home: string
 let stubs: string
@@ -27,21 +26,42 @@ const approve = (text: string): void => harnessApprove(home, text)
 const stubCodex = (): void => harnessStubCodex(stubs)
 const leftovers = (): string[] => harnessLeftovers(home)
 
-
 const ask = (request: Partial<Parameters<typeof prepareAsk>[0]>) => prepareAsk({ role: 'epic-reviewer', question: 'Is the loop bounded?', ...request }, { environment: env, cwd: home, home })
+const git = (root: string, ...args: string[]): string => execFileSync('git', ['-c', 'user.name=made-up', '-c', 'user.email=made-up@example.test', ...args], { cwd: root, encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: home, GIT_CONFIG_GLOBAL: '/dev/null' } })
 /** A small synthetic project with one commit, made once per test. */
 const projectRoot = (): string => {
   const root = join(home, 'code/app')
   if (existsSync(join(root, '.git'))) return root
   mkdirSync(join(root, 'src'), { recursive: true })
   writeFileSync(join(root, 'src/a.ts'), 'export const a = 1\n')
-  const git = (...args: string[]): string => execFileSync('git', ['-c', 'user.name=made-up', '-c', 'user.email=made-up@example.test', ...args], { cwd: root, encoding: 'utf8' })
-  git('init', '-q', '-b', 'main')
-  git('add', '.')
-  git('commit', '-q', '-m', 'test: one')
+  git(root, 'init', '-q', '-b', 'main')
+  git(root, 'add', '.')
+  git(root, 'commit', '-q', '-m', 'test: one')
   return root
 }
-const projectAsk = () => ask({ access: 'project', project: projectRoot() })
+const projectAsk = (fields: Partial<Parameters<typeof prepareAsk>[0]> = {}) => ask({ project: projectRoot(), ...fields })
+const stateOf = (folder: string): { scope?: { unit: string; cgroup: string }; [key: string]: unknown } => {
+  try {
+    return JSON.parse(readFileSync(join(folder, 'state.json'), 'utf8'))
+  } catch {
+    // Not written yet.
+    return {}
+  }
+}
+/** The cgroup a process is in now, or undefined once it is gone. */
+const cgroupOf = (pid: number): string | undefined => {
+  try {
+    return `/sys/fs/cgroup${readFileSync(`/proc/${pid}/cgroup`, 'utf8').trim().replace(/^0::/u, '')}`
+  } catch {
+    return undefined
+  }
+}
+const rewrite = (folder: string, change: (launch: Record<string, unknown>) => Record<string, unknown>): void => {
+  writeFileSync(join(folder, 'launch.json'), JSON.stringify(change(JSON.parse(readFileSync(join(folder, 'launch.json'), 'utf8')))))
+}
+/** A start that only writes the launch: the test starts the supervisor itself, after changing what it reads. */
+const noStart = () => ({ pid: 1, start: '1' })
+
 beforeEach(() => {
   ({ home, stubs, env } = teamAskHome('bmn-team-run-'))
 })
@@ -52,65 +72,98 @@ afterEach(async () => {
   if (process.env.BMN_TEST_KEEP_HOME === undefined) rmSync(home, { recursive: true, force: true })
 })
 
-describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout: 30_000 }, () => {
-  it('answers, attributed from its own first event and turn span, with usage, and its transient state is gone (AC2, AC4)', async () => {
+describe.skipIf(!SCOPES)('an ask run in its app\'s own read-only mode, in a systemd user scope of its own (72.3, 72.9)', { timeout: 30_000 }, () => {
+  it('answers in an empty folder of the run\'s own when there is no project, attributed from its own output, usage counted by its stated basis, in a scope named for the run that is gone at the end (72.9 AC4, AC5)', async () => {
     const prepared = ask({})
     expect(prepared.verdict.verdict).toBe('PASS')
+    expect(prepared.cwd).toBe(join(prepared.folder, 'work'))
+    // Codex's own read-only sandbox in the owner's own home: no container, copy, home or sign-in of BMN's, and nothing of the asker's environment.
+    expect(prepared.argv.slice(0, 2)).toEqual(['/usr/bin/env', '-i'])
+    expect(prepared.argv).toContain(`HOME=${home}`)
+    expect(prepared.argv).toEqual(expect.arrayContaining(['exec', '--sandbox', 'read-only', '-C', prepared.cwd, '--json']))
+    expect(prepared.argv.join(' ')).not.toContain(ENV_SENTINEL)
     const started = startAsk(prepared, { timeLimitMinutes: 2 })
     expect(started.pid).toBeGreaterThan(0)
     const outcome = await waitAsk(prepared.folder, { timeoutMs: 20_000 })
     expect(outcome).toMatchObject({
-      state: 'answered', exit: 0,
+      state: 'answered', exit: 0, subagents: [],
       observed: { session_source: 'thread.started', model: 'gpt-6-astra', model_source: 'turn span', effort: 'medium', effort_source: 'turn span' },
-      usage: { input_tokens: 100, cached_input_tokens: 10, output_tokens: 5, reasoning_tokens: 2, reported_cost: 'unknown', source: 'turn.completed' }
+      usage: { input_tokens: 100, cached_input_tokens: 10, output_tokens: 5, reasoning_tokens: 2, reported_cost: 'unknown', source: 'turn.completed', complete: true, aggregation: expect.stringContaining('each counted once') }
     })
     expect(outcome.observed.session).toMatch(/^[0-9a-f]{8}-0000-7000-8000-000000000000$/)
-    // Inside, the container shows only the run's own places.
-    expect(readFileSync(join(prepared.folder, ASK_RUN_FILES.answer), 'utf8')).toMatch(/^codex answer [0-9a-f]{8} from home inputs work \n$/)
-    expect(existsSync(join(prepared.folder, ASK_RUN_FILES.home))).toBe(false)
-    expect(readdirSync(prepared.folder).sort()).toEqual(['answer.md', 'events.jsonl', 'exit.json', 'inputs', 'launch.json', 'outcome.json', 'question.md', 'receipt.json', 'request.json', 'snapshots', 'state.json', 'stderr.txt', 'tree.json'])
-    // bubblewrap took its arguments from a descriptor: no argument file is left, and the launch says so.
-    expect(JSON.parse(readFileSync(join(prepared.folder, 'launch.json'), 'utf8'))).toMatchObject({ args_fd: true })
+    expect(readFileSync(join(prepared.folder, ASK_RUN_FILES.answer), 'utf8')).toMatch(new RegExp(`^codex answer [0-9a-f]{8} in ${prepared.cwd}\\n$`, 'u'))
+    const state = stateOf(prepared.folder)
+    expect(state.scope).toEqual({ unit: `bmn-ask-${prepared.id}.scope`, cgroup: expect.stringMatching(new RegExp(`/bmn-ask-${prepared.id}\\.scope$`, 'u')) })
+    await settle(() => scopeGone(state.scope?.cgroup))
+    expect(scopeGone(state.scope?.cgroup)).toBe(true)
+    // Codex's last message and the app's status file are transient: gone with the run.
+    expect(readdirSync(prepared.folder).sort()).toEqual(['answer.md', 'events.jsonl', 'exit.json', 'inputs', 'launch.json', 'outcome.json', 'question.md', 'receipt.json', 'request.json', 'snapshots', 'state.json', 'stderr.txt', 'work'])
+    expect(JSON.parse(readFileSync(join(prepared.folder, 'launch.json'), 'utf8'))).toMatchObject({ cwd: prepared.cwd, argv: prepared.argv })
     expect(runState(prepared.folder).state).toBe('ended')
   })
 
-  it('Claude Code: the session from system init, the effort from the pinned command, the reported cost, and the owner\'s rules for a private ask (AC1, AC2)', async () => {
-    mkdirSync(join(home, '.config/bmn/agents'), { recursive: true })
-    writeFileSync(join(home, '.config/bmn/agents/global-rules.md'), RULES)
-    const prepared = ask({ role: 'designer' })
-    expect(readFileSync(join(prepared.folder, ASK_RUN_FILES.rules), 'utf8')).toContain('RULES-SENTINEL')
-    expect(prepared.argv).toContain('--append-system-prompt')
-    expect(prepared.verdict.receipt?.snapshots.rules).toMatch(/^[0-9a-f]{64}$/)
+  it('Claude Code: its read tools from the project, BMN\'s git first on its PATH, the session from system init, the effort from the pinned command, usage from modelUsage; the owner\'s rules stay in his own home (72.9 AC1, AC2)', async () => {
+    const root = projectRoot()
+    const prepared = ask({ role: 'designer', project: root })
+    expect(prepared.cwd).toBe(root)
+    expect(prepared.argv).toEqual(expect.arrayContaining(['--restricted', '--tools', 'Read,Grep,Glob,Bash,WebSearch,Agent', '--permission-mode', 'dontAsk', '--strict-mcp-config']))
+    expect(prepared.argv.find((part) => part.startsWith('PATH='))).toMatch(new RegExp(`^PATH=${prepared.folder}/bin:`, 'u'))
+    expect(existsSync(join(prepared.folder, ASK_RUN_FILES.bin, 'git'))).toBe(true)
+    expect(prepared.verdict.receipt?.snapshots.git).toMatch(/^[0-9a-f]{64}$/u)
+    // Codex and Claude Code read the owner's own rules where they keep them: BMN adds none.
+    expect(existsSync(join(prepared.folder, ASK_RUN_FILES.rules))).toBe(false)
+    expect(prepared.argv).not.toContain('--append-system-prompt')
     startAsk(prepared, { timeLimitMinutes: 2 })
     const outcome = await waitAsk(prepared.folder, { timeoutMs: 20_000 })
     expect(outcome).toMatchObject({
       state: 'answered', observed: { session_source: 'system init', model: 'claude-fable-5-1', effort: 'medium', effort_source: 'pinned command (--effort)' },
-      usage: { input_tokens: 10, cached_input_tokens: 11, output_tokens: 4, reported_cost: 0.0123, billing: 'subscription', source: 'result' }
+      usage: { input_tokens: 10, cached_input_tokens: 11, output_tokens: 4, reported_cost: 0.0123, billing: 'subscription', source: 'result.modelUsage', complete: true }
     })
-    expect(readFileSync(join(prepared.folder, ASK_RUN_FILES.answer), 'utf8')).toContain('rules=yes')
-    // A public ask carries no rules.
-    const open = ask({ role: 'designer', data: 'public' })
-    expect(existsSync(join(open.folder, ASK_RUN_FILES.rules))).toBe(false)
-    expect(open.argv).not.toContain('--append-system-prompt')
-    // Codex gets them as its own AGENTS.md in the run's home, snapshotted.
-    const codex = ask({})
-    expect(readFileSync(join(codex.folder, 'home/codex/AGENTS.md'), 'utf8')).toBe(readFileSync(join(codex.folder, ASK_RUN_FILES.rules), 'utf8'))
-    expect(readFileSync(join(codex.folder, 'snapshots/config/codex/AGENTS.md'), 'utf8')).toContain('RULES-SENTINEL')
+    expect(readFileSync(join(prepared.folder, ASK_RUN_FILES.answer), 'utf8')).toContain(`rules=no in ${root}`)
+    const commit = git(root, 'rev-parse', 'HEAD').trim()
+    expect(outcome.project).toEqual({ root, start: { commit, clean: true, changed: 0, at: expect.any(String) }, end: { commit, clean: true, changed: 0, at: expect.any(String) } })
   })
 
-  it('a model that contradicts the request, a second session or none is "answer not attributed", the answer kept only as evidence (AC2)', async () => {
-    // SUBAGENT: a sub-agent the teammate started, which Codex names only in its own turn span (74.3's extra-tools probe): its work
-    // is never passed on as the teammate's answer, and its usage is not the ask's.
-    for (const [word, problem] of [['MISMATCH', 'the app ran gpt-6-other, not gpt-6-astra'], ['SECOND', 'the run named a second session'], ['SUBAGENT', 'the run named a second session, eeeeeeee'],
-      ['NOSESSION', 'the run named no session in its first event']] as const) {
-      const prepared = ask({ question: `Is the loop bounded? ${word}` })
+  it('a model that contradicts the request, a second session, a thread no rollout names or no session at all is "answer not attributed", the answer kept only as evidence (AC2, 72.9 AC5)', async () => {
+    const cases = [
+      ['epic-reviewer', 'MISMATCH', 'the app ran gpt-6-other, not gpt-6-astra'],
+      ['epic-reviewer', 'SECOND', 'the run named a session BMN cannot identify, ffffffff-0000-7000-8000-000000000000'],
+      ['epic-reviewer', 'STRANGER', `the run named a session BMN cannot identify, ${CODEX_STRANGER}: no rollout names it a sub-agent of the teammate`],
+      ['epic-reviewer', 'NOSESSION', 'the run named no session in its first event'],
+      ['designer', 'SECOND', 'the run named a session BMN cannot identify, ffffffff-0000-4000-8000-000000000000']
+    ] as const
+    for (const [role, word, problem] of cases) {
+      const prepared = ask({ role, question: `Is the loop bounded? ${word}` })
       startAsk(prepared, { timeLimitMinutes: 2 })
       const outcome = await waitAsk(prepared.folder, { timeoutMs: 20_000 })
-      expect(outcome).toMatchObject({ state: 'not-attributed', exit: 17 })
-      expect(outcome.reason).toContain(problem)
+      expect(outcome, `${role} ${word}`).toMatchObject({ state: 'not-attributed', exit: 17 })
+      expect(outcome.reason, `${role} ${word}`).toContain(problem)
       expect(existsSync(join(prepared.folder, ASK_RUN_FILES.answer))).toBe(false)
-      expect(readFileSync(join(prepared.folder, 'diagnostic-answer.md'), 'utf8')).toContain('codex answer')
+      expect(readFileSync(join(prepared.folder, 'diagnostic-answer.md'), 'utf8')).toMatch(/^(codex|claude) answer/u)
     }
+  })
+
+  it('a sub-agent the teammate started is named in the record and counted once: Codex\'s by its own rollout, Claude Code\'s inside the run\'s own total (72.9 AC2, AC5)', async () => {
+    const codex = ask({ question: 'Is the loop bounded? SUBAGENT' })
+    startAsk(codex, { timeLimitMinutes: 2 })
+    const counted = await waitAsk(codex.folder, { timeoutMs: 20_000 })
+    expect(counted).toMatchObject({
+      state: 'answered', exit: 0,
+      usage: { input_tokens: 140, cached_input_tokens: 14, output_tokens: 8, reasoning_tokens: 3, source: 'turn.completed and sub-agent rollouts', complete: true },
+      subagents: [{
+        session: CODEX_CHILD, parent: counted.observed.session, name: 'Ada', role: 'explorer', kind: 'Codex sub-agent', model: 'gpt-6-astra', effort: 'low',
+        usage: { input_tokens: 40, cached_input_tokens: 4, output_tokens: 3, reasoning_tokens: 1 }, record: expect.stringContaining(join(home, '.codex/sessions'))
+      }]
+    })
+    const claude = ask({ role: 'designer', question: 'Is the loop bounded? SUBAGENT' })
+    startAsk(claude, { timeLimitMinutes: 2 })
+    const total = await waitAsk(claude.folder, { timeoutMs: 20_000 })
+    expect(total).toMatchObject({
+      state: 'answered', exit: 0, usage: { input_tokens: 60, cached_input_tokens: 11, output_tokens: 10, reported_cost: 0.0123, source: 'result.modelUsage', complete: true },
+      subagents: [{ session: 'task-1', parent: total.observed.session, name: 'read the tests', role: 'Explore', kind: 'Claude Code sub-agent', model: 'claude-made-up-helper', status: 'completed', own_tokens: 56, usage: 'counted in the run\'s total' }]
+    })
+    // `bmn team asks show` names them too.
+    expect(askJson(codex.folder)).toMatchObject({ subagents: [{ session: CODEX_CHILD, name: 'Ada' }] })
   })
 
   it('two asks started together keep their own sessions, never swapped (AC2)', async () => {
@@ -124,86 +177,66 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
     expect(second.observed.session).toBe(`${hash('Second question?')}-0000-7000-8000-000000000000`)
   })
 
-  it('a failed app is "failed" with its words; Stop and the time limit end the run and leave no process (AC3, AC4)', async () => {
+  it('a failed app is "failed" with its words; the app\'s end, Stop and the time limit end every process it started, also one that left its group and ignores TERM (72.9 AC3, AC6)', async () => {
     const failed = ask({ question: 'Is it bounded? FAIL' })
     startAsk(failed, { timeLimitMinutes: 2 })
     expect(await waitAsk(failed.folder, { timeoutMs: 20_000 })).toMatchObject({ state: 'failed', exit: 1, reason: 'the app ended with code 3' })
-    const stopped = ask({ question: 'Is it bounded? SLEEP' })
+    const stray = ask({ question: 'Is it bounded? STRAY' })
+    startAsk(stray, { timeLimitMinutes: 2 })
+    expect(await waitAsk(stray.folder, { timeoutMs: 20_000 })).toMatchObject({ state: 'answered', exit: 0 })
+    const stopped = ask({ question: 'Is it bounded? STRAY SLEEP' })
     startAsk(stopped, { timeLimitMinutes: 2 })
-    await settle(() => askOutcome(stopped.folder).state === 'running')
+    await settle(() => askOutcome(stopped.folder).state === 'running' && leftovers().some((line) => line.includes('stray of')))
     stopAsk(stopped.folder)
     expect(await waitAsk(stopped.folder, { timeoutMs: 20_000 })).toMatchObject({ state: 'stopped', exit: 16 })
-    const late = ask({ question: 'Is it bounded? SLEEP' })
+    const late = ask({ question: 'Is it bounded? STRAY SLEEP' })
     startAsk(late, { timeLimitMinutes: 0.02 })
     expect(await waitAsk(late.folder, { timeoutMs: 20_000 })).toMatchObject({ state: 'out-of-time', exit: 15 })
     await settle(() => leftovers().length === 0)
     expect(leftovers()).toEqual([])
+    for (const prepared of [failed, stray, stopped, late]) expect(scopeGone(stateOf(prepared.folder).scope?.cgroup)).toBe(true)
   })
 
-  it('the supervisor\'s death ends the container and leaves the run interrupted, never started again (AC3)', async () => {
-    const prepared = ask({ question: 'Is it bounded? SLEEP' })
+  it('the supervisor\'s death ends its scope at once, and whoever looks next finishes the record as interrupted, never started again (72.9 AC6)', async () => {
+    const prepared = ask({ question: 'Is it bounded? STRAY SLEEP' })
     const started = startAsk(prepared, { timeLimitMinutes: 2 })
-    await settle(() => askOutcome(prepared.folder).state === 'running')
+    await settle(() => stateOf(prepared.folder).scope !== undefined && leftovers().some((line) => line.includes('stray of')))
+    const cgroup = stateOf(prepared.folder).scope?.cgroup
     process.kill(started.pid, 'SIGKILL')
-    await settle(() => askOutcome(prepared.folder).state === 'interrupted')
-    expect(askOutcome(prepared.folder)).toMatchObject({ state: 'interrupted', exit: null })
-    // Under load bubblewrap can miss its parent's death in its first instant (it sets --die-with-parent itself, after
-    // it starts): whoever looks at the run next ends what it left, by the identity the supervisor recorded (epic acceptance).
-    recordInterrupted(prepared.folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
-    await settle(() => leftovers().length === 0)
+    // The kernel signals the scope's first process when the supervisor dies; it ends the scope.
+    await settle(() => scopeGone(cgroup) && leftovers().length === 0)
     expect(leftovers()).toEqual([])
-    expect(askOutcome(prepared.folder)).toMatchObject({ state: 'interrupted', exit: 1 })
-    // The same with a container that certainly outlived its supervisor: a process group of its own, named as the run's child.
-    const orphaned = ask({ question: 'Is it bounded? SLEEP' })
-    const left = spawn('/bin/sh', ['-c', `exec /bin/sleep 30 # ${orphaned.folder}`], { detached: true, stdio: 'ignore' })
-    left.unref()
-    await settle(() => processStart(left.pid as number) !== null, 2000)
-    writeFileSync(join(orphaned.folder, 'state.json'), JSON.stringify({ version: 1, state: 'running', supervisor: { pid: 999_999_999, start: '1' }, child: { pid: left.pid, start: processStart(left.pid as number) } }))
-    expect(askOutcome(orphaned.folder).state).toBe('interrupted')
-    recordInterrupted(orphaned.folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
-    await settle(() => processStart(left.pid as number) === null, 3000)
-    expect(processStart(left.pid as number)).toBeNull()
+    expect(scopeGone(cgroup)).toBe(true)
+    expect(askOutcome(prepared.folder)).toMatchObject({ state: 'interrupted', exit: null })
+    recordInterrupted(prepared.folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
+    // The record is finished as any run's: what its output showed, its usage and its basis, and its transient files gone.
+    expect(askOutcome(prepared.folder)).toMatchObject({ state: 'interrupted', exit: 1, reason: expect.stringContaining('its supervisor ended'), observed: expect.any(Object), usage: { complete: false }, subagents: [] })
+    expect(existsSync(join(prepared.folder, 'app-status'))).toBe(false)
   })
 
-  it('a container a dead supervisor left is found by this run\'s home exactly: a run of the same id in another BMN state is never touched (epic review recheck)', async () => {
-    // A container bubblewrap made of a folder bound at the container's home, as BMN's own binds a run's home; nothing named as the run's child.
-    const container = (from: string) => {
-      const started = spawn('/usr/bin/bwrap', ['--tmpfs', '/', '--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
-        '--dir', '/ask', '--bind', from, '/ask/home', '/usr/bin/sleep', '30'], { detached: true, stdio: 'ignore' })
+  it('a scope a dead supervisor left is found by the run\'s own unit: whoever looks next ends it; another run\'s scope is never touched (72.9 AC6)', async () => {
+    const scope = (id: string) => {
+      const started = spawn('/usr/bin/systemd-run', ['--user', '--scope', '--quiet', '--collect', `--unit=bmn-ask-${id}`, '--', '/bin/sh', '-c', `trap '' TERM; sleep 30 # left of ${home}`],
+        { detached: true, stdio: 'ignore', env: { PATH: '/usr/bin:/bin', HOME: home, ...ownSystemd() } })
       started.unref()
       return started
     }
-    // A process's mount of /ask/home, read once: one that ends while the list is read has none (full test:unit run).
-    const askHomeMount = (pid: string): string | undefined => {
-      try {
-        return readFileSync(`/proc/${pid}/mountinfo`, 'utf8').split('\n').find((entry) => entry.split(' ')[4] === '/ask/home')
-      } catch {
-        return undefined
-      }
-    }
-    const sleeping = (from: string) => readdirSync('/proc').filter((pid) => /^\d+$/u.test(pid)).filter((pid) => {
-      const line = askHomeMount(pid)
-      const own = mountIdentity(from)
-      return line !== undefined && own !== null && line.split(' ')[2] === own.device && line.split(' ')[3] === own.folder
-    })
     const orphaned = ask({ question: 'Is it bounded? SLEEP' })
     const id = orphaned.folder.split('/').pop() as string
-    // Another BMN state holding a run of the very same id, its home elsewhere (a copied state, an isolated profile).
-    const elsewhere = join(home, 'other-state/runs', id, 'home')
-    mkdirSync(elsewhere, { recursive: true })
-    const ours = container(join(orphaned.folder, 'home'))
-    const theirs = container(elsewhere)
+    const other = `${id.slice(0, -8)}ffffffff`
+    const ours = scope(id)
+    const theirs = scope(other)
     try {
-      await settle(() => sleeping(join(orphaned.folder, 'home')).length > 0 && sleeping(elsewhere).length > 0, 5000)
-      expect(sleeping(elsewhere).length).toBeGreaterThan(0)
+      await settle(() => cgroupOf(ours.pid as number)?.endsWith(`/bmn-ask-${id}.scope`) === true && cgroupOf(theirs.pid as number)?.endsWith(`/bmn-ask-${other}.scope`) === true, 5000)
+      const [left, kept] = [cgroupOf(ours.pid as number), cgroupOf(theirs.pid as number)]
+      expect(left).toMatch(new RegExp(`/bmn-ask-${id}\\.scope$`, 'u'))
+      // Its state names a supervisor that is gone and no scope: the run's own unit is where it would be.
       writeFileSync(join(orphaned.folder, 'state.json'), JSON.stringify({ version: 1, state: 'running', supervisor: { pid: 999_999_999, start: '1' } }))
       expect(askOutcome(orphaned.folder).state).toBe('interrupted')
       recordInterrupted(orphaned.folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
-      await settle(() => processStart(ours.pid as number) === null, 3000)
-      expect(processStart(ours.pid as number)).toBeNull()
-      // The other state's container goes on.
-      expect(processStart(theirs.pid as number)).not.toBeNull()
-      expect(sleeping(elsewhere).length).toBeGreaterThan(0)
+      await settle(() => scopeGone(left), 3000)
+      expect(scopeGone(left)).toBe(true)
+      expect(scopeGone(kept)).toBe(false)
     } finally {
       for (const started of [ours, theirs]) {
         try {
@@ -230,7 +263,7 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
     expect(outcome.state).toBe('answered')
   })
 
-  it('a team change or a replaced program between the check and the start starts nothing; the owner\'s own configuration changing does not reach the run (AC1)', async () => {
+  it('a team change or a replaced program between the check and the start starts nothing (AC1)', () => {
     const team = ask({})
     approve(EXAMPLE.replace('PROSE-SENTINEL-PREAMBLE', 'PROSE-SENTINEL-PREAMBLE, changed'))
     expect(() => startAsk(team)).toThrow(StartRefusal)
@@ -240,91 +273,37 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
     stubCodex()
     expect(() => startAsk(program)).toThrow(/the app's program changed after the check; nothing started/)
     expect(existsSync(join(program.folder, 'launch.json'))).toBe(false)
-    // The owner's own Codex configuration after the check: the run reads its own, as judged.
-    const own = ask({})
-    writeFileSync(join(home, '.codex/config.toml'), 'model_provider = "elsewhere"\n[model_providers.elsewhere]\nbase_url = "https://elsewhere.example.org/v1"\n')
-    startAsk(own, { timeLimitMinutes: 2 })
-    expect(await waitAsk(own.folder, { timeoutMs: 20_000 })).toMatchObject({ state: 'answered' })
-    expect(JSON.parse(readFileSync(join(own.folder, 'launch.json'), 'utf8')).argv).toEqual(own.argv)
-    expect(readFileSync(join(own.folder, 'snapshots/config/codex/config.toml'), 'utf8')).toBe('')
   })
 
-  it('a command, a prompt or a configuration changed after the check starts nothing, also when the launch is changed before the supervisor reads it (epic review)', async () => {
+  it('a command, a folder, a prompt or BMN\'s git changed after the check starts nothing, also when the launch is changed before the supervisor reads it (epic review)', async () => {
     const argv = ask({})
     argv.argv.push('--extra')
     expect(() => startAsk(argv)).toThrow(/the command is not the one the check judged; nothing started/)
+    const folder = ask({})
+    folder.cwd = home
+    expect(() => startAsk(folder)).toThrow(/the folder the app starts in is not the one the check judged; nothing started/)
     const prompt = ask({})
     writeFileSync(join(prompt.folder, ASK_RUN_FILES.prompt), 'Another question?\n')
     expect(() => startAsk(prompt)).toThrow(/the prompt is not the one the check judged; nothing started/)
-    const config = ask({})
-    writeFileSync(join(config.folder, 'home/codex/config.toml'), 'model_provider = "elsewhere"\n')
-    expect(() => startAsk(config)).toThrow(/the run's codex\/config.toml is not the configuration the check judged; nothing started/)
-    // A Claude Code ask's own /etc/hosts, which keeps its sign-in hosts out of reach, is judged too (epic review R13).
-    const hosts = ask({ role: 'designer' })
-    writeFileSync(join(hosts.folder, ASK_RUN_FILES.snapshots, 'hosts'), '127.0.0.1\tlocalhost\n')
-    expect(() => startAsk(hosts)).toThrow(/the run's \/etc\/hosts is not the one the check judged; nothing started/)
-    for (const prepared of [argv, prompt, config, hosts]) expect(existsSync(join(prepared.folder, 'launch.json'))).toBe(false)
+    const wrapper = projectAsk({ role: 'designer' })
+    writeFileSync(join(wrapper.folder, ASK_RUN_FILES.bin, 'git'), '#!/bin/sh\nexec /usr/bin/git "$@"\n')
+    expect(() => startAsk(wrapper)).toThrow(/BMN's git in the run is not the one the check judged; nothing started/)
+    for (const prepared of [argv, folder, prompt, wrapper]) expect(existsSync(join(prepared.folder, 'launch.json'))).toBe(false)
     // Between the start and the supervisor: the supervisor checks the command and the prompt again.
     const late = ask({})
-    startAsk(late, { timeLimitMinutes: 2, start: () => ({ pid: 1, start: '1' }) })
-    const launch = JSON.parse(readFileSync(join(late.folder, 'launch.json'), 'utf8'))
-    writeFileSync(join(late.folder, 'launch.json'), JSON.stringify({ ...launch, argv: [...launch.argv, '--extra'] }))
+    startAsk(late, { timeLimitMinutes: 2, start: noStart })
+    rewrite(late.folder, (launch) => ({ ...launch, argv: [...(launch.argv as string[]), '--extra'] }))
     expect(startTeamSupervisor(late.folder)).toMatchObject({ pid: expect.any(Number) })
     expect(await waitAsk(late.folder, { timeoutMs: 10_000 })).toMatchObject({ state: 'refused', exit: 10, reason: 'the command changed after the check; nothing started' })
     expect(existsSync(join(late.folder, 'events.jsonl'))).toBe(false)
     const latePrompt = ask({})
-    startAsk(latePrompt, { timeLimitMinutes: 2, start: () => ({ pid: 1, start: '1' }) })
+    startAsk(latePrompt, { timeLimitMinutes: 2, start: noStart })
     writeFileSync(join(latePrompt.folder, ASK_RUN_FILES.prompt), 'Another question?\n')
     startTeamSupervisor(latePrompt.folder)
     expect(await waitAsk(latePrompt.folder, { timeoutMs: 10_000 })).toMatchObject({ state: 'refused', exit: 10, reason: 'the prompt changed after the check; nothing started' })
-    expect(existsSync(join(latePrompt.folder, 'home'))).toBe(false)
   })
 
-  it('a run whose storage grows over its limit is ended and fails: its home, its logs, a short run at its end, a folder over it before the start (epic review)', async () => {
-    // A judged ask with a stand-in app that only writes, its launch given a small storage ceiling (the shipped one is 1 GiB).
-    const run = async (body: string, before: (folder: string) => void = () => undefined): Promise<Record<string, unknown>> => {
-      writeFileSync(join(stubs, 'codex'), `#!/bin/sh\n[ "$1" = --version ] && echo "codex-cli 0.162.1" && exit 0\ncat >/dev/null\n${body}\n`, { mode: 0o755 })
-      const prepared = ask({})
-      expect(prepared.verdict.verdict).toBe('PASS')
-      startAsk(prepared, { timeLimitMinutes: 2, start: () => ({ pid: 1, start: '1' }) })
-      const launch = JSON.parse(readFileSync(join(prepared.folder, 'launch.json'), 'utf8'))
-      writeFileSync(join(prepared.folder, 'launch.json'), JSON.stringify({ ...launch, storage_limit: 1_000_000 }))
-      before(prepared.folder)
-      expect(startTeamSupervisor(prepared.folder)).toMatchObject({ pid: expect.any(Number) })
-      await settle(() => runState(prepared.folder).state === 'ended', 20_000)
-      expect(askOutcome(prepared.folder)).toMatchObject({ state: 'failed', exit: 1, reason: 'the run\'s storage went over 1 GiB' })
-      return JSON.parse(readFileSync(join(prepared.folder, 'exit.json'), 'utf8'))
-    }
-    expect(await run('/usr/bin/head -c 3000000 /dev/zero > /ask/home/big; exec /bin/sleep 20')).toMatchObject({ ended: 'storage', started: true, reason: expect.stringContaining('over 1000000') })
-    // The run's own logs count too: output under the output bound that takes the whole folder over its storage (epic review recheck).
-    expect(await run('/usr/bin/head -c 1500000 /dev/zero; exec /bin/sleep 20')).toMatchObject({ ended: 'storage', started: true })
-    // A short run that ends between two measurements is measured once more at its end.
-    expect(await run('/usr/bin/head -c 1500000 /dev/zero')).toMatchObject({ ended: 'storage', started: true })
-    // A folder over the limit before the start starts nothing.
-    expect(await run('/usr/bin/touch /ask/home/ran', (folder) => writeFileSync(join(folder, 'big'), Buffer.alloc(1_200_000)))).toMatchObject({ ended: 'storage', started: false })
-  })
-
-  it('everything the container binds is the judged copy: the git wrapper, the frozen history, a link or an added configuration file starts nothing (epic review R6)', () => {
-    const root = projectRoot()
-    const cases: Array<[string, (folder: string) => void, RegExp]> = [
-      ['wrapper', (folder) => writeFileSync(join(folder, 'inputs/bin/git'), '#!/bin/sh\nexec /usr/bin/git "$@"\n'), /the run's inputs\/bin\/git is not the one the check judged; nothing started/],
-      ['history', (folder) => appendFileSync(join(folder, 'project/.git/config'), '[core]\n\tfsmonitor = /usr/bin/true\n'), /the run's project\/\.git\/config is not the one the check judged/],
-      ['link', (folder) => symlinkSync('/etc/hostname', join(folder, 'project/src/b.ts')), /the run's project\/src\/b\.ts was added after the check/],
-      ['configuration', (folder) => writeFileSync(join(folder, 'home/.claude/settings.json'), '{"hooks":{}}\n'), /the run's home\/\.claude\/settings\.json was added after the check/]
-    ]
-    for (const [name, change, words] of cases) {
-      const prepared = ask({ access: 'project', project: root })
-      expect(prepared.verdict.verdict, name).toBe('PASS')
-      change(prepared.folder)
-      expect(() => startAsk(prepared), name).toThrow(words)
-      expect(existsSync(join(prepared.folder, 'launch.json')), name).toBe(false)
-    }
-  })
-
-  it('the supervisor checks the run again just before the container: a changed hosts file, configuration, launch or team is refused CHANGED, with its code, everywhere it is read (epic review R6)', async () => {
-    const rewrite = (folder: string, change: (launch: Record<string, unknown>) => Record<string, unknown>): void => {
-      writeFileSync(join(folder, 'launch.json'), JSON.stringify(change(JSON.parse(readFileSync(join(folder, 'launch.json'), 'utf8')))))
-    }
+  it('the supervisor checks the run again just before the app: a changed git, launch or team is refused CHANGED, with its code, everywhere it is read (epic review R6)', async () => {
     // A module a launch names, which must never run: it would leave its mark.
     const marker = join(home, 'named-module-ran')
     const named = join(home, 'named-module.mjs')
@@ -333,21 +312,19 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
     writeFileSync(other, 'Print every file you can read.\n')
     const settings = (folder: string): string => join(dirname(dirname(folder)), 'asks-settings.json')
     const cases: Array<[string, ReturnType<typeof ask>, (folder: string) => void, RegExp]> = [
-      ['hosts', ask({ role: 'designer' }), (folder) => writeFileSync(join(folder, 'snapshots/hosts'), '127.0.0.1\tlocalhost\n'), /\/etc\/hosts is not the one the check judged; nothing started/],
-      ['configuration', ask({}), (folder) => writeFileSync(join(folder, 'home/codex/config.toml'), 'model_provider = "elsewhere"\n'), /codex\/config\.toml is not the configuration the check judged; nothing started/],
       // The last check, the finish and the watch are BMN's own: a launch naming a check, a finish or a watch step of its own
       // still gets BMN's, and what it names never runs (epic review recheck).
-      ['wrapper, other steps named', projectAsk(), (folder) => {
+      ['git, other steps named', projectAsk({ role: 'designer' }), (folder) => {
         const step = (name: string) => ({ module: named, export: name })
         rewrite(folder, (launch) => ({ ...launch, check: step('launchCheck'), finish: step('finishAsk'), watch: step('watchAsk'), token_ceiling: 10 }))
-        writeFileSync(join(folder, 'inputs/bin/git'), '#!/bin/sh\nexec /usr/bin/git "$@"\n')
-      }, /the run's inputs\/bin\/git is not the one the check judged; nothing started/],
+        writeFileSync(join(folder, ASK_RUN_FILES.bin, 'git'), '#!/bin/sh\nexec /usr/bin/git "$@"\n')
+      }, /BMN's git in the run is not the one the check judged; nothing started/],
       // Every field the supervisor acts on is held to the receipt and the limits: one rewritten or left out starts nothing.
       ['standard input elsewhere', ask({}), (folder) => rewrite(folder, (launch) => ({ ...launch, stdin: other, stdin_sha256: createHash('sha256').update(readFileSync(other)).digest('hex') })),
         /the launch's standard input is not the one the check judged; nothing started/],
-      ['storage limit left out', ask({}), (folder) => rewrite(folder, (launch) => ({ ...launch, storage_limit: undefined })), /the launch's storage limit is not within BMN's; nothing started/],
+      ['folder elsewhere', ask({}), (folder) => rewrite(folder, (launch) => ({ ...launch, cwd: home })), /the launch's folder is not the one the check judged; nothing started/],
       ['time limit widened', ask({}), (folder) => rewrite(folder, (launch) => ({ ...launch, deadline: Date.now() + 24 * 60 * 60_000 })), /the launch's time limit is not within BMN's; nothing started/],
-      ['options on the command line', ask({}), (folder) => rewrite(folder, (launch) => ({ ...launch, args_fd: false })), /bubblewrap's options on its command line; nothing started/],
+      ['output limit left out', ask({}), (folder) => rewrite(folder, (launch) => ({ ...launch, output_limit: undefined })), /the launch's output limit is not within BMN's; nothing started/],
       // The owner's token ceiling, set for Claude Code's asks, holds for a launch without it.
       ['token ceiling left out', ask({ role: 'designer' }), (folder) => writeFileSync(settings(folder), '{"token_ceiling": 2500}\n'), /the launch's token ceiling is not within the owner's; nothing started/],
       // Last: a new approval changes the team for every run prepared before it.
@@ -355,7 +332,7 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
     ]
     try {
       for (const [name, prepared, change, words] of cases) {
-        startAsk(prepared, { timeLimitMinutes: 2, start: () => ({ pid: 1, start: '1' }) })
+        startAsk(prepared, { timeLimitMinutes: 2, start: noStart })
         change(prepared.folder)
         startTeamSupervisor(prepared.folder)
         const outcome = await waitAsk(prepared.folder, { timeoutMs: 10_000 })
@@ -370,34 +347,71 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
     }
   })
 
-  it('the export is the allowlist: no sign-in, home, raw error stream, frozen copy or environment value (AC4)', async () => {
-    const root = join(home, 'code/app')
-    mkdirSync(root, { recursive: true })
-    const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=S', '-c', 'user.email=s@example.org', ...args], { cwd: root, env: { PATH: '/usr/bin:/bin', HOME: home, GIT_CONFIG_GLOBAL: '/dev/null' } })
-    git('init', '-q', '-b', 'main')
-    writeFileSync(join(root, 'a.ts'), 'export const a = 1\n')
-    git('add', '.')
-    git('commit', '-q', '-m', 'test: one')
-    const prepared = ask({ role: 'designer', access: 'project', project: realpathSync(root) })
+  it('Stop and the time limit are read again immediately before the app: a run stopped or out of time by then starts nothing (72.9 AC4)', async () => {
+    const stopped = ask({})
+    startAsk(stopped, { timeLimitMinutes: 2, start: noStart })
+    stopAsk(stopped.folder)
+    startTeamSupervisor(stopped.folder)
+    expect(await waitAsk(stopped.folder, { timeoutMs: 10_000 })).toMatchObject({ state: 'stopped', exit: 16 })
+    const late = ask({})
+    startAsk(late, { timeLimitMinutes: 2, start: noStart })
+    rewrite(late.folder, (launch) => ({ ...launch, deadline: Date.now() - 1000 }))
+    startTeamSupervisor(late.folder)
+    expect(await waitAsk(late.folder, { timeoutMs: 10_000 })).toMatchObject({ state: 'out-of-time', exit: 15 })
+    for (const prepared of [stopped, late]) {
+      expect(existsSync(join(prepared.folder, 'events.jsonl'))).toBe(false)
+      expect(JSON.parse(readFileSync(join(prepared.folder, 'exit.json'), 'utf8'))).toMatchObject({ started: false })
+      expect(stateOf(prepared.folder).scope).toBeUndefined()
+    }
+  })
+
+  it('a supervisor that cannot reach a systemd user manager starts nothing of the app and says why (72.9 AC4)', async () => {
+    const prepared = ask({ question: 'Is it bounded? STRAY' })
+    startAsk(prepared, { timeLimitMinutes: 2, start: (folder: string) => startTeamSupervisor(folder, { environment: { HOME: home, PATH: '/usr/bin:/bin' } }) })
+    expect(await waitAsk(prepared.folder, { timeoutMs: 15_000 })).toMatchObject({ state: 'failed', exit: 1, reason: expect.stringContaining('systemd scope could not start') })
+    expect(JSON.parse(readFileSync(join(prepared.folder, 'exit.json'), 'utf8'))).toMatchObject({ started: false })
+    expect(leftovers()).toEqual([])
+  })
+
+  it('a project ask records the commit and whether the tree was clean at the start and at the end (72.9 AC6)', async () => {
+    const root = projectRoot()
+    writeFileSync(join(root, 'notes.txt'), 'made-up notes\n')
+    const prepared = ask({ project: root, question: 'Is it bounded? NAP' })
     startAsk(prepared, { timeLimitMinutes: 2 })
-    await waitAsk(prepared.folder, { timeoutMs: 20_000 })
+    await settle(() => existsSync(join(prepared.folder, ASK_RUN_FILES.projectStart)))
+    // The owner goes on working while the teammate reads.
+    writeFileSync(join(root, 'src/a.ts'), 'export const a = 2\n')
+    const outcome = await waitAsk(prepared.folder, { timeoutMs: 20_000 })
+    const commit = git(root, 'rev-parse', 'HEAD').trim()
+    expect(outcome).toMatchObject({ state: 'answered', project: { root, start: { commit, clean: false, changed: 1 }, end: { commit, clean: false, changed: 2 } } })
+    expect(askJson(prepared.folder)).toMatchObject({ project_state: { root, start: { clean: false }, end: { changed: 2 } } })
+  })
+
+  it('a credential in the answer is masked in the answer, the app\'s output, the export and what is shown, and the record says so; the export is the allowlist (72.9 AC6, AC4)', async () => {
+    const prepared = projectAsk({ role: 'designer', question: 'Is it bounded? CREDANSWER' })
+    startAsk(prepared, { timeLimitMinutes: 2 })
+    const outcome = await waitAsk(prepared.folder, { timeoutMs: 20_000 })
+    expect(outcome).toMatchObject({ state: 'answered', credentials_masked: { answer: ['an OpenAI key'], output: ['an OpenAI key'] } })
+    expect(readFileSync(join(prepared.folder, ASK_RUN_FILES.answer), 'utf8')).toContain('key [credential masked by BMN: an OpenAI key]')
+    expect(readFileSync(join(prepared.folder, 'events.jsonl'), 'utf8')).toContain('[credential masked by BMN: an OpenAI key]')
     const output = join(home, 'export')
     const files = exportAsk(prepared.folder, output)
-    expect(files).toEqual(expect.arrayContaining(['request.json', 'receipt.json', 'outcome.json', 'answer.md', 'events.jsonl', 'launch.json', 'inputs/prompt.md', 'inputs/manifest.json', 'project-manifest.json', 'snapshots/executable.json']))
-    expect(files.some((file) => file.startsWith('home/') || file.startsWith('project/') || file === 'stderr.txt')).toBe(false)
+    expect(files).toEqual(expect.arrayContaining(['request.json', 'receipt.json', 'outcome.json', 'answer.md', 'events.jsonl', 'launch.json', 'inputs/prompt.md', 'inputs/manifest.json', 'project-start.json', 'snapshots/executable.json']))
+    expect(files.some((file) => file.startsWith('bin/') || file === 'stderr.txt')).toBe(false)
     const everything = files.map((file) => readFileSync(join(output, file), 'utf8')).join('\n')
-    expect(everything).not.toContain(SIGN_IN_SENTINEL)
-    expect(everything).not.toContain(ENV_SENTINEL)
+    for (const kept of [SIGN_IN_SENTINEL, ENV_SENTINEL, ANSWER_KEY]) expect(everything).not.toContain(kept)
     const launch = JSON.parse(readFileSync(join(output, 'launch.json'), 'utf8'))
-    expect(launch.argv[launch.argv.indexOf('--setenv') + 2]).toBe('(not exported)')
+    expect(launch.argv.find((part: string) => part.startsWith('HOME='))).toBe('HOME=(not exported)')
+    expect(JSON.stringify(askJson(prepared.folder))).not.toContain(ANSWER_KEY)
+    expect(askJson(prepared.folder)).toMatchObject({ credentials_masked: { answer: ['an OpenAI key'] } })
     expect(() => exportAsk(prepared.folder, output)).toThrow(/already exists/)
   })
 })
 
-describe.skipIf(!canContain)('bmn team ask and bmn team asks (72.3 AC3)', { timeout: 30_000 }, () => {
+describe.skipIf(!SCOPES)('bmn team ask and bmn team asks (72.3 AC3, 72.9 AC4)', { timeout: 30_000 }, () => {
   const BMN = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
-  const bmn = (args: string[], input = ''): Promise<{ code: number | null; stdout: string; stderr: string }> => new Promise((done) => {
-    const child = spawn(process.execPath, [BMN, ...args], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }, cwd: home, stdio: ['pipe', 'pipe', 'pipe'] })
+  const bmn = (args: string[], input = '', environment: Record<string, string> = { HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...ownSystemd() }): Promise<{ code: number | null; stdout: string; stderr: string }> => new Promise((done) => {
+    const child = spawn(process.execPath, [BMN, ...args], { env: environment, cwd: home, stdio: ['pipe', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
@@ -406,30 +420,46 @@ describe.skipIf(!canContain)('bmn team ask and bmn team asks (72.3 AC3)', { time
     child.on('exit', (code) => done({ code, stdout, stderr }))
   })
 
-  it('the answer on standard output, progress on standard error, the run listed, shown and exported', async () => {
+  it('the answer on standard output, progress on standard error with what the teammate\'s mode can read, the run listed, shown and exported', async () => {
     const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question-file', '-'], 'Is the loop bounded?\n')
     expect(asked.code, asked.stderr).toBe(0)
-    expect(asked.stdout).toMatch(/^codex answer [0-9a-f]{8} from home inputs work \n$/)
-    expect(asked.stderr).toMatch(/^bmn: asked astra \(codex gpt-6-astra, medium; chosen by chain\), question access; run (\d{8}T\d{6}-[0-9a-f]{8}), key \d{8}-shell-[0-9a-f]{8}, supervisor \d+\n$/)
+    expect(asked.stdout).toMatch(/^codex answer [0-9a-f]{8} in \S+\/work\n$/u)
+    expect(asked.stderr).toMatch(/^bmn: asked astra \(codex gpt-6-astra, medium; chosen by chain\) in \S+\/work; it can read any file your user can read, .*; run (\d{8}T\d{6}-[0-9a-f]{8}), key \d{8}-shell-[0-9a-f]{8}, supervisor \d+\n$/u)
     const id = /run (\S+),/.exec(asked.stderr)![1]!
     const json = await bmn(['team', 'ask', '--role', 'designer', '--question', 'And the other loop?', '--json'])
-    expect(JSON.parse(json.stdout)).toMatchObject({ version: 1, state: 'answered', exit: 0, role: 'designer', chosen_by: 'chain', access: 'question', data: 'private',
-      teammate: { agent: 'fable', app: 'claude', app_version: '2.1.300', form: 'claude-no-tools', requested: { model: 'claude-fable-5-1', effort: 'medium' }, observed: { session_source: 'system init' } },
-      usage: { reported_cost: 0.0123, billing: 'subscription' } })
+    expect(JSON.parse(json.stdout)).toMatchObject({ version: 1, state: 'answered', exit: 0, role: 'designer', chosen_by: 'chain', data: 'private',
+      teammate: { agent: 'fable', app: 'claude', app_version: '2.1.300', form: 'claude-read-tools', could_read: expect.stringContaining('its working folder only'), works_in: expect.stringMatching(/\/work$/u),
+        requested: { model: 'claude-fable-5-1', effort: 'medium' }, observed: { session_source: 'system init' } },
+      subagents: [], usage: { reported_cost: 0.0123, billing: 'subscription', complete: true } })
     const list = JSON.parse((await bmn(['team', 'asks', '--json'])).stdout)
     expect(list.asks.map((entry: { id: string }) => entry.id)).toContain(id)
-    expect((await bmn(['team', 'asks', 'show', id])).stdout).toContain('epic-reviewer -> astra (codex gpt-6-astra, medium), chosen by chain')
+    const shown = (await bmn(['team', 'asks', 'show', id])).stdout
+    expect(shown).toContain('epic-reviewer -> astra (codex 0.162.1 gpt-6-astra, medium), chosen by chain')
+    expect(shown).toMatch(/^Could read: Codex's read-only sandbox: any file your user can read, .*; worked in \S+\/work$/mu)
     const exported = await bmn(['team', 'asks', 'export', id, '--output', join(home, 'bundle')])
     expect(exported.code).toBe(0)
     expect(existsSync(join(home, 'bundle/answer.md'))).toBe(true)
-    // Usage problems and refusals keep their exit codes.
+    // Usage problems and refusals keep their exit codes; the old --access and --wide-read are refused with the new spelling.
     expect((await bmn(['team', 'ask', '--role', 'epic-reviewer'])).code).toBe(2)
     expect((await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'x', '--agent', 'astra', '--small-work'])).code).toBe(2)
+    for (const [option, words] of [[['--access', 'files'], /--access is gone: .*--project.*--file/u], [['--wide-read'], /--wide-read is gone: .*--project/u]] as const) {
+      const old = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'x', ...option])
+      expect(old.code).toBe(2)
+      expect(old.stderr).toMatch(words)
+    }
     const refused = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'x', '--agent', 'luna', '--json'])
     expect(refused.code).toBe(10)
     expect(JSON.parse(refused.stdout)).toMatchObject({ version: 1, state: 'refused', exit: 10, refusal: { code: 'AGENT_NOT_ELIGIBLE', alternatives: ['astra@medium', 'fable@medium', 'astra@low'] } })
     // A bare `bmn team` is the team, as before.
     expect((await bmn(['team'])).stdout).toContain('astra')
+  })
+
+  it('with no systemd user manager to reach, an ask is refused saying so, and nothing starts (72.9 AC4)', async () => {
+    const refused = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Is it bounded?', '--json'], '', { HOME: home, PATH: `${stubs}:/usr/bin:/bin` })
+    expect(refused.code).toBe(10)
+    expect(JSON.parse(refused.stdout)).toMatchObject({ state: 'refused', refusal: { code: 'SCOPE_UNAVAILABLE', reason: expect.stringContaining('no systemd user manager answered') } })
+    const features = JSON.parse((await bmn(['team', 'ask', '--features', '--json'], '', { HOME: home, PATH: `${stubs}:/usr/bin:/bin` })).stdout)
+    expect(features).toMatchObject({ version: 2, scope: { ok: false, reason: expect.stringContaining('no systemd user manager answered') } })
   })
 })
 
@@ -440,12 +470,13 @@ describe('the outcome of what a run said (epic review)', () => {
   const completed = '{"type":"turn.completed","usage":{}}'
   function run(name: string, events: string[], stderr = '', exit: Record<string, unknown> = { ended: 'done', code: 0 }): string {
     const folder = join(home, name)
-    mkdirSync(join(folder, 'home'), { recursive: true })
+    mkdirSync(folder, { recursive: true })
     writeFileSync(join(folder, 'request.json'), JSON.stringify({ id: name, model: 'gpt-6-astra', effort: 'medium' }))
     writeFileSync(join(folder, 'receipt.json'), JSON.stringify({ harness: 'codex' }))
     writeFileSync(join(folder, 'exit.json'), JSON.stringify({ version: 1, ...exit }))
     writeFileSync(join(folder, 'events.jsonl'), `${events.join('\n')}\n`)
     writeFileSync(join(folder, 'stderr.txt'), stderr)
+    writeFileSync(join(folder, 'app-status'), '0\n')
     return folder
   }
 
@@ -460,7 +491,7 @@ describe('the outcome of what a run said (epic review)', () => {
     expect(askOutcome(join(home, 'exit-code'))).toMatchObject({ state: 'failed', exit: 1, reason: 'the app ended with code 2' })
     finishAsk(run('recovered', [started, '{"type":"error","message":"Reconnecting... 1/5"}', said, completed], span))
     expect(askOutcome(join(home, 'recovered'))).toMatchObject({ state: 'answered', exit: 0 })
-    for (const name of ['no-model', 'failed-after', 'exit-code', 'recovered']) expect(existsSync(join(home, name, 'home'))).toBe(false)
+    for (const name of ['no-model', 'failed-after', 'exit-code', 'recovered']) expect(existsSync(join(home, name, 'app-status'))).toBe(false)
   })
 
   it('a finish that fails still writes an outcome and deletes the transient state; a run ended with no outcome is interrupted, so a wait ends', async () => {
@@ -470,7 +501,7 @@ describe('the outcome of what a run said (epic review)', () => {
     writeFileSync(join(folder, 'answer.md/x'), 'x')
     expect(() => finishAsk(folder)).toThrow()
     expect(askOutcome(folder)).toMatchObject({ state: 'failed', exit: 1, reason: expect.stringContaining('BMN could not finish the run') })
-    expect(existsSync(join(folder, 'home'))).toBe(false)
+    expect(existsSync(join(folder, 'app-status'))).toBe(false)
     const ended = join(home, 'ended')
     mkdirSync(ended)
     writeFileSync(join(ended, 'state.json'), JSON.stringify({ version: 1, state: 'ended' }))
@@ -479,14 +510,18 @@ describe('the outcome of what a run said (epic review)', () => {
   })
 })
 
-describe('reading who answered (72.3 AC2)', () => {
+describe('reading who answered (72.3 AC2, 72.9 AC5)', () => {
   it('what the app does not report is unknown with the reason, never zero', () => {
     const folder = join(home, 'run')
     mkdirSync(folder)
     writeFileSync(join(folder, 'events.jsonl'), '{"type":"thread.started","thread_id":"t-1"}\n{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n')
     const seen = observeAsk(folder, 'codex', { model: 'gpt-6-astra', effort: 'medium' })
     // A model nothing names is unknown, and the answer is then not attributed (epic review): no model, no attribution.
-    expect(seen).toMatchObject({ answer: 'done', observed: { session: 't-1', model: null, model_source: 'unknown: no turn span on standard error' }, usage: { input_tokens: 'unknown', source: 'unknown' }, problems: ['nothing in the run names its model (unknown: no turn span on standard error)'] })
+    expect(seen).toMatchObject({
+      answer: 'done', observed: { session: 't-1', model: null, model_source: 'unknown: no turn span of the teammate on standard error' },
+      usage: { input_tokens: 'unknown', source: 'unknown', complete: false, incomplete_reason: 'the app reported no usage' },
+      problems: ['nothing in the run names its model (unknown: no turn span of the teammate on standard error)']
+    })
   })
 
   it('a usage field the app leaves out stays unknown, in one turn or summed over several (epic pre-review)', () => {
@@ -502,6 +537,22 @@ describe('reading who answered (72.3 AC2)', () => {
     const claude = join(home, 'partial-claude')
     mkdirSync(claude)
     writeFileSync(join(claude, 'events.jsonl'), '{"type":"result","subtype":"success","is_error":false,"result":"done","usage":{"input_tokens":12,"output_tokens":5,"cache_read_input_tokens":3}}\n')
-    expect(observeAsk(claude, 'claude', { model: 'claude-opus-5-5', effort: 'medium' }).usage).toMatchObject({ input_tokens: 'unknown', cached_input_tokens: 3, output_tokens: 5, reasoning_tokens: 'unknown', source: 'result' })
+    expect(observeAsk(claude, 'claude', { model: 'claude-opus-5-5', effort: 'medium' }).usage).toMatchObject({ input_tokens: 'unknown', cached_input_tokens: 3, output_tokens: 5, reasoning_tokens: 'unknown', source: 'result.usage', complete: true })
+  })
+
+  it('a sub-agent whose own usage cannot be read is named, its usage "incomplete", and the run\'s usage says it is incomplete (72.9 AC5)', () => {
+    const folder = join(home, 'child-unread')
+    mkdirSync(folder)
+    const day = new Date()
+    const rollouts = join(home, '.codex/sessions', String(day.getFullYear()), String(day.getMonth() + 1).padStart(2, '0'), String(day.getDate()).padStart(2, '0'))
+    mkdirSync(rollouts, { recursive: true })
+    writeFileSync(join(rollouts, `rollout-made-up-${CODEX_CHILD}.jsonl`), `${JSON.stringify({ type: 'session_meta', payload: { id: CODEX_CHILD, source: { subagent: { thread_spawn: { parent_thread_id: 't-3', agent_nickname: 'Ada' } } } } })}\n`)
+    writeFileSync(join(folder, 'launch.json'), JSON.stringify({ argv: ['/usr/bin/env', '-i', `HOME=${home}`, 'codex'] }))
+    writeFileSync(join(folder, 'events.jsonl'), '{"type":"thread.started","thread_id":"t-3"}\n{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}\n')
+    writeFileSync(join(folder, 'stderr.txt'), `INFO turn{thread.id=t-3 model=gpt-6-astra codex.turn.reasoning_effort=medium}: started\nINFO turn{thread.id=${CODEX_CHILD} model=gpt-6-astra codex.turn.reasoning_effort=low}: started\n`)
+    const seen = observeAsk(folder, 'codex', { model: 'gpt-6-astra', effort: 'medium' }, { startedAt: Date.now() - 1000, endedAt: Date.now() })
+    expect(seen.problems).toEqual([])
+    expect(seen.subagents).toEqual([expect.objectContaining({ session: CODEX_CHILD, name: 'Ada', usage: 'incomplete', usage_reason: 'its rollout holds no token count' })])
+    expect(seen.usage).toMatchObject({ input_tokens: 1, complete: false, incomplete_reason: 'a sub-agent\'s usage could not be read from its rollout' })
   })
 })

@@ -1,14 +1,13 @@
-// MODULE: agents-team-places.mjs - Epic 72: many asks, safely: a key, the request's hash and a capacity place reserved together before an ask starts, runs recovered after a crash and never started again, records kept for their retention, and the PID namespaces of running asks
+// MODULE: agents-team-places.mjs - Epic 72: many asks, safely: a key, the request's hash and a capacity place reserved together before an ask starts, runs recovered after a crash (their scope ended, their record finished) and never started again, and records kept for their retention
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { takeLock } from './agents-research.mjs'
 import { processLives, processStart } from './agents-supervised.mjs'
-import { INSIDE } from './agents-container.mjs'
 import { ASK_RUN_FILES } from './agents-team-forms.mjs'
-import { forgetNamespace } from './agents-team-nested.mjs'
 import { AskRefusal } from './agents-team-resolve.mjs'
-import { RUN_FILES, runState, writeWhole } from './agents-team-supervisor.mjs'
+import { TRANSIENT, finishRun } from './agents-team-run.mjs'
+import { RUN_FILES, endScope, runState, scopeUnit, writeWhole } from './agents-team-supervisor.mjs'
 
 /**
  * An asker may retry: its command, tool call or session can end at any moment, and a retry must
@@ -94,10 +93,10 @@ export function keyScope(asker) {
  */
 export function requestHash(request) {
   const canonical = {
-    version: 1, role: request.role, question_sha256: sha256(request.question ?? ''), agent: request.agent ?? null, effort: request.effort ?? null,
-    small_work: request.smallWork === true, recheck_of: request.recheckOf ?? null, project: request.project ?? null, access: request.access ?? 'question',
+    version: 2, role: request.role, question_sha256: sha256(request.question ?? ''), agent: request.agent ?? null, effort: request.effort ?? null,
+    small_work: request.smallWork === true, recheck_of: request.recheckOf ?? null, project: request.project ?? null,
     files: (request.files ?? []).map((file) => ({ path: file.path, sha256: file.sha256 })), images: (request.images ?? []).map((image) => ({ path: image.path, sha256: image.sha256 })),
-    data: request.data === 'public' ? 'public' : 'private', wide_read: request.wide === true, time_limit_minutes: request.timeLimitMinutes
+    data: request.data === 'public' ? 'public' : 'private', time_limit_minutes: request.timeLimitMinutes
   }
   return sha256(JSON.stringify(canonical))
 }
@@ -122,96 +121,39 @@ export function askSettings(runs) {
 // ---------------------------------------------------------------------------------------------
 // A run's state, recovered
 
-/** A path as a mountinfo line writes it, read back (a space is \040, a backslash \134). */
-const mountPath = (text) => text.replace(/\\([0-7]{3})/gu, (_, octal) => String.fromCharCode(Number.parseInt(octal, 8)))
-
 /**
- * A folder as every mount of it shows it: its filesystem's device and the folder within that
- * filesystem, read from this process's own mounts (the last mount at the longest mount point above
- * it). Null when it cannot be told; then nothing is matched by it.
+ * Ends the scope a dead supervisor left: the wrapper's parent-death signal ends it as the supervisor
+ * dies, and this ends it again, by the cgroup the supervisor recorded or, where it died before it
+ * recorded one, where the owner's systemd puts a scope of that name. Only this very run's scope is
+ * ever killed (agents-team-supervisor.mjs endScope).
  */
-export function mountIdentity(path) {
-  let real
-  let mounts
-  try {
-    real = realpathSync(path)
-    mounts = readFileSync('/proc/self/mountinfo', 'utf8')
-  } catch {
-    return null
-  }
-  let holder = null
-  for (const line of mounts.split('\n')) {
-    const fields = line.split(' ')
-    if (fields.length < 5) continue
-    const point = mountPath(fields[4])
-    const within = point === '/' ? real : real === point ? '' : real.startsWith(`${point}/`) ? real.slice(point.length) : null
-    if (within !== null && (holder === null || point.length >= holder.point.length)) holder = { point, device: fields[2], root: mountPath(fields[3]), within }
-  }
-  if (holder === null) return null
-  return { device: holder.device, folder: holder.root === '/' ? holder.within || '/' : `${holder.root}${holder.within}` }
+function endLeftScope(folder) {
+  const id = basename(folder)
+  const recorded = readJsonOrNull(join(folder, RUN_FILES.state))?.scope?.cgroup
+  if (endScope(recorded, id)) return
+  const uid = process.getuid?.()
+  if (uid !== undefined) endScope(`/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/app.slice/${scopeUnit(id)}.scope`, id)
 }
 
 /**
- * Ends the container a dead supervisor left running. bubblewrap sets --die-with-parent itself, after
- * it starts, so a supervisor killed in that first instant can leave it, or the namespace's own first
- * bubblewrap, running (seen under load, epic acceptance). So: bubblewrap by the identity (pid and
- * start) the supervisor recorded, and its process group; then every process whose mounts show this
- * very run's home folder (its filesystem and its folder in it, exactly) at the container's home: only
- * this run's container binds it there, and its end ends the rest. A run of the same id in another
- * BMN state, its home elsewhere, is never matched.
- */
-function endLeftContainer(folder) {
-  const kill = (target) => {
-    try {
-      process.kill(target, 'SIGKILL')
-    } catch {
-      // Already gone, or not this user's.
-    }
-  }
-  const child = readJsonOrNull(join(folder, RUN_FILES.state))?.child
-  if (child !== null && child !== undefined && processLives(child)) {
-    kill(-child.pid)
-    kill(child.pid)
-  }
-  const own = mountIdentity(join(folder, ASK_RUN_FILES.home))
-  if (own === null) return
-  let pids
-  try {
-    pids = readdirSync('/proc').filter((name) => /^\d+$/u.test(name))
-  } catch {
-    return
-  }
-  for (const pid of pids) {
-    let mounts
-    try {
-      mounts = readFileSync(`/proc/${pid}/mountinfo`, 'utf8')
-    } catch {
-      continue
-    }
-    // A mountinfo line: id, parent, device, the mounted folder (root), where it is mounted, ...
-    const inside = mounts.split('\n').some((line) => {
-      const fields = line.split(' ')
-      return fields.length >= 5 && fields[2] === own.device && mountPath(fields[3]) === own.folder && mountPath(fields[4]) === INSIDE.home
-    })
-    if (inside) kill(Number(pid))
-  }
-}
-
-/**
- * Records a run that ended without its supervisor's finish: whatever its container left running is
- * ended, its outcome says interrupted and why, and its transient state (the app home, the frozen
- * project) is deleted, as on every other outcome. A supervisor that comes later finds the outcome and
- * starts nothing.
+ * Records a run that ended without its supervisor's finish (a crash, or BMN or the computer
+ * restarting): whatever its scope still holds is ended, and its record is finished as `interrupted`
+ * with why, keeping what its output shows of its sessions and usage, and its transient files go, as on
+ * every other outcome. A supervisor that comes later finds the outcome and starts nothing.
  */
 export function recordInterrupted(folder, reason) {
   if (existsSync(join(folder, ASK_RUN_FILES.outcome))) return
-  endLeftContainer(folder)
-  const request = readJsonOrNull(join(folder, ASK_RUN_FILES.request)) ?? {}
-  writeWhole(join(folder, ASK_RUN_FILES.outcome), `${JSON.stringify({ version: 1, id: request.id ?? null, state: 'interrupted', exit: 1, reason, ended_at: new Date().toISOString() }, null, 2)}\n`)
-  for (const part of [ASK_RUN_FILES.home, ASK_RUN_FILES.project]) rmSync(join(folder, part), { recursive: true, force: true })
-  // Its supervisor ended without taking back its container's namespace name: it is taken back here.
-  const namespace = readJsonOrNull(join(folder, RUN_FILES.state))?.container?.pid_namespace
-  if (typeof namespace === 'string') forgetNamespace(dirname(folder), namespace)
+  endLeftScope(folder)
+  try {
+    finishRun(folder, { interrupted: reason })
+  } catch {
+    // What could not be read is no reason to leave the run without an outcome.
+    if (!existsSync(join(folder, ASK_RUN_FILES.outcome))) {
+      const request = readJsonOrNull(join(folder, ASK_RUN_FILES.request)) ?? {}
+      writeWhole(join(folder, ASK_RUN_FILES.outcome), `${JSON.stringify({ version: 1, id: request.id ?? null, state: 'interrupted', exit: 1, reason, ended_at: new Date().toISOString() }, null, 2)}\n`)
+    }
+  }
+  for (const part of TRANSIENT) rmSync(join(folder, part), { recursive: true, force: true })
 }
 
 /**
@@ -390,8 +332,8 @@ export function sweepRuns(runs, now = new Date()) {
     const folder = join(runs, id)
     const ended = endedAt(folder)
     if (ended !== null && now.getTime() - ended > RETENTION_DAYS * DAY_MS) removeRun(runs, id, now)
-    // A run with an outcome holds no transient state: what a crash between its outcome and that deletion left goes now.
-    else if (ended !== null) for (const part of [ASK_RUN_FILES.home, ASK_RUN_FILES.project]) if (existsSync(join(folder, part))) rmSync(join(folder, part), { recursive: true, force: true })
+    // A run with an outcome holds no transient files: what a crash between its outcome and that deletion left goes now.
+    else if (ended !== null) for (const part of TRANSIENT) if (existsSync(join(folder, part))) rmSync(join(folder, part), { recursive: true, force: true })
   }
   let keys
   try {

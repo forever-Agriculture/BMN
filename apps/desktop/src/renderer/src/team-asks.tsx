@@ -1,6 +1,6 @@
-// MODULE: team-asks.tsx - Story 73.1: Preferences › Team › Asks: a read-only record of every ask his agents made on this computer, newest first, with what was readable, who answered, the answer as the teammate's own words, the usage, Stop, Copy, Export and Remove
+// MODULE: team-asks.tsx - Story 73.1: Preferences › Team › Asks: a read-only record of every ask his agents made on this computer, newest first, with what was readable and what the teammate's mode could read (72.9), who answered and its sub-agents, the answer as the teammate's own words, the usage, Stop, Copy, Export and Remove
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import type { TeamAskDetail, TeamAskLine, TeamAskState, TeamAskUsageView, TeamAsksSnapshot } from '@bmn/protocol'
+import type { TeamAskDetail, TeamAskLine, TeamAskProjectState, TeamAskState, TeamAskSubagentView, TeamAskUsageView, TeamAsksSnapshot } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { roleName } from './roster-staging'
 import { displayPath } from './session-presentation'
@@ -25,12 +25,31 @@ export function outcomeWords(state: string): string {
   return ASK_OUTCOME_WORDS[state as TeamAskState] ?? (state.charAt(0).toUpperCase() + state.slice(1).replace(/-/gu, ' '))
 }
 
-/** What the teammate could read, as one phrase: "the question only", "the question and 3 files", "… · public". */
+/** "a", "a and b", "a, b and c". */
+const listWords = (parts: string[]): string => (parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`)
+
+/** What the teammate could read, as one phrase: "the question only", "the question and 3 files", "the question, 1 file and its working folder", "… · public". */
 export function readsWords(reads: TeamAskLine['reads'], data: 'public' | 'private'): string {
-  const parts = reads.access === 'project' ? ['the project'] : reads.access === 'files' ? [plural(reads.files, 'file')] : []
-  if (reads.pictures > 0) parts.push(plural(reads.pictures, 'picture'))
-  const words = parts.length === 0 ? 'the question only' : `the question and ${parts.join(' and ')}`
+  const parts = [reads.files > 0 ? plural(reads.files, 'file') : null, reads.pictures > 0 ? plural(reads.pictures, 'picture') : null, reads.reach].filter((part): part is string => part !== null)
+  const words = parts.length === 0 ? 'the question only' : listWords(['the question', ...parts])
   return data === 'public' ? `${words} · public` : words
+}
+
+/** A project's state at one end of an ask: "a1b2c3d4e5f6, clean", "a1b2c3d4e5f6, 2 changes", "not a Git working tree". */
+export function projectStateWords(state: TeamAskProjectState | null): string {
+  if (state === null) return 'not read'
+  if (state.commit === null && state.clean === null) return state.reason ?? 'not a Git working tree'
+  const tree = state.clean === null ? 'its tree unread' : state.clean ? 'clean' : state.changed === null ? 'changed' : plural(state.changed, 'change')
+  return `${state.commit === null ? 'no commit' : state.commit.slice(0, 12)}, ${tree}`
+}
+
+/** One sub-agent: "Check the tests · Codex sub-agent · gpt-5.5 high · 2,410 in · 96 out", or why its usage is not added. */
+export function subagentWords(entry: TeamAskSubagentView): string {
+  const model = [entry.model, entry.effort].filter((part) => part !== null).join(' ')
+  const usage = entry.usage === null ? entry.usageNote
+    : [entry.usage.input === null ? null : `${thousands(entry.usage.input)} in`, entry.usage.output === null ? null : `${thousands(entry.usage.output)} out`].filter((part) => part !== null).join(' · ') || 'usage unknown'
+  const own = entry.ownTokens === null ? null : `${thousands(entry.ownTokens)} tokens of its own`
+  return [entry.name ?? entry.role ?? `session ${entry.session}`, entry.kind, model === '' ? null : model, usage, own].filter((part) => part !== null && part !== '').join(' · ')
 }
 
 /** "48 s", "4 min 12 s", "30 min": a line's short time. */
@@ -72,7 +91,7 @@ export function usageWords(line: Pick<TeamAskLine, 'state' | 'usage'>): string {
   const usage = line.usage
   if (usage === null) return line.state === 'refused' ? 'no usage' : 'usage unknown'
   if (usage.input === null && usage.output === null && usage.reportedCost === null) return `usage unknown · ${billingWords(usage.billing)}`
-  return [usage.input === null ? null : `${thousands(usage.input)} in`, usage.output === null ? null : `${thousands(usage.output)} out`, costWords(usage.reportedCost), billingWords(usage.billing)]
+  return [usage.input === null ? null : `${thousands(usage.input)} in`, usage.output === null ? null : `${thousands(usage.output)} out`, costWords(usage.reportedCost), billingWords(usage.billing), usage.complete === false ? 'incomplete' : null]
     .filter((part) => part !== null).join(' · ')
 }
 
@@ -80,7 +99,8 @@ export function usageWords(line: Pick<TeamAskLine, 'state' | 'usage'>): string {
 export function fullUsageWords(usage: TeamAskUsageView | null): string {
   if (usage === null) return 'not reported'
   const counts: Array<[number | null, string]> = [[usage.input, 'in'], [usage.cached, 'cached'], [usage.output, 'out'], [usage.reasoning, 'reasoning']]
-  return [...counts.filter(([value]) => value !== null).map(([value, word]) => `${thousands(value as number)} ${word}`), costWords(usage.reportedCost), billingWords(usage.billing)].join(' · ')
+  const incomplete = usage.complete === false ? [`incomplete: ${usage.incompleteReason ?? 'not every usage record was read'}`] : []
+  return [...counts.filter(([value]) => value !== null).map(([value, word]) => `${thousands(value as number)} ${word}`), costWords(usage.reportedCost), billingWords(usage.billing), ...incomplete].join(' · ')
 }
 
 /** Bytes as the page says them: "41 KB", "2.8 MB". */
@@ -297,8 +317,26 @@ function AskBody(props: {
         <dd className="wrap">
           {readsWords(line.reads, line.data)}
           {detail.files.map((file) => <span key={file.path}> · <span className="mono">{displayPath(file.path, props.home)}</span> {sizeWords(file.bytes)}</span>)}
-          {detail.project?.root ? <span> · <span className="mono">{displayPath(detail.project.root, props.home)}</span>{detail.project.revision ? ` at ${detail.project.revision.slice(0, 12)}` : ''}{detail.project.files === null ? '' : `, ${thousands(detail.project.files)} files`}</span> : null}
         </dd>
+        {line.reads.words !== null || line.reads.folder !== null ? (
+          <>
+            <dt>Its mode</dt>
+            <dd className="wrap">
+              {line.reads.words ?? 'not recorded'}
+              {line.reads.folder !== null ? <span> · worked in <span className="mono">{displayPath(line.reads.folder, props.home)}</span></span> : null}
+            </dd>
+          </>
+        ) : null}
+        {detail.project?.root ? (
+          <>
+            <dt>Project</dt>
+            <dd className="wrap">
+              <span className="mono">{displayPath(detail.project.root, props.home)}</span>
+              {` · at the start ${projectStateWords(detail.project.start)}`}
+              {going ? '' : ` · at the end ${projectStateWords(detail.project.end)}`}
+            </dd>
+          </>
+        ) : null}
         {detail.pictures.length > 0 ? (
           <>
             <dt>Pictures</dt>
@@ -311,6 +349,16 @@ function AskBody(props: {
         ) : null}
         <dt>Teammate</dt>
         <dd className="wrap">{[name, appWords, session].filter((part) => part !== null && part !== '').join(' · ')}</dd>
+        {detail.subagents.length > 0 ? (
+          <>
+            <dt>Sub-agents</dt>
+            <dd className="wrap">
+              <ul className="plain-lines" aria-label="Sub-agents it started">
+                {detail.subagents.map((entry) => <li key={entry.session}>{subagentWords(entry)}</li>)}
+              </ul>
+            </dd>
+          </>
+        ) : null}
       </dl>
       {detail.answer !== null ? (
         <>
@@ -319,9 +367,16 @@ function AskBody(props: {
         </>
       ) : going ? <p className="muted">{`${name} is answering. The answer shows here when the ask ends.`}</p>
         : line.reason ? <p>{outcomeWords(line.state)}: {line.reason}</p> : <p className="muted">No answer was kept.</p>}
+      {detail.masked.length > 0 ? <p className="preferences-help">{`BMN masked what looked like ${listWords(detail.masked)} in the answer and the app's output, here, in the record and in an export.`}</p> : null}
       <dl className="kv ask-facts">
         <dt>Usage</dt>
         <dd className="wrap">{going ? 'usage at the end' : fullUsageWords(line.usage)}</dd>
+        {!going && line.usage?.basis ? (
+          <>
+            <dt>Counted</dt>
+            <dd className="wrap">{line.usage.basis}</dd>
+          </>
+        ) : null}
         <dt>Took</dt>
         <dd className="wrap">
           {took === null ? 'never started' : `${longTook(took)}${line.timeLimitMinutes === null ? '' : ` of ${plural(line.timeLimitMinutes, 'minute')}`}`}

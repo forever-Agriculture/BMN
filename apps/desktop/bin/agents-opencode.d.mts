@@ -26,3 +26,7 @@ type Environment = NodeJS.ProcessEnv | Record<string, string>
 export declare function openCodeListsLuna(options?: { environment?: Environment; timeoutMs?: number }): Promise<{ listed: boolean; reason?: string }>
 export declare function openCodeGoSignedIn(options?: { environment?: Environment; base?: string; timeoutMs?: number }): Promise<{ signedIn: boolean | null; reason?: string }>
 export declare function copyOpenCodeGoSignIn(options?: { environment?: Environment; base?: string; timeoutMs?: number }): Promise<{ ok: boolean; copied: boolean; message: string }>
+export declare const OPENCODE_ASK_AGENTS: Readonly<{ reader: string; asker: string; subagent: string }>
+export declare function openCodeAskConfig(kind: 'reader' | 'asker', rules?: string | null): { agent: string; content: string }
+export interface OpenCodeSessionInfo { id: string; parent: string | null; agent: string | null; model: { id: string | null; provider: string | null; variant: string | null }; tokens: Record<string, number | 'unknown'>; reported_cost: number | 'unknown' }
+export declare function openCodeSessionInfo(session: string | null, runBase?: string, options?: { launcher?: string; environment?: Environment; timeoutMs?: number }): { info: OpenCodeSessionInfo; failed?: undefined } | { failed: string; info?: undefined }

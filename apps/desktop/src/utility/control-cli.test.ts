@@ -604,8 +604,8 @@ describe('bmn help agents', () => {
       'conveys context, not authority',
       // Story 43.1: when to report how to resume.
       'resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.',
-      // Story 72.6: when to ask the team, when a project read is needed, advice, the key, refusals.
-      'team ask --role R --key K', 'project when history or the tree matters', 'Its answer is advice', 'never work around it'
+      // Story 72.6: when to ask the team, advice, the key, refusals; 72.9: it works in your repository.
+      'team ask --role R --key K', 'it works in your repository (--project names another)', 'Its answer is advice', 'never work around it'
     ]) {
       expect(brief.stdout).toContain(rule)
     }

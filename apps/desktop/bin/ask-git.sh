@@ -1,14 +1,15 @@
 #!/bin/sh
-# MODULE: ask-git.sh - Epic 72: the `git` a teammate's project ask runs inside its container: only log, show, diff and blame, only options that read the frozen repository, never one that writes a file or reads one outside it
+# MODULE: ask-git.sh - Epic 72: the `git` a teammate's ask runs to read a project's history: only log, show, diff and blame, only options that read, never one that writes a file or reads one outside the project
 #
-# A project ask's teammate reads the project's history with git log, show, diff and blame (R72-NFR2). Its
-# app lets only command lines that start with those words run, but git itself takes options that write a file
-# (--output), read any file the container shows (diff --no-index, blame --contents, -O, --pathspec-from-file,
-# --ignore-revs-file) or run a program (external diff, textconv), and it takes any unique beginning of a long
-# option as the option (--cont= is --contents=). This file stands first on the run's PATH as `git`: it takes the
+# A teammate reads the project's history with git log, show, diff and blame (R72-NFR2). Its app lets only command
+# lines that start with those words run, but git itself takes options that write a file (--output), read any file
+# (diff --no-index, blame --contents, -O, --pathspec-from-file, --ignore-revs-file) or run a program (external
+# diff, textconv), and it takes any unique beginning of a long option as the option (--cont= is --contents=). This
+# file stands first on the run's PATH as `git` for Claude Code and OpenCode's reader (72.9): it takes the
 # subcommand from an allowlist and every option only when it is spelled whole as one of the read-only options
-# below, refusing anything else by name, and runs the system's git with no configuration but the frozen
-# repository's own, which BMN writes.
+# below, refusing anything else by name, and runs the system's git with no system or global configuration, with
+# hooks, fsmonitor, external diff, text conversion and the pager off; the project's own configuration is read as
+# the owner's own git reads it.
 
 refuse() {
   printf 'git (BMN ask): %s is not allowed in a read-only project ask\n' "$1" >&2
