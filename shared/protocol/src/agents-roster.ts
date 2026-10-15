@@ -689,7 +689,7 @@ export type TeamAskAccess = 'question' | 'files' | 'project'
 /** How a run stands: `running` until its outcome, then the contract's outcome word. */
 export type TeamAskState = 'running' | 'answered' | 'failed' | 'refused' | 'out-of-time' | 'stopped' | 'not-attributed' | 'interrupted'
 /** A run's usage as the app reported it; null for a count or cost it did not report. */
-export interface TeamAskUsageView { input: number | null; cached: number | null; output: number | null; reasoning: number | null; cost: number | null; billing: string }
+export interface TeamAskUsageView { input: number | null; cached: number | null; output: number | null; reasoning: number | null; reportedCost: number | null; billing: string }
 /** One ask as Team › Asks lists it, whoever asked. */
 export interface TeamAskLine {
   id: string

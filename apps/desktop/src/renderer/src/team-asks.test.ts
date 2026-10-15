@@ -3,7 +3,7 @@ import type { TeamAskDetail, TeamAskLine, TeamAsksSnapshot } from '@bmn/protocol
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { ASK_OUTCOME_WORDS, TeamAsks, elapsedMs, fullUsageWords, outcomeWords, pictureWords, readsWords, shortTook, sizeWords, usageWords, type TeamAsksProps } from './team-asks'
+import { ASK_OUTCOME_WORDS, TeamAsks, costWords, elapsedMs, fullUsageWords, outcomeWords, pictureWords, readsWords, shortTook, sizeWords, usageWords, type TeamAsksProps } from './team-asks'
 
 const NOW = new Date(2026, 9, 15, 4, 0)
 const at = (hour: number, minute: number, second = 0, day = 15): string => new Date(2026, 9, day, hour, minute, second).toISOString()
@@ -11,12 +11,12 @@ const line = (fields: Partial<TeamAskLine>): TeamAskLine => ({
   id: '20261015T034100-7c2e91ab', question: 'Does the invoice total round the same way in the PDF and the API?', by: { kind: 'session', session: 's-1', app: 'claude' },
   agent: 'astra', agentName: 'Astra', effort: 'medium', role: 'focused-reviewer', project: '/home/made-up/code/shop', data: 'private',
   reads: { access: 'files', files: 2, pictures: 0 }, askedAt: at(3, 41), startedAt: at(3, 41), endedAt: at(3, 43, 4), timeLimitMinutes: 30, state: 'answered',
-  usage: { input: 7817, cached: 2816, output: 33, reasoning: 20, cost: null, billing: 'subscription' }, keptUntil: at(3, 43, 4, 14), ...fields
+  usage: { input: 7817, cached: 2816, output: 33, reasoning: 20, reportedCost: null, billing: 'subscription' }, keptUntil: at(3, 43, 4, 14), ...fields
 })
 const ANSWERED = line({})
 const RUNNING = line({ id: '20261015T035800-0000aaaa', question: 'Is the checkout retry safe when the payment webhook arrives twice?', askedAt: at(3, 58), startedAt: at(3, 55, 48), endedAt: null, state: 'running', usage: null, keptUntil: null, now: at(4, 0), reads: { access: 'files', files: 3, pictures: 0 } })
 const REFUSED = line({ id: '20261015T021200-0000bbbb', question: 'Review the migration plan for the orders table before I run it.', by: { kind: 'shell' }, agent: 'opus', agentName: 'Opus', effort: 'xhigh', role: 'lead', project: '/home/made-up/code/invoices', reads: { access: 'question', files: 0, pictures: 0 }, askedAt: at(2, 12), startedAt: null, endedAt: at(2, 12), state: 'refused', refusalCode: 'CHECK_FAILED', reason: 'the check refused the command: Opus is off since 13 Oct', usage: null })
-const LOST = line({ id: '20261014T230700-0000cccc', question: 'Which tests cover the coupon code path?', by: { kind: 'session', session: 's-9' }, agentName: 'Luna', effort: 'max', role: 'helper', reads: { access: 'question', files: 0, pictures: 0 }, askedAt: at(23, 7, 0, 14), startedAt: at(23, 7, 0, 14), endedAt: at(23, 8, 31, 14), state: 'not-attributed', reason: 'the events named a second session', usage: { input: 3204, cached: null, output: 412, reasoning: null, cost: null, billing: 'subscription' } })
+const LOST = line({ id: '20261014T230700-0000cccc', question: 'Which tests cover the coupon code path?', by: { kind: 'session', session: 's-9' }, agentName: 'Luna', effort: 'max', role: 'helper', reads: { access: 'question', files: 0, pictures: 0 }, askedAt: at(23, 7, 0, 14), startedAt: at(23, 7, 0, 14), endedAt: at(23, 8, 31, 14), state: 'not-attributed', reason: 'the events named a second session', usage: { input: 3204, cached: null, output: 412, reasoning: null, reportedCost: null, billing: 'subscription' } })
 const LATE = line({ id: '20261014T214000-0000dddd', question: 'Summarise the public changelog since 3.2.', by: { kind: 'session', session: 's-1', app: 'opencode' }, agentName: 'Luna (Go)', effort: 'max', role: 'helper', data: 'public', reads: { access: 'question', files: 0, pictures: 0 }, askedAt: at(21, 40, 0, 14), startedAt: at(21, 40, 0, 14), endedAt: at(22, 10, 0, 14), state: 'out-of-time', reason: 'OpenCode was still waiting on its provider', usage: null })
 
 const snapshot = (fields: Partial<TeamAsksSnapshot> = {}): TeamAsksSnapshot => ({ asks: [RUNNING, ANSWERED, REFUSED, LOST, LATE], places: { used: 1, capacity: 4 }, keptDays: 30, ...fields })
@@ -53,7 +53,9 @@ describe('the words of Team › Asks', () => {
     expect(sizeWords(4100)).toBe('4.1 KB')
     expect(sizeWords(2_800_000)).toBe('2.8 MB')
     expect(usageWords(ANSWERED)).toBe('7,817 in · 33 out · cost unknown · subscription')
-    expect(usageWords({ state: 'answered', usage: { input: 9412, cached: 0, output: 188, reasoning: null, cost: 0.0391, billing: 'per_token' } })).toBe('9,412 in · 188 out · $0.0391 · paid per token')
+    expect(usageWords({ state: 'answered', usage: { input: 9412, cached: 0, output: 188, reasoning: null, reportedCost: 0.0391, billing: 'per_token' } })).toBe('9,412 in · 188 out · $0.0391 · paid per token')
+    expect(usageWords({ state: 'answered', usage: { input: 213, cached: 0, output: 13, reasoning: 36, reportedCost: 0.0000458, billing: 'unknown' } })).toBe('213 in · 13 out · under $0.0001 · billing unknown')
+    expect(costWords(0)).toBe('$0.0000')
     expect(usageWords(RUNNING)).toBe('usage at the end')
     expect(usageWords(REFUSED)).toBe('no usage')
     expect(usageWords(LATE)).toBe('usage unknown')

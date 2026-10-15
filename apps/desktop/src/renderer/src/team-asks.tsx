@@ -61,7 +61,9 @@ export function billingWords(billing: string): string {
 }
 
 export function costWords(cost: number | null): string {
-  return cost === null ? 'cost unknown' : `$${cost.toFixed(4)}`
+  if (cost === null) return 'cost unknown'
+  // A real cost too small for four places (an OpenCode Go ask's $0.0000458) is not shown as nothing.
+  return cost > 0 && cost < 0.00005 ? 'under $0.0001' : `$${cost.toFixed(4)}`
 }
 
 /** A line's usage: tokens in and out, the cost the app reported or "cost unknown", and the billing basis. */
@@ -69,8 +71,8 @@ export function usageWords(line: Pick<TeamAskLine, 'state' | 'usage'>): string {
   if (line.state === 'running') return 'usage at the end'
   const usage = line.usage
   if (usage === null) return line.state === 'refused' ? 'no usage' : 'usage unknown'
-  if (usage.input === null && usage.output === null && usage.cost === null) return `usage unknown · ${billingWords(usage.billing)}`
-  return [usage.input === null ? null : `${thousands(usage.input)} in`, usage.output === null ? null : `${thousands(usage.output)} out`, costWords(usage.cost), billingWords(usage.billing)]
+  if (usage.input === null && usage.output === null && usage.reportedCost === null) return `usage unknown · ${billingWords(usage.billing)}`
+  return [usage.input === null ? null : `${thousands(usage.input)} in`, usage.output === null ? null : `${thousands(usage.output)} out`, costWords(usage.reportedCost), billingWords(usage.billing)]
     .filter((part) => part !== null).join(' · ')
 }
 
@@ -78,7 +80,7 @@ export function usageWords(line: Pick<TeamAskLine, 'state' | 'usage'>): string {
 export function fullUsageWords(usage: TeamAskUsageView | null): string {
   if (usage === null) return 'not reported'
   const counts: Array<[number | null, string]> = [[usage.input, 'in'], [usage.cached, 'cached'], [usage.output, 'out'], [usage.reasoning, 'reasoning']]
-  return [...counts.filter(([value]) => value !== null).map(([value, word]) => `${thousands(value as number)} ${word}`), costWords(usage.cost), billingWords(usage.billing)].join(' · ')
+  return [...counts.filter(([value]) => value !== null).map(([value, word]) => `${thousands(value as number)} ${word}`), costWords(usage.reportedCost), billingWords(usage.billing)].join(' · ')
 }
 
 /** Bytes as the page says them: "41 KB", "2.8 MB". */

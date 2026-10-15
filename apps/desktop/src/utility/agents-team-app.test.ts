@@ -72,7 +72,7 @@ describe.skipIf(!canContain)('Team › Asks reads his agents\' asks (73.1)', { t
     const listed = appAsks()
     expect(listed.asks[0]).toMatchObject({
       id: prepared.id, question: 'Is the retry bounded?', by: SESSION, agent: 'astra', agentName: 'Astra', effort: 'medium', role: 'epic-reviewer', data: 'private',
-      reads: { access: 'files', files: 1, pictures: 0 }, state: 'answered', usage: { input: 100, cached: 10, output: 5, reasoning: 2, cost: null }, timeLimitMinutes: 2
+      reads: { access: 'files', files: 1, pictures: 0 }, state: 'answered', usage: { input: 100, cached: 10, output: 5, reasoning: 2, reportedCost: null }, timeLimitMinutes: 2
     })
     const line = listed.asks[0]!
     expect(Date.parse(line.keptUntil!) - Date.parse(line.endedAt!)).toBe(30 * 24 * 60 * 60 * 1000)

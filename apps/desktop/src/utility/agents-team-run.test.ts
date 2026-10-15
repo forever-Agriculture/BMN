@@ -170,17 +170,18 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
       started.unref()
       return started
     }
-    const inside = (pid: number) => {
+    // A process's mount of /ask/home, read once: one that ends while the list is read has none (full test:unit run).
+    const askHomeMount = (pid: string): string | undefined => {
       try {
-        return readFileSync(`/proc/${pid}/mountinfo`, 'utf8').includes(' /ask/home ')
+        return readFileSync(`/proc/${pid}/mountinfo`, 'utf8').split('\n').find((entry) => entry.split(' ')[4] === '/ask/home')
       } catch {
-        return false
+        return undefined
       }
     }
-    const sleeping = (from: string) => readdirSync('/proc').filter((pid) => /^\d+$/u.test(pid) && inside(Number(pid))).filter((pid) => {
-      const line = readFileSync(`/proc/${pid}/mountinfo`, 'utf8').split('\n').find((entry) => entry.split(' ')[4] === '/ask/home')
+    const sleeping = (from: string) => readdirSync('/proc').filter((pid) => /^\d+$/u.test(pid)).filter((pid) => {
+      const line = askHomeMount(pid)
       const own = mountIdentity(from)
-      return own !== null && line?.split(' ')[2] === own.device && line?.split(' ')[3] === own.folder
+      return line !== undefined && own !== null && line.split(' ')[2] === own.device && line.split(' ')[3] === own.folder
     })
     const orphaned = ask({ question: 'Is it bounded? SLEEP' })
     const id = orphaned.folder.split('/').pop() as string

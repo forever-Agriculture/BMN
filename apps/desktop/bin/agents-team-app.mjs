@@ -67,10 +67,10 @@ function questionOf(folder) {
 /** A run's usage as the page shows it: tokens, the cost the app reported or null for unknown, and the billing basis. */
 function usageView(usage, billing) {
   if (usage === null || typeof usage !== 'object') return null
-  const cost = typeof usage.reported_cost === 'number' && Number.isFinite(usage.reported_cost) ? usage.reported_cost : null
+  const reportedCost = typeof usage.reported_cost === 'number' && Number.isFinite(usage.reported_cost) ? usage.reported_cost : null
   return {
     input: count(usage.input_tokens), cached: count(usage.cached_input_tokens), output: count(usage.output_tokens), reasoning: count(usage.reasoning_tokens),
-    cost, billing: text(usage.billing, 32) ?? text(billing, 32) ?? 'unknown'
+    reportedCost, billing: text(usage.billing, 32) ?? text(billing, 32) ?? 'unknown'
   }
 }
 
