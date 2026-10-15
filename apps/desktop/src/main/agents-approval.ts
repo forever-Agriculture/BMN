@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { appendFileSync, chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
 import {
-  ID_PATTERN, RESERVED_SECTIONS, RosterError, SHARED_SECTIONS, agentsDirectory, choiceEnded, outsideYamlBlocks, parseRoster, projectChoiceProblem, rewriteRoster, rosterPath, sha256,
+  ID_PATTERN, RESERVED_SECTIONS, RosterError, SHARED_SECTIONS, agentsDirectory, choiceEnded, outsideYamlBlocks, parseRoster, projectChoiceProblem, resolvedDirectory, rewriteRoster, rosterPath, sha256,
   splitSections, type RosterData
 } from '../../bin/agents-roster.mjs'
 import {
@@ -236,6 +236,8 @@ export function judgeProjectChoices(previous: RosterData | null, next: RosterDat
     const problem = projectChoiceProblem(next, choice)
     if (problem !== null) throw new RosterError('PROJECT_CHOICE_UNAVAILABLE', `the project choice ${choice.id} cannot be kept: ${problem}; nothing was approved`)
     if (choiceEnded(choice, now)) throw new RosterError('PROJECT_CHOICE_UNAVAILABLE', `the project choice ${choice.id} ended on ${choice.ends}; nothing was approved`)
+    // An ask finds its project by its real path, so a choice written through a link would be approved and never apply.
+    if (resolvedDirectory(choice.project) !== choice.project) throw new RosterError('PROJECT_CHOICE_UNAVAILABLE', `the project choice ${choice.id} names its project through a link; a choice counts only for a project's real path, so write that path; nothing was approved`)
   }
 }
 

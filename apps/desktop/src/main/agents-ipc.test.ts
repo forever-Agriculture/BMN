@@ -7,9 +7,9 @@ import { spawn } from 'node:child_process'
 import { createServer, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { LUNA_GO_PROPOSAL } from '@bmn/protocol'
-import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, OpenCodeGoView, JudgeTried, JudgeView, ResearchLookup, ResearchSnapshot, WebQuestionAsked, WebQuestionsSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan, ToolProposalView, ToolsPlan } from '@bmn/protocol'
+import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, OpenCodeGoView, JudgeTried, JudgeView, ResearchLookup, ResearchSnapshot, WebQuestionAsked, WebQuestionsSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan, TeamAskDetail, TeamAsksSnapshot, ToolProposalView, ToolsPlan } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { CODEX_RESEARCH_TOOLS_SEEN, fenceTestsPath, researchFormHash, type FenceTestEntry } from '../../bin/agents-check.mjs'
+import { CODEX_RESEARCH_TOOLS_SEEN, fenceTestsPath, researchFormHash, teamRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import { contextAuto, contextTests, setContextAuto } from '../../bin/agents-context.mjs'
 import { fetchPublicPage } from '../../bin/agents-research.mjs'
 import { judgeProposal } from '../../bin/agents-roster.mjs'
@@ -43,6 +43,8 @@ let ipc: AgentsIpcHandle
 let notices: { title: string; body: string }[]
 /** The addresses handed to the owner's browser. */
 let openedInBrowser: string[]
+/** The folder the owner picks for an ask's export; null as when he cancels. */
+let askExportInto: string | null
 const saved = { HOME: process.env.HOME, PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
 
 function stub(name: string, body: string): void {
@@ -70,6 +72,7 @@ beforeEach(() => {
   researchCompare = null
   notices = []
   openedInBrowser = []
+  askExportInto = null
   openCodeGo = { listed: false, signedIn: true, copy: { ok: true, copied: false, message: 'BMN\'s OpenCode folder already holds your OpenCode Go sign-in' }, calls: [] }
   // BMN's own context testing is off here, as an owner may have it, so no test starts a stand-in app behind another test's back; its own tests switch it on.
   setContextAuto({ enabled: false })
@@ -85,7 +88,7 @@ beforeEach(() => {
       if (researchCompare === null || researchCompare === undefined) throw new Error('no comparison under a provider list is expected here')
       return researchCompare(options)
     },
-    notifyApp: (notice) => { notices.push(notice) }, contextRetryLater: () => {},
+    notifyApp: (notice) => { notices.push(notice) }, contextRetryLater: () => {}, chooseAskExportFolder: async () => askExportInto,
     openCodeGo: {
       lists: async (options) => { openCodeGo.calls.push({ kind: 'lists', home: options?.environment?.HOME }); return { listed: openCodeGo.listed } },
       signedIn: async (options) => { openCodeGo.calls.push({ kind: 'signedIn', home: options?.environment?.HOME }); return { signedIn: openCodeGo.signedIn } },
@@ -1891,5 +1894,51 @@ describe('Luna through OpenCode Go on Team (70.4)', () => {
     expect(saved).toMatchObject({ ok: true })
     expect(saved).not.toHaveProperty('openCodeSignIn')
     expect(kinds('copy')).toHaveLength(1)
+  })
+})
+
+describe('Team › Asks through the app (73.1 AC2, AC3)', () => {
+  const SESSION = { kind: 'session', session: 'session-made-up-1', app: 'claude' } as const
+  /** A run's record written by hand; with no outcome it is still going, as far as the folder says. */
+  const record = (id: string, asked: string, outcome: Record<string, unknown> | null): string => {
+    const folder = join(teamRunsDirectory(), id)
+    mkdirSync(join(folder, 'inputs'), { recursive: true })
+    writeFileSync(join(folder, 'request.json'), JSON.stringify({ id, role: 'epic-reviewer', agent: 'astra', effort: 'medium', access: 'question', data: 'private', asked_by: SESSION, asked_at: asked }))
+    writeFileSync(join(folder, 'question.md'), 'Is the retry bounded?\n')
+    if (outcome !== null) writeFileSync(join(folder, 'outcome.json'), JSON.stringify({ version: 1, id, ...outcome }))
+    return folder
+  }
+  const ENDED = '20261015T090000-0000000a'
+  const GOING = '20261015T091000-0000000b'
+
+  it('lists and opens every ask, stops one still going, exports and removes ended ones, and refuses a bad or gone id in its own words', async () => {
+    const ended = record(ENDED, '2026-10-15T09:00:00.000Z', { state: 'answered', exit: 0, ended_at: '2026-10-15T09:01:00.000Z' })
+    writeFileSync(join(ended, 'answer.md'), 'Bounded at three tries.')
+    const going = record(GOING, '2026-10-15T09:10:00.000Z', null)
+    const loaded = await call<TeamAsksSnapshot>('asks:load')
+    expect(loaded.asks.map((line) => line.id)).toEqual([GOING, ENDED])
+    expect(loaded.asks[1]).toMatchObject({ question: 'Is the retry bounded?', by: SESSION, agent: 'astra', state: 'answered' })
+    expect(await call<TeamAskDetail>('asks:detail', { id: ENDED })).toMatchObject({ answer: 'Bounded at three tries.', line: { id: ENDED } })
+
+    // Stop asks the run's supervisor to end it; an ended ask is left as it is.
+    expect((await call<TeamAsksSnapshot>('asks:stop', { id: GOING })).asks).toHaveLength(2)
+    expect(existsSync(join(going, 'stop'))).toBe(true)
+    await call('asks:stop', { id: ENDED })
+    expect(existsSync(join(ended, 'stop'))).toBe(false)
+
+    // Export goes into the folder he picks, and nothing is written when he cancels.
+    expect(await call('asks:export', { id: ENDED })).toEqual({ output: null, files: 0 })
+    askExportInto = join(home, 'exports')
+    const exported = await call<{ output: string; files: number }>('asks:export', { id: ENDED })
+    expect(exported.output.startsWith(`${askExportInto}/`)).toBe(true)
+    expect(exported.files).toBeGreaterThan(0)
+    expect(readFileSync(join(exported.output, 'answer.md'), 'utf8')).toBe('Bounded at three tries.')
+
+    // A running ask is never removed under its supervisor; removing every ended ask leaves it.
+    await expect(call('asks:remove', { id: GOING })).rejects.toThrow(`ask ${GOING} is still running: stop it first`)
+    expect((await call<TeamAsksSnapshot>('asks:remove', { id: null })).asks.map((line) => line.id)).toEqual([GOING])
+    expect(existsSync(ended)).toBe(false)
+    await expect(call('asks:detail', { id: ENDED })).rejects.toThrow(`no ask ${ENDED} on this computer`)
+    await expect(call('asks:detail', { id: '../roster.md' })).rejects.toThrow('id must be the id of an ask')
   })
 })

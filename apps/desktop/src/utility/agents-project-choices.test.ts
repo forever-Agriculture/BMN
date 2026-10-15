@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { consequences } from '../../bin/agents-check.mjs'
-import { parseRoster, rewriteRoster } from '../../bin/agents-roster.mjs'
+import { parseRoster, projectChoiceProblem, rewriteRoster } from '../../bin/agents-roster.mjs'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { AskRefusal } from '../../bin/agents-team-resolve.mjs'
@@ -151,13 +151,23 @@ describe('the team file\'s ## project-choices (73.2 AC1)', () => {
     ])
     // No folder is printed where the check speaks: the choice is named by its id.
     expect(notes.join('\n')).not.toContain('/synthetic/')
+    // An agent on a retired app answers nothing, whatever the file says of it.
+    const data = parsed.data!
+    const retired = { ...data, agents: data.agents.map((agent) => (agent.id === 'fable' ? { ...agent, harness: 'cursor' as never } : agent)) }
+    expect(projectChoiceProblem(retired, { id: 'a', project: '/synthetic/g', role: 'epic-reviewer', agent: 'fable' })).toBe('fable is retired')
   })
 
   it('a project through a link is noted: a choice counts only for the real folder', () => {
     const real = makeProject('shop')
     symlinkSync(real, join(home, 'shop-link'))
-    const parsed = parseRoster(withChoices(`a: {project: ${join(home, 'shop-link')}, role: epic-reviewer, agent: fable}`))
-    expect(parsed.warnings.map((warning) => warning.code)).toContain('PROJECT_CHOICE_LINK')
+    const text = withChoices(`a: {project: ${join(home, 'shop-link')}, role: epic-reviewer, agent: fable}`)
+    expect(parseRoster(text).warnings.map((warning) => warning.code)).toContain('PROJECT_CHOICE_LINK')
+    // Asks find the project by its real path, so such a choice is never approved to sit there unused.
+    writeFileSync(rosterFile(), text)
+    expect(() => approveRoster(shown(), { checkInspectedRoutes: () => {}, now: () => NOW })).toThrow('the project choice a names its project through a link; a choice counts only for a project\'s real path, so write that path; nothing was approved')
+    expect(readApproved().data.project_choices).toBeUndefined()
+    approve(withChoices(`a: {project: ${real}, role: epic-reviewer, agent: fable}`))
+    expect(readApproved().data.project_choices).toEqual([{ id: 'a', project: real, role: 'epic-reviewer', agent: 'fable' }])
   })
 
   it('a rewrite keeps the section as written while its data holds, and writes the data where it does not', () => {
@@ -287,5 +297,13 @@ describe('`bmn roster role R --project P` (73.2 AC3, AC4)', () => {
     expect(role('epic-reviewer', '--project', shop, '--json').json()).toMatchObject({ project_choice: { state: 'unavailable', reason: 'fable is disabled' } })
     expect(role('epic-reviewer', '--project', shop).stdout).toContain('names fable@medium, which cannot be asked now: fable is disabled; asks for the role there are refused until the owner changes the choice')
     expect(role('epic-reviewer', '--project', join(home, 'missing'), '--json')).toMatchObject({ code: 10 })
+  })
+
+  it('says an ended choice, and that the chain applies', () => {
+    const shop = makeProject('shop')
+    // Approved while it held; by now its end date has passed.
+    approve(withChoices(`shop-review: {project: ${shop}, role: epic-reviewer, agent: fable, ends: 2020-01-02}`), new Date('2020-01-01T09:00:00'))
+    expect(role('epic-reviewer', '--project', shop, '--json').json()).toMatchObject({ project_choice: { id: 'shop-review', state: 'ended', ends: '2020-01-02' } })
+    expect(role('epic-reviewer', '--project', shop).stdout).toContain(`project ${shop}: the owner's choice shop-review (fable) ended on 2020-01-02; the chain applies`)
   })
 })

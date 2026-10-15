@@ -178,6 +178,11 @@ describe('who answers (72.2 AC1)', () => {
     expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer', recheck: earlier }, context({ project: '/synthetic/other' })))).toMatchObject({ code: 'RECHECK_INVALID' })
     expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer', recheck: earlier, agent: 'fable' }, context())).code).toBe('USAGE')
     expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer', recheck: earlier, smallWork: true }, context())).code).toBe('USAGE')
+    // Where the project's approved choice names another teammate, a recheck there is refused too, naming the choice (73.2 AC3: no one-ask override).
+    expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer', recheck: earlier }, context({ projectChoice: () => ({ id: 'shop-review', agent: 'fable', effort: 'medium' }) })))).toMatchObject({
+      code: 'PROJECT_CHOICE_CONFLICT', alternatives: ['fable'], message: 'this project\'s approved choice for epic-reviewer is fable (shop-review); a recheck of run 20261015T010000-0a0b0c0d by astra there needs the owner to change the choice first'
+    })
+    expect(resolveTeammate(data(), { role: 'epic-reviewer', recheck: earlier }, context({ projectChoice: () => ({ id: 'shop-review', agent: 'astra' }) }))).toMatchObject({ agent: { id: 'astra' }, effort: 'low', rule: 'recheck' })
     // A recheck whose teammate cannot answer now is refused, never passed to another.
     expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer', recheck: earlier }, context({ standing: (agent: { id: string }) => (agent.id === 'astra' ? 'cannot answer here: no form' : 'proven') })))).toMatchObject({ code: 'AGENT_NOT_ELIGIBLE', alternatives: ['fable@medium'] })
   })

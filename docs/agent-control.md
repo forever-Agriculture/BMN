@@ -991,14 +991,15 @@ choice per project and role. A choice takes effect like every edit of the team f
 approve it in BMN (Preferences, Team), whose review says who that role's asks in the project would
 reach before and after; no command approves one. The approval refuses a new or changed choice
 whose agent is not active, does not hold the role, is of a class the role refuses or is given an
-effort the role does not allow it, and one that already ended (`PROJECT_CHOICE_UNAVAILABLE`). A
+effort the role does not allow it, one that already ended, and one whose project passes through a
+link (`PROJECT_CHOICE_UNAVAILABLE`). A
 choice picks who answers and grants nothing: what data may reach that agent, its tools and what it
 can read stay the team's.
 
 With an approved choice, `bmn team ask` in that project asks the chosen agent (the run's
 `request.json` says `chosen_by: project-choice` and the choice's id); an agent naming someone else
-there is refused naming the choice (`PROJECT_CHOICE_CONFLICT`), and a different teammate there
-needs you to change the choice first. `bmn roster role <role> --project <path>` says whether a
+there is refused naming the choice (`PROJECT_CHOICE_CONFLICT`), a recheck of an earlier run by
+another teammate included, and a different teammate there needs you to change the choice first. `bmn roster role <role> --project <path>` says whether a
 choice applies there. When the chosen agent is later turned off, retired or taken out of the role,
 the team stays valid: `bmn roster validate` notes it (`PROJECT_CHOICE_UNAVAILABLE`), `bmn roster
 role --project` says the choice cannot be asked and why, and asks there are refused with that
@@ -2282,7 +2283,7 @@ bmn team asks export <id> --output PATH
 | `--agent A` | Ask this teammate; refused with the reason and the eligible alternatives when it is not valid now, never passed over. Where the owner approved a choice for the role in the project, it answers, and naming someone else is refused (`PROJECT_CHOICE_CONFLICT`; "Your teammate for a project"). |
 | `--effort E` | One effort the role's applicable phase allows; several allowed and none given or saved is refused with the list. |
 | `--small-work` | The role's small-work candidate. |
-| `--recheck-of ID` | A recheck of that earlier run: same project and role, its teammate, the role's recheck effort. |
+| `--recheck-of ID` | A recheck of that earlier run: same project and role, its teammate, the role's recheck effort; refused (`PROJECT_CHOICE_CONFLICT`) where the owner's choice for the role there names another teammate. |
 | `--project P` | The project the ask belongs to (default: the asking session's repository root, else none). Naming it grants no reads. |
 | `--access` | What the teammate may read: `question` (default), `files`, `project`. |
 | `--file PATH` | A regular UTF-8 text file the asker can read: its text goes into the prompt with its path and hash (`files`), or joins the frozen copy (`project`). |

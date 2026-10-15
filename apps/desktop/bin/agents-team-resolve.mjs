@@ -4,7 +4,7 @@ import { agentState, classRefusal, initialEfforts, isCalled, parseCandidate, rol
 /**
  * Who answers is decided by rules the asker can predict (R72-FR3, 72.2 AC1), in this order: a valid
  * recheck asks the earlier run's teammate at the role's recheck effort; an approved project choice
- * binds (73.2): asking someone else there needs the owner to change the choice first; a named agent; the role's small-work candidate;
+ * binds (73.2): asking someone else there, a recheck by another teammate included, needs the owner to change the choice first; a named agent; the role's small-work candidate;
  * the chain's first candidate that is active, has a proven form for this access mode and may get
  * this data. A recheck, a project choice or a named agent that is not valid now is refused with the
  * reason and the eligible alternatives, never passed over (R72-NFR7). The result says which rule chose.
@@ -111,6 +111,7 @@ export function resolveTeammate(data, request, context) {
     if (earlier.role !== role.id) refuse('RECHECK_INVALID', `run ${request.recheck.id} was for the role ${earlier.role}, not ${role.id}`)
     if ((earlier.project ?? null) !== (context.project ?? null)) refuse('RECHECK_INVALID', `run ${request.recheck.id} was for ${earlier.project ?? 'no project'}, not ${context.project ?? 'no project'}`)
     if (request.agent !== undefined && request.agent !== earlier.agent) refuse('USAGE', `a recheck of run ${request.recheck.id} asks ${earlier.agent}, its teammate, not ${request.agent}`)
+    if (choice !== null && choice.agent !== earlier.agent) refuse('PROJECT_CHOICE_CONFLICT', `this project's approved choice for ${role.id} is ${choice.agent} (${choice.id}); a recheck of run ${request.recheck.id} by ${earlier.agent} there needs the owner to change the choice first`, [choice.agent])
     return named(earlier.agent, 'recheck', 'recheck')
   }
   if (choice !== null) {
