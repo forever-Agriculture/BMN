@@ -649,6 +649,15 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
     // Only the app's own self-test, started in test mode, serves made-up pages, and only for site names ending in `.test`.
     researchPages: () => (rendererTestMode ? process.env.BMN_SELF_TEST_PAGES ?? null : null),
     judgeTestPort: () => (rendererTestMode ? process.env.BMN_JUDGE_TEST_PORT ?? null : null),
+    // The self-test keeps the owner's HOME, where his approved team is read, and opens Preferences on Team: it asks
+    // no OpenCode, so nothing runs in BMN's OpenCode folder under his real roots (packaged smoke of 2026-10-15).
+    ...(selfTest ? {
+      openCodeGo: {
+        lists: async () => ({ listed: false, reason: 'The self-test asks no OpenCode' }),
+        signedIn: async () => ({ signedIn: null, reason: 'The self-test asks no OpenCode' }),
+        copy: async () => ({ ok: false, copied: false, message: 'The self-test copies no sign-in' })
+      }
+    } : {}),
     // Team › Asks (73.1): the folder he exports an ask into.
     chooseAskExportFolder: async (event) => {
       if (selfTestTaps?.headless) throw new MainIpcError(ERROR_CODES.invalidArgument, 'File dialogs are unavailable in this run')
