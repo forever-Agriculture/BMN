@@ -1858,8 +1858,9 @@ export function consequences(before, after) {
     const current = outcome(after, project, now.role)
     const ends = (choice) => (choice.ends === undefined ? 'with no end date' : `until ${choice.ends}`)
     // The end date is said with the choice it belongs to when that choice decides before and after.
-    if (then.ends !== now.ends && current.reach === chosen(now) && before.reach === chosen(then)) push(`${now.role} asks in one project would reach ${chosen(now)} ${ends(now)} instead of ${ends(then)}`)
-    else push(change(now.role, before, current))
+    if (then.ends !== now.ends && current.reach === chosen(now) && before.reach === chosen(then)) {
+      push(`${now.role} asks in one project would reach ${chosen(now)} ${ends(now)} instead of ${chosen(then) === chosen(now) ? '' : `${chosen(then)} `}${ends(then)}`)
+    } else push(change(now.role, before, current))
   }
   // Who researches (63.3): naming the first researcher closes the offer to every other agent; after that only the named ones change.
   const researched = namedResearchers(prior)

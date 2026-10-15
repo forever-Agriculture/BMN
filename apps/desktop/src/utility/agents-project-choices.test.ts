@@ -216,6 +216,18 @@ describe('approving a choice in the Team view (73.2 AC2)', () => {
     expect(consequences(before, astra)).toContain('epic-reviewer asks in one project would reach Astra at medium instead of Fable')
     expect(consequences(before, ends)).toContain('epic-reviewer asks in one project would reach Fable until 2026-12-31 instead of with no end date')
     expect(consequences(before, parseRoster(EXAMPLE).data!)).toContain('epic-reviewer asks in one project would reach the role\'s chain (Astra first) instead of Fable')
+    // The agent and the end date changed together: both are said, before and after (epic recheck 4).
+    const both = parseRoster(withChoices('a: {project: /synthetic/shop, role: epic-reviewer, agent: astra, effort: medium, ends: 2099-12-31}')).data!
+    expect(consequences(before, both)).toContain('epic-reviewer asks in one project would reach Astra at medium until 2099-12-31 instead of Fable with no end date')
+  })
+
+  it('the Team view\'s preview says a choice whose agent and end date change together with both, before and after (epic recheck 4)', async () => {
+    const shop = makeProject('shop')
+    approve(withChoices(`shop-review: {project: ${shop}, role: epic-reviewer, agent: fable}`))
+    writeFileSync(rosterFile(), withChoices(`shop-review: {project: ${shop}, role: epic-reviewer, agent: astra, effort: medium, ends: 2099-12-31}`))
+    const preview = await previewApproval({ kind: 'sections', scope: ['project-choices'] }, env)
+    expect(preview).toMatchObject({ valid: true, consequences: expect.arrayContaining(['epic-reviewer asks in one project would reach Astra at medium until 2099-12-31 instead of Fable with no end date']) })
+    expect(preview.consequences?.filter((line) => line.startsWith('epic-reviewer asks in one project'))).toHaveLength(1)
   })
 
   it('a new or changed choice is approved only for an agent that can answer it, and one that ended is refused', () => {
