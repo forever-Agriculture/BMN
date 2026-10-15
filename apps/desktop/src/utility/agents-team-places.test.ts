@@ -1,7 +1,7 @@
 // MODULE: agents-team-places.test.ts - Stories 72.4, 72.9: many asks, safely: a key, the request's hash and a capacity place reserved together across processes, crashes on either side of the start, capacity edges, nesting told from an ask's own systemd scope with a cleared environment and forged labels, sessions kept apart, credentials refused before anything starts, retention and the key window, the token ceiling and the features list; BMN's real systemd user scope, stand-in apps, a synthetic team, no provider reached
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
@@ -9,7 +9,7 @@ import { askFeatures, teamAsker } from '../../bin/agents-team-cli.mjs'
 import type { Server } from 'node:net'
 import { ASK_READS } from '../../bin/agents-team-forms.mjs'
 import { nestedAsk, scopeAsk } from '../../bin/agents-team-nested.mjs'
-import { keyDay, keyExpired, keyFresh, keyPath, keyedRun, makeKey, releaseReservation, removeRun, requestHash, reserveAsk, sweepRuns } from '../../bin/agents-team-places.mjs'
+import { keyDay, keyExpired, keyFresh, keyPath, keyedRun, makeKey, recordInterrupted, releaseReservation, removeRun, requestHash, reserveAsk, sweepRuns } from '../../bin/agents-team-places.mjs'
 import { askOutcome, startAsk, stopAsk, waitAsk, watchAsk } from '../../bin/agents-team-run.mjs'
 import { startTeamSupervisor } from '../../bin/agents-team-supervisor.mjs'
 import { SCOPES, TOKEN_MAC, leftovers, ownSystemd, settle, standInControl, stubClaude, stubCodex, teamAskHome } from './test-fixtures/team-ask-harness'
@@ -284,11 +284,33 @@ describe.skipIf(!SCOPES)('refusals, crashes and retries leave nothing behind (ep
     expect(again.code, again.stderr).toBe(0)
     const id = again.stdout.trim()
     await waitAsk(join(runs(), id), { timeoutMs: 20_000 })
-    // A crash between the outcome and the deletion of the transient state: the next reservation's sweep deletes it.
-    for (const name of ['app-status', 'codex-answer.md']) writeFileSync(join(runs(), id, name), 'left behind\n')
+    // A crash between the outcome and the deletion of the transient state, and what a record from before 72.9 held (its
+    // per-run sign-in copy and frozen project): the next reservation's sweep deletes them.
+    for (const name of ['app-status', 'codex-answer.md', 'home/oc/opencode.db', 'project/src/a.ts']) {
+      mkdirSync(dirname(join(runs(), id, name)), { recursive: true })
+      writeFileSync(join(runs(), id, name), 'left behind\n')
+    }
     await reserveAsk(runs(), { scope: 'shell', key: key('sweep'), hash: 'h-sweep', id: '20261015T060000-0000000f' })
-    for (const name of ['app-status', 'codex-answer.md']) expect(existsSync(join(runs(), id, name))).toBe(false)
+    for (const name of ['app-status', 'codex-answer.md', 'home', 'project']) expect(existsSync(join(runs(), id, name))).toBe(false)
     expect(existsSync(join(runs(), id, 'outcome.json'))).toBe(true)
+    expect(existsSync(join(runs(), id, 'answer.md'))).toBe(true)
+  })
+
+  it('an interrupted record from before 72.9 is finished by recovery, once or twice, its sign-in copy and frozen project deleted, another run untouched (72.9 AC6, full review)', () => {
+    const [old, other] = ['20261014T230000-0000000a', '20261014T230000-0000000b'].map((id) => join(runs(), id))
+    for (const folder of [old!, other!]) {
+      for (const name of ['home/oc/opencode.db', 'project/src/a.ts']) {
+        mkdirSync(dirname(join(folder, name)), { recursive: true })
+        writeFileSync(join(folder, name), 'made-up\n')
+      }
+      writeFileSync(join(folder, 'request.json'), JSON.stringify({ version: 1, id: folder.split('/').pop(), role: 'epic-reviewer' }))
+      writeFileSync(join(folder, 'state.json'), JSON.stringify({ version: 1, state: 'running' }))
+    }
+    for (let time = 0; time < 2; time += 1) recordInterrupted(old!, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
+    expect(askOutcome(old!)).toMatchObject({ state: 'interrupted', exit: 1, reason: expect.stringContaining('its supervisor ended') })
+    for (const name of ['home', 'project']) expect(existsSync(join(old!, name))).toBe(false)
+    for (const name of ['home/oc/opencode.db', 'project/src/a.ts', 'state.json']) expect(existsSync(join(other!, name))).toBe(true)
+    expect(existsSync(join(other!, 'outcome.json'))).toBe(false)
   })
 
   it('a retry that follows a key whose first ask is refused before it starts gets a refusal, never a crash (epic review)', async () => {

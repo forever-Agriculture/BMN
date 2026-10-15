@@ -127,7 +127,8 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"claude a
  * session's record, which `session export` prints. Words in the question steer it: SLEEP (waits as on
  * a provider it retries), FAIL (an error event), OTHERMODEL (the session ran another model), SUBAGENT
  * (a task whose child session names the teammate's as its parent), ORPHAN (a child session that
- * names no parent), CREDANSWER, STRAY.
+ * names no parent), NOEXPORT (a child session with no export), TWICE (two events name one child),
+ * CREDANSWER, STRAY.
  */
 export function stubOpenCode(stubs: string, version = '2.0.29'): void {
   writeFileSync(join(stubs, 'opencode'), `#!/bin/sh
@@ -158,10 +159,11 @@ printf '{"type":"step_start","sessionID":"%s","part":{"type":"step-start"}}\\n' 
 case $question in *SLEEP*) sleep 60;; esac
 case $question in *FAIL*) printf '{"type":"error","sessionID":"%s","error":{"type":"provider.auth","message":"made-up sign-in failure"}}\\n' "$sid"; exit 1;; esac
 # A task the teammate started (OpenCode 2.0.29, measured 72.9): its child session has its own export, naming its parent, with its own tokens only.
-case $question in *SUBAGENT*|*ORPHAN*)
+case $question in *SUBAGENT*|*ORPHAN*|*NOEXPORT*|*TWICE*)
   parent=',"parentID":"'"$sid"'"'
   case $question in *ORPHAN*) parent=;; esac
-  printf '{"info":{"id":"%s"%s,"agent":"bmn-reader","title":"read the tests","model":{"id":"%s","providerID":"%s","variant":"low"},"cost":0.001,"tokens":{"input":30,"output":4,"reasoning":1,"cache":{"read":2,"write":0}}}}' "$kid" "$parent" "$mid" "$provider" > "$data/session-$kid.json"
+  case $question in *NOEXPORT*) ;; *) printf '{"info":{"id":"%s"%s,"agent":"bmn-reader","title":"read the tests","model":{"id":"%s","providerID":"%s","variant":"low"},"cost":0.001,"tokens":{"input":30,"output":4,"reasoning":1,"cache":{"read":2,"write":0}}}}' "$kid" "$parent" "$mid" "$provider" > "$data/session-$kid.json";; esac
+  case $question in *TWICE*) printf '{"type":"tool_use","sessionID":"%s","part":{"tool":"subagent","state":{"status":"running","input":{"agent":"bmn-reader","description":"read the tests","prompt":"made-up"},"metadata":{"metadata":{"sessionID":"%s","status":"running"}}}}}\\n' "$sid" "$kid";; esac
   printf '{"type":"tool_use","sessionID":"%s","part":{"tool":"subagent","state":{"status":"completed","input":{"agent":"bmn-reader","description":"read the tests","prompt":"made-up"},"metadata":{"metadata":{"sessionID":"%s","status":"completed"}}}}}\\n' "$sid" "$kid";;
 esac
 printf '{"type":"text","sessionID":"%s","part":{"type":"text","text":"opencode answer %s agent=%s signed=%s rules=%s in %s%s"}}\\n' "$sid" "$id" "$agent" "$signed" "$rules" "$(pwd)" "$key"

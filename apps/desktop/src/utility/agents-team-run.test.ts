@@ -1,5 +1,5 @@
 // MODULE: agents-team-run.test.ts - Stories 72.3, 72.9: an ask started exactly as judged, in its app's own read-only mode and a systemd user scope of its own that Stop, the time limit and the supervisor's death end whole; attributed from its own output with its sub-agents named and counted once, any credential masked, the project's state at both ends, finished into its record and exported by its allowlist; stand-in apps written in sh, a synthetic team, made-up sign-in files; no provider is reached
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -8,7 +8,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ASK_RUN_FILES } from '../../bin/agents-team-forms.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { StartRefusal, askOutcome, exportAsk, finishAsk, observeAsk, startAsk, stopAsk, waitAsk } from '../../bin/agents-team-run.mjs'
-import { runState, startTeamSupervisor } from '../../bin/agents-team-supervisor.mjs'
+import { SCOPE_OPTIONS, SCOPE_WRAPPER, SYSTEMD_RUN, runState, startTeamSupervisor } from '../../bin/agents-team-supervisor.mjs'
+import { appAskExport } from '../../bin/agents-team-app.mjs'
+import { AskRefusal } from '../../bin/agents-team-resolve.mjs'
 import { askJson } from '../../bin/agents-team-cli.mjs'
 import { recordInterrupted } from '../../bin/agents-team-places.mjs'
 import {
@@ -212,6 +214,42 @@ describe.skipIf(!SCOPES)('an ask run in its app\'s own read-only mode, in a syst
     // The record is finished as any run's: what its output showed, its usage and its basis, and its transient files gone.
     expect(askOutcome(prepared.folder)).toMatchObject({ state: 'interrupted', exit: 1, reason: expect.stringContaining('its supervisor ended'), observed: expect.any(Object), usage: { complete: false }, subagents: [] })
     expect(existsSync(join(prepared.folder, 'app-status'))).toBe(false)
+  })
+
+  it('the scope\'s first process starts nothing when the supervisor that started it died before its parent-death signal was set (72.9 AC6, full review)', async () => {
+    const marker = join(home, 'app-started')
+    const status = join(home, 'app-status')
+    // In a scope of its own, as a run's: the outer shell plays the supervisor; it ends before the wrapper starts, and the wrapper's parent is then another process.
+    const inScope = (script: string) => spawnSync(SYSTEMD_RUN, [...SCOPE_OPTIONS, '--', '/bin/sh', '-c', script, 'supervisor', SCOPE_WRAPPER, status, marker],
+      { env: { PATH: '/usr/bin:/bin', ...ownSystemd() }, encoding: 'utf8', timeout: 10_000 })
+    inScope('( sleep 0.3; exec /bin/sh -c "$1" bmn-ask $$ "$2" /usr/bin/touch "$3" ) & exit 0')
+    await new Promise((done) => setTimeout(done, 1500))
+    expect(existsSync(marker)).toBe(false)
+    expect(existsSync(status)).toBe(false)
+    // The same start with the supervisor alive runs the app.
+    inScope('( exec /bin/sh -c "$1" bmn-ask $$ "$2" /usr/bin/touch "$3" ); wait')
+    await settle(() => existsSync(status))
+    expect(existsSync(marker)).toBe(true)
+    expect(readFileSync(status, 'utf8').trim()).toBe('0')
+  })
+
+  it('the app\'s arguments reach it as the check judged them: systemd-run expands none of them (72.9 AC4, consolidated repair)', () => {
+    const said = spawnSync(SYSTEMD_RUN, [...SCOPE_OPTIONS, '--', '/bin/echo', '${HOME}', '$HOME', 'a$HOME', '$$'], { env: { PATH: '/usr/bin:/bin', HOME: home, ...ownSystemd() }, encoding: 'utf8', timeout: 10_000 })
+    expect(said.stdout).toBe('${HOME} $HOME a$HOME $$\n')
+  })
+
+  it('a running ask is not exported, by the command or the app: its output is masked only when it ends (72.9 AC6, full review)', async () => {
+    const prepared = ask({ question: 'Is it bounded? SLEEP' })
+    startAsk(prepared, { timeLimitMinutes: 2 })
+    await settle(() => stateOf(prepared.folder).scope !== undefined)
+    expect(() => exportAsk(prepared.folder, join(home, 'early'))).toThrow(expect.objectContaining({ code: 'RUNNING', message: 'the ask is still running; export it once it has ended' }))
+    const id = prepared.folder.split('/').pop() as string
+    expect(() => appAskExport(id, home)).toThrow(AskRefusal)
+    expect(existsSync(join(home, 'early'))).toBe(false)
+    expect(existsSync(join(home, `bmn-ask-${id}`))).toBe(false)
+    stopAsk(prepared.folder)
+    await waitAsk(prepared.folder, { timeoutMs: 20_000 })
+    expect(exportAsk(prepared.folder, join(home, 'late'))).toEqual(expect.arrayContaining(['events.jsonl', 'outcome.json']))
   })
 
   it('a scope a dead supervisor left is found by the run\'s own unit: whoever looks next ends it; another run\'s scope is never touched (72.9 AC6)', async () => {

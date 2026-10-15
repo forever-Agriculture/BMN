@@ -4,6 +4,7 @@ export declare const KILL_AFTER_MS: number
 export declare const RUN_FILES: Readonly<{ launch: string; state: string; stop: string; events: string; stderr: string; exit: string; status: string }>
 export declare const SYSTEMD_RUN: string
 export declare const SCOPE_WRAPPER: string
+export declare const SCOPE_OPTIONS: readonly string[]
 export declare function writeWhole(path: string, text: string): void
 export declare function scopeEnvironment(environment?: NodeJS.ProcessEnv | Record<string, string>): Record<string, string>
 export declare function scopeUnit(id: string): string

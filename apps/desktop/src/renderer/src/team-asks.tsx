@@ -414,7 +414,7 @@ function AskBody(props: {
       <div className="page-foot">
         <span className="spacer" />
         {detail.answer !== null ? <button type="button" className="small" onClick={() => props.copy(detail.answer ?? '')}>Copy</button> : null}
-        <button type="button" className="small" disabled={props.busy} onClick={props.exportAsk}>Export…</button>
+        <button type="button" className="small" disabled={props.busy || going} title={going ? 'Export once the ask ends' : undefined} onClick={props.exportAsk}>Export…</button>
         <button type="button" className="small" disabled={props.busy || going} title={going ? 'Stop the ask first' : undefined} onClick={props.remove}>Remove</button>
       </div>
     </div>

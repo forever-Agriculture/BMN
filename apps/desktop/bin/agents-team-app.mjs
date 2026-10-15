@@ -8,7 +8,7 @@ import { ASK_READS, ASK_RUN_FILES } from './agents-team-forms.mjs'
 import { LIMITS } from './agents-team-inputs.mjs'
 import { AskRefusal } from './agents-team-resolve.mjs'
 import { RETENTION_DAYS, askSettings, placePath, recordInterrupted, removeRun, runHolds, sweepRuns } from './agents-team-places.mjs'
-import { ANSWER_LIMIT, askOutcome, exportAsk, stopAsk } from './agents-team-run.mjs'
+import { ANSWER_LIMIT, StartRefusal, askOutcome, exportAsk, stopAsk } from './agents-team-run.mjs'
 import { RUN_FILES } from './agents-team-supervisor.mjs'
 import { BROWSER_LIMITS } from './agents-team-browser.mjs'
 
@@ -306,5 +306,11 @@ export function appAskExport(id, into, { runs = teamRunsDirectory() } = {}) {
   const folder = runFolder(runs, id)
   const output = join(into, `bmn-ask-${id}`)
   if (existsSync(output)) throw new AskRefusal('EXISTS', `${output} already exists`)
-  return { output, files: exportAsk(folder, output) }
+  try {
+    return { output, files: exportAsk(folder, output) }
+  } catch (error) {
+    // A running ask is refused as the command refuses it: said to the owner, not an internal error.
+    if (error instanceof StartRefusal) throw new AskRefusal(error.code, error.message)
+    throw error
+  }
 }

@@ -2368,11 +2368,14 @@ options, every shell redirection, a background shell) and every tool not given. 
 ### Supervision: a systemd user scope per ask
 
 The supervisor runs the app in a systemd user scope of its own: `systemd-run --user --scope --unit
-bmn-ask-<run id>`, its first process a small wrapper started with `setpriv --pdeathsig TERM`. Everything
+bmn-ask-<run id> --expand-environment=no` (so the app's arguments reach it as the check judged them:
+systemd-run would otherwise expand `${NAME}` and a lone `$NAME` in them), its first process a small
+wrapper started with `setpriv --pdeathsig TERM`. Everything
 the app starts stays in that cgroup, whether it calls `setsid`, double forks, uses `nohup` or ignores
 TERM. The run is ended by writing the scope's `cgroup.kill`. When the app ends, the wrapper ends what
 it left behind. When the supervisor dies, however it dies, the kernel signals the wrapper and it ends
-the scope. Stop and the time limit send TERM to every process of the scope and write its
+the scope; a supervisor that died before that signal was set never sends it, so the wrapper starts
+nothing unless its parent is still the supervisor that started it. Stop and the time limit send TERM to every process of the scope and write its
 `cgroup.kill` three seconds later. Measured: Stop, the time limit, the supervisor killed or terminated and the run's own end each
 left none of a run's nine processes, and the run beside it untouched (`RESULT-v8.md`, AC3).
 
@@ -2494,8 +2497,10 @@ The answer is the teammate's. Each sub-agent is named in the record, in `asks sh
 Team › Asks, and counted once by its app's basis above. The usage names that basis
 (`usage.aggregation`) and says whether every record was read (`usage.complete`). A sub-agent
 whose usage could not be read leaves the total marked incomplete, with the reason, never a number
-passed off as whole. A session BMN cannot identify, as the teammate or as one of its sub-agents,
-makes the ask "not attributed" (exit 17). Usage reads as observed tokens, reported cost and billing
+passed off as whole. A session BMN cannot identify, as the teammate or as one of its sub-agents (for OpenCode, a child
+whose own export names another parent or none), makes the ask "not attributed" (exit 17); a child
+whose export cannot be read stands, its usage incomplete. A sub-agent named by several events is one
+sub-agent, counted once. Usage reads as observed tokens, reported cost and billing
 basis (subscription, key), each "unknown" where the app does not record it, never zero. A per-ask
 token ceiling (`token_ceiling` in `team/asks-settings.json`, below) applies to Claude Code only, the
 one app that reports usage while a run goes on: its supervisor counts each model call's input, cache
@@ -2526,7 +2531,8 @@ file or picture changed between the command hashing it for the key and reading i
 sent), `PICTURE_UNTREATABLE` (Pictures, above), `CREDENTIAL_FOUND` (names the file and pattern, never
 the value; a value that says it is made up, by a word of six letters or more such as `synthetic`,
 `example` or `placeholder`, is not counted, judged by the value alone, never by a variable's name),
-`PUBLIC_NOT_VERIFIED`, `PRIVATE_NOT_ALLOWED`, `CHANGED` (the approved team, the app's program, the
+`PUBLIC_NOT_VERIFIED`, `PRIVATE_NOT_ALLOWED`, `RUNNING` (`asks export` of an ask still running: its output
+is masked when it ends), `CHANGED` (the approved team, the app's program, the
 command, its folder, the prompt, the inputs or BMN's `git` changed between the check and the start;
 nothing started; found by the supervisor, the outcome and every JSON answer carry it as `refusal:
 {code: "CHANGED", reason}` too), `KEY_REQUIRED`, `KEY_CONFLICT` (same key, different request), `GONE`
@@ -2714,7 +2720,7 @@ question, the files and pictures it was given, what its mode could read and wher
 answered with the session BMN observed, its sub-agents with their own usage, the project's commit and
 state at the start and the end, a browser ask's pages and screenshots, what BMN masked, and the answer as plain text: nothing in it becomes a
 link, a picture or markup, and an answer that could not be attributed is not shown. The owner may Stop
-any running ask (its supervisor records it stopped), Export one as the bundle above, Copy an answer,
+any running ask (its supervisor records it stopped), Export an ended one as the bundle above, Copy an answer,
 and Remove one ended ask or all of them; a running ask is never removed. Records are removed 30 days
 after they end.
 

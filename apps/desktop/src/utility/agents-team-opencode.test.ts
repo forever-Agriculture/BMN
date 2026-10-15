@@ -178,10 +178,24 @@ describe.skipIf(!SCOPES)('an OpenCode teammate\'s ask, run (72.5, 72.9)', { time
     })
     expect(outcome.usage.reported_cost).toBeCloseTo(0.003, 10)
     expect(readFileSync(join(prepared.folder, 'answer.md'), 'utf8')).toContain(`agent=bmn-ask-reader signed=1 rules=yes in ${root}`)
+    // Two events naming one child: one sub-agent, counted once (full review).
+    const twice = ask({ data: undefined, project: root, question: 'Is the loop bounded? TWICE' })
+    startAsk(twice, { timeLimitMinutes: 2 })
+    const counted = await waitAsk(twice.folder, { timeoutMs: 20_000 })
+    expect(counted).toMatchObject({ state: 'answered', usage: { input_tokens: 90, output_tokens: 28, complete: true }, subagents: [{ status: 'completed', usage: { input_tokens: 30 } }] })
+    expect(counted.subagents).toHaveLength(1)
+    expect(counted.usage.reported_cost).toBeCloseTo(0.003, 10)
+    // A child whose export cannot be read stands, its usage incomplete; one whose export names no parent is a session BMN cannot identify (exit 17).
+    const unread = ask({ data: undefined, project: root, question: 'Is the loop bounded? NOEXPORT' })
+    startAsk(unread, { timeLimitMinutes: 2 })
+    expect(await waitAsk(unread.folder, { timeoutMs: 20_000 })).toMatchObject({
+      state: 'answered', exit: 0, usage: { input_tokens: 60, complete: false, incomplete_reason: 'a sub-agent\'s session could not be read' },
+      subagents: [{ kind: 'OpenCode sub-agent', parent: null, usage: 'incomplete', usage_reason: expect.any(String) }]
+    })
     const orphan = ask({ data: undefined, project: root, question: 'Is the loop bounded? ORPHAN' })
     startAsk(orphan, { timeLimitMinutes: 2 })
     expect(await waitAsk(orphan.folder, { timeoutMs: 20_000 })).toMatchObject({
-      state: 'answered', usage: { input_tokens: 60, complete: false, incomplete_reason: 'a sub-agent\'s session could not be read' },
+      state: 'not-attributed', exit: 17, reason: expect.stringContaining('the run named a sub-agent session whose export names no parent'),
       subagents: [{ kind: 'OpenCode sub-agent', parent: null, usage: 'incomplete', usage_reason: 'its session export does not name the teammate as its parent' }]
     })
   })

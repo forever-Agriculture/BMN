@@ -33,8 +33,12 @@ export const ANSWER_LIMIT = 1024 * 1024
 export const OPENCODE_SESSION_INFO = 'session-info.json'
 /** Each final state and its exit code (the contract's "Exit codes"). */
 export const OUTCOME_EXIT = Object.freeze({ answered: 0, failed: 1, interrupted: 1, refused: 10, 'out-of-time': 15, stopped: 16, 'not-attributed': 17 })
-/** A run's own files the outcome no longer needs: deleted on every outcome and by recovery (Codex's last message, read into the record). */
-export const TRANSIENT = Object.freeze([ASK_RUN_FILES.codexAnswer, RUN_FILES.status])
+/**
+ * A run's own files the outcome no longer needs: deleted on every outcome, by recovery and by the
+ * retention sweep (Codex's last message, read into the record). `home` and `project` are a record's
+ * from before 72.9, the per-run sign-in copy and frozen project an interrupted run may have left.
+ */
+export const TRANSIENT = Object.freeze([ASK_RUN_FILES.codexAnswer, RUN_FILES.status, 'home', 'project'])
 
 /** BMN's git, the one a form that reads history runs (72.1 AC1, 72.9 AC1). */
 export const ASK_GIT = fileURLToPath(new URL('./ask-git.sh', import.meta.url))
@@ -500,16 +504,18 @@ export function observeAsk(folder, harness, request, { startedAt = null, endedAt
     // Every event names the session (70.1); the model, its variant and the usage are in the sessions' own records, read after the run (finishAsk).
     if (typeof events[0]?.sessionID === 'string') Object.assign(observed, { session: events[0].sessionID, session_source: 'every event (sessionID)' })
     const sessions = new Set()
-    const started = []
+    // One entry per child session, whatever number of events name it: its usage is counted once (72.9 AC5).
+    const children = new Map()
     for (const event of events) {
       if (typeof event.sessionID === 'string') sessions.add(event.sessionID)
       if (event.type === 'text' && typeof event.part?.text === 'string') answer = event.part.text
       if (event.type === 'error') failure = typeof event.error?.message === 'string' ? `OpenCode reported an error: ${event.error.message.slice(0, 200)}` : `OpenCode reported an error (${event.error?.type ?? 'unknown'})`
       if (event.type === 'tool_use' && ['subagent', 'task'].includes(event.part?.tool)) {
         const child = event.part.state?.metadata?.metadata?.sessionID ?? event.part.state?.metadata?.sessionId ?? null
-        if (typeof child === 'string') started.push({ session: child, name: event.part.state?.input?.description ?? null, role: event.part.state?.input?.agent ?? null, status: event.part.state?.status ?? null })
+        if (typeof child === 'string') children.set(child, { session: child, name: event.part.state?.input?.description ?? null, role: event.part.state?.input?.agent ?? null, status: event.part.state?.status ?? null })
       }
     }
+    const started = [...children.values()]
     const record = readJsonOrNull(join(folder, OPENCODE_SESSION_INFO))
     const info = record?.info
     if (info !== undefined && info !== null && info.id === observed.session) {
@@ -521,9 +527,17 @@ export function observeAsk(folder, harness, request, { startedAt = null, endedAt
       for (const child of started) {
         const found = (record.subagents ?? []).find((entry) => entry.info?.id === child.session || entry.session === child.session)
         const own = found?.info
-        if (own === undefined || own === null || own.parent !== observed.session) {
+        if (own === undefined || own === null) {
+          // Named by the teammate's own event, its export unread: the sub-agent stands, its usage is incomplete.
           complete = false
-          subagents.push({ ...child, parent: own?.parent ?? null, kind: 'OpenCode sub-agent', model: own?.model?.id ?? null, effort: own?.model?.variant ?? null, usage: 'incomplete', usage_reason: found?.failed ?? 'its session export does not name the teammate as its parent' })
+          subagents.push({ ...child, parent: null, kind: 'OpenCode sub-agent', model: null, effort: null, usage: 'incomplete', usage_reason: found?.failed ?? 'its session export could not be read' })
+          continue
+        }
+        if (own.parent !== observed.session) {
+          // Its own export says it is not the teammate's: a session BMN cannot identify (exit 17).
+          complete = false
+          problems.push(`the run named a sub-agent session whose export names ${own.parent === null ? 'no parent' : `another parent, ${own.parent}`}, ${child.session}`)
+          subagents.push({ ...child, parent: own.parent, kind: 'OpenCode sub-agent', model: own.model?.id ?? null, effort: own.model?.variant ?? null, usage: 'incomplete', usage_reason: 'its session export does not name the teammate as its parent' })
           continue
         }
         const childTokens = { input_tokens: own.tokens?.input ?? 'unknown', cached_input_tokens: own.tokens?.cache_read ?? 'unknown', output_tokens: own.tokens?.output ?? 'unknown', reasoning_tokens: own.tokens?.reasoning ?? 'unknown', reported_cost: own.reported_cost ?? 'unknown' }
@@ -783,8 +797,12 @@ function launchWithoutValues(launch) {
   return { ...launch, argv }
 }
 
-/** Copies the allowlisted record of a run into `output`, a folder that must not exist yet. Returns the files written. */
+/**
+ * Copies the allowlisted record of an ended run into `output`, a folder that must not exist yet.
+ * Returns the files written. A running ask is refused: its output is masked only when it ends (72.9 AC6).
+ */
 export function exportAsk(folder, output) {
+  if (!existsSync(join(folder, ASK_RUN_FILES.outcome))) throw new StartRefusal('RUNNING', 'the ask is still running; export it once it has ended')
   if (existsSync(output)) throw new StartRefusal('INPUT_INVALID', `${output} already exists; name a new folder`)
   mkdirSync(dirname(output), { recursive: true })
   mkdirSync(output, { mode: 0o700 })

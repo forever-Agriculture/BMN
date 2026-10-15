@@ -42,16 +42,24 @@ export const RUN_FILES = Object.freeze({
 
 export const SYSTEMD_RUN = '/usr/bin/systemd-run'
 const SETPRIV = '/usr/bin/setpriv'
+/**
+ * systemd-run's options for a run's scope. It would otherwise expand `${NAME}` anywhere and a lone
+ * `$NAME` in the app's arguments (systemd 259, measured 2026-10-15), so the app would not run the
+ * command the check judged.
+ */
+export const SCOPE_OPTIONS = Object.freeze(['--user', '--scope', '--quiet', '--collect', '--expand-environment=no'])
 
 /**
  * The run's first process in its scope (72.9 AC3): the app in the background with the prompt on its
  * standard input (dash gives a background job /dev/null unless it is handed the input on another
  * descriptor), its exit status written, and the whole scope ended when the app ends or when the
  * wrapper is signalled: by Stop, the time limit, or the supervisor's death through its parent-death
- * signal.
+ * signal. It starts nothing when its parent is no longer the supervisor that started it: one that died
+ * before setpriv set that signal would never send it.
  */
-export const SCOPE_WRAPPER = `status=$1
-shift
+export const SCOPE_WRAPPER = `supervisor=$1 status=$2
+shift 2
+[ "$PPID" = "$supervisor" ] || exit 70
 cg=/sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)
 end() { echo 1 > "$cg/cgroup.kill"; }
 trap end TERM HUP INT
@@ -94,7 +102,7 @@ export function scopeUnit(id) {
 export function scopeStarts({ environment = process.env, timeoutMs = 10_000, systemdRun = SYSTEMD_RUN } = {}) {
   if (!existsSync(systemdRun)) return { ok: false, reason: `${systemdRun} is not installed, so BMN cannot give the ask a systemd user scope` }
   if (!existsSync(SETPRIV)) return { ok: false, reason: `${SETPRIV} is not installed` }
-  const result = spawnSync(systemdRun, ['--user', '--scope', '--quiet', '--collect', '--', '/bin/true'], { encoding: 'utf8', timeout: timeoutMs, env: scopeEnvironment(environment) })
+  const result = spawnSync(systemdRun, [...SCOPE_OPTIONS, '--', '/bin/true'], { encoding: 'utf8', timeout: timeoutMs, env: scopeEnvironment(environment) })
   if (result.status === 0) return { ok: true }
   const said = `${result.stderr ?? ''}`.trim().split('\n').pop() || (result.error ? result.error.message : `systemd-run ended with code ${result.status}`)
   return { ok: false, reason: `no systemd user manager answered (${said})` }
@@ -291,8 +299,8 @@ async function supervise(folder) {
   let child
   try {
     // The app runs in its own scope; systemd-run --scope runs it as this process's own child, inside this process's restrictions.
-    child = spawn(SYSTEMD_RUN, ['--user', '--scope', '--quiet', '--collect', `--unit=${scopeUnit(id)}`, '--', SETPRIV, '--pdeathsig', 'TERM', '--',
-      '/bin/sh', '-c', SCOPE_WRAPPER, 'bmn-ask', join(folder, RUN_FILES.status), ...launch.argv],
+    child = spawn(SYSTEMD_RUN, [...SCOPE_OPTIONS, `--unit=${scopeUnit(id)}`, '--', SETPRIV, '--pdeathsig', 'TERM', '--',
+      '/bin/sh', '-c', SCOPE_WRAPPER, 'bmn-ask', String(process.pid), join(folder, RUN_FILES.status), ...launch.argv],
     { cwd: launch.cwd, env: scopeEnvironment(process.env), stdio: [input, output, errors], detached: true })
   } finally {
     closeSync(output)
