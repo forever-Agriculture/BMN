@@ -4,7 +4,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFile
 import { homedir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { APP_NAMES, agentState, projectChoiceFor, publicOnlyReasons } from './agents-roster.mjs'
+import { APP_NAMES, agentState, collisionWords, projectChoiceFor, publicOnlyReasons } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { askConsent, askRequest, evaluateAsk, expectedDestination, harnessVersion, teamRunsDirectory, workspaceRoot, workspaceVisibility, askStandingWords } from './agents-check.mjs'
 import { ASK_ACCESS, ASK_APPS, ASK_RUN_FILES, appSearchPath, askArgv, askProgram, claudePictureMessage, executableIdentity, signInBind } from './agents-team-forms.mjs'
@@ -12,7 +12,7 @@ import { readMaster, render } from './agents-rules.mjs'
 import { openCodeFolders } from './agents-opencode.mjs'
 import { askerOf } from './agents-ask.mjs'
 import { INSIDE } from './agents-container.mjs'
-import { InputRefusal, LIMITS, askProject, checkQuestion, freezeProject, mainWorktree, sha256Of, textFile, workingTreeRoot } from './agents-team-inputs.mjs'
+import { InputRefusal, LIMITS, askProject, canonicalProject, checkQuestion, freezeProject, sha256Of, textFile, workingTreeRoot } from './agents-team-inputs.mjs'
 import { AskRefusal, resolveTeammate } from './agents-team-resolve.mjs'
 import { pictureFile } from './agents-team-pictures.mjs'
 import { TREE_FILE, runTree } from './agents-team-tree.mjs'
@@ -198,11 +198,12 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     }
   }
   const recheck = request.recheckOf === undefined ? undefined : { id: request.recheckOf, run: earlierRun(request.recheckOf, runs) }
-  // The owner's approved choice for the role in this project (73.2): made for the project, or for the repository a linked worktree belongs to; an ended one no longer applies.
+  // The owner's approved choice for the role in this project (73.2): any choice for the project or one of its linked worktrees; an ended one no longer applies.
+  // Two that still apply decide nothing: the role's asks here are refused, before anyone is chosen or anything copied (epic recheck 2).
   const projectChoice = (role) => {
     if (project === null || (data.project_choices ?? []).length === 0) return null
-    const linked = mainWorktree(project)
-    const found = projectChoiceFor(data, linked === null ? [project] : [project, linked], role.id, now)
+    const found = projectChoiceFor(data, canonicalProject(project), role.id, canonicalProject, now)
+    if (found?.collision !== undefined) throw new AskRefusal('PROJECT_CHOICE_COLLISION', `${collisionWords(found.collision)}; asks for ${role.id} here are refused until the owner removes one of them in the team file and approves it in BMN`)
     return found === null || found.ended ? null : found.choice
   }
   const choice = resolveTeammate(data, { role: request.role, agent: request.agent, effort: request.effort, smallWork: request.smallWork === true, recheck },

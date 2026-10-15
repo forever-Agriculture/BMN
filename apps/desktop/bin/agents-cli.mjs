@@ -1,6 +1,6 @@
 // MODULE: agents-cli.mjs - Epic 60: `bmn team`, `bmn roster …` and `bmn rules …`, owner commands that need no control socket
 import { writeSync } from 'node:fs'
-import { RosterError, projectChoiceFor, projectChoiceProblem, roleChain, roleChainText, rosterPath, team, teamLine } from './agents-roster.mjs'
+import { RosterError, collisionWords, projectChoiceCollisions, projectChoiceFor, projectChoiceProblem, roleChain, roleChainText, rosterPath, team, teamLine } from './agents-roster.mjs'
 import { diffLine, listGenerations, machineDiff, readApproved, readApprovedWithFile, readValidRoster } from './agents-state.mjs'
 
 /** Exit codes shared by every Epic 60 command (the epic's shared contract). */
@@ -182,7 +182,27 @@ export async function runRoster(argv) {
   return usage(`roster expects validate, status, role, route, visibility, check, explain, bind or fence, not ${action}`)
 }
 
-function rosterValidate(argv) {
+/**
+ * Two choices for one role in one project, its linked worktrees counted as it (73.2 AC1, epic recheck 2): in the file, an approval
+ * of it would be refused; in the approved team (a folder became a linked worktree after it was approved), that role's asks there are refused.
+ */
+async function choiceCollisionNotes(fileChoices) {
+  const { canonicalProject } = await import('./agents-team-inputs.mjs')
+  const notes = projectChoiceCollisions(fileChoices, canonicalProject).map((group) => ({ code: 'PROJECT_CHOICE_COLLISION', line: null,
+    message: `in the file, ${collisionWords(group)}; one choice per project and role, so approving the file is refused until one is removed` }))
+  let approved = null
+  try {
+    approved = readApproved().data.project_choices
+  } catch (error) {
+    if (!(error instanceof RosterError)) throw error
+  }
+  for (const group of projectChoiceCollisions(approved, canonicalProject, new Date())) {
+    notes.push({ code: 'PROJECT_CHOICE_COLLISION', line: null, message: `in the approved team, ${collisionWords(group)}; asks for ${group.role} there are refused until the owner removes one in the file and approves it` })
+  }
+  return notes
+}
+
+async function rosterValidate(argv) {
   let parsed
   try {
     parsed = readOptions(argv, { flags: ['json'] })
@@ -194,11 +214,12 @@ function rosterValidate(argv) {
   const asJson = parsed.options.json === true
   try {
     const roster = readValidRoster()
+    const warnings = [...roster.warnings, ...await choiceCollisionNotes(roster.data.project_choices)]
     if (asJson) {
-      out(JSON.stringify({ ok: true, file: roster.path, hash: roster.hash, agents: roster.data.agents.length, warnings: roster.warnings }, null, 2))
+      out(JSON.stringify({ ok: true, file: roster.path, hash: roster.hash, agents: roster.data.agents.length, warnings }, null, 2))
     } else {
       const lines = [`${roster.path} is valid: ${roster.data.agents.length} agent${roster.data.agents.length === 1 ? '' : 's'}, ${roster.data.roles.length} role${roster.data.roles.length === 1 ? '' : 's'}.`]
-      for (const warning of roster.warnings) lines.push(`  note, line ${warning.line ?? '?'}: ${warning.code}: ${warning.message}`)
+      for (const warning of warnings) lines.push(`  note, line ${warning.line ?? '?'}: ${warning.code}: ${warning.message}`)
       lines.push('Validation reads the file; nothing in it takes effect until it is approved in BMN Preferences > Team.')
       out(lines.join('\n'))
     }
@@ -345,16 +366,20 @@ export const WEB_QUESTION_LINE = 'to search the web, ask with `bmn research ask`
  * it applies, cannot be asked, or ended. A choice for a repository covers its linked worktrees.
  */
 async function projectChoiceView(data, roleId, named) {
-  const { askProject, mainWorktree } = await import('./agents-team-inputs.mjs')
+  const { askProject, canonicalProject } = await import('./agents-team-inputs.mjs')
   const project = askProject(named)
-  const linked = mainWorktree(project)
-  const found = projectChoiceFor(data, linked === null ? [project] : [project, linked], roleId)
+  const canonical = canonicalProject(project)
+  const found = projectChoiceFor(data, canonical, roleId, canonicalProject)
   if (found === null) return { project, project_choice: null }
+  // Two choices that still apply there decide nothing: the role's asks are refused until the owner removes one (epic recheck 2).
+  if (found.collision !== undefined) {
+    return { project, project_choice: { state: 'collision', role: roleId, project: canonical, ids: found.collision.choices.map((choice) => choice.id), choices: found.collision.choices, reason: collisionWords(found.collision) } }
+  }
   const { choice, ended } = found
   const problem = ended ? null : projectChoiceProblem(data, choice)
   return {
     project,
-    project_choice: { ...choice, state: ended ? 'ended' : problem === null ? 'applies' : 'unavailable', ...(problem === null ? {} : { reason: problem }), ...(choice.project === linked ? { worktree_of: linked } : {}) }
+    project_choice: { ...choice, state: ended ? 'ended' : problem === null ? 'applies' : 'unavailable', ...(problem === null ? {} : { reason: problem }), ...(project !== canonical ? { worktree_of: canonical } : {}) }
   }
 }
 
@@ -362,6 +387,7 @@ function projectChoiceText(view) {
   const choice = view.project_choice
   const where = `  project ${view.project}: `
   if (choice === null) return `${where}no choice of the owner's; the chain applies`
+  if (choice.state === 'collision') return `${where}${choice.reason}; asks for the role there are refused until the owner removes one of them`
   const named = `${choice.agent}${choice.effort === undefined ? '' : `@${choice.effort}`}`
   if (choice.state === 'ended') return `${where}the owner's choice ${choice.id} (${named}) ended on ${choice.ends}; the chain applies`
   if (choice.state === 'unavailable') return `${where}the owner's choice ${choice.id} names ${named}, which cannot be asked now: ${choice.reason}; asks for the role there are refused until the owner changes the choice`

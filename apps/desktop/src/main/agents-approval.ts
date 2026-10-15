@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { appendFileSync, chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
 import {
-  ID_PATTERN, RESERVED_SECTIONS, RosterError, SHARED_SECTIONS, agentsDirectory, choiceEnded, outsideYamlBlocks, parseRoster, projectChoiceProblem, resolvedDirectory, rewriteRoster, rosterPath, sha256,
+  ID_PATTERN, RESERVED_SECTIONS, RosterError, SHARED_SECTIONS, agentsDirectory, choiceEnded, collisionWords, outsideYamlBlocks, parseRoster, projectChoiceCollisions, projectChoiceProblem, resolvedDirectory, rewriteRoster, rosterPath, sha256,
   splitSections, type RosterData
 } from '../../bin/agents-roster.mjs'
 import {
@@ -12,7 +12,7 @@ import {
   readApproved, readGeneration, restoreProblem, stateDirectory, type Generation
 } from '../../bin/agents-state.mjs'
 import { pathState, replaceFileSafely, type PathState } from '../../bin/safe-config-write.mjs'
-import { mainWorktree } from '../../bin/agents-team-inputs.mjs'
+import { canonicalProject, mainWorktree } from '../../bin/agents-team-inputs.mjs'
 
 /**
  * Approval is workflow protection against same-user processes, not an OS boundary
@@ -242,18 +242,18 @@ export function judgeProjectChoices(previous: RosterData | null, next: RosterDat
     // A linked worktree is the repository's project, not one of its own: its choice is the repository's, so two never claim one project (epic review).
     if (mainWorktree(choice.project) !== null) throw new RosterError('PROJECT_CHOICE_UNAVAILABLE', `the project choice ${choice.id} names a linked worktree; a choice names its repository's main folder, whose linked worktrees count as it; nothing was approved`)
   }
-  // One choice per project and role in the whole approved team, the unchanged ones included: a folder that became a linked worktree after its choice
-  // was approved is its repository's project, so a choice for the repository beside it would make two (epic recheck).
-  const taken = new Map<string, NonNullable<RosterData['project_choices']>[number]>()
-  for (const choice of next.project_choices ?? []) {
-    const project = mainWorktree(choice.project) ?? choice.project
-    const key = `${project}\n${choice.role}`
-    const other = taken.get(key)
-    if (other !== undefined) {
-      throw new RosterError('PROJECT_CHOICE_COLLISION', `the project choices ${other.id} and ${choice.id} both choose for ${choice.role} in ${project}, whose linked worktrees count as it; one choice per project and role, so remove one; nothing was approved`)
-    }
-    taken.set(key, choice)
-  }
+  judgeChoiceUniqueness(next)
+}
+
+/**
+ * One choice per project and role in a team BMN publishes (73.2 AC1), every choice counted, the unchanged and the ended
+ * ones included: a folder its repository now records as a linked worktree counts as the repository, so a choice for it beside
+ * one for the repository is two (epic recheck 2). Run on every path that publishes a version (approval, sections, save and
+ * approve, restore, Allow here) and on every preview; an unavailable choice's agent is not judged here (AC4).
+ */
+export function judgeChoiceUniqueness(next: RosterData): void {
+  const [collision] = projectChoiceCollisions(next.project_choices, canonicalProject)
+  if (collision !== undefined) throw new RosterError('PROJECT_CHOICE_COLLISION', `${collisionWords(collision)}; one choice per project and role, so remove one in the team file; nothing was approved`)
 }
 
 function validData(text: string): RosterData {
@@ -427,6 +427,8 @@ export function restoreGeneration(shown: ShownRevision, number: number, seams: A
     const earlier = problem === null ? readGeneration(number) : null
     if (earlier === null) throw new RosterError(problem?.includes('earlier roster layout') ? 'INVALID_VALUE' : 'STATE_CORRUPT', problem ?? `version ${number} is missing or does not verify`)
     judgeInspected(current?.data ?? null, earlier.data, seams)
+    // An earlier version's choices are restored as they were approved, an unavailable one included, but never two for one project (epic recheck 2).
+    judgeChoiceUniqueness(earlier.data)
     return publish(earlier.data, earlier.roster_file_hash, current, seams, 'restore', number)
   })
 }
@@ -469,6 +471,8 @@ export function allowWorkspace(provider: string, folder: string, seams: Approval
     // The approved result on its own must be a valid team too: only the entry is new in it.
     const approved = parseRoster(rewriteRoster(nextText, { ...current.data, exceptions: [...current.data.exceptions, entry] }))
     if (approved.data === null) throw new RosterError('ROSTER_INVALID', 'the approved team would not be valid with this workspace allowed', { errors: approved.errors })
+    // A version with two choices for one project is never published, also by Allow here: checked before the file is touched (epic recheck 2).
+    judgeChoiceUniqueness(approved.data)
     if (nextText !== file.text) {
       keepPriorState(file.state, (seams.now ?? (() => new Date()))())
       assertLockHeld()

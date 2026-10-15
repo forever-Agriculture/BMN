@@ -196,7 +196,10 @@ export declare const PROJECT_CHOICE_FIELDS: readonly string[]
 export declare const MAX_PROJECT_CHOICES: number
 export declare function projectChoiceProblem(data: Pick<RosterData, 'agents' | 'roles'>, choice: RosterProjectChoice): string | null
 export declare function choiceEnded(choice: RosterProjectChoice, now?: Date): boolean
-export declare function projectChoiceFor(data: Pick<RosterData, 'project_choices'>, folders: readonly string[], roleId: string, now?: Date): { choice: RosterProjectChoice; ended: boolean } | null
+export interface ProjectChoiceCollision { project: string; role: string; choices: RosterProjectChoice[] }
+export declare function projectChoiceCollisions(choices: readonly RosterProjectChoice[] | undefined, canonical: (folder: string) => string, now?: Date | null): ProjectChoiceCollision[]
+export declare function collisionWords(group: ProjectChoiceCollision): string
+export declare function projectChoiceFor(data: Pick<RosterData, 'project_choices'>, project: string, roleId: string, canonical: (folder: string) => string, now?: Date): { choice: RosterProjectChoice; ended: boolean; collision?: undefined } | { collision: ProjectChoiceCollision; choice?: undefined; ended?: undefined } | null
 export declare function projectChoicesYaml(choices: RosterProjectChoice[]): string
 export declare function agentYaml(agent: RosterAgent): string
 export declare function rolesYaml(roles: RosterRole[]): string

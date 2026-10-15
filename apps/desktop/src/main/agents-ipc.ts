@@ -80,7 +80,7 @@ import { AskRefusal } from '../../bin/agents-team-resolve.mjs'
 import { OPENCODE_GO_PROVIDER, copyOpenCodeGoSignIn, openCodeGoSignedIn, openCodeListsLuna } from '../../bin/agents-opencode.mjs'
 import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsAutoPlan, skillsTests, type SkillsOutcome } from '../../bin/agents-skills.mjs'
 import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsTests } from '../../bin/agents-tools.mjs'
-import { allowWorkspace, approveRoster, approveSections, judgeProjectChoices, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
+import { allowWorkspace, approveRoster, approveSections, judgeChoiceUniqueness, judgeProjectChoices, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
 import { findAppProgram } from './app-program'
 import { createContextAuto, type ContextAutoSeams } from './context-auto'
 import { createSkillsAuto } from './skills-auto'
@@ -354,14 +354,14 @@ export async function previewApproval(request: AgentsApprovalRequest, environmen
     errors = staged.errors
   }
   if (next === null) return { valid: false, errors, ...NOT_PREVIEWED }
-  // A new or changed project choice whose agent cannot answer it is refused here, before he approves (73.2).
-  if (request.kind !== 'restore') {
-    try {
-      judgeProjectChoices(generation?.data ?? null, next)
-    } catch (error) {
-      if (error instanceof RosterError) return { valid: false, errors: [{ code: error.code, message: error.message }], ...NOT_PREVIEWED }
-      throw error
-    }
+  // A new or changed project choice whose agent cannot answer it is refused here, before he approves (73.2); a restore keeps its
+  // choices as they were approved, but no version with two choices for one project is offered either (epic recheck 2).
+  try {
+    if (request.kind === 'restore') judgeChoiceUniqueness(next)
+    else judgeProjectChoices(generation?.data ?? null, next)
+  } catch (error) {
+    if (error instanceof RosterError) return { valid: false, errors: [{ code: error.code, message: error.message }], ...NOT_PREVIEWED }
+    throw error
   }
   return {
     ...(request.kind === 'restore' ? { restored: next as RosterDataShape } : {}),

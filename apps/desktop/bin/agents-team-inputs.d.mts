@@ -15,6 +15,7 @@ export declare function readInputFile(path: string, options?: { kind?: 'file' | 
 export declare function textFile(path: string, options?: { cwd?: string; home?: string }): InputFile & { sha256: string }
 export declare function workingTreeRoot(folder: string): string | null
 export declare function mainWorktree(top: string): string | null
+export declare function canonicalProject(folder: string): string
 export declare function notAProject(real: string, home?: string): string | null
 export declare function askProject(named: string | undefined, options?: { cwd?: string; home?: string }): string | null
 export interface FrozenFile { path: string; kind: 'file' | 'link' | 'deleted'; bytes?: number; sha256?: string; target?: string; changed: 'modified' | 'added' | 'deleted' | 'type-changed' | 'named' | null }

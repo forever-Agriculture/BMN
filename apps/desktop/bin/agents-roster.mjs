@@ -271,21 +271,45 @@ export function choiceEnded(choice, now = new Date()) {
 }
 
 /**
- * The project choice for a role in a project, or null. `folders` are the ask's project and, for a
- * linked worktree, its repository's main folder, in that order: a choice for the repository covers
- * its worktrees and no other folder (73.2 AC1). The first folder with a choice that has not ended
- * decides, never the order of the team file; `ended` is true only when every choice that matches has
- * ended, so it no longer applies.
+ * The project choices grouped by the project they choose for and their role, each group of two or
+ * more: `[{ project, role, choices }]`. `canonical(folder)` is the project a folder belongs to: a
+ * folder its repository records as a linked worktree counts as the repository's main folder, any
+ * other folder as itself (73.2 AC1). With `now`, only the choices that have not ended count: two
+ * that still apply decide nothing (epic recheck 2).
  */
-export function projectChoiceFor(data, folders, roleId, now = new Date()) {
-  let ended = null
-  for (const folder of folders) {
-    const choice = (data.project_choices ?? []).find((entry) => entry.role === roleId && entry.project === folder)
-    if (choice === undefined) continue
-    if (!choiceEnded(choice, now)) return { choice, ended: false }
-    ended ??= choice
+export function projectChoiceCollisions(choices, canonical, now = null) {
+  const groups = new Map()
+  for (const choice of choices ?? []) {
+    if (now !== null && choiceEnded(choice, now)) continue
+    const project = canonical(choice.project)
+    const key = `${project}\n${choice.role}`
+    if (!groups.has(key)) groups.set(key, { project, role: choice.role, choices: [] })
+    groups.get(key).choices.push(choice)
   }
-  return ended === null ? null : { choice: ended, ended: true }
+  return [...groups.values()].filter((group) => group.choices.length > 1)
+}
+
+/** How a collision is named: its choices with their folders, the role and the project. */
+export function collisionWords(group) {
+  const ids = group.choices.map((choice) => choice.id)
+  const folders = [...new Set(group.choices.map((choice) => choice.project))]
+  return `the project choices ${ids.slice(0, -1).join(', ')} and ${ids.at(-1)} both choose for ${group.role} in ${group.project} (${folders.join(', ')}), whose linked worktrees count as it`
+}
+
+/**
+ * The project choice for a role in a project: `{ choice, ended }`, `{ collision }` or null. `project`
+ * is the project's canonical folder (`canonical` as above); every choice whose folder is that project
+ * or one of its linked worktrees counts, whichever of them asks, and no other folder does (73.2 AC1).
+ * One that has not ended applies; two that have not ended are a collision, which applies neither and
+ * no chain either: that role's asks there are refused until the owner removes one. `ended` is true
+ * only when every choice there has ended, so none applies.
+ */
+export function projectChoiceFor(data, project, roleId, canonical, now = new Date()) {
+  const there = (data.project_choices ?? []).filter((entry) => entry.role === roleId && canonical(entry.project) === project)
+  if (there.length === 0) return null
+  const live = there.filter((choice) => !choiceEnded(choice, now))
+  if (live.length > 1) return { collision: { project, role: roleId, choices: live } }
+  return live.length === 1 ? { choice: live[0], ended: false } : { choice: there[0], ended: true }
 }
 
 export function roleEfforts(role, agentId) {

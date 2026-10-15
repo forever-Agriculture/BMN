@@ -1,16 +1,16 @@
 // MODULE: agents-project-choices.test.ts - Story 73.2: the owner's teammate for a role in one project: the team file's ## project-choices, its approval and its effect, asks in the project and its worktrees, and `bmn roster role --project`; a synthetic team, stand-in apps and made-up projects, nothing of the owner's is read
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { consequences } from '../../bin/agents-check.mjs'
-import { RETIRED_APPS, parseRoster, projectChoiceFor, projectChoiceProblem, rewriteRoster } from '../../bin/agents-roster.mjs'
+import { RETIRED_APPS, parseRoster, projectChoiceCollisions, projectChoiceFor, projectChoiceProblem, rewriteRoster } from '../../bin/agents-roster.mjs'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { AskRefusal } from '../../bin/agents-team-resolve.mjs'
-import { approveRoster, approveSections } from '../main/agents-approval'
+import { allowWorkspace, approveRoster, approveSections, restoreGeneration, saveAndApprove } from '../main/agents-approval'
 import { previewApproval } from '../main/agents-ipc'
 
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
@@ -302,24 +302,141 @@ describe('asks in the project and its worktrees (73.2 AC1, AC3, AC4)', () => {
     approve(withChoices(tree))
     git(shop, 'worktree', 'add', '-q', '-b', 'feature', worktree)
     writeFileSync(rosterFile(), withChoices(tree, `main: {project: ${shop}, role: epic-reviewer, agent: fable}`))
-    expect(() => approveRoster(shown(), { checkInspectedRoutes: () => {}, now: () => NOW })).toThrow(`the project choices tree and main both choose for epic-reviewer in ${shop}, whose linked worktrees count as it; one choice per project and role, so remove one; nothing was approved`)
+    expect(() => approveRoster(shown(), { checkInspectedRoutes: () => {}, now: () => NOW })).toThrow(`the project choices tree and main both choose for epic-reviewer in ${shop} (${realpathSync(worktree)}, ${shop}), whose linked worktrees count as it; one choice per project and role, so remove one in the team file; nothing was approved`)
     expect(readApproved().data.project_choices).toEqual([{ id: 'tree', project: realpathSync(worktree), role: 'epic-reviewer', agent: 'astra' }])
     // Another role there is a choice of its own.
     approve(withChoices(tree, `main: {project: ${shop}, role: final-reviewer, agent: fable}`))
     expect(readApproved().data.project_choices?.map((choice) => choice.id)).toEqual(['tree', 'main'])
   })
 
-  it('the first folder with a choice that has not ended decides, whatever the team file\'s order (epic review)', () => {
+  it('restoring a version whose two choices now name one project is refused, and so is its preview (epic recheck 2)', async () => {
+    const shop = makeProject('shop')
+    const worktree = join(home, 'worktrees/shop-feature')
+    mkdirSync(worktree, { recursive: true })
+    const main = `main: {project: ${shop}, role: epic-reviewer, agent: fable}`
+    approve(withChoices(main, `tree: {project: ${realpathSync(worktree)}, role: epic-reviewer, agent: astra}`))
+    const both = generation()!
+    approve(withChoices(main))
+    git(shop, 'worktree', 'add', '-q', '-b', 'feature', worktree)
+    expect(await previewApproval({ kind: 'restore', number: both }, env)).toMatchObject({ valid: false, errors: [{ code: 'PROJECT_CHOICE_COLLISION' }] })
+    expect(() => restoreGeneration(shown(), both, { checkInspectedRoutes: () => {}, now: () => NOW })).toThrow(`the project choices main and tree both choose for epic-reviewer in ${shop}`)
+    expect(readApproved().data.project_choices?.map((choice) => choice.id)).toEqual(['main'])
+  })
+
+  it('a folder that became a linked worktree with a choice of its own beside its repository\'s: asks there for that role are refused until the owner removes one (epic recheck 2)', () => {
+    const shop = makeProject('shop')
+    const worktree = join(home, 'worktrees/shop-feature')
+    mkdirSync(worktree, { recursive: true })
+    approve(withChoices(`main: {project: ${shop}, role: epic-reviewer, agent: fable}`, `tree: {project: ${realpathSync(worktree)}, role: epic-reviewer, agent: astra}`))
+    git(shop, 'worktree', 'add', '-q', '-b', 'feature', worktree)
+    for (const project of [shop, realpathSync(worktree)]) {
+      expect(refusal(() => ask({ project }))).toMatchObject({ code: 'PROJECT_CHOICE_COLLISION', message: expect.stringContaining('main and tree both choose for epic-reviewer') })
+    }
+    expect(role('epic-reviewer', '--project', shop, '--json').json().project_choice).toMatchObject({ state: 'collision', ids: ['main', 'tree'] })
+    // Another role there follows its chain.
+    expect(ask({ project: shop, role: 'final-reviewer', effort: 'high' }).choice.rule).toBe('chain')
+  })
+
+  it('every choice of the project counts, whichever of its folders asks; two that have not ended decide nothing, whatever the team file\'s order (epic recheck 2)', () => {
     const data = parseRoster(EXAMPLE).data!
+    const canonical = (folder: string): string => (folder.startsWith('/synthetic/shop') ? '/synthetic/shop' : folder)
     const main = { id: 'main', project: '/synthetic/shop', role: 'epic-reviewer', agent: 'fable' }
     const tree = { id: 'tree', project: '/synthetic/shop-feature', role: 'epic-reviewer', agent: 'astra' }
-    const folders = ['/synthetic/shop-feature', '/synthetic/shop']
-    for (const order of [[main, tree], [tree, main]]) {
-      expect(projectChoiceFor({ ...data, project_choices: order }, folders, 'epic-reviewer', NOW)).toEqual({ choice: tree, ended: false })
-      expect(projectChoiceFor({ ...data, project_choices: order.map((choice) => (choice.id === 'tree' ? { ...choice, ends: '2026-10-14' } : choice)) }, folders, 'epic-reviewer', NOW)).toEqual({ choice: main, ended: false })
+    const other = { id: 'other', project: '/synthetic/invoices', role: 'epic-reviewer', agent: 'astra' }
+    for (const order of [[main, tree, other], [other, tree, main]]) {
+      expect(projectChoiceFor({ ...data, project_choices: order }, '/synthetic/shop', 'epic-reviewer', canonical, NOW)).toEqual({ collision: { project: '/synthetic/shop', role: 'epic-reviewer', choices: order.filter((choice) => choice !== other) } })
+      expect(projectChoiceCollisions(order, canonical).map((group) => group.choices.map((choice) => choice.id).sort())).toEqual([['main', 'tree']])
+      // One ended: the other applies, to every folder of the project.
+      const ended = order.map((choice) => (choice.id === 'tree' ? { ...choice, ends: '2026-10-14' } : choice))
+      expect(projectChoiceFor({ ...data, project_choices: ended }, '/synthetic/shop', 'epic-reviewer', canonical, NOW)).toEqual({ choice: main, ended: false })
+      expect(projectChoiceCollisions(ended, canonical, NOW)).toEqual([])
+      // An approval still counts an ended one: one entry per project and role (AC1).
+      expect(projectChoiceCollisions(ended, canonical)).toHaveLength(1)
     }
+    // A worktree's own choice, with none for the repository, is the project's.
+    expect(projectChoiceFor({ ...data, project_choices: [tree] }, '/synthetic/shop', 'epic-reviewer', canonical, NOW)).toEqual({ choice: tree, ended: false })
     const both = [{ ...main, ends: '2026-10-13' }, { ...tree, ends: '2026-10-14' }]
-    expect(projectChoiceFor({ ...data, project_choices: both }, folders, 'epic-reviewer', NOW)).toEqual({ choice: both[1], ended: true })
+    expect(projectChoiceFor({ ...data, project_choices: both }, '/synthetic/shop', 'epic-reviewer', canonical, NOW)).toEqual({ choice: both[0], ended: true })
+    expect(projectChoiceFor({ ...data, project_choices: [other] }, '/synthetic/shop', 'epic-reviewer', canonical, NOW)).toBeNull()
+  })
+
+  it('two linked worktrees with choices of their own and none for the repository: the repository and both worktrees refuse that role, named, small-work and recheck asks included (epic recheck 2)', () => {
+    const shop = makeProject('shop')
+    const one = join(home, 'worktrees/shop-one')
+    const two = join(home, 'worktrees/shop-two')
+    const earlierRun = ask({ project: shop }).id
+    for (const folder of [one, two]) mkdirSync(folder, { recursive: true })
+    approve(withChoices(`one: {project: ${realpathSync(one)}, role: epic-reviewer, agent: fable}`, `two: {project: ${realpathSync(two)}, role: epic-reviewer, agent: astra}`))
+    git(shop, 'worktree', 'add', '-q', '-b', 'one', one)
+    git(shop, 'worktree', 'add', '-q', '-b', 'two', two)
+    for (const project of [shop, realpathSync(one), realpathSync(two)]) {
+      expect(refusal(() => ask({ project }))).toMatchObject({ code: 'PROJECT_CHOICE_COLLISION', message: expect.stringContaining(`the project choices one and two both choose for epic-reviewer in ${shop}`) })
+    }
+    expect(refusal(() => ask({ project: shop, agent: 'astra' })).code).toBe('PROJECT_CHOICE_COLLISION')
+    expect(refusal(() => ask({ project: shop, smallWork: true })).code).toBe('PROJECT_CHOICE_COLLISION')
+    expect(refusal(() => ask({ project: shop, recheckOf: earlierRun })).code).toBe('PROJECT_CHOICE_COLLISION')
+    // Nothing was copied for a refused ask: only the earlier run's folder exists.
+    expect(readdirSync(join(home, '.config/bmn/agents/state/team/runs'))).toEqual([earlierRun])
+    // Another project, and another role here, are not touched.
+    expect(ask({ project: makeProject('invoices') }).choice.rule).toBe('chain')
+    expect(ask({ project: shop, role: 'final-reviewer', effort: 'high' }).choice.rule).toBe('chain')
+    // `bmn roster validate` names it, for the approved team.
+    const validate = spawnSync(process.execPath, [BMN, 'roster', 'validate', '--json'], { env: { HOME: home, PATH: '/usr/bin:/bin' }, cwd: home, encoding: 'utf8' })
+    expect(JSON.parse(validate.stdout).warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'PROJECT_CHOICE_COLLISION', message: expect.stringContaining('in the file, the project choices one and two') }),
+      expect.objectContaining({ code: 'PROJECT_CHOICE_COLLISION', message: expect.stringContaining('in the approved team, the project choices one and two') })
+    ]))
+  })
+
+  it('a team with two choices for one project is published by no path: sections and their preview, save and approve, and Allow here leave the file and the approval as they were (epic recheck 2)', async () => {
+    const shop = makeProject('shop')
+    const worktree = join(home, 'worktrees/shop-feature')
+    mkdirSync(worktree, { recursive: true })
+    const tree = `tree: {project: ${realpathSync(worktree)}, role: epic-reviewer, agent: astra}`
+    approve(withChoices(tree))
+    git(shop, 'worktree', 'add', '-q', '-b', 'feature', worktree)
+    const approvedBefore = generation()
+    mkdirSync(join(home, 'later'))
+    const text = withChoices(tree, `main: {project: ${shop}, role: epic-reviewer, agent: fable}`)
+    writeFileSync(rosterFile(), text)
+    expect(await previewApproval({ kind: 'sections', scope: ['project-choices'] }, env)).toMatchObject({ valid: false, errors: [{ code: 'PROJECT_CHOICE_COLLISION' }] })
+    expect(() => approveSections(shown(), ['project-choices'], { checkInspectedRoutes: () => {}, now: () => NOW })).toThrow('both choose for epic-reviewer')
+    expect(() => saveAndApprove(shown(), readValidRoster().data, { checkInspectedRoutes: () => {}, now: () => NOW })).toThrow('both choose for epic-reviewer')
+    expect(generation()).toBe(approvedBefore)
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(text)
+    // The approved team itself holds a pair once a folder became a worktree after its approval: Allow here publishes nothing and writes nothing either.
+    approve(withChoices(`main: {project: ${shop}, role: epic-reviewer, agent: fable}`, `tree2: {project: ${realpathSync(join(home, 'later'))}, role: epic-reviewer, agent: astra}`))
+    git(shop, 'worktree', 'add', '-q', '-b', 'later', join(home, 'later'))
+    const pair = generation()
+    const file = readFileSync(rosterFile(), 'utf8')
+    expect(() => allowWorkspace('zai', shop, { checkInspectedRoutes: () => {} })).toThrow('both choose for epic-reviewer')
+    expect(generation()).toBe(pair)
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(file)
+  })
+
+  it('removing one of two choices for a project takes effect only when approved, and the review says the role is asked again (epic recheck 2)', async () => {
+    const shop = makeProject('shop')
+    const worktree = join(home, 'worktrees/shop-feature')
+    mkdirSync(worktree, { recursive: true })
+    const main = `main: {project: ${shop}, role: epic-reviewer, agent: fable, effort: medium}`
+    approve(withChoices(main, `tree: {project: ${realpathSync(worktree)}, role: epic-reviewer, agent: astra}`))
+    git(shop, 'worktree', 'add', '-q', '-b', 'feature', worktree)
+    writeFileSync(rosterFile(), withChoices(main))
+    // Pending: asks stay refused until the owner approves the removal.
+    expect(refusal(() => ask({ project: shop })).code).toBe('PROJECT_CHOICE_COLLISION')
+    const preview = await previewApproval({ kind: 'sections', scope: ['project-choices'] }, env)
+    expect(preview).toMatchObject({ valid: true, consequences: expect.arrayContaining(['epic-reviewer asks in one project would reach Fable at medium instead of being refused for two choices there']) })
+    approveSections(shown(), ['project-choices'], { checkInspectedRoutes: () => {}, now: () => NOW })
+    expect(ask({ project: realpathSync(worktree) }).choice).toMatchObject({ agent: 'fable', rule: 'project-choice', project_choice: 'main' })
+  })
+
+  it('a restore whose choices do not collide keeps an unavailable choice as it was approved (AC4, epic recheck 2)', () => {
+    const shop = makeProject('shop')
+    approve(withChoices(`shop-review: {project: ${shop}, role: epic-reviewer, agent: fable}`))
+    const withChoice = generation()!
+    approve(fableOff(EXAMPLE))
+    restoreGeneration(shown(), withChoice, { checkInspectedRoutes: () => {}, now: () => NOW })
+    expect(readApproved().data.project_choices).toEqual([{ id: 'shop-review', project: shop, role: 'epic-reviewer', agent: 'fable' }])
   })
 
   it('an ended choice no longer applies; one whose agent cannot answer is refused with the reason, never sent to another', () => {

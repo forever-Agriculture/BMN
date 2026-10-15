@@ -234,6 +234,11 @@ export function mainWorktree(top) {
   }
 }
 
+/** The project a folder belongs to for project choices: its repository's main folder when the repository records it as a linked worktree, else itself (73.2 AC1). */
+export function canonicalProject(folder) {
+  return mainWorktree(folder) ?? folder
+}
+
 /** Why a folder can never be a project: the home folder, `/`, or the apps' and BMN's configuration folders. */
 export function notAProject(real, home = homedir()) {
   if (real === '/') return '/ is not a project'

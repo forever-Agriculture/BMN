@@ -987,19 +987,23 @@ shop-review: {project: /home/you/code/shop, role: reviewer, agent: astra, effort
 counts for nothing, as with an exception): a repository's main folder, never one of its linked
 worktrees. The repository's linked worktrees count as it, each only where the repository itself
 records that worktree (a copy of a linked checkout does not); any other folder, a subfolder
-included, does not. Where a worktree's own folder had a choice too (an older approved version),
-the choice for the folder asked from comes before the repository's, and one that ended gives way
-to the next; the order of the file never decides. `effort` and `ends` are optional: without an effort,
+included, does not. Every choice of the project counts wherever in it you ask, also one approved
+for a folder that later became one of its linked worktrees. `effort` and `ends` are optional: without an effort,
 the efforts the role gives that agent apply; a choice applies through the day `ends` names. One
 choice per project and role. A choice takes effect like every edit of the team file, once you
 approve it in BMN (Preferences, Team), whose review says who that role's asks in the project would
 reach before and after; no command approves one. The approval refuses a new or changed choice
 whose agent is not active, does not hold the role, is of a class the role refuses or is given an
 effort the role does not allow it, one that already ended, one whose project passes through a
-link, and one naming a linked worktree (`PROJECT_CHOICE_UNAVAILABLE`). It also refuses a team
-with two choices for one role in one project, its linked worktrees counted as it, unchanged choices
-included: a folder that became a linked worktree after its choice was approved takes no second
-choice for its repository (`PROJECT_CHOICE_COLLISION`). A first approval's review
+link, and one naming a linked worktree (`PROJECT_CHOICE_UNAVAILABLE`). No version with two
+choices for one role in one project, its linked worktrees counted as it, is ever published
+(`PROJECT_CHOICE_COLLISION`): not by an approval, whatever it changes and ended or unchanged
+choices included, not by a restore, not by Allow here, and no review of one is offered. A folder
+can still become a linked worktree after its choice was approved, so that two approved choices meet
+in one project: then that role's asks anywhere in the project are refused, naming both, an ask that
+names its teammate, a small-work ask and a recheck included, never sent to either or to the chain;
+`bmn roster role --project` and `bmn roster validate` say so. Remove one of the two in the team file
+and approve that; every version that keeps both is refused. A first approval's review
 names each choice with its folder, role, teammate, effort and end date. A
 choice picks who answers and grants nothing: what data may reach that agent, its tools and what it
 can read stay the team's.

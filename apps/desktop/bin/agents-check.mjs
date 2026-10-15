@@ -3,7 +3,8 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
-import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, agentState, appName, canonicalJson, classRefusal, harnessPrivateWork, isCalled, isRetired, namedResearchers, parseYaml, publicOnlyReasons, resolvedDirectory, retiredProgram, retiredWords, roleEfforts, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, agentState, appName, canonicalJson, classRefusal, harnessPrivateWork, isCalled, isRetired, namedResearchers, parseYaml, projectChoiceCollisions, projectChoiceFor, publicOnlyReasons, resolvedDirectory, retiredProgram, retiredWords, roleEfforts, sha256 } from './agents-roster.mjs'
+import { canonicalProject } from './agents-team-inputs.mjs'
 import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, err, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
@@ -1797,7 +1798,31 @@ export function consequences(before, after) {
   }
   const oldChoices = new Map((prior.project_choices ?? []).map((choice) => [choice.id, choice]))
   const newChoices = new Map((after.project_choices ?? []).map((choice) => [choice.id, choice]))
+  // Two choices that still apply for one role in one project decide nothing: that role's asks there are refused (epic recheck 2).
+  // A change that ends or starts such a pair is said as that, for the pair, instead of choice by choice.
+  const said = new Set()
+  if (oldChoices.size + newChoices.size > 0) {
+    const today = new Date()
+    const pairKey = (group) => `${group.project}\n${group.role}`
+    const pairsBefore = new Map(projectChoiceCollisions(prior.project_choices, canonicalProject, today).map((group) => [pairKey(group), group]))
+    const pairsAfter = new Map(projectChoiceCollisions(after.project_choices, canonicalProject, today).map((group) => [pairKey(group), group]))
+    const reached = (data, group) => {
+      const found = projectChoiceFor(data, group.project, group.role, canonicalProject, today)
+      return found === null || found.ended ? chain(data, group.role) : found.collision !== undefined ? null : chosen(found.choice)
+    }
+    for (const [key, group] of pairsBefore) {
+      if (pairsAfter.has(key)) continue
+      out.push(`${group.role} asks in one project would reach ${reached(after, group)} instead of being refused for two choices there`)
+      for (const choice of group.choices) said.add(choice.id)
+    }
+    for (const [key, group] of pairsAfter) {
+      if (pairsBefore.has(key)) continue
+      out.push(`${group.role} asks in one project would be refused for two choices there instead of reaching ${reached(prior, group) ?? 'its choice'}`)
+      for (const choice of group.choices) said.add(choice.id)
+    }
+  }
   for (const id of new Set([...oldChoices.keys(), ...newChoices.keys()])) {
+    if (said.has(id)) continue
     const was = oldChoices.get(id)
     const now = newChoices.get(id)
     const moved = was === undefined || now === undefined || was.project !== now.project || was.role !== now.role
