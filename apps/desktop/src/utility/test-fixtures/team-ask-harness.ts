@@ -79,6 +79,48 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"claude a
 }
 
 /**
+ * A stand-in OpenCode in sh: `auth export` and `auth import` keep a made-up sign-in in its data
+ * folder, `run` answers from inside the container naming its session in every event and saving the
+ * session's record, which `session export` prints. Words in the question steer it: SLEEP (waits as on
+ * a provider it retries), FAIL (an error event), OTHERMODEL (the session ran another model).
+ */
+export function stubOpenCode(stubs: string, version = '2.0.29'): void {
+  writeFileSync(join(stubs, 'opencode'), `#!/bin/sh
+[ "$1" = --version ] && echo "${version}" && exit 0
+data="\${XDG_DATA_HOME:-$HOME/.local/share}/opencode"
+case "$1 $2" in
+  "auth export") if [ -f "$data/auth-stub.json" ]; then cat "$data/auth-stub.json"; else echo '[]'; fi; exit 0;;
+  "auth import") mkdir -p "$data"; cat > "$data/auth-stub.json"; exit 0;;
+  "session export") if [ -f "$data/session-$3.json" ]; then cat "$data/session-$3.json"; exit 0; fi; echo "no session" >&2; exit 1;;
+esac
+model=; agent=; prev=
+for a in "$@"; do [ "$prev" = -m ] && model=$a; [ "$prev" = --agent ] && agent=$a; prev=$a; done
+question=$(cat)
+id=$(printf %s "$question" | md5sum | cut -c1-12)
+sid="ses_\${id}AAAAAAAAAAAAAA"
+signed=$(grep -c sk-synthetic "$data/auth-stub.json" 2>/dev/null || echo 0)
+provider=\${model%%/*}; rest=\${model#*/}; mid=\${rest%%#*}; variant=\${rest#*#}
+case $question in *OTHERMODEL*) mid=gpt-6-other;; esac
+mkdir -p "$data"
+printf '{"info":{"id":"%s","agent":"%s","title":"BMN ask","model":{"id":"%s","providerID":"%s","variant":"%s"},"cost":0.002,"tokens":{"input":60,"output":24,"reasoning":3,"cache":{"read":5,"write":0}}},"messages":[{"text":"MESSAGES-SENTINEL"}]}' "$sid" "$agent" "$mid" "$provider" "$variant" > "$data/session-$sid.json"
+printf '{"type":"step_start","sessionID":"%s","part":{"type":"step-start"}}\\n' "$sid"
+case $question in *SLEEP*) sleep 60;; esac
+case $question in *FAIL*) printf '{"type":"error","sessionID":"%s","error":{"type":"provider.auth","message":"made-up sign-in failure"}}\\n' "$sid"; exit 1;; esac
+printf '{"type":"text","sessionID":"%s","part":{"type":"text","text":"opencode answer %s agent=%s signed=%s from %s"}}\\n' "$sid" "$id" "$agent" "$signed" "$(ls /ask | tr '\\n' ' ')"
+printf '{"type":"step_finish","sessionID":"%s","part":{"type":"step-finish","tokens":{"input":20,"output":8}}}\\n' "$sid"
+`)
+  chmodSync(join(stubs, 'opencode'), 0o755)
+}
+
+/** A made-up OpenCode Go sign-in in BMN's own OpenCode folder, as 70.4 copies the owner's there. */
+export const GO_KEY_SENTINEL = 'sk-synthetic-go-key-SIGNIN-SENTINEL'
+export function goSignInInBmnFolder(home: string, entries = [{ id: 'a1', integrationID: 'opencode-go', label: 'Go', active: true, value: { type: 'key', key: GO_KEY_SENTINEL } }]): void {
+  const base = join(home, '.config/bmn/agents/state/opencode')
+  for (const folder of ['home', 'config', 'state', 'cache', 'data/opencode']) mkdirSync(join(base, folder), { recursive: true })
+  writeFileSync(join(base, 'data/opencode/auth-stub.json'), `${JSON.stringify(entries)}\n`)
+}
+
+/**
  * A fresh home for one test: `process.env.HOME` set to it, both stand-in apps on its PATH, made-up
  * sign-in files where each app keeps its own, and the example team approved.
  */

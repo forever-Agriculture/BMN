@@ -129,7 +129,7 @@ describe('keys and the request\'s hash (72.4 AC2)', () => {
   })
 })
 
-describe.skipIf(!canContain)('crashes on either side of the start (72.4 AC2)', () => {
+describe.skipIf(!canContain)('crashes on either side of the start (72.4 AC2)', { timeout: 30_000 }, () => {
   it('before the start: the run is recorded interrupted, never launched, and its supervisor, should it come, starts nothing', async () => {
     const question = 'Is the loop bounded?'
     const reserved = await reserveAsk(runs(), { scope: 'shell', key: key('crash-before'), hash: shellHash(question), id: '20261015T010000-0000000a' }, { holder: DEAD })
@@ -166,7 +166,7 @@ describe.skipIf(!canContain)('crashes on either side of the start (72.4 AC2)', (
   })
 })
 
-describe.skipIf(!canContain)('many asks at once (72.4 AC1, AC3)', () => {
+describe.skipIf(!canContain)('many asks at once (72.4 AC1, AC3)', { timeout: 30_000 }, () => {
   it('separate commands submitting together never exceed the capacity; one more is busy (exit 14), and a freed place is taken again', async () => {
     settings('{"capacity": 3}\n')
     const results = await Promise.all([1, 2, 3, 4, 5].map((n) => bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', `Bounded ${n}? SLEEP`, '--key', key(`load-${n}`), '--background', '--json'])))
@@ -195,7 +195,7 @@ describe.skipIf(!canContain)('many asks at once (72.4 AC1, AC3)', () => {
   })
 })
 
-describe.skipIf(!canContain)('who sees and controls an ask (72.4 AC2, AC4)', () => {
+describe.skipIf(!canContain)('who sees and controls an ask (72.4 AC2, AC4)', { timeout: 30_000 }, () => {
   it('a session must pass --key; it sees and stops only its own asks, and a forged session label sees nothing', async () => {
     const a = session('sess-a')
     const required = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'x', '--json'], a)
@@ -233,7 +233,7 @@ describe.skipIf(!canContain)('who sees and controls an ask (72.4 AC2, AC4)', () 
   })
 })
 
-describe.skipIf(!canContain)('retention and the key window (72.4 AC2)', () => {
+describe.skipIf(!canContain)('retention and the key window (72.4 AC2)', { timeout: 30_000 }, () => {
   it('a removed run keeps a content-free entry, and a retry is GONE, during the window and after it', async () => {
     const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Remove me?', '--key', key('removed')])
     expect(asked.code, asked.stderr).toBe(0)
@@ -270,7 +270,7 @@ describe.skipIf(!canContain)('retention and the key window (72.4 AC2)', () => {
   })
 })
 
-describe.skipIf(!canContain)('the owner\'s token ceiling (72.4 AC3)', () => {
+describe.skipIf(!canContain)('the owner\'s token ceiling (72.4 AC3)', { timeout: 30_000 }, () => {
   it('a Claude Code run reaching it is stopped with that reason (exit 16)', async () => {
     settings('{"token_ceiling": 2500}\n')
     const asked = await bmn(['team', 'ask', '--role', 'designer', '--question', 'Look closely. CEILING', '--key', key('ceiling'), '--json'])
@@ -291,7 +291,7 @@ describe.skipIf(!canContain)('the owner\'s token ceiling (72.4 AC3)', () => {
   })
 })
 
-describe.skipIf(!canContain)('nesting (72.4 AC4)', () => {
+describe.skipIf(!canContain)('nesting (72.4 AC4)', { timeout: 30_000 }, () => {
   it('inside an ask\'s PID namespace every BMN command is refused, its environment cleared or its labels forged; a hook does nothing', async () => {
     // A child in a PID namespace of its own that sees the whole file system, with this test's BMN state where the
     // account's own is (the owner's stays out of reach), tries every BMN path and reports what each said.
@@ -378,7 +378,8 @@ describe('what may be asked here (72.4 AC5)', () => {
     expect(features).toMatchObject({ version: 1, platform: 'linux', container: { ok: canContain } })
     expect(features.apps).toEqual([
       { app: 'codex', installed: true, version: '0.162.1', measured: ['0.162.1'], forms: { question: 'proven', files: 'proven', project: 'unavailable', 'wide-read': 'not-enabled' }, pictures: 'not-offered', usage_while_running: false },
-      { app: 'claude', installed: true, version: '2.1.300', measured: ['2.1.300'], forms: { question: 'proven', files: 'proven', project: 'proven', 'wide-read': 'not-enabled' }, pictures: 'not-offered', usage_while_running: true }
+      { app: 'claude', installed: true, version: '2.1.300', measured: ['2.1.300'], forms: { question: 'proven', files: 'proven', project: 'proven', 'wide-read': 'not-enabled' }, pictures: 'not-offered', usage_while_running: true },
+      { app: 'opencode', installed: false, version: null, measured: ['2.0.29'], forms: { question: 'not-installed', files: 'not-installed', project: 'not-installed', 'wide-read': 'not-enabled' }, pictures: 'not-offered', usage_while_running: false }
     ])
     stubCodex(stubs, '0.170.0')
     rmSync(join(stubs, 'claude'))

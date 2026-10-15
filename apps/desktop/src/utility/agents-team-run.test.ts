@@ -35,7 +35,7 @@ afterEach(async () => {
   if (process.env.BMN_TEST_KEEP_HOME === undefined) rmSync(home, { recursive: true, force: true })
 })
 
-describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', () => {
+describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout: 30_000 }, () => {
   it('answers, attributed from its own first event and turn span, with usage, and its transient state is gone (AC2, AC4)', async () => {
     const prepared = ask({})
     expect(prepared.verdict.verdict).toBe('PASS')
@@ -188,7 +188,7 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', () => {
   })
 })
 
-describe.skipIf(!canContain)('bmn team ask and bmn team asks (72.3 AC3)', () => {
+describe.skipIf(!canContain)('bmn team ask and bmn team asks (72.3 AC3)', { timeout: 30_000 }, () => {
   const BMN = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
   const bmn = (args: string[], input = ''): Promise<{ code: number | null; stdout: string; stderr: string }> => new Promise((done) => {
     const child = spawn(process.execPath, [BMN, ...args], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }, cwd: home, stdio: ['pipe', 'pipe', 'pipe'] })

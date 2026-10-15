@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statS
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readApproved } from './agents-state.mjs'
+import { copyGoSignInToRun, openCodeSessionInfo } from './agents-opencode.mjs'
 import { ASK_RUN_FILES, sameProgram } from './agents-team-forms.mjs'
 import { RUN_FILES, requestStop, runState, startTeamSupervisor, writeWhole } from './agents-team-supervisor.mjs'
 
@@ -21,6 +22,8 @@ export const TIME_LIMIT = Object.freeze({ default: 30, min: 1, max: 120 })
 export const OUTPUT_LIMIT = 64 * 1024 * 1024
 export const ANSWER_LIMIT = 1024 * 1024
 /** Each final state and its exit code (the contract's "Exit codes"). */
+/** What OpenCode recorded of an ask's session, read after the run (72.5): its info alone, never its messages. */
+export const OPENCODE_SESSION_INFO = 'session-info.json'
 export const OUTCOME_EXIT = Object.freeze({ answered: 0, failed: 1, interrupted: 1, refused: 10, 'out-of-time': 15, stopped: 16, 'not-attributed': 17 })
 
 export class StartRefusal extends Error {
@@ -54,6 +57,11 @@ export function startAsk(prepared, { now = new Date(), timeLimitMinutes = TIME_L
   const identity = readJsonOrNull(join(folder, ASK_RUN_FILES.snapshots, 'executable.json'))
   if (identity === null || !sameProgram(identity, prepared.program)) {
     throw new StartRefusal('CHANGED', 'the app\'s program changed after the check; nothing started')
+  }
+  // An OpenCode run gets its own copy of BMN's OpenCode Go sign-in, for this run alone; its home goes on every outcome (72.5 AC1, AC2).
+  if (receipt.harness === 'opencode') {
+    const copied = copyGoSignInToRun(join(folder, ASK_RUN_FILES.home, 'oc'), { launcher: prepared.program.launcher, environment: { PATH: '/usr/bin:/bin' } })
+    if (!copied.ok) throw new StartRefusal('SIGN_IN_UNAVAILABLE', `${copied.reason}; nothing started`)
   }
   const launch = {
     version: 1, argv: prepared.argv, deadline: now.getTime() + timeLimitMinutes * 60_000, time_limit_minutes: timeLimitMinutes,
@@ -192,6 +200,29 @@ export function observeAsk(folder, harness, request) {
     }
     // Claude Code does not report its effort: it is the one the pinned command named.
     if (request.effort !== undefined) Object.assign(observed, { effort: request.effort, effort_source: 'pinned command (--effort)' })
+  } else if (harness === 'opencode') {
+    // Every event names the session (70.1); the model, its variant and the usage are in the session's own record, read after the run (finishAsk).
+    if (typeof events[0]?.sessionID === 'string') Object.assign(observed, { session: events[0].sessionID, session_source: 'every event (sessionID)' })
+    for (const event of events) {
+      if (typeof event.sessionID === 'string') sessions.add(event.sessionID)
+      if (event.type === 'text' && typeof event.part?.text === 'string') answer = event.part.text
+      if (event.type === 'error') failure = typeof event.error?.message === 'string' ? `OpenCode reported an error: ${event.error.message.slice(0, 200)}` : `OpenCode reported an error (${event.error?.type ?? 'unknown'})`
+    }
+    const record = readJsonOrNull(join(folder, OPENCODE_SESSION_INFO))
+    const info = record?.info
+    if (info !== undefined && info !== null && info.id === observed.session) {
+      if (typeof info.model?.id === 'string') Object.assign(observed, { model: info.model.id, model_source: 'session export' })
+      if (typeof info.model?.variant === 'string') Object.assign(observed, { effort: info.model.variant, effort_source: 'session export (variant)' })
+      if (typeof info.model?.provider === 'string' && typeof request.provider === 'string' && info.model.provider !== request.provider) problems.push(`the session ran on ${info.model.provider}, not ${request.provider}`)
+      Object.assign(usage, {
+        input_tokens: info.tokens?.input ?? 'unknown', cached_input_tokens: info.tokens?.cache_read ?? 'unknown', output_tokens: info.tokens?.output ?? 'unknown',
+        reasoning_tokens: info.tokens?.reasoning ?? 'unknown', reported_cost: info.reported_cost ?? 'unknown', source: 'session export'
+      })
+    } else {
+      const why = record?.failed ?? 'no session export'
+      Object.assign(observed, { model_source: `unknown: ${why}`, effort_source: `unknown: ${why}` })
+      usage.source = `unknown: ${why}`
+    }
   }
   if (observed.session === null) problems.push('the run named no session in its first event')
   const others = [...sessions].filter((id) => id !== observed.session)
@@ -206,6 +237,18 @@ export function observeAsk(folder, harness, request) {
 // The end of a run, called by its supervisor
 
 /**
+ * Reads an OpenCode ask's session record with OpenCode itself in the run's own folders, as 70.4 did
+ * for research, and keeps only its info (`session-info.json`): model, variant, tokens, reported spend. The
+ * program is the one the run's snapshot names.
+ */
+function recordOpenCodeSession(folder) {
+  const session = eventsOf(folder).events.find((event) => typeof event.sessionID === 'string')?.sessionID ?? null
+  const launcher = readJsonOrNull(join(folder, ASK_RUN_FILES.snapshots, 'executable.json'))?.launcher?.path
+  const found = typeof launcher === 'string' ? openCodeSessionInfo(session, join(folder, ASK_RUN_FILES.home, 'oc'), { launcher, environment: { PATH: '/usr/bin:/bin' } }) : { failed: 'the run\'s program is not recorded' }
+  writeWhole(join(folder, OPENCODE_SESSION_INFO), `${JSON.stringify({ version: 1, ...found }, null, 2)}\n`)
+}
+
+/**
  * Finishes a run once its container has ended: the outcome and the answer into the record, then the
  * run's app home and frozen project deleted, whatever the outcome. An answer that cannot be
  * attributed is kept only as diagnostic evidence, never as the answer.
@@ -216,6 +259,8 @@ export function finishAsk(folder) {
   const exit = readJsonOrNull(join(folder, RUN_FILES.exit)) ?? { ended: 'failed' }
   const state = readJsonOrNull(join(folder, RUN_FILES.state)) ?? {}
   const harness = receipt.harness ?? null
+  // OpenCode keeps its usage in the session's own record: read in the run's own folders before they are deleted (72.5 AC2).
+  if (harness === 'opencode') recordOpenCodeSession(folder)
   let seen
   try {
     seen = observeAsk(folder, harness, request)
@@ -228,8 +273,13 @@ export function finishAsk(folder) {
   else if (exit.ended === 'ceiling') {
     outcome = 'stopped'
     reason = exit.reason ?? 'the run reached the owner\'s token ceiling'
-  } else if (exit.ended === 'limit') outcome = 'out-of-time'
-  else if (exit.ended === 'output') {
+  } else if (exit.ended === 'limit') {
+    outcome = 'out-of-time'
+    const minutes = readJsonOrNull(join(folder, RUN_FILES.launch))?.time_limit_minutes
+    reason = `the run's time limit${minutes ? ` of ${minutes} minute${minutes === 1 ? '' : 's'}` : ''} ended it`
+    // OpenCode retries a provider error without end and says nothing (70.1): a run that started steps and answered nothing was still waiting on its provider.
+    if (harness === 'opencode' && seen.answer === null && seen.failure === null && eventsOf(folder).events.some((event) => event.type === 'step_start')) reason += '; OpenCode was still waiting on its provider, which it retries without end'
+  } else if (exit.ended === 'output') {
     outcome = 'failed'
     reason = `the app's output went over ${OUTPUT_LIMIT / 1024 / 1024} MiB`
   } else if (seen.answer === null || seen.answer.trim() === '') {
@@ -328,7 +378,7 @@ export function stopAsk(folder) {
 // The export
 
 /** What an export carries (the contract's record table): never the app's home, its raw error stream or the frozen copy. */
-export const EXPORTED = Object.freeze(['request.json', 'inputs', 'project-manifest.json', 'snapshots', 'receipt.json', 'launch.json', 'state.json', 'exit.json', 'events.jsonl', 'answer.md', 'outcome.json'])
+export const EXPORTED = Object.freeze(['request.json', 'inputs', 'project-manifest.json', 'snapshots', 'receipt.json', 'launch.json', 'state.json', 'exit.json', 'events.jsonl', 'session-info.json', 'answer.md', 'outcome.json'])
 
 /** The launch with every environment value the container is given left out: names only. */
 function launchWithoutValues(launch) {

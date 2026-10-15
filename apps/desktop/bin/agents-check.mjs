@@ -11,7 +11,7 @@ import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, CONTEXT_
 import { RUN_TEST_APPS, appTools, checkRunTools } from './agents-tools.mjs'
 import { ASK_APPS, ASK_FORMS_PROVEN, ASK_FORM_NAMES, ASK_ACCESS, ASK_RUN_FILES, UNAVAILABLE_WHY, appSearchPath, askArgv, askProgram, formStanding, sameProgram } from './agents-team-forms.mjs'
 import { INSIDE } from './agents-container.mjs'
-import { OPENCODE_FOLDER_SHA256, OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_RESEARCH_AGENT, OPENCODE_SESSION_ID, installOpenCodeFolder, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
+import { OPENCODE_ASKER_AGENT, OPENCODE_FOLDER_SHA256, OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_RESEARCH_AGENT, OPENCODE_SESSION_ID, installOpenCodeFolder, openCodeAskHome, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
 
 export { publicOnlyReasons }
 
@@ -874,8 +874,7 @@ export function resolveClaudeRoute(parsed, environment, cwd, { container = false
  * names the session with one more request to a title model the form does not name, so the destination
  * is unknown.
  */
-export function resolveOpenCodeRoute(parsed, { agent: wantedAgent = OPENCODE_HELPER_AGENT, folder = true } = {}) {
-  const base = openCodeFolder()
+export function resolveOpenCodeRoute(parsed, { agent: wantedAgent = OPENCODE_HELPER_AGENT, folder = true, base = openCodeFolder() } = {}) {
   const wanted = openCodeEnvironment(base)
   const form = 'the folders and switches `bmn roster role <role> --json` gives'
   if (parsed.envMode !== 'clean') return { unsupported: `an OpenCode run is checked only behind env -i, with ${form}` }
@@ -897,7 +896,7 @@ export function resolveOpenCodeRoute(parsed, { agent: wantedAgent = OPENCODE_HEL
   const problem = folder ? openCodeFolderProblem(base) : null
   if (problem !== null) return { unsupported: `${problem}; \`bmn roster role <role> --json\` puts BMN's folder back` }
   if (parsed.agent !== wantedAgent) {
-    const which = wantedAgent === OPENCODE_HELPER_AGENT ? 'read-only' : 'research'
+    const which = wantedAgent === OPENCODE_HELPER_AGENT ? 'read-only' : wantedAgent === OPENCODE_ASKER_AGENT ? 'asked-teammate' : 'research'
     return { unsupported: parsed.agent === undefined ? `opencode run must carry --agent ${wantedAgent}, BMN's ${which} agent` : `--agent ${parsed.agent} is not BMN's agent; the form runs --agent ${wantedAgent}` }
   }
   const folders = openCodeFolders(base)
@@ -2731,7 +2730,7 @@ export function askConsent(data, destination, inputs, label, now = new Date(), n
 export function askRequest(agent, version, { access, effort, rules = null, pictures = [], contextTestLog = undefined }) {
   const proven = agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(agent.harness, version, contextTestLog)
   const items = contextItems(agent, proven)
-  return { access, model: agent.model, effort, rules, pictures, context: items.state === 'applied' ? { argv: items.argv, env: items.env } : { argv: [], env: [] } }
+  return { access, model: agent.model, provider: agent.provider, effort, rules, pictures, context: items.state === 'applied' ? { argv: items.argv, env: items.env } : { argv: [], env: [] } }
 }
 
 /**
@@ -2869,10 +2868,18 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     const assignments = Object.fromEntries(Object.entries(built.form.environment).map(([name, value]) => [name, value.startsWith(INSIDE.home) ? `${run.home}${value.slice(INSIDE.home.length)}` : value]))
     const parsed = agent.harness === 'codex'
       ? { harness: 'codex', command: program.payload, envMode: 'clean', assignments, config: [...request.context.argv.filter((_, index) => index % 2 === 1), `model_reasoning_effort="${inputs.effort}"`, 'approval_policy="never"'], disable: [], model: agent.model, sandbox: 'read-only', resume: null }
-      : { harness: 'claude', command: program.payload, envMode: 'clean', assignments, addDir: [], model: agent.model, effort: inputs.effort }
-    const resolution = agent.harness === 'codex' ? resolveCodexRoute(parsed, {}, null) : resolveClaudeRoute(parsed, {}, inputs.access === 'project' ? run.project : null, { container: true })
+      : agent.harness === 'claude'
+        ? { harness: 'claude', command: program.payload, envMode: 'clean', assignments, addDir: [], model: agent.model, effort: inputs.effort }
+        // OpenCode's command read by the same parser as every OpenCode dispatch.
+        : parseOpenCode(built.form.command.slice(1), { harness: 'opencode', command: program.payload, envMode: 'clean', assignments })
+    if (parsed.unsupported) refuse('ROUTE_UNSUPPORTED', parsed.unsupported)
+    // OpenCode's folders are the run's own, in its home: the same rules as BMN's research folder, read there.
+    const resolution = agent.harness === 'codex' ? resolveCodexRoute(parsed, {}, null)
+      : agent.harness === 'claude' ? resolveClaudeRoute(parsed, {}, inputs.access === 'project' ? run.project : null, { container: true })
+        : resolveOpenCodeRoute(parsed, { agent: openCodeAskHome(inputs.access).agent, folder: false, base: `${run.home}/oc` })
     if (resolution.unsupported) refuse('ROUTE_UNSUPPORTED', resolution.unsupported)
-    const { model, effort } = checkModelAndEffort(agent, resolution, note)
+    // OpenCode names a model with its provider (`-m opencode-go/gpt-6-luna`), as research's check reads it.
+    const { model, effort } = checkModelAndEffort(agent.harness === 'opencode' && !agent.model.includes('/') ? { ...agent, model: `${agent.provider}/${agent.model}` } : agent, resolution, note)
     checkRoleEffort(role, agent, effort, note)
     const context = checkContext(agent, resolution.context, proven, agent.context_limit === undefined ? [] : provenPrecedence(agent.harness, version, contextTestLog))
     if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal, context.why)
@@ -2891,7 +2898,8 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       ...(agent.context_limit !== undefined && context.applied === null ? { context_limit_note: context.note } : {}),
       access: inputs.access, form: ASK_FORM_NAMES[agent.harness][inputs.access], ...(manifest.pictures.length > 0 ? { pictures: manifest.pictures.length } : {}),
       sandbox: agent.harness === 'codex' ? { mode: 'read-only', source: '--sandbox', approval_policy: 'never', tools: 'none' }
-        : { mode: 'read-only', source: '--tools', tools: inputs.access === 'project' ? ['Read', 'Grep', 'Glob', 'git log', 'git show', 'git diff', 'git blame'] : [] },
+        : agent.harness === 'claude' ? { mode: 'read-only', source: '--tools', tools: inputs.access === 'project' ? ['Read', 'Grep', 'Glob', 'git log', 'git show', 'git diff', 'git blame'] : [] }
+          : { mode: 'read-only', source: '--agent', agent: openCodeAskHome(inputs.access).agent, tools: inputs.access === 'project' ? ['read', 'glob', 'grep', 'list'] : [] },
       run: basename(folder), data: label, consent,
       inputs_sha256: sha256(canonicalJson(manifest)),
       snapshots: {

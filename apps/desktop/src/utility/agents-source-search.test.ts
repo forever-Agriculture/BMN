@@ -29,7 +29,9 @@ const DOCS = ['docs/agent-control.md', 'docs/features.md', 'README.md']
  */
 const HISTORICAL: Array<[file: string, line: RegExp]> = [
   ['apps/desktop/bin/agents-roster.mjs', /^const SCHEMA_1_CHANGES = /],
-  ['apps/desktop/src/utility/agents-roster.test.ts', /'the earlier small_epic rule'|'the earlier ## data-labels section'|toMatch\(\/title became class\/\)|toMatch\(\/trust, authority, security, cost, quota, tags and ## data-labels are gone\/\)|schema_version: 1, agents: \[/]
+  ['apps/desktop/src/utility/agents-roster.test.ts', /'the earlier small_epic rule'|'the earlier ## data-labels section'|toMatch\(\/title became class\/\)|toMatch\(\/trust, authority, security, cost, quota, tags and ## data-labels are gone\/\)|schema_version: 1, agents: \[/],
+  // Not a team field: OpenCode's own session export names what a session spent `cost` (70.4), read once into reported_cost.
+  ['apps/desktop/bin/agents-opencode.mjs', /^\s*reported_cost: number\(info\.cost\)$/]
 ]
 
 interface Hit { file: string; line: number; text: string }

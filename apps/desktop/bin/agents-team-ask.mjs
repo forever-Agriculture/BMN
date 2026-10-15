@@ -1,6 +1,6 @@
 // MODULE: agents-team-ask.mjs - Epic 72: one teammate's ask made ready to start: the teammate chosen, every input read, scanned and its consent decided before anything is copied, the run's folder built, the command built and judged
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,6 +9,7 @@ import { readApproved } from './agents-state.mjs'
 import { askConsent, askRequest, evaluateAsk, expectedDestination, harnessVersion, teamRunsDirectory, workspaceRoot, workspaceVisibility, askStandingWords } from './agents-check.mjs'
 import { ASK_ACCESS, ASK_APPS, ASK_RUN_FILES, appSearchPath, askArgv, askProgram, executableIdentity, signInBind } from './agents-team-forms.mjs'
 import { readMaster, render } from './agents-rules.mjs'
+import { openCodeFolders } from './agents-opencode.mjs'
 import { askerOf } from './agents-ask.mjs'
 import { INSIDE } from './agents-container.mjs'
 import { InputRefusal, LIMITS, askProject, checkQuestion, freezeProject, sha256Of, textFile, workingTreeRoot } from './agents-team-inputs.mjs'
@@ -146,6 +147,8 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     // The owner's sign-in file is bound into the run, never read: without it the app cannot answer.
     const signIn = signInBind(agent.harness, environment)
     if (signIn !== null && !existsSync(signIn.from)) return `runs on ${APP_NAMES[agent.harness]}, which is not signed in on this computer (no ${signIn.from})`
+    // OpenCode's run gets a copy of the OpenCode Go sign-in BMN keeps in its own folder (70.4), made at the start.
+    if (agent.harness === 'opencode' && !existsSync(openCodeFolders().data)) return 'runs on OpenCode, and BMN\'s OpenCode folder holds no sign-in yet: BMN copies your OpenCode Go sign-in when you approve an OpenCode teammate in the Team view'
     return 'proven'
   }
   const allowed = (agent) => {
@@ -214,7 +217,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   }
   writePrivate(join(folder, ASK_RUN_FILES.manifest), `${JSON.stringify(manifest, null, 2)}\n`)
   writePrivate(join(folder, ASK_RUN_FILES.request), `${JSON.stringify({
-    version: 1, id, role: request.role, agent: choice.agent.id, model: choice.agent.model, aliases: choice.agent.aliases ?? [], effort: choice.effort, chosen_by: choice.rule, phase: choice.phase,
+    version: 1, id, role: request.role, agent: choice.agent.id, model: choice.agent.model, provider: choice.agent.provider, aliases: choice.agent.aliases ?? [], effort: choice.effort, chosen_by: choice.rule, phase: choice.phase,
     billing: choice.agent.paid_by ?? 'unknown', project, access, data: label, ...(request.recheckOf === undefined ? {} : { recheck_of: request.recheckOf }),
     // The retry key, whose it is and the request's hash (72.4): a retry with the same three finds this run.
     ...(request.key === undefined ? {} : { key: request.key, key_scope: request.keyScope, request_sha256: request.requestSha256 }),
@@ -226,6 +229,16 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   // The run's own app home: what the form names, and the empty files the sign-in is bound onto.
   for (const [path, text] of Object.entries(form.home)) writePrivate(join(run.home, path), text)
   for (const path of form.mountPoints) writePrivate(join(run.home, path), '')
+  for (const path of form.folders ?? []) mkdirSync(join(run.home, path), { recursive: true, mode: 0o700 })
+  // OpenCode searches with ripgrep; a copy of the one BMN's OpenCode folder links to, so the run fetches none from the web (70.1).
+  if (choice.agent.harness === 'opencode') {
+    const ripgrep = join(openCodeFolders().cache, 'opencode/bin/rg')
+    if (existsSync(ripgrep)) {
+      mkdirSync(join(run.home, 'oc/cache/opencode/bin'), { recursive: true, mode: 0o700 })
+      copyFileSync(ripgrep, join(run.home, 'oc/cache/opencode/bin/rg'))
+      chmodSync(join(run.home, 'oc/cache/opencode/bin/rg'), 0o700)
+    }
+  }
   // The snapshots the check judges and the start uses (72.3 AC1): the app's configuration as BMN wrote it, its program, its environment once.
   for (const [path, text] of Object.entries(form.home)) writePrivate(join(folder, ASK_RUN_FILES.snapshots, 'config', path), text)
   writePrivate(join(folder, ASK_RUN_FILES.snapshots, 'executable.json'), `${JSON.stringify(executableIdentity(installed.program), null, 2)}\n`)

@@ -2279,7 +2279,7 @@ the network is the app's form below. Environment: `--clearenv`, then only what t
 | --- | --- | --- | --- |
 | Codex | `codex exec --skip-git-repo-check --sandbox read-only --strict-config -c approval_policy="never" --ephemeral` with every tool off: `--disable view_image goals image_generation sleep_tool hooks code_mode_host`, `mcp_servers={}`, `web_search="disabled"`, `features.shell_tool`, `unified_exec`, `multi_agent`, `apps`, `plugins` off, skills and app, collaboration and environment instructions off, `project_doc_max_bytes=0`. `--ephemeral` because Codex keeps offering `spawn_agent` whatever is set, and only a run that keeps no session makes every start fail. | `-i /ask/inputs/images/<name>` | **Unavailable here.** Codex runs every command of a restricted run in its own bubblewrap sandbox, and a sandbox nested in BMN's container is refused by AppArmor (`bwrap//&unpriv_bwrap`). With its sandbox off in the container, it reads the run's own sign-in, session and configuration and reaches the network (FAIL). |
 | Claude Code | `claude -p --tools '' --permission-mode dontAsk --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands --no-session-persistence --output-format stream-json --verbose --append-system-prompt <rules>` | `--input-format stream-json`, one user message holding the image blocks and the question | `--tools Read,Grep,Glob,Bash --allowedTools 'Bash(git log:*)' 'Bash(git show:*)' 'Bash(git diff:*)' 'Bash(git blame:*)' --permission-mode dontAsk --restricted`, started in `/ask/project`, with BMN's own `git` first on `PATH` (`bin/ask-git.sh`). `--restricted` keeps Read, Grep and Glob in the working folder; the prefix rules alone let `git blame --contents`, `--ignore-revs-file`, `--output` and `-O` read or write any file the container shows (FAIL), so BMN's `git` (`bin/ask-git.sh`, shipped with 72.3) allows only `log`, `show`, `diff` and `blame` with no option that names a file, runs no external diff, text conversion, pager or hook, and reads no configuration but the frozen copy's own. |
-| OpenCode | `opencode run --standalone --format json --agent bmn-asker` with per-run `HOME` and `XDG_*` folders in `/ask/home`, the agent `"*": deny`, the owner's rules as `config/opencode/AGENTS.md` | not measured (no picture ask for OpenCode) | `--agent bmn-helper` (read, glob, grep, list; everything else denied): reads stay in the project (PASS), but the agent has no history tool; a Git-only shell rule is for 72.5 to measure. |
+| OpenCode | `opencode run --standalone --format json --agent bmn-asker -m <provider>/<model>#<effort> --title 'BMN ask'` with the run's own `HOME` and `XDG_*` folders in `/ask/home/oc`, the project's own configuration, updates and the model list fetch off (`OPENCODE_DISABLE_*`), the agent `"*": deny`, BMN's settings (no update, sharing or snapshots, no search service), the owner's rules as `config/opencode/AGENTS.md` for a private ask, ripgrep copied from BMN's OpenCode folder | not measured (no picture ask for OpenCode) | **Not offered.** `--agent bmn-helper` (read, glob, grep, list; everything else denied) keeps reads in the project (PASS), but it has no tool that reads Git history; whether to offer a project ask without history is the owner's call. |
 
 **Wider-read mode (assumption f).** For Codex project asks the owner may enable, in the Team view, a
 named wider-read mode measured at its own outer boundary: Codex outside BMN's container, its own
@@ -2306,7 +2306,7 @@ names the narrowest permission rule if auto mode then refuses it.
 | --- | --- | --- |
 | Codex | the owner's `~/.codex/auth.json` bound read-write at `/ask/home/codex/auth.json` | written in place into his file (same file), as research's link does today |
 | Claude Code | the owner's `~/.claude/.credentials.json` bound read-write at `/ask/home/.claude/.credentials.json` | written in place into his file (same file) |
-| OpenCode | his Go key copied into the run's own folders with `opencode auth export` and `auth import` (70.4) | none: Go signs in with a key |
+| OpenCode | the Go key BMN's OpenCode folder holds (copied there from his OpenCode when he approved an OpenCode teammate, 70.4) copied into the run's own folders at the start with `opencode auth export` and `auth import`, in memory only; refused (`SIGN_IN_UNAVAILABLE`, nothing started) where that folder holds none | none: Go signs in with a key |
 
 BMN never reads Codex's or Claude Code's sign-in file; it only names it. A copy is not used: a run
 that renews its copy rotates a token the owner's own file no longer matches (measured for both
@@ -2325,7 +2325,7 @@ failed renewal is the run's sign-in failure (exit 1), never retried by BMN.
 | Session named | first event `thread.started.thread_id` (1.6–1.8 s after start, before the answer) | first event `system`/`init` `session_id` (1.1–1.4 s) | every event's `sessionID` (`ses_…`) |
 | Two runs in the same second | different ids (UUIDv7) | different ids | different ids (70.3) |
 | Answer | the last `item.completed` agent message; also `-o /ask/home/answer.md` | `result.result` | the last `text` event |
-| Model | the turn span on standard error, `turn{… model=…}` | `init.model` and each assistant message's `model` | the session export |
+| Model | the turn span on standard error, `turn{… model=…}` | `init.model` and each assistant message's `model` | the session export (`opencode session export <id> --standalone` in the run's own folders after it ends; its info alone kept as `session-info.json`, never its messages) |
 | Effort | the same span, `codex.turn.reasoning_effort=…` | not reported: verified from the pinned command (`--effort`) | the session export |
 | Usage | `turn.completed.usage` (input, cached, output, reasoning tokens), at the end only | each assistant message's `usage` while it runs; `result.usage`, `modelUsage` at the end | the session export at the end (output holds only part) |
 | Cost | not reported (subscription) | `result.total_cost_usd` as reported | the session export |
@@ -2350,7 +2350,7 @@ says so.
 | 3–7 | team state, as for every team command: 3 team file missing, 4 invalid, 5 not approved, 6 state corrupt, 7 revision conflict |
 | 10 | refused, with the refusal code and its words (below) |
 | 14 | busy (`BUSY`): the capacity limit is reached; nothing is queued |
-| 15 | out of time: the run's time limit ended it |
+| 15 | out of time: the run's time limit ended it; for OpenCode, which retries a provider error without end and says nothing, the reason says it was still waiting on its provider |
 | 16 | stopped: Stop, its supervisor ended, or the token ceiling |
 | 17 | answer not attributed: no session, a second different session, or a model or effort that contradicts the request; the answer is kept only as diagnostic evidence |
 
@@ -2360,7 +2360,7 @@ Refusal codes (exit 10) the commands add: `ROLE_UNKNOWN`, `AGENT_NOT_ELIGIBLE`, 
 `INPUT_INVALID` (a link, a non-regular or non-UTF-8 file, a credential or configuration location),
 `INPUT_TOO_LARGE`, `CREDENTIAL_FOUND` (names the file and pattern, never the value), `PUBLIC_NOT_VERIFIED`,
 `PRIVATE_NOT_ALLOWED`, `CHANGED` (the approved team or the app's program changed between the check and
-the start; nothing started), `KEY_REQUIRED`, `KEY_CONFLICT` (same key, different request), `GONE` (a removed
+the start; nothing started), `SIGN_IN_UNAVAILABLE` (OpenCode: BMN's folder holds no Go sign-in to copy; nothing started), `KEY_REQUIRED`, `KEY_CONFLICT` (same key, different request), `GONE` (a removed
 run's or expired key), `NESTED` (asked from inside a teammate's run), `NOT_YOURS` (another session's
 run), and every refusal of `evaluate`'s ask mode with its existing code.
 
@@ -2479,6 +2479,7 @@ so a run outlives BMN closing.
 | `receipt.json` | `evaluate`'s verdict, the argv's hash, every snapshot's hash, the form and any wide-read mode | yes |
 | `launch.json`, `state.json`, `exit.json` | the supervisor's input, its state and the container's end | yes |
 | `events.jsonl` | the app's own output events | yes |
+| `session-info.json` | OpenCode only: the session export's info (id, agent, model and variant, tokens, cost, title), never its messages | yes |
 | `stderr.txt` | the app's raw error stream | no |
 | `answer.md`, `outcome.json` | the answer; state, exit, refusal, observed identity with sources, usage with source, times | yes |
 | `diagnostic-answer.md` | an answer that could not be attributed (exit 17), kept only as evidence, never shown as the answer | no |

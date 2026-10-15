@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto'
 import { closeSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
 import { INSIDE, appPaths, containerArgv } from './agents-container.mjs'
+import { openCodeAskHome, openCodeEnvironment } from './agents-opencode.mjs'
 
 /**
  * A teammate's ask runs its app in exactly one form per access mode (R72-NFR2), each one measured
@@ -27,7 +28,7 @@ export const UNAVAILABLE_WHY = Object.freeze({
     project: 'Codex runs every command of a project ask in its own bubblewrap sandbox, and on this computer a sandbox inside BMN\'s container is refused (AppArmor\'s unprivileged-namespace restriction); without that sandbox Codex would read its own sign-in, so project asks on Codex are unavailable here (72.1)'
   },
   opencode: {
-    project: 'OpenCode\'s read-only agent has no tool that reads the project\'s Git history, so its project form is not offered yet (72.5 measures one)',
+    project: 'OpenCode\'s read-only agent has no tool that reads the project\'s Git history, so its project form is not offered (72.1, 72.5); ask it with --access files and the files it needs',
     pictures: 'pictures for OpenCode teammates are not measured'
   }
 })
@@ -50,8 +51,12 @@ export const ASK_RUN_FILES = Object.freeze({
 /** The name a receipt gives each form, per app and access mode. */
 export const ASK_FORM_NAMES = Object.freeze({
   codex: { question: 'codex-no-tools', files: 'codex-no-tools', project: 'codex-project' },
-  claude: { question: 'claude-no-tools', files: 'claude-no-tools', project: 'claude-project-read' }
+  claude: { question: 'claude-no-tools', files: 'claude-no-tools', project: 'claude-project-read' },
+  opencode: { question: 'opencode-asker', files: 'opencode-asker', project: 'opencode-project-read' }
 })
+
+/** An ask's OpenCode session title: with one named, OpenCode makes no request of its own to name the session (70.3). */
+export const OPENCODE_ASK_TITLE = 'BMN ask'
 
 /** Codex with every tool off, as its research form and the 72.1 question/files form; `--ephemeral`, because only a run that keeps no session makes every sub-agent start fail. */
 export const CODEX_ASK_NO_TOOLS = Object.freeze(['--ephemeral', '--disable', 'view_image', '--disable', 'goals', '--disable', 'image_generation', '--disable', 'sleep_tool', '--disable', 'hooks', '--disable', 'code_mode_host',
@@ -93,7 +98,7 @@ export function askProgram(harness, environment = process.env) {
  * Returns `{ command, environment, cwd, home: { [relative path]: text }, mountPoints, stdin }`;
  * `stdin` is `text` (the prompt as it is) or `stream-json` (one user message with the pictures).
  */
-export function askCommand(harness, program, { access, model, effort, rules = null, pictures = [], context = { argv: [], env: [] } }) {
+export function askCommand(harness, program, { access, model, provider = null, effort, rules = null, pictures = [], context = { argv: [], env: [] } }) {
   // The agent's context limit, where the owner's test proved the setting on this app version (60.9): `-c` items for Codex, environment for Claude Code.
   const contextEnvironment = Object.fromEntries(context.env.map((pair) => [pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1)]))
   if (harness === 'codex') {
@@ -114,6 +119,16 @@ export function askCommand(harness, program, { access, model, effort, rules = nu
       environment: { HOME: INSIDE.home, CLAUDE_CONFIG_DIR: `${INSIDE.home}/.claude`, PATH: project ? `${INSIDE.inputs}/bin:/usr/bin:/bin` : '/usr/bin:/bin',
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1', ...contextEnvironment },
       cwd: project ? INSIDE.project : INSIDE.work, home: {}, mountPoints: ['.claude/.credentials.json'], stdin: pictures.length > 0 ? 'stream-json' : 'text'
+    }
+  }
+  if (harness === 'opencode') {
+    // 72.1's OpenCode form: the run's own five folders in its home, BMN's agent, the project's own configuration off.
+    const own = openCodeAskHome(access, rules)
+    const reference = model.includes('/') ? model : `${provider}/${model}`
+    return {
+      command: [program.payload, 'run', '--standalone', '--format', 'json', '--agent', own.agent, '-m', `${reference}#${effort}`, '--title', OPENCODE_ASK_TITLE],
+      environment: { ...openCodeEnvironment(`${INSIDE.home}/oc`), PATH: '/usr/bin:/bin' },
+      cwd: access === 'project' ? INSIDE.project : INSIDE.work, home: own.files, folders: own.folders, mountPoints: [], stdin: 'text'
     }
   }
   throw new Error(`no ask form for ${harness} yet`)
@@ -161,8 +176,8 @@ export function sameProgram(identity, program) {
   return same(identity.launcher, program.launcher) && same(identity.payload, program.payload)
 }
 
-/** Whether BMN builds an ask form for an app yet: OpenCode's arrives with Story 72.5. */
-export const ASK_APPS = Object.freeze(['codex', 'claude'])
+/** The apps whose teammates BMN asks: OpenCode's form arrived with Story 72.5. */
+export const ASK_APPS = Object.freeze(['codex', 'claude', 'opencode'])
 
 /**
  * The whole command of one ask: the app's form inside the run's container. `run`: the run's own
