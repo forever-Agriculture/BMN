@@ -2393,9 +2393,7 @@ only then the teammate's container. A browser ask is private, reads the question
 asker's statement that the app and its services are disposable test instances with synthetic data
 and no production backend or credentials, because navigation and the page's own code may change the
 app's state and a look follows any link a page offers, a destructive `GET` included; without it the
-ask is refused (`BROWSER_STATEMENT_REQUIRED`). The commands are kept in the run's record and its
-export, so they are scanned as the question is: one that holds a credential BMN recognises is
-refused (`CREDENTIAL_FOUND`) and nothing starts.
+ask is refused (`BROWSER_STATEMENT_REQUIRED`).
 
 **Two sealed spaces.** Each is a bubblewrap space with a network of its own holding only loopback,
 its own processes, the system's programs read-only and a made-up account:

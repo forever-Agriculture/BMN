@@ -12,7 +12,7 @@ import { readMaster, render } from './agents-rules.mjs'
 import { openCodeFolders } from './agents-opencode.mjs'
 import { askerOf } from './agents-ask.mjs'
 import { INSIDE } from './agents-container.mjs'
-import { InputRefusal, LIMITS, askProject, canonicalProject, checkQuestion, credentialHits, freezeProject, sha256Of, textFile, workingTreeRoot } from './agents-team-inputs.mjs'
+import { InputRefusal, LIMITS, askProject, canonicalProject, checkQuestion, freezeProject, sha256Of, textFile, workingTreeRoot } from './agents-team-inputs.mjs'
 import { AskRefusal, resolveTeammate } from './agents-team-resolve.mjs'
 import { pictureFile } from './agents-team-pictures.mjs'
 import { TREE_FILE, runTree } from './agents-team-tree.mjs'
@@ -122,9 +122,6 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     if (read.code !== undefined) throw new AskRefusal(read.code, read.message)
     if (access !== 'question' || files.length > 0 || images.length > 0) throw new AskUsageError('a browser ask gives the teammate the app, not files, pictures or the project\'s copy: leave out --access, --file and --image')
     if (label !== 'private') throw new AskUsageError('browser asks are private: leave out --data public')
-    // The commands are kept in the run's record and its export, as the question is: one that holds a credential BMN recognises is refused.
-    const hits = credentialHits([read.request.serve, ...read.request.services].join('\n'))
-    if (hits.length > 0) throw new InputRefusal('CREDENTIAL_FOUND', `the app's commands hold ${hits.join(' and ')}; nothing was started`)
     browser = read.request
   }
 

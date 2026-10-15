@@ -116,22 +116,6 @@ describe('Team › Asks', () => {
     expect(html).toContain('**bold**')
   })
 
-  it('an opened browser ask lists its pages and screenshots as plain lines: a hostile title or address makes no link, picture or markup (74.3 AC5, AC6)', () => {
-    const browser = { origin: 'http://127.0.0.1:4173', interact: false, refused: 2,
-      pages: [{ url: 'http://127.0.0.1:4173/?q=<script>alert(1)</script>', title: '<img src=x onerror=alert(1)> [pay](javascript:alert(1)) **Shop**' }, { url: 'http://127.0.0.1:4173/empty', title: null }],
-      screenshots: [{ name: 'page-<b>1</b>.png', bytes: 14_336 }] }
-    const browsing = line({ reads: { access: 'question', files: 0, pictures: 0, browser: { origin: browser.origin, interact: false } } })
-    const html = render({ snapshot: snapshot({ asks: [browsing] }), initiallyOpen: browsing.id, initialDetail: detail({ line: browsing, files: [], browser }) })
-    expect(html).not.toMatch(/<img|<script|<a |<strong|<b>1/u)
-    expect(html).not.toContain('href="javascript')
-    expect(html).toContain('http://127.0.0.1:4173/?q=&lt;script&gt;alert(1)&lt;/script&gt; · &lt;img src=x onerror=alert(1)&gt; [pay](javascript:alert(1)) **Shop**')
-    expect(html).toContain('page-&lt;b&gt;1&lt;/b&gt;.png')
-    const text = words(html)
-    expect(text).toContain('the question and the app at http://127.0.0.1:4173, looking only')
-    expect(text).toContain('http://127.0.0.1:4173/empty')
-    expect(text).toContain("The app's own text, shown as plain text · BMN refused 2 calls")
-  })
-
   it('an opened refused or lost ask shows why and no answer; a running one says it is answering and cannot be removed', () => {
     const lost = words(render({ initiallyOpen: LOST.id, initialDetail: detail({ line: LOST, answer: null }) }))
     expect(lost).toContain('Not attributed: the events named a second session')

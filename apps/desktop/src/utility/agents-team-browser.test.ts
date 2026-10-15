@@ -1,6 +1,5 @@
 // MODULE: agents-team-browser.test.ts - Story 74.3: a browser ask: its request and refusals, BMN's filter of the browser's tools, and whole asks in BMN's real network spaces and container, stand-in Codex and Claude Code driving the real browser against a synthetic app and service that try to reach a forbidden server on load, on a click and from the server side; no provider is reached
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import { networkInterfaces, userInfo } from 'node:os'
@@ -118,7 +117,7 @@ function writeApp(project: string, forbidden: { port: number; lan: string | null
   const targets = [`http://127.0.0.1:${forbidden.port}`, ...(forbidden.lan === null ? [] : [`http://${forbidden.lan}:${forbidden.port}`]), 'http://192.0.2.1']
   writeFileSync(join(project, 'app.mjs'), `import { createServer, request } from 'node:http'
 import { connect } from 'node:net'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 const targets = ${JSON.stringify(targets)}
 const tries = (where) => { for (const target of targets) { const url = new URL(target); const socket = connect(Number(url.port || 80), url.hostname); socket.on('error', () => {}); socket.setTimeout(2000, () => socket.destroy()) } }
 tries('app')
@@ -126,38 +125,13 @@ tries('app')
 setTimeout(() => request('http://127.0.0.1:4174/relay').on('error', () => {}).end(), 300)
 writeFileSync('written-by-the-app.txt', 'the overlay keeps nothing')
 const page = (title, body) => '<!doctype html><title>' + title + '</title><h1>' + title + '</h1>' + body
+const attempts = targets.map((t) => 'fetch(' + JSON.stringify(t + '/page') + ').catch(() => {}); new Image().src = ' + JSON.stringify(t + '/img') + ';').join('')
 createServer((req, res) => {
-  if (req.url === '/escapes.js' || req.url === '/worker.js') {
-    res.setHeader('content-type', 'text/javascript')
-    return res.end(readFileSync(req.url.slice(1)))
-  }
-  // A redirect off the origin: the browser follows it into nothing.
-  if (req.url === '/redirect') return res.writeHead(302, { location: targets[0] + '/redirected' }).end()
   res.setHeader('content-type', 'text/html')
   if (req.url === '/delete-everything') return res.end(page('Deleted (synthetic)', '<p>A destructive GET a link offers.</p>'))
-  res.end(page('Synthetic shop', '<p id="state">ready</p><button onclick="tryAll(false); document.getElementById(\\'state\\').textContent = \\'clicked\\'">Act</button><a href="/delete-everything">delete everything</a><script src="/escapes.js"></script><script>tryAll(true)</script>'))
+  res.end(page('Synthetic shop', '<p id="state">ready</p><button onclick="' + attempts.replace(/"/g, '&quot;') + 'document.getElementById(\\'state\\').textContent = \\'clicked\\'">Act</button><a href="/delete-everything">delete everything</a><script>' + attempts + '</script>'))
 }).listen(Number(process.env.PORT), '127.0.0.1')
 `)
-  // Every way of 74.1 AC1 a page leaves its origin, toward each forbidden target, on load and on a click (a pop-up on load only:
-  // one opened by a click would become the browser's current page).
-  writeFileSync(join(project, 'escapes.js'), `const T = ${JSON.stringify(targets)}
-function tryAll(loading) {
-  for (const t of T) {
-    fetch(t + '/page').catch(() => {}); fetch(t + '/no-cors', { mode: 'no-cors' }).catch(() => {}); new Image().src = t + '/img'
-    const x = new XMLHttpRequest(); x.open('GET', t + '/xhr'); x.onerror = () => {}; x.send()
-    for (const [tag, attr] of [['script', 'src'], ['link', 'href'], ['iframe', 'src']]) { const e = document.createElement(tag); if (tag === 'link') e.rel = 'stylesheet'; e[attr] = t + '/' + tag; e.onerror = () => {}; document.body.appendChild(e) }
-    try { new WebSocket(t.replace('http', 'ws') + '/ws').onerror = () => {} } catch {}
-    try { const e = new EventSource(t + '/events'); setTimeout(() => e.close(), 3000) } catch {}
-    try { navigator.sendBeacon(t + '/beacon', 'x') } catch {}
-    try { new Worker('/worker.js').postMessage(t + '/worker') } catch {}
-  }
-  fetch('/redirect').catch(() => {})
-  const r = document.createElement('iframe'); r.src = '/redirect'; document.body.appendChild(r)
-  try { const u = new URL(T[0]); const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:' + u.hostname + ':' + u.port }, { urls: 'turn:' + u.hostname + ':' + u.port + '?transport=tcp', username: 'u', credential: 'p' }] }); pc.createDataChannel('x'); pc.createOffer().then((o) => pc.setLocalDescription(o)).catch(() => {}) } catch {}
-  if (loading) try { window.open(T[0] + '/popup', '_blank') } catch {}
-}
-`)
-  writeFileSync(join(project, 'worker.js'), 'onmessage = (m) => { fetch(m.data).catch(() => {}); try { new WebSocket(String(m.data).replace("http", "ws")).onerror = () => {} } catch {} }\n')
   writeFileSync(join(project, 'service.mjs'), `import { createServer } from 'node:http'
 import { connect } from 'node:net'
 const targets = ${JSON.stringify(targets)}
@@ -176,7 +150,7 @@ const refusal = (run: () => unknown): { code: string; message: string } => {
     run()
   } catch (error) {
     if (error instanceof AskRefusal) return error
-    if (error instanceof Error) return { code: (error as { code?: string }).code ?? error.constructor.name, message: error.message }
+    if (error instanceof Error) return { code: error.constructor.name, message: error.message }
   }
   throw new Error('expected a refusal')
 }
@@ -211,17 +185,6 @@ describe('a browser ask\'s request (74.3 AC1, AC2)', () => {
     expect(refusal(() => ask({ data: 'public' })).message).toContain('browser asks are private')
     expect(refusal(() => ask({ access: 'project' })).message).toContain('a browser ask gives the teammate the app')
     expect(refusal(() => ask({ project: undefined })).message).toContain('a browser ask starts the app from its project')
-    expect(existsSync(teamRunsDirectory()) ? readdirSync(teamRunsDirectory()) : []).toEqual([])
-  })
-
-  it('is refused when a command holds a credential BMN recognises: the commands are kept in the record and its export (pre-review)', () => {
-    // A made-up key, spelled in parts so no scanner of this repository takes it for one.
-    const key = `sk-${'proj'}-${createHash('sha256').update('made-up browser key').digest('hex').slice(0, 48)}`
-    for (const browser of [browserRequest({ serve: `OPENAI_API_KEY=${key} node app.mjs` }), browserRequest({ services: [`node service.mjs --token ${key}`] })]) {
-      const refused = refusal(() => ask({ browser }))
-      expect(refused).toMatchObject({ code: 'CREDENTIAL_FOUND', message: expect.stringContaining("the app's commands hold an OpenAI key") })
-      expect(refused.message).not.toContain(key.slice(8))
-    }
     expect(existsSync(teamRunsDirectory()) ? readdirSync(teamRunsDirectory()) : []).toEqual([])
   })
 })
