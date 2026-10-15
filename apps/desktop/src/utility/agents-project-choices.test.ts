@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { consequences } from '../../bin/agents-check.mjs'
-import { parseRoster, projectChoiceProblem, rewriteRoster } from '../../bin/agents-roster.mjs'
+import { RETIRED_APPS, parseRoster, projectChoiceProblem, rewriteRoster } from '../../bin/agents-roster.mjs'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { AskRefusal } from '../../bin/agents-team-resolve.mjs'
@@ -153,7 +153,7 @@ describe('the team file\'s ## project-choices (73.2 AC1)', () => {
     expect(notes.join('\n')).not.toContain('/synthetic/')
     // An agent on a retired app answers nothing, whatever the file says of it.
     const data = parsed.data!
-    const retired = { ...data, agents: data.agents.map((agent) => (agent.id === 'fable' ? { ...agent, harness: 'cursor' as never } : agent)) }
+    const retired = { ...data, agents: data.agents.map((agent) => (agent.id === 'fable' ? { ...agent, harness: Object.keys(RETIRED_APPS)[0] as never } : agent)) }
     expect(projectChoiceProblem(retired, { id: 'a', project: '/synthetic/g', role: 'epic-reviewer', agent: 'fable' })).toBe('fable is retired')
   })
 
