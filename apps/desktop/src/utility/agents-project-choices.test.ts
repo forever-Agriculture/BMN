@@ -294,6 +294,21 @@ describe('asks in the project and its worktrees (73.2 AC1, AC3, AC4)', () => {
     expect(readApproved().data.project_choices).toBeUndefined()
   })
 
+  it('a folder that became a linked worktree after its choice was approved is its repository\'s project: a choice for the repository beside it is refused (epic recheck)', () => {
+    const shop = makeProject('shop')
+    const worktree = join(home, 'worktrees/shop-feature')
+    mkdirSync(worktree, { recursive: true })
+    const tree = `tree: {project: ${realpathSync(worktree)}, role: epic-reviewer, agent: astra}`
+    approve(withChoices(tree))
+    git(shop, 'worktree', 'add', '-q', '-b', 'feature', worktree)
+    writeFileSync(rosterFile(), withChoices(tree, `main: {project: ${shop}, role: epic-reviewer, agent: fable}`))
+    expect(() => approveRoster(shown(), { checkInspectedRoutes: () => {}, now: () => NOW })).toThrow(`the project choices tree and main both choose for epic-reviewer in ${shop}, whose linked worktrees count as it; one choice per project and role, so remove one; nothing was approved`)
+    expect(readApproved().data.project_choices).toEqual([{ id: 'tree', project: realpathSync(worktree), role: 'epic-reviewer', agent: 'astra' }])
+    // Another role there is a choice of its own.
+    approve(withChoices(tree, `main: {project: ${shop}, role: final-reviewer, agent: fable}`))
+    expect(readApproved().data.project_choices?.map((choice) => choice.id)).toEqual(['tree', 'main'])
+  })
+
   it('the first folder with a choice that has not ended decides, whatever the team file\'s order (epic review)', () => {
     const data = parseRoster(EXAMPLE).data!
     const main = { id: 'main', project: '/synthetic/shop', role: 'epic-reviewer', agent: 'fable' }

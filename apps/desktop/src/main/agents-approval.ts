@@ -242,6 +242,18 @@ export function judgeProjectChoices(previous: RosterData | null, next: RosterDat
     // A linked worktree is the repository's project, not one of its own: its choice is the repository's, so two never claim one project (epic review).
     if (mainWorktree(choice.project) !== null) throw new RosterError('PROJECT_CHOICE_UNAVAILABLE', `the project choice ${choice.id} names a linked worktree; a choice names its repository's main folder, whose linked worktrees count as it; nothing was approved`)
   }
+  // One choice per project and role in the whole approved team, the unchanged ones included: a folder that became a linked worktree after its choice
+  // was approved is its repository's project, so a choice for the repository beside it would make two (epic recheck).
+  const taken = new Map<string, NonNullable<RosterData['project_choices']>[number]>()
+  for (const choice of next.project_choices ?? []) {
+    const project = mainWorktree(choice.project) ?? choice.project
+    const key = `${project}\n${choice.role}`
+    const other = taken.get(key)
+    if (other !== undefined) {
+      throw new RosterError('PROJECT_CHOICE_COLLISION', `the project choices ${other.id} and ${choice.id} both choose for ${choice.role} in ${project}, whose linked worktrees count as it; one choice per project and role, so remove one; nothing was approved`)
+    }
+    taken.set(key, choice)
+  }
 }
 
 function validData(text: string): RosterData {

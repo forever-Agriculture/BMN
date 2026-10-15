@@ -996,7 +996,10 @@ approve it in BMN (Preferences, Team), whose review says who that role's asks in
 reach before and after; no command approves one. The approval refuses a new or changed choice
 whose agent is not active, does not hold the role, is of a class the role refuses or is given an
 effort the role does not allow it, one that already ended, one whose project passes through a
-link, and one naming a linked worktree (`PROJECT_CHOICE_UNAVAILABLE`). A first approval's review
+link, and one naming a linked worktree (`PROJECT_CHOICE_UNAVAILABLE`). It also refuses a team
+with two choices for one role in one project, its linked worktrees counted as it, unchanged choices
+included: a folder that became a linked worktree after its choice was approved takes no second
+choice for its repository (`PROJECT_CHOICE_COLLISION`). A first approval's review
 names each choice with its folder, role, teammate, effort and end date. A
 choice picks who answers and grants nothing: what data may reach that agent, its tools and what it
 can read stay the team's.
