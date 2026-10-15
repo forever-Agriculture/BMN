@@ -1,7 +1,7 @@
 // MODULE: agents-team-places.mjs - Epic 72: many asks, safely: a key, the request's hash and a capacity place reserved together before an ask starts, runs recovered after a crash and never started again, records kept for their retention, and the PID namespaces of running asks
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { takeLock } from './agents-research.mjs'
 import { processLives, processStart } from './agents-supervised.mjs'
 import { INSIDE } from './agents-container.mjs'
@@ -122,12 +122,43 @@ export function askSettings(runs) {
 // ---------------------------------------------------------------------------------------------
 // A run's state, recovered
 
+/** A path as a mountinfo line writes it, read back (a space is \040, a backslash \134). */
+const mountPath = (text) => text.replace(/\\([0-7]{3})/gu, (_, octal) => String.fromCharCode(Number.parseInt(octal, 8)))
+
+/**
+ * A folder as every mount of it shows it: its filesystem's device and the folder within that
+ * filesystem, read from this process's own mounts (the last mount at the longest mount point above
+ * it). Null when it cannot be told; then nothing is matched by it.
+ */
+export function mountIdentity(path) {
+  let real
+  let mounts
+  try {
+    real = realpathSync(path)
+    mounts = readFileSync('/proc/self/mountinfo', 'utf8')
+  } catch {
+    return null
+  }
+  let holder = null
+  for (const line of mounts.split('\n')) {
+    const fields = line.split(' ')
+    if (fields.length < 5) continue
+    const point = mountPath(fields[4])
+    const within = point === '/' ? real : real === point ? '' : real.startsWith(`${point}/`) ? real.slice(point.length) : null
+    if (within !== null && (holder === null || point.length >= holder.point.length)) holder = { point, device: fields[2], root: mountPath(fields[3]), within }
+  }
+  if (holder === null) return null
+  return { device: holder.device, folder: holder.root === '/' ? holder.within || '/' : `${holder.root}${holder.within}` }
+}
+
 /**
  * Ends the container a dead supervisor left running. bubblewrap sets --die-with-parent itself, after
  * it starts, so a supervisor killed in that first instant can leave it, or the namespace's own first
  * bubblewrap, running (seen under load, epic acceptance). So: bubblewrap by the identity (pid and
- * start) the supervisor recorded, and its process group; then every process of this user whose mounts
- * show this very run's home at the container's home, the container's own, whose end ends the rest.
+ * start) the supervisor recorded, and its process group; then every process whose mounts show this
+ * very run's home folder (its filesystem and its folder in it, exactly) at the container's home: only
+ * this run's container binds it there, and its end ends the rest. A run of the same id in another
+ * BMN state, its home elsewhere, is never matched.
  */
 function endLeftContainer(folder) {
   const kill = (target) => {
@@ -142,7 +173,8 @@ function endLeftContainer(folder) {
     kill(-child.pid)
     kill(child.pid)
   }
-  const own = `/${basename(folder)}/${ASK_RUN_FILES.home}`
+  const own = mountIdentity(join(folder, ASK_RUN_FILES.home))
+  if (own === null) return
   let pids
   try {
     pids = readdirSync('/proc').filter((name) => /^\d+$/u.test(name))
@@ -159,7 +191,7 @@ function endLeftContainer(folder) {
     // A mountinfo line: id, parent, device, the mounted folder (root), where it is mounted, ...
     const inside = mounts.split('\n').some((line) => {
       const fields = line.split(' ')
-      return fields[4] === INSIDE.home && fields[3]?.endsWith(own)
+      return fields.length >= 5 && fields[2] === own.device && mountPath(fields[3]) === own.folder && mountPath(fields[4]) === INSIDE.home
     })
     if (inside) kill(Number(pid))
   }

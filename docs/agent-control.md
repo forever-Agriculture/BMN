@@ -2474,7 +2474,7 @@ steps, whatever the launch names, and gives the app the very bytes it checked; i
 fails still writes a failed outcome and deletes the transient state) → one of `answered`, `failed`,
 `refused`, `out-of-time`, `stopped`, `not-attributed`; `interrupted` (exit 1) when the supervisor ended with
 no record of the end or with no outcome written, or the asking command ended after the reservation and before the start (nothing
-starts it again, and when BMN next looks (the next ask, `bmn team asks`, show, wait) its transient state is deleted and whatever its container left running is ended: bubblewrap by the identity its supervisor recorded, and every process whose mounts show this run's home); `gone` after removal, for the key window.
+starts it again, and when BMN next looks (the next ask, `bmn team asks`, show, wait) its transient state is deleted and whatever its container left running is ended: bubblewrap by the identity its supervisor recorded, and every process whose mounts show this run's own home folder, its filesystem and its folder in it exactly, at the container's home; a run of the same id in another BMN state is never touched); `gone` after removal, for the key window.
 These are complete integrity checks before the start, not a seal: the container reads the run's own
 copies, never the owner's live files, and a program of the owner's own user that rewrites them after
 the supervisor's last check, while the run goes on, is not stopped by them.

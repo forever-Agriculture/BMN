@@ -11,7 +11,7 @@ import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { StartRefusal, askOutcome, exportAsk, finishAsk, observeAsk, startAsk, stopAsk, waitAsk } from '../../bin/agents-team-run.mjs'
 import { runState, startTeamSupervisor } from '../../bin/agents-team-supervisor.mjs'
 import { askJson } from '../../bin/agents-team-cli.mjs'
-import { recordInterrupted } from '../../bin/agents-team-places.mjs'
+import { mountIdentity, recordInterrupted } from '../../bin/agents-team-places.mjs'
 import { processStart } from '../../bin/agents-supervised.mjs'
 import { ENV_SENTINEL, EXAMPLE, SIGN_IN_SENTINEL, approve as harnessApprove, leftovers as harnessLeftovers, settle, stubCodex as harnessStubCodex, teamAskHome } from './test-fixtures/team-ask-harness'
 
@@ -160,6 +160,55 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
     recordInterrupted(orphaned.folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
     await settle(() => processStart(left.pid as number) === null, 3000)
     expect(processStart(left.pid as number)).toBeNull()
+  })
+
+  it('a container a dead supervisor left is found by this run\'s home exactly: a run of the same id in another BMN state is never touched (epic review recheck)', async () => {
+    // A container bubblewrap made of a folder bound at the container's home, as BMN's own binds a run's home; nothing named as the run's child.
+    const container = (from: string) => {
+      const started = spawn('/usr/bin/bwrap', ['--tmpfs', '/', '--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
+        '--dir', '/ask', '--bind', from, '/ask/home', '/usr/bin/sleep', '30'], { detached: true, stdio: 'ignore' })
+      started.unref()
+      return started
+    }
+    const inside = (pid: number) => {
+      try {
+        return readFileSync(`/proc/${pid}/mountinfo`, 'utf8').includes(' /ask/home ')
+      } catch {
+        return false
+      }
+    }
+    const sleeping = (from: string) => readdirSync('/proc').filter((pid) => /^\d+$/u.test(pid) && inside(Number(pid))).filter((pid) => {
+      const line = readFileSync(`/proc/${pid}/mountinfo`, 'utf8').split('\n').find((entry) => entry.split(' ')[4] === '/ask/home')
+      const own = mountIdentity(from)
+      return own !== null && line?.split(' ')[2] === own.device && line?.split(' ')[3] === own.folder
+    })
+    const orphaned = ask({ question: 'Is it bounded? SLEEP' })
+    const id = orphaned.folder.split('/').pop() as string
+    // Another BMN state holding a run of the very same id, its home elsewhere (a copied state, an isolated profile).
+    const elsewhere = join(home, 'other-state/runs', id, 'home')
+    mkdirSync(elsewhere, { recursive: true })
+    const ours = container(join(orphaned.folder, 'home'))
+    const theirs = container(elsewhere)
+    try {
+      await settle(() => sleeping(join(orphaned.folder, 'home')).length > 0 && sleeping(elsewhere).length > 0, 5000)
+      expect(sleeping(elsewhere).length).toBeGreaterThan(0)
+      writeFileSync(join(orphaned.folder, 'state.json'), JSON.stringify({ version: 1, state: 'running', supervisor: { pid: 999_999_999, start: '1' } }))
+      expect(askOutcome(orphaned.folder).state).toBe('interrupted')
+      recordInterrupted(orphaned.folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
+      await settle(() => processStart(ours.pid as number) === null, 3000)
+      expect(processStart(ours.pid as number)).toBeNull()
+      // The other state's container goes on.
+      expect(processStart(theirs.pid as number)).not.toBeNull()
+      expect(sleeping(elsewhere).length).toBeGreaterThan(0)
+    } finally {
+      for (const started of [ours, theirs]) {
+        try {
+          process.kill(started.pid as number, 'SIGKILL')
+        } catch {
+          // Already ended.
+        }
+      }
+    }
   })
 
   it('closing the asking command only detaches it: the run goes on to its answer (AC3)', async () => {
