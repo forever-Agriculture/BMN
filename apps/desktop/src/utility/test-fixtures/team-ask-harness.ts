@@ -27,7 +27,7 @@ export function approve(home: string, text: string): void {
 /**
  * Stand-in apps that run inside the container with nothing but /usr: they read the prompt, take the
  * model and effort from their own arguments and answer as each app does. Words in the question
- * steer them: SLEEP, NAP, MISMATCH, SECOND, NOSESSION, FAIL, CEILING (Claude Code: model calls that
+ * steer them: SLEEP, NAP, MISMATCH, SECOND, SUBAGENT, NOSESSION, FAIL, CEILING (Claude Code: model calls that
  * keep reporting usage while it runs). Pictures are reported by hash as each app received them:
  * Codex the `-i` files it can open, Claude Code the stream-json message on its standard input.
  */
@@ -54,6 +54,8 @@ case $question in *NOSESSION*) ;; *) printf '{"type":"thread.started","thread_id
 printf '{"type":"turn.started"}\\n'
 printf 'INFO turn{otel.name="session_task.turn" thread.id=%s turn.id=t-1 model=%s codex.turn.reasoning_effort=%s}: started\\n' "$thread" "$model" "$effort" >&2
 case $question in *SECOND*) printf '{"type":"thread.started","thread_id":"ffffffff-0000-7000-8000-000000000000"}\\n';; esac
+# A sub-agent the model started (Codex 0.162.1, measured 74.3): only its own turn span on standard error names it.
+case $question in *SUBAGENT*) printf 'INFO turn{otel.name="session_task.turn" thread.id=eeeeeeee-0000-7000-8000-000000000000 turn.id=t-1 model=%s codex.turn.reasoning_effort=%s}: started\\n' "$model" "$effort" >&2;; esac
 printf '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"codex answer %s from %s%s"}}\\n' "$id" "$(ls /ask | tr '\\n' ' ')" "\${pictures:+pictures$pictures}"
 printf '{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":10,"output_tokens":5,"reasoning_output_tokens":2}}\\n'
 `)

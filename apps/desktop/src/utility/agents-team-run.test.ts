@@ -99,7 +99,10 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
   })
 
   it('a model that contradicts the request, a second session or none is "answer not attributed", the answer kept only as evidence (AC2)', async () => {
-    for (const [word, problem] of [['MISMATCH', 'the app ran gpt-6-other, not gpt-6-astra'], ['SECOND', 'the run named a second session'], ['NOSESSION', 'the run named no session in its first event']] as const) {
+    // SUBAGENT: a sub-agent the teammate started, which Codex names only in its own turn span (74.3's extra-tools probe): its work
+    // is never passed on as the teammate's answer, and its usage is not the ask's.
+    for (const [word, problem] of [['MISMATCH', 'the app ran gpt-6-other, not gpt-6-astra'], ['SECOND', 'the run named a second session'], ['SUBAGENT', 'the run named a second session, eeeeeeee'],
+      ['NOSESSION', 'the run named no session in its first event']] as const) {
       const prepared = ask({ question: `Is the loop bounded? ${word}` })
       startAsk(prepared, { timeLimitMinutes: 2 })
       const outcome = await waitAsk(prepared.folder, { timeoutMs: 20_000 })

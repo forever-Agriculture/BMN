@@ -2428,6 +2428,17 @@ goes on: its supervisor counts each model call's input, cache and output tokens 
 report, about once a second, and over the ceiling the run is stopped (exit 16) with the count and the
 ceiling as its reason. For Codex and OpenCode time and capacity are the only bounds.
 
+**Codex's own extra tools.** On Codex 0.162.1 every model it lists runs in code mode, and every
+Codex ask form, the question form included, still offers `exec`, `wait`, `request_user_input`,
+`request_user_input_async` and six tools for sub-agents. Forced through BMN's own ask command in
+its container against a stand-in provider (74.3, `reference-74-browser/extra-tools.mjs`):
+`apply_patch` is refused by the read-only policy wherever it writes, `request_user_input` is
+refused, `request_user_input_async` is accepted but nobody answers it, and a sub-agent does start
+and asks the model, inside the same container with the same tools, fence and time limit. Codex
+names a sub-agent only in its turn log, which BMN reads: an ask whose run names a second session
+is "not attributed", so a sub-agent's work is never passed on as the teammate's answer, and its
+usage is not counted as the ask's.
+
 ### Exit codes
 
 | Code | Meaning |
