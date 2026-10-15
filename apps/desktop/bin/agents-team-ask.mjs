@@ -60,10 +60,14 @@ export function filePrompt(question, files) {
   return `${parts.join('\n')}\n`
 }
 
-/** The prompt of a project ask: the question and where the project is. */
+/**
+ * The prompt of a project ask: the question, where the project is, and that its history is there to be read. The last
+ * sentence is 72.6 AC2's repair: in the gate a reviewer listed the log and judged a change without opening the commit
+ * that had reverted it, so a project ask now says to read the commits behind what it judges.
+ */
 export function projectPrompt(question, frozen, root) {
   const changed = frozen.files.filter((file) => file.changed !== null).length
-  return `${question}\n\nThe project is in your working folder (${INSIDE.project}), read-only: a frozen copy of ${root.split('/').pop()} at commit ${frozen.revision.slice(0, 12)}${frozen.public_commit === null ? '' : ' (its public commit)'}, ${frozen.files.length} files, with its Git history (git log, git show, git diff and git blame answer)${changed === 0 ? '' : `; ${changed} file(s) changed since that commit show as uncommitted changes`}.\n`
+  return `${question}\n\nThe project is in your working folder (${INSIDE.project}), read-only: a frozen copy of ${root.split('/').pop()} at commit ${frozen.revision.slice(0, 12)}${frozen.public_commit === null ? '' : ' (its public commit)'}, ${frozen.files.length} files, with its Git history (git log, git show, git diff and git blame answer)${changed === 0 ? '' : `; ${changed} file(s) changed since that commit show as uncommitted changes`}. The history can say why the code is as it is: before you judge code, read the commits behind it (git log -p or git blame on the lines in question, then git show).\n`
 }
 
 /** A prompt with the pictures named in the order they are attached: by label, type and size, never by what was taken out of them. */

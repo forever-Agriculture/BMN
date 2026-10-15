@@ -390,7 +390,10 @@ describe('an ask made ready and judged (72.2 AC2-AC5)', () => {
     expect(result.argv.join('\n')).toContain(`--chdir\n/ask/project`)
     expect(readFileSync(join(result.folder, 'inputs/bin/git'), 'utf8')).toBe(readFileSync(SHIM, 'utf8'))
     expect(existsSync(join(result.folder, 'project/src/retry.ts'))).toBe(true)
-    expect(readFileSync(join(result.folder, ASK_RUN_FILES.prompt), 'utf8')).toContain('The project is in your working folder (/ask/project), read-only')
+    const prompt = readFileSync(join(result.folder, ASK_RUN_FILES.prompt), 'utf8')
+    expect(prompt).toContain('The project is in your working folder (/ask/project), read-only')
+    // 72.6 AC2's repair: a project ask says to read the commits behind what it judges.
+    expect(prompt).toContain('before you judge code, read the commits behind it (git log -p or git blame on the lines in question, then git show)')
     // Asked of Codex by name, the ask is refused with the reason and who could answer.
     const named = refusal(() => ask({ access: 'project', project: root, agent: 'astra' }))
     expect(named).toMatchObject({ code: 'AGENT_NOT_ELIGIBLE', alternatives: ['fable@medium'] })

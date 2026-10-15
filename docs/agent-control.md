@@ -2565,6 +2565,27 @@ the cache had been reverted. Reported cost per run: packet $0.04–0.08, prototy
 Codex has no project form in BMN's container here, so its prototype is a capability failure and was
 not asked. This is an early look; 72.6 is the gate.
 
+### Review quality (72.6)
+
+The gate compared each app's current dev-auto way with `team ask`, same teammate, effort, repository
+state and question, on four synthetic reviews with seeded defects (two project cases, each with a
+defect findable only through its history; two file cases), floors fixed before any run: every
+critical seed in at least two thirds of the team-ask runs, every seed the old way found that often
+found by team ask too, and team ask's totals no worse.
+
+| App and mode | Teammate | Result |
+| --- | --- | --- |
+| Claude Code, project | Opus, medium | FAIL over six runs (the history-only critical seed of one case 3 of 6; the old way 0 of 6); after the repair below PASS, 3 of 3 for every seed |
+| Claude Code, files | Opus, medium | INCONCLUSIVE: every floor passes; 12 "Missing context" lines against 10 (the brief asks for them); for the owner |
+| Codex, files | Astra, medium | PASS |
+| OpenCode, files | Luna (Go), xhigh | PASS |
+| Codex, project; OpenCode, project | | not asked: no team-ask form here (above) |
+
+The repair: in the failing runs the reviewer listed the log, saw the revert's subject and judged the
+change without opening it, so a project ask's prompt now ends by saying to read the commits behind
+the code it judges (`git log -p` or `git blame`, then `git show`). The record, with every answer and
+a hand audit of each scoring miss, is in `_bmad-output/planning-artifacts/reference-72-team-ask/records/gate/`.
+
 ## A brief for agents
 
 `bmn help agents` prints this page from the binary, so an agent can read it without leaving its
