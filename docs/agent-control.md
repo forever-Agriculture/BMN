@@ -2405,10 +2405,10 @@ Refusal codes (exit 10) the commands add: `ROLE_UNKNOWN`, `AGENT_NOT_ELIGIBLE`, 
 (a mode not proven for this app version), `WIDE_READ_NOT_ENABLED`, `CONTAINER_UNAVAILABLE`,
 `INPUT_INVALID` (a link, a non-regular or non-UTF-8 file, a credential or configuration location, a
 picture that is not PNG, JPEG or WebP), `INPUT_TOO_LARGE`, `INPUT_CHANGED` (a file or picture changed between the command hashing it for the key and reading it to send; nothing was sent), `PICTURE_UNTREATABLE` (Pictures, above), `CREDENTIAL_FOUND` (names the file and pattern, never the value; a value that says it is made up, by a word of six letters or more such as `synthetic`, `example` or `placeholder`, is not counted, judged by the value alone, never by a variable's name), `PUBLIC_NOT_VERIFIED`,
-`PRIVATE_NOT_ALLOWED`, `CHANGED` (the approved team, the app's program, the command, the prompt, the inputs or the run's configuration changed between the check and
-the start; nothing started), `SIGN_IN_UNAVAILABLE` (OpenCode: BMN's folder holds no Go sign-in to copy; nothing started), `KEY_REQUIRED`, `KEY_CONFLICT` (same key, different request), `GONE` (a removed
+`PRIVATE_NOT_ALLOWED`, `CHANGED` (the approved team, the app's program, the command, the prompt, the inputs, the run's configuration or any other file the container binds changed between the check and
+the start; nothing started; found by the supervisor, the outcome and every JSON answer carry it as `refusal: {code: "CHANGED", reason}` too), `SIGN_IN_UNAVAILABLE` (OpenCode: BMN's folder holds no Go sign-in to copy; nothing started), `KEY_REQUIRED`, `KEY_CONFLICT` (same key, different request), `GONE` (a removed
 run's or expired key), `NOT_STARTED` (a retry followed a key whose first ask was refused before it started; nothing ran), `NESTED` (asked from inside a teammate's run), `NOT_YOURS` (another session's
-run, or a session label BMN's control service does not confirm), `SESSION_UNPROVEN` (BMN's control service could not be reached to confirm the session), and every refusal of `evaluate`'s ask mode with its existing code.
+run, or a session label BMN's control service does not confirm), `SESSION_UNPROVEN` (BMN's control service could not be reached to confirm the session, or `BMN_CONTROL_SOCKET` names a socket other than BMN's own), and every refusal of `evaluate`'s ask mode with its existing code.
 
 ### JSON
 
@@ -2448,7 +2448,7 @@ says `not-enabled` until the owner enables one in the Team view; `pictures` is t
 | Pictures | 8 per ask, each 5 MiB, 8,000 px a side and 33.2 million pixels once drawn (an 8K screen, 7680x4320); PNG, JPEG, WebP | the providers' own image limits; the pixel bound keeps a small file from unfolding into gigabytes in the app |
 | Project | 20,000 files, 200 MiB, each file 10 MiB, the tracked ones and those named with `--file` together; history the newest commits of the checked-out revision, at most 1,000 (where history branches, a depth of 1,000 holds more, so the depth is made smaller until the count is inside), 500 MiB of objects | an ask reads a project, not a monorepo's every blob |
 | Answer kept | 1 MiB; the app's raw output 64 MiB, over it the run fails | |
-| Run storage | 1 GiB (inputs, frozen copy, home, record): measured at the start and the app's home again every second; over it the run fails | |
+| Run storage | 1 GiB, the run's whole folder (inputs, frozen copy, home, record, its output and error logs), the bytes its files hold, links not followed: measured before the start, every second while it runs and once more when the container ends; over it the run fails, nothing started when it is over before the start. A watched limit, not a disk quota: a run can go past it by what it writes in one second | |
 | Time | 30 minutes; 1 to 120 with `--time-limit` | assumption (b) |
 | Capacity | 4 runs at once across BMN; 1 to 10 in Preferences (`team/asks-settings.json` `capacity`) | assumption (c) |
 | Key window | until the end of the 8th UTC day after the day the key names: at least 7 days from its first use | a lead's retries happen within its run |
@@ -2459,15 +2459,23 @@ Over a limit the ask is refused (`INPUT_TOO_LARGE`), never cut.
 ### Lifecycle
 
 `accepted` (key, request hash and capacity place reserved together) → `starting` (snapshots taken,
-the command judged; just before the start the approved team and the executable checked again, and the
-command, the prompt or picture message, the inputs' manifest, each picture and project file and the
-run's configuration against the receipt's hashes; the supervisor started, which checks the command and
-standard input once more and gives the app the very bytes it checked) → `running` → `finishing`
+the command judged, and with it a manifest of every entry the container binds from the run: the app's
+home, the inputs with BMN's git, the frozen project with its history, the snapshots, each with its
+type, permission bits, bytes' hash or link target, nothing extra allowed; just before the start the
+approved team and the executable checked again, and the command, the prompt or picture message, the
+inputs' manifest, each picture and project file, the run's configuration and that whole manifest
+against the receipt's hashes; OpenCode's sign-in import may then add only its database, its log and
+empty folders; the supervisor started, which checks the command and standard input once more, and,
+immediately before the container, the team, the program and the whole manifest again, and gives the app
+the very bytes it checked; inside the container the configuration BMN wrote is read-only) → `running` → `finishing`
 (answer, attribution and usage read, transient state deleted, then the outcome written; a finish that
 fails still writes a failed outcome and deletes the transient state) → one of `answered`, `failed`,
 `refused`, `out-of-time`, `stopped`, `not-attributed`; `interrupted` (exit 1) when the supervisor ended with
 no record of the end or with no outcome written, or the asking command ended after the reservation and before the start (nothing
 starts it again, and its transient state is deleted when BMN next looks); `gone` after removal, for the key window.
+These are complete integrity checks before the start, not a seal: the container reads the run's own
+copies, never the owner's live files, and a program of the owner's own user that rewrites them after
+the supervisor's last check, while the run goes on, is not stopped by them.
 A refusal while the ask is prepared (a credential found in the copied history, a file over its limit)
 deletes everything the preparing copied and gives the key back; each reservation also deletes what a
 crash left of a finished run's transient state.
@@ -2500,13 +2508,18 @@ that was following that key is told `NOT_STARTED`.
 
 A session sees, waits for, stops and exports only its own asks; a plain shell those asked from a
 plain shell. A session is proven, not claimed: its `BMN_TOKEN` must name its `BMN_SESSION_ID`, and BMN's
-own control service (the socket `BMN_CONTROL_SOCKET` names) must confirm the token, as it does for
-every `bmn` command that reaches it. A session id with no token, with a token naming another session or
+own control service must confirm the token. The token goes only to BMN's own socket,
+`control/control.sock` in BMN's runtime folder as BMN itself finds it (`BMN_RUNTIME_HOME`, else
+`$XDG_RUNTIME_DIR/bmn`); a `BMN_CONTROL_SOCKET` naming any other socket is refused before the token is
+sent (`SESSION_UNPROVEN`). A session id with no token, with a token naming another session or
 with one BMN does not know is a forged label: it sees nothing and asks nothing (`NOT_YOURS`). Where the
 service cannot be reached (BMN closed, or a sandbox keeping the command from its socket) the session is
 unproven and refused the same way (`SESSION_UNPROVEN`, saying to run outside the sandbox). No flag, label or environment value gives the owner's
 view of every ask: only his action in the app does. Like every owner-only file, the records stay
-readable to his other programs; BMN's commands keep sessions apart, not the file system.
+readable to his other programs; BMN's commands keep sessions apart, not the file system. The proof
+assumes the BMN that runs is the real one and that a session's token stays its own: it stops a claimed,
+copied or mistaken identity, not a program of the owner's own user that replaces BMN's runtime folder,
+reads another session's token from its environment, reads `owner.token`, or reads the records directly.
 
 Inside a teammate's run nothing of BMN is reachable: the container holds no BMN command, state
 folder, app socket or token. As a second wall, each run's supervisor writes its container's PID
@@ -2534,7 +2547,8 @@ so a run outlives BMN closing.
 | `inputs/manifest.json` | every input with its source path, source root, consent basis and sha256; each picture's hashes before and after and the fields taken out and kept, by name | yes |
 | `project/`, `project-manifest.json` | the frozen copy (deleted on every outcome); files, commits, trees and blobs with hashes, the included commits and the shallow boundary | manifest only |
 | `snapshots/` | the app's effective configuration, executable identity (launcher and payload hashes), environment names | yes, values never |
-| `receipt.json` | `evaluate`'s verdict, the argv's hash, every snapshot's hash, the form and any wide-read mode | yes |
+| `receipt.json` | `evaluate`'s verdict, the argv's hash, every snapshot's hash, the hash of the manifest of the run's bound files, the form and any wide-read mode | yes |
+| `tree.json` | that manifest: each bound entry's path, type, permission bits and hash or link target, to name what changed | no |
 | `launch.json`, `state.json`, `exit.json` | the supervisor's input, its state and the container's end | yes |
 | `events.jsonl` | the app's own output events | yes |
 | `session-info.json` | OpenCode only: the session export's info (id, agent, model and variant, tokens, cost, title), never its messages | yes |

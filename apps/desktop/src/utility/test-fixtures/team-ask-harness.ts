@@ -95,8 +95,8 @@ export function stubOpenCode(stubs: string, version = '2.0.29'): void {
 [ "$1" = --version ] && echo "${version}" && exit 0
 data="\${XDG_DATA_HOME:-$HOME/.local/share}/opencode"
 case "$1 $2" in
-  "auth export") if [ -f "$data/auth-stub.json" ]; then cat "$data/auth-stub.json"; else echo '[]'; fi; exit 0;;
-  "auth import") mkdir -p "$data"; cat > "$data/auth-stub.json"; exit 0;;
+  "auth export") if [ -f "$data/opencode.db" ]; then cat "$data/opencode.db"; else echo '[]'; fi; exit 0;;
+  "auth import") mkdir -p "$data"; cat > "$data/opencode.db"; exit 0;;
   "session export") if [ -f "$data/session-$3.json" ]; then cat "$data/session-$3.json"; exit 0; fi; echo "no session" >&2; exit 1;;
 esac
 model=; agent=; prev=
@@ -104,7 +104,7 @@ for a in "$@"; do [ "$prev" = -m ] && model=$a; [ "$prev" = --agent ] && agent=$
 question=$(cat)
 id=$(printf %s "$question" | md5sum | cut -c1-12)
 sid="ses_\${id}AAAAAAAAAAAAAA"
-signed=$(grep -c sk-synthetic "$data/auth-stub.json" 2>/dev/null || echo 0)
+signed=$(grep -c sk-synthetic "$data/opencode.db" 2>/dev/null || echo 0)
 provider=\${model%%/*}; rest=\${model#*/}; mid=\${rest%%#*}; variant=\${rest#*#}
 case $question in *OTHERMODEL*) mid=gpt-6-other;; esac
 mkdir -p "$data"
@@ -123,7 +123,7 @@ export const GO_KEY_SENTINEL = 'sk-synthetic-go-key-SIGNIN-SENTINEL'
 export function goSignInInBmnFolder(home: string, entries = [{ id: 'a1', integrationID: 'opencode-go', label: 'Go', active: true, value: { type: 'key', key: GO_KEY_SENTINEL } }]): void {
   const base = join(home, '.config/bmn/agents/state/opencode')
   for (const folder of ['home', 'config', 'state', 'cache', 'data/opencode']) mkdirSync(join(base, folder), { recursive: true })
-  writeFileSync(join(base, 'data/opencode/auth-stub.json'), `${JSON.stringify(entries)}\n`)
+  writeFileSync(join(base, 'data/opencode/opencode.db'), `${JSON.stringify(entries)}\n`)
 }
 
 /**
@@ -170,8 +170,9 @@ export const TOKEN_MAC = 'a'.repeat(64)
 /**
  * A stand-in for BMN's control service at `path`: it answers `auth` as control-auth.ts does, a
  * session token `s1.<session>.<incarnation>.<TOKEN_MAC>` naming its session and any other refused.
+ * With `accept`, a forger's service instead: every token is the session `accept` names.
  */
-export async function standInControl(path: string): Promise<Server> {
+export async function standInControl(path: string, accept?: (token: string) => string): Promise<Server> {
   mkdirSync(join(path, '..'), { recursive: true })
   const server = createServer((socket) => {
     let buffer = ''
@@ -183,7 +184,9 @@ export async function standInControl(path: string): Promise<Server> {
       if (newline === -1) return
       const request = JSON.parse(buffer.slice(0, newline)) as { id: number; method: string; params?: { token?: string } }
       const parts = /^s1\.([A-Za-z0-9_:-]{1,128})\.([A-Za-z0-9_:-]{1,128})\.([0-9a-f]{64})$/.exec(request.params?.token ?? '')
-      if (request.method === 'auth' && parts !== null && parts[3] === TOKEN_MAC) {
+      if (accept !== undefined) {
+        socket.end(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { scope: 'session', sessionId: accept(request.params?.token ?? '') } })}\n`)
+      } else if (request.method === 'auth' && parts !== null && parts[3] === TOKEN_MAC) {
         socket.end(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { scope: 'session', sessionId: parts[1] } })}\n`)
       } else {
         socket.end(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32001, message: 'Invalid credential', data: { code: 'UNAUTHORIZED' } } })}\n`)

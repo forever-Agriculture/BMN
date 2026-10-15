@@ -201,15 +201,18 @@ export const ASK_APPS = Object.freeze(['codex', 'claude', 'opencode'])
 /**
  * The whole command of one ask: the app's form inside the run's container. `run`: the run's own
  * `{ home, inputs, project }` folders on this computer. The owner's sign-in file is bound read-only
- * onto the empty file the run's home holds at its place (72.1 AC5); a form with its own `hosts` gets
+ * onto the empty file the run's home holds at its place (72.1 AC5), the configuration BMN wrote for the app
+ * bound read-only over itself; a form with its own `hosts` gets
  * the run's `snapshots/hosts` as /etc/hosts. Returns `{ argv, form }`.
  */
 export function askArgv(harness, program, run, request, environment = process.env) {
   const form = askCommand(harness, program, request)
   const signIn = signInBind(harness, environment)
+  // The configuration BMN wrote for the app is read-only inside the container: the app writes only its own runtime files there (epic review R6).
+  const configuration = Object.keys(form.home).map((path) => ({ from: join(run.home, path), to: `${INSIDE.home}/${path}`, writable: false }))
   const argv = containerArgv({
     app: program.paths, home: run.home, inputs: run.inputs, project: request.access === 'project' ? run.project : null,
-    binds: signIn === null ? [] : [signIn], environment: form.environment, cwd: form.cwd, command: form.command,
+    binds: [...configuration, ...(signIn === null ? [] : [signIn])], environment: form.environment, cwd: form.cwd, command: form.command,
     hosts: form.hosts === undefined ? null : join(dirname(run.home), ASK_RUN_FILES.snapshots, 'hosts')
   })
   return { argv, form }

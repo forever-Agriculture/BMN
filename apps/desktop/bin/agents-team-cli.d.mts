@@ -7,6 +7,7 @@ export type TeamAsker = { kind: 'shell' } | { kind: 'owner' } | { kind: 'session
 export type SessionProof = { session: string } | { invalid: true } | { unreachable: string }
 export declare function verifySessionToken(socketPath: string, token: string, options?: { timeoutMs?: number }): Promise<SessionProof>
 export declare function teamAsker(environment: NodeJS.ProcessEnv | Record<string, string | undefined>, options?: { verify?: (socketPath: string, token: string) => Promise<SessionProof> }): Promise<TeamAsker>
+export declare function bmnControlSocket(environment?: NodeJS.ProcessEnv | Record<string, string | undefined>): string
 export interface AskFeatures {
   version: 1; platform: string; container: { ok: boolean; reason?: string }
   apps: Array<{ app: string; installed: boolean; version: string | null; measured: string[]; forms: Record<'question' | 'files' | 'project' | 'wide-read', string>; pictures: string; usage_while_running: boolean }>

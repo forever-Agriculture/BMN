@@ -1,7 +1,7 @@
 // MODULE: agents-team-supervisor.mjs - Epic 72: the supervisor of one teammate's ask. Started by the asking command inside its own restrictions, it outlives that command, holds the deadline and Stop, and ends the whole container with itself
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, lstatSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { constants } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -44,23 +44,27 @@ export function writeWhole(path, text) {
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'))
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 
-/** The bytes of every file under a folder; one that goes while it is counted counts nothing. */
+/**
+ * The bytes a folder's files hold, everything under it, links not followed. A file or folder gone
+ * meanwhile counts nothing; any other error is thrown, never counted as nothing (epic review R12).
+ */
 export function folderBytes(folder) {
   let total = 0
   let entries
   try {
     entries = readdirSync(folder, { withFileTypes: true })
-  } catch {
-    return 0
+  } catch (error) {
+    if (error.code === 'ENOENT') return 0
+    throw error
   }
   for (const entry of entries) {
     const path = join(folder, entry.name)
     if (entry.isDirectory()) total += folderBytes(path)
     else if (entry.isFile()) {
       try {
-        total += statSync(path).size
-      } catch {
-        // Gone meanwhile.
+        total += lstatSync(path).size
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error
       }
     }
   }
@@ -76,11 +80,13 @@ export function teamSupervisorScript() {
 
 /**
  * Starts the supervisor of the run in `folder`, whose `launch.json` says what to run:
- * `{ argv, argv_sha256, deadline, stdin, stdin_sha256, finish, args_fd, output_limit, storage_limit, storage_watch }`
- * (`*_sha256`: what the check judged, compared just before the start, a difference starting nothing; `finish`: a
- * module path and export name the supervisor calls with the folder once the container has ended, or null;
- * `args_fd`: give bubblewrap its arguments on a file descriptor; `output_limit`: the bytes of raw output over
- * which the run fails; `storage_limit`: the bytes the run's folder may hold, `storage_watch` the part of it that grows).
+ * `{ argv, argv_sha256, deadline, stdin, stdin_sha256, check, state_home, finish, args_fd, output_limit, storage_limit }`
+ * (`*_sha256`: what the check judged, compared just before the start, a difference starting nothing; `check`: a
+ * module path and export name called with the folder and the launch immediately before the container, whose
+ * reason, when it gives one, starts nothing; `state_home`: the asker's home, where that check reads the team;
+ * `finish`: a module path and export name the supervisor calls with the folder once the container has ended,
+ * or null; `args_fd`: give bubblewrap its arguments on a file descriptor; `output_limit`: the bytes of raw output
+ * over which the run fails; `storage_limit`: the bytes the run's whole folder may hold).
  * Returns `{ pid, start }` or `{ failed }`.
  * The supervisor is detached and in a session of its own: closing the asking command leaves it running.
  */
@@ -197,11 +203,42 @@ async function supervise(folder) {
       return finish({ code: null, signal: null, started: false })
     }
   }
+  // The run's last check, immediately before the container: the run's receipt, the team, the program and every file the
+  // container binds, as the check judged them (72.3 AC1, epic review R6). A step that cannot run starts nothing either.
+  if (launch.check) {
+    let reason
+    try {
+      const module = await import(launch.check.module)
+      reason = await module[launch.check.export](folder, launch)
+    } catch (error) {
+      reason = `BMN could not check the run before its start (${error instanceof Error ? error.message : String(error)})`
+    }
+    if (reason !== null) {
+      ended = 'changed'
+      endedReason = `${reason}; nothing started`
+      return finish({ code: null, signal: null, started: false })
+    }
+  }
+  // The run's storage: all of its folder, the record, its logs and its transient state together (the contract's "Limits"),
+  // before the start, every few polls while it runs and once more when the container has ended.
+  const storageOver = () => {
+    if (typeof launch.storage_limit !== 'number') return null
+    let used
+    try {
+      used = folderBytes(folder)
+    } catch (error) {
+      return `the run's storage could not be measured (${error.code ?? error.message})`
+    }
+    return used > launch.storage_limit ? `the run's storage reached ${used} bytes, over ${launch.storage_limit}` : null
+  }
+  const before = storageOver()
+  if (before !== null) {
+    ended = 'storage'
+    endedReason = before
+    return finish({ code: null, signal: null, started: false })
+  }
   // The run's own watch step, loaded once before the start: it reads the run's output and says when to end it (a token ceiling).
   const watcher = launch.watch ? await import(launch.watch.module).then((module) => module[launch.watch.export] ?? null).catch(() => null) : null
-  // The run's storage: what its folder holds now, its app's home measured again as it grows (the contract's "Limits").
-  const storageWatched = typeof launch.storage_limit === 'number' && typeof launch.storage_watch === 'string' ? join(folder, launch.storage_watch) : null
-  const storageBase = storageWatched === null ? 0 : folderBytes(folder) - folderBytes(storageWatched)
   // Standard input is the very bytes checked above, given through a pipe: a file changed after the check is never read.
   const input = stdinBytes === null ? 'ignore' : 'pipe'
   const output = openSync(join(folder, RUN_FILES.events), 'a', 0o600)
@@ -252,6 +289,12 @@ async function supervise(folder) {
   child.on('exit', (code, signal) => {
     clearInterval(watch)
     clearTimeout(timer)
+    // A short run can end between two measurements: its storage is measured once more at its end.
+    const after = ended === null ? storageOver() : null
+    if (after !== null) {
+      ended = 'storage'
+      endedReason = after
+    }
     // What the container left goes with it: its namespace ends with its first process, and the group is killed besides.
     group('SIGKILL')
     void finish({ code, signal: signal ?? null, signal_number: signal ? constants.signals[signal] ?? null : null, started: true })
@@ -275,9 +318,9 @@ async function supervise(folder) {
     polls += 1
     if (existsSync(join(folder, RUN_FILES.stop))) end('stopped')
     if (polls <= 40) nameIt()
-    if (storageWatched !== null && polls % WATCH_EVERY === 0) {
-      const used = storageBase + folderBytes(storageWatched)
-      if (used > launch.storage_limit) end('storage', `the run's storage reached ${used} bytes, over ${launch.storage_limit}`)
+    if (polls % WATCH_EVERY === 0) {
+      const over = storageOver()
+      if (over !== null) end('storage', over)
     }
     if (watcher !== null && polls % WATCH_EVERY === 0) {
       let reason = null

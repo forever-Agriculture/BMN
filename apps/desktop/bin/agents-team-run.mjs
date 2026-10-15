@@ -1,5 +1,6 @@
 // MODULE: agents-team-run.mjs - Epic 72: an ask started exactly as it was judged, attributed from its own output, finished into its record, and exported only as its allowlist says
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { canonicalJson, sha256 } from './agents-roster.mjs'
@@ -7,6 +8,7 @@ import { readApproved } from './agents-state.mjs'
 import { copyGoSignInToRun, openCodeSessionInfo } from './agents-opencode.mjs'
 import { ASK_RUN_FILES, sameProgram } from './agents-team-forms.mjs'
 import { RUN_FILES, requestStop, runState, startTeamSupervisor, writeWhole } from './agents-team-supervisor.mjs'
+import { treeChange } from './agents-team-tree.mjs'
 
 /**
  * An ask starts only as it was judged (R72-FR3, 72.3 AC1): the approved team and the app's program
@@ -68,9 +70,11 @@ function filesUnder(folder, base = folder) {
 /**
  * Why what is about to start is not what the check judged, or null when it is: the command whole,
  * the prompt and the message on standard input, the inputs' manifest and each picture and project
- * file it names, and the app's configuration in the run's home, each against the receipt's hashes.
+ * file it names, the app's configuration in the run's home, each against the receipt's hashes, and
+ * last every entry the container binds from the run (agents-team-tree.mjs). `phase` `started` is
+ * after the app's own start steps (OpenCode's sign-in import), which add only what its form allows.
  */
-export function judgedChange(prepared) {
+export function judgedChange(prepared, phase = 'check') {
   const receipt = prepared.verdict.receipt
   const folder = prepared.folder
   if (sha256(canonicalJson(prepared.argv)) !== receipt.argv_sha256) return 'the command is not the one the check judged'
@@ -97,7 +101,43 @@ export function judgedChange(prepared) {
   }
   if (sha256(canonicalJson(hashes)) !== receipt.snapshots?.config) return 'the run\'s configuration is not the one the check judged'
   if (receipt.snapshots?.hosts !== undefined && fileHash(join(folder, ASK_RUN_FILES.snapshots, 'hosts')) !== receipt.snapshots.hosts) return 'the run\'s /etc/hosts is not the one the check judged'
-  return null
+  return treeChange(folder, receipt, phase)
+}
+
+/**
+ * Why a judged ask may not start now, or null: the approved team and the app's program as the check
+ * saw them, then everything `judgedChange` compares. The start calls it, and the supervisor again
+ * immediately before the container (72.3 AC1).
+ */
+export function startChange(prepared, phase = 'check') {
+  const receipt = prepared.verdict.receipt
+  let generation
+  try {
+    generation = readApproved()
+  } catch (error) {
+    return `the approved team could not be read (${error.message})`
+  }
+  if (generation.number !== receipt.generation?.number || generation.hash !== receipt.generation?.hash) {
+    return `the approved team changed after the check (version ${receipt.generation?.number} then, ${generation.number} now)`
+  }
+  const identity = readJsonOrNull(join(prepared.folder, ASK_RUN_FILES.snapshots, 'executable.json'))
+  if (identity === null || !prepared.program || !sameProgram(identity, prepared.program)) return 'the app\'s program changed after the check'
+  return judgedChange(prepared, phase)
+}
+
+/**
+ * The supervisor's last check before the container (its launch's `check` step): the run's receipt as
+ * the check wrote it, the command the launch holds, the team read from the asker's own home, and the
+ * program at the paths its identity names. Returns why it may not start, or null.
+ */
+export function launchCheck(folder, launch) {
+  const receipt = readJsonOrNull(join(folder, ASK_RUN_FILES.receipt))
+  if (receipt === null) return 'the run holds no receipt of its check'
+  // The supervisor runs with an empty environment; the team is the asker's, in the home it named.
+  if (typeof launch.state_home === 'string') process.env.HOME = launch.state_home
+  const identity = readJsonOrNull(join(folder, ASK_RUN_FILES.snapshots, 'executable.json'))
+  const program = typeof identity?.launcher?.path === 'string' && typeof identity?.payload?.path === 'string' ? { launcher: identity.launcher.path, payload: identity.payload.path } : null
+  return startChange({ folder, argv: launch.argv, verdict: { receipt }, program }, 'started')
 }
 
 /**
@@ -111,22 +151,18 @@ export function startAsk(prepared, { now = new Date(), timeLimitMinutes = TIME_L
   // A run already given its outcome (recorded interrupted while it was prepared) is never started.
   const ended = readJsonOrNull(join(folder, ASK_RUN_FILES.outcome))
   if (ended !== null) throw new StartRefusal('CHANGED', `the run already ended (${ended.state}); nothing started`)
-  const generation = readApproved()
-  if (generation.number !== receipt.generation.number || generation.hash !== receipt.generation.hash) {
-    throw new StartRefusal('CHANGED', `the approved team changed after the check (version ${receipt.generation.number} then, ${generation.number} now); nothing started`)
-  }
-  const identity = readJsonOrNull(join(folder, ASK_RUN_FILES.snapshots, 'executable.json'))
-  if (identity === null || !sameProgram(identity, prepared.program)) {
-    throw new StartRefusal('CHANGED', 'the app\'s program changed after the check; nothing started')
-  }
-  const changed = judgedChange(prepared)
+  const changed = startChange(prepared)
   if (changed !== null) throw new StartRefusal('CHANGED', `${changed}; nothing started`)
+  const identity = readJsonOrNull(join(folder, ASK_RUN_FILES.snapshots, 'executable.json'))
   // An OpenCode run gets its own copy of BMN's OpenCode Go sign-in, for this run alone; its home goes on every outcome (72.5 AC1, AC2).
   if (receipt.harness === 'opencode') {
     const copied = copyGoSignInToRun(join(folder, ASK_RUN_FILES.home, 'oc'), { launcher: prepared.program.launcher, environment: { PATH: '/usr/bin:/bin' } })
     if (!copied.ok) throw new StartRefusal('SIGN_IN_UNAVAILABLE', `${copied.reason}; nothing started`)
     // The copy ran OpenCode's own program: it must still be the one the check judged.
     if (!sameProgram(identity, prepared.program)) throw new StartRefusal('CHANGED', 'the app\'s program changed while its sign-in was copied; nothing started')
+    // The import adds only what OpenCode's form allows; everything the check judged is still there as it was.
+    const imported = treeChange(folder, receipt, 'started')
+    if (imported !== null) throw new StartRefusal('CHANGED', `${imported}; nothing started`)
   }
   const stdin = join(folder, receipt.snapshots?.message === undefined ? ASK_RUN_FILES.prompt : ASK_RUN_FILES.message)
   const launch = {
@@ -134,7 +170,8 @@ export function startAsk(prepared, { now = new Date(), timeLimitMinutes = TIME_L
     version: 1, argv: prepared.argv, argv_sha256: receipt.argv_sha256, deadline: now.getTime() + timeLimitMinutes * 60_000, time_limit_minutes: timeLimitMinutes,
     // A picture ask on Claude Code reads the one message the check judged; any other ask its prompt.
     stdin, stdin_sha256: receipt.snapshots?.message ?? receipt.snapshots?.prompt, finish: { module: fileURLToPath(import.meta.url), export: 'finishAsk' }, args_fd: true, output_limit: OUTPUT_LIMIT,
-    storage_limit: STORAGE_LIMIT, storage_watch: ASK_RUN_FILES.home,
+    // The supervisor's own last check before the container, with the team read from the asker's home; the run's storage, all of its folder.
+    check: { module: fileURLToPath(import.meta.url), export: 'launchCheck' }, state_home: homedir(), storage_limit: STORAGE_LIMIT,
     // The owner's per-ask token ceiling holds where the app reports usage while it runs: Claude Code alone (72.1).
     ...(tokenCeiling !== null && receipt.harness === 'claude' ? { token_ceiling: tokenCeiling, watch: { module: fileURLToPath(import.meta.url), export: 'watchAsk', ends: 'ceiling' } } : {})
   }
@@ -365,6 +402,7 @@ function finishRun(folder) {
   }
   let outcome
   let reason = null
+  let refusal = null
   if (exit.ended === 'stopped') outcome = 'stopped'
   else if (exit.ended === 'ceiling') {
     outcome = 'stopped'
@@ -384,6 +422,7 @@ function finishRun(folder) {
   } else if (exit.ended === 'changed') {
     outcome = 'refused'
     reason = exit.reason ?? 'what was judged changed before the start; nothing started'
+    refusal = { code: 'CHANGED', reason }
   } else if (seen.answer === null || seen.answer.trim() === '') {
     outcome = 'failed'
     reason = seen.failure ?? (exit.code === 0 ? 'the app ended without an answer' : `the app ended with code ${exit.code ?? exit.signal ?? 'unknown'}`)
@@ -407,7 +446,7 @@ function finishRun(folder) {
   // The transient state goes before the outcome is written: a crash between the two leaves a run recovery finishes, never a sign-in behind an outcome.
   for (const part of TRANSIENT) rmSync(join(folder, part), { recursive: true, force: true })
   writeWhole(join(folder, ASK_RUN_FILES.outcome), `${JSON.stringify({
-    version: 1, id: request.id ?? null, state: outcome, exit: OUTCOME_EXIT[outcome], ...(reason === null ? {} : { reason }),
+    version: 1, id: request.id ?? null, state: outcome, exit: OUTCOME_EXIT[outcome], ...(reason === null ? {} : { reason }), ...(refusal === null ? {} : { refusal }),
     requested: { agent: request.agent ?? null, model: request.model ?? null, effort: request.effort ?? null },
     observed: seen.observed, usage: seen.usage, ...(seen.rateLimit === null ? {} : { rate_limit: seen.rateLimit }), problems: seen.problems,
     started_at: state.started_at ?? null, ended_at: exit.at ?? new Date().toISOString(), time_limit_minutes: readJsonOrNull(join(folder, RUN_FILES.launch))?.time_limit_minutes ?? null

@@ -1,8 +1,8 @@
 // MODULE: agents-team-cli.mjs - Epic 72: `bmn team ask` and `bmn team asks`, one bounded question to one approved teammate, its run listed, waited on, stopped and exported
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { createConnection } from 'node:net'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { APP_NAMES, DESIGNER_ROLE, RosterError } from './agents-roster.mjs'
 import { AgentsUsageError, EXIT, err, failWith, out, usage } from './agents-cli.mjs'
@@ -126,6 +126,7 @@ export function askJson(folder) {
   }
   return {
     version: 1, id: request.id ?? null, state: outcome.state, exit: outcome.exit ?? null, ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+    ...(outcome.refusal === undefined ? {} : { refusal: outcome.refusal }),
     role: request.role ?? null, chosen_by: request.chosen_by ?? null, access: request.access ?? null, project: request.project ?? null, data: request.data ?? null,
     teammate: {
       agent: request.agent ?? null, app: receipt.harness ?? null, app_version: receipt.harness_version?.version ?? null, form: receipt.form ?? null,
@@ -187,11 +188,31 @@ export function verifySessionToken(socketPath, token, { timeoutMs = 3000 } = {})
 }
 
 /**
+ * BMN's own control socket, where BMN itself puts it: `control/control.sock` in its runtime folder,
+ * found by the precedence src/utility/roots.ts uses (BMN_RUNTIME_HOME, then XDG_RUNTIME_DIR/bmn, then
+ * the temporary folder's bmn-<uid>/bmn).
+ */
+export function bmnControlSocket(environment = process.env) {
+  const runtime = environment.BMN_RUNTIME_HOME ?? environment.AITERM_RUNTIME_HOME ?? join(environment.XDG_RUNTIME_DIR ?? join(tmpdir(), `bmn-${process.getuid?.() ?? 'user'}`), 'bmn')
+  return join(runtime, 'control', 'control.sock')
+}
+
+const samePath = (a, b) => {
+  if (resolve(a) === resolve(b)) return true
+  try {
+    return realpathSync(a) === realpathSync(b)
+  } catch {
+    return false
+  }
+}
+
+/**
  * Who asks, as BMN's commands see it: a session, proven by the token BMN gave it, which BMN's own
  * control service must confirm names that very session; a plain shell; `forged` when the session id
  * comes with no token, or with one that names another session or that BMN does not know; or
- * `unproven` when BMN's control service cannot be reached to confirm it. Owner rights never come
- * from here: only the app's owner action has them.
+ * `unproven` when BMN's control service cannot be reached to confirm it. The token is shown only to
+ * BMN's own control socket (`bmnControlSocket`); a BMN_CONTROL_SOCKET naming another is refused before
+ * any token is sent (epic review R1). Owner rights never come from here: only the app's owner action has them.
  */
 export async function teamAsker(environment, { verify = verifySessionToken } = {}) {
   const asker = askerOf(environment)
@@ -200,8 +221,11 @@ export async function teamAsker(environment, { verify = verifySessionToken } = {
   if (typeof token !== 'string' || token === '') return { kind: 'forged', reason: `BMN_SESSION_ID names session ${asker.session}, but there is no BMN_TOKEN; BMN gives every session both` }
   const named = /^s1\.([A-Za-z0-9_:-]{1,128})\./u.exec(token)?.[1] ?? null
   if (named !== asker.session) return { kind: 'forged', reason: `BMN_SESSION_ID names session ${asker.session}, but the BMN_TOKEN BMN gave this session ${named === null ? 'names none' : `is session ${named}'s`}` }
-  const socket = environment.BMN_CONTROL_SOCKET ?? environment.AITERM_CONTROL_SOCKET
-  if (typeof socket !== 'string' || socket === '') return { kind: 'unproven', reason: `session ${asker.session} cannot be proven: BMN_CONTROL_SOCKET is not set` }
+  const socket = bmnControlSocket(environment)
+  const supplied = environment.BMN_CONTROL_SOCKET ?? environment.AITERM_CONTROL_SOCKET
+  if (typeof supplied === 'string' && supplied !== '' && !samePath(supplied, socket)) {
+    return { kind: 'unproven', reason: `session ${asker.session} cannot be proven: BMN_CONTROL_SOCKET names ${supplied}, not BMN's own control socket ${socket}` }
+  }
   const answer = await verify(socket, token)
   if (answer.session === asker.session) return asker
   if (answer.unreachable !== undefined) {

@@ -28,8 +28,10 @@ const runs = (): string => join(home, '.config/bmn/agents/state/team/runs')
 const today = (now = new Date()): string => now.toISOString().slice(0, 10).replaceAll('-', '')
 const key = (name: string): string => `${today()}-${name}`
 const controlSocket = (): string => join(home, 'runtime/control/control.sock')
+/** Where BMN's control service is, as BMN gives it to a session: its runtime folder, and the socket in it. */
+const proof = (): Record<string, string> => ({ BMN_RUNTIME_HOME: join(home, 'runtime'), BMN_CONTROL_SOCKET: controlSocket() })
 /** A session as BMN starts one: its id, its token, and BMN's control service that proves the token. */
-const session = (id: string, token = id): Record<string, string> => ({ BMN_SESSION_ID: id, BMN_TOKEN: `s1.${token}.inc-1.${TOKEN_MAC}`, BMN_CONTROL_SOCKET: controlSocket() })
+const session = (id: string, token = id): Record<string, string> => ({ BMN_SESSION_ID: id, BMN_TOKEN: `s1.${token}.inc-1.${TOKEN_MAC}`, ...proof() })
 /** The hash `bmn team ask` gives a question-only ask from a plain shell in the test's home. */
 const shellHash = (question: string, extra: Record<string, unknown> = {}): string =>
   requestHash({ role: 'epic-reviewer', question, project: null, files: [], timeLimitMinutes: 30, ...extra })
@@ -223,17 +225,22 @@ describe.skipIf(!canContain)('who sees and controls an ask (72.4 AC2, AC4)', { t
       expect(JSON.parse(tried.stdout).refusal.code).toBe('NOT_YOURS')
     }
     // A session id that the token BMN gave does not name is a forged label: nothing is shown or asked.
-    const forged = { BMN_SESSION_ID: 'sess-a', BMN_TOKEN: `s1.sess-b.inc-1.${TOKEN_MAC}`, BMN_CONTROL_SOCKET: controlSocket() }
+    const forged = { BMN_SESSION_ID: 'sess-a', BMN_TOKEN: `s1.sess-b.inc-1.${TOKEN_MAC}`, ...proof() }
     expect(await teamAsker(forged)).toMatchObject({ kind: 'forged' })
     const shown = await bmn(['team', 'asks', 'show', id, '--json'], forged)
     expect(shown.code).toBe(10)
     expect(JSON.parse(shown.stdout).refusal).toMatchObject({ code: 'NOT_YOURS', reason: expect.stringContaining('BMN_SESSION_ID names session sess-a') })
     expect((await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'x', '--key', key('forged')], forged)).code).toBe(10)
     // Session A's id with no token, or with a made-up token naming A that BMN does not know, is refused every operation (epic review).
-    const bare = { BMN_SESSION_ID: 'sess-a', BMN_CONTROL_SOCKET: controlSocket() }
-    const fabricated = { BMN_SESSION_ID: 'sess-a', BMN_TOKEN: `s1.sess-a.inc-1.${'b'.repeat(64)}`, BMN_CONTROL_SOCKET: controlSocket() }
-    const unreachable = { ...a, BMN_CONTROL_SOCKET: join(home, 'no-such.sock') }
-    for (const [who, code, words] of [[bare, 'NOT_YOURS', 'there is no BMN_TOKEN'], [fabricated, 'NOT_YOURS', 'BMN does not know the BMN_TOKEN'], [unreachable, 'SESSION_UNPROVEN', 'cannot be proven']] as const) {
+    const bare = { BMN_SESSION_ID: 'sess-a', ...proof() }
+    const fabricated = { BMN_SESSION_ID: 'sess-a', BMN_TOKEN: `s1.sess-a.inc-1.${'b'.repeat(64)}`, ...proof() }
+    const unreachable = { ...a, BMN_RUNTIME_HOME: join(home, 'no-runtime'), BMN_CONTROL_SOCKET: join(home, 'no-runtime/control/control.sock') }
+    // A control service of the caller's own making, which says yes to anything, is never asked: the token goes only to BMN's (epic review R1).
+    const accepted: string[] = []
+    const fake = await standInControl(join(home, 'fake/control.sock'), (token) => { accepted.push(token); return 'sess-a' })
+    const substituted = { BMN_SESSION_ID: 'sess-a', BMN_TOKEN: `s1.sess-a.inc-1.${'c'.repeat(64)}`, ...proof(), BMN_CONTROL_SOCKET: join(home, 'fake/control.sock') }
+    for (const [who, code, words] of [[bare, 'NOT_YOURS', 'there is no BMN_TOKEN'], [fabricated, 'NOT_YOURS', 'BMN does not know the BMN_TOKEN'], [unreachable, 'SESSION_UNPROVEN', 'did not answer'],
+      [substituted, 'SESSION_UNPROVEN', 'not BMN\'s own control socket']] as const) {
       expect(await teamAsker(who)).toMatchObject({ kind: code === 'NOT_YOURS' ? 'forged' : 'unproven' })
       const listed = await bmn(['team', 'asks', '--json'], who)
       expect(listed.code).toBe(10)
@@ -247,6 +254,8 @@ describe.skipIf(!canContain)('who sees and controls an ask (72.4 AC2, AC4)', { t
       expect(JSON.parse(asked.stdout).refusal.code).toBe(code)
     }
     expect(existsSync(join(home, 'forged-export'))).toBe(false)
+    await new Promise((resolve) => fake.close(resolve))
+    expect(accepted).toEqual([])
     // No flag or label gives the owner's view: there is no "all".
     expect((await bmn(['team', 'asks', '--all'], b)).code).toBe(2)
     // A plain shell sees the shell's asks only.

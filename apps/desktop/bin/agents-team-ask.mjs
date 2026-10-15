@@ -15,6 +15,7 @@ import { INSIDE } from './agents-container.mjs'
 import { InputRefusal, LIMITS, askProject, checkQuestion, freezeProject, sha256Of, textFile, workingTreeRoot } from './agents-team-inputs.mjs'
 import { AskRefusal, resolveTeammate } from './agents-team-resolve.mjs'
 import { pictureFile } from './agents-team-pictures.mjs'
+import { TREE_FILE, runTree } from './agents-team-tree.mjs'
 
 /**
  * Making an ask ready follows one order, so that nothing is copied before it is allowed: the
@@ -294,6 +295,10 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   writePrivate(join(folder, ASK_RUN_FILES.snapshots, 'environment.json'), `${JSON.stringify({ names: Object.keys(form.environment), sha256: sha256Of(Buffer.from(JSON.stringify(form.environment))) }, null, 2)}\n`)
   const verdict = evaluateAsk({ agent: choice.agent.id, role: request.role, effort: choice.effort, access, data: label, wide: request.wide === true, run: folder, argv },
     { environment, now, program: installed.program, version: installed.version, contextTestLog })
-  if (verdict.verdict === 'PASS') writePrivate(join(folder, ASK_RUN_FILES.receipt), `${JSON.stringify(verdict.receipt, null, 2)}\n`)
+  if (verdict.verdict === 'PASS') {
+    writePrivate(join(folder, ASK_RUN_FILES.receipt), `${JSON.stringify(verdict.receipt, null, 2)}\n`)
+    // The judged manifest, beside the run's roots, so a later change names the entry that changed (agents-team-tree.mjs).
+    writePrivate(join(folder, TREE_FILE), `${JSON.stringify(runTree(folder).entries)}\n`)
+  }
   return { id, folder, choice: { agent: choice.agent.id, effort: choice.effort, rule: choice.rule, phase: choice.phase }, verdict, argv, stdin: form.stdin, manifest, program: installed.program }
 }

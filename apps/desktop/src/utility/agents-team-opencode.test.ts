@@ -79,7 +79,7 @@ describe.skipIf(!canContain)('an OpenCode teammate\'s ask (72.5)', { timeout: 30
     expect(kept).not.toContain(GO_KEY_SENTINEL)
     expect(kept).not.toContain('MESSAGES-SENTINEL')
     // BMN's own folder still holds its sign-in: the run had a copy.
-    expect(readFileSync(join(home, '.config/bmn/agents/state/opencode/data/opencode/auth-stub.json'), 'utf8')).toContain(GO_KEY_SENTINEL)
+    expect(readFileSync(join(home, '.config/bmn/agents/state/opencode/data/opencode/opencode.db'), 'utf8')).toContain(GO_KEY_SENTINEL)
   })
 
   it('a private ask to a public-only provider is refused before anything is copied (AC1)', () => {

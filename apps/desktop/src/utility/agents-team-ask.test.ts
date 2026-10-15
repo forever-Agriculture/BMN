@@ -10,6 +10,7 @@ import { evaluate, evaluateAsk, teamRunsDirectory, visibilityPath } from '../../
 import { ASK_RUN_FILES, CLAUDE_ASK_HOSTS, CLAUDE_ASK_PROJECT, CODEX_ASK_NO_RENEWAL, CODEX_ASK_NO_TOOLS } from '../../bin/agents-team-forms.mjs'
 import { InputRefusal, LIMITS, askProject, checkQuestion, credentialHits, freezeProject, readInside, readInputFile, textFile } from '../../bin/agents-team-inputs.mjs'
 import { AskUsageError, filePrompt, prepareAsk } from '../../bin/agents-team-ask.mjs'
+import { TREE_FILE, runTree, treeChange, treeDigests } from '../../bin/agents-team-tree.mjs'
 import { AskRefusal, resolveTeammate } from '../../bin/agents-team-resolve.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
@@ -430,6 +431,56 @@ describe('the frozen project (72.2 AC2)', () => {
   })
 })
 
+describe('the manifest of what a run\'s container binds (epic review R6)', () => {
+  const make = (): string => {
+    const folder = mkdtempSync(join(home, 'tree-'))
+    for (const path of ['home/oc/config/opencode', 'home/oc/data', 'inputs', 'snapshots']) mkdirSync(join(folder, path), { recursive: true })
+    writeFileSync(join(folder, 'home/oc/config/opencode/opencode.json'), '{}\n')
+    writeFileSync(join(folder, 'inputs/prompt.md'), 'made-up question\n')
+    symlinkSync('prompt.md', join(folder, 'inputs/link'))
+    return folder
+  }
+  it('names every entry, a missing root as absent, and a changed, added, removed or relinked entry by its path', () => {
+    const folder = make()
+    const tree = runTree(folder)
+    expect(tree.entries.map((entry) => `${entry.type} ${entry.path}`)).toEqual(expect.arrayContaining(['dir home', 'file home/oc/config/opencode/opencode.json', 'link inputs/link', 'absent project', 'dir snapshots']))
+    const receipt = { harness: 'codex', snapshots: treeDigests(folder, 'codex') }
+    writeFileSync(join(folder, TREE_FILE), JSON.stringify(tree.entries))
+    expect(treeChange(folder, receipt)).toBeNull()
+    writeFileSync(join(folder, 'inputs/prompt.md'), 'another question\n')
+    expect(treeChange(folder, receipt)).toBe('the run\'s inputs/prompt.md is not the one the check judged')
+    writeFileSync(join(folder, 'inputs/prompt.md'), 'made-up question\n')
+    rmSync(join(folder, 'inputs/link'))
+    symlinkSync('/etc/hostname', join(folder, 'inputs/link'))
+    expect(treeChange(folder, receipt)).toBe('the run\'s inputs/link is not the one the check judged')
+    rmSync(join(folder, 'inputs/link'))
+    expect(treeChange(folder, receipt)).toBe('the run\'s inputs/link is gone since the check')
+    symlinkSync('prompt.md', join(folder, 'inputs/link'))
+    mkdirSync(join(folder, 'project'))
+    expect(treeChange(folder, receipt)).toBe('the run\'s project was added after the check')
+    rmSync(join(folder, 'project'), { recursive: true })
+    // Anything but a file, a folder or a link fails closed.
+    execFileSync('mkfifo', [join(folder, 'inputs/pipe')])
+    expect(treeChange(folder, receipt)).toMatch(/^the run could not be read whole \(.*inputs\/pipe is neither a file, a folder nor a link\)$/)
+  })
+  it('OpenCode\'s sign-in import may add its database, its log and empty folders after the check, and nothing else', () => {
+    const folder = make()
+    const receipt = { harness: 'opencode', snapshots: treeDigests(folder, 'opencode') }
+    writeFileSync(join(folder, TREE_FILE), JSON.stringify(runTree(folder).entries))
+    mkdirSync(join(folder, 'home/oc/data/opencode/log'), { recursive: true })
+    writeFileSync(join(folder, 'home/oc/data/opencode/opencode.db'), 'made-up database\n')
+    writeFileSync(join(folder, 'home/oc/data/opencode/log/opencode.log'), 'made-up log\n')
+    mkdirSync(join(folder, 'home/oc/state/opencode'), { recursive: true })
+    expect(treeChange(folder, receipt, 'started')).toBeNull()
+    expect(treeChange(folder, receipt, 'check')).not.toBeNull()
+    writeFileSync(join(folder, 'home/oc/config/opencode/opencode.json'), '{"plugin":["made-up"]}\n')
+    expect(treeChange(folder, receipt, 'started')).toBe('the run\'s home/oc/config/opencode/opencode.json is not the one the check judged')
+    writeFileSync(join(folder, 'home/oc/config/opencode/opencode.json'), '{}\n')
+    writeFileSync(join(folder, 'home/oc/config/opencode/agents.md'), 'made-up rules\n')
+    expect(treeChange(folder, receipt, 'started')).toBe('the run\'s home/oc/config/opencode/agents.md was added after the check')
+  })
+})
+
 describe('an ask made ready and judged (72.2 AC2-AC5)', () => {
   it('a question ask: the chain\'s Codex teammate, its no-tools form in the run\'s container, judged PASS', () => {
     const result = ask({})
@@ -450,6 +501,10 @@ describe('an ask made ready and judged (72.2 AC2-AC5)', () => {
     expect(result.argv.join('\n')).toContain(`--ro-bind\n${home}/.codex/auth.json\n/ask/home/codex/auth.json`)
     expect(result.argv.join('\n')).toContain(`--setenv\nCODEX_REFRESH_TOKEN_URL_OVERRIDE\n${CODEX_ASK_NO_RENEWAL}`)
     expect(result.argv.join('\n')).not.toContain(`--bind\n${home}/.codex/auth.json`)
+    // The configuration BMN wrote is read-only inside the container, and the receipt holds the manifest of every file the container binds (epic review R6).
+    expect(result.argv.join('\n')).toContain(`--ro-bind\n${result.folder}/home/codex/config.toml\n/ask/home/codex/config.toml`)
+    expect(result.verdict.receipt?.snapshots).toMatchObject({ tree: runTree(result.folder).sha256 })
+    expect(JSON.parse(readFileSync(join(result.folder, TREE_FILE), 'utf8'))).toEqual(runTree(result.folder).entries)
     expect(JSON.parse(readFileSync(join(result.folder, ASK_RUN_FILES.request), 'utf8'))).toMatchObject({ role: 'epic-reviewer', agent: 'astra', effort: 'medium', chosen_by: 'chain', access: 'question', data: 'private' })
   })
 

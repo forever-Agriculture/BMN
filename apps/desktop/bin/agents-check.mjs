@@ -11,6 +11,7 @@ import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, CONTEXT_
 import { RUN_TEST_APPS, appTools, checkRunTools } from './agents-tools.mjs'
 import { ASK_APPS, ASK_FORMS_PROVEN, ASK_FORM_NAMES, ASK_ACCESS, ASK_RUN_FILES, UNAVAILABLE_WHY, appSearchPath, askArgv, askProgram, claudePictureMessage, formStanding, sameProgram } from './agents-team-forms.mjs'
 import { INSIDE } from './agents-container.mjs'
+import { TreeUnreadable, treeDigests } from './agents-team-tree.mjs'
 import { OPENCODE_ASKER_AGENT, OPENCODE_FOLDER_SHA256, OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_RESEARCH_AGENT, OPENCODE_SESSION_ID, installOpenCodeFolder, openCodeAskHome, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
 
 export { publicOnlyReasons }
@@ -2890,7 +2891,15 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       }
       if (hosts !== built.form.hosts) refuse('WORKSPACE_MISMATCH', 'the run\'s /etc/hosts is not the one BMN wrote for this ask')
     }
-    note(`snapshots: configuration ${Object.keys(configHashes).join(', ') || 'none'}, program ${identity.payload.sha256.slice(0, 12)}, environment ${environmentSnapshot.names.join(', ')}`)
+    // Everything the container binds from the run, entry by entry, as the start and the supervisor will check it again (epic review R6).
+    let tree
+    try {
+      tree = treeDigests(folder, agent.harness)
+    } catch (error) {
+      if (!(error instanceof TreeUnreadable)) throw error
+      refuse('WORKSPACE_MISMATCH', `the run's files could not be read whole: ${error.message}`)
+    }
+    note(`snapshots: configuration ${Object.keys(configHashes).join(', ') || 'none'}, program ${identity.payload.sha256.slice(0, 12)}, environment ${environmentSnapshot.names.join(', ')}, run files ${tree.tree.slice(0, 12)}`)
 
     // Where it goes, as the route readers see the run's own home: the same answers evaluate gives.
     const assignments = Object.fromEntries(Object.entries(built.form.environment).map(([name, value]) => [name, value.startsWith(INSIDE.home) ? `${run.home}${value.slice(INSIDE.home.length)}` : value]))
@@ -2932,7 +2941,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       inputs_sha256: sha256(canonicalJson(manifest)),
       snapshots: {
         config: sha256(canonicalJson(configHashes)), executable: { launcher: identity.launcher.sha256, payload: identity.payload.sha256 },
-        environment: environmentSnapshot.sha256, rules: rules === null ? null : sha256(rules), prompt: promptHash, ...(message === null ? {} : { message }), ...(hosts === null ? {} : { hosts: sha256(hosts) })
+        environment: environmentSnapshot.sha256, rules: rules === null ? null : sha256(rules), prompt: promptHash, ...(message === null ? {} : { message }), ...(hosts === null ? {} : { hosts: sha256(hosts) }), ...tree
       },
       argv_sha256: sha256(canonicalJson(built.argv)),
       harness_version: { version, state: tested.state, form: 'proven' },
