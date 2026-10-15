@@ -2388,7 +2388,7 @@ Refusal codes (exit 10) the commands add: `ROLE_UNKNOWN`, `AGENT_NOT_ELIGIBLE`, 
 `EFFORT_REQUIRED`, `RECHECK_INVALID`, `PROJECT_CHOICE_CONFLICT`, `PROJECT_INVALID`, `ACCESS_UNAVAILABLE`
 (a mode not proven for this app version), `WIDE_READ_NOT_ENABLED`, `CONTAINER_UNAVAILABLE`,
 `INPUT_INVALID` (a link, a non-regular or non-UTF-8 file, a credential or configuration location, a
-picture that is not PNG, JPEG or WebP), `INPUT_TOO_LARGE`, `PICTURE_UNTREATABLE` (Pictures, above), `CREDENTIAL_FOUND` (names the file and pattern, never the value), `PUBLIC_NOT_VERIFIED`,
+picture that is not PNG, JPEG or WebP), `INPUT_TOO_LARGE`, `INPUT_CHANGED` (a file or picture changed between the command hashing it for the key and reading it to send; nothing was sent), `PICTURE_UNTREATABLE` (Pictures, above), `CREDENTIAL_FOUND` (names the file and pattern, never the value), `PUBLIC_NOT_VERIFIED`,
 `PRIVATE_NOT_ALLOWED`, `CHANGED` (the approved team or the app's program changed between the check and
 the start; nothing started), `SIGN_IN_UNAVAILABLE` (OpenCode: BMN's folder holds no Go sign-in to copy; nothing started), `KEY_REQUIRED`, `KEY_CONFLICT` (same key, different request), `GONE` (a removed
 run's or expired key), `NESTED` (asked from inside a teammate's run), `NOT_YOURS` (another session's

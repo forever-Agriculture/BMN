@@ -255,7 +255,9 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
   const runs = teamRunsDirectory()
   const key = options.key ?? makeKey('shell', now())
   const scope = keyScope(asker)
-  const hash = requestHash({ ...request, project, files: files.map((path) => ({ path, sha256: fileHash(path) })), images: images.map((path) => ({ path, sha256: fileHash(path, LIMITS.picture) })), timeLimitMinutes: minutes })
+  // Each input is hashed once: the request's hash names these bytes, and the ask refuses to send any other (INPUT_CHANGED).
+  const inputHashes = { files: files.map((path) => fileHash(path)), images: images.map((path) => fileHash(path, LIMITS.picture)) }
+  const hash = requestHash({ ...request, project, files: files.map((path, index) => ({ path, sha256: inputHashes.files[index] })), images: images.map((path, index) => ({ path, sha256: inputHashes.images[index] })), timeLimitMinutes: minutes })
   let reservation
   try {
     reservation = await reserveAsk(runs, { scope, key, hash, id: askRunId(now()) }, { now: now() })
@@ -275,7 +277,7 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     const container = containerStarts()
     if (!container.ok) return refused(asJson, 'CONTAINER_UNAVAILABLE', `BMN's container cannot start from here: ${container.reason}; ask from where it can (a terminal, or escalated as a sandboxed lead runs helpers)`)
     try {
-      prepared = prepareAsk({ ...request, key, keyScope: scope, requestSha256: hash, askedBy: asker }, { environment, cwd, id, now: now() })
+      prepared = prepareAsk({ ...request, key, keyScope: scope, requestSha256: hash, askedBy: asker, inputHashes }, { environment, cwd, id, now: now() })
     } catch (error) {
       if (error instanceof AskUsageError) return usage(error.message)
       if (error instanceof AskRefusal) return error.code === 'USAGE' ? usage(error.message) : refused(asJson, error.code, error.message, error.alternatives)

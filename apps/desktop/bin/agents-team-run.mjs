@@ -108,6 +108,11 @@ function eventsOf(folder) {
  * `request.json` (requested model, aliases, effort). Nothing the app does not report is made up:
  * it is `unknown`, with the reason.
  */
+/** A token count the app reported, added to a total: a field it left out makes the total unknown, never zero (R72-FR6). */
+function addTokens(total, value) {
+  return total === 'unknown' || typeof value !== 'number' || !Number.isFinite(value) ? 'unknown' : total + value
+}
+
 export function observeAsk(folder, harness, request) {
   const { events } = eventsOf(folder)
   const problems = []
@@ -130,10 +135,10 @@ export function observeAsk(folder, harness, request) {
       if (event.type === 'turn.failed' || event.type === 'error') failure = event.error?.message ?? event.message ?? 'the app reported an error'
       if (event.type === 'turn.completed' && event.usage !== null && typeof event.usage === 'object') {
         totals ??= { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_tokens: 0 }
-        totals.input_tokens += Number(event.usage.input_tokens ?? 0)
-        totals.cached_input_tokens += Number(event.usage.cached_input_tokens ?? 0)
-        totals.output_tokens += Number(event.usage.output_tokens ?? 0)
-        totals.reasoning_tokens += Number(event.usage.reasoning_output_tokens ?? 0)
+        totals.input_tokens = addTokens(totals.input_tokens, event.usage.input_tokens)
+        totals.cached_input_tokens = addTokens(totals.cached_input_tokens, event.usage.cached_input_tokens)
+        totals.output_tokens = addTokens(totals.output_tokens, event.usage.output_tokens)
+        totals.reasoning_tokens = addTokens(totals.reasoning_tokens, event.usage.reasoning_output_tokens)
       }
     }
     if (totals !== null) Object.assign(usage, totals, { source: 'turn.completed' })
@@ -189,10 +194,10 @@ export function observeAsk(folder, harness, request) {
         else failure = typeof event.result === 'string' && event.result !== '' ? event.result : `the app ended with ${event.subtype ?? 'an error'}`
         if (event.usage !== null && typeof event.usage === 'object') {
           Object.assign(usage, {
-            input_tokens: Number(event.usage.input_tokens ?? 0) + Number(event.usage.cache_creation_input_tokens ?? 0),
-            cached_input_tokens: Number(event.usage.cache_read_input_tokens ?? 0),
-            output_tokens: Number(event.usage.output_tokens ?? 0),
-            reasoning_tokens: event.usage.output_tokens_details?.thinking_tokens ?? 'unknown',
+            input_tokens: addTokens(addTokens(0, event.usage.input_tokens), event.usage.cache_creation_input_tokens),
+            cached_input_tokens: addTokens(0, event.usage.cache_read_input_tokens),
+            output_tokens: addTokens(0, event.usage.output_tokens),
+            reasoning_tokens: addTokens(0, event.usage.output_tokens_details?.thinking_tokens),
             source: 'result'
           })
         }

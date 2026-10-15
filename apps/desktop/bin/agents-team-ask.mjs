@@ -121,6 +121,13 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   const project = askProject(request.project, { cwd, home })
   // Each picture is read, bounded and its metadata taken out before anything else: what may leave is what is sent (72.8 AC2).
   const pictures = images.map((path) => pictureFile(path, { cwd, home }))
+  // The bytes read here must be the bytes the request's hash names: a file changed after the asking command hashed
+  // it is refused, never sent under a key that names other bytes (epic pre-review).
+  if (request.inputHashes !== undefined) {
+    const pairs = [...texts.map((file, index) => [files[index], file.sha256, request.inputHashes.files?.[index]]), ...pictures.map((picture, index) => [images[index], picture.before.sha256, request.inputHashes.images?.[index]])]
+    const changed = pairs.find(([, read, hashed]) => read !== hashed)
+    if (changed !== undefined) throw new InputRefusal('INPUT_CHANGED', `${changed[0]} changed while the ask was being made; nothing was sent: ask again with another key`)
+  }
   if (access === 'project') {
     if (project === null) throw new InputRefusal('PROJECT_INVALID', 'a project ask needs a project: name it with --project, or ask from inside its repository')
     if (workingTreeRoot(project) !== project) throw new InputRefusal('PROJECT_INVALID', `${project} is not a Git working tree's top folder; to give it files, ask with --access files and --file`)

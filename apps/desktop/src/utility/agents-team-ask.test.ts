@@ -413,6 +413,17 @@ describe('an ask made ready and judged (72.2 AC2-AC5)', () => {
     ])
   })
 
+  it('a file changed after the asking command hashed it for the key is refused, never sent under that key (epic pre-review)', () => {
+    const root = makeProject()
+    const path = join(root, 'src/retry.ts')
+    const hashed = createHash('sha256').update(readFileSync(path)).digest('hex')
+    expect(ask({ access: 'files', files: [path], inputHashes: { files: [hashed], images: [] } }, { cwd: root }).verdict.verdict).toBe('PASS')
+    writeFileSync(path, `${readFileSync(path, 'utf8')}// changed after hashing\n`)
+    const changed = refusal(() => ask({ access: 'files', files: [path], inputHashes: { files: [hashed], images: [] } }, { cwd: root }))
+    expect(changed).toMatchObject({ code: 'INPUT_CHANGED' })
+    expect(changed.message).toContain(`${path} changed while the ask was being made; nothing was sent`)
+  })
+
   it('usage problems are refused before anything is read', () => {
     expect(() => ask({ files: [join(home, 'x')] })).toThrow(AskUsageError)
     expect(() => ask({ access: 'files' })).toThrow(AskUsageError)

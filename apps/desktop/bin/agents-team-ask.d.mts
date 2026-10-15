@@ -9,7 +9,7 @@ export declare function projectPrompt(question: string, frozen: import('./agents
 export interface AskAsked {
   role: string; question: string; agent?: string; effort?: string; smallWork?: boolean; recheckOf?: string; project?: string
   access?: string; files?: string[]; images?: string[]; data?: string; wide?: boolean
-  key?: string; keyScope?: string; requestSha256?: string; askedBy?: { kind: string; session?: string; app?: string }
+  key?: string; keyScope?: string; requestSha256?: string; askedBy?: { kind: string; session?: string; app?: string }; inputHashes?: { files?: string[]; images?: string[] }
 }
 export interface PreparedAsk {
   id: string; folder: string; choice: { agent: string; effort: string; rule: string; phase: string }

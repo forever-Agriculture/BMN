@@ -235,4 +235,20 @@ describe('reading who answered (72.3 AC2)', () => {
     const seen = observeAsk(folder, 'codex', { model: 'gpt-6-astra', effort: 'medium' })
     expect(seen).toMatchObject({ answer: 'done', observed: { session: 't-1', model: null, model_source: 'unknown: no turn span on standard error' }, usage: { input_tokens: 'unknown', source: 'unknown' }, problems: [] })
   })
+
+  it('a usage field the app leaves out stays unknown, in one turn or summed over several (epic pre-review)', () => {
+    const codex = join(home, 'partial-codex')
+    mkdirSync(codex)
+    writeFileSync(join(codex, 'events.jsonl'), [
+      '{"type":"thread.started","thread_id":"t-2"}',
+      '{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":7}}',
+      '{"type":"turn.completed","usage":{"input_tokens":50,"output_tokens":3,"reasoning_output_tokens":2}}',
+      ''
+    ].join('\n'))
+    expect(observeAsk(codex, 'codex', { model: 'gpt-6-astra', effort: 'medium' }).usage).toMatchObject({ input_tokens: 150, cached_input_tokens: 'unknown', output_tokens: 10, reasoning_tokens: 'unknown', source: 'turn.completed' })
+    const claude = join(home, 'partial-claude')
+    mkdirSync(claude)
+    writeFileSync(join(claude, 'events.jsonl'), '{"type":"result","subtype":"success","is_error":false,"result":"done","usage":{"input_tokens":12,"output_tokens":5,"cache_read_input_tokens":3}}\n')
+    expect(observeAsk(claude, 'claude', { model: 'claude-opus-5-5', effort: 'medium' }).usage).toMatchObject({ input_tokens: 'unknown', cached_input_tokens: 3, output_tokens: 5, reasoning_tokens: 'unknown', source: 'result' })
+  })
 })
