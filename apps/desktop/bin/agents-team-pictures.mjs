@@ -130,6 +130,17 @@ const PNG_KEPT = new Map([
   ['mDCV', 'mastering display (mDCV)'], ['cLLI', 'light level (cLLI)'], ['sBIT', null], ['pHYs', null], ['bKGD', null]
 ])
 const PNG_DEPTHS = { 0: [1, 2, 4, 8, 16], 2: [8, 16], 3: [1, 2, 4, 8], 4: [8, 16], 6: [8, 16] }
+/**
+ * The sizes the PNG specification gives each kept chunk of fixed shape, by the picture's colour type
+ * where it depends on it: a kept chunk of any other size could carry bytes no viewer reads, so it is refused.
+ */
+const PNG_SIZES = {
+  gAMA: () => [4], cHRM: () => [32], sRGB: () => [1], pHYs: () => [9], cICP: () => [4], mDCV: () => [24], cLLI: () => [8],
+  bKGD: (colour) => (colour === 3 ? [1] : colour === 0 || colour === 4 ? [2] : [6]),
+  sBIT: (colour) => [{ 0: 1, 2: 3, 3: 3, 4: 2, 6: 4 }[colour]],
+  tRNS: (colour, length) => (colour === 0 ? [2] : colour === 2 ? [6] : colour === 3 && length >= 1 && length <= 256 ? [length] : []),
+  PLTE: (colour, length) => (length >= 3 && length <= 768 && length % 3 === 0 && colour !== 0 && colour !== 4 ? [length] : [])
+}
 
 function pngChunk(type, data) {
   const out = Buffer.alloc(12 + data.length)
@@ -174,7 +185,9 @@ function treatPng(bytes, label) {
       untreatable(label, 'has two headers')
     }
     if (type === 'IEND') {
-      out.push(whole)
+      // The end chunk holds nothing; whatever a writer put in it is not drawn and goes.
+      out.push(length === 0 ? whole : pngChunk('IEND', Buffer.alloc(0)))
+      if (length > 0) removed.push(`data inside the end chunk (${length} bytes)`)
       ended = true
       break
     }
@@ -191,6 +204,7 @@ function treatPng(bytes, label) {
       continue
     }
     if (PNG_KEPT.has(type)) {
+      if (PNG_SIZES[type] !== undefined && !PNG_SIZES[type](header.colour, length).includes(length)) untreatable(label, `has a ${type} chunk of a size no viewer reads (${length} bytes)`)
       out.push(whole)
       if (type === 'IDAT') data += 1
       const named = PNG_KEPT.get(type)
@@ -328,10 +342,13 @@ function treatJpeg(bytes, label) {
       if (!kept.includes('colour profile (ICC)')) kept.push('colour profile (ICC)')
       continue
     }
-    if (marker === 0xee && segmentName(data).startsWith('Adobe')) {
-      // Adobe's segment says how the colours are coded; without it a CMYK picture draws wrong.
-      out.push(whole)
+    if (marker === 0xee && data.length >= 12 && data.toString('latin1', 0, 5) === 'Adobe' && data[11] <= 2) {
+      // Adobe's segment says how the colours are coded; without it a CMYK picture draws wrong. Of its twelve
+      // bytes (name, version, two flag words, the transform) a viewer reads only the transform: the segment is
+      // written anew around it, so nothing else a writer put there, nor anything after it, is sent.
+      out.push(segment(0xee, Buffer.from([...Buffer.from('Adobe', 'latin1'), 0, 100, 0, 0, 0, 0, data[11]])))
       kept.push('colour coding (Adobe)')
+      if (data.length > 12) removed.push(`data after Adobe's colour coding (${data.length - 12} bytes)`)
       continue
     }
     if (marker >= 0xe0 && marker <= 0xef) {
@@ -376,7 +393,6 @@ function webpFrame(fourcc, data) {
 
 const WEBP_ICC = 0x20
 const WEBP_EXIF = 0x08
-const WEBP_XMP = 0x04
 const WEBP_ANIMATION = 0x02
 
 function treatWebp(bytes, label) {
@@ -446,9 +462,12 @@ function treatWebp(bytes, label) {
     if (frame.width !== canvas.width || frame.height !== canvas.height) untreatable(label, 'has a canvas of another size than its picture')
     // A lossless picture carries its own alpha channel, flagged in the header.
     if ((flags & 0x10) && !kept.includes('transparency (ALPH)')) kept.push('transparency (alpha channel)')
-    // The header's flags say which of the kept chunks follow.
-    const header = Buffer.from(first.data)
-    header[0] = (flags & ~(WEBP_ICC | WEBP_EXIF | WEBP_XMP)) | (icc ? WEBP_ICC : 0) | (exif?.tiff ? WEBP_EXIF : 0)
+    // The header is ten bytes: its flags say which of the kept chunks follow, its reserved bits are zero, and
+    // anything a writer put after the ten bytes is no part of it and goes.
+    const header = Buffer.from(first.data.subarray(0, 10))
+    header[0] = (flags & 0x10) | (icc ? WEBP_ICC : 0) | (exif?.tiff ? WEBP_EXIF : 0)
+    header.fill(0, 1, 4)
+    if (first.data.length > 10) removed.push(`data after the WebP header (${first.data.length - 10} bytes)`)
     parts.push(riffChunk('VP8X', header), ...body)
   } else {
     untreatable(label, 'does not start with a picture chunk')

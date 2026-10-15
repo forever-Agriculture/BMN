@@ -1,6 +1,7 @@
 // MODULE: agents-team-forms.mjs - Epic 72: the one read-only form of each app for each access mode, as Story 72.1 measured them, and which app versions they are proven on
 import { createHash } from 'node:crypto'
 import { closeSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { INSIDE, appPaths, containerArgv } from './agents-container.mjs'
 import { openCodeAskHome, openCodeEnvironment } from './agents-opencode.mjs'
 
@@ -75,13 +76,29 @@ export const CLAUDE_ASK_PROJECT = Object.freeze(['--tools', 'Read,Grep,Glob,Bash
 export const CLAUDE_ASK_COMMON = Object.freeze(['--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--no-session-persistence',
   '--output-format', 'stream-json', '--verbose'])
 
-/** Where an app's sign-in is inside the run's home, and the owner's own file bound there read-write (72.1 AC5: renewals land in his file). */
+/**
+ * Where an app's sign-in is inside the run's home: the owner's own file bound there read-only. An ask
+ * never renews his sign-in: a renewal spends his single-use refresh token outside the lock his own
+ * sessions share, and a lost race wipes his file (measured 2026-10-15, records/signin/renewal-race-*).
+ * So the app's renewal cannot reach its host (Codex: its renewal address; Claude Code: the sign-in
+ * hosts in the run's own /etc/hosts), and an ask whose token has expired fails as a sign-in failure
+ * until one of his own sessions renews it.
+ */
 export function signInBind(harness, environment = process.env) {
   const home = environment.HOME ?? ''
-  if (harness === 'codex') return { from: `${environment.CODEX_HOME || `${home}/.codex`}/auth.json`, to: `${INSIDE.home}/codex/auth.json`, writable: true }
-  if (harness === 'claude') return { from: `${environment.CLAUDE_CONFIG_DIR || `${home}/.claude`}/.credentials.json`, to: `${INSIDE.home}/.claude/.credentials.json`, writable: true }
+  if (harness === 'codex') return { from: `${environment.CODEX_HOME || `${home}/.codex`}/auth.json`, to: `${INSIDE.home}/codex/auth.json`, writable: false }
+  if (harness === 'claude') return { from: `${environment.CLAUDE_CONFIG_DIR || `${home}/.claude`}/.credentials.json`, to: `${INSIDE.home}/.claude/.credentials.json`, writable: false }
   return null
 }
+
+/** Where Codex sends a renewal in an ask: a port nothing listens on, so it never spends the owner's refresh token. */
+export const CODEX_ASK_NO_RENEWAL = 'http://127.0.0.1:1/oauth/token'
+/**
+ * The /etc/hosts of a Claude Code ask: the sign-in hosts at an address nothing answers on, so Claude
+ * Code never renews the owner's sign-in (its local sign-in settings do not move the token host; the
+ * hosts file does, measured on 2.1.300). The model host is looked up as always.
+ */
+export const CLAUDE_ASK_HOSTS = '127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n127.0.1.1\task\n127.0.0.2\tplatform.claude.com console.anthropic.com claude.ai\n'
 
 /** PATH without BMN's own wrappers, so the app found is the one the owner installed. */
 export function appSearchPath(environment = process.env) {
@@ -108,7 +125,8 @@ export function askCommand(harness, program, { access, model, provider = null, e
     return {
       command: [program.payload, 'exec', '--skip-git-repo-check', '--sandbox', 'read-only', '--strict-config', '-c', 'approval_policy="never"', ...CODEX_ASK_NO_TOOLS,
         ...pictures.flatMap((path) => ['-i', path]), ...context.argv, '-m', model, '-c', `model_reasoning_effort="${effort}"`, '--json', '-C', INSIDE.work, '-o', `${INSIDE.home}/answer.md`, '-'],
-      environment: { HOME: INSIDE.home, CODEX_HOME: `${INSIDE.home}/codex`, PATH: '/usr/bin:/bin', CODEX_MANAGED_BY_NPM: '1', CODEX_MANAGED_PACKAGE_ROOT: program.root, RUST_LOG: CODEX_ASK_LOG },
+      environment: { HOME: INSIDE.home, CODEX_HOME: `${INSIDE.home}/codex`, PATH: '/usr/bin:/bin', CODEX_MANAGED_BY_NPM: '1', CODEX_MANAGED_PACKAGE_ROOT: program.root, RUST_LOG: CODEX_ASK_LOG,
+        CODEX_REFRESH_TOKEN_URL_OVERRIDE: CODEX_ASK_NO_RENEWAL },
       cwd: INSIDE.work, home, mountPoints: ['codex/auth.json'], stdin: 'text'
     }
   }
@@ -119,7 +137,7 @@ export function askCommand(harness, program, { access, model, provider = null, e
         ...(pictures.length > 0 ? ['--input-format', 'stream-json'] : []), ...(rules === null ? [] : ['--append-system-prompt', rules])],
       environment: { HOME: INSIDE.home, CLAUDE_CONFIG_DIR: `${INSIDE.home}/.claude`, PATH: project ? `${INSIDE.inputs}/bin:/usr/bin:/bin` : '/usr/bin:/bin',
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1', ...contextEnvironment },
-      cwd: project ? INSIDE.project : INSIDE.work, home: {}, mountPoints: ['.claude/.credentials.json'], stdin: pictures.length > 0 ? 'stream-json' : 'text'
+      cwd: project ? INSIDE.project : INSIDE.work, home: {}, mountPoints: ['.claude/.credentials.json'], stdin: pictures.length > 0 ? 'stream-json' : 'text', hosts: CLAUDE_ASK_HOSTS
     }
   }
   if (harness === 'opencode') {
@@ -182,15 +200,17 @@ export const ASK_APPS = Object.freeze(['codex', 'claude', 'opencode'])
 
 /**
  * The whole command of one ask: the app's form inside the run's container. `run`: the run's own
- * `{ home, inputs, project }` folders on this computer. The owner's sign-in file is bound onto the
- * empty file the run's home holds at its place (72.1 AC5). Returns `{ argv, form }`.
+ * `{ home, inputs, project }` folders on this computer. The owner's sign-in file is bound read-only
+ * onto the empty file the run's home holds at its place (72.1 AC5); a form with its own `hosts` gets
+ * the run's `snapshots/hosts` as /etc/hosts. Returns `{ argv, form }`.
  */
 export function askArgv(harness, program, run, request, environment = process.env) {
   const form = askCommand(harness, program, request)
   const signIn = signInBind(harness, environment)
   const argv = containerArgv({
     app: program.paths, home: run.home, inputs: run.inputs, project: request.access === 'project' ? run.project : null,
-    binds: signIn === null ? [] : [signIn], environment: form.environment, cwd: form.cwd, command: form.command
+    binds: signIn === null ? [] : [signIn], environment: form.environment, cwd: form.cwd, command: form.command,
+    hosts: form.hosts === undefined ? null : join(dirname(run.home), ASK_RUN_FILES.snapshots, 'hosts')
   })
   return { argv, form }
 }

@@ -7,8 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { containerStarts } from '../../bin/agents-container.mjs'
 import { ASK_RUN_FILES } from '../../bin/agents-team-forms.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
-import { StartRefusal, askOutcome, exportAsk, observeAsk, startAsk, stopAsk, waitAsk } from '../../bin/agents-team-run.mjs'
-import { runState } from '../../bin/agents-team-supervisor.mjs'
+import { StartRefusal, askOutcome, exportAsk, finishAsk, observeAsk, startAsk, stopAsk, waitAsk } from '../../bin/agents-team-run.mjs'
+import { runState, startTeamSupervisor } from '../../bin/agents-team-supervisor.mjs'
 import { ENV_SENTINEL, EXAMPLE, SIGN_IN_SENTINEL, approve as harnessApprove, leftovers as harnessLeftovers, settle, stubCodex as harnessStubCodex, teamAskHome } from './test-fixtures/team-ask-harness'
 
 const CLI = fileURLToPath(new URL('../../bin/agents-team-cli.mjs', import.meta.url))
@@ -164,6 +164,47 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
     expect(readFileSync(join(own.folder, 'snapshots/config/codex/config.toml'), 'utf8')).toBe('')
   })
 
+  it('a command, a prompt or a configuration changed after the check starts nothing, also when the launch is changed before the supervisor reads it (epic review)', async () => {
+    const argv = ask({})
+    argv.argv.push('--extra')
+    expect(() => startAsk(argv)).toThrow(/the command is not the one the check judged; nothing started/)
+    const prompt = ask({})
+    writeFileSync(join(prompt.folder, ASK_RUN_FILES.prompt), 'Another question?\n')
+    expect(() => startAsk(prompt)).toThrow(/the prompt is not the one the check judged; nothing started/)
+    const config = ask({})
+    writeFileSync(join(config.folder, 'home/codex/config.toml'), 'model_provider = "elsewhere"\n')
+    expect(() => startAsk(config)).toThrow(/the run's codex\/config.toml is not the configuration the check judged; nothing started/)
+    // A Claude Code ask's own /etc/hosts, which keeps its sign-in hosts out of reach, is judged too (epic review R13).
+    const hosts = ask({ role: 'designer' })
+    writeFileSync(join(hosts.folder, ASK_RUN_FILES.snapshots, 'hosts'), '127.0.0.1\tlocalhost\n')
+    expect(() => startAsk(hosts)).toThrow(/the run's \/etc\/hosts is not the one the check judged; nothing started/)
+    for (const prepared of [argv, prompt, config, hosts]) expect(existsSync(join(prepared.folder, 'launch.json'))).toBe(false)
+    // Between the start and the supervisor: the supervisor checks the command and the prompt again.
+    const late = ask({})
+    startAsk(late, { timeLimitMinutes: 2, start: () => ({ pid: 1, start: '1' }) })
+    const launch = JSON.parse(readFileSync(join(late.folder, 'launch.json'), 'utf8'))
+    writeFileSync(join(late.folder, 'launch.json'), JSON.stringify({ ...launch, argv: [...launch.argv, '--extra'] }))
+    expect(startTeamSupervisor(late.folder)).toMatchObject({ pid: expect.any(Number) })
+    expect(await waitAsk(late.folder, { timeoutMs: 10_000 })).toMatchObject({ state: 'refused', exit: 10, reason: 'the command changed after the check; nothing started' })
+    expect(existsSync(join(late.folder, 'events.jsonl'))).toBe(false)
+    const latePrompt = ask({})
+    startAsk(latePrompt, { timeLimitMinutes: 2, start: () => ({ pid: 1, start: '1' }) })
+    writeFileSync(join(latePrompt.folder, ASK_RUN_FILES.prompt), 'Another question?\n')
+    startTeamSupervisor(latePrompt.folder)
+    expect(await waitAsk(latePrompt.folder, { timeoutMs: 10_000 })).toMatchObject({ state: 'refused', exit: 10, reason: 'the prompt changed after the check; nothing started' })
+    expect(existsSync(join(latePrompt.folder, 'home'))).toBe(false)
+  })
+
+  it('a run whose storage grows over its limit is ended and fails (epic review)', async () => {
+    const folder = join(home, 'storage')
+    mkdirSync(join(folder, 'home'), { recursive: true })
+    writeFileSync(join(folder, 'launch.json'), JSON.stringify({ version: 1, argv: ['/bin/sh', '-c', `/usr/bin/head -c 3000000 /dev/zero > ${join(folder, 'home/big')}; exec /bin/sleep 20`],
+      deadline: Date.now() + 60_000, stdin: null, finish: null, storage_limit: 1_000_000, storage_watch: 'home' }))
+    expect(startTeamSupervisor(folder)).toMatchObject({ pid: expect.any(Number) })
+    await settle(() => runState(folder).state === 'ended', 15_000)
+    expect(JSON.parse(readFileSync(join(folder, 'exit.json'), 'utf8'))).toMatchObject({ ended: 'storage', reason: expect.stringContaining('over 1000000') })
+  })
+
   it('the export is the allowlist: no sign-in, home, raw error stream, frozen copy or environment value (AC4)', async () => {
     const root = join(home, 'code/app')
     mkdirSync(root, { recursive: true })
@@ -227,13 +268,60 @@ describe.skipIf(!canContain)('bmn team ask and bmn team asks (72.3 AC3)', { time
   })
 })
 
+describe('the outcome of what a run said (epic review)', () => {
+  const span = 'INFO turn{thread.id=t-1 model=gpt-6-astra codex.turn.reasoning_effort=medium}: started\n'
+  const started = '{"type":"thread.started","thread_id":"t-1"}'
+  const said = '{"type":"item.completed","item":{"type":"agent_message","text":"an answer"}}'
+  const completed = '{"type":"turn.completed","usage":{}}'
+  function run(name: string, events: string[], stderr = '', exit: Record<string, unknown> = { ended: 'done', code: 0 }): string {
+    const folder = join(home, name)
+    mkdirSync(join(folder, 'home'), { recursive: true })
+    writeFileSync(join(folder, 'request.json'), JSON.stringify({ id: name, model: 'gpt-6-astra', effort: 'medium' }))
+    writeFileSync(join(folder, 'receipt.json'), JSON.stringify({ harness: 'codex' }))
+    writeFileSync(join(folder, 'exit.json'), JSON.stringify({ version: 1, ...exit }))
+    writeFileSync(join(folder, 'events.jsonl'), `${events.join('\n')}\n`)
+    writeFileSync(join(folder, 'stderr.txt'), stderr)
+    return folder
+  }
+
+  it('an answer whose model nothing names is not attributed; text before a failure or an error exit is no answer; a failure the app recovered from is', () => {
+    finishAsk(run('no-model', [started, said, completed]))
+    expect(askOutcome(join(home, 'no-model'))).toMatchObject({ state: 'not-attributed', exit: 17, reason: expect.stringContaining('nothing in the run names its model') })
+    expect(existsSync(join(home, 'no-model/answer.md'))).toBe(false)
+    expect(readFileSync(join(home, 'no-model/diagnostic-answer.md'), 'utf8')).toBe('an answer\n')
+    finishAsk(run('failed-after', [started, said, '{"type":"turn.failed","error":{"message":"stream ended"}}'], span, { ended: 'failed', code: 1 }))
+    expect(askOutcome(join(home, 'failed-after'))).toMatchObject({ state: 'failed', exit: 1, reason: 'stream ended' })
+    finishAsk(run('exit-code', [started, said, completed], span, { ended: 'failed', code: 2 }))
+    expect(askOutcome(join(home, 'exit-code'))).toMatchObject({ state: 'failed', exit: 1, reason: 'the app ended with code 2' })
+    finishAsk(run('recovered', [started, '{"type":"error","message":"Reconnecting... 1/5"}', said, completed], span))
+    expect(askOutcome(join(home, 'recovered'))).toMatchObject({ state: 'answered', exit: 0 })
+    for (const name of ['no-model', 'failed-after', 'exit-code', 'recovered']) expect(existsSync(join(home, name, 'home'))).toBe(false)
+  })
+
+  it('a finish that fails still writes an outcome and deletes the transient state; a run ended with no outcome is interrupted, so a wait ends', async () => {
+    const folder = run('broken', [started, said, completed], span)
+    // The answer cannot be written where it goes: the finish fails.
+    mkdirSync(join(folder, 'answer.md'))
+    writeFileSync(join(folder, 'answer.md/x'), 'x')
+    expect(() => finishAsk(folder)).toThrow()
+    expect(askOutcome(folder)).toMatchObject({ state: 'failed', exit: 1, reason: expect.stringContaining('BMN could not finish the run') })
+    expect(existsSync(join(folder, 'home'))).toBe(false)
+    const ended = join(home, 'ended')
+    mkdirSync(ended)
+    writeFileSync(join(ended, 'state.json'), JSON.stringify({ version: 1, state: 'ended' }))
+    expect(askOutcome(ended)).toMatchObject({ state: 'interrupted', exit: null })
+    expect(await waitAsk(ended, { timeoutMs: 60_000 })).toMatchObject({ state: 'interrupted' })
+  })
+})
+
 describe('reading who answered (72.3 AC2)', () => {
   it('what the app does not report is unknown with the reason, never zero', () => {
     const folder = join(home, 'run')
     mkdirSync(folder)
     writeFileSync(join(folder, 'events.jsonl'), '{"type":"thread.started","thread_id":"t-1"}\n{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n')
     const seen = observeAsk(folder, 'codex', { model: 'gpt-6-astra', effort: 'medium' })
-    expect(seen).toMatchObject({ answer: 'done', observed: { session: 't-1', model: null, model_source: 'unknown: no turn span on standard error' }, usage: { input_tokens: 'unknown', source: 'unknown' }, problems: [] })
+    // A model nothing names is unknown, and the answer is then not attributed (epic review): no model, no attribution.
+    expect(seen).toMatchObject({ answer: 'done', observed: { session: 't-1', model: null, model_source: 'unknown: no turn span on standard error' }, usage: { input_tokens: 'unknown', source: 'unknown' }, problems: ['nothing in the run names its model (unknown: no turn span on standard error)'] })
   })
 
   it('a usage field the app leaves out stays unknown, in one turn or summed over several (epic pre-review)', () => {

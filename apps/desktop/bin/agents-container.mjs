@@ -34,6 +34,7 @@ const SYSTEM_LINKS = [['usr/bin', '/bin'], ['usr/sbin', '/sbin'], ['usr/lib', '/
  * - `environment`: the whole environment of the app, nothing inherited;
  * - `cwd`: the folder the app starts in inside the container;
  * - `passwd`: a file with the one account the run sees, bound at /etc/passwd (and `group` at /etc/group);
+ * - `hosts`: a file bound at /etc/hosts instead of the computer's own, or null;
  * - `command`: the app's argv inside the container.
  */
 export function containerArgv(spec) {
@@ -41,7 +42,8 @@ export function containerArgv(spec) {
     '--hostname', 'ask', '--ro-bind', '/usr', '/usr']
   for (const [target, link] of SYSTEM_LINKS) if (existsSync(link)) argv.push('--symlink', target, link)
   for (const folder of ETC_FOLDERS) if (existsSync(folder)) argv.push('--ro-bind', folder, folder)
-  for (const file of ETC_FILES) if (existsSync(file)) argv.push('--ro-bind', file, file)
+  for (const file of ETC_FILES) if (existsSync(file) && !(file === '/etc/hosts' && spec.hosts)) argv.push('--ro-bind', file, file)
+  if (spec.hosts) argv.push('--ro-bind', spec.hosts, '/etc/hosts')
   const resolver = realOrNull('/etc/resolv.conf')
   if (resolver !== null) argv.push('--ro-bind', resolver, '/etc/resolv.conf')
   if (spec.passwd) argv.push('--ro-bind', spec.passwd, '/etc/passwd')

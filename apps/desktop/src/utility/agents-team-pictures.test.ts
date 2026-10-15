@@ -232,6 +232,31 @@ describe('a picture made ready to send (72.8 AC1, AC2)', () => {
     expect(treatPicture(WEBP_LOSSLESS, 'b.webp')).toMatchObject({ width: 16, height: 8, kept: ['transparency (alpha channel)'] })
   })
 
+  it('a payload hidden inside a structure a viewer reads is taken out or refused: the end chunk, a fixed-size chunk, Adobe\'s segment, the WebP header (epic review)', () => {
+    const hidden = Buffer.from('MADE-UP-TEXT, private words')
+    // PNG: the end chunk is sent empty; a kept chunk of fixed size that carries more is refused.
+    const ended = treatPicture(png(ihdr(16, 8), idat(), chunk('IEND', hidden)), 'end.png')
+    expect(ended.removed).toEqual([`data inside the end chunk (${hidden.length} bytes)`])
+    expect(ended.bytes.equals(png(ihdr(16, 8), idat(), iend))).toBe(true)
+    expect(code(() => treatPicture(png(ihdr(16, 8), chunk('gAMA', Buffer.concat([Buffer.alloc(4), hidden])), idat(), iend), 'gamma.png'))).toMatch(/^PICTURE_UNTREATABLE: .*gAMA chunk of a size no viewer reads/)
+    expect(code(() => treatPicture(png(ihdr(16, 8), chunk('pHYs', Buffer.concat([Buffer.alloc(9), hidden])), idat(), iend), 'phys.png'))).toMatch(/pHYs chunk of a size no viewer reads/)
+    expect(code(() => treatPicture(png(ihdr(16, 8), chunk('tRNS', hidden), idat(), iend), 'alpha.png'))).toMatch(/tRNS chunk of a size no viewer reads/)
+    // JPEG: Adobe's segment is written anew around its transform; its other bytes and anything after them go.
+    const adobe = (version: number, transform: number, rest = Buffer.alloc(0)): Buffer => Buffer.concat([Buffer.from('Adobe', 'latin1'), Buffer.from([version >> 8, version & 0xff, 0x4d, 0x41, 0x44, 0x45, transform]), rest])
+    const cmyk = treatPicture(jpeg(segment(0xee, adobe(0x4d41, 2, hidden))), 'cmyk.jpg')
+    expect(cmyk.kept).toContain('colour coding (Adobe)')
+    expect(cmyk.removed).toContain(`data after Adobe's colour coding (${hidden.length} bytes)`)
+    expect(cmyk.bytes.includes(segment(0xee, adobe(100, 2).fill(0, 7, 11)))).toBe(true)
+    expect(cmyk.bytes.includes(Buffer.from('MADE'))).toBe(false)
+    expect(leftIn(treatPicture(jpeg(segment(0xee, Buffer.from('AdobeMADE-UP-TEXT'))), 'named.jpg').bytes)).toEqual([])
+    // WebP: the header is its ten bytes, reserved bits zero; what a writer put after them goes.
+    const header = Buffer.concat([vp8x(0).subarray(8, 18), hidden])
+    header[1] = 0x4d
+    const webp = treatPicture(riff(riffChunk('VP8X', header), imageChunk(WEBP_LOSSY)), 'header.webp')
+    expect(webp.removed).toContain(`data after the WebP header (${hidden.length} bytes)`)
+    expect(webp.bytes.equals(riff(vp8x(0), imageChunk(WEBP_LOSSY)))).toBe(true)
+  })
+
   it('refuses what it cannot walk to the end, never sending a picture half-treated', () => {
     const refusals = {
       gif: code(() => treatPicture(Buffer.from('GIF89a\x10\x00\x08\x00', 'latin1'), 'a.gif')),

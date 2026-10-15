@@ -1,6 +1,7 @@
 // MODULE: agents-team-cli.mjs - Epic 72: `bmn team ask` and `bmn team asks`, one bounded question to one approved teammate, its run listed, waited on, stopped and exported
 import { createHash } from 'node:crypto'
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { APP_NAMES, DESIGNER_ROLE, RosterError } from './agents-roster.mjs'
@@ -12,7 +13,7 @@ import { ASK_APPS, ASK_FORMS_PROVEN, ASK_OFFERED, ASK_RUN_FILES, appSearchPath, 
 import { InputRefusal, LIMITS, askProject } from './agents-team-inputs.mjs'
 import { AskRefusal } from './agents-team-resolve.mjs'
 import { AskUsageError, askRunId, prepareAsk } from './agents-team-ask.mjs'
-import { OUTCOME_EXIT, StartRefusal, TIME_LIMIT, askOutcome, exportAsk, startAsk, stopAsk, waitAsk } from './agents-team-run.mjs'
+import { OUTCOME_EXIT, StartRefusal, TIME_LIMIT, TRANSIENT, askOutcome, exportAsk, startAsk, stopAsk, waitAsk } from './agents-team-run.mjs'
 import { writeWhole } from './agents-team-supervisor.mjs'
 import { nestedAsk } from './agents-team-nested.mjs'
 import { askSettings, keyDay, keyPath, keyScope, keyedRun, makeKey, recordInterrupted, releaseReservation, requestHash, reserveAsk } from './agents-team-places.mjs'
@@ -137,9 +138,10 @@ export function askJson(folder) {
 
 /** Ends a run that the check refused: its record says so, and its transient state goes. */
 function recordRefusal(prepared) {
-  for (const part of [ASK_RUN_FILES.home, ASK_RUN_FILES.project]) rmSync(join(prepared.folder, part), { recursive: true, force: true })
+  for (const part of TRANSIENT) rmSync(join(prepared.folder, part), { recursive: true, force: true })
   const { code, message } = prepared.verdict
-  writeWhole(join(prepared.folder, ASK_RUN_FILES.outcome), `${JSON.stringify({ version: 1, id: prepared.id, state: 'refused', exit: OUTCOME_EXIT.refused, refusal: { code, reason: message }, ended_at: new Date().toISOString() }, null, 2)}\n`)
+  // An outcome already written (an interruption recorded meanwhile) stays the run's outcome.
+  if (!existsSync(join(prepared.folder, ASK_RUN_FILES.outcome))) writeWhole(join(prepared.folder, ASK_RUN_FILES.outcome), `${JSON.stringify({ version: 1, id: prepared.id, state: 'refused', exit: OUTCOME_EXIT.refused, refusal: { code, reason: message }, ended_at: new Date().toISOString() }, null, 2)}\n`)
   return { code, message }
 }
 
@@ -147,17 +149,71 @@ function recordRefusal(prepared) {
 export const BUSY_EXIT = 14
 
 /**
- * Who asks, as BMN's commands see it: a session (its id and, where BMN gave one, its token naming
- * the same session), a plain shell, or `forged` when the session id and the token BMN gave name two
- * different sessions. Owner rights never come from here: only the app's owner action has them.
+ * What BMN's control service says of a session's token: `{ session }` it names, `{ invalid }` when
+ * BMN does not know it, or `{ unreachable }` with why the service did not answer. The token goes only
+ * to the service, as every BMN command sends it.
  */
-export function teamAsker(environment) {
+export function verifySessionToken(socketPath, token, { timeoutMs = 3000 } = {}) {
+  return new Promise((resolve) => {
+    let settled = false
+    let buffer = ''
+    const socket = createConnection(socketPath)
+    const done = (answer) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      socket.destroy()
+      resolve(answer)
+    }
+    const timer = setTimeout(() => done({ unreachable: `no answer in ${timeoutMs / 1000} seconds` }), timeoutMs)
+    socket.setEncoding('utf8')
+    socket.on('connect', () => socket.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'auth', params: { token } })}\n`))
+    socket.on('data', (chunk) => {
+      buffer += chunk
+      const newline = buffer.indexOf('\n')
+      if (newline === -1) return
+      let message
+      try {
+        message = JSON.parse(buffer.slice(0, newline))
+      } catch {
+        return done({ unreachable: 'its answer was not readable' })
+      }
+      if (message?.result?.scope === 'session' && typeof message.result.sessionId === 'string') return done({ session: message.result.sessionId })
+      done({ invalid: true })
+    })
+    socket.on('error', (error) => done({ unreachable: error.code ?? error.message }))
+    socket.on('close', () => done({ unreachable: 'it closed the connection without an answer' }))
+  })
+}
+
+/**
+ * Who asks, as BMN's commands see it: a session, proven by the token BMN gave it, which BMN's own
+ * control service must confirm names that very session; a plain shell; `forged` when the session id
+ * comes with no token, or with one that names another session or that BMN does not know; or
+ * `unproven` when BMN's control service cannot be reached to confirm it. Owner rights never come
+ * from here: only the app's owner action has them.
+ */
+export async function teamAsker(environment, { verify = verifySessionToken } = {}) {
   const asker = askerOf(environment)
   if (asker.kind !== 'session') return asker
   const token = environment.BMN_TOKEN ?? environment.AITERM_TOKEN
-  const named = typeof token === 'string' ? /^s1\.([A-Za-z0-9_:-]{1,128})\./u.exec(token)?.[1] ?? null : null
-  if (typeof token === 'string' && named !== asker.session) return { kind: 'forged', reason: `BMN_SESSION_ID names session ${asker.session}, but the BMN_TOKEN BMN gave this session ${named === null ? 'names none' : `is session ${named}'s`}` }
-  return asker
+  if (typeof token !== 'string' || token === '') return { kind: 'forged', reason: `BMN_SESSION_ID names session ${asker.session}, but there is no BMN_TOKEN; BMN gives every session both` }
+  const named = /^s1\.([A-Za-z0-9_:-]{1,128})\./u.exec(token)?.[1] ?? null
+  if (named !== asker.session) return { kind: 'forged', reason: `BMN_SESSION_ID names session ${asker.session}, but the BMN_TOKEN BMN gave this session ${named === null ? 'names none' : `is session ${named}'s`}` }
+  const socket = environment.BMN_CONTROL_SOCKET ?? environment.AITERM_CONTROL_SOCKET
+  if (typeof socket !== 'string' || socket === '') return { kind: 'unproven', reason: `session ${asker.session} cannot be proven: BMN_CONTROL_SOCKET is not set` }
+  const answer = await verify(socket, token)
+  if (answer.session === asker.session) return asker
+  if (answer.unreachable !== undefined) {
+    const sandboxed = /^(EPERM|EACCES)$/u.test(answer.unreachable) ? '; a sandbox may be keeping this command from BMN: run it outside the sandbox' : ''
+    return { kind: 'unproven', reason: `session ${asker.session} cannot be proven: BMN's control service did not answer (${answer.unreachable})${sandboxed}` }
+  }
+  return { kind: 'forged', reason: `BMN does not know the BMN_TOKEN given for session ${asker.session}` }
+}
+
+/** The refusal of an asker that is not proven to be who it says. */
+function askerRefusal(asker, what) {
+  return new AskRefusal(asker.kind === 'forged' ? 'NOT_YOURS' : 'SESSION_UNPROVEN', `${asker.reason}; ${what}`)
 }
 
 /** A file's bytes by their hash, for the request's hash; a file BMN will refuse later counts by what it is. */
@@ -226,8 +282,11 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
   const minutes = options['time-limit'] === undefined ? TIME_LIMIT.default : Number(options['time-limit'])
   if (minutes < TIME_LIMIT.min || minutes > TIME_LIMIT.max) return usage(`--time-limit takes minutes, ${TIME_LIMIT.min} to ${TIME_LIMIT.max}`)
   if (options['recheck-of'] !== undefined && !RUN_ID.test(options['recheck-of'])) return refused(asJson, 'RECHECK_INVALID', `${options['recheck-of']} is not the id of an ask`)
-  const asker = teamAsker(environment)
-  if (asker.kind === 'forged') return refused(asJson, 'NOT_YOURS', `${asker.reason}; ask from your own session`)
+  const asker = await teamAsker(environment)
+  if (asker.kind === 'forged' || asker.kind === 'unproven') {
+    const refusal = askerRefusal(asker, 'ask from your own session')
+    return refused(asJson, refusal.code, refusal.message)
+  }
   // A session must name its key, so that its retry finds this ask; a plain shell may leave it to BMN.
   if (options.key === undefined && asker.kind === 'session') return refused(asJson, 'KEY_REQUIRED', `an ask from a session needs --key: today's UTC day and a name of yours, as ${makeKey('review-1', now())}; keep it, and a retry with the same key and request finds this ask`)
   if (options.key !== undefined && keyDay(options.key) === null) return usage(`--key ${options.key} is not a key: today's UTC day and a name (letters, digits, . _ -), as ${makeKey('review-1', now())}`)
@@ -279,6 +338,8 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     try {
       prepared = prepareAsk({ ...request, key, keyScope: scope, requestSha256: hash, askedBy: asker, inputHashes }, { environment, cwd, id, now: now() })
     } catch (error) {
+      // Nothing was sent and the key is given back: whatever preparing had copied (a frozen history, file copies) goes with it.
+      rmSync(join(runs, id), { recursive: true, force: true })
       if (error instanceof AskUsageError) return usage(error.message)
       if (error instanceof AskRefusal) return error.code === 'USAGE' ? usage(error.message) : refused(asJson, error.code, error.message, error.alternatives)
       if (error instanceof InputRefusal) return refused(asJson, error.code, error.message)
@@ -340,7 +401,15 @@ async function followKeyed(runs, entry, { asJson, background }) {
   let found = keyedRun(runs, entry)
   while (found.state === 'preparing') {
     await new Promise((resolve) => setTimeout(resolve, 200))
-    found = keyedRun(runs, JSON.parse(readFileSync(keyPath(runs, entry.scope, entry.key), 'utf8')))
+    let now
+    try {
+      now = JSON.parse(readFileSync(keyPath(runs, entry.scope, entry.key), 'utf8'))
+    } catch {
+      now = null
+    }
+    // The first ask was refused before it started and gave its key back (its own command said why): nothing ran.
+    if (now === null || now.id !== entry.id) return refused(asJson, 'NOT_STARTED', `the ask with key ${entry.key} was refused before it started (its own command said why); nothing ran, and the key may be used again`)
+    found = keyedRun(runs, now)
   }
   if (found.state === 'interrupted') {
     if (asJson) out(JSON.stringify({ version: 1, id: entry.id, state: 'interrupted', exit: 1, reason: found.reason }))
@@ -369,10 +438,9 @@ function printOutcome(folder, asJson) {
   return shown.exit ?? 1
 }
 
-/** The asks of whoever asks now: a session sees its own; a shell sees those asked from a shell; a forged session none. */
-function ownAsks(environment) {
-  const asker = teamAsker(environment)
-  if (asker.kind === 'forged') return []
+/** The asks of whoever asks now: a proven session sees its own; a shell sees those asked from a shell. */
+function ownAsks(asker) {
+  if (asker.kind !== 'session' && asker.kind !== 'shell') return []
   let names
   try {
     names = readdirSync(teamRunsDirectory()).filter((name) => RUN_ID.test(name)).sort().reverse()
@@ -389,14 +457,12 @@ function ownAsks(environment) {
   })
 }
 
-function runFolder(id, environment) {
+function runFolder(id, asker) {
   if (!RUN_ID.test(id ?? '')) throw new AgentsUsageError('name an ask by its id, as `bmn team asks` lists it')
+  if (asker.kind === 'forged' || asker.kind === 'unproven') throw askerRefusal(asker, 'a session sees only its own asks')
   const folder = join(teamRunsDirectory(), id)
   if (!existsSync(folder)) throw new AskRefusal('GONE', `no ask ${id} on this computer`)
-  if (!ownAsks(environment).includes(folder)) {
-    const asker = teamAsker(environment)
-    throw new AskRefusal('NOT_YOURS', asker.kind === 'forged' ? `${asker.reason}; a session sees only its own asks` : `ask ${id} was asked by another session; the owner sees every ask in the app`)
-  }
+  if (!ownAsks(asker).includes(folder)) throw new AskRefusal('NOT_YOURS', `ask ${id} was asked by another session; the owner sees every ask in the app`)
   // A run whose supervisor died is recorded as interrupted when it is looked at, its transient state deleted.
   if (askOutcome(folder).state === 'interrupted') recordInterrupted(folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
   return folder
@@ -409,9 +475,11 @@ export async function runTeamAsks(argv, { environment = process.env, cwd = proce
   const nested = nestedAsk()
   if (nested !== null) return refused(asJson, 'NESTED', `this runs inside teammate ask ${nested}; a teammate's run may not see or control asks`)
   try {
+    const asker = await teamAsker(environment)
     if (action === undefined) {
       if (flags.some((flag) => flag !== '--json')) throw new AgentsUsageError(`unknown option ${flags.find((flag) => flag !== '--json')}`)
-      const asks = ownAsks(environment).map((folder) => {
+      if (asker.kind === 'forged' || asker.kind === 'unproven') throw askerRefusal(asker, 'a session sees only its own asks')
+      const asks = ownAsks(asker).map((folder) => {
         const shown = askJson(folder)
         return { id: shown.id, state: shown.state, role: shown.role, agent: shown.teammate.agent, project: shown.project, started_at: shown.started_at, ended_at: shown.ended_at }
       })
@@ -420,7 +488,7 @@ export async function runTeamAsks(argv, { environment = process.env, cwd = proce
       return EXIT.ok
     }
     const id = rest.find((entry) => !entry.startsWith('--'))
-    const folder = runFolder(id, environment)
+    const folder = runFolder(id, asker)
     if (action === 'show') {
       const shown = askJson(folder)
       if (asJson) out(JSON.stringify(shown, null, 2))

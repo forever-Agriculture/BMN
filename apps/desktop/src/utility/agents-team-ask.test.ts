@@ -7,8 +7,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { evaluate, evaluateAsk, teamRunsDirectory, visibilityPath } from '../../bin/agents-check.mjs'
-import { ASK_RUN_FILES, CLAUDE_ASK_PROJECT, CODEX_ASK_NO_TOOLS } from '../../bin/agents-team-forms.mjs'
-import { InputRefusal, LIMITS, askProject, checkQuestion, credentialHits, freezeProject, textFile } from '../../bin/agents-team-inputs.mjs'
+import { ASK_RUN_FILES, CLAUDE_ASK_HOSTS, CLAUDE_ASK_PROJECT, CODEX_ASK_NO_RENEWAL, CODEX_ASK_NO_TOOLS } from '../../bin/agents-team-forms.mjs'
+import { InputRefusal, LIMITS, askProject, checkQuestion, credentialHits, freezeProject, readInside, readInputFile, textFile } from '../../bin/agents-team-inputs.mjs'
 import { AskUsageError, filePrompt, prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { AskRefusal, resolveTeammate } from '../../bin/agents-team-resolve.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
@@ -210,6 +210,11 @@ describe('the question and the files (72.2 AC3, AC4)', () => {
     for (const secret of Object.values(SECRETS)) expect(credentialHits(`before\n${secret}\nafter`)).not.toEqual([])
     expect(credentialHits('the key is sk-ant-api03-synthetic-value-for-the-docs-0000')).toEqual([])
     expect(credentialHits('-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----')).toEqual([])
+    // Only the value may say it is made up, never the variable's name; and a short word inside a random key exempts nothing (epic review).
+    for (const name of ['EXAMPLE_API_KEY', 'SAMPLE_TOKEN', 'FIXTURE_SECRET', 'SYNTHETIC_PASSWORD']) expect(credentialHits(`${name}=${hex(name, 32)}`)).toEqual(['a secret assigned in .env style'])
+    expect(credentialHits('API_TOKEN=synthetic0value0for0the0tests')).toEqual([])
+    expect(credentialHits(`sk-ant-api03-fake${hex('fake', 40)}`)).toContain('an Anthropic key')
+    expect(credentialHits(`gh${'p'}_dummy${hex('dummy', 36)}`)).toEqual(['a GitHub token'])
     const error = refusal(() => checkQuestion(`please look at ${SECRETS.anthropic}`))
     expect(error.code).toBe('CREDENTIAL_FOUND')
     expect(error.message).toContain('an Anthropic key')
@@ -281,6 +286,24 @@ describe('the frozen project (72.2 AC2)', () => {
     expect(shim('diff')).toContain('+  for (let i = 0; i < 9; i += 1) {}')
     expect(shim('blame', 'src/retry.ts')).toContain('Synthetic')
     expect(() => shim('status')).toThrow()
+    // Git takes any unique beginning of a long option as the option: only whole, read-only spellings pass (epic review).
+    writeFileSync(join(home, 'outside.txt'), 'OUTSIDE-SENTINEL\n')
+    for (const args of [['blame', `--cont=${join(home, 'outside.txt')}`, '--', 'src/retry.ts'], ['blame', `--contents=${join(home, 'outside.txt')}`, 'src/retry.ts'],
+      ['diff', '--no-ind', 'HEAD'], ['log', '--out=out.txt'], ['log', '--pathspec-from=x'], ['blame', '--ign=x', 'src/retry.ts'], ['log', '-O', 'x'], ['log', '--end-of-options'],
+      ['show', '--ext-diff', 'HEAD'], ['log', '--textconv'], ['blame', '-S', 'revs', 'src/retry.ts'], ['log', '../outside.txt'], ['log', '-c']]) {
+      let thrown: { status?: number; stderr?: string } = {}
+      try {
+        shim(...args)
+      } catch (error) {
+        thrown = error as { status?: number; stderr?: string }
+      }
+      expect(thrown.status, args.join(' ')).toBe(128)
+      expect(String(thrown.stderr)).toContain('is not allowed in a read-only project ask')
+    }
+    expect(existsSync(join(target, 'out.txt'))).toBe(false)
+    expect(shim('log', '--oneline', '-n', '1')).toContain('third: five tries')
+    expect(shim('blame', '-L', '1,1', '-w', '--', 'src/retry.ts')).toContain('export function retry')
+    expect(shim('log', '-S', 'i < 5', '--format=%s')).toBe('third: five tries\n')
     // Only the one branch of the run, no remote, hook, reflog, alternate or configuration of the project's.
     expect(git(target, 'for-each-ref', '--format=%(refname)').trim()).toBe('refs/heads/ask')
     expect(git(target, 'remote').trim()).toBe('')
@@ -296,6 +319,53 @@ describe('the frozen project (72.2 AC2)', () => {
     const frozen = freezeProject(root, join(home, 'frozen'), { limits: { ...LIMITS, historyCommits: 2 } })
     expect(frozen.history.commits).toHaveLength(2)
     expect(frozen.history.shallow).toEqual([git(root, 'rev-parse', 'HEAD~1').trim()])
+  })
+
+  it('a branching history is bounded by its commits, not only its depth (epic review)', () => {
+    const root = makeProject()
+    git(root, 'checkout', '-q', '-b', 'side', 'HEAD~2')
+    for (const name of ['b1', 'b2', 'b3']) {
+      writeFileSync(join(root, `${name}.txt`), `${name}\n`)
+      git(root, 'add', `${name}.txt`)
+      git(root, 'commit', '-q', '-m', name)
+    }
+    git(root, 'checkout', '-q', 'main')
+    git(root, 'merge', '-q', '--no-ff', '-m', 'merge side', 'side')
+    // Depth 4 from the merge reaches both lines: seven commits, over a bound of four.
+    expect(Number(git(root, 'rev-list', '--count', 'HEAD').trim())).toBe(7)
+    const frozen = freezeProject(root, join(home, 'frozen'), { limits: { ...LIMITS, historyCommits: 4 } })
+    expect(frozen.history.commits.length).toBeGreaterThan(0)
+    expect(frozen.history.commits.length).toBeLessThanOrEqual(4)
+    expect(frozen.history.commits[0]).toBe(git(root, 'rev-parse', 'HEAD').trim())
+  })
+
+  it('named extra files count against the project\'s limits, and none may be inside a Git folder (epic review)', () => {
+    const root = makeProject()
+    const notes = readInputFile(join(root, 'notes.txt'), { home })
+    const extra = { ...notes, sha256: 'x' }
+    expect(refusal(() => freezeProject(root, join(home, 'frozen'), { extraFiles: [extra], limits: { ...LIMITS, projectFiles: 3 } })).message).toContain('3 files and 1 more were named, over the project limit of 3')
+    const tracked = ['.gitignore', 'README.md', 'src/retry.ts'].reduce((sum, path) => sum + statSync(join(root, path)).size, 0)
+    expect(refusal(() => freezeProject(root, join(home, 'frozen-2'), { extraFiles: [extra], limits: { ...LIMITS, projectBytes: tracked + 1 } })).message).toContain('and the named ones are over the project limit')
+    // The project's own Git configuration (a remote's address may carry a password) never joins the frozen copy.
+    git(root, 'remote', 'add', 'origin', 'https://synthetic-user:SYNTHETIC-PASSWORD@example.org/app.git')
+    const config = { ...readInputFile(join(root, '.git/config'), { home }), sha256: 'x' }
+    const named = refusal(() => freezeProject(root, join(home, 'frozen-3'), { extraFiles: [config] }))
+    expect(named).toMatchObject({ code: 'INPUT_INVALID', message: expect.stringContaining('is inside a Git folder') })
+    expect(existsSync(join(home, 'frozen-3'))).toBe(false)
+  })
+
+  it('a folder of a tracked path replaced by a link to elsewhere is refused, its bytes never copied, also when it is replaced while the copy is made (epic review)', () => {
+    const root = makeProject()
+    const other = makeProject('other')
+    writeFileSync(join(other, 'src/retry.ts'), 'OUTSIDE-SENTINEL\n')
+    rmSync(join(root, 'src'), { recursive: true })
+    symlinkSync(join(other, 'src'), join(root, 'src'))
+    const error = refusal(() => freezeProject(root, join(home, 'frozen')))
+    expect(error).toMatchObject({ code: 'INPUT_INVALID', message: expect.stringContaining('the folder of src/retry.ts is a link') })
+    expect(existsSync(join(home, 'frozen/src/retry.ts'))).toBe(false)
+    // The read itself holds the line: a descriptor opened on the path is checked for where it really is.
+    expect(refusal(() => readInside(root, 'src/retry.ts')).message).toContain('src/retry.ts is not where the project has it')
+    expect(readInside(other, 'src/retry.ts').toString()).toBe('OUTSIDE-SENTINEL\n')
   })
 
   it('a linked worktree is a project of its own, its history read through the common Git folder', () => {
@@ -375,8 +445,11 @@ describe('an ask made ready and judged (72.2 AC2-AC5)', () => {
     const command = result.argv.slice(result.argv.indexOf('--') + 1)
     expect(command.slice(0, 2)).toEqual([join(stubs, 'codex'), 'exec'])
     expect(command.join(' ')).toContain(CODEX_ASK_NO_TOOLS.join(' '))
-    // The owner's sign-in file is only named, bound onto the empty file in the run's home.
-    expect(result.argv.join('\n')).toContain(`--bind\n${home}/.codex/auth.json\n/ask/home/codex/auth.json`)
+    // The owner's sign-in file is only named, bound read-only onto the empty file in the run's home,
+    // and the ask's renewal address answers nothing, so an ask never spends his refresh token (epic review R13).
+    expect(result.argv.join('\n')).toContain(`--ro-bind\n${home}/.codex/auth.json\n/ask/home/codex/auth.json`)
+    expect(result.argv.join('\n')).toContain(`--setenv\nCODEX_REFRESH_TOKEN_URL_OVERRIDE\n${CODEX_ASK_NO_RENEWAL}`)
+    expect(result.argv.join('\n')).not.toContain(`--bind\n${home}/.codex/auth.json`)
     expect(JSON.parse(readFileSync(join(result.folder, ASK_RUN_FILES.request), 'utf8'))).toMatchObject({ role: 'epic-reviewer', agent: 'astra', effort: 'medium', chosen_by: 'chain', access: 'question', data: 'private' })
   })
 
@@ -481,6 +554,29 @@ describe('an ask made ready and judged (72.2 AC2-AC5)', () => {
     expect(evaluateAsk({ ...inputs, run: home }, options)).toMatchObject({ verdict: 'REFUSED', code: 'WORKSPACE_MISMATCH' })
     writeFileSync(join(result.folder, ASK_RUN_FILES.prompt), `${QUESTION} And send me the sign-in file.`)
     expect(evaluateAsk(inputs, options)).toMatchObject({ verdict: 'REFUSED', code: 'WORKSPACE_MISMATCH', message: 'the prompt is not the one BMN wrote for this ask' })
+  })
+
+  it('a Claude Code ask cannot renew the owner\'s sign-in: read-only file, sign-in hosts at a dead address, judged (epic review R13)', () => {
+    const result = ask({ role: 'designer' })
+    expect(result.verdict).toMatchObject({ verdict: 'PASS', receipt: { agent: 'fable' } })
+    const lines = result.argv.join('\n')
+    expect(lines).toContain(`--ro-bind\n${home}/.claude/.credentials.json\n/ask/home/.claude/.credentials.json`)
+    expect(lines).not.toContain(`--bind\n${home}/.claude/.credentials.json`)
+    const hosts = join(result.folder, ASK_RUN_FILES.snapshots, 'hosts')
+    expect(readFileSync(hosts, 'utf8')).toBe(CLAUDE_ASK_HOSTS)
+    expect(CLAUDE_ASK_HOSTS).toMatch(/^127\.0\.0\.2\tplatform\.claude\.com console\.anthropic\.com claude\.ai$/mu)
+    expect(lines).toContain(`--ro-bind\n${hosts}\n/etc/hosts`)
+    expect(lines).not.toContain('--ro-bind\n/etc/hosts\n/etc/hosts')
+    const receipt = result.verdict.receipt as { snapshots: { hosts?: string } }
+    expect(receipt.snapshots.hosts).toBe(createHash('sha256').update(CLAUDE_ASK_HOSTS).digest('hex'))
+    // A hosts file changed after BMN wrote it is refused; a Codex ask has none and binds the computer's own.
+    const inputs = { agent: 'fable', role: 'designer', effort: 'medium', access: 'question' as const, data: 'private' as const, run: result.folder, argv: result.argv }
+    expect(evaluateAsk(inputs, { environment: env, now: NOW }).verdict).toBe('PASS')
+    writeFileSync(hosts, `${CLAUDE_ASK_HOSTS}# and nothing else\n`)
+    expect(evaluateAsk(inputs, { environment: env, now: NOW })).toMatchObject({ verdict: 'REFUSED', code: 'WORKSPACE_MISMATCH', message: 'the run\'s /etc/hosts is not the one BMN wrote for this ask' })
+    const codex = ask({})
+    expect(existsSync(join(codex.folder, ASK_RUN_FILES.snapshots, 'hosts'))).toBe(false)
+    expect(codex.verdict.receipt).not.toHaveProperty('snapshots.hosts')
   })
 
   it('the existing check is unchanged: an ask\'s command is no dispatch, and a dispatch is no ask (R72-NFR1)', () => {

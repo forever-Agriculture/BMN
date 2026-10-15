@@ -145,7 +145,11 @@ export function runHolds(runs, id, holder, now = Date.now()) {
   const folder = join(runs, id)
   if (existsSync(join(folder, ASK_RUN_FILES.outcome))) return false
   const state = runState(folder)
-  if (state.state === 'ended') return false
+  if (state.state === 'ended') {
+    // Its supervisor ended, but its finish step wrote no outcome: interrupted, its transient state deleted.
+    if (existsSync(folder)) recordInterrupted(folder, 'its supervisor ended without recording the run\'s outcome; BMN never starts it again')
+    return false
+  }
   if (state.state === 'interrupted') {
     if (existsSync(folder)) recordInterrupted(folder, `its supervisor ended with no record of the run's end (it was ${state.was ?? 'running'}); BMN never starts it again`)
     return false
@@ -305,8 +309,11 @@ export function sweepRuns(runs, now = new Date()) {
     return
   }
   for (const id of names) {
-    const ended = endedAt(join(runs, id))
+    const folder = join(runs, id)
+    const ended = endedAt(folder)
     if (ended !== null && now.getTime() - ended > RETENTION_DAYS * DAY_MS) removeRun(runs, id, now)
+    // A run with an outcome holds no transient state: what a crash between its outcome and that deletion left goes now.
+    else if (ended !== null) for (const part of [ASK_RUN_FILES.home, ASK_RUN_FILES.project]) if (existsSync(join(folder, part))) rmSync(join(folder, part), { recursive: true, force: true })
   }
   let keys
   try {

@@ -289,6 +289,8 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   // The snapshots the check judges and the start uses (72.3 AC1): the app's configuration as BMN wrote it, its program, its environment once.
   for (const [path, text] of Object.entries(form.home)) writePrivate(join(folder, ASK_RUN_FILES.snapshots, 'config', path), text)
   writePrivate(join(folder, ASK_RUN_FILES.snapshots, 'executable.json'), `${JSON.stringify(executableIdentity(installed.program), null, 2)}\n`)
+  // A form that keeps the app's sign-in hosts out of reach gets its own /etc/hosts (agents-team-forms.mjs CLAUDE_ASK_HOSTS).
+  if (form.hosts !== undefined) writePrivate(join(folder, ASK_RUN_FILES.snapshots, 'hosts'), form.hosts)
   writePrivate(join(folder, ASK_RUN_FILES.snapshots, 'environment.json'), `${JSON.stringify({ names: Object.keys(form.environment), sha256: sha256Of(Buffer.from(JSON.stringify(form.environment))) }, null, 2)}\n`)
   const verdict = evaluateAsk({ agent: choice.agent.id, role: request.role, effort: choice.effort, access, data: label, wide: request.wide === true, run: folder, argv },
     { environment, now, program: installed.program, version: installed.version, contextTestLog })

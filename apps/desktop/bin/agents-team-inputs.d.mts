@@ -21,5 +21,7 @@ export interface FrozenProject {
   root: string; revision: string; head: string; public_commit: string | null; files: FrozenFile[]
   history: { commits: string[]; shallow: string[]; counts: { commits: number; trees: number; blobs: number }; objects_sha256: string; objects: string; blobs: { name: string; size: number }[] }
 }
+/** A tracked file's bytes, read through one descriptor whose real path must be `root/path`. */
+export declare function readInside(root: string, path: string, limit?: number): Buffer
 export declare function freezeProject(root: string, target: string, options?: { extraFiles?: (InputFile & { sha256: string })[]; publicCommit?: string | null; limits?: typeof LIMITS }): FrozenProject
 export declare function headBytes(path: string, count?: number): Buffer

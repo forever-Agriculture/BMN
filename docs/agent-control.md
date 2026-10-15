@@ -2282,7 +2282,7 @@ the network is the app's form below. Environment: `--clearenv`, then only what t
 | App | `question` and `files` | Pictures | `project` |
 | --- | --- | --- | --- |
 | Codex | `codex exec --skip-git-repo-check --sandbox read-only --strict-config -c approval_policy="never" --ephemeral` with every tool off: `--disable view_image goals image_generation sleep_tool hooks code_mode_host`, `mcp_servers={}`, `web_search="disabled"`, `features.shell_tool`, `unified_exec`, `multi_agent`, `apps`, `plugins` off, skills and app, collaboration and environment instructions off, `project_doc_max_bytes=0`. `--ephemeral` because Codex keeps offering `spawn_agent` whatever is set, and only a run that keeps no session makes every start fail. | `-i /ask/inputs/pictures/<n>.<ext>`, one per picture in order; the picture tool `view_image` stays off | **Unavailable here.** Codex runs every command of a restricted run in its own bubblewrap sandbox, and a sandbox nested in BMN's container is refused by AppArmor (`bwrap//&unpriv_bwrap`). With its sandbox off in the container, it reads the run's own sign-in, session and configuration and reaches the network (FAIL). |
-| Claude Code | `claude -p --tools '' --permission-mode dontAsk --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands --no-session-persistence --output-format stream-json --verbose --append-system-prompt <rules>` | `--input-format stream-json`: standard input is one user message (`inputs/message.jsonl`) holding the image blocks, then the prompt, every tool still off | `--tools Read,Grep,Glob,Bash --allowedTools 'Bash(git log:*)' 'Bash(git show:*)' 'Bash(git diff:*)' 'Bash(git blame:*)' --permission-mode dontAsk --restricted`, started in `/ask/project`, with BMN's own `git` first on `PATH` (`bin/ask-git.sh`). `--restricted` keeps Read, Grep and Glob in the working folder; the prefix rules alone let `git blame --contents`, `--ignore-revs-file`, `--output` and `-O` read or write any file the container shows (FAIL), so BMN's `git` (`bin/ask-git.sh`, shipped with 72.3) allows only `log`, `show`, `diff` and `blame` with no option that names a file, runs no external diff, text conversion, pager or hook, and reads no configuration but the frozen copy's own. |
+| Claude Code | `claude -p --tools '' --permission-mode dontAsk --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands --no-session-persistence --output-format stream-json --verbose --append-system-prompt <rules>` | `--input-format stream-json`: standard input is one user message (`inputs/message.jsonl`) holding the image blocks, then the prompt, every tool still off | `--tools Read,Grep,Glob,Bash --allowedTools 'Bash(git log:*)' 'Bash(git show:*)' 'Bash(git diff:*)' 'Bash(git blame:*)' --permission-mode dontAsk --restricted`, started in `/ask/project`, with BMN's own `git` first on `PATH` (`bin/ask-git.sh`). `--restricted` keeps Read, Grep and Glob in the working folder; the prefix rules alone let `git blame --contents`, `--ignore-revs-file`, `--output` and `-O` read or write any file the container shows (FAIL), so BMN's `git` (`bin/ask-git.sh`, shipped with 72.3) allows only `log`, `show`, `diff` and `blame`, takes an option only when it is spelled whole as one of its read-only options (Git takes any unique beginning of a long option, so `--cont=` would be `--contents=`), takes no option that names a file and no path that climbs out with `..`, runs no external diff, text conversion, pager or hook, and reads no configuration but the frozen copy's own. |
 | OpenCode | `opencode run --standalone --format json --agent bmn-asker -m <provider>/<model>#<effort> --title 'BMN ask'` with the run's own `HOME` and `XDG_*` folders in `/ask/home/oc`, the project's own configuration, updates and the model list fetch off (`OPENCODE_DISABLE_*`), the agent `"*": deny`, BMN's settings (no update, sharing or snapshots, no search service), the owner's rules as `config/opencode/AGENTS.md` for a private ask, ripgrep copied from BMN's OpenCode folder | not measured: a picture ask to an OpenCode teammate is refused saying so | **Not offered.** `--agent bmn-helper` (read, glob, grep, list; everything else denied) keeps reads in the project (PASS), but it has no tool that reads Git history; whether to offer a project ask without history is the owner's call. |
 
 **Wider-read mode (assumption f).** For Codex project asks the owner may enable, in the Team view, a
@@ -2315,7 +2315,13 @@ thumbnail, `ICC_PROFILE` and Adobe's colour segment; WebP `VP8X` (its flags rewr
 `VP8 ` or `VP8L`. EXIF is rewritten to the Orientation tag alone, in its own byte order, or left out
 when it has none. Everything else goes: every other EXIF field (GPS, camera make, model and serial
 numbers, dates, text fields, the maker's notes, the thumbnail), XMP, IPTC, comments, text chunks,
-other chunks and segments, and anything after the picture's end (a second picture, a video).
+other chunks and segments, and anything after the picture's end (a second picture, a video). A kept
+part keeps only what a viewer reads of it: the PNG end chunk is sent empty, a kept PNG chunk of fixed
+size whose size is not the specification's is refused, Adobe's segment is written anew around its
+transform byte, and the WebP header is its ten bytes with its reserved bits zero; whatever a writer
+put beyond them goes, named in the record. The compressed picture data (PNG `IDAT`, JPEG scans, WebP
+frames and `ALPH`) and colour profiles are kept as they are: BMN does not decode them, so bytes hidden
+inside a compressed stream or a profile would go with it.
 
 Refused, never sent half-treated (`PICTURE_UNTREATABLE`): an animated picture (APNG, animated WebP), a
 damaged chunk (PNG checksums are checked), a part a viewer must understand that BMN does not know (a
@@ -2334,8 +2340,8 @@ check).
 
 | App | How it is there | Renewal |
 | --- | --- | --- |
-| Codex | the owner's `~/.codex/auth.json` bound read-write at `/ask/home/codex/auth.json` | written in place into his file (same file), as research's link does today |
-| Claude Code | the owner's `~/.claude/.credentials.json` bound read-write at `/ask/home/.claude/.credentials.json` | written in place into his file (same file) |
+| Codex | the owner's `~/.codex/auth.json` bound read-only at `/ask/home/codex/auth.json` | none: the run's renewal address, `CODEX_REFRESH_TOKEN_URL_OVERRIDE=http://127.0.0.1:1/oauth/token`, answers nothing |
+| Claude Code | the owner's `~/.claude/.credentials.json` bound read-only at `/ask/home/.claude/.credentials.json` | none: the run's own `/etc/hosts` (`snapshots/hosts`, judged by the check like the prompt) puts `platform.claude.com`, `console.anthropic.com` and `claude.ai` at 127.0.0.2, where nothing answers |
 | OpenCode | the Go key BMN's OpenCode folder holds (copied there from his OpenCode when he approved an OpenCode teammate, 70.4) copied into the run's own folders at the start with `opencode auth export` and `auth import`, in memory only; refused (`SIGN_IN_UNAVAILABLE`, nothing started) where that folder holds none | none: Go signs in with a key |
 
 BMN never reads Codex's or Claude Code's sign-in file; it only names it. A copy is not used: a run
@@ -2344,9 +2350,19 @@ apps). On disk the run's home holds only the empty file the sign-in is bound ont
 value is ever in a command line, a recorded environment value or the record: bubblewrap's own
 options (what the container shows, its environment) go to it through `--args` on a file descriptor,
 never on its command line; only the app's command after `--` is there, as the app's own.
-Claude Code serializes renewals with a lock in its configuration folder, which an ask does not
-share with the owner's own sessions; tokens last hours, so two renewals at once are rare, and a
-failed renewal is the run's sign-in failure (exit 1), never retried by BMN.
+An ask never renews a sign-in. Both apps' refresh tokens are spent by one renewal, so a run
+renewing at the same moment as one of the owner's own sessions can leave his file holding a token
+the provider has already replaced, and sign him out. Claude Code 2.1.300 takes its renewal lock in
+its configuration folder, which an ask does not share, and writes its file by replacing it; with a
+provider that spends refresh tokens, two renewals at once left the owner's session with no working
+token (`records/signin/renewal-race-20261015T021204Z`). Claude Code ignores `USE_LOCAL_OAUTH` for its
+token host, so its hosts file is what holds renewal back. A token that is still valid answers as
+usual, also one two minutes from expiring (Claude Code); an expired one is the run's sign-in failure (exit 1, Claude
+Code's `401 OAuth token has expired`, Codex's failed request to `127.0.0.1:1`), never retried by
+BMN, and the next ask after one of the owner's own sessions renewed it reads the new token through
+the bind. Measured in BMN's own container form for both apps, with the provider stood in on
+loopback: fresh, expired and three races with an owner session renewing, which always kept a token
+the provider accepts (`records/signin/renewal-bmn-form-20261015T023552Z`).
 
 ### Session, model, effort and usage
 
@@ -2375,24 +2391,24 @@ says so.
 | Code | Meaning |
 | --- | --- |
 | 0 | answered (foreground), or accepted (`--background`, `stop`, `export`) |
-| 1 | failed: the app ended without an answer (its own error, a sign-in failure, a provider error) |
+| 1 | failed: the app ended without an answer (its own error, a sign-in failure, a provider error), or said it failed or ended with an error code after some text; the text is kept only as diagnostic evidence |
 | 2 | usage: unknown option, missing or conflicting option |
 | 3–7 | team state, as for every team command: 3 team file missing, 4 invalid, 5 not approved, 6 state corrupt, 7 revision conflict |
 | 10 | refused, with the refusal code and its words (below) |
 | 14 | busy (`BUSY`): the capacity limit is reached; nothing is queued |
 | 15 | out of time: the run's time limit ended it; for OpenCode, which retries a provider error without end and says nothing, the reason says it was still waiting on its provider |
 | 16 | stopped: Stop, its supervisor ended, or the token ceiling |
-| 17 | answer not attributed: no session, a second different session, or a model or effort that contradicts the request; the answer is kept only as diagnostic evidence |
+| 17 | answer not attributed: no session, a second different session, nothing in the run naming its model, or a model or effort that contradicts the request; the answer is kept only as diagnostic evidence |
 
 Refusal codes (exit 10) the commands add: `ROLE_UNKNOWN`, `AGENT_NOT_ELIGIBLE`, `EFFORT_NOT_ALLOWED`,
 `EFFORT_REQUIRED`, `RECHECK_INVALID`, `PROJECT_CHOICE_CONFLICT`, `PROJECT_INVALID`, `ACCESS_UNAVAILABLE`
 (a mode not proven for this app version), `WIDE_READ_NOT_ENABLED`, `CONTAINER_UNAVAILABLE`,
 `INPUT_INVALID` (a link, a non-regular or non-UTF-8 file, a credential or configuration location, a
-picture that is not PNG, JPEG or WebP), `INPUT_TOO_LARGE`, `INPUT_CHANGED` (a file or picture changed between the command hashing it for the key and reading it to send; nothing was sent), `PICTURE_UNTREATABLE` (Pictures, above), `CREDENTIAL_FOUND` (names the file and pattern, never the value), `PUBLIC_NOT_VERIFIED`,
-`PRIVATE_NOT_ALLOWED`, `CHANGED` (the approved team or the app's program changed between the check and
+picture that is not PNG, JPEG or WebP), `INPUT_TOO_LARGE`, `INPUT_CHANGED` (a file or picture changed between the command hashing it for the key and reading it to send; nothing was sent), `PICTURE_UNTREATABLE` (Pictures, above), `CREDENTIAL_FOUND` (names the file and pattern, never the value; a value that says it is made up, by a word of six letters or more such as `synthetic`, `example` or `placeholder`, is not counted, judged by the value alone, never by a variable's name), `PUBLIC_NOT_VERIFIED`,
+`PRIVATE_NOT_ALLOWED`, `CHANGED` (the approved team, the app's program, the command, the prompt, the inputs or the run's configuration changed between the check and
 the start; nothing started), `SIGN_IN_UNAVAILABLE` (OpenCode: BMN's folder holds no Go sign-in to copy; nothing started), `KEY_REQUIRED`, `KEY_CONFLICT` (same key, different request), `GONE` (a removed
-run's or expired key), `NESTED` (asked from inside a teammate's run), `NOT_YOURS` (another session's
-run), and every refusal of `evaluate`'s ask mode with its existing code.
+run's or expired key), `NOT_STARTED` (a retry followed a key whose first ask was refused before it started; nothing ran), `NESTED` (asked from inside a teammate's run), `NOT_YOURS` (another session's
+run, or a session label BMN's control service does not confirm), `SESSION_UNPROVEN` (BMN's control service could not be reached to confirm the session), and every refusal of `evaluate`'s ask mode with its existing code.
 
 ### JSON
 
@@ -2430,9 +2446,9 @@ says `not-enabled` until the owner enables one in the Team view; `pictures` is t
 | Question | 1 MiB of UTF-8 | dev-auto's largest prompt of the month before 2026-10-14 was 888 KB (1,405 prompts; median 5 KB, 90th percentile 137 KB) |
 | Files | 64 files, each 1 MiB; question and file text together 2 MiB | the same prompts with their packets |
 | Pictures | 8 per ask, each 5 MiB, 8,000 px a side and 33.2 million pixels once drawn (an 8K screen, 7680x4320); PNG, JPEG, WebP | the providers' own image limits; the pixel bound keeps a small file from unfolding into gigabytes in the app |
-| Project | 20,000 tracked files, 200 MiB, each file 10 MiB; history the newest 1,000 commits of the checked-out revision, 500 MiB of objects | an ask reads a project, not a monorepo's every blob |
+| Project | 20,000 files, 200 MiB, each file 10 MiB, the tracked ones and those named with `--file` together; history the newest commits of the checked-out revision, at most 1,000 (where history branches, a depth of 1,000 holds more, so the depth is made smaller until the count is inside), 500 MiB of objects | an ask reads a project, not a monorepo's every blob |
 | Answer kept | 1 MiB; the app's raw output 64 MiB, over it the run fails | |
-| Run storage | 1 GiB (inputs, frozen copy, home, record) | |
+| Run storage | 1 GiB (inputs, frozen copy, home, record): measured at the start and the app's home again every second; over it the run fails | |
 | Time | 30 minutes; 1 to 120 with `--time-limit` | assumption (b) |
 | Capacity | 4 runs at once across BMN; 1 to 10 in Preferences (`team/asks-settings.json` `capacity`) | assumption (c) |
 | Key window | until the end of the 8th UTC day after the day the key names: at least 7 days from its first use | a lead's retries happen within its run |
@@ -2443,17 +2459,25 @@ Over a limit the ask is refused (`INPUT_TOO_LARGE`), never cut.
 ### Lifecycle
 
 `accepted` (key, request hash and capacity place reserved together) → `starting` (snapshots taken,
-the command judged and its executable checked again, the supervisor started) → `running` → `finishing`
-(answer, attribution and usage read, transient state deleted) → one of `answered`, `failed`,
+the command judged; just before the start the approved team and the executable checked again, and the
+command, the prompt or picture message, the inputs' manifest, each picture and project file and the
+run's configuration against the receipt's hashes; the supervisor started, which checks the command and
+standard input once more and gives the app the very bytes it checked) → `running` → `finishing`
+(answer, attribution and usage read, transient state deleted, then the outcome written; a finish that
+fails still writes a failed outcome and deletes the transient state) → one of `answered`, `failed`,
 `refused`, `out-of-time`, `stopped`, `not-attributed`; `interrupted` (exit 1) when the supervisor ended with
-no record of the end, or the asking command ended after the reservation and before the start (nothing
+no record of the end or with no outcome written, or the asking command ended after the reservation and before the start (nothing
 starts it again, and its transient state is deleted when BMN next looks); `gone` after removal, for the key window.
+A refusal while the ask is prepared (a credential found in the copied history, a file over its limit)
+deletes everything the preparing copied and gives the key back; each reservation also deletes what a
+crash left of a finished run's transient state.
 
 ### Keys
 
 Every ask has a key, and before anything is copied BMN reserves three things together under one
 short lock that separate commands and the app share: the key, the request's hash and one capacity
-place. A refusal before the start gives all three back, so the key may then be used again.
+place. A refusal before the start gives all three back, so the key may then be used again; a retry
+that was following that key is told `NOT_STARTED`.
 
 - **Scope.** A key is the asking session's (`BMN_SESSION_ID`), the plain shell's, or the owner's in the
   app: the same words in another session are another key.
@@ -2475,8 +2499,12 @@ place. A refusal before the start gives all three back, so the key may then be u
 ### Who sees and controls an ask
 
 A session sees, waits for, stops and exports only its own asks; a plain shell those asked from a
-plain shell. A session id that the `BMN_TOKEN` BMN gave the session does not name is a forged label:
-it sees nothing and asks nothing (`NOT_YOURS`). No flag, label or environment value gives the owner's
+plain shell. A session is proven, not claimed: its `BMN_TOKEN` must name its `BMN_SESSION_ID`, and BMN's
+own control service (the socket `BMN_CONTROL_SOCKET` names) must confirm the token, as it does for
+every `bmn` command that reaches it. A session id with no token, with a token naming another session or
+with one BMN does not know is a forged label: it sees nothing and asks nothing (`NOT_YOURS`). Where the
+service cannot be reached (BMN closed, or a sandbox keeping the command from its socket) the session is
+unproven and refused the same way (`SESSION_UNPROVEN`, saying to run outside the sandbox). No flag, label or environment value gives the owner's
 view of every ask: only his action in the app does. Like every owner-only file, the records stay
 readable to his other programs; BMN's commands keep sessions apart, not the file system.
 

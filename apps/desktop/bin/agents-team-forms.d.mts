@@ -9,13 +9,15 @@ export declare const ASK_ACCESS: readonly AskAccess[]
 export declare const ASK_RUN_FILES: Readonly<{ request: string; manifest: string; prompt: string; rules: string; files: string; pictures: string; message: string; projectManifest: string; snapshots: string; receipt: string; answer: string; outcome: string; home: string; inputs: string; project: string }>
 export declare const ASK_FORM_NAMES: Readonly<Record<string, Record<AskAccess, string>>>
 export declare const CODEX_ASK_NO_TOOLS: readonly string[]
+export declare const CODEX_ASK_NO_RENEWAL: string
+export declare const CLAUDE_ASK_HOSTS: string
 export declare const CODEX_ASK_LOG: string
 export declare const CLAUDE_ASK_NO_TOOLS: readonly string[]
 export declare const CLAUDE_ASK_PROJECT: readonly string[]
 export declare const CLAUDE_ASK_COMMON: readonly string[]
 export declare const ASK_APPS: readonly string[]
 export interface AskProgram { launcher: string; payload: string; root: string; paths: string[] }
-export interface AskForm { command: string[]; environment: Record<string, string>; cwd: string; home: Record<string, string>; mountPoints: string[]; stdin: 'text' | 'stream-json' }
+export interface AskForm { command: string[]; environment: Record<string, string>; cwd: string; home: Record<string, string>; mountPoints: string[]; stdin: 'text' | 'stream-json'; hosts?: string }
 export declare function signInBind(harness: string, environment?: NodeJS.ProcessEnv | Record<string, string>): { from: string; to: string; writable: true } | null
 export declare function appSearchPath(environment?: NodeJS.ProcessEnv | Record<string, string>): string
 export declare function askProgram(harness: string, environment?: NodeJS.ProcessEnv | Record<string, string>): AskProgram | null

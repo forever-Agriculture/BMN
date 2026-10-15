@@ -1,7 +1,7 @@
 // MODULE: agents-team-inputs.mjs - Epic 72: what a teammate may read, built for one ask: the question, file copies, or a frozen, bounded copy of one project with a self-contained Git history, each hashed, scanned for credentials and bounded
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
@@ -56,21 +56,26 @@ export const CREDENTIAL_PATTERNS = Object.freeze([
   ['an app sign-in file (refresh token)', /"(?:refresh_token|refreshToken)"\s*:\s*"[^"]{20,}"/gu],
   ['an OpenCode sign-in entry', /"type"\s*:\s*"api"\s*,\s*"key"\s*:\s*"[^"]{16,}"/gu],
   // A .env-style assignment of a secret-named variable to a value that looks like one: long, letters and digits.
-  ['a secret assigned in .env style', /^[ \t]*(?:export[ \t]+)?[A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY)[A-Za-z0-9_]*[ \t]*[=:][ \t]*["']?(?=[A-Za-z0-9_+/=-]*\d)(?=[A-Za-z0-9_+/=-]*[A-Za-z])[A-Za-z0-9_+/=-]{16,}["']?[ \t]*$/gu]
+  // The value is a group of its own: only the value, never the variable's name, may say it is made up.
+  ['a secret assigned in .env style', /^[ \t]*(?:export[ \t]+)?[A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY)[A-Za-z0-9_]*[ \t]*[=:][ \t]*["']?(?<value>(?=[A-Za-z0-9_+/=-]*\d)(?=[A-Za-z0-9_+/=-]*[A-Za-z])[A-Za-z0-9_+/=-]{16,})["']?[ \t]*$/gu]
 ])
 
 /**
- * A value that says it is made up is no credential: tests and documents are full of them, and a
- * real key is random, so it never spells one of these words. Every other match counts.
+ * A value that says it is made up is no credential: tests and documents are full of them. A real
+ * key is random, so it spells one of these words only by chance; the words are six letters or more,
+ * so that chance stays below one in a hundred thousand for a whole key block (a four-letter word
+ * turns up in about one random key block in five hundred). Only the value counts, never a
+ * variable's name. Every other match counts.
  */
-export const SYNTHETIC_WORDS = /(synthetic|planted|sentinel|example|fake|dummy|made-?up|placeholder|redacted|x{5}|sample|fixture|0123456789|abcdefghij)/iu
+export const SYNTHETIC_WORDS = /(synthetic|planted|sentinel|example|made-?up|placeholder|redacted|sample|fixture|0123456789|abcdefghij)/iu
 
+/** Each match's value: the pattern's `value` group where it has one, else the whole match. */
 function matches(pattern, text) {
   pattern.lastIndex = 0
   const found = []
   let match
   while ((match = pattern.exec(text)) !== null) {
-    found.push(match[0])
+    found.push(match.groups?.value ?? match[0])
     if (match[0].length === 0) pattern.lastIndex += 1
   }
   return found
@@ -285,14 +290,33 @@ export function freezeProject(root, target, { extraFiles = [], publicCommit = nu
   const unique = [...new Set(tracked)]
   if (unique.length > limits.projectFiles) refuse('INPUT_TOO_LARGE', `${root} tracks ${unique.length} files, over the project limit of ${limits.projectFiles}`)
 
+  // The asker's extra files count against the project's own limits, and none may name the frozen repository's Git folder.
+  const extras = extraFiles.filter((extra) => !unique.includes(relative(root, extra.real)))
+  for (const extra of extraFiles) {
+    const path = relative(root, extra.real)
+    if (path.startsWith('..') || isAbsolute(path)) refuse('INPUT_INVALID', `${extra.path} is outside the project ${root}; files from elsewhere go with --access files`)
+    if (path.split(sep).some((part) => part.toLowerCase() === '.git')) refuse('INPUT_INVALID', `${extra.path} is inside a Git folder; a project ask never carries Git's own files`)
+  }
+  if (unique.length + extras.length > limits.projectFiles) refuse('INPUT_TOO_LARGE', `${root} tracks ${unique.length} files and ${extras.length} more were named, over the project limit of ${limits.projectFiles}`)
+
   mkdirSync(target, { recursive: true, mode: 0o700 })
-  // The history first, into an empty repository of the run's own.
-  git(target, ['init', '-q', '-b', 'ask'])
-  try {
-    git(target, ['fetch', '-q', '--no-tags', '--no-write-fetch-head', '--update-head-ok', '--no-recurse-submodules', `--depth=${limits.historyCommits}`, `file://${root}`, `+${revision}:refs/heads/ask`],
-      { env: { GIT_ALLOW_PROTOCOL: 'file' } })
-  } catch (error) {
-    refuse('PROJECT_INVALID', `the history of ${root} could not be copied (${String(error.stderr ?? error.message).trim().split('\n').pop()})`)
+  // The history first, into an empty repository of the run's own: the newest commits of the revision,
+  // at most the bound. A depth counts commits along each line of history, so where lines branch it
+  // holds more; the depth is then made smaller until the count is inside the bound.
+  let depth = limits.historyCommits
+  for (let attempt = 0; ; attempt += 1) {
+    rmSync(join(target, '.git'), { recursive: true, force: true })
+    git(target, ['init', '-q', '-b', 'ask'])
+    try {
+      git(target, ['fetch', '-q', '--no-tags', '--no-write-fetch-head', '--update-head-ok', '--no-recurse-submodules', `--depth=${depth}`, `file://${root}`, `+${revision}:refs/heads/ask`],
+        { env: { GIT_ALLOW_PROTOCOL: 'file' } })
+    } catch (error) {
+      refuse('PROJECT_INVALID', `the history of ${root} could not be copied (${String(error.stderr ?? error.message).trim().split('\n').pop()})`)
+    }
+    const count = Number(git(target, ['rev-list', '--count', 'refs/heads/ask']).trim())
+    if (count <= limits.historyCommits) break
+    if (depth === 1 || attempt >= 8) refuse('INPUT_TOO_LARGE', `the newest history of ${root} holds ${count} commits, over the limit of ${limits.historyCommits}`)
+    depth = Math.max(1, Math.min(depth - 1, Math.floor((depth * limits.historyCommits) / count)))
   }
   git(target, ['symbolic-ref', 'HEAD', 'refs/heads/ask'])
   for (const path of ['hooks', 'logs', 'FETCH_HEAD', 'description', 'info', 'ORIG_HEAD', 'objects/info/alternates']) rmSync(join(target, '.git', path), { recursive: true, force: true })
@@ -333,6 +357,8 @@ export function freezeProject(root, target, { extraFiles = [], publicCommit = nu
       continue
     }
     if (stat.isDirectory()) continue
+    // Its folder must be the project's own: a folder of the path replaced by a link to elsewhere is refused, never followed.
+    folderInside(root, path)
     if (stat.isSymbolicLink()) {
       const link = readlinkSync(source)
       linkInside(root, path, link)
@@ -343,35 +369,85 @@ export function freezeProject(root, target, { extraFiles = [], publicCommit = nu
     }
     if (!stat.isFile()) continue
     if (stat.size > limits.projectFile) refuse('INPUT_TOO_LARGE', `${path} is ${mib(stat.size)}, over the project file limit of ${mib(limits.projectFile)}`)
-    total += stat.size
-    if (total > limits.projectBytes) refuse('INPUT_TOO_LARGE', `${root}'s tracked files are over the project limit of ${mib(limits.projectBytes)}`)
     if (secretName(path)) refuse('CREDENTIAL_FOUND', `${path} is a key store or sign-in file; nothing was sent`)
-    const bytes = readFileSync(source)
+    const bytes = readInside(root, path, limits.projectFile)
+    total += bytes.length
+    if (total > limits.projectBytes) refuse('INPUT_TOO_LARGE', `${root}'s tracked files are over the project limit of ${mib(limits.projectBytes)}`)
     mkdirSync(dirname(copy), { recursive: true })
     writeFileSync(copy, bytes, { mode: stat.mode & 0o111 ? 0o755 : 0o644 })
     files.push({ path, kind: 'file', bytes: bytes.length, sha256: sha256Of(bytes), changed: state })
   }
-  if (total > limits.projectBytes) refuse('INPUT_TOO_LARGE', `${root}'s tracked files are over the project limit of ${mib(limits.projectBytes)}`)
-  // The asker's own extra files, inside the project only.
-  for (const extra of extraFiles) {
+  // The asker's own extra files, inside the project only (checked above), counted with the tracked ones.
+  for (const extra of extras) {
     const path = relative(root, extra.real)
-    if (path.startsWith('..') || isAbsolute(path)) refuse('INPUT_INVALID', `${extra.path} is outside the project ${root}; files from elsewhere go with --access files`)
     if (files.some((file) => file.path === path)) continue
+    total += extra.bytes.length
     const copy = join(target, path)
     mkdirSync(dirname(copy), { recursive: true })
     writeFileSync(copy, extra.bytes, { mode: 0o644 })
     files.push({ path, kind: 'file', bytes: extra.bytes.length, sha256: extra.sha256, changed: 'named' })
   }
-  // The index is the revision's, so the working tree's changes show as uncommitted.
-  git(target, ['read-tree', 'HEAD'])
+  if (total > limits.projectBytes) refuse('INPUT_TOO_LARGE', `${root}'s tracked files${extras.length > 0 ? ' and the named ones' : ''} are over the project limit of ${mib(limits.projectBytes)}`)
+  // The index is the revision's, so the working tree's changes show as uncommitted. Git here runs
+  // outside the container: no repository setting may start a program.
+  git(target, ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', 'read-tree', 'HEAD'])
   try {
-    git(target, ['update-index', '-q', '--refresh'])
+    git(target, ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', 'update-index', '-q', '--refresh'])
   } catch {
     // Differences are what update-index reports; the index itself is written.
   }
   const history = historyManifest(target)
   scanProject(target, files, history)
   return { root, revision, head, public_commit: publicCommit, files, history }
+}
+
+/** The folder a tracked path lies in must be the project's own folder of that name, not a link out of it. */
+function folderInside(root, path) {
+  const folder = dirname(join(root, path))
+  let real
+  try {
+    real = realpathSync(folder)
+  } catch {
+    refuse('INPUT_INVALID', `the folder of ${path} cannot be read`)
+  }
+  if (real !== folder) refuse('INPUT_INVALID', `the folder of ${path} is a link (to ${real}); a project's files are read only from its own folders, never through a link`)
+}
+
+/**
+ * A tracked file's bytes, read through one descriptor opened without following a link, whose real
+ * path is then checked: a folder of the path replaced by a link while the copy is made reads nothing
+ * from outside the project.
+ */
+export function readInside(root, path, limit = LIMITS.projectFile) {
+  const expected = join(root, path)
+  let handle
+  try {
+    handle = openSync(expected, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  } catch {
+    refuse('INPUT_INVALID', `${path} changed while the project was copied; ask again`)
+  }
+  try {
+    let real = null
+    try {
+      real = readlinkSync(`/proc/self/fd/${handle}`)
+    } catch {
+      real = null
+    }
+    if (real !== expected) refuse('INPUT_INVALID', `${path} is not where the project has it${real === null ? '' : ` (it is ${real})`}; a project's files are read only from its own folders, never through a link`)
+    const stat = fstatSync(handle)
+    if (!stat.isFile()) refuse('INPUT_INVALID', `${path} changed while the project was copied; ask again`)
+    if (stat.size > limit) refuse('INPUT_TOO_LARGE', `${path} is ${mib(stat.size)}, over the project file limit of ${mib(limit)}`)
+    const bytes = Buffer.alloc(stat.size)
+    let at = 0
+    while (at < bytes.length) {
+      const read = readSync(handle, bytes, at, bytes.length - at, at)
+      if (read === 0) break
+      at += read
+    }
+    return bytes.subarray(0, at)
+  } finally {
+    closeSync(handle)
+  }
 }
 
 /** A tracked link may point only inside the project, and at something that is there. */

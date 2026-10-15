@@ -14,6 +14,10 @@ export interface Outcome {
 export declare function startAsk(prepared: import('./agents-team-ask.mjs').PreparedAsk, options?: { now?: Date; timeLimitMinutes?: number; start?: (folder: string) => { pid?: number; start?: string; failed?: string }; tokenCeiling?: number | null }): { pid: number; start: string }
 export declare function observeAsk(folder: string, harness: string | null, request: { model?: string; aliases?: string[]; effort?: string; billing?: string }): { observed: Observed; answer: string | null; failure: string | null; usage: AskUsage; rateLimit: Outcome['rate_limit'] | null; problems: string[] }
 export declare function finishAsk(folder: string): void
+export declare const STORAGE_LIMIT: number
+export declare const TRANSIENT: readonly string[]
+/** Why what is about to start is not what the check judged, or null. */
+export declare function judgedChange(prepared: { folder: string; argv: string[]; verdict: { receipt?: unknown } }): string | null
 export declare function watchAsk(folder: string, launch: { token_ceiling?: number } | null): string | null
 export declare function askOutcome(folder: string): Outcome
 export declare function waitAsk(folder: string, options?: { timeoutMs?: number; pollMs?: number; signal?: AbortSignal }): Promise<Outcome>

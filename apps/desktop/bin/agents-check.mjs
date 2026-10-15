@@ -2880,6 +2880,16 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     }
     if (!isObject(identity) || !isObject(identity.launcher) || !isObject(identity.payload) || !sameProgram(identity, program)) refuse('HARNESS_UNKNOWN', `${appName(agent.harness)}'s program is not the one BMN recorded for this ask`)
     if (!isObject(environmentSnapshot) || environmentSnapshot.sha256 !== sha256(JSON.stringify(built.form.environment))) refuse('WORKSPACE_MISMATCH', 'the environment of this ask is not the one BMN recorded')
+    // A form with its own /etc/hosts (Claude Code's, which keeps the sign-in hosts out of reach) must find exactly that file.
+    let hosts = null
+    if (built.form.hosts !== undefined) {
+      try {
+        hosts = readText(`${snapshots}/hosts`)
+      } catch {
+        hosts = null
+      }
+      if (hosts !== built.form.hosts) refuse('WORKSPACE_MISMATCH', 'the run\'s /etc/hosts is not the one BMN wrote for this ask')
+    }
     note(`snapshots: configuration ${Object.keys(configHashes).join(', ') || 'none'}, program ${identity.payload.sha256.slice(0, 12)}, environment ${environmentSnapshot.names.join(', ')}`)
 
     // Where it goes, as the route readers see the run's own home: the same answers evaluate gives.
@@ -2922,7 +2932,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       inputs_sha256: sha256(canonicalJson(manifest)),
       snapshots: {
         config: sha256(canonicalJson(configHashes)), executable: { launcher: identity.launcher.sha256, payload: identity.payload.sha256 },
-        environment: environmentSnapshot.sha256, rules: rules === null ? null : sha256(rules), prompt: promptHash, ...(message === null ? {} : { message })
+        environment: environmentSnapshot.sha256, rules: rules === null ? null : sha256(rules), prompt: promptHash, ...(message === null ? {} : { message }), ...(hosts === null ? {} : { hosts: sha256(hosts) })
       },
       argv_sha256: sha256(canonicalJson(built.argv)),
       harness_version: { version, state: tested.state, form: 'proven' },

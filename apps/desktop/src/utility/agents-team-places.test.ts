@@ -1,5 +1,5 @@
 // MODULE: agents-team-places.test.ts - Story 72.4: many asks, safely: a key, the request's hash and a capacity place reserved together across processes, crashes on either side of the start, capacity edges, nesting told from an ask's own PID namespace with a cleared environment and forged labels, sessions kept apart, retention and the key window, the token ceiling and the features list; BMN's real container, stand-in apps, a synthetic team, no provider reached
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { join } from 'node:path'
@@ -8,24 +8,28 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { containerStarts } from '../../bin/agents-container.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { askFeatures, teamAsker } from '../../bin/agents-team-cli.mjs'
+import type { Server } from 'node:net'
 import { childNamespace, forgetNamespace, nameNamespace, nestedAsk } from '../../bin/agents-team-nested.mjs'
 import { keyDay, keyExpired, keyFresh, keyPath, keyedRun, makeKey, releaseReservation, removeRun, requestHash, reserveAsk, sweepRuns } from '../../bin/agents-team-places.mjs'
 import { askOutcome, startAsk, stopAsk, waitAsk, watchAsk } from '../../bin/agents-team-run.mjs'
-import { leftovers, settle, stubClaude, stubCodex, teamAskHome } from './test-fixtures/team-ask-harness'
+import { startTeamSupervisor } from '../../bin/agents-team-supervisor.mjs'
+import { TOKEN_MAC, leftovers, settle, standInControl, stubClaude, stubCodex, teamAskHome } from './test-fixtures/team-ask-harness'
 
 const BMN = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const canContain = containerStarts().ok
 const savedHome = process.env.HOME
 const DEAD = { pid: 4_194_000, start: '1' }
-const TOKEN_MAC = 'a'.repeat(64)
 
 let home: string
 let stubs: string
 let env: Record<string, string>
+let control: Server
 const runs = (): string => join(home, '.config/bmn/agents/state/team/runs')
 const today = (now = new Date()): string => now.toISOString().slice(0, 10).replaceAll('-', '')
 const key = (name: string): string => `${today()}-${name}`
-const session = (id: string, token = id): Record<string, string> => ({ BMN_SESSION_ID: id, BMN_TOKEN: `s1.${token}.inc-1.${TOKEN_MAC}` })
+const controlSocket = (): string => join(home, 'runtime/control/control.sock')
+/** A session as BMN starts one: its id, its token, and BMN's control service that proves the token. */
+const session = (id: string, token = id): Record<string, string> => ({ BMN_SESSION_ID: id, BMN_TOKEN: `s1.${token}.inc-1.${TOKEN_MAC}`, BMN_CONTROL_SOCKET: controlSocket() })
 /** The hash `bmn team ask` gives a question-only ask from a plain shell in the test's home. */
 const shellHash = (question: string, extra: Record<string, unknown> = {}): string =>
   requestHash({ role: 'epic-reviewer', question, project: null, files: [], timeLimitMinutes: 30, ...extra })
@@ -61,11 +65,13 @@ const settings = (text: string): void => {
   writeFileSync(join(home, '.config/bmn/agents/state/team/asks-settings.json'), text)
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   ({ home, stubs, env } = teamAskHome('bmn-team-places-'))
+  control = await standInControl(controlSocket())
 })
 
 afterEach(async () => {
+  await new Promise((resolve) => control.close(resolve))
   await stopAll()
   await settle(() => leftovers(home).length === 0, 5000)
   process.env.HOME = savedHome
@@ -142,8 +148,10 @@ describe.skipIf(!canContain)('crashes on either side of the start (72.4 AC2)', {
     expect(JSON.parse(readFileSync(join(prepared.folder, 'outcome.json'), 'utf8'))).toMatchObject({ state: 'interrupted', reason: expect.stringContaining('nothing started') })
     expect(existsSync(join(prepared.folder, 'home'))).toBe(false)
     expect(existsSync(join(prepared.folder, 'launch.json'))).toBe(false)
-    // A supervisor that comes late reads the outcome and runs nothing.
-    startAsk(prepared, { timeLimitMinutes: 1 })
+    // Its start is refused, and a supervisor that comes late reads the outcome and runs nothing.
+    expect(() => startAsk(prepared, { timeLimitMinutes: 1 })).toThrow(/already ended .*nothing started/)
+    writeFileSync(join(prepared.folder, 'launch.json'), JSON.stringify({ version: 1, argv: prepared.argv, deadline: Date.now() + 60_000, stdin: null, finish: null }))
+    expect(startTeamSupervisor(prepared.folder)).toMatchObject({ pid: expect.any(Number) })
     await new Promise((resolve) => setTimeout(resolve, 1500))
     expect(existsSync(join(prepared.folder, 'events.jsonl'))).toBe(false)
     expect(existsSync(join(prepared.folder, 'state.json'))).toBe(false)
@@ -215,12 +223,30 @@ describe.skipIf(!canContain)('who sees and controls an ask (72.4 AC2, AC4)', { t
       expect(JSON.parse(tried.stdout).refusal.code).toBe('NOT_YOURS')
     }
     // A session id that the token BMN gave does not name is a forged label: nothing is shown or asked.
-    const forged = { BMN_SESSION_ID: 'sess-a', BMN_TOKEN: `s1.sess-b.inc-1.${TOKEN_MAC}` }
-    expect(teamAsker(forged)).toMatchObject({ kind: 'forged' })
+    const forged = { BMN_SESSION_ID: 'sess-a', BMN_TOKEN: `s1.sess-b.inc-1.${TOKEN_MAC}`, BMN_CONTROL_SOCKET: controlSocket() }
+    expect(await teamAsker(forged)).toMatchObject({ kind: 'forged' })
     const shown = await bmn(['team', 'asks', 'show', id, '--json'], forged)
     expect(shown.code).toBe(10)
     expect(JSON.parse(shown.stdout).refusal).toMatchObject({ code: 'NOT_YOURS', reason: expect.stringContaining('BMN_SESSION_ID names session sess-a') })
     expect((await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'x', '--key', key('forged')], forged)).code).toBe(10)
+    // Session A's id with no token, or with a made-up token naming A that BMN does not know, is refused every operation (epic review).
+    const bare = { BMN_SESSION_ID: 'sess-a', BMN_CONTROL_SOCKET: controlSocket() }
+    const fabricated = { BMN_SESSION_ID: 'sess-a', BMN_TOKEN: `s1.sess-a.inc-1.${'b'.repeat(64)}`, BMN_CONTROL_SOCKET: controlSocket() }
+    const unreachable = { ...a, BMN_CONTROL_SOCKET: join(home, 'no-such.sock') }
+    for (const [who, code, words] of [[bare, 'NOT_YOURS', 'there is no BMN_TOKEN'], [fabricated, 'NOT_YOURS', 'BMN does not know the BMN_TOKEN'], [unreachable, 'SESSION_UNPROVEN', 'cannot be proven']] as const) {
+      expect(await teamAsker(who)).toMatchObject({ kind: code === 'NOT_YOURS' ? 'forged' : 'unproven' })
+      const listed = await bmn(['team', 'asks', '--json'], who)
+      expect(listed.code).toBe(10)
+      expect(JSON.parse(listed.stdout).refusal).toMatchObject({ code, reason: expect.stringContaining(words) })
+      for (const action of ['show', 'wait', 'stop', 'export']) {
+        const tried = await bmn(['team', 'asks', action, id, ...(action === 'export' ? ['--output', join(home, `forged-${action}`)] : []), '--json'], who)
+        expect(tried.code, `${action}: ${tried.stdout}`).toBe(10)
+        expect(JSON.parse(tried.stdout).refusal.code).toBe(code)
+      }
+      const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'x', '--key', key('forged-2'), '--json'], who)
+      expect(JSON.parse(asked.stdout).refusal.code).toBe(code)
+    }
+    expect(existsSync(join(home, 'forged-export'))).toBe(false)
     // No flag or label gives the owner's view: there is no "all".
     expect((await bmn(['team', 'asks', '--all'], b)).code).toBe(2)
     // A plain shell sees the shell's asks only.
@@ -230,6 +256,52 @@ describe.skipIf(!canContain)('who sees and controls an ask (72.4 AC2, AC4)', { t
     expect(other.code, other.stderr).toBe(0)
     expect(other.stdout.trim()).not.toBe(id)
     expect((await bmn(['team', 'asks', 'stop', id], a)).code).toBe(0)
+  })
+})
+
+describe.skipIf(!canContain)('refusals, crashes and retries leave nothing behind (epic review)', { timeout: 30_000 }, () => {
+  it('a refusal while preparing deletes what was copied and gives the key back; a crash after the outcome leaves nothing the next reservation does not take away', async () => {
+    const root = join(home, 'code/app')
+    mkdirSync(root, { recursive: true })
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=S', '-c', 'user.email=s@example.org', '-c', 'commit.gpgsign=false', ...args], { cwd: root, env: { PATH: '/usr/bin:/bin', HOME: home, GIT_CONFIG_GLOBAL: '/dev/null' } })
+    git('init', '-q', '-b', 'main')
+    // A credential only in the history: the frozen copy finds it after the history is copied.
+    writeFileSync(join(root, 'config.ts'), `export const token = 'gh${'p'}_${'7Kq2'.repeat(9)}'\n`)
+    git('add', '.')
+    git('commit', '-q', '-m', 'add config')
+    git('rm', '-q', 'config.ts')
+    writeFileSync(join(root, 'README.md'), '# app\n')
+    git('add', '.')
+    git('commit', '-q', '-m', 'remove config')
+    const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Is the history clean?', '--access', 'project', '--project', root, '--key', key('history'), '--json'])
+    expect(asked.code, asked.stderr).toBe(10)
+    expect(JSON.parse(asked.stdout).refusal).toMatchObject({ code: 'CREDENTIAL_FOUND' })
+    expect(runFolders()).toEqual([])
+    // The key was given back: the same key may be used for another request.
+    const again = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Another question?', '--key', key('history'), '--background'])
+    expect(again.code, again.stderr).toBe(0)
+    const id = again.stdout.trim()
+    await waitAsk(join(runs(), id), { timeoutMs: 20_000 })
+    // A crash between the outcome and the deletion of the transient state: the next reservation's sweep deletes it.
+    mkdirSync(join(runs(), id, 'home/.claude'), { recursive: true })
+    writeFileSync(join(runs(), id, 'home/.claude/.credentials.json'), '{"left": "behind"}\n')
+    await reserveAsk(runs(), { scope: 'shell', key: key('sweep'), hash: 'h-sweep', id: '20261015T060000-0000000f' })
+    expect(existsSync(join(runs(), id, 'home'))).toBe(false)
+    expect(existsSync(join(runs(), id, 'outcome.json'))).toBe(true)
+  })
+
+  it('a retry that follows a key whose first ask is refused before it starts gets a refusal, never a crash (epic review)', async () => {
+    const question = 'Followed? SLEEP'
+    // The first command holds the key while it prepares (this test is its living holder) ...
+    await reserveAsk(runs(), { scope: 'shell', key: key('follow'), hash: shellHash(question), id: '20261015T070000-00000010' })
+    const retry = bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', question, '--key', key('follow'), '--json'])
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    // ... and is refused before the start, giving the key back.
+    await releaseReservation(runs(), { scope: 'shell', key: key('follow'), id: '20261015T070000-00000010' })
+    const followed = await retry
+    expect(followed.code, followed.stderr).toBe(10)
+    expect(JSON.parse(followed.stdout).refusal).toMatchObject({ code: 'NOT_STARTED', reason: expect.stringContaining('was refused before it started') })
+    expect(followed.stderr).not.toContain('ENOENT')
   })
 })
 
@@ -347,9 +419,7 @@ process.stdout.write(JSON.stringify(results))
     const other = join(runs(), '20261015T050000-0000000e')
     mkdirSync(other, { recursive: true })
     writeFileSync(join(other, 'answer.md'), 'OTHER-RUN-SENTINEL\n')
-    const socket = join(home, 'runtime/control/control.sock')
-    mkdirSync(join(socket, '..'), { recursive: true })
-    writeFileSync(socket, '')
+    const socket = controlSocket()
     writeFileSync(join(stubs, 'codex'), `#!/bin/sh
 [ "$1" = --version ] && echo "codex-cli 0.162.1" && exit 0
 model=; effort=; prev=
@@ -365,7 +435,7 @@ printf 'INFO turn{thread.id=aaaaaaaa-0000-7000-8000-000000000000 model=%s codex.
 printf '{"type":"item.completed","item":{"type":"agent_message","text":"%s"}}\\n' "$seen"
 printf '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}\\n'
 `)
-    const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'What do you see?', '--key', key('inside')], { ...session('sess-in'), BMN_CONTROL_SOCKET: socket })
+    const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'What do you see?', '--key', key('inside')], session('sess-in'))
     expect(asked.code, asked.stderr).toBe(0)
     expect(asked.stdout).toBe('bmn=none;state=0;other=none;socket=no;env=0\n')
     rmSync(other, { recursive: true, force: true })

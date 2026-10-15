@@ -1,7 +1,8 @@
 // MODULE: agents-team-run.mjs - Epic 72: an ask started exactly as it was judged, attributed from its own output, finished into its record, and exported only as its allowlist says
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { canonicalJson, sha256 } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { copyGoSignInToRun, openCodeSessionInfo } from './agents-opencode.mjs'
 import { ASK_RUN_FILES, sameProgram } from './agents-team-forms.mjs'
@@ -21,10 +22,14 @@ export const TIME_LIMIT = Object.freeze({ default: 30, min: 1, max: 120 })
 /** The app's raw output over which a run fails, and the answer kept. */
 export const OUTPUT_LIMIT = 64 * 1024 * 1024
 export const ANSWER_LIMIT = 1024 * 1024
+/** A run's storage, its record and transient state together, over which it fails (the contract's "Limits"). */
+export const STORAGE_LIMIT = 1024 * 1024 * 1024
 /** Each final state and its exit code (the contract's "Exit codes"). */
 /** What OpenCode recorded of an ask's session, read after the run (72.5): its info alone, never its messages. */
 export const OPENCODE_SESSION_INFO = 'session-info.json'
 export const OUTCOME_EXIT = Object.freeze({ answered: 0, failed: 1, interrupted: 1, refused: 10, 'out-of-time': 15, stopped: 16, 'not-attributed': 17 })
+/** A run's own folders and files the outcome no longer needs: deleted on every outcome and by recovery. */
+export const TRANSIENT = Object.freeze([ASK_RUN_FILES.home, ASK_RUN_FILES.project])
 
 export class StartRefusal extends Error {
   constructor(code, message) {
@@ -41,6 +46,59 @@ const readJsonOrNull = (path) => {
     return null
   }
 }
+const fileHash = (path) => {
+  try {
+    return sha256(readFileSync(path))
+  } catch {
+    return null
+  }
+}
+
+/** Every file under a folder, by its path inside it. */
+function filesUnder(folder, base = folder) {
+  let entries
+  try {
+    entries = readdirSync(folder, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  return entries.flatMap((entry) => entry.isDirectory() ? filesUnder(join(folder, entry.name), base) : [relative(base, join(folder, entry.name))])
+}
+
+/**
+ * Why what is about to start is not what the check judged, or null when it is: the command whole,
+ * the prompt and the message on standard input, the inputs' manifest and each picture and project
+ * file it names, and the app's configuration in the run's home, each against the receipt's hashes.
+ */
+export function judgedChange(prepared) {
+  const receipt = prepared.verdict.receipt
+  const folder = prepared.folder
+  if (sha256(canonicalJson(prepared.argv)) !== receipt.argv_sha256) return 'the command is not the one the check judged'
+  if (fileHash(join(folder, ASK_RUN_FILES.prompt)) !== receipt.snapshots?.prompt) return 'the prompt is not the one the check judged'
+  if (receipt.snapshots?.message !== undefined && fileHash(join(folder, ASK_RUN_FILES.message)) !== receipt.snapshots.message) return 'the message on standard input is not the one the check judged'
+  const manifest = readJsonOrNull(join(folder, ASK_RUN_FILES.manifest))
+  if (manifest === null || sha256(canonicalJson(manifest)) !== receipt.inputs_sha256) return 'the inputs\' manifest is not the one the check judged'
+  for (const picture of manifest.pictures ?? []) {
+    if (fileHash(join(folder, ASK_RUN_FILES.inputs, picture.copy)) !== picture.sha256) return `the picture ${picture.label} is not the copy the check judged`
+  }
+  if (manifest.project !== undefined && manifest.project !== null) {
+    const frozen = readJsonOrNull(join(folder, ASK_RUN_FILES.projectManifest))
+    if (frozen === null || sha256(Buffer.from(JSON.stringify(frozen.files))) !== manifest.project.files_sha256) return 'the project\'s manifest is not the one the check judged'
+    for (const file of frozen.files) {
+      if (file.kind === 'file' && fileHash(join(folder, ASK_RUN_FILES.project, file.path)) !== file.sha256) return `the project's ${file.path} is not the copy the check judged`
+    }
+  }
+  const snapshot = join(folder, ASK_RUN_FILES.snapshots, 'config')
+  const hashes = {}
+  for (const path of filesUnder(snapshot)) {
+    const live = fileHash(join(folder, ASK_RUN_FILES.home, path))
+    if (live === null || live !== fileHash(join(snapshot, path))) return `the run's ${path} is not the configuration the check judged`
+    hashes[path] = live
+  }
+  if (sha256(canonicalJson(hashes)) !== receipt.snapshots?.config) return 'the run\'s configuration is not the one the check judged'
+  if (receipt.snapshots?.hosts !== undefined && fileHash(join(folder, ASK_RUN_FILES.snapshots, 'hosts')) !== receipt.snapshots.hosts) return 'the run\'s /etc/hosts is not the one the check judged'
+  return null
+}
 
 /**
  * Starts a judged ask. `prepared`: what `prepareAsk` returned with a PASS. The approved team and the
@@ -50,6 +108,9 @@ const readJsonOrNull = (path) => {
 export function startAsk(prepared, { now = new Date(), timeLimitMinutes = TIME_LIMIT.default, start = startTeamSupervisor, tokenCeiling = null } = {}) {
   const receipt = prepared.verdict.receipt
   const folder = prepared.folder
+  // A run already given its outcome (recorded interrupted while it was prepared) is never started.
+  const ended = readJsonOrNull(join(folder, ASK_RUN_FILES.outcome))
+  if (ended !== null) throw new StartRefusal('CHANGED', `the run already ended (${ended.state}); nothing started`)
   const generation = readApproved()
   if (generation.number !== receipt.generation.number || generation.hash !== receipt.generation.hash) {
     throw new StartRefusal('CHANGED', `the approved team changed after the check (version ${receipt.generation.number} then, ${generation.number} now); nothing started`)
@@ -58,15 +119,22 @@ export function startAsk(prepared, { now = new Date(), timeLimitMinutes = TIME_L
   if (identity === null || !sameProgram(identity, prepared.program)) {
     throw new StartRefusal('CHANGED', 'the app\'s program changed after the check; nothing started')
   }
+  const changed = judgedChange(prepared)
+  if (changed !== null) throw new StartRefusal('CHANGED', `${changed}; nothing started`)
   // An OpenCode run gets its own copy of BMN's OpenCode Go sign-in, for this run alone; its home goes on every outcome (72.5 AC1, AC2).
   if (receipt.harness === 'opencode') {
     const copied = copyGoSignInToRun(join(folder, ASK_RUN_FILES.home, 'oc'), { launcher: prepared.program.launcher, environment: { PATH: '/usr/bin:/bin' } })
     if (!copied.ok) throw new StartRefusal('SIGN_IN_UNAVAILABLE', `${copied.reason}; nothing started`)
+    // The copy ran OpenCode's own program: it must still be the one the check judged.
+    if (!sameProgram(identity, prepared.program)) throw new StartRefusal('CHANGED', 'the app\'s program changed while its sign-in was copied; nothing started')
   }
+  const stdin = join(folder, receipt.snapshots?.message === undefined ? ASK_RUN_FILES.prompt : ASK_RUN_FILES.message)
   const launch = {
-    version: 1, argv: prepared.argv, deadline: now.getTime() + timeLimitMinutes * 60_000, time_limit_minutes: timeLimitMinutes,
+    // The supervisor checks the command and standard input against these hashes again just before it starts them.
+    version: 1, argv: prepared.argv, argv_sha256: receipt.argv_sha256, deadline: now.getTime() + timeLimitMinutes * 60_000, time_limit_minutes: timeLimitMinutes,
     // A picture ask on Claude Code reads the one message the check judged; any other ask its prompt.
-    stdin: join(folder, receipt.snapshots?.message === undefined ? ASK_RUN_FILES.prompt : ASK_RUN_FILES.message), finish: { module: fileURLToPath(import.meta.url), export: 'finishAsk' }, args_fd: true, output_limit: OUTPUT_LIMIT,
+    stdin, stdin_sha256: receipt.snapshots?.message ?? receipt.snapshots?.prompt, finish: { module: fileURLToPath(import.meta.url), export: 'finishAsk' }, args_fd: true, output_limit: OUTPUT_LIMIT,
+    storage_limit: STORAGE_LIMIT, storage_watch: ASK_RUN_FILES.home,
     // The owner's per-ask token ceiling holds where the app reports usage while it runs: Claude Code alone (72.1).
     ...(tokenCeiling !== null && receipt.harness === 'claude' ? { token_ceiling: tokenCeiling, watch: { module: fileURLToPath(import.meta.url), export: 'watchAsk', ends: 'ceiling' } } : {})
   }
@@ -133,6 +201,8 @@ export function observeAsk(folder, harness, request) {
       if (event.type === 'thread.started' && typeof event.thread_id === 'string') sessions.add(event.thread_id)
       if (event.type === 'item.completed' && event.item?.type === 'agent_message' && typeof event.item.text === 'string') answer = event.item.text
       if (event.type === 'turn.failed' || event.type === 'error') failure = event.error?.message ?? event.message ?? 'the app reported an error'
+      // An error Codex recovers from (a stream it reconnects) is followed by a completed turn; one it does not ends the run.
+      if (event.type === 'turn.completed') failure = null
       if (event.type === 'turn.completed' && event.usage !== null && typeof event.usage === 'object') {
         totals ??= { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_tokens: 0 }
         totals.input_tokens = addTokens(totals.input_tokens, event.usage.input_tokens)
@@ -234,7 +304,9 @@ export function observeAsk(folder, harness, request) {
   const others = [...sessions].filter((id) => id !== observed.session)
   if (observed.session !== null && others.length > 0) problems.push(`the run named a second session, ${others[0]}`)
   const names = [request.model, ...(request.aliases ?? [])]
-  if (observed.model !== null && !names.includes(observed.model)) problems.push(`the app ran ${observed.model}, not ${request.model}`)
+  // An answer is attributed to the model that gave it: a run whose model nothing names is not attributed (R72-NFR7).
+  if (observed.model === null) problems.push(`nothing in the run names its model (${observed.model_source ?? 'unknown'})`)
+  else if (!names.includes(observed.model)) problems.push(`the app ran ${observed.model}, not ${request.model}`)
   if (observed.effort !== null && observed.effort !== request.effort) problems.push(`the app ran at ${observed.effort}, not ${request.effort}`)
   return { observed, answer, failure, usage, rateLimit, problems }
 }
@@ -260,6 +332,24 @@ function recordOpenCodeSession(folder) {
  * attributed is kept only as diagnostic evidence, never as the answer.
  */
 export function finishAsk(folder) {
+  try {
+    finishRun(folder)
+  } catch (error) {
+    // A finish that fails still ends the run: an outcome that says so, and its transient state gone.
+    if (!existsSync(join(folder, ASK_RUN_FILES.outcome))) {
+      const request = readJsonOrNull(join(folder, ASK_RUN_FILES.request)) ?? {}
+      writeWhole(join(folder, ASK_RUN_FILES.outcome), `${JSON.stringify({ version: 1, id: request.id ?? null, state: 'failed', exit: OUTCOME_EXIT.failed, reason: `BMN could not finish the run: ${error instanceof Error ? error.message : String(error)}`, ended_at: new Date().toISOString() }, null, 2)}\n`)
+    }
+    throw error
+  } finally {
+    for (const part of TRANSIENT) rmSync(join(folder, part), { recursive: true, force: true })
+    rmSync(join(folder, RUN_FILES.stop), { force: true })
+    // Its capacity place is given back (agents-team-places.mjs placePath), once its outcome is written.
+    rmSync(join(dirname(folder), '.places', `${basename(folder)}.json`), { force: true })
+  }
+}
+
+function finishRun(folder) {
   const request = readJsonOrNull(join(folder, ASK_RUN_FILES.request)) ?? {}
   const receipt = readJsonOrNull(join(folder, ASK_RUN_FILES.receipt)) ?? {}
   const exit = readJsonOrNull(join(folder, RUN_FILES.exit)) ?? { ended: 'failed' }
@@ -288,9 +378,19 @@ export function finishAsk(folder) {
   } else if (exit.ended === 'output') {
     outcome = 'failed'
     reason = `the app's output went over ${OUTPUT_LIMIT / 1024 / 1024} MiB`
+  } else if (exit.ended === 'storage') {
+    outcome = 'failed'
+    reason = `the run's storage went over ${STORAGE_LIMIT / 1024 / 1024 / 1024} GiB`
+  } else if (exit.ended === 'changed') {
+    outcome = 'refused'
+    reason = exit.reason ?? 'what was judged changed before the start; nothing started'
   } else if (seen.answer === null || seen.answer.trim() === '') {
     outcome = 'failed'
     reason = seen.failure ?? (exit.code === 0 ? 'the app ended without an answer' : `the app ended with code ${exit.code ?? exit.signal ?? 'unknown'}`)
+  } else if (seen.failure !== null || exit.code !== 0) {
+    // Text before a failure is no answer: the app said it failed, or ended with an error code.
+    outcome = 'failed'
+    reason = seen.failure ?? `the app ended with code ${exit.code ?? exit.signal ?? 'unknown'}`
   } else if (seen.problems.length > 0) {
     outcome = 'not-attributed'
     reason = seen.problems.join('; ')
@@ -304,17 +404,14 @@ export function finishAsk(folder) {
     const text = seen.answer.endsWith('\n') ? seen.answer : `${seen.answer}\n`
     writeWhole(join(folder, outcome === 'answered' ? ASK_RUN_FILES.answer : 'diagnostic-answer.md'), text)
   }
+  // The transient state goes before the outcome is written: a crash between the two leaves a run recovery finishes, never a sign-in behind an outcome.
+  for (const part of TRANSIENT) rmSync(join(folder, part), { recursive: true, force: true })
   writeWhole(join(folder, ASK_RUN_FILES.outcome), `${JSON.stringify({
     version: 1, id: request.id ?? null, state: outcome, exit: OUTCOME_EXIT[outcome], ...(reason === null ? {} : { reason }),
     requested: { agent: request.agent ?? null, model: request.model ?? null, effort: request.effort ?? null },
     observed: seen.observed, usage: seen.usage, ...(seen.rateLimit === null ? {} : { rate_limit: seen.rateLimit }), problems: seen.problems,
     started_at: state.started_at ?? null, ended_at: exit.at ?? new Date().toISOString(), time_limit_minutes: readJsonOrNull(join(folder, RUN_FILES.launch))?.time_limit_minutes ?? null
   }, null, 2)}\n`)
-  // The transient state goes on every outcome: the run's app home (its sign-in's mount point, sessions, bookkeeping) and its frozen project.
-  for (const part of [ASK_RUN_FILES.home, ASK_RUN_FILES.project]) rmSync(join(folder, part), { recursive: true, force: true })
-  rmSync(join(folder, RUN_FILES.stop), { force: true })
-  // Its capacity place is given back (agents-team-places.mjs placePath), once its outcome is written.
-  rmSync(join(dirname(folder), '.places', `${basename(folder)}.json`), { force: true })
 }
 
 /** What the token ceiling has seen of each run this process watches: where it read to, and each model call's tokens. */
@@ -362,7 +459,8 @@ export function askOutcome(folder) {
   const outcome = readJsonOrNull(join(folder, ASK_RUN_FILES.outcome))
   if (outcome !== null) return outcome
   const now = runState(folder)
-  return { version: 1, state: now.state === 'unknown' ? 'accepted' : now.state, exit: null }
+  // A supervisor that ended with no outcome written (its finish step failed) leaves an interrupted run, never one still going.
+  return { version: 1, state: now.state === 'unknown' ? 'accepted' : now.state === 'ended' ? 'interrupted' : now.state, exit: null }
 }
 
 /** Waits for a run's outcome, up to `timeoutMs`; returns what is known then. */

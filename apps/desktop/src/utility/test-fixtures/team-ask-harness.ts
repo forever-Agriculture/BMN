@@ -1,5 +1,6 @@
 // MODULE: team-ask-harness.ts - Epic 72 test harness: an isolated home with a synthetic approved team, made-up sign-in files and stand-in Codex and Claude Code apps written in sh that run inside BMN's real container; no provider is reached
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { createServer, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -161,4 +162,34 @@ export function leftovers(home: string): string[] {
 export async function settle(check: () => boolean, ms = 8000): Promise<void> {
   const until = Date.now() + ms
   while (!check() && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 100))
+}
+
+/** The made-up MAC every test session token carries; the stand-in control service accepts only it. */
+export const TOKEN_MAC = 'a'.repeat(64)
+
+/**
+ * A stand-in for BMN's control service at `path`: it answers `auth` as control-auth.ts does, a
+ * session token `s1.<session>.<incarnation>.<TOKEN_MAC>` naming its session and any other refused.
+ */
+export async function standInControl(path: string): Promise<Server> {
+  mkdirSync(join(path, '..'), { recursive: true })
+  const server = createServer((socket) => {
+    let buffer = ''
+    socket.setEncoding('utf8')
+    socket.on('error', () => undefined)
+    socket.on('data', (chunk: string) => {
+      buffer += chunk
+      const newline = buffer.indexOf('\n')
+      if (newline === -1) return
+      const request = JSON.parse(buffer.slice(0, newline)) as { id: number; method: string; params?: { token?: string } }
+      const parts = /^s1\.([A-Za-z0-9_:-]{1,128})\.([A-Za-z0-9_:-]{1,128})\.([0-9a-f]{64})$/.exec(request.params?.token ?? '')
+      if (request.method === 'auth' && parts !== null && parts[3] === TOKEN_MAC) {
+        socket.end(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { scope: 'session', sessionId: parts[1] } })}\n`)
+      } else {
+        socket.end(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32001, message: 'Invalid credential', data: { code: 'UNAUTHORIZED' } } })}\n`)
+      }
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(path, resolve))
+  return server
 }
