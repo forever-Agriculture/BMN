@@ -2895,7 +2895,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     if (manifest.pictures.length > 0 && ASK_UNSUPPORTED[agent.harness]?.pictures !== undefined) refuse('ACCESS_UNAVAILABLE', ASK_UNSUPPORTED[agent.harness].pictures)
 
     // The form: the app's one read-only form, OpenCode's asker where it may read nothing but the asker's text.
-    const form = askFormName(agent.harness, { project, label })
+    const form = askFormName(agent.harness, { project, label, textOnly: publicOnlyReasons(agent, data).length > 0 })
     if (manifest.form !== form) refuse('WORKSPACE_MISMATCH', `the ask's manifest names the form ${manifest.form}, not ${form}`)
     // A public ask goes only through a form that reads nothing beyond the asker's text (R72-NFR5).
     if (label === 'public' && ASK_READS[form].scope !== 'text') refuse('PUBLIC_NOT_VERIFIED', `${agent.id} works with ${appName(agent.harness)}'s own tools, which read beyond what you hand over, so its asks are private (R72-NFR5)`)

@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { evaluate, evaluateAsk, teamRunsDirectory, visibilityPath } from '../../bin/agents-check.mjs'
-import { ASK_READS, ASK_RUN_FILES, CLAUDE_ASK_TOOLS } from '../../bin/agents-team-forms.mjs'
+import { ASK_READS, ASK_RUN_FILES, CLAUDE_ASK_TOOLS, askFormName } from '../../bin/agents-team-forms.mjs'
 import { InputRefusal, LIMITS, askProject, checkQuestion, credentialHits, maskCredentials, maskedNames, textFile } from '../../bin/agents-team-inputs.mjs'
 import { ACCESS_GONE, AskUsageError, WIDE_READ_GONE, filePrompt, prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { AskRefusal, resolveTeammate } from '../../bin/agents-team-resolve.mjs'
@@ -427,6 +427,26 @@ describe('an ask made ready and judged (72.2 AC2-AC5, 72.9 AC1, AC4)', () => {
     expect(go({ files: [join(root, 'src/retry.ts')] }, ).verdict.receipt).toMatchObject({ project: null })
     writeFileSync(join(root, 'src/retry.ts'), 'changed\n')
     expect(refusal(() => go({ files: [join(root, 'src/retry.ts')] })).message).toContain('is not byte-identical to src/retry.ts')
+  })
+
+  it('a private ask to an OpenCode teammate whose provider takes public work only gets only the asker\'s text, which a folder exception can cover (72.6\'s measured route)', () => {
+    const root = makeProject()
+    stubOpenCode(stubs)
+    goSignInInBmnFolder(home)
+    const team = EXAMPLE.replace('## roles', '## luna-go\n\n```yaml\nname: Luna (Go)\nclass: pawn\nharness: opencode\nmodel: gpt-6-luna\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [high]\nroles: [helper]\n```\n\n## roles')
+      .replace('helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max], then: lead}', 'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna-go@high, luna@max], then: lead}')
+    approve(team)
+    const go = () => ask({ role: 'helper', agent: 'luna-go', effort: 'high', files: [join(root, 'src/retry.ts')] }, { cwd: root })
+    // Without a folder exception its private work is refused, as before.
+    expect(refusal(go).message).toContain('OpenCode Go gets public work only')
+    // With one for the project, the question and the file are covered; OpenCode's reader, which could follow a link out, is not used.
+    approve(team.replace('zai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}', `zai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}\ngo-app: {provider: opencode-go, folder: ${root}}`))
+    const asked = go()
+    expect(asked.verdict).toMatchObject({ verdict: 'PASS', receipt: { agent: 'luna-go', form: 'opencode-asker', data: 'private', consent: [{ kind: 'question', basis: 'exception go-app' }, { kind: 'file', basis: 'exception go-app' }] } })
+    expect(asked.argv).toContain('bmn-ask-asker')
+    // A teammate whose provider takes private work still gets the reader in a project.
+    expect(askFormName('opencode', { project: root, label: 'private' })).toBe('opencode-reader')
+    expect(askFormName('opencode', { project: root, label: 'private', textOnly: true })).toBe('opencode-asker')
   })
 
   it('the check refuses a command other than the one it builds, another folder, a changed prompt and a folder BMN did not make', () => {

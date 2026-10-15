@@ -101,11 +101,16 @@ export function askProgram(harness, environment = process.env) {
   return { launcher, payload: real }
 }
 
-/** The name of the form an ask gets: the app's one form, and OpenCode's asker where it may read nothing but the asker's text. */
-export function askFormName(harness, { project, label }) {
+/**
+ * The name of the form an ask gets: the app's one form, and OpenCode's asker where it may read nothing but the
+ * asker's text: a public ask, an ask with no project, and a private ask to a teammate whose provider takes public
+ * work only (`textOnly`). OpenCode's reader can read beyond the project (its tracked links), which no folder
+ * exception covers, so there only the asker's text, which an exception can cover, is given (72.6's measured route).
+ */
+export function askFormName(harness, { project, label, textOnly = false }) {
   if (harness === 'codex') return 'codex-read-only'
   if (harness === 'claude') return 'claude-read-tools'
-  return project !== null && label === 'private' ? 'opencode-reader' : 'opencode-asker'
+  return project !== null && label === 'private' && !textOnly ? 'opencode-reader' : 'opencode-asker'
 }
 
 const pairs = (environment) => Object.entries(environment).map(([name, value]) => `${name}=${value}`)

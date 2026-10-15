@@ -13,7 +13,7 @@ export interface AskCommandRequest { form: AskFormName; model: string; provider?
 export interface AskCommand { argv: string[]; environment: Record<string, string>; command: string[]; cwd: string; stdin: 'text' | 'stream-json' }
 export declare function appSearchPath(environment?: NodeJS.ProcessEnv | Record<string, string>): string
 export declare function askProgram(harness: string, environment?: NodeJS.ProcessEnv | Record<string, string>): AskProgram | null
-export declare function askFormName(harness: string, options: { project: string | null; label: string }): AskFormName
+export declare function askFormName(harness: string, options: { project: string | null; label: string; textOnly?: boolean }): AskFormName
 export declare function askCommand(harness: string, program: AskProgram, request: AskCommandRequest): AskCommand
 export declare function claudePictureMessage(pictures: { media_type: string; bytes: Buffer }[], prompt: string): string
 export interface ProgramFile { path: string; real: string; sha256: string; link: string | null; dev: string; ino: string; size: string; mtime_ns: string; ctime_ns: string }

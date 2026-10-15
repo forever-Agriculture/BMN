@@ -138,7 +138,8 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     named.push({ kind: 'picture', label: picture.path, root, relative: relative(root, picture.real), sha256: picture.sha256 })
   }
   // What a candidate's form reads besides: the project it works in, and whatever its mode reaches beyond (72.9 AC1).
-  const formOf = (agent) => askFormName(agent.harness, { project, label })
+  // A teammate whose provider takes public work only reads only the text its folder exceptions can cover.
+  const formOf = (agent) => askFormName(agent.harness, { project, label, textOnly: publicOnlyReasons(agent, data).length > 0 })
   const inputsOf = (agent) => (project !== null && ASK_READS[formOf(agent)].scope !== 'text' ? [...named, { kind: 'project', label: `the project ${project}`, root: project }] : named)
 
   // The teammate, judged for these inputs and what its app's mode can read.
