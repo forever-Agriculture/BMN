@@ -2423,7 +2423,7 @@ the provider accepts (`records/signin/renewal-bmn-form-20261015T023552Z`).
 Codex logs that turn span only with `RUST_LOG=codex_core=info,codex_core::stream_events_utils=debug`;
 that log holds no prompt or answer text. Usage reads as observed tokens, reported cost and billing
 basis (subscription, key), each "unknown" where the app does not record it, never zero. A per-ask
-token ceiling (Preferences) applies to Claude Code only, the one app that reports usage while a run
+token ceiling (`token_ceiling` in `team/asks-settings.json`, below) applies to Claude Code only, the one app that reports usage while a run
 goes on: its supervisor counts each model call's input, cache and output tokens at that call's last
 report, about once a second, and over the ceiling the run is stopped (exit 16) with the count and the
 ceiling as its reason. For Codex and OpenCode time and capacity are the only bounds.
@@ -2492,7 +2492,7 @@ says `not-enabled` until the owner enables one in the Team view; `pictures` is t
 | Answer kept | 1 MiB; the app's raw output 64 MiB, over it the run fails | |
 | Run storage | 1 GiB, the run's whole folder (inputs, frozen copy, home, record, its output and error logs), the bytes its files hold, links not followed: measured before the start, every second while it runs and once more when the container ends; over it the run fails, nothing started when it is over before the start. A watched limit, not a disk quota: a run can go past it by what it writes in about four seconds, one between measurements and up to three while its container is made to end | |
 | Time | 30 minutes; 1 to 120 with `--time-limit` | assumption (b) |
-| Capacity | 4 runs at once across BMN; 1 to 10 in Preferences (`team/asks-settings.json` `capacity`) | assumption (c) |
+| Capacity | 4 runs at once across BMN; 1 to 10 as `capacity` in `team/asks-settings.json` in BMN's state folder, beside `team/runs`; no screen sets it (owner, 2026-10-15: asks are the agents' layer). The same file's `token_ceiling` sets Claude Code's per-ask token ceiling; none by default | assumption (c) |
 | Key window | until the end of the 8th UTC day after the day the key names: at least 7 days from its first use | a lead's retries happen within its run |
 | Retention | 30 days after a run ends; a content-free entry (key, request hash, outcome) stays for the key window after removal | assumption (e) |
 
