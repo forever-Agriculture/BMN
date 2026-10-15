@@ -126,7 +126,7 @@ export function startChange(prepared, phase = 'check') {
 }
 
 /**
- * The supervisor's last check before the container (its launch's `check` step): the run's receipt as
+ * The supervisor's last check before the container, run for every launch: the run's receipt as
  * the check wrote it, the command the launch holds, the team read from the asker's own home, and the
  * program at the paths its identity names. Returns why it may not start, or null.
  */
@@ -170,8 +170,8 @@ export function startAsk(prepared, { now = new Date(), timeLimitMinutes = TIME_L
     version: 1, argv: prepared.argv, argv_sha256: receipt.argv_sha256, deadline: now.getTime() + timeLimitMinutes * 60_000, time_limit_minutes: timeLimitMinutes,
     // A picture ask on Claude Code reads the one message the check judged; any other ask its prompt.
     stdin, stdin_sha256: receipt.snapshots?.message ?? receipt.snapshots?.prompt, finish: { module: fileURLToPath(import.meta.url), export: 'finishAsk' }, args_fd: true, output_limit: OUTPUT_LIMIT,
-    // The supervisor's own last check before the container, with the team read from the asker's home; the run's storage, all of its folder.
-    check: { module: fileURLToPath(import.meta.url), export: 'launchCheck' }, state_home: homedir(), storage_limit: STORAGE_LIMIT,
+    // The home where the supervisor's last check (launchCheck, always run) reads the team; the run's storage, all of its folder.
+    state_home: homedir(), storage_limit: STORAGE_LIMIT,
     // The owner's per-ask token ceiling holds where the app reports usage while it runs: Claude Code alone (72.1).
     ...(tokenCeiling !== null && receipt.harness === 'claude' ? { token_ceiling: tokenCeiling, watch: { module: fileURLToPath(import.meta.url), export: 'watchAsk', ends: 'ceiling' } } : {})
   }

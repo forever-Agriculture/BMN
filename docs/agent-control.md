@@ -2448,7 +2448,7 @@ says `not-enabled` until the owner enables one in the Team view; `pictures` is t
 | Pictures | 8 per ask, each 5 MiB, 8,000 px a side and 33.2 million pixels once drawn (an 8K screen, 7680x4320); PNG, JPEG, WebP | the providers' own image limits; the pixel bound keeps a small file from unfolding into gigabytes in the app |
 | Project | 20,000 files, 200 MiB, each file 10 MiB, the tracked ones and those named with `--file` together; history the newest commits of the checked-out revision, at most 1,000 (where history branches, a depth of 1,000 holds more, so the depth is made smaller until the count is inside), 500 MiB of objects | an ask reads a project, not a monorepo's every blob |
 | Answer kept | 1 MiB; the app's raw output 64 MiB, over it the run fails | |
-| Run storage | 1 GiB, the run's whole folder (inputs, frozen copy, home, record, its output and error logs), the bytes its files hold, links not followed: measured before the start, every second while it runs and once more when the container ends; over it the run fails, nothing started when it is over before the start. A watched limit, not a disk quota: a run can go past it by what it writes in one second | |
+| Run storage | 1 GiB, the run's whole folder (inputs, frozen copy, home, record, its output and error logs), the bytes its files hold, links not followed: measured before the start, every second while it runs and once more when the container ends; over it the run fails, nothing started when it is over before the start. A watched limit, not a disk quota: a run can go past it by what it writes in about four seconds, one between measurements and up to three while its container is made to end | |
 | Time | 30 minutes; 1 to 120 with `--time-limit` | assumption (b) |
 | Capacity | 4 runs at once across BMN; 1 to 10 in Preferences (`team/asks-settings.json` `capacity`) | assumption (c) |
 | Key window | until the end of the 8th UTC day after the day the key names: at least 7 days from its first use | a lead's retries happen within its run |
@@ -2472,7 +2472,7 @@ the very bytes it checked; inside the container the configuration BMN wrote is r
 fails still writes a failed outcome and deletes the transient state) → one of `answered`, `failed`,
 `refused`, `out-of-time`, `stopped`, `not-attributed`; `interrupted` (exit 1) when the supervisor ended with
 no record of the end or with no outcome written, or the asking command ended after the reservation and before the start (nothing
-starts it again, and its transient state is deleted when BMN next looks); `gone` after removal, for the key window.
+starts it again, and when BMN next looks (the next ask, `bmn team asks`, show, wait) its transient state is deleted and whatever its container left running is ended: bubblewrap by the identity its supervisor recorded, and every process whose mounts show this run's home); `gone` after removal, for the key window.
 These are complete integrity checks before the start, not a seal: the container reads the run's own
 copies, never the owner's live files, and a program of the owner's own user that rewrites them after
 the supervisor's last check, while the run goes on, is not stopped by them.

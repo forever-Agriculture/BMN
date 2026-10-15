@@ -504,6 +504,8 @@ export async function runTeamAsks(argv, { environment = process.env, cwd = proce
       if (flags.some((flag) => flag !== '--json')) throw new AgentsUsageError(`unknown option ${flags.find((flag) => flag !== '--json')}`)
       if (asker.kind === 'forged' || asker.kind === 'unproven') throw askerRefusal(asker, 'a session sees only its own asks')
       const asks = ownAsks(asker).map((folder) => {
+        // A run whose supervisor died is recorded as interrupted when it is listed, as when it is looked at.
+        if (askOutcome(folder).state === 'interrupted') recordInterrupted(folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
         const shown = askJson(folder)
         return { id: shown.id, state: shown.state, role: shown.role, agent: shown.teammate.agent, project: shown.project, started_at: shown.started_at, ended_at: shown.ended_at }
       })
@@ -525,6 +527,10 @@ export async function runTeamAsks(argv, { environment = process.env, cwd = proce
       const seconds = at === -1 ? null : Number(rest[at + 1])
       if (seconds !== null && !(seconds >= 0)) throw new AgentsUsageError('--timeout takes seconds')
       const outcome = await waitAsk(folder, { timeoutMs: seconds === null ? Number.POSITIVE_INFINITY : seconds * 1000 })
+      if (outcome.state === 'interrupted' && outcome.exit === null) {
+        recordInterrupted(folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
+        return printOutcome(folder, asJson)
+      }
       if (outcome.exit === null) {
         if (asJson) out(JSON.stringify({ version: 1, id, state: outcome.state, exit: null }))
         else err(`bmn: ask ${id} is ${outcome.state}`)

@@ -10,6 +10,8 @@ import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { StartRefusal, askOutcome, exportAsk, finishAsk, observeAsk, startAsk, stopAsk, waitAsk } from '../../bin/agents-team-run.mjs'
 import { runState, startTeamSupervisor } from '../../bin/agents-team-supervisor.mjs'
 import { askJson } from '../../bin/agents-team-cli.mjs'
+import { recordInterrupted } from '../../bin/agents-team-places.mjs'
+import { processStart } from '../../bin/agents-supervised.mjs'
 import { ENV_SENTINEL, EXAMPLE, SIGN_IN_SENTINEL, approve as harnessApprove, leftovers as harnessLeftovers, settle, stubCodex as harnessStubCodex, teamAskHome } from './test-fixtures/team-ask-harness'
 
 const CLI = fileURLToPath(new URL('../../bin/agents-team-cli.mjs', import.meta.url))
@@ -26,6 +28,19 @@ const leftovers = (): string[] => harnessLeftovers(home)
 
 
 const ask = (request: Partial<Parameters<typeof prepareAsk>[0]>) => prepareAsk({ role: 'epic-reviewer', question: 'Is the loop bounded?', ...request }, { environment: env, cwd: home, home })
+/** A small synthetic project with one commit, made once per test. */
+const projectRoot = (): string => {
+  const root = join(home, 'code/app')
+  if (existsSync(join(root, '.git'))) return root
+  mkdirSync(join(root, 'src'), { recursive: true })
+  writeFileSync(join(root, 'src/a.ts'), 'export const a = 1\n')
+  const git = (...args: string[]): string => execFileSync('git', ['-c', 'user.name=made-up', '-c', 'user.email=made-up@example.test', ...args], { cwd: root, encoding: 'utf8' })
+  git('init', '-q', '-b', 'main')
+  git('add', '.')
+  git('commit', '-q', '-m', 'test: one')
+  return root
+}
+const projectAsk = () => ask({ access: 'project', project: projectRoot() })
 beforeEach(() => {
   ({ home, stubs, env } = teamAskHome('bmn-team-run-'))
 })
@@ -126,9 +141,24 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
     const started = startAsk(prepared, { timeLimitMinutes: 2 })
     await settle(() => askOutcome(prepared.folder).state === 'running')
     process.kill(started.pid, 'SIGKILL')
+    await settle(() => askOutcome(prepared.folder).state === 'interrupted')
+    expect(askOutcome(prepared.folder)).toMatchObject({ state: 'interrupted', exit: null })
+    // Under load bubblewrap can miss its parent's death in its first instant (it sets --die-with-parent itself, after
+    // it starts): whoever looks at the run next ends what it left, by the identity the supervisor recorded (epic acceptance).
+    recordInterrupted(prepared.folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
     await settle(() => leftovers().length === 0)
     expect(leftovers()).toEqual([])
-    expect(askOutcome(prepared.folder)).toMatchObject({ state: 'interrupted', exit: null })
+    expect(askOutcome(prepared.folder)).toMatchObject({ state: 'interrupted', exit: 1 })
+    // The same with a container that certainly outlived its supervisor: a process group of its own, named as the run's child.
+    const orphaned = ask({ question: 'Is it bounded? SLEEP' })
+    const left = spawn('/bin/sh', ['-c', `exec /bin/sleep 30 # ${orphaned.folder}`], { detached: true, stdio: 'ignore' })
+    left.unref()
+    await settle(() => processStart(left.pid as number) !== null, 2000)
+    writeFileSync(join(orphaned.folder, 'state.json'), JSON.stringify({ version: 1, state: 'running', supervisor: { pid: 999_999_999, start: '1' }, child: { pid: left.pid, start: processStart(left.pid as number) } }))
+    expect(askOutcome(orphaned.folder).state).toBe('interrupted')
+    recordInterrupted(orphaned.folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
+    await settle(() => processStart(left.pid as number) === null, 3000)
+    expect(processStart(left.pid as number)).toBeNull()
   })
 
   it('closing the asking command only detaches it: the run goes on to its answer (AC3)', async () => {
@@ -196,47 +226,32 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
     expect(existsSync(join(latePrompt.folder, 'home'))).toBe(false)
   })
 
-  it('a run whose storage grows over its limit is ended and fails (epic review)', async () => {
-    const folder = join(home, 'storage')
-    mkdirSync(join(folder, 'home'), { recursive: true })
-    writeFileSync(join(folder, 'launch.json'), JSON.stringify({ version: 1, argv: ['/bin/sh', '-c', `/usr/bin/head -c 3000000 /dev/zero > ${join(folder, 'home/big')}; exec /bin/sleep 20`],
-      deadline: Date.now() + 60_000, stdin: null, finish: null, storage_limit: 1_000_000 }))
-    expect(startTeamSupervisor(folder)).toMatchObject({ pid: expect.any(Number) })
-    await settle(() => runState(folder).state === 'ended', 15_000)
-    expect(JSON.parse(readFileSync(join(folder, 'exit.json'), 'utf8'))).toMatchObject({ ended: 'storage', reason: expect.stringContaining('over 1000000') })
+  it('a run whose storage grows over its limit is ended and fails: its home, its logs, a short run at its end, a folder over it before the start (epic review)', async () => {
+    // A judged ask with a stand-in app that only writes, its launch given a small storage ceiling (the shipped one is 1 GiB).
+    const run = async (body: string, before: (folder: string) => void = () => undefined): Promise<Record<string, unknown>> => {
+      writeFileSync(join(stubs, 'codex'), `#!/bin/sh\n[ "$1" = --version ] && echo "codex-cli 0.162.1" && exit 0\ncat >/dev/null\n${body}\n`, { mode: 0o755 })
+      const prepared = ask({})
+      expect(prepared.verdict.verdict).toBe('PASS')
+      startAsk(prepared, { timeLimitMinutes: 2, start: () => ({ pid: 1, start: '1' }) })
+      const launch = JSON.parse(readFileSync(join(prepared.folder, 'launch.json'), 'utf8'))
+      writeFileSync(join(prepared.folder, 'launch.json'), JSON.stringify({ ...launch, storage_limit: 1_000_000 }))
+      before(prepared.folder)
+      expect(startTeamSupervisor(prepared.folder)).toMatchObject({ pid: expect.any(Number) })
+      await settle(() => runState(prepared.folder).state === 'ended', 20_000)
+      expect(askOutcome(prepared.folder)).toMatchObject({ state: 'failed', exit: 1, reason: 'the run\'s storage went over 1 GiB' })
+      return JSON.parse(readFileSync(join(prepared.folder, 'exit.json'), 'utf8'))
+    }
+    expect(await run('/usr/bin/head -c 3000000 /dev/zero > /ask/home/big; exec /bin/sleep 20')).toMatchObject({ ended: 'storage', started: true, reason: expect.stringContaining('over 1000000') })
     // The run's own logs count too: output under the output bound that takes the whole folder over its storage (epic review recheck).
-    const logs = join(home, 'storage-logs')
-    mkdirSync(join(logs, 'home'), { recursive: true })
-    writeFileSync(join(logs, 'launch.json'), JSON.stringify({ version: 1, argv: ['/bin/sh', '-c', '/usr/bin/head -c 1500000 /dev/zero; /usr/bin/head -c 10 /dev/zero >&2; exec /bin/sleep 20'],
-      deadline: Date.now() + 60_000, stdin: null, finish: null, output_limit: 64 * 1024 * 1024, storage_limit: 1_000_000 }))
-    startTeamSupervisor(logs)
-    await settle(() => runState(logs).state === 'ended', 15_000)
-    expect(JSON.parse(readFileSync(join(logs, 'exit.json'), 'utf8'))).toMatchObject({ ended: 'storage', started: true })
-    // A short run that ends between two measurements is measured once more at its end; a folder over the limit before the start starts nothing.
-    const short = join(home, 'storage-short')
-    mkdirSync(short, { recursive: true })
-    writeFileSync(join(short, 'launch.json'), JSON.stringify({ version: 1, argv: ['/bin/sh', '-c', '/usr/bin/head -c 1500000 /dev/zero'], deadline: Date.now() + 60_000, stdin: null, finish: null, storage_limit: 1_000_000 }))
-    startTeamSupervisor(short)
-    await settle(() => runState(short).state === 'ended', 15_000)
-    expect(JSON.parse(readFileSync(join(short, 'exit.json'), 'utf8'))).toMatchObject({ ended: 'storage', started: true })
-    const full = join(home, 'storage-full')
-    mkdirSync(full, { recursive: true })
-    writeFileSync(join(full, 'big'), Buffer.alloc(1_200_000))
-    writeFileSync(join(full, 'launch.json'), JSON.stringify({ version: 1, argv: ['/bin/sh', '-c', `/usr/bin/touch ${join(full, 'ran')}`], deadline: Date.now() + 60_000, stdin: null, finish: null, storage_limit: 1_000_000 }))
-    startTeamSupervisor(full)
-    await settle(() => runState(full).state === 'ended', 15_000)
-    expect(JSON.parse(readFileSync(join(full, 'exit.json'), 'utf8'))).toMatchObject({ ended: 'storage', started: false })
-    expect(existsSync(join(full, 'ran'))).toBe(false)
+    expect(await run('/usr/bin/head -c 1500000 /dev/zero; exec /bin/sleep 20')).toMatchObject({ ended: 'storage', started: true })
+    // A short run that ends between two measurements is measured once more at its end.
+    expect(await run('/usr/bin/head -c 1500000 /dev/zero')).toMatchObject({ ended: 'storage', started: true })
+    // A folder over the limit before the start starts nothing.
+    expect(await run('/usr/bin/touch /ask/home/ran', (folder) => writeFileSync(join(folder, 'big'), Buffer.alloc(1_200_000)))).toMatchObject({ ended: 'storage', started: false })
   })
 
   it('everything the container binds is the judged copy: the git wrapper, the frozen history, a link or an added configuration file starts nothing (epic review R6)', () => {
-    const root = join(home, 'code/app')
-    mkdirSync(join(root, 'src'), { recursive: true })
-    writeFileSync(join(root, 'src/a.ts'), 'export const a = 1\n')
-    const git = (...args: string[]): string => execFileSync('git', ['-c', 'user.name=made-up', '-c', 'user.email=made-up@example.test', ...args], { cwd: root, encoding: 'utf8' })
-    git('init', '-q', '-b', 'main')
-    git('add', '.')
-    git('commit', '-q', '-m', 'test: one')
+    const root = projectRoot()
     const cases: Array<[string, (folder: string) => void, RegExp]> = [
       ['wrapper', (folder) => writeFileSync(join(folder, 'inputs/bin/git'), '#!/bin/sh\nexec /usr/bin/git "$@"\n'), /the run's inputs\/bin\/git is not the one the check judged; nothing started/],
       ['history', (folder) => appendFileSync(join(folder, 'project/.git/config'), '[core]\n\tfsmonitor = /usr/bin/true\n'), /the run's project\/\.git\/config is not the one the check judged/],
@@ -256,6 +271,18 @@ describe.skipIf(!canContain)('an ask run in BMN\'s container (72.3)', { timeout:
     const cases: Array<[string, ReturnType<typeof ask>, (folder: string) => void, RegExp]> = [
       ['hosts', ask({ role: 'designer' }), (folder) => writeFileSync(join(folder, 'snapshots/hosts'), '127.0.0.1\tlocalhost\n'), /\/etc\/hosts is not the one the check judged; nothing started/],
       ['configuration', ask({}), (folder) => writeFileSync(join(folder, 'home/codex/config.toml'), 'model_provider = "elsewhere"\n'), /codex\/config\.toml is not the configuration the check judged; nothing started/],
+      // The last check is BMN's own: a launch file that names none, or another, still gets it (epic review recheck).
+      ['configuration, no check named', ask({}), (folder) => {
+        const launch = JSON.parse(readFileSync(join(folder, 'launch.json'), 'utf8'))
+        writeFileSync(join(folder, 'launch.json'), JSON.stringify({ ...launch, check: null, storage_limit: launch.storage_limit }))
+        writeFileSync(join(folder, 'home/codex/config.toml'), 'model_provider = "elsewhere"\n')
+      }, /codex\/config\.toml is not the configuration the check judged; nothing started/],
+      ['wrapper, another check named', projectAsk(), (folder) => {
+        const launch = JSON.parse(readFileSync(join(folder, 'launch.json'), 'utf8'))
+        writeFileSync(join(folder, 'launch.json'), JSON.stringify({ ...launch, check: { module: '/usr/bin/true', export: 'none' } }))
+        writeFileSync(join(folder, 'inputs/bin/git'), '#!/bin/sh\nexec /usr/bin/git "$@"\n')
+      }, /the run's inputs\/bin\/git is not the one the check judged; nothing started/],
+      // Last: a new approval changes the team for every run prepared before it.
       ['team', ask({}), () => approve(EXAMPLE), /the approved team changed after the check/]
     ]
     for (const [name, prepared, change, words] of cases) {

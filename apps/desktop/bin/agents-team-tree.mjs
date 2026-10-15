@@ -14,9 +14,9 @@ export const TREE_ROOTS = Object.freeze(['home', 'inputs', 'project', 'snapshots
 
 /**
  * What an app may add to its home after the check, by its harness: OpenCode's sign-in import at the
- * start writes its database, its log and its empty folders into the run's own OpenCode folders
- * (measured on 2.0.29); nothing else. Configuration, BMN's ripgrep copy and every file present at
- * the check stay covered.
+ * start writes its database and its log, and makes folders, in the run's own OpenCode folders
+ * (measured on 2.0.29). Only additions: a file it names may appear or change, a folder may only
+ * appear; every entry the check judged, folders and their permission bits included, stays as it was.
  */
 const ALLOWANCES = Object.freeze({
   opencode: (path, entry) => (entry.type === 'dir' && path.startsWith('home/oc/'))
@@ -37,11 +37,9 @@ function entryOf(path) {
 
 /**
  * The run's manifest: every entry under its bound roots, sorted, nothing followed through a link;
- * a root that is not there is recorded as absent. With `harness`, what that app may add after the
- * check is left out (`kept`). Throws TreeUnreadable on an entry it cannot read or type.
+ * a root that is not there is recorded as absent. Throws TreeUnreadable on an entry it cannot read or type.
  */
-export function runTree(folder, { harness = null } = {}) {
-  const allowed = harness === null ? null : ALLOWANCES[harness] ?? null
+export function runTree(folder) {
   const entries = []
   const walk = (relative) => {
     let entry
@@ -52,7 +50,7 @@ export function runTree(folder, { harness = null } = {}) {
       if (error.code === 'ENOENT' && TREE_ROOTS.includes(relative)) return entries.push({ path: relative, type: 'absent' })
       throw new TreeUnreadable(`${relative} could not be read (${error.code ?? error.message})`)
     }
-    if (allowed === null || !allowed(relative, entry)) entries.push({ path: relative, ...entry })
+    entries.push({ path: relative, ...entry })
     if (entry.type !== 'dir') return
     let names
     try {
@@ -66,27 +64,26 @@ export function runTree(folder, { harness = null } = {}) {
   return { entries, sha256: sha256(canonicalJson(entries)) }
 }
 
-/** Both digests a receipt keeps: the whole tree at the check, and what must stay of it once the app's own start has added its allowance. */
-export function treeDigests(folder, harness) {
-  const whole = runTree(folder).sha256
-  return ALLOWANCES[harness] === undefined ? { tree: whole } : { tree: whole, tree_kept: runTree(folder, { harness }).sha256 }
+/** What a receipt keeps of the run's files: the digest of the whole manifest at the check. */
+export function treeDigests(folder) {
+  return { tree: runTree(folder).sha256 }
 }
 
-/** The file beside the run's roots that keeps the judged manifest, to name what changed (not bound, not part of the tree). */
+/** The file beside the run's roots that keeps the judged manifest, pinned by the receipt's digest (not bound, not part of the tree). */
 export const TREE_FILE = 'tree.json'
 
 /**
- * Why the run's tree is not the one the check judged, or null. `phase` `check` compares the whole
- * tree; `started` (after the app's own start steps, and in the supervisor) compares what must stay.
- * The judged manifest in `tree.json` names the first entry that differs, when it is the judged one.
+ * Why the run's files are not the ones the check judged, or null. `phase` `check` allows no
+ * difference; `started` (after the app's own start steps, and in the supervisor) allows only the
+ * additions the app's form declares, read entry by entry against the judged manifest in `tree.json`,
+ * which must be the very one the receipt's digest names.
  */
 export function treeChange(folder, receipt, phase = 'check') {
-  const kept = phase === 'started' && receipt.snapshots?.tree_kept !== undefined
-  const expected = kept ? receipt.snapshots.tree_kept : receipt.snapshots?.tree
+  const expected = receipt.snapshots?.tree
   if (typeof expected !== 'string') return 'the receipt holds no manifest of the run'
   let now
   try {
-    now = runTree(folder, kept ? { harness: receipt.harness } : {})
+    now = runTree(folder)
   } catch (error) {
     return `the run could not be read whole (${error.message})`
   }
@@ -94,19 +91,22 @@ export function treeChange(folder, receipt, phase = 'check') {
   let judged = null
   try {
     const recorded = JSON.parse(readFileSync(join(folder, TREE_FILE), 'utf8'))
-    if (sha256(canonicalJson(recorded)) === receipt.snapshots.tree) judged = recorded
+    if (sha256(canonicalJson(recorded)) === expected) judged = recorded
   } catch {
     judged = null
   }
-  if (judged !== null) {
-    const allowed = kept ? ALLOWANCES[receipt.harness] : null
-    // A root recorded as absent is named as added when it appears, and as gone when it disappears.
-    const present = (entry) => entry.type !== 'absent'
-    const before = new Map(judged.filter((entry) => present(entry) && (allowed === null || !allowed(entry.path, entry))).map((entry) => [entry.path, canonicalJson(entry)]))
-    const after = new Map(now.entries.filter(present).map((entry) => [entry.path, canonicalJson(entry)]))
-    const paths = [...new Set([...before.keys(), ...after.keys()])].sort()
-    const first = paths.find((path) => before.get(path) !== after.get(path))
-    if (first !== undefined) return `the run's ${first} ${!before.has(first) ? 'was added after the check' : !after.has(first) ? 'is gone since the check' : 'is not the one the check judged'}`
+  if (judged === null) return 'the run\'s files are not the ones the check judged, and its judged manifest is gone or changed'
+  const allowed = phase === 'started' ? ALLOWANCES[receipt.harness] ?? null : null
+  // A root recorded as absent is named as added when it appears, and as gone when it disappears.
+  const present = (entry) => entry.type !== 'absent'
+  const before = new Map(judged.filter(present).map((entry) => [entry.path, entry]))
+  const after = new Map(now.entries.filter(present).map((entry) => [entry.path, entry]))
+  for (const path of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+    const was = before.get(path)
+    const is = after.get(path)
+    if (was !== undefined && is !== undefined && canonicalJson(was) === canonicalJson(is)) continue
+    if (allowed !== null && is !== undefined && allowed(path, is) && (was === undefined || (was.type === 'file' && is.type === 'file'))) continue
+    return `the run's ${path} ${was === undefined ? 'was added after the check' : is === undefined ? 'is gone since the check' : 'is not the one the check judged'}`
   }
-  return 'the run\'s files are not the ones the check judged'
+  return null
 }

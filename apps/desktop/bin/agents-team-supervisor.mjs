@@ -22,6 +22,8 @@ import { childNamespace, forgetNamespace, nameNamespace } from './agents-team-ne
  */
 
 const NAME = 'agents-team-supervisor.mjs'
+/** The module whose `launchCheck` every run passes immediately before its container. */
+const RUN_MODULE = fileURLToPath(new URL('./agents-team-run.mjs', import.meta.url))
 const SUPERVISE = '--supervise-ask'
 /** How long a container asked to end may take before it is made to. */
 export const KILL_AFTER_MS = 3000
@@ -80,10 +82,10 @@ export function teamSupervisorScript() {
 
 /**
  * Starts the supervisor of the run in `folder`, whose `launch.json` says what to run:
- * `{ argv, argv_sha256, deadline, stdin, stdin_sha256, check, state_home, finish, args_fd, output_limit, storage_limit }`
- * (`*_sha256`: what the check judged, compared just before the start, a difference starting nothing; `check`: a
- * module path and export name called with the folder and the launch immediately before the container, whose
- * reason, when it gives one, starts nothing; `state_home`: the asker's home, where that check reads the team;
+ * `{ argv, argv_sha256, deadline, stdin, stdin_sha256, state_home, finish, args_fd, output_limit, storage_limit }`
+ * (`*_sha256`: what the check judged, compared just before the start, a difference starting nothing; every run
+ * also passes agents-team-run.mjs's `launchCheck` immediately before the container, its reason starting nothing;
+ * `state_home`: the asker's home, where that check reads the team;
  * `finish`: a module path and export name the supervisor calls with the folder once the container has ended,
  * or null; `args_fd`: give bubblewrap its arguments on a file descriptor; `output_limit`: the bytes of raw output
  * over which the run fails; `storage_limit`: the bytes the run's whole folder may hold).
@@ -204,20 +206,18 @@ async function supervise(folder) {
     }
   }
   // The run's last check, immediately before the container: the run's receipt, the team, the program and every file the
-  // container binds, as the check judged them (72.3 AC1, epic review R6). A step that cannot run starts nothing either.
-  if (launch.check) {
-    let reason
-    try {
-      const module = await import(launch.check.module)
-      reason = await module[launch.check.export](folder, launch)
-    } catch (error) {
-      reason = `BMN could not check the run before its start (${error instanceof Error ? error.message : String(error)})`
-    }
-    if (reason !== null) {
-      ended = 'changed'
-      endedReason = `${reason}; nothing started`
-      return finish({ code: null, signal: null, started: false })
-    }
+  // container binds, as the check judged them (72.3 AC1, epic review R6). It is BMN's own, beside this file, for every run,
+  // never one the launch names; a check that cannot run starts nothing either.
+  let reason
+  try {
+    reason = await (await import(RUN_MODULE)).launchCheck(folder, launch)
+  } catch (error) {
+    reason = `BMN could not check the run before its start (${error instanceof Error ? error.message : String(error)})`
+  }
+  if (reason !== null) {
+    ended = 'changed'
+    endedReason = `${reason}; nothing started`
+    return finish({ code: null, signal: null, started: false })
   }
   // The run's storage: all of its folder, the record, its logs and its transient state together (the contract's "Limits"),
   // before the start, every few polls while it runs and once more when the container has ended.

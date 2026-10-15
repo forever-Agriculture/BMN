@@ -444,7 +444,7 @@ describe('the manifest of what a run\'s container binds (epic review R6)', () =>
     const folder = make()
     const tree = runTree(folder)
     expect(tree.entries.map((entry) => `${entry.type} ${entry.path}`)).toEqual(expect.arrayContaining(['dir home', 'file home/oc/config/opencode/opencode.json', 'link inputs/link', 'absent project', 'dir snapshots']))
-    const receipt = { harness: 'codex', snapshots: treeDigests(folder, 'codex') }
+    const receipt = { harness: 'codex', snapshots: treeDigests(folder) }
     writeFileSync(join(folder, TREE_FILE), JSON.stringify(tree.entries))
     expect(treeChange(folder, receipt)).toBeNull()
     writeFileSync(join(folder, 'inputs/prompt.md'), 'another question\n')
@@ -465,7 +465,7 @@ describe('the manifest of what a run\'s container binds (epic review R6)', () =>
   })
   it('OpenCode\'s sign-in import may add its database, its log and empty folders after the check, and nothing else', () => {
     const folder = make()
-    const receipt = { harness: 'opencode', snapshots: treeDigests(folder, 'opencode') }
+    const receipt = { harness: 'opencode', snapshots: treeDigests(folder) }
     writeFileSync(join(folder, TREE_FILE), JSON.stringify(runTree(folder).entries))
     mkdirSync(join(folder, 'home/oc/data/opencode/log'), { recursive: true })
     writeFileSync(join(folder, 'home/oc/data/opencode/opencode.db'), 'made-up database\n')
@@ -478,6 +478,19 @@ describe('the manifest of what a run\'s container binds (epic review R6)', () =>
     writeFileSync(join(folder, 'home/oc/config/opencode/opencode.json'), '{}\n')
     writeFileSync(join(folder, 'home/oc/config/opencode/agents.md'), 'made-up rules\n')
     expect(treeChange(folder, receipt, 'started')).toBe('the run\'s home/oc/config/opencode/agents.md was added after the check')
+    rmSync(join(folder, 'home/oc/config/opencode/agents.md'))
+    // Only additions: a folder the check judged may not go or change its permission bits (epic review recheck).
+    const mode = statSync(join(folder, 'home/oc/config')).mode & 0o777
+    chmodSync(join(folder, 'home/oc/config'), 0o700)
+    expect(treeChange(folder, receipt, 'started')).toBe('the run\'s home/oc/config is not the one the check judged')
+    chmodSync(join(folder, 'home/oc/config'), mode)
+    expect(treeChange(folder, receipt, 'started')).toBeNull()
+    rmSync(join(folder, 'home/oc/data'), { recursive: true })
+    expect(treeChange(folder, receipt, 'started')).toBe('the run\'s home/oc/data is gone since the check')
+    mkdirSync(join(folder, 'home/oc/data/opencode'), { recursive: true })
+    // The judged manifest must be the one the receipt names: a rewritten one allows nothing.
+    writeFileSync(join(folder, TREE_FILE), JSON.stringify(runTree(folder).entries))
+    expect(treeChange(folder, receipt, 'started')).toBe('the run\'s files are not the ones the check judged, and its judged manifest is gone or changed')
   })
 })
 

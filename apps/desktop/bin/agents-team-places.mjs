@@ -1,9 +1,10 @@
 // MODULE: agents-team-places.mjs - Epic 72: many asks, safely: a key, the request's hash and a capacity place reserved together before an ask starts, runs recovered after a crash and never started again, records kept for their retention, and the PID namespaces of running asks
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { takeLock } from './agents-research.mjs'
 import { processLives, processStart } from './agents-supervised.mjs'
+import { INSIDE } from './agents-container.mjs'
 import { ASK_RUN_FILES } from './agents-team-forms.mjs'
 import { forgetNamespace } from './agents-team-nested.mjs'
 import { AskRefusal } from './agents-team-resolve.mjs'
@@ -122,12 +123,57 @@ export function askSettings(runs) {
 // A run's state, recovered
 
 /**
- * Records a run that ended without its supervisor's finish: its outcome says interrupted and why,
- * and its transient state (the app home, the frozen project) is deleted, as on every other outcome.
- * A supervisor that comes later finds the outcome and starts nothing.
+ * Ends the container a dead supervisor left running. bubblewrap sets --die-with-parent itself, after
+ * it starts, so a supervisor killed in that first instant can leave it, or the namespace's own first
+ * bubblewrap, running (seen under load, epic acceptance). So: bubblewrap by the identity (pid and
+ * start) the supervisor recorded, and its process group; then every process of this user whose mounts
+ * show this very run's home at the container's home, the container's own, whose end ends the rest.
+ */
+function endLeftContainer(folder) {
+  const kill = (target) => {
+    try {
+      process.kill(target, 'SIGKILL')
+    } catch {
+      // Already gone, or not this user's.
+    }
+  }
+  const child = readJsonOrNull(join(folder, RUN_FILES.state))?.child
+  if (child !== null && child !== undefined && processLives(child)) {
+    kill(-child.pid)
+    kill(child.pid)
+  }
+  const own = `/${basename(folder)}/${ASK_RUN_FILES.home}`
+  let pids
+  try {
+    pids = readdirSync('/proc').filter((name) => /^\d+$/u.test(name))
+  } catch {
+    return
+  }
+  for (const pid of pids) {
+    let mounts
+    try {
+      mounts = readFileSync(`/proc/${pid}/mountinfo`, 'utf8')
+    } catch {
+      continue
+    }
+    // A mountinfo line: id, parent, device, the mounted folder (root), where it is mounted, ...
+    const inside = mounts.split('\n').some((line) => {
+      const fields = line.split(' ')
+      return fields[4] === INSIDE.home && fields[3]?.endsWith(own)
+    })
+    if (inside) kill(Number(pid))
+  }
+}
+
+/**
+ * Records a run that ended without its supervisor's finish: whatever its container left running is
+ * ended, its outcome says interrupted and why, and its transient state (the app home, the frozen
+ * project) is deleted, as on every other outcome. A supervisor that comes later finds the outcome and
+ * starts nothing.
  */
 export function recordInterrupted(folder, reason) {
   if (existsSync(join(folder, ASK_RUN_FILES.outcome))) return
+  endLeftContainer(folder)
   const request = readJsonOrNull(join(folder, ASK_RUN_FILES.request)) ?? {}
   writeWhole(join(folder, ASK_RUN_FILES.outcome), `${JSON.stringify({ version: 1, id: request.id ?? null, state: 'interrupted', exit: 1, reason, ended_at: new Date().toISOString() }, null, 2)}\n`)
   for (const part of [ASK_RUN_FILES.home, ASK_RUN_FILES.project]) rmSync(join(folder, part), { recursive: true, force: true })

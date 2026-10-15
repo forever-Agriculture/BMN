@@ -2894,7 +2894,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     // Everything the container binds from the run, entry by entry, as the start and the supervisor will check it again (epic review R6).
     let tree
     try {
-      tree = treeDigests(folder, agent.harness)
+      tree = treeDigests(folder)
     } catch (error) {
       if (!(error instanceof TreeUnreadable)) throw error
       refuse('WORKSPACE_MISMATCH', `the run's files could not be read whole: ${error.message}`)
