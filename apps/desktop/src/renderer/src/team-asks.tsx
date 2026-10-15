@@ -29,8 +29,14 @@ export function outcomeWords(state: string): string {
 export function readsWords(reads: TeamAskLine['reads'], data: 'public' | 'private'): string {
   const parts = reads.access === 'project' ? ['the project'] : reads.access === 'files' ? [plural(reads.files, 'file')] : []
   if (reads.pictures > 0) parts.push(plural(reads.pictures, 'picture'))
+  if (reads.browser !== undefined) parts.push(`the app at ${reads.browser.origin}${reads.browser.interact ? ', clicking and typing' : ', looking only'}`)
   const words = parts.length === 0 ? 'the question only' : `the question and ${parts.join(' and ')}`
   return data === 'public' ? `${words} · public` : words
+}
+
+/** One page a browser ask visited: its address and the title the app gave it, both the app's own text. */
+export function pageWords(page: NonNullable<TeamAskDetail['browser']>['pages'][number]): string {
+  return page.title === null || page.title === '' ? page.url : `${page.url} · ${page.title}`
 }
 
 /** "48 s", "4 min 12 s", "30 min": a line's short time. */
@@ -306,6 +312,27 @@ function AskBody(props: {
               <ul className="plain-lines" aria-label="Pictures it saw">
                 {detail.pictures.map((picture, index) => <li key={index}>{pictureWords(picture)}</li>)}
               </ul>
+            </dd>
+          </>
+        ) : null}
+        {detail.browser !== null ? (
+          <>
+            <dt>Pages</dt>
+            <dd className="wrap">
+              {detail.browser.pages.length === 0 ? <span className="muted">No page was visited.</span> : (
+                <ul className="plain-lines" aria-label="Pages it visited">
+                  {detail.browser.pages.map((page, index) => <li key={index} className="mono">{pageWords(page)}</li>)}
+                </ul>
+              )}
+              <span className="faint">The app&apos;s own text, shown as plain text{detail.browser.refused > 0 ? ` · BMN refused ${plural(detail.browser.refused, 'call')}` : ''}</span>
+            </dd>
+            <dt>Screenshots</dt>
+            <dd className="wrap">
+              {detail.browser.screenshots.length === 0 ? <span className="muted">None taken.</span> : (
+                <ul className="plain-lines" aria-label="Screenshots it took">
+                  {detail.browser.screenshots.map((shot) => <li key={shot.name}><span className="mono">{shot.name}</span> {sizeWords(shot.bytes)}</li>)}
+                </ul>
+              )}
             </dd>
           </>
         ) : null}

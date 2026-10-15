@@ -16,11 +16,14 @@ import { AskUsageError, askRunId, prepareAsk } from './agents-team-ask.mjs'
 import { OUTCOME_EXIT, StartRefusal, TIME_LIMIT, TRANSIENT, askOutcome, exportAsk, startAsk, stopAsk, waitAsk } from './agents-team-run.mjs'
 import { writeWhole } from './agents-team-supervisor.mjs'
 import { nestedAsk } from './agents-team-nested.mjs'
+import { BROWSER_FILES, BROWSER_ROLE } from './agents-team-browser.mjs'
 import { askSettings, keyDay, keyPath, keyScope, keyedRun, makeKey, recordInterrupted, releaseReservation, requestHash, reserveAsk } from './agents-team-places.mjs'
 
 export const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --question-file PATH|-) --key K [--agent A] [--effort E]
          [--small-work] [--recheck-of ID] [--project P] [--access question|files|project] [--file PATH]...
          [--image PATH]... [--data public] [--time-limit MINUTES] [--background] [--json]
+       bmn team ask [--role R] (--question TEXT | --question-file PATH|-) --key K --serve COMMAND
+         --origin http://127.0.0.1:PORT [--service COMMAND]... [--interact] --disposable [--project P]
        bmn team ask --features [--json]             What each installed app may be asked here, as BMN measured it
        bmn team asks [--json]                       Your asks, newest first
        bmn team asks show <id> [--json]             One ask: its state, who answered, the answer
@@ -32,7 +35,14 @@ Asks one approved teammate in a role, read-only, in a container BMN builds for t
 (docs/agent-control.md, "Asking a teammate"). --access says what it may read: the question only
 (default), the --file texts, or one project's frozen copy with its Git history; --image gives PNG, JPEG
 or WebP pictures as images, their metadata taken out, to the designer unless --role names another
-role. --key is required in
+role. --serve asks a browser teammate (the browser role unless --role names another) to check a web
+app of the project: BMN starts each --service and then the app from the project, with these commands,
+in a network of their own, and a browser that reaches only --origin; the teammate may navigate, read
+and take screenshots, and with --interact also click, type and submit there; pages visited and
+screenshots stay in the record. Navigation and the page's own code may change the app's state, and a
+look follows any link a page offers: --disposable is your statement that the app and its services are
+disposable test instances with synthetic data and no production backend or credentials; without it
+the ask is refused. Browser asks are private. --key is required in
 a session: today's UTC day and a name of yours (20261015-review-1); a retry with the same key and
 request finds the first ask, never starts a second. The answer goes to standard output, progress to
 standard error; closing the command only detaches it, and the run goes on. Exit: 0 answered,
@@ -40,9 +50,11 @@ standard error; closing the command only detaches it, and the run goes on. Exit:
 attributed.`
 
 const RUN_ID = /^\d{8}T\d{6}-[0-9a-f]{8}$/u
-const VALUES = ['role', 'question', 'question-file', 'agent', 'effort', 'recheck-of', 'project', 'access', 'data', 'time-limit', 'key']
-const REPEATED = ['file', 'image']
-const FLAGS = ['small-work', 'background', 'json', 'help', 'wide-read', 'features']
+const VALUES = ['role', 'question', 'question-file', 'agent', 'effort', 'recheck-of', 'project', 'access', 'data', 'time-limit', 'key', 'serve', 'origin']
+const REPEATED = ['file', 'image', 'service']
+const FLAGS = ['small-work', 'background', 'json', 'help', 'wide-read', 'features', 'interact', 'disposable']
+/** A browser ask's options (74.3): any of them makes the ask a browser ask, judged whole by prepareAsk. */
+const BROWSER_OPTIONS = ['serve', 'origin', 'interact', 'disposable']
 
 /** The options of `team ask`: values once each, `--file` as often as needed, nothing positional. */
 export function readAskOptions(argv) {
@@ -133,8 +145,25 @@ export function askJson(folder) {
       requested: { model: request.model ?? null, effort: request.effort ?? null }, observed: outcome.observed ?? null
     },
     usage: outcome.usage ?? null, answer, started_at: outcome.started_at ?? null, ended_at: outcome.ended_at ?? null,
-    time_limit_minutes: outcome.time_limit_minutes ?? null, record: folder
+    time_limit_minutes: outcome.time_limit_minutes ?? null, record: folder,
+    // A browser ask's pages and screenshots (74.3 AC6): the app's own text, untrusted.
+    ...(request.browser === undefined ? {} : { browser: { origin: request.browser.origin ?? null, interact: request.browser.interact === true, ...(read(BROWSER_FILES.record) ?? { pages: [], screenshots: [], refused: [] }) } })
   }
+}
+
+/** A browser ask's lines in `team asks show`: each page visited and each screenshot, the app's own text marked as such. */
+function browserLines(browser, folder) {
+  if (browser === undefined) return []
+  const pages = Array.isArray(browser.pages) ? browser.pages : []
+  const shots = Array.isArray(browser.screenshots) ? browser.screenshots : []
+  const refused = Array.isArray(browser.refused) ? browser.refused.length : 0
+  // Untrusted text from the app's pages: one line each, no control characters.
+  // eslint-disable-next-line no-control-regex -- the control characters are what is taken out
+  const plain = (value) => String(value).replace(/[\u0000-\u001f\u007f-\u009f]/gu, ' ')
+  return ['', `${browser.interact ? 'Looked and clicked' : 'Looked'} at ${browser.origin}; pages and titles below are the app's own text:`,
+    ...(pages.length === 0 ? ['  no page was visited'] : pages.map((page) => `  page ${plain(page.url)}${page.title ? `  ${plain(page.title)}` : ''}`)),
+    ...(shots.length === 0 ? ['  no screenshot'] : shots.map((shot) => `  screenshot ${join(folder, BROWSER_FILES.files, plain(shot.name))} (${shot.bytes} bytes)`)),
+    ...(refused === 0 ? [] : [`  BMN refused ${refused} call${refused === 1 ? '' : 's'} (record: ${join(folder, BROWSER_FILES.record)})`])]
 }
 
 /** Ends a run that the check refused: its record says so, and its transient state goes. */
@@ -290,8 +319,8 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     if (options.features) {
       if (Object.keys(options).some((name) => !['features', 'json', ...REPEATED].includes(name)) || REPEATED.some((name) => options[name].length > 0)) throw new AgentsUsageError('--features takes only --json')
     } else {
-      // A picture ask goes to the designer unless the asker names another role (72.8 AC1).
-      if (options.role === undefined && options.image.length === 0) throw new AgentsUsageError('team ask needs --role')
+      // A picture ask goes to the designer unless the asker names another role (72.8 AC1); a browser ask to the browser role (74.3).
+      if (options.role === undefined && options.image.length === 0 && options.serve === undefined) throw new AgentsUsageError('team ask needs --role')
       if ((options.question === undefined) === (options['question-file'] === undefined)) throw new AgentsUsageError('team ask takes exactly one of --question and --question-file')
       if (options['time-limit'] !== undefined && !/^\d{1,3}$/u.test(options['time-limit'])) throw new AgentsUsageError(`--time-limit takes minutes, ${TIME_LIMIT.min} to ${TIME_LIMIT.max}`)
     }
@@ -331,9 +360,11 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     if (error instanceof InputRefusal) return refused(asJson, error.code, error.message)
     throw error
   }
+  const browsing = BROWSER_OPTIONS.some((name) => options[name] !== undefined) || options.service.length > 0
   const request = {
-    role: options.role ?? DESIGNER_ROLE, question, agent: options.agent, effort: options.effort, smallWork: options['small-work'] === true, recheckOf: options['recheck-of'],
-    project: options.project, access: options.access, files, images, data: options.data, wide: options['wide-read'] === true
+    role: options.role ?? (options.serve !== undefined ? BROWSER_ROLE : DESIGNER_ROLE), question, agent: options.agent, effort: options.effort, smallWork: options['small-work'] === true, recheckOf: options['recheck-of'],
+    project: options.project, access: options.access, files, images, data: options.data, wide: options['wide-read'] === true,
+    ...(browsing ? { browser: { serve: options.serve, origin: options.origin, services: options.service, interact: options.interact === true, disposable: options.disposable === true } } : {})
   }
   const runs = teamRunsDirectory()
   const key = options.key ?? makeKey('shell', now())
@@ -519,7 +550,7 @@ export async function runTeamAsks(argv, { environment = process.env, cwd = proce
       const shown = askJson(folder)
       if (asJson) out(JSON.stringify(shown, null, 2))
       else out([`${shown.id}  ${shown.state}${shown.reason ? `: ${shown.reason}` : ''}`, `${shown.role} -> ${shown.teammate.agent} (${shown.teammate.app ?? '?'} ${shown.teammate.requested.model ?? '?'}, ${shown.teammate.requested.effort ?? '?'}), chosen by ${shown.chosen_by}`,
-        ...(shown.answer === null ? [] : ['', shown.answer.replace(/\n$/u, '')])].join('\n'))
+        ...browserLines(shown.browser, folder), ...(shown.answer === null ? [] : ['', shown.answer.replace(/\n$/u, '')])].join('\n'))
       return EXIT.ok
     }
     if (action === 'wait') {

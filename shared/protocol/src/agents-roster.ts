@@ -707,7 +707,8 @@ export interface TeamAskLine {
   role: string | null
   project: string | null
   data: 'public' | 'private'
-  reads: { access: TeamAskAccess; files: number; pictures: number }
+  /** `browser`: a browser ask (74.3), the app's origin and whether the teammate could click, type and submit. */
+  reads: { access: TeamAskAccess; files: number; pictures: number; browser?: { origin: string; interact: boolean } }
   askedAt: string | null
   startedAt: string | null
   endedAt: string | null
@@ -733,6 +734,8 @@ export interface TeamAskDetail {
   files: Array<{ path: string; bytes: number }>
   pictures: Array<{ label: string; bytes: number; mediaType: string; width: number | null; height: number | null; removed: string[] }>
   project: { root: string | null; revision: string | null; files: number | null } | null
+  /** A browser ask's record (74.3 AC6): the pages it visited and its screenshots, the app's own words; the calls BMN refused. */
+  browser: { origin: string; interact: boolean; pages: Array<{ url: string; title: string | null }>; screenshots: Array<{ name: string; bytes: number }>; refused: number } | null
   teammate: { app: string | null; appName: string | null; appVersion: string | null; model: string | null; session: string | null; sessionSource: string | null }
 }
 /** Epic 65: what the judge's page on Team shows of its calls. Sums count every call that made a request; a refused call costs nothing and is counted apart. */

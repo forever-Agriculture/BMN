@@ -10,6 +10,7 @@ import { AskRefusal } from './agents-team-resolve.mjs'
 import { RETENTION_DAYS, askSettings, placePath, recordInterrupted, removeRun, runHolds, sweepRuns } from './agents-team-places.mjs'
 import { ANSWER_LIMIT, askOutcome, exportAsk, stopAsk } from './agents-team-run.mjs'
 import { RUN_FILES } from './agents-team-supervisor.mjs'
+import { BROWSER_FILES } from './agents-team-browser.mjs'
 
 /**
  * The app reads the same run folders `bmn team ask` writes, and the owner sees them all: an ask
@@ -77,7 +78,25 @@ function usageView(usage, billing) {
 /** What a run read, as one phrase's parts: its access mode and how many files and pictures went with the question. */
 function readsView(request, manifest) {
   const access = ASK_ACCESS.includes(request.access) ? request.access : 'question'
-  return { access, files: Array.isArray(manifest?.files) ? manifest.files.length : 0, pictures: Array.isArray(manifest?.pictures) ? manifest.pictures.length : 0 }
+  const origin = text(request.browser?.origin, 64)
+  return {
+    access, files: Array.isArray(manifest?.files) ? manifest.files.length : 0, pictures: Array.isArray(manifest?.pictures) ? manifest.pictures.length : 0,
+    ...(origin === null ? {} : { browser: { origin, interact: request.browser.interact === true } })
+  }
+}
+
+/** A browser ask's record as the page lists it: its pages and screenshots as lines, everything in them the app's own text (74.3 AC6). */
+function browserView(folder, request) {
+  const origin = text(request.browser?.origin, 64)
+  if (origin === null) return null
+  const record = readJson(join(folder, BROWSER_FILES.record)) ?? {}
+  const list = (value) => (Array.isArray(value) ? value.slice(0, 200) : [])
+  return {
+    origin, interact: request.browser.interact === true,
+    pages: list(record.pages).flatMap((page) => (text(page?.url, 2000) === null ? [] : [{ url: text(page.url, 2000), title: text(page.title, 300) }])),
+    screenshots: list(record.screenshots).flatMap((shot) => (text(shot?.name, 255) === null ? [] : [{ name: text(shot.name, 255), bytes: count(shot.bytes) ?? 0 }])),
+    refused: Array.isArray(record.refused) ? record.refused.length : 0
+  }
 }
 
 const reasonOf = (outcome) => text(outcome.reason, 2000) ?? text(outcome.refusal?.reason, 2000)
@@ -198,6 +217,7 @@ export function appAskDetail(id, { runs = teamRunsDirectory(), now = new Date() 
       width: count(picture.width), height: count(picture.height), removed: Array.isArray(picture.removed) ? picture.removed.filter((name) => typeof name === 'string').slice(0, 40) : []
     })),
     project: manifest.project === null || typeof manifest.project !== 'object' ? null : { root: text(manifest.project.root, 4096), revision: text(manifest.project.revision, 64), files: count(manifest.project.files) },
+    browser: browserView(folder, request),
     teammate: {
       app: text(receipt.harness, 32), appName: APP_NAMES[receipt.harness] ?? null, appVersion: text(receipt.harness_version?.version, 64), model: text(observed.model, 128) ?? text(request.model, 128),
       session: text(observed.session, 128), sessionSource: text(observed.session_source, 64)

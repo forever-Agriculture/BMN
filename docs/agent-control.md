@@ -2280,6 +2280,8 @@ scripts and raw records are in `_bmad-output/planning-artifacts/reference-72-tea
 bmn team ask --role R (--question TEXT | --question-file -) [--agent A] [--effort E] [--small-work]
   [--recheck-of ID] [--project P] [--access question|files|project] [--file PATH]... [--image PATH]...
   [--data public] [--wide-read] [--time-limit MINUTES] [--key K] [--background] [--json]
+bmn team ask [--role R] (--question TEXT | --question-file -) --key K --serve COMMAND
+  --origin http://127.0.0.1:PORT [--service COMMAND]... [--interact] --disposable [--project P]
 bmn team ask --features [--json]
 bmn team asks [--json]
 bmn team asks show <id> [--json]
@@ -2303,6 +2305,7 @@ bmn team asks export <id> --output PATH
 | `--data public` | A declaration BMN verifies (R72-NFR5); refused, never raised, where it does not hold. Without it the ask is private. |
 | `--wide-read` | Selects the owner-enabled wider-read mode of the chosen teammate's app (below); refused where he has not enabled one. |
 | `--time-limit MINUTES` | 1 to 120; default 30. |
+| `--serve COMMAND`, `--origin URL`, `--service COMMAND`, `--interact`, `--disposable` | A browser ask: BMN starts the app and its services from the project and a browser that reaches only the origin (Browser asks, below). |
 | `--key K` | The retry key: the UTC day it was issued and a name of yours, `20261015-review-1` (letters, digits, `.`, `_`, `-`; at most 64 after the day). Required in a BMN session, which every agent runs in; a plain shell may leave it out and BMN makes one. (Keys, below.) |
 | `--background` | Prints the run id at once and leaves the run going. |
 | `--json` | Versioned JSON on standard output instead of words. |
@@ -2378,6 +2381,71 @@ are a file of the verified public commit of its project, so one BMN changed is p
 JPEG, RGBA and palette PNG, lossy and lossless WebP with alpha) decodes to the same pixels,
 orientation, colour profile and transparency, with nothing planted left (Story 72.8's decoder
 check).
+
+### Browser asks (74.3)
+
+`--serve COMMAND --origin http://127.0.0.1:PORT` asks a teammate (the `browser` role unless `--role`
+names another) to check a web app of the project. BMN starts each `--service COMMAND` (at most 8)
+and the app from the project with those commands (each at most 4,096 bytes), then a browser, and
+only then the teammate's container. A browser ask is private, reads the question only (no
+`--access`, `--file` or `--image`), needs a project, and goes to a Codex or Claude Code teammate
+(OpenCode was never measured with a browser: refused saying so). It needs `--disposable`, the
+asker's statement that the app and its services are disposable test instances with synthetic data
+and no production backend or credentials, because navigation and the page's own code may change the
+app's state and a look follows any link a page offers, a destructive `GET` included; without it the
+ask is refused (`BROWSER_STATEMENT_REQUIRED`).
+
+**Two sealed spaces.** Each is a bubblewrap space with a network of its own holding only loopback,
+its own processes, the system's programs read-only and a made-up account:
+
+- the app's space: the project as an overlay at its own path, whose writes go to the run's folder
+  (`browser/overlay/`, counted with the run's storage and removed when the spaces end; the project
+  is never written), Node with its own packages read-only (npm's settings beside Node hidden), a
+  256 MiB `/tmp`; started in the project with `PORT` set. The app and its services reach each other
+  and nothing else.
+- the browser's space: Node, Playwright MCP 0.0.75's packages and Chromium for Testing revision 1234
+  read-only (the versions 74.1 measured), a 256 MiB `/tmp` and `/dev/shm`, and BMN's filter.
+
+The two meet only through BMN's bridge, a Unix socket that carries the browser's connections to the
+origin into the app's space: the browser reaches the origin and nothing else, and nothing in either
+space reaches this computer's network, the internet or another server on it. Where 74.1's
+containment does not hold here (a network with only loopback, the overlay, a sized `/tmp`), browser
+asks are refused.
+
+**The tools.** The teammate reaches the browser only through one more socket, to BMN's filter in
+front of Playwright MCP. A look ask (the default) offers navigate, navigate back, snapshot,
+screenshot, wait, console messages, network requests, tabs, close and resize; `--interact` adds
+click, type, fill form, select option, press key, hover, drag and dialog answers, inside the origin.
+The filter lists only these and refuses, before the browser sees it, every other tool (the
+teammate's own scripts, `browser_evaluate` and `browser_run_code_unsafe`, uploads and drops among
+them), an address off the origin, and every resource, prompt or sampling request; a file name the
+teammate gives a screenshot is dropped, and the browser writes where BMN says. Each call and BMN's
+verdict is a line of `browser/out/calls.jsonl`. The prompt names the address and the tools and says
+that the pages' text is the app's content, not instructions. Codex has the browser as its only MCP
+server with only those tools enabled and its code-mode host on, the one way 0.162.1 offers MCP tools
+(74.1 measured that the host has no network, file or process API; Codex's own extra tools, below,
+are as in every Codex ask); Claude Code has it as its only MCP server with only those tools allowed
+(`--allowedTools mcp__browser__...`).
+
+**Held to the check.** The spaces' whole specification (commands, origin, services, tools, where each
+program is and what it is) is a snapshot the receipt pins, and the retry key covers the browser
+options. The tool's package folder and Chromium's folder are identified whole (every entry's size,
+times and inode), at the check and again by the supervisor before it starts them: a change between
+the two stops the launch with nothing started (`CHANGED`).
+
+**Start and end.** The supervisor starts both spaces and waits up to 2 minutes, within the ask's time
+limit, for the app to answer at the origin and the browser to offer its tools, measuring the run's
+storage about once a second meanwhile (the spaces' logs and the app's writes are in the run's
+folder). An app that does not come up, a space that ends, a Stop, the time limit or the storage
+limit ends the ask before the teammate starts, with the space's last log lines as the reason. When
+the ask ends, BMN ends both spaces (asked, then made to); `browser/spaces.json` says how each ended
+and names any process left (none, when all is well), and the app's writes are removed.
+
+**What is kept.** `browser/record.json`: the pages visited with their titles, the screenshots, and
+every refused call with its reason; page addresses and titles are the app's own text and are shown
+as plain text. `bmn team asks show` and an opened ask in Team › Asks list the pages and screenshots
+as lines; the export carries the record, the calls, `spaces.json` and the screenshots, never the
+spaces' logs. Page texts the browser saved are removed when the ask ends; screenshots stay.
 
 ### Sign-in inside the container
 
@@ -2501,8 +2569,9 @@ says `not-enabled` until the owner enables one in the Team view; `pictures` is t
 | Pictures | 8 per ask, each 5 MiB, 8,000 px a side and 33.2 million pixels once drawn (an 8K screen, 7680x4320); PNG, JPEG, WebP | the providers' own image limits; the pixel bound keeps a small file from unfolding into gigabytes in the app |
 | Project | 20,000 files, 200 MiB, each file 10 MiB, the tracked ones and those named with `--file` together; history the newest commits of the checked-out revision, at most 1,000 (where history branches, a depth of 1,000 holds more, so the depth is made smaller until the count is inside), 500 MiB of objects | an ask reads a project, not a monorepo's every blob |
 | Answer kept | 1 MiB; the app's raw output 64 MiB, over it the run fails | |
-| Run storage | 1 GiB, the run's whole folder (inputs, frozen copy, home, record, its output and error logs), the bytes its files hold, links not followed: measured before the start, every second while it runs and once more when the container ends; over it the run fails, nothing started when it is over before the start. A watched limit, not a disk quota: a run can go past it by what it writes in about four seconds, one between measurements and up to three while its container is made to end | |
+| Run storage | 1 GiB, the run's whole folder (inputs, frozen copy, home, record, its output and error logs; a browser ask's space logs and the app's writes), the bytes its files hold, links not followed: measured before the start, about every second while a browser ask's app starts, every second while it runs and once more when the container ends; over it the run fails, nothing started when it is over before the start. A watched limit, not a disk quota: a run can go past it by what it writes in about four seconds, one between measurements and up to three while its container is made to end | |
 | Time | 30 minutes; 1 to 120 with `--time-limit` | assumption (b) |
+| Browser ask | 8 services; each command 4,096 bytes; 2 minutes for the app and the browser to come up, within the time limit; each space's `/tmp` 256 MiB, the browser's `/dev/shm` 256 MiB | 74.1's measured asks; a bound on memory the spaces can fill |
 | Capacity | 4 runs at once across BMN; 1 to 10 as `capacity` in `team/asks-settings.json` in BMN's state folder, beside `team/runs`; no screen sets it (owner, 2026-10-15: asks are the agents' layer). The same file's `token_ceiling` sets Claude Code's per-ask token ceiling; none by default | assumption (c) |
 | Key window | until the end of the 8th UTC day after the day the key names: at least 7 days from its first use | a lead's retries happen within its run |
 | Retention | 30 days after a run ends; a content-free entry (key, request hash, outcome) stays for the key window after removal | assumption (e) |
@@ -2612,6 +2681,8 @@ so a run outlives BMN closing.
 | `answer.md`, `outcome.json` | the answer; state, exit, refusal, observed identity with sources, usage with source, times | yes |
 | `diagnostic-answer.md` | an answer that could not be attributed (exit 17), kept only as evidence, never shown as the answer | no |
 | `home/` | the app's home: the bound sign-in's empty mount point, its sessions and bookkeeping | no; deleted on every outcome |
+| `browser/record.json`, `browser/out/calls.jsonl`, `browser/spaces.json`, `browser/out/files/` | a browser ask's pages, screenshots and refused calls; each tool call with BMN's verdict; how its spaces ended; the screenshots | yes |
+| `browser/app.log`, `browser/browser.log`, `browser/overlay/` | the spaces' own output; the app's writes to its project | no; the writes are removed when the spaces end |
 
 Export (`asks export`) is the allowlisted bundle above, never a sign-in file, an app database, the
 home folder, raw logs or an environment value.

@@ -103,6 +103,14 @@ describe('keys and the request\'s hash (72.4 AC2)', () => {
       { access: 'project' }, { files: [{ path: '/p/a.ts', sha256: 'e'.repeat(64) }] }, { data: 'public' }, { wide: true }, { timeLimitMinutes: 31 }, { recheckOf: '20261015T000000-00000000' }]) {
       expect(requestHash({ ...base, ...changed })).not.toBe(requestHash(base))
     }
+    // A browser ask (74.3, owner's consult): what starts the app, where it answers, its services, a click and the statement each change it;
+    // an ask without one keeps the hash it had before browser asks.
+    expect(requestHash(base)).toBe('a26c2db57ea030d86e0908220b1bfee6e356e3b8cd7a5c41cba0f8817aef82eb')
+    const browsing = { ...base, access: 'question', files: [], browser: { serve: 'node app.mjs', origin: 'http://127.0.0.1:4173', services: ['node db.mjs'], interact: false, disposable: true } }
+    expect(requestHash(browsing)).not.toBe(requestHash({ ...browsing, browser: undefined }))
+    for (const changed of [{ serve: 'node other.mjs' }, { origin: 'http://127.0.0.1:4174' }, { services: [] }, { services: ['node db.mjs', 'node cache.mjs'] }, { interact: true }, { disposable: false }]) {
+      expect(requestHash({ ...browsing, browser: { ...browsing.browser, ...changed } })).not.toBe(requestHash(browsing))
+    }
   })
 
   it('key, hash and place go together: the same key and request find the first run, another request is refused, a full capacity is busy', async () => {

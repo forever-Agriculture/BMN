@@ -11,6 +11,7 @@ export declare function keyScope(asker: { kind: string; session?: string }): str
 export interface HashedRequest {
   role: string; question: string; agent?: string | undefined; effort?: string | undefined; smallWork?: boolean; recheckOf?: string | undefined; project?: string | null | undefined; access?: string | undefined
   files?: Array<{ path: string; sha256: string }>; images?: Array<{ path: string; sha256: string }>; data?: string | undefined; wide?: boolean; timeLimitMinutes: number
+  browser?: { serve?: string | null; origin?: string | null; services?: string[]; interact?: boolean; disposable?: boolean } | null | undefined
 }
 export declare function requestHash(request: HashedRequest): string
 export declare function keyPath(runs: string, scope: string, key: string): string

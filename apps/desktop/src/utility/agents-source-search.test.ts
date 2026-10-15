@@ -31,7 +31,10 @@ const HISTORICAL: Array<[file: string, line: RegExp]> = [
   ['apps/desktop/bin/agents-roster.mjs', /^const SCHEMA_1_CHANGES = /],
   ['apps/desktop/src/utility/agents-roster.test.ts', /'the earlier small_epic rule'|'the earlier ## data-labels section'|toMatch\(\/title became class\/\)|toMatch\(\/trust, authority, security, cost, quota, tags and ## data-labels are gone\/\)|schema_version: 1, agents: \[/],
   // Not a team field: OpenCode's own session export names what a session spent `cost` (70.4), read once into reported_cost.
-  ['apps/desktop/bin/agents-opencode.mjs', /^\s*reported_cost: number\(info\.cost\)$/]
+  ['apps/desktop/bin/agents-opencode.mjs', /^\s*reported_cost: number\(info\.cost\)$/],
+  // Not a team field: a page's title as a browser ask's record keeps it and Team › Asks reads it (74.3).
+  ['apps/desktop/bin/agents-team-browser.mjs', /^\s*pages\.push\(\{ url, title: text\(call\.title, 300\) \}\)$/],
+  ['apps/desktop/bin/agents-team-app.mjs', /^\s*pages: list\(record\.pages\)\.flatMap\(\(page\) => \(text\(page\?\.url, 2000\) === null \? \[\] : \[\{ url: text\(page\.url, 2000\), title: text\(page\.title, 300\) \}\]\)\),$/]
 ]
 
 interface Hit { file: string; line: number; text: string }
@@ -116,14 +119,14 @@ describe('team and rules state has no path into the database, Backup export, Tel
   const imports = (file: string): string[] => [...readFileSync(join(REPOSITORY, file), 'utf8').matchAll(IMPORT)].map((match) => (match[1] ?? match[2] ?? match[3]) as string)
 
   it('searches the modules that hold it, and reads their imports', () => {
-    expect(HOLDERS).toHaveLength(37)
+    expect(HOLDERS).toHaveLength(38)
     expect(imports('apps/desktop/src/main/app-program.ts')).toEqual(['node:fs', 'node:path'])
     expect(imports('apps/desktop/src/main/agents-ipc.ts')).toEqual(expect.arrayContaining(['node:fs', '@bmn/protocol', '../../bin/agents-roster.mjs', './agents-approval', './workspace-ipc']))
     expect(imports('apps/desktop/bin/agents-rules.mjs')).toEqual(expect.arrayContaining(['./agents-check.mjs']))
   })
 
   it('they import only Node, the protocol types, each other and the IPC error type', () => {
-    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check|rules|cli|approval|guard|context|skills|research|ask|fence|supervised|judge|tools|tool-files|opencode|container|team-app|team-ask|team-cli|team-forms|team-inputs|team-nested|team-pictures|team-places|team-resolve|team-run|team-supervisor|team-tree)|safe-config-write|text-diff)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/context-auto|\.\/skills-auto)$/
+    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check|rules|cli|approval|guard|context|skills|research|ask|fence|supervised|judge|tools|tool-files|opencode|container|team-app|team-ask|team-cli|team-forms|team-inputs|team-nested|team-pictures|team-places|team-resolve|team-run|team-supervisor|team-tree|team-browser)|ask-browser-space|safe-config-write|text-diff)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/context-auto|\.\/skills-auto)$/
     const hits = HOLDERS.flatMap((file) => imports(file).filter((name) => !allowed.test(name)).map((name) => `${file}: imports ${name}`))
     expect(hits.length === 0 ? 'PASS' : `FAIL\n${hits.join('\n')}`).toBe('PASS')
     // The one Electron import is a type, and the IPC module takes only its error class from the workspace handlers.
