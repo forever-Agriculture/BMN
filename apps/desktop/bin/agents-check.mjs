@@ -1801,45 +1801,65 @@ export function consequences(before, after) {
   // Two choices that still apply for one role in one project decide nothing: that role's asks there are refused (epic recheck 2).
   // A change that ends or starts such a pair is said as that, for the pair, instead of choice by choice.
   const said = new Set()
+  const today = new Date()
+  // What a role's asks in one project get under `data`: the choice that applies, the role's chain, or a refusal and why. Every
+  // line below says this, never a choice's agent by itself, so a choice whose agent cannot be asked is never said to be reached (AC2, AC4).
+  const outcome = (data, project, roleId) => {
+    const found = projectChoiceFor(data, project, roleId, canonicalProject, today)
+    if (found === null || found.ended) return { reach: chain(data, roleId) }
+    if (found.collision !== undefined) return { refused: ' for two choices there' }
+    const problem = projectChoiceProblem(data, found.choice)
+    return problem === null ? { reach: chosen(found.choice) } : { refused: `: the choice ${found.choice.id} names ${chosen(found.choice)}, who cannot be asked now (${problem})` }
+  }
+  const was = (group) => (group.reach !== undefined ? group.reach : `being refused${group.refused}`)
+  const change = (roleId, before, now) => {
+    if (now.refused !== undefined) return now.refused === before.refused ? null : `${roleId} asks in one project would be refused${now.refused}, instead of ${before.reach === undefined ? `being refused${before.refused}` : `reaching ${before.reach}`}`
+    return now.reach === before.reach ? null : `${roleId} asks in one project would reach ${now.reach} instead of ${was(before)}`
+  }
+  const push = (line) => {
+    if (line !== null && !out.includes(line)) out.push(line)
+  }
   if (oldChoices.size + newChoices.size > 0) {
-    const today = new Date()
     const pairKey = (group) => `${group.project}\n${group.role}`
     const pairsBefore = new Map(projectChoiceCollisions(prior.project_choices, canonicalProject, today).map((group) => [pairKey(group), group]))
     const pairsAfter = new Map(projectChoiceCollisions(after.project_choices, canonicalProject, today).map((group) => [pairKey(group), group]))
-    const reached = (data, group) => {
-      const found = projectChoiceFor(data, group.project, group.role, canonicalProject, today)
-      return found === null || found.ended ? chain(data, group.role) : found.collision !== undefined ? null : chosen(found.choice)
-    }
-    // The choice left may name an agent that can no longer be asked: its asks stay refused, for that reason (AC4).
-    const leftWords = (group) => {
-      const found = projectChoiceFor(after, group.project, group.role, canonicalProject, today)
-      const problem = found !== null && !found.ended && found.collision === undefined ? projectChoiceProblem(after, found.choice) : null
-      return problem === null ? `would reach ${reached(after, group)} instead of being refused for two choices there`
-        : `would stay refused: the choice left, ${found.choice.id}, names ${chosen(found.choice)}, who cannot be asked now (${problem}), instead of being refused for two choices there`
-    }
+    // A pair that ends: the choice left decides, or its asks stay refused because its agent cannot be asked (AC4).
     for (const [key, group] of pairsBefore) {
       if (pairsAfter.has(key)) continue
-      out.push(`${group.role} asks in one project ${leftWords(group)}`)
+      const left = outcome(after, group.project, group.role)
+      out.push(left.refused === undefined ? `${group.role} asks in one project would reach ${left.reach} instead of being refused for two choices there`
+        : `${group.role} asks in one project would stay refused${left.refused.replace(/^: the choice (\S+) names/u, ': the choice left, $1, names')}, instead of being refused for two choices there`)
       for (const choice of group.choices) said.add(choice.id)
     }
     for (const [key, group] of pairsAfter) {
       if (pairsBefore.has(key)) continue
-      out.push(`${group.role} asks in one project would be refused for two choices there instead of reaching ${reached(prior, group) ?? 'its choice'}`)
+      const before = outcome(prior, group.project, group.role)
+      out.push(`${group.role} asks in one project would be refused for two choices there instead of ${before.reach === undefined ? `being refused${before.refused}` : `reaching ${before.reach}`}`)
       for (const choice of group.choices) said.add(choice.id)
     }
   }
   for (const id of new Set([...oldChoices.keys(), ...newChoices.keys()])) {
     if (said.has(id)) continue
-    const was = oldChoices.get(id)
+    const then = oldChoices.get(id)
     const now = newChoices.get(id)
-    const moved = was === undefined || now === undefined || was.project !== now.project || was.role !== now.role
+    const moved = then === undefined || now === undefined || then.project !== now.project || then.role !== now.role
     if (moved) {
-      if (was !== undefined) out.push(`${was.role} asks in one project would reach ${chain(after, was.role)} instead of ${chosen(was)}`)
-      if (now !== undefined) out.push(`${now.role} asks in one project would reach ${chosen(now)} instead of ${chain(prior.roles.some((role) => role.id === now.role) ? prior : after, now.role)}`)
+      if (then !== undefined) push(change(then.role, outcome(prior, canonicalProject(then.project), then.role), outcome(after, canonicalProject(then.project), then.role)))
+      // A choice for a role the team did not have was compared with that role's chain as it will be.
+      if (now !== undefined) {
+        const project = canonicalProject(now.project)
+        push(change(now.role, prior.roles.some((role) => role.id === now.role) ? outcome(prior, project, now.role) : { reach: chain(after, now.role) }, outcome(after, project, now.role)))
+      }
       continue
     }
-    if (was.agent !== now.agent || was.effort !== now.effort) out.push(`${now.role} asks in one project would reach ${chosen(now)} instead of ${chosen(was)}`)
-    if (was.ends !== now.ends) out.push(`${now.role} asks in one project would reach ${chosen(now)} ${now.ends === undefined ? 'with no end date' : `until ${now.ends}`} instead of ${was.ends === undefined ? 'with no end date' : `until ${was.ends}`}`)
+    // An unchanged choice is said too when what its asks get changes: its agent turned off, or back on (AC4).
+    const project = canonicalProject(now.project)
+    const before = outcome(prior, project, now.role)
+    const current = outcome(after, project, now.role)
+    const ends = (choice) => (choice.ends === undefined ? 'with no end date' : `until ${choice.ends}`)
+    // The end date is said with the choice it belongs to when that choice decides before and after.
+    if (then.ends !== now.ends && current.reach === chosen(now) && before.reach === chosen(then)) push(`${now.role} asks in one project would reach ${chosen(now)} ${ends(now)} instead of ${ends(then)}`)
+    else push(change(now.role, before, current))
   }
   // Who researches (63.3): naming the first researcher closes the offer to every other agent; after that only the named ones change.
   const researched = namedResearchers(prior)

@@ -432,7 +432,7 @@ describe('asks in the project and its worktrees (73.2 AC1, AC3, AC4)', () => {
     expect(ask({ project: realpathSync(worktree) }).choice).toMatchObject({ agent: 'fable', rule: 'project-choice', project_choice: 'main' })
   })
 
-  it('a restore whose choices do not collide keeps an unavailable choice as it was approved (AC4, epic recheck 2)', () => {
+  it('a restore whose choices do not collide keeps an unavailable choice as it was approved, and its preview says asks there are refused (AC4, epic recheck 2)', async () => {
     const shop = makeProject('shop')
     const choice = `shop-review: {project: ${shop}, role: epic-reviewer, agent: fable}`
     approve(withChoices(choice))
@@ -442,6 +442,12 @@ describe('asks in the project and its worktrees (73.2 AC1, AC3, AC4)', () => {
     expect(readApproved().data.agents.find((agent) => agent.id === 'fable')?.enabled).toBe(false)
     approve(fableOff(EXAMPLE))
     expect(readApproved().data.project_choices).toBeUndefined()
+    // Its preview says that asks there would be refused and why, never that they would reach Fable (epic recheck 3, owner's recheck).
+    const preview = await previewApproval({ kind: 'restore', number: unavailable }, env)
+    expect(preview).toMatchObject({ valid: true, consequences: expect.arrayContaining([
+      'epic-reviewer asks in one project would be refused: the choice shop-review names Fable, who cannot be asked now (fable is disabled), instead of reaching the role\'s chain (Astra first)'
+    ]) })
+    expect(preview.consequences?.some((line) => /would reach Fable/u.test(line))).toBe(false)
     restoreGeneration(shown(), unavailable, { checkInspectedRoutes: () => {}, now: () => NOW })
     expect(readApproved().data.project_choices).toEqual([{ id: 'shop-review', project: shop, role: 'epic-reviewer', agent: 'fable' }])
     expect(readApproved().data.agents.find((agent) => agent.id === 'fable')?.enabled).toBe(false)
@@ -462,6 +468,21 @@ describe('asks in the project and its worktrees (73.2 AC1, AC3, AC4)', () => {
     expect(preview.consequences?.some((line) => /would reach Fable/u.test(line))).toBe(false)
     approveSections(shown(), ['project-choices'], { checkInspectedRoutes: () => {}, now: () => NOW })
     expect(refusal(() => ask({ project: shop }))).toMatchObject({ code: 'AGENT_NOT_ELIGIBLE', message: expect.stringContaining('(main) is disabled') })
+  })
+
+  it('turning a chosen agent off or back on, the choice kept: the review says what asks there get, and a changed choice whose agent cannot be asked is never said to be reached (AC2, AC4)', () => {
+    const on = parseRoster(withChoices('a: {project: /synthetic/shop, role: epic-reviewer, agent: fable}')).data!
+    const off = parseRoster(fableOff(withChoices('a: {project: /synthetic/shop, role: epic-reviewer, agent: fable}'))).data!
+    const offMedium = parseRoster(fableOff(withChoices('a: {project: /synthetic/shop, role: epic-reviewer, agent: fable, effort: medium}'))).data!
+    const offEnds = parseRoster(fableOff(withChoices('a: {project: /synthetic/shop, role: epic-reviewer, agent: fable, ends: 2099-12-31}'))).data!
+    const refused = 'epic-reviewer asks in one project would be refused: the choice a names Fable, who cannot be asked now (fable is disabled), instead of reaching Fable'
+    expect(consequences(on, off)).toContain(refused)
+    expect(consequences(off, on)).toContain('epic-reviewer asks in one project would reach Fable instead of being refused: the choice a names Fable, who cannot be asked now (fable is disabled)')
+    // A change to a choice whose agent stays off: asks there stay refused, so nothing is said to reach Fable.
+    for (const next of [offMedium, offEnds]) expect(consequences(off, next).some((line) => /would reach Fable/u.test(line))).toBe(false)
+    expect(consequences(on, offMedium)).toContain('epic-reviewer asks in one project would be refused: the choice a names Fable at medium, who cannot be asked now (fable is disabled), instead of reaching Fable')
+    // Removing it while off: the chain answers again, instead of the refusal.
+    expect(consequences(off, parseRoster(fableOff(EXAMPLE)).data!)).toContain('epic-reviewer asks in one project would reach the role\'s chain (Astra first) instead of being refused: the choice a names Fable, who cannot be asked now (fable is disabled)')
   })
 
   it('an ended choice no longer applies; one whose agent cannot answer is refused with the reason, never sent to another', () => {
