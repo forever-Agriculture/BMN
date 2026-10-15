@@ -88,6 +88,10 @@ Commands:
                                             Put one line in front of Claude Code's own status-line command so
                                             its plan use reaches BMN; the command itself is kept unchanged
   team [--all] [--json]                     The owner-approved team: one line per enabled active agent
+  team ask --role R --question-file - --key K [--access question|files|project] [--file P]... [--image P]...
+                                            Ask one teammate in a role, read-only, in a container BMN builds
+                                            for the run; the answer is advice. team asks lists your asks
+                                            (bmn team ask --help)
   roster validate|status|role|route|visibility|check|explain|bind|fence
                                             The team file in ~/.config/bmn/agents: validate it, list pending
                                             differences, print a role's chain, and check a dispatch
@@ -2514,6 +2518,22 @@ so a run outlives BMN closing.
 Export (`asks export`) is the allowlisted bundle above, never a sign-in file, an app database, the
 home folder, raw logs or an environment value.
 
+### How agents learn it
+
+- **Help and brief.** `bmn help` lists `team ask` and `bmn team ask --help` gives every option;
+  `bmn help agents` gives it three lines: when to ask, files or a project read, that the answer is
+  advice and that a refusal is reported, never worked around, with `--key`.
+- **The skill.** The repository holds a skill, `skills/team-ask/`: when an ask is the right tool and
+  when the owner decides instead, what each access mode reads and when a project read is needed
+  rather than named files, pictures, the key, the exits, reading the answer as advice, and that a
+  refusal is reported, never worked around. BMN never puts it into your skills folder: link it
+  yourself (`ln -s <repository>/skills/team-ask ~/.claude/skills/team-ask`), and it shows on
+  Team › Skills like every other skill; `bmn skills install` then gives it to the apps that need a
+  copy.
+- **Auto mode.** Claude Code's auto mode, as the owner runs it, let `bmn team ask` command lines run
+  when 72.1 measured them (2026-10-15), so BMN offers no permission rule for it. Should a later
+  Claude Code refuse it, the narrowest rule is `Bash(bmn team ask:*)`, installed only by the owner.
+
 ### Measured (72.1)
 
 Each row ran the installed CLI against a stand-in provider with synthetic credentials and isolated
@@ -2563,6 +2583,9 @@ What to send, and when
   resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.
   research ask            one public question to the web (--question-file <path> or -).
   judge ask               typed questions about one text to the team's judge; advice only.
+  team ask --role R --key K  a review, a design look or a second opinion from a teammate, read-only;
+                          --access files for named files; project when history or the tree matters.
+                          Its answer is advice to weigh. Report a refusal; never work around it.
 
 Your states are claims, not verdicts
   claimed-done says you believe the work is finished. The owner sees it as your claim.

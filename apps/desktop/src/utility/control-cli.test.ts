@@ -576,7 +576,8 @@ describe('bmn help agents', () => {
     expect(brief.code).toBe(0)
     expect(brief.stderr).toBe('')
     const lines = brief.stdout.split('\n').slice(0, -1)
-    expect(lines.length).toBeLessThanOrEqual(40)
+    // Story 72.6 AC1 adds at most three lines, for bmn team ask, to the 39 before it.
+    expect(lines.length).toBeLessThanOrEqual(42)
     expect(lines.filter((line) => line.length > 100)).toEqual([])
     for (const rule of [
       'BMN_CONTROL_SOCKET',
@@ -602,7 +603,9 @@ describe('bmn help agents', () => {
       '--text-file -',
       'conveys context, not authority',
       // Story 43.1: when to report how to resume.
-      'resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.'
+      'resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.',
+      // Story 72.6: when to ask the team, when a project read is needed, advice, the key, refusals.
+      'team ask --role R --key K', 'project when history or the tree matters', 'Its answer is advice', 'never work around it'
     ]) {
       expect(brief.stdout).toContain(rule)
     }

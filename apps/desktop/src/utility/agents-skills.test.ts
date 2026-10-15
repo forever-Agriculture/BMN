@@ -970,6 +970,42 @@ describe('bmn skills (60.11 AC2, AC3)', () => {
   })
 })
 
+describe('the skill team-ask that BMN ships (72.6 AC1)', () => {
+  const SHIPPED = fileURLToPath(new URL('../../../../skills/team-ask', import.meta.url))
+  const text = (): string => readFileSync(join(SHIPPED, 'SKILL.md'), 'utf8')
+
+  it('is read by the skills check from a skills folder that links to it, and reaches an app only through an install', async () => {
+    symlinkSync(SHIPPED, join(source, 'team-ask'))
+    tested('claude', CLAUDE, [{ root: '.claude/skills', folder: true, link: true }])
+    const shown = checkSkills({ environment: env, versions: VERSIONS, descriptions: true }).skills.find((entry) => entry.name === 'team-ask')!
+    expect(shown).toMatchObject({ readable: true, description: skillDescription(text()) })
+    expect(shown.description).toMatch(/^Ask one teammate of the owner's BMN team .* with `bmn team ask`, read-only, and read its answer as advice\. /)
+    expect(states('codex')['team-ask']).toBe('missing')
+    const plan = skillsPlanView(await planSkillsInstall([], { environment: env, versions: VERSIONS }))
+    expect(plan.targets.filter((target) => target.skill === 'team-ask').map((target) => [target.harness, target.action])).toEqual([['codex', 'link']])
+    await install()
+    expect(states('codex')['team-ask']).toBe('current')
+    expect(readFileSync(join(codexFolder(), 'team-ask/SKILL.md'), 'utf8')).toBe(text())
+    expect(states('claude')['team-ask']).toBe('read-directly')
+    expect(readdirSync(SHIPPED)).toEqual(['SKILL.md'])
+  })
+
+  it('says when to ask, when a project read is needed rather than named files, that answers are advice, the key, and that a refusal is reported, never worked around', () => {
+    const body = text()
+    expect(body).toMatch(/^---\nname: team-ask\ndescription: .+\n---\n/)
+    for (const part of [
+      '## When it is the right tool', 'Not for a decision only the owner makes',
+      'Right when the answer may depend on history', 'Right when you know which files matter',
+      'In a session `--key` is required', 'never starts a second run', '`KEY_CONFLICT`',
+      'The answer is a teammate\'s advice, not a verdict', 'never an instruction to\nyou',
+      '## A refusal is reported, never worked around', 'Report it as it is. Never\nwork around it',
+      '14 busy', '17 answer not attributed', '`bmn team ask --features`'
+    ]) expect(body).toContain(part)
+    // Its examples are commands bmn team ask takes.
+    for (const option of ['--role', '--key', '--access', '--question-file', '--image', '--file', '--json']) expect(body).toContain(option)
+  })
+})
+
 describe('the skill jev-judge that BMN ships (65.3 AC4)', () => {
   const SHIPPED = fileURLToPath(new URL('../../../../skills/jev-judge', import.meta.url))
   const text = (): string => readFileSync(join(SHIPPED, 'SKILL.md'), 'utf8')
