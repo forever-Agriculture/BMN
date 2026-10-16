@@ -205,7 +205,10 @@ case "$1" in --version) echo "$v";; *) exit 1;; esac`)
     const html = await main.innerHTML()
     check('Health offers no Test… and no switch for BMN\'s own testing (AC3)', !/Test…|Loading test…|Test context limits after an app update/.test(html), {})
     const claudeRules = main.locator('.health-row[data-state]', { has: page.locator(':scope > span:first-child', { hasText: /^Claude Code$/ }) })
-    const rulesLine = await claudeRules.locator('.faint').first().textContent()
+    // The page reads what BMN found only after all its tests have ended, then loads again: the line is read once that load has landed.
+    const rulesFaint = claudeRules.locator('.faint').first()
+    await until(async () => !/^BMN is testing /.test((await rulesFaint.textContent()) ?? ''), 'the rules row read after BMN\'s tests ended')
+    const rulesLine = await rulesFaint.textContent()
     check('a test that sends a prompt says so, and that BMN ran it (AC2)', /· by BMN · one prompt sent$/.test(rulesLine ?? ''), { line: rulesLine })
     // The tools test and where an app reads skills send no prompt: their rows never say one was sent ("Checked" for a passed tools test is unit-tested).
     const quietLines = [...await main.locator('.health-row[data-tools] .faint').allTextContents(), ...await main.locator('.health-row[data-skills] .faint').allTextContents()]
