@@ -75,7 +75,6 @@ export const METHOD_REGISTRY = Object.freeze({
   historyStatus: 'history.status',
   historyConfirm: 'history.confirm',
   backupExport: 'backup.export',
-  backupVerify: 'backup.verify',
   telegramConfigure: 'telegram.configure',
   telegramStatus: 'telegram.status',
   telegramTest: 'telegram.test',

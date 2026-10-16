@@ -743,6 +743,13 @@ describe('Rules › Editor (60.6 AC1–AC3)', () => {
   })
 })
 
+it('Team whose file needs fixing reads it again when the owner comes back, with no Check now (Story 75.7)', () => {
+  const broken = words(pageMarkup({ name: 'agents' }, team({ data: null, base: null }))).replace(/\s+/g, ' ')
+  expect(broken).toContain('The team file needs fixing')
+  expect(broken).toContain('Nothing in it takes effect until it is fixed and approved; BMN reads it again when you come back.')
+  expect(broken).not.toContain('Check now')
+})
+
 describe('Rules › Health (60.6 AC4)', () => {
   const markup = rulesMarkup('health')
 
@@ -750,7 +757,8 @@ describe('Rules › Health (60.6 AC4)', () => {
     expect(markup).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')} · 1 skill entry to install · 1 skill exposed · 2 tool entries to install · 1 tool exposed</span>`)
     // With the skills and the tools in order, the header says only when Health was read.
     expect(rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0, exposed: 0 }, tools: { ...RULES.tools, pending: 0, exposed: 0 } } }))).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')}</span>`)
-    expect(markup).toContain('>Check now</button>')
+    // Story 75.7: Health, Skills and Tools read themselves again by Health's rule; no button asks for it.
+    for (const page of [markup, rulesMarkup('skills'), rulesMarkup('tools')]) expect(page).not.toContain('Check now')
     expect(markup).toMatch(/data-state="current"><span>Claude Code<\/span><span class="path mono" title="\/home\/synthetic\/.claude\/CLAUDE.md">~\/.claude\/CLAUDE.md<\/span><span class="health-state"><span>Current <span class="muted">· Full rules<\/span>/)
     expect(markup).toContain(`<span class="faint">Test passed ${shortDate('2026-10-09T20:00:00.000Z')} · stale</span>`)
     expect(markup).toMatch(/data-state="stale">.*?aria-label="Needs you".*?Differs from the rules <span class="muted">· Full rules<\/span><\/span><span class="faint">Never tested<\/span>/)
@@ -788,7 +796,7 @@ describe('Rules › Health: Update… (60.6: the app\'s own updater, shown befor
   const markup = rulesMarkup('health')
   const apps = RULES.apps
   const sheet = (index: number, extra: Partial<Parameters<typeof UpdateSheet>[0]> = {}): string =>
-    renderToStaticMarkup(createElement(UpdateSheet, { app: apps[index]!, home: RULES.home, sessions: 0, hasTest: false, busy: false, result: null, onCopied: noop, onCheck: noop, onClose: noop, ...extra }))
+    renderToStaticMarkup(createElement(UpdateSheet, { app: apps[index]!, home: RULES.home, sessions: 0, hasTest: false, busy: false, result: null, onCopied: noop, onClose: noop, ...extra }))
 
   it('shows under each version the program BMN finds, and says when it finds none', () => {
     expect(markup).toContain('Agent apps<span class="caption">the program BMN finds, its version and where it sends data</span>')
@@ -821,7 +829,7 @@ describe('Rules › Health: Update… (60.6: the app\'s own updater, shown befor
     expect(read).toContain('Open in BMN BMN currently recognises 2 Claude Code sessions. Restart them to use the updated installation; their running versions are not checked.')
     expect(read).toContain('Afterwards Run the command in a terminal. When you come back to Health, BMN reads the version and where Claude Code sends data again. A loading test made before the update needs to be run again.')
     expect(read).toContain('The updater decides what it downloads and replaces, and may ask questions; BMN does not see that in advance and cannot undo it. BMN does not know whether a newer version exists.')
-    expect([...claude.matchAll(/<button type="button"[^>]*>([^<]+)<\/button>/g)].map((match) => match[1])).toEqual(['Copy command', 'Check now', 'Close'])
+    expect([...claude.matchAll(/<button type="button"[^>]*>([^<]+)<\/button>/g)].map((match) => match[1])).toEqual(['Copy command', 'Close'])
     // Nothing on the sheet starts the updater: the only action on the command is a copy.
     expect(read).not.toMatch(/\bRun update\b|\bUpdate now\b|\bStart\b/)
     expect(claude).not.toContain('role="status"')
@@ -831,7 +839,7 @@ describe('Rules › Health: Update… (60.6: the app\'s own updater, shown befor
     const typed: string[][] = []
     const offered = sheet(1, { onRun: async (name, command) => { typed.push([name, command]); return 'typed' } })
     expect([...offered.matchAll(/<button type="button"( class="primary")?[^>]*>([^<]+)<\/button>/g)].map((match) => [match[2], match[1] !== undefined]))
-      .toEqual([['Update now', true], ['Copy command', false], ['Check now', false], ['Close', false]])
+      .toEqual([['Update now', true], ['Copy command', false], ['Close', false]])
     expect(words(offered).replace(/\s+/g, ' ')).toContain('Afterwards Update now opens a new session and, once its shell shows its prompt, types the command there and presses Enter; you see what the updater does and answer what it asks. Or run it in any terminal. BMN reads the version and where Codex sends data again each time that session&#x27;s shell is back at its prompt, and whenever you come back to Health.')
     // What BMN takes for the prompt, and the one case where that is not the prompt, are said before the press.
     const limit = 'BMN knows the prompt by the sign the shell&#x27;s line editor gives; a question that one of your shell&#x27;s start-up files asks with line editing gives the same sign and would get the command as its answer.'
@@ -895,11 +903,12 @@ describe('Rules › Health: Update… (60.6: the app\'s own updater, shown befor
     expect(words(sheet(0))).not.toContain('own command')
   })
 
-  it('with no program found the command cannot be copied; a check that is running says so', () => {
+  it('with no program found the command cannot be copied; a check that is running is said by Health, not the sheet', () => {
     const missing = sheet(2, { busy: true })
     expect(words(missing).replace(/\s+/g, ' ')).toContain('Installed version not read Program not found Command no program found')
     expect(missing).toContain('<button type="button" class="primary" disabled="">Copy command</button>')
-    expect(missing).toContain('<button type="button" disabled="">Checking…</button>')
+    expect(missing).not.toContain('Checking…')
+    expect(rulesMarkup('health', rules({ busy: true }))).toContain('<span class="faint">Checking…</span>')
   })
 
   it('counts only the sessions BMN recognises and never claims their versions', () => {
@@ -955,7 +964,7 @@ describe('universal words (R60-NFR8)', () => {
     const pages = [
       pageMarkup({ name: 'agents' }), pageMarkup({ name: 'agent', id: 'sol' }), pageMarkup({ name: 'new' }), pageMarkup({ name: 'roles' }), pageMarkup({ name: 'changes' }),
       rulesMarkup('editor'), rulesMarkup('skills'), rulesMarkup('tools'), rulesMarkup('health'),
-      ...RULES.apps.map((app) => renderToStaticMarkup(createElement(UpdateSheet, { app, home: RULES.home, sessions: 2, hasTest: true, busy: false, result: 'The program still reports 1.0.0.', onCopied: noop, onCheck: noop, onClose: noop })))
+      ...RULES.apps.map((app) => renderToStaticMarkup(createElement(UpdateSheet, { app, home: RULES.home, sessions: 2, hasTest: true, busy: false, result: 'The program still reports 1.0.0.', onCopied: noop, onClose: noop })))
     ]
     for (const page of pages) {
       // The file names the owner's own apps use are theirs, not BMN's words.

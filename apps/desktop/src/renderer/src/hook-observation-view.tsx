@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import type { HookObservation, HookOriginRecord } from '@bmn/protocol'
 import { boundedRead } from './bounded-read'
+import { useSelfRefresh } from './self-refresh'
 import { failureDetail } from './bridge-error'
 import { compactionWords, modelOriginFlag, modelOriginLabel } from './session-presentation'
 import './hook-observation-view.css'
@@ -43,13 +44,12 @@ export function HookObservationView(props: {
     // A new origin means this run's hook just reported, so the Model row follows the flag at once
     // instead of waiting for the next refresh tick.
   }, [props.sessionId, props.incarnationId, props.refreshTick, refresh, props.origin?.observedAt])
+  // Story 75.7: and as soon as this session's hook reports, and when the window comes back; no button asks for it.
+  useSelfRefresh(() => setRefresh((value) => value + 1), { topics: ['hooks'], sessionId: props.sessionId })
 
   return (
     <section className="hook-observation inspector-section" aria-label="Harness integration">
-      <h3>Harness
-        <button type="button" className="ghost small" onClick={() => setRefresh((value) => value + 1)}
-          disabled={reading}>Refresh observation</button>
-      </h3>
+      <h3>Harness</h3>
       {reading && observation === null ? <p className="meta">Reading hook observations…</p> : null}
       {error ? <p className="inline-error" role="status">Observation unavailable: {error}</p> : null}
       {observation?.state === 'none' ? (

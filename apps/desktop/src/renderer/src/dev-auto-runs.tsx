@@ -3,6 +3,7 @@ import type { DevAutoRun, DevAutoRunsResult, WorkspaceRecord } from '@bmn/protoc
 import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
 import { boundedRead } from './bounded-read'
+import { SELF_REFRESH_MS, useSelfRefresh } from './self-refresh'
 import './dev-auto.css'
 
 export function DevAutoRunsDialog({ workspaceId, workspaces, onClose, onOpenSession }: {
@@ -31,7 +32,10 @@ export function DevAutoRunsDialog({ workspaceId, workspaces, onClose, onOpenSess
     mounted.current = true
     void load()
     return () => { mounted.current = false; generation.current++ }
-  }, [workspaceId]) // reads only on open and explicit Refresh
+  }, [workspaceId])
+  // Story 75.7: dev-auto writes its files outside BMN, so they are read again every 30 s while this is on screen, when
+  // the window comes back and when a request changes; the read is bounded and what was shown stays meanwhile.
+  useSelfRefresh(load, { topics: ['attention'], everyMs: SELF_REFRESH_MS })
   const show = (run: DevAutoRun): React.JSX.Element => <li key={run.checkout}>
     <h4>{run.branch ?? 'Detached checkout'}</h4>
     <p>{run.workspaceIds.map((id) => workspaces.find((workspace) => workspace.workspaceId === id)?.name ?? 'Workspace unavailable').join(', ')} · {run.checkout}</p>
@@ -55,9 +59,9 @@ export function DevAutoRunsDialog({ workspaceId, workspaces, onClose, onOpenSess
     </>}
   </li>
   return <Dialog label="dev-auto runs" onClose={onClose} className="workspace-results-dialog dev-auto-dialog">
-    <div className="workspace-results-toolbar"><button type="button" onClick={() => void load()}>Refresh</button>
+    <div className="workspace-results-toolbar">
       {result ? <span>Read {new Date(result.observedAt).toLocaleString()}</span> : null}</div>
-    {loading ? <p role="status">Reading dev-auto runs…</p> : null}
+    {loading && result === null ? <p role="status">Reading dev-auto runs…</p> : null}
     {error ? <p role="alert">{error}</p> : null}
     {result ? <>
       {result.skipped ? <p role="status">Incomplete: {result.skipped} sources or items skipped.</p> : null}

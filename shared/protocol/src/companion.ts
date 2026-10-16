@@ -899,6 +899,13 @@ export interface BackupVerifyResult {
   }>
 }
 
+/** What an export wrote, and the check of the copy it ran at once (Story 75.7). */
+export interface BackupExportResult {
+  directory: string
+  manifest: BackupManifest
+  verification: BackupVerifyResult
+}
+
 export interface ControlInfo {
   socketPath: string
   cliPath: string

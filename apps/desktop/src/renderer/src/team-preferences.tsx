@@ -1288,10 +1288,8 @@ export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?:
   if (data === null) {
     return (
       <>
-        <PageHead title="Team" status="The team file needs fixing">
-          <button type="button" onClick={() => void team.reload()}>Check now</button>
-        </PageHead>
-        <p className="page-note">BMN cannot read <span className="mono">{displayPath(snapshot.rosterPath, snapshot.home)}</span>. Nothing in it takes effect until it is fixed and approved.</p>
+        <PageHead title="Team" status="The team file needs fixing" />
+        <p className="page-note">BMN cannot read <span className="mono">{displayPath(snapshot.rosterPath, snapshot.home)}</span>. Nothing in it takes effect until it is fixed and approved; BMN reads it again when you come back.</p>
         <Issues issues={snapshot.file.errors} />
         <button type="button" onClick={() => void window.aiTerminal.openTeamFile()}>Open team file</button>
       </>

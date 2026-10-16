@@ -2270,7 +2270,6 @@ function App(): React.JSX.Element {
                   directory={selectedRecord.cwd}
                   identity={detailsRepository.identity}
                   loading={detailsRepository.loading}
-                  onRefresh={() => void detailsRepository.refresh()}
                   home={home}
                 />
                 {selectedProgress ? (
@@ -2409,7 +2408,6 @@ function App(): React.JSX.Element {
                 directory={sessionForm.cwd}
                 identity={formRepository.identity}
                 loading={formRepository.loading}
-                onRefresh={() => void formRepository.refresh()}
               /> : null}
               {!editingSessionId ? <CheckoutPeerWarning report={formPeers.report} loading={formPeers.loading} /> : null}
               <details className="advanced" open={!!editingSessionId || undefined}>

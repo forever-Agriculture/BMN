@@ -11,6 +11,7 @@ import type {
   RulesPlan
 } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
+import { onUpdateEnded } from './rules-preferences'
 import { changedSections, groupDifferences, sameData, type DiffGroup, type RosterSection } from './roster-staging'
 
 const PREVIEW_DELAY_MS = 250
@@ -159,6 +160,11 @@ export function useTeamState(): TeamState {
     const onFocus = (): void => { void reload() }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
+  }, [idle, reload])
+  // And once a command BMN typed for an app update has ended, by Health's rule (Story 75.7): the apps it names may have changed.
+  useEffect(() => {
+    if (!idle) return
+    return onUpdateEnded(() => { void reload() })
   }, [idle, reload])
 
   const base = snapshot?.file.data ?? null

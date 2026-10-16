@@ -322,7 +322,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
           firstRow: section?.querySelector('.preferences-row .preferences-row-label')?.textContent?.trim() ?? null }
       })
       assert.deepEqual(telegram, { terms: ['State', 'Token', 'Last poll', 'Last error', 'Rejected updates'], helpInLabelColumn: 0,
-        refreshInHead: 'Refresh', firstRow: 'Enabled' },
+        refreshInHead: null, firstRow: 'Enabled' },
         `${colorMode} Telegram: ${JSON.stringify(telegram)}`)
       await page.keyboard.press('Escape')
       await sleep(200)

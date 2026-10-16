@@ -133,7 +133,6 @@ describe('protocol surface', () => {
         'history.status',
         'history.confirm',
         'backup.export',
-        'backup.verify',
         'telegram.configure',
         'telegram.status',
         'telegram.test',
@@ -144,8 +143,9 @@ describe('protocol surface', () => {
     )
     // Story 75.3 removed the two methods of custom templates and the six of launch sets (91 before); Story 75.4 the
     // owner's Paste, Pause and pair Resume of messages and the Resume of turn recording (83 before); Story 75.5 the
-    // owner's review and save of a handoff (79 before).
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(77)
+    // owner's review and save of a handoff (79 before); Story 75.7 the separate check of a backup, which an export now
+    // runs on its own copy (77 before).
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(76)
   })
 
   it('exports the initial stable error codes', () => {

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type {
   AppearanceSettings,
   AppSettings,
-  BackupManifest,
+  BackupExportResult,
   BackupVerifyResult,
   ControlInfo,
   HookCheckAgent,
@@ -23,6 +23,7 @@ import { HistoryPreferences } from './history-preferences'
 import { useResearchState } from './models-preferences'
 import { TeamLedger, TeamPreferences, TeamToast, type TeamPage } from './team-preferences'
 import { useTeamState } from './team-state'
+import { SELF_REFRESH_MS, useSelfRefresh } from './self-refresh'
 import { RulesPreferences, useRulesState, type RecognisedSessions } from './rules-preferences'
 import type { RunInSession } from './session-command'
 import type { ReportedModel } from './model-suggestions'
@@ -44,6 +45,36 @@ function idText(value: number | null): string {
 
 function pluralize(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`
+}
+
+const BACKUP_FAILURE_WORDS: Record<BackupVerifyResult['failures'][number]['reason'], string> = {
+  'missing': 'missing from the copy',
+  'hash-mismatch': 'differs from what was written',
+  'unreadable-manifest': 'cannot be read',
+  'unreadable-database': 'cannot be read as a database',
+  'not-in-manifest': 'is in the database but not in the manifest',
+  'database-mismatch': 'does not match the backup database'
+}
+
+/** What an export wrote and what the check of the copy found, said at once (Story 75.7). */
+export function BackupOutcome(props: { result: BackupExportResult }): React.JSX.Element {
+  const { directory, manifest, verification } = props.result
+  const excluded = manifest.excluded.length > 0 ? <> Not included: {manifest.excluded.join(', ')}.</> : null
+  if (verification.ok) {
+    return (
+      <p className="preferences-success" role="status">
+        Exported to {directory}: database plus {pluralize(manifest.artifacts.length, 'artifact')} · verified, {pluralize(verification.checked, 'file')} checked.{excluded}
+      </p>
+    )
+  }
+  return (
+    <div className="preferences-error" role="alert">
+      <p>Exported to {directory}, but the copy failed its check; keep the earlier backup and export again.</p>
+      <ul>
+        {verification.failures.map((failure) => <li key={`${failure.file}:${failure.reason}`}>{failure.file}: {BACKUP_FAILURE_WORDS[failure.reason]}</li>)}
+      </ul>
+    </div>
+  )
 }
 
 const USAGE_LINES = [
@@ -293,6 +324,9 @@ export function PreferencesDialog(props: {
       setTelegramStatusBusy(false)
     }
   }
+  // Story 75.7: the status reads itself again while the Telegram page is on screen: when BMN says Telegram changed, when
+  // the window comes back and every 30 s for the polling line. It is never a press, and it never touches the form.
+  useSelfRefresh(refreshTelegramStatus, { topics: ['telegram'], everyMs: SELF_REFRESH_MS, shown: () => page === 'telegram' })
 
   // --- Telegram: token ---------------------------------------------------
   const [tokenInput, setTokenInput] = useState('')
@@ -484,7 +518,7 @@ export function PreferencesDialog(props: {
   // --- Backup ---------------------------------------------------------------
   const [exportBusy, setExportBusy] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
-  const [exportResult, setExportResult] = useState<{ directory: string; manifest: BackupManifest } | null>(null)
+  const [exportResult, setExportResult] = useState<BackupExportResult | null>(null)
 
   async function runExportBackup(): Promise<void> {
     setExportBusy(true)
@@ -496,23 +530,6 @@ export function PreferencesDialog(props: {
       setExportError(failureDetail(error, 'Could not export the backup'))
     } finally {
       setExportBusy(false)
-    }
-  }
-
-  const [verifyBusy, setVerifyBusy] = useState(false)
-  const [verifyError, setVerifyError] = useState<string | null>(null)
-  const [verifyResult, setVerifyResult] = useState<BackupVerifyResult | null>(null)
-
-  async function runVerifyBackup(): Promise<void> {
-    setVerifyBusy(true)
-    setVerifyError(null)
-    try {
-      const outcome = await window.aiTerminal.verifyBackup()
-      if (outcome) setVerifyResult(outcome)
-    } catch (error) {
-      setVerifyError(failureDetail(error, 'Could not verify the backup'))
-    } finally {
-      setVerifyBusy(false)
     }
   }
 
@@ -705,9 +722,6 @@ export function PreferencesDialog(props: {
       <section className="preferences-section">
         <div className="preferences-section-head">
           <h3>Telegram</h3>
-          <button type="button" className="small" disabled={telegramStatusBusy} onClick={() => void refreshTelegramStatus()}>
-            {telegramStatusBusy ? 'Refreshing…' : 'Refresh'}
-          </button>
         </div>
         {props.telegramCue ? (
           <div className="history-confirm telegram-cue" role="status">
@@ -1227,18 +1241,15 @@ export function PreferencesDialog(props: {
         <h3>Backup</h3>
         <div className="preferences-row">
           <div className="preferences-row-label">
-            <span>Export and verify</span>
+            <span>Export</span>
           </div>
           <div className="preferences-row-control">
             <div className="preferences-button-row">
               <button type="button" disabled={exportBusy} onClick={() => void runExportBackup()}>
                 {exportBusy ? 'Exporting…' : 'Export backup…'}
               </button>
-              <button type="button" disabled={verifyBusy} onClick={() => void runVerifyBackup()}>
-                {verifyBusy ? 'Verifying…' : 'Verify a backup…'}
-              </button>
             </div>
-            <p className="preferences-help">Saves the database and artifacts to a folder you choose.</p>
+            <p className="preferences-help">Saves the database and artifacts to a folder you choose and checks the copy.</p>
           </div>
         </div>
         {exportError && (
@@ -1246,34 +1257,7 @@ export function PreferencesDialog(props: {
             {exportError}
           </p>
         )}
-        {exportResult && (
-          <p className="preferences-success" role="status">
-            Exported to {exportResult.directory}: database plus {pluralize(exportResult.manifest.artifacts.length, 'artifact')}.
-            {exportResult.manifest.excluded.length > 0 && <> Not included: {exportResult.manifest.excluded.join(', ')}.</>}
-          </p>
-        )}
-        {verifyError && (
-          <p className="preferences-error" role="alert">
-            {verifyError}
-          </p>
-        )}
-        {verifyResult &&
-          (verifyResult.ok ? (
-            <p className="preferences-success" role="status">
-              Backup verified: {pluralize(verifyResult.checked, 'file')} checked.
-            </p>
-          ) : (
-            <div className="preferences-error" role="alert">
-              <p>Backup verification failed:</p>
-              <ul>
-                {verifyResult.failures.map((failure) => (
-                  <li key={failure.file}>
-                    {failure.file}: {failure.reason}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
+        {exportResult && <BackupOutcome result={exportResult} />}
       </section>
       </>)}
       </main>

@@ -19,6 +19,7 @@ import {
   type AppEventMessage,
   type ArtifactRecord,
   type AttentionRecord,
+  type BackupExportResult,
   type BackupManifest,
   type BackupVerifyResult,
   type HookEventRecord,
@@ -531,9 +532,10 @@ async function storePublishedArtifact(artifactId: string, sessionId = 's1', sour
 }
 
 const exportBackup = (parent: string) =>
-  service.route('backup.export', { directory: parent }) as Promise<{ directory: string; manifest: BackupManifest }>
+  service.route('backup.export', { directory: parent }) as Promise<BackupExportResult>
+// The check an export runs on its copy (Story 75.7), run again here on a copy changed after it.
 const verifyBackup = (directory: string) =>
-  service.route('backup.verify', { directory }) as Promise<BackupVerifyResult>
+  service['verifyBackup'](directory) as Promise<BackupVerifyResult>
 
 type AgentHandoffParams = {
   sourceSessionId: string
@@ -761,16 +763,35 @@ describe('backup', () => {
     expect(await readFile(join(first.directory, 'state.sqlite3'))).toEqual(originalDatabase)
     expect(first.manifest.artifacts).toHaveLength(0)
     expect(second.manifest.artifacts).toHaveLength(1)
+    // Each export checked its own copy at once (Story 75.7).
+    expect(first.verification).toEqual({ directory: first.directory, ok: true, checked: 1, failures: [] })
+    expect(second.verification).toEqual({ directory: second.directory, ok: true, checked: 2, failures: [] })
     expect(await verifyBackup(first.directory)).toMatchObject({ ok: true, checked: 1 })
     expect(await verifyBackup(second.directory)).toMatchObject({ ok: true, checked: 2 })
   })
 
   it('exports every ready artifact, not only the newest 1,000', async () => {
     const records = await storeArtifacts(1001)
-    const { manifest, directory } = await exportBackup(join(root, 'backups'))
+    const { manifest, verification } = await exportBackup(join(root, 'backups'))
     expect(manifest.artifacts.map((entry) => entry.artifactId).sort()).toEqual(records.map((record) => record.artifactId))
-    expect(await verifyBackup(directory)).toMatchObject({ ok: true, checked: 1002, failures: [] })
+    expect(verification).toMatchObject({ ok: true, checked: 1002, failures: [] })
   }, 30_000)
+
+  it('says in the export\'s own answer when the copy fails its check (Story 75.7)', async () => {
+    await storeArtifacts(1)
+    const store = service['options'].database
+    const real = store.readyArtifactsInBackup.bind(store)
+    // The export reads the backup database to copy its artifacts, then the check reads it again: that second read fails.
+    const read = vi.spyOn(store, 'readyArtifactsInBackup').mockImplementationOnce(real).mockRejectedValueOnce(new Error('synthetic'))
+    try {
+      const { directory, manifest, verification } = await exportBackup(join(root, 'backups'))
+      expect(manifest.artifacts).toHaveLength(1)
+      expect(verification).toEqual({ directory, ok: false, checked: 2, failures: [{ file: manifest.database.file, reason: 'unreadable-database' }] })
+      expect(read).toHaveBeenCalledTimes(2)
+    } finally {
+      read.mockRestore()
+    }
+  })
 
   it('explicitly excludes retained hook metadata from backups', async () => {
     await mkdir(join(root, 'state'), { recursive: true })

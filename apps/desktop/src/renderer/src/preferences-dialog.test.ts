@@ -1,9 +1,9 @@
 // MODULE: preferences-dialog.test.ts - Telegram's status list says an error once, and in full (Story 40.3); digest and quiet-hours rows; the left navigation and its pages (Story 60.5)
-import { DEFAULT_APP_SETTINGS, type AppSettings, type TelegramStatus } from '@bmn/protocol'
+import { DEFAULT_APP_SETTINGS, type AppSettings, type BackupExportResult, type TelegramStatus } from '@bmn/protocol'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { PREFERENCES_NAVIGATION, PreferencesDialog, TelegramStatusList, pageParent } from './preferences-dialog'
+import { BackupOutcome, PREFERENCES_NAVIGATION, PreferencesDialog, TelegramStatusList, pageParent } from './preferences-dialog'
 
 const ERROR = 'Another client is polling this bot token; stop the other client or revoke the token in BotFather'
 const status = (lastError: string | null): TelegramStatus => ({
@@ -169,5 +169,40 @@ describe('the left navigation and its pages (Story 60.5 AC1)', () => {
     expect(count(markup, '<div class="preferences-page">')).toBe(1)
     expect(markup).toMatch(/<div class="preferences-page"><section class="preferences-section" id="agent-control-section"><h3>Local control<\/h3>/)
     for (const title of ['Appearance', 'Terminal', 'Notifications', 'Voice', 'History', 'Backup']) expect(markup).toMatch(new RegExp(`<h3[^>]*>${title}</h3>`))
+  })
+})
+
+describe('Backup checks what it wrote at once (Story 75.7)', () => {
+  const manifest = {
+    formatVersion: 1 as const, createdAt: '2026-10-16T12:00:00.000Z', database: { file: 'state.sqlite3', sha256: 'a'.repeat(64), byteLength: 10 },
+    artifacts: [{ file: 'artifacts/bb/artifact-1', artifactId: 'artifact-1', sha256: 'b'.repeat(64), byteLength: 5 }], excluded: ['Telegram bot token']
+  }
+  const outcome = (verification: BackupExportResult['verification']): string =>
+    renderToStaticMarkup(createElement(BackupOutcome, { result: { directory: '/backups/bmn-backup-1', manifest, verification } }))
+
+  it('offers one Export, which says it checks the copy, and no Verify', () => {
+    const markup = renderToStaticMarkup(createElement(PreferencesDialog, {
+      settings: DEFAULT_APP_SETTINGS, onSettings: () => undefined, onClose: () => undefined,
+      saveVoice: async () => DEFAULT_APP_SETTINGS, suggestVocabulary: () => ({ ok: false as const, reason: 'test' }) }))
+    expect(markup).toContain('>Export backup…</button>')
+    expect(markup).toContain('Saves the database and artifacts to a folder you choose and checks the copy.')
+    expect(markup).not.toMatch(/Verify a backup|Export and verify/)
+  })
+
+  it('says what was written and that the copy checked out', () => {
+    const markup = outcome({ directory: '/backups/bmn-backup-1', ok: true, checked: 2, failures: [] })
+    expect(markup).toContain('role="status"')
+    expect(markup).toContain('Exported to /backups/bmn-backup-1: database plus 1 artifact · verified, 2 files checked. Not included: Telegram bot token.')
+  })
+
+  it('says a copy that failed its check, file by file, as an alert', () => {
+    const markup = outcome({ directory: '/backups/bmn-backup-1', ok: false, checked: 2, failures: [
+      { file: 'artifacts/bb/artifact-1', reason: 'hash-mismatch' }, { file: 'state.sqlite3', reason: 'unreadable-database' }
+    ] })
+    expect(markup).toContain('role="alert"')
+    expect(markup).toContain('the copy failed its check; keep the earlier backup and export again.')
+    expect(markup).toContain('<li>artifacts/bb/artifact-1: differs from what was written</li>')
+    expect(markup).toContain('<li>state.sqlite3: cannot be read as a database</li>')
+    expect(markup).not.toContain('verified, ')
   })
 })

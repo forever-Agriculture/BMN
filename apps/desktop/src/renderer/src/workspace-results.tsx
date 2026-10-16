@@ -6,6 +6,7 @@ import { evidenceRows } from './progress-evidence-dialog'
 import { progressPresentation, type ProgressPresentation } from './session-presentation'
 import { failureDetail } from './bridge-error'
 import { boundedRead } from './bounded-read'
+import { useSelfRefresh } from './self-refresh'
 import './workspace-results.css'
 
 export interface WorkspaceReportRow {
@@ -72,9 +73,9 @@ export function WorkspaceResultsDialog(props: {
   const sequence = useRef(0)
   const mounted = useRef(true)
 
+  /** Story 75.7: what was shown stays on screen while BMN reads again; a failed read keeps it and says so. */
   async function load(preserveError = false): Promise<void> {
     const request = ++sequence.current
-    setState('loading')
     if (!preserveError) setError(null)
     try {
       const [sessions, reports, artifacts] = await boundedRead(Promise.all([
@@ -87,7 +88,6 @@ export function WorkspaceResultsDialog(props: {
       setState('ready')
     } catch (cause) {
       if (!mounted.current || request !== sequence.current) return
-      setSnapshot(null)
       setState('unavailable')
       setError(failureDetail(cause, 'Workspace results unavailable'))
     }
@@ -101,8 +101,10 @@ export function WorkspaceResultsDialog(props: {
       sequence.current += 1
     }
   }, [props.workspace.workspaceId])
+  // Story 75.7: a report, a published file or a session that changes is read again at once, and so is everything when the owner comes back.
+  useSelfRefresh(() => load(), { topics: ['progress', 'artifacts', 'catalogue'] })
 
-  const results = snapshot && state === 'ready' ? workspaceResults(
+  const results = snapshot ? workspaceResults(
     props.workspace.workspaceId, snapshot.sessions, snapshot.reports, snapshot.artifacts, props.now
   ) : null
 
@@ -115,7 +117,7 @@ export function WorkspaceResultsDialog(props: {
       const currentSession = sessions.find((item) => item.sessionId === session.sessionId && item.archivedAt === null)
       const currentReport = reports.find((item) => item.sessionId === report.sessionId && item.source === report.source)
       if (!currentSession || !currentReport || !sameProgressRecord(currentReport, report)) {
-        setError('This report changed or its session is unavailable. Refresh and review it again.')
+        setError('This report changed or its session is unavailable. BMN read it again; review it again.')
         await load(true)
         return
       }
@@ -129,12 +131,11 @@ export function WorkspaceResultsDialog(props: {
     <Dialog label={`Workspace results — ${props.workspace.name}`} onClose={props.onClose} className="workspace-results-dialog">
       <p className="dialog-note">Agent report: reported by the agent; BMN has not verified it. Current reports; use History for earlier records.</p>
       <div className="workspace-results-toolbar">
-        <button type="button" onClick={() => void load()}>Refresh results</button>
         <button type="button" onClick={props.onOpenRuns}>dev-auto runs…</button>
-        {snapshot && state === 'ready' ? <span>Read {new Date(snapshot.checkedAt).toLocaleString()}</span> : null}
+        {snapshot ? <span>Read {new Date(snapshot.checkedAt).toLocaleString()}</span> : null}
       </div>
-      {state === 'loading' ? <p role="status">Loading workspace results…</p> : null}
-      {state === 'unavailable' ? <p role="status">Workspace results unavailable. Try Refresh.</p> : null}
+      {state === 'loading' && snapshot === null ? <p role="status">Loading workspace results…</p> : null}
+      {state === 'unavailable' && snapshot === null ? <p role="status">Workspace results unavailable. BMN reads them again when they change and when you come back.</p> : null}
       {error ? <p className="inline-error" role="alert">{error}</p> : null}
       {results ? (
         <>

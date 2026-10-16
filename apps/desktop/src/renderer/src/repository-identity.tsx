@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RepositoryIdentity } from '@bmn/protocol'
 import { displayPath } from './session-presentation'
+import { useSelfRefresh } from './self-refresh'
 
 export interface IdentityLookupState {
   directory: string
@@ -9,16 +10,19 @@ export interface IdentityLookupState {
   identity?: RepositoryIdentity | undefined
 }
 
-/** One lookup at a time. A changed directory or newer refresh invalidates every older response. */
+/**
+ * One lookup at a time. A changed directory or newer refresh invalidates every older response. A quiet lookup
+ * (Story 75.7: the window came back) keeps what is shown until the answer replaces it.
+ */
 export function createIdentityLookup(
   read: (directory: string) => Promise<RepositoryIdentity>,
   publish: (state: IdentityLookupState) => void
-): { start(directory: string, key?: string): Promise<RepositoryIdentity | undefined>; cancel(): void } {
+): { start(directory: string, key?: string, quiet?: boolean): Promise<RepositoryIdentity | undefined>; cancel(): void } {
   let generation = 0
   return {
-    async start(directory, key = directory) {
+    async start(directory, key = directory, quiet = false) {
       const current = ++generation
-      publish({ directory, key, loading: true })
+      if (!quiet) publish({ directory, key, loading: true })
       try {
         const identity = await read(directory)
         if (current !== generation) return undefined
@@ -65,6 +69,8 @@ export function useRepositoryIdentity(directory: string | null, requestKey = dir
     else lookup.current?.cancel()
     return () => lookup.current?.cancel()
   }, [directory, requestKey])
+  // Story 75.7: the branch may have changed while the owner was in another window, so it is read again when he comes back.
+  useSelfRefresh(() => directory ? lookup.current?.start(directory, requestKey ?? directory, true) : undefined, { paused: !directory })
   const current = directory && state?.directory === directory && state.key === requestKey ? state : undefined
   return {
     identity: current?.identity,
@@ -75,12 +81,11 @@ export function useRepositoryIdentity(directory: string | null, requestKey = dir
 
 /** Full section in Session details; `compact` is the one line under the launcher's Directory field. */
 export function RepositoryIdentityView({
-  directory, identity, loading, onRefresh, compact = false, home = null
+  directory, identity, loading, compact = false, home = null
 }: {
   directory: string
   identity?: RepositoryIdentity | undefined
   loading: boolean
-  onRefresh?: () => void
   compact?: boolean
   home?: string | null
 }): React.JSX.Element {
@@ -100,13 +105,10 @@ export function RepositoryIdentityView({
   if (compact) {
     return <div className="repository-identity compact" aria-live="polite">
       <span title={read ? `Read from selected directory at ${read}` : undefined}>{description}</span>
-      {onRefresh ? <button type="button" className="ghost small" onClick={onRefresh}>Refresh identity</button> : null}
     </div>
   }
   return <section className="repository-identity inspector-section" aria-live="polite">
-    <h3>Repository
-      {onRefresh ? <button type="button" className="ghost small" onClick={onRefresh}>Refresh identity</button> : null}
-    </h3>
+    <h3>Repository</h3>
     <dl className="kv">
       <dt>Directory</dt>
       <dd className="path" title={directory}><bdi>{displayPath(directory, home)}</bdi></dd>

@@ -35,8 +35,7 @@ import type {
   ArtifactRecord,
   AttentionOrigin,
   AttentionRecord,
-  BackupManifest,
-  BackupVerifyResult,
+  BackupExportResult,
   ClosePromptDecision,
   ClosePromptRequest,
   ControlInfo,
@@ -337,8 +336,8 @@ export interface AiTerminalBridge {
   /** Sends the machine's current readings to Telegram marked as a test; no stored state changes. */
   testHealthAlerts(): Promise<TelegramStatus>
   getControlInfo(): Promise<ControlInfo>
-  exportBackup(): Promise<{ directory: string; manifest: BackupManifest } | null>
-  verifyBackup(directory?: string): Promise<BackupVerifyResult | null>
+  /** Writes a backup to a folder the owner picks and checks the copy at once (Story 75.7); null when he cancels. */
+  exportBackup(): Promise<BackupExportResult | null>
   /** Epic 60.5: the team file, the approved version, pending differences with consequences, and approval history. */
   agentsSnapshot(): Promise<AgentsSnapshot>
   /** What an approving control would approve: validity, the grouped diff, its consequences in words and the rules files it would also update. */

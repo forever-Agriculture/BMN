@@ -42,6 +42,7 @@ import {
   type AttentionProducer,
   type ManualChoices,
   type AttentionRecord,
+  type BackupExportResult,
   type BackupManifest,
   type BackupManifestEntry,
   type BackupVerifyResult,
@@ -1148,8 +1149,6 @@ export class CompanionService {
         return this.history.status()
       case METHOD_REGISTRY.backupExport:
         return this.exportBackup(text(params, 'directory'))
-      case METHOD_REGISTRY.backupVerify:
-        return this.verifyBackup(text(params, 'directory'))
       case METHOD_REGISTRY.telegramConfigure:
         return this.configureTelegram(params.token)
       case METHOD_REGISTRY.telegramStatus:
@@ -2762,7 +2761,8 @@ export class CompanionService {
     return record
   }
 
-  private async exportBackup(parent: string): Promise<{ directory: string; manifest: BackupManifest }> {
+  /** Writes a backup and checks the copy at once against its manifest and its own database (Story 75.7). */
+  private async exportBackup(parent: string): Promise<BackupExportResult> {
     if (!isAbsolute(parent)) invalid('The backup location must be an absolute path')
     const createdAt = this.iso()
     await mkdir(parent, { recursive: true, mode: 0o700 })
@@ -2792,7 +2792,7 @@ export class CompanionService {
     const manifestPath = join(directory, 'manifest.json')
     await writeFile(`${manifestPath}.tmp`, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 })
     await rename(`${manifestPath}.tmp`, manifestPath)
-    return { directory, manifest }
+    return { directory, manifest, verification: await this.verifyBackup(directory) }
   }
 
   private async verifyBackup(directory: string): Promise<BackupVerifyResult> {

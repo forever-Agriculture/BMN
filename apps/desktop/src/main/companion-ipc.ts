@@ -248,19 +248,6 @@ export function installCompanionIpcHandlers(ipc: CompanionIpcRegistrar, actions:
     if (picked.canceled || !picked.filePaths[0]) return null
     return actions.client().request(METHOD_REGISTRY.backupExport, { directory: picked.filePaths[0] })
   })
-
-  handle('aiterm:backup:verify', async (event, params) => {
-    let directory = typeof params.directory === 'string' ? params.directory : undefined
-    if (!directory) {
-      requireDialogs()
-      const owner = windowFor(event.sender)
-      const options = { title: 'Choose a backup folder to verify', properties: ['openDirectory'] as Array<'openDirectory'> }
-      const picked = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
-      if (picked.canceled || !picked.filePaths[0]) return null
-      directory = picked.filePaths[0]
-    }
-    return actions.client().request(METHOD_REGISTRY.backupVerify, { directory })
-  })
 }
 
 export interface AppEventForwarderOptions {

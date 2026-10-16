@@ -535,19 +535,21 @@ while :; do [ -e '${quit}' ] && exit 0; sleep 0.2; done`)
         await main.getByRole('button', { name: 'Install…' }).click()
         await main.locator('.target').first().waitFor()
       }, async () => { await pickIfOffered(main.getByRole('button', { name: 'Cancel', exact: true })) }],
-      ['preferences-skills', 'Preferences › Rules › Skills after Check now: each skill with a state per app', async () => {
+      ['preferences-skills', 'Preferences › Rules › Skills, read again: each skill with a state per app', async () => {
         await go('Rules', 'Skills')
         if (!skillsChecked) {
           skillsChecked = true
-          await pickIfOffered(main.getByRole('button', { name: 'Check now' }))
+          // The page reads again when the window gets the focus (Story 75.7 took Check now away).
+          await main.evaluate(() => { window.dispatchEvent(new Event('focus')) })
           await sleep(2_000)
         }
       }],
-      ['preferences-tools', 'Preferences › Rules › Tools after Check now, with Add tool open (the apps a tool reaches)', async () => {
+      ['preferences-tools', 'Preferences › Rules › Tools, read again, with Add tool open (the apps a tool reaches)', async () => {
         await go('Rules', 'Tools')
         if (!toolsChecked) {
           toolsChecked = true
-          await pickIfOffered(main.getByRole('button', { name: 'Check now' }))
+          // The page reads again when the window gets the focus (Story 75.7 took Check now away).
+          await main.evaluate(() => { window.dispatchEvent(new Event('focus')) })
           await sleep(2_000)
         }
         if (await main.locator('.tool-editor').count() === 0) await pickIfOffered(main.getByRole('button', { name: 'Add tool', exact: true }))

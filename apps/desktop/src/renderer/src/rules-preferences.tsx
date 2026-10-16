@@ -182,7 +182,7 @@ export interface RulesState {
   pending: Pending | null
   setDraft(text: string): void
   setNotice(notice: { ok: boolean; text: string } | null): void
-  /** Reads the rules once; later calls are the owner's Check now. */
+  /** Reads the rules once; later reads are Health's rule (Story 75.7). */
   ensure(): void
   /** Reads them again if they were read before: an approval changes what each app may read. */
   refresh(): void
@@ -361,7 +361,7 @@ export function useRulesState(): RulesState {
     setBusy(true)
     try {
       const outcome = await task()
-      // Like Check now: what was read again replaces the page, never an unsaved draft.
+      // Like a read by Health's rule: what was read again replaces the page, never an unsaved draft.
       setBegan((reads.current as MachineReads).shownElsewhere())
       show(outcome.snapshot)
       setNotice({ ok: outcome.ok, text: outcome.ok || outcome.code !== 'REVISION_CONFLICT' ? outcome.message : 'Something changed since this was shown. Reloaded without writing.' })
@@ -814,7 +814,7 @@ export function UpdateSheet(props: {
   app: AgentAppView; home: string | null; sessions: number; hasTest: boolean; busy: boolean
   /** What a check after the command was copied read, or null before one. */
   result: string | null
-  onCopied(): void; onCheck(): void; onClose(): void
+  onCopied(): void; onClose(): void
   /** Runs the command in a new shell session and shows it, answering how that went; `left` tells it the sheet was closed. Absent where no session can be opened. */
   onRun?: ((name: string, command: string, left: AbortSignal) => Promise<CommandStart>) | undefined
   /** Where a press on Update now stands when the sheet opens; `idle` unless a test says otherwise. */
@@ -879,8 +879,6 @@ export function UpdateSheet(props: {
           <button type="button" className={press === 'not-reading' ? undefined : 'primary'} disabled={command === null || !takesPress(press)} onClick={run}>Update now</button>
         ) : null}
         <button type="button" className={props.onRun && press !== 'not-reading' ? undefined : 'primary'} disabled={command === null} onClick={copy}>Copy command</button>
-        {/* The button turns off while BMN checks and would drop the focus with it; the sheet keeps it, so Escape still closes only the sheet. */}
-        <button type="button" disabled={props.busy} onClick={() => { sheet.current?.focus(); props.onCheck() }}>{props.busy ? 'Checking…' : 'Check now'}</button>
         <button type="button" onClick={props.onClose}>Close</button>
         {copied ? <span className="muted" role="status">{copied}</span> : null}
       </div>
@@ -1186,6 +1184,7 @@ function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
   const idle = !rules.busy && pending === null
   const installs = snapshot.transactions.filter((entry) => entry.reason === SKILLS_INSTALL)
   const count = view.skills.length
+  const top = useHealthRule<HTMLDivElement>(rules)
   return (
     <>
       <PageHead title="Skills" status={view.source.readable ? `${count} skill${count === 1 ? '' : 's'}` : 'The skills folder cannot be read'}>
@@ -1196,7 +1195,6 @@ function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
             <button type="button" className={pending?.kind === 'skills' ? undefined : 'primary'} disabled={!idle} onClick={() => void rules.beginSkillsInstall()}>Install…</button>
           </>
         ) : null}
-        <button type="button" disabled={rules.busy} onClick={() => void rules.load()}>{rules.busy && pending === null ? 'Checking…' : 'Check now'}</button>
       </PageHead>
       <Notice rules={rules} />
       {pending?.kind === 'skills' ? <PendingSheet rules={rules} /> : null}
@@ -1208,7 +1206,7 @@ function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
       {view.exposed > 0 ? (
         <p className="page-note" role="status"><Dot label="Needs you" />{view.exposed === 1 ? 'One skill can be seen by an app that may not have it.' : `${view.exposed} skills can be seen by an app that may not have them.`} Mark the skill Public, or move it out of the skills folder.</p>
       ) : null}
-      <div className="skill-rows">
+      <div className="skill-rows" ref={top}>
         {view.skills.map((skill) => <SkillRow key={skill.name} skill={skill} apps={view.apps} team={team} busy={rules.busy} />)}
       </div>
       {count === 0 && view.source.readable ? <p className="preferences-help">No skills in this folder yet.</p> : null}
@@ -1468,6 +1466,7 @@ function ToolsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Ele
   const idle = !rules.busy && pending === null && editor === null && found === null
   const installs = snapshot.transactions.filter((entry) => entry.reason === TOOLS_INSTALL)
   const count = tools.length
+  const top = useHealthRule<HTMLDivElement>(rules)
   // Entries the apps hold that are not on the list, each id once with the apps that hold it.
   const others = new Map<string, { apps: RosterHarness[]; exposed: boolean }>()
   for (const app of view.apps) {
@@ -1499,7 +1498,6 @@ function ToolsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Ele
             <button type="button" className={pending?.kind === 'tools' ? undefined : 'primary'} disabled={!idle} onClick={() => void rules.beginToolsInstall(false)}>Install…</button>
           </>
         ) : null}
-        <button type="button" disabled={rules.busy} onClick={() => void rules.load()}>{rules.busy && pending === null ? 'Checking…' : 'Check now'}</button>
       </PageHead>
       <Notice rules={rules} />
       {pending?.kind === 'tools' ? <PendingSheet rules={rules} /> : null}
@@ -1507,7 +1505,7 @@ function ToolsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Ele
       {view.exposed > 0 ? (
         <p className="page-note" role="status"><Dot label="Needs you" />{view.exposed === 1 ? 'One tool is in an app that may not have it.' : `${view.exposed} tools are in apps that may not have them.`} Mark the tool Public, or remove its entry in that app.</p>
       ) : null}
-      <div className="skill-rows">
+      <div className="skill-rows" ref={top}>
         {tools.map((tool) => (
           <ToolRow key={tool.id} tool={tool} view={view.tools.find((entry) => entry.id === tool.id)} apps={view.apps} team={team} busy={rules.busy || editor !== null}
             onEdit={() => setEditor(draftFrom(tool))} />
@@ -1595,22 +1593,16 @@ function ToolsHealth(props: { rules: RulesState; action: AppAction | null; setAc
   )
 }
 
-function HealthPage(props: { rules: RulesState; team: TeamState; recognised: RecognisedSessions; onRun?: RunInSession | undefined }): React.JSX.Element {
-  const { rules, team, onRun: runInSession } = props
-  const snapshot = rules.snapshot as RulesSnapshot
-  const [action, setAction] = useState<AppAction | null>(null)
-  const [, redraw] = useState(0)
-  // Apps whose before-and-now line was shown on this visit: said once, their watch ends when the owner leaves Health.
-  const told = useRef(new Set<RosterHarness>())
-  useEffect(() => {
-    const shown = told.current
-    return () => forgetUpdateWatches(shown)
-  }, [])
-  const top = useRef<HTMLHeadingElement | null>(null)
+/**
+ * Health's rule, for each page that shows what BMN reads from this machine: Health, Skills and Tools (Story 75.7 takes
+ * their Check now away). What such a page shows is read again when the owner comes back: on opening the page after a
+ * while, when the window gets the focus while the page is on screen, and after an update command BMN typed has ended.
+ * Never under an unsaved draft or an open confirmation. Returns the ref of an element on the page, by which BMN tells that the page is on screen.
+ */
+function useHealthRule<T extends HTMLElement>(rules: RulesState): React.RefObject<T | null> {
+  const top = useRef<T | null>(null)
   const { load, began } = rules
-  const checkedAt = snapshot.health.checkedAt
-  // What Health shows is read from this machine, so BMN reads it again when the owner comes back: on opening
-  // the page after a while and when the window gets the focus. Never under an unsaved draft or an open confirmation.
+  const checkedAt = (rules.snapshot as RulesSnapshot).health.checkedAt
   const calm = rules.pending === null && !rules.dirty
   const quiet = !rules.busy && calm
   const arrived = useRef(false)
@@ -1643,6 +1635,20 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
     readAfter.current = endedAt
     void load()
   }, [calm, endedAt, began, load])
+  return top
+}
+
+function HealthPage(props: { rules: RulesState; team: TeamState; recognised: RecognisedSessions; onRun?: RunInSession | undefined }): React.JSX.Element {
+  const { rules, team, onRun: runInSession } = props
+  const snapshot = rules.snapshot as RulesSnapshot
+  const [action, setAction] = useState<AppAction | null>(null)
+  // Apps whose before-and-now line was shown on this visit: said once, their watch ends when the owner leaves Health.
+  const told = useRef(new Set<RosterHarness>())
+  useEffect(() => {
+    const shown = told.current
+    return () => forgetUpdateWatches(shown)
+  }, [])
+  const top = useHealthRule<HTMLHeadingElement>(rules)
   const opener = useRef<HTMLButtonElement | null>(null)
   // Update… is off while its sheet is open, so the focus can go back to it only once the sheet has gone.
   useEffect(() => {
@@ -1663,9 +1669,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
   ].join(' · ')
   return (
     <>
-      <PageHead title="Health" status={`Checked ${shortDate(health.checkedAt)}${skillsCount === '' ? '' : ` · ${skillsCount}`}`}>
-        <button type="button" disabled={rules.busy} onClick={() => void rules.load()}>{rules.busy && pending === null ? 'Checking…' : 'Check now'}</button>
-      </PageHead>
+      <PageHead title="Health" status={rules.busy && pending === null ? 'Checking…' : `Checked ${shortDate(health.checkedAt)}${skillsCount === '' ? '' : ` · ${skillsCount}`}`} />
       <Notice rules={rules} />
       {notHeldWords(snapshot.readOnlyRoles) === null ? null : <p className="page-note" role="status"><Dot label="Needs you" />{notHeldWords(snapshot.readOnlyRoles)}</p>}
       <h4 className="group-head" ref={top}>Rules files</h4>
@@ -1744,7 +1748,6 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
                   told.current.delete(app.harness)
                   return runInSession(session, command, updateRunEnded, left)
                 } : undefined}
-                onCheck={() => { watchUpdate(app, health.checkedAt); redraw((count) => count + 1); void rules.load() }}
                 onClose={() => setAction(null)} />
             ) : reports !== null ? <p className="app-note" role="status">{reports}</p> : null}
           </div>

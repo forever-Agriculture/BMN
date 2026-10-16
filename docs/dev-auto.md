@@ -1,7 +1,9 @@
 # dev-auto runs
 
 Open **dev-auto runs…** in the command palette, or **Review results… → dev-auto runs…**
-for one workspace. Refresh reads current handoffs and their selected sprint-board rows.
+for one workspace. It reads current handoffs and their selected sprint-board rows by itself: on
+opening, when the window gets the focus, when a request changes, and every 30 seconds while it is
+shown in a visible window, so a handoff dev-auto rewrites outside BMN shows without a press.
 BMN shows owning checkouts, copies, unknown ownership and unavailable sources separately.
 It never changes handoffs, boards, decisions or agent requests. Open request titles navigate
 to the corresponding live session.

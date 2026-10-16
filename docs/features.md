@@ -53,7 +53,8 @@ BMN checks again when you press Create; if a known identity changed, it shows th
 value for review before another press. A non-repository or unavailable Git result is named and
 does not by itself block an otherwise valid launch. This describes the selected directory at the
 time shown, not where a running shell may have moved later. BMN never checks out a branch or
-creates a worktree for this feature.
+creates a worktree for this feature. Session details reads the identity again when the window gets
+the focus; there is no Refresh button.
 
 Sessions are independent: each has its own process, its own terminal, and a token that reaches only
 itself. A session launched from inside an agent does not inherit that agent's session identity
@@ -200,7 +201,8 @@ shown as "Agent reports done", never BMN's verdict. A file the agent deleted lat
 report as a named, unavailable reference.
 From a workspace's ⋯ menu, **Review results…** groups each session's latest report per named
 source, with observation time, current or previous run, ten-minute freshness and evidence
-availability. It names sessions with no report. This view reads current records; it does not
+availability. It names sessions with no report. This view reads current records, and reads them
+again by itself when an agent reports or publishes and when the window gets the focus; it does not
 judge whether an agent succeeded or promise a report history.
 
 **Turn changes.** Progress is what the agent says; turn changes are what BMN saw in the files. For
@@ -468,10 +470,11 @@ owner-only permissions and never shown again. Use a bot that no other program po
 
 ## Backups
 
-Preferences → **Backup** has two actions. **Export backup…** writes a consistent snapshot — the
+Preferences → **Backup** has one action. **Export backup…** writes a consistent snapshot — the
 database plus the stored files it references — with a hash manifest, and lists what it excluded.
-**Verify a backup…** later checks the files against the manifest and against the backup's own
-database. Exports are manual: there is no schedule and no built-in restore step.
+It then checks the copy at once, against the manifest and against the backup's own database, and
+says the result with the export: how many files checked out, or each file that did not. Exports are
+manual: there is no schedule and no built-in restore step.
 
 ## Customization
 

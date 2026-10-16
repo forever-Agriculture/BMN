@@ -32,6 +32,13 @@ describe('repository identity requests', () => {
     expect(published.at(-1)?.identity).toMatchObject({ head: { name: 'new' } })
   })
 
+  it('keeps what is shown during a quiet read and replaces it only with the answer (Story 75.7)', async () => {
+    const published: IdentityLookupState[] = []
+    const lookup = createIdentityLookup(async () => repository('/tmp/project', 'feature'), (state) => published.push(state))
+    await lookup.start('/tmp/project', '/tmp/project', true)
+    expect(published).toEqual([{ directory: '/tmp/project', key: '/tmp/project', loading: false, identity: repository('/tmp/project', 'feature') }])
+  })
+
   it('requires another review only when a known identity changes to another known identity', () => {
     const main = repository('/tmp/project', 'main')
     const feature = repository('/tmp/project', 'feature')

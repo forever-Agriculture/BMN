@@ -45,8 +45,8 @@ async function until(read, label, timeoutMs = 20_000) {
 }
 
 /**
- * The Harness section's compaction line, once the view has read this run's observation. It is read without
- * pressing Refresh observation, so the line must follow the window's own periodic re-read (15 s).
+ * The Harness section's compaction line, once the view has read this run's observation. It is read without a
+ * press: the view reads again when BMN hears a harness event, on the window's focus and on its periodic re-read (15 s).
  */
 async function compactionLine(page, expected) {
   const harness = page.locator('section.hook-observation')

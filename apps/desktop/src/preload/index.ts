@@ -56,8 +56,7 @@ import {
   type TurnDifferenceAnswer,
   type TurnSessionView,
   type TurnSummary,
-  type BackupManifest,
-  type BackupVerifyResult,
+  type BackupExportResult,
   type ControlInfo,
   type DraftSendExpectation,
   type FileReferenceReadParams,
@@ -702,11 +701,8 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   getControlInfo(): Promise<ControlInfo> {
     return invokeBridge('aiterm:control:info', {})
   },
-  exportBackup(): Promise<{ directory: string; manifest: BackupManifest } | null> {
+  exportBackup(): Promise<BackupExportResult | null> {
     return invokeBridge('aiterm:backup:export', {})
-  },
-  verifyBackup(directory?: string): Promise<BackupVerifyResult | null> {
-    return invokeBridge('aiterm:backup:verify', directory ? { directory } : {})
   },
   agentsSnapshot(): Promise<AgentsSnapshot> {
     return invokeBridge('aiterm:agents:snapshot', {})
