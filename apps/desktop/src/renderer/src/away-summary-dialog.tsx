@@ -167,7 +167,7 @@ export function AwaySummaryDialog(props: {
           {view.now.lines.length > 0 || view.now.incomplete ? (
             <section className="inspector-section" aria-label="Now">
               <h3><span>Now<Incomplete on={view.now.incomplete} /></span></h3>
-              <ul className="away-lines">{view.now.lines.map((line, index) => <li key={`${index}:${line}`}>{line}</li>)}</ul>
+              {view.now.empty !== null ? <p className="dialog-note">{view.now.empty}</p> : <ul className="away-lines">{view.now.lines.map((line, index) => <li key={`${index}:${line}`}>{line}</li>)}</ul>}
               {view.now.legacy !== null ? <small className="away-more">{view.now.legacy}</small> : null}
               {view.now.more !== null ? <small className="away-more">{view.now.more}</small> : null}
             </section>

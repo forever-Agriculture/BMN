@@ -371,15 +371,18 @@ echo seeded
       }, { region: 'dialog[open]', close: async () => { await page.keyboard.press('Enter') } })
       const awayNow = await page.evaluate(() => window.aiTerminal.getAway())
       if (awayNow.state !== 'away') await setAway('away', 'back by 8, don\'t merge 76')
-      // A session that does what an agent does while he is away: its hook names its conversation, it publishes a file,
+      // A session that does what an agent does while he is away, under a node parent as an agent's own commands run
+      // (BMN binds a hook's conversation only to a foreground process that is not a shell): its hook names its conversation, it publishes a file,
       // records two decisions (one with references BMN checks, one depending on it and on one not in the list),
       // reports an outcome and leaves a question as a card.
       const night = join(root, 'night.sh')
       writeFileSync(join(work, 'plan.md'), '# Synthetic plan\n')
+      const nightLog = join(root, 'night.log')
       writeFileSync(night, `B() { if command -v bmn >/dev/null; then bmn "$@"; else '${process.execPath}' '${cli}' "$@"; fi; }
+exec > >(tee '${nightLog}') 2>&1
 cd '${work}'
 printf '%s' '{"hook_event_name":"SessionStart","source":"startup","session_id":"6f1c2a4e-0b7d-4c3a-9e21-5a8b7c6d4e3f","transcript_path":"/tmp/synthetic.jsonl"}' | B hook claude > /dev/null
-rev=$(B away --status --json | sed -n 's/.*"revision":\\([0-9]*\\).*/\\1/p')
+rev=$(B away --status --json | sed -n 's/.*"revision": *\\([0-9]*\\).*/\\1/p')
 published=$(B publish plan.md --key night-publish)
 id=$(printf '%s\\n' "$published" | sed -n 's/.* as \\([^ ]*\\).*/\\1/p')
 B decision record --key filter-state --revision "$rev" --choice 'Keep the filter state in the URL, not in local storage' --reason 'The acceptance text names shareable links; storage would break them' --affects 'src/search.ts, search.test.ts' --reverse 'Revert the commit on dev-auto/epic-76; nothing else reads the URL yet' --ref "session:${reviewerId}" --ref "artifact:$id" --ref 'workflow:dev-auto/epic-76#d3'
@@ -388,9 +391,10 @@ B decision outcome --key filter-state --op build --result done
 B ask night-colour 'Which colour should the made-up badge be?' --kind question --body 'Gold or grey'
 echo night-seeded
 `)
-      const nightSession = await startSession('Night', ['-ic', `bash '${night}'; exec bash -i`])
+      const nightSession = await startSession('Night', ['-ic', `'${process.execPath}' -e "require('node:child_process').execFileSync('bash', ['${night}'], { stdio: 'inherit' })"; exec bash -i`])
       if (nightSession.failed) note(`the Night session was not started: ${nightSession.failed}`)
       await sleep(6_000)
+      try { note(`Night's shell said: ${readFileSync(nightLog, 'utf8').split('\n').map((line) => line.trimEnd()).filter(Boolean).slice(-10).join(' | ')}`) } catch { note('the Night shell left no output') }
       await screen('head-away', 'The window head while away: the checked box and "Away since …", its words a button', async () => {}, { region: '.app-header' })
       await screen('palette-away', 'Palette, "away" typed while away: I\'m back with since and source', async () => { await palette('away') }, { region: 'dialog[open]', close: escape })
       await screen('away-summary-so-far', 'The head\'s words pressed while away: While you are away, the summary so far', async () => {
@@ -409,14 +413,14 @@ echo night-seeded
       writeFileSync(long, `B() { if command -v bmn >/dev/null; then bmn "$@"; else '${process.execPath}' '${cli}' "$@"; fi; }
 cd '${work}'
 printf '%s' '{"hook_event_name":"SessionStart","source":"startup","session_id":"7a2d3b5f-1c8e-4d4b-8f32-6b9c8d7e5f40","transcript_path":"/tmp/synthetic-long.jsonl"}' | B hook claude > /dev/null
-rev=$(B away --status --json | sed -n 's/.*"revision":\\([0-9]*\\).*/\\1/p')
+rev=$(B away --status --json | sed -n 's/.*"revision": *\\([0-9]*\\).*/\\1/p')
 for n in $(seq 1 34); do B decision record --key "long-$n" --revision "$rev" --choice "Synthetic choice number $n for the long night" --reason 'A made-up reason' --affects 'src/long.ts' --reverse 'Revert it' > /dev/null; done
 for n in $(seq 1 42); do B ask "long-ask-$n" "Synthetic question number $n" --kind question > /dev/null; done
 echo long-seeded
 `)
       if (wanted('away-summary-long')) {
         await setAway('away')
-        const longSession = await startSession('Long night', ['-ic', `bash '${long}'; exec bash -i`])
+        const longSession = await startSession('Long night', ['-ic', `'${process.execPath}' -e "require('node:child_process').execFileSync('bash', ['${long}'], { stdio: 'inherit' })"; exec bash -i`])
         if (longSession.failed) note(`the Long night session was not started: ${longSession.failed}`)
         await sleep(20_000)
         await setAway('back')

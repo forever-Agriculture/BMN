@@ -21,7 +21,7 @@ const SOURCE_ORDER: readonly AwaySourceName[] = Object.freeze(['requests', 'deci
 export type AwaySourceGap =
   | { kind: 'missing' }
   | { kind: 'unreadable' }
-  | { kind: 'partial'; read: number }
+  | { kind: 'partial'; read: number; skipped: number }
   | { kind: 'truncated'; at: number }
   | { kind: 'expired' }
 
@@ -30,7 +30,7 @@ export function awayGapWords(gap: AwaySourceGap): string {
   switch (gap.kind) {
     case 'missing': return 'not recorded'
     case 'unreadable': return 'unreadable'
-    case 'partial': return `partial: ${gap.read} of more`
+    case 'partial': return `partial: ${gap.read} read, ${gap.skipped} skipped`
     case 'truncated': return `cut at ${gap.at} listings`
     case 'expired': return 'no longer retained'
   }
@@ -132,7 +132,7 @@ export interface AwaySummaryView {
   waiting: { open: number; groups: Array<{ sessionId: string; where: string; rows: AwayWaitingRow[] }>; more: string | null; empty: string | null }
   decided: { incomplete: boolean; groups: Array<{ sessionId: string; where: string; records: AwayDecisionView[] }>; more: string | null; empty: string | null; tail: string }
   happened: { incomplete: boolean; blocks: Array<{ sessionId: string; head: string; lines: string[] }>; more: string | null; empty: string | null }
-  now: { lines: string[]; legacy: string | null; more: string | null; incomplete: boolean }
+  now: { lines: string[]; legacy: string | null; more: string | null; empty: string | null; incomplete: boolean }
 }
 
 const KIND_WORDS: Readonly<Record<AttentionKind, string>> = Object.freeze({
@@ -226,7 +226,11 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   else if (!input.decisions.complete) gaps.decisions = { kind: 'truncated', at: input.decisions.decisions.length }
   if (input.activity === null) for (const source of ['turns', 'files', 'messages', 'exits'] as const) gaps[source] = { kind: 'unreadable' }
   if (input.devAuto === null) gaps['dev-auto'] = { kind: 'unreadable' }
-  else if (input.devAuto.result.skipped > 0) gaps['dev-auto'] = { kind: 'partial', read: input.devAuto.result.runs.length }
+  else {
+    // A folder that is not a Git repository holds no run, so it is not a gap in this list.
+    const skipped = input.devAuto.result.skipped - input.devAuto.result.issues.filter((issue) => issue.endsWith(': Not a repository')).length
+    if (skipped > 0) gaps['dev-auto'] = { kind: 'partial', read: input.devAuto.result.runs.length, skipped }
+  }
   const gapList = SOURCE_ORDER.filter((source) => gaps[source] !== undefined)
   const couldNotRead = gapList.length === 0 ? null
     : `Could not read in full: ${gapList.map((source) => `${SOURCE_WORDS[source]} (${awayGapWords(gaps[source]!)})`).join(', ')}.`
@@ -343,6 +347,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     lines: nowLines.slice(0, AWAY_SUMMARY_LIMITS.now),
     legacy: legacy ? 'Entries without an identity may repeat a record above.' : null,
     more: nowLines.length > AWAY_SUMMARY_LIMITS.now ? `${nowLines.length - AWAY_SUMMARY_LIMITS.now} more · dev-auto runs…` : null,
+    empty: nowLines.length === 0 ? 'No dev-auto run that BMN could read reports anything now.' : null,
     incomplete: gaps['dev-auto'] !== undefined
   }
 

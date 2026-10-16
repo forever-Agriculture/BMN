@@ -165,6 +165,16 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
     expect(view.now.legacy).toBe('Entries without an identity may repeat a record above.')
     expect(view.decided.groups[0]!.records[0]!.rows.at(-1)!.text).toBe('Wed 23:41 by Builder (Claude Code) · also in dev-auto\'s handoff')
   })
+
+  it('a folder that is not a repository is no gap in dev-auto; a real skip is named with its count and an empty Now says so', () => {
+    const devAuto = (issues: string[]) => ({ result: { runs: [], skipped: issues.length, issues, observedAt: ENDED }, workspaceNames: { w: 'Personal' } })
+    const plain = buildAwaySummary(input({ devAuto: devAuto(['/home/me/notes: Not a repository']) }))
+    expect(plain.couldNotRead).toBeNull()
+    expect(plain.now.incomplete).toBe(false)
+    const skipped = buildAwaySummary(input({ devAuto: devAuto(['/home/me/notes: Not a repository', '/repo: Worktree bound: /repo/wt']) }))
+    expect(skipped.couldNotRead).toBe('Could not read in full: dev-auto runs (partial: 0 read, 1 skipped).')
+    expect(skipped.now).toMatchObject({ incomplete: true, lines: [], empty: 'No dev-auto run that BMN could read reports anything now.' })
+  })
 })
 
 describe('withCompletedAsks (Story 76.6 AC1)', () => {
