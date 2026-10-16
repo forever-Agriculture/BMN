@@ -28,6 +28,8 @@ import {
   type ClosePromptRequest,
   type SessionRecord,
   type TelegramStatus,
+  type OwnerAwayView,
+  awaySinceWords,
   exactAbsoluteFileReference,
   telegramOwnerCue,
   effectiveTerminalGraphics,
@@ -40,6 +42,8 @@ import './styles.css'
 import { checkSixelRenderer } from './terminal-images'
 import { failureDetail, sessionFailureDetail } from './bridge-error'
 import { CommandPalette, paletteFileSearchRootLabel, type PaletteCommand } from './command-palette'
+import { AwayCheck, awaySourceWords } from './away-check'
+import { AWAY_NOTE_LIMIT } from '@bmn/protocol'
 import { rememberRecentSession } from './recent-sessions'
 import { WorkspacePinsDialog } from './workspace-pins-dialog'
 import { restoreArchive, type ArchiveUndoTarget } from './archive-undo'
@@ -189,6 +193,8 @@ type ShellDialog =
   /** Read-only: what this session's harness reported, for a request that did or did not arrive. */
   | { kind: 'hook-events'; session: SessionRecord }
   | { kind: 'plan-use' }
+  /** Story 76.3: "I'm away…": the palette's second mode, a note for himself or just Enter. */
+  | { kind: 'away-note' }
   /**
    * Read-only: one progress observation and the published files it points at. The observation is
    * captured when the detail opens, so a newer report cannot swap itself in under the owner.
@@ -255,6 +261,8 @@ function App(): React.JSX.Element {
   /** Preferences → History waits for Start cleanup (Story 31.1); the gear carries the one attention dot. */
   const [historyPending, setHistoryPending] = useState(false)
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
+  /** Story 76.3: what the owner said, away or back, as the host keeps it. */
+  const [awayView, setAwayView] = useState<OwnerAwayView | null>(null)
   const [panel, setPanel] = useState<SidePanel>(null)
   const sessionNameInput = useRef<HTMLInputElement>(null)
   const [focusMode, setFocusMode] = useState(false)
@@ -406,6 +414,10 @@ function App(): React.JSX.Element {
   }
 
   const fail = (fallback: string) => (error: unknown): void => setFailure(failureDetail(error, fallback))
+  /** Story 76.3: away (with his note) or back, said here; the host's answer is the state every window shows. */
+  const sayAway = (to: 'away' | 'back', note?: string): void => {
+    void window.aiTerminal.setAway(to, note).then(setAwayView).catch(fail('Away could not be changed'))
+  }
   /** Opens a listed port in the owner's browser; the process is left alone. */
   const openPort = (sessionId: string, port: ListeningPort): void => {
     void window.aiTerminal.openPort(sessionId, port.port).catch(fail(`Could not open ${listeningPortLabel(port)}`))
@@ -558,6 +570,7 @@ function App(): React.JSX.Element {
       const history = await window.aiTerminal.getHistoryStatus().catch(() => null)
       if (history) setHistoryPending(history.needsConfirmation)
     },
+    away: () => window.aiTerminal.getAway().then(setAwayView),
     // A phone channel that stopped delivering must not sit unseen behind the gear either.
     telegram: async () => {
       const status = await window.aiTerminal.getTelegramStatus().catch(() => null)
@@ -1530,6 +1543,7 @@ function App(): React.JSX.Element {
   const paletteCommands = (): PaletteCommand[] => {
     const shown = visibleWorkspaces(workspaces, false)
     const selectedRecord = sessions.find((session) => session.sessionId === selectedSessionId)
+    const sessionNameOf = (sessionId: string): string | null => sessions.find((item) => item.sessionId === sessionId)?.name ?? null
     const command = (id: string, label: string, run: () => void, extra: Partial<PaletteCommand> = {}): PaletteCommand =>
       ({ id, group: 'Commands', label, run, ...extra })
     return [
@@ -1572,6 +1586,10 @@ function App(): React.JSX.Element {
         })) : []
       }),
       command('next-attention', 'Go to next request needing you', nextNeedingYou, { shortcut: SHORTCUT_LABELS['attention-next'], context: `${unresolved.length} waiting` }),
+      // Story 76.3: the one slot that flips, in the shape of Focus mode / Leave focus mode.
+      awayView?.state === 'away' && awayView.since !== null
+        ? command('away', "I'm back", () => sayAway('back'), { context: `${awaySinceWords(awayView.since, new Date(now))} · ${awaySourceWords(awayView, sessionNameOf)}` })
+        : command('away', "I'm away…", () => setDialog({ kind: 'away-note' }), { disabled: awayView === null }),
       command('new-workspace', 'New workspace…', () => setDialog({ kind: 'new-workspace' })),
       command('new-session', 'New session…', () => beginNewSession(activeWorkspace), { disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, context: activeWorkspace?.name }),
       command('split', (layout?.split.panes.length ?? 0) >= 2 ? 'Close split' : 'Split view…', () => toggleSplit(), { shortcut: SHORTCUT_LABELS['split-toggle'] }),
@@ -1807,6 +1825,8 @@ function App(): React.JSX.Element {
           ) : <span>Create a workspace.</span>}
         </nav>
         <div className="header-actions">
+          <AwayCheck view={awayView} now={new Date(now)} onChange={(to) => sayAway(to)}
+            sessionName={(sessionId) => sessions.find((item) => item.sessionId === sessionId)?.name ?? null} />
           <button type="button" className="icon-button" aria-label="Command palette" title={`Command palette (${SHORTCUT_LABELS.palette})`} onClick={() => setDialog({ kind: 'palette' })}>
             <Icon name="search" />
           </button>
@@ -2442,6 +2462,25 @@ function App(): React.JSX.Element {
           }}
           onResume={(idempotencyKey, entries) =>
             resumeInterruptedCohort(dialog.cohort.cohortId, idempotencyKey, entries)}
+        />
+      ) : null}
+      {dialog?.kind === 'away-note' ? (
+        <CommandPalette
+          label="I'm away"
+          searchLabel="A note for yourself"
+          placeholder="A note for yourself, or just Enter"
+          commands={[]}
+          entry={(text) => {
+            const length = [...text.trim()].length
+            return {
+              label: 'Away now',
+              context: length === 0 ? 'no note' : length > AWAY_NOTE_LIMIT ? `Too long by ${length - AWAY_NOTE_LIMIT} character${length - AWAY_NOTE_LIMIT === 1 ? '' : 's'}`
+                : length > 160 ? `${AWAY_NOTE_LIMIT} characters at most` : text.trim(),
+              disabled: length > AWAY_NOTE_LIMIT,
+              run: () => sayAway('away', text.trim() === '' ? undefined : text.trim())
+            }
+          }}
+          onClose={() => setDialog(null)}
         />
       ) : null}
       {dialog?.kind === 'palette' ? (

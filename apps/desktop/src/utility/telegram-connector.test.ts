@@ -204,6 +204,7 @@ describe('telegram connector polling', () => {
       messageId: 900,
       replyToMessageId: null,
       text: 'looks good',
+      textSource: 'text',
       file: null
     }])
     const [first, second] = h.api.polls()

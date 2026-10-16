@@ -35,6 +35,13 @@ import {
   AGENT_HISTORY_KEEP_DAYS,
   type AgentHistoryKeepDays,
   type AppSettings,
+  type AwayChange,
+  type AwayChangeResult,
+  type AwayRecord,
+  agentAwayView,
+  effectiveAway,
+  ownerAwayView,
+  parseAwayRecord,
   type ArtifactPreview,
   type ArtifactRecord,
   type AttentionEvidence,
@@ -109,7 +116,8 @@ import { manualCardFits } from './telegram-cards'
 import { createScanMemory, procReader, scanSessionPorts, type ProcReader } from './listening-ports'
 import { PortWatch } from './port-watch'
 import { AGENT_HISTORY_STATE_KEY, AgentHistory, readHistoryState, type AgentHistoryAdapter } from './agent-history'
-import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
+import { TelegramConnector, TelegramConnectorError, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
+import { awayReplyText, backReplyText, telegramAwayCommand, type TelegramAwayCommand } from './telegram-away'
 import { SessionMessages, type MessageDestination } from './session-messages'
 import { AgentBriefs } from './agent-briefs'
 import { foregroundProcessFolder } from './foreground-process'
@@ -347,8 +355,10 @@ export class CompanionService {
   /** Local ports each session's programs listen on, read from /proc on its own cadence (Story 41.1). */
   private readonly ports: PortWatch
   private readonly now: () => Date
-  /** Whether the owner is away from the desk, as the app last reported; null while it cannot tell. */
-  private ownerAway: boolean | null = null
+  /** Whether the owner is away from the desk by its input, as the app last reported; null while it cannot tell. */
+  private measuredAway: boolean | null = null
+  /** Story 76.3: what he said (away, back or nothing yet), read before any delivery at start. */
+  private awayRecord: AwayRecord = parseAwayRecord(undefined)
   private readonly pager: ReturnType<typeof createAttentionPager>
   /** Delivers a phone answer into the dialog that asked; reachable only from inside this process (Epic 30). */
   private readonly answers: RemoteAnswers
@@ -482,7 +492,7 @@ export class CompanionService {
       read: () => options.database.companion('getRawSetting', QUIET_LEDGER_KEY),
       write: (value, changes) => options.database.companion('commitQuietDelivery', value, changes ?? {}, this.iso()),
       settings: () => this.quietSettings,
-      now: () => this.now(), ownerAway: () => this.ownerAway,
+      now: () => this.now(), ownerAway: () => this.ownerAway(),
       ready: () => this.telegramReady && this.telegramHealth?.state === 'polling',
       requests: () => options.database.companion('listQuietAttention'),
       retire: record => this.pager.retire(record),
@@ -560,7 +570,7 @@ export class CompanionService {
         timer.unref()
         return () => clearTimeout(timer)
       },
-      ownerAway: () => this.ownerAway,
+      ownerAway: () => this.ownerAway(),
       now: () => this.now().getTime(),
       observeDelivery: (event) => this.logTelegramDelivery(event),
       ...(options.pageAfterMs !== undefined
@@ -719,6 +729,22 @@ export class CompanionService {
         }),
         dropTurnMark: (sessionId, requestId) => this.turns?.dropped(sessionId, requestId),
         reportRefusal: (method, sessionId, reason) => this.logRefusal(method, sessionId, reason),
+        awayStatus: async (scope) => scope.kind === 'owner' ? this.awayForOwner() : this.awayForAgent(),
+        changeAway: (p) => this.controlCall(async () => {
+          const result = await this.changeAway({
+            to: p.to, source: p.scope.kind === 'owner' ? 'cli' : 'agent',
+            ...(p.scope.kind === 'session' ? { agentSessionId: p.scope.sessionId } : {}),
+            ...(p.note === undefined ? {} : { note: p.note }),
+            ...(p.expectedRevision === undefined ? {} : { expectedRevision: p.expectedRevision }),
+            ...(p.operationKey === undefined ? {} : { operationKey: p.operationKey })
+          })
+          if (result.outcome === 'invalid') throw new HostControlError(ERROR_CODES.invalidArgument, result.reason)
+          if (result.outcome === 'stale') {
+            throw new HostControlError(ERROR_CODES.revisionConflict, `The away state changed since the revision you saw; it is at revision ${result.record.revision} now; nothing was changed`)
+          }
+          const view = p.scope.kind === 'owner' ? ownerAwayView(result.record) : agentAwayView(result.record)
+          return { outcome: result.outcome, ...view }
+        }),
         observeConversation: (p) => this.controlCall(async () => {
           if (p.agentCli === 'claude' || p.agentCli === 'codex') {
             const previous = this.producers.stamp(p.sessionId, p.incarnationId)
@@ -858,6 +884,8 @@ export class CompanionService {
   }
 
   async start(): Promise<void> {
+    // Story 76.3 (R76-NFR1): the said state is restored before anything at start can deliver.
+    this.awayRecord = await this.options.database.companion('getAway')
     // Epic 69: a turn stored as open has nobody left to end it.
     await this.turns?.start()
     await this.sessionsChanged()
@@ -921,7 +949,7 @@ export class CompanionService {
       if (state !== 'exited') return
       const settings = await this.options.database.companion('getSettings')
       if (!settings.telegram.enabled || settings.telegram.notifyOn !== 'attention-and-exit') return
-      if (this.ownerAway === false) return
+      if (this.ownerAway() === false) return
       if (await this.quietDelivery.holdExit(sessionId, this.options.manager.liveIncarnationId(sessionId) ?? null)) return
       await this.cards.exited(sessionId)
     }).catch(() => undefined)
@@ -1165,13 +1193,27 @@ export class CompanionService {
       case METHOD_REGISTRY.presenceSet: {
         const away = params.away
         if (away !== true && away !== false && away !== null) invalid('away must be true, false or null')
-        const left = away === true && this.ownerAway !== true
-        this.ownerAway = away
-        if (left) {
-          this.pager.ownerLeft()
-          void this.quietDelivery.sweep().catch(() => undefined)
-        }
+        const before = this.ownerAway()
+        this.measuredAway = away
+        this.presenceChanged(before)
         return { away }
+      }
+      case METHOD_REGISTRY.awayGet:
+        return this.awayForOwner()
+      case METHOD_REGISTRY.awaySet: {
+        const to = params.to
+        if (to !== 'away' && to !== 'back') invalid('to must be away or back')
+        const result = await this.changeAway({ to, source: 'app', ...(params.note === undefined ? {} : { note: params.note as string | null }) })
+        if (result.outcome === 'invalid') invalid(result.reason)
+        return ownerAwayView(result.record)
+      }
+      case METHOD_REGISTRY.awaySummaryShown: {
+        const periodId = params.periodId
+        if (typeof periodId !== 'string' || periodId === '') invalid('periodId is required')
+        const before = this.awayRecord.summaryShownAt
+        this.awayRecord = await this.options.database.companion('markAwaySummaryShown', periodId as string, this.iso())
+        if (before !== this.awayRecord.summaryShownAt) this.emit('away', null)
+        return this.awayForOwner()
       }
       case METHOD_REGISTRY.controlInfo:
         return {
@@ -1187,6 +1229,43 @@ export class CompanionService {
 
   private iso(): string {
     return this.now().toISOString()
+  }
+
+  /**
+   * Effective delivery presence (R76-NFR1): away while he said away, otherwise the desk input's true, false or unknown.
+   * Paging, quiet-hours release, exit cards and watched sessions all go by this.
+   */
+  private ownerAway(): boolean | null {
+    return effectiveAway(this.awayRecord, this.measuredAway)
+  }
+
+  /** The owner turning away, by his words or by the desk input, starts what waited for that; nothing else changes. */
+  private presenceChanged(before: boolean | null): void {
+    if (before === true || this.ownerAway() !== true) return
+    this.pager.ownerLeft()
+    void this.quietDelivery.sweep().catch(() => undefined)
+  }
+
+  /** Story 76.3: one serialised change of the said state, from any surface; the caller's source decides what it may do. */
+  async changeAway(change: Omit<AwayChange, 'periodId'>): Promise<AwayChangeResult> {
+    const before = this.ownerAway()
+    const result: AwayChangeResult = await this.options.database.companion('changeAway', change, this.iso())
+    if (result.outcome === 'changed' || result.record.revision > this.awayRecord.revision) {
+      this.awayRecord = result.record
+      this.presenceChanged(before)
+      this.emit('away', null)
+    }
+    return result
+  }
+
+  /** What the owner's surfaces see. */
+  awayForOwner(): ReturnType<typeof ownerAwayView> {
+    return ownerAwayView(this.awayRecord)
+  }
+
+  /** What an agent sees: state, since, revision. */
+  awayForAgent(): ReturnType<typeof agentAwayView> {
+    return agentAwayView(this.awayRecord)
   }
 
   private emit(topic: AppEventTopic, sessionId: string | null): void {
@@ -2994,6 +3073,9 @@ export class CompanionService {
     const connector = this.telegram
     if (!connector) return
     const bot = createHash('sha256').update(this.telegramToken ?? 'unconfigured').digest('hex')
+    // Story 76.3: /away and /back come before Other answers and ordinary replies, whether or not they reply to a card.
+    const away = telegramAwayCommand(reply, () => connector.botUsername())
+    if (away) return this.telegramAway(connector, reply, away, bot)
     const key = `telegram-reply:${bot}:${reply.updateId}`
     const pending = this.telegramReplyOperations.get(key)
     if (pending) return pending
@@ -3011,6 +3093,46 @@ export class CompanionService {
     this.telegramReplyOperations.set(key, operation)
     try { await operation } finally {
       if (this.telegramReplyOperations.get(key) === operation) this.telegramReplyOperations.delete(key)
+    }
+  }
+
+  /**
+   * Story 76.3 AC4: the state change carries the update's key, stored in the same operation, so a redelivered update neither
+   * repeats nor reverses it. The reply is claimed before it is sent and sent again only when Telegram definitely refused
+   * it; a reply that failed leaves the state as it is.
+   */
+  private async telegramAway(connector: TelegramConnector, reply: InboundReply, command: TelegramAwayCommand, bot: string): Promise<void> {
+    const operationKey = `telegram:${bot}:${reply.updateId}`
+    const before = this.awayRecord.state
+    let note: 'none' | 'kept' | 'replaced' | 'too-long' = 'none'
+    let result = await this.changeAway(command.to === 'away'
+      ? { to: 'away', source: 'telegram', operationKey, ...(command.note === null ? {} : { note: command.note }) }
+      : { to: 'back', source: 'telegram', operationKey })
+    if (result.outcome === 'invalid' && command.to === 'away') {
+      // Leaving never fails for a long note: away is set and only the note is refused (Fable's question 2).
+      note = 'too-long'
+      result = await this.changeAway({ to: 'away', source: 'telegram', operationKey })
+    } else if (command.to === 'away' && command.note !== null) note = before === 'away' ? 'replaced' : 'kept'
+    const record = result.record
+    const text = command.to === 'away'
+      ? record.state === 'away' && record.since !== null
+        ? awayReplyText({ since: record.since, repeated: result.outcome !== 'repeated' && before === 'away', note, now: this.now() })
+        : 'Not away; nothing changed.'
+      : backReplyText({ since: record.since, endedAt: record.endedAt, changed: record.state === 'back' && (result.outcome === 'changed' || result.outcome === 'repeated'), now: this.now() })
+    const replyKey = `telegram-away-reply:${bot}:${reply.updateId}`
+    const database = this.options.database
+    if (await database.companion('getReceipt', replyKey)) return
+    const paramsHash = createHash('sha256').update(text).digest('hex')
+    await database.companion('putReceipt', { key: replyKey, paramsHash, state: 'staged' }, this.iso())
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await connector.sendMessage(text, { replyToMessageId: reply.messageId })
+        await database.companion('putReceipt', { key: replyKey, paramsHash, state: 'done' }, this.iso())
+        return
+      } catch (error) {
+        // Only an answer from Telegram saying no proves the reply was not sent; anything else may have been delivered.
+        if (!(error instanceof TelegramConnectorError) || error.kind !== 'http' || attempt === 1) return
+      }
     }
   }
 

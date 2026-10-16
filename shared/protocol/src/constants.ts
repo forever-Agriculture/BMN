@@ -79,7 +79,10 @@ export const METHOD_REGISTRY = Object.freeze({
   telegramTest: 'telegram.test',
   telegramHealthTest: 'telegram.healthTest',
   controlInfo: 'control.info',
-  presenceSet: 'presence.set'
+  presenceSet: 'presence.set',
+  awayGet: 'away.get',
+  awaySet: 'away.set',
+  awaySummaryShown: 'away.summaryShown'
 } as const)
 
 export type ProtocolMethod = (typeof METHOD_REGISTRY)[keyof typeof METHOD_REGISTRY]

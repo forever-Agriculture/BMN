@@ -148,7 +148,11 @@ function fakeHandlers(current: Map<string, string>) {
     takeAnswers: vi.fn(async (): Promise<unknown> => ({ answers: [] })),
     reportResumeCommand: vi.fn(async (p: Parameters<ControlHandlers['reportResumeCommand']>[0]): Promise<unknown> =>
       ({ recorded: true, argv: [...p.argv], reportedAt: '2026-09-29T10:15:00.000Z' })),
-    clearResumeCommand: vi.fn(async (): Promise<unknown> => ({ cleared: true }))
+    clearResumeCommand: vi.fn(async (): Promise<unknown> => ({ cleared: true })),
+    awayStatus: vi.fn(async (scope: { kind: string }): Promise<unknown> => scope.kind === 'owner'
+      ? { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3, note: 'back by 8' }
+      : { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3 }),
+    changeAway: vi.fn(async (p: { to: string }): Promise<unknown> => ({ outcome: 'changed', state: p.to, revision: 4 }))
   } satisfies ControlHandlers
 }
 
@@ -1673,5 +1677,31 @@ describe('turn.mark (Story 69.4)', () => {
     expectError(await agent.request('hook.observe', { ...observed, conversation: OBSERVED_REFERENCE, nested: false }), ERROR_CODES.invalidArgument)
     expectError(await agent.request('hook.observe', { ...observed, conversation: 'no reference' }), ERROR_CODES.invalidArgument)
     expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('away state (Story 76.3)', () => {
+  it('gives the owner the whole view and an agent its own, and checks what each may say', async () => {
+    const fixture = await serverFixture()
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    await owner.request('away.status', {})
+    await agent.request('away.status', {})
+    expect(fixture.handlers.awayStatus.mock.calls.map(([scope]) => scope.kind)).toEqual(['owner', 'session'])
+
+    expect((await owner.request('away.set', { to: 'away', note: 'train', idempotencyKey: 'k1' })).error).toBeUndefined()
+    expect((await agent.request('away.set', { to: 'back', revision: 3, idempotencyKey: 'k1' })).error).toBeUndefined()
+    const [ownerCall, agentCall] = fixture.handlers.changeAway.mock.calls.map(([call]) => call as Record<string, unknown>)
+    expect(ownerCall).toMatchObject({ to: 'away', note: 'train' })
+    expect(agentCall).toMatchObject({ to: 'back', expectedRevision: 3 })
+    expect(ownerCall!.operationKey).not.toBe(agentCall!.operationKey)
+
+    expectError(await agent.request('away.set', { to: 'away' }), ERROR_CODES.invalidArgument)
+    expectError(await agent.request('away.set', { to: 'away', revision: 3, note: 'mine' }), ERROR_CODES.invalidArgument)
+    expectError(await owner.request('away.set', { to: 'asleep' }), ERROR_CODES.invalidArgument)
+    expectError(await owner.request('away.set', { to: 'away', revision: -1 }), ERROR_CODES.invalidArgument)
+    expectError(await owner.request('away.set', { to: 'away', extra: true }), ERROR_CODES.invalidArgument)
+    expectError(await owner.request('away.status', { verbose: true }), ERROR_CODES.invalidArgument)
+    expect(fixture.handlers.changeAway).toHaveBeenCalledTimes(2)
   })
 })

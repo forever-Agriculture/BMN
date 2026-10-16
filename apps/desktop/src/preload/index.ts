@@ -58,6 +58,7 @@ import {
   type TurnSummary,
   type BackupExportResult,
   type ControlInfo,
+  type OwnerAwayView,
   type DraftSendExpectation,
   type FileReferenceReadParams,
   type FileReferenceReadResult,
@@ -697,6 +698,17 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   getControlInfo(): Promise<ControlInfo> {
     return invokeBridge('aiterm:control:info', {})
+  },
+  /** Story 76.3: the owner's said away state, as his own surfaces see it. */
+  getAway(): Promise<OwnerAwayView> {
+    return invokeBridge('aiterm:away:get', {})
+  },
+  /** Away (with an optional note, which replaces the period's) or back, said in the app. */
+  setAway(to: 'away' | 'back', note?: string | null): Promise<OwnerAwayView> {
+    return invokeBridge('aiterm:away:set', note === undefined ? { to } : { to, note })
+  },
+  markAwaySummaryShown(periodId: string): Promise<OwnerAwayView> {
+    return invokeBridge('aiterm:away:summary-shown', { periodId })
   },
   exportBackup(): Promise<BackupExportResult | null> {
     return invokeBridge('aiterm:backup:export', {})

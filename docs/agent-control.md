@@ -63,6 +63,13 @@ Commands:
                                             Ask for attention; kind is one of
                                             question|permission|review|notice (default question)
   withdraw <request-key>                    Withdraw an attention request
+  away [--note TEXT] [--revision R] [--key K]
+  back [--revision R] [--key K]             The owner is away, or back. From an agent only on the
+                                            owner's own words, naming the revision bmn away --status showed.
+                                            A repeated away keeps the period's time and note unless --note is
+                                            given; a repeated back changes nothing. Only the owner sets a note
+                                            (at most 200 characters), and only he sees it
+  away --status [--json]                    Away or back, since when, and the revision
   resolve <request-key> <resolution>        Resolve an attention request
   send <text> | --text-file - [--submit] [--key K]
                                             Paste text into the session; --submit also presses Enter

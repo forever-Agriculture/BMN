@@ -74,7 +74,10 @@ const ROUTES = {
   'aiterm:telegram:status': METHOD_REGISTRY.telegramStatus,
   'aiterm:telegram:test': METHOD_REGISTRY.telegramTest,
   'aiterm:telegram:health-test': METHOD_REGISTRY.telegramHealthTest,
-  'aiterm:control:info': METHOD_REGISTRY.controlInfo
+  'aiterm:control:info': METHOD_REGISTRY.controlInfo,
+  'aiterm:away:get': METHOD_REGISTRY.awayGet,
+  'aiterm:away:set': METHOD_REGISTRY.awaySet,
+  'aiterm:away:summary-shown': METHOD_REGISTRY.awaySummaryShown
 } as const
 
 const PASTE_IMAGE_TYPES = new Map([['image/png', 'png'], ['image/jpeg', 'jpg'], ['image/webp', 'webp'], ['image/gif', 'gif']])

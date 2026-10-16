@@ -40,6 +40,7 @@ import type {
   ClosePromptDecision,
   ClosePromptRequest,
   ControlInfo,
+  OwnerAwayView,
   DraftSendExpectation,
   FileReferenceReadParams,
   FileReferenceReadResult,
@@ -330,6 +331,10 @@ export interface AiTerminalBridge {
   /** Sends the machine's current readings to Telegram marked as a test; no stored state changes. */
   testHealthAlerts(): Promise<TelegramStatus>
   getControlInfo(): Promise<ControlInfo>
+  /** Story 76.3: the owner's said away state, as his own surfaces see it. */
+  getAway(): Promise<OwnerAwayView>
+  setAway(to: 'away' | 'back', note?: string | null): Promise<OwnerAwayView>
+  markAwaySummaryShown(periodId: string): Promise<OwnerAwayView>
   /** Writes a backup to a folder the owner picks and checks the copy at once (Story 75.7); null when he cancels. */
   exportBackup(): Promise<BackupExportResult | null>
   /** Epic 60.5: the team file, the approved version, pending differences with consequences, and approval history. */

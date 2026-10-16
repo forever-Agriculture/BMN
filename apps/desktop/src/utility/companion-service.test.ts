@@ -42,7 +42,7 @@ import { createWorkspace, listSessions, listWorkspaces } from './database-worksp
 import type { SessionManager } from './session-manager'
 import type { ProcReader } from './listening-ports'
 import type { ScreenLike } from './remote-answer'
-import type { TelegramConnector, InboundReply } from './telegram-connector'
+import { TelegramConnectorError, type TelegramConnector, type InboundReply } from './telegram-connector'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
 import { startFakeBotApi } from '../main/fake-bot-api'
 
@@ -3997,4 +3997,123 @@ it('preserves the correlated native OpenCode route while old supported ownership
     kind: 'question', title: 'Synthetic', origin: 'cli', manualChoices: { options: [{ label: 'Proceed', description: null }, { label: 'Wait', description: null }], allowOther: true } })
   expect(await service.answerability(unknown)).toMatchObject({ answerable: false })
   expect(writes).toHaveLength(0)
+})
+
+describe('Away (Story 76.3)', () => {
+  afterEach(() => vi.useRealTimers())
+
+  const reply = (updateId: number, text: string): InboundReply => ({
+    updateId, chatId: 1, fromUserId: 1, messageId: 900 + updateId, replyToMessageId: null, text, textSource: 'text', file: null
+  })
+  const fakeTelegram = (send: (message: string) => Promise<{ messageId: number }>) => {
+    service['telegram'] = { sendMessage: send, botUsername: () => 'bmn_synthetic_bot' } as unknown as TelegramConnector
+    service['telegramToken'] = '123456789:SYNTHETIC_test_token_not_real'
+  }
+
+  it('keeps one state across the app, the CLI and an agent, and emits each change once', async () => {
+    const away = await service.route(METHOD_REGISTRY.awaySet, { to: 'away', note: 'train' })
+    expect(away).toMatchObject({ state: 'away', revision: 1, source: 'app', note: 'train' })
+    expect(emitted.filter(event => event.topic === 'away')).toHaveLength(1)
+    expect(await service.changeAway({ to: 'away', source: 'cli' })).toMatchObject({ outcome: 'unchanged' })
+    expect(emitted.filter(event => event.topic === 'away')).toHaveLength(1)
+    expect(await service.changeAway({ to: 'back', source: 'agent', agentSessionId: 's1', expectedRevision: 0 })).toMatchObject({ outcome: 'stale' })
+    expect(await service.changeAway({ to: 'back', source: 'agent', agentSessionId: 's1', expectedRevision: 1 })).toMatchObject({ outcome: 'changed' })
+    expect(service.awayForAgent()).toEqual({ state: 'back', since: clock, revision: 2 })
+    expect(service.awayForOwner()).toMatchObject({ state: 'back', endedBy: 'agent', note: 'train' })
+    await expect(service.route(METHOD_REGISTRY.awaySet, { to: 'away', note: 'x'.repeat(201) })).rejects.toThrow('longer than 200')
+    await expect(service.route(METHOD_REGISTRY.awaySet, { to: 'gone' })).rejects.toThrow('to must be')
+  })
+
+  it('reads the said state back after a restart, and shows a summary as shown once', async () => {
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    const back = await service.route(METHOD_REGISTRY.awaySet, { to: 'back' }) as { periodId: string }
+    service = new CompanionService(service['options']); liveIncarnations.clear(); await service.start()
+    expect(service.awayForOwner()).toMatchObject({ state: 'back', periodId: back.periodId, summaryShownAt: null })
+    emitted.length = 0
+    await service.route(METHOD_REGISTRY.awaySummaryShown, { periodId: 'another-period' })
+    expect(service.awayForOwner().summaryShownAt).toBeNull()
+    await service.route(METHOD_REGISTRY.awaySummaryShown, { periodId: back.periodId })
+    await service.route(METHOD_REGISTRY.awaySummaryShown, { periodId: back.periodId })
+    expect(service.awayForOwner().summaryShownAt).toBe(clock)
+    expect(emitted.filter(event => event.topic === 'away')).toHaveLength(1)
+  })
+
+  it('pages and sends exits while said away even when the desk says he is here, and goes by the desk after back (R76-NFR1)', async () => {
+    vi.useFakeTimers()
+    const sent: string[] = []
+    service['telegram'] = {
+      sendMessage: async (message: string) => { sent.push(message); return { messageId: sent.length } }
+    } as unknown as TelegramConnector
+    service['telegramHealth'] = { state: 'polling', detail: '', lastPollAt: null, lastError: null, rejectedUpdates: 0, failingSince: null }
+    service['sessionsChanged'] = async () => undefined
+    await database.transaction(() => COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+      enabled: true, allowedChatId: 1, allowedUserId: null, notifyOn: 'attention-and-exit', autoSubmitReplies: false
+    }, now))()
+    const prompt = { sessionId: 's1', incarnationId: null, kind: 'permission' as const, title: 'Claude wants to use Bash' }
+    await service.route(METHOD_REGISTRY.presenceSet, { away: false })
+    await service['openAttention']({ ...prompt, requestKey: 'claude:permission' })
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(sent).toEqual([])
+
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await vi.advanceTimersByTimeAsync(0)
+    service.sessionStateChanged('s1', 'exited')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sent).toEqual([
+      '🔐 <b>Session</b>\n<b>Claude wants to use Bash</b>\n\n<i>Reply to this message to answer.</i>',
+      '■ <b>Session</b> exited'
+    ])
+
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'back' })
+    await service['openAttention']({ ...prompt, requestKey: 'claude:question', kind: 'question', title: 'After back' })
+    service.sessionStateChanged('s1', 'exited')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sent).toHaveLength(2)
+  })
+
+  it('takes /away and /back from Telegram once, however often the update arrives, and never echoes the note', async () => {
+    const sent: string[] = []
+    fakeTelegram(async (message) => { sent.push(message); return { messageId: sent.length } })
+    await service['handleTelegramReply'](reply(1, '/away dentist at 9'))
+    await service['handleTelegramReply'](reply(1, '/away dentist at 9'))
+    expect(service.awayForOwner()).toMatchObject({ state: 'away', source: 'telegram', note: 'dentist at 9', revision: 1 })
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatch(/^Away since \d\d:\d\d\. Note kept on the laptop\./)
+    expect(sent[0]).not.toContain('dentist')
+
+    await service['handleTelegramReply'](reply(2, '/back'))
+    await service['handleTelegramReply'](reply(1, '/away dentist at 9'))
+    expect(service.awayForOwner()).toMatchObject({ state: 'back', endedBy: 'telegram', revision: 2 })
+    expect(sent).toHaveLength(2)
+    expect(sent[1]).toMatch(/^Back\. Away 0 min, /)
+
+    await service['handleTelegramReply'](reply(3, '/back'))
+    expect(sent[2]).toBe('Not away; nothing changed.')
+    await service['handleTelegramReply'](reply(4, `/away ${'x'.repeat(201)}`))
+    expect(service.awayForOwner()).toMatchObject({ state: 'away', note: null, revision: 3 })
+    expect(sent[3]).toContain('Note not kept: longer than 200 characters.')
+  })
+
+  it('sends a reply again only when Telegram said no; a lost answer is never resent', async () => {
+    let calls = 0
+    fakeTelegram(async () => { calls += 1; throw new TelegramConnectorError('http', 'Bad Request', 400) })
+    await service['handleTelegramReply'](reply(10, '/away'))
+    expect(calls).toBe(2)
+    expect(service.awayForOwner().state).toBe('away')
+    calls = 0
+    fakeTelegram(async () => { calls += 1; throw new TelegramConnectorError('network', 'socket hang up') })
+    await service['handleTelegramReply'](reply(11, '/back'))
+    await service['handleTelegramReply'](reply(11, '/back'))
+    expect(calls).toBe(1)
+    expect(service.awayForOwner().state).toBe('back')
+  })
+
+  it('leaves a caption, another bot and other words to their own routing', async () => {
+    const sent: string[] = []
+    fakeTelegram(async (message) => { sent.push(message); return { messageId: sent.length } })
+    await service['handleTelegramReply']({ ...reply(20, '/away'), textSource: 'caption' })
+    await service['handleTelegramReply'](reply(21, '/away@other_bot'))
+    expect(service.awayForOwner().state).toBe('none')
+    expect(sent.every(message => message.startsWith('Reply to a notification'))).toBe(true)
+  })
 })

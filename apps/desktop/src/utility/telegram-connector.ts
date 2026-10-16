@@ -36,6 +36,8 @@ export interface InboundReply {
   messageId: number
   replyToMessageId: number | null
   text: string | null
+  /** Story 76.3: whether `text` is the message's own text or a caption under a file. */
+  textSource?: 'text' | 'caption' | null
   file: {
     fileId: string
     fileName: string
@@ -284,6 +286,7 @@ function parseUpdate(
       messageId: message.message_id,
       replyToMessageId: isRecord(replyTo) && isInteger(replyTo.message_id) ? replyTo.message_id : null,
       text,
+      textSource: typeof message.text === 'string' ? 'text' : typeof message.caption === 'string' ? 'caption' : null,
       file: attachedFile(message, message.message_id)
     }
   }
@@ -344,6 +347,7 @@ export class TelegramConnector {
   private verified = false
   private backoffMs = 0
   private offsetLoaded = false
+  private username: string | null = null
   private nextOffset: number | null = null
 
   constructor(options: TelegramConnectorOptions) {
@@ -397,6 +401,15 @@ export class TelegramConnector {
 
   health(): ConnectorHealth {
     return { ...this.current }
+  }
+
+  /** Story 76.3: this bot's own username, so `/away@ThisBot` is its command and `/away@OtherBot` is not. */
+  botUsername(): string | null {
+    return this.username
+  }
+
+  private rememberBot(result: unknown): void {
+    if (isRecord(result) && typeof result.username === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(result.username)) this.username = result.username
   }
 
   async sendMessage(text: string, options: CardMessageOptions = {}): Promise<{ messageId: number }> {
@@ -519,7 +532,7 @@ export class TelegramConnector {
     this.verified = false
     this.backoffMs = 0
     try {
-      await this.call('getMe', {}, AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]))
+      this.rememberBot(await this.call('getMe', {}, AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])))
       this.verified = true
       this.publish({ state: 'polling', detail: 'Waiting for Telegram replies', failingSince: null })
     } catch (error) {
@@ -537,7 +550,7 @@ export class TelegramConnector {
       }
       try {
         if (!this.verified) {
-          await this.call('getMe', {}, AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]))
+          this.rememberBot(await this.call('getMe', {}, AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])))
           this.verified = true
         }
         const updates = await this.getUpdates(signal)

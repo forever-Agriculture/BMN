@@ -233,6 +233,13 @@ export interface ControlHandlers {
    */
   reportResumeCommand(p: { sessionId: string; incarnationId: string; argv: readonly string[] }): Promise<unknown>
   clearResumeCommand(p: { sessionId: string; incarnationId: string }): Promise<unknown>
+  /** Story 76.3: the owner's said state; the note only to the owner's token (R76-NFR3). */
+  awayStatus(scope: ControlScope): Promise<unknown>
+  /**
+   * Story 76.3: away or back. The owner's token says it as `cli`; a session's agent only on his words, naming the revision
+   * it saw, as `agent`. `operationKey` makes a retry return the first result.
+   */
+  changeAway(p: { scope: ControlScope; to: 'away' | 'back'; note?: string | null; expectedRevision?: number; operationKey?: string }): Promise<unknown>
 }
 
 export interface ReceiptRecord {
@@ -352,7 +359,9 @@ const RULES = {
   conversationReference: { min: 36, max: 36, unit: 'characters', controls: 'reject' },
   text: { min: 0, max: MAX_INPUT_TEXT_BYTES, unit: 'bytes', controls: 'allow' },
   guardLine: { min: 1, max: 600, unit: 'characters', controls: 'reject', strip: true },
-  timestamp: { min: 1, max: 64, unit: 'characters', controls: 'reject' }
+  timestamp: { min: 1, max: 64, unit: 'characters', controls: 'reject' },
+  /** Story 76.3: his own note; the store refuses one over 200 characters rather than cutting it. */
+  awayNote: { min: 0, max: 4096, unit: 'characters', controls: 'reject' }
 } satisfies Record<string, TextRule>
 
 const utf8 = new TextDecoder('utf-8', { fatal: true })
@@ -1415,6 +1424,29 @@ export class ControlServer {
         readText(params, 'idempotencyKey', RULES.idempotencyKey)
         const sessionId = this.target(scope, params)
         return handlers.clearResumeCommand({ sessionId, incarnationId: scope.incarnationId })
+      }
+      case 'away.status': {
+        closedParams(rawParams, [])
+        return handlers.awayStatus(scope)
+      }
+      case 'away.set': {
+        const params = closedParams(rawParams, ['to', 'note', 'revision', 'idempotencyKey'])
+        const to = params.to
+        if (to !== 'away' && to !== 'back') throw invalid('to must be away or back')
+        const note = params.note === undefined || params.note === null ? params.note : readText(params, 'note', RULES.awayNote)
+        const revision = params.revision
+        if (revision !== undefined && (!Number.isSafeInteger(revision) || (revision as number) < 0)) throw invalid('revision must be a whole number')
+        // An agent says it only on the owner's words, against the state it saw: a stale revision changes nothing.
+        if (scope.kind === 'session' && revision === undefined) throw invalid('An agent names the away revision it saw (bmn away --status)')
+        // The note comes only from the owner's own hands (Story 76.1, Fable's question 1).
+        if (scope.kind === 'session' && note !== undefined && note !== null) throw invalid('Only the owner sets a note; say away without one')
+        const operationKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
+        return handlers.changeAway({
+          scope, to,
+          ...(note === undefined ? {} : { note: note as string | null }),
+          ...(revision === undefined ? {} : { expectedRevision: revision as number }),
+          ...(operationKey === undefined ? {} : { operationKey: `${scopeKey(scope)}|${operationKey}` })
+        })
       }
       default:
         throw invalid(`Unknown method: ${method.slice(0, 64)}`)

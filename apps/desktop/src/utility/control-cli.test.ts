@@ -101,7 +101,11 @@ async function cliFixture() {
     takeAnswers: vi.fn<ControlHandlers['takeAnswers']>(async () => ({ answers: [] })),
     reportResumeCommand: vi.fn<ControlHandlers['reportResumeCommand']>(async (p) =>
       ({ recorded: true, argv: [...p.argv], reportedAt: '2026-09-29T10:15:00.000Z' })),
-    clearResumeCommand: vi.fn<ControlHandlers['clearResumeCommand']>(async () => ({ cleared: true }))
+    clearResumeCommand: vi.fn<ControlHandlers['clearResumeCommand']>(async () => ({ cleared: true })),
+    awayStatus: vi.fn<ControlHandlers['awayStatus']>(async (scope) => scope.kind === 'owner'
+      ? { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3, note: 'back by 8' }
+      : { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3 }),
+    changeAway: vi.fn<ControlHandlers['changeAway']>(async (p) => ({ outcome: 'changed', state: p.to, since: '2026-10-16T19:10:00.000Z', revision: 4 }))
   } satisfies ControlHandlers
   const server = new ControlServer({ socketPath, auth, handlers, receipts: new MemoryReceiptStore() })
   await server.listen()
@@ -5314,5 +5318,43 @@ describe('bmn hook turn marks (Story 69.4)', () => {
     expect(text).toContain("  turn changes: recorded in every workspace that is not archived (waiting for the prompt hook measured on Codex 0.162.1)")
     expect(text).toContain('  turn changes: not recorded for OpenCode; it was not measured to wait for its prompt hook')
     expect(asJson.agents.find((row) => row.agent === 'codex')?.turnChanges).toMatch(/^turn changes: recorded/)
+  })
+})
+
+describe('bmn away and bmn back (Story 76.3)', () => {
+  it('shows an agent the state without the note and passes the revision it saw', async () => {
+    const fixture = await cliFixture()
+    const status = await runCli(['away', '--status'], { env: fixture.sessionEnv })
+    expect(status.code).toBe(0)
+    expect(status.stdout).toMatch(/^Away since .+ \(revision 3\)\n$/)
+    const back = await runCli(['back', '--revision', '3', '--key', 'back-1'], { env: fixture.sessionEnv })
+    expect(back.code).toBe(0)
+    expect(back.stdout).toMatch(/^Back; was away from .+ \(revision 4\)\n$/)
+    expect(fixture.handlers.changeAway).toHaveBeenCalledWith({
+      scope: { kind: 'session', sessionId: 'session-1', incarnationId: 'incarnation-1' },
+      to: 'back', expectedRevision: 3, operationKey: 'session:session-1|back-1'
+    })
+  })
+
+  it('shows the owner the note and refuses bad input before anything is sent', async () => {
+    const fixture = await cliFixture()
+    await writeOwnerToken(dirname(fixture.socketPath), fixture.auth.ownerToken)
+    const env = { BMN_CONTROL_SOCKET: fixture.socketPath }
+    expect((await runCli(['away', '--status', '--owner'], { env })).stdout).toMatch(/\(revision 3\)\nNote: back by 8\n$/)
+    expect((await runCli(['away', '--owner', '--note', 'train'], { env })).code).toBe(0)
+    expect(fixture.handlers.changeAway).toHaveBeenLastCalledWith(expect.objectContaining({ to: 'away', note: 'train' }))
+    for (const args of [
+      ['away', '--owner', '--note', 'x'.repeat(201)],
+      ['back', '--owner', '--revision', 'three'],
+      ['away', '--status', '--owner', '--note', 'n'],
+      ['back', '--owner', '--note', 'n']
+    ]) {
+      const result = await runCli(args, { env })
+      expect(result.code, args.join(' ')).toBe(2)
+    }
+    expect(fixture.handlers.changeAway).toHaveBeenCalledTimes(1)
+    const refused = await runCli(['away'], { env: fixture.sessionEnv })
+    expect(refused.code).toBe(1)
+    expect(refused.stderr).toMatch(/^bmn: INVALID_ARGUMENT: An agent names the away revision/)
   })
 })

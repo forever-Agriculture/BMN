@@ -51,6 +51,7 @@ import { isAbsolute, normalize } from 'node:path'
 import type { DatabaseConnection } from './database-initialization'
 import { admitHandoff, HANDOFF_MESSAGE_KEY, MESSAGE_OPERATIONS, type SendOutcome } from './database-message-store'
 import { TURN_OPERATIONS } from './database-turn-store'
+import { AWAY_OPERATIONS } from './database-away-store'
 import { selectSession, selectWorkspace, WorkspaceStoreError } from './database-workspace-store'
 
 interface ArtifactRow {
@@ -1420,7 +1421,8 @@ export const COMPANION_OPERATIONS = Object.freeze({
   getRawSetting,
   putRawSetting,
   ...MESSAGE_OPERATIONS,
-  ...TURN_OPERATIONS
+  ...TURN_OPERATIONS,
+  ...AWAY_OPERATIONS
 })
 
 export type CompanionOperations = typeof COMPANION_OPERATIONS

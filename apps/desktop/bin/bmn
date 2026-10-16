@@ -24,7 +24,7 @@ const OPENCODE_REFERENCE = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
 const ATTENTION_KINDS = ['question', 'permission', 'review', 'notice']
 const VALUE_OPTIONS = new Set([
   'name', 'session', 'key', 'source', 'detail', 'observed', 'kind', 'body', 'expires', 'socket', 'token-file', 'file', 'text', 'wait', 'reported',
-  'body-file', 'text-file', 'detail-file', 'choices-json', 'choices-file'
+  'body-file', 'text-file', 'detail-file', 'choices-json', 'choices-file', 'note', 'revision'
 ])
 /**
  * Story 35.1: the one field each command can read from standard input instead of an argument, and the app's
@@ -42,7 +42,7 @@ const PIPED_FIELDS = {
 const MAX_ANSWER_WAIT_SECONDS = 25
 /** Options that may be repeated; each occurrence appends, so the order given is the order stored. */
 const LIST_OPTIONS = new Set(['evidence-id', 'file-id'])
-const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help', 'outline', 'clear', 'yes', 'absent'])
+const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help', 'outline', 'clear', 'yes', 'absent', 'status'])
 const GLOBAL_OPTIONS = ['json', 'owner', 'token-file', 'socket', 'help']
 /**
  * Story 35.2: what `bmn handoff --outline` prints. bin/bmn runs unbundled, so this is a copy of HANDOFF_OUTLINE in
@@ -92,6 +92,13 @@ Commands:
                                             Ask for attention; kind is one of
                                             ${ATTENTION_KINDS.join('|')} (default question)
   withdraw <request-key>                    Withdraw an attention request
+  away [--note TEXT] [--revision R] [--key K]
+  back [--revision R] [--key K]             The owner is away, or back. From an agent only on the
+                                            owner's own words, naming the revision bmn away --status showed.
+                                            A repeated away keeps the period's time and note unless --note is
+                                            given; a repeated back changes nothing. Only the owner sets a note
+                                            (at most 200 characters), and only he sees it
+  away --status [--json]                    Away or back, since when, and the revision
   resolve <request-key> <resolution>        Resolve an attention request
   send <text> | --text-file - [--submit] [--key K]
                                             Paste text into the session; --submit also presses Enter
@@ -298,6 +305,34 @@ function isObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
+/** Story 76.3: the note, the revision an agent saw, and the key that makes a retry return the first result. */
+function awayOptions(options) {
+  let revision
+  if (options.revision !== undefined) {
+    if (!/^\d{1,15}$/.test(String(options.revision))) throw new UsageError('--revision must be a whole number (bmn away --status shows it)')
+    revision = Number(options.revision)
+  }
+  if (options.note !== undefined && [...options.note].length > 200) throw new UsageError('--note is longer than 200 characters; nothing was changed')
+  return {
+    ...(options.note === undefined ? {} : { note: options.note }),
+    ...(revision === undefined ? {} : { revision }),
+    idempotencyKey: options.key ?? randomUUID()
+  }
+}
+
+/** One line for a said state: away or back, since when, the revision, and the note where the caller may see it. */
+function describeAway(result) {
+  if (!isObject(result)) return JSON.stringify(result, null, 2)
+  const since = typeof result.since === 'string' ? new Date(result.since) : null
+  const at = since && Number.isFinite(since.getTime())
+    ? since.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : 'an unknown time'
+  const head = result.state === 'away' ? `Away since ${at}`
+    : result.state === 'back' ? `Back; was away from ${at}` : 'Nothing said: BMN goes by the desk input'
+  const outcome = result.outcome === 'unchanged' ? ' (nothing changed)' : result.outcome === 'repeated' ? ' (already done earlier; not repeated)' : ''
+  const note = typeof result.note === 'string' && result.note !== '' ? `\nNote: ${result.note}` : ''
+  return `${head} (revision ${result.revision})${outcome}${note}`
+}
+
 function withSession(options, params) {
   return options.session === undefined ? params : { sessionId: options.session, ...params }
 }
@@ -418,6 +453,24 @@ const COMMANDS = {
     args: [],
     options: [],
     build: () => ({ method: 'peers.list', params: {} })
+  },
+  away: {
+    args: [],
+    options: ['note', 'status', 'revision', 'key'],
+    build: (_positionals, options) => {
+      if (options.status) {
+        if (options.note !== undefined || options.revision !== undefined || options.key !== undefined) {
+          throw new UsageError('away --status takes no other option')
+        }
+        return { method: 'away.status', params: {} }
+      }
+      return { method: 'away.set', params: { to: 'away', ...awayOptions(options) } }
+    }
+  },
+  back: {
+    args: [],
+    options: ['revision', 'key'],
+    build: (_positionals, options) => ({ method: 'away.set', params: { to: 'back', ...awayOptions(options) } })
   },
   send: {
     args: ['text'],
@@ -2869,6 +2922,9 @@ function describeResult(command, positionals, options, result) {
           'BMN hands it to the agent there after its next tool call. Its state: bmn handoff status'
     case 'peers':
       return describePeers(result)
+    case 'away':
+    case 'back':
+      return describeAway(result)
     case 'tell':
       return positionals[0] === 'status'
         ? describeTellStatus(result)

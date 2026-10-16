@@ -427,6 +427,28 @@ input[type='radio'] {
   gap: 6px;
 }
 
+/* Story 76.3: away is a state, not attention: the app's own box, no gold, no plate; set apart from the two icons. */
+.away-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.away-check input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.away-check[data-away] {
+  color: var(--text);
+}
+
 /*
  * The failure bar's red used to run the full window width along its bottom edge, directly against the
  * gold selection outline of the pane beneath it: two saturated 1px lines touching, meaning two

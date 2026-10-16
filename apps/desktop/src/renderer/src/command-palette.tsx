@@ -89,6 +89,11 @@ export function CommandPalette(props: {
   searchLabel?: string
   placeholder?: string
   emptyMessage?: string
+  /**
+   * Story 76.3: a second mode in the same shell, as the file search is: what is typed is text, not a search, and the one row
+   * it shows says what Enter does with it.
+   */
+  entry?: ((text: string) => { label: string; context: string; disabled: boolean; run(): void }) | undefined
   fileSearch?: {
     workspaceId: string
     sessionId: string | null
@@ -130,14 +135,14 @@ export function CommandPalette(props: {
     }
   }, [query, workspaceId, sessionId, rootLabel])
   const matchingFiles = matchingPaletteFileSearch(fileResult, { query, workspaceId, sessionId, rootLabel })
-  const results = useMemo(() => [
+  const results = useMemo((): PaletteCommand[] => props.entry ? [{ id: 'entry', group: 'Commands', ...props.entry(query) }] : [
     ...filterCommands(props.commands, query),
     ...(matchingFiles?.files.map((file, index): PaletteCommand => ({
       id: `file-${index}`,
       group: 'Files', label: file.name, context: file.directory,
       run: () => props.fileSearch?.open(file.path, fileResult?.sessionId ?? null)
     })) ?? [])
-  ], [props.commands, query, matchingFiles, props.fileSearch, fileResult])
+  ], [props.commands, props.entry, query, matchingFiles, props.fileSearch, fileResult])
   const activeIndex = paletteSelectionIndex(results, activeId, previousIndex.current, previousIds.current)
   previousIndex.current = activeIndex
   previousIds.current = results.map(row => row.id)
@@ -193,6 +198,7 @@ export function CommandPalette(props: {
               data-group={command.group}
               data-live={command.live === undefined ? undefined : String(command.live)}
               aria-selected={index === activeIndex}
+              aria-disabled={command.disabled || undefined}
               onMouseMove={() => setActiveId(command.id)}
               onClick={() => invoke(command)}
             >

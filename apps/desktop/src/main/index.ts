@@ -262,7 +262,8 @@ function showAppNotice(notice: { title: string; body: string }): void {
 const appEvents = createAppEventForwarder({
   client: () => hostClient,
   targets: allowedTargets,
-  watching: (sessionId) => !presence.current().away && !selfTestTaps?.windowUnwatched && BrowserWindow.getAllWindows().some((window) =>
+  // Story 76.3 (R76-NFR1): while he said away nobody is watching, whatever the desk input says.
+  watching: (sessionId) => !saidAway && !presence.current().away && !selfTestTaps?.windowUnwatched && BrowserWindow.getAllWindows().some((window) =>
     !window.isDestroyed() && window.isFocused() && selectedSessions.get(window.webContents.id) === sessionId
   ),
   notify: ({ title, body, sessionId, requestId, kind, revision }) => {
@@ -297,6 +298,17 @@ const appEvents = createAppEventForwarder({
     return null
   }
 })
+
+/** Story 76.3: whether the owner said he is away, as the host last told; read again on every away event. */
+let saidAway = false
+function readSaidAway(): void {
+  void hostClient?.request<{ state: string }>(METHOD_REGISTRY.awayGet, {}).then((view) => {
+    const next = view.state === 'away'
+    if (next === saidAway) return
+    saidAway = next
+    appEvents.watchChanged()
+  }).catch(() => undefined)
+}
 
 /** The host pages the owner's phone only while they are away; null tells it presence cannot be read. */
 function reportPresence(): void {
@@ -428,7 +440,11 @@ async function initializeApplication(testMode: boolean): Promise<ApplicationStar
   hostClient = launched.client
   hostRendererPort = launched.applicationPort
   trackSessionProcessStates(launched.client)
-  launched.client.onAppEvent((message) => appEvents.forward(message))
+  launched.client.onAppEvent((message) => {
+    if (message.topic === 'away') readSaidAway()
+    appEvents.forward(message)
+  })
+  readSaidAway()
   const programCopy = createProgramCopy({
     allowed: async () => programCopyAllowed(await launched.client.request<Partial<AppSettings>>(METHOD_REGISTRY.settingsGet, {})),
     write: async (target, text) => {
