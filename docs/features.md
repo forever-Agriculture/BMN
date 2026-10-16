@@ -203,10 +203,10 @@ source, with observation time, current or previous run, ten-minute freshness and
 availability. It names sessions with no report. This view reads current records; it does not
 judge whether an agent succeeded or promise a report history.
 
-**Turn changes.** Progress is what the agent says; turn changes are what BMN saw in the files. A
-workspace's ⋯ menu has **Record what each turn changes**, off by default. With it on, for Claude
-Code and Codex sessions in that workspace, BMN scans the Git work tree the agent runs in when a
-prompt is sent and again when the turn ends, and keeps what differs between the two scans. The
+**Turn changes.** Progress is what the agent says; turn changes are what BMN saw in the files. For
+Claude Code and Codex sessions in every workspace that is not archived, with nothing to switch on,
+BMN scans the Git work tree the agent runs in when a prompt is sent and again when the turn ends,
+and keeps what differs between the two scans. The
 pane's header then shows one quiet button for the latest turn, "4 files +120 −33", and the pane's
 ⋯ menu and the session's menu have **Turn changes…**; both open the same read-only dialog. It
 lists the latest 50 turns still kept, newest first: time, app, how the turn ended, and its totals.
@@ -220,9 +220,9 @@ that applies, such as "Partial: 3 files" or "Before snapshot unavailable"; in a 
 button reads Partial, Not complete or No totals and its tooltip gives the reason. Every Codex turn
 is one of them, with "Ordering unverified on Codex (version not read)": BMN runs no program to ask
 its version, reads Claude Code's from where its program lies, and finds no such place for Codex.
-While recording is off, paused or not possible for the app now running, the button and the dialog
-say "Recording off", "Paused" or "Not supported for <app>" beside the earlier turn, so an old number
-is not read as the latest. While a pane says it waits for you, as it does with the notice of a
+While recording is paused or not possible for the app now running, the button and the dialog say
+"Paused" or "Not supported for <app>" beside the earlier turn, so an old number is not read as the
+latest. While a pane says it waits for you, as it does with the notice of a
 finished turn, the button is away until you go to that session; the menu entry stays.
 
 A difference shows at most 5,000 lines or 256 KiB, and says how many lines it left out. Secret
@@ -231,9 +231,10 @@ every value of an `.env` file, values named like a key, token or password in JSO
 files, and the known shapes of keys anywhere. Under such a name the whole value goes, and where a
 file leaves BMN unsure where a value ends it hides more. Nothing in this dialog reveals one; a
 change that is only a masked value reads "Secret value changed". Three scans in a row that fail or
-read nothing new pause recording for that work tree; a card says so once, and **Resume recording in
-<work tree>** in the workspace's menu starts it again. How turns are recorded, the limits and each
-wording: [turn-changes.md](turn-changes.md).
+read nothing new pause recording for that work tree; a card says so once, with when BMN tries
+again. Nothing needs pressing: ten minutes later the next turn there is scanned as a try, one that
+reads the work tree ends the pause, and each try that fails waits twice as long, up to two hours.
+How turns are recorded, the limits and each wording: [turn-changes.md](turn-changes.md).
 
 **Handoffs.** An agent can prepare a package for another session — text plus up to ten of its
 published files — but cannot deliver it. The handoff opens in the source session's Needs you queue;
@@ -247,26 +248,24 @@ destination workspace, with both names and a route to review the exact draft in 
 that view never pastes or submits a handoff. Its draft list is bounded, not a complete history.
 
 **Messages between sessions.** A handoff waits for you; a message is for the short thing one agent
-must tell another while both work: "hold any commit on local main". A workspace's ⋯ menu has
-**Sessions here may message each other**, off by default. With it on, agents in that workspace
-can see each other's session names (`bmn peers`) and leave each other short messages
-(`bmn tell`), and a message can influence an agent that runs with wider permissions than its
-sender. A session's ⋯ menu has **Receive messages** to shut that one session out. BMN stamps
-where each message is from: the session, the folder the command ran in and the app BMN last saw
-there. The stamp says the message was written in that session, not by you, and that it is context,
+must tell another while both work: "hold any commit on local main". In every workspace that is not
+archived, with nothing to switch on, agents can see each other's session names (`bmn peers`) and
+leave each other short messages (`bmn tell`); a message can influence an agent that runs with
+wider permissions than its sender. BMN stamps where each message is from: the session, the folder
+the command ran in and the agent in front there. The stamp says the message was written in that session, not by you, and that it is context,
 not an instruction; it does not prove which program wrote the text.
 
-BMN never presses Enter for a message and never wakes a resting agent with one. A working Claude
-Code or Codex agent gets a waiting message from its own hook after its next tool call, when its
-provider may see
-the sender's folder ([measured per app](session-messages.md)); for every other app, and whenever
-you want, **Messages…** in the workspace's ⋯ menu lists the latest 200 and **Paste into
-<session>** appends one to that session's input without pressing Enter. A message is delivered
-once: by the hook or by your Paste, whichever takes it first.
+BMN never types a message into a terminal and never wakes a resting agent with one. A working
+Claude Code or Codex agent gets a waiting message from its own hook after its next tool call, once,
+when its provider may see the sender's folder ([measured per app](session-messages.md)). A message
+for a session where no such agent is in front now (OpenCode, a plain shell, an agent that has
+exited into its shell, a stopped session) is refused to its sender with the reason, so nothing
+waits where nothing would take it. **Messages…** in the command palette or the workspace's ⋯ menu
+lists the latest 200, read-only.
 
-**Pause messages** in that dialog refuses new ones until **Resume**. Twelve messages between two
-sessions in an hour pause that pair, forty in a workspace pause the workspace, and you get one
-notice for it; a pause lasts until you resume it. Messages never go to Telegram. They are kept as
+Twelve messages between two sessions in an hour pause that pair, forty in a workspace pause the
+workspace, and you get one notice for it; the pause lifts by itself once fewer were sent in the
+last hour, and what was refused meanwhile is not sent later. Messages never go to Telegram. They are kept as
 long as Preferences → History → Keep agent history says, counted from sending, and are deleted
 with either of their sessions. Limits and the exact rules:
 [agent-control.md](agent-control.md#messages-between-sessions).
@@ -498,15 +497,15 @@ full shortcut table is in the [README](../README.md#keyboard).
 - Voice audio is transcribed locally; the microphone is open only while recording; model downloads
   are pinned by size and SHA-256.
 - Telegram is off by default and answers only the chat (and optionally the user) you allow.
-- **Record what each turn changes** is off by default, per workspace. While it is on, BMN keeps
-  its own copy of the files in the Git work tree an agent runs in: every tracked file and every
+- Turn changes are recorded in every workspace that is not archived. For them BMN keeps its own
+  copy of the files in the Git work tree an agent runs in: every tracked file and every
   untracked file Git does not ignore, secrets in them included. The copies are in
   `~/.local/share/bmn/turn-changes/`, in owner-only folders, one per session; nothing is written
   into your repository. A turn and its copies are kept as long as Preferences → History → Keep
   agent history says, counted from the turn's end, and are removed with their session. Removal
   runs when BMN starts and every hour; one that failed is tried again and reads "Removal
-  pending" until it is done. Switching the workspace's switch off stops new copies and removes
-  none before its time. The copies and the differences are read by the window only: no agent's
+  pending" until it is done. Archiving the workspace stops new copies and removes none before its
+  time. The copies and the differences are read by the window only: no agent's
   token and no Telegram message carries them. A backup export holds the database's list of
   turns (work tree, times, counts and the fixed wordings; no file name or content) and none of
   the copies.

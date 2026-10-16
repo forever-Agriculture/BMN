@@ -24,7 +24,7 @@ import {
   turnLabelShown,
   turnLineNumber,
   turnMoreWords,
-  turnRecordingWords,
+  turnStateLine,
   turnResult,
   turnAppName,
   turnWhen
@@ -229,7 +229,7 @@ export function TurnChangesView(props: {
   /** Another page of the opened turn's files: the one that `from` files stand before. */
   onPage(from: number): void
 }): React.JSX.Element {
-  const recording = turnRecordingWords(props.view)
+  const recording = turnStateLine(props.view, props.now)
   const state = props.view?.removalPending ? `${recording} · ${TURN_REMOVAL_PENDING_WORDS}` : recording
   return (
     <div className="turns-layout" data-opened={props.opened !== null || undefined}>

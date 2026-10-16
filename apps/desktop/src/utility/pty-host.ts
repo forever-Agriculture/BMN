@@ -517,6 +517,17 @@ async function start(): Promise<void> {
         return { selfTestTurnsForget: swept }
       })()
     }
+    if (typeof params.selfTestTurnsRetryNow === 'string') {
+      // Story 75.4: each pause of the session's recording is due its next try now, as if its wait had passed; its
+      // next turn is the probe. Nothing the owner does resumes it.
+      const sessionId = params.selfTestTurnsRetryNow
+      return (async () => {
+        await companionService.turnsIdle()
+        const paused = companionService['turns']?.['sessions'].get(sessionId)?.paused
+        for (const pause of paused?.values() ?? []) pause.retryAt = companionService['now']().getTime()
+        return { selfTestTurnsRetryNow: paused?.size ?? 0 }
+      })()
+    }
     if (params.selfTestRemoteAnswer === undefined) return undefined
     const probe = record(params.selfTestRemoteAnswer)
     return (async () => {
@@ -592,8 +603,8 @@ async function start(): Promise<void> {
             )
             const updated = await (params.archived === true ? manager.archiveWorkspace(params.workspaceId, mutate) : mutate())
             companionService.catalogueChanged()
-            // Epic 69: a workspace's switch for turn changes takes effect for its sessions at once.
-            if ('turnChanges' in params || params.archived !== undefined) await companionService.sessionsChanged().catch(() => undefined)
+            // Turn changes are recorded in every unarchived workspace: archiving or restoring one takes effect at once.
+            if (params.archived !== undefined) await companionService.sessionsChanged().catch(() => undefined)
             return updated
           } finally {
             finish()

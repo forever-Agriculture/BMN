@@ -493,14 +493,15 @@ hook entries: BMN's plugin is handed events after they happened.
 
 ## How a turn is recorded
 
-The app records turns with the mechanism above (Story 69.4). Nothing is recorded until the owner
-switches it on, and no agent gets a new command.
+The app records turns with the mechanism above (Story 69.4). Since Story 75.4 every session of a
+workspace that is not archived is recorded, with nothing to switch on, and no agent gets a new
+command.
 
-### The switch
+### Always on
 
-A workspace's menu has **Record what each turn changes**. It is off for every workspace until he
-ticks it, and it is stored with the workspace. Ticking it first shows what is stored, in the
-words its tooltip also carries:
+The workspace switch **Record what each turn changes** and its confirmation are gone (Story
+75.4): an upgrade turned recording on for every workspace, and every workspace made since starts
+with it. What BMN stores, as the switch's confirmation used to say:
 
 - BMN keeps a copy of the files in the Git work tree the agent runs in, every tracked file and
   every untracked file Git does not ignore, secrets in them included, on this computer for as
@@ -508,10 +509,10 @@ words its tooltip also carries:
 - Removal runs when BMN starts and every hour; one that failed shows as pending.
 - BMN shows what differs between two scans of that work tree, not who changed it.
 
-While the switch is on for a session's workspace, BMN keeps an empty file named after the
-session in the private folder `turn-marks/` beside its control socket. `bmn hook` looks for that
-file and adds nothing when it is not there, so with the switch off a hook does exactly what it
-did before: the prompt guard's answer first, then a message for its own agent, exit 0.
+While a session's workspace is not archived, BMN keeps an empty file named after the session in
+the private folder `turn-marks/` beside its control socket. `bmn hook` looks for that file and
+adds nothing when it is not there, so for a session of an archived workspace a hook does exactly
+what it did before: the prompt guard's answer first, then a message for its own agent, exit 0.
 
 ### The marks a hook sends
 
@@ -579,8 +580,8 @@ stored and matched too.
   here: <reason>" when the work tree is one BMN does not scan.
 - A call repeated with the same request id changes nothing. An end, tool or compaction event of
   another agent, conversation or turn is counted as stale and changes no turn.
-- When the switch goes off, or the session moves to a workspace whose switch is off, a scan
-  still running is cancelled and an open turn closes as "Recording was switched off". A turn
+- When the session's workspace is archived, or the session moves into an archived workspace, a
+  scan still running is cancelled and an open turn closes as "Recording was switched off". A turn
   stored as open when BMN starts closes as "End not observed; final scan unavailable".
 
 One row per turn is stored (`turn_record`): its id, number, session, incarnation, foreground
@@ -674,7 +675,14 @@ scans in a row failed", "Three scans in a row were incomplete and read nothing n
 scans in a row failed, or were incomplete and read nothing new". The card shows once for a pause,
 under that session's header when its pane is on screen, with the work tree and the reason, and
 only closes; after it the header's plate reads "Paused" and its tooltip keeps the reason.
-**Resume recording in <work tree>** in the workspace's menu sets the count back to zero.
+
+Nobody resumes a pause (Story 75.4); BMN tries again by itself. The card, the plate's tooltip and
+the dialog say when: ten minutes after the pause, the next turn there that asks is scanned as a
+try. As the try starts, the next one is set at once, twice as far off (20 minutes, 40, and so on,
+never more than two hours), so a try whose scan fails, or never answers, holds nothing up and
+only waits longer. A try that reads the work tree, whole or reading on, ends the pause and sets
+the count back to zero; so does any such scan of the same work tree. Turns before a try's time
+are not recorded. A pause lives in BMN's memory only: a restart starts with none.
 
 ### Who can read it
 

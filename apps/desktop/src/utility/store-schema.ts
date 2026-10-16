@@ -727,5 +727,18 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
         CHECK ((work_tree IS NULL) = (capture_id IS NULL))
       );
       CREATE INDEX turn_removal_job_by_session ON turn_removal_job(session_id);`
+  },
+  {
+    // Story 75.4: messages and turn changes are on for every workspace and session, with no switch. Every row is
+    // set on, "Receive messages" off included, and a pause the owner made is lifted; a pause the hourly limit
+    // made stays and lifts by itself once the count falls, its counting history untouched. SQLite keeps a
+    // column's declared default unless the table is rebuilt, and every session and message row references this
+    // one: BMN writes 1 into both switches when it creates a workspace and reads neither.
+    version: 28,
+    sql: `UPDATE workspace SET session_messages = 1 WHERE session_messages <> 1;
+      UPDATE workspace SET turn_changes = 1 WHERE turn_changes <> 1;
+      UPDATE session SET receive_messages = 1 WHERE receive_messages <> 1;
+      UPDATE workspace SET session_messages_paused_at = NULL, session_messages_paused_by = NULL
+        WHERE session_messages_paused_by = 'owner';`
   }
 ])

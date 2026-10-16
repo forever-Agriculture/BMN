@@ -79,10 +79,6 @@ export interface WorkspaceRecord {
   marker: WorkspaceMarker
   archivedAt: string | null
   revision: number
-  /** Present and true while "Sessions here may message each other" is on (Epic 66); absent means off. */
-  sessionMessages?: boolean
-  /** Present and true while "Record what each turn changes" is on (Epic 69); absent means off. */
-  turnChanges?: boolean
 }
 
 /**
@@ -117,8 +113,6 @@ export interface SessionRecord {
   launchDisabledReason?: string
   /** The command a program in the session reported for resuming it (Story 43.1); absent when none is kept. */
   reportedResume?: ReportedResumeCommand
-  /** Present and false while the owner has shut this session out of its workspace's messages (Epic 66); absent means it receives them. */
-  receiveMessages?: boolean
 }
 
 export interface WorkspaceLayoutState {
@@ -155,8 +149,6 @@ export interface WorkspaceUpdateParams {
   marker?: WorkspaceMarker
   archived?: boolean
   pinnedFilePaths?: string[]
-  sessionMessages?: boolean
-  turnChanges?: boolean
 }
 
 export interface SessionListParams {
@@ -187,7 +179,6 @@ export interface SessionUpdateParams {
   backgroundChoice?: BackgroundChoice | null
   terminalGraphics?: TerminalGraphicsChoice
   archived?: boolean
-  receiveMessages?: boolean
 }
 
 export interface SessionStopParams {
@@ -359,16 +350,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const WORKSPACE_RECORD_KEYS = ['workspaceId', 'name', 'defaultCwd', 'pinnedFilePaths', 'position', 'marker', 'archivedAt', 'revision'] as const
-const WORKSPACE_RECORD_OPTIONAL_KEYS = ['sessionMessages', 'turnChanges'] as const
 const SESSION_RECORD_KEYS = [
   'sessionId', 'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'terminalGraphics',
   'revision', 'createdAt', 'archivedAt', 'lastProcess'
 ] as const
-const SESSION_RECORD_OPTIONAL_KEYS = ['launchDisabledReason', 'reportedResume', 'receiveMessages'] as const
+const SESSION_RECORD_OPTIONAL_KEYS = ['launchDisabledReason', 'reportedResume'] as const
 const SESSION_PROCESS_KEYS = ['incarnationId', 'state', 'exitCode', 'signal', 'detail'] as const
-const WORKSPACE_UPDATE_FIELDS = ['name', 'defaultCwd', 'position', 'marker', 'archived', 'pinnedFilePaths', 'sessionMessages', 'turnChanges'] as const
+const WORKSPACE_UPDATE_FIELDS = ['name', 'defaultCwd', 'position', 'marker', 'archived', 'pinnedFilePaths'] as const
 const SESSION_UPDATE_FIELDS = [
-  'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'terminalGraphics', 'archived', 'receiveMessages'
+  'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'terminalGraphics', 'archived'
 ] as const
 const SESSION_STOP_KEYS = ['sessionId', 'incarnationId', 'cause'] as const
 const LAYOUT_KEYS = ['workspaceId', 'selectedSessionId', 'split', 'sessionView', 'revision'] as const
@@ -432,10 +422,8 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 export function isWorkspaceRecord(value: unknown): value is WorkspaceRecord {
-  if (!isRecord(value) || !hasExactKeys(value, WORKSPACE_RECORD_KEYS, WORKSPACE_RECORD_OPTIONAL_KEYS)) return false
+  if (!isRecord(value) || !hasExactKeys(value, WORKSPACE_RECORD_KEYS)) return false
   return (
-    (!('sessionMessages' in value) || typeof value.sessionMessages === 'boolean') &&
-    (!('turnChanges' in value) || typeof value.turnChanges === 'boolean') &&
     isIdentifier(value.workspaceId) &&
     isName(value.name) &&
     isNullableText(value.defaultCwd) &&
@@ -481,8 +469,7 @@ export function isSessionRecord(value: unknown): value is SessionRecord {
       (typeof value.launchDisabledReason === 'string' &&
         value.launchDisabledReason.trim().length > 0)) &&
     (value.lastProcess === null || isSessionProcessStatus(value.lastProcess)) &&
-    (!('reportedResume' in value) || parseReportedResumeCommand(value.reportedResume) !== null) &&
-    (!('receiveMessages' in value) || typeof value.receiveMessages === 'boolean')
+    (!('reportedResume' in value) || parseReportedResumeCommand(value.reportedResume) !== null)
   )
 }
 
@@ -511,8 +498,6 @@ export function isWorkspaceUpdateParams(value: unknown): value is WorkspaceUpdat
   if ('marker' in value && !isWorkspaceMarker(value.marker)) return false
   if ('archived' in value && typeof value.archived !== 'boolean') return false
   if ('pinnedFilePaths' in value && !isPinnedFilePaths(value.pinnedFilePaths)) return false
-  if ('sessionMessages' in value && typeof value.sessionMessages !== 'boolean') return false
-  if ('turnChanges' in value && typeof value.turnChanges !== 'boolean') return false
   return WORKSPACE_UPDATE_FIELDS.some((key) => key in value)
 }
 
@@ -564,7 +549,6 @@ export function isSessionUpdateParams(value: unknown): value is SessionUpdatePar
   if ('backgroundChoice' in value && !isBackgroundChoice(value.backgroundChoice)) return false
   if ('terminalGraphics' in value && !isTerminalGraphicsChoice(value.terminalGraphics)) return false
   if ('archived' in value && typeof value.archived !== 'boolean') return false
-  if ('receiveMessages' in value && typeof value.receiveMessages !== 'boolean') return false
   return SESSION_UPDATE_FIELDS.some((key) => key in value)
 }
 

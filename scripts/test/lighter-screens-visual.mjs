@@ -3,10 +3,11 @@
 // The app runs in test mode with a temporary HOME and XDG folders (removed at the end). The temporary home holds the
 // unit-test roster, a synthetic rules master and two synthetic skills; stand-ins for claude and codex sit on the PATH
 // the home's shell settings add. One workspace carries what the owner-facing controls act on (the before set of
-// 4e2c44f also held a launch set and a custom template, gone with Story 75.3): the confirmations of both workspace
-// switches (captured before they are switched on), then
-// messages and turn changes on, and a session whose shell publishes a file, reports progress with it as evidence,
-// prepares a handoff for a second session and leaves that session a message, all with BMN's own `bmn` commands.
+// 4e2c44f also held a launch set and a custom template, gone with Story 75.3, and the confirmations of the two
+// workspace switches, gone with Story 75.4, which left messages and turn changes always on), and a session whose
+// shell publishes a file, reports progress with it as evidence, prepares a handoff for a second session and tries to
+// leave that session a message, all with BMN's own `bmn` commands; since Story 75.4 the message is refused, because
+// the second session runs a plain shell and no agent.
 // No agent runs, nothing leaves the machine and no file of the owner's is read. The script asserts nothing: it opens
 // each screen, saves what the window shows in each colour mode and writes shots.json naming the screens, the parts
 // and the buttons each capture showed. A screen that cannot be opened is listed with the reason, and the run goes on.
@@ -252,23 +253,6 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       await page.locator('[role="menu"]').first().waitFor()
     }
 
-    // The confirmations both switches show before they are on; then both go on, as the screens after them assume.
-    await screen('messages-switch-confirm', 'Workspace ⋯ › "Sessions here may message each other" while off: the confirmation it shows before switching on (cancelled)', async () => {
-      await openWorkspaceMenu()
-      await page.getByRole('menuitemcheckbox', { name: /^Sessions here may message each other/ }).or(page.getByRole('menuitem', { name: /^Sessions here may message each other/ })).first().click()
-      await page.locator('dialog[open]').first().waitFor()
-    }, { region: 'dialog[open]', close: escape })
-    await screen('turn-changes-switch-confirm', 'Workspace ⋯ › "Record what each turn changes" while off: the confirmation it shows before switching on (cancelled)', async () => {
-      await openWorkspaceMenu()
-      await page.getByRole('menuitemcheckbox', { name: /^Record what each turn changes/ }).or(page.getByRole('menuitem', { name: /^Record what each turn changes/ })).first().click()
-      await page.locator('dialog[open]').first().waitFor()
-    }, { region: 'dialog[open]', close: escape })
-    try {
-      const fresh = await workspaceNow()
-      await page.evaluate(async (workspace) => window.aiTerminal.updateWorkspace({ workspaceId: workspace.workspaceId, expectedRevision: workspace.revision, sessionMessages: true, turnChanges: true }), fresh)
-      note('messages between sessions and turn changes switched on for the workspace')
-    } catch (error) { note(`switches not turned on: ${firstLine(error)}`) }
-
     // The Builder's shell does what an agent does with BMN: publish, report progress with evidence, hand off, tell.
     const reviewerId = reviewer.session.sessionId
     const seed = join(root, 'seed.sh')
@@ -301,9 +285,9 @@ echo seeded
 
     // ---- main window -----------------------------------------------------------------------------------------
     await screen('main-window', 'Main window, Builder selected: sidebar, pane header and the session\'s output', async () => { await builderRow.click() })
-    await screen('workspace-menu', 'Workspace ⋯ (sidebar): every entry, the two switches on, the Marker group', openWorkspaceMenu,
+    await screen('workspace-menu', 'Workspace ⋯ (sidebar): every entry, the Marker group', openWorkspaceMenu,
       { region: '[role="menu"]', scroll: '[role="menu"]' })
-    await screen('session-menu', 'Session ⋯ (sidebar row of Builder): every entry, "Receive messages" on', async () => {
+    await screen('session-menu', 'Session ⋯ (sidebar row of Builder): every entry', async () => {
       await page.locator('button[aria-label="Actions for Builder"]').click()
       await page.locator('[role="menu"]').first().waitFor()
     }, { region: '[role="menu"]', scroll: '[role="menu"]' })

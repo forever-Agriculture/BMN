@@ -72,7 +72,6 @@ import {
   type ClosePromptRequest,
   type InputDraftRecord,
   type SessionMessageListing,
-  type SessionMessageRecord,
   type InterruptedSessionCohort,
   type ProgressRecord,
   type RepositoryIdentity,
@@ -674,15 +673,6 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   listSessionMessages(workspaceId: string): Promise<SessionMessageListing> {
     return invokeBridge('aiterm:messages:list', { workspaceId })
   },
-  pasteSessionMessage(messageId: string, expectedIncarnationId: string): Promise<SessionMessageRecord> {
-    return invokeBridge('aiterm:messages:paste', { messageId, expectedIncarnationId })
-  },
-  pauseSessionMessages(workspaceId: string, paused: boolean): Promise<SessionMessageListing> {
-    return invokeBridge('aiterm:messages:pause', { workspaceId, paused })
-  },
-  resumeSessionMessagePair(workspaceId: string, firstSessionId: string, secondSessionId: string): Promise<SessionMessageListing> {
-    return invokeBridge('aiterm:messages:resume-pair', { workspaceId, firstSessionId, secondSessionId })
-  },
   listTurnRecording(): Promise<TurnSessionView[]> {
     return invokeBridge('aiterm:turn-changes:state', {})
   },
@@ -694,9 +684,6 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   readTurnDifference(sessionId: string, turnId: string, path: string): Promise<TurnDifferenceAnswer> {
     return invokeBridge('aiterm:turn-changes:difference', { sessionId, turnId, path })
-  },
-  resumeTurnRecording(sessionId: string): Promise<{ resumed: boolean }> {
-    return invokeBridge('aiterm:turn-changes:resume', { sessionId })
   },
   getSettings(): Promise<AppSettings> {
     return invokeBridge('aiterm:settings:get', {})

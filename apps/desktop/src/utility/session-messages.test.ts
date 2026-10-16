@@ -1,4 +1,4 @@
-// MODULE: session-messages.test.ts - messages between sessions over a real store: peers, limits, the stamp, Paste, pauses, the hook's take (Epic 66)
+// MODULE: session-messages.test.ts - messages between sessions over a real store: peers, refusals, limits, the stamp, pauses that lift by themselves, the hook's take (Epic 66, Story 75.4)
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -9,6 +9,7 @@ import {
   SESSION_MESSAGE_WAITING_CHECK_MS,
   SESSION_MESSAGES_OFF,
   SESSION_MESSAGES_PAUSED,
+  type SessionAgentNow,
   type SessionMessageRecord
 } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -32,16 +33,14 @@ let clock: number
 let root: string
 let repo: string
 let live: Map<string, string>
-let apps: Map<string, string>
-let pasted: Array<{ sessionId: string; payload: string }>
+/** What holds each session's terminal now; a session not here has its shell in front. */
+let fronts: Map<string, SessionAgentNow>
 let notices: Array<{ sessionId: string; incarnationId: string; requestKey: string; title: string; body: string }>
 let changes: number
 let keepDays: number | null | undefined
 type ProviderAnswer = { allowed: boolean; reason: string }
 let allowed: (destination: MessageDestination, senderRoot: string) => ProviderAnswer | Promise<ProviderAnswer>
 let sourceRoot: (folder: string) => string | Promise<string>
-/** Runs once between a Paste's claim and its write, to stage what happens in that gap. */
-let betweenClaimAndWrite: (() => void) | null
 /** While set, the store does not answer which messages a hook may have. */
 let stalled: Promise<unknown> | null
 /** One store call that fails: before it changed anything, or after it did, with its answer lost. */
@@ -68,12 +67,28 @@ function addSession(sessionId: string, workspaceId: string, position: number, na
   live.set(sessionId, `run-${sessionId}`)
 }
 
-function change(sessionId: string, patch: { workspaceId?: string; archived?: boolean; receiveMessages?: boolean }): void {
+function change(sessionId: string, patch: { workspaceId?: string; archived?: boolean }): void {
   updateSession(database, { sessionId, expectedRevision: selectSession(database, sessionId).revision, ...patch }, iso())
 }
 
-function workspaceSwitch(workspaceId: string, patch: { sessionMessages?: boolean; archived?: boolean }): void {
-  updateWorkspace(database, { workspaceId, expectedRevision: selectWorkspace(database, workspaceId).revision, ...patch }, iso())
+function archiveWorkspace(workspaceId: string, archived = true): void {
+  updateWorkspace(database, { workspaceId, expectedRevision: selectWorkspace(database, workspaceId).revision, archived }, iso())
+}
+
+/**
+ * Fills the last hour with `count` messages between two sessions (all of the workspace's when `pair` is
+ * absent), already printed, so the hourly limit counts them without one waiting: the earliest `count` minutes
+ * ago, one a minute.
+ */
+function fillHour(count: number, pair: [string, string] = ['a', 'b']): void {
+  const insert = database.prepare(
+    `INSERT INTO session_message(message_id, workspace_id, sender_session_id, receiver_session_id, sender_root, stamp, text,
+       sent_at, expires_at, state) VALUES (?, 'w1', ?, ?, ?, '[stamp]', 'text', ?, ?, 'printed')`
+  )
+  for (let index = 0; index < count; index += 1) {
+    const at = new Date(clock - (count - index) * MINUTE).toISOString()
+    insert.run(`filled-${index}`, pair[index % 2]!, pair[(index + 1) % 2]!, repo, at, at)
+  }
 }
 
 const tell = (from: string, to: string, text = `note from ${from}`, cwd = repo): Promise<{ messageId: string; state: 'waiting' }> =>
@@ -107,14 +122,15 @@ beforeEach(() => {
   database = new BetterSqlite3(':memory:')
   initializeDatabase(database, iso())
   live = new Map()
-  apps = new Map([['a', 'claude'], ['b', 'codex']])
-  pasted = []
+  fronts = new Map<string, SessionAgentNow>([
+    ['a', { state: 'agent', app: 'claude' }], ['b', { state: 'agent', app: 'codex' }],
+    ['c', { state: 'agent', app: 'codex' }], ['x', { state: 'agent', app: 'claude' }]
+  ])
   notices = []
   changes = 0
   keepDays = undefined
   allowed = () => ({ allowed: true, reason: 'OpenAI may see private work' })
   sourceRoot = workspaceRoot
-  betweenClaimAndWrite = null
   stalled = null
   held = null
   failing = null
@@ -126,7 +142,6 @@ beforeEach(() => {
   addSession('b', 'w1', 1, 'Builder')
   addSession('c', 'w1', 2, 'Reviewer')
   addSession('x', 'w2', 0, 'Elsewhere')
-  workspaceSwitch('w1', { sessionMessages: true })
   const worker = {
     companion: async (name: CompanionOperationName, ...args: unknown[]) => {
       if (name === 'messageTakeCandidates' && stalled) await stalled
@@ -142,11 +157,6 @@ beforeEach(() => {
       const operation = COMPANION_OPERATIONS[name] as (connection: DatabaseConnection, ...rest: unknown[]) => unknown
       const result = database.transaction(() => operation(database, ...args))()
       if (fails === 'after') throw new Error('the store ran it and its answer was lost')
-      if (name === 'claimMessageForPaste' && betweenClaimAndWrite) {
-        const staged = betweenClaimAndWrite
-        betweenClaimAndWrite = null
-        staged()
-      }
       return result
     }
   } as unknown as Pick<DatabaseWorkerClient, 'companion'>
@@ -156,8 +166,7 @@ beforeEach(() => {
     session: async (sessionId) => {
       try { return selectSession(database, sessionId) } catch { return undefined }
     },
-    lastApp: async (sessionId) => apps.get(sessionId) ?? null,
-    paste: (sessionId, payload) => { pasted.push({ sessionId, payload }) },
+    foreground: (sessionId) => live.has(sessionId) ? fronts.get(sessionId) ?? { state: 'shell' } : { state: 'stopped' },
     notice: async (p) => { notices.push(p) },
     changed: () => { changes += 1 },
     now: () => new Date(clock),
@@ -172,28 +181,29 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-describe('bmn peers (66.2 AC2)', () => {
-  it('lists nothing and says messages are off while the workspace switch is off, which is how old data loads', async () => {
-    expect(selectWorkspace(database, 'w2').sessionMessages).toBeUndefined()
-    expect(await messages.peers('x')).toEqual({ on: false, paused: false, peers: [] })
-    workspaceSwitch('w1', { sessionMessages: false })
+describe('bmn peers (66.2 AC2, 75.4)', () => {
+  it('is on in every workspace, with no switch; only an archived caller, or one of an archived workspace, has none', async () => {
+    expect((await messages.peers('x')).on).toBe(true)
+    change('c', { archived: true })
+    expect(await messages.peers('c')).toEqual({ on: false, paused: false, peers: [] })
+    archiveWorkspace('w1')
     expect(await messages.peers('a')).toEqual({ on: false, paused: false, peers: [] })
   })
 
-  it('lists every other unarchived session of the caller\'s workspace that receives messages, with the app BMN last saw', async () => {
+  it('lists every other unarchived session of the caller\'s workspace, with the agent in front there now', async () => {
+    fronts.set('c', { state: 'shell' })
     expect(await messages.peers('a')).toEqual({
       on: true, paused: false,
       peers: [{ sessionId: 'b', name: 'Builder', app: 'Codex' }, { sessionId: 'c', name: 'Reviewer', app: null }]
     })
-    change('b', { receiveMessages: false })
+    // The app is the one in front now, not the last one seen: Codex exited into its shell.
+    fronts.set('b', { state: 'shell' })
+    expect((await messages.peers('a')).peers[0]).toEqual({ sessionId: 'b', name: 'Builder', app: null })
     change('c', { archived: true })
-    expect((await messages.peers('a')).peers).toEqual([])
-    // A session that does not receive may still send, and still sees who does.
-    expect((await messages.peers('b')).peers.map((peer) => peer.sessionId)).toEqual(['a'])
+    expect((await messages.peers('a')).peers.map((peer) => peer.sessionId)).toEqual(['b'])
   })
 
   it('never lists a session of another workspace, in either direction', async () => {
-    workspaceSwitch('w2', { sessionMessages: true })
     expect((await messages.peers('x')).peers).toEqual([])
     expect((await messages.peers('a')).peers.map((peer) => peer.sessionId)).not.toContain('x')
   })
@@ -210,35 +220,59 @@ describe('bmn tell (66.2 AC3-AC5)', () => {
       text: 'hold any commit on local main', sentAt: iso(), expiresAt: new Date(clock + 120 * MINUTE).toISOString(),
       state: 'waiting', claimedApp: null
     })
-    // Nothing reaches a terminal, Needs you or the phone on a send.
-    expect(pasted).toEqual([])
+    // Nothing reaches Needs you or the phone on a send.
     expect(notices).toEqual([])
     // The window is told, so an open Messages dialog reads again.
     expect(changes).toBe(1)
   })
 
-  it('says "no agent app" in the stamp when BMN has seen none in the sending session', async () => {
+  it('says "no agent app" in the stamp when no agent is in front in the sending session', async () => {
+    fronts.set('c', { state: 'shell' })
     const sent = await tell('c', 'a')
     expect(stored(sent.messageId).stamp).toContain('where BMN last saw no agent app.')
   })
 
   it('refuses with one wording every destination bmn peers would not list, and stores nothing', async () => {
-    workspaceSwitch('w2', { sessionMessages: true })
-    addSession('d', 'w1', 3)
     addSession('e', 'w1', 4)
-    change('d', { receiveMessages: false })
     change('e', { archived: true })
-    for (const destination of ['a', 'x', 'd', 'e', 'no-such-session']) {
+    // Whatever runs there: the peer check comes first and says nothing about a session the sender may not message.
+    fronts.set('x', { state: 'agent', app: 'opencode' })
+    live.delete('e')
+    for (const destination of ['a', 'x', 'e', 'no-such-session']) {
       await expect(tell('a', destination)).rejects.toMatchObject({ code: ERROR_CODES.invalidArgument, message: SESSION_MESSAGE_NOT_A_PEER })
     }
     expect(count()).toBe(0)
   })
 
-  it('refuses everything while the workspace switch is off', async () => {
-    workspaceSwitch('w1', { sessionMessages: false })
+  it('refuses every send of an archived session, or of a session of an archived workspace', async () => {
+    change('c', { archived: true })
+    await expect(tell('c', 'a')).rejects.toMatchObject({ message: SESSION_MESSAGES_OFF })
+    archiveWorkspace('w1')
     await expect(tell('a', 'b')).rejects.toMatchObject({ message: SESSION_MESSAGES_OFF })
-    await expect(tell('x', 'a')).rejects.toMatchObject({ message: SESSION_MESSAGES_OFF })
     expect(count()).toBe(0)
+  })
+
+  it.each<[string, () => void, string]>([
+    ['is stopped', () => { live.delete('b') }, 'That session is stopped; nothing was sent'],
+    ['runs a plain shell', () => { fronts.delete('b') }, 'That session runs no agent now, only its shell; nothing was sent'],
+    ['runs a program whose hook BMN never heard from', () => { fronts.set('b', { state: 'program' }) },
+      'That session runs no agent whose hook BMN has heard from; nothing was sent'],
+    ['runs OpenCode, which has no hand-over', () => { fronts.set('b', { state: 'agent', app: 'opencode' }) },
+      'That session runs OpenCode, which takes no messages; nothing was sent']
+  ])('refuses a message to a session that %s, with the reason, and stores nothing (75.4 AC5)', async (_what, arrange, reason) => {
+    arrange()
+    await expect(tell('a', 'b')).rejects.toMatchObject({ code: ERROR_CODES.invalidArgument, message: reason })
+    expect(count()).toBe(0)
+    expect(notices).toEqual([])
+  })
+
+  it('judges a receiver by what is in front now: an agent that exited into its still-running shell is a plain shell (75.4 AC5)', async () => {
+    // Codex ran in "b"; the owner quit it and the shell it was typed in took the terminal back.
+    fronts.set('b', { state: 'shell' })
+    await expect(tell('a', 'b')).rejects.toMatchObject({ message: 'That session runs no agent now, only its shell; nothing was sent' })
+    // Claude Code typed in the same shell takes messages again.
+    fronts.set('b', { state: 'agent', app: 'claude' })
+    expect((await tell('a', 'b')).state).toBe('waiting')
   })
 
   it('refuses a send from a process the session no longer runs', async () => {
@@ -296,11 +330,6 @@ describe('bmn tell (66.2 AC3-AC5)', () => {
     // The hook prints that stamp, and the provider is asked about the folder as it is on disk.
     expect((await take('b')).message!.stamp).toBe(stamp)
     expect(asked).toEqual([hostile])
-    // The owner's Paste writes the same clean line to the terminal.
-    clock += 31 * SECOND
-    const second = await tell('a', 'c', 'pasted', join(root, 'harmless'))
-    await messages.paste(second.messageId, 'run-c')
-    expect(pasted).toEqual([{ sessionId: 'c', payload: `${stamp}\npasted` }])
   })
 
   it('stores nothing when the sending terminal is given another process while BMN asks which repository the folder belongs to', async () => {
@@ -323,28 +352,16 @@ describe('bmn tell (66.2 AC3-AC5)', () => {
 
   it('accepts a send that was on its way to the store when the sending terminal was given another process, and keeps the message', async () => {
     // The send is the word of the process that was running when the store was asked; ending it later cancels nothing.
-    for (const hookFirst of [true, false]) {
-      const store = holdStore('sendSessionMessage')
-      const sending = tell('a', 'b')
-      await store.asked
-      const before = live.get('a')!
-      live.set('a', 'run-later')
-      store.answer()
+    const store = holdStore('sendSessionMessage')
+    const sending = tell('a', 'b')
+    await store.asked
+    live.set('a', 'run-later')
+    store.answer()
 
-      const sent = await sending
-      expect(stored(sent.messageId)).toMatchObject({ state: 'waiting', senderSessionId: 'a' })
-      // It is a message like any other: the hook and the owner's Paste reach for it and exactly one has it.
-      const [taken, pastedRecord] = hookFirst
-        ? await Promise.all([take('b'), messages.paste(sent.messageId, 'run-b')])
-        : (await Promise.all([messages.paste(sent.messageId, 'run-b'), take('b')])).reverse() as [Awaited<ReturnType<typeof take>>, SessionMessageRecord]
-      const hookWon = taken.message !== null
-      expect(hookWon).toBe(pastedRecord.state === 'taken')
-      expect(stored(sent.messageId).state).toBe(hookWon ? 'taken' : 'pasted')
-      expect(pasted).toHaveLength(hookWon ? 0 : 1)
-      pasted = []
-      live.set('a', before)
-      clock += 31 * SECOND
-    }
+    const sent = await sending
+    expect(stored(sent.messageId)).toMatchObject({ state: 'waiting', senderSessionId: 'a' })
+    // It is a message like any other: the receiver's hook has it.
+    expect((await take('b')).message!.messageId).toBe(sent.messageId)
   })
 
   it('hands over a message whose sender\'s process has ended since it was sent', async () => {
@@ -391,7 +408,7 @@ describe('bmn tell (66.2 AC3-AC5)', () => {
     expect(count()).toBe(5)
   })
 
-  it('stops counting a waiting message once it has expired: only the owner can deliver it then', async () => {
+  it('stops counting a waiting message once it has expired: nothing delivers it then', async () => {
     const old = await tell('a', 'b')
     clock += 120 * MINUTE
     await tell('a', 'b', 'a newer note')
@@ -421,7 +438,7 @@ describe('bmn tell status (66.2 AC6)', () => {
   })
 })
 
-describe('the owner\'s list and Paste (66.2 AC7-AC10)', () => {
+describe('the owner\'s list, read-only (66.2 AC7-AC10, 75.4)', () => {
   it('lists a workspace\'s messages newest first with the names of their sessions, and nothing of another workspace', async () => {
     const first = await tell('a', 'b', 'first line\nsecond line')
     clock += 31 * SECOND
@@ -450,130 +467,62 @@ describe('the owner\'s list and Paste (66.2 AC7-AC10)', () => {
     expect(listing.messages[199]!.messageId).toBe('m-005')
   })
 
-  it('appends the stamp and the text once, without Enter, and then reads "pasted by the owner"', async () => {
-    const sent = await tell('a', 'b', 'update queued')
-
-    const record = await messages.paste(sent.messageId, 'run-b')
-
-    expect(record.state).toBe('pasted')
-    expect(pasted).toEqual([{ sessionId: 'b', payload: `${stored(sent.messageId).stamp}\nupdate queued` }])
-    expect((await messages.status('a', sent.messageId)).messages[0]!.state).toBe('pasted by the owner')
-  })
-
-  it('lets exactly one of two presses paste', async () => {
-    const sent = await tell('a', 'b')
-
-    const results = await Promise.all([messages.paste(sent.messageId, 'run-b'), messages.paste(sent.messageId, 'run-b')])
-
-    expect(pasted).toHaveLength(1)
-    // The press that lost reads the message as the winner left it at that moment: claimed, or already pasted.
-    expect(results.filter((record) => record.state === 'pasted').length).toBeGreaterThanOrEqual(1)
-    expect(results.every((record) => record.state === 'pasted' || record.state === 'paste-uncertain')).toBe(true)
-    expect(stored(sent.messageId).state).toBe('pasted')
-    // A third press finds it delivered and writes nothing.
-    expect((await messages.paste(sent.messageId, 'run-b')).state).toBe('pasted')
-    expect(pasted).toHaveLength(1)
-  })
-
-  it('refuses when the receiving process is not the one the owner was shown, and leaves the message waiting', async () => {
-    const sent = await tell('a', 'b')
-    await expect(messages.paste(sent.messageId, 'run-earlier')).rejects.toMatchObject({ code: ERROR_CODES.revisionConflict })
-    expect(stored(sent.messageId).state).toBe('waiting')
-    expect(pasted).toEqual([])
-  })
-
-  it('puts the message back to waiting when the receiving process changes between the claim and the write', async () => {
-    const sent = await tell('a', 'b')
-    betweenClaimAndWrite = () => { live.set('b', 'run-b-restarted') }
-
-    await expect(messages.paste(sent.messageId, 'run-b')).rejects.toMatchObject({ code: ERROR_CODES.revisionConflict })
-
-    expect(pasted).toEqual([])
-    expect(stored(sent.messageId).state).toBe('waiting')
-  })
-
-  it('leaves a paste whose write failed uncertain, and never repeats it', async () => {
-    const sent = await tell('a', 'b')
-    const failing = new SessionMessages({
-      ...(messages as unknown as { options: ConstructorParameters<typeof SessionMessages>[0] }).options,
-      paste: () => { throw new Error('the terminal is gone') }
-    })
-
-    await expect(failing.paste(sent.messageId, 'run-b')).rejects.toThrow('the terminal is gone')
-
-    expect(stored(sent.messageId).state).toBe('paste-uncertain')
-    expect((await messages.paste(sent.messageId, 'run-b')).state).toBe('paste-uncertain')
-    expect(pasted).toEqual([])
-    expect((await take('b')).message).toBeNull()
-    expect((await messages.status('a', sent.messageId)).messages[0]!.state).toBe('paste not confirmed')
-  })
-
-  it('pastes an expired message and a message of a paused workspace: both are the owner\'s own word', async () => {
-    const expired = await tell('a', 'b')
-    clock += 121 * MINUTE
-    expect((await messages.paste(expired.messageId, 'run-b')).state).toBe('pasted')
-    const paused = await tell('a', 'c')
-    await messages.pause('w1', true)
-    expect((await messages.paste(paused.messageId, 'run-c')).state).toBe('pasted')
-    expect(pasted).toHaveLength(2)
-  })
-
   it.each([['the receiver', 'b'], ['the sender', 'a']])('delivers by no route once %s has moved to another workspace; the owner still reads it where it was sent', async (_who, moved) => {
     const sent = await tell('a', 'b')
     change(moved, { workspaceId: 'w2' })
 
-    await expect(messages.paste(sent.messageId, 'run-b')).rejects.toMatchObject({
-      message: 'A session of this message has left the workspace it was sent in, so it is not delivered'
-    })
-    workspaceSwitch('w2', { sessionMessages: true })
     expect((await take('b')).message).toBeNull()
-
-    expect(pasted).toEqual([])
     expect(stored(sent.messageId).state).toBe('waiting')
     const row = (await messages.list('w1')).messages[0]!
     expect([row.messageId, row.membersPresent]).toEqual([sent.messageId, false])
     expect((await messages.list('w2')).messages).toEqual([])
   })
-
-  it('refuses a paste once either session is archived', async () => {
-    const sent = await tell('a', 'b')
-    change('a', { archived: true })
-    await expect(messages.paste(sent.messageId, 'run-b')).rejects.toMatchObject({ code: ERROR_CODES.invalidArgument })
-    expect(stored(sent.messageId).state).toBe('waiting')
-  })
 })
 
-describe('pauses and the hourly limits (66.3 AC1-AC3)', () => {
-  /** Sends one message and has the owner paste it, so the next one between the two is not held by "one at a time". */
+describe('pauses of the hourly limits, lifted by themselves (66.3 AC1-AC3, 75.4 AC3)', () => {
+  /** Sends one message and has the receiver's hook take it, so the next one between the two is not held by "one at a time". */
   async function exchange(from: string, to: string): Promise<void> {
-    const sent = await tell(from, to)
-    await messages.paste(sent.messageId, live.get(to)!)
+    await tell(from, to)
+    expect((await take(to)).message).not.toBeNull()
     clock += 31 * SECOND
   }
 
-  it('accepts twelve messages between two sessions inside an hour, refuses the thirteenth and pauses the pair', async () => {
+  /** Twelve messages between "a" and "b", the first at T0 and one every 31 seconds. */
+  async function twelve(): Promise<void> {
     for (let index = 0; index < 12; index += 1) await exchange(index % 2 === 0 ? 'a' : 'b', index % 2 === 0 ? 'b' : 'a')
+  }
+
+  /** BMN restarts: a new host over the same store. */
+  function restart(): void {
+    messages = new SessionMessages((messages as unknown as { options: ConstructorParameters<typeof SessionMessages>[0] }).options)
+  }
+
+  const PAIR_PAUSED = 'You and that session exchanged 12 messages in an hour; messages between you are paused, and allowed again when the count falls'
+  const NOTICE_BODY = 'They are allowed again by themselves once fewer were sent in the last hour; Messages… in the command palette shows them. BMN stopped nothing else.'
+
+  it('accepts twelve messages between two sessions inside an hour, refuses the thirteenth and pauses the pair until the count falls', async () => {
+    await twelve()
     expect(count()).toBe(12)
     expect(notices).toEqual([])
 
-    await expect(tell('a', 'b')).rejects.toMatchObject({
-      message: 'You and that session exchanged 12 messages in an hour; messages between you are paused until the owner resumes them'
-    })
+    await expect(tell('a', 'b')).rejects.toMatchObject({ message: PAIR_PAUSED })
 
     expect(count()).toBe(12)
     expect(notices).toEqual([{
       sessionId: 'a', incarnationId: 'run-a', requestKey: 'watch:messages:b',
       title: 'Lead and Builder exchanged 12 messages in an hour; messages between them are paused',
-      body: 'Open the workspace menu, Messages…, to read them and to resume. BMN stopped nothing else.'
+      body: NOTICE_BODY
     }])
-    expect((await messages.list('w1')).pairPauses).toEqual([
-      { firstSessionId: 'a', firstName: 'Lead', secondSessionId: 'b', secondName: 'Builder', pausedAt: iso() }
-    ])
+    // The first of the twelve leaves the hour at T0 + 1 h: from then eleven count, and the next one is allowed.
+    expect((await messages.list('w1')).pairPauses).toEqual([{
+      firstSessionId: 'a', firstName: 'Lead', secondSessionId: 'b', secondName: 'Builder', pausedAt: iso(),
+      until: new Date(T0 + 60 * MINUTE).toISOString()
+    }])
   })
 
   it('leaves a paused pair out of bmn peers on both sides, refuses it with the one wording and opens no second notice', async () => {
-    for (let index = 0; index < 12; index += 1) await exchange(index % 2 === 0 ? 'a' : 'b', index % 2 === 0 ? 'b' : 'a')
-    await expect(tell('b', 'a')).rejects.toThrow(/paused until the owner resumes/)
+    await twelve()
+    await expect(tell('b', 'a')).rejects.toThrow(/allowed again when the count falls/)
     clock += 31 * SECOND
 
     expect((await messages.peers('a')).peers.map((peer) => peer.sessionId)).toEqual(['c'])
@@ -586,32 +535,44 @@ describe('pauses and the hourly limits (66.3 AC1-AC3)', () => {
     await tell('b', 'c')
   })
 
-  it('keeps a pair paused when the workspace switch goes off and on, until the owner resumes that pair', async () => {
-    for (let index = 0; index < 12; index += 1) await exchange(index % 2 === 0 ? 'a' : 'b', index % 2 === 0 ? 'b' : 'a')
-    await expect(tell('a', 'b')).rejects.toThrow(/paused/)
-    workspaceSwitch('w1', { sessionMessages: false })
-    workspaceSwitch('w1', { sessionMessages: true })
-    clock += 31 * SECOND
+  it('lifts a pair\'s pause by itself once fewer than twelve lie inside the hour, across a restart and again after a second pause, keeping the counting history', async () => {
+    await twelve()
+    await expect(tell('a', 'b')).rejects.toMatchObject({ message: PAIR_PAUSED })
+    restart()
+    clock = T0 + 60 * MINUTE - 1
     await expect(tell('a', 'b')).rejects.toMatchObject({ message: SESSION_MESSAGE_NOT_A_PEER })
+    expect((await messages.list('w1')).pairPauses).toHaveLength(1)
 
-    const listing = await messages.resumePair('w1', 'b', 'a')
-
-    expect(listing.pairPauses).toEqual([])
-    // Resume starts the hour's count again; otherwise the very next message would pause the pair once more.
+    clock = T0 + 60 * MINUTE
+    expect((await messages.peers('a')).peers.map((peer) => peer.sessionId)).toEqual(['b', 'c'])
+    expect((await messages.list('w1')).pairPauses).toEqual([])
+    // Nothing refused was stored or comes back, and every message it counted is still there.
+    expect(count()).toBe(12)
     await tell('a', 'b')
+    expect(count()).toBe(13)
     expect(notices).toHaveLength(1)
+    expect(database.prepare('SELECT counted_from FROM session_message_pair').get()).toEqual({ counted_from: null })
+
+    // Twelve inside the hour again: the next one pauses the pair once more, and that pause lifts the same way.
+    await expect(tell('b', 'a')).rejects.toMatchObject({ message: PAIR_PAUSED })
+    expect(notices).toHaveLength(2)
+    expect((await messages.list('w1')).pairPauses[0]!.until).toBe(new Date(T0 + 31 * SECOND + 60 * MINUTE).toISOString())
+    clock = T0 + 31 * SECOND + 60 * MINUTE
+    await tell('b', 'a')
+    expect(count()).toBe(14)
   })
 
   it('counts a rolling hour: a message older than an hour no longer counts', async () => {
-    for (let index = 0; index < 12; index += 1) await exchange(index % 2 === 0 ? 'a' : 'b', index % 2 === 0 ? 'b' : 'a')
+    await twelve()
     // The first message was sent at T0; one hour and a moment later eleven remain inside the hour.
     clock = T0 + 60 * MINUTE + 1
     await tell('a', 'b')
     expect(notices).toEqual([])
   })
 
-  it('accepts forty messages in a workspace inside an hour, refuses the forty-first and pauses the workspace', async () => {
+  it('accepts forty messages in a workspace inside an hour, refuses the forty-first and pauses the workspace until the count falls, across a restart', async () => {
     addSession('d', 'w1', 3, 'Tester')
+    fronts.set('d', { state: 'agent', app: 'codex' })
     const pairs: Array<[string, string]> = [['a', 'b'], ['a', 'c'], ['a', 'd'], ['b', 'c'], ['b', 'd'], ['c', 'd']]
     for (let index = 0; index < 40; index += 1) {
       const [from, to] = pairs[index % pairs.length]!
@@ -621,43 +582,39 @@ describe('pauses and the hourly limits (66.3 AC1-AC3)', () => {
     expect(notices).toEqual([])
 
     await expect(tell('d', 'a')).rejects.toMatchObject({
-      message: 'Sessions in this workspace exchanged 40 messages in an hour; messages here are paused until the owner resumes them'
+      message: 'Sessions in this workspace exchanged 40 messages in an hour; messages here are paused, and allowed again when the count falls'
     })
 
     expect(count()).toBe(40)
     expect(notices).toEqual([{
       sessionId: 'd', incarnationId: 'run-d', requestKey: 'watch:messages:workspace',
       title: 'Sessions in Shop exchanged 40 messages in an hour; messages in it are paused',
-      body: 'Open the workspace menu, Messages…, to read them and to resume. BMN stopped nothing else.'
+      body: NOTICE_BODY
     }])
-    expect((await messages.list('w1')).workspacePause).toEqual({ at: iso(), by: 'limit' })
-    // Every later send is refused with the plain reason and no further notice; the switch does not lift the pause.
+    expect((await messages.list('w1')).workspacePause).toEqual({ at: iso(), until: new Date(T0 + 60 * MINUTE).toISOString() })
+    // Every later send is refused with the plain reason and no further notice, after a restart too.
     clock += 31 * SECOND
-    workspaceSwitch('w1', { sessionMessages: false })
-    workspaceSwitch('w1', { sessionMessages: true })
+    restart()
     await expect(tell('b', 'c')).rejects.toMatchObject({ message: SESSION_MESSAGES_PAUSED })
     expect(notices).toHaveLength(1)
     expect((await messages.peers('b')).paused).toBe(true)
 
-    expect((await messages.pause('w1', false)).workspacePause).toBeNull()
+    // The first of the forty leaves the hour at T0 + 1 h, and the workspace takes messages again by itself.
+    clock = T0 + 60 * MINUTE
+    expect((await messages.peers('b')).paused).toBe(false)
+    expect((await messages.list('w1')).workspacePause).toBeNull()
     await tell('b', 'c')
+    expect(count()).toBe(41)
   })
 
-  it('lets the owner pause and resume a workspace by hand; waiting messages stay waiting and still expire', async () => {
-    const waiting = await tell('a', 'b')
-    expect((await messages.pause('w1', true)).workspacePause).toEqual({ at: iso(), by: 'owner' })
-    clock += 31 * SECOND
-
-    await expect(tell('a', 'c')).rejects.toMatchObject({ message: SESSION_MESSAGES_PAUSED })
-    expect(notices).toEqual([])
-    expect(stored(waiting.messageId).state).toBe('waiting')
-    // Paused, so the hook is handed nothing; the owner's Paste still works (above).
+  it('keeps the send gap, one message at a time and the two-hour expiry: no pause lifts those', async () => {
+    await tell('a', 'b')
+    clock += 30 * SECOND - 1
+    await expect(tell('a', 'c')).rejects.toMatchObject({ message: 'Wait 30 seconds between messages' })
+    clock += 1
+    await expect(tell('a', 'b')).rejects.toMatchObject({ message: 'Your earlier message to that session is still waiting; one at a time' })
+    clock += 121 * MINUTE
     expect((await take('b')).message).toBeNull()
-    clock += 120 * MINUTE
-    expect((await messages.status('a', waiting.messageId)).messages[0]!.state).toBe('expired')
-
-    await messages.pause('w1', false)
-    await tell('a', 'c')
   })
 })
 
@@ -709,7 +666,6 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
     })
     expect(stored(first.messageId)).toMatchObject({ state: 'taken', claimedApp: 'codex' })
     expect((await messages.status('a', first.messageId)).messages[0]!.state).toBe('taken, not confirmed')
-    expect(pasted).toEqual([])
 
     expect(await messages.report({ sessionId: 'b', incarnationId: 'run-b', pid: 4242, messageId: first.messageId, claimId: taken.message!.claimId }))
       .toEqual({ recorded: true })
@@ -771,43 +727,28 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
     expect(await report({})).toEqual({ recorded: false })
   })
 
-  it('keeps a claim whose answer or report was lost "taken, not confirmed": neither the hook nor Paste offers it again', async () => {
+  it('keeps a claim whose answer or report was lost "taken, not confirmed": the hook does not offer it again', async () => {
     const sent = await tell('a', 'b')
     await take('b')
 
     expect((await take('b')).message).toBeNull()
-    expect((await messages.paste(sent.messageId, 'run-b')).state).toBe('taken')
-    expect(pasted).toEqual([])
     clock += 3 * 60 * MINUTE
     expect(stored(sent.messageId).state).toBe('taken')
     expect((await messages.list('w1')).messages[0]!.state).toBe('taken')
-  })
-
-  it('gives exactly one winner when the hook and the owner\'s Paste reach for the same message', async () => {
-    for (const hookFirst of [true, false]) {
-      const sent = await tell('a', 'b')
-      const [taken, pastedRecord] = hookFirst
-        ? await Promise.all([take('b'), messages.paste(sent.messageId, 'run-b')])
-        : (await Promise.all([messages.paste(sent.messageId, 'run-b'), take('b')])).reverse() as [Awaited<ReturnType<typeof take>>, SessionMessageRecord]
-      const hookWon = taken.message !== null
-      expect(hookWon).toBe(pastedRecord.state === 'taken')
-      expect(stored(sent.messageId).state).toBe(hookWon ? 'taken' : 'pasted')
-      expect(pasted).toHaveLength(hookWon ? 0 : 1)
-      pasted = []
-      clock += 31 * SECOND
-    }
   })
 
   const refusals: Array<[string, () => void | Promise<void>]> = [
     ['the message has expired', () => { clock += 120 * MINUTE }],
     ['the sender is archived', () => change('a', { archived: true })],
     ['the sender has moved to another workspace', () => change('a', { workspaceId: 'w2' })],
-    ['the receiver has moved to another workspace', () => { change('b', { workspaceId: 'w2' }); workspaceSwitch('w2', { sessionMessages: true }) }],
-    ['the workspace is archived', () => workspaceSwitch('w1', { archived: true })],
-    ['the workspace switch is off', () => workspaceSwitch('w1', { sessionMessages: false })],
-    ['the receiver has "Receive messages" off', () => change('b', { receiveMessages: false })],
-    ['the workspace is paused', async () => { await messages.pause('w1', true) }],
-    ['the pair is paused', () => {
+    ['the receiver has moved to another workspace', () => change('b', { workspaceId: 'w2' })],
+    ['the workspace is archived', () => archiveWorkspace('w1')],
+    ['the hourly limit holds the workspace', () => {
+      fillHour(40, ['b', 'c'])
+      database.prepare("UPDATE workspace SET session_messages_paused_at = ?, session_messages_paused_by = 'limit' WHERE workspace_id = 'w1'").run(iso())
+    }],
+    ['the hourly limit holds the pair', () => {
+      fillHour(12)
       database.prepare("INSERT INTO session_message_pair(workspace_id, first_session_id, second_session_id, paused_at) VALUES ('w1', 'a', 'b', ?)").run(iso())
     }]
   ]
@@ -819,12 +760,19 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
     expect(stored(sent.messageId).state).toBe('waiting')
   })
 
-  it('hands over again once the one failing condition is lifted', async () => {
+  it('hands over by itself once the hourly limit lets go of the workspace, and not a moment before (75.4 AC3)', async () => {
     const sent = await tell('a', 'b')
-    change('b', { receiveMessages: false })
+    fillHour(40, ['b', 'c'])
+    database.prepare("UPDATE workspace SET session_messages_paused_at = ?, session_messages_paused_by = 'limit' WHERE workspace_id = 'w1'").run(iso())
     expect((await take('b')).message).toBeNull()
-    change('b', { receiveMessages: true })
+    // Forty-one inside the hour, the earliest two 40 and 39 minutes ago: they have left it 21 minutes from now.
+    clock = T0 + 21 * MINUTE - 1
+    expect(await messages.waiting({ sessionId: 'b', incarnationId: 'run-b', agent: 'codex', event: 'PostToolUse' })).toBe(false)
+    expect((await take('b')).message).toBeNull()
+    clock = T0 + 21 * MINUTE
+    expect(await messages.waiting({ sessionId: 'b', incarnationId: 'run-b', agent: 'codex', event: 'PostToolUse' })).toBe(true)
     expect((await take('b')).message!.messageId).toBe(sent.messageId)
+    expect((await messages.list('w1')).workspacePause).toBeNull()
   })
 
   it('asks the provider question with the destination the hook resolved and the root stored with the message', async () => {
@@ -852,7 +800,7 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
 
     expect(stored(held.messageId).state).toBe('waiting')
     expect(await shown(held.messageId)).toMatchObject({
-      state: 'waiting', detail: 'Not handed over by the hook: Moonshot AI gets public work only. Paste hands it over on your word.'
+      state: 'waiting', detail: 'Not handed over by the hook: Moonshot AI gets public work only.'
     })
     const told = changes
     expect((await take('b')).message).toBeNull()
@@ -877,10 +825,6 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
       expect(JSON.stringify(database.prepare(`SELECT * FROM "${table}"`).all())).not.toMatch(/Moonshot|public work only|Not handed over/)
     }
     expect((database.prepare('PRAGMA table_info(session_message)').all() as Array<{ name: string }>).map((column) => column.name)).not.toContain('detail')
-
-    // The owner's Paste of that message ends the reason too.
-    await messages.paste(held.messageId, 'run-b')
-    expect((await shown(held.messageId))!.detail).toBeNull()
   })
 
   it('refuses the send when the app does not answer for the folder\'s repository, and stores nothing', async () => {
@@ -948,8 +892,6 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
     const kept = await replacedDuringClaim()
     expect((await messages.status('a', kept.messageId)).messages[0]!.state).toBe('taken, not confirmed')
     expect((await take('b')).message).toBeNull()
-    expect((await messages.paste(kept.messageId, live.get('b')!)).state).toBe('taken')
-    expect(pasted).toEqual([])
 
     // The store ran the give-back and only its answer was lost: nothing was printed, so the message waits again.
     clock += 31 * SECOND
@@ -1052,11 +994,11 @@ describe('a deleted session (66.2 AC9)', () => {
     database.transaction(() => createWorkspace(database, { name: 'Third' }, 'w3', iso()))()
     addSession('p', 'w3', 0)
     addSession('q', 'w3', 1)
-    workspaceSwitch('w3', { sessionMessages: true })
+    fronts.set('q', { state: 'agent', app: 'codex' })
     await tell('p', 'q')
     change('p', { workspaceId: 'w1' })
     change('q', { workspaceId: 'w1' })
-    workspaceSwitch('w3', { archived: true })
+    archiveWorkspace('w3')
     clock += 40 * 24 * 60 * MINUTE
 
     const purged = database.transaction(() => purgeExpiredArchives(database, iso()))()

@@ -3,7 +3,7 @@ import { TURN_PAUSE_REASONS, TURN_WORDINGS, type TurnSessionView, type TurnSumma
 import { describe, expect, it } from 'vitest'
 import {
   turnAppName, turnBinarySizes, turnEndWord, turnFileLines, turnHeading, turnHunkRange, turnLabelShown, turnLineNumber, turnMoreWords, turnPlate,
-  turnRecordingWords, turnResult, turnSentence, turnSize, turnTotalsText, turnWhen
+  turnRecordingWords, turnResult, turnRetryWords, turnSentence, turnSize, turnStateLine, turnTotalsText, turnWhen
 } from './turn-changes-presentation'
 
 /** Local times, so that the words do not depend on the zone the test runs in. */
@@ -18,7 +18,7 @@ function turn(change: Partial<TurnSummary> = {}): TurnSummary {
 }
 const noTotals = (wording: string, change: Partial<TurnSummary> = {}): TurnSummary => turn({ totals: null, totalsState: 'none', wording, ...change })
 function view(change: Partial<TurnSessionView> = {}): TurnSessionView {
-  return { sessionId: 's1', state: 'recording', app: 'claude', pausedRoot: null, pauseReason: null, latest: turn(), removalPending: false, ...change }
+  return { sessionId: 's1', state: 'recording', app: 'claude', pausedRoot: null, pauseReason: null, retryAt: null, latest: turn(), removalPending: false, ...change }
 }
 const full = (given: TurnSessionView): string => (turnPlate(given, NOW)?.full ?? []).map((part) => part.tone === 'text' ? part.text : `[${part.tone}:${part.text}]`).join('')
 const short = (given: TurnSessionView): string => {
@@ -100,6 +100,17 @@ describe('the state of recording', () => {
     expect(turnRecordingWords(view({ state: 'paused' }))).toBe('Paused')
     expect(turnRecordingWords(view({ state: 'not-supported', app: 'opencode' }))).toBe('Not supported for OpenCode')
     expect(turnRecordingWords(view({ state: 'not-supported', app: 'my-agent' }))).toBe('Not supported for my-agent')
+  })
+
+  it('says, while paused, why and when BMN tries again by itself (75.4 AC4)', () => {
+    expect(turnStateLine(view({ state: 'paused', pauseReason: 'failed', retryAt: NOW + 52 * 60_000 }), NOW)).toBe('Paused after three failed scans · tries again at 15:52')
+    expect(turnStateLine(view({ state: 'paused', pauseReason: 'mixed', retryAt: NOW - 1 }), NOW))
+      .toBe('Paused after three failed or stalled scans · tries again with the next turn')
+    expect(turnStateLine(view(), NOW)).toBe('Recording on')
+    expect(turnStateLine(null, NOW)).toBe('Recording off')
+    expect(turnRetryWords(null, NOW)).toBe('tries again with the next turn')
+    // A time on another day carries its date.
+    expect(turnRetryWords(new Date(2026, 9, 14, 0, 30, 0).getTime(), NOW)).toMatch(/^tries again at .+ 00:30$/)
   })
 })
 

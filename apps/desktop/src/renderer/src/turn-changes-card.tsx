@@ -1,26 +1,9 @@
-// MODULE: turn-changes-card.tsx - what the owner reads before he switches "Record what each turn changes" on, and the card a paused recording shows once on its own session (Epic 69)
+// MODULE: turn-changes-card.tsx - the card a paused recording of turn changes shows once on its own session, with when BMN tries again (Epic 69, Story 75.4)
 import { useEffect, useRef } from 'react'
-import { TURN_CHANGES_HELP, TURN_CHANGES_SWITCH, TURN_PAUSE_REASONS, type TurnRecordingState } from '@bmn/protocol'
-import { Dialog } from './dialog'
+import { TURN_PAUSE_REASONS, type TurnRecordingState } from '@bmn/protocol'
 import { guardPath } from './session-guard-card'
 import type { SessionPlace } from './session-request-card'
-import { turnAppName } from './turn-changes-presentation'
-
-/** The switch's help, read before it goes on: with it on, BMN keeps copies of the work tree's files, secrets included. */
-export function TurnChangesSwitchDialog(props: { workspaceName: string; onConfirm(): void; onClose(): void }): React.JSX.Element {
-  return (
-    <Dialog label={`${TURN_CHANGES_SWITCH} — ${props.workspaceName}`} onClose={props.onClose} className="session-messages-switch">
-      <ul>
-        {TURN_CHANGES_HELP.map((line) => <li key={line}>{line}</li>)}
-      </ul>
-      <p className="dialog-note">Recorded for Claude Code and Codex sessions in this workspace. Nothing is written into your repository, and no agent or phone can read a copy.</p>
-      <div className="dialog-actions">
-        <button type="button" className="ghost" autoFocus onClick={props.onClose}>Cancel</button>
-        <button type="button" className="primary" onClick={() => { props.onClose(); props.onConfirm() }}>Switch on</button>
-      </div>
-    </Dialog>
-  )
-}
+import { turnAppName, turnRetryWords } from './turn-changes-presentation'
 
 export const TURN_PAUSE_HEADING = 'Recording what each turn changes is paused here'
 
@@ -28,7 +11,7 @@ export const TURN_PAUSE_HEADING = 'Recording what each turn changes is paused he
  * Recording paused for a session's work tree after three scans in a row failed or read nothing new. The card
  * shows once for a pause, under that session's header; after it the header's plate reads "Paused". It lives in
  * the window only, as the prompt guard's card does: it is not a request and reaches no snapshot, token or phone.
- * It only says so: Resume is in the workspace's menu.
+ * It only says so: BMN tries again by itself (Story 75.4), and nothing here is pressed but Close.
  */
 export function TurnPauseCard(props: {
   state: TurnRecordingState
@@ -71,7 +54,7 @@ export function TurnPauseCard(props: {
         {props.state.pausedRoot ? <><dt>Work tree</dt><dd className="mono" title={props.state.pausedRoot}>{guardPath(props.state.pausedRoot, props.home)}</dd></> : null}
         {props.state.pauseReason === null ? null : <><dt>Reason</dt><dd>{TURN_PAUSE_REASONS[props.state.pauseReason]}</dd></>}
       </dl>
-      <p className="seen">BMN scans nothing here until you resume. Resume is in this workspace's menu and sets the count back to zero.</p>
+      <p className="seen">BMN scans nothing here for now and {turnRetryWords(props.state.retryAt, Date.now())}. Each try that fails waits longer.</p>
       <div className="actions">
         <button type="button" className="primary" onClick={() => props.onClose(true)}>Close</button>
       </div>

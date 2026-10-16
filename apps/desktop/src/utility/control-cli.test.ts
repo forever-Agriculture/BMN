@@ -1274,31 +1274,32 @@ describe('bmn hook prompt guard (Story 60.8)', () => {
 })
 
 describe('bmn peers and bmn tell (Story 66.2)', () => {
-  it('says that messages are off and lists nothing when the workspace has them off', async () => {
+  it('says that an archived session sends no messages and lists nothing (Story 75.4)', async () => {
     const fixture = await cliFixture()
     fixture.handlers.listPeers.mockResolvedValueOnce({ on: false, paused: false, peers: [] })
 
-    expect(await runCli(['peers'], { env: fixture.sessionEnv })).toEqual({ code: 0, stdout: 'Messages are off in this workspace\n', stderr: '' })
+    expect(await runCli(['peers'], { env: fixture.sessionEnv }))
+      .toEqual({ code: 0, stdout: 'This session or its workspace is archived; it sends no messages\n', stderr: '' })
     expect(fixture.handlers.listPeers).toHaveBeenLastCalledWith('session-1')
   })
 
-  it('lists each peer by id, name and the app BMN last saw there', async () => {
+  it('lists each peer by id, name and the agent in front there now (Story 75.4)', async () => {
     const fixture = await cliFixture()
     fixture.handlers.listPeers.mockResolvedValue({ on: true, paused: false, peers: [
       { sessionId: 'session-2', name: 'Builder', app: 'Codex' }, { sessionId: 'session-3', name: 'Shell', app: null }
     ] })
 
-    expect((await runCli(['peers'], { env: fixture.sessionEnv })).stdout).toBe('session-2\tBuilder\tCodex\nsession-3\tShell\tno agent app seen\n')
+    expect((await runCli(['peers'], { env: fixture.sessionEnv })).stdout).toBe('session-2\tBuilder\tCodex\nsession-3\tShell\tno agent now\n')
     expect(JSON.parse((await runCli(['peers', '--json'], { env: fixture.sessionEnv })).stdout)).toMatchObject({ on: true, peers: [{ sessionId: 'session-2' }, { sessionId: 'session-3' }] })
   })
 
-  it('says so when nobody receives, and when the owner has paused messages', async () => {
+  it('says so when nobody receives, and when the hourly limit has paused messages', async () => {
     const fixture = await cliFixture()
     fixture.handlers.listPeers.mockResolvedValueOnce({ on: true, paused: false, peers: [] })
     expect((await runCli(['peers'], { env: fixture.sessionEnv })).stdout).toBe('No other session here receives messages\n')
     fixture.handlers.listPeers.mockResolvedValueOnce({ on: true, paused: true, peers: [{ sessionId: 'session-2', name: 'Builder', app: 'Codex' }] })
     expect((await runCli(['peers'], { env: fixture.sessionEnv })).stdout)
-      .toBe('Messages are paused in this workspace until the owner resumes them\nsession-2\tBuilder\tCodex\n')
+      .toBe('Messages are paused in this workspace by its hourly limit; they are allowed again when the count falls\nsession-2\tBuilder\tCodex\n')
   })
 
   it('refuses the owner token for peers, tell and tell status', async () => {
@@ -4975,8 +4976,8 @@ describe('bmn hook turn marks (Story 69.4)', () => {
     const text = (await runHooks(['check'])).stdout
     const asJson = JSON.parse((await runHooks(['check', '--json'])).stdout) as { agents: Array<{ agent: string; turnChanges?: string }> }
 
-    expect(text).toContain("  turn changes: recorded where a workspace's switch is on (waiting for the prompt hook measured on Claude Code 2.1.296)")
-    expect(text).toContain("  turn changes: recorded where a workspace's switch is on (waiting for the prompt hook measured on Codex 0.162.1)")
+    expect(text).toContain("  turn changes: recorded in every workspace that is not archived (waiting for the prompt hook measured on Claude Code 2.1.296)")
+    expect(text).toContain("  turn changes: recorded in every workspace that is not archived (waiting for the prompt hook measured on Codex 0.162.1)")
     expect(text).toContain('  turn changes: not recorded for OpenCode; it was not measured to wait for its prompt hook')
     expect(asJson.agents.find((row) => row.agent === 'codex')?.turnChanges).toMatch(/^turn changes: recorded/)
   })

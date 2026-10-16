@@ -1,5 +1,5 @@
 // MODULE: turn-changes-presentation.ts - the words the window shows for turn changes (Story 69.5): a turn's time, end and totals, the state of recording, the header plate in both its widths, a file's sizes and a hunk's range
-import { RETIRED_APP_NAMES, TURN_APP_NAMES, TURN_PAUSE_REASONS, type TurnSessionView, type TurnShownHunk, type TurnSummary } from '@bmn/protocol'
+import { RETIRED_APP_NAMES, TURN_APP_NAMES, TURN_PAUSE_REASONS, TURN_PAUSE_WORDS, type TurnSessionView, type TurnShownHunk, type TurnSummary } from '@bmn/protocol'
 import { shortDate } from './history-rows'
 
 /** The sign of a removed line and of a count of removed lines: a real minus, as wide as the plus. */
@@ -63,7 +63,22 @@ export function turnResult(turn: TurnSummary): { totals: TurnTotalsWords | null;
   }
 }
 
-/** Where recording stands, as the dialog's state line says it. */
+/**
+ * When a paused recording scans one turn again by itself (Story 75.4): at its time, or with the next turn once that
+ * time has passed.
+ */
+export function turnRetryWords(retryAt: number | null, now: number): string {
+  if (retryAt === null || retryAt <= now) return 'tries again with the next turn'
+  return `tries again at ${turnWhen(new Date(retryAt).toISOString(), now)}`
+}
+
+/** The dialog's state line: while paused, why and when BMN tries again; otherwise where recording stands. */
+export function turnStateLine(view: Pick<TurnSessionView, 'state' | 'app' | 'pauseReason' | 'retryAt'> | null, now: number): string {
+  if (view?.state !== 'paused' || view.pauseReason === null) return turnRecordingWords(view)
+  return `${TURN_PAUSE_WORDS[view.pauseReason]} · ${turnRetryWords(view.retryAt, now)}`
+}
+
+/** Where recording stands, in a word or two. */
 export function turnRecordingWords(view: Pick<TurnSessionView, 'state' | 'app'> | null): string {
   if (view === null || view.state === 'off') return 'Recording off'
   if (view.state === 'paused') return 'Paused'

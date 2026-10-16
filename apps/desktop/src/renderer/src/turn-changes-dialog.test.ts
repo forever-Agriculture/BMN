@@ -24,7 +24,7 @@ function turn(turnId: string, change: Partial<TurnSummary> = {}): TurnSummary {
 const none = (turnId: string, wording: string, change: Partial<TurnSummary> = {}): TurnSummary =>
   turn(turnId, { totals: null, totalsState: 'none', wording, ...change })
 function view(change: Partial<TurnSessionView> = {}): TurnSessionView {
-  return { sessionId: 's1', state: 'recording', app: 'claude', pausedRoot: null, pauseReason: null, latest: turn('t-1'), removalPending: false, ...change }
+  return { sessionId: 's1', state: 'recording', app: 'claude', pausedRoot: null, pauseReason: null, retryAt: null, latest: turn('t-1'), removalPending: false, ...change }
 }
 
 function dialog(given: {
@@ -100,7 +100,8 @@ describe('the list of turns', () => {
 describe('the state of recording beside older numbers', () => {
   it.each([
     [view({ state: 'off', app: null }), 'Recording off'],
-    [view({ state: 'paused', pausedRoot: '/home/synthetic/code/shop', pauseReason: 'failed' }), 'Paused'],
+    [view({ state: 'paused', pausedRoot: '/home/synthetic/code/shop', pauseReason: 'failed' }), 'Paused after three failed scans · tries again with the next turn'],
+    [view({ state: 'paused', pauseReason: 'incomplete', retryAt: NOW + 20 * 60_000 }), 'Paused after three scans that read nothing new · tries again at 15:20'],
     [view({ state: 'not-supported', app: 'opencode' }), 'Not supported for OpenCode'],
     [null, 'Recording off']
   ] as const)('says %s above the kept turns', (given, words) => {
@@ -355,7 +356,7 @@ describe('the card of a paused recording', () => {
     place: { workspace: 'Shop', session: 'api-agent' }, home: '/home/synthetic', anchor: null, onClose: noop
   }))
 
-  it('says where and why in fixed words, and only closes: Resume is in the workspace\'s menu', () => {
+  it('says where and why in fixed words, and when BMN tries again by itself; it only closes (75.4 AC4)', () => {
     const html = card()
     expect(html).toContain('role="dialog" aria-label="Turn changes"')
     expect(html).toContain('<header><strong>Paused</strong><span>stays on this computer</span>')
@@ -363,7 +364,9 @@ describe('the card of a paused recording', () => {
     expect(html).toContain('<dt>Work tree</dt><dd class="mono" title="/home/synthetic/code/shop">~/code/shop</dd>')
     expect(html).toContain(`<dt>Reason</dt><dd>${TURN_PAUSE_REASONS.incomplete}</dd>`)
     expect(html).toContain('<span class="attention-kind">Claude Code</span>')
-    expect(text(html)).toContain("Resume is in this workspace's menu and sets the count back to zero.")
+    expect(text(html)).toContain('BMN scans nothing here for now and tries again with the next turn. Each try that fails waits longer.')
+    expect(text(card({ retryAt: Date.now() + 60 * 60_000 }))).toMatch(/BMN scans nothing here for now and tries again at \d\d:\d\d\. Each try/)
+    expect(html).not.toMatch(/Resume/)
     expect([...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1])).toEqual(['×', 'Close'])
   })
 

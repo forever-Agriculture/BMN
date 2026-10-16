@@ -1,10 +1,12 @@
-// MODULE: session-messages-dialog.test.ts - what the Messages dialog shows: its rows and bound, the Paste button's states, pause and resume (Epic 66)
+// MODULE: session-messages-dialog.test.ts - what the read-only Messages dialog shows: its rows and bound, an opened message's words, the hourly limit's pauses (Epic 66, Story 75.4)
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
   SESSION_MESSAGE_HANDOVER, SESSION_MESSAGE_LIST_LIMIT, type SessionMessageListRow, type SessionMessageState
 } from '@bmn/protocol'
 import {
-  messageHandover, messagePairPauseWords, messagePasteControl, messagePauseControl, messageRows
+  SessionMessagesDialog, messageHandover, messageNote, messagePairPauseWords, messagePauseWords, messageRows
 } from './session-messages-dialog'
 
 const NOW = Date.parse('2026-10-13T12:00:00.000Z')
@@ -56,98 +58,79 @@ describe('the Messages list (Story 66.2)', () => {
   })
 })
 
-describe('the Paste button (Story 66.2)', () => {
-  it('offers Paste into the receiving session for a waiting message whose receiver runs', () => {
-    expect(messagePasteControl(message(), NOW, 'process-1', false)).toEqual({
-      offered: true, label: 'Paste into Planner', disabled: false,
-      note: 'Appends the stamp and the text to its input. Enter is not pressed.'
-    })
+describe('an opened message, read-only (Story 66.2, 75.4)', () => {
+  it('says a waiting message waits for the receiving agent\'s own hook', () => {
+    expect(messageNote(message(), NOW)).toBe('Waits for the agent in Planner to take it after a tool call.')
   })
 
-  it('still offers Paste for an expired message, and says the hook no longer hands it over', () => {
-    expect(messagePasteControl(message({ expiresAt: iso(-1) }), NOW, 'process-1', false)).toEqual({
-      offered: true, label: 'Paste into Planner', disabled: false,
-      note: 'Expired: no hook hands it over any more. Your Paste still does, without pressing Enter.'
-    })
+  it('says an expired message is handed over by nothing any more', () => {
+    expect(messageNote(message({ expiresAt: iso(-1) }), NOW)).toBe('Expired: no hook hands it over any more.')
   })
 
-  it('says why the hook held a message back, and keeps Paste for it', () => {
-    const detail = 'Not handed over by the hook: gpt may not see private work in /synthetic/repo. Paste hands it over on your word.'
-    expect(messagePasteControl(message({ detail }), NOW, 'process-1', false)).toEqual({
-      offered: true, label: 'Paste into Planner', disabled: false, note: detail
-    })
+  it('says why the hook held a message back', () => {
+    const detail = 'Not handed over by the hook: gpt may not see private work in /synthetic/repo.'
+    expect(messageNote(message({ detail }), NOW)).toBe(detail)
   })
 
-  it('cannot be pressed while the receiving session is not running, or while a paste is under way', () => {
-    expect(messagePasteControl(message(), NOW, null, false)).toEqual({
-      offered: true, label: 'Paste into Planner', disabled: true, note: 'Planner is not running. Start it to paste.'
-    })
-    expect(messagePasteControl(message(), NOW, 'process-1', true)).toEqual({
-      offered: true, label: 'Paste into Planner', disabled: true, note: 'Pasting…'
-    })
+  it('says nothing delivers a message once either session has left the workspace it was sent in', () => {
+    expect(messageNote(message({ membersPresent: false }), NOW)).toBe('One of its sessions has left this workspace, so nothing delivers this message.')
   })
 
-  it('offers nothing once either session has left the workspace the message was sent in', () => {
-    expect(messagePasteControl(message({ membersPresent: false }), NOW, 'process-1', false)).toEqual({
-      offered: false, note: 'One of its sessions has left this workspace, so nothing delivers this message. You can still read it here.'
-    })
-  })
-
-  it('offers nothing for a message that was claimed, whoever claimed it and whether or not that was confirmed', () => {
-    expect(messagePasteControl(message({ state: 'pasted' }), NOW, 'process-1', false))
-      .toEqual({ offered: false, note: 'You pasted it into Planner. Enter was not pressed.' })
-    expect(messagePasteControl(message({ state: 'paste-uncertain' }), NOW, 'process-1', false))
-      .toEqual({ offered: false, note: "BMN could not confirm this paste. Look at Planner's input; BMN does not paste it again." })
-    expect(messagePasteControl(message({ state: 'taken', claimedApp: 'codex' }), NOW, 'process-1', false))
-      .toEqual({ offered: false, note: "Taken by Codex's hook and not confirmed as printed. BMN does not offer it again." })
+  it('reads a message the owner pasted before Story 75.4 as it did, and one a hook took and never confirmed', () => {
+    expect(messageNote(message({ state: 'pasted' }), NOW)).toBe('You pasted it into Planner. Enter was not pressed.')
+    expect(messageNote(message({ state: 'paste-uncertain' }), NOW)).toBe("BMN could not confirm this paste. Look at Planner's input; BMN does not paste it again.")
+    expect(messageNote(message({ state: 'taken', claimedApp: 'codex' }), NOW)).toBe("Taken by Codex's hook and not confirmed as printed. BMN does not offer it again.")
   })
 
   it('names the app whose hook printed a message and the version its hand-over was measured on (Story 66.4)', () => {
     const version = SESSION_MESSAGE_HANDOVER.codex!.version
-    expect(messagePasteControl(message({ state: 'printed', claimedApp: 'codex' }), NOW, 'process-1', false)).toEqual({
-      offered: false, note: `Printed for the agent by Codex's hook: printed, not proven read. Hand-over measured on Codex ${version}.`
-    })
-    expect(messagePasteControl(message({ state: 'printed', claimedApp: 'claude' }), NOW, 'process-1', false)).toEqual({
-      offered: false, note: "Printed for the agent by Claude Code's hook: printed, not proven read. Hand-over measured on Claude Code 2.1.296."
-    })
+    expect(messageNote(message({ state: 'printed', claimedApp: 'codex' }), NOW))
+      .toBe(`Printed for the agent by Codex's hook: printed, not proven read. Hand-over measured on Codex ${version}.`)
+    expect(messageNote(message({ state: 'printed', claimedApp: 'claude' }), NOW))
+      .toBe("Printed for the agent by Claude Code's hook: printed, not proven read. Hand-over measured on Claude Code 2.1.296.")
     // An app BMN holds no measurement for is named without one.
-    expect(messagePasteControl(message({ state: 'printed', claimedApp: 'opencode' }), NOW, 'process-1', false)).toEqual({
-      offered: false, note: "Printed for the agent by OpenCode's hook: printed, not proven read."
-    })
+    expect(messageNote(message({ state: 'printed', claimedApp: 'opencode' }), NOW)).toBe("Printed for the agent by OpenCode's hook: printed, not proven read.")
   })
 
-  it('says which apps a hook hands messages to, as bmn hooks check does, and which only the owner pastes into', () => {
+  it('says which apps a hook hands messages to, as bmn hooks check does; no other app takes one', () => {
     const handover = messageHandover()
     for (const [app, measured] of Object.entries(SESSION_MESSAGE_HANDOVER)) {
-      expect(handover.byHook).toContain(`measured on ${app === 'codex' ? 'Codex' : 'Claude Code'} ${measured!.version}`)
+      expect(handover).toContain(`measured on ${app === 'codex' ? 'Codex' : 'Claude Code'} ${measured!.version}`)
     }
-    expect(handover.byHook).toBe('Claude Code (measured on Claude Code 2.1.296), Codex (measured on Codex 0.162.1)')
-    expect(handover.byPaste).toBe('OpenCode')
-    expect(handover.byHook).not.toContain('OpenCode')
+    expect(handover).toBe('Claude Code (measured on Claude Code 2.1.296), Codex (measured on Codex 0.162.1)')
+    expect(handover).not.toContain('OpenCode')
+  })
+
+  it('opens with no button but its own close: Pause messages, Resume and Refresh are gone (75.4 AC2)', () => {
+    const html = renderToStaticMarkup(createElement(SessionMessagesDialog, {
+      workspace: { workspaceId: 'w1', name: 'Shop', defaultCwd: null, pinnedFilePaths: [], position: 0, marker: 'none', archivedAt: null, revision: 1 },
+      now: NOW, revision: 0, onClose: () => undefined
+    } as Parameters<typeof SessionMessagesDialog>[0]))
+    expect(html).toContain('<h3>This workspace</h3>')
+    expect(html).toContain('<h3>Latest messages</h3>')
+    expect(html.match(/<button/g)).toHaveLength(1)
+    expect(html).not.toMatch(/Pause messages|Resume|Refresh|Paste|By your Paste/)
   })
 })
 
-describe('pause and resume in the Messages dialog (Story 66.3)', () => {
+describe('what the hourly limit holds, in words (Story 66.3, 75.4)', () => {
   const time = (at: string): string => at
 
-  it('offers Pause messages while new messages are accepted', () => {
-    expect(messagePauseControl({ workspacePause: null }, time)).toEqual({ paused: false, words: 'Accepted', action: 'Pause messages' })
+  it('reads Accepted while new messages are accepted', () => {
+    expect(messagePauseWords({ workspacePause: null, messages: [message()] }, NOW, time)).toBe('Accepted')
   })
 
-  it('offers Resume after the owner paused, and says it was his pause', () => {
-    expect(messagePauseControl({ workspacePause: { at: iso(-3), by: 'owner' } }, time))
-      .toEqual({ paused: true, words: `Paused by you, ${iso(-3)}`, action: 'Resume' })
+  it('says until when the limit holds the workspace, with the messages it holds back', () => {
+    const pause = { at: iso(-3), until: iso(52) }
+    const messages = [message(), message({ messageId: 'm2', expiresAt: iso(-1) }), message({ messageId: 'm3', state: 'printed' }),
+      message({ messageId: 'm4', membersPresent: false })]
+    expect(messagePauseWords({ workspacePause: pause, messages }, NOW, time)).toBe(`Paused by the limit until ${iso(52)} · 1 held`)
+    expect(messagePauseWords({ workspacePause: pause, messages: [] }, NOW, time)).toBe(`Paused by the limit until ${iso(52)}`)
   })
 
-  it('offers Resume after the hourly limit paused the workspace, and says what paused it', () => {
-    expect(messagePauseControl({ workspacePause: { at: iso(-3), by: 'limit' } }, time)).toEqual({
-      paused: true, words: `Paused ${iso(-3)}: sessions here exchanged 40 messages in an hour`, action: 'Resume'
-    })
-  })
-
-  it('names the two sessions of a paused pair and since when', () => {
+  it('names the two sessions of a paused pair, since when, and by when the next message between them is allowed', () => {
     expect(messagePairPauseWords({
-      firstSessionId: 'lead', firstName: 'Lead', secondSessionId: 'planner', secondName: 'Planner', pausedAt: iso(-9)
-    }, time)).toBe(`Lead and Planner exchanged 12 messages in an hour; paused ${iso(-9)}`)
+      firstSessionId: 'lead', firstName: 'Lead', secondSessionId: 'planner', secondName: 'Planner', pausedAt: iso(-9), until: iso(40)
+    }, time, time)).toBe(`Lead and Planner exchanged 12 messages in an hour; paused ${iso(-9)}, allowed again when the counts fall, by ${iso(40)}`)
   })
 })

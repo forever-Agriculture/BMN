@@ -7,9 +7,6 @@ import {
   DEFAULT_TELEGRAM_QUIET_HOURS,
   IDENTITY_NAMES,
   RESTORED_VIEW_NOTICE,
-  SESSION_MESSAGES_HELP,
-  TURN_CHANGES_HELP,
-  TURN_CHANGES_SWITCH,
   type TurnSessionView,
   TERMINAL_FONT_SIZE_RANGE,
   type AppearanceSettings,
@@ -52,7 +49,7 @@ import { FilesPanel } from './files-panel'
 import { HookEventsDialog } from './hook-events-dialog'
 import { ProgressEvidenceDialog } from './progress-evidence-dialog'
 import { WorkspaceResultsDialog } from './workspace-results'
-import { MessagesSwitchDialog, SessionMessagesDialog } from './session-messages-dialog'
+import { SessionMessagesDialog } from './session-messages-dialog'
 import { DevAutoRunsDialog } from './dev-auto-runs'
 import { prepareWorkspaceHandoffReview, sameHandoffDraft } from './workspace-handoff-review'
 import { HookObservationView } from './hook-observation-view'
@@ -85,7 +82,7 @@ import {
 } from './launch-template'
 import { SessionRequestCard, type ClearedNotice } from './session-request-card'
 import { GUARD_STOP_WORDS, SessionGuardCard } from './session-guard-card'
-import { TurnChangesSwitchDialog, TurnPauseCard } from './turn-changes-card'
+import { TurnPauseCard } from './turn-changes-card'
 import { TurnChangesDialog } from './turn-changes-dialog'
 import { dismissAttentionReminder, noticesWhenNavigating, applyAttentionWithdrawal } from './attention-actions'
 import { PopupMenu, type MenuAnchor, type MenuEntry } from './popup-menu'
@@ -178,10 +175,6 @@ type ShellDialog =
   | { kind: 'workspace-results'; workspace: WorkspaceRecord; openedFromWorkspaceId: string | null }
   /** The owner's reading of one workspace's messages between sessions (Epic 66). */
   | { kind: 'workspace-messages'; workspaceId: string; openedFromWorkspaceId: string | null }
-  /** The messages switch's two help lines, read before it goes on. */
-  | { kind: 'messages-switch'; workspaceId: string }
-  /** What "Record what each turn changes" stores, read before it goes on (Story 69.4). */
-  | { kind: 'turn-changes-switch'; workspaceId: string }
   /** Read-only: a session's kept turns, one opened to its files and a file's difference (Story 69.5). */
   | { kind: 'turn-changes'; sessionId: string }
   | { kind: 'new-workspace' }
@@ -935,33 +928,6 @@ function App(): React.JSX.Element {
     }
   }
 
-  /** The workspace's consent for its sessions to list and message each other (Epic 66). */
-  const setSessionMessages = async (workspace: WorkspaceRecord, sessionMessages: boolean): Promise<void> => {
-    await updateWorkspace(workspace, { sessionMessages })
-    brief(sessionMessages ? `Sessions in ${workspace.name} may message each other.` : `Messages are off in ${workspace.name}.`)
-  }
-
-  /** The workspace's switch for turn changes (Story 69.4): BMN keeps copies of the work tree's files while it is on. */
-  const setTurnChanges = async (workspace: WorkspaceRecord, turnChanges: boolean): Promise<void> => {
-    await updateWorkspace(workspace, { turnChanges })
-    brief(turnChanges ? `BMN records what each turn changes in ${workspace.name}.` : `Turn changes are no longer recorded in ${workspace.name}.`)
-  }
-
-  /** Resume: every paused session of the workspace starts again with its count at zero. */
-  const resumeTurnRecording = async (sessionIds: readonly string[]): Promise<void> => {
-    await Promise.all(sessionIds.map((sessionId) => window.aiTerminal.resumeTurnRecording(sessionId)))
-    setTurnCard(null)
-    brief('Recording of turn changes resumed.')
-  }
-
-  /** Shuts one session out of its workspace's messages, or lets it back in. */
-  const setReceiveMessages = async (record: SessionRecord, receiveMessages: boolean): Promise<void> => {
-    handoffReviewEpoch.current += 1
-    const updated = await window.aiTerminal.updateSession({ sessionId: record.sessionId, expectedRevision: record.revision, receiveMessages })
-    setSessions((current) => current.map((item) => item.sessionId === updated.sessionId ? updated : item))
-    brief(receiveMessages ? `${updated.name} receives messages.` : `${updated.name} receives no messages.`)
-  }
-
   const moveWorkspace = (ordered: readonly WorkspaceRecord[], index: number, direction: -1 | 1): void => {
     const changes = adjacentPositionUpdates(ordered, index, direction)
     void Promise.all(changes.map(({ record, position }) => updateWorkspace(record, { position })))
@@ -1519,7 +1485,7 @@ function App(): React.JSX.Element {
     return {
       label: 'Turn changes…',
       disabled: !recorded,
-      title: recorded ? undefined : 'No turn recorded here; the switch is in the workspace\'s menu',
+      title: recorded ? undefined : 'No turn recorded here yet',
       onSelect: () => setDialog({ kind: 'turn-changes', sessionId: session.sessionId })
     }
   }
@@ -1543,14 +1509,6 @@ function App(): React.JSX.Element {
         void window.aiTerminal.putSettings('telegram', { ...settings.telegram, quietHours: { ...quiet, allowSessions } })
           .then(setSettings).catch(fail('Quiet-hours exception could not be saved'))
       }
-    },
-    {
-      label: 'Receive messages',
-      checked: session.receiveMessages !== false,
-      title: workspaces.find((workspace) => workspace.workspaceId === session.workspaceId)?.sessionMessages === true
-        ? 'Other sessions of this workspace may leave this one a message'
-        : 'Without effect while messages are off in this workspace',
-      onSelect: () => void setReceiveMessages(session, session.receiveMessages === false).catch(fail('Receive messages could not be changed'))
     },
     { label: 'Edit launch settings', onSelect: () => beginSessionEdit(session) },
     { label: 'Move up', disabled: index === 0, onSelect: () => void moveSession(siblings, index, -1).catch(fail('Session move failed')) },
@@ -1621,38 +1579,6 @@ function App(): React.JSX.Element {
     { label: 'Move down', disabled: index === ordered.length - 1, onSelect: () => moveWorkspace(ordered, index, 1) },
     'separator',
     {
-      // Off by default. Switching it on first shows what it allows; switching it off needs no second thought.
-      label: 'Sessions here may message each other',
-      checked: workspace.sessionMessages === true,
-      disabled: workspace.archivedAt !== null,
-      title: SESSION_MESSAGES_HELP.join(' '),
-      onSelect: () => workspace.sessionMessages === true
-        ? void setSessionMessages(workspace, false).catch(fail('The messages switch could not be changed'))
-        : setDialog({ kind: 'messages-switch', workspaceId: workspace.workspaceId })
-    },
-    {
-      // Off by default. Switching it on first shows what BMN will keep; switching it off needs no second thought.
-      label: TURN_CHANGES_SWITCH,
-      checked: workspace.turnChanges === true,
-      disabled: workspace.archivedAt !== null,
-      title: TURN_CHANGES_HELP.join(' '),
-      onSelect: () => workspace.turnChanges === true
-        ? void setTurnChanges(workspace, false).catch(fail('The switch for turn changes could not be changed'))
-        : setDialog({ kind: 'turn-changes-switch', workspaceId: workspace.workspaceId })
-    },
-    ...((): MenuEntry[] => {
-      // Offered only while recording is paused for a session of this workspace: one entry for each work tree.
-      const paused = turnRecording.filter((state) => state.state === 'paused' &&
-        sessions.some((session) => session.sessionId === state.sessionId && session.workspaceId === workspace.workspaceId))
-      return [...new Set(paused.map((state) => state.pausedRoot))].map((root) => ({
-        label: root === null ? 'Resume recording' : `Resume recording in ${displayPath(root, home)}`,
-        title: 'Recording paused after three scans in a row failed or read nothing new. Resume sets the count back to zero.',
-        onSelect: () => void resumeTurnRecording(paused.filter((state) => state.pausedRoot === root).map((state) => state.sessionId))
-          .catch(fail('Recording could not be resumed'))
-      }))
-    })(),
-    'separator',
-    {
       group: 'Marker',
       selected: workspace.marker,
       options: workspaceMarkerOptions(),
@@ -1719,6 +1645,10 @@ function App(): React.JSX.Element {
       command('next-attention', 'Go to next request needing you', nextNeedingYou, { shortcut: SHORTCUT_LABELS['attention-next'], context: `${unresolved.length} waiting` }),
       command('new-workspace', 'New workspace…', () => setDialog({ kind: 'new-workspace' })),
       command('dev-auto-runs', 'dev-auto runs…', () => setDialog({ kind: 'dev-auto-runs' })),
+      // Read-only: what the sessions of the active workspace left each other (Story 75.4).
+      command('messages', 'Messages…', () => activeWorkspace && setDialog({
+        kind: 'workspace-messages', workspaceId: activeWorkspace.workspaceId, openedFromWorkspaceId: activeWorkspaceId
+      }), { disabled: !activeWorkspace, context: activeWorkspace?.name }),
       command('new-session', 'New session…', () => beginNewSession(activeWorkspace), { disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, context: activeWorkspace?.name }),
       command('split', (layout?.split.panes.length ?? 0) >= 2 ? 'Close split' : 'Split view…', () => toggleSplit(), { shortcut: SHORTCUT_LABELS['split-toggle'] }),
       command('pane-other', 'Switch to other pane', focusOtherPane, { shortcut: SHORTCUT_LABELS['pane-other'], disabled: (layout?.split.panes.length ?? 0) < 2 }),
@@ -2744,11 +2674,6 @@ function App(): React.JSX.Element {
           workspace={workspace}
           now={now}
           revision={messagesRevision}
-          incarnationOf={(sessionId) => {
-            const record = sessions.find((session) => session.sessionId === sessionId)
-            const incarnationId = live[sessionId]?.incarnationId
-            return record && incarnationId && sessionProcessLive(record, incarnationId) ? incarnationId : null
-          }}
           onClose={() => setDialog(null)} /> : null
       })() : null}
       {dialog?.kind === 'turn-changes' ? (
@@ -2763,20 +2688,6 @@ function App(): React.JSX.Element {
           onFailure={setFailure}
         />
       ) : null}
-      {dialog?.kind === 'turn-changes-switch' ? (() => {
-        const workspace = workspaces.find((item) => item.workspaceId === dialog.workspaceId && item.archivedAt === null)
-        return workspace ? <TurnChangesSwitchDialog
-          workspaceName={workspace.name}
-          onConfirm={() => void setTurnChanges(workspace, true).catch(fail('The switch for turn changes could not be changed'))}
-          onClose={() => setDialog(null)} /> : null
-      })() : null}
-      {dialog?.kind === 'messages-switch' ? (() => {
-        const workspace = workspaces.find((item) => item.workspaceId === dialog.workspaceId && item.archivedAt === null)
-        return workspace ? <MessagesSwitchDialog
-          workspaceName={workspace.name}
-          onConfirm={() => void setSessionMessages(workspace, true).catch(fail('The messages switch could not be changed'))}
-          onClose={() => setDialog(null)} /> : null
-      })() : null}
       {dialog?.kind === 'workspace-results' ? (
         <WorkspaceResultsDialog
           workspace={dialog.workspace}

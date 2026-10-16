@@ -125,11 +125,7 @@ describe('protocol surface', () => {
         'draft.send',
         'draft.discard',
         'messages.list',
-        'messages.paste',
-        'messages.pause',
-        'messages.resumePair',
         'turnChanges.state',
-        'turnChanges.resume',
         'turnChanges.list',
         'turnChanges.turn',
         'turnChanges.difference',
@@ -147,8 +143,9 @@ describe('protocol surface', () => {
         'presence.set'
       ])
     )
-    // Story 75.3 removed template.list, template.create and the six launchSet methods (91 before).
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(83)
+    // Story 75.3 removed the two methods of custom templates and the six of launch sets (91 before); Story 75.4 the
+    // owner's Paste, Pause and pair Resume of messages and the Resume of turn recording (83 before).
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(79)
   })
 
   it('exports the initial stable error codes', () => {

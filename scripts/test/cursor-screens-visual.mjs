@@ -325,12 +325,9 @@ while :; do [ -e '${quit}' ] && exit 0; sleep 0.2; done`)
     }
 
     // Launch sets and templates that named Cursor were captured here until Story 75.3 removed both.
-    phase('workspace data: turn changes on, then a Cursor session')
+    // Turn changes are on in every workspace since Story 75.4; nothing switches them on.
+    phase('workspace data: a Cursor session')
     const workspace = await page.evaluate(async () => (await window.aiTerminal.listWorkspaces()).find((item) => !item.archivedAt))
-    try {
-      await page.evaluate(async (workspace) => window.aiTerminal.updateWorkspace({ workspaceId: workspace.workspaceId, expectedRevision: workspace.revision, turnChanges: true }), workspace)
-      note('turn changes switched on for the workspace')
-    } catch (error) { note(`turn changes not switched on: ${String(error?.message ?? error).split('\n')[0]}`) }
     const created = await page.evaluate(async ({ workspaceId, cwd, executable }) => {
       try {
         return { session: (await window.aiTerminal.createSession({

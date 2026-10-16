@@ -4088,24 +4088,18 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       totals: { files: number; added: number; removed: number } | null; wording: string | null; labels: string[] }
     const turnRows = async (): Promise<TurnProbeRow[]> => (await client.request<{ selfTestTurns: TurnProbeRow[] }>(
       METHOD_REGISTRY.healthGet, { selfTestTurns: turnSessionId })).selfTestTurns.sort((a, b) => a.number - b.number)
-    const turnSwitch = async (on: boolean): Promise<void> => {
-      const current = (await client.request<WorkspaceRecord[]>(METHOD_REGISTRY.workspaceList, { includeArchived: true }))
-        .find((workspace) => workspace.workspaceId === turnWorkspace.workspaceId)
-      if (!current) throw new Error('the turn workspace is gone')
-      await client.request(METHOD_REGISTRY.workspaceUpdate, { workspaceId: current.workspaceId, expectedRevision: current.revision, turnChanges: on })
-    }
     const turnStates = async (): Promise<TurnRecordingState[]> =>
       (await client.request<TurnRecordingState[]>(METHOD_REGISTRY.turnChangesState, {})).filter((state) => state.sessionId === turnSessionId)
 
-    // The switch is off: a whole turn's events record nothing.
-    await turnStep({ event: turnEvent('UserPromptSubmit', 'turn-off') })
-    await turnStep({ write: { 'off.txt': 'written while the switch is off\n' } })
-    await turnStep({ event: turnEvent('Stop', 'turn-off') })
-    const turnsWhileOff = await turnRows()
-    const statesWhileOff = await turnStates()
-
-    await turnSwitch(true)
-    const statesWhenOn = await turnStates()
+    // Story 75.4: a new workspace records from the start; nothing switches it on.
+    const statesWhenOn = await (async () => {
+      const end = Date.now() + 5000
+      for (;;) {
+        const now = await turnStates()
+        if (now.length > 0 || Date.now() > end) return now
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+    })()
     // From here the session's pane is on screen: what the header's plate does, it does beside a live terminal.
     type TurnGrid = { cols: number; rows: number; refits: number; inputEvents: number }
     type TurnPlateRead = { full: string; short: string; title: string; gold: string[] }
@@ -4213,8 +4207,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       await turnStep({ event: turnEvent('Stop', turn) })
     }
     const statesWhenPaused = await turnStates()
-    // The card comes by itself, once, under its session's header; it only closes. Resume is in the workspace's menu.
-    const turnPause = await turnPage<{ text: string; buttons: string[]; paused: TurnPlateRead | null; again: boolean; entry: string; grid: TurnGrid }>(`
+    // The card comes by itself, once, under its session's header, and says when BMN tries again; it only closes.
+    // No menu resumes recording (Story 75.4).
+    const turnPause = await turnPage<{ text: string; buttons: string[]; paused: TurnPlateRead | null; again: boolean; entries: string[]; grid: TurnGrid }>(`
       const shown = () => document.querySelector('.session-guard-card[aria-label="Turn changes"]');
       const card = await until(shown, 'the pause card');
       const text = card.textContent;
@@ -4227,40 +4222,51 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const menuButton = await until(() => [...document.querySelectorAll('.workspace-group')]
         .find((group) => group.textContent.includes('Turn agent'))?.querySelector('.row-menu-button'), 'the workspace menu');
       menuButton.click();
-      const resume = await until(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')]
-        .find((row) => row.textContent.trim().startsWith('Resume recording in ')), 'Resume in the menu');
-      const entry = resume.textContent.trim();
-      resume.click();
-      await until(() => plate() === null || !plate().textContent.includes('Paused') ? true : null, 'the pause lifted');
-      return { text, buttons, paused, again, entry, grid: grid() };
+      const menu = await until(() => document.querySelector('.popup-menu'), 'the workspace menu open');
+      const entries = [...menu.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"]')].map((row) => row.textContent.trim());
+      menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await until(() => document.querySelector('.popup-menu') === null ? true : null, 'the workspace menu closed');
+      return { text, buttons, paused, again, entries, grid: grid() };
     `)
-    const statesAfterResume = await turnStates()
+    // A turn before the next try's time is held: it records nothing, though it writes a file.
+    const turnsWhenPaused = (await turnRows()).length
+    await turnStep({ event: turnEvent('UserPromptSubmit', 'turn-7') })
+    await turnStep({ write: { 'c.txt': 'written while paused\n' } })
+    await turnStep({ event: turnEvent('Stop', 'turn-7') })
+    const turnsWhileHeld = (await turnRows()).length
+    const statesWhileHeld = await turnStates()
+    // Its wait passes, as ten minutes would; the next turn is the probe, which reads the work tree and lifts the pause.
+    const turnRetry = (await client.request<{ selfTestTurnsRetryNow: number }>(METHOD_REGISTRY.healthGet, { selfTestTurnsRetryNow: turnSessionId }))
+      .selfTestTurnsRetryNow
+    await turnStep({ event: turnEvent('UserPromptSubmit', 'turn-8') })
+    await turnStep({ write: { 'd.txt': 'four\n' }, event: { ...turnEvent('PostToolUse', 'turn-8'), tool_name: 'Bash', tool_input: {}, tool_response: {} } })
+    await turnStep({ event: turnEvent('Stop', 'turn-8') })
+    const afterProbe = await turnRows()
+    const statesAfterProbe = await turnStates()
     const turnSnapshot = JSON.stringify(await client.request(METHOD_REGISTRY.attentionList, {}))
     const turnTyped = existsSync(join(turnDirectory, 'stdin.log')) ? readFileSync(join(turnDirectory, 'stdin.log')).length : 0
-    await turnSwitch(false)
-    const statesAfterOff = await turnStates()
-    const turnOff = await turnPage<{ off: TurnPlateRead | null; grid: TurnGrid }>(`
-      await until(attended(() => plate()?.textContent.includes('Recording off') ? true : null), 'the plate saying Recording off');
-      const read = { off: words(plate()), grid: grid() };
+    const turnBack = await turnPage<{ read: TurnPlateRead | null; grid: TurnGrid }>(`
+      const read = await until(attended(() => { const now = words(plate()); return now?.full.startsWith('1 file +1 −0') ? now : null }), 'the plate of the probe turn');
+      const back = { read, grid: grid() };
       const selected = ${JSON.stringify(turnShown.selected)};
       if (selected) document.querySelector('button[data-session-id="' + selected + '"]')?.click();
-      return read;
+      return back;
     `)
     await client.request(METHOD_REGISTRY.sessionStop, { sessionId: turnSessionId,
       incarnationId: turnSession.session.lastProcess?.incarnationId, cause: 'explicit' })
     const turnChanges = {
-      turnsWhileOff: turnsWhileOff.length, statesWhileOff, statesWhenOn,
+      statesWhenOn,
       afterStop: afterStop.map((row) => ({ ...row, labels: row.labels.length })),
       afterInterrupt: afterInterrupt.slice(1).map((row) => ({ ...row, labels: row.labels.length })),
       afterThird: afterThird.slice(2).map((row) => ({ ...row, labels: row.labels.length })),
       turnShown, turnRead: { ...turnRead, whole: turnRead.whole.length }, turnGone,
-      statesWhenPaused, turnPause, statesAfterResume, statesAfterOff, turnOff, turnTyped,
+      statesWhenPaused, turnPause, turnsWhenPaused, turnsWhileHeld, statesWhileHeld, turnRetry,
+      afterProbe: afterProbe.slice(-1).map((row) => ({ ...row, labels: row.labels.length })), statesAfterProbe, turnBack, turnTyped,
       error: existsSync(join(turnDirectory, 'error')) ? readFileSync(join(turnDirectory, 'error'), 'utf8') : null
     }
     console.error(`[BMN] self-test phase: turn changes ${JSON.stringify(turnChanges)}`)
     if (turnChanges.error !== null) throw new Error(`the turn stand-in failed: ${turnChanges.error}`)
-    if (turnChanges.turnsWhileOff !== 0 || statesWhileOff.length !== 0) throw new Error('a turn was recorded while the switch was off')
-    if (statesWhenOn[0]?.state !== 'recording') throw new Error(`the switch did not start recording: ${JSON.stringify(statesWhenOn)}`)
+    if (statesWhenOn[0]?.state !== 'recording') throw new Error(`a new workspace did not record from the start: ${JSON.stringify(statesWhenOn)}`)
     const firstTurn = afterStop[0]
     // The stand-in is not Codex, so its version cannot be read: the totals are there and are not called complete.
     if (afterStop.length !== 1 || !firstTurn || firstTurn.state !== 'provisional' || firstTurn.endKind !== 'finished' ||
@@ -4274,13 +4280,26 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       JSON.stringify(secondTurn.totals) !== JSON.stringify({ files: 1, added: 1, removed: 0 })) {
       throw new Error(`an interrupt did not end its turn as interrupted: ${JSON.stringify(afterInterrupt)}`)
     }
-    if (statesWhenPaused[0]?.state !== 'paused' || statesWhenPaused[0]?.pauseReason !== 'failed') {
-      throw new Error(`three failed scans did not pause recording: ${JSON.stringify(statesWhenPaused)}`)
+    // The first try waits ten minutes (Story 75.4).
+    if (statesWhenPaused[0]?.state !== 'paused' || statesWhenPaused[0]?.pauseReason !== 'failed' ||
+      (statesWhenPaused[0]?.retryAt ?? 0) < Date.now() + 5 * 60 * 1000) {
+      throw new Error(`three failed scans did not pause recording until a later try: ${JSON.stringify(statesWhenPaused)}`)
     }
     if (!turnPause.text.includes('Recording what each turn changes is paused here') || !turnPause.text.includes('Three scans in a row failed') ||
+      !turnPause.text.includes('BMN scans nothing here for now and tries again at ') || !turnPause.text.includes('Each try that fails waits longer.') ||
       JSON.stringify(turnPause.buttons) !== JSON.stringify(['×', 'Close']) || turnPause.again || !turnPause.paused?.full.startsWith('Paused') ||
-      turnPause.paused.gold.length !== 0 || !turnPause.entry.startsWith('Resume recording in ')) {
-      throw new Error(`the pause was not shown once on its session, or Resume was not in the workspace's menu: ${JSON.stringify(turnPause)}`)
+      turnPause.paused.gold.length !== 0 || turnPause.entries.length === 0 ||
+      turnPause.entries.some((entry) => /^(Resume recording|Record what each turn changes|Sessions here may message each other)/.test(entry))) {
+      throw new Error(`the pause was not shown once on its session with its next try, or the workspace's menu still switches or resumes: ${JSON.stringify(turnPause)}`)
+    }
+    if (turnsWhileHeld !== turnsWhenPaused || statesWhileHeld[0]?.state !== 'paused') {
+      throw new Error(`a turn before the next try was recorded: ${JSON.stringify({ turnsWhenPaused, turnsWhileHeld, statesWhileHeld })}`)
+    }
+    const probeTurn = afterProbe.at(-1)
+    if (turnRetry !== 1 || statesAfterProbe[0]?.state !== 'recording' || statesAfterProbe[0]?.retryAt !== null ||
+      afterProbe.length !== turnsWhenPaused + 1 || probeTurn?.endKind !== 'finished' ||
+      JSON.stringify(probeTurn.totals) !== JSON.stringify({ files: 1, added: 1, removed: 0 }) || !turnBack.read?.full.startsWith('1 file +1 −0')) {
+      throw new Error(`the probe did not lift the pause and record its turn: ${JSON.stringify({ turnRetry, statesAfterProbe, afterProbe, turnBack })}`)
     }
     // Story 69.5: the plate, the dialog, a file and its difference.
     const thirdTurn = afterThird[2]
@@ -4313,19 +4332,13 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     if (turnGone.gone !== 'No longer kept' || !turnGone.state.includes('Removal pending') || turnGone.empty !== 'No turns yet') {
       throw new Error(`a turn removed while open did not say so: ${JSON.stringify(turnGone)}`)
     }
-    if (!turnOff.off?.full.startsWith('Recording off') || turnOff.off.gold.length !== 0) {
-      throw new Error(`the plate did not say that recording is off: ${JSON.stringify(turnOff)}`)
-    }
     // The plate appearing, changing and going, the dialog and the card: the terminal keeps its grid and gets no byte.
-    for (const [name, grid] of Object.entries({ 'plate shown': turnRead.before, 'dialog read': turnRead.after, 'plate gone': turnGone.grid, paused: turnPause.grid, off: turnOff.grid })) {
+    for (const [name, grid] of Object.entries({ 'plate shown': turnRead.before, 'dialog read': turnRead.after, 'plate gone': turnGone.grid, paused: turnPause.grid, back: turnBack.grid })) {
       if (grid.cols !== turnShown.grid.cols || grid.rows !== turnShown.grid.rows || grid.refits !== turnShown.grid.refits || grid.inputEvents !== turnShown.grid.inputEvents) {
         throw new Error(`turn changes disturbed the terminal (${name}): ${JSON.stringify({ first: turnShown.grid, now: grid })}`)
       }
     }
-    if (statesAfterResume[0]?.state !== 'recording') throw new Error(`Resume did not start recording again: ${JSON.stringify(statesAfterResume)}`)
     if (/paus|Three scans/i.test(turnSnapshot)) throw new Error('the pause reached a request')
-    // With the switch off the session is still listed beside what is kept of it, as off.
-    if (statesAfterOff.length !== 1 || statesAfterOff[0]?.state !== 'off') throw new Error(`the switch did not stop recording: ${JSON.stringify(statesAfterOff)}`)
     if (turnTyped !== 0) throw new Error(`recording a turn wrote ${turnTyped} bytes to its terminal`)
 
     // Epic 26.2: the survival-table endings no automated check had exercised. The two stops run

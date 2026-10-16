@@ -9,6 +9,7 @@ import {
   initializeDatabase,
   type DatabaseConnection
 } from './database-initialization'
+import { createWorkspace, selectWorkspace } from './database-workspace-store'
 import { DATABASE_MIGRATIONS, DEFAULT_WORKSPACE_ID, STORY_SCHEMA_TABLES } from './store-schema'
 
 const testRequire = createRequire(import.meta.url)
@@ -21,9 +22,9 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
-  it('contains the twenty-seven ordered migrations and only the owned tables', () => {
+  it('contains the twenty-eight ordered migrations and only the owned tables', () => {
     expect(DATABASE_MIGRATIONS.map((migration) => migration.version))
-      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27])
+      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
@@ -199,7 +200,7 @@ describe('owned database schema', () => {
           { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 },
           { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 },
           { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 },
-          { version: 26 }, { version: 27 }
+          { version: 26 }, { version: 27 }, { version: 28 }
         ])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
@@ -317,7 +318,7 @@ describe('owned database schema', () => {
           { version: 19, applied_at: migratedAt },
           { version: 20, applied_at: migratedAt }, { version: 21, applied_at: migratedAt },
           { version: 22, applied_at: migratedAt }, { version: 23, applied_at: migratedAt }, { version: 24, applied_at: migratedAt }, { version: 25, applied_at: migratedAt },
-          { version: 26, applied_at: migratedAt }, { version: 27, applied_at: migratedAt }
+          { version: 26, applied_at: migratedAt }, { version: 27, applied_at: migratedAt }, { version: 28, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
@@ -364,7 +365,7 @@ describe('owned database schema', () => {
         state: 'draft'
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
-        .toEqual({ version: 27 })
+        .toEqual({ version: 28 })
     } finally {
       database.close()
     }
@@ -667,7 +668,7 @@ it('adds the reported resume command at version 20, empty for every existing ses
   } finally { database.close() }
 })
 
-it('adds messages between sessions at version 26: off for every existing workspace, on for every existing session (Epic 66)', () => {
+it('adds messages between sessions at version 26, which version 28 turns on for every existing workspace and session (Epic 66, Story 75.4)', () => {
   const database = new BetterSqlite3(':memory:')
   const at = '2026-10-13T00:00:00.000Z'
   try {
@@ -688,8 +689,8 @@ it('adds messages between sessions at version 26: off for every existing workspa
     initializeDatabase(database, '2026-10-13T01:00:00.000Z')
 
     expect(database.prepare('SELECT * FROM workspace WHERE workspace_id = ?').get(DEFAULT_WORKSPACE_ID)).toEqual({
-      ...workspaceBefore, session_messages: 0, session_messages_paused_at: null, session_messages_paused_by: null,
-      session_messages_counted_from: null, turn_changes: 0
+      ...workspaceBefore, session_messages: 1, session_messages_paused_at: null, session_messages_paused_by: null,
+      session_messages_counted_from: null, turn_changes: 1
     })
     expect(database.prepare("SELECT * FROM session WHERE session_id = 'old-a'").get()).toEqual({ ...sessionBefore, receive_messages: 1 })
     expect(database.prepare('SELECT COUNT(*) AS count FROM session_message').get()).toEqual({ count: 0 })
@@ -714,11 +715,11 @@ it('adds messages between sessions at version 26: off for every existing workspa
     expect(database.prepare('SELECT COUNT(*) AS count FROM session_message_pair').get()).toEqual({ count: 0 })
     expect(database.pragma('foreign_key_check')).toEqual([])
     initializeDatabase(database, '2026-10-13T02:00:00.000Z')
-    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 27 })
+    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 28 })
   } finally { database.close() }
 })
 
-it('adds turn changes at version 27: off for every existing workspace, four tables that name no file (Epic 69)', () => {
+it('adds turn changes at version 27, which version 28 turns on for every existing workspace, and four tables that name no file (Epic 69, Story 75.4)', () => {
   const database = new BetterSqlite3(':memory:')
   const at = '2026-10-13T00:00:00.000Z'
   try {
@@ -744,7 +745,7 @@ it('adds turn changes at version 27: off for every existing workspace, four tabl
 
     initializeDatabase(database, '2026-10-13T01:00:00.000Z')
 
-    expect(database.prepare('SELECT * FROM workspace WHERE workspace_id = ?').get(DEFAULT_WORKSPACE_ID)).toEqual({ ...workspaceBefore, turn_changes: 0 })
+    expect(database.prepare('SELECT * FROM workspace WHERE workspace_id = ?').get(DEFAULT_WORKSPACE_ID)).toEqual({ ...workspaceBefore, turn_changes: 1 })
     expect(database.prepare("SELECT * FROM session WHERE session_id = 'old-a'").get()).toEqual(sessionBefore)
     expect(database.prepare("SELECT * FROM session_message WHERE message_id = 'm-1'").get()).toEqual(messageBefore)
     for (const table of ['turn_capture', 'turn_record', 'turn_capture_reference', 'turn_removal_job']) {
@@ -794,6 +795,91 @@ it('adds turn changes at version 27: off for every existing workspace, four tabl
     expect(database.prepare('SELECT COUNT(*) AS count FROM turn_removal_job').get()).toEqual({ count: 2 })
     expect(database.pragma('foreign_key_check')).toEqual([])
     initializeDatabase(database, '2026-10-13T02:00:00.000Z')
-    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 27 })
+    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 28 })
+  } finally { database.close() }
+})
+
+it('turns messages and turn changes on at version 28 for every workspace and session, archived ones and "Receive messages" off included, and lifts the owner\'s pauses only (Story 75.4)', () => {
+  const database = new BetterSqlite3(':memory:')
+  const at = '2026-10-16T00:00:00.000Z'
+  const hourAgo = '2026-10-15T23:00:00.000Z'
+  try {
+    // A copy of a version-27 database: the default workspace with both switches off and the owner's pause; an
+    // archived one with messages on and the hourly limit's pause; sessions shut out of messages, one archived;
+    // and a pair the limit paused.
+    for (const migration of DATABASE_MIGRATIONS.filter((item) => item.version <= 27)) {
+      database.exec(migration.sql)
+      database.prepare('INSERT INTO schema_migration VALUES (?, ?)').run(migration.version, at)
+    }
+    database.prepare(
+      "INSERT INTO workspace(workspace_id, name, default_cwd, archived_at, revision) VALUES ('w-archived', 'Old', NULL, ?, 1)"
+    ).run(at)
+    const insertSession = database.prepare(
+      `INSERT INTO session(session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position)
+       VALUES (?, ?, ?, '/work', '/bin/bash', '[]', 1, ?, ?)`
+    )
+    insertSession.run('old-a', DEFAULT_WORKSPACE_ID, 'A', at, 0)
+    insertSession.run('old-b', DEFAULT_WORKSPACE_ID, 'B', at, 1)
+    insertSession.run('old-c', 'w-archived', 'C', at, 0)
+    database.prepare("UPDATE session SET receive_messages = 0 WHERE session_id IN ('old-b', 'old-c')").run()
+    database.prepare("UPDATE session SET archived_at = ? WHERE session_id = 'old-c'").run(at)
+    database.prepare(
+      `UPDATE workspace SET session_messages_paused_at = ?, session_messages_paused_by = 'owner', session_messages_counted_from = ?
+       WHERE workspace_id = ?`
+    ).run(at, hourAgo, DEFAULT_WORKSPACE_ID)
+    database.prepare(
+      `UPDATE workspace SET session_messages = 1, session_messages_paused_at = ?, session_messages_paused_by = 'limit'
+       WHERE workspace_id = 'w-archived'`
+    ).run(at)
+    database.prepare(
+      "INSERT INTO session_message_pair(workspace_id, first_session_id, second_session_id, paused_at, counted_from) VALUES (?, 'old-a', 'old-b', ?, ?)"
+    ).run(DEFAULT_WORKSPACE_ID, at, hourAgo)
+    const rows = (sql: string) => database.prepare(sql).all() as Array<Record<string, unknown>>
+    const workspacesBefore = rows('SELECT * FROM workspace ORDER BY workspace_id')
+    const sessionsBefore = rows('SELECT * FROM session ORDER BY session_id')
+    const pairsBefore = rows('SELECT * FROM session_message_pair')
+
+    initializeDatabase(database, '2026-10-16T01:00:00.000Z')
+
+    const on = { session_messages: 1, turn_changes: 1 }
+    expect(rows('SELECT * FROM workspace ORDER BY workspace_id')).toEqual([
+      // The owner's pause is lifted; where the hourly count starts stays as it was.
+      { ...workspacesBefore[0], ...on, session_messages_paused_at: null, session_messages_paused_by: null, session_messages_counted_from: hourAgo },
+      // The limit's pause stays, to lift by itself once the count falls.
+      { ...workspacesBefore[1], ...on, session_messages_paused_at: at, session_messages_paused_by: 'limit' }
+    ])
+    expect(rows('SELECT * FROM session ORDER BY session_id')).toEqual(sessionsBefore.map((row) => ({ ...row, receive_messages: 1 })))
+    expect(rows('SELECT * FROM session_message_pair')).toEqual(pairsBefore)
+    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 28 })
+
+    // A workspace created after the upgrade is on, though the column's declared default is still 0; the record
+    // carries no switch.
+    database.transaction(() => createWorkspace(database, { name: 'New' }, 'w-new', at))()
+    expect(database.prepare("SELECT session_messages, turn_changes FROM workspace WHERE workspace_id = 'w-new'").get()).toEqual(on)
+    expect(selectWorkspace(database, 'w-new')).not.toHaveProperty('sessionMessages')
+    expect(selectWorkspace(database, 'w-new')).not.toHaveProperty('turnChanges')
+    // Running it again changes nothing.
+    const after = rows('SELECT * FROM workspace ORDER BY workspace_id')
+    initializeDatabase(database, '2026-10-16T02:00:00.000Z')
+    expect(rows('SELECT * FROM workspace ORDER BY workspace_id')).toEqual(after)
+    expect(database.pragma('foreign_key_check')).toEqual([])
+  } finally { database.close() }
+})
+
+it('starts a fresh database with its default workspace on, and every workspace and session created later (Story 75.4)', () => {
+  const database = new BetterSqlite3(':memory:')
+  const at = '2026-10-16T00:00:00.000Z'
+  try {
+    initializeDatabase(database, at)
+    expect(database.prepare('SELECT session_messages, turn_changes FROM workspace WHERE workspace_id = ?').get(DEFAULT_WORKSPACE_ID))
+      .toEqual({ session_messages: 1, turn_changes: 1 })
+    database.transaction(() => createWorkspace(database, { name: 'Shop' }, 'w-shop', at))()
+    database.prepare(
+      `INSERT INTO session(session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position)
+       VALUES ('s-new', 'w-shop', 'New', '/work', '/bin/bash', '[]', 1, ?, 0)`
+    ).run(at)
+    expect(database.prepare("SELECT session_messages, turn_changes FROM workspace WHERE workspace_id = 'w-shop'").get())
+      .toEqual({ session_messages: 1, turn_changes: 1 })
+    expect(database.prepare("SELECT receive_messages FROM session WHERE session_id = 's-new'").get()).toEqual({ receive_messages: 1 })
   } finally { database.close() }
 })

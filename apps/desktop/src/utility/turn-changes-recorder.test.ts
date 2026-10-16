@@ -4,7 +4,7 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { TURN_LABELS, TURN_PAUSE_REASONS, TURN_WORDINGS } from '@bmn/protocol'
+import { TURN_LABELS, TURN_PAUSE_REASONS, TURN_RETRY_AFTER_MS, TURN_RETRY_MAX_MS, TURN_WORDINGS } from '@bmn/protocol'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import { listTurns, listUnclosedTurns, nextTurnNumber, putTurn, type TurnRow } from './database-turn-store'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
@@ -857,25 +857,68 @@ describe('what a turn says', () => {
 })
 
 describe('the pause', () => {
-  it('pauses a session\'s root after three scans in a row that failed, says so to the window only, and goes on after Resume', async () => {
-    const w = world('pause')
+  it('pauses a session\'s root after three scans in a row that failed, says so to the window only, and probes one turn again after the cooldown, waiting longer after each probe that fails (75.4 AC4)', async () => {
+    let clock = Date.now()
+    const w = world('pause', { now: () => clock })
+    const prompt = (extra: Partial<TurnMarkCall>) => w.prompt({ until: clock + ROOMY, ...extra })
     // The agent stands in a folder that is no repository: every scan fails.
     w.foreground.folder = w.at.base
-    for (const id of ['t-1', 't-2', 't-3']) expect(await w.prompt({ turn: id, folder: w.at.base })).toBe('unavailable')
+    for (const id of ['t-1', 't-2', 't-3']) expect(await prompt({ turn: id, folder: w.at.base })).toBe('unavailable')
     await w.recorder.idle()
     expect(w.turns().map((row) => row.wording)).toEqual([1, 2, 3].map(() => TURN_WORDINGS.beforeUnavailable()))
-    expect(w.recorder.states()).toEqual([{ sessionId: SESSION, state: 'paused', app: 'codex', pausedRoot: w.at.base, pauseReason: 'failed' }])
+    expect(w.recorder.states()).toEqual([{
+      sessionId: SESSION, state: 'paused', app: 'codex', pausedRoot: w.at.base, pauseReason: 'failed', retryAt: clock + TURN_RETRY_AFTER_MS
+    }])
     expect(Object.keys(TURN_PAUSE_REASONS)).toContain('failed')
 
-    expect(await w.prompt({ turn: 't-4', folder: w.at.base })).toBe('paused')
+    // Inside the cooldown nothing is scanned and nothing is recorded.
+    clock += TURN_RETRY_AFTER_MS - 1
+    expect(await prompt({ turn: 't-4', folder: w.at.base })).toBe('paused')
     await w.recorder.idle()
     expect(w.turns()).toHaveLength(3)
 
-    expect(w.recorder.resume(SESSION)).toBe(true)
-    expect(w.recorder.states()).toEqual([{ sessionId: SESSION, state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null }])
-    w.foreground.folder = w.at.repo
-    expect(await w.prompt({ turn: 't-5' })).toBe('captured, confirmed')
+    // Its time come, one turn is scanned as the probe: it fails, and the next wait is twice as long. The turn after it waits.
+    clock += 1
+    expect(await prompt({ turn: 't-5', folder: w.at.base })).toBe('unavailable')
+    await w.recorder.idle()
     expect(w.turns()).toHaveLength(4)
+    expect(w.recorder.states()[0]).toMatchObject({ state: 'paused', retryAt: clock + 2 * TURN_RETRY_AFTER_MS })
+    expect(await prompt({ turn: 't-6', folder: w.at.base })).toBe('paused')
+
+    // Each probe that fails doubles the wait, up to the longest.
+    for (const wait of [4 * TURN_RETRY_AFTER_MS, 8 * TURN_RETRY_AFTER_MS, TURN_RETRY_MAX_MS, TURN_RETRY_MAX_MS]) {
+      clock = w.recorder.states()[0]!.retryAt!
+      expect(await prompt({ turn: `probe-${wait}-${clock}`, folder: w.at.base })).toBe('unavailable')
+      await w.recorder.idle()
+      expect(w.recorder.states()[0]).toMatchObject({ state: 'paused', retryAt: clock + wait })
+    }
+
+    // The work tree reads again: the next probe reads it, the pause lifts, and the turns after it are recorded as before.
+    w.foreground.folder = w.at.repo
+    clock = w.recorder.states()[0]!.retryAt!
+    expect(await prompt({ turn: 't-ok' })).toBe('captured, confirmed')
+    await w.recorder.idle()
+    expect(w.recorder.states()).toEqual([{ sessionId: SESSION, state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null, retryAt: null }])
+    expect(await w.end({ turn: 't-ok' })).toBe('queued')
+    expect(await prompt({ turn: 't-next' })).toBe('captured, confirmed')
+  })
+
+  it('starts over after a restart: the first turn of a new run scans a work tree an earlier run had paused (75.4 AC4)', async () => {
+    const w = world('pause-restart')
+    w.foreground.folder = w.at.base
+    for (const id of ['t-1', 't-2', 't-3']) expect(await w.prompt({ turn: id, folder: w.at.base })).toBe('unavailable')
+    expect(w.recorder.states()[0]).toMatchObject({ state: 'paused', pausedRoot: w.at.base })
+
+    // BMN restarts: the pause lived in that run only.
+    await w.recorder.idle()
+    const restarted = new TurnRecorder(w.recorder['options'])
+    restarted.setSwitches(new Set([SESSION]))
+    w.foreground.folder = w.at.repo
+    const call = { sessionId: SESSION, incarnationId: 'i-2', requestId: 'after-restart', app: 'codex', conversation: CONVERSATION, turn: 't-9', kind: null, continued: false }
+    expect(await restarted.mark({ ...call, edge: 'start', folder: w.at.repo, until: Date.now() + ROOMY })).toBe('captured')
+    expect(await restarted.mark({ ...call, edge: 'confirm', folder: null, until: null })).toBe('confirmed')
+    await restarted.idle()
+    expect(restarted.states()).toEqual([{ sessionId: SESSION, state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null, retryAt: null }])
   })
 
   it('counts incomplete scans that read nothing new, and not the one that read on', async () => {
@@ -1015,7 +1058,7 @@ describe('the app now running (Story 69.5)', () => {
   it('reads "not supported" for an app BMN does not record while that program holds the terminal, and no longer once it has gone', async () => {
     const w = world('app-now')
     await turn(w, 'a.txt', 'one\n')
-    expect(w.recorder.states()).toEqual([{ sessionId: SESSION, state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null }])
+    expect(w.recorder.states()).toEqual([{ sessionId: SESSION, state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null, retryAt: null }])
 
     // Another program takes the terminal; until its own hook speaks nothing is known of it.
     w.foreground.identity = '34817:7002:900:1:3'
@@ -1040,7 +1083,7 @@ describe('the app now running (Story 69.5)', () => {
     expect(w.turns()).toHaveLength(1)
   })
 
-  it('says paused before anything else, and hears nothing of a session whose switch is off', async () => {
+  it('says paused before anything else, and hears nothing of a session of an archived workspace', async () => {
     const w = world('app-paused')
     w.foreground.folder = w.at.base
     for (const turnId of ['t-1', 't-2', 't-3']) expect(await w.prompt({ turn: turnId, folder: w.at.base })).toBe('unavailable')

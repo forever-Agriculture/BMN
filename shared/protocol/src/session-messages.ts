@@ -4,7 +4,7 @@ import { stripFormatCharacters } from './file-reference'
 
 /** The longest message text, counted after invisible and direction-changing characters are removed. */
 export const SESSION_MESSAGE_MAX_CHARACTERS = 2000
-/** How long BMN hands a waiting message over by itself; afterwards only the owner's Paste delivers it. */
+/** How long BMN hands a waiting message over by itself; afterwards no route delivers it. */
 export const SESSION_MESSAGE_EXPIRY_MS = 2 * 60 * 60 * 1000
 /** The shortest time between two sends a session is allowed. */
 export const SESSION_MESSAGE_SEND_GAP_MS = 30_000
@@ -14,9 +14,12 @@ export const SESSION_MESSAGE_MAX_WAITING = 5
 export const SESSION_MESSAGE_LIST_LIMIT = 200
 /** The window the two hourly limits count in, from the stored messages' times. */
 export const SESSION_MESSAGE_HOUR_MS = 60 * 60 * 1000
-/** Messages two sessions may exchange inside an hour; the next one is refused and pauses the pair. */
+/**
+ * Messages two sessions may exchange inside an hour; the next one is refused and pauses the pair until fewer
+ * than this many lie inside the last hour (Story 75.4).
+ */
 export const SESSION_MESSAGE_PAIR_HOURLY = 12
-/** Messages a workspace may hold inside an hour; the next one is refused and pauses the workspace. */
+/** Messages a workspace may hold inside an hour; the next one is refused and pauses the workspace the same way. */
 export const SESSION_MESSAGE_WORKSPACE_HOURLY = 40
 /**
  * The longest the host lets "does a message wait for this session" hold back its answer to a hook's report of
@@ -26,10 +29,11 @@ export const SESSION_MESSAGE_WORKSPACE_HOURLY = 40
 export const SESSION_MESSAGE_WAITING_CHECK_MS = 150
 /** The one wording for every destination `bmn peers` would not list to the caller: it reveals nothing about why. */
 export const SESSION_MESSAGE_NOT_A_PEER = 'That session is not one of your peers; run bmn peers'
-export const SESSION_MESSAGES_OFF = 'Messages are off in this workspace'
-export const SESSION_MESSAGES_PAUSED = 'Messages are paused in this workspace until the owner resumes them'
+/** An archived session, or a session of an archived workspace, sends nothing and is nobody's peer. */
+export const SESSION_MESSAGES_OFF = 'This session or its workspace is archived; it sends no messages'
+export const SESSION_MESSAGES_PAUSED = 'Messages are paused in this workspace by its hourly limit; they are allowed again when the count falls'
 
-/** The two lines the switch's help says, wherever the switch is shown. */
+/** What Messages says about messages in a workspace: they are on in every one (Story 75.4). */
 export const SESSION_MESSAGES_HELP = [
   "Agents in this workspace can see each other's session names and leave each other short messages.",
   'A message can influence an agent that runs with wider permissions than its sender.'
@@ -38,7 +42,7 @@ export const SESSION_MESSAGES_HELP = [
 /**
  * The apps whose own hook hands a waiting message to its agent after a tool call, with the version that was
  * measured on (docs/session-messages.md). `bin/agents-guard.mjs` `MESSAGE_HANDOVER` holds the same record for the
- * hook itself; a test holds the two together. An app that is not here receives only through the owner's Paste.
+ * hook itself; a test holds the two together. A message to a session whose agent is not here is refused (Story 75.4).
  */
 export const SESSION_MESSAGE_HANDOVER: Readonly<Record<string, { event: string; version: string } | undefined>> = Object.freeze({
   claude: { event: 'PostToolUse', version: '2.1.296' },
@@ -46,8 +50,9 @@ export const SESSION_MESSAGE_HANDOVER: Readonly<Record<string, { event: string; 
 })
 
 /**
- * Where a message stands. `waiting` reads "expired" once its time has passed; `paste-uncertain` is an owner's
- * Paste that was claimed and not confirmed; `taken` and `printed` belong to the hook hand-over (Story 66.4).
+ * Where a message stands. `waiting` reads "expired" once its time has passed; `taken` and `printed` belong to the
+ * hook hand-over (Story 66.4). `paste-uncertain` and `pasted` were the owner's Paste, gone in Story 75.4: a message
+ * stored with either still reads as it did.
  */
 export const SESSION_MESSAGE_STATES = ['waiting', 'paste-uncertain', 'pasted', 'taken', 'printed'] as const
 export type SessionMessageState = (typeof SESSION_MESSAGE_STATES)[number]
@@ -93,14 +98,19 @@ export interface SessionMessagePairPause {
   secondSessionId: string
   secondName: string
   pausedAt: string
+  /** When enough of the pair's messages have left the last hour for the next one to be allowed. */
+  until: string
 }
 
 /** What the Messages dialog of one workspace reads. */
 export interface SessionMessageListing {
   /** Newest first, at most `SESSION_MESSAGE_LIST_LIMIT`. */
   messages: SessionMessageListRow[]
-  /** Set while new messages are refused in the whole workspace: by the owner's press, or by the hourly limit. */
-  workspacePause: { at: string; by: 'owner' | 'limit' } | null
+  /**
+   * Set while the hourly limit refuses new messages in the whole workspace, with the moment enough messages have
+   * left the last hour for the next one to be allowed. It lifts by itself (Story 75.4).
+   */
+  workspacePause: { at: string; until: string } | null
   pairPauses: SessionMessagePairPause[]
 }
 
@@ -173,8 +183,35 @@ export interface SessionMessageReceipt {
 export interface SessionPeer {
   sessionId: string
   name: string
-  /** The agent app BMN last saw in that session, or null when it has seen none. */
+  /** The agent app in front in that session's terminal now, or null when none is (Story 75.4). */
   app: string | null
+}
+
+/**
+ * What holds a session's terminal now, as a message to it sees it (Story 75.4): the agent whose own hook
+ * reported from the very process in front, not the last app seen there. An agent that exited into its
+ * still-running shell leaves the shell in front, which is no agent.
+ */
+export type SessionAgentNow =
+  | { state: 'stopped' }
+  | { state: 'shell' }
+  /** A program in front whose own hook has reported nothing to BMN. */
+  | { state: 'program' }
+  | { state: 'agent'; app: string }
+
+/**
+ * Why a message to a session with this in front is refused, or null when its agent's own hook hands messages
+ * over. Asked after the peer check, so it says nothing about a session the sender may not message.
+ */
+export function sessionMessageReceiverRefusal(foreground: SessionAgentNow, appName: (app: string) => string): string | null {
+  switch (foreground.state) {
+    case 'stopped': return 'That session is stopped; nothing was sent'
+    case 'shell': return 'That session runs no agent now, only its shell; nothing was sent'
+    case 'program': return 'That session runs no agent whose hook BMN has heard from; nothing was sent'
+    case 'agent': return SESSION_MESSAGE_HANDOVER[foreground.app] === undefined
+      ? `That session runs ${appName(foreground.app)}, which takes no messages; nothing was sent`
+      : null
+  }
 }
 
 /** The word the owner and the sender read for a message's state at `now`. */

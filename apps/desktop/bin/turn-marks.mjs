@@ -81,9 +81,9 @@ export function turnMark(agent, event) {
 }
 
 /**
- * Whether the owner switched recording on for this session's workspace, as BMN wrote it down beside its
- * control socket: with the switch off the hook sends no mark at all. BMN decides again when a mark arrives;
- * this only spares a prompt the call.
+ * Whether BMN records this session, as it wrote it down beside its control socket: every session of an
+ * unarchived workspace since Story 75.4. Without the file the hook sends no mark at all. BMN decides again
+ * when a mark arrives; this only spares a prompt the call.
  */
 export function turnMarksWanted(socketPath, sessionId) {
   if (typeof socketPath !== 'string' || typeof sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(sessionId)) return false
@@ -100,5 +100,5 @@ export function turnStanding(agent) {
   const app = APP_NAMES[agent] ?? agent
   const measured = TURN_MARKS[agent]
   if (measured === undefined) return `turn changes: not recorded for ${app}; it was not measured to wait for its prompt hook`
-  return `turn changes: recorded where a workspace's switch is on (waiting for the prompt hook measured on ${app} ${measured.version})`
+  return `turn changes: recorded in every workspace that is not archived (waiting for the prompt hook measured on ${app} ${measured.version})`
 }

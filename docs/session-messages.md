@@ -1,6 +1,6 @@
 # Messages between sessions: what a hook can hand its own agent
 
-With a workspace's switch on, an agent in one session can leave a short message for another
+An agent in one session can leave a short message for another in the same workspace
 (`bmn tell`; [agent-control.md](agent-control.md#messages-between-sessions)). BMN never types a
 message with Enter. A working agent gets one from its own app's hook, which may add text to what
 the agent reads after a tool call. This page records, per app and version, whether that is proven
@@ -20,10 +20,11 @@ raw records are kept under `_bmad-output/planning-artifacts/reference-66-session
 | OpenCode | no hand-over: BMN cannot tell where they send work | does not apply |
 
 A PASS needs five runs with no doubled, cut or lost text. An agent of an app without PASS can
-send, and receives only through the owner's **Paste** in **Messages…**.
+send; since Story 75.4 a message to it is refused to its sender with the reason, as one to a plain
+shell or a stopped session is, and nobody pastes one.
 
 Both apps hold PASS, and each app's agent runs `bmn` from its own shell tool (below), so a message
-can travel either way between a Claude Code agent and a Codex agent without the owner's Paste. For
+can travel either way between a Claude Code agent and a Codex agent with nobody passing it on. For
 each app these records also hold one real message from end to end: `bmn tell` typed in a second
 session's shell, handed to the working agent by BMN's own hook (below). A message written by one
 app's agent and handed to the other's on an installed build is not in these records.

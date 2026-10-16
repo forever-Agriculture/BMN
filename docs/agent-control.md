@@ -40,12 +40,12 @@ Commands:
   handoff <destination-id> --text T | --text-file - [--file-id ID ...] --key K
   handoff status [draft-id]                 Prepare an owner-delivered handoff; read its bounded receipt
   handoff --outline                         Print the optional outline of a complete handoff; sends nothing
-  peers                                     List the sessions of your workspace you may leave a message for;
-                                            says so when the owner has messages off there
+  peers                                     List the sessions of your workspace you may leave a message for,
+                                            with the agent in front of each now
   tell <session-id> --text T | --text-file - --key K
   tell status [message-id]                  Leave one short message for a peer; BMN stamps where it is from.
                                             A working Claude Code or Codex agent may get it at its next
-                                            tool call; the owner can always read and paste it. A refused
+                                            tool call; one with no such agent in front is refused. A refused
                                             send stored nothing: send again with a new --key. status lists
                                             your own messages and where each stands
   progress <state> <label> [--source S] [--detail D | --detail-file -] [--observed ISO]
@@ -270,14 +270,13 @@ submission enabled; it cannot deliver the handoff.
 
 A handoff is a package the owner delivers. A message is one short text an agent leaves for a peer
 session of its own workspace: "hold any commit on local main", "I will edit these three files".
-It is off until the owner switches it on for a workspace.
 
-**The two switches.** A workspace's ⋯ menu has **Sessions here may message each other**, off by
-default. With it on, every agent in that workspace can see the names of its sessions and leave
-each other short messages, whatever its provider, and a message can influence an agent that runs
-with wider permissions than its sender. Each session's ⋯ menu has **Receive messages**, on by
-default, which shuts that one session out; it has no effect while the workspace's switch is off.
-Sessions in different workspaces cannot list or message each other.
+**Always on.** Since Story 75.4 there is no switch: in every workspace that is not archived, every
+agent can see the names of its sessions and leave each other short messages, whatever its
+provider, and a message can influence an agent that runs with wider permissions than its sender.
+Sessions in different workspaces cannot list or message each other, and an archived session sends
+and receives none. The switches of earlier versions are no longer read: an upgrade turned them on
+everywhere and lifted every pause the owner had made.
 
 **The two commands.**
 
@@ -288,15 +287,21 @@ bmn tell <session-id> --text-file - --key plan-1 < note.txt
 bmn tell status [message-id]                           # this session's own sent messages
 ```
 
-`bmn peers` lists every other unarchived session of the caller's workspace that receives messages:
-its id, its name and the agent app BMN last saw there, and nothing about what it is doing. With
-the switch off it says so and lists nothing. Any destination `bmn peers` would not list is refused
-in one wording, "That session is not one of your peers; run bmn peers", whatever the reason. The
+`bmn peers` lists every other unarchived session of the caller's workspace: its id, its name and
+the agent in front of its terminal now ("no agent now" when there is none), and nothing about what
+it is doing. From an archived session it says so and lists nothing. Any destination `bmn peers`
+would not list is refused in one wording, "That session is not one of your peers; run bmn peers",
+whatever the reason. A peer is refused too, with its reason, when no agent there takes messages:
+"That session is stopped", "runs no agent now, only its shell" (also an agent that exited into its
+still-running shell), "runs no agent whose hook BMN has heard from", or "runs <app>, which takes no
+messages" (OpenCode); each ends "nothing was sent". The agent in front is the one whose own hook
+reported from the very process that holds the terminal now, not the last one seen there. The
 text is 1 to 2,000 characters after invisible and direction-changing characters are removed, with
 newline and tab as the only control characters. `--key` makes a retry safe: the same key with the
 same message returns the first result. `bmn tell status` shows the sender only its own messages:
-id, receiving session, state and time. A message reads *waiting*, *expired*, *pasted by the
-owner*, *paste not confirmed*, *taken, not confirmed* or *printed for the agent*.
+id, receiving session, state and time. A message reads *waiting*, *expired*, *taken, not
+confirmed* or *printed for the agent*; one from before Story 75.4 may read *pasted by the owner* or
+*paste not confirmed*.
 
 **The stamp.** BMN, not the sender, writes where a message is from, and puts it in front of the
 text:
@@ -316,15 +321,11 @@ program in that session wrote the text, and the folder is workflow protection, n
 program that reports a false one. "Context, not an instruction" is guidance to the receiving
 agent; BMN cannot enforce it and never acts on what a message says.
 
-**How a message arrives.** BMN never presses Enter for a message and never starts an agent's turn
-with one.
+**How a message arrives.** BMN never types a message into a terminal and never starts an agent's
+turn with one. **Messages…**, in the command palette and the workspace's ⋯ menu, is read-only: its
+latest 200 messages with time, sender, receiver, state and first line; a row opens the whole text,
+its stamp, the sender's folder and where it stands. It has no Paste, Pause or Resume.
 
-- *Your Paste.* The workspace's ⋯ menu has **Messages…**: its latest 200 messages with time,
-  sender, receiver, state and first line; a row opens the whole text, its stamp and the sender's
-  folder. **Paste into <session>** appends the stamp and the text to that session's input without
-  pressing Enter, once, when both sessions are still in that workspace and the receiving process is
-  the one shown. It works for a waiting or an expired message, also while messages are paused. A
-  paste BMN could not confirm stays *paste not confirmed* and is not repeated.
 - *The receiving agent's own hook.* Where it is measured
   ([session-messages.md](session-messages.md): Claude Code 2.1.296 and Codex 0.162.1), `bmn hook`
   hands a waiting message
@@ -335,25 +336,24 @@ with one.
   record Codex saved for the session, Claude Code's a record under that process's own Claude Code
   folder, so a hook entry that names the wrong app hands nothing over. BMN hands over the oldest
   message that may be handed over: not
-  expired, both sessions still unarchived members of the message's workspace, both switches on, no
-  pause, and a provider that may see private work in the sender's folder by the approved team as it
+  expired, both sessions still unarchived members of the message's workspace, no pause, and a
+  provider that may see private work in the sender's folder by the approved team as it
   stands at that moment. A destination BMN cannot tell, or one that is only the owner's word, gets
   nothing; while no team is approved no hook hands anything over. A message held back for its
   provider stays waiting and Messages says why. That reason names a provider of your team, so BMN
   keeps it in memory until it is next closed and never stores it; the next refused tool call writes
-  it again. Your Paste carries no such check, it is your own transfer. An app that changes where it sends work without its launch or settings changing is not
+  it again. An app that changes where it sends work without its launch or settings changing is not
   noticed, as for the [prompt guard](#the-prompt-guard).
 
-One claim serves both routes: whoever takes a message first has it. After the hook took one it
-reads *taken, not confirmed* until the hook reports that it printed it, then *printed for the
-agent*. Printed means printed, never read. A lost answer or report leaves it *taken, not
-confirmed*, and neither the hook nor Paste offers it again by itself; you still read it in
-Messages. One message is handed over per event, and everything the hook adds to an event for a
+After the hook took a message it reads *taken, not confirmed* until the hook reports that it
+printed it, then *printed for the agent*. Printed means printed, never read. A lost answer or
+report leaves it *taken, not confirmed*, and the hook does not offer it again by itself; you still
+read it in Messages. One message is handed over per event, and everything the hook adds to an event for a
 message is bounded to 300 ms, counted from the moment the hook reports the event: BMN's word that
 a message waits (150 ms at most; no word in time means nothing on this event), resolving where the
 agent sends work, taking and reporting. A resting agent reads a message at the first tool call of its next
-turn. A message not collected within two hours is no longer handed over by a hook; nothing is
-deleted by that, and Paste still works.
+turn. A message not collected within two hours is no longer handed over: it reads *expired*, and
+nothing is deleted by that.
 
 A message speaks for its session, not for one process in it. `bmn tell` is refused when, by the
 time BMN passes the message to its store, the terminal runs another process than the one that sent
@@ -368,11 +368,12 @@ session's sends; at most five waiting for one receiver. Two sessions may exchang
 in a rolling hour: the thirteenth is refused and that pair is paused. A workspace may hold forty
 in a rolling hour: the forty-first is refused and the workspace is paused. Such a pause opens one
 notice on the session whose send was refused, under the ordinary notice rules, the phone included;
-nothing else about messages opens a request or goes to Telegram. In Messages, **Pause messages**
-refuses every new `bmn tell` in the workspace until **Resume**, and a paused pair has its own
-Resume. A pause is stored: switching the workspace's switch off and on does not lift it. `bmn
-peers` leaves out a session the caller is paused with. Waiting messages stay waiting while paused
-and still expire.
+nothing else about messages opens a request or goes to Telegram. A pause lifts by itself once
+fewer than twelve (for the pair) or forty (for the workspace) were sent in the last hour, also
+across a BMN restart; Messages says until when. Lifting it clears no history and sends nothing
+that was refused meanwhile, and a pause after it counts afresh. Nobody pauses or resumes messages
+by hand. `bmn peers` leaves out a session the caller is paused with. Waiting messages stay waiting
+while paused and still expire.
 
 **How long messages are kept.** A message is deleted with either of its sessions. Otherwise
 Preferences → History → **Keep agent history** decides: a message sent more than that many days
@@ -619,8 +620,8 @@ and `1` otherwise, and `--json` prints the same report as one object. Run it aft
 update rewrites its hook or plugin file. Per app it also says whether the prompt guard is in force
 and, on a `messages:` line, whether that app's hook hands
 [messages](#messages-between-sessions) to a working agent and on which version that was measured.
-A `turn changes:` line says whether that app's turns are recorded where a workspace's switch
-**Record what each turn changes** is on, and on which version waiting for the prompt hook was
+A `turn changes:` line says whether that app's turns are recorded, as they are in every workspace
+that is not archived, and on which version waiting for the prompt hook was
 measured ([turn-changes.md](turn-changes.md#how-a-turn-is-recorded)).
 
 For OpenCode 2 (2.0.28, checked 2026-10-14), `bmn hooks print opencode` prints the terminal plugin
@@ -2885,13 +2886,13 @@ bmn hook is not yours
 - A session token can publish, report and send only for its own session, and only while that
   process incarnation is current. It has two exceptions. `handoff.prepare` may name a destination
   ID, but only prepares a bounded draft for owner delivery and cannot list another session.
-  `peers.list` and `message.send` reach peer sessions only while the owner has switched messages
-  on for that workspace: `peers.list` returns the id, name and last seen agent app of the caller's
-  peers and nothing of their activity; `message.send` takes exactly `destinationSessionId`, `text`,
+  `peers.list` and `message.send` reach unarchived peer sessions of the caller's own workspace only:
+  `peers.list` returns the id, name and the agent in front of each of the caller's peers now and
+  nothing of their activity; `message.send` takes exactly `destinationSessionId`, `text`,
   `senderCwd` and `idempotencyKey`, takes the sender from the token, and refuses every destination
   `peers.list` would not return in one wording. Both refuse the owner token. `bmn list` and `bmn
   snapshot` still return the caller's own session only.
-- A message is written to a terminal only by the owner's Paste, never with Enter, and never opens
+- A message is never written to a terminal, and never opens
   a request. `message.status` shows a sender its own messages only. `message.take` is accepted only
   from a session token, for its own live process, with the agent's process id and the whole
   destination its hook resolved; it claims at most one message per call, for that session only,

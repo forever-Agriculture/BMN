@@ -1,4 +1,4 @@
-// MODULE: turn-changes-host.test.ts - turn changes in the host, through its real control socket: the workspace's switch, a turn from a hook's marks, the pause that only the window sees, and no file name or content in anything a token can read
+// MODULE: turn-changes-host.test.ts - turn changes in the host, through its real control socket: on in every unarchived workspace, a turn from a hook's marks, the pause that only the window sees and that lifts by itself, and no file name or content in anything a token can read
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createConnection } from 'node:net'
@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  ERROR_CODES, METHOD_REGISTRY, TURN_FILES_LIMIT, TURN_LABELS, TURN_LIST_LIMIT, TURN_SECRET_PLATE, TURN_SWITCH_FOLDER, TURN_WORDINGS,
+  ERROR_CODES, METHOD_REGISTRY, TURN_FILES_LIMIT, TURN_LABELS, TURN_LIST_LIMIT, TURN_RETRY_AFTER_MS, TURN_SECRET_PLATE, TURN_SWITCH_FOLDER, TURN_WORDINGS,
   type AppEventMessage, type TurnDetail, type TurnDetailAnswer, type TurnDifferenceAnswer, type TurnSessionView, type TurnShownLine, type TurnSummary
 } from '@bmn/protocol'
 import { CompanionService } from './companion-service'
@@ -85,7 +85,8 @@ interface Host {
   mark: (params: Record<string, unknown>) => Promise<string>
   /** A prompt as the hook sends it: the mark and, when BMN holds a "before", the confirmation on the same connection. */
   prompt: (turn: string, folder?: string) => Promise<string>
-  switchOn: (on: boolean, workspaceId?: string) => Promise<void>
+  /** Records in the workspace while it is unarchived, and not once it is archived (Story 75.4). */
+  recordHere: (on: boolean, workspaceId?: string) => Promise<void>
   idle: () => Promise<void>
   turns: () => TurnRow[]
   states: () => Promise<TurnSessionView[]>
@@ -165,9 +166,9 @@ async function host(name: string, wrap: (port: TurnChangesPort) => TurnChangesPo
       heard.push(JSON.stringify(answers))
       return answers.map((answer) => (answer.result as { status: string }).status).join(', ')
     },
-    switchOn: async (on, workspaceId = DEFAULT_WORKSPACE_ID) => {
+    recordHere: async (on, workspaceId = DEFAULT_WORKSPACE_ID) => {
       const workspace = selectWorkspace(database, workspaceId)
-      updateWorkspace(database, { workspaceId, expectedRevision: workspace?.revision ?? 1, turnChanges: on }, NOW)
+      if ((workspace.archivedAt === null) !== on) updateWorkspace(database, { workspaceId, expectedRevision: workspace.revision, archived: !on }, NOW)
       await service.sessionsChanged()
     },
     idle: () => (service['turns'] as { idle: () => Promise<void> }).idle(),
@@ -189,31 +190,33 @@ afterEach(async () => {
   }
 })
 
-describe('the workspace\'s switch', () => {
-  it('is off until it is set, stored per workspace, and old data loads as off', async () => {
+describe('where turns are recorded (Story 75.4)', () => {
+  it('records in every unarchived workspace with no switch, a workspace from before included, and in no archived one', async () => {
     const h = await host('switch')
     const hint = join(dirname(h.socket), TURN_SWITCH_FOLDER, 's1')
+    // The migration set every row on; even a row put back to 0 by hand records, because nothing reads the column.
+    expect(h.database.prepare('SELECT turn_changes FROM workspace WHERE workspace_id = ?').get(DEFAULT_WORKSPACE_ID)).toEqual({ turn_changes: 1 })
+    h.database.prepare('UPDATE workspace SET turn_changes = 0').run()
+    await h.service.sessionsChanged()
     expect(selectWorkspace(h.database, DEFAULT_WORKSPACE_ID)).not.toHaveProperty('turnChanges')
+    expect(existsSync(hint)).toBe(true)
+    expect(await h.states()).toEqual([{ sessionId: 's1', state: 'recording', app: null, pausedRoot: null, pauseReason: null, retryAt: null, latest: null, removalPending: false }])
+    expect(h.emitted).toContainEqual({ kind: 'app-event', topic: 'turns', sessionId: null })
+
+    await h.recordHere(false)
     expect(existsSync(hint)).toBe(false)
     expect(await h.states()).toEqual([])
     expect(await h.mark({ edge: 'start', until: Date.now() + 5_000, turn: 't-1', folder: h.at.repo })).toBe('off')
-
-    await h.switchOn(true)
-    expect(selectWorkspace(h.database, DEFAULT_WORKSPACE_ID)).toMatchObject({ turnChanges: true })
+    await h.recordHere(true)
     expect(existsSync(hint)).toBe(true)
-    expect(await h.states()).toEqual([{ sessionId: 's1', state: 'recording', app: null, pausedRoot: null, pauseReason: null, latest: null, removalPending: false }])
-    expect(h.emitted).toContainEqual({ kind: 'app-event', topic: 'turns', sessionId: null })
-
-    await h.switchOn(false)
-    expect(existsSync(hint)).toBe(false)
-    expect(selectWorkspace(h.database, DEFAULT_WORKSPACE_ID)).not.toHaveProperty('turnChanges')
   })
 
-  it('closes an open turn as switched off when its session moves to a workspace whose switch is off', async () => {
+  it('closes an open turn as switched off when its session moves into an archived workspace', async () => {
     const h = await host('moved')
-    await h.switchOn(true)
+    await h.recordHere(true)
     expect(await h.prompt('t-1')).toBe('captured, confirmed')
     const other = createWorkspace(h.database, { name: 'Other', defaultCwd: h.at.base }, 'workspace-other', NOW)
+    updateWorkspace(h.database, { workspaceId: other.workspaceId, expectedRevision: other.revision, archived: true }, NOW)
     h.database.prepare('UPDATE session SET workspace_id = ? WHERE session_id = ?').run(other.workspaceId, 's1')
     await h.service.sessionsChanged()
     await h.idle()
@@ -224,7 +227,7 @@ describe('the workspace\'s switch', () => {
 
   it('closes an open turn when its session\'s process ends', async () => {
     const h = await host('exited')
-    await h.switchOn(true)
+    await h.recordHere(true)
     expect(await h.prompt('t-1')).toBe('captured, confirmed')
     write(h.at.repo, 'a.txt', 'one\n')
     await sleep(25)
@@ -238,7 +241,7 @@ describe('the workspace\'s switch', () => {
 describe('a turn through the control socket', () => {
   it('records prompt, write and stop as one turn with those files, from a hook\'s marks and events alone', async () => {
     const h = await host('socket-turn')
-    await h.switchOn(true)
+    await h.recordHere(true)
     expect(await h.prompt('t-1')).toBe('captured, confirmed')
     write(h.at.repo, 'a.txt', 'one\ntwo\n')
     await sleep(25)
@@ -256,7 +259,7 @@ describe('a turn through the control socket', () => {
 
   it('cancels a "before" whose connection closes before the confirmation', async () => {
     const h = await host('socket-drop')
-    await h.switchOn(true)
+    await h.recordHere(true)
     const held = await ask(h.socket, h.session, [['turn.mark', {
       requestId: 'held', app: 'codex', conversation: CONVERSATION, turn: 't-1', edge: 'start', until: Date.now() + 5_000, folder: h.at.repo
     }]], true)
@@ -271,7 +274,7 @@ describe('a turn through the control socket', () => {
 describe('what a token can read', () => {
   it('holds no file name and no content of a capture, whether scans succeed or fail, for a session and for the owner', async () => {
     const h = await host('markers')
-    await h.switchOn(true)
+    await h.recordHere(true)
     write(h.at.repo, `${MARKER}-name-tracked.txt`, `${MARKER}-content-tracked\n`)
     h.at.git(h.at.repo, 'add', '-A')
     h.at.git(h.at.repo, 'commit', '-qm', 'made-up second')
@@ -329,14 +332,16 @@ describe('what a token can read', () => {
     expect(h.heard.join('\n')).not.toContain(elsewhere)
   })
 
-  it('shows a pause in the window only: no request, no snapshot, no notice, and Resume sets the count back', async () => {
+  it('shows a pause in the window only, with when BMN tries again: no request, no snapshot, no notice, and no route to resume it', async () => {
     const h = await host('held')
-    await h.switchOn(true)
+    await h.recordHere(true)
     h.foreground.folder = h.at.base
     for (const turn of ['t-1', 't-2', 't-3']) expect(await h.prompt(turn, h.at.base)).toBe('unavailable')
     await h.idle()
 
-    expect(await h.states()).toMatchObject([{ sessionId: 's1', state: 'paused', app: 'codex', pausedRoot: h.at.base, pauseReason: 'failed' }])
+    const [paused] = await h.states()
+    expect(paused).toMatchObject({ sessionId: 's1', state: 'paused', app: 'codex', pausedRoot: h.at.base, pauseReason: 'failed' })
+    expect(paused!.retryAt! - Date.now()).toBeGreaterThan(TURN_RETRY_AFTER_MS - 60_000)
     expect(await h.prompt('t-4', h.at.base)).toBe('paused')
     expect(await h.service.route(METHOD_REGISTRY.attentionList, {})).toEqual([])
     for (const token of [h.session, h.owner]) {
@@ -344,18 +349,12 @@ describe('what a token can read', () => {
       expect(snapshot).not.toMatch(/paus|Three scans|recording/i)
     }
     expect(h.emitted.filter((event) => event.topic === 'attention')).toEqual([])
-
-    expect(await h.service.route(METHOD_REGISTRY.turnChangesResume, { sessionId: 's1' })).toEqual({ resumed: true })
-    expect(await h.states()).toMatchObject([{ sessionId: 's1', state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null }])
-    expect(await h.service.route(METHOD_REGISTRY.turnChangesResume, { sessionId: 's1' })).toEqual({ resumed: false })
-    h.foreground.folder = h.at.repo
-    expect(await h.prompt('t-5')).toBe('captured, confirmed')
   })
 })
 
 /** One finished turn in a repository with a made-up secret: a changed config file, an added text file. */
 async function windowTurn(h: Host): Promise<string> {
-  await h.switchOn(true)
+  await h.recordHere(true)
   write(h.at.repo, `config/${MARKER}-payments.yaml`, `provider: stripe\napi_key: ${MARKER}-key-one\n`)
   h.at.git(h.at.repo, 'add', '-A')
   h.at.git(h.at.repo, 'commit', '-qm', 'made-up second')
@@ -375,7 +374,7 @@ describe('what the window reads (Story 69.5)', () => {
     const turnId = await windowTurn(h)
 
     expect(await h.states()).toEqual([{
-      sessionId: 's1', state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null, removalPending: false,
+      sessionId: 's1', state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null, retryAt: null, removalPending: false,
       latest: expect.objectContaining({
         turnId, number: 1, app: 'codex', appVersion: '0.162.1', end: 'finished', state: 'provisional', totalsState: 'complete',
         totals: { files: 2, added: 4, removed: 1 }, wording: null
@@ -427,7 +426,8 @@ describe('what the window reads (Story 69.5)', () => {
       [METHOD_REGISTRY.turnChangesList, { sessionId: 's1' }],
       [METHOD_REGISTRY.turnChangesTurn, { sessionId: 's1', turnId }],
       [METHOD_REGISTRY.turnChangesDifference, { sessionId: 's1', turnId, path }],
-      [METHOD_REGISTRY.turnChangesResume, { sessionId: 's1' }]
+      // Gone in Story 75.4 from every route; a token never had it.
+      ['turnChanges.resume', { sessionId: 's1' }]
     ]
     for (const token of [h.session, h.owner]) {
       for (const [method, params] of reads) {
@@ -452,13 +452,13 @@ describe('what the window reads (Story 69.5)', () => {
     expect(await h.window(METHOD_REGISTRY.turnChangesTurn, { sessionId: 's1', turnId })).toEqual({ kept: false })
     expect(await h.window(METHOD_REGISTRY.turnChangesDifference, { sessionId: 's1', turnId, path: `${MARKER}-added.txt` })).toEqual({ kept: false })
     expect(await h.window(METHOD_REGISTRY.turnChangesList, { sessionId: 's1' })).toEqual([])
-    expect(await h.states()).toEqual([{ sessionId: 's1', state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null, latest: null, removalPending: true }])
+    expect(await h.states()).toEqual([{ sessionId: 's1', state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null, retryAt: null, latest: null, removalPending: true }])
 
-    // With the switch off and its last turn gone, the session is still listed while its bytes wait to be removed:
+    // With its workspace archived and its last turn gone, the session is still listed while its bytes wait to be removed:
     // "Removal pending" stays readable, and the menu's entry stays open...
-    await h.switchOn(false)
+    await h.recordHere(false)
     await h.idle()
-    expect(await h.states()).toEqual([{ sessionId: 's1', state: 'off', app: null, pausedRoot: null, pauseReason: null, latest: null, removalPending: true }])
+    expect(await h.states()).toEqual([{ sessionId: 's1', state: 'off', app: null, pausedRoot: null, pauseReason: null, retryAt: null, latest: null, removalPending: true }])
     // ...and not once nothing of it is kept or waits.
     h.database.prepare('DELETE FROM turn_removal_job').run()
     expect(await h.states()).toEqual([])
@@ -491,7 +491,7 @@ describe('what the window reads (Story 69.5)', () => {
 
   it('reaches every file of a turn a page at a time: the last of 2,001 changed files opens like the first', async () => {
     const h = await host('pages')
-    await h.switchOn(true)
+    await h.recordHere(true)
     const scan = async (job: string, base: string | null = null): Promise<TurnCaptureRecord> => {
       const answer = await h.engine.capture({ job, session: 's1', folder: h.at.repo, base, publish: true })
       if (!('record' in answer) || answer.state !== 'whole') throw new Error(`the scan is whole: ${answer.state}`)
@@ -543,10 +543,10 @@ describe('what the window reads (Story 69.5)', () => {
     }
   }, 60_000)
 
-  it('still lists a session whose switch went off beside its kept turn, as off', async () => {
+  it('still lists a session of an archived workspace beside its kept turn, as off', async () => {
     const h = await host('off-kept')
     const turnId = await windowTurn(h)
-    await h.switchOn(false)
+    await h.recordHere(false)
     await h.idle()
     expect(await h.states()).toMatchObject([{ sessionId: 's1', state: 'off', app: null, latest: { turnId }, removalPending: false }])
     // What was kept can still be read.
@@ -583,7 +583,7 @@ describe('what the window reads (Story 69.5)', () => {
         return refusal('cancelled', 'cancelled')
       }
     }))
-    await h.switchOn(true)
+    await h.recordHere(true)
     // A turn whose totals were stored, so that opening it compares its two scans again.
     const turnId = await (async () => {
       const id = 't-kept'

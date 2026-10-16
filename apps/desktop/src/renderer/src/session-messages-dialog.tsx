@@ -1,8 +1,8 @@
-// MODULE: session-messages-dialog.tsx - the owner's reading of one workspace's messages between sessions: list, Paste, pauses (Epic 66)
+// MODULE: session-messages-dialog.tsx - the owner's reading of one workspace's messages between sessions, read-only (Epic 66, Story 75.4)
 import { useEffect, useRef, useState } from 'react'
 import {
   ROSTER_APP_NAMES, SESSION_MESSAGE_HANDOVER, SESSION_MESSAGE_LIST_LIMIT, SESSION_MESSAGE_PAIR_HOURLY,
-  SESSION_MESSAGE_WORKSPACE_HOURLY, SESSION_MESSAGES_HELP, sessionMessageFirstLine, sessionMessageStateWord,
+  SESSION_MESSAGES_HELP, sessionMessageFirstLine, sessionMessageStateWord,
   type SessionMessageListing, type SessionMessageListRow, type SessionMessagePairPause, type WorkspaceRecord
 } from '@bmn/protocol'
 import { Dialog } from './dialog'
@@ -13,20 +13,16 @@ import './session-messages.css'
 
 const appName = (app: string): string => (ROSTER_APP_NAMES as Readonly<Record<string, string | undefined>>)[app] ?? app
 const localTime = (iso: string): string => new Date(iso).toLocaleString()
+const clockTime = (iso: string): string => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
 /**
- * Which apps' agents get a waiting message from their own hook, with the version that was measured on, and
- * which get one only by the owner's Paste: the same fact `bmn hooks check` says per app.
+ * Which apps' agents get a waiting message from their own hook, with the version that was measured on: the same
+ * fact `bmn hooks check` says per app. A message to a session running any other app is refused to its sender.
  */
-export function messageHandover(): { byHook: string; byPaste: string } {
-  const apps = Object.keys(ROSTER_APP_NAMES)
-  const measured = apps.filter((app) => SESSION_MESSAGE_HANDOVER[app] !== undefined)
-  const rest = apps.filter((app) => SESSION_MESSAGE_HANDOVER[app] === undefined)
-  return {
-    byHook: measured.length === 0 ? 'no app'
-      : measured.map((app) => `${appName(app)} (measured on ${appName(app)} ${SESSION_MESSAGE_HANDOVER[app]!.version})`).join(', '),
-    byPaste: rest.map(appName).join(', ')
-  }
+export function messageHandover(): string {
+  const measured = Object.keys(ROSTER_APP_NAMES).filter((app) => SESSION_MESSAGE_HANDOVER[app] !== undefined)
+  return measured.length === 0 ? 'no app'
+    : measured.map((app) => `${appName(app)} (measured on ${appName(app)} ${SESSION_MESSAGE_HANDOVER[app]!.version})`).join(', ')
 }
 
 export interface MessageRowView {
@@ -47,108 +43,64 @@ export function messageRows(listing: Pick<SessionMessageListing, 'messages'>, no
   }))
 }
 
-/** What the opened message offers: the Paste button and what it would do, or why there is none. */
-export type MessagePasteControl =
-  | { offered: true; label: string; disabled: boolean; note: string }
-  | { offered: false; note: string }
-
-/**
- * Paste is offered for a message nobody has claimed, waiting or expired, while both its sessions are still in
- * the workspace it was sent in. Once claimed, by a Paste or by a hook, BMN never offers it again by itself.
- */
-export function messagePasteControl(
-  message: SessionMessageListRow, now: number, receiverIncarnationId: string | null, pasting: boolean
-): MessagePasteControl {
+/** What the opened message says beside its text: where it stands, in words. Nothing here can be pressed. */
+export function messageNote(message: SessionMessageListRow, now: number): string {
   const receiver = message.receiverName
   const hook = message.claimedApp === null ? "the agent's hook" : `${appName(message.claimedApp)}'s hook`
   const measured = message.claimedApp === null ? undefined : SESSION_MESSAGE_HANDOVER[message.claimedApp]
   switch (message.state) {
+    // The owner's Paste is gone (Story 75.4); a message stored with either of its states still reads as it did.
     case 'pasted':
-      return { offered: false, note: `You pasted it into ${receiver}. Enter was not pressed.` }
+      return `You pasted it into ${receiver}. Enter was not pressed.`
     case 'paste-uncertain':
-      return { offered: false, note: `BMN could not confirm this paste. Look at ${receiver}'s input; BMN does not paste it again.` }
+      return `BMN could not confirm this paste. Look at ${receiver}'s input; BMN does not paste it again.`
     case 'taken':
-      return { offered: false, note: `Taken by ${hook} and not confirmed as printed. BMN does not offer it again.` }
+      return `Taken by ${hook} and not confirmed as printed. BMN does not offer it again.`
     case 'printed':
-      return {
-        offered: false,
-        note: `Printed for the agent by ${hook}: printed, not proven read.` +
-          (measured === undefined ? '' : ` Hand-over measured on ${appName(message.claimedApp!)} ${measured.version}.`)
-      }
-    case 'waiting': {
-      if (!message.membersPresent) {
-        return { offered: false, note: 'One of its sessions has left this workspace, so nothing delivers this message. You can still read it here.' }
-      }
-      const label = `Paste into ${receiver}`
-      if (pasting) return { offered: true, label, disabled: true, note: 'Pasting…' }
-      if (receiverIncarnationId === null) return { offered: true, label, disabled: true, note: `${receiver} is not running. Start it to paste.` }
-      const expired = Date.parse(message.expiresAt) <= now
-      return {
-        offered: true, label, disabled: false,
-        note: message.detail ?? (expired
-          ? 'Expired: no hook hands it over any more. Your Paste still does, without pressing Enter.'
-          : 'Appends the stamp and the text to its input. Enter is not pressed.')
-      }
-    }
+      return `Printed for the agent by ${hook}: printed, not proven read.` +
+        (measured === undefined ? '' : ` Hand-over measured on ${appName(message.claimedApp!)} ${measured.version}.`)
+    case 'waiting':
+      if (!message.membersPresent) return 'One of its sessions has left this workspace, so nothing delivers this message.'
+      if (Date.parse(message.expiresAt) <= now) return 'Expired: no hook hands it over any more.'
+      return message.detail ?? `Waits for the agent in ${receiver} to take it after a tool call.`
   }
 }
 
-/** "Pause messages" or "Resume" for the whole workspace, and the words beside it. */
-export function messagePauseControl(
-  listing: Pick<SessionMessageListing, 'workspacePause'>, time: (iso: string) => string = localTime
-): { paused: boolean; words: string; action: 'Pause messages' | 'Resume' } {
+/** "New ones" for the whole workspace: accepted, or held by the hourly limit until it lets go by itself. */
+export function messagePauseWords(
+  listing: Pick<SessionMessageListing, 'workspacePause' | 'messages'>, now: number, clock: (iso: string) => string = clockTime
+): string {
   const pause = listing.workspacePause
-  if (pause === null) return { paused: false, words: 'Accepted', action: 'Pause messages' }
-  return {
-    paused: true,
-    words: pause.by === 'owner' ? `Paused by you, ${time(pause.at)}`
-      : `Paused ${time(pause.at)}: sessions here exchanged ${SESSION_MESSAGE_WORKSPACE_HOURLY} messages in an hour`,
-    action: 'Resume'
-  }
+  if (pause === null) return 'Accepted'
+  const held = listing.messages.filter((message) => message.state === 'waiting' && message.membersPresent &&
+    Date.parse(message.expiresAt) > now).length
+  return `Paused by the limit until ${clock(pause.until)}${held === 0 ? '' : ` · ${held} held`}`
 }
 
-/** Two sessions the hourly limit paused: who, and since when. */
-export function messagePairPauseWords(pair: SessionMessagePairPause, time: (iso: string) => string = localTime): string {
-  return `${pair.firstName} and ${pair.secondName} exchanged ${SESSION_MESSAGE_PAIR_HOURLY} messages in an hour; paused ${time(pair.pausedAt)}`
-}
-
-/** The switch's two help lines, read before it goes on: with it on, agents here can name and influence each other. */
-export function MessagesSwitchDialog(props: { workspaceName: string; onConfirm(): void; onClose(): void }): React.JSX.Element {
-  return (
-    <Dialog label={`Sessions here may message each other — ${props.workspaceName}`} onClose={props.onClose} className="session-messages-switch">
-      <ul>
-        {SESSION_MESSAGES_HELP.map((line) => <li key={line}>{line}</li>)}
-      </ul>
-      <p className="dialog-note">BMN stamps where each message is from and never presses Enter for one. Messages… in this menu is where you read, paste and pause them.</p>
-      <div className="dialog-actions">
-        <button type="button" className="ghost" autoFocus onClick={props.onClose}>Cancel</button>
-        <button type="button" className="primary" onClick={() => { props.onClose(); props.onConfirm() }}>Switch on</button>
-      </div>
-    </Dialog>
-  )
+/** Two sessions the hourly limit paused: who, since when, and when the next message between them is allowed. */
+export function messagePairPauseWords(
+  pair: SessionMessagePairPause, time: (iso: string) => string = localTime, clock: (iso: string) => string = clockTime
+): string {
+  return `${pair.firstName} and ${pair.secondName} exchanged ${SESSION_MESSAGE_PAIR_HOURLY} messages in an hour; paused ${time(pair.pausedAt)}, ` +
+    `allowed again when the counts fall, by ${clock(pair.until)}`
 }
 
 /**
- * One workspace's latest messages between its sessions. Reading changes nothing; Paste is the only thing here
- * that writes to a terminal, on the owner's press and without Enter.
+ * One workspace's latest messages between its sessions, read-only (Story 75.4): nothing here is pressed, and a
+ * message reaches an agent only through its own hook. The list reads again whenever the host says a message or
+ * a pause changed.
  */
 export function SessionMessagesDialog(props: {
   workspace: WorkspaceRecord
   now: number
   /** Bumped by the host whenever a message or a pause changed, so an open list reads again. */
   revision: number
-  /** The live process of a session as the window shows it, or null while it is not running. */
-  incarnationOf(sessionId: string): string | null
   onClose(): void
 }): React.JSX.Element {
   const workspaceId = props.workspace.workspaceId
   const [listing, setListing] = useState<SessionMessageListing | null>(null)
-  const [unavailable, setUnavailable] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
+  const [unavailable, setUnavailable] = useState<string | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
-  const [pastingId, setPastingId] = useState<string | null>(null)
-  const [changing, setChanging] = useState(false)
   const sequence = useRef(0)
   const mounted = useRef(true)
 
@@ -158,12 +110,11 @@ export function SessionMessagesDialog(props: {
       const found = await boundedRead(window.aiTerminal.listSessionMessages(workspaceId))
       if (!mounted.current || request !== sequence.current) return
       setListing(found)
-      setUnavailable(false)
+      setUnavailable(null)
     } catch (cause) {
       if (!mounted.current || request !== sequence.current) return
       setListing(null)
-      setUnavailable(true)
-      setError(failureDetail(cause, 'Messages are unavailable'))
+      setUnavailable(failureDetail(cause, 'Messages are unavailable'))
     }
   }
 
@@ -176,70 +127,18 @@ export function SessionMessagesDialog(props: {
     }
   }, [workspaceId, props.revision])
 
-  /** A pause or a resume answers with the list as it stands afterwards. */
-  async function change(run: () => Promise<SessionMessageListing>, fallback: string): Promise<void> {
-    setChanging(true)
-    setError(null)
-    setNotice(null)
-    const request = ++sequence.current
-    try {
-      const found = await run()
-      if (mounted.current && request === sequence.current) setListing(found)
-    } catch (cause) {
-      if (mounted.current) setError(failureDetail(cause, fallback))
-    } finally {
-      if (mounted.current) setChanging(false)
-    }
-  }
-
-  async function paste(message: SessionMessageListRow): Promise<void> {
-    const incarnationId = props.incarnationOf(message.receiverSessionId)
-    if (incarnationId === null || pastingId !== null) return
-    setPastingId(message.messageId)
-    setError(null)
-    setNotice(null)
-    try {
-      const record = await window.aiTerminal.pasteSessionMessage(message.messageId, incarnationId)
-      if (!mounted.current) return
-      if (record.state === 'pasted') setNotice(`Pasted into ${message.receiverName}. Enter was not pressed.`)
-      else setError(`Not pasted: this message is already ${sessionMessageStateWord(record, Date.now())}.`)
-    } catch (cause) {
-      if (mounted.current) setError(failureDetail(cause, 'The message was not pasted'))
-    } finally {
-      if (mounted.current) {
-        setPastingId(null)
-        void load()
-      }
-    }
-  }
-
-  const on = props.workspace.sessionMessages === true
   const rows = listing ? messageRows(listing, props.now) : []
-  const pause = listing ? messagePauseControl(listing) : null
   const handover = messageHandover()
 
   return (
     <Dialog label={`Messages — ${props.workspace.name}`} onClose={props.onClose} className="session-messages-dialog">
       <section className="inspector-section">
-        <h3>
-          This workspace
-          {pause ? (
-            <button type="button" disabled={changing}
-              onClick={() => void change(() => window.aiTerminal.pauseSessionMessages(workspaceId, !pause.paused),
-                pause.paused ? 'Messages were not resumed' : 'Messages were not paused')}>
-              {pause.action}
-            </button>
-          ) : null}
-        </h3>
+        <h3>This workspace</h3>
         <dl className="kv">
-          <dt>Messages</dt>
-          <dd>{on ? 'On: sessions here may message each other' : 'Off. The switch is in this workspace’s menu: Sessions here may message each other'}</dd>
           <dt>New ones</dt>
-          <dd>{pause ? pause.words : '…'}</dd>
+          <dd>{listing ? messagePauseWords(listing, props.now) : '…'}</dd>
           <dt>By its own hook</dt>
-          <dd title={`A working agent gets a waiting message after a tool call: ${handover.byHook}`}>{handover.byHook}</dd>
-          <dt>By your Paste</dt>
-          <dd>Any session; the only way for {handover.byPaste}</dd>
+          <dd title={`A working agent gets a waiting message after a tool call: ${handover}. A message to a session running anything else is refused.`}>{handover}</dd>
         </dl>
         {SESSION_MESSAGES_HELP.map((line) => <small key={line}>{line}</small>)}
       </section>
@@ -248,38 +147,21 @@ export function SessionMessagesDialog(props: {
           <h3>Paused pairs</h3>
           <ul className="message-pairs">
             {listing.pairPauses.map((pair) => (
-              <li key={`${pair.firstSessionId} ${pair.secondSessionId}`}>
-                <span>{messagePairPauseWords(pair)}</span>
-                <button type="button" disabled={changing}
-                  onClick={() => void change(() => window.aiTerminal.resumeSessionMessagePair(workspaceId, pair.firstSessionId, pair.secondSessionId),
-                    'The pair was not resumed')}>
-                  Resume
-                </button>
-              </li>
+              <li key={`${pair.firstSessionId} ${pair.secondSessionId}`}><span>{messagePairPauseWords(pair)}</span></li>
             ))}
           </ul>
         </section>
       ) : null}
       <section className="inspector-section">
-        <h3>
-          Latest messages
-          <button type="button" onClick={() => { setError(null); setNotice(null); void load() }}>Refresh</button>
-        </h3>
-        {error ? <p className="inline-error" role="alert">{error}</p> : null}
-        {notice ? <p className="dialog-note" role="status">{notice}</p> : null}
-        {listing === null && !unavailable ? <p className="dialog-note" role="status">Reading…</p> : null}
-        {unavailable ? <p className="dialog-note" role="status">Messages are unavailable. Try Refresh.</p> : null}
-        {listing !== null && rows.length === 0 ? (
-          <p className="dialog-note">{on ? 'No messages yet. An agent leaves one with bmn tell.' : 'No messages. Nothing can be sent while the switch is off.'}</p>
-        ) : null}
+        <h3>Latest messages</h3>
+        {listing === null && unavailable === null ? <p className="dialog-note" role="status">Reading…</p> : null}
+        {unavailable !== null ? <p className="inline-error" role="alert">{unavailable}</p> : null}
+        {listing !== null && rows.length === 0 ? <p className="dialog-note">No messages yet. An agent leaves one with bmn tell.</p> : null}
         {rows.length > 0 ? (
           <ul className="message-list" aria-label={`Latest messages, at most ${SESSION_MESSAGE_LIST_LIMIT}`}>
             {rows.map((row) => {
               const { message } = row
               const open = openId === message.messageId
-              const control = open
-                ? messagePasteControl(message, props.now, props.incarnationOf(message.receiverSessionId), pastingId === message.messageId)
-                : null
               return (
                 <li key={message.messageId}>
                   <button type="button" className="message-row" aria-expanded={open}
@@ -289,7 +171,7 @@ export function SessionMessagesDialog(props: {
                     <span className="state">{row.state}</span>
                     <span className="first-line">{row.firstLine}</span>
                   </button>
-                  {open && control ? (
+                  {open ? (
                     <div className="message-detail">
                       <pre className="message-text" aria-label="Message text">{message.text}</pre>
                       <p className="message-stamp" aria-label="Stamp">{message.stamp}</p>
@@ -299,14 +181,7 @@ export function SessionMessagesDialog(props: {
                         <dt>Sent</dt>
                         <dd>{localTime(message.sentAt)}</dd>
                       </dl>
-                      <div className="message-actions">
-                        {control.offered ? (
-                          <button type="button" className="primary" disabled={control.disabled} onClick={() => void paste(message)}>
-                            {control.label}
-                          </button>
-                        ) : null}
-                        <small>{control.note}</small>
-                      </div>
+                      <small className="message-note">{messageNote(message, props.now)}</small>
                     </div>
                   ) : null}
                 </li>

@@ -8,8 +8,8 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  TURN_APP_NAMES, TURN_LABELS, TURN_MARK_LIMIT_MS, TURN_PAUSE_AFTER, TURN_RECORDED_APPS, TURN_WORDINGS,
-  type TurnEndKind, type TurnMarkStatus, type TurnPauseReason, type TurnRecordingState
+  TURN_APP_NAMES, TURN_LABELS, TURN_MARK_LIMIT_MS, TURN_PAUSE_AFTER, TURN_RECORDED_APPS, TURN_RETRY_AFTER_MS,
+  TURN_RETRY_MAX_MS, TURN_WORDINGS, type TurnEndKind, type TurnMarkStatus, type TurnPauseReason, type TurnRecordingState
 } from '@bmn/protocol'
 import type { TurnCaptureRow, TurnRow, TurnTotalsState } from './database-turn-store'
 import { refusal, type TurnRefusal, type TurnRootIdentity } from './turn-changes-capture'
@@ -121,10 +121,17 @@ interface SessionTurns {
   /** Marks already answered, by edge and request id. */
   requests: Map<string, TurnMarkStatus>
   failures: Map<string, { failed: number; incomplete: number }>
-  paused: Map<string, TurnPauseReason>
+  paused: Map<string, TurnPause>
   app: string | null
   /** The foreground process that app was seen as; another one in its place is no longer that app. */
   appIdentity: string | null
+}
+
+/** A pause of one work tree: why, when the next eligible turn is scanned as its probe, and how many probes it had. */
+interface TurnPause {
+  reason: TurnPauseReason
+  retryAt: number
+  probes: number
 }
 
 const TOOL_EVENTS: readonly string[] = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest']
@@ -133,6 +140,10 @@ const VERSIONS_KEPT = 32
 const refused = (answer: TurnCaptureAnswer): answer is TurnRefusal => !('record' in answer)
 const sameTurn = (a: string | null, b: string | null): boolean => a === null || b === null || a === b
 const two = (value: number): string => String(value).padStart(2, '0')
+/** The folder itself, or a folder inside it. */
+const inside = (folder: string, key: string): boolean => folder === key || folder.startsWith(key.endsWith('/') ? key : `${key}/`)
+/** The wait before a pause's next probe, doubled by each probe that came before it, never past the longest. */
+const retryWait = (probes: number): number => Math.min(TURN_RETRY_AFTER_MS * 2 ** probes, TURN_RETRY_MAX_MS)
 const shortCommit = (commit: string | null): string => (commit === null ? 'no commit' : commit.slice(0, 12))
 
 /** A moment as a label says it: this computer's own date and time. */
@@ -196,9 +207,9 @@ export class TurnRecorder {
   }
 
   /**
-   * The sessions whose workspace has the switch on, as they are now. A session that left the set (the switch
-   * was turned off, or the session moved to a workspace without it) has its running scan cancelled and its
-   * open turn closed as "Recording was switched off".
+   * The sessions recorded now: those of every unarchived workspace (Story 75.4). A session that left the set (its
+   * workspace was archived, or it moved into an archived one) has its running scan cancelled and its open turn
+   * closed as "Recording was switched off".
    */
   setSwitches(sessions: ReadonlySet<string>): void {
     const before = [...this.on]
@@ -235,16 +246,6 @@ export class TurnRecorder {
     this.sessions.delete(sessionId)
   }
 
-  /** Resume in the workspace's menu: the count of failed scans goes back to zero. */
-  resume(sessionId: string): boolean {
-    const state = this.sessions.get(sessionId)
-    if (!state || (state.paused.size === 0 && state.failures.size === 0)) return false
-    state.paused.clear()
-    state.failures.clear()
-    this.options.changed(sessionId)
-    return true
-  }
-
   /** Where recording stands, for the window only. */
   states(): TurnRecordingState[] {
     const states: TurnRecordingState[] = []
@@ -254,7 +255,7 @@ export class TurnRecorder {
       if (!this.on.has(sessionId)) continue
       states.push({
         sessionId, state: state ? this.standing(state) : 'recording', app: state ? this.appNow(state) : null,
-        pausedRoot: paused?.[0] ?? null, pauseReason: paused?.[1] ?? null
+        pausedRoot: paused?.[0] ?? null, pauseReason: paused?.[1].reason ?? null, retryAt: paused?.[1].retryAt ?? null
       })
     }
     return states
@@ -390,8 +391,9 @@ export class TurnRecorder {
       }
     }
     const folder = this.options.foreground.folder(identity)
-    if (folder !== null && this.pausedAt(state, folder)) {
-      // Paused: nothing is scanned and nothing is recorded until Resume.
+    const held = folder === null ? null : this.pausedAt(state, folder)
+    if (held !== null && !this.probe(state, held)) {
+      // Paused: nothing is scanned and nothing is recorded until the pause's next probe.
       for (const earlier of waiting) this.closeNotObserved(state, earlier, null)
       return 'paused'
     }
@@ -849,25 +851,55 @@ export class TurnRecorder {
    * Three scans in a row that failed, or were incomplete and read nothing new, for one root of this session,
    * pause recording for it. An incomplete scan that read on is not one of the three and leaves the count as
    * it is (the owner's pick on the design card, 2026-10-13): a big work tree is whole after a few scans with
-   * nothing pressed, and one that never gets further still pauses.
+   * nothing pressed, and one that never gets further still pauses. A scan that reads the work tree, whole or
+   * further, lifts a pause of that work tree: that is how a probe ends one (Story 75.4).
    */
   private count(state: SessionTurns, key: string, outcome: 'whole' | 'incomplete' | 'failed', further = false): void {
-    if (outcome === 'whole') {
-      state.failures.delete(key)
+    if (outcome === 'whole' || further) {
+      if (outcome === 'whole') state.failures.delete(key)
+      if (this.lift(state, key)) this.options.changed(state.sessionId)
       return
     }
-    if (outcome === 'incomplete' && further) return
     const tally = state.failures.get(key) ?? { failed: 0, incomplete: 0 }
     tally[outcome] += 1
     state.failures.set(key, tally)
-    if (tally.failed + tally.incomplete < TURN_PAUSE_AFTER || state.paused.has(key)) return
-    state.paused.set(key, tally.failed === 0 ? 'incomplete' : tally.incomplete === 0 ? 'failed' : 'mixed')
+    if (tally.failed + tally.incomplete < TURN_PAUSE_AFTER || this.pausedAt(state, key) !== null) return
+    const reason = tally.failed === 0 ? 'incomplete' : tally.incomplete === 0 ? 'failed' : 'mixed'
+    state.paused.set(key, { reason, retryAt: this.now() + retryWait(0), probes: 0 })
     this.options.changed(state.sessionId)
   }
 
-  private pausedAt(state: SessionTurns, folder: string): boolean {
-    for (const key of state.paused.keys()) if (folder === key || folder.startsWith(key.endsWith('/') ? key : `${key}/`)) return true
-    return false
+  /** The pause a folder lies under, by its key, or null. */
+  private pausedAt(state: SessionTurns, folder: string): string | null {
+    for (const key of state.paused.keys()) if (inside(folder, key)) return key
+    return null
+  }
+
+  /**
+   * Story 75.4: no owner resumes a pause. Once its time has come, the turn that asks is scanned as its probe, and
+   * the next probe's time is set at once, twice as far off: a probe whose scan fails, or never answers, holds
+   * nothing up and only waits longer. A probe that reads the work tree lifts the pause (`count`).
+   */
+  private probe(state: SessionTurns, key: string): boolean {
+    const pause = state.paused.get(key)
+    if (pause === undefined || this.now() < pause.retryAt) return false
+    pause.probes += 1
+    pause.retryAt = this.now() + retryWait(pause.probes)
+    this.options.changed(state.sessionId)
+    return true
+  }
+
+  /** Lifts every pause of the work tree a scan read, by the root or folder it was kept under, with its count. */
+  private lift(state: SessionTurns, key: string): boolean {
+    let lifted = false
+    for (const held of [...state.paused.keys()]) {
+      if (!inside(key, held) && !inside(held, key)) continue
+      state.paused.delete(held)
+      state.failures.delete(held)
+      lifted = true
+    }
+    if (lifted) state.failures.delete(key)
+    return lifted
   }
 
   // ---- plumbing -------------------------------------------------------------------------------------
@@ -937,7 +969,7 @@ export class TurnRecorder {
     return new Date(this.now()).toISOString()
   }
 
-  /** One empty file per session whose switch is on: the hook sends no mark without it. */
+  /** One empty file per recorded session: the hook sends no mark without it. */
   private writeHints(): void {
     try {
       mkdirSync(this.options.hintFolder, { recursive: true, mode: 0o700 })

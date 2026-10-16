@@ -1,4 +1,4 @@
-// MODULE: database-message-store.ts - messages sessions of one workspace leave each other: peers, limits, pauses, the one claim (Epic 66)
+// MODULE: database-message-store.ts - messages sessions of one workspace leave each other: peers, limits, pauses that lift by themselves, the one claim (Epic 66, Story 75.4)
 import {
   ERROR_CODES,
   SESSION_MESSAGE_EXPIRY_MS,
@@ -38,10 +38,8 @@ interface MemberRow {
   name: string
   workspace_id: string
   archived_at: string | null
-  receive_messages: number
   workspace_name: string
   workspace_archived_at: string | null
-  session_messages: number
   session_messages_paused_at: string | null
   session_messages_counted_from: string | null
 }
@@ -62,11 +60,11 @@ function messageRecord(row: MessageRow): SessionMessageRecord {
   }
 }
 
-/** A session with what decides whether it can take part: its workspace, both archive marks, both switches, the pause. */
+/** A session with what decides whether it can take part: its workspace, both archive marks, the pause. */
 function member(database: DatabaseConnection, sessionId: string): MemberRow | undefined {
   return database.prepare(
-    `SELECT s.session_id, s.name, s.workspace_id, s.archived_at, s.receive_messages,
-            w.name AS workspace_name, w.archived_at AS workspace_archived_at, w.session_messages,
+    `SELECT s.session_id, s.name, s.workspace_id, s.archived_at,
+            w.name AS workspace_name, w.archived_at AS workspace_archived_at,
             w.session_messages_paused_at, w.session_messages_counted_from
      FROM session s JOIN workspace w ON w.workspace_id = s.workspace_id
      WHERE s.session_id = ?`
@@ -89,31 +87,81 @@ function pairRow(
 }
 
 export interface MessagePeers {
-  /** False while the caller's workspace has messages off, or the caller is not an open session of an open workspace. */
+  /** False unless the caller is an unarchived session of an unarchived workspace: messages are on in every one. */
   on: boolean
-  /** True while the owner, or the hourly limit, has paused the caller's workspace. */
+  /** True while the hourly limit holds the caller's workspace. */
   paused: boolean
   peers: Array<{ sessionId: string; name: string }>
 }
 
+/** Messages a workspace, or two of its sessions, sent since `since`, oldest first. */
+function sentSince(database: DatabaseConnection, workspaceId: string, since: string, pair?: [string, string]): string[] {
+  const rows = (pair === undefined
+    ? database.prepare('SELECT sent_at FROM session_message WHERE workspace_id = ? AND sent_at > ? ORDER BY sent_at')
+      .all(workspaceId, since)
+    : database.prepare(
+        `SELECT sent_at FROM session_message
+         WHERE workspace_id = ? AND sent_at > ?
+           AND ((sender_session_id = ? AND receiver_session_id = ?) OR (sender_session_id = ? AND receiver_session_id = ?))
+         ORDER BY sent_at`
+      ).all(workspaceId, since, pair[0], pair[1], pair[1], pair[0])) as Array<{ sent_at: string }>
+  return rows.map((row) => row.sent_at)
+}
+
+/** When enough of these messages have left the last hour for the count to be under `limit`: then a send is allowed. */
+function allowedAgainAt(sent: readonly string[], limit: number, now: string): string {
+  const leaving = sent[sent.length - limit]
+  return leaving === undefined ? now : new Date(Date.parse(leaving) + SESSION_MESSAGE_HOUR_MS).toISOString()
+}
+
 /**
- * Who the caller may message: every other unarchived session of its own workspace that has "Receive messages"
- * on and is not paused with the caller, and nobody while the workspace's switch is off. Nothing about a peer's
- * activity is read here.
+ * Story 75.4: a pause the hourly limit made lifts by itself once the rolling count is under the limit again, for
+ * the workspace and for each of its pairs. The counting history is left as it is and no refused send comes back:
+ * a refused send was never stored. Asked before anything that a pause decides.
  */
-export function messagePeers(database: DatabaseConnection, callerSessionId: string): MessagePeers {
+function liftLimitPauses(database: DatabaseConnection, workspaceId: string, now: string): void {
+  const workspace = database.prepare(
+    'SELECT session_messages_paused_at AS at, session_messages_counted_from AS counted FROM workspace WHERE workspace_id = ?'
+  ).get(workspaceId) as { at: string | null; counted: string | null } | undefined
+  if (workspace?.at != null &&
+    sentSince(database, workspaceId, countedSince(now, workspace.counted)).length < SESSION_MESSAGE_WORKSPACE_HOURLY) {
+    database.prepare(
+      'UPDATE workspace SET session_messages_paused_at = NULL, session_messages_paused_by = NULL WHERE workspace_id = ?'
+    ).run(workspaceId)
+  }
+  const pairs = database.prepare(
+    `SELECT first_session_id, second_session_id, counted_from FROM session_message_pair
+     WHERE workspace_id = ? AND paused_at IS NOT NULL`
+  ).all(workspaceId) as Array<{ first_session_id: string; second_session_id: string; counted_from: string | null }>
+  for (const pair of pairs) {
+    const sent = sentSince(database, workspaceId, countedSince(now, pair.counted_from), [pair.first_session_id, pair.second_session_id])
+    if (sent.length >= SESSION_MESSAGE_PAIR_HOURLY) continue
+    database.prepare(
+      `UPDATE session_message_pair SET paused_at = NULL
+       WHERE workspace_id = ? AND first_session_id = ? AND second_session_id = ?`
+    ).run(workspaceId, pair.first_session_id, pair.second_session_id)
+  }
+}
+
+/**
+ * Who the caller may message: every other unarchived session of its own workspace that is not paused with the
+ * caller. Nothing about a peer's activity is read here; what runs in a peer's terminal is the host's question.
+ */
+export function messagePeers(database: DatabaseConnection, callerSessionId: string, now: string): MessagePeers {
   const caller = member(database, callerSessionId)
-  if (!caller || caller.archived_at !== null || caller.workspace_archived_at !== null || caller.session_messages !== 1) {
+  if (!caller || caller.archived_at !== null || caller.workspace_archived_at !== null) {
     return { on: false, paused: false, peers: [] }
   }
+  liftLimitPauses(database, caller.workspace_id, now)
+  const paused = (member(database, callerSessionId)?.session_messages_paused_at ?? null) !== null
   const rows = database.prepare(
     `SELECT session_id, name FROM session
-     WHERE workspace_id = ? AND archived_at IS NULL AND receive_messages = 1 AND session_id <> ?
+     WHERE workspace_id = ? AND archived_at IS NULL AND session_id <> ?
      ORDER BY position, created_at, session_id`
   ).all(caller.workspace_id, callerSessionId) as Array<{ session_id: string; name: string }>
   return {
     on: true,
-    paused: caller.session_messages_paused_at !== null,
+    paused,
     peers: rows
       .filter((row) => (pairRow(database, caller.workspace_id, callerSessionId, row.session_id)?.paused_at ?? null) === null)
       .map((row) => ({ sessionId: row.session_id, name: row.name }))
@@ -126,7 +174,7 @@ export function getSessionMessage(database: DatabaseConnection, messageId: strin
   return messageRecord(row)
 }
 
-/** The later of an hour ago and the last Resume: where an hourly count starts. */
+/** The later of an hour ago and the last owner's Resume, from before Story 75.4: where an hourly count starts. */
 function countedSince(now: string, countedFrom: string | null): string {
   const hourAgo = new Date(Date.parse(now) - SESSION_MESSAGE_HOUR_MS).toISOString()
   return countedFrom !== null && countedFrom > hourAgo ? countedFrom : hourAgo
@@ -146,10 +194,11 @@ export type SendOutcome =
 
 /**
  * One transaction decides and stores a message: the caller must be able to see the receiver in `bmn peers`
- * (one wording for every other case), the limits must hold, and the row carries the workspace the sender is
- * in at this moment. A refusal stores nothing, except the send one past an hourly limit, which stores the pause
- * it caused and says so. Only messages still waiting and unexpired count as waiting: an expired one waits for
- * the owner alone and holds nobody back.
+ * (one wording for every other case), the receiver must run an agent whose hook takes messages (the host's
+ * `receiverRefusal`, asked only after that), the limits must hold, and the row carries the workspace the sender
+ * is in at this moment. A refusal stores nothing, except the send one past an hourly limit, which stores the pause
+ * it caused and says so. Only messages still waiting and unexpired count as waiting: an expired one is delivered
+ * by no route and holds nobody back.
  */
 export function sendSessionMessage(database: DatabaseConnection, p: {
   messageId: string
@@ -158,11 +207,14 @@ export function sendSessionMessage(database: DatabaseConnection, p: {
   senderRoot: string
   stamp: string
   text: string
+  /** Why the receiver cannot take a message now (Story 75.4), or null: what runs in its terminal is the host's to say. */
+  receiverRefusal: string | null
 }, now: string): SendOutcome {
-  const peers = messagePeers(database, p.senderSessionId)
+  const peers = messagePeers(database, p.senderSessionId, now)
   if (!peers.on) refuse(SESSION_MESSAGES_OFF)
   const receiver = peers.peers.find((peer) => peer.sessionId === p.receiverSessionId)
   if (!receiver) refuse(SESSION_MESSAGE_NOT_A_PEER)
+  if (p.receiverRefusal !== null) refuse(p.receiverRefusal)
   if (peers.paused) refuse(SESSION_MESSAGES_PAUSED)
   const sender = member(database, p.senderSessionId)!
   const waiting = database.prepare(
@@ -184,13 +236,9 @@ export function sendSessionMessage(database: DatabaseConnection, p: {
   }
   const [first, second] = ordered(p.senderSessionId, p.receiverSessionId)
   const pair = pairRow(database, sender.workspace_id, first, second)
-  const between = database.prepare(
-    `SELECT COUNT(*) AS count FROM session_message
-     WHERE workspace_id = ? AND sent_at > ?
-       AND ((sender_session_id = ? AND receiver_session_id = ?) OR (sender_session_id = ? AND receiver_session_id = ?))`
-  ).get(sender.workspace_id, countedSince(now, pair?.counted_from ?? null), first, second, second, first) as { count: number }
+  const between = sentSince(database, sender.workspace_id, countedSince(now, pair?.counted_from ?? null), [first, second]).length
   const names = { senderName: sender.name, receiverName: receiver.name, workspaceName: sender.workspace_name }
-  if (between.count >= SESSION_MESSAGE_PAIR_HOURLY) {
+  if (between >= SESSION_MESSAGE_PAIR_HOURLY) {
     database.prepare(
       `INSERT INTO session_message_pair(workspace_id, first_session_id, second_session_id, paused_at, counted_from)
        VALUES (?, ?, ?, ?, NULL)
@@ -198,19 +246,17 @@ export function sendSessionMessage(database: DatabaseConnection, p: {
     ).run(sender.workspace_id, first, second, now)
     return {
       accepted: false, paused: 'pair', ...names,
-      reason: `You and that session exchanged ${SESSION_MESSAGE_PAIR_HOURLY} messages in an hour; messages between you are paused until the owner resumes them`
+      reason: `You and that session exchanged ${SESSION_MESSAGE_PAIR_HOURLY} messages in an hour; messages between you are paused, and allowed again when the count falls`
     }
   }
-  const inWorkspace = database.prepare(
-    'SELECT COUNT(*) AS count FROM session_message WHERE workspace_id = ? AND sent_at > ?'
-  ).get(sender.workspace_id, countedSince(now, sender.session_messages_counted_from)) as { count: number }
-  if (inWorkspace.count >= SESSION_MESSAGE_WORKSPACE_HOURLY) {
+  const inWorkspace = sentSince(database, sender.workspace_id, countedSince(now, sender.session_messages_counted_from)).length
+  if (inWorkspace >= SESSION_MESSAGE_WORKSPACE_HOURLY) {
     database.prepare(
       "UPDATE workspace SET session_messages_paused_at = ?, session_messages_paused_by = 'limit' WHERE workspace_id = ?"
     ).run(now, sender.workspace_id)
     return {
       accepted: false, paused: 'workspace', ...names,
-      reason: `Sessions in this workspace exchanged ${SESSION_MESSAGE_WORKSPACE_HOURLY} messages in an hour; messages here are paused until the owner resumes them`
+      reason: `Sessions in this workspace exchanged ${SESSION_MESSAGE_WORKSPACE_HOURLY} messages in an hour; messages here are paused, and allowed again when the count falls`
     }
   }
   database.prepare(
@@ -251,12 +297,13 @@ function stillMembers(database: DatabaseConnection, row: MessageRow): boolean {
 
 /**
  * The owner's view of one workspace: its latest messages, newest first, whatever became of their sessions
- * since, and what is paused there.
+ * since, and what the hourly limit holds there now, with when it lets go.
  */
-export function listWorkspaceMessages(database: DatabaseConnection, workspaceId: string): SessionMessageListing {
+export function listWorkspaceMessages(database: DatabaseConnection, workspaceId: string, now: string): SessionMessageListing {
+  liftLimitPauses(database, workspaceId, now)
   const workspace = database.prepare(
-    'SELECT session_messages_paused_at AS at, session_messages_paused_by AS by FROM workspace WHERE workspace_id = ?'
-  ).get(workspaceId) as { at: string | null; by: string | null } | undefined
+    'SELECT session_messages_paused_at AS at, session_messages_counted_from AS counted FROM workspace WHERE workspace_id = ?'
+  ).get(workspaceId) as { at: string | null; counted: string | null } | undefined
   if (!workspace) throw new WorkspaceStoreError(ERROR_CODES.notFound, 'The workspace was not found')
   const rows = database.prepare(
     `SELECT ${MESSAGE_COLUMNS} FROM session_message WHERE workspace_id = ? ORDER BY sent_at DESC, rowid DESC LIMIT ?`
@@ -272,103 +319,33 @@ export function listWorkspaceMessages(database: DatabaseConnection, workspaceId:
     detail: null
   }))
   const pairs = database.prepare(
-    `SELECT first_session_id, second_session_id, paused_at FROM session_message_pair
+    `SELECT first_session_id, second_session_id, paused_at, counted_from FROM session_message_pair
      WHERE workspace_id = ? AND paused_at IS NOT NULL ORDER BY paused_at, first_session_id, second_session_id`
-  ).all(workspaceId) as Array<{ first_session_id: string; second_session_id: string; paused_at: string }>
+  ).all(workspaceId) as Array<{ first_session_id: string; second_session_id: string; paused_at: string; counted_from: string | null }>
   return {
     messages,
-    workspacePause: workspace.at === null ? null : { at: workspace.at, by: workspace.by === 'limit' ? 'limit' : 'owner' },
+    workspacePause: workspace.at === null ? null : {
+      at: workspace.at,
+      until: allowedAgainAt(sentSince(database, workspaceId, countedSince(now, workspace.counted)), SESSION_MESSAGE_WORKSPACE_HOURLY, now)
+    },
     pairPauses: pairs.map((pair) => ({
       firstSessionId: pair.first_session_id, firstName: named(pair.first_session_id),
-      secondSessionId: pair.second_session_id, secondName: named(pair.second_session_id), pausedAt: pair.paused_at
+      secondSessionId: pair.second_session_id, secondName: named(pair.second_session_id), pausedAt: pair.paused_at,
+      until: allowedAgainAt(sentSince(database, workspaceId, countedSince(now, pair.counted_from),
+        [pair.first_session_id, pair.second_session_id]), SESSION_MESSAGE_PAIR_HOURLY, now)
     }))
   }
 }
 
 /**
- * The owner's "Pause messages" and "Resume" for a whole workspace. A pause is stored beside the switch and not
- * in it, so switching messages off and on lifts none. Resume starts the hourly count again from this moment:
- * otherwise the very next message would pause the workspace once more.
- */
-export function setWorkspaceMessagePause(
-  database: DatabaseConnection, workspaceId: string, paused: boolean, now: string
-): SessionMessageListing {
-  const updated = paused
-    ? database.prepare(
-        `UPDATE workspace SET session_messages_paused_at = COALESCE(session_messages_paused_at, ?),
-           session_messages_paused_by = COALESCE(session_messages_paused_by, 'owner')
-         WHERE workspace_id = ?`
-      ).run(now, workspaceId)
-    : database.prepare(
-        `UPDATE workspace SET session_messages_counted_from = CASE WHEN session_messages_paused_at IS NULL
-             THEN session_messages_counted_from ELSE ? END,
-           session_messages_paused_at = NULL, session_messages_paused_by = NULL
-         WHERE workspace_id = ?`
-      ).run(now, workspaceId)
-  if (Number(updated.changes) !== 1) throw new WorkspaceStoreError(ERROR_CODES.notFound, 'The workspace was not found')
-  return listWorkspaceMessages(database, workspaceId)
-}
-
-/** The owner's Resume for two sessions the hourly limit paused; their count starts again from this moment. */
-export function resumeMessagePair(
-  database: DatabaseConnection, workspaceId: string, a: string, b: string, now: string
-): SessionMessageListing {
-  const [first, second] = ordered(a, b)
-  database.prepare(
-    `UPDATE session_message_pair SET paused_at = NULL, counted_from = ?
-     WHERE workspace_id = ? AND first_session_id = ? AND second_session_id = ? AND paused_at IS NOT NULL`
-  ).run(now, workspaceId, first, second)
-  return listWorkspaceMessages(database, workspaceId)
-}
-
-/**
- * The owner's Paste takes the message out of `waiting` in one step: whoever changes that row first has it, so
- * two presses, or a press and a hook, cannot both deliver. A message whose sender or receiver left its
- * workspace is delivered by no route. Neither a pause nor the expiry stops the owner's own Paste. The claim
- * records the receiving process the owner was shown.
- */
-export function claimMessageForPaste(
-  database: DatabaseConnection, messageId: string, receiverIncarnationId: string, now: string
-): { record: SessionMessageRecord; claimed: boolean } {
-  const row = database.prepare(`SELECT ${MESSAGE_COLUMNS} FROM session_message WHERE message_id = ?`).get(messageId) as MessageRow | undefined
-  if (!row) throw new WorkspaceStoreError(ERROR_CODES.notFound, 'The message was not found')
-  if (row.state !== 'waiting') return { record: messageRecord(row), claimed: false }
-  if (!stillMembers(database, row)) {
-    refuse('A session of this message has left the workspace it was sent in, so it is not delivered')
-  }
-  const updated = database.prepare(
-    `UPDATE session_message SET state = 'paste-uncertain', claimed_incarnation_id = ?, claimed_at = ?
-     WHERE message_id = ? AND state = 'waiting'`
-  ).run(receiverIncarnationId, now, messageId)
-  return { record: getSessionMessage(database, messageId), claimed: Number(updated.changes) === 1 }
-}
-
-/**
- * Ends an owner's Paste that was claimed: `pasted` once the text was written to the terminal, or back to
- * `waiting` when BMN stopped before writing anything. A claim nobody finished stays `paste-uncertain`.
- */
-export function finishMessagePaste(
-  database: DatabaseConnection, messageId: string, outcome: 'pasted' | 'waiting'
-): SessionMessageRecord {
-  const updated = database.prepare(
-    `UPDATE session_message
-     SET state = ?, claimed_incarnation_id = CASE WHEN ? = 'waiting' THEN NULL ELSE claimed_incarnation_id END,
-         claimed_at = CASE WHEN ? = 'waiting' THEN NULL ELSE claimed_at END
-     WHERE message_id = ? AND state = 'paste-uncertain'`
-  ).run(outcome, outcome, outcome, messageId)
-  if (Number(updated.changes) !== 1) refuse('The message has no paste in progress')
-  return getSessionMessage(database, messageId)
-}
-
-/**
  * What a hook may be handed, as far as the store can tell: waiting, unexpired, both sessions still unarchived
- * members of the message's unarchived workspace, the workspace's switch and the receiver's "Receive messages"
- * on, and neither the workspace nor the pair paused. Whether the receiving agent's provider may see the
- * sender's work is the host's question, asked per message before the claim.
+ * members of the message's unarchived workspace, and neither the workspace nor the pair paused by the hourly
+ * limit, as it stands once lifted pauses are gone. Whether the receiving agent's provider may see the sender's
+ * work is the host's question, asked per message before the claim.
  */
 const HOOK_ELIGIBLE = `m.state = 'waiting' AND m.expires_at > ? AND m.receiver_session_id = ?
-  AND w.archived_at IS NULL AND w.session_messages = 1 AND w.session_messages_paused_at IS NULL
-  AND r.archived_at IS NULL AND r.workspace_id = m.workspace_id AND r.receive_messages = 1
+  AND w.archived_at IS NULL AND w.session_messages_paused_at IS NULL
+  AND r.archived_at IS NULL AND r.workspace_id = m.workspace_id
   AND s.archived_at IS NULL AND s.workspace_id = m.workspace_id
   AND NOT EXISTS (
     SELECT 1 FROM session_message_pair p
@@ -385,16 +362,23 @@ const HOOK_FROM = `session_message m
 export function messageTakeCandidates(
   database: DatabaseConnection, receiverSessionId: string, now: string
 ): Array<{ messageId: string; senderRoot: string }> {
+  liftReceiverPauses(database, receiverSessionId, now)
   const rows = database.prepare(
     `SELECT m.message_id, m.sender_root FROM ${HOOK_FROM} WHERE ${HOOK_ELIGIBLE} ORDER BY m.sent_at, m.rowid`
   ).all(now, receiverSessionId) as Array<{ message_id: string; sender_root: string }>
   return rows.map((row) => ({ messageId: row.message_id, senderRoot: row.sender_root }))
 }
 
+/** The hourly limit's pauses of the receiver's workspace, lifted where the count fell. */
+function liftReceiverPauses(database: DatabaseConnection, receiverSessionId: string, now: string): void {
+  const receiver = member(database, receiverSessionId)
+  if (receiver) liftLimitPauses(database, receiver.workspace_id, now)
+}
+
 /**
- * The hook's claim, the same one step the owner's Paste takes: the conditions are read again inside this
- * transaction and the row leaves `waiting` only if it is still there. From here the message reads "taken, not
- * confirmed" and no route offers it again by itself, whatever becomes of the answer.
+ * The hook's claim in one step: the conditions are read again inside this transaction and the row leaves
+ * `waiting` only if it is still there. From here the message reads "taken, not confirmed" and no route offers it
+ * again by itself, whatever becomes of the answer.
  */
 export function claimMessageForHook(database: DatabaseConnection, p: {
   messageId: string
@@ -404,6 +388,7 @@ export function claimMessageForHook(database: DatabaseConnection, p: {
   app: string
   claimId: string
 }, now: string): { claimed: boolean; record: SessionMessageRecord | null } {
+  liftReceiverPauses(database, p.receiverSessionId, now)
   const eligible = database.prepare(
     `SELECT m.message_id FROM ${HOOK_FROM} WHERE ${HOOK_ELIGIBLE} AND m.message_id = ?`
   ).get(now, p.receiverSessionId, p.messageId)
@@ -461,10 +446,6 @@ export const MESSAGE_OPERATIONS = Object.freeze({
   sendSessionMessage,
   listSentMessages,
   listWorkspaceMessages,
-  setWorkspaceMessagePause,
-  resumeMessagePair,
-  claimMessageForPaste,
-  finishMessagePaste,
   messageTakeCandidates,
   claimMessageForHook,
   releaseMessageClaim,

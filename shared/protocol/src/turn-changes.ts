@@ -3,16 +3,6 @@
 // Nothing here can hold a file's name: a wording takes a bound, a fixed reason, an app, a version or a
 // count, and a label takes the work tree's root, times and commits.
 
-/** The switch's words in a workspace's menu. */
-export const TURN_CHANGES_SWITCH = 'Record what each turn changes'
-
-/** What the switch's help says, wherever the switch is shown (Story 69.4, criterion 1). */
-export const TURN_CHANGES_HELP = [
-  'BMN keeps a copy of the files in the Git work tree the agent runs in, every tracked file and every untracked file Git does not ignore, secrets in them included, on this computer for as long as you keep agent history.',
-  'Removal runs when BMN starts and every hour; one that failed shows as pending.',
-  'BMN shows what differs between two scans of that work tree, not who changed it.'
-] as const
-
 /**
  * The apps whose turns are recorded: those measured to wait for their prompt hook before they act, with the
  * version that was measured on and the event that carries a prompt (docs/turn-changes.md). `promptArrives`
@@ -111,17 +101,31 @@ export const TURN_PAUSE_REASONS = Object.freeze({
 export type TurnPauseReason = keyof typeof TURN_PAUSE_REASONS
 /** How many captures in a row may fail, or be incomplete without reading anything new, before recording pauses. */
 export const TURN_PAUSE_AFTER = 3
+/**
+ * A pause lifts by itself (Story 75.4): after this long one eligible turn is scanned again as a probe; a probe
+ * that reads the work tree lifts the pause, and each one that does not doubles the wait, up to `TURN_RETRY_MAX_MS`.
+ */
+export const TURN_RETRY_AFTER_MS = 10 * 60 * 1000
+export const TURN_RETRY_MAX_MS = 2 * 60 * 60 * 1000
+/** The state line of a paused session, by reason: what happened, without a file's name. */
+export const TURN_PAUSE_WORDS = Object.freeze({
+  incomplete: 'Paused after three scans that read nothing new',
+  failed: 'Paused after three failed scans',
+  mixed: 'Paused after three failed or stalled scans'
+}) satisfies Record<TurnPauseReason, string>
 
 /** Where recording stands for one session, as the window shows it beside a turn's numbers. Window only: it reaches no snapshot, token or phone. */
 export interface TurnRecordingState {
   sessionId: string
-  /** `off`: the workspace's switch is off. `not-supported`: the app now running is not a recorded one. */
+  /** `off`: the session's workspace is archived. `not-supported`: the app now running is not a recorded one. */
   state: 'recording' | 'off' | 'paused' | 'not-supported'
   /** The app now in the terminal's foreground, when BMN knows it. */
   app: string | null
   /** While paused: the work tree's root and the reason. */
   pausedRoot: string | null
   pauseReason: TurnPauseReason | null
+  /** While paused: when the next eligible turn is scanned again, in milliseconds since the epoch. */
+  retryAt: number | null
 }
 
 export function isTurnRecordingState(value: unknown): value is TurnRecordingState {
@@ -131,7 +135,8 @@ export function isTurnRecordingState(value: unknown): value is TurnRecordingStat
     ['recording', 'off', 'paused', 'not-supported'].includes(state.state as string) &&
     (state.app === null || typeof state.app === 'string') &&
     (state.pausedRoot === null || typeof state.pausedRoot === 'string') &&
-    (state.pauseReason === null || Object.hasOwn(TURN_PAUSE_REASONS, state.pauseReason as string))
+    (state.pauseReason === null || Object.hasOwn(TURN_PAUSE_REASONS, state.pauseReason as string)) &&
+    (state.retryAt === null || (typeof state.retryAt === 'number' && Number.isFinite(state.retryAt)))
 }
 
 // ---- what the window reads (Story 69.5) -------------------------------------------------------------

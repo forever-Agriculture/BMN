@@ -84,7 +84,6 @@ import type {
   SavedOutputSnapshot,
   SessionCreateParams,
   SessionMessageListing,
-  SessionMessageRecord,
   SessionRecord,
   SessionUpdateParams,
   TerminalActivationResult,
@@ -296,7 +295,6 @@ export interface AiTerminalBridge {
   /** One file's difference of a kept turn: bounded, every secret value already masked. Nothing reveals one. */
   readTurnDifference(sessionId: string, turnId: string, path: string): Promise<TurnDifferenceAnswer>
   /** Resume: a session's count of failed scans goes back to zero. */
-  resumeTurnRecording(sessionId: string): Promise<{ resumed: boolean }>
   /** Read-only: the local ports each session's programs listen on, as the last /proc scan found them (Story 41.1). */
   listPorts(): Promise<SessionPorts[]>
   /**
@@ -329,12 +327,8 @@ export interface AiTerminalBridge {
   retryHandoffDraft(draftId: string): Promise<InputDraftRecord>
   sendDraft(draftId: string, submit: boolean, expected?: DraftSendExpectation): Promise<InputDraftRecord>
   discardDraft(draftId: string): Promise<InputDraftRecord>
-  /** Epic 66: one workspace's latest messages between its sessions, with its pauses. */
+  /** Epic 66: one workspace's latest messages between its sessions, with what the hourly limit holds. Read-only (Story 75.4). */
   listSessionMessages(workspaceId: string): Promise<SessionMessageListing>
-  /** The owner's Paste of one message into the receiving session's process as shown; Enter is never pressed. */
-  pasteSessionMessage(messageId: string, expectedIncarnationId: string): Promise<SessionMessageRecord>
-  pauseSessionMessages(workspaceId: string, paused: boolean): Promise<SessionMessageListing>
-  resumeSessionMessagePair(workspaceId: string, firstSessionId: string, secondSessionId: string): Promise<SessionMessageListing>
   getSettings(): Promise<AppSettings>
   putSettings<Section extends keyof AppSettings>(section: Section, value: AppSettings[Section]): Promise<AppSettings>
   /** Preferences → History: each Claude folder, each agent's counts and whether Start cleanup is waiting. */

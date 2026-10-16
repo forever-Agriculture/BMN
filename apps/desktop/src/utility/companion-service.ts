@@ -54,6 +54,7 @@ import {
   type FileReferencePasteReceipt,
   type FileReferenceSearchResult,
   type ProgressRecord,
+  type SessionAgentNow,
   type SessionRecord,
   type TelegramStatus,
   type TerminalNoticeCode,
@@ -410,6 +411,8 @@ export class CompanionService {
     agent: Exclude<HookEventAgent, 'terminal'>
     event: string
     observedAt: string
+    /** The terminal's foreground process when the report came, which is the agent's own (Story 75.4); null once it ended. */
+    foreground: string | null
   }>()
   /**
    * The model origin each session's current run last reported: the maker's country with the model
@@ -582,10 +585,7 @@ export class CompanionService {
         await this.sessionsChanged()
         return this.knownSessions.get(sessionId)
       },
-      // What a hook of this run of BMN reported last; before any, the app the session's stored conversation names.
-      lastApp: async (sessionId) => this.hookObservations.get(sessionId)?.agent ??
-        (await options.database.getConversationBinding(sessionId).catch(() => undefined))?.agentCli ?? null,
-      paste: (sessionId, payload) => options.manager.writeToSession(sessionId, bracketedPaste(payload, false)),
+      foreground: (sessionId) => this.sessionForeground(sessionId),
       notice: async (p) => {
         await this.openAttention({
           sessionId: p.sessionId, incarnationId: p.incarnationId, requestKey: p.requestKey, kind: 'notice',
@@ -1009,8 +1009,6 @@ export class CompanionService {
         // Epic 69: where recording stands per session, with its latest kept turn. These four reads are for the
         // window only; they reach no snapshot, token or phone, and the control socket has no method for them.
         return await this.turnViews()
-      case METHOD_REGISTRY.turnChangesResume:
-        return { resumed: this.turns?.resume(text(params, 'sessionId')) ?? false }
       case METHOD_REGISTRY.turnChangesList:
         return (await this.options.database.companion('listTurns', { sessionId: text(params, 'sessionId'), limit: TURN_LIST_LIMIT })).map(turnSummary)
       case METHOD_REGISTRY.turnChangesTurn:
@@ -1121,14 +1119,6 @@ export class CompanionService {
       }
       case METHOD_REGISTRY.messagesList:
         return this.messages.list(text(params, 'workspaceId'))
-      case METHOD_REGISTRY.messagesPaste:
-        return this.messages.paste(text(params, 'messageId'), text(params, 'expectedIncarnationId'))
-      case METHOD_REGISTRY.messagesPause: {
-        if (params.paused !== true && params.paused !== false) invalid('paused must be true or false')
-        return this.messages.pause(text(params, 'workspaceId'), params.paused)
-      }
-      case METHOD_REGISTRY.messagesResumePair:
-        return this.messages.resumePair(text(params, 'workspaceId'), text(params, 'firstSessionId'), text(params, 'secondSessionId'))
       case METHOD_REGISTRY.settingsGet:
         return database.companion('getSettings')
       case METHOD_REGISTRY.settingsPut: {
@@ -1244,8 +1234,8 @@ export class CompanionService {
     if (removedHooks) this.retainedHooks.markDirty()
     this.ports.sessionsChanged()
     if (this.turns !== null) {
-      // Epic 69: recording is on for the sessions of a workspace whose switch is on, wherever a session is now.
-      const recording = new Set(workspaces.filter((workspace) => workspace.turnChanges === true && workspace.archivedAt === null)
+      // Recording is on for the sessions of every unarchived workspace, wherever a session is now (Story 75.4).
+      const recording = new Set(workspaces.filter((workspace) => workspace.archivedAt === null)
         .map((workspace) => workspace.workspaceId))
       for (const sessionId of this.turnSessions) if (!this.knownSessions.has(sessionId)) this.turns.forget(sessionId)
       this.turnSessions = new Set(this.knownSessions.keys())
@@ -1285,7 +1275,7 @@ export class CompanionService {
     const latest = new Map((await this.options.database.companion('latestTurns')).map((row) => [row.sessionId, turnSummary(row)]))
     const pending = new Set(await this.options.database.companion('turnRemovalPendingSessions'))
     return [...new Set([...states.keys(), ...latest.keys(), ...pending])].sort().map((sessionId) => ({
-      ...(states.get(sessionId) ?? { sessionId, state: 'off' as const, app: null, pausedRoot: null, pauseReason: null }),
+      ...(states.get(sessionId) ?? { sessionId, state: 'off' as const, app: null, pausedRoot: null, pauseReason: null, retryAt: null }),
       latest: latest.get(sessionId) ?? null,
       removalPending: pending.has(sessionId)
     }))
@@ -2008,7 +1998,8 @@ export class CompanionService {
           incarnationId: p.incarnationId,
           agent: p.agent,
           event: p.event,
-          observedAt
+          observedAt,
+          foreground: p.event === 'SessionEnd' ? null : this.options.manager.foregroundProcessIdentity(p.sessionId)
         })
         if (p.agent === 'codex') void this.readCodexUsage(p.sessionId, p.incarnationId, p.event === 'Stop')
         if (isCompactionEvent(p)) {
@@ -2104,6 +2095,22 @@ export class CompanionService {
       ),
       compaction: this.hookCompaction(sessionId, stored.incarnationId)
     }
+  }
+
+  /**
+   * What holds a session's terminal now, as a message to it sees it (Story 75.4): the agent whose own hook
+   * reported from the very process in the foreground, not the last app seen there. An agent that exited into its
+   * still-running shell leaves the shell in front, which Linux reports as no foreground process of an agent.
+   */
+  private sessionForeground(sessionId: string): SessionAgentNow {
+    const run = this.options.manager.liveIncarnationId(sessionId)
+    if (!run) return { state: 'stopped' }
+    const front = this.options.manager.foregroundProcessIdentity(sessionId)
+    if (front === null) return { state: 'shell' }
+    const seen = this.hookObservations.get(sessionId)
+    return seen !== undefined && seen.incarnationId === run && seen.foreground === front
+      ? { state: 'agent', app: seen.agent }
+      : { state: 'program' }
   }
 
   private hookCompaction(sessionId: string, incarnationId: string): HookCompaction | null {

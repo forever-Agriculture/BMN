@@ -1,4 +1,4 @@
-// MODULE: session-messages.ts - what the host does with a message between sessions: stamp and store, the owner's Paste, the hook's take (Epic 66)
+// MODULE: session-messages.ts - what the host does with a message between sessions: stamp, refuse or store, the hook's take (Epic 66, Story 75.4)
 import { randomUUID } from 'node:crypto'
 import { realpath, stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
@@ -11,14 +11,14 @@ import {
   SESSION_MESSAGE_WORKSPACE_HOURLY,
   cleanSessionMessageName,
   cleanSessionMessageText,
-  sessionMessagePayload,
+  sessionMessageReceiverRefusal,
   sessionMessageStamp,
   sessionMessageStateWord,
   stripFormatCharacters,
   type MessageDestination,
+  type SessionAgentNow,
   type SessionMessageListing,
   type SessionMessageReceipt,
-  type SessionMessageRecord,
   type SessionMessageTaken,
   type SessionPeer,
   type SessionRecord
@@ -33,10 +33,8 @@ export interface SessionMessagesOptions {
   liveIncarnationId(sessionId: string): string | null | undefined
   /** A session as the host knows it now, read afresh. */
   session(sessionId: string): Promise<SessionRecord | undefined>
-  /** The agent app BMN last saw in a session (`claude`, `codex`, …), or null when it has seen none. */
-  lastApp(sessionId: string): Promise<string | null>
-  /** Appends text to a session's input as one bracketed paste, without Enter. */
-  paste(sessionId: string, payload: string): void
+  /** What holds a session's terminal now: the agent in front, its shell, another program, or nothing running. */
+  foreground(sessionId: string): SessionAgentNow
   /** Opens the one notice a pause made by an hourly limit gets, on the session whose send was refused. */
   notice(p: { sessionId: string; incarnationId: string; requestKey: string; title: string; body: string }): Promise<void>
   /** Something the Messages dialog shows has changed. */
@@ -69,9 +67,13 @@ function appName(app: string | null): string | null {
   return app !== null && Object.hasOwn(ROSTER_APP_NAMES, app) ? ROSTER_APP_NAMES[app as keyof typeof ROSTER_APP_NAMES] : null
 }
 
+function agentNow(foreground: SessionAgentNow): string | null {
+  return foreground.state === 'agent' ? foreground.app : null
+}
+
 /**
- * Messages between the sessions of one workspace. Nothing here types into a terminal except `paste`, on the
- * owner's press, and nothing here opens a request except the one notice of a pause.
+ * Messages between the sessions of one workspace. Nothing here types into a terminal: a message reaches an agent
+ * only through its own hook. Nothing here opens a request except the one notice of a pause.
  */
 export class SessionMessages {
   /**
@@ -113,12 +115,12 @@ export class SessionMessages {
     return this.options.now().toISOString()
   }
 
-  /** `bmn peers`: the sessions the caller may message, each with the app BMN last saw there. Nothing else. */
+  /** `bmn peers`: the sessions the caller may message, each with the agent in front there now. Nothing else. */
   async peers(sessionId: string): Promise<{ on: boolean; paused: boolean; peers: SessionPeer[] }> {
-    const found = await this.options.database.companion('messagePeers', sessionId)
-    const peers = await Promise.all(found.peers.map(async (peer) => ({
-      sessionId: peer.sessionId, name: cleanSessionMessageName(peer.name), app: appName(await this.options.lastApp(peer.sessionId))
-    })))
+    const found = await this.options.database.companion('messagePeers', sessionId, this.iso())
+    const peers = found.peers.map((peer) => ({
+      sessionId: peer.sessionId, name: cleanSessionMessageName(peer.name), app: appName(agentNow(this.options.foreground(peer.sessionId)))
+    }))
     return { on: found.on, paused: found.paused, peers }
   }
 
@@ -126,7 +128,8 @@ export class SessionMessages {
    * `bmn tell`: BMN, not the sender, says where the message is from. The sender's source root comes from the
    * folder the sending command itself ran in, links resolved; the terminal's start folder is never used in its
    * place, because an agent typed after a `cd` works elsewhere. This is workflow protection, not proof against
-   * a program that reports a false folder.
+   * a program that reports a false folder. A receiver whose terminal holds no agent that takes messages refuses
+   * the send with the reason (Story 75.4): judged by what is in front there now, after the peer check.
    */
   async send(p: {
     senderSessionId: string
@@ -150,15 +153,17 @@ export class SessionMessages {
     }
     const stamp = sessionMessageStamp({
       sessionId: sender.sessionId, name: sender.name, folder: senderRoot,
-      app: appName(await this.options.lastApp(sender.sessionId))
+      app: appName(agentNow(this.options.foreground(sender.sessionId)))
     })
     // The reads above took time, and the terminal may have been given another process meanwhile. This is the
     // last look: a send is the word of the process that was running when the store was asked, and a process
     // that ends after that does not cancel it. A message outlives its sender's process in any case.
     this.sameProcess(p.senderSessionId, p.senderIncarnationId)
+    const receiverRefusal = sessionMessageReceiverRefusal(this.options.foreground(p.destinationSessionId),
+      (app) => appName(app) ?? 'an app')
     const outcome = await this.options.database.companion('sendSessionMessage', {
       messageId: randomUUID(), senderSessionId: p.senderSessionId, receiverSessionId: p.destinationSessionId,
-      senderRoot, stamp, text: cleaned.text
+      senderRoot, stamp, text: cleaned.text, receiverRefusal
     }, this.iso())
     this.options.changed()
     if (outcome.accepted) return { messageId: outcome.messageId, state: outcome.state }
@@ -169,13 +174,13 @@ export class SessionMessages {
           sessionId: p.senderSessionId, incarnationId: p.senderIncarnationId,
           requestKey: `watch:messages:${p.destinationSessionId}`,
           title: `${sent} and ${received} exchanged ${SESSION_MESSAGE_PAIR_HOURLY} messages in an hour; messages between them are paused`,
-          body: 'Open the workspace menu, Messages…, to read them and to resume. BMN stopped nothing else.'
+          body: 'They are allowed again by themselves once fewer were sent in the last hour; Messages… in the command palette shows them. BMN stopped nothing else.'
         }
       : {
           sessionId: p.senderSessionId, incarnationId: p.senderIncarnationId,
           requestKey: 'watch:messages:workspace',
           title: `Sessions in ${cleanSessionMessageName(outcome.workspaceName)} exchanged ${SESSION_MESSAGE_WORKSPACE_HOURLY} messages in an hour; messages in it are paused`,
-          body: 'Open the workspace menu, Messages…, to read them and to resume. BMN stopped nothing else.'
+          body: 'They are allowed again by themselves once fewer were sent in the last hour; Messages… in the command palette shows them. BMN stopped nothing else.'
         }).catch(() => undefined)
     return invalid(outcome.reason)
   }
@@ -206,54 +211,14 @@ export class SessionMessages {
   }
 
   async list(workspaceId: string): Promise<SessionMessageListing> {
-    return this.shown(await this.options.database.companion('listWorkspaceMessages', workspaceId))
-  }
-
-  async pause(workspaceId: string, paused: boolean): Promise<SessionMessageListing> {
-    const listing = await this.options.database.companion('setWorkspaceMessagePause', workspaceId, paused, this.iso())
-    this.options.changed()
-    return this.shown(listing)
-  }
-
-  async resumePair(workspaceId: string, firstSessionId: string, secondSessionId: string): Promise<SessionMessageListing> {
-    const listing = await this.options.database.companion('resumeMessagePair', workspaceId, firstSessionId, secondSessionId, this.iso())
-    this.options.changed()
-    return this.shown(listing)
-  }
-
-  /**
-   * The owner's Paste: one claim, then the stamp and text appended to the receiving session's input without
-   * Enter, as a handoff is pasted. `expectedIncarnationId` is the receiving process the owner was shown; a
-   * different one now refuses before anything is written. A claim BMN could not finish stays uncertain and is
-   * never repeated by BMN. No provider check is made: this is the owner's own explicit transfer.
-   */
-  async paste(messageId: string, expectedIncarnationId: string): Promise<SessionMessageRecord> {
-    const database = this.options.database
-    const message = await database.companion('getSessionMessage', messageId)
-    if (message.state !== 'waiting') return message
-    if (this.options.liveIncarnationId(message.receiverSessionId) !== expectedIncarnationId) {
-      throw new HostControlError(ERROR_CODES.revisionConflict, "The receiving session's process changed; open Messages again")
-    }
-    const claim = await database.companion('claimMessageForPaste', messageId, expectedIncarnationId, this.iso())
-    if (!claim.claimed) return claim.record
-    this.held.delete(messageId)
-    this.options.changed()
-    if (this.options.liveIncarnationId(message.receiverSessionId) !== expectedIncarnationId) {
-      await database.companion('finishMessagePaste', messageId, 'waiting')
-      this.options.changed()
-      throw new HostControlError(ERROR_CODES.revisionConflict, "The receiving session's process changed; open Messages again")
-    }
-    this.options.paste(message.receiverSessionId, sessionMessagePayload(message))
-    const record = await database.companion('finishMessagePaste', messageId, 'pasted')
-    this.options.changed()
-    return record
+    return this.shown(await this.options.database.companion('listWorkspaceMessages', workspaceId, this.iso()))
   }
 
   /**
    * `message.take`, asked by the receiving agent's own hook after a tool call: the oldest message that may be
-   * handed over at this moment, claimed in one step, or nothing. The store answers for expiry, memberships,
-   * switches and pauses; this asks, per message, whether the provider the hook resolved may see private work in
-   * the root stored with that message. A message refused for its provider stays waiting and the list says why
+   * handed over at this moment, claimed in one step, or nothing. The store answers for expiry, memberships and
+   * the hourly limit's pauses; this asks, per message, whether the provider the hook resolved may see private
+   * work in the root stored with that message. A message refused for its provider stays waiting and the list says why
    * for as long as this run lasts; a later one from another folder is not held up behind it. One message per event.
    */
   async take(p: {
@@ -280,7 +245,7 @@ export class SessionMessages {
         answers.set(candidate.senderRoot, answer)
       }
       if (!answer.allowed) {
-        const detail = `Not handed over by the hook: ${stripFormatCharacters(answer.reason)}. Paste hands it over on your word.`.slice(0, 400)
+        const detail = `Not handed over by the hook: ${stripFormatCharacters(answer.reason)}.`.slice(0, 400)
         if (this.hold(candidate.messageId, detail)) this.options.changed()
         continue
       }
@@ -291,7 +256,7 @@ export class SessionMessages {
         messageId: candidate.messageId, receiverSessionId: p.sessionId, incarnationId: p.incarnationId,
         pid: p.pid, app: p.app, claimId
       }, this.iso())
-      // Lost to the owner's Paste, or a condition ended between the two reads: nothing more on this event.
+      // Lost to another claim, or a condition ended between the two reads: nothing more on this event.
       if (!claim.claimed || claim.record === null) return { message: null }
       // The store answers later than it was asked. A claim that landed for a process the terminal stopped running
       // meanwhile is never answered with the text; it is given back so the terminal's next process may have the

@@ -69,12 +69,12 @@ Commands:
   handoff <destination-id> --text T | --text-file - [--file-id ID ...] --key K
   handoff status [draft-id]                 Prepare an owner-delivered handoff; read its bounded receipt
   handoff --outline                         Print the optional outline of a complete handoff; sends nothing
-  peers                                     List the sessions of your workspace you may leave a message for;
-                                            says so when the owner has messages off there
+  peers                                     List the sessions of your workspace you may leave a message for,
+                                            with the agent in front of each now
   tell <session-id> --text T | --text-file - --key K
   tell status [message-id]                  Leave one short message for a peer; BMN stamps where it is from.
                                             A working Claude Code or Codex agent may get it at its next
-                                            tool call; the owner can always read and paste it. A refused
+                                            tool call; one with no such agent in front is refused. A refused
                                             send stored nothing: send again with a new --key. status lists
                                             your own messages and where each stands
   progress <state> <label> [--source S] [--detail D | --detail-file -] [--observed ISO]
@@ -2723,12 +2723,19 @@ function describeHandoffStatus(snapshot, draftId) {
   return visible.map((row) => `${row.draftId}\t${handoffStateWord(row.state)}\t${row.destinationSessionId ?? row.sessionId}\t${row.updatedAt}`).join('\n')
 }
 
+/**
+ * Story 75.4: messages are on wherever the session and its workspace are not archived, and a limit pause lifts by
+ * itself; the app is the agent in front of each peer's terminal now. The wording matches the protocol's
+ * SESSION_MESSAGES_OFF and SESSION_MESSAGES_PAUSED.
+ */
 function describePeers(result) {
-  if (!isObject(result) || result.on !== true) return 'Messages are off in this workspace'
+  if (!isObject(result) || result.on !== true) return 'This session or its workspace is archived; it sends no messages'
   const rows = Array.isArray(result.peers) ? result.peers.filter(isObject) : []
-  const lines = result.paused === true ? ['Messages are paused in this workspace until the owner resumes them'] : []
+  const lines = result.paused === true
+    ? ['Messages are paused in this workspace by its hourly limit; they are allowed again when the count falls']
+    : []
   if (rows.length === 0) lines.push('No other session here receives messages')
-  for (const row of rows) lines.push(`${row.sessionId}\t${row.name}\t${row.app ?? 'no agent app seen'}`)
+  for (const row of rows) lines.push(`${row.sessionId}\t${row.name}\t${row.app ?? 'no agent now'}`)
   return lines.join('\n')
 }
 
