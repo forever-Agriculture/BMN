@@ -7,6 +7,13 @@ export interface DevAutoRun {
   status: string | null
   nextAction: string | null
   decisions: string[]
+  /** The handoff's `- Run id:` field, written once when the run starts and kept across leads; null for a legacy handoff. */
+  runId: string | null
+  /**
+   * Per decision, in the order of `decisions`: its entry id (`[d3]`, given once and never renumbered) and the BMN record key
+   * the lead kept with it (`(bmn: KEY)`). Both null for a legacy entry, which is matched by nothing but its text.
+   */
+  decisionEntries: Array<{ entry: string | null; bmnKey: string | null }>
   omittedDecisions: number
   /** Outbound reader reports fields clipped after masking; local view remains unchanged. */
   truncatedFields?: number

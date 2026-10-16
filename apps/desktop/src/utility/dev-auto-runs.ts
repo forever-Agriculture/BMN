@@ -66,7 +66,16 @@ export function handoffFinished(text: string): boolean {
     new RegExp(`^-[ \\t]*Status:[ \\t]*COMPLETE${note}$`, 'i').test(text.trimEnd().split('\n').at(-1)!.trim())
 }
 
-export function parseHandoff(text: string, format?: (value: string) => string): Pick<DevAutoRun, 'project' | 'status' | 'nextAction' | 'decisions' | 'omittedDecisions' | 'finished' | 'ownerCheckout' | 'ownerBranch' | 'truncatedFields'> {
+/** A run id and a decision's entry id and BMN key, as the dev-auto handoff template writes them (Story 76.7). */
+const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u
+const ENTRY_ID = /^\[(d\d{1,4})\](?:\s|$)/u
+const BMN_KEY = /\(bmn: ([A-Za-z0-9][A-Za-z0-9._:-]{0,119})\)\s*$/u
+
+export function decisionEntry(value: string): DevAutoRun['decisionEntries'][number] {
+  return { entry: ENTRY_ID.exec(value)?.[1] ?? null, bmnKey: BMN_KEY.exec(value)?.[1] ?? null }
+}
+
+export function parseHandoff(text: string, format?: (value: string) => string): Pick<DevAutoRun, 'project' | 'status' | 'nextAction' | 'decisions' | 'runId' | 'decisionEntries' | 'omittedDecisions' | 'finished' | 'ownerCheckout' | 'ownerBranch' | 'truncatedFields'> {
   let truncatedFields = 0
   const bound = (value: string): string => {
     const formatted = format ? format(value) : value
@@ -82,21 +91,24 @@ export function parseHandoff(text: string, format?: (value: string) => string): 
   const lines = text.split(/\r?\n/u)
   const heading = lines.indexOf('## Decisions and findings')
   const decisions: string[] = []
+  const decisionEntries: DevAutoRun['decisionEntries'] = []
   if (heading >= 0) {
     const section = lines.slice(heading + 1).join('\n').split(/^## /m)[0]!
     const match = /^- Decided for you(?: \([^\n]*\))?:([^\n]*(?:\n(?!- |#)[^\n]*)*)/m.exec(section)
     if (match) {
       for (const row of match[1]!.split('\n')) {
         const value = row.trim().replace(/^[-*]\s+/u, '')
-        if (value) decisions.push(bound(value))
+        if (value) { decisions.push(bound(value)); decisionEntries.push(decisionEntry(value)) }
       }
     }
   }
   const owning = field('Owning checkout and branch', true)
+  const runId = field('Run id', true)
   const split = owning?.lastIndexOf(' / ') ?? -1
   return {
     project: field('Project / selected epics'), status: field('Status'), nextAction: field('Next safe action'),
-    decisions: decisions.slice(0, 20), omittedDecisions: Math.max(0, decisions.length - 20), finished: handoffFinished(text),
+    decisions: decisions.slice(0, 20), runId: runId !== null && RUN_ID.test(runId) ? runId : null,
+    decisionEntries: decisionEntries.slice(0, 20), omittedDecisions: Math.max(0, decisions.length - 20), finished: handoffFinished(text),
     ownerCheckout: split >= 0 ? owning!.slice(0, split) : null,
     ownerBranch: split >= 0 ? owning!.slice(split + 3) : null,
     ...(format ? { truncatedFields } : {})

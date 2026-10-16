@@ -5,7 +5,7 @@ import { TelegramConnectorError } from './telegram-connector'
 
 function run(overrides: Partial<DevAutoRun> = {}): DevAutoRun {
   return { workspaceIds: ['w'], checkout: '/home/owner/project', branch: 'epic-57', project: 'Epics 57', status: 'ACTIVE',
-    nextAction: 'Implement', decisions: [], omittedDecisions: 0, finished: false, ownership: 'own', ownerCheckout: '/home/owner/project',
+    nextAction: 'Implement', decisions: [], runId: null, decisionEntries: [], omittedDecisions: 0, finished: false, ownership: 'own', ownerCheckout: '/home/owner/project',
     ownerBranch: 'epic-57', unavailable: null, board: { checkout: '/home/owner/project', rows: [], unavailable: null }, ownerItems: [], ...overrides }
 }
 function snapshot(runs: DevAutoRun[] = []): DigestSnapshot {
@@ -40,6 +40,21 @@ describe('morning digest content', () => {
     expect(next.text).toContain('Choose a database'); expect(next.text).not.toContain('must be ignored')
     const unchanged = buildMorningDigest(snapshot([run({ status: 'COMPLETE', finished: true, decisions: ['First', 'Second'] })]), next.runs, '/home/owner')
     expect(unchanged.text).toBe('No dev-auto changes.')
+  })
+
+  it('knows a decision with a run and entry id by its identity through text edits, lead replacement, back and resume; a legacy one by its text (Story 76.7)', () => {
+    const ids = (...entries: Array<string | null>) => entries.map((entry) => ({ entry, bmnKey: entry ? `dev-auto:epic-76-1016:${entry}` : null }))
+    const first = buildMorningDigest(snapshot([run({ runId: 'epic-76-1016', decisions: ['[d1] JSON store', '[d2] One table', 'Legacy note'], decisionEntries: ids('d1', 'd2', null) })]), [], '/home/owner')
+    expect(first.text).toContain('[d1] JSON store'); expect(first.text).toContain('Legacy note')
+    // A successor lead after compaction or a restart edits d1's words and adds d3; back and a resume change nothing else.
+    const next = buildMorningDigest(snapshot([run({ runId: 'epic-76-1016', decisions: ['[d1] JSON store, reworded', '[d2] One table', '[d3] Cache key', 'Legacy note'], decisionEntries: ids('d1', 'd2', 'd3', null) })]), first.runs, '/home/owner')
+    expect(next.text).toContain('[d3] Cache key'); expect(next.text).not.toContain('reworded'); expect(next.text).not.toContain('One table'); expect(next.text).not.toContain('Legacy note')
+    expect(buildMorningDigest(snapshot([run({ runId: 'epic-76-1016', decisions: ['[d1] JSON store, reworded', '[d2] One table', '[d3] Cache key', 'Legacy note'], decisionEntries: ids('d1', 'd2', 'd3', null) })]), next.runs, '/home/owner').text).toBe('No dev-auto changes.')
+    // A legacy entry edited reads as new; an id without a run id is legacy too.
+    const legacy = buildMorningDigest(snapshot([run({ runId: 'epic-76-1016', decisions: ['[d1] JSON store, reworded', '[d2] One table', '[d3] Cache key', 'Legacy note, edited'], decisionEntries: ids('d1', 'd2', 'd3', null) })]), next.runs, '/home/owner')
+    expect(legacy.text).toContain('Legacy note, edited'); expect(legacy.text).not.toContain('Cache key')
+    const noRun = buildMorningDigest(snapshot([run({ decisions: ['[d1] Edited without a run id'], decisionEntries: ids('d1') })]), first.runs, '/home/owner')
+    expect(noRun.text).toContain('Edited without a run id')
   })
 
   it('reports incomplete sources instead of claiming no change', () => {

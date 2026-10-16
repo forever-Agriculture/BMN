@@ -10,6 +10,14 @@ const MAX_RUNS = 32 * 64
 const MAX_DECISIONS = 20
 const READ_INTERVAL = 10 * 60_000
 const fingerprint = (text: string): string => createHash('sha256').update(text).digest('hex')
+/**
+ * A decision with a run and entry id is the same decision whatever its text becomes, under any lead (Story 76.7); a legacy
+ * entry without them is known only by its text, so an edit of it reads as new.
+ */
+const decisionPrint = (run: DevAutoRunsResult['runs'][number], index: number): string => {
+  const entry = run.decisionEntries?.[index]?.entry ?? null
+  return fingerprint(run.runId && entry ? `entry\n${run.runId}\n${entry}` : run.decisions[index]!)
+}
 interface RunFingerprint { path: string; status: string; finished: boolean; decisions: string[] }
 interface DigestState { version: 1; day: string | null; runs: RunFingerprint[] }
 export interface DigestSnapshot { result: DevAutoRunsResult; workspaceNames: Record<string, string> }
@@ -58,7 +66,7 @@ export function buildMorningDigest(snapshot: DigestSnapshot, previous: readonly 
     if (run.unavailable) { incomplete++; if (old) runs.push(old); continue }
     if (!run.project || !run.status || run.truncatedFields) incomplete++
     const status = run.status ?? ''
-    const current = { path, status: fingerprint(status), finished: run.finished, decisions: run.decisions.slice(0, MAX_DECISIONS).map(fingerprint) }
+    const current = { path, status: fingerprint(status), finished: run.finished, decisions: run.decisions.slice(0, MAX_DECISIONS).map((_, index) => decisionPrint(run, index)) }
     runs.push(current)
     const workspace = run.workspaceIds.map(id => field(snapshot.workspaceNames[id] ?? 'Workspace unavailable')).join(', ')
     const label = `${workspace} · ${field(run.branch ?? basename(run.checkout))} · ${field(run.project ?? 'Epics not recorded')}`

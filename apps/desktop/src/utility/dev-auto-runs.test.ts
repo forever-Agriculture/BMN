@@ -47,6 +47,17 @@ describe('read-only dev-auto runs', () => {
       { checkout: '/a', branch: 'main' }, { checkout: '/b', branch: null }
     ])
   })
+  it('reads the run id and each decision\'s entry id and BMN key; a legacy entry has neither (Story 76.7)', () => {
+    const text = (runId: string) => `- Run id: ${runId}\n\n## Decisions and findings\n\n- Decided for you (one line each):\n  - [d1] Keep JSON; reversible (bmn: dev-auto:epic-76-1016:d1)\n  - [d12] Reworded by a later lead\n  - Legacy line [d3] (bmn: not at the end) x\n- Material pending findings: none\n`
+    const parsed = parseHandoff(text('epic-76-1016'))
+    expect(parsed.runId).toBe('epic-76-1016')
+    expect(parsed.decisions).toEqual(['[d1] Keep JSON; reversible (bmn: dev-auto:epic-76-1016:d1)', '[d12] Reworded by a later lead', 'Legacy line [d3] (bmn: not at the end) x'])
+    expect(parsed.decisionEntries).toEqual([{ entry: 'd1', bmnKey: 'dev-auto:epic-76-1016:d1' }, { entry: 'd12', bmnKey: null }, { entry: null, bmnKey: null }])
+    expect(parseHandoff(text('has spaces')).runId).toBeNull()
+    expect(parseHandoff(handoff('/r', 'main'))).toMatchObject({ runId: null, decisionEntries: [{ entry: null, bmnKey: null }, { entry: null, bmnKey: null }] })
+    // The id is read from the field before masking, so a phone-bound reader keeps the identity.
+    expect(parseHandoff(text('epic-76-1016'), (value) => value.replace('Keep JSON', '***')).decisionEntries[0]).toEqual({ entry: 'd1', bmnKey: 'dev-auto:epic-76-1016:d1' })
+  })
   it('reads main and two linked trees, flags a copy, keeps legacy ownership unknown, and assigns live requests only to the right checkout', async () => {
     const root = fixture(), main = join(root, 'main'); repo(main)
     const child = join(main, '.claude/worktrees/child'), other = join(root, 'other')

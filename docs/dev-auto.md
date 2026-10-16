@@ -8,6 +8,13 @@ BMN shows owning checkouts, copies, unknown ownership and unavailable sources se
 It never changes handoffs, boards, decisions or agent requests. Open request titles navigate
 to the corresponding live session.
 
+A handoff's `- Run id:` (written once when the run starts) and each Decided-for-you line's leading
+entry id (`[d3]`, never renumbered) make a decision the same decision through text edits, compaction
+and a new lead; a line ending in `(bmn: KEY)` names the BMN decision record the lead made for it while
+you were away, so the two join by that identity, never by text. Lines without an id are legacy and
+are known only by their text. dev-auto reads the away state with `bmn away --status --json`, which
+gives an agent the state, since and revision, never your note.
+
 
 ## Morning digest
 
