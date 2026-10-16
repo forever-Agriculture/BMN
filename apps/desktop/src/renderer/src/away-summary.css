@@ -1,0 +1,15 @@
+/* MODULE: away-summary.css - "While you were away": the Messages shape with a head line, session where-lines and word lines; no hue (Story 76.6) */
+.away-summary-dialog h3 { display: flex; justify-content: space-between; gap: 12px; }
+.away-summary-dialog .away-count { color: var(--muted); font-weight: 400; font-size: 12px; }
+.away-head-line { margin: 0; font-size: 13px; }
+.away-note { margin: 4px 0 0; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.away-gaps { display: block; margin-top: 6px; color: var(--muted); font-size: 11.5px; }
+.away-group { display: grid; gap: 4px; margin-bottom: 10px; }
+.away-where { margin: 0; color: var(--muted); font-size: 12px; }
+.message-row .away-command { font-family: var(--font-mono); }
+.away-decision { padding: 8px 8px 12px; }
+.away-decision .away-kv-row { display: contents; }
+.away-decision dd { overflow-wrap: anywhere; }
+.away-link { margin-left: 8px; }
+.away-lines { display: grid; gap: 2px; margin: 0; padding: 0 0 0 8px; list-style: none; font-size: 12px; }
+.away-more { display: block; margin-top: 4px; color: var(--muted); font-size: 11.5px; }

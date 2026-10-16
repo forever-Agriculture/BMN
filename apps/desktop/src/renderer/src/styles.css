@@ -449,6 +449,18 @@ input[type='radio'] {
   color: var(--text);
 }
 
+/* Checked, the words open the summary so far: a plain text button, no plate (Story 76.6). */
+.away-check button.away-words {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.away-check button.away-words:hover { text-decoration: underline; }
+
 /*
  * The failure bar's red used to run the full window width along its bottom edge, directly against the
  * gold selection outline of the pane beneath it: two saturated 1px lines touching, meaning two

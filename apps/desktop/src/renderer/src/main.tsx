@@ -30,6 +30,7 @@ import {
   type TelegramStatus,
   type OwnerAwayView,
   awaySinceWords,
+  awayPeriodWords,
   exactAbsoluteFileReference,
   telegramOwnerCue,
   effectiveTerminalGraphics,
@@ -43,6 +44,7 @@ import { checkSixelRenderer } from './terminal-images'
 import { failureDetail, sessionFailureDetail } from './bridge-error'
 import { CommandPalette, paletteFileSearchRootLabel, type PaletteCommand } from './command-palette'
 import { AwayCheck, awaySourceWords } from './away-check'
+import { AwaySummaryDialog } from './away-summary-dialog'
 import { AWAY_NOTE_LIMIT } from '@bmn/protocol'
 import { rememberRecentSession } from './recent-sessions'
 import { WorkspacePinsDialog } from './workspace-pins-dialog'
@@ -195,6 +197,8 @@ type ShellDialog =
   | { kind: 'plan-use' }
   /** Story 76.3: "I'm away…": the palette's second mode, a note for himself or just Enter. */
   | { kind: 'away-note' }
+  /** Story 76.6: "While you were away", the current period's summary, read-only. */
+  | { kind: 'away-summary' }
   /**
    * Read-only: one progress observation and the published files it points at. The observation is
    * captured when the detail opens, so a newer report cannot swap itself in under the owner.
@@ -418,6 +422,22 @@ function App(): React.JSX.Element {
   const sayAway = (to: 'away' | 'back', note?: string): void => {
     void window.aiTerminal.setAway(to, note).then(setAwayView).catch(fail('Away could not be changed'))
   }
+  // Story 76.6 AC3 (Fable 76.1 §1): a closed period's summary not yet shown opens by itself once, in the focused window or,
+  // when none is, the first window that gains focus; it waits for an open dialog to close and is marked shown when it opens.
+  useEffect(() => {
+    if (awayView?.state !== 'back' || awayView.summaryShownAt !== null || awayView.periodId === null || dialog !== null) return
+    const open = (): void => setDialog((current) => current ?? { kind: 'away-summary' })
+    if (document.hasFocus()) {
+      open()
+      return
+    }
+    window.addEventListener('focus', open, { once: true })
+    return () => window.removeEventListener('focus', open)
+  }, [awayView, dialog])
+  useEffect(() => {
+    if (dialog?.kind !== 'away-summary' || awayView?.state !== 'back' || awayView.summaryShownAt !== null || awayView.periodId === null) return
+    void window.aiTerminal.markAwaySummaryShown(awayView.periodId).then(setAwayView).catch(() => undefined)
+  }, [dialog?.kind, awayView])
   /** Opens a listed port in the owner's browser; the process is left alone. */
   const openPort = (sessionId: string, port: ListeningPort): void => {
     void window.aiTerminal.openPort(sessionId, port.port).catch(fail(`Could not open ${listeningPortLabel(port)}`))
@@ -1402,6 +1422,11 @@ function App(): React.JSX.Element {
       brief('None waiting.')
       return
     }
+    goToRequest(request)
+  }
+
+  /** Opens the request's session, records it as opened and announces it: Go to next request needing you and the away summary's rows. */
+  const goToRequest = (request: AttentionRecord): void => {
     if (!openSession(request.sessionId, true)) {
       void refresh.attention().catch(fail('Attention refresh failed'))
       return
@@ -1612,6 +1637,7 @@ function App(): React.JSX.Element {
       // What the owner only reads opens from here, read-only, together (Story 75.10).
       ...readOnlyViewCommands({
         workspace: activeWorkspace?.name ?? null, session: selectedRecord?.name ?? null,
+        awayPeriod: awayView?.state === 'back' && awayView.since !== null && awayView.endedAt !== null ? awayPeriodWords(awayView.since, awayView.endedAt, new Date(now)) : null,
         progress: !!selectedRecord && !!observedProgressFor(selectedRecord),
         turnRecorded: !!selectedRecord && turnRecording.some((view) => view.sessionId === selectedRecord.sessionId)
       }, {
@@ -1621,7 +1647,8 @@ function App(): React.JSX.Element {
         turnChanges: () => selectedRecord && setDialog({ kind: 'turn-changes', sessionId: selectedRecord.sessionId }),
         hookEvents: () => selectedRecord && setDialog({ kind: 'hook-events', session: selectedRecord }),
         devAutoRuns: () => setDialog({ kind: 'dev-auto-runs' }),
-        planUse: () => setDialog({ kind: 'plan-use' })
+        planUse: () => setDialog({ kind: 'plan-use' }),
+        awaySummary: () => setDialog({ kind: 'away-summary' })
       }),
       command('file-reference', 'Open file reference…', () => openFileReference(
         selectedRecord?.sessionId ?? null,
@@ -1825,7 +1852,7 @@ function App(): React.JSX.Element {
           ) : <span>Create a workspace.</span>}
         </nav>
         <div className="header-actions">
-          <AwayCheck view={awayView} now={new Date(now)} onChange={(to) => sayAway(to)}
+          <AwayCheck view={awayView} now={new Date(now)} onChange={(to) => sayAway(to)} onOpenSummary={() => setDialog({ kind: 'away-summary' })}
             sessionName={(sessionId) => sessions.find((item) => item.sessionId === sessionId)?.name ?? null} />
           <button type="button" className="icon-button" aria-label="Command palette" title={`Command palette (${SHORTCUT_LABELS.palette})`} onClick={() => setDialog({ kind: 'palette' })}>
             <Icon name="search" />
@@ -2480,6 +2507,17 @@ function App(): React.JSX.Element {
               run: () => sayAway('away', text.trim() === '' ? undefined : text.trim())
             }
           }}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+      {dialog?.kind === 'away-summary' && awayView !== null && awayView.periodId !== null ? (
+        <AwaySummaryDialog
+          away={awayView}
+          attention={attention}
+          workspaces={workspaces}
+          now={now}
+          onOpenRequest={(request) => { setDialog(null); goToRequest(request) }}
+          onOpenSession={(sessionId) => { setDialog(null); openSession(sessionId, true) }}
           onClose={() => setDialog(null)}
         />
       ) : null}

@@ -7,10 +7,10 @@ const noop = (): void => {}
 /** A menu as the owner reads it: each entry's words, a rule for a separator, the group's name for a choice. */
 const read = (entries: MenuEntry[]): string[] => entries.map((entry) => entry === 'separator' ? '—' : 'group' in entry ? `[${entry.group}]` : entry.label)
 const MARKER = { group: 'Marker', selected: 'none', options: [{ value: 'none', label: 'None' }], onChoose: noop }
-const READ_ONLY = ['Review results…', 'Messages…', 'Progress details', 'Turn changes…', 'Hook events…', 'dev-auto runs…', 'Plan use…']
+const READ_ONLY = ['While you were away…', 'Review results…', 'Messages…', 'Progress details', 'Turn changes…', 'Hook events…', 'dev-auto runs…', 'Plan use…']
 const sessionActs = { splitBeside: noop, details: noop, toggleQuiet: noop, editLaunch: noop, move: noop, stop: noop, startAgain: noop, archive: noop }
 const paneActs = { details: noop, search: noop, copy: noop, paste: noop, selectAll: noop, sendNextKey: noop, resetModes: noop, arrange: noop, newSession: noop, editLaunch: noop, stop: noop }
-const viewActs = { results: noop, messages: noop, progress: noop, turnChanges: noop, hookEvents: noop, devAutoRuns: noop, planUse: noop }
+const viewActs = { awaySummary: noop, results: noop, messages: noop, progress: noop, turnChanges: noop, hookEvents: noop, devAutoRuns: noop, planUse: noop }
 
 describe('the menus hold only what the owner does by hand (Story 75.10 AC2)', () => {
   it('Workspace ⋯: Pinned files…, New session here, Rename…, Move up, Move down, the marker, Archive', () => {
@@ -48,15 +48,16 @@ describe('the menus hold only what the owner does by hand (Story 75.10 AC2)', ()
 
 describe('the read-only views open from the palette (Story 75.10 AC2)', () => {
   it('lists them together, each with the workspace or session it is about', () => {
-    const commands = readOnlyViewCommands({ workspace: 'BMN', session: 'Lead', progress: true, turnRecorded: true }, viewActs)
+    const commands = readOnlyViewCommands({ workspace: 'BMN', session: 'Lead', progress: true, turnRecorded: true, awayPeriod: 'Wed 22:10 – Thu 07:40' }, viewActs)
     expect(commands.map((command) => command.label)).toEqual(READ_ONLY)
-    expect(commands.map((command) => command.context)).toEqual(['BMN', 'BMN', 'Lead', 'Lead', 'Lead', undefined, undefined])
+    expect(commands.map((command) => command.context)).toEqual(['Wed 22:10 – Thu 07:40', 'BMN', 'BMN', 'Lead', 'Lead', 'Lead', undefined, undefined])
     expect(commands.every((command) => command.group === 'Commands' && command.disabled !== true)).toBe(true)
   })
 
   it('leaves out what has nothing to show: Progress details before any report, Turn changes… before a recorded turn, the session views with no session', () => {
     const quiet = readOnlyViewCommands({ workspace: 'BMN', session: 'Lead', progress: false, turnRecorded: false }, viewActs)
-    expect(quiet.filter((command) => command.disabled === true).map((command) => command.label)).toEqual(['Progress details', 'Turn changes…'])
+    // While you were away… exists only once a period has closed (Story 76.6).
+    expect(quiet.filter((command) => command.disabled === true).map((command) => command.label)).toEqual(['While you were away…', 'Progress details', 'Turn changes…'])
     const none = readOnlyViewCommands({ workspace: null, session: null, progress: false, turnRecorded: false }, viewActs)
     expect(none.filter((command) => command.disabled !== true).map((command) => command.label)).toEqual(['dev-auto runs…', 'Plan use…'])
   })
@@ -64,7 +65,7 @@ describe('the read-only views open from the palette (Story 75.10 AC2)', () => {
   it('opens what its menu entry opened', () => {
     const opened: string[] = []
     const acts = Object.fromEntries(Object.keys(viewActs).map((key) => [key, () => { opened.push(key) }])) as typeof viewActs
-    for (const command of readOnlyViewCommands({ workspace: 'BMN', session: 'Lead', progress: true, turnRecorded: true }, acts)) command.run()
-    expect(opened).toEqual(['results', 'messages', 'progress', 'turnChanges', 'hookEvents', 'devAutoRuns', 'planUse'])
+    for (const command of readOnlyViewCommands({ workspace: 'BMN', session: 'Lead', progress: true, turnRecorded: true, awayPeriod: 'Wed 22:10 – Thu 07:40' }, acts)) command.run()
+    expect(opened).toEqual(['awaySummary', 'results', 'messages', 'progress', 'turnChanges', 'hookEvents', 'devAutoRuns', 'planUse'])
   })
 })

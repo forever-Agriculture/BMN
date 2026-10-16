@@ -90,18 +90,20 @@ export function paneMenu(
 }
 
 /**
- * The read-only views, together in the palette: Review results… and Messages… for the active
- * workspace, Progress details, Turn changes… and Hook events… for the selected session, then the
- * dev-auto runs and plan use. Each opens what its menu entry opened before.
+ * The read-only views, together in the palette: While you were away… once a period has closed (Story 76.6), Review
+ * results… and Messages… for the active workspace, Progress details, Turn changes… and Hook events… for the selected
+ * session, then the dev-auto runs and plan use. Each opens what its menu entry opened before.
  */
 export function readOnlyViewCommands(
-  state: { workspace: string | null; session: string | null; progress: boolean; turnRecorded: boolean },
-  open: { results(): void; messages(): void; progress(): void; turnChanges(): void; hookEvents(): void; devAutoRuns(): void; planUse(): void }
+  state: { workspace: string | null; session: string | null; progress: boolean; turnRecorded: boolean; awayPeriod?: string | null },
+  open: { results(): void; messages(): void; progress(): void; turnChanges(): void; hookEvents(): void; devAutoRuns(): void; planUse(): void; awaySummary?(): void }
 ): PaletteCommand[] {
   const command = (id: string, label: string, run: () => void, extra: Partial<PaletteCommand> = {}): PaletteCommand => ({ id, group: 'Commands', label, run, ...extra })
   const workspace = state.workspace ?? undefined
   const session = state.session ?? undefined
   return [
+    // Until a period has closed there is no summary, and a disabled command is left out of the palette.
+    command('away-summary', 'While you were away…', () => open.awaySummary?.(), { disabled: !state.awayPeriod || !open.awaySummary, context: state.awayPeriod ?? undefined }),
     command('review-results', 'Review results…', open.results, { disabled: state.workspace === null, context: workspace }),
     command('messages', 'Messages…', open.messages, { disabled: state.workspace === null, context: workspace }),
     // The palette leaves a disabled command out, so a session with nothing reported or recorded simply has no such line.

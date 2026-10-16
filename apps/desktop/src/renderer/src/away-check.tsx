@@ -20,7 +20,7 @@ export function awayTooltip(view: OwnerAwayView | null, now: Date, sessionName: 
   return [
     `${awaySinceWords(view.since, now)} · ${awaySourceWords(view, sessionName)}`,
     ...(view.note ? [`Note: ${view.note}`] : []),
-    'Uncheck when you are back.'
+    'The words open the summary so far. Uncheck when you are back.'
   ].join('\n')
 }
 
@@ -33,14 +33,27 @@ export function AwayCheck(props: {
   now: Date
   sessionName(sessionId: string): string | null
   onChange(to: 'away' | 'back'): void
+  /** Checked, the words are a button that opens the summary so far (76.3 AC3); only the box ends away. */
+  onOpenSummary?(): void
 }): React.JSX.Element {
   const away = props.view?.state === 'away' && props.view.since !== null
   const words = away ? awaySinceWords(props.view!.since!, props.now) : 'Away'
   const title = awayTooltip(props.view, props.now, props.sessionName)
+  const box = (
+    <input type="checkbox" checked={away} disabled={props.view === null} aria-label={away ? 'Away; uncheck when you are back' : undefined}
+      onChange={(event) => props.onChange(event.target.checked ? 'away' : 'back')} />
+  )
+  if (away && props.onOpenSummary) {
+    return (
+      <span className="away-check" data-away title={title}>
+        {box}
+        <button type="button" className="away-words" onClick={props.onOpenSummary}>{words}</button>
+      </span>
+    )
+  }
   return (
     <label className="away-check" data-away={away || undefined} title={title}>
-      <input type="checkbox" checked={away} disabled={props.view === null} aria-describedby={undefined}
-        onChange={(event) => props.onChange(event.target.checked ? 'away' : 'back')} />
+      {box}
       <span className="away-words">{words}</span>
     </label>
   )
