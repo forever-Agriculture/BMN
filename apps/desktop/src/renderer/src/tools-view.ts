@@ -102,7 +102,7 @@ export function toolStateWords(state: ToolStateName | undefined, app: Pick<Tools
 export function toolStateHint(state: ToolStateName | undefined, app: Pick<ToolsAppView, 'supported'> | undefined, on: boolean, name: string, detail?: string): string {
   if (state === 'exposed') return `${name} holds this tool but may not have it`
   if (!on) return `Not for ${name}`
-  if (app === undefined || !app.supported) return `Tools are not supported yet in ${name}: run its test on Health`
+  if (app === undefined || !app.supported) return `Tools are not supported yet in ${name}: Health says how BMN's test of it stands`
   switch (state) {
     case 'current': return `${name} has it`
     case 'missing': return `Not in ${name} yet: Install… adds it`
@@ -120,10 +120,11 @@ export function toolsTestLine(app: Pick<ToolsAppView, 'supported' | 'version' | 
   if (!app.supported) {
     if (app.version === null) return 'The app is not found'
     const last = app.test !== null && app.test.version === app.version ? app.test.outcome : null
-    return last === 'fail' ? `The test failed on ${app.version}` : last === 'inconclusive' ? `The test was inconclusive on ${app.version}` : `Not tested on ${app.version}`
+    return last === 'fail' ? `The test failed on ${app.version}` : last === 'inconclusive' ? `The test was inconclusive on ${app.version}` : `BMN tests ${app.version} by itself`
   }
+  // The tools test sends no prompt, so it reads as a check (Story 75.8 AC2).
   const seen = [app.variable ? 'passes variables' : 'variables not seen', app.isolation ? 'a run keeps to its own tools' : 'no run seen kept to its tools'].join(' · ')
-  return `Tested ${app.test ? day(app.test.at) : ''} · ${seen}`.replace('  ', ' ')
+  return `Checked ${app.test ? day(app.test.at) : ''}${app.test?.by === 'bmn' ? ' by BMN' : ''} · ${seen}`.replace('  ', ' ')
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -828,6 +828,32 @@ export function lastProbes({ inspect } = {}) {
 
 const PROBE_COMMANDS = { claude: 'claude', codex: 'codex', opencode: 'opencode' }
 
+/**
+ * Which apps BMN gives the loading test by itself (Story 75.8): an app that may receive private work, whose rules
+ * file holds the current rendering, at a version and rendering no test has settled, because none ran or each one
+ * showed nothing. The key is the rendering, so new rules are tested again; the caller reads the versions and bounds
+ * the tries. The test sends one prompt to the app's provider.
+ */
+export function probeAutoPlan({ versions, environment = process.env } = {}) {
+  let targets
+  try {
+    targets = checkTargets(environment)
+  } catch {
+    // No master, or one that cannot be read: nothing to test against.
+    return []
+  }
+  const log = probeLog()
+  const plan = []
+  for (const target of targets) {
+    const version = versions?.[target.harness]
+    if (typeof version !== 'string' || target.kind !== 'full' || target.state !== 'current') continue
+    const ofKey = log.filter((entry) => entry.harness === target.harness && entry.version === version && entry.rendered_hash === target.rendered_hash)
+    if (ofKey.some((entry) => entry.outcome === 'pass' || entry.outcome === 'fail')) continue
+    plan.push({ harness: target.harness, version, key: target.rendered_hash, reason: ofKey.length === 0 ? 'untested' : 'retry' })
+  }
+  return plan
+}
+
 /** The harness's version and destination now, for marking an earlier probe stale. */
 export async function probeInspector(environment = process.env) {
   const { harnessVersion, inspectRoute } = await import('./agents-check.mjs')
@@ -870,7 +896,7 @@ export function beforeFirstToolCall(rollout) {
  * route and the rendered file's hash. Sends the rules to that app's provider, so it runs only
  * where the approved destination may receive private work.
  */
-export async function probe(harness, { environment = process.env, now = new Date(), timeoutMs = 180_000 } = {}) {
+export async function probe(harness, { environment = process.env, now = new Date(), timeoutMs = 180_000, by } = {}) {
   const master = readMaster()
   const generation = approvedOrNull()
   const rendering = render(master, harness, generation)
@@ -878,7 +904,7 @@ export async function probe(harness, { environment = process.env, now = new Date
   const command = PROBE_COMMANDS[harness]
   let host = null
   const record = (outcome, detail, version = null) => {
-    const entry = { harness, at: now.toISOString(), outcome, detail, version, host, route: canonicalRoute(decision), rendered_hash: rendering.hash, master_hash: master.hash }
+    const entry = { harness, at: now.toISOString(), outcome, detail, version, host, route: canonicalRoute(decision), rendered_hash: rendering.hash, master_hash: master.hash, ...(by === 'bmn' ? { by } : {}) }
     ensurePrivate(dirname(probeLogPath()))
     appendFileSync(probeLogPath(), `${JSON.stringify(entry)}\n`, { mode: 0o600 })
     return entry
@@ -964,8 +990,9 @@ export const RULES_USAGE = `Usage: bmn rules render <app>                     Th
        bmn rules history [--json]                  The master-source snapshots BMN kept
        bmn rules revert-master <revision> [--yes]  Write one snapshot back as the master (a new revision)
        bmn rules import [--from <file>] [--yes]    One-shot: today's Claude rules become the master
-       bmn rules probe <app> [--json]              Owner-run: does the app load the file? Sends the rules to that
-                                                   app's provider, so only where it may receive private work
+       bmn rules probe <app> [--auto] [--json]     Does the app load the file? Sends the rules to that app's provider,
+                                                   so only where it may receive private work. BMN runs it by itself
+                                                   for a new app version or new rules (--auto marks such a run)
 
 Apps: ${HARNESSES.join(', ')}. The master is ~/.config/bmn/agents/global-rules.md: untagged text goes to every app;
 <!-- bmn:apps codex opencode --> … <!-- /bmn:apps --> limits a section to those apps; <!-- bmn:public --> …
@@ -984,7 +1011,7 @@ export async function runRulesCommand(argv) {
   }
   let parsed
   try {
-    parsed = readOptions(rest, { flags: ['json', 'yes', 'list', 'plan'], values: ['transaction', 'from', 'expect-plan'] })
+    parsed = readOptions(rest, { flags: ['json', 'yes', 'list', 'plan', 'auto'], values: ['transaction', 'from', 'expect-plan'] })
     if (parsed.rest !== null) throw new AgentsUsageError('rules takes no -- arguments')
   } catch (error) {
     if (error instanceof AgentsUsageError) return usage(error.message)
@@ -993,7 +1020,7 @@ export async function runRulesCommand(argv) {
   const { positionals, options } = parsed
   const asJson = options.json === true
   const allowed = { render: [], check: ['json'], install: ['json', 'yes', 'plan', 'expect-plan'], restore: ['json', 'yes', 'list', 'transaction', 'plan', 'expect-plan'], history: ['json'],
-    'revert-master': ['json', 'yes'], import: ['json', 'yes', 'from'], probe: ['json'] }
+    'revert-master': ['json', 'yes'], import: ['json', 'yes', 'from'], probe: ['json', 'auto'] }
   if (!Object.hasOwn(allowed, action)) return usage(`rules expects render, check, install, restore, history, revert-master, import or probe, not ${action}`)
   for (const name of Object.keys(options)) {
     if (!allowed[action].includes(name)) return usage(`rules ${action} does not accept --${name}`)
@@ -1082,7 +1109,7 @@ export async function runRulesCommand(argv) {
       return 0
     }
     if (positionals.length !== 1 || !HARNESSES.includes(positionals[0])) return usage(appRefusal(positionals[0], `rules probe expects one app: ${HARNESSES.join(', ')}`))
-    const result = await probe(positionals[0])
+    const result = await probe(positionals[0], options.auto === true ? { by: 'bmn' } : {})
     out(asJson ? JSON.stringify(result, null, 2) : `${result.harness}: ${result.outcome} - ${result.detail}${result.version ? ` (${result.version})` : ''}`)
     return result.outcome === 'pass' ? 0 : 1
   } catch (error) {

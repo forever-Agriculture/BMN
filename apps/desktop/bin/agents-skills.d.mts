@@ -100,7 +100,7 @@ export declare function installSkills(harnesses?: string[], options?: {
 export declare function restoreSkillsTransaction(manifest: unknown, folder: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string; leftWords?: string[] }): Promise<{ code: string; restored?: string[]; message?: string; plan_hash?: string; targets?: { harness: string; path: string; resolved_path: string; becomes: string; diff: string }[] }>
 
 export declare function testSkillsFolders(harness: string, options?: { environment?: Environment; now?: Date; timeoutMs?: number; by?: 'bmn' }): Promise<SkillsTestEntry>
-type SkillsTestOptions = { environment?: Environment; now?: Date; timeoutMs?: number }
+type SkillsTestOptions = { environment?: Environment; now?: Date; timeoutMs?: number; by?: 'bmn' }
 type LastSkillsTests = (Partial<SkillsTestEntry> & { harness: SkillsHarness; outcome: SkillsOutcome | null; stale?: boolean })[]
 type LastSkillsOptions = { environment?: Environment; tests?: SkillsTestEntry[]; versions?: SkillsVersions; generation?: Generation | null }
 export declare function testSkillsListing(harness: string, options?: SkillsTestOptions): Promise<SkillsTestEntry>
@@ -110,7 +110,9 @@ export declare function testSkillsLoading(harness: string, options?: SkillsTestO
 export declare function lastLoadingTests(options?: LastSkillsOptions): LastSkillsTests
 export declare function lastListingTests(options?: LastSkillsOptions): LastSkillsTests
 export declare function testSkills(harness: string, options?: SkillsTestOptions): Promise<{ harness: string; version: string | null; outcome: SkillsOutcome; detail: string; folders: SkillsTestEntry; listing: SkillsTestEntry | null }>
-export interface SkillsAutoPlanEntry { harness: SkillsHarness; version: string; reason: 'untested' | 'retry' }
-export declare function skillsAutoPlan(options?: { versions?: SkillsVersions; tests?: SkillsTestEntry[] }): SkillsAutoPlanEntry[]
+/** One app BMN tests by itself now (Story 75.8): `key` names what else the test is bound to, empty where only the version. */
+export interface SkillsAutoPlanEntry { harness: SkillsHarness; version: string; key: string; reason: 'untested' | 'retry' }
+export declare function skillsAutoPlan(options?: { versions?: SkillsVersions; tests?: SkillsTestEntry[]; generation?: Generation | null }): SkillsAutoPlanEntry[]
+export declare function skillsLoadingAutoPlan(options?: { versions?: SkillsVersions; tests?: SkillsTestEntry[]; environment?: Environment; generation?: Generation | null }): SkillsAutoPlanEntry[]
 export declare const SKILLS_USAGE: string
 export declare function runSkillsCommand(argv: string[]): Promise<number>

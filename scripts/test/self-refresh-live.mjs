@@ -68,7 +68,6 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const backups = join(root, 'backups')
   const agentsDir = join(home, '.config/bmn/agents')
   for (const folder of [agentsDir, join(agentsDir, 'state'), work, stubs, queue, backups]) mkdirSync(folder, { recursive: true, mode: 0o700 })
-  writeFileSync(join(agentsDir, 'state/context-auto.json'), '{"version":1,"enabled":false,"told":{}}\n')
   const roster = readFileSync(join(fixtures, 'agents/roster-example.md'), 'utf8')
   writeFileSync(join(agentsDir, 'roster.md'), roster)
   writeFileSync(join(agentsDir, 'global-rules.md'), MASTER)

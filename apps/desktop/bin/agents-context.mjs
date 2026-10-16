@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFi
 import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 import { APP_NAMES, RosterError, agentState, agentsDirectory, appName, sha256 } from './agents-roster.mjs'
-import { absoluteUncollapsed, jsonIndent, pathState, replaceFileSafely, resolvedPath, writeAtomically } from './safe-config-write.mjs'
+import { absoluteUncollapsed, jsonIndent, pathState, replaceFileSafely, resolvedPath } from './safe-config-write.mjs'
 import { unifiedDiff } from './text-diff.mjs'
 
 /**
@@ -154,17 +154,16 @@ function shownBy(test) {
 
 /**
  * Why an app's setting is not used on a version, said so that the reader knows who acts next (63.1 AC6):
- * BMN by itself, or the owner because BMN's own testing is switched off or its test did not pass.
+ * BMN by itself, or the owner once its test failed (Story 75.8 took the switch that turned BMN's own testing off).
  */
-function untestedReason(app, harness, standing, auto) {
+function untestedReason(app, harness, standing) {
   const command = `bmn context test ${harness}`
   if (standing === 'fail') return `the context test failed on this ${app} version, so the setting is not used (${command} runs it again)`
   if (standing === 'inconclusive' || standing === 'unavailable') {
-    return `the context test showed nothing on this ${app} version${auto ? '; BMN tries it once more when it next starts' : ` (${command})`}`
+    return `the context test showed nothing on this ${app} version; BMN tries it again by itself, up to three times`
   }
   if (standing === 'unknown') return `the ${app} version cannot be read, so its context setting counts as not tested`
-  return auto ? `the context setting is not tested on this ${app} version yet; BMN tests it by itself when it starts, when Rules > Health is read and after an update there`
-    : `the context setting is not tested on this ${app} version and BMN's own test is switched off in Rules > Health (${command})`
+  return `the context setting is not tested on this ${app} version yet; BMN tests it by itself when it starts, when Rules > Health is read and after an update there`
 }
 
 /**
@@ -179,7 +178,7 @@ export function contextItems(agent, proven) {
   const app = appName(agent.harness)
   const base = { limit: agent.context_limit, ...(agent.compact_at === undefined ? {} : { compact_at: agent.compact_at }) }
   if (controls === undefined) return { state: 'not-supported-yet', ...base, reason: `BMN has no context setting for ${app}` }
-  if (!proven.limit) return { state: 'not-supported-yet', ...base, reason: untestedReason(app, agent.harness, proven.standing, proven.auto ?? contextAuto().enabled) }
+  if (!proven.limit) return { state: 'not-supported-yet', ...base, reason: untestedReason(app, agent.harness, proven.standing) }
   const { min, max } = controls.limit
   if ((min !== undefined && agent.context_limit < min) || (max !== undefined && agent.context_limit > max)) {
     return { state: 'out-of-range', ...base, reason: `${app} takes ${thousands(min)} to ${thousands(max)} tokens` }
@@ -749,33 +748,6 @@ export async function testContext(harness, { environment = process.env, now = ne
 // ---------------------------------------------------------------------------------------------
 // BMN tests a new app version by itself (63.1)
 
-export function contextAutoPath() {
-  return `${agentsDirectory()}/state/context-auto.json`
-}
-
-/**
- * BMN's own testing: `enabled` is the owner's one switch for all apps, on until he turns it off;
- * `told` holds, per app, the version and outcome of the self-run test he was last told about, so a
- * failure is said once. A file that is missing or cannot be read is the default, never a guess.
- */
-export function contextAuto() {
-  try {
-    const data = JSON.parse(readFileSync(contextAutoPath(), 'utf8'))
-    const told = data?.told !== null && typeof data?.told === 'object' && !Array.isArray(data.told) ? data.told : {}
-    return { enabled: data?.enabled !== false, told: Object.fromEntries(Object.entries(told).filter(([, value]) => typeof value === 'string')) }
-  } catch {
-    return { enabled: true, told: {} }
-  }
-}
-
-/** Keeps a change to BMN's own testing: the switch, or what the owner was told. */
-export function setContextAuto(change) {
-  const next = { version: 1, ...contextAuto(), ...change }
-  mkdirSync(dirname(contextAutoPath()), { recursive: true, mode: 0o700 })
-  writeAtomically(contextAutoPath(), `${JSON.stringify(next)}\n`)
-  return { enabled: next.enabled, told: next.told }
-}
-
 /** The approved, enabled agents on an app that have a context limit of their own: the ones a test of that app is for. */
 export function limitedAgents(data, harness) {
   return (data?.agents ?? []).filter((agent) => agent.harness === harness && agentState(agent) === 'active' && agent.context_limit !== undefined)
@@ -817,10 +789,9 @@ function newSourceSet(harness, agents, last, tests, today) {
  * agent has a limit for is never named, nor is one whose version cannot be read, nor a version whose
  * latest test failed: that one waits for the owner. `versions` holds each app's installed version and
  * `sources` what a test started now would meet besides its own size (contextTestSources). The caller
- * sees to it that a retry happens once per start of BMN.
+ * bounds the tries, across restarts of BMN (Story 75.8).
  */
-export function contextAutoPlan({ data, versions, tests = contextTests(), enabled = contextAuto().enabled, sources = {} }) {
-  if (!enabled) return []
+export function contextAutoPlan({ data, versions, tests = contextTests(), sources = {} }) {
   const plan = []
   for (const harness of CONTEXT_APPS) {
     const agents = limitedAgents(data, harness)
@@ -846,8 +817,8 @@ export const CONTEXT_USAGE = `Usage: bmn context check [--json]            Each 
                                              as a diff and written after Yes
        bmn context test <app> [--json]       Start the app once in an empty folder and see whether it takes the
                                              setting; the result is kept for that version. BMN runs it by itself
-                                             for a new version of an app an agent has a limit on, unless that is
-                                             switched off in Rules > Health (--auto marks such a run)
+                                             for a new version of an app an agent has a limit on (--auto marks
+                                             such a run)
 
 Apps: codex (config.toml: model_context_window, model_auto_compact_token_limit) and claude
 (settings.json env: CLAUDE_CODE_AUTO_COMPACT_WINDOW). An agent's own limit is applied to a dispatch by the

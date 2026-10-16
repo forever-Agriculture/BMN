@@ -20,7 +20,9 @@ import {
   type SessionRecord,
   type SessionStopCause,
   type WorkspaceLayoutState,
-  type WorkspaceRecord
+  type WorkspaceRecord,
+  AUTO_TEST_KINDS,
+  type AutoTestKind
 } from '@bmn/protocol'
 import {
   app,
@@ -573,6 +575,8 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
     // Only the app's own self-test, started in test mode, serves made-up pages, and only for site names ending in `.test`.
     researchPages: () => (rendererTestMode ? process.env.BMN_SELF_TEST_PAGES ?? null : null),
     judgeTestPort: () => (rendererTestMode ? process.env.BMN_JUDGE_TEST_PORT ?? null : null),
+    // A test run starts none of BMN's own app tests unless it names them (`all` or a list): the self-test keeps the owner's HOME and his apps' sign-ins (Story 75.8).
+    ...(rendererTestMode || selfTest ? { autoTestKinds: testRunAutoTests(process.env.BMN_AUTO_TESTS) } : {}),
     // The self-test keeps the owner's HOME, where his approved team is read, and opens Preferences on Team: it asks
     // no OpenCode, so nothing runs in BMN's OpenCode folder under his real roots (packaged smoke of 2026-10-15).
     ...(selfTest ? {
@@ -591,10 +595,9 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
       return picked.canceled ? null : picked.filePaths[0] ?? null
     }
   })
-  // Once the shell's own program path is known, so a new app version is tested with the program a session would start (63.1, and skills).
+  // Once the shell's own program path is known, so an app is tested with the program a session would start (Story 75.8).
   void sessionEnvironment.refresh().finally(() => {
-    void agentsIpc.contextAutoAtStart()
-    void agentsIpc.skillsAutoAtStart()
+    void agentsIpc.autoTestsAtStart()
   })
   installVoiceIpcHandlers(bridgeIpc, {
     senderIsAllowed,
@@ -998,6 +1001,12 @@ function actionableStartupFailure(error: unknown): StartupFailure {
 
 
 const selfTest = process.argv.includes('--self-test')
+
+/** The tests a test run lets BMN start by itself: `all`, or a comma-separated list of kinds; none otherwise. */
+function testRunAutoTests(value: string | undefined): AutoTestKind[] {
+  if (value === 'all') return [...AUTO_TEST_KINDS]
+  return (value ?? '').split(',').filter((kind): kind is AutoTestKind => (AUTO_TEST_KINDS as readonly string[]).includes(kind))
+}
 const rendererTestMode = process.argv.includes('--bmn-test-mode')
 if (selfTest) {
   // The dictation flow records from Chromium's fake microphone, so the real recorder path runs without hardware.

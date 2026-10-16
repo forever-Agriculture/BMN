@@ -1,16 +1,16 @@
 // MODULE: agents-ipc.test.ts - Epic 60.4–60.6: the Team and Rules handlers preview an approval, update only the rules files that were shown, and re-inspect what an approval records
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { createServer, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { LUNA_GO_PROPOSAL } from '@bmn/protocol'
+import { LUNA_GO_PROPOSAL, type AutoTestKind, type AutoTestsView } from '@bmn/protocol'
 import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, OpenCodeGoView, JudgeTried, JudgeView, ResearchLookup, ResearchSnapshot, WebQuestionAsked, WebQuestionsSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan, TeamAskDetail, TeamAsksSnapshot, ToolProposalView, ToolsPlan } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CODEX_RESEARCH_TOOLS_SEEN, fenceTestsPath, researchFormHash, teamRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
-import { contextAuto, contextTests, setContextAuto } from '../../bin/agents-context.mjs'
+import { contextTests } from '../../bin/agents-context.mjs'
 import { fetchPublicPage } from '../../bin/agents-research.mjs'
 import { judgeProposal } from '../../bin/agents-roster.mjs'
 import { approveRoster, restoreGeneration, saveAndApprove } from './agents-approval'
@@ -40,6 +40,8 @@ let researchCompare: NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]>
 let openCodeGo: { listed: boolean; signedIn: boolean | null; copy: { ok: boolean; copied: boolean; message: string } | Error; calls: Array<{ kind: string; home: string | undefined }> }
 /** What installing the handlers handed back, and the notices BMN itself showed. */
 let ipc: AgentsIpcHandle
+/** The tests BMN may start by itself here: none, unless a test names the ones it is about, so no test starts a stand-in app behind another's back. */
+const autoKinds: AutoTestKind[] = []
 let notices: { title: string; body: string }[]
 /** The addresses handed to the owner's browser. */
 let openedInBrowser: string[]
@@ -74,8 +76,7 @@ beforeEach(() => {
   openedInBrowser = []
   askExportInto = null
   openCodeGo = { listed: false, signedIn: true, copy: { ok: true, copied: false, message: 'BMN\'s OpenCode folder already holds your OpenCode Go sign-in' }, calls: [] }
-  // BMN's own context testing is off here, as an owner may have it, so no test starts a stand-in app behind another test's back; its own tests switch it on.
-  setContextAuto({ enabled: false })
+  autoKinds.length = 0
   ipc = installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
     senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...appEnv }),
     openPath: async (path) => (existsSync(path) ? '' : 'no such file'), openExternal: async (address) => { openedInBrowser.push(address) }, resolvesPublic: async (host) => !host.startsWith('intranet.') && !host.startsWith('unknown.'), researchPages: () => researchPages,
@@ -88,7 +89,7 @@ beforeEach(() => {
       if (researchCompare === null || researchCompare === undefined) throw new Error('no comparison under a provider list is expected here')
       return researchCompare(options)
     },
-    notifyApp: (notice) => { notices.push(notice) }, contextRetryLater: () => {}, chooseAskExportFolder: async () => askExportInto,
+    notifyApp: (notice) => { notices.push(notice) }, autoTestsLater: () => {}, autoTestKinds: autoKinds, chooseAskExportFolder: async () => askExportInto,
     openCodeGo: {
       lists: async (options) => { openCodeGo.calls.push({ kind: 'lists', home: options?.environment?.HOME }); return { listed: openCodeGo.listed } },
       signedIn: async (options) => { openCodeGo.calls.push({ kind: 'signedIn', home: options?.environment?.HOME }); return { signedIn: openCodeGo.signedIn } },
@@ -672,89 +673,114 @@ describe('BMN\'s own context testing on Rules › Health (63.1)', () => {
   ].join('\n'))
   const calls = (name: string): string[] => (existsSync(join(home, `${name}-calls`)) ? file(`${name}-calls`).trim().split('\n') : [])
   const tests = (): number => calls('codex').filter((first) => first === 'exec').length
-  /** The example team, in which only Sol (Codex) has a limit of its own, approved; the switch as a new install has it. */
+  /** The example team, in which only Sol (Codex) has a limit of its own, approved; BMN may start its context test by itself. */
   const approved = async (): Promise<void> => {
     writeFileSync(rosterFile(), EXAMPLE)
     await call<AgentsOutcome>('agents:approve', { shown: await shown() })
-    setContextAuto({ enabled: true })
+    autoKinds.push('context')
   }
-  const settled = (): Promise<RulesSnapshot['contextAuto']> => call('rules:context-auto', { fresh: false })
+  const settled = (): Promise<AutoTestsView> => call('rules:auto-tests', { fresh: false })
+  const idle: AutoTestsView = { running: null, stopped: [] }
+  /** Ten minutes and a second pass, as BMN sees its tries on disk. */
+  const later = (): void => {
+    const path = join(home, '.config/bmn/agents/state/auto-tests.json')
+    const kept = JSON.parse(readFileSync(path, 'utf8')) as { version: 1; tries: Record<string, { at: string }> }
+    for (const entry of Object.values(kept.tries)) entry.at = new Date(Date.parse(entry.at) - 601_000).toISOString()
+    writeFileSync(path, JSON.stringify(kept))
+  }
 
   it('tests a new version when Health reads the machine, says that it is, and then shows the test as its own and the limit as applied (AC1, AC5)', async () => {
     codex('0.161.0', 116850)
     stub('claude', 'echo "$1" >> "$HOME/claude-calls"\necho "2.1.295 (Claude Code)"')
     await approved()
     const first = await call<RulesSnapshot>('rules:snapshot')
-    expect(first.contextAuto).toEqual({ enabled: true, running: 'codex' })
+    expect(first.autoTests).toEqual({ running: { kind: 'context', harness: 'codex' }, stopped: [] })
     expect(first.context[0]).toMatchObject({ limitProven: false, test: null, limits: [{ agent: 'Sol', limit: 272000, state: 'not-applied', reason: expect.stringContaining('BMN tests it by itself') }] })
     expect(first.context[1]).toMatchObject({ harness: 'claude', limits: [] })
     // A second read while the test runs starts no second one.
     await call<RulesSnapshot>('rules:snapshot')
-    expect(await settled()).toEqual({ enabled: true, running: null })
+    expect(await settled()).toEqual(idle)
     const after = await call<RulesSnapshot>('rules:snapshot')
-    expect(after.contextAuto).toEqual({ enabled: true, running: null })
+    expect(after.autoTests).toEqual(idle)
     expect(after.context[0]).toMatchObject({ limitProven: true, test: { outcome: 'pass', version: '0.161.0', by: 'bmn' }, limits: [{ agent: 'Sol', limit: 272000, state: 'applied' }] })
     expect(after.context[0]?.limits[0]).not.toHaveProperty('reason')
     await settled()
     expect([tests(), notices]).toEqual([1, []])
     // The app is updated: the next read tests the new version, once.
     codex('0.162.0', 116850)
-    expect((await call<RulesSnapshot>('rules:snapshot')).contextAuto.running).toBe('codex')
+    expect((await call<RulesSnapshot>('rules:snapshot')).autoTests.running).toEqual({ kind: 'context', harness: 'codex' })
     await settled()
     await call<RulesSnapshot>('rules:snapshot')
     await settled()
     expect([tests(), contextTests().map((entry) => [entry.version, entry.limit, entry.by])]).toEqual([2, [['0.161.0', 'pass', 'bmn'], ['0.162.0', 'pass', 'bmn']]])
-    // Claude Code has no agent with a limit: it was asked for its version by Health, and never started.
+    // Claude Code has no agent with a limit: it was asked for its version, and never started.
     expect(calls('claude').every((first) => first === '--version')).toBe(true)
   })
 
-  it('tests at the start of BMN and when an update ended, without Health, and asks no app for its version that no agent has a limit on (AC1)', async () => {
+  it('tests at the start of BMN and when an update ended, without Health, and starts no app that no agent has a limit on (AC1; Story 75.8 AC1)', async () => {
     codex('0.161.0', 116850)
     stub('claude', 'echo "$1" >> "$HOME/claude-calls"\necho "2.1.295 (Claude Code)"')
     await approved()
     rmSync(join(home, 'claude-calls'), { force: true })
-    await ipc.contextAutoAtStart()
-    expect([tests(), calls('claude'), contextTests().map((entry) => entry.by)]).toEqual([1, [], ['bmn']])
+    await ipc.autoTestsAtStart()
+    expect([tests(), contextTests().map((entry) => entry.by)]).toEqual([1, ['bmn']])
     codex('0.162.0', 116850)
-    expect(await call('rules:context-auto', { fresh: true })).toEqual({ enabled: true, running: null })
-    expect([tests(), calls('claude'), contextTests().map((entry) => entry.version)]).toEqual([2, [], ['0.161.0', '0.162.0']])
+    expect(await call('rules:auto-tests', { fresh: true })).toEqual(idle)
+    expect([tests(), contextTests().map((entry) => entry.version)]).toEqual([2, ['0.161.0', '0.162.0']])
     // Nothing new: nothing started.
-    await call('rules:context-auto', { fresh: true })
-    await ipc.contextAutoAtStart()
+    await call('rules:auto-tests', { fresh: true })
+    await ipc.autoTestsAtStart()
     expect(tests()).toBe(2)
+    expect(calls('claude').every((first) => first === '--version')).toBe(true)
+    // The switch is gone: no channel turns BMN's own tests off.
+    expect(handlers.has('aiterm:rules:context-auto-set')).toBe(false)
   })
 
-  it('starts nothing with the switch off, says so, and tests once it is switched on (AC4)', async () => {
-    codex('0.161.0', 116850)
+  it('stops after three tries that showed nothing, ten minutes apart, says so once, shows it, and leaves Test again to the owner (Story 75.8 AC2)', async () => {
+    stub('codex', 'echo "$1" >> "$HOME/codex-calls"\nif [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi\ncat > /dev/null')
     await approved()
-    const off = await call<RulesOutcome>('rules:context-auto-set', { enabled: false })
-    expect(off).toMatchObject({ ok: true, message: 'BMN no longer tests context limits by itself', snapshot: { contextAuto: { enabled: false, running: null } } })
-    expect(off.snapshot.context[0]?.limits).toMatchObject([{ agent: 'Sol', state: 'not-applied', reason: expect.stringContaining("BMN's own test is switched off in Rules > Health") }])
-    await ipc.contextAutoAtStart()
+    await ipc.autoTestsAtStart()
+    expect([tests(), contextTests().map((entry) => entry.limit), notices]).toEqual([1, ['inconclusive'], []])
+    // Before the ten minutes are up nothing starts, however often BMN looks.
+    await call('rules:auto-tests', { fresh: true })
     await call<RulesSnapshot>('rules:snapshot')
-    await call('rules:context-auto', { fresh: true })
-    expect([tests(), contextAuto().enabled]).toEqual([0, false])
-    // The owner's own test still runs, and is recorded as his.
-    expect(await call<RulesOutcome>('rules:context-test', { harness: 'codex' })).toMatchObject({ ok: true, snapshot: { context: [{ test: { outcome: 'pass' } }, {}] } })
-    expect(contextTests().map((entry) => entry.by)).toEqual([undefined])
-    codex('0.162.0', 116850)
-    const on = await call<RulesOutcome>('rules:context-auto-set', { enabled: true })
-    expect(on).toMatchObject({ ok: true, message: 'BMN tests context limits by itself after an app update', snapshot: { contextAuto: { enabled: true, running: 'codex' } } })
     await settled()
-    expect(contextTests().map((entry) => [entry.version, entry.by])).toEqual([['0.161.0', undefined], ['0.162.0', 'bmn']])
-    await expect(call('rules:context-auto-set', { enabled: 'yes' })).rejects.toThrow(/true or false/)
+    expect(tests()).toBe(1)
+    later()
+    await call('rules:auto-tests', { fresh: true })
+    expect([tests(), notices]).toEqual([2, []])
+    later()
+    const stopped = await call<AutoTestsView>('rules:auto-tests', { fresh: true })
+    expect(tests()).toBe(3)
+    expect(stopped).toEqual({ running: null, stopped: [{ kind: 'context', harness: 'codex', version: '0.161.0', tries: 3, at: expect.any(String) }] })
+    expect(notices).toEqual([{ title: 'Codex context test stopped',
+      body: "Sol's own context limit does not hold on Codex 0.161.0: the test BMN ran by itself showed nothing, 3 times, so it stopped trying. Rules › Health has Test again." }])
+    expect(statSync(join(home, '.config/bmn/agents/state/auto-tests.json')).mode & 0o777).toBe(0o600)
+    // No fourth try, and nothing more said.
+    later()
+    await call('rules:auto-tests', { fresh: true })
+    expect((await call<RulesSnapshot>('rules:snapshot')).autoTests.stopped).toHaveLength(1)
+    await settled()
+    expect([tests(), notices.length]).toEqual([3, 1])
+    // The owner's Test again runs, is recorded as his, and the row no longer says BMN stopped.
+    codex('0.161.0', 116850)
+    const again = await call<RulesOutcome>('rules:context-test', { harness: 'codex' })
+    expect(again).toMatchObject({ ok: true, snapshot: { context: [{ test: { outcome: 'pass' } }, {}] } })
+    expect(contextTests().map((entry) => entry.by)).toEqual(['bmn', 'bmn', 'bmn', undefined])
+    expect((await call<RulesSnapshot>('rules:snapshot')).autoTests).toEqual(idle)
   })
 
   it('tells the owner once when the test it ran failed, naming the agent (AC5)', async () => {
     codex('0.161.0', 258400)
     await approved()
-    await ipc.contextAutoAtStart()
+    await ipc.autoTestsAtStart()
     await call<RulesSnapshot>('rules:snapshot')
     await settled()
     expect(tests()).toBe(1)
-    expect(notices).toEqual([{ title: 'Codex context test failed', body: "Sol's own context limit does not hold on Codex 0.161.0: the test BMN ran by itself failed. Rules › Health has the details." }])
+    expect(notices).toEqual([{ title: 'Codex context test failed', body: "Sol's own context limit does not hold on Codex 0.161.0: the test BMN ran by itself failed. Rules › Health has the details and Test again." }])
     const shownNow = await call<RulesSnapshot>('rules:snapshot')
     expect(shownNow.context[0]).toMatchObject({ limitProven: false, test: { outcome: 'fail', by: 'bmn' }, limits: [{ agent: 'Sol', state: 'not-applied', reason: expect.stringContaining('the context test failed on this Codex version') }] })
+    expect(shownNow.autoTests).toEqual(idle)
   })
 })
 
@@ -826,37 +852,42 @@ describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
     await expect(call('rules:skills-loading-test', { harness: 'vim' })).rejects.toThrow()
   })
 
-  it('tests a new version of an app whose skills it reached by itself, shows that it is, and tells a failure once', async () => {
+  it('tests where an app reads skills by itself on a first install and a new version, shows that it is, and tells a failure once (Story 75.8 AC1)', async () => {
     await approvedAndInstalled()
     skill('alpha')
+    // Codex alone: the other apps are not installed here.
+    rmSync(join(stubs, 'claude'), { force: true })
     const lister = (version: string, folder: string): string => codexLister.replace('codex-cli 0.161.0', `codex-cli ${version}`).replace('.agents/skills', folder)
     stub('codex', codexLister)
-    // An app no test ever passed on is left to the owner.
-    await ipc.skillsAutoAtStart()
-    expect(existsSync(join(home, '.config/bmn/agents/state/skills-tests.jsonl'))).toBe(false)
-    expect(await call<RulesOutcome>('rules:skills-test', { harness: 'codex' })).toMatchObject({ ok: true })
+    autoKinds.push('skills')
     const records = (): string[][] => file('.config/bmn/agents/state/skills-tests.jsonl').trim().split('\n').map((line) => JSON.parse(line) as Record<string, string>)
       .map((entry) => [String(entry.kind), String(entry.version), String(entry.outcome), entry.by ?? 'owner'])
+    // A first install: BMN finds where Codex reads skills, then whether it lists one placed there, and sends no prompt.
+    await ipc.autoTestsAtStart()
+    expect(records()).toEqual([['capability', '0.161.0', 'pass', 'bmn'], ['listing', '0.161.0', 'pass', 'bmn']])
 
     stub('codex', lister('0.162.0', '.agents/skills'))
     const reading = await call<RulesSnapshot>('rules:snapshot')
-    expect(reading.skills.apps[1]).toMatchObject({ harness: 'codex', version: '0.162.0', supported: false, testing: true })
-    await call('rules:skills-auto', { fresh: false })
+    expect(reading.autoTests.running).toEqual({ kind: 'skills', harness: 'codex' })
+    await call('rules:auto-tests', { fresh: false })
     const after = (await call<RulesSnapshot>('rules:snapshot')).skills.apps[1]!
-    expect(after).toMatchObject({ supported: true, state: 'Missing', test: { version: '0.162.0', outcome: 'pass', by: 'bmn' } })
-    expect(after.testing).toBeUndefined()
-    // Only where the app reads skills: nothing was put where Codex keeps them.
-    expect(records()).toEqual([['capability', '0.161.0', 'pass', 'owner'], ['listing', '0.161.0', 'pass', 'owner'], ['capability', '0.162.0', 'pass', 'bmn']])
+    expect(after).toMatchObject({ supported: true, state: 'Missing', test: { version: '0.162.0', outcome: 'pass', by: 'bmn' }, listing: { version: '0.162.0', outcome: 'pass', by: 'bmn' } })
+    // Only where the app reads skills and a listing in a home of its own: nothing was put where Codex keeps them.
+    expect(records().slice(2)).toEqual([['capability', '0.162.0', 'pass', 'bmn'], ['listing', '0.162.0', 'pass', 'bmn']])
     expect(notices).toEqual([])
 
     // The next version reads no folder BMN knows: one test, one notice, and nothing more at the next start.
     stub('codex', lister('0.163.0', '.nowhere'))
-    await ipc.skillsAutoAtStart()
-    expect(notices).toEqual([{ title: 'Codex skills test failed', body: 'Codex 0.163.0 no longer reads skills from any folder BMN knows, so BMN installs no skills for it. Rules › Skills has the details.' }])
-    await ipc.skillsAutoAtStart()
-    await call('rules:skills-auto', { fresh: true })
-    expect(records().slice(3)).toEqual([['capability', '0.163.0', 'fail', 'bmn']])
+    await ipc.autoTestsAtStart()
+    expect(notices).toEqual([{ title: 'Codex skills test failed', body: 'The skills test BMN ran by itself on Codex 0.163.0 failed. Rules › Skills has the details and Test again.' }])
+    await ipc.autoTestsAtStart()
+    await call('rules:auto-tests', { fresh: true })
+    expect(records().slice(4)).toEqual([['capability', '0.163.0', 'fail', 'bmn']])
     expect(notices).toHaveLength(1)
+    // The owner's Test again is his own test, recorded as his.
+    stub('codex', lister('0.163.0', '.agents/skills'))
+    expect(await call<RulesOutcome>('rules:skills-test', { harness: 'codex' })).toMatchObject({ ok: true })
+    expect(records().slice(5)).toEqual([['capability', '0.163.0', 'pass', 'owner'], ['listing', '0.163.0', 'pass', 'owner']])
   })
 
   it('previews which apps a staged skills change reaches, and approves it with the team', async () => {
@@ -1288,7 +1319,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
         writeFileSync(fenceTestsPath(), `${JSON.stringify(entry)}\n`)
         return entry
       }
-      expect((await call<ResearchSnapshot>('research:fence-test')).fenceTest).toEqual({ running: true, ended: null })
+      expect((await call<ResearchSnapshot>('research:fence-test')).fenceTest).toEqual({ running: true, ended: null, last: [] })
       // Pressed again while it runs, it starts nothing more.
       expect((await call<ResearchSnapshot>('research:fence-test')).fenceTest.running).toBe(true)
       await pause(20)
@@ -1299,12 +1330,38 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
         .toMatchObject({ ok: false, message: 'The Codex fence test is running. Wait for it to end.' })
       release()
       const done = await tested()
-      expect(done.fenceTest).toEqual({ running: false, ended: { ok: true, text: 'The fence test of Codex 0.161.0 passed: a research run sends its provider nothing of yours.' } })
+      expect(done.fenceTest).toEqual({ running: false, ended: { ok: true, text: 'The fence test of Codex 0.161.0 passed: a research run sends its provider nothing of yours.' },
+        last: [{ harness: 'codex', verdict: 'pass', version: '0.161.0', at: expect.any(String) }] })
       expect(done.researchers.map((agent) => [agent.id, agent.ok, agent.fence?.compared])).toEqual([['sol', true, false], ['opus', true, undefined], ['luna', true, false]])
       expect(done.researchers.find((agent) => agent.id === 'luna')?.fence?.tools).toEqual(CODEX_RESEARCH_TOOLS_SEEN)
       // The record is of 0.161.0 alone: the next Codex version is closed again until its own test.
       stub('codex', 'echo "codex-cli 0.162.0"')
       expect((await load(true)).researchers.filter((agent) => agent.ok).map((agent) => agent.id)).toEqual(['opus'])
+    })
+
+    it('runs the fence test by itself for the Codex version a researcher is on, once it passed no more, and Test again names the app (Story 75.8 AC1)', async () => {
+      await name('sol', 'opus', 'luna')
+      const apps: string[] = []
+      fenceTest = async (options) => {
+        apps.push(options?.harness ?? 'codex')
+        const entry = passed(['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna'])
+        mkdirSync(dirname(fenceTestsPath()), { recursive: true })
+        writeFileSync(fenceTestsPath(), `${JSON.stringify(entry)}\n`)
+        return entry
+      }
+      autoKinds.push('fence')
+      await ipc.autoTestsAtStart()
+      expect(apps).toEqual(['codex'])
+      const after = await load(true)
+      expect([after.fenceTest.last, after.autoTests]).toEqual([[{ harness: 'codex', verdict: 'pass', version: '0.161.0', at: expect.any(String) }], { running: null, stopped: [] }])
+      expect(after.researchers.filter((agent) => agent.ok).map((agent) => agent.id)).toEqual(['sol', 'opus', 'luna'])
+      // A pass is not tested again; the owner's Test again names the app, and Claude Code has no fence test.
+      await ipc.autoTestsAtStart()
+      expect(apps).toEqual(['codex'])
+      await call<ResearchSnapshot>('research:fence-test', { harness: 'codex' })
+      await tested()
+      expect(apps).toEqual(['codex', 'codex'])
+      await expect(call('research:fence-test', { harness: 'claude' })).rejects.toThrow(/Codex and OpenCode/)
     })
 
     it('says in words how a fence test that failed, showed nothing or could not run ended', async () => {

@@ -35,6 +35,7 @@ import type {
   ArtifactRecord,
   AttentionOrigin,
   AttentionRecord,
+  AutoTestsView,
   BackupExportResult,
   ClosePromptDecision,
   ClosePromptRequest,
@@ -375,10 +376,8 @@ export interface AiTerminalBridge {
   applyContextLimit(harness: ContextLimitApp, limit: number | null, compact: number | null, planHash: string): Promise<RulesOutcome>
   /** Owner-run: starts the app once in an empty folder to see whether it takes the setting. */
   testContextLimit(harness: ContextLimitApp): Promise<RulesOutcome>
-  /** BMN's own context testing: `fresh` makes it look now, without it the call waits for a test under way. */
-  contextAuto(fresh: boolean): Promise<RulesSnapshot['contextAuto']>
-  skillsAuto(fresh: boolean): Promise<{ running: RosterHarness | null }>
-  setContextAuto(enabled: boolean): Promise<RulesOutcome>
+  /** BMN's own tests (Story 75.8): `fresh` makes it look now, without it the call waits for the tests under way. */
+  autoTests(fresh: boolean): Promise<AutoTestsView>
   /** Story 60.11: what a skills install would link, copy or remove in each app, then the install itself, bound to that plan. */
   planSkillsInstall(): Promise<SkillsPlan>
   installSkills(planHash: string): Promise<RulesOutcome>
@@ -399,8 +398,8 @@ export interface AiTerminalBridge {
   /** Owner-run: starts the research with that agent. It runs in the background; the snapshot says how far it is. */
   startResearch(researcher: string): Promise<ResearchSnapshot>
   stopResearch(): Promise<ResearchSnapshot>
-  /** Owner-run: starts the fence test of the installed Codex. It calls no provider and runs in the background; the snapshot says when it has ended. */
-  testCodexFence(): Promise<ResearchSnapshot>
+  /** The owner's Test again: starts the fence test of the installed app named, or of Codex and OpenCode. It calls no provider and runs in the background; the snapshot says when it has ended. */
+  testCodexFence(harness?: 'codex' | 'opencode'): Promise<ResearchSnapshot>
   /** Owner-run: researches one model name on one provider and resolves when that run ends. */
   lookUpModel(researcher: string, provider: string, model: string): Promise<ResearchLookup>
   /** Story 64.3: the kept web questions, what holds the research lock now, the switch and the day's count. */

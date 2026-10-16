@@ -35,6 +35,7 @@ import {
   type ToolsAppView,
   type ToolsPlan
 } from '@bmn/protocol'
+import { offersTestAgain, runningWords, stoppedTest, stoppedWords, testRunning } from './auto-test-words'
 import { failureDetail } from './bridge-error'
 import { createMachineReads, endedSince, type MachineReads } from './machine-reads'
 import { Segmented } from './history-preferences'
@@ -111,10 +112,14 @@ export const TEST_WORDS: Readonly<Record<NonNullable<RulesProbeView['outcome']>,
   unavailable: 'Unavailable'
 }
 
-/** The last loading test in words: its result and date, and whether the rules or the app changed since. */
+/** Said after a test that sent the app's provider one prompt, unlike the checks that send none (Story 75.8 AC2). */
+export const PROMPT_SENT = ' · one prompt sent'
+
+/** The last loading test in words: its result, date and version, whether BMN ran it by itself, whether the rules or the app changed since, and the prompt it sent. */
 export function testLine(test: RulesProbeView | undefined): string {
-  if (!test || test.outcome === null) return 'Never tested'
-  return `Test ${TEST_WORDS[test.outcome].toLowerCase()} ${shortDate(test.at)}${test.stale ? ' · stale' : ''}`
+  if (!test || test.outcome === null) return 'Not tested yet'
+  const spent = test.outcome === 'unavailable' ? '' : PROMPT_SENT
+  return `Test ${TEST_WORDS[test.outcome].toLowerCase()} ${shortDate(test.at)}${test.version ? ` on ${test.version}` : ''}${test.by === 'bmn' ? ' · by BMN' : ''}${test.stale ? ' · stale' : ''}${spent}`
 }
 
 /** What an install does to one file, in words: what it replaces, then the size of the change. */
@@ -374,13 +379,13 @@ export function useRulesState(): RulesState {
     }
   }
 
-  // BMN is running a context (63.1) or skills test by itself: what it found is read once it has ended, never under an open confirmation.
-  const testing = snapshot !== null && (snapshot.contextAuto.running !== null || snapshot.skills.apps.some((app) => app.testing === true)) ? snapshot : null
+  // BMN is running one of its own tests (Story 75.8): what it found is read once they have ended, never under an open confirmation.
+  const testing = snapshot !== null && snapshot.autoTests.running !== null ? snapshot : null
   const confirming = pending !== null
   useEffect(() => {
     if (testing === null || confirming) return
     let cancelled = false
-    Promise.all([window.aiTerminal.contextAuto(false), window.aiTerminal.skillsAuto(false)]).then(() => { if (!cancelled) void load() }).catch(() => undefined)
+    window.aiTerminal.autoTests(false).then(() => { if (!cancelled) void load() }).catch(() => undefined)
     return () => { cancelled = true }
   }, [testing, confirming, load])
 
@@ -788,11 +793,10 @@ export function onUpdateEnded(listener: () => void): () => void {
   return () => { updateEndListeners.delete(listener) }
 }
 
-/** An update command BMN typed has ended: Health reads the machine after it, and BMN looks for a new app version to test (63.1 AC1, and skills). */
+/** An update command BMN typed has ended: Health reads the machine after it, and BMN looks for what the new version needs tested (Story 75.8). */
 function updateRunEnded(): void {
   updateEnded()
-  void window.aiTerminal.contextAuto(true).catch(() => undefined)
-  void window.aiTerminal.skillsAuto(true).catch(() => undefined)
+  void window.aiTerminal.autoTests(true).catch(() => undefined)
 }
 
 /** What the sheet says about a press on Update now that did not run the command; null while there is nothing to say. */
@@ -938,14 +942,16 @@ export function contextValueWords(row: Pick<ContextLimitView, 'limit' | 'compact
  * Whether BMN may use the app's setting on the installed version, and why not when it may not (60.9 AC1).
  * A test BMN ran by itself says so, with its day, the version and what came of it (63.1 AC5).
  */
-export function contextStateWords(row: Pick<ContextLimitView, 'limitProven' | 'version' | 'test'>): string {
+export function contextStateWords(row: Pick<ContextLimitView, 'harness' | 'limitProven' | 'version' | 'test'>): string {
   if (row.version === null) return 'Not supported yet · the app is not found'
   const last = row.test !== null && row.test.version === row.version ? row.test : null
+  // Codex's test sends one short request to its provider; Claude Code's asks for its own report (Story 75.8 AC2).
+  const spent = last !== null && row.harness === 'codex' ? ' · one prompt sent' : ''
   if (last?.by === 'bmn') {
-    return `BMN tested ${row.version} by itself ${shortDate(last.at)} · ${last.outcome === 'pass' ? 'it takes the setting' : last.outcome === 'fail' ? 'the test failed' : 'the test showed nothing'}`
+    return `BMN tested ${row.version} by itself ${shortDate(last.at)} · ${last.outcome === 'pass' ? 'it takes the setting' : last.outcome === 'fail' ? 'the test failed' : 'the test showed nothing'}${spent}`
   }
-  if (row.limitProven) return `Setting tested on ${row.version}`
-  return `Not supported yet · ${last?.outcome === 'fail' ? `the test failed on ${row.version}` : last?.outcome === 'inconclusive' ? `the test was inconclusive on ${row.version}` : `not tested on ${row.version}`}`
+  if (row.limitProven) return `Setting tested on ${row.version}${spent}`
+  return `Not supported yet · ${last?.outcome === 'fail' ? `the test failed on ${row.version}` : last?.outcome === 'inconclusive' ? `the test was inconclusive on ${row.version}` : `BMN tests ${row.version} by itself`}${spent}`
 }
 
 /**
@@ -964,8 +970,6 @@ export function agentLimitWords(entry: ContextAgentLimit): string {
   if (entry.state === 'refused') return `${entry.agent}: runs are refused, because its own limit of ${size} cannot be applied.`
   return `${entry.agent}: its own limit of ${size} is not applied, so a run gets the app's own size.`
 }
-
-const AUTO_TEST = 'Test context limits after an app update'
 
 const PLAN_PENDING: ContextLimitPlan = { ok: false, code: 'PENDING', diff: '', planHash: null }
 
@@ -1036,20 +1040,15 @@ function ContextSheet(props: { row: ContextLimitView; home: string | null; busy:
 function ContextLimits(props: { rules: RulesState; action: AppAction | null; setAction(action: AppAction | null): void }): React.JSX.Element {
   const { rules, action } = props
   const snapshot = rules.snapshot as RulesSnapshot
-  const auto = snapshot.contextAuto
+  const auto = snapshot.autoTests
   const idle = !rules.busy && action === null && rules.pending === null
   return (
     <>
       <h4 className="group-head">Context limits<span className="caption">how large a conversation may grow in sessions you start yourself</span></h4>
-      <div className="health-row auto-test">
-        <span id="context-auto-test">{AUTO_TEST}</span>
-        <span className="faint">{auto.enabled
-          ? 'When an app has a new version and an agent on it has a limit of its own, BMN starts that app once in an empty folder: Claude Code is asked for its context report, Codex gets one short request to its provider. Nothing of yours is in it.'
-          : 'Off: BMN starts no app. After an update an agent\'s own limit waits until you run Test… for that app.'}</span>
-        <Switch labelledBy="context-auto-test" on={auto.enabled} disabled={!idle} onChange={(next) => void rules.run(() => window.aiTerminal.setContextAuto(next))} />
-      </div>
       {snapshot.context.map((row) => {
         const name = ROSTER_APP_NAMES[row.harness]
+        const stopped = stoppedTest(auto, 'context', row.harness)
+        const failed = row.test !== null && row.test.version === row.version && row.test.outcome === 'fail'
         return (
           <div key={row.harness} className="limit-block">
             <div className="health-row">
@@ -1060,12 +1059,14 @@ function ContextLimits(props: { rules: RulesState; action: AppAction | null; set
               </span>
               <span className="health-state">
                 <span title={row.unreadable}>{row.unreadable ? <Dot label="Needs you" /> : null}{contextValueWords(row)}</span>
-                <span className="faint" title={row.test?.detail}>{auto.running === row.harness ? `BMN is testing ${name} by itself now…` : contextStateWords(row)}</span>
+                <span className="faint" title={row.test?.detail}>{testRunning(auto, 'context', row.harness) ? runningWords(row.harness) : stopped !== undefined ? stoppedWords(stopped) : contextStateWords(row)}</span>
               </span>
               <span className="app-actions">
-                <button type="button" className="small" disabled={!idle || row.version === null} aria-label={`Context test for ${name}`} onClick={() => props.setAction({ kind: 'context-test', harness: row.harness })}>Test…</button>
+                {offersTestAgain(auto, 'context', row.harness, failed) ? (
+                  <button type="button" className="small" disabled={!idle || row.version === null} aria-label={`Test the context limit of ${name} again`} onClick={() => props.setAction({ kind: 'context-test', harness: row.harness })}>Test again…</button>
+                ) : null}
                 <button type="button" className="small" disabled={!idle || !row.limitProven || row.unreadable !== undefined} aria-label={`Change the default context limit of ${name}`}
-                  title={row.limitProven ? undefined : `Not supported yet: run the test for ${name} first`} onClick={() => props.setAction({ kind: 'context-change', harness: row.harness })}>Change…</button>
+                  title={row.limitProven ? undefined : `Not supported yet: it waits for a test that passes on this ${name} version`} onClick={() => props.setAction({ kind: 'context-change', harness: row.harness })}>Change…</button>
               </span>
             </div>
             {row.limits.map((entry) => (
@@ -1083,7 +1084,7 @@ function ContextLimits(props: { rules: RulesState; action: AppAction | null; set
           </div>
         )
       })}
-      <p className="preferences-help">BMN changes a limit only on an app version whose test passed. An agent's own limit, set on its page, is added to each run BMN or dev-auto starts with it, on a version whose test passed.</p>
+      <p className="preferences-help">When an app has a new version and an agent on it has a limit of its own, BMN tests the app by itself, once in an empty folder: Claude Code is asked for its context report, Codex gets one short request to its provider; nothing of yours is in it. BMN changes a limit only on an app version whose test passed, and an agent's own limit waits for the next automatic test. An agent's own limit, set on its page, is added to each run BMN or dev-auto starts with it, on a version whose test passed.</p>
     </>
   )
 }
@@ -1111,7 +1112,7 @@ export function skillStateWords(state: SkillStateName | undefined, app: Pick<Ski
 export function skillStateHint(state: SkillStateName | undefined, app: Pick<SkillsAppView, 'harness' | 'supported' | 'kind'> | undefined, on: boolean, name: string): string {
   if (state === 'exposed') return `${name} can see this skill but may not have it`
   if (!on) return `Not for ${name}`
-  if (app === undefined || !app.supported) return `Skills are not supported yet in ${name}: run its test on Health`
+  if (app === undefined || !app.supported) return `Skills are not supported yet in ${name}: Health says how BMN's test of it stands`
   switch (state) {
     case 'current': return `${name} has it`
     case 'read-directly': return `${name} reads the skills folder itself`
@@ -1124,19 +1125,24 @@ export function skillStateHint(state: SkillStateName | undefined, app: Pick<Skil
 }
 
 /** An app's last skills test, or why its skills are not supported yet. */
-export function skillsTestLine(app: Pick<SkillsAppView, 'supported' | 'version' | 'test' | 'listing' | 'loading' | 'kind' | 'testable' | 'testing'>): string {
-  if (app.testing === true) return `BMN is testing ${app.version ?? 'the new version'}…`
+export function skillsTestLine(app: Pick<SkillsAppView, 'supported' | 'version' | 'test' | 'listing' | 'loading' | 'kind' | 'testable'>): string {
   if (!app.supported) {
     if (app.version === null) return 'The app is not found'
     if (!app.testable) return 'BMN has no test for this app'
     const last = app.test !== null && app.test.version === app.version ? app.test.outcome : null
-    return last === 'fail' ? `The test failed on ${app.version}` : last === 'inconclusive' ? `The test was inconclusive on ${app.version}` : `Not tested on ${app.version}`
+    return last === 'fail' ? `The test failed on ${app.version}` : last === 'inconclusive' ? `The test was inconclusive on ${app.version}` : `BMN tests ${app.version} by itself`
   }
   // Two tests, each named for what it shows: a listing sends no prompt, a loading test sends one. A listing never reads as loading.
   if (app.kind !== 'full') return 'No loading test'
-  const words = (label: string, test: NonNullable<SkillsAppView['loading']>): string => `${label} ${TEST_WORDS[test.outcome].toLowerCase()} ${shortDate(test.at)}${test.stale ? ' · stale' : ''}`
-  if (app.loading !== null) return words('Loading test', app.loading)
+  const words = (label: string, test: NonNullable<SkillsAppView['loading']>): string => `${label} ${TEST_WORDS[test.outcome].toLowerCase()} ${shortDate(test.at)}${test.by === 'bmn' ? ' · by BMN' : ''}${test.stale ? ' · stale' : ''}`
+  if (app.loading !== null) return `${words('Loading test', app.loading)}${app.loading.outcome === 'unavailable' ? '' : PROMPT_SENT}`
   return app.listing === null ? 'Loading never tested' : `${words('Listing test', app.listing)} · loading never tested`
+}
+
+/** Whether a skills test failed on the installed version: the folder test, or a listing or loading test that is not stale. */
+function skillsFailed(app: Pick<SkillsAppView, 'version' | 'test' | 'listing' | 'loading'>, kind: 'skills' | 'skills-loading'): boolean {
+  const failed = (test: { version: string | null; outcome: string; stale?: boolean } | null): boolean => test !== null && test.version === app.version && test.outcome === 'fail' && test.stale !== true
+  return kind === 'skills' ? failed(app.test) || failed(app.listing) : failed(app.loading)
 }
 
 function SkillRow(props: { skill: SkillView; apps: readonly SkillsAppView[]; team: TeamState; busy: boolean }): React.JSX.Element {
@@ -1241,6 +1247,9 @@ function SkillsHealth(props: { rules: RulesState; action: AppAction | null; setA
         const name = ROSTER_APP_NAMES[app.harness]
         const idle = !rules.busy && action === null && rules.pending === null
         const needs = app.supported && app.state !== 'Linked' && app.state !== 'Copied' && app.state !== 'Reads the source'
+        const stopped = stoppedTest(snapshot.autoTests, 'skills', app.harness) ?? stoppedTest(snapshot.autoTests, 'skills-loading', app.harness)
+        const again = offersTestAgain(snapshot.autoTests, 'skills', app.harness, skillsFailed(app, 'skills'))
+        const loadAgain = app.supported && app.kind === 'full' && offersTestAgain(snapshot.autoTests, 'skills-loading', app.harness, skillsFailed(app, 'skills-loading'))
         return (
           <div key={app.harness} className="skills-block">
             <div className="health-row" data-skills={app.state}>
@@ -1251,16 +1260,17 @@ function SkillsHealth(props: { rules: RulesState; action: AppAction | null; setA
                 {app.location !== null && app.readsSource ? <span className="faint">Also reads the skills folder itself</span> : null}
               </span>
               <span className="health-state">
-                <span title={app.reason}>{needs ? <Dot label="Needs you" /> : null}{app.state}{app.supported ? <span className="muted"> · {app.kind === 'full' ? 'Full' : 'Public skills only'}</span> : null}</span>
-                <span className="faint" title={app.loading?.detail ?? app.listing?.detail ?? app.test?.detail}>{skillsTestLine(app)}</span>
+                <span title={app.reason}>{needs || again || loadAgain ? <Dot label="Needs you" /> : null}{app.state}{app.supported ? <span className="muted"> · {app.kind === 'full' ? 'Full' : 'Public skills only'}</span> : null}</span>
+                <span className="faint" title={app.loading?.detail ?? app.listing?.detail ?? app.test?.detail}>{testRunning(snapshot.autoTests, ['skills', 'skills-loading'], app.harness) ? runningWords(app.harness) : stopped !== undefined ? stoppedWords(stopped) : skillsTestLine(app)}</span>
               </span>
               <span className="app-actions">
-                <button type="button" className="small" disabled={!idle || !app.testable || app.version === null} aria-label={`Skills test for ${name}`}
-                  title={app.testable ? undefined : `BMN has no way to ask ${name} which skills it sees`} onClick={() => props.setAction({ kind: 'skills-test', harness: app.harness })}>Test…</button>
-                {app.supported && app.kind === 'full' ? (
-                  <button type="button" className="small" disabled={!idle || !app.loadTestable} aria-label={`Skill loading test for ${name}`}
-                    title={app.loadTestable ? undefined : `BMN cannot yet tell ${name} handing a skill to its model from the model reading the file itself`}
-                    onClick={() => props.setAction({ kind: 'skills-loading-test', harness: app.harness })}>Loading test…</button>
+                {again && app.testable ? (
+                  <button type="button" className="small" disabled={!idle || app.version === null} aria-label={`Test the skills of ${name} again`}
+                    onClick={() => props.setAction({ kind: 'skills-test', harness: app.harness })}>Test again…</button>
+                ) : null}
+                {loadAgain && app.loadTestable ? (
+                  <button type="button" className="small" disabled={!idle} aria-label={`Test skill loading in ${name} again`}
+                    onClick={() => props.setAction({ kind: 'skills-loading-test', harness: app.harness })}>Test loading again…</button>
                 ) : null}
               </span>
             </div>
@@ -1563,6 +1573,8 @@ function ToolsHealth(props: { rules: RulesState; action: AppAction | null; setAc
         const name = ROSTER_APP_NAMES[app.harness]
         const idle = !rules.busy && action === null && rules.pending === null
         const needs = app.supported && app.state !== 'Set up' && app.state !== 'None'
+        const stopped = stoppedTest(snapshot.autoTests, 'tools', app.harness)
+        const again = offersTestAgain(snapshot.autoTests, 'tools', app.harness, app.test !== null && app.test.version === app.version && app.test.outcome === 'fail')
         return (
           <div key={app.harness} className="skills-block">
             <div className="health-row" data-tools={app.state}>
@@ -1573,11 +1585,13 @@ function ToolsHealth(props: { rules: RulesState; action: AppAction | null; setAc
                   : app.readable ? null : <span className="faint" title={app.detail}>BMN cannot read it</span>}
               </span>
               <span className="health-state">
-                <span title={app.reason}>{needs ? <Dot label="Needs you" /> : null}{app.state}{app.supported ? <span className="muted"> · {app.kind === 'full' ? 'Full' : 'Public tools only'}</span> : null}</span>
-                <span className="faint" title={app.test?.detail}>{toolsTestLine(app, shortDate)}</span>
+                <span title={app.reason}>{needs || again ? <Dot label="Needs you" /> : null}{app.state}{app.supported ? <span className="muted"> · {app.kind === 'full' ? 'Full' : 'Public tools only'}</span> : null}</span>
+                <span className="faint" title={app.test?.detail}>{testRunning(snapshot.autoTests, 'tools', app.harness) ? runningWords(app.harness) : stopped !== undefined ? stoppedWords(stopped) : toolsTestLine(app, shortDate)}</span>
               </span>
               <span className="app-actions">
-                <button type="button" className="small" disabled={!idle || app.version === null} aria-label={`Tools test for ${name}`} onClick={() => props.setAction({ kind: 'tools-test', harness: app.harness })}>Test…</button>
+                {again ? (
+                  <button type="button" className="small" disabled={!idle || app.version === null} aria-label={`Test the tools of ${name} again`} onClick={() => props.setAction({ kind: 'tools-test', harness: app.harness })}>Test again…</button>
+                ) : null}
               </span>
             </div>
             {action?.kind === 'tools-test' && action.harness === app.harness ? (
@@ -1675,23 +1689,25 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
       <h4 className="group-head" ref={top}>Rules files</h4>
       {health.state === 'failed' ? <p className="preferences-error" role="alert">{health.reason}</p> : health.targets.map((target) => {
         const test = snapshot.probes.find((entry) => entry.harness === target.harness)
+        const stopped = stoppedTest(snapshot.autoTests, 'rules', target.harness)
+        const again = target.kind === 'full' && offersTestAgain(snapshot.autoTests, 'rules', target.harness, test?.outcome === 'fail' && test.stale !== true)
         return (
           <div key={target.harness} className="health-row" data-state={target.state}>
             <span>{ROSTER_APP_NAMES[target.harness]}</span>
             <span className="path mono" title={target.path}>{displayPath(target.path, snapshot.home)}</span>
             <span className="health-state">
-              <span>{target.state === 'current' ? null : <Dot label="Needs you" />}{STATE_WORDS[target.state]} <span className="muted">· {KIND_WORDS[target.kind]}</span></span>
-              <span className="faint">{target.kind === 'full' ? testLine(test) : 'No loading test'}</span>
+              <span>{target.state === 'current' && !again ? null : <Dot label="Needs you" />}{STATE_WORDS[target.state]} <span className="muted">· {KIND_WORDS[target.kind]}</span></span>
+              <span className="faint" title={test?.detail}>{target.kind !== 'full' ? 'No loading test' : testRunning(snapshot.autoTests, 'rules', target.harness) ? runningWords(target.harness) : stopped !== undefined ? stoppedWords(stopped) : testLine(test)}</span>
             </span>
-            {target.kind === 'full'
-              ? <button type="button" className="small" disabled={rules.busy || pending !== null} aria-label={`Test ${ROSTER_APP_NAMES[target.harness]}`} onClick={() => rules.beginTest(target.harness)}>Test…</button>
+            {again
+              ? <button type="button" className="small" disabled={rules.busy || pending !== null} aria-label={`Test ${ROSTER_APP_NAMES[target.harness]} again`} onClick={() => rules.beginTest(target.harness)}>Test again…</button>
               : <span />}
           </div>
         )
       })}
       {pending?.kind === 'test' ? <PendingSheet rules={rules} /> : null}
       <p className="preferences-help">
-        A loading test starts the app once and sends it the rules.{withheld.length > 0 ? ` It is off for ${withheld.join(' and ')}, which ${withheld.length === 1 ? 'gets' : 'get'} only the public sections.` : ''}
+        A loading test starts the app once and sends it the rules in one prompt. BMN runs it by itself after an app update or a change to the rules.{withheld.length > 0 ? ` It is off for ${withheld.join(' and ')}, which ${withheld.length === 1 ? 'gets' : 'get'} only the public sections.` : ''}
       </p>
 
       <h4 className="group-head">Agent apps<span className="caption">the program BMN finds, its version and where it sends data</span></h4>

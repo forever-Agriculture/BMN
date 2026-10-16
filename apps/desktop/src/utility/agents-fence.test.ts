@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CODEX_RESEARCH_TOOLS_SEEN, OPENCODE_RESEARCH_TOOLS_SEEN, bindSession, bindingPath, evaluateResearch, fenceStanding, fenceTests, fenceTestsPath, prepareResearchRun, researchFormHash, researchRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
-import { FENCE_MARKERS, compareUnderProviderList, fenceDirectory, fenceSubjects, markersIn, providerModelList, runFenceTest } from '../../bin/agents-fence.mjs'
+import { FENCE_MARKERS, compareUnderProviderList, fenceAutoPlan, fenceDirectory, fenceSubjects, markersIn, providerModelList, runFenceTest } from '../../bin/agents-fence.mjs'
 import { readQuestions, runAsk } from '../../bin/agents-ask.mjs'
 import { answerText, researchArgv, researchers, runResearch } from '../../bin/agents-research.mjs'
 import { openCodeFolder, openCodeFolderProblem, openCodeSession } from '../../bin/agents-opencode.mjs'
@@ -183,6 +183,25 @@ describe('the fence test of a Codex research run (63.3 AC2, AC3)', () => {
     const data = readApproved().data
     expect(fenceSubjects(data).map((agent) => agent.model)).toEqual(['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna'])
     expect(fenceSubjects({ agents: [...data.agents, { ...data.agents.find((agent) => agent.id === 'luna')!, id: 'luna-2' }] }).map((agent) => agent.id)).toEqual(['sol', 'astra', 'luna'])
+  })
+
+  it('names for BMN\'s own run each app a researcher is on, at a version, research form or set of models no test settled (Story 75.8 AC1)', () => {
+    const data = readApproved().data
+    const form = researchFormHash('codex')
+    const models = ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna']
+    const test = (over: Partial<FenceTestEntry> = {}, covered = models): FenceTestEntry => ({ harness: 'codex', at: NOW.toISOString(), version: '0.161.0', form, catalog: 'bundled', verdict: 'pass',
+      models: covered.map((model) => ({ model, verdict: 'pass', tools: [], reasons: [] })), ...over } as FenceTestEntry)
+    const plan = (tests: FenceTestEntry[], version: string | null = '0.161.0') => fenceAutoPlan({ data, versions: { codex: version }, tests }).map((one) => [one.harness, one.version, one.reason])
+    expect(fenceAutoPlan({ data, versions: { codex: '0.161.0' }, tests: [] })).toEqual([{ harness: 'codex', version: '0.161.0', key: `${form} gpt-6-astra,gpt-6-luna,gpt-6.1-sol`, reason: 'untested' }])
+    expect([plan([test()]), plan([test({ verdict: 'fail' })])]).toEqual([[], []])
+    // An update, another research form, or a model no test covered is a new test; one that showed nothing is tried again.
+    expect(plan([test()], '0.162.0')).toEqual([['codex', '0.162.0', 'untested']])
+    expect(plan([test({ form: 'f'.repeat(64) })])).toEqual([['codex', '0.161.0', 'untested']])
+    expect(plan([test({}, ['gpt-6.1-sol'])])).toEqual([['codex', '0.161.0', 'retry']])
+    expect(plan([test({ verdict: 'inconclusive' })])).toEqual([['codex', '0.161.0', 'retry']])
+    // A comparison made during a research is not a fence test; no researcher or no version, nothing.
+    expect(plan([test({ catalog: 'live' })])).toEqual([['codex', '0.161.0', 'untested']])
+    expect([fenceAutoPlan({ data: null, versions: { codex: '0.161.0' }, tests: [] }), plan([], null)]).toEqual([[], []])
   })
 })
 

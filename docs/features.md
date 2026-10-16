@@ -351,7 +351,7 @@ Team → **Models** has one of the agents your team names a researcher look up y
 published prices and context windows, in an empty folder, sent nothing but the model names and the
 source list. A Claude Code researcher runs with web tools only. A Codex researcher runs with a
 Codex folder of its own that holds nothing of yours, and is offered only where BMN's fence test
-(`bmn roster fence`, or **Run test** on Models) passed for exactly the installed Codex version;
+(`bmn roster fence`, which BMN runs by itself for each new version and researcher model) passed for exactly the installed Codex version;
 Models names the tools Codex keeps offering there. An OpenCode researcher runs from BMN's own
 OpenCode folder with web search only (its searches go to the TinyFish search service), on the same
 terms: a fence test of exactly the installed OpenCode. BMN reads each cited page itself and marks what
@@ -369,7 +369,7 @@ An agent's context limit, set on its page, is added to each run BMN or dev-auto 
 and checked before the run leaves. Rules → **Health** also shows each app's default limit for the
 sessions you start yourself and can change it, one line of the app's own settings file, after
 showing the difference. Both work for Codex and Claude Code, and only on an app version where
-**Test…** there showed that the app takes the setting; until then the limit is kept but not applied.
+BMN's own test there showed that the app takes the setting; until then the limit is kept but not applied.
 
 Preferences → **Rules** keeps one rules text and writes it into each agent app's own rules file
 (Claude Code, Codex and OpenCode), shows each file's difference before it writes, and can

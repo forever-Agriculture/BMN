@@ -1156,11 +1156,31 @@ hooks check is read (current, differs from the rules, edited outside BMN, not in
 missing or unreadable) and, under **Agent apps**, where each app sends data and its installed
 version, marked tested, newer than tested or not tested. Every installed version is supported:
 BMN works out where an app sends data the same way on each, at every check, and writes the
-version and that mark into the receipt. **Test…** asks an app which rules it loaded; it sends the rendered rules to that
+version and that mark into the receipt. The **loading test** (`bmn rules probe <app>`) asks an app which rules it loaded; it sends the rendered rules to that
 app's provider, so it runs only where private work is allowed, inspects the destination again
 just before sending, and answers passed, failed, inconclusive or unavailable. A Codex test passes
 only when its own session record carries the rendered header before any tool ran. A result turns
 stale when the rendering, the approved destination, the app version or the host changes.
+
+**Tests BMN runs by itself (Story 75.8).** No test waits for a button. BMN runs each test an app
+needs by itself: the rules loading test, where an app reads skills (with its listing test),
+whether a model gets a skill, where an app reads tools, the context test and the research fence
+test. It looks when BMN starts, when Health reads the machine, when an update command it typed
+ends and after you approve a team change. A test is needed on a first install and on a new app
+version, and where its result is bound to more than the version: new rules once they are
+installed, new skills, a new set of sources naming a context size, a new research form or
+researcher model, or, for a test that sends a prompt, a new sign-in. The tests that send no prompt
+run first, one at a time; the loading tests and the Codex context test send one synthetic prompt
+each, and their rows say "one prompt sent". Each test is started at most three times for the same
+version and binding, ten minutes apart; the count is written to `state/auto-tests.json` before
+each start, so a restart or a crash does not start it again and again. A pass or a failure settles
+it. A failure, or three tries that showed nothing, is told once as a notice; that row then carries
+the Needs-you dot, says "BMN stopped after 3 tries on 2.1.296" where it stopped, and offers
+**Test again…**, which runs your own test. BMN runs the same commands you would, with `--auto`,
+and their records carry `"by": "bmn"`. The sign-in a prompt test is bound to is the time of the
+app's own credential file; BMN never reads what it holds. A test run of BMN (test mode or the
+self-test) starts none of these unless `BMN_AUTO_TESTS` names them: `all`, or a comma-separated
+list of `rules`, `skills`, `skills-loading`, `tools`, `context` and `fence`.
 
 After you approve a team change that alters the team's names, BMN rewrites the team line in the
 rules files that were current, exactly the files the Review listed; a file that changed
@@ -1183,7 +1203,7 @@ and BMN uses one only on an app version where your own test showed that the app 
 Claude Code 2.1.296 reads `CLAUDE_CODE_MAX_CONTEXT_TOKENS` only for a model it does not know or
 with compaction off, so BMN does not use it.
 
-**The test.** `bmn context test <app>`, or **Test…** under Rules → Health → Context limits, starts
+**The test.** `bmn context test <app>`, which BMN also runs by itself (above), starts
 the app once in an empty folder under your home folder with a short synthetic prompt and asks for
 a size no default equals (Codex 123 000, Claude Code 137 000). It passes when the app's own
 report shows that size: Codex's session record (which holds a little less than was asked, because
@@ -1204,19 +1224,16 @@ version.
 
 **BMN runs the test by itself.** A new app version starts untested, so without anything more an
 agent's own limit would stop holding at every app update. BMN therefore runs that same test
-itself, with **Test context limits after an app update** under Rules → Health → Context limits
-switched on, as it is from the start. It looks at three moments: when BMN starts, when Health
-reads the machine, and when an Update now session ends. It starts an app only where an approved,
-enabled agent on that app has a limit of its own; an app no agent has a limit for is never
-started, and at start it is not even asked for its version. What it does then follows the latest
-test of exactly the installed version:
+itself, as it runs every test (above), and only where an approved, enabled agent on that app has a
+limit of its own; an app no agent has a limit for is never started for it. What it does follows
+the latest test of exactly the installed version:
 
 | Latest test of the installed version | What BMN does |
 | --- | --- |
-| none | runs the test once |
+| none | runs the test |
 | passed | nothing, unless a run today would meet a source the test did not (below) |
-| failed | nothing: that version waits for your own **Test…** |
-| showed nothing (`inconclusive`, `unavailable`) | tries once more, at most once per start of BMN: ten minutes later, or sooner if one of the three moments comes first |
+| failed | nothing: that version waits for your **Test again…** |
+| showed nothing (`inconclusive`, `unavailable`) | tries again ten minutes later, three times in all for that version, set of sources and sign-in |
 
 For Claude Code a passed version is tested once more when your files have changed since: a run
 of one of those agents would now meet a source the recorded test did not see lose on that side,
@@ -1231,22 +1248,19 @@ starts no test. Two looks at once start one test, never two.
 
 A test BMN ran is recorded exactly like yours, with `"by": "bmn"` beside it, and the app's row on
 Health then reads "BMN tested 2.1.296 by itself Oct 11 · it takes the setting" (or "the test
-failed", "the test showed nothing"). A failure, or a test that showed nothing twice, is told once
-as a notice that names the agents whose limit does not hold; BMN keeps which version and outcome
-it told in `state/context-auto.json`, beside the switch. Under each app's row Health names every
+failed", "the test showed nothing"; a Codex row adds "one prompt sent"). A failure, or three tries
+that showed nothing, is told once as a notice that names the agents whose limit does not hold;
+the row then offers **Test again…**. Under each app's row Health names every
 agent with a limit of its own and what becomes of it in a run started now: applied, not applied
 (the run gets the app's own size) or refused, with the check's reason behind the line. That is
 judged from where the test runs, a folder of its own under your home folder; a project with
 settings of its own may fare differently, and the check says so for that run.
 
-With the switch off BMN starts no app, and switching it off while BMN is testing one app stops
-the apps still waiting their turn; Health still names the agents whose limits are not applied
-or refused, and **Test…** works as before. `bmn roster check` never starts an app and writes
-nothing either way. For a version without a test its step says who acts next: "BMN tests it by
-itself when it starts, when Rules > Health is read and after an update there", or that BMN's own
-test is switched off and which command runs it. What a test costs: Claude Code is asked for its
-`/context` report; Codex gets one short synthetic request to its provider, so one per new Codex
-version.
+`bmn roster check` never starts an app and writes nothing. For a version without a test its step
+says who acts next: "BMN tests it by itself when it starts, when Rules > Health is read and after
+an update there"; after a test that showed nothing, that BMN tries it again by itself, up to three
+times. What a test costs: Claude Code is asked for its `/context` report; Codex gets one short
+synthetic request to its provider, so one per new Codex version.
 
 **Runs BMN checks.** `bmn roster role <role> --json` gives each candidate a `context` entry:
 `applied` with the exact `argv` items (Codex) or `env` entries (Claude Code), `app-default`,
@@ -1254,8 +1268,7 @@ version.
 use and refuses with `CONTEXT_MISMATCH`, after the effort and before the destination, when that
 differs from the agent's limit or cannot be resolved; a PASS records the limit in the receipt's
 `context_limit_applied`, and where an agent's own limit is not applied the receipt's
-`context_limit_note` says why: that BMN tests the version by itself, or that its own testing is
-switched off. For Codex a `-c` item wins, then the selected profile, then
+`context_limit_note` says why: that BMN tests the version by itself, or how its test ended. For Codex a `-c` item wins, then the selected profile, then
 `config.toml`; a `.codex/config.toml` in the working folder or above it, or `/etc/codex`, that
 sets a size makes the answer unresolved unless the run carries its own item. For Claude Code BMN
 cannot tell from the files which source wins, so every source that names a size must name the
@@ -1289,8 +1302,8 @@ with a `SKILL.md`. BMN gives every agent app the skills it may have and tells yo
 differ. Rules → **Skills** lists each skill with its first line, the apps it is for and its state
 in each; `bmn skills check` prints the same.
 
-**Where an app reads skills is tested, not assumed.** Until **Test…** (Rules → Health → Skills, or
-`bmn skills test <app>`) passed on exactly the installed version, an app's skills are "not
+**Where an app reads skills is tested, not assumed.** Until the skills test (`bmn skills test
+<app>`, which BMN runs by itself) passed on exactly the installed version, an app's skills are "not
 supported yet" and nothing is written for it. The test starts the app in an empty home folder
 that holds only test skills, one real folder and one link in each folder the app may read, and
 asks which it sees; BMN sends no prompt and no sign-in is there. It records the folders the app
@@ -1303,14 +1316,11 @@ OpenCode 2.0.29 lists a skill once when two of its folders hold the same name, a
 `~/.agents/skills` wins over `~/.claude/skills` (measured 2026-10-14); a link BMN puts there for
 Codex points at the same skill, so OpenCode reads it once.
 
-**After an app update BMN tests by itself.** Once a test of an app has passed on some version, a
-new version of that app is tested by BMN when it starts, when Health reads the machine and when an
-update command it typed ends: only where the app reads skills, in the same empty home folder,
-with no prompt and nothing of yours in it (`bmn skills test <app> --auto`, recorded as BMN's).
-The row says "BMN is testing …" meanwhile. A run that showed nothing is tried once more; a
-failure, or a second run that showed nothing, is told once, and that version then waits for your
-**Test…**. A version you tested yourself is never tested again by BMN, and the listing test is
-never run by itself: it puts a skill where the app keeps yours.
+**BMN tests by itself.** On a first install and on each new version BMN runs that test itself
+(above), the listing test included where the app may receive private work, with no prompt and
+nothing of yours in it (`bmn skills test <app> --auto`, recorded as BMN's). The row says "BMN is
+testing …" meanwhile; after a failure, or three tries that showed nothing, it offers **Test
+again…**.
 
 | App | What BMN asks | Folders it looks in | Tested on a live app |
 | --- | --- | --- | --- |
@@ -1318,9 +1328,10 @@ never run by itself: it puts a skill where the app keeps yours.
 | Codex | `codex debug prompt-input` | `~/.agents/skills`, `~/.codex/skills`, `~/.claude/skills` | 0.162.1, 2026-10-11 |
 | OpenCode | its own server's skill list: `opencode serve --port 0` on loopback with a password made for the run, then `opencode api --server <url> skill.list` until two answers agree (OpenCode 2 has no `debug skill`) | `~/.config/opencode/skills`, `~/.config/opencode/skill`, `~/.agents/skills`, `~/.claude/skills` | 2.0.29, 2026-10-14 |
 
-**Whether a model gets a skill is a second test.** **Loading test…** on the same row, or
-`bmn skills test <app> --prompt`, sends one prompt to the app's provider, so it is offered only
-where the app may receive private work. BMN puts one test skill where the app keeps its skills;
+**Whether a model gets a skill is a second test.** `bmn skills test <app> --prompt`, which BMN
+runs by itself once the skills test passed and again whenever the skills change, sends one prompt
+to the app's provider, so it runs only where the app may receive private work, and the row says
+"one prompt sent". BMN puts one test skill where the app keeps its skills;
 only the skill's body holds a token made for that run, not its name, its description or the
 prompt. The app is started once in an empty folder and asked for the skill by name, and the
 skill is removed and checked to be gone. The test passes only when the token comes back and no
@@ -1419,8 +1430,8 @@ argument it takes for a value only makes the entry read `blocked` until you move
 environment variable. An entry that is exactly the tool you approved, as BMN writes it, is never
 taken to hold a value.
 
-**Where an app reads tools is tested, not assumed.** Until `bmn tools test <app>` (Rules → Health
-→ Tools → **Test…**) passed on exactly the installed version, an app's tools are "not supported
+**Where an app reads tools is tested, not assumed.** Until `bmn tools test <app>`, which BMN runs
+by itself on a first install and on each new version, passed on exactly the installed version, an app's tools are "not supported
 yet" and nothing is written for it. The test starts the app in an empty home folder with no
 sign-in, so no prompt can be answered there; BMN does not watch what the app itself sends when
 it starts. It writes one stand-in tool into the app's settings file the way BMN would, asks the
@@ -1679,7 +1690,9 @@ switch or an extra one is refused. When Codex renews your sign-in during a run, 
 through the link into your real file and the link stays a link. The run's Codex folder is removed
 when the run ends, and one a crash left behind is removed at the next research.
 
-**The test.** `bmn roster fence`, or **Run test** on Models, runs the very command a research run
+**The test.** `bmn roster fence`, which BMN runs by itself for each new version, research form and
+researcher model (never beside a research; Models shows the last result read-only and offers **Test
+again** after a failure or three tries that showed nothing), runs the very command a research run
 is, against a stand-in for the provider on this computer. No provider is called. It builds a
 throwaway home folder and plants thirteen markers where Codex could pick something up: its rules
 file, memory, prompt history, an earlier session, skills in two places, files and rules files in
@@ -1883,7 +1896,7 @@ OpenCode form (see [Checking an OpenCode helper run](#checking-an-opencode-helpe
 
 An OpenCode agent researches only where a fence test of exactly the installed OpenCode passed for
 its model (Story 70.3), as a Codex agent does. `bmn roster fence` runs it, after Codex's, where
-your team has an agent on OpenCode, and **Run test** on Models does the same.
+your team has an agent on OpenCode, and BMN runs it by itself the same way.
 
 **The run.** A research run starts from BMN's own OpenCode folder (see
 [Checking an OpenCode helper run](#checking-an-opencode-helper-run)) with BMN's research agent

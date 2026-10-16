@@ -107,6 +107,23 @@ export function lastToolsTest(harness, tests = toolsTests()) {
 }
 
 /**
+ * Which apps BMN gives the tools test by itself (Story 75.8): in an empty home folder with no sign-in, so no prompt
+ * can be answered. Named at a version no test has settled: none ran, which covers a first install and an update, or
+ * each one showed nothing. The caller reads the versions and bounds the tries.
+ */
+export function toolsAutoPlan({ versions, tests = toolsTests() } = {}) {
+  const plan = []
+  for (const harness of HARNESSES) {
+    const version = versions?.[harness]
+    if (typeof version !== 'string' || TOOL_APPS[harness] === undefined) continue
+    const ofVersion = tests.filter((entry) => entry.harness === harness && entry.version === version)
+    if (ofVersion.some((entry) => entry.outcome === 'pass' || entry.outcome === 'fail')) continue
+    plan.push({ harness, version, key: '', reason: ofVersion.length === 0 ? 'untested' : 'retry' })
+  }
+  return plan
+}
+
+/**
  * What the owner's test showed about an app's tools on exactly this version; the latest test of
  * that version decides. Each is true only for what that test saw: `variable` an environment entry
  * a tool is given by name, `argument` an argument given from a variable, `header` a request header
@@ -1277,11 +1294,11 @@ export function claudeRunSeen(result, notes) {
  * itself sends when it starts. An app that needs a sign-in to answer is recorded as inconclusive.
  * No remote tool is started, so a header sent from a variable is never seen here.
  */
-export async function testTools(harness, { environment = process.env, now = new Date(), timeoutMs = 120_000 } = {}) {
+export async function testTools(harness, { environment = process.env, now = new Date(), timeoutMs = 120_000, by } = {}) {
   const spec = TOOL_APPS[harness]
   const { harnessVersion } = await import('./agents-check.mjs')
   const version = harnessVersion(spec.command, environment)
-  const done = (outcome, detail, extra = {}) => record({ harness, kind: 'capability', at: now.toISOString(), version, outcome, variable: 'unproven', argument: 'unproven', isolation: 'unproven', own_command: 'none', ...extra, detail })
+  const done = (outcome, detail, extra = {}) => record({ harness, kind: 'capability', at: now.toISOString(), version, outcome, variable: 'unproven', argument: 'unproven', isolation: 'unproven', own_command: 'none', ...extra, detail, ...(by === 'bmn' ? { by } : {}) })
   if (version === null) return done('unavailable', `${spec.command} is not installed or did not answer --version`)
   const folder = mkdtempSync(`${home(environment)}/.bmn-tools-test-`)
   try {
@@ -1407,7 +1424,8 @@ export async function testTools(harness, { environment = process.env, now = new 
 export const TOOLS_USAGE = `Usage: bmn tools check [--json]                              One state per app and per tool; exit 0 only when every supported app has its tools and nothing is exposed
        bmn tools install [app…] [--plan] [--remove-unlisted] [--yes]   Set each app's entries, and remove what an app may no longer have, as one transaction
        bmn tools import [--json] [--yes]                       Propose the entries the apps already hold as tools in the team file; you approve them in BMN
-       bmn tools test <app> [--json]                           Owner-run: find where the app reads its tools, in an empty home folder
+       bmn tools test <app> [--auto] [--json]                  Find where the app reads its tools, in an empty home folder; BMN runs it
+                                                               by itself for a new app version (--auto marks such a run)
 
 Apps: ${HARNESSES.join(', ')}. The tools are the ## tools section of the approved team.
 A tool names environment variables and never holds their values; BMN keeps and prints none.
@@ -1527,10 +1545,10 @@ export async function runToolsCommand(argv) {
       return wrote.code === 'OK' ? 0 : wrote.code === 'NOT_CONFIRMED' ? 1 : EXIT.refusal
     }
     if (action === 'test') {
-      const { options, positionals } = readOptions(rest, { flags: ['json'] })
+      const { options, positionals } = readOptions(rest, { flags: ['json', 'auto'] })
       asJson = options.json === true
       if (positionals.length !== 1 || !HARNESSES.includes(positionals[0])) return usage(appRefusal(positionals[0], `tools test expects one app: ${HARNESSES.join(', ')}`))
-      const result = await testTools(positionals[0])
+      const result = await testTools(positionals[0], options.auto === true ? { by: 'bmn' } : {})
       out(asJson ? JSON.stringify(result, null, 2) : `${result.harness}: ${result.outcome} - ${result.detail}${result.version ? ` (${result.version})` : ''}`)
       return result.outcome === 'pass' ? 0 : 1
     }

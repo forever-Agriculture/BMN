@@ -23,11 +23,7 @@ export interface ContextProven {
   limit: boolean
   compact: boolean
   standing?: ContextStanding
-  /** Whether BMN tests by itself; read from its own state when absent. */
-  auto?: boolean
 }
-/** BMN's own testing: the owner's switch, and per app the version and outcome he was last told about. */
-export interface ContextAutoState { enabled: boolean; told: Record<string, string> }
 /** One app BMN should test by itself now, why, and the agents whose limit waits for it. */
 /** `set` names the sources a `sources` test would meet, so that each set is tested once. */
 export interface ContextAutoPlanEntry { harness: ContextApp; version: string; reason: 'untested' | 'retry' | 'sources'; agents: string[]; set?: string }
@@ -113,15 +109,11 @@ export declare function codexRecordedWindow(rollout: string): number | null
 export declare function testContext(harness: string, options?: { environment?: NodeJS.ProcessEnv; now?: Date; timeoutMs?: number; by?: 'bmn' }): Promise<ContextTestEntry>
 export declare const CLAUDE_TEST_ARGUMENTS: string[]
 export declare function contextTestFolder(environment?: NodeJS.ProcessEnv | Record<string, string>): string
-export declare function contextAutoPath(): string
-export declare function contextAuto(): ContextAutoState
-export declare function setContextAuto(change: Partial<ContextAutoState>): ContextAutoState
 export declare function limitedAgents(data: import('./agents-roster.mjs').RosterData | null, harness: string): import('./agents-roster.mjs').RosterAgent[]
 export declare function contextAutoPlan(input: {
   data: import('./agents-roster.mjs').RosterData | null
   versions: Partial<Record<ContextApp, string | null>>
   tests?: ContextTestEntry[]
-  enabled?: boolean
   sources?: Partial<Record<ContextApp, ContextSource[]>>
 }): ContextAutoPlanEntry[]
 export declare function runContextCommand(argv: string[]): Promise<number>

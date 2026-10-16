@@ -1,6 +1,7 @@
 // MODULE: models-preferences.tsx - Stories 60.10, 63.3: Preferences › Team › Models: what research found for the team's models, who researches, Codex behind its fence, and Apply prices
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { type ResearchLookup, type ResearchModelView, type ResearchSnapshot, type ResearcherView, type RosterDataShape, type RosterPriceShape } from '@bmn/protocol'
+import { ROSTER_APP_NAMES, type ResearchLookup, type ResearchModelView, type ResearchSnapshot, type ResearcherView, type RosterDataShape, type RosterPriceShape } from '@bmn/protocol'
+import { offersTestAgain, stoppedTest, stoppedWords, testRunning } from './auto-test-words'
 import { Segmented } from './history-preferences'
 import {
   applyPrices, codexToolsLine, dayWords, fillFrom, priceChanges, priceText, researchGroups, researchStatus, siteOf, unverifiedWords, type PriceChange, type ResearchFill, type TeamModelRow
@@ -9,6 +10,7 @@ import { Dot, Piece } from './roster-marks'
 import { listedAgents, nameResearchers, namedResearchers, thousands } from './roster-staging'
 import { PageHead, Row, shortDate } from './team-preferences'
 import type { TeamState } from './team-state'
+import { useSelfRefresh } from './self-refresh'
 import { WebQuestions, useWebQuestionsState } from './web-questions'
 import { failureDetail } from './bridge-error'
 
@@ -22,8 +24,8 @@ export interface ResearchState {
   ensure(version?: number | null): void
   /** Reads what research found without asking any app; once, for the pages that only offer its names. */
   peek(): void
-  /** Owner-run: starts the fence test of the installed Codex. It runs in the background and calls no provider. */
-  testFence(): Promise<void>
+  /** The owner's Test again: starts the fence test of one installed app. It runs in the background and calls no provider. */
+  testFence(harness: 'codex' | 'opencode'): Promise<void>
   choose(researcher: string): void
   start(): Promise<void>
   stop(): Promise<void>
@@ -63,6 +65,9 @@ export function useResearchState(): ResearchState {
     }
   }, [adopt])
 
+  // BMN runs the fence test by itself (Story 75.8): coming back to the window reads how it stands, without asking the apps again.
+  useSelfRefresh(() => { if (asked.current !== 'none') void load(false) })
+
   const running = snapshot?.running != null || snapshot?.fenceTest.running === true
   useEffect(() => {
     if (!running) return undefined
@@ -95,9 +100,9 @@ export function useResearchState(): ResearchState {
 
   return {
     snapshot, loadError, busy, notice, setNotice, ensure, peek,
-    testFence: () => {
+    testFence: (harness) => {
       setNotice(null)
-      return act(() => window.aiTerminal.testCodexFence(), 'The fence test could not start')
+      return act(() => window.aiTerminal.testCodexFence(harness), 'The fence test could not start')
     },
     choose: (researcher) => void act(() => window.aiTerminal.chooseResearcher(researcher), 'Could not keep that choice'),
     start: () => {
@@ -163,9 +168,34 @@ export function fenceWords(codex: readonly ResearcherView[], app = 'Codex'): str
     const all = entries.map((entry) => entry.name)
     return all.length <= 1 ? all.join('') : `${all.slice(0, -1).join(', ')} and ${all.at(-1) as string}`
   }
-  const about = `It runs ${app} against a stand-in on this computer with made-up files: no provider is called and none of your files is read. About a minute.`
-  if (waiting.length === 0) return `Passed for the installed ${app}. ${about}`
+  const about = `BMN runs it by itself when ${app} or a researcher's model changes: ${app} against a stand-in on this computer with made-up files, so no provider is called and none of your files is read.`
+  if (waiting.length === 0) return about
   return `${names(waiting)} research${waiting.length === 1 ? 'es' : ''} only where this test passed for exactly the installed ${app}: ${waiting[0]!.why ?? 'it has not passed'}. ${about}`
+}
+
+/** The fence test's result on its read-only row: the last one recorded, its day and the version it ran on (Story 75.8). */
+export function fenceResultWords(last: ResearchSnapshot['fenceTest']['last'][number] | undefined, day: (iso: string) => string): string {
+  if (last === undefined) return 'Not tested yet'
+  const outcome = last.verdict === 'pass' ? 'passed' : last.verdict === 'fail' ? 'failed' : 'showed nothing'
+  return `Fence test ${outcome} ${day(last.at)}${last.version === null ? '' : ` on ${last.version}`}`
+}
+
+/** One app's fence test on Models: read-only, with Test again only after a failure or once BMN stopped trying. */
+function FenceRow(props: { harness: 'codex' | 'opencode'; researchers: readonly ResearcherView[]; snapshot: ResearchSnapshot; research: ResearchState; locked: boolean }): React.JSX.Element {
+  const { harness, snapshot } = props
+  const app = ROSTER_APP_NAMES[harness]
+  const stopped = stoppedTest(snapshot.autoTests, 'fence', harness)
+  const failed = props.researchers.some((entry) => !entry.ok && /did not pass/.test(entry.why ?? ''))
+  const line = testRunning(snapshot.autoTests, 'fence', harness) || (snapshot.fenceTest.running && snapshot.autoTests.running === null) ? 'Testing…'
+    : stopped !== undefined ? stoppedWords(stopped) : fenceResultWords(snapshot.fenceTest.last.find((entry) => entry.harness === harness), shortDate)
+  return (
+    <Row label={`${app} fence test`} hint={fenceWords(props.researchers, app)}>
+      <span>{failed || stopped !== undefined ? <Dot label="Needs you" /> : null}{line}</span>
+      {!snapshot.fenceTest.running && offersTestAgain(snapshot.autoTests, 'fence', harness, failed) ? (
+        <button type="button" className="small" disabled={props.locked} aria-label={`Test the ${app} fence again`} onClick={() => void props.research.testFence(harness)}>Test again</button>
+      ) : null}
+    </Row>
+  )
 }
 
 type Read = { source: string; as_of: string; verified: boolean; why?: string }
@@ -358,16 +388,8 @@ export function ModelsPage(props: {
           : <Segmented labelledBy={researcherId} fit options={able.map((entry) => entry.id)} value={chosen?.id ?? ''} disabled={running || research.busy}
               optionLabel={researcherLabel} onChange={(id) => research.choose(id)} />}
       </Row>
-      {codex.length > 0 ? (
-        <Row label="Codex fence test" hint={fenceWords(codex)}>
-          <button type="button" className="small" disabled={testing || running || research.busy} onClick={() => void research.testFence()}>{testing ? 'Testing…' : codex.every((entry) => entry.ok) ? 'Run again' : 'Run test'}</button>
-        </Row>
-      ) : null}
-      {openCode.length > 0 ? (
-        <Row label="OpenCode fence test" hint={fenceWords(openCode, 'OpenCode')}>
-          <button type="button" className="small" disabled={testing || running || research.busy} onClick={() => void research.testFence()}>{testing ? 'Testing…' : openCode.every((entry) => entry.ok) ? 'Run again' : 'Run test'}</button>
-        </Row>
-      ) : null}
+      {codex.length > 0 ? <FenceRow harness="codex" researchers={codex} snapshot={snapshot} research={research} locked={testing || running || research.busy} /> : null}
+      {openCode.length > 0 ? <FenceRow harness="opencode" researchers={openCode} snapshot={snapshot} research={research} locked={testing || running || research.busy} /> : null}
       <Row label="Sources" hint="Prices come from provider pages first; other sites are cited and never override. BMN reads each cited page itself and marks what it cannot confirm.">
         <ol className="sources"><li>Provider pages</li><li>Other sites</li></ol>
       </Row>

@@ -44,7 +44,7 @@ import {
   retiredAppProposalWords, shortDate, type TeamPage
 } from './team-preferences'
 import { ModelList } from './model-field'
-import { fenceWords, noResearcherWords, researcherHint, researchedModels, type ResearchState } from './models-preferences'
+import { fenceResultWords, fenceWords, noResearcherWords, researcherHint, researchedModels, type ResearchState } from './models-preferences'
 import { codexToolsLine, dayWords, fillFrom } from './research-view'
 import { modelSuggestions } from './model-suggestions'
 import { changeModel, consequenceWords, formatValue, groupDifferences, holdProposed, listedRoles, nameResearchers, namedResearchers, readOnlyProposal, readOnlyProposed, removeException, setResearcher, setRoleReadOnly, setSkillPublic, skillMark, toggleSkillApp } from './roster-staging'
@@ -585,7 +585,7 @@ const RULES: RulesSnapshot = {
     { harness: 'claude', path: '/home/synthetic/.claude/settings.json', exists: true, limit: null, compact: null, version: '2.1.295', limitProven: true, compactProven: false, min: 100000, max: 1000000,
       test: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'asked for 137000; Claude Code reports a window of 137000' }, agents: ['Opus', 'Fable'], limits: [] }
   ],
-  contextAuto: { enabled: true, running: null },
+  autoTests: { running: null, stopped: [] },
   readOnlyRoles: { held: ['epic-reviewer'], proposed: [] },
   skills: {
     source: { path: '/home/synthetic/.claude/skills', readable: true }, markedMissing: [], pending: 1, exposed: 1,
@@ -760,15 +760,26 @@ describe('Rules › Health (60.6 AC4)', () => {
     // Story 75.7: Health, Skills and Tools read themselves again by Health's rule; no button asks for it.
     for (const page of [markup, rulesMarkup('skills'), rulesMarkup('tools')]) expect(page).not.toContain('Check now')
     expect(markup).toMatch(/data-state="current"><span>Claude Code<\/span><span class="path mono" title="\/home\/synthetic\/.claude\/CLAUDE.md">~\/.claude\/CLAUDE.md<\/span><span class="health-state"><span>Current <span class="muted">· Full rules<\/span>/)
-    expect(markup).toContain(`<span class="faint">Test passed ${shortDate('2026-10-09T20:00:00.000Z')} · stale</span>`)
-    expect(markup).toMatch(/data-state="stale">.*?aria-label="Needs you".*?Differs from the rules <span class="muted">· Full rules<\/span><\/span><span class="faint">Never tested<\/span>/)
+    // A loading test sends one prompt, and says so (Story 75.8 AC2).
+    expect(markup).toContain(`<span class="faint">Test passed ${shortDate('2026-10-09T20:00:00.000Z')} · stale · one prompt sent</span>`)
+    expect(markup).toMatch(/data-state="stale">.*?aria-label="Needs you".*?Differs from the rules <span class="muted">· Full rules<\/span><\/span><span class="faint">Not tested yet<\/span>/)
     expect(markup).toMatch(/data-state="missing">.*?Missing <span class="muted">· Public sections only<\/span><\/span><span class="faint">No loading test<\/span>/)
-    expect(testLine(undefined)).toBe('Never tested')
+    expect(testLine(undefined)).toBe('Not tested yet')
+    expect(testLine({ harness: 'codex', outcome: 'pass', at: '2026-10-09T20:00:00.000Z', version: '0.171.0', by: 'bmn' })).toBe(`Test passed ${shortDate('2026-10-09T20:00:00.000Z')} on 0.171.0 · by BMN · one prompt sent`)
+    expect(testLine({ harness: 'codex', outcome: 'unavailable', at: '2026-10-09T20:00:00.000Z' })).toBe(`Test unavailable ${shortDate('2026-10-09T20:00:00.000Z')}`)
   })
 
-  it('offers Test… only where the app may receive private work, and says why not elsewhere', () => {
-    expect([...markup.matchAll(/aria-label="Test ([A-Za-z ]+)"/g)].map((match) => match[1])).toEqual(['Claude Code', 'Codex'])
-    expect(markup).toContain("A loading test starts the app once and sends it the rules. It is off for OpenCode, which gets only the public sections.")
+  it('offers no Test…: Test again… only after a failure or once BMN stopped trying, and only where the app may receive private work (Story 75.8)', () => {
+    expect(markup).not.toContain('Test…')
+    expect(markup).not.toMatch(/aria-label="Test [A-Za-z ]+ again"/)
+    expect(markup).toContain('A loading test starts the app once and sends it the rules in one prompt. BMN runs it by itself after an app update or a change to the rules. It is off for OpenCode, which gets only the public sections.')
+    const after = rulesMarkup('health', rules({ snapshot: { ...RULES,
+      probes: [{ harness: 'claude', outcome: 'fail', at: '2026-10-09T20:00:00.000Z', version: '2.1.295' }, { harness: 'codex', outcome: 'inconclusive', at: '2026-10-09T20:00:00.000Z', version: '0.171.0', by: 'bmn' }],
+      autoTests: { running: null, stopped: [{ kind: 'rules', harness: 'codex', version: '0.171.0', tries: 3, at: '2026-10-09T20:00:00.000Z' }, { kind: 'rules', harness: 'opencode', version: '1.18.32', tries: 3, at: '2026-10-09T20:00:00.000Z' }] } } }))
+    expect([...after.matchAll(/aria-label="Test ([A-Za-z ]+) again">Test again…/g)].map((match) => match[1])).toEqual(['Claude Code', 'Codex'])
+    expect(after).toContain('<span class="faint">BMN stopped after 3 tries on 0.171.0</span>')
+    const running = rulesMarkup('health', rules({ snapshot: { ...RULES, autoTests: { running: { kind: 'rules', harness: 'claude' }, stopped: [] } } }))
+    expect(running).toContain('BMN is testing Claude Code now…')
   })
 
   it('shows each agent app: version, whether it is tested, where it sends data and what is recorded', () => {
@@ -1037,34 +1048,32 @@ describe('context limits (60.9 AC3, AC4)', () => {
 
   it('shows one row per app: its file, who shares it, the default it holds and whether the setting is tested', () => {
     expect(markup).toContain('<h4 class="group-head">Context limits<span class="caption">how large a conversation may grow in sessions you start yourself</span></h4>')
-    expect(markup).toMatch(/<span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.codex\/config.toml">~\/.codex\/config.toml<\/span><span class="faint">Shared by Sol, Astra and Luna<\/span><\/span><span class="health-state"><span>380 000 tokens · summarises at 342 000<\/span><span class="faint" title="[^"]*">Not supported yet · not tested on 0.171.0<\/span>/)
+    expect(markup).toMatch(/<span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.codex\/config.toml">~\/.codex\/config.toml<\/span><span class="faint">Shared by Sol, Astra and Luna<\/span><\/span><span class="health-state"><span>380 000 tokens · summarises at 342 000<\/span><span class="faint" title="[^"]*">Not supported yet · BMN tests 0.171.0 by itself<\/span>/)
     expect(markup).toMatch(/<span class="faint">Shared by Opus and Fable<\/span><\/span><span class="health-state"><span>App default<\/span><span class="faint" title="[^"]*">Setting tested on 2.1.295<\/span>/)
   })
 
   it('offers Change… only where the test passed on the installed version', () => {
-    expect(markup).toContain('disabled="" aria-label="Change the default context limit of Codex" title="Not supported yet: run the test for Codex first"')
+    expect(markup).toContain('disabled="" aria-label="Change the default context limit of Codex" title="Not supported yet: it waits for a test that passes on this Codex version"')
     expect(markup).toMatch(/<button type="button" class="small" aria-label="Change the default context limit of Claude Code">Change…<\/button>/)
-    expect([...markup.matchAll(/aria-label="Context test for ([A-Za-z ]+)"/g)].map((match) => match[1])).toEqual(['Codex', 'Claude Code'])
+    expect(markup).not.toMatch(/aria-label="Test the context limit of [A-Za-z ]+ again"/)
   })
 
   it('says in words what a row holds and why a setting is not supported yet', () => {
     expect(contextValueWords({ limit: null, compact: null })).toBe('App default')
     expect(contextValueWords({ limit: 272000, compact: null })).toBe('272 000 tokens')
     expect(contextValueWords({ limit: 272000, compact: null, unreadable: 'config.toml model_context_window is not a whole number' })).toBe("Can't be read")
-    expect(contextStateWords({ limitProven: false, version: null, test: null })).toBe('Not supported yet · the app is not found')
-    expect(contextStateWords({ limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'fail', detail: 'd' } })).toBe('Not supported yet · the test failed on 0.162.0')
-    expect(contextStateWords({ limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'inconclusive', detail: 'd' } })).toBe('Not supported yet · the test was inconclusive on 0.162.0')
-    expect(contextStateWords({ limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.161.0', outcome: 'pass', detail: 'd' } })).toBe('Not supported yet · not tested on 0.162.0')
+    expect(contextStateWords({ harness: 'codex', limitProven: false, version: null, test: null })).toBe('Not supported yet · the app is not found')
+    // Codex's test sends one short request to its provider, and says so; Claude Code's asks for its own report.
+    expect(contextStateWords({ harness: 'codex', limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'fail', detail: 'd' } })).toBe('Not supported yet · the test failed on 0.162.0 · one prompt sent')
+    expect(contextStateWords({ harness: 'claude', limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'inconclusive', detail: 'd' } })).toBe('Not supported yet · the test was inconclusive on 0.162.0')
+    expect(contextStateWords({ harness: 'codex', limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.161.0', outcome: 'pass', detail: 'd' } })).toBe('Not supported yet · BMN tests 0.162.0 by itself')
   })
 
-  it('has one switch for BMN\'s own testing, named by the words beside it, with what a test starts and costs (63.1 AC4)', () => {
-    expect(markup).toContain('<span id="context-auto-test">Test context limits after an app update</span>')
-    expect(markup).toMatch(/Claude Code is asked for its context report, Codex gets one short request to its provider\. Nothing of yours is in it\.<\/span><button type="button" class="switch on" role="switch" aria-checked="true" aria-labelledby="context-auto-test"><\/button>/)
-    const off = rulesMarkup('health', rules({ snapshot: { ...RULES, contextAuto: { enabled: false, running: null } } }))
-    expect(off).toContain('Off: BMN starts no app. After an update an agent&#x27;s own limit waits until you run Test… for that app.')
-    expect(off).toContain('<button type="button" class="switch" role="switch" aria-checked="false" aria-labelledby="context-auto-test"></button>')
-    // The Test… button stays as it was, with the switch on or off.
-    expect([...off.matchAll(/aria-label="Context test for ([A-Za-z ]+)"/g)].map((match) => match[1])).toEqual(['Codex', 'Claude Code'])
+  it('has no switch: BMN tests by itself, and the help says what a test starts and costs (63.1 AC4; Story 75.8 AC3)', () => {
+    expect(markup).not.toContain('context-auto-test')
+    expect(markup).not.toContain('Test context limits after an app update')
+    expect(markup).toContain('Claude Code is asked for its context report, Codex gets one short request to its provider; nothing of yours is in it.')
+    expect(markup).toContain('an agent&#x27;s own limit waits for the next automatic test')
   })
 
   it('says which agents\' own limits are applied, not applied or refused, with the check\'s reason behind each (63.1 AC4)', () => {
@@ -1077,16 +1086,21 @@ describe('context limits (60.9 AC3, AC4)', () => {
 
   it('says of a test BMN ran by itself that it did, with its day, the version and what came of it, and while one runs (63.1 AC5)', () => {
     const at = '2026-10-09T20:00:00.000Z'
-    const own = (outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'): string => contextStateWords({ limitProven: outcome === 'pass', version: '2.1.296', test: { at, version: '2.1.296', outcome, detail: 'd', by: 'bmn' } })
+    const own = (outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'): string => contextStateWords({ harness: 'claude', limitProven: outcome === 'pass', version: '2.1.296', test: { at, version: '2.1.296', outcome, detail: 'd', by: 'bmn' } })
     expect(own('pass')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · it takes the setting`)
     expect(own('fail')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test failed`)
     expect(own('inconclusive')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test showed nothing`)
     // A test of another version is not this version's, whoever ran it; the owner's own test reads as before.
-    expect(contextStateWords({ limitProven: false, version: '2.1.297', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd', by: 'bmn' } })).toBe('Not supported yet · not tested on 2.1.297')
-    expect(contextStateWords({ limitProven: true, version: '2.1.296', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd' } })).toBe('Setting tested on 2.1.296')
-    const running = rulesMarkup('health', rules({ snapshot: { ...RULES, contextAuto: { enabled: true, running: 'claude' } } }))
-    expect(running).toMatch(/<span class="faint" title="[^"]*">BMN is testing Claude Code by itself now…<\/span>/)
+    expect(contextStateWords({ harness: 'claude', limitProven: false, version: '2.1.297', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd', by: 'bmn' } })).toBe('Not supported yet · BMN tests 2.1.297 by itself')
+    expect(contextStateWords({ harness: 'claude', limitProven: true, version: '2.1.296', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd' } })).toBe('Setting tested on 2.1.296')
+    expect(contextStateWords({ harness: 'codex', limitProven: true, version: '0.171.0', test: { at, version: '0.171.0', outcome: 'pass', detail: 'd', by: 'bmn' } })).toBe(`BMN tested 0.171.0 by itself ${shortDate(at)} · it takes the setting · one prompt sent`)
+    const running = rulesMarkup('health', rules({ snapshot: { ...RULES, autoTests: { running: { kind: 'context', harness: 'claude' }, stopped: [] } } }))
+    expect(running).toMatch(/<span class="faint" title="[^"]*">BMN is testing Claude Code now…<\/span>/)
     expect(running).not.toContain('BMN is testing Codex')
+    // Stopped after its tries: the row says so and offers Test again…, which opens the owner's own test.
+    const stopped = rulesMarkup('health', rules({ snapshot: { ...RULES, autoTests: { running: null, stopped: [{ kind: 'context', harness: 'codex', version: '0.171.0', tries: 3, at }] } } }))
+    expect(stopped).toMatch(/<span class="faint" title="[^"]*">BMN stopped after 3 tries on 0.171.0<\/span>/)
+    expect([...stopped.matchAll(/aria-label="Test the context limit of ([A-Za-z ]+) again">Test again…/g)].map((match) => match[1])).toEqual(['Codex'])
   })
 
   it('refuses a limit above what the model holds, inline, and a compaction point that is not below the limit', () => {
@@ -1211,15 +1225,23 @@ describe('skills (60.11 AC5)', () => {
     expect(health).toMatch(/data-skills="Reads the source"><span>Claude Code<\/span><span class="health-state"><span>The skills folder itself<\/span><\/span><span class="health-state"><span>Reads the source<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code named a test skill">Listing test passed [^<]+ · stale · loading never tested<\/span>/)
     expect(health).toMatch(/data-skills="Missing"><span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.agents\/skills">~\/.agents\/skills<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Loading never tested<\/span>/)
     expect(health).toMatch(/data-skills="Exposed"><span>OpenCode<\/span>.*?Exposed<span class="muted"> · Public skills only<\/span><\/span><span class="faint" title="[^"]*">No loading test<\/span>/)
-    expect([...health.matchAll(/(disabled="" )?aria-label="Skills test for ([A-Za-z ]+)"/g)].map((match) => `${match[2]}${match[1] ? ' off' : ''}`)).toEqual(['Claude Code', 'Codex', 'OpenCode'])
-    // An app BMN has no skills test for says so, and its test is off.
+    // BMN tests by itself: no Test… and no Loading test… (Story 75.8).
+    expect(health).not.toMatch(/aria-label="Skills test for|aria-label="Skill loading test for|Loading test…/)
+    // An app BMN has no skills test for says so.
     const untested = rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, apps: RULES.skills.apps.map((app) => (app.harness === 'opencode'
       ? { ...app, supported: false, reason: 'no test has run on OpenCode 1.18.32', testable: false, readsSource: false, kind: 'public' as const, kindReason: '', state: 'Not supported yet', test: null }
       : app)) } } }))
     expect(untested).toMatch(/data-skills="Not supported yet"><span>OpenCode<\/span><span class="health-state"><span class="faint">Not known yet<\/span><\/span><span class="health-state"><span title="no test has run on OpenCode 1.18.32">Not supported yet<\/span><span class="faint">BMN has no test for this app<\/span>/)
-    expect([...untested.matchAll(/(disabled="" )?aria-label="Skills test for ([A-Za-z ]+)"/g)].map((match) => `${match[2]}${match[1] ? ' off' : ''}`)).toEqual(['Claude Code', 'Codex', 'OpenCode off'])
-    // The loading test, which sends a prompt, is its own button, only where the app may receive private work.
-    expect([...health.matchAll(/(disabled="" )?aria-label="Skill loading test for ([A-Za-z ]+)"/g)].map((match) => `${match[2]}${match[1] ? ' off' : ''}`)).toEqual(['Claude Code', 'Codex'])
+    // Test again… follows a failure or a stop: the folders test for any app BMN can ask, the loading test only where the app may receive private work.
+    const after = rulesMarkup('health', rules({ snapshot: { ...RULES, autoTests: { running: null, stopped: [
+      { kind: 'skills', harness: 'opencode', version: '1.18.32', tries: 3, at: '2026-10-09T20:00:00.000Z' },
+      { kind: 'skills-loading', harness: 'codex', version: '0.171.0', tries: 3, at: '2026-10-09T20:00:00.000Z' },
+      { kind: 'skills-loading', harness: 'opencode', version: '1.18.32', tries: 3, at: '2026-10-09T20:00:00.000Z' }
+    ] } } }))
+    expect([...after.matchAll(/aria-label="Test the skills of ([A-Za-z ]+) again"/g)].map((match) => match[1])).toEqual(['OpenCode'])
+    expect([...after.matchAll(/aria-label="Test skill loading in ([A-Za-z ]+) again"/g)].map((match) => match[1])).toEqual(['Codex'])
+    expect(after).toMatch(/data-skills="Missing"><span>Codex<\/span>.*?<span class="faint" title="[^"]*">BMN stopped after 3 tries on 0.171.0<\/span>/)
+    expect(rulesMarkup('health', rules({ snapshot: { ...RULES, autoTests: { running: { kind: 'skills-loading', harness: 'codex' }, stopped: [] } } }))).toContain('BMN is testing Codex now…')
   })
 
   it('says each state and test in plain words', () => {
@@ -1233,21 +1255,20 @@ describe('skills (60.11 AC5)', () => {
     expect(skillStateWords(undefined, { supported: false, format: null }, true)).toBe('Not yet')
     expect(skillStateHint('excluded', { ...app, kind: 'public' }, true, 'OpenCode')).toBe('OpenCode gets public skills only')
     expect(skillStateHint('missing', app, true, 'Codex')).toBe('Not in Codex yet: Install… adds it')
-    expect(skillStateHint(undefined, { ...app, supported: false }, true, 'OpenCode')).toBe('Skills are not supported yet in OpenCode: run its test on Health')
+    expect(skillStateHint(undefined, { ...app, supported: false }, true, 'OpenCode')).toBe('Skills are not supported yet in OpenCode: Health says how BMN\'s test of it stands')
     const base = { supported: false, version: '0.171.0', test: null, listing: null, loading: null, kind: 'full' as const, testable: true }
     expect(skillsTestLine({ ...base, version: null })).toBe('The app is not found')
-    expect(skillsTestLine(base)).toBe('Not tested on 0.171.0')
+    expect(skillsTestLine(base)).toBe('BMN tests 0.171.0 by itself')
     expect(skillsTestLine({ ...base, test: { at: 'x', version: '0.171.0', outcome: 'inconclusive', detail: 'd' } })).toBe('The test was inconclusive on 0.171.0')
-    expect(skillsTestLine({ ...base, test: { at: 'x', version: '0.170.0', outcome: 'fail', detail: 'd' } })).toBe('Not tested on 0.171.0')
-    // BMN testing the new version by itself after an update says so, whatever the last test was.
-    expect(skillsTestLine({ ...base, testing: true })).toBe('BMN is testing 0.171.0…')
-    expect(skillsTestLine({ ...base, supported: true, testing: true, test: { at: 'x', version: '0.171.0', outcome: 'pass', detail: 'd', by: 'bmn' } })).toBe('BMN is testing 0.171.0…')
+    expect(skillsTestLine({ ...base, test: { at: 'x', version: '0.170.0', outcome: 'fail', detail: 'd' } })).toBe('BMN tests 0.171.0 by itself')
     // A listing is named a listing, and never reads as a loading test; the loading test, once run, is the line.
     const seen = { at: '2026-10-09T20:00:00.000Z', version: '0.171.0', detail: 'd', stale: false }
     const there = { ...base, supported: true }
     expect(skillsTestLine(there)).toBe('Loading never tested')
     expect(skillsTestLine({ ...there, listing: { ...seen, outcome: 'pass' } })).toMatch(/^Listing test passed [^·]+ · loading never tested$/)
-    expect(skillsTestLine({ ...there, listing: { ...seen, outcome: 'pass' }, loading: { ...seen, outcome: 'inconclusive', stale: true } })).toMatch(/^Loading test inconclusive [^·]+ · stale$/)
+    // The loading test sends one prompt, and says so; one BMN ran by itself says that too.
+    expect(skillsTestLine({ ...there, listing: { ...seen, outcome: 'pass' }, loading: { ...seen, outcome: 'inconclusive', stale: true } })).toMatch(/^Loading test inconclusive [^·]+ · stale · one prompt sent$/)
+    expect(skillsTestLine({ ...there, loading: { ...seen, outcome: 'pass', by: 'bmn' } })).toMatch(/^Loading test passed [^·]+ · by BMN · one prompt sent$/)
     expect(skillsTestLine({ ...there, kind: 'public' })).toBe('No loading test')
   })
 })
@@ -1381,14 +1402,17 @@ describe('tools (60.12 AC6)', () => {
     const health = rulesMarkup('health')
     expect(health).toContain('<h4 class="group-head">Tools<span class="caption">where each app keeps its tools, and whether it has the ones it may have</span></h4>')
     expect(words(health)).toMatch(/Checked [^·]+ · 1 skill entry to install · 1 skill exposed · 2 tool entries to install · 1 tool exposed/)
-    expect(health).toMatch(/data-tools="Differs"><span>Claude Code<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.claude.json">~\/.claude.json<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Differs<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code listed the stand-in tool">Tested [^<]+ · passes variables · a run keeps to its own tools<\/span>/)
-    expect(health).toMatch(/data-tools="Missing"><span>Codex<\/span>.*?Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Tested [^<]+ · variables not seen · no run seen kept to its tools<\/span>/)
+    expect(health).toMatch(/data-tools="Differs"><span>Claude Code<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.claude.json">~\/.claude.json<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Differs<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code listed the stand-in tool">Checked [^<]+ · passes variables · a run keeps to its own tools<\/span>/)
+    expect(health).toMatch(/data-tools="Missing"><span>Codex<\/span>.*?Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Checked [^<]+ · variables not seen · no run seen kept to its tools<\/span>/)
     expect(health).toMatch(/data-tools="Exposed"><span>OpenCode<\/span>.*?<span class="faint" title="\/home\/synthetic\/dotfiles\/opencode.jsonc">A link: BMN does not write through it<\/span>.*?Exposed<span class="muted"> · Public tools only<\/span>/)
-    expect([...health.matchAll(/(disabled="" )?aria-label="Tools test for ([A-Za-z ]+)"/g)].map((match) => `${match[2]}${match[1] ? ' off' : ''}`)).toEqual(['Claude Code', 'Codex', 'OpenCode'])
+    expect(health).not.toMatch(/aria-label="Tools test for|aria-label="Test the tools of/)
+    const failed = rulesMarkup('health', rules({ snapshot: { ...RULES, tools: { ...RULES.tools, apps: RULES.tools.apps.map((app) => (app.harness === 'codex'
+      ? { ...app, test: { at: '2026-10-09T20:00:00.000Z', version: app.version, outcome: 'fail' as const, detail: 'd', by: 'bmn' as const } } : app)) } } }))
+    expect([...failed.matchAll(/aria-label="Test the tools of ([A-Za-z ]+) again">Test again…/g)].map((match) => match[1])).toEqual(['Codex'])
     const untested = rulesMarkup('health', rules({ snapshot: { ...RULES, tools: { ...RULES.tools, apps: RULES.tools.apps.map((app) => (app.harness === 'opencode'
       ? { ...app, supported: false, reason: 'no test has run on OpenCode 1.18.32', state: 'Not supported yet', variable: false, isolation: false, test: null }
       : app)) } } }))
-    expect(untested).toMatch(/data-tools="Not supported yet"><span>OpenCode<\/span>.*?<span title="no test has run on OpenCode 1.18.32">Not supported yet<\/span><span class="faint">Not tested on 1.18.32<\/span>/)
+    expect(untested).toMatch(/data-tools="Not supported yet"><span>OpenCode<\/span>.*?<span title="no test has run on OpenCode 1.18.32">Not supported yet<\/span><span class="faint">BMN tests 1.18.32 by itself<\/span>/)
     expect(health.indexOf('<h4 class="group-head">Skills')).toBeLessThan(health.indexOf('<h4 class="group-head">Tools'))
     expect(health.indexOf('<h4 class="group-head">Tools')).toBeLessThan(health.indexOf('<h4 class="group-head">Context limits'))
   })
@@ -1438,7 +1462,7 @@ describe('Team › Models (60.10, first release)', () => {
       { id: 'glm', name: 'Glm', harness: 'claude', ok: false, why: 'its provider gets public work only', reason: 'synthetic reason with the word roster in it' },
       { id: 'kimi', name: 'Kimi', harness: 'opencode', ok: false, why: 'the fence test has not run for this version of OpenCode yet', reason: 'synthetic' }
     ],
-    researcher: 'fable', choice: { named: ['sol', 'fable', 'luna', 'glm', 'kimi'], proposed: [] }, dropped: null, fenceTest: { running: false, ended: null }, running: null, ended: null
+    researcher: 'fable', choice: { named: ['sol', 'fable', 'luna', 'glm', 'kimi'], proposed: [] }, dropped: null, fenceTest: { running: false, ended: null, last: [{ harness: 'codex', verdict: 'pass', version: '0.161.0', at: '2026-10-09T20:00:00.000Z' }] }, autoTests: { running: null, stopped: [] }, running: null, ended: null
   }
   const lookup = async () => ({ ok: false, message: '', model: null })
   const research = (extra: Partial<ResearchState> = {}): ResearchState => ({
@@ -1550,22 +1574,32 @@ describe('Team › Models (60.10, first release)', () => {
       expect(words(page)).not.toContain('no longer one of your team')
     })
 
-    it('shows how the installed Codex stands for the fence test and lets him run it (AC2)', () => {
+    it('shows how the installed Codex stands for the fence test, read-only, with Test again only after a failure or a stop (AC2; Story 75.8)', () => {
       expect(words(page)).toContain('Codex fence test')
-      expect(page).toContain('<button type="button" class="small">Run again</button>')
-      expect(fenceWords(RESEARCH.researchers.filter((entry) => entry.harness === 'codex'))).toBe('Passed for the installed Codex. It runs Codex against a stand-in on this computer with made-up files: no provider is called and none of your files is read. About a minute.')
+      expect(words(page)).toContain(`Fence test passed ${shortDate('2026-10-09T20:00:00.000Z')} on 0.161.0`)
+      expect(page).not.toMatch(/Run again|Run test|aria-label="Test the [A-Za-z]+ fence again"/)
+      expect(fenceWords(RESEARCH.researchers.filter((entry) => entry.harness === 'codex'))).toBe('BMN runs it by itself when Codex or a researcher\'s model changes: Codex against a stand-in on this computer with made-up files, so no provider is called and none of your files is read.')
+      expect(fenceResultWords(undefined, shortDate)).toBe('Not tested yet')
+      expect(fenceResultWords({ harness: 'opencode', verdict: 'inconclusive', version: null, at: '2026-10-09T20:00:00.000Z' }, shortDate)).toBe(`Fence test showed nothing ${shortDate('2026-10-09T20:00:00.000Z')}`)
       const closed: ResearchSnapshot['researchers'] = RESEARCH.researchers.map((entry) => (entry.harness === 'codex'
         ? { id: entry.id, name: entry.name, harness: entry.harness, ok: false, why: 'the fence test has not run for this version of Codex yet', reason: 'synthetic' } : entry))
       const untested = withSnapshot({ researchers: closed })
-      expect(untested).toContain('<button type="button" class="small">Run test</button>')
+      expect(untested).not.toContain('Test again')
       expect(words(untested)).toContain('Sol and Luna research only where this test passed for exactly the installed Codex: the fence test has not run for this version of Codex yet.')
+      // A failure on the installed version, or a stop after BMN's tries, offers Test again on that app's row.
+      const failed = withSnapshot({ researchers: RESEARCH.researchers.map((entry) => (entry.harness === 'codex'
+        ? { id: entry.id, name: entry.name, harness: entry.harness, ok: false, why: 'the fence test of codex 0.161.0 with gpt-6-luna did not pass, so no research runs there: pick another researcher', reason: 'synthetic' } : entry)) })
+      expect(failed).toContain('<button type="button" class="small" aria-label="Test the Codex fence again">Test again</button>')
+      const stopped = withSnapshot({ autoTests: { running: null, stopped: [{ kind: 'fence', harness: 'opencode', version: '2.0.29', tries: 3, at: '2026-10-09T20:00:00.000Z' }] } })
+      expect(words(stopped)).toContain('BMN stopped after 3 tries on 2.0.29')
+      expect(stopped).toContain('aria-label="Test the OpenCode fence again"')
       // An OpenCode researcher gets a row of its own, from the same test (70.3); without one there is no row.
       expect(words(page)).toContain('OpenCode fence test')
-      expect(words(page)).toContain('Kimi researches only where this test passed for exactly the installed OpenCode: the fence test has not run for this version of OpenCode yet. It runs OpenCode against a stand-in on this computer')
+      expect(words(page)).toContain('Kimi researches only where this test passed for exactly the installed OpenCode: the fence test has not run for this version of OpenCode yet. BMN runs it by itself when OpenCode')
       expect(words(withSnapshot({ researchers: RESEARCH.researchers.filter((entry) => entry.harness !== 'opencode') }))).not.toContain('OpenCode fence test')
       expect(words(untested)).toContain('Sol cannot research: the fence test has not run for this version of Codex yet.')
       expect(offered(untested)).toEqual(['Rook Fable:true'])
-      expect(withSnapshot({ researchers: closed, fenceTest: { running: true, ended: null } })).toContain('<button type="button" class="small" disabled="">Testing…</button>')
+      expect(words(withSnapshot({ researchers: closed, fenceTest: { running: true, ended: null, last: [] } }))).toContain('Testing…')
     })
 
     it('an agent\'s own page says what its Researcher switch means as the team stands', () => {

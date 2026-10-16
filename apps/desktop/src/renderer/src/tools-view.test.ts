@@ -84,16 +84,17 @@ describe('a tool\'s state in words', () => {
     expect(toolStateHint('missing', on, true, 'Codex')).toBe('Not in Codex yet: Install… adds it')
     expect(toolStateHint('blocked', on, true, 'Codex', 'Codex has no way to pass an environment variable as an argument')).toBe('Codex has no way to pass an environment variable as an argument')
     expect(toolStateHint('exposed', on, false, 'OpenCode')).toBe('OpenCode holds this tool but may not have it')
-    expect(toolStateHint('missing', { supported: false }, true, 'OpenCode')).toBe('Tools are not supported yet in OpenCode: run its test on Health')
+    expect(toolStateHint('missing', { supported: false }, true, 'OpenCode')).toBe('Tools are not supported yet in OpenCode: Health says how BMN\'s test of it stands')
     expect(toolStateHint('current', on, false, 'OpenCode')).toBe('Not for OpenCode')
   })
 
   it('says when an app was tested and what the test saw', () => {
     const day = (iso: string): string => `<${iso.slice(0, 10)}>`
     const test = { at: '2026-10-10T12:00:00.000Z', version: '0.161.0', outcome: 'pass' as const, detail: '' }
-    expect(toolsTestLine({ supported: true, version: '0.161.0', test, variable: true, isolation: true }, day)).toBe('Tested <2026-10-10> · passes variables · a run keeps to its own tools')
-    expect(toolsTestLine({ supported: true, version: '0.161.0', test, variable: false, isolation: false }, day)).toBe('Tested <2026-10-10> · variables not seen · no run seen kept to its tools')
-    expect(toolsTestLine({ supported: false, version: '0.162.0', test, variable: false, isolation: false }, day)).toBe('Not tested on 0.162.0')
+    // The tools test sends no prompt: it reads as a check (Story 75.8 AC2).
+    expect(toolsTestLine({ supported: true, version: '0.161.0', test, variable: true, isolation: true }, day)).toBe('Checked <2026-10-10> · passes variables · a run keeps to its own tools')
+    expect(toolsTestLine({ supported: true, version: '0.161.0', test: { ...test, by: 'bmn' }, variable: false, isolation: false }, day)).toBe('Checked <2026-10-10> by BMN · variables not seen · no run seen kept to its tools')
+    expect(toolsTestLine({ supported: false, version: '0.162.0', test, variable: false, isolation: false }, day)).toBe('BMN tests 0.162.0 by itself')
     expect(toolsTestLine({ supported: false, version: '0.161.0', test: { ...test, outcome: 'fail' }, variable: false, isolation: false }, day)).toBe('The test failed on 0.161.0')
     expect(toolsTestLine({ supported: false, version: '0.161.0', test: { ...test, outcome: 'inconclusive' }, variable: false, isolation: false }, day)).toBe('The test was inconclusive on 0.161.0')
     expect(toolsTestLine({ supported: false, version: null, test: null, variable: false, isolation: false }, day)).toBe('The app is not found')

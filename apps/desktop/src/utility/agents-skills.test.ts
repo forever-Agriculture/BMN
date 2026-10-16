@@ -253,32 +253,34 @@ describe('where an app reads skills: the owner-run test (60.11 AC1)', () => {
     expect(appSkills('opencode', { environment: env, version: OPENCODE, source }).supported).toBe(false)
   })
 
-  it('names for BMN\'s own run only a new version of an app a test once passed on, or a version its own one run showed nothing on', () => {
+  it('names for BMN\'s own run every app at a version no folders test settled: a first install, an update, or one that showed nothing (Story 75.8 AC1)', () => {
     const entry = (harness: string, version: string, outcome: SkillsTestEntry['outcome'], by?: 'bmn'): SkillsTestEntry => ({ harness, kind: 'capability', at: NOW.toISOString(), version, outcome, detail: 'synthetic', ...(by ? { by } : {}) })
     const versions = { claude: '2.1.300', codex: '0.162.0', opencode: '2.0.29' }
-    expect(skillsAutoPlan({ versions, tests: [] })).toEqual([])
-    // Claude Code never passed, and the owner's own test of this OpenCode waits for him.
-    expect(skillsAutoPlan({ versions, tests: [entry('codex', '0.161.0', 'pass'), entry('claude', '2.1.299', 'fail'), entry('opencode', '1.18.32', 'pass'), entry('opencode', '2.0.29', 'inconclusive')] }))
-      .toEqual([{ harness: 'codex', version: '0.162.0', reason: 'untested' }])
-    const once = [entry('codex', '0.161.0', 'pass'), entry('codex', '0.162.0', 'inconclusive', 'bmn')]
-    expect(skillsAutoPlan({ versions, tests: once })).toEqual([{ harness: 'codex', version: '0.162.0', reason: 'retry' }])
-    expect(skillsAutoPlan({ versions, tests: [...once, entry('codex', '0.162.0', 'inconclusive', 'bmn')] })).toEqual([])
-    expect(skillsAutoPlan({ versions, tests: [entry('codex', '0.161.0', 'pass'), entry('codex', '0.162.0', 'fail', 'bmn')] })).toEqual([])
-    expect(skillsAutoPlan({ versions, tests: [entry('codex', '0.161.0', 'pass'), entry('codex', '0.162.0', 'pass', 'bmn')] })).toEqual([])
+    const plan = (tests: SkillsTestEntry[], at: Record<string, string | null> = versions) => skillsAutoPlan({ versions: at, tests, generation: null }).map((one) => [one.harness, one.version, one.reason])
+    // A first install: every app BMN can ask which skills it sees.
+    expect(plan([])).toEqual([['claude', '2.1.300', 'untested'], ['codex', '0.162.0', 'untested'], ['opencode', '2.0.29', 'untested']])
+    // A settled version is not named again, whoever ran it; an update is; one that showed nothing is tried again.
+    expect(plan([entry('claude', '2.1.300', 'fail'), entry('codex', '0.161.0', 'pass'), entry('opencode', '2.0.29', 'inconclusive', 'bmn')]))
+      .toEqual([['codex', '0.162.0', 'untested'], ['opencode', '2.0.29', 'retry']])
+    expect(plan([entry('claude', '2.1.300', 'pass'), entry('codex', '0.162.0', 'pass', 'bmn'), entry('opencode', '2.0.29', 'unavailable'), entry('opencode', '2.0.29', 'pass')])).toEqual([])
+    // With no approved team no app may receive private work, so no listing follows the folders test.
+    expect(skillsAutoPlan({ versions, tests: [entry('codex', '0.162.0', 'pass')], generation: null }).filter((one) => one.harness === 'codex')).toEqual([])
     // A listing is not where the app reads skills, and an app whose version cannot be read is never named.
-    expect(skillsAutoPlan({ versions, tests: [{ ...entry('codex', '0.161.0', 'pass'), kind: 'listing' }] })).toEqual([])
-    expect(skillsAutoPlan({ versions: { ...versions, codex: null }, tests: [entry('codex', '0.161.0', 'pass')] })).toEqual([])
+    expect(plan([{ ...entry('codex', '0.162.0', 'pass'), kind: 'listing' }], { codex: '0.162.0' })).toEqual([['codex', '0.162.0', 'untested']])
+    expect(plan([], { ...versions, codex: null }).map(([harness]) => harness)).toEqual(['claude', 'opencode'])
+    // Every entry names its tries by the version alone: the caller bounds them.
+    expect(skillsAutoPlan({ versions: { codex: '0.162.0' }, tests: [], generation: null })).toEqual([{ harness: 'codex', version: '0.162.0', key: '', reason: 'untested' }])
   })
 
-  it('runs only the folders test when BMN starts it by itself, and marks it as BMN\'s', async () => {
+  it('runs the owner\'s own test when BMN starts it by itself, and marks every record it writes as BMN\'s (Story 75.8)', async () => {
     rmSync(skillsTestsPath())
     const result = await run(['skills', 'test', 'codex', '--auto', '--json'])
     expect(result.code).toBe(0)
-    expect(JSON.parse(result.stdout)).toMatchObject({ harness: 'codex', kind: 'capability', version: CODEX, outcome: 'pass', by: 'bmn' })
-    expect(skillsTests().map((entry) => [entry.kind, entry.by])).toEqual([['capability', 'bmn']])
-    // No listing test: nothing was put where Codex keeps its skills.
-    expect(existsSync(codexFolder())).toBe(false)
-    expect(await run(['skills', 'test', 'codex', '--auto', '--prompt'])).toMatchObject({ code: 2, stderr: expect.stringContaining('--prompt or --auto, not both') })
+    expect(JSON.parse(result.stdout)).toMatchObject({ harness: 'codex', version: CODEX, outcome: 'pass', folders: { kind: 'capability', by: 'bmn' } })
+    expect(skillsTests().length).toBeGreaterThan(0)
+    expect(skillsTests().map((entry) => entry.by)).toEqual(skillsTests().map(() => 'bmn'))
+    // Whatever the test placed where Codex keeps its skills, it removed.
+    expect(existsSync(codexFolder()) ? readdirSync(codexFolder()) : []).toEqual([])
   })
 
   it('counts only a test of exactly the installed version, and the latest one decides', () => {

@@ -71,9 +71,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const stubs = join(root, 'stubs')
   mkdirSync(agentsDir, { recursive: true })
   mkdirSync(stubs)
-  // BMN's own context testing starts switched off here, so no step before 63.1's own has a test running behind it.
+  // A test run that names none of BMN's own tests (BMN_AUTO_TESTS) starts none: no step has a test running behind it (Story 75.8).
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
-  writeFileSync(join(stateDir, 'context-auto.json'), '{"version":1,"enabled":false,"told":{}}\n')
   writeFileSync(rosterFile, EXAMPLE)
   writeFileSync(masterFile, MASTER)
   const stub = (name, body) => {
@@ -180,6 +179,15 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     }
     // The window gets the focus: Team, Skills, Tools and Health read again by themselves, as Check now once asked (Story 75.7).
     const outsideFocus = () => page.evaluate(() => { window.dispatchEvent(new Event('focus')) })
+    // The owner's own test, from a terminal with the session's PATH: Story 75.8 took its button away, and this run lets BMN start none of its own.
+    const ownTest = (...args) => {
+      const run = spawnSync(process.execPath, [join(appDirectory, 'bin/bmn'), ...args, '--json'], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 180_000 })
+      try {
+        return JSON.parse(run.stdout)
+      } catch {
+        throw new Error(`bmn ${args.join(' ')} printed no JSON: ${run.stderr}`)
+      }
+    }
 
     await openPreferences()
 
@@ -603,22 +611,14 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     assert.deepEqual(await Promise.all(['Claude Code', 'Codex', 'OpenCode'].map((name) => fileRow(name).getAttribute('data-state'))), ['link', 'unmanaged', 'missing'])
     assert.match(await fileRow('Claude Code').locator('.health-state').textContent(), /Link · Full rules/)
     assert.match(await fileRow('OpenCode').locator('.health-state').textContent(), /Missing · Public sections only/)
-    assert.equal(await main.getByRole('button', { name: 'Test OpenCode' }).count(), 0, 'a loading test is offered for a public-only app')
-    await main.getByText('It is off for OpenCode, which gets only the public sections.').waitFor()
+    assert.equal(await main.getByRole('button', { name: /^Test .+ again$/ }).count(), 0, 'Test again is offered before any test failed or stopped')
+    await main.getByText('It is off for OpenCode, which gets only the public sections.', { exact: false }).waitFor()
     await shot('health-1280.png')
-    await main.getByRole('button', { name: 'Test Claude Code' }).click()
-    await sheet.getByText('Starts Claude Code once and sends the rules to its provider.', { exact: false }).waitFor()
-    await sheet.getByRole('button', { name: 'Send test' }).click()
-    await dialog.locator('.preferences-main [role="status"], .preferences-main [role="alert"]').filter({ hasText: /^Claude Code loading test (failed|was inconclusive): / }).waitFor({ timeout: 60_000 })
-    await fileRow('Claude Code').getByText(/^Test (failed|inconclusive) /).waitFor()
-    // The notice reports what was done on Health: it does not follow the owner to the editor and is not there on the way back.
-    await go('Rules', 'Editor')
-    await main.locator('.page-title', { hasText: /^Rules$/ }).waitFor()
-    assert.equal(await dialog.locator('.preferences-main [role="status"], .preferences-main [role="alert"]').filter({ hasText: /loading test/ }).count(), 0, 'the loading test notice followed to the editor')
-    await go('Rules', 'Health')
-    await fileRow('Claude Code').getByText(/^Test (failed|inconclusive) /).waitFor()
-    assert.equal(await dialog.locator('.preferences-main [role="status"], .preferences-main [role="alert"]').filter({ hasText: /loading test/ }).count(), 0, 'the loading test notice came back')
-    passed('Health shows each file with its state and rendering; the loading test says what it sends, is off for public-only apps and reports in words')
+    const probed = ownTest('rules', 'probe', 'claude')
+    assert.match(probed.outcome, /^(fail|inconclusive)$/, JSON.stringify(probed))
+    await outsideFocus()
+    await fileRow('Claude Code').getByText(/^Test (failed|inconclusive) .+ · one prompt sent$/).waitFor()
+    passed('Health shows each file with its state and rendering; the loading test says it sent a prompt, is off for public-only apps and reports in words')
 
     phase('every installed app version is supported and marked; a changed destination still shows')
     const app = (name) => main.locator('.app-block', { has: page.locator('.health-row > span:first-child', { hasText: new RegExp(`^${name}$`) }) })
@@ -872,12 +872,11 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     stub('codex', ['if [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi', 'dir=""; prev=""', 'for a in "$@"; do [ "$prev" = "-C" ] && dir="$a"; prev="$a"; done',
       'cat > /dev/null', 'mkdir -p "$HOME/.codex/sessions/2026/10/10"',
       `printf '{"payload":{"cwd":"%s"}}\\n{"payload":{"type":"task_started","model_context_window":116850}}\\n' "$dir" > "$HOME/.codex/sessions/2026/10/10/rollout-context-test.jsonl"`].join('\n'))
-    await main.getByRole('button', { name: 'Context test for Codex' }).click()
+    const contextOwn = ownTest('context', 'test', 'codex')
+    assert.equal(contextOwn.outcome, 'pass', JSON.stringify(contextOwn))
+    await outsideFocus()
+    await limitRow('Codex').getByText('Setting tested on 0.161.0 · one prompt sent').waitFor()
     const limitSheet = limitRow('Codex').locator('.sheet')
-    await limitSheet.getByText('Starts Codex once in an empty folder under your home folder', { exact: false }).waitFor()
-    await limitSheet.getByRole('button', { name: 'Run test' }).click()
-    await notice(/^Codex context test passed: asked for 123000; the session record shows 116850/)
-    await limitRow('Codex').getByText('Setting tested on 0.161.0').waitFor()
     assert.equal(readdirSync(home).filter((name) => name.startsWith('.bmn-context-test-')).length, 0, 'the test left its folder behind')
     await main.getByRole('button', { name: 'Change the default context limit of Codex' }).click()
     await limitSheet.getByRole('textbox', { name: 'Codex context limit' }).fill('999 999 999 999')
@@ -896,9 +895,9 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     stub('codex', 'echo "codex-cli 0.161.0"')
     await outsideFocus()
     await limitRow('Codex').getByText('App default', { exact: true }).waitFor()
-    passed('Health shows each app\'s default context limit; Change… is off until the owner\'s test passed on the installed version, then shows the diff and writes only that line (60.9)')
+    passed('Health shows each app\'s default context limit; Change… is off until a test passed on the installed version, then shows the diff and writes only that line (60.9)')
 
-    phase('63.1: BMN tests a new app version by itself; one switch turns that off, and the check holds an agent to exactly its limit')
+    phase('63.1, 75.8: a new app version waits for BMN\'s own test, which a test run starts only when it names it; the check holds an agent to exactly its limit')
     // Sol has a context limit of its own (272 000). A stand-in Codex of one version: any start but the question about
     // its version leaves a line and, after a moment, the session record a real run writes.
     const contextStarts = join(root, 'codex-context-starts')
@@ -920,45 +919,37 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       const [exact, none, other] = [solCheck(...SOL_LIMIT), solCheck(), solCheck('-c', 'model_context_window=271000')]
       assert.deepEqual([exact.verdict, none.verdict, other.verdict], ['PASS', 'CONTEXT_MISMATCH', 'CONTEXT_MISMATCH'], `${when}: ${exact.text}\n${none.text}\n${other.text}`)
     }
-    const autoSwitch = main.getByRole('switch', { name: 'Test context limits after an app update' })
-    assert.equal(await autoSwitch.getAttribute('aria-checked'), 'false')
     await limitRow('Codex').locator('.limit-note').getByText('Sol: its own limit of 272 000 is applied to each run.', { exact: true }).waitFor()
     heldToItsLimit('on the version the owner tested')
-    // The app is updated. With the switch off BMN starts nothing: Health and the check both say the limit is not applied and why.
+    // The app is updated. This run lets BMN start none of its own tests: Health and the check both say the limit is not applied and why.
     codexOf('0.162.0')
     await outsideFocus()
-    await limitRow('Codex').getByText('Not supported yet · not tested on 0.162.0').waitFor()
+    await limitRow('Codex').getByText('Not supported yet · BMN tests 0.162.0 by itself').waitFor()
     await limitRow('Codex').locator('.limit-note').getByText("Sol: its own limit of 272 000 is not applied, so a run gets the app's own size.", { exact: true }).waitFor()
+    assert.equal(await main.getByRole('switch', { name: 'Test context limits after an app update' }).count(), 0, 'the switch is still there')
     await sleep(1500)
-    assert.equal(contextRuns(), 0, 'BMN started the app although its own testing is switched off')
+    assert.equal(contextRuns(), 0, 'BMN started the app in a run that names none of its tests')
     const unapplied = solCheck()
     assert.equal(unapplied.verdict, 'PASS', unapplied.text)
-    assert.match(unapplied.text, /BMN's own test is switched off in Rules > Health/)
+    assert.match(unapplied.text, /BMN tests it by itself when it starts/)
     assert.equal(contextRuns(), 0, 'bmn roster check started the app')
     await limitRow('Codex').scrollIntoViewIfNeeded()
-    await shot('health-context-auto-off-1280.png')
-    // Switched on, BMN runs the owner's own test for the version it finds, once, and says on Health that it did.
-    await autoSwitch.click()
-    await limitRow('Codex').getByText('BMN is testing Codex by itself now…', { exact: false }).waitFor()
-    await limitRow('Codex').getByText(/^BMN tested 0\.162\.0 by itself .+ · it takes the setting$/).waitFor({ timeout: 30_000 })
+    await shot('health-context-untested-1280.png')
+    // What BMN starts by itself is the owner's own test marked as BMN's; Health names it.
+    const byBmn = ownTest('context', 'test', 'codex', '--auto')
+    assert.deepEqual([byBmn.outcome, byBmn.by], ['pass', 'bmn'], JSON.stringify(byBmn))
+    await outsideFocus()
+    await limitRow('Codex').getByText(/^BMN tested 0\.162\.0 by itself .+ · it takes the setting · one prompt sent$/).waitFor({ timeout: 30_000 })
     await limitRow('Codex').locator('.limit-note').getByText('Sol: its own limit of 272 000 is applied to each run.', { exact: true }).waitFor()
-    assert.equal(await autoSwitch.getAttribute('aria-checked'), 'true')
     assert.equal(contextRuns(), 1)
     assert.equal(readdirSync(home).filter((name) => name.startsWith('.bmn-context-test-')).length, 0, 'the test BMN ran left its folder behind')
     heldToItsLimit('on the new version, after the test BMN ran')
     await limitRow('Codex').scrollIntoViewIfNeeded()
     await shot('health-context-auto-1280.png')
-    // A test that passed is not run again, however often Health is read.
-    await outsideFocus()
-    await limitRow('Codex').getByText(/^BMN tested 0\.162\.0 by itself/).waitFor()
-    await sleep(1500)
-    assert.equal(contextRuns(), 1, 'a version whose test passed was tested again')
-    await autoSwitch.click()
-    await notice(/^BMN no longer tests context limits by itself/)
     stub('codex', 'echo "codex-cli 0.161.0"')
     await outsideFocus()
-    await limitRow('Codex').getByText('Setting tested on 0.161.0').waitFor()
-    passed('with the switch off a new app version starts no test and the limit is said not to be applied; switched on, BMN tests the version once and Health names its test; the check passes Sol only with exactly its limit, before and after (63.1)')
+    await limitRow('Codex').getByText('Setting tested on 0.161.0 · one prompt sent').waitFor()
+    passed('a new app version is not tested in a run that names no test, and the limit is said not to be applied; BMN\'s own run of the test is named on Health; the check passes Sol only with exactly its limit, before and after (63.1, 75.8)')
 
     phase('60.8: a prompt bound for a provider that may not see private work is stopped; Allow here records that workspace')
     // A stand-in agent app: each line typed into it is a prompt, and BMN's prompt hook answers before it "leaves".
@@ -1174,12 +1165,10 @@ done`)
     await skillRow('evidence-first').getByRole('button', { name: 'evidence-first in Codex: Not yet' }).waitFor()
     assert.equal(await main.getByRole('button', { name: 'Install…' }).count(), 0, 'Install… is offered before any app was tested')
     await go('Rules', 'Health')
-    await skillsApp('Codex').getByText('Not tested on 0.161.0').waitFor()
-    await main.getByRole('button', { name: 'Skills test for Codex' }).click()
-    const skillsSheet = skillsApp('Codex').locator('.sheet')
-    await skillsSheet.getByText('BMN sends no prompt and no sign-in is there', { exact: false }).waitFor()
-    await skillsSheet.getByRole('button', { name: 'Run test' }).click()
-    await notice(/^Codex skills test passed: Codex reads skills from ~\/\.agents\/skills; Codex lists a test skill placed in /)
+    await skillsApp('Codex').getByText('BMN tests 0.161.0 by itself').waitFor()
+    const skillsOwn = ownTest('skills', 'test', 'codex')
+    assert.equal(skillsOwn.outcome, 'pass', JSON.stringify(skillsOwn))
+    await outsideFocus()
     await skillsApp('Codex').locator('.path', { hasText: '~/.agents/skills' }).waitFor()
     await skillsApp('Codex').getByText('Differs').waitFor()
     await skillsApp('Codex').getByText(/^Listing test passed /).waitFor()
@@ -1189,19 +1178,14 @@ done`)
     // words given to the model before any tool ran, in a run that came to its end. The stand-in answers the way such a
     // run would be recorded.
     await skillsApp('Codex').getByText(/ · loading never tested$/).waitFor()
-    assert.equal(await main.getByRole('button', { name: 'Skill loading test for OpenCode' }).count(), 0, 'a loading test is offered where no prompt may go')
     stub('codex', ['if [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi', '[ "$1" = "exec" ] || exit 4', 'cat > /dev/null',
       'token=$(grep -ho "BMN-[0-9a-f]*" "$HOME"/.agents/skills/bmn-loading-test-*/SKILL.md | head -n 1)', 'mkdir -p "$HOME/.codex/sessions/2026/10/11"',
       `printf '%s\\n' "{\\"type\\":\\"session_meta\\",\\"payload\\":{\\"id\\":\\"s\\",\\"cwd\\":\\"$4\\"}}" "{\\"type\\":\\"response_item\\",\\"payload\\":{\\"type\\":\\"message\\",\\"role\\":\\"user\\",\\"content\\":[{\\"type\\":\\"input_text\\",\\"text\\":\\"$token\\"}]}}" "{\\"type\\":\\"response_item\\",\\"payload\\":{\\"type\\":\\"message\\",\\"role\\":\\"assistant\\",\\"content\\":[{\\"type\\":\\"output_text\\",\\"text\\":\\"$token\\"}]}}" "{\\"type\\":\\"event_msg\\",\\"payload\\":{\\"type\\":\\"task_complete\\"}}" > "$HOME/.codex/sessions/2026/10/11/rollout-2026-10-11T00-00-00-s.jsonl"`,
       'exit 0'].join('\n'))
-    await main.getByRole('button', { name: 'Skill loading test for Codex' }).click()
-    const loadingSheet = skillsApp('Codex').locator('.sheet')
-    await loadingSheet.getByText('sends one prompt that calls the skill by name', { exact: false }).waitFor()
-    await loadingSheet.scrollIntoViewIfNeeded()
-    await shot('health-skills-loading-sheet-1280.png')
-    await loadingSheet.getByRole('button', { name: 'Run test' }).click()
-    await notice(/^Codex skill loading test passed: Codex gave the model the test skill's words itself, before any tool ran$/)
-    await skillsApp('Codex').getByText(/^Loading test passed /).waitFor()
+    const loaded = ownTest('skills', 'test', 'codex', '--prompt')
+    assert.equal(loaded.outcome, 'pass', JSON.stringify(loaded))
+    await outsideFocus()
+    await skillsApp('Codex').getByText(/^Loading test passed .+ · one prompt sent$/).waitFor()
     assert.deepEqual(readdirSync(codexSkills), ['small-steps'], 'the loading test left a test skill behind')
     rmSync(join(home, '.codex/sessions'), { recursive: true, force: true })
     stub('codex', ['if [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi', '[ "$1 $2" = "debug prompt-input" ] || exit 4',
@@ -1269,14 +1253,12 @@ done`)
     await main.getByText('No tools on your list yet.', { exact: true }).waitFor()
     assert.equal(await main.getByRole('button', { name: 'Install…' }).count(), 0, 'Install… is offered while no tool is on the list')
     await go('Rules', 'Health')
-    await toolsApp('Codex').getByText('Not tested on 0.161.0').waitFor()
+    await toolsApp('Codex').getByText('BMN tests 0.161.0 by itself').waitFor()
     await toolsApp('Codex').locator('.path', { hasText: '~/.codex/config.toml' }).waitFor()
-    await main.getByRole('button', { name: 'Tools test for Codex' }).click()
-    const toolsSheet = toolsApp('Codex').locator('.sheet')
-    await toolsSheet.getByText('in an empty home folder with no sign-in, so no prompt can be answered there', { exact: false }).waitFor()
-    await toolsSheet.getByRole('button', { name: 'Run test' }).click()
-    await notice(/^Codex tools test passed: Codex reads its tools from ~\/\.codex\/config\.toml; its own list names the environment variable a tool is given \(the tool was not started\); BMN has no test yet that shows which tools a run of Codex starts with, so a run cannot be kept to its own tools$/)
-    await toolsApp('Codex').getByText(/^Tested .* · passes variables · no run seen kept to its tools$/).waitFor()
+    const toolsOwn = ownTest('tools', 'test', 'codex')
+    assert.equal(toolsOwn.outcome, 'pass', JSON.stringify(toolsOwn))
+    await outsideFocus()
+    await toolsApp('Codex').getByText(/^Checked .* · passes variables · no run seen kept to its tools$/).waitFor()
     assert.equal(readFileSync(toolsConfig, 'utf8'), ownTools, 'the test changed the settings file')
     assert.equal(readdirSync(home).filter((name) => name.startsWith('.bmn-tools-test-')).length, 0, 'the test left its folder behind')
     await toolsApp('Codex').scrollIntoViewIfNeeded()
@@ -1806,6 +1788,17 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     const fenceRecord = () => (existsSync(join(stateDir, 'fence-tests.jsonl')) ? readFileSync(join(stateDir, 'fence-tests.jsonl'), 'utf8').trim().split('\n').map((entry) => JSON.parse(entry)) : [])
     const offeredNow = async () => (await who.getByRole('radio').allTextContents()).sort()
     const fenceRow = main.locator('.preferences-row', { hasText: 'Codex fence test' })
+    // The owner's own fence test from a terminal (Story 75.8 took Run test away); Models reads who may research when Preferences opens.
+    const fenceFromTerminal = async () => {
+      // One entry per app tested: Codex, and OpenCode where the team has an agent on it.
+      const result = [ownTest('roster', 'fence')].flat().find((entry) => entry.harness === 'codex')
+      await page.keyboard.press('Escape')
+      await dialog.waitFor({ state: 'detached' })
+      await openPreferences()
+      await go('Team', 'Models')
+      await who.waitFor()
+      return result
+    }
     const untested = 'the fence test has not run for this version of Codex yet'
     const inWords = (names) => (names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`)
     const teamWithTwo = approved()
@@ -1830,17 +1823,17 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     await proposal.getByText(`Who researches is your choice and you have not made it yet, so every agent that can research is offered. BMN proposes ${inWords(proposedNames)}: one agent per model.`, { exact: true }).waitFor()
     await shot('models-researchers-before-1280.png')
 
-    // The owner runs the test from the page. It runs the very research command against the stand-in and records what it saw.
-    await fenceRow.getByRole('button', { name: 'Run test', exact: true }).click()
-    await notice(/^The fence test of Codex 0\.161\.0 passed: a research run sends its provider nothing of yours\.$/)
+    // The row is read-only: no Run test. The test runs the very research command against the stand-in and records what it saw.
+    assert.equal(await fenceRow.getByRole('button').count(), 0, 'the fence row offers a button before any test failed or stopped')
+    assert.equal((await fenceFromTerminal()).verdict, 'pass')
     const firstTest = fenceRecord()
     assert.equal(firstTest.length, 1)
     assert.deepEqual([firstTest[0].verdict, firstTest[0].version, firstTest[0].catalog, firstTest[0].models.map((model) => model.model).sort()], ['pass', '0.161.0', 'bundled', teamWithTwo.agents.filter((agent) => codexNames.includes(agent.name)).map((agent) => agent.model).sort()])
     assert.notEqual(firstTest[0].form, 'other', 'the test was not of the research form')
     assert.deepEqual(readdirSync(join(stateDir, 'research/fence')), [], 'the fence test left a folder behind')
     for (const name of codexNames) await who.getByRole('radio', { name: new RegExp(`${name}$`) }).waitFor()
-    await fenceRow.getByText(/^Passed for the installed Codex\./).waitFor()
-    await fenceRow.getByRole('button', { name: 'Run again', exact: true }).waitFor()
+    await fenceRow.getByText(/^Fence test passed .+ on 0\.161\.0$/).waitFor()
+    assert.equal(await fenceRow.getByRole('button').count(), 0, 'a passed fence test offers a button')
     // A Codex researcher has the words of the others and one line naming the tools Codex keeps offering.
     await who.getByRole('radio', { name: /Astra$/ }).click()
     await who.getByRole('radio', { name: /Astra$/ }).and(main.locator('[aria-checked="true"]')).waitFor()
@@ -1868,7 +1861,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     assert.equal(await who.locator('[role="radio"][aria-checked="true"]').count(), 0, 'another agent was picked in place of the one that fell away')
     assert.equal(await main.getByRole('button', { name: 'Research now', exact: true }).isDisabled(), true, 'Research now is offered with no researcher picked')
     assert.equal(await proposal.count(), 0, 'the page still says the choice waits for him')
-    await fenceRow.getByRole('button', { name: 'Run test', exact: true }).waitFor()
+    assert.equal(await fenceRow.getByRole('button').count(), 0, 'an untested version offers a button: BMN tests it by itself')
 
     // The check refuses a research with an agent the team does not name, with a code of its own, whatever the command is.
     const researchWork = join(root, 'research-check')
@@ -1884,8 +1877,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     assert.notEqual(namedOne.code, 'NOT_A_RESEARCHER', namedOne.text)
 
     // The test passes for the new version too: the two Codex researchers the team names are offered, and nobody else.
-    await fenceRow.getByRole('button', { name: 'Run test', exact: true }).click()
-    await notice(/^The fence test of Codex 0\.170\.0 passed: a research run sends its provider nothing of yours\.$/)
+    assert.equal((await fenceFromTerminal()).verdict, 'pass')
     assert.deepEqual(fenceRecord().map((entry) => `${entry.version} ${entry.verdict}`), ['0.161.0 pass', '0.170.0 pass'])
     await until(async () => (await offeredNow()).join(' ') === [...proposedNames].sort().join(' '), 'exactly the named researchers offered')
     assert.equal(await main.getByText(/cannot research/).count(), 0, 'a named researcher is still closed after the test passed')

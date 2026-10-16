@@ -17,6 +17,8 @@ import {
   type OpenCodeSignInResult,
   type AgentsShownRevision,
   type AgentsSnapshot,
+  AUTO_TEST_KINDS,
+  type AutoTestKind,
   type ContextLimitApp,
   type ContextLimitPlan,
   type ContextLimitView,
@@ -46,6 +48,7 @@ import {
   type RulesPlan,
   type RulesProbeView,
   type RulesRenderingView,
+  type AutoTestsView,
   type RulesSnapshot,
   type RulesTargetHealth,
   type SkillStateName,
@@ -60,30 +63,28 @@ import {
 import type { IpcMainInvokeEvent } from 'electron'
 import { HARNESSES, RosterError, agentsDirectory, parseRoster, proseOf, readOnlyProposal, rewriteProse, rewriteRoster, rosterPath, sha256, starterRoster, type RosterData } from '../../bin/agents-roster.mjs'
 import { approvedIfAny, listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
-import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, inspectRoute, limitStanding, privateWorkAnswer, versionStanding, workspaceRoot, type FenceTestEntry } from '../../bin/agents-check.mjs'
+import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, inspectRoute, fenceTests, limitStanding, privateWorkAnswer, versionStanding, workspaceRoot, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import {
-  applyTeamUpdate, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planTeamUpdate, probeInspector, render, writeMaster, type RulesHarness
+  applyTeamUpdate, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planTeamUpdate, probeAutoPlan, probeInspector, render, writeMaster, type RulesHarness
 } from '../../bin/agents-rules.mjs'
-import { pathState, replaceFileSafely } from '../../bin/safe-config-write.mjs'
+import { pathState, replaceFileSafely, writeAtomically } from '../../bin/safe-config-write.mjs'
 import { unifiedDiff } from '../../bin/text-diff.mjs'
 import { decide as decidePrompt } from '../../bin/agents-guard.mjs'
 import {
-  CONTEXT_APPS, ContextError, applyContextDefault, contextAuto, contextAutoPlan, contextDefault, contextTestFolder, limitedAgents, planContextDefault, setContextAuto, sharingAgents,
-  type ContextAutoPlanEntry, type ContextTestOutcome
+  CONTEXT_APPS, ContextError, applyContextDefault, contextAutoPlan, contextDefault, contextTestFolder, limitedAgents, planContextDefault, sharingAgents
 } from '../../bin/agents-context.mjs'
 import { judgeLimit, judgeTotals, readJudgeRecord, runJudge, setJudgeLimit } from '../../bin/agents-judge.mjs'
 import { ASK_KEPT, ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, agentsMayAsk, askedCount, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord } from '../../bin/agents-ask.mjs'
 import { chooseResearcher, fetchPublicPage, processStart, publicHostName, readResearch, resolvesPublic, researchLockHolder, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
-import { fenceSubjects, runFenceTest } from '../../bin/agents-fence.mjs'
+import { fenceAutoPlan, fenceSubjects, runFenceTest } from '../../bin/agents-fence.mjs'
 import { appAskDetail, appAskExport, appAskRemove, appAskStop, appAsks } from '../../bin/agents-team-app.mjs'
 import { AskRefusal } from '../../bin/agents-team-resolve.mjs'
 import { OPENCODE_GO_PROVIDER, copyOpenCodeGoSignIn, openCodeGoSignedIn, openCodeListsLuna } from '../../bin/agents-opencode.mjs'
-import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsAutoPlan, skillsTests, type SkillsOutcome } from '../../bin/agents-skills.mjs'
-import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsTests } from '../../bin/agents-tools.mjs'
+import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsAutoPlan, skillsLoadingAutoPlan, skillsTests } from '../../bin/agents-skills.mjs'
+import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsAutoPlan, toolsTests } from '../../bin/agents-tools.mjs'
 import { allowWorkspace, approveRoster, approveSections, judgeChoiceUniqueness, judgeProjectChoices, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
 import { findAppProgram } from './app-program'
-import { createContextAuto, type ContextAutoSeams } from './context-auto'
-import { createSkillsAuto } from './skills-auto'
+import { createAutoTests, signInMark, type AutoTestEntry, type AutoTestOutcome, type AutoTestTry, type AutoTestsSeams } from './auto-tests'
 import { MainIpcError } from './workspace-ipc'
 
 interface AgentsIpcRegistrar {
@@ -129,18 +130,18 @@ export interface AgentsIpcOptions {
   researchCompare?: NonNullable<Parameters<typeof runResearch>[0]['compare']>
   /** Shows the owner a notice from BMN itself; absent in tests that have nobody to tell. */
   notifyApp?(notice: { title: string; body: string }): void
-  /** The timer BMN's own context testing waits on before it tries once more; tests replace it. */
-  contextRetryLater?: ContextAutoSeams['later']
+  /** The timer BMN's own tests wait on before a test is tried once more; tests replace it. */
+  autoTestsLater?: AutoTestsSeams['later']
+  /** The tests BMN may start by itself; all where absent. A test run names the ones it means to see, so none starts an app behind its back. */
+  autoTestKinds?: readonly AutoTestKind[]
   /** Team › Asks (73.1): the folder the owner exports an ask into; null when he cancels. Absent where there is no window. */
   chooseAskExportFolder?(event: IpcMainInvokeEvent): Promise<string | null>
 }
 
 /** What installing the handlers hands back to the app. */
 export interface AgentsIpcHandle {
-  /** BMN has started: a new app version an agent has a context limit on is tested now (63.1 AC1). Resolves when that is done. */
-  contextAutoAtStart(): Promise<void>
-  /** BMN has started: a new version of an app whose skills a test once showed is tested now, where it reads skills. Resolves when that is done. */
-  skillsAutoAtStart(): Promise<void>
+  /** BMN has started: every app test a new install, version, rules, skills or sign-in needs runs now (Story 75.8). Resolves when that is done. */
+  autoTestsAtStart(): Promise<void>
 }
 
 /** Variables the rules CLI reads to find each app's file and its destination; nothing else of this process's environment. */
@@ -467,10 +468,10 @@ export interface RulesIpcContext {
   script: string; env: NodeJS.ProcessEnv; probeEnv: NodeJS.ProcessEnv; now: () => Date
   /** Why the shell's settings could not be read, when BMN's own environment stands in for them. */
   ownEnvironment?: string
-  /** BMN's own context testing as it stands now; absent where nothing can start a test. */
-  contextAuto?(): RulesSnapshot['contextAuto']
-  /** The app whose skills BMN is testing by itself right now, or null; absent where nothing can start a test. */
-  skillsAuto?(): RosterHarness | null
+  /** The tests BMN runs by itself, as they stand for the installed versions; absent where nothing can start a test. */
+  autoTests?(versions: Partial<Record<RosterHarness, string | null>>): AutoTestsView
+  /** Something BMN reads its tests against may have changed (an install, a restore): it looks for tests to run. */
+  autoTestsLook?(): void
 }
 
 /** What an inspection resolved: the app's installed version and where it sends data. */
@@ -555,7 +556,7 @@ function skillsView(apps: AgentAppView[], team: ReturnType<typeof approvedForPag
     const last = (found: ReturnType<typeof lastLoadingTests>, harness: RosterHarness): SkillsView['apps'][number]['loading'] => {
       const entry = found.find((one) => one.harness === harness)
       return entry === undefined || entry.outcome === null || entry.outcome === 'unavailable' ? null
-        : { at: String(entry.at), version: entry.version ?? null, outcome: entry.outcome, detail: String(entry.detail ?? ''), stale: entry.stale === true }
+        : { at: String(entry.at), version: entry.version ?? null, outcome: entry.outcome, detail: String(entry.detail ?? ''), stale: entry.stale === true, ...((entry as { by?: unknown }).by === 'bmn' ? { by: 'bmn' as const } : {}) }
     }
     // Two records kept apart: a listing (no prompt) never stands in for a loading test (one prompt).
     const listing = lastListingTests(bound)
@@ -575,7 +576,6 @@ function skillsView(apps: AgentAppView[], team: ReturnType<typeof approvedForPag
         const test = lastSkillsTest(app.harness, 'capability', tests)
         return {
           harness: app.harness, version: app.version, supported: app.supported, ...(app.reason === undefined ? {} : { reason: app.reason }),
-          ...(context.skillsAuto?.() === app.harness ? { testing: true } : {}),
           testable: SKILL_APPS[app.harness].list !== null, location: app.location, format: app.format, readsSource: app.reads_source,
           kind: app.kind, kindReason: app.kind_reason, state: appStateWord(app, check.source.readable),
           test: test === null ? null : { at: test.at, version: test.version, outcome: test.outcome, detail: test.detail, ...(test.by === 'bmn' ? { by: 'bmn' as const } : {}) },
@@ -728,7 +728,7 @@ export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnap
     apps,
     // The version each limit setting is judged against is the one the row above shows.
     context: (CONTEXT_APPS as ContextLimitApp[]).map((harness) => contextView(harness, apps.find((app) => app.harness === harness)?.version ?? null, generation, context)),
-    contextAuto: context.contextAuto?.() ?? { enabled: contextAuto().enabled, running: null },
+    autoTests: context.autoTests?.(Object.fromEntries(apps.map((app) => [app.harness, app.version]))) ?? { running: null, stopped: [] },
     readOnlyRoles: generation === null ? null : { held: generation.data.roles.filter((role) => role.read_only === true).map((role) => role.id), proposed: readOnlyProposal(generation.data) },
     skills: skillsView(apps, pages, context),
     tools: toolsView(apps, pages, context),
@@ -760,6 +760,7 @@ function planFrom(result: CliResult, kind: 'install' | 'restore'): RulesPlan {
 
 async function rulesOutcome(context: RulesIpcContext, result: CliResult, success: (report: Record<string, unknown>) => string): Promise<RulesOutcome> {
   const report = parseJson(result.stdout)
+  context.autoTestsLook?.()
   const snapshot = await rulesSnapshot(context)
   if (result.failed) return { ok: false, code: 'IO_ERROR', message: `The rules command ${result.failed}`, snapshot }
   if (report === null) return { ok: false, code: 'IO_ERROR', message: result.stderr.trim().split('\n').pop() || 'The rules command printed nothing BMN can read', snapshot }
@@ -812,71 +813,103 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     return {
       script: options.cliScript(), env: rulesEnvironment(environment), probeEnv: probeEnvironment(environment), now: options.now ?? (() => new Date()),
       ...(session?.source === 'app' ? { ownEnvironment: session.reason ?? 'the shell could not be asked' } : {}),
-      contextAuto: () => auto.view(),
-      skillsAuto: () => skillsAuto.view().running
+      autoTests: (versions) => autoTests.view(versions),
+      autoTestsLook: () => { void autoTests.trigger() }
     }
   }
   const installedVersion = (harness: ContextLimitApp, ctx: RulesIpcContext): string | null => inspectApp(harness, ctx.env).resolution.version
-  /**
-   * BMN's own context testing (63.1). What to test is decided from the approved team, the installed
-   * versions and the sources a test would meet today; the test itself is the owner's own, `bmn context
-   * test`, started with his environment and marked as BMN's.
-   */
-  const auto = createContextAuto({
-    plan: (known): ContextAutoPlanEntry[] => {
-      if (!contextAuto().enabled) return []
-      let data: RosterData | null
-      try {
-        data = approvedIfAny()?.data ?? null
-      } catch {
-        data = null
-      }
-      // An app no agent has a limit for is not even asked for its version.
-      const apps = (CONTEXT_APPS as ContextLimitApp[]).filter((harness) => limitedAgents(data, harness).length > 0)
-      if (apps.length === 0) return []
-      const ctx = context()
-      const versions = Object.fromEntries(apps.map((harness) => [harness, known !== undefined && harness in known ? known[harness] ?? null : installedVersion(harness, ctx)]))
-      const folder = contextTestFolder(ctx.probeEnv)
-      const sources = Object.fromEntries(apps.map((harness) => {
-        try {
-          return [harness, contextTestSources(harness, ctx.probeEnv, folder)]
-        } catch {
-          // A source that cannot be read is not a new one to test against.
-          return [harness, []]
-        }
+  /** Where BMN keeps how often it started each of its own tests (Story 75.8), so a restart does not start one again and again. */
+  const triesPath = (): string => `${agentsDirectory()}/state/auto-tests.json`
+  const readTries = (): Record<string, AutoTestTry> => {
+    try {
+      const data = JSON.parse(readFileSync(triesPath(), 'utf8')) as { tries?: unknown }
+      const tries = data?.tries
+      if (tries === null || typeof tries !== 'object' || Array.isArray(tries)) return {}
+      return Object.fromEntries(Object.entries(tries as Record<string, unknown>).filter((entry): entry is [string, AutoTestTry] => {
+        const value = entry[1] as Partial<AutoTestTry> | null
+        return value !== null && typeof value === 'object' && Number.isSafeInteger(value.count) && typeof value.at === 'string'
       }))
-      return contextAutoPlan({ data, versions, sources })
-    },
-    test: async (harness) => {
+    } catch {
+      // Missing or unreadable: no tries on record, never a guess.
+      return {}
+    }
+  }
+  const writeTries = (tries: Record<string, AutoTestTry>): void => {
+    mkdirSync(dirname(triesPath()), { recursive: true, mode: 0o700 })
+    writeAtomically(triesPath(), `${JSON.stringify({ version: 1, tries })}\n`)
+  }
+  /** The versions the last look found, for pages that show the tests without reading the apps again. */
+  let lookedAt: Partial<Record<RosterHarness, string | null>> = {}
+  const outcomeOf = (result: CliResult): { outcome: AutoTestOutcome; version: string | null; detail: string } | null => {
+    const report = parseJson(result.stdout)
+    if (result.failed || report === null || typeof report.outcome !== 'string') return null
+    return { outcome: report.outcome as AutoTestOutcome, version: typeof report.version === 'string' ? report.version : null, detail: String(report.detail ?? '') }
+  }
+  /** The approved team, or null where none is approved or it cannot be read: then no test that depends on it is planned. */
+  const approvedData = (): RosterData | null => {
+    try {
+      return approvedIfAny()?.data ?? null
+    } catch {
+      return null
+    }
+  }
+  /**
+   * BMN's own tests (Story 75.8): every test the owner once started with Test…, run when it is needed: a first install
+   * or a new version, new rules, skills, sources or research form, a new sign-in. The tests themselves are the owner's
+   * own CLI commands, started with his environment and marked as BMN's; the ones that send no prompt go first.
+   */
+  const autoTests = createAutoTests({
+    plan: (known) => {
+      const kinds = options.autoTestKinds ?? AUTO_TEST_KINDS
+      if (kinds.length === 0) return []
       const ctx = context()
-      const result = await runCli(ctx.script, ['context', 'test', harness, '--json', '--auto'], ctx.probeEnv, PROBE_TIMEOUT_MS)
-      const report = parseJson(result.stdout)
-      if (result.failed || report === null || typeof report.outcome !== 'string') return null
-      return { outcome: report.outcome as ContextTestOutcome, version: typeof report.version === 'string' ? report.version : null, detail: String(report.detail ?? '') }
+      const versions = Object.fromEntries((HARNESSES as RosterHarness[]).map((harness) => [harness,
+        known !== undefined && harness in known ? known[harness] ?? null : inspectApp(harness, ctx.env).resolution.version]))
+      lookedAt = versions
+      const data = approvedData()
+      const signedIn = (entry: { harness: RosterHarness; key: string }): string => `${entry.key} ${signInMark(entry.harness, ctx.probeEnv)}`
+      const entries: AutoTestEntry[] = [
+        ...toolsAutoPlan({ versions }).map((entry) => ({ ...entry, kind: 'tools' as const })),
+        ...skillsAutoPlan({ versions }).map((entry) => ({ ...entry, kind: 'skills' as const })),
+        // Never beside a research or a fence test already going: it waits for the next look.
+        ...(research !== null || fenceTest.running ? [] : fenceAutoPlan({ data, versions }).map((entry) => ({ ...entry, kind: 'fence' as const })))
+      ]
+      // An app no agent has a limit for is not tested for one.
+      const apps = (CONTEXT_APPS as ContextLimitApp[]).filter((harness) => limitedAgents(data, harness).length > 0)
+      if (apps.length > 0) {
+        const folder = contextTestFolder(ctx.probeEnv)
+        const sources = Object.fromEntries(apps.map((harness) => {
+          try {
+            return [harness, contextTestSources(harness, ctx.probeEnv, folder)]
+          } catch {
+            // A source that cannot be read is not a new one to test against.
+            return [harness, []]
+          }
+        }))
+        const contextVersions = Object.fromEntries(apps.map((harness) => [harness, versions[harness] ?? null]))
+        for (const entry of contextAutoPlan({ data, versions: contextVersions, sources })) {
+          entries.push({ kind: 'context', harness: entry.harness, version: entry.version, reason: entry.reason, agents: entry.agents, key: signedIn({ harness: entry.harness, key: entry.set ?? '' }) })
+        }
+      }
+      // The two that send a prompt to the app's provider come last.
+      entries.push(...skillsLoadingAutoPlan({ versions, environment: ctx.env }).map((entry) => ({ ...entry, kind: 'skills-loading' as const, key: signedIn(entry) })))
+      entries.push(...probeAutoPlan({ versions, environment: ctx.env }).map((entry) => ({ ...entry, kind: 'rules' as const, key: signedIn(entry) })))
+      return entries.filter((entry) => kinds.includes(entry.kind))
+    },
+    test: async (entry) => {
+      const ctx = context()
+      if (entry.kind === 'fence') return fenceAuto(entry.harness as 'codex' | 'opencode', ctx)
+      const argv = entry.kind === 'rules' ? ['rules', 'probe', entry.harness, '--auto', '--json']
+        : entry.kind === 'skills' ? ['skills', 'test', entry.harness, '--auto', '--json']
+          : entry.kind === 'skills-loading' ? ['skills', 'test', entry.harness, '--prompt', '--auto', '--json']
+            : entry.kind === 'tools' ? ['tools', 'test', entry.harness, '--auto', '--json']
+              : ['context', 'test', entry.harness, '--json', '--auto']
+      return outcomeOf(await runCli(ctx.script, argv, ctx.probeEnv, PROBE_TIMEOUT_MS))
     },
     tell: (notice) => options.notifyApp?.(notice),
-    read: contextAuto,
-    write: (change) => { setContextAuto(change) },
-    ...(options.contextRetryLater === undefined ? {} : { later: options.contextRetryLater })
-  })
-  /**
-   * BMN's own skills testing: after an app update, the folders test of an app whose skills a test
-   * once showed, in a throwaway home with nothing of the owner's and no prompt (skillsAutoPlan).
-   */
-  const skillsAuto = createSkillsAuto({
-    plan: (known) => {
-      const ctx = context()
-      const versions = Object.fromEntries((HARNESSES as RosterHarness[]).map((harness) => [harness, known !== undefined && harness in known ? known[harness] ?? null : inspectApp(harness, ctx.env).resolution.version]))
-      return skillsAutoPlan({ versions, tests: skillsTests() })
-    },
-    test: async (harness) => {
-      const ctx = context()
-      const result = await runCli(ctx.script, ['skills', 'test', harness, '--auto', '--json'], ctx.probeEnv, PROBE_TIMEOUT_MS)
-      const report = parseJson(result.stdout)
-      if (result.failed || report === null || typeof report.outcome !== 'string') return null
-      return { outcome: report.outcome as SkillsOutcome, version: typeof report.version === 'string' ? report.version : null, detail: String(report.detail ?? '') }
-    },
-    tell: (notice) => options.notifyApp?.(notice)
+    read: readTries,
+    write: writeTries,
+    ...(options.autoTestsLater === undefined ? {} : { later: options.autoTestsLater })
   })
 
   const inspect = (harness: RosterHarness): AppInspection => {
@@ -903,6 +936,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const shownTargets = teamUpdateParam(params)
     const result = outcome(run)
     if (!result.ok) return result
+    // A new team can change what a test is for: who is limited, who researches, where an app may send its rules.
+    void autoTests.trigger()
     const ctx = context()
     let done: AgentsOutcome = result
     if (shownTargets.length > 0) {
@@ -1052,15 +1087,11 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
 
   handle('aiterm:rules:snapshot', async () => {
     const snapshot = await rulesSnapshot(context())
-    // Health has read the machine: a new app version is tested from here, with the versions this read found.
-    void auto.trigger(Object.fromEntries(snapshot.context.map((row) => [row.harness, row.version])))
-    void skillsAuto.trigger(Object.fromEntries(snapshot.apps.map((app) => [app.harness, app.version])))
-    const testing = skillsAuto.view().running
-    return {
-      ...snapshot, contextAuto: auto.view(),
-      // A mark the page reads after the test ended only makes it wait for nothing and read again.
-      skills: { ...snapshot.skills, apps: snapshot.skills.apps.map((app) => (app.harness === testing ? { ...app, testing: true } : app)) }
-    }
+    // Health has read the machine: what a new install, version, rules or sign-in needs is tested from here, with the versions this read found.
+    const versions = Object.fromEntries(snapshot.apps.map((app) => [app.harness, app.version]))
+    void autoTests.trigger(versions)
+    // Read after the look began, so a test it started shows as running.
+    return { ...snapshot, autoTests: autoTests.view(versions) }
   })
   handle('aiterm:rules:plan-master', (params) => {
     const text = textParam(params, 'text')
@@ -1176,28 +1207,10 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const result = await runCli(ctx.script, ['context', 'test', harness, '--json'], ctx.probeEnv, PROBE_TIMEOUT_MS)
     return rulesOutcome(ctx, result, (report) => `${ROSTER_APP_NAMES[harness]} context test ${PROBE_OUTCOME_WORDS[String(report.outcome)] ?? String(report.outcome)}: ${String(report.detail)}`)
   })
-  // `fresh` makes BMN look now (an update command ended); without it the call only waits for a test under way.
-  handle('aiterm:rules:context-auto', async (params) => {
-    await (params.fresh === true ? auto.trigger() : auto.settled())
-    return auto.view()
-  })
-  // `fresh` makes BMN look now (an update command ended); without it the call only waits for a skills test under way.
-  handle('aiterm:rules:skills-auto', async (params) => {
-    await (params.fresh === true ? skillsAuto.trigger() : skillsAuto.settled())
-    return skillsAuto.view()
-  })
-  handle('aiterm:rules:context-auto-set', async (params) => {
-    if (typeof params.enabled !== 'boolean') invalid('enabled must be true or false')
-    const ctx = context()
-    try {
-      setContextAuto({ enabled: params.enabled })
-    } catch (error) {
-      return { ok: false, code: 'IO_ERROR', message: error instanceof Error ? error.message : String(error), snapshot: await rulesSnapshot(ctx) } satisfies RulesOutcome
-    }
-    const snapshot = await rulesSnapshot(ctx)
-    if (params.enabled) void auto.trigger(Object.fromEntries(snapshot.context.map((row) => [row.harness, row.version])))
-    const message = params.enabled ? 'BMN tests context limits by itself after an app update' : 'BMN no longer tests context limits by itself'
-    return { ok: true, message, snapshot: { ...snapshot, contextAuto: auto.view() } } satisfies RulesOutcome
+  // `fresh` makes BMN look now (an update command ended); without it the call only waits for the tests under way (Story 75.8).
+  handle('aiterm:rules:auto-tests', async (params) => {
+    await (params.fresh === true ? autoTests.trigger() : autoTests.settled())
+    return autoTests.view(lookedAt)
   })
   handle('aiterm:rules:skills-plan', async () => {
     const ctx = context()
@@ -1272,12 +1285,49 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   let research: { researcher: string; done: number; total: number; lookup: boolean; controller: AbortController } | null = null
   let researchEnded: ResearchSnapshot['ended'] = null
   let researcherList: ResearcherView[] | null = null
-  // The fence test of the installed Codex (63.3): the owner starts it here, one at a time; it calls no provider.
-  let fenceTest: ResearchSnapshot['fenceTest'] = { running: false, ended: null }
+  // The fence test of the installed Codex and OpenCode (63.3): BMN runs it by itself (Story 75.8), the owner with Test again; one at a time, and it calls no provider.
+  let fenceTest: Omit<ResearchSnapshot['fenceTest'], 'last'> = { running: false, ended: null }
+  /** The last fence test recorded for each app, from the record the check reads; a comparison made during a research is not one. */
+  const lastFences = (): ResearchSnapshot['fenceTest']['last'] => {
+    const last: ResearchSnapshot['fenceTest']['last'] = []
+    try {
+      for (const entry of fenceTests()) {
+        if (entry.harness !== 'codex' && entry.harness !== 'opencode') continue
+        if ((entry.catalog ?? 'bundled') !== 'bundled') continue
+        const found = last.findIndex((one) => one.harness === entry.harness)
+        const row = { harness: entry.harness, verdict: entry.verdict, version: entry.version, at: entry.at } as const
+        if (found === -1) last.push(row)
+        else if (Date.parse(entry.at) >= Date.parse(last[found]!.at)) last[found] = row
+      }
+    } catch {
+      // No record yet, or one BMN cannot read: the rows say the test has not run.
+    }
+    return last
+  }
   /** A research run starts the owner's own app: his environment, without BMN's stand-in commands on the program path. */
   const researchEnvironment = (ctx: RulesIpcContext): NodeJS.ProcessEnv => {
     const own = dirname(ctx.script)
     return { ...ctx.probeEnv, PATH: (ctx.probeEnv.PATH ?? '').split(':').filter((entry) => entry !== own).join(':') }
+  }
+  /** BMN's own fence test of one app: the test Test again runs, never beside a research or another fence test. */
+  const fenceAuto = async (harness: 'codex' | 'opencode', ctx: RulesIpcContext): Promise<{ outcome: AutoTestOutcome; version: string | null; detail: string } | null> => {
+    if (fenceTest.running || research !== null) return null
+    fenceTest = { ...fenceTest, running: true }
+    try {
+      const entry = await (options.fenceTest ?? runFenceTest)({ harness, environment: researchEnvironment(ctx), now: ctx.now() })
+      if (entry.stopped === true || entry.expired === true) return null
+      return { outcome: entry.verdict, version: entry.version, detail: (entry.reasons ?? []).join('; ') }
+    } catch {
+      return null
+    } finally {
+      try {
+        // Who is offered depends on the record the test just wrote.
+        researcherList = researchers({ environment: researchEnvironment(ctx), now: ctx.now() }) as ResearcherView[]
+      } catch {
+        // The list as last read stays; the next look at Models reads it again.
+      }
+      fenceTest = { ...fenceTest, running: false }
+    }
   }
   // Stop and what is left of the research's time reach the page read itself, so neither waits for a slow site.
   const readPage: typeof fetchPublicPage = (address, limits) => (options.researchFetch ?? fetchPublicPage)(address, { ...limits, selfTestPages: options.researchPages?.() ?? null })
@@ -1299,7 +1349,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       researcher: able.some((entry) => entry.id === chosen) ? chosen : dropped !== null ? null : able[0]?.id ?? null,
       choice: researcherChoice(),
       dropped: dropped === null ? null : approvedIfAny()?.data.agents.find((agent) => agent.id === dropped)?.name ?? dropped,
-      fenceTest,
+      fenceTest: { ...fenceTest, last: lastFences() },
+      autoTests: autoTests.view(lookedAt),
       running: research === null ? null : { researcher: research.researcher, done: research.done, total: research.total, lookup: research.lookup },
       ended: researchEnded
     }
@@ -1330,7 +1381,10 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     if ((researcherList ?? []).some((entry) => entry.id === researcher)) chooseResearcher(researcher)
     return researchSnapshot(false)
   })
-  handle('aiterm:research:fence-test', () => {
+  handle('aiterm:research:fence-test', (params) => {
+    // Test again on one app's row tests that app; with none named, Codex and OpenCode as before.
+    const only = params.harness === undefined ? null : harnessParam(params.harness)
+    if (only === 'claude') invalid('the fence test is for Codex and OpenCode')
     if (fenceTest.running || research !== null) return researchSnapshot(false)
     const ctx = context()
     fenceTest = { running: true, ended: null }
@@ -1342,8 +1396,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const test = options.fenceTest ?? runFenceTest
     // Codex as before; OpenCode too where the team has an agent on it (70.3), one after the other.
     const both = async () => {
-      const entries = [await test({ environment: researchEnvironment(ctx), now: ctx.now() })]
-      if (fenceSubjects(readApproved().data, 'opencode').length > 0) entries.push(await test({ harness: 'opencode', environment: researchEnvironment(ctx), now: ctx.now() }))
+      const entries = only === 'opencode' ? [] : [await test({ environment: researchEnvironment(ctx), now: ctx.now() })]
+      if (only === 'opencode' || (only === null && fenceSubjects(readApproved().data, 'opencode').length > 0)) entries.push(await test({ harness: 'opencode', environment: researchEnvironment(ctx), now: ctx.now() }))
       return entries
     }
     void both().then(
@@ -1585,7 +1639,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     }
     return { reply, view: judgeView() }
   })
-  return { contextAutoAtStart: () => auto.trigger(), skillsAutoAtStart: () => skillsAuto.trigger() }
+  return { autoTestsAtStart: () => autoTests.trigger() }
 }
 
 const TEAM_ASK_ID = /^\d{8}T\d{6}-[0-9a-f]{8}$/u

@@ -14,6 +14,9 @@ export declare function fenceDirectory(): string
 export declare function markersIn(text: string, markers: Record<string, string>): string[]
 /** The approved, active agents on an app (Codex unless named), one per model: what a fence test covers. */
 export declare function fenceSubjects(data: Pick<RosterData, 'agents'>, harness?: 'codex' | 'opencode'): RosterAgent[]
+/** One app BMN gives the fence test by itself now (Story 75.8); `key` is the research form and the models. */
+export interface FenceAutoPlanEntry { harness: 'codex' | 'opencode'; version: string; key: string; reason: 'untested' | 'retry' }
+export declare function fenceAutoPlan(options?: { data?: Pick<RosterData, 'agents'> | null; versions?: Partial<Record<'codex' | 'opencode', string | null>>; tests?: unknown[] }): FenceAutoPlanEntry[]
 
 export interface FenceTestOptions {
   /** The app whose installed version is tested; Codex unless named. */

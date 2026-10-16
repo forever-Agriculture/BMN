@@ -81,8 +81,6 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const stubs = join(root, 'stubs')
   const agentsDir = join(home, '.config/bmn/agents')
   for (const folder of [agentsDir, join(agentsDir, 'state'), work, stubs]) mkdirSync(folder, { recursive: true, mode: 0o700 })
-  // BMN's own context testing stays off, so nothing starts a test behind a screen.
-  writeFileSync(join(agentsDir, 'state/context-auto.json'), '{"version":1,"enabled":false,"told":{}}\n')
   writeFileSync(join(agentsDir, 'roster.md'), readFileSync(join(fixtures, 'agents/roster-example.md'), 'utf8'))
   writeFileSync(join(agentsDir, 'global-rules.md'), MASTER)
   writeFileSync(join(home, '.bashrc'), `export PATH="${stubs}:$PATH"\n`)

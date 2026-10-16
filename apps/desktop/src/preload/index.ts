@@ -43,6 +43,7 @@ import {
   type ArtifactRecord,
   type AttentionOrigin,
   type AttentionRecord,
+  type AutoTestsView,
   type HookEventRecord,
   type HookEventsView,
   type HookCheckReport,
@@ -773,16 +774,9 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   testContextLimit(harness: ContextLimitApp): Promise<RulesOutcome> {
     return invokeBridge('aiterm:rules:context-test', { harness })
   },
-  /** BMN's own context testing: `fresh` makes it look now, without it the call waits for a test under way. Resolves when none is. */
-  contextAuto(fresh: boolean): Promise<RulesSnapshot['contextAuto']> {
-    return invokeBridge('aiterm:rules:context-auto', { fresh })
-  },
-  setContextAuto(enabled: boolean): Promise<RulesOutcome> {
-    return invokeBridge('aiterm:rules:context-auto-set', { enabled })
-  },
-  /** BMN's own skills testing after an app update: `fresh` makes it look now, without it the call waits for a test under way. Resolves when none is. */
-  skillsAuto(fresh: boolean): Promise<{ running: RosterHarness | null }> {
-    return invokeBridge('aiterm:rules:skills-auto', { fresh })
+  /** BMN's own tests (Story 75.8): `fresh` makes it look now, without it the call waits for the tests under way. Resolves when none is. */
+  autoTests(fresh: boolean): Promise<AutoTestsView> {
+    return invokeBridge('aiterm:rules:auto-tests', { fresh })
   },
   planSkillsInstall(): Promise<SkillsPlan> {
     return invokeBridge('aiterm:rules:skills-plan', {})
@@ -820,8 +814,8 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   stopResearch(): Promise<ResearchSnapshot> {
     return invokeBridge('aiterm:research:stop', {})
   },
-  testCodexFence(): Promise<ResearchSnapshot> {
-    return invokeBridge('aiterm:research:fence-test', {})
+  testCodexFence(harness?: 'codex' | 'opencode'): Promise<ResearchSnapshot> {
+    return invokeBridge('aiterm:research:fence-test', harness === undefined ? {} : { harness })
   },
   lookUpModel(researcher: string, provider: string, model: string): Promise<ResearchLookup> {
     return invokeBridge('aiterm:research:lookup', { researcher, provider, model })

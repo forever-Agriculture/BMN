@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import * as zlib from 'node:zlib'
 import { APP_NAMES, agentState, canonicalJson, sha256 } from './agents-roster.mjs'
 import { readApproved, stateDirectory } from './agents-state.mjs'
-import { CODEX_RESEARCH_HOME, CODEX_RESEARCH_TOOLS_SEEN, CODEX_SIGN_IN, OPENCODE_RESEARCH_TOOLS_SEEN, fenceStanding, fenceTestsPath, harnessVersion, parseDispatch, researchFormHash, researchFormProblem } from './agents-check.mjs'
+import { CODEX_RESEARCH_HOME, CODEX_RESEARCH_TOOLS_SEEN, CODEX_SIGN_IN, OPENCODE_RESEARCH_TOOLS_SEEN, fenceStanding, fenceTests, fenceTestsPath, harnessVersion, parseDispatch, researchFormHash, researchFormProblem } from './agents-check.mjs'
 import { OPENCODE_HELPER_AGENT, installOpenCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
 import { researchArgv } from './agents-research.mjs'
 import { NOTHING_STARTED, startSupervised } from './agents-supervised.mjs'
@@ -635,6 +635,30 @@ function isRecord(value) {
 export function fenceSubjects(data, harness = 'codex') {
   const seen = new Set()
   return data.agents.filter((agent) => agent.harness === harness && agentState(agent) === 'active' && !seen.has(openCodeModel(agent)) && seen.add(openCodeModel(agent)))
+}
+
+/**
+ * Which apps BMN gives the fence test by itself (Story 75.8): Codex, and OpenCode where the approved team has an
+ * active agent on it, at a version and research form where some agent's model has no test that settled (passed or
+ * failed) under the app's own model list: none ran, which covers a first install and an update, or each one showed
+ * nothing. The key is the form and the models, so a new form or a new model is tested again. The test calls no
+ * provider; the caller reads the versions and bounds the tries.
+ */
+export function fenceAutoPlan({ data, versions, tests = fenceTests() } = {}) {
+  const plan = []
+  for (const harness of ['codex', 'opencode']) {
+    const version = versions?.[harness]
+    const subjects = data === null || data === undefined ? [] : fenceSubjects(data, harness)
+    if (typeof version !== 'string' || subjects.length === 0) continue
+    const form = researchFormHash(harness)
+    const models = subjects.map(openCodeModel).sort()
+    const ofForm = tests.filter((entry) => entry.harness === harness && entry.version === version && entry.form === form && (entry.catalog ?? 'bundled') === 'bundled')
+    const settled = (model) => ofForm.some((entry) => (entry.verdict === 'pass' || entry.verdict === 'fail')
+      && entry.models.some((one) => one?.model === model && (one.verdict === 'pass' || one.verdict === 'fail')))
+    if (models.every(settled)) continue
+    plan.push({ harness, version, key: `${form} ${models.join(',')}`, reason: ofForm.length === 0 ? 'untested' : 'retry' })
+  }
+  return plan
 }
 
 /** The model as the check names it: an OpenCode agent's is `provider/model`. */

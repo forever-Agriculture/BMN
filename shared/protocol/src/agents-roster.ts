@@ -320,6 +320,21 @@ export interface RulesProbeView {
   detail?: string
   version?: string | null
   stale?: boolean
+  /** BMN ran it by itself (Story 75.8). */
+  by?: 'bmn'
+}
+
+/** The tests BMN runs by itself when they are needed (Story 75.8): the rules loading test, the skills test, the skill loading test, the tools test, the context test and the fence test. */
+export const AUTO_TEST_KINDS = ['rules', 'skills', 'skills-loading', 'tools', 'context', 'fence'] as const
+export type AutoTestKind = (typeof AUTO_TEST_KINDS)[number]
+/** How many times BMN starts one test by itself for one version, rendering, set of skills or sign-in before it stops and waits for Test again. */
+export const AUTO_TEST_TRIES = 3
+
+/** The tests BMN runs by itself: the one running now, and the ones it stopped trying on an installed version. */
+export interface AutoTestsView {
+  running: { kind: AutoTestKind; harness: RosterHarness } | null
+  /** Tried AUTO_TEST_TRIES times without a pass or a failure on that version; each waits for the owner's Test again. `at` is when the last try began. */
+  stopped: { kind: AutoTestKind; harness: RosterHarness; version: string; tries: number; at: string }[]
 }
 
 /** The apps BMN has a context-limit setting for. */
@@ -383,16 +398,14 @@ export interface SkillsAppView {
   kindReason: string
   /** Linked, Copied, Reads the source, Differs, Missing, Not supported yet or Exposed. */
   state: string
-  /** The last test of where the app reads skills, whatever version it ran against; `by: 'bmn'` when BMN ran it by itself after an app update. */
+  /** The last test of where the app reads skills, whatever version it ran against; `by: 'bmn'` when BMN ran it by itself. */
   test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; by?: 'bmn' } | null
-  /** BMN is testing, by itself, where this app reads skills right now (after an app update). */
-  testing?: boolean
   /** Whether BMN can tell, in a run of this app, the app handing a skill to its model from the model reading the file itself. */
   loadTestable: boolean
   /** The last listing test (no prompt): the app lists a skill placed where its skills live. Stale when the app, its destination or a skill changed since. */
-  listing: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; stale: boolean } | null
+  listing: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; stale: boolean; by?: 'bmn' } | null
   /** The last loading test (one prompt): the app hands a skill's text to its model. Never filled from a listing. Stale the same way. */
-  loading: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; stale: boolean } | null
+  loading: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; stale: boolean; by?: 'bmn' } | null
 }
 
 /** One skill of the skills folder, as Rules › Skills shows it. */
@@ -449,8 +462,8 @@ export interface ToolsAppView {
   variable: boolean
   /** Whether a run was seen with only the tools its own command names. */
   isolation: boolean
-  /** The last test of where the app reads tools, whatever version it ran against. */
-  test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string } | null
+  /** The last test of where the app reads tools, whatever version it ran against; `by: 'bmn'` when BMN ran it by itself. */
+  test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; by?: 'bmn' } | null
   /** Entries the app holds that are not on the owner's list; `managed` ones BMN wrote for a tool that left the list. */
   unlisted: { id: string; state: 'unmanaged' | 'exposed'; managed: boolean }[]
 }
@@ -536,8 +549,14 @@ export interface ResearchSnapshot {
   choice: { named: string[] | null; proposed: string[] }
   /** The name of a researcher the owner had picked that the team no longer names, until he picks again or researches. */
   dropped: string | null
-  /** The fence test of the installed Codex as started from this window: whether one is going, and how the last one ended. */
-  fenceTest: { running: boolean; ended: { ok: boolean; text: string } | null }
+  /** The fence test of the installed Codex and OpenCode, by BMN or the owner's Test again: whether one is going, and how the last one the owner started ended. */
+  fenceTest: {
+    running: boolean; ended: { ok: boolean; text: string } | null
+    /** The last fence test recorded for each app, whoever started it: what its read-only row on Models says (Story 75.8). */
+    last: { harness: 'codex' | 'opencode'; verdict: 'pass' | 'fail' | 'inconclusive'; version: string | null; at: string }[]
+  }
+  /** The tests BMN runs by itself, of which this page shows the fence test's (Story 75.8). */
+  autoTests: AutoTestsView
   running: { researcher: string; done: number; total: number; lookup: boolean } | null
   /** How the last run started from this window ended, in words; `kept` when it found something, which the page then shows. Null when none has. */
   ended: { ok: boolean; text: string; kept: boolean } | null
@@ -742,8 +761,8 @@ export interface RulesSnapshot {
   apps: AgentAppView[]
   /** Each app's default context limit, and whether its setting is proven on the installed version. */
   context: ContextLimitView[]
-  /** Whether BMN tests a new app version's context setting by itself, and the app it is testing right now (63.1). */
-  contextAuto: { enabled: boolean; running: ContextLimitApp | null }
+  /** The tests BMN runs by itself (Story 75.8 took the switch away): the one running now and the ones it stopped trying. */
+  autoTests: AutoTestsView
   /**
    * The roles the approved team holds to read-only, and the ones BMN proposes that it does not hold yet (63.2):
    * while it holds none, the check lets a reviewer be started with write access. Null where no team is approved.

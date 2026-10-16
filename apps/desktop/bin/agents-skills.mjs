@@ -907,7 +907,7 @@ function loadingBinding(app, decision, source) {
  * No prompt is sent, so this is a listing and nothing more (`kind: 'listing'`): it shows the app
  * finds a skill there. It is never read as a loading test, which is `testSkillsLoading`.
  */
-export async function testSkillsListing(harness, { environment = process.env, now = new Date(), timeoutMs = 120_000 } = {}) {
+export async function testSkillsListing(harness, { environment = process.env, now = new Date(), timeoutMs = 120_000, by } = {}) {
   const spec = SKILL_APPS[harness]
   const generation = approvedIfAny()
   const { harnessVersion } = await import('./agents-check.mjs')
@@ -916,7 +916,7 @@ export async function testSkillsListing(harness, { environment = process.env, no
   const decision = routeFor(harness, generation)
   const source = sourceSkills(skillsSource(generation?.data ?? null, environment))
   const app = appSkills(harness, { environment, version, source: source.path })
-  const done = (outcome, detail) => record({ harness, kind: 'listing', at: now.toISOString(), version, outcome, detail, ...loadingBinding(app, decision, source) })
+  const done = (outcome, detail) => record({ harness, kind: 'listing', at: now.toISOString(), version, outcome, detail, ...loadingBinding(app, decision, source), ...(by === 'bmn' ? { by } : {}) })
   if (version === null) return done('unavailable', `${spec.command} is not installed or did not answer --version`)
   if (!app.supported) return done('unavailable', `skills not supported yet: ${app.reason}`)
   if (decision.kind !== 'full') return done('unavailable', `${decision.reason}; a listing test is offered only where the app may receive private work`)
@@ -1076,7 +1076,7 @@ const LOADING_SKILL = (name, token) => `---\nname: ${name}\ndescription: BMN tes
  * prompt is sent. The prompt goes to the app's provider, so the test runs only where the approved
  * destination may receive private work; it is bound like a listing test.
  */
-export async function testSkillsLoading(harness, { environment = process.env, now = new Date(), timeoutMs = 180_000 } = {}) {
+export async function testSkillsLoading(harness, { environment = process.env, now = new Date(), timeoutMs = 180_000, by } = {}) {
   const spec = SKILL_APPS[harness]
   const generation = approvedIfAny()
   const { harnessVersion } = await import('./agents-check.mjs')
@@ -1085,7 +1085,7 @@ export async function testSkillsLoading(harness, { environment = process.env, no
   const decision = routeFor(harness, generation)
   const source = sourceSkills(skillsSource(generation?.data ?? null, environment))
   const app = appSkills(harness, { environment, version, source: source.path })
-  const done = (outcome, detail) => record({ harness, kind: 'loading', basis: 'prompt', at: now.toISOString(), version, outcome, detail, ...loadingBinding(app, decision, source) })
+  const done = (outcome, detail) => record({ harness, kind: 'loading', basis: 'prompt', at: now.toISOString(), version, outcome, detail, ...loadingBinding(app, decision, source), ...(by === 'bmn' ? { by } : {}) })
   if (version === null) return done('unavailable', `${spec.command} is not installed or did not answer --version`)
   if (!app.supported) return done('unavailable', `skills not supported yet: ${app.reason}`)
   if (decision.kind !== 'full') return done('unavailable', `${decision.reason}; a loading test sends a prompt to that provider`)
@@ -1167,24 +1167,58 @@ export async function testSkills(harness, options = {}) {
   return { harness, version: folders.version, outcome: listing.outcome, detail: `${folders.detail}; ${listing.detail}`, folders, listing }
 }
 
+const settles = (entry) => entry.outcome === 'pass' || entry.outcome === 'fail'
+
 /**
- * Which apps BMN tests by itself now, after an app update: the folders test only, in a throwaway
- * home that holds nothing of the owner's, with no sign-in and no prompt. Only an app whose skills
- * some test once showed is named, at a version no test has run on (`untested`), or whose one test
- * of this version was BMN's own and showed nothing (`retry`). A version whose test failed, or that
- * the owner tested himself, waits for him; so does an app no test ever passed on.
+ * Which apps BMN gives the skills test by itself (Story 75.8): where the app reads skills, in a throwaway home with
+ * nothing of the owner's and no prompt, then, where the app may receive private work, whether it lists a skill placed
+ * there (no prompt either). Named at a version no test has settled: none ran, which covers a first install and an
+ * update, or each one showed nothing. An app BMN cannot ask which skills it sees is left out. The caller bounds the tries.
  */
-export function skillsAutoPlan({ versions, tests = skillsTests() } = {}) {
+export function skillsAutoPlan({ versions, tests = skillsTests(), generation = approvedIfAny() } = {}) {
   const plan = []
   for (const harness of HARNESSES) {
     const version = versions?.[harness]
-    if (typeof version !== 'string' || SKILL_APPS[harness] === undefined) continue
-    const capability = tests.filter((entry) => entry.harness === harness && entry.kind === 'capability')
-    if (!capability.some((entry) => entry.outcome === 'pass')) continue
-    const ofVersion = capability.filter((entry) => entry.version === version)
-    const reason = ofVersion.length === 0 ? 'untested'
-      : ofVersion.length === 1 && ofVersion[0].by === 'bmn' && (ofVersion[0].outcome === 'inconclusive' || ofVersion[0].outcome === 'unavailable') ? 'retry' : null
-    if (reason !== null) plan.push({ harness, version, reason })
+    if (typeof version !== 'string' || SKILL_APPS[harness] === undefined || SKILL_APPS[harness].list === null) continue
+    const ofVersion = tests.filter((entry) => entry.harness === harness && entry.version === version)
+    const folders = ofVersion.filter((entry) => entry.kind === 'capability')
+    if (!folders.some(settles)) {
+      plan.push({ harness, version, key: '', reason: folders.length === 0 ? 'untested' : 'retry' })
+      continue
+    }
+    // The listing follows a folders test that passed, where the app may receive private work.
+    if (folders.filter(settles).at(-1)?.outcome !== 'pass' || !harnessPrivateWork(generation?.data ?? null, harness).allowed) continue
+    const listings = ofVersion.filter(isListing)
+    if (!listings.some(settles)) plan.push({ harness, version, key: '', reason: listings.length === 0 ? 'untested' : 'retry' })
+  }
+  return plan
+}
+
+/**
+ * Which apps BMN gives the skill loading test by itself (Story 75.8): one prompt to the app's provider, so only an app
+ * that may receive private work, whose skills test passed on this version, and only where no loading test settled the
+ * same version, destination, place and skills. The key is that binding, so a change to any skill tests it again.
+ */
+export function skillsLoadingAutoPlan({ versions, tests = skillsTests(), environment = process.env, generation = approvedIfAny() } = {}) {
+  let source
+  try {
+    source = sourceSkills(skillsSource(generation?.data ?? null, environment))
+  } catch {
+    return []
+  }
+  const plan = []
+  for (const harness of HARNESSES) {
+    const version = versions?.[harness]
+    if (typeof version !== 'string' || SKILL_APPS[harness]?.prompt !== true) continue
+    const answer = harnessPrivateWork(generation?.data ?? null, harness)
+    if (!answer.allowed) continue
+    const app = appSkills(harness, { environment, version, tests, source: source.path })
+    if (!app.supported) continue
+    const binding = loadingBinding(app, { kind: 'full', reason: answer.reason, route: answer.route }, source)
+    const ofKey = tests.filter((entry) => entry.harness === harness && isLoading(entry) && entry.version === version
+      && entry.route === binding.route && entry.discovery === binding.discovery && entry.skills_hash === binding.skills_hash)
+    if (ofKey.some(settles)) continue
+    plan.push({ harness, version, key: sha256(canonicalJson(binding)), reason: ofKey.length === 0 ? 'untested' : 'retry' })
   }
   return plan
 }
@@ -1196,7 +1230,8 @@ export const SKILLS_USAGE = `Usage: bmn skills check [--json]                   
        bmn skills install [app…] [--plan] [--yes]   Link or copy each app's skills, and remove what an app may no longer have, as one transaction
        bmn skills test <app> [--json]               Owner-run: find where the app reads skills, then whether it lists a skill placed there (no prompt)
        bmn skills test <app> --prompt [--json]      Owner-run: one prompt to that app's provider, to see whether the app hands a test skill to its model
-       bmn skills test <app> --auto [--json]        BMN's own run after an app update: where the app reads skills, only, marked as BMN's
+       bmn skills test <app> --auto [--json]        BMN's own run of the first: a new app version needs no press (marked as BMN's)
+       bmn skills test <app> --prompt --auto [--json]   BMN's own run of the prompt test, marked as BMN's
 
 Apps: ${HARNESSES.join(', ')}. The skills come from ~/.claude/skills unless the approved team names another folder.
 Undo an install with: bmn rules restore --transaction <id>`
@@ -1270,9 +1305,8 @@ export async function runSkillsCommand(argv) {
       const { options, positionals } = readOptions(rest, { flags: ['json', 'prompt', 'auto'] })
       asJson = options.json === true
       if (positionals.length !== 1 || !HARNESSES.includes(positionals[0])) return usage(appRefusal(positionals[0], `skills test expects one app: ${HARNESSES.join(', ')}`))
-      if (options.prompt === true && options.auto === true) return usage('skills test takes --prompt or --auto, not both')
-      const result = options.prompt === true ? await testSkillsLoading(positionals[0])
-        : options.auto === true ? await testSkillsFolders(positionals[0], { by: 'bmn' }) : await testSkills(positionals[0])
+      const by = options.auto === true ? { by: 'bmn' } : {}
+      const result = options.prompt === true ? await testSkillsLoading(positionals[0], by) : await testSkills(positionals[0], by)
       out(asJson ? JSON.stringify(result, null, 2) : `${result.harness}: ${result.outcome} - ${result.detail}${result.version ? ` (${result.version})` : ''}`)
       return result.outcome === 'pass' ? 0 : 1
     }

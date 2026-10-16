@@ -68,8 +68,6 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const home = join(root, 'home')
   const agents = join(home, '.config/bmn/agents')
   mkdirSync(join(agents, 'state'), { recursive: true, mode: 0o700 })
-  // BMN's own context testing stays off: no test runs behind these steps.
-  writeFileSync(join(agents, 'state/context-auto.json'), '{"version":1,"enabled":false,"told":{}}\n')
   // The unit tests' made-up team: OpenAI and Anthropic may see private work. This home holds no OpenCode settings, so its destination is the owner's word here.
   writeFileSync(join(agents, 'roster.md'), readFileSync(join(repo, 'apps/desktop/src/utility/test-fixtures/agents/roster-example.md'), 'utf8')
     .replace('opencode: {provider: opencode-go, basis: observed-default}', 'opencode: {provider: opencode-go, basis: owner-declared}'))

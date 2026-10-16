@@ -156,6 +156,9 @@ export declare function checkRunTools(agent: RosterAgent, data: Pick<RosterData,
   | { unchecked: true; note: string; applied?: undefined; hash?: undefined; refusal?: undefined }
   | { refusal: { code: 'TOOL_MISMATCH' | 'ROUTE_UNSUPPORTED'; message: string }; applied?: undefined; note?: undefined; hash?: undefined; unchecked?: undefined }
 
-export declare function testTools(harness: string, options?: { environment?: Environment; now?: Date; timeoutMs?: number }): Promise<ToolsTestEntry>
+export declare function testTools(harness: string, options?: { environment?: Environment; now?: Date; timeoutMs?: number; by?: 'bmn' }): Promise<ToolsTestEntry>
+/** One app BMN gives the tools test by itself now (Story 75.8). */
+export interface ToolsAutoPlanEntry { harness: ToolsHarness; version: string; key: string; reason: 'untested' | 'retry' }
+export declare function toolsAutoPlan(options?: { versions?: Partial<Record<ToolsHarness, string | null>>; tests?: ToolsTestEntry[] }): ToolsAutoPlanEntry[]
 export declare const TOOLS_USAGE: string
 export declare function runToolsCommand(argv: string[]): Promise<number>

@@ -23,7 +23,7 @@ export interface TargetCheck {
 export interface InstallResult { code: string; transaction: string | null; written: { harness: RulesHarness; path: string; kind: RenderingKind }[]; message?: string }
 export interface TeamUpdateTarget { harness: RulesHarness; path: string; resolved_path: string; kind: RenderingKind; diff: string; binding: string }
 export interface TeamUpdateResult extends InstallResult { skipped: RulesHarness[] }
-export interface ProbeEntry { harness: RulesHarness; at: string; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; version: string | null; host?: string | null; route: string; rendered_hash: string; master_hash: string }
+export interface ProbeEntry { harness: RulesHarness; at: string; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; version: string | null; host?: string | null; route: string; rendered_hash: string; master_hash: string; by?: 'bmn' }
 export declare const TEAM_LIMIT_BYTES: number
 export declare const TEAM_MARKER: string
 export declare const KIND_WORDS: Record<RenderingKind, string>
@@ -53,7 +53,10 @@ export type ProbeInspector = (harness: RulesHarness) => { version: string | null
 export declare function probeInspector(environment?: NodeJS.ProcessEnv | Record<string, string>): Promise<ProbeInspector>
 export declare function beforeFirstToolCall(rollout: string): string
 export declare function lastProbes(options?: { inspect?: ProbeInspector }): (Partial<ProbeEntry> & { harness: RulesHarness; outcome: ProbeEntry['outcome'] | null; stale?: boolean })[]
-export declare function probe(harness: RulesHarness, options?: { environment?: NodeJS.ProcessEnv | Record<string, string>; now?: Date; timeoutMs?: number }): Promise<ProbeEntry>
+export declare function probe(harness: RulesHarness, options?: { environment?: NodeJS.ProcessEnv | Record<string, string>; now?: Date; timeoutMs?: number; by?: 'bmn' }): Promise<ProbeEntry>
+/** One app BMN gives the loading test by itself now (Story 75.8); `key` is the rendering it tests. */
+export interface ProbeAutoPlanEntry { harness: RulesHarness; version: string; key: string; reason: 'untested' | 'retry' }
+export declare function probeAutoPlan(options?: { versions?: Partial<Record<RulesHarness, string | null>>; environment?: NodeJS.ProcessEnv | Record<string, string> }): ProbeAutoPlanEntry[]
 export declare const RULES_USAGE: string
 export declare function runRulesCommand(argv: string[]): Promise<number>
 export declare function confirm(question: string, details: string, options: { yes: boolean; asJson: boolean }): Promise<boolean>

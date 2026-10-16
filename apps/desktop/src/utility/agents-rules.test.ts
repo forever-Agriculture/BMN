@@ -9,7 +9,7 @@ import { inspectRoute } from '../../bin/agents-check.mjs'
 import { parseRoster, sha256 } from '../../bin/agents-roster.mjs'
 import { readValidRoster } from '../../bin/agents-state.mjs'
 import {
-  TEAM_LIMIT_BYTES, applyTeamUpdate, checkTargets, importedMaster, installRules, lastProbes, listTransactions, masterHistory, parseMaster, planTeamUpdate, probe, probeInspector, readMaster, render,
+  TEAM_LIMIT_BYTES, applyTeamUpdate, checkTargets, importedMaster, installRules, lastProbes, listTransactions, masterHistory, parseMaster, planTeamUpdate, probe, probeAutoPlan, probeInspector, readMaster, render,
   restoreTransaction, teamPhrase, writeMaster
 } from '../../bin/agents-rules.mjs'
 import type { PathState } from '../../bin/safe-config-write.mjs'
@@ -586,6 +586,30 @@ describe('probes (60.4 AC5)', () => {
     expect((await probe('claude', { environment: env })).outcome).toBe('fail')
     stub('claude', 'case "$1" in --version) echo "2.1.295";; *) cat > /dev/null; echo "I cannot tell";; esac')
     expect((await probe('claude', { environment: env })).outcome).toBe('inconclusive')
+  })
+
+  it('names for BMN\'s own loading test every app whose rules are current and full, at a version and rendering no test settled (Story 75.8 AC1)', async () => {
+    const versions = { claude: '2.1.295', codex: '0.161.0', opencode: '2.0.29' }
+    const plan = (at: Record<string, string | null> = versions) => probeAutoPlan({ versions: at, environment: env }).map((one) => [one.harness, one.version, one.reason])
+    const first = plan()
+    expect(first.map(([harness]) => harness)).toContain('claude')
+    expect(first.every(([, , reason]) => reason === 'untested')).toBe(true)
+    // The key is the rendering the app has.
+    const claude = checkTargets(env).find((target: { harness: string }) => target.harness === 'claude') as { rendered_hash: string }
+    expect(probeAutoPlan({ versions, environment: env }).find((one) => one.harness === 'claude')?.key).toBe(claude.rendered_hash)
+    stub('claude', 'case "$1" in --version) echo "2.1.295";; *) cat > /dev/null; echo "I cannot tell";; esac')
+    await probe('claude', { environment: env })
+    expect(plan().find(([harness]) => harness === 'claude')).toEqual(['claude', '2.1.295', 'retry'])
+    stub('claude', `case "$1" in --version) echo "2.1.295 (Claude Code)";; *) cat > /dev/null; grep -o 'master sha256 [0-9a-f]*' "$HOME/.claude/CLAUDE.md" | cut -d' ' -f3;; esac`)
+    await probe('claude', { environment: env })
+    expect(plan().find(([harness]) => harness === 'claude')).toBeUndefined()
+    // An update is a new test; so is new rules, once they are installed, and not before.
+    expect(plan({ ...versions, claude: '2.1.296' }).find(([harness]) => harness === 'claude')).toEqual(['claude', '2.1.296', 'untested'])
+    writeMasterFile(MASTER.replace('Plain rule for everyone.', 'Changed.'))
+    expect(plan().find(([harness]) => harness === 'claude')).toBeUndefined()
+    await installRules(['claude'], { yes: true, environment: env })
+    expect(plan().find(([harness]) => harness === 'claude')).toEqual(['claude', '2.1.295', 'untested'])
+    expect(plan({ ...versions, claude: null }).find(([harness]) => harness === 'claude')).toBeUndefined()
   })
 
   it('Codex reads the injected instructions from its own probe rollout', async () => {

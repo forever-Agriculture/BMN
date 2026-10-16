@@ -11,7 +11,7 @@ import { listTransactions, restoreTransaction } from '../../bin/agents-rules.mjs
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import {
   appStateWord, appTools, checkExit, checkRunTools, checkTools, claudeRunSeen, installTools, looksSecret, maskedEntry, neutralOf, pendingCounts, plainArgument, planToolsInstall, proposeTools,
-  readAppTools, renderTool, runTools, testTools, toolItems, toolsPlanView, toolsTestsPath, transportWords, uncoveredSources, type ToolState, type ToolsTestEntry
+  readAppTools, renderTool, runTools, testTools, toolItems, toolsAutoPlan, toolsPlanView, toolsTestsPath, transportWords, uncoveredSources, type ToolState, type ToolsTestEntry
 } from '../../bin/agents-tools.mjs'
 import { approveRoster } from '../main/agents-approval'
 
@@ -289,6 +289,17 @@ describe('what the owner\'s test proved for a version (60.12 AC1)', () => {
     expect(appTools('codex', { version: CODEX, tests: [pass, { ...pass, outcome: 'fail', detail: 'it reads its tools elsewhere' }] })).toMatchObject({ supported: false, reason: `the test on Codex ${CODEX} did not pass: it reads its tools elsewhere` })
     expect(appTools('codex', { version: CODEX, tests: [pass, { ...pass, variable: 'unproven' }] })).toMatchObject({ supported: true, variable: false })
     expect(appTools('vim', { version: '1.0.0', tests: [] })).toMatchObject({ supported: false })
+  })
+
+  it('names for BMN\'s own run every app at a version no test settled: a first install, an update, or one that showed nothing (Story 75.8 AC1)', () => {
+    const test = (harness: string, version: string, outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'): ToolsTestEntry => ({ harness, at: '2026-10-16T12:00:00.000Z', version, outcome, detail: 'synthetic' } as ToolsTestEntry)
+    const versions = { claude: '2.1.300', codex: '0.162.0', opencode: '2.0.29' }
+    const plan = (tests: ToolsTestEntry[], at: Record<string, string | null> = versions) => toolsAutoPlan({ versions: at, tests }).map((one) => [one.harness, one.version, one.reason])
+    expect(plan([])).toEqual([['claude', '2.1.300', 'untested'], ['codex', '0.162.0', 'untested'], ['opencode', '2.0.29', 'untested']])
+    expect(plan([test('claude', '2.1.300', 'fail'), test('codex', '0.161.0', 'pass'), test('opencode', '2.0.29', 'inconclusive')])).toEqual([['codex', '0.162.0', 'untested'], ['opencode', '2.0.29', 'retry']])
+    expect(plan([test('claude', '2.1.300', 'pass'), test('codex', '0.162.0', 'fail'), test('opencode', '2.0.29', 'unavailable'), test('opencode', '2.0.29', 'pass')])).toEqual([])
+    expect(plan([], { codex: null })).toEqual([])
+    expect(toolsAutoPlan({ versions: { codex: '0.162.0' }, tests: [] })).toEqual([{ harness: 'codex', version: '0.162.0', key: '', reason: 'untested' }])
   })
 
   it('takes a run as kept to its tools only from a run that was seen with and then without the settings\' tools', () => {
