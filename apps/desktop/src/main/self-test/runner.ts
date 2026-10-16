@@ -33,6 +33,7 @@ import { runCheckoutPeersSelfTest } from '../checkout-peers-self-test'
 import { runQuietHoursSelfTest } from './quiet-hours'
 import { runMorningDigestSelfTest } from './morning-digest'
 import { runHealthAlertsSelfTest } from './health-alerts'
+import { runAwaySelfTest } from './away'
 import {
   closeWithinDeadline,
   drainAfterExit,
@@ -5104,6 +5105,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     console.error(`[BMN] self-test phase: morning digest ${JSON.stringify(morningDigest)}`)
     const healthAlerts = await runHealthAlertsSelfTest(host, client, taps)
     console.error(`[BMN] self-test phase: health alerts ${JSON.stringify(healthAlerts)}`)
+    const away = await runAwaySelfTest(host, client, taps)
+    console.error(`[BMN] self-test phase: away ${JSON.stringify(away)}`)
     const secondClose = await client.close()
     console.error('[BMN] self-test phase: second host closed')
     clientClosed = true

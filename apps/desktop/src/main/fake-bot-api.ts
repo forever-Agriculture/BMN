@@ -27,6 +27,8 @@ export interface FakeBotApi {
   tapOn(match: string, options: FakeBotStep[]): void
   /** Story 32.2: answer getMe and getUpdates with this HTTP error, or drop the connection; null serves again. */
   failWith(mode: 409 | 401 | 'network' | null): void
+  /** Story 76.3: the owner sends this text as a message of its own (`/away`, `/back`), replying to nothing. */
+  say(text: string): void
   close(): Promise<void>
 }
 
@@ -145,6 +147,12 @@ export async function startFakeBotApi(chatId: number, userId: number): Promise<F
     },
     failWith: (mode) => {
       failure = mode
+    },
+    say: (text) => {
+      updates.push({
+        update_id: nextUpdate++,
+        message: { message_id: nextMessage++, date: 1_789_000_000, text, chat: { id: chatId, type: 'private' }, from: { id: userId, is_bot: false, first_name: 'Owner' } }
+      })
     },
     close: () => new Promise((resolve) => {
       server.closeAllConnections()
