@@ -423,7 +423,7 @@ async function start(): Promise<void> {
       const page = deps.page, summary = deps.sendSummary
       const trace = (step: string, identity: { requestId?: string; revision?: number }, result: unknown): void => {
         if (selfTestQuietTrace.length < 40) selfTestQuietTrace.push({ seq: selfTestQuietTrace.length, step, ...identity,
-          result, away: companionService['ownerAway'], ready: deps.ready() })
+          result, away: companionService['ownerAway'](), ready: deps.ready() })
       }
       const failure = (error: unknown): string => error instanceof Error ? error.name : 'unknown'
       quiet.before = async record => {
@@ -470,7 +470,7 @@ async function start(): Promise<void> {
         }))
         const quiet = companionService['quietDelivery']
         return { rows, ready: companionService['telegramReady'], health: companionService['telegramHealth']?.state,
-          away: companionService['ownerAway'], flushing: !!quiet['flushing'], permits: quiet['permits'].size,
+          away: companionService['ownerAway'](), flushing: !!quiet['flushing'], permits: quiet['permits'].size,
           exitHeld: quiet['ledger']?.entries.some(entry => 'sessionId' in entry && entry.sessionId === params.selfTestQuietExit) ?? false,
           trace: [...selfTestQuietTrace] }
       })()
