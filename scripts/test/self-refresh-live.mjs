@@ -11,19 +11,20 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
+import { testedApp } from '../lib/tested-app.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDirectory, '../..')
 const appDirectory = join(repoRoot, 'apps/desktop')
 const cli = join(appDirectory, 'bin/bmn')
 const fixtures = join(appDirectory, 'src/utility/test-fixtures')
-const electronBinary = createRequire(join(appDirectory, 'package.json'))('electron')
-const reportPath = process.argv[2] ? resolve(process.argv[2]) : null
+const tested = testedApp(appDirectory)
+console.log(`BMN build: ${tested.build}`)
+const reportPath = tested.rest[0] ? resolve(tested.rest[0]) : null
 const phase = (label) => console.error(`[BMN self-refresh] ${label}`)
 const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms))
 const CONVERSATION = '7e7e7e7e-1b1b-2c2c-3d3d-4e4e4e4e4e4e'
@@ -113,8 +114,8 @@ done
   const hookLine = (payload) => `H '${JSON.stringify({ session_id: CONVERSATION, ...payload })}'`
 
   const application = await electron.launch({
-    executablePath: electronBinary,
-    args: [appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
+    executablePath: tested.executablePath,
+    args: [...tested.appArgs, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     cwd: repoRoot,
     env: {
       ...callerEnvironment, HOME: home, SHELL: '/bin/bash', PATH: '/usr/bin:/bin',
@@ -219,6 +220,50 @@ done
     await application.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; window.show(); window.focus() })
     await sleep(1_000)
     await page.keyboard.press('Escape')
+    await page.keyboard.press('Escape')
+    await sleep(300)
+
+    // ---- Messages: an open list recovers from a failed read and lets a pause go, with no press and no message -----
+    phase('Messages')
+    // BMN's own list handler, for this run only: the next read fails once, and a pause is shown while armed.
+    const armed = await application.evaluate(({ ipcMain }) => {
+      const handlers = ipcMain._invokeHandlers
+      const handler = handlers instanceof Map ? handlers.get('aiterm:messages:list') : undefined
+      if (typeof handler !== 'function') return false
+      globalThis.__messages = { fail: 1, pauseUntil: 0, reads: 0 }
+      handlers.set('aiterm:messages:list', async (...args) => {
+        const state = globalThis.__messages
+        state.reads += 1
+        if (state.fail > 0) {
+          state.fail -= 1
+          throw new Error('Synthetic: this read failed')
+        }
+        const listing = await handler(...args)
+        if (Date.now() >= state.pauseUntil || listing?.ok === false) return listing
+        const workspacePause = { at: new Date(Date.now() - 60_000).toISOString(), until: new Date(state.pauseUntil).toISOString() }
+        // BMN's handlers answer in an envelope, { ok, result }.
+        return listing?.ok === true && listing.result ? { ...listing, result: { ...listing.result, workspacePause } } : listing
+      })
+      return true
+    })
+    assert.equal(armed, true, 'BMN\'s Messages handler could not be wrapped')
+    await palette('Messages…')
+    const messagesDialog = page.locator('dialog.session-messages-dialog')
+    await messagesDialog.waitFor()
+    await noButton(messagesDialog, ['Refresh'])
+    await messagesDialog.getByRole('alert').waitFor({ timeout: 10_000 })
+    const recoveredMs = await timed('the list after a failed read', async () => (await messagesDialog.getByRole('alert').count()) === 0 &&
+      (await messagesDialog.textContent()).includes('Accepted'), EVERY_MS + 10_000)
+    check('Messages reads again by itself after a failed read, within its 30 s bound', recoveredMs <= EVERY_MS + 3_000, { ms: recoveredMs })
+    await application.evaluate(() => { globalThis.__messages.pauseUntil = Date.now() + 8_000 })
+    await focus()
+    await until(async () => (await messagesDialog.textContent()).includes('Paused by the limit until'), 'the pause in Messages', 10_000)
+    const pauseReads = (await application.evaluate(() => globalThis.__messages.reads))
+    const liftedMs = await timed('the pause to go', async () => (await messagesDialog.textContent()).includes('Accepted'), 20_000)
+    check('Messages lets a pause go by itself once its time is up, with no message and no press', liftedMs <= 12_000, { ms: liftedMs, readsAfterPause: (await application.evaluate(() => globalThis.__messages.reads)) - pauseReads })
+    const idleMessages = await application.evaluate(() => globalThis.__messages.reads)
+    await sleep(35_000)
+    check('Messages reads nothing on a timer while its list is read and no pause is ahead', (await application.evaluate(() => globalThis.__messages.reads)) === idleMessages, {})
     await page.keyboard.press('Escape')
     await sleep(300)
 

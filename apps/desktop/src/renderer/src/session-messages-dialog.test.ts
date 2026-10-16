@@ -6,7 +6,7 @@ import {
   SESSION_MESSAGE_HANDOVER, SESSION_MESSAGE_LIST_LIMIT, type SessionMessageListRow, type SessionMessageState
 } from '@bmn/protocol'
 import {
-  SessionMessagesDialog, messageHandover, messageNote, messagePairPauseWords, messagePauseWords, messageRows
+  SessionMessagesDialog, messageHandover, messageNote, messagePairPauseWords, messagePauseWords, messageRows, messagesReadAgainAt
 } from './session-messages-dialog'
 
 const NOW = Date.parse('2026-10-13T12:00:00.000Z')
@@ -142,5 +142,14 @@ describe('what the hourly limit holds, in words (Story 66.3, 75.4)', () => {
     expect(messagePairPauseWords({
       firstSessionId: 'lead', firstName: 'Lead', secondSessionId: 'planner', secondName: 'Planner', pausedAt: iso(-9), until: iso(40)
     }, time, time)).toBe(`Lead and Planner exchanged 12 messages in an hour; paused ${iso(-9)}, allowed again when the counts fall, by ${iso(40)}`)
+  })
+})
+
+describe('the open list reads again by itself when a pause lets go (Story 75.7)', () => {
+  const pair = (until: string) => ({ firstSessionId: 'a', firstName: 'Lead', secondSessionId: 'b', secondName: 'Planner', pausedAt: iso(-30), until })
+  it('names the earliest pause still ahead, and nothing once each has passed', () => {
+    expect(messagesReadAgainAt({ workspacePause: null, pairPauses: [] }, NOW)).toBeNull()
+    expect(messagesReadAgainAt({ workspacePause: { at: iso(-50), until: iso(10) }, pairPauses: [pair(iso(4)), pair(iso(20))] }, NOW)).toBe(Date.parse(iso(4)))
+    expect(messagesReadAgainAt({ workspacePause: { at: iso(-50), until: iso(-1) }, pairPauses: [pair(iso(0))] }, NOW)).toBeNull()
   })
 })

@@ -8,6 +8,7 @@ import {
 import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
 import { boundedRead } from './bounded-read'
+import { SELF_REFRESH_MS, useSelfRefresh } from './self-refresh'
 import { relativeAge } from './session-presentation'
 import './session-messages.css'
 
@@ -88,10 +89,19 @@ export function messagePairPauseWords(
     `allowed again when the counts fall, by ${clock(pair.until)}`
 }
 
+/** When the earliest pause shown lets go, so the open list reads again then; null when none is still ahead. */
+export function messagesReadAgainAt(listing: Pick<SessionMessageListing, 'workspacePause' | 'pairPauses'>, now: number): number | null {
+  const ends = [listing.workspacePause?.until, ...listing.pairPauses.map((pair) => pair.until)]
+    .map((until) => (until === undefined ? Number.NaN : Date.parse(until)))
+    .filter((at) => Number.isFinite(at) && at > now)
+  return ends.length === 0 ? null : Math.min(...ends)
+}
+
 /**
  * One workspace's latest messages between its sessions, read-only (Story 75.4): nothing here is pressed, and a
  * message reaches an agent only through its own hook. The list reads again whenever the host says a message or
- * a pause changed.
+ * a pause changed, when the owner comes back to the window, every half minute while a read failed, and when a
+ * pause it shows lets go (Story 75.7).
  */
 export function SessionMessagesDialog(props: {
   workspace: WorkspaceRecord
@@ -129,6 +139,15 @@ export function SessionMessagesDialog(props: {
       sequence.current += 1
     }
   }, [workspaceId, props.revision])
+
+  useSelfRefresh(() => load(), { everyMs: unavailable !== null ? SELF_REFRESH_MS : null })
+  // Reading the list is what lifts a pause whose count fell, so the read is made just after its time.
+  const readAgainAt = listing === null ? null : messagesReadAgainAt(listing, Date.now())
+  useEffect(() => {
+    if (readAgainAt === null) return
+    const timer = setTimeout(() => void load(), readAgainAt - Date.now() + 1_000)
+    return () => clearTimeout(timer)
+  }, [readAgainAt])
 
   const rows = listing ? messageRows(listing, props.now) : []
   const handover = messageHandover()

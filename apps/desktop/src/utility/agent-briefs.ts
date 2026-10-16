@@ -6,7 +6,11 @@ import {
   AGENT_START_BRIEF
 } from '@bmn/protocol'
 
-/** One compaction's start may be reported by more than one hook entry; starts this close are one compaction. */
+/**
+ * One compaction's start may be reported by more than one hook entry, back to back: starts with no other event of the
+ * conversation between them, and this close, are one compaction. Any other event (a prompt, a tool call, a compaction's
+ * own event) ends it, so the next start is another compaction.
+ */
 export const AGENT_BRIEF_COMPACT_SAME_MS = 60_000
 /** Conversations remembered at once; the oldest is forgotten first. */
 export const AGENT_BRIEF_REMEMBERED = 2_000
@@ -39,6 +43,12 @@ export class AgentBriefs {
 
   /** The brief for this event's answer, or null. */
   answer(p: AgentBriefEvent): string | null {
+    const compactStart = AGENT_BRIEF_HANDOVER[p.agent]?.event === p.event && p.source === AGENT_BRIEF_AGAIN_SOURCE
+    if (!compactStart && p.turn !== undefined) {
+      // The conversation moved on: the compaction it last reported is over.
+      const seen = this.conversations.get(`${p.sessionId}\u0000${p.agent}\u0000${p.turn.conversation}`)
+      if (seen !== undefined) seen.compactedAt = null
+    }
     if (AGENT_BRIEF_HANDOVER[p.agent]?.event !== p.event || p.source === null) return null
     if (p.turn === undefined || p.turn.nested || p.incarnationId === null) return null
     if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return null
@@ -46,9 +56,10 @@ export class AgentBriefs {
     const known = this.conversations.get(key)
     if (p.source === AGENT_BRIEF_AGAIN_SOURCE) {
       const now = this.options.now()
-      const same = known?.compactedAt != null && now - known.compactedAt < AGENT_BRIEF_COMPACT_SAME_MS
+      // A repeated report keeps the first one's time, so repeats never stretch one compaction.
+      if (known?.compactedAt != null && now - known.compactedAt < AGENT_BRIEF_COMPACT_SAME_MS) return null
       this.remember(key, { compactedAt: now })
-      return same ? null : AGENT_START_BRIEF
+      return AGENT_START_BRIEF
     }
     if (known !== undefined) return null
     this.remember(key, { compactedAt: null })

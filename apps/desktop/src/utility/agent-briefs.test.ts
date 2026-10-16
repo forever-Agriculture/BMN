@@ -56,6 +56,29 @@ describe('BMN briefs a conversation once (Story 75.6)', () => {
     expect(briefs.answer(start('compact', other))).toBe(AGENT_START_BRIEF)
   })
 
+  it.each([['a prompt', 'UserPromptSubmit'], ['a tool call', 'PostToolUse'], ['the next compaction\'s own event', 'PreCompact'], ['Codex\'s PostCompact', 'PostCompact']])(
+    'briefs two compactions under a minute apart when %s lies between them', (_what, event) => {
+      expect(briefs.answer(start('startup'))).toBe(AGENT_START_BRIEF)
+      expect(briefs.answer(start('compact'))).toBe(AGENT_START_BRIEF)
+      now += 10_000
+      expect(briefs.answer(start(null, { event }))).toBeNull()
+      now += 10_000
+      expect(briefs.answer(start('compact'))).toBe(AGENT_START_BRIEF)
+      // Another conversation's events end nothing of this one.
+      now += 1_000
+      expect(briefs.answer(start(null, { event, ...other }))).toBeNull()
+      expect(briefs.answer(start('compact'))).toBeNull()
+    })
+
+  it('counts repeated reports of one compaction once, without stretching it', () => {
+    expect(briefs.answer(start('compact'))).toBe(AGENT_START_BRIEF)
+    now += 40_000
+    expect(briefs.answer(start('compact'))).toBeNull()
+    // Seventy seconds after the first report and thirty after the repeat: the minute counts from the first.
+    now += 30_000
+    expect(briefs.answer(start('compact'))).toBe(AGENT_START_BRIEF)
+  })
+
   it('a BMN restart briefs nothing again: a resumed conversation is not briefed, a new one is', () => {
     expect(briefs.answer(start('startup'))).toBe(AGENT_START_BRIEF)
     const restarted = new AgentBriefs({ liveIncarnationId: () => 'incarnation-2', now: () => now })

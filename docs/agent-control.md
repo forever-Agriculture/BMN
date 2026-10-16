@@ -2984,8 +2984,9 @@ reach the agent in Codex 0.162.1 and Claude Code 2.1.301, five of five each
   prompt, so neither shares this answer; should BMN ever answer a brief and a message for one event,
   the hook prints them as one answer, the brief first. A prompt the guard stops goes out alone, never
   with a brief: Claude Code drops what rides on a refused prompt.
-- Two hook entries reporting one start are answered once; a compaction's starts within a minute of
-  each other count once. BMN remembers the last 2,000 conversations, in memory. The brief counts as
+- Two hook entries reporting one start are answered once; a compaction's starts count once while
+  nothing else of that conversation comes between them, within a minute of the first (a prompt, a
+  tool call or a compaction's own event makes the next start another compaction). BMN remembers the last 2,000 conversations, in memory. The brief counts as
   given when BMN answers: a hook that stopped waiting first loses it, and `bmn help agents` says all
   of it and more.
 - The text ships with BMN (`shared/protocol/src/agent-brief.ts`) and changes with the commands it

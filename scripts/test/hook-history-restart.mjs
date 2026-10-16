@@ -1,14 +1,16 @@
 /* global window */
 // A recognized synthetic hook producer on a real PTY, graceful restart, and the existing owner dialog.
 import assert from 'node:assert/strict'
-import { createRequire } from 'node:module'
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
+import { testedApp } from '../lib/tested-app.mjs'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+const tested = testedApp(join(repo, 'apps/desktop'))
+console.log(`BMN build: ${tested.build}`)
 const evidence = join(repo, '.dev-auto/evidence/epic-49/runtime'); mkdirSync(evidence, { recursive: true })
 await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
   const input = join(root, 'input'), trigger = join(root, 'emit'), ready = join(root, 'ready.json'), fixture = join(root, 'hooks.mjs')
@@ -31,8 +33,8 @@ catch{writeFileSync(${JSON.stringify(ready)},JSON.stringify({error:'Synthetic pr
   const env = { ...process.env }
   if (env.WAYLAND_DISPLAY && !isAbsolute(env.WAYLAND_DISPLAY)) env.WAYLAND_DISPLAY = join(env.XDG_RUNTIME_DIR, env.WAYLAND_DISPLAY)
   for (const key of ['BMN_TOKEN', 'BMN_SESSION_ID', 'BMN_CONTROL_SOCKET', 'BMN_PTY_INCARNATION_ID']) delete env[key]
-  const launch = () => _electron.launch({ executablePath: createRequire(join(repo, 'apps/desktop/package.json'))('electron'), cwd: repo,
-    args: [join(repo, 'apps/desktop'), ...(!env.WAYLAND_DISPLAY && env.DISPLAY ? ['--ozone-platform=x11'] : []), '--bmn-test-mode'],
+  const launch = () => _electron.launch({ executablePath: tested.executablePath, cwd: repo,
+    args: [...tested.appArgs, ...(!env.WAYLAND_DISPLAY && env.DISPLAY ? ['--ozone-platform=x11'] : []), '--bmn-test-mode'],
     env: { ...env, XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data, XDG_STATE_HOME: roots.state,
       XDG_CACHE_HOME: roots.cache, XDG_RUNTIME_DIR: roots.runtime, BMN_CONFIG_HOME: join(roots.config, 'bmn'),
       BMN_DATA_HOME: join(roots.data, 'bmn'), BMN_STATE_HOME: join(roots.state, 'bmn'), BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'), BMN_LAUNCH_CWD: root }

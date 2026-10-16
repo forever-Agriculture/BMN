@@ -11,7 +11,7 @@ import { DEFAULT_WORKSPACE_ID } from './store-schema'
 import { refusal, type CaptureSeams, type TurnLimits } from './turn-changes-capture'
 import { TurnChangesClient } from './turn-changes-client'
 import { TurnChangesEngine, inProcessKeeper, inProcessPort, type TurnCaptureRequest, type TurnChangesPort } from './turn-changes-engine'
-import { TurnRecorder, turnLabelTime, type TurnMarkCall, type TurnObservation } from './turn-changes-recorder'
+import { TurnRecorder, turnLabelTime, turnPausesFile, type TurnMarkCall, type TurnObservation, type TurnRecorderOptions } from './turn-changes-recorder'
 import { TURN_STORE_FOLDER } from './turn-changes-store'
 import { readAppVersion, type VersionPlaces } from './turn-changes-version'
 import { filesUnder, scratch, sleep, write, type Place } from './test-fixtures/turn-changes/fixtures'
@@ -49,7 +49,7 @@ interface World {
 
 const worlds: World[] = []
 let requests = 0
-function world(name: string, options: { app?: string; limits?: Partial<TurnLimits>; port?: (port: TurnChangesPort, at: Place) => TurnChangesPort; limitMs?: number; defer?: (work: () => void) => void; now?: () => number } = {}): World {
+function world(name: string, options: { app?: string; limits?: Partial<TurnLimits>; port?: (port: TurnChangesPort, at: Place) => TurnChangesPort; limitMs?: number; defer?: (work: () => void) => void; now?: () => number; pauses?: TurnRecorderOptions['pauses'] } = {}): World {
   const at = scratch(name)
   const database = new BetterSqlite3(':memory:')
   initializeDatabase(database, new Date().toISOString())
@@ -81,6 +81,7 @@ function world(name: string, options: { app?: string; limits?: Partial<TurnLimit
     },
     ...(options.defer ? { defer: options.defer } : {}),
     ...(options.now ? { now: options.now } : {}),
+    ...(options.pauses ? { pauses: options.pauses } : {}),
     shared: () => shared.value,
     hintFolder: hints,
     changed: (sessionId) => changes.push(sessionId),
@@ -903,22 +904,64 @@ describe('the pause', () => {
     expect(await prompt({ turn: 't-next' })).toBe('captured, confirmed')
   })
 
-  it('starts over after a restart: the first turn of a new run scans a work tree an earlier run had paused (75.4 AC4)', async () => {
-    const w = world('pause-restart')
+  it('keeps a pause across a restart: no scan before its time, one probe after it, a longer wait when that fails, and recording once one reads (75.4 AC4)', async () => {
+    let clock = Date.now()
+    const w = world('pause-restart', { now: () => clock })
+    const file = join(w.at.base, 'state/turn-pauses.json')
+    const kept = turnPausesFile(file)
+    // The first run keeps nothing yet on disk: the recorder is built again over the same options plus the file.
+    const run = (): TurnRecorder => {
+      const recorder = new TurnRecorder({ ...(w.recorder['options'] as TurnRecorderOptions), pauses: kept })
+      recorder.setSwitches(new Set([SESSION]))
+      return recorder
+    }
+    let recorder = run()
+    let serial = 0
+    const turn = async (folder: string): Promise<string> => {
+      serial += 1
+      const call = { sessionId: SESSION, incarnationId: 'i-1', requestId: `r-${serial}`, app: 'codex', conversation: CONVERSATION, turn: `t-${serial}`, kind: null, continued: false }
+      const started = await recorder.mark({ ...call, edge: 'start', folder, until: clock + ROOMY })
+      const confirmed = started === 'captured' ? await recorder.mark({ ...call, edge: 'confirm', folder: null, until: null }) : null
+      await recorder.idle()
+      return confirmed === null ? started : `${started}, ${confirmed}`
+    }
     w.foreground.folder = w.at.base
-    for (const id of ['t-1', 't-2', 't-3']) expect(await w.prompt({ turn: id, folder: w.at.base })).toBe('unavailable')
-    expect(w.recorder.states()[0]).toMatchObject({ state: 'paused', pausedRoot: w.at.base })
+    for (let index = 0; index < 3; index += 1) expect(await turn(w.at.base)).toBe('unavailable')
+    expect(recorder.states()[0]).toMatchObject({ state: 'paused', pausedRoot: w.at.base, retryAt: clock + TURN_RETRY_AFTER_MS })
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+    const scans = (): number => w.turns().length
 
-    // BMN restarts: the pause lived in that run only.
-    await w.recorder.idle()
-    const restarted = new TurnRecorder(w.recorder['options'])
-    restarted.setSwitches(new Set([SESSION]))
+    // BMN restarts inside the cooldown: the new run shows the pause before any turn, and scans nothing yet.
+    recorder = run()
+    expect(recorder.states()[0]).toMatchObject({ state: 'paused', pausedRoot: w.at.base, pauseReason: 'failed', retryAt: clock + TURN_RETRY_AFTER_MS })
+    clock += TURN_RETRY_AFTER_MS - 1
+    const before = scans()
+    expect(await turn(w.at.base)).toBe('paused')
+    expect(scans()).toBe(before)
+
+    // Its time come, exactly one probe; it fails, and the wait doubles - also after another restart.
+    clock += 1
+    expect(await turn(w.at.base)).toBe('unavailable')
+    expect(scans()).toBe(before + 1)
+    expect(await turn(w.at.base)).toBe('paused')
+    recorder = run()
+    expect(recorder.states()[0]).toMatchObject({ state: 'paused', retryAt: clock + 2 * TURN_RETRY_AFTER_MS })
+
+    // The work tree reads again: the next probe lifts the pause, and the file keeps none.
     w.foreground.folder = w.at.repo
-    const call = { sessionId: SESSION, incarnationId: 'i-2', requestId: 'after-restart', app: 'codex', conversation: CONVERSATION, turn: 't-9', kind: null, continued: false }
-    expect(await restarted.mark({ ...call, edge: 'start', folder: w.at.repo, until: Date.now() + ROOMY })).toBe('captured')
-    expect(await restarted.mark({ ...call, edge: 'confirm', folder: null, until: null })).toBe('confirmed')
-    await restarted.idle()
-    expect(restarted.states()).toEqual([{ sessionId: SESSION, state: 'recording', app: 'codex', pausedRoot: null, pauseReason: null, retryAt: null }])
+    clock += 2 * TURN_RETRY_AFTER_MS
+    expect(await turn(w.at.repo)).toBe('captured, confirmed')
+    expect(recorder.states()[0]).toMatchObject({ state: 'recording', pausedRoot: null })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({})
+    recorder = run()
+    expect(recorder.states()[0]).toMatchObject({ state: 'recording', pausedRoot: null })
+  })
+
+  it('reads a kept file it cannot trust as no pause at all', () => {
+    const w = world('pause-unreadable')
+    const recorder = new TurnRecorder({ ...(w.recorder['options'] as TurnRecorderOptions), pauses: { read: () => ({ [SESSION]: { [w.at.base]: { reason: 'nonsense', retryAt: 1, probes: 0 } } }), write: () => {} } })
+    recorder.setSwitches(new Set([SESSION]))
+    expect(recorder.states()).toEqual([{ sessionId: SESSION, state: 'recording', app: null, pausedRoot: null, pauseReason: null, retryAt: null }])
   })
 
   it('counts incomplete scans that read nothing new, and not the one that read on', async () => {

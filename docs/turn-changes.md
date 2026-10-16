@@ -682,7 +682,9 @@ try. As the try starts, the next one is set at once, twice as far off (20 minute
 never more than two hours), so a try whose scan fails, or never answers, holds nothing up and
 only waits longer. A try that reads the work tree, whole or reading on, ends the pause and sets
 the count back to zero; so does any such scan of the same work tree. Turns before a try's time
-are not recorded. A pause lives in BMN's memory only: a restart starts with none.
+are not recorded. A pause, its next try and its wait are kept in `turn-pauses.json` in BMN's state
+folder (owner-only), so a restart of BMN neither tries early nor starts the waits over; the three
+scans that lead to a pause are counted in BMN's memory only.
 
 ### Who can read it
 

@@ -655,4 +655,3 @@ export function isWorkspaceLayoutState(
   }
   return true
 }
-

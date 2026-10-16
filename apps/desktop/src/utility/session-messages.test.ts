@@ -1177,6 +1177,23 @@ describe('handoffs that deliver themselves (Story 75.5)', () => {
     expect(records()).toBe(1)
   })
 
+  it('counts a pair in two workspaces both ways: the twelfth exchange in an hour pauses them, whichever workspace sent it', async () => {
+    // Eleven already exchanged, each stored under its sender's workspace: six from a (w1), five from x (w2).
+    const insert = database.prepare(
+      `INSERT INTO session_message(message_id, workspace_id, sender_session_id, receiver_session_id, sender_root, stamp, text,
+         sent_at, expires_at, state) VALUES (?, ?, ?, ?, ?, '[stamp]', 'text', ?, ?, 'printed')`
+    )
+    for (let index = 0; index < 11; index += 1) {
+      const at = new Date(clock - (11 - index) * MINUTE).toISOString()
+      const fromA = index % 2 === 0
+      insert.run(`across-${index}`, fromA ? 'w1' : 'w2', fromA ? 'a' : 'x', fromA ? 'x' : 'a', repo, at, at)
+    }
+    await handoff('x', 'a')
+    clock += 31 * SECOND
+    await expect(handoff('a', 'x')).rejects.toMatchObject({ message: expect.stringContaining('paused') })
+    expect(database.prepare("SELECT COUNT(*) AS count FROM session_message WHERE message_id LIKE 'handoff-message-%'").get()).toEqual({ count: 1 })
+  })
+
   it('deletes a handoff\'s record with its message when agent history is trimmed, keeping its stored file', async () => {
     const old = await handoff('a', 'b')
     clock += 10 * 24 * 60 * MINUTE

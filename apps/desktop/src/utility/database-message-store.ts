@@ -106,17 +106,20 @@ export interface MessagePeers {
   peers: Array<{ sessionId: string; name: string }>
 }
 
-/** Messages a workspace, or two of its sessions, sent since `since`, oldest first. */
+/**
+ * Messages a workspace sent since `since`, or those two sessions sent each other in any workspace, oldest first: a
+ * handoff between two workspaces is stored under its sender's, and the pair's hour counts both ways (Story 75.5).
+ */
 function sentSince(database: DatabaseConnection, workspaceId: string, since: string, pair?: [string, string]): string[] {
   const rows = (pair === undefined
     ? database.prepare('SELECT sent_at FROM session_message WHERE workspace_id = ? AND sent_at > ? ORDER BY sent_at')
       .all(workspaceId, since)
     : database.prepare(
         `SELECT sent_at FROM session_message
-         WHERE workspace_id = ? AND sent_at > ?
+         WHERE sent_at > ?
            AND ((sender_session_id = ? AND receiver_session_id = ?) OR (sender_session_id = ? AND receiver_session_id = ?))
          ORDER BY sent_at`
-      ).all(workspaceId, since, pair[0], pair[1], pair[1], pair[0])) as Array<{ sent_at: string }>
+      ).all(since, pair[0], pair[1], pair[1], pair[0])) as Array<{ sent_at: string }>
   return rows.map((row) => row.sent_at)
 }
 

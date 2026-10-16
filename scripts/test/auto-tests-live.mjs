@@ -9,20 +9,21 @@
 // Usage: node scripts/test/auto-tests-live.mjs [report.json] [shots-folder]   (needs `pnpm --filter @bmn/desktop build` first)
 import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
+import { testedApp } from '../lib/tested-app.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDirectory, '../..')
 const appDirectory = join(repoRoot, 'apps/desktop')
 const cli = join(appDirectory, 'bin/bmn')
 const fixtures = join(appDirectory, 'src/utility/test-fixtures')
-const electronBinary = createRequire(join(appDirectory, 'package.json'))('electron')
-const reportPath = process.argv[2] ? resolve(process.argv[2]) : null
-const shots = process.argv[3] ? resolve(process.argv[3]) : null
+const tested = testedApp(appDirectory)
+console.log(`BMN build: ${tested.build}`)
+const reportPath = tested.rest[0] ? resolve(tested.rest[0]) : null
+const shots = tested.rest[1] ? resolve(tested.rest[1]) : null
 const phase = (label) => console.error(`[BMN auto-tests] ${label}`)
 const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms))
 const KINDS = 'skills,tools,rules,context'
@@ -116,8 +117,8 @@ case "$1" in --version) echo "$v";; *) exit 1;; esac`)
   const bmn = (...args) => spawnSync(process.execPath, [cli, ...args], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }, encoding: 'utf8', timeout: 120_000 })
 
   const launch = () => electron.launch({
-    executablePath: electronBinary,
-    args: [appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
+    executablePath: tested.executablePath,
+    args: [...tested.appArgs, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     cwd: repoRoot,
     env: {
       ...callerEnvironment, HOME: home, SHELL: '/bin/bash', PATH: '/usr/bin:/bin', BMN_AUTO_TESTS: KINDS,

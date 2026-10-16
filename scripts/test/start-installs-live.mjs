@@ -10,19 +10,20 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
+import { testedApp } from '../lib/tested-app.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDirectory, '../..')
 const appDirectory = join(repoRoot, 'apps/desktop')
 const fixtures = join(appDirectory, 'src/utility/test-fixtures')
-const electronBinary = createRequire(join(appDirectory, 'package.json'))('electron')
-const reportPath = process.argv[2] ? resolve(process.argv[2]) : null
-const shots = process.argv[3] ? resolve(process.argv[3]) : null
+const tested = testedApp(appDirectory)
+console.log(`BMN build: ${tested.build}`)
+const reportPath = tested.rest[0] ? resolve(tested.rest[0]) : null
+const shots = tested.rest[1] ? resolve(tested.rest[1]) : null
 const phase = (label) => console.error(`[BMN start installs] ${label}`)
 const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms))
 const MASTER = '# Global rules\n\nPlain rule for everyone.\n'
@@ -112,8 +113,8 @@ esac`)
   })
 
   const launch = () => electron.launch({
-    executablePath: electronBinary,
-    args: [appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
+    executablePath: tested.executablePath,
+    args: [...tested.appArgs, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     cwd: repoRoot,
     env: {
       ...callerEnvironment, HOME: home, SHELL: '/bin/bash', PATH: '/usr/bin:/bin', BMN_START_INSTALLS: 'all', BMN_AUTO_TESTS: 'skills',

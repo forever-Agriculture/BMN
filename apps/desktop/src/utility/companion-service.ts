@@ -114,7 +114,7 @@ import { SessionMessages, type MessageDestination } from './session-messages'
 import { AgentBriefs } from './agent-briefs'
 import { foregroundProcessFolder } from './foreground-process'
 import type { TurnChangesPort, TurnStoreKeeper } from './turn-changes-engine'
-import { TurnRecorder } from './turn-changes-recorder'
+import { TurnRecorder, turnPausesFile } from './turn-changes-recorder'
 import { readAppVersion } from './turn-changes-version'
 import { turnFileView, turnSummary, turnUnavailable } from './turn-changes-view'
 
@@ -678,7 +678,8 @@ export class CompanionService {
       shared: (sessionId, root) => this.startedInWorkTree(sessionId, root),
       hintFolder: join(dirname(this.socketPath), TURN_SWITCH_FOLDER),
       changed: (sessionId) => this.emit('turns', sessionId),
-      now: () => this.now().getTime()
+      now: () => this.now().getTime(),
+      pauses: turnPausesFile(join(options.roots.state, 'turn-pauses.json'))
     })
     this.refusalLogPath = join(options.roots.state, 'refused-requests.log')
     this.telegramDeliveryLogPath = join(options.roots.state, 'telegram-delivery.log')

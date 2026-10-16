@@ -1193,10 +1193,11 @@ export function skillsAutoPlan({ versions, tests = skillsTests(), generation = a
       plan.push({ harness, version, key: '', reason: folders.length === 0 ? 'untested' : 'retry' })
       continue
     }
-    // The listing follows a folders test that passed, where the app may receive private work.
+    // The listing follows a folders test that passed, where the app may receive private work. Its own key: a folders
+    // test that passed before the destination was approved settled only the folders, so its pass cannot stand for it.
     if (folders.filter(settles).at(-1)?.outcome !== 'pass' || !harnessPrivateWork(generation?.data ?? null, harness).allowed) continue
     const listings = ofVersion.filter(isListing)
-    if (!listings.some(settles)) plan.push({ harness, version, key: '', reason: listings.length === 0 ? 'untested' : 'retry' })
+    if (!listings.some(settles)) plan.push({ harness, version, key: 'listing', reason: listings.length === 0 ? 'untested' : 'retry' })
   }
   return plan
 }

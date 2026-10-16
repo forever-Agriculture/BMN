@@ -1,6 +1,8 @@
 // MODULE: auto-tests.test.ts - Story 75.8: the one place BMN starts app tests by itself: tries on disk, their bound and spacing, one at a time, a failure or a stop told once
 import { describe, expect, it } from 'vitest'
 import { AUTO_TEST_RETRY_MS, autoTestId, autoTestNotice, createAutoTests, keptTries, signInMark, type AutoTestEntry, type AutoTestResult, type AutoTestTry } from './auto-tests'
+import { skillsAutoPlan, type SkillsTestEntry } from '../../bin/agents-skills.mjs'
+import type { Generation } from '../../bin/agents-state.mjs'
 import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -32,6 +34,39 @@ function machine(answers: Array<AutoTestResult['outcome'] | null>, plan: () => A
 }
 
 describe('BMN runs its own app tests (Story 75.8)', () => {
+  it('runs the skills listing by itself once the destination may receive private work, after a pass that covered only the folders', async () => {
+    const tests: SkillsTestEntry[] = []
+    let privateWork = 'public_only'
+    const generation = (): Generation => ({ data: {
+      harness_routes: [{ harness: 'codex', provider: 'openai', basis: 'inspected' }],
+      providers: [{ id: 'openai', name: 'OpenAI', private_work: privateWork }]
+    } } as unknown as Generation)
+    let disk: Record<string, AutoTestTry> = {}
+    const started: string[] = []
+    const runner = createAutoTests({
+      plan: (versions) => skillsAutoPlan({ versions: versions ?? { codex: '0.162.1' }, tests, generation: generation() }).map((one) => ({ ...one, kind: 'skills' as const })),
+      // As `bmn skills test codex --auto`: the folders, then the listing only where private work may go.
+      test: async (one) => {
+        started.push(one.key)
+        const at = new Date(START).toISOString()
+        tests.push({ harness: 'codex', kind: 'capability', at, version: one.version, outcome: 'pass', detail: 'synthetic' })
+        if (privateWork === 'allowed') tests.push({ harness: 'codex', kind: 'listing', at, version: one.version, outcome: 'pass', detail: 'synthetic' })
+        return { outcome: 'pass', version: one.version, detail: 'synthetic' }
+      },
+      tell: () => {}, read: () => disk, write: (tries) => { disk = tries }, now: () => START, later: () => {}
+    })
+    await runner.trigger()
+    expect(started).toEqual([''])
+    // The owner approves the destination; the app version stays the same.
+    privateWork = 'allowed'
+    await runner.trigger()
+    expect(started).toEqual(['', 'listing'])
+    expect(tests.filter((one) => one.kind === 'listing')).toHaveLength(1)
+    // Settled: a further look starts nothing.
+    await runner.trigger()
+    expect(started).toEqual(['', 'listing'])
+  })
+
   it('counts a try on disk before it starts, so a crash during it still counts', async () => {
     const written: Record<string, AutoTestTry>[] = []
     let seen: Record<string, AutoTestTry> | null = null

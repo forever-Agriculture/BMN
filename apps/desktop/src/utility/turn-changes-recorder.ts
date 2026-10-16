@@ -5,10 +5,10 @@
 // outside that order, so a slow one never holds the next prompt. Nothing here holds a file's name: a status
 // is one word, a wording takes a bound, a fixed reason, an app, a version or a count.
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import {
-  TURN_APP_NAMES, TURN_LABELS, TURN_MARK_LIMIT_MS, TURN_PAUSE_AFTER, TURN_RECORDED_APPS, TURN_RETRY_AFTER_MS,
+  TURN_APP_NAMES, TURN_LABELS, TURN_MARK_LIMIT_MS, TURN_PAUSE_AFTER, TURN_PAUSE_REASONS, TURN_RECORDED_APPS, TURN_RETRY_AFTER_MS,
   TURN_RETRY_MAX_MS, TURN_WORDINGS, type TurnEndKind, type TurnMarkStatus, type TurnPauseReason, type TurnRecordingState
 } from '@bmn/protocol'
 import type { TurnCaptureRow, TurnRow, TurnTotalsState } from './database-turn-store'
@@ -75,7 +75,12 @@ export interface TurnRecorderOptions {
   markLimitMs?: number
   setTimer?: (run: () => void, ms: number) => unknown
   clearTimer?: (timer: unknown) => void
+  /** Where the pauses are kept across a BMN restart, so a restart neither scans early nor starts the backoff over (Story 75.4). */
+  pauses?: { read(): unknown; write(pauses: KeptTurnPauses): void }
 }
+
+/** The pauses kept on disk: by session, then by the work tree's key. */
+export type KeptTurnPauses = Record<string, Record<string, TurnPause>>
 
 interface LiveTurn {
   row: TurnRow
@@ -128,7 +133,7 @@ interface SessionTurns {
 }
 
 /** A pause of one work tree: why, when the next eligible turn is scanned as its probe, and how many probes it had. */
-interface TurnPause {
+export interface TurnPause {
   reason: TurnPauseReason
   retryAt: number
   probes: number
@@ -142,6 +147,45 @@ const sameTurn = (a: string | null, b: string | null): boolean => a === null || 
 const two = (value: number): string => String(value).padStart(2, '0')
 /** The folder itself, or a folder inside it. */
 const inside = (folder: string, key: string): boolean => folder === key || folder.startsWith(key.endsWith('/') ? key : `${key}/`)
+/** The pauses kept in one file of BMN's state folder, replaced whole: a missing file keeps none. */
+export function turnPausesFile(path: string): NonNullable<TurnRecorderOptions['pauses']> {
+  return {
+    read: () => {
+      try {
+        return JSON.parse(readFileSync(path, 'utf8')) as unknown
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
+        throw error
+      }
+    },
+    write: (pauses) => {
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+      const temporary = `${path}.${randomUUID()}.tmp`
+      writeFileSync(temporary, JSON.stringify(pauses), { mode: 0o600, flag: 'wx' })
+      try {
+        renameSync(temporary, path)
+      } catch (error) {
+        rmSync(temporary, { force: true })
+        throw error
+      }
+    }
+  }
+}
+
+/** Kept pauses as read back: anything not shaped as one is left out, never trusted. */
+function keptPauses(value: unknown): KeptTurnPauses {
+  const kept: KeptTurnPauses = {}
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return kept
+  for (const [sessionId, roots] of Object.entries(value)) {
+    if (roots === null || typeof roots !== 'object' || Array.isArray(roots)) continue
+    for (const [key, pause] of Object.entries(roots as Record<string, unknown>)) {
+      const { reason, retryAt, probes } = (pause ?? {}) as Partial<TurnPause>
+      if (typeof reason !== 'string' || !Object.hasOwn(TURN_PAUSE_REASONS, reason) || !Number.isFinite(retryAt) || !Number.isInteger(probes) || probes! < 0) continue
+      ;(kept[sessionId] ??= {})[key] = { reason, retryAt: retryAt!, probes: probes! }
+    }
+  }
+  return kept
+}
 /** The wait before a pause's next probe, doubled by each probe that came before it, never past the longest. */
 const retryWait = (probes: number): number => Math.min(TURN_RETRY_AFTER_MS * 2 ** probes, TURN_RETRY_MAX_MS)
 const shortCommit = (commit: string | null): string => (commit === null ? 'no commit' : commit.slice(0, 12))
@@ -176,6 +220,8 @@ export class TurnRecorder {
   private readonly clearTimer: (timer: unknown) => void
   /** Events that named no open or provisional turn of their agent and conversation. They change nothing. */
   staleEvents = 0
+  /** The pauses kept on disk, read once. */
+  private kept: KeptTurnPauses | null = null
 
   constructor(options: TurnRecorderOptions) {
     this.options = options
@@ -244,13 +290,15 @@ export class TurnRecorder {
     if (state.pending) this.clearTimer(state.pending.timer)
     for (const turn of state.live) turn.scan?.stop.abort()
     this.sessions.delete(sessionId)
+    this.keepPauses(sessionId, new Map())
   }
 
   /** Where recording stands, for the window only. */
   states(): TurnRecordingState[] {
     const states: TurnRecordingState[] = []
     for (const sessionId of new Set([...this.on, ...this.sessions.keys()])) {
-      const state = this.sessions.get(sessionId)
+      // A session not heard from since BMN started still shows a pause kept from before.
+      const state = this.sessions.get(sessionId) ?? (this.keptOnDisk()[sessionId] !== undefined ? this.session(sessionId) : undefined)
       const paused = state ? [...state.paused][0] : undefined
       if (!this.on.has(sessionId)) continue
       states.push({
@@ -857,7 +905,10 @@ export class TurnRecorder {
   private count(state: SessionTurns, key: string, outcome: 'whole' | 'incomplete' | 'failed', further = false): void {
     if (outcome === 'whole' || further) {
       if (outcome === 'whole') state.failures.delete(key)
-      if (this.lift(state, key)) this.options.changed(state.sessionId)
+      if (this.lift(state, key)) {
+        this.keepPauses(state.sessionId, state.paused)
+        this.options.changed(state.sessionId)
+      }
       return
     }
     const tally = state.failures.get(key) ?? { failed: 0, incomplete: 0 }
@@ -866,6 +917,7 @@ export class TurnRecorder {
     if (tally.failed + tally.incomplete < TURN_PAUSE_AFTER || this.pausedAt(state, key) !== null) return
     const reason = tally.failed === 0 ? 'incomplete' : tally.incomplete === 0 ? 'failed' : 'mixed'
     state.paused.set(key, { reason, retryAt: this.now() + retryWait(0), probes: 0 })
+    this.keepPauses(state.sessionId, state.paused)
     this.options.changed(state.sessionId)
   }
 
@@ -885,6 +937,7 @@ export class TurnRecorder {
     if (pause === undefined || this.now() < pause.retryAt) return false
     pause.probes += 1
     pause.retryAt = this.now() + retryWait(pause.probes)
+    this.keepPauses(state.sessionId, state.paused)
     this.options.changed(state.sessionId)
     return true
   }
@@ -904,10 +957,36 @@ export class TurnRecorder {
 
   // ---- plumbing -------------------------------------------------------------------------------------
 
+  private keptOnDisk(): KeptTurnPauses {
+    if (this.kept === null) {
+      try {
+        this.kept = keptPauses(this.options.pauses?.read() ?? null)
+      } catch {
+        this.kept = {}
+      }
+    }
+    return this.kept
+  }
+
+  /** Writes a session's pauses as they now stand; a write that fails leaves them in this run only. */
+  private keepPauses(sessionId: string, paused: ReadonlyMap<string, TurnPause>): void {
+    if (this.options.pauses === undefined) return
+    const kept = this.keptOnDisk()
+    if (paused.size === 0 && kept[sessionId] === undefined) return
+    if (paused.size === 0) delete kept[sessionId]
+    else kept[sessionId] = Object.fromEntries([...paused].map(([key, pause]) => [key, { ...pause }]))
+    try {
+      this.options.pauses.write(kept)
+    } catch {
+      // The pause still holds in this run.
+    }
+  }
+
   private session(sessionId: string): SessionTurns {
     let state = this.sessions.get(sessionId)
     if (!state) {
-      state = { sessionId, queue: Promise.resolve(), number: null, live: [], pending: null, confirming: null, requests: new Map(), failures: new Map(), paused: new Map(), app: null, appIdentity: null }
+      const paused = new Map(Object.entries(this.keptOnDisk()[sessionId] ?? {}).map(([key, pause]) => [key, { ...pause }]))
+      state = { sessionId, queue: Promise.resolve(), number: null, live: [], pending: null, confirming: null, requests: new Map(), failures: new Map(), paused, app: null, appIdentity: null }
       this.sessions.set(sessionId, state)
     }
     return state
