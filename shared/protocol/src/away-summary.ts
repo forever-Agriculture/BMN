@@ -261,21 +261,28 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     empty: input.attention !== null && open.length === 0 ? 'Nothing waits on you.' : null
   }
 
-  // Decided for you: the period's records; a dev-auto entry joined by its kept record key shows here once.
+  // Decided for you: the period's records; a dev-auto entry joined to its record by their recorded identity shows here once.
   const records = (input.decisions?.decisions ?? []).toSorted((a, b) => a.recordedAt.localeCompare(b.recordedAt))
   const keys = new Set(records.map((record) => record.key))
+  const shown = records.slice(0, AWAY_SUMMARY_LIMITS.decisions)
+  const recordId = (sessionId: string, key: string): string => `${sessionId}\u0000${key}`
+  // A record is identified by its session and key, which BMN returns when it records and dev-auto keeps with the entry
+  // (`(bmn: SESSION/KEY)`, the consultant's method). An entry joins only that record, only when its key is the one the run's
+  // own id and entry id make (dev-auto:<run id>:<entry>), the record names no other workflow entry, and the record is
+  // shown; an entry that kept only a key proves nothing and stays apart (Astra's review, finding 4).
+  const shownIds = new Map(shown.map((record) => [recordId(record.sessionId, record.key), record]))
+  const identity = (run: DevAutoRunsResult['runs'][number], entry: DevAutoRunsResult['runs'][number]['decisionEntries'][number]): string | null => {
+    if (run.runId === null || entry.entry === null || entry.bmnSession === null || entry.bmnKey !== `dev-auto:${run.runId}:${entry.entry}`) return null
+    const id = recordId(entry.bmnSession, entry.bmnKey)
+    const record = shownIds.get(id)
+    if (record === undefined || record.references.some((reference) => reference.kind === 'workflow' && reference.id !== entry.bmnKey)) return null
+    return id
+  }
   const joined = new Set<string>()
-  const keyCounts = new Map<string, number>()
-  for (const record of records) keyCounts.set(record.key, (keyCounts.get(record.key) ?? 0) + 1)
-  // An entry joins its record only by identity: the key dev-auto kept is the one its own run id and entry id make
-  // (dev-auto:<run id>:<entry>), and exactly one BMN record in this list carries it; anything else stays apart.
-  const identity = (run: DevAutoRunsResult['runs'][number], entry: { entry: string | null; bmnKey: string | null }): string | null =>
-    run.runId !== null && entry.entry !== null && entry.bmnKey === `dev-auto:${run.runId}:${entry.entry}` && keyCounts.get(entry.bmnKey) === 1 ? entry.bmnKey : null
   for (const run of input.devAuto?.result.runs ?? []) {
     if (run.ownership === 'copy' || run.unavailable) continue
-    for (const entry of run.decisionEntries ?? []) { const key = identity(run, entry); if (key !== null) joined.add(key) }
+    for (const entry of run.decisionEntries ?? []) { const id = identity(run, entry); if (id !== null) joined.add(id) }
   }
-  const shown = records.slice(0, AWAY_SUMMARY_LIMITS.decisions)
   // A workflow entry is identified as dev-auto names it (dev-auto:<run id>:<entry>, Story 76.7) and found in a run BMN can read
   // that owns its checkout; the store cannot check it when the record is written, so the summary checks it when it reads.
   const workflowEntry = (id: string): string | null => {
@@ -303,7 +310,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
       { label: 'To reverse', text: record.reverse },
       last === undefined ? { label: 'Outcome', text: 'Outcome unknown', muted: true }
         : { label: 'Outcome', text: `Agent reported ${last.result} ${clockWords(last.at)}${last.result === 'failed' ? ` · ${last.evidence[0] ?? last.op}` : ''}` },
-      { label: 'Recorded', text: `${awayMomentWords(record.recordedAt, now)} by ${name(record.sessionId) ?? 'a session BMN no longer holds'}${app ? ` (${app})` : ''}${joined.has(record.key) ? ' · also in dev-auto\'s handoff' : ''}` }
+      { label: 'Recorded', text: `${awayMomentWords(record.recordedAt, now)} by ${name(record.sessionId) ?? 'a session BMN no longer holds'}${app ? ` (${app})` : ''}${joined.has(recordId(record.sessionId, record.key)) ? ' · also in dev-auto\'s handoff' : ''}` }
     ]
     return { key: record.key, sessionId: record.sessionId, time: clockWords(record.recordedAt), choice: oneLine(record.choice.split('\n')[0] ?? '', 160), rows }
   }
@@ -366,7 +373,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     run.decisions.forEach((decision, index) => {
       const entry = run.decisionEntries?.[index]
       if (entry !== undefined && identity(run, entry) !== null) return
-      if (!entry || entry.entry === null) legacy = true
+      if (!entry || entry.entry === null || (entry.bmnKey !== null && entry.bmnSession === null)) legacy = true
       nowLines.push(`${label}: ${oneLine(decision, 220)}`)
     })
   }

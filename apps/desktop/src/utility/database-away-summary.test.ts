@@ -77,6 +77,14 @@ describe('awaySummaryData (Story 76.6 AC1-AC2)', () => {
     expect(data.activity!.gaps).toEqual({ changes: { kind: 'partial', read: 2, skipped: 1 } })
   })
 
+  it('counts a turn whose capture was unavailable (none) as not recorded, never as no change (recheck finding 6)', () => {
+    addTurn('s1', IN, { state: 'complete', files: 1 })
+    addTurn('s1', IN, { state: 'none', files: null })
+    const data = awaySummaryData(database, call())
+    expect(data.activity!.sessions.find((session) => session.sessionId === 's1')).toMatchObject({ turnsEnded: 2, changesAtLeast: true })
+    expect(data.activity!.gaps).toEqual({ changes: { kind: 'partial', read: 1, skipped: 1 } })
+  })
+
   it('says when a source was cut and when the period is older than what is retained', () => {
     for (let index = 0; index <= AWAY_ACTIVITY_LIMITS.files; index += 1) addFile(`f${index}`, 's1', `f${index}`, IN)
     const data = awaySummaryData(database, call())

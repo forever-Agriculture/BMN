@@ -65,8 +65,9 @@ export function awaySummaryData(database: DatabaseConnection, call: AwaySummaryC
     let files: number
     try { files = turn.totals_json === null ? 0 : Number((JSON.parse(turn.totals_json) as { files?: unknown }).files) || 0 } catch { files = 0 }
     if (files > 0) entry.turnsWithChanges += 1
-    // A turn whose changes were not captured whole says its count is a floor, and the source says so in its gap line.
-    if (turn.totals_state !== 'complete' && turn.totals_state !== 'none') { entry.changesAtLeast = true; partial += 1 }
+    // A turn whose changes were not captured whole says its count is a floor, and the source says so in its gap line;
+    // 'none' is capture unavailable (switched off, overlapped, a scan missing), never evidence of no change (the consultant).
+    if (turn.totals_state !== 'complete') { entry.changesAtLeast = true; partial += 1 }
   }
   if (partial > 0) gaps.changes = { kind: 'partial', read: Math.min(turns.length, AWAY_ACTIVITY_LIMITS.turns) - partial, skipped: partial }
 

@@ -1,4 +1,5 @@
 // MODULE: agent-away-notices.ts - which conversation was handed which away state, and the snapshot an event's answer carries (Story 76.4)
+import { randomUUID } from 'node:crypto'
 import {
   AGENT_BRIEF_HANDOVER,
   AWAY_NOTICE_HANDOVER,
@@ -7,13 +8,13 @@ import {
 } from '@bmn/protocol'
 import type { AgentBriefEvent } from './agent-briefs'
 
-/** Conversations remembered at once; the oldest is forgotten first. */
-export const AWAY_NOTICES_REMEMBERED = 2_000
 /**
- * How long a claim may stay unconfirmed before it counts as uncertain: longer than a hook takes from BMN's answer to its
- * printed report (its own 3 s calls and the message allowance), so a claim still on its way is never handed twice.
+ * Conversations remembered at once. The oldest told back and reported printed is forgotten first: a conversation still told
+ * away, or holding a claim not reported printed, may yet be resumed and must be told back (the consultant, finding 1), so it
+ * goes only past the hard bound.
  */
-export const AWAY_CLAIM_SETTLE_MS = 15_000
+export const AWAY_NOTICES_REMEMBERED = 2_000
+export const AWAY_NOTICES_HARD_BOUND = 10_000
 /** Retries of a save that failed, so what was handed survives a restart without waiting for the next change. */
 const SAVE_RETRY_MS = 5_000
 /** SessionStart sources after which the conversation has lost what it was told. */
@@ -29,13 +30,16 @@ export interface AwayTold {
   state: 'away' | 'back'
   status: 'claimed' | 'printed'
   incarnationId: string
-  /** When BMN answered with it; absent in a record kept before it was stored, which reads as long settled. */
+  /** When BMN answered with it. */
   claimedAt?: string
+  /** The one claim a printed report must name, so a late report of an older claim never confirms a newer one. */
+  claimId?: string
 }
 
 export interface AwayNoticeAnswer {
   text: string
   revision: number
+  claimId: string
 }
 
 /**
@@ -45,60 +49,74 @@ export interface AwayNoticeAnswer {
  * what was handed is kept on disk; a compaction or a clear hands the current state again to one that was told before. An
  * away that was never handed and is over by now is never handed (away and back coalesce only then). The record is the one
  * the host holds when the answer is made, and a revision older than the one handed is never handed.
+ *
+ * Order (76.4 AC2, the consultant's method): only a hook holding its conversation's lock (bin/bmn holdAwayLock, taken before
+ * it asks and held by its process until it ends) is handed anything, so a claim never reported printed belongs to a hook that
+ * has ended and is reconciled by handing the current state again at once. Claims are made one at a time and stored before
+ * their text is returned: a claim that cannot be stored hands nothing and the next tool call tries again.
  */
 export class AwayNotices {
-  private readonly told = new Map<string, AwayTold>()
+  private told = new Map<string, AwayTold>()
   private retry: ReturnType<typeof setTimeout> | null = null
+  private queue: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly options: {
     liveIncarnationId(sessionId: string): string | null | undefined
     now(): Date
-    /** Keeps what was handed; a failed write leaves the answer as it is and is tried again with the next change. */
+    /** Keeps what was handed: a claim is stored before it is answered; a printed report's failed save is tried again. */
     save(entries: Array<[string, AwayTold]>): Promise<void>
   }) {}
 
   /** What was kept, read back at start. */
   load(entries: Array<[string, AwayTold]>): void {
-    this.told.clear()
-    for (const [key, told] of entries.slice(-AWAY_NOTICES_REMEMBERED)) this.told.set(key, told)
+    this.told = new Map(entries.slice(-AWAY_NOTICES_HARD_BOUND))
   }
 
-  /** The snapshot for this event's answer, or null; a returned one counts as handed. */
-  answer(p: AgentBriefEvent, record: Pick<AwayRecord, 'state' | 'revision' | 'since' | 'endedAt'>): AwayNoticeAnswer | null {
+  /**
+   * The snapshot for this event's answer, or null; a returned one counts as handed. `locked` says the asking hook holds its
+   * conversation's lock; `current` reads the record once this claim's turn comes.
+   */
+  answer(p: AgentBriefEvent, current: () => Pick<AwayRecord, 'state' | 'revision' | 'since' | 'endedAt'>, locked: boolean): Promise<AwayNoticeAnswer | null> {
     const start = AGENT_BRIEF_HANDOVER[p.agent]?.event === p.event && p.source !== null
     const tool = AWAY_NOTICE_HANDOVER[p.agent]?.event === p.event
-    if (!start && !tool) return null
-    if (p.turn === undefined || p.turn.nested || p.incarnationId === null) return null
-    if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return null
+    if ((!start && !tool) || !locked) return Promise.resolve(null)
+    if (p.turn === undefined || p.turn.nested || p.incarnationId === null) return Promise.resolve(null)
+    const incarnationId = p.incarnationId
     const key = AwayNotices.key(p.sessionId, p.agent, p.turn.conversation)
-    const known = this.told.get(key)
-    if (record.state === 'none' || (known !== undefined && known.revision > record.revision)) return null
-    const lost = start && LOST_SOURCES.includes(p.source ?? '')
-    // One claim at a time per conversation: while one is on its way in this process, a later state waits for its report,
-    // so a hook still delivering an older revision can never print after a newer one (76.4 AC2).
-    const settling = known?.status === 'claimed' && known.incarnationId === p.incarnationId && known.claimedAt !== undefined &&
-      this.options.now().getTime() - Date.parse(known.claimedAt) < AWAY_CLAIM_SETTLE_MS
-    if (settling && !lost) return null
-    // A claim never reported printed, by another process or past its settle time, may or may not have reached the agent:
-    // it is reconciled by handing the current state again (76.4 AC2), also after a restart and in a resumed process.
-    const uncertain = known?.status === 'claimed'
-    const due = record.state === 'away'
-      ? known === undefined || known.revision !== record.revision || known.state !== 'away' || lost || uncertain
-      : known !== undefined && (known.state === 'away' || lost || uncertain) && (known.revision !== record.revision || lost || uncertain)
-    if (!due) return null
-    const text = awayNotice(record, this.options.now())
-    if (text === null) return null
-    this.remember(key, { revision: record.revision, state: record.state, status: 'claimed', incarnationId: p.incarnationId, claimedAt: this.options.now().toISOString() })
-    return { text, revision: record.revision }
+    return this.serial(async () => {
+      if (this.options.liveIncarnationId(p.sessionId) !== incarnationId) return null
+      const record = current()
+      const known = this.told.get(key)
+      if (record.state === 'none' || (known !== undefined && known.revision > record.revision)) return null
+      const lost = start && LOST_SOURCES.includes(p.source ?? '')
+      // A claim never reported printed may or may not have reached the agent; its hook has ended, since this one holds the
+      // lock, so the current state is handed again (76.4 AC2), also after a restart and in a resumed process.
+      const uncertain = known?.status === 'claimed'
+      const due = record.state === 'away'
+        ? known === undefined || known.revision !== record.revision || known.state !== 'away' || lost || uncertain
+        : known !== undefined && (known.state === 'away' || lost || uncertain) && (known.revision !== record.revision || lost || uncertain)
+      if (!due) return null
+      const now = this.options.now()
+      const text = awayNotice(record, now)
+      if (text === null) return null
+      const claim: AwayTold = { revision: record.revision, state: record.state, status: 'claimed', incarnationId, claimedAt: now.toISOString(), claimId: randomUUID() }
+      const next = this.with(key, claim)
+      try { await this.options.save([...next.entries()]) } catch { return null }
+      this.told = next
+      return { text, revision: record.revision, claimId: claim.claimId! }
+    })
   }
 
-  /** The hook printed it: still never read. */
-  printed(sessionId: string, agent: string, conversation: string, revision: number): boolean {
+  /** The hook printed the claim it names: still never read. A report of another claim confirms nothing. */
+  printed(sessionId: string, agent: string, conversation: string, claimId: string): Promise<boolean> {
     const key = AwayNotices.key(sessionId, agent, conversation)
-    const known = this.told.get(key)
-    if (known === undefined || known.revision !== revision || known.status === 'printed') return false
-    this.remember(key, { ...known, status: 'printed' })
-    return true
+    return this.serial(async () => {
+      const known = this.told.get(key)
+      if (known === undefined || known.claimId !== claimId || known.status === 'printed') return false
+      this.told = this.with(key, { ...known, status: 'printed' })
+      this.save()
+      return true
+    })
   }
 
   /** What one conversation was handed last, for tests and the summary. */
@@ -106,15 +124,28 @@ export class AwayNotices {
     return this.told.get(AwayNotices.key(sessionId, agent, conversation))
   }
 
-  private remember(key: string, told: AwayTold): void {
-    this.told.delete(key)
-    this.told.set(key, told)
-    while (this.told.size > AWAY_NOTICES_REMEMBERED) {
-      const oldest = this.told.keys().next().value
-      if (oldest === undefined) break
-      this.told.delete(oldest)
+  /** Claims and reports one after another, each against what the one before left. */
+  private serial<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(work, work)
+    this.queue = run.catch(() => undefined)
+    return run
+  }
+
+  /** The map with this conversation's entry last, trimmed: settled back first, anything else only past the hard bound. */
+  private with(key: string, told: AwayTold): Map<string, AwayTold> {
+    const next = new Map(this.told)
+    next.delete(key)
+    next.set(key, told)
+    for (const [candidate, entry] of next) {
+      if (next.size <= AWAY_NOTICES_REMEMBERED) break
+      if (candidate !== key && entry.state === 'back' && entry.status === 'printed') next.delete(candidate)
     }
-    this.save()
+    while (next.size > AWAY_NOTICES_HARD_BOUND) {
+      const oldest = next.keys().next().value
+      if (oldest === undefined) break
+      next.delete(oldest)
+    }
+    return next
   }
 
   /** Saves everything held; a failed save is tried again until one succeeds, a newer save taking its place. */

@@ -748,7 +748,7 @@ export class CompanionService {
         dropTurnMark: (sessionId, requestId) => this.turns?.dropped(sessionId, requestId),
         reportRefusal: (method, sessionId, reason) => this.logRefusal(method, sessionId, reason),
         awayStatus: async (scope) => scope.kind === 'owner' ? this.awayForOwner() : this.awayForAgent(),
-        awayPrinted: async (p) => ({ recorded: this.awayNotices.printed(p.sessionId, p.agent, p.conversation, p.revision) }),
+        awayPrinted: async (p) => ({ recorded: await this.awayNotices.printed(p.sessionId, p.agent, p.conversation, p.claimId) }),
         // Story 76.5: BMN binds the decision to this process's conversation, as its own hook reported it, never the caller's word.
         recordDecision: (p) => this.controlCall(async () => {
           const producer = p.incarnationId === null ? null : this.producers.stamp(p.sessionId, p.incarnationId)
@@ -759,7 +759,8 @@ export class CompanionService {
             sessionId: p.sessionId, incarnationId: p.incarnationId, key: p.key, payload: p.payload, expectedRevision: p.revision,
             provenance: { agentCli: producer.agentCli, conversation: producer.conversationReference }
           }, this.iso())
-          return { outcome: result.outcome, key: result.record.key, periodId: result.record.periodId, revision: result.record.revision, recordedAt: result.record.recordedAt }
+          // The record's identity is its session and key; dev-auto keeps both with its entry (Story 76.7 AC2).
+          return { outcome: result.outcome, sessionId: result.record.sessionId, key: result.record.key, periodId: result.record.periodId, revision: result.record.revision, recordedAt: result.record.recordedAt }
         }),
         decisionOutcome: (p) => this.controlCall(async () => {
           const result = await this.options.database.companion('addDecisionOutcome', p, this.iso())
@@ -818,10 +819,10 @@ export class CompanionService {
           // Story 75.6: BMN's start brief rides in this answer once per conversation and once after a compaction.
           const brief = this.briefs.answer(p)
           // Story 76.4: the away state rides beside them, on its own rules; the hook prints all three in one answer.
-          const notice = this.awayNotices.answer(p, this.awayRecord)
+          const notice = await this.awayNotices.answer(p, () => this.awayRecord, p.awayLock === true)
           return {
             ...recorded, ...(waiting ? { messageWaiting: true } : {}), ...(brief === null ? {} : { brief }),
-            ...(notice === null ? {} : { awayNotice: notice.text, awayRevision: notice.revision })
+            ...(notice === null ? {} : { awayNotice: notice.text, awayRevision: notice.revision, awayClaim: notice.claimId })
           }
         }),
         reportUsage: (p) => this.controlCall(async () => this.recordUsage(p)),

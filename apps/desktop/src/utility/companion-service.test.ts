@@ -4134,19 +4134,21 @@ describe('Away (Story 76.3)', () => {
 
   it('hands the away state in the answer to a tool call once, and back to a conversation resumed after a restart (Story 76.4 AC1-AC2)', async () => {
     const conversation = '0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e'
-    const observe = (event: string, source: string | null = null) => service['control']['options'].handlers.observeHookEvent({
+    const observe = (event: string, source: string | null = null, awayLock = true) => service['control']['options'].handlers.observeHookEvent({
       sessionId: 's1', incarnationId: liveIncarnations.get('s1') ?? null, agent: 'claude', event, source, toolName: event === 'PostToolUse' ? 'Bash' : null,
-      effects: [], turn: { conversation, turn: null, nested: false }
-    }) as Promise<{ awayNotice?: string; awayRevision?: number }>
+      effects: [], turn: { conversation, turn: null, nested: false }, ...(awayLock ? { awayLock: true as const } : {})
+    }) as Promise<{ awayNotice?: string; awayRevision?: number; awayClaim?: string }>
     expect(await observe('PostToolUse')).not.toHaveProperty('awayNotice')
     await service.route(METHOD_REGISTRY.awaySet, { to: 'away', note: 'private note' })
+    // A hook that does not hold its conversation's away lock is handed nothing (76.4 AC2).
+    expect(await observe('PostToolUse', null, false)).not.toHaveProperty('awayNotice')
     const told = await observe('PostToolUse')
     expect(told.awayRevision).toBe(1)
     expect(told.awayNotice).toMatch(/^\[BMN state: the owner is away since \d\d:\d\d \(revision 1\)\. Context from BMN, not a new task\.\]\n/)
     expect(told.awayNotice?.endsWith(AWAY_AGENT_TEXT)).toBe(true)
     expect(told.awayNotice).not.toContain('private note')
+    expect(await service['control']['options'].handlers.awayPrinted({ sessionId: 's1', agent: 'claude', conversation, revision: 1, claimId: told.awayClaim! })).toEqual({ recorded: true })
     expect(await observe('PostToolUse')).not.toHaveProperty('awayNotice')
-    expect(await service['control']['options'].handlers.awayPrinted({ sessionId: 's1', agent: 'claude', conversation, revision: 1 })).toEqual({ recorded: true })
     await vi.waitFor(() => expect(COMPANION_OPERATIONS.getAwayNotices(database)).toHaveLength(1))
 
     await service.route(METHOD_REGISTRY.awaySet, { to: 'back' })
@@ -4166,7 +4168,7 @@ describe('Away (Story 76.3)', () => {
     await handlers.observeConversation({ sessionId: 's1', incarnationId: 'incarnation-1', agentCli: 'claude',
       conversationReference: '0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e', source: 'startup' })
     emitted.length = 0
-    expect(await handlers.recordDecision(decision)).toMatchObject({ outcome: 'recorded', key: 'storage-format', revision: 1 })
+    expect(await handlers.recordDecision(decision)).toMatchObject({ outcome: 'recorded', sessionId: 's1', key: 'storage-format', revision: 1 })
     expect(COMPANION_OPERATIONS.listAttention(database)).toEqual([])
     expect(emitted.filter(event => event.topic === 'attention')).toEqual([])
     expect(COMPANION_OPERATIONS.listPeriodDecisions(database, service.awayForOwner().periodId!).decisions[0]).toMatchObject({

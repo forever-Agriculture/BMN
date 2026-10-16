@@ -69,10 +69,11 @@ export function handoffFinished(text: string): boolean {
 /** A run id and a decision's entry id and BMN key, as the dev-auto handoff template writes them (Story 76.7). */
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u
 const ENTRY_ID = /^\[(d\d{1,4})\](?:\s|$)/u
-const BMN_KEY = /\(bmn: ([A-Za-z0-9][A-Za-z0-9._:-]{0,119})\)\s*$/u
+const BMN_RECORD = /\(bmn: (?:([A-Za-z0-9][A-Za-z0-9-]{0,63})\/)?([A-Za-z0-9][A-Za-z0-9._:-]{0,119})\)\s*$/u
 
 export function decisionEntry(value: string): DevAutoRun['decisionEntries'][number] {
-  return { entry: ENTRY_ID.exec(value)?.[1] ?? null, bmnKey: BMN_KEY.exec(value)?.[1] ?? null }
+  const record = BMN_RECORD.exec(value)
+  return { entry: ENTRY_ID.exec(value)?.[1] ?? null, bmnKey: record?.[2] ?? null, bmnSession: record?.[1] ?? null }
 }
 
 export function parseHandoff(text: string, format?: (value: string) => string): Pick<DevAutoRun, 'project' | 'status' | 'nextAction' | 'decisions' | 'runId' | 'decisionEntries' | 'omittedDecisions' | 'finished' | 'ownerCheckout' | 'ownerBranch' | 'truncatedFields'> {

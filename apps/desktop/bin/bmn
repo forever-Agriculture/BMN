@@ -2,7 +2,7 @@
 // MODULE: bmn - command-line client for the BMN control socket (one connection per invocation)
 import { createHash, randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, readFileSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
-import { createConnection } from 'node:net'
+import { createConnection, createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -2812,12 +2812,16 @@ async function runHook(args) {
   // What a message may add to an event is counted from the sending of this report, whose answer carries BMN's
   // word on whether one waits.
   let reported = Date.now()
+  // Story 76.4 AC2 (the consultant's fence): BMN hands the away state only to a hook holding its conversation's lock, taken
+  // before it asks and held until this process ends, so an older revision can never be printed after a newer one.
+  const awayFacts = marks !== null && ['SessionStart', 'PostToolUse'].includes(event.hook_event_name) ? marks.turnFacts(agent, event) : {}
+  const awayLock = awayFacts.conversation !== undefined && awayFacts.nested !== true && await holdAwayLock(agent, awayFacts.conversation)
   const calls = [...requests, (outcomes) => {
     reported = Date.now()
     // Story 75.6: a conversation's start names the conversation whatever turn changes do, so BMN can brief it once.
     // Story 76.4: and a tool call names it too, so the away state can follow the conversation it was handed to.
     const facts = marks !== null && (turns || ['SessionStart', 'PostToolUse'].includes(event.hook_event_name)) ? marks.turnFacts(agent, event) : {}
-    return hookObservation(agent, event, requests, outcomes, apiHost, model, configDir, facts)
+    return hookObservation(agent, event, requests, outcomes, apiHost, model, configDir, awayLock && facts.conversation !== undefined ? { ...facts, awayLock: true } : facts)
   }]
   const outcomes = await callEach(socketPath, token, calls, HOOK_TIMEOUT_MS).catch(() => [])
   // BMN's answer to the report of this event says when a message waits for this session and carries its start
@@ -2830,7 +2834,8 @@ async function runHook(args) {
   }
   const answer = outcomes[requests.length]?.result
   const brief = typeof answer?.brief === 'string' && answer.brief !== '' ? answer.brief : null
-  const notice = typeof answer?.awayNotice === 'string' && answer.awayNotice !== '' && Number.isSafeInteger(answer.awayRevision) ? answer.awayNotice : null
+  const notice = awayLock && typeof answer?.awayNotice === 'string' && answer.awayNotice !== '' && Number.isSafeInteger(answer.awayRevision) &&
+    typeof answer.awayClaim === 'string' ? answer.awayNotice : null
   const said = { printed: false }
   if (answer?.messageWaiting === true) {
     // Should one event ever carry both a turn's start and a message, they share the one allowance (R69-NFR5).
@@ -2842,14 +2847,33 @@ async function runHook(args) {
     said.printed = true
   }
   if (notice !== null && said.printed) {
-    // Printed, never read: BMN keeps that it went out (Story 76.4 AC2); a lost report leaves it "claimed", which counts too.
-    const conversation = marks?.turnFacts(agent, event).conversation
-    if (conversation !== undefined) {
-      await callEach(socketPath, token, [{ method: 'away.printed', params: { agent, conversation, revision: answer.awayRevision } }], HOOK_TIMEOUT_MS)
-        .catch(() => undefined)
-    }
+    // Printed, never read: BMN keeps that this claim went out (Story 76.4 AC2); a lost report leaves it "claimed", and the
+    // next hook to hold the lock is handed the current state again.
+    await callEach(socketPath, token, [{ method: 'away.printed', params: { agent, conversation: awayFacts.conversation, revision: answer.awayRevision, claimId: answer.awayClaim } }], HOOK_TIMEOUT_MS)
+      .catch(() => undefined)
   }
   return 0
+}
+
+/**
+ * One hook at a time per conversation may be handed the away state (Story 76.4 AC2, the consultant's method): an abstract
+ * socket name held by this process, which the kernel lets go when the process ends, whatever BMN does meanwhile, and which
+ * is never taken from a living holder. A hook that cannot take it within about 100 ms asks for nothing; the state waits for
+ * the next tool call. Elsewhere than Linux there is no such name and nothing is handed.
+ */
+async function holdAwayLock(agent, conversation) {
+  if (process.platform !== 'linux') return false
+  const name = `\0bmn-away-${createHash('sha256').update(`${agent}\0${conversation}`).digest('hex').slice(0, 40)}`
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const held = await new Promise((done) => {
+      const server = createServer()
+      server.once('error', () => done(false))
+      server.listen({ path: name, exclusive: true }, () => { server.unref(); done(true) })
+    })
+    if (held) return true
+    await new Promise((done) => setTimeout(done, 25))
+  }
+  return false
 }
 
 /** The typed agent's blocking question tool in its main conversation: never Codex's asynchronous one, never a permission. */

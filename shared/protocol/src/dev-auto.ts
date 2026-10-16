@@ -10,10 +10,11 @@ export interface DevAutoRun {
   /** The handoff's `- Run id:` field, written once when the run starts and kept across leads; null for a legacy handoff. */
   runId: string | null
   /**
-   * Per decision, in the order of `decisions`: its entry id (`[d3]`, given once and never renumbered) and the BMN record key
-   * the lead kept with it (`(bmn: KEY)`). Both null for a legacy entry, which is matched by nothing but its text.
+   * Per decision, in the order of `decisions`: its entry id (`[d3]`, given once and never renumbered) and the BMN record the
+   * lead kept with it (`(bmn: SESSION/KEY)`, the session and key BMN returned). All null for a legacy entry, matched by nothing
+   * but its text; a session null with a key is an entry that kept only the key, which proves no record.
    */
-  decisionEntries: Array<{ entry: string | null; bmnKey: string | null }>
+  decisionEntries: Array<{ entry: string | null; bmnKey: string | null; bmnSession: string | null }>
   omittedDecisions: number
   /** Outbound reader reports fields clipped after masking; local view remains unchanged. */
   truncatedFields?: number

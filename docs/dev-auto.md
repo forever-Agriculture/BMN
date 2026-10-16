@@ -10,9 +10,10 @@ to the corresponding live session.
 
 A handoff's `- Run id:` (written once when the run starts) and each Decided-for-you line's leading
 entry id (`[d3]`, never renumbered) make a decision the same decision through text edits, compaction
-and a new lead; a line ending in `(bmn: KEY)` names the BMN decision record the lead made for it while
-you were away, so the two join by that identity, never by text. Lines without an id are legacy and
-are known only by their text. dev-auto reads the away state with `bmn away --status --json`, which
+and a new lead; a line ending in `(bmn: SESSION/KEY)` names the BMN decision record the lead made for
+it while you were away, by the session and key `bmn decision record` returned, so the two join by that
+identity, never by text, and only while the record is in the list. Lines without an id are legacy and
+are known only by their text; a line that kept only `(bmn: KEY)` proves no record and shows apart. dev-auto reads the away state with `bmn away --status --json`, which
 gives an agent the state, since and revision, never your note.
 
 

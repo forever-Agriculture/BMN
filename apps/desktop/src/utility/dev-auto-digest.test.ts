@@ -43,7 +43,7 @@ describe('morning digest content', () => {
   })
 
   it('knows a decision with a run and entry id by its identity through text edits, lead replacement, back and resume; a legacy one by its text (Story 76.7)', () => {
-    const ids = (...entries: Array<string | null>) => entries.map((entry) => ({ entry, bmnKey: entry ? `dev-auto:epic-76-1016:${entry}` : null }))
+    const ids = (...entries: Array<string | null>) => entries.map((entry) => ({ entry, bmnKey: entry ? `dev-auto:epic-76-1016:${entry}` : null, bmnSession: entry ? 's1' : null }))
     const first = buildMorningDigest(snapshot([run({ runId: 'epic-76-1016', decisions: ['[d1] JSON store', '[d2] One table', 'Legacy note'], decisionEntries: ids('d1', 'd2', null) })]), [], '/home/owner')
     expect(first.text).toContain('[d1] JSON store'); expect(first.text).toContain('Legacy note')
     // A successor lead after compaction or a restart edits d1's words and adds d3; back and a resume change nothing else.

@@ -50,13 +50,12 @@ describe('away store', () => {
     expect(getAway(database).state).toBe('away')
   })
 
-  it('moves the keys a record kept itself out on its first change, so they still hold', () => {
-    database.prepare('INSERT INTO app_setting(key, value_json, updated_at) VALUES (?, ?, ?)').run(AWAY_RECORD_KEY, JSON.stringify({
-      version: 1, state: 'away', revision: 4, periodId: 'p-1', since: T0, endedAt: null, source: 'app', endedBy: null, agentSessionId: null,
-      note: null, summaryShownAt: null, operations: [{ key: 'old-back', revision: 3, unchanged: true }]
-    }), T0)
-    expect(changeAway(database, { to: 'away', source: 'app', note: 'n' }, T1).outcome).toBe('changed')
-    expect(changeAway(database, { to: 'back', source: 'app', operationKey: 'old-back' }, T1).outcome).toBe('unchanged')
+  it('keeps the keys when the summary is marked shown, so a replay after it changes nothing (the recheck\'s migration case)', () => {
+    expect(changeAway(database, { to: 'away', source: 'cli', operationKey: 'A' }, T0).outcome).toBe('changed')
+    const back = changeAway(database, { to: 'back', source: 'cli', operationKey: 'K' }, T0)
+    markAwaySummaryShown(database, back.record.periodId!, T1)
+    expect(changeAway(database, { to: 'away', source: 'cli', operationKey: 'B' }, T1).outcome).toBe('changed')
+    expect(changeAway(database, { to: 'back', source: 'cli', operationKey: 'K' }, T1).outcome).toBe('repeated')
     expect(getAway(database).state).toBe('away')
   })
 

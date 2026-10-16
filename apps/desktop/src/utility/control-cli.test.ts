@@ -1813,7 +1813,7 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     it.each(['codex', 'claude'] as const)('puts the brief, the away state and a waiting message in one %s answer, in that order, and reports the state printed', async (app) => {
       const fixture = await cliFixture()
       const session = app === 'codex' ? await codexSession(fixture.root) : await claudeSession(fixture.root)
-      fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, messageWaiting: true, brief: BRIEF, awayNotice: NOTICE, awayRevision: 7 })
+      fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, messageWaiting: true, brief: BRIEF, awayNotice: NOTICE, awayRevision: 7, awayClaim: 'claim-7' })
       fixture.handlers.takeMessage.mockResolvedValue({ message: MESSAGE })
 
       const result = await runCli(['hook', app], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
@@ -1822,23 +1822,43 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
         code: 0, stderr: '',
         stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `${BRIEF}\n\n${NOTICE}\n\n${STAMP}\nhold any commit on local main\nI am about to merge` } })
       })
-      expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({ turn: { conversation: SESSION, nested: false } })
-      expect(fixture.handlers.awayPrinted).toHaveBeenCalledWith({ sessionId: 'session-1', agent: app, conversation: SESSION, revision: 7 })
+      expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({ turn: { conversation: SESSION, nested: false }, awayLock: true })
+      expect(fixture.handlers.awayPrinted).toHaveBeenCalledWith({ sessionId: 'session-1', agent: app, conversation: SESSION, revision: 7, claimId: 'claim-7' })
     })
 
     it('prints the state alone after a tool call, and nothing for a malformed one', async () => {
       const fixture = await cliFixture()
       const session = await claudeSession(fixture.root)
       const env = { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }
-      fixture.handlers.observeHookEvent.mockResolvedValueOnce({ recorded: true, awayNotice: NOTICE, awayRevision: 7 })
+      fixture.handlers.observeHookEvent.mockResolvedValueOnce({ recorded: true, awayNotice: NOTICE, awayRevision: 7, awayClaim: 'claim-7' })
       expect(await runCli(['hook', 'claude'], { env, input: afterTool(session) })).toEqual({
         code: 0, stderr: '', stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: NOTICE } })
       })
-      for (const answer of [{ recorded: true, awayNotice: NOTICE }, { recorded: true, awayNotice: '', awayRevision: 7 }, { recorded: true, awayNotice: 3, awayRevision: 7 }]) {
+      for (const answer of [{ recorded: true, awayNotice: NOTICE, awayClaim: 'c' }, { recorded: true, awayNotice: '', awayRevision: 7, awayClaim: 'c' },
+        { recorded: true, awayNotice: 3, awayRevision: 7, awayClaim: 'c' }, { recorded: true, awayNotice: NOTICE, awayRevision: 7 }]) {
         fixture.handlers.observeHookEvent.mockResolvedValueOnce(answer)
         expect(await runCli(['hook', 'claude'], { env, input: afterTool(session) })).toEqual(QUIET)
       }
       expect(fixture.handlers.awayPrinted).toHaveBeenCalledTimes(1)
+    })
+
+    it('asks for no away state and prints none while another process holds the conversation\'s away lock (76.4 AC2)', async () => {
+      const fixture = await cliFixture()
+      const session = await claudeSession(fixture.root)
+      const env = { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }
+      const name = `\0bmn-away-${createHash('sha256').update(`claude\0${SESSION}`).digest('hex').slice(0, 40)}`
+      const holder = createServer()
+      await new Promise<void>((done) => holder.listen({ path: name, exclusive: true }, done))
+      try {
+        fixture.handlers.observeHookEvent.mockResolvedValueOnce({ recorded: true, awayNotice: NOTICE, awayRevision: 7, awayClaim: 'claim-7' })
+        expect(await runCli(['hook', 'claude'], { env, input: afterTool(session) })).toEqual(QUIET)
+        expect(fixture.handlers.observeHookEvent.mock.calls.at(-1)?.[0]).not.toHaveProperty('awayLock')
+        expect(fixture.handlers.awayPrinted).not.toHaveBeenCalled()
+      } finally { await new Promise((done) => holder.close(done)) }
+      fixture.handlers.observeHookEvent.mockResolvedValueOnce({ recorded: true, awayNotice: NOTICE, awayRevision: 7, awayClaim: 'claim-8' })
+      expect(await runCli(['hook', 'claude'], { env, input: afterTool(session) })).toEqual({
+        code: 0, stderr: '', stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: NOTICE } })
+      })
     })
 
     it.each([['claude', 'AskUserQuestion'], ['codex', 'request_user_input']] as const)('refuses %s\'s blocking question when BMN says so, and prints only the refusal', async (app, tool) => {

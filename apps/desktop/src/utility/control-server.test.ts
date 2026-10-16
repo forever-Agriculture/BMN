@@ -1732,11 +1732,17 @@ describe('away snapshot and refusal (Story 76.4)', () => {
     const agent = await authenticated(fixture, sessionToken(fixture))
     const owner = await authenticated(fixture, fixture.auth.ownerToken)
     const conversation = '0A0A0A0A-1B1B-2C2C-3D3D-4E4E4E4E4E4E'
-    expect((await agent.request('away.printed', { agent: 'claude', conversation, revision: 7 })).error).toBeUndefined()
-    expect(fixture.handlers.awayPrinted).toHaveBeenCalledWith({ sessionId: 'session-1', agent: 'claude', conversation: conversation.toLowerCase(), revision: 7 })
-    expectError(await owner.request('away.printed', { agent: 'claude', conversation, revision: 7 }), ERROR_CODES.unauthorized)
-    expectError(await agent.request('away.printed', { agent: 'claude', conversation: 'nope', revision: 7 }), ERROR_CODES.invalidArgument)
-    expectError(await agent.request('away.printed', { agent: 'claude', conversation, revision: -1 }), ERROR_CODES.invalidArgument)
+    expect((await agent.request('away.printed', { agent: 'claude', conversation, revision: 7, claimId: 'claim-7' })).error).toBeUndefined()
+    expect(fixture.handlers.awayPrinted).toHaveBeenCalledWith({ sessionId: 'session-1', agent: 'claude', conversation: conversation.toLowerCase(), revision: 7, claimId: 'claim-7' })
+    expectError(await owner.request('away.printed', { agent: 'claude', conversation, revision: 7, claimId: 'claim-7' }), ERROR_CODES.unauthorized)
+    expectError(await agent.request('away.printed', { agent: 'claude', conversation: 'nope', revision: 7, claimId: 'claim-7' }), ERROR_CODES.invalidArgument)
+    expectError(await agent.request('away.printed', { agent: 'claude', conversation, revision: -1, claimId: 'claim-7' }), ERROR_CODES.invalidArgument)
+    expectError(await agent.request('away.printed', { agent: 'claude', conversation, revision: 7 }), ERROR_CODES.invalidArgument)
+    // Story 76.4 AC2: a hook says it holds its conversation's away lock only with that conversation.
+    expect((await agent.request('hook.observe', { agent: 'claude', event: 'PostToolUse', effects: [], conversation, awayLock: true })).error).toBeUndefined()
+    expect((fixture.handlers.observeHookEvent.mock.calls.at(-1) as unknown[] | undefined)?.[0]).toMatchObject({ awayLock: true })
+    expectError(await agent.request('hook.observe', { agent: 'claude', event: 'PostToolUse', effects: [], awayLock: true }), ERROR_CODES.invalidArgument)
+    expectError(await agent.request('hook.observe', { agent: 'claude', event: 'PostToolUse', effects: [], conversation, awayLock: 'yes' }), ERROR_CODES.invalidArgument)
   })
 })
 

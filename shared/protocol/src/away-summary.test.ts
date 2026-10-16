@@ -159,9 +159,9 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
     expect(gapped.happened.empty).toBe('No retained activity found for this period; some sources could not be read.')
   })
 
-  it('shows dev-auto as Now, undated; an entry joined to its BMN record by key shows once, above; legacy entries are said', () => {
+  it('shows dev-auto as Now, undated; an entry joined to its BMN record by session and key shows once, above; legacy entries are said', () => {
     const devAuto = {
-      result: { runs: [run({ finished: true, decisions: ['[d1] SQLite (bmn: dev-auto:r1:d1)', 'old line'], decisionEntries: [{ entry: 'd1', bmnKey: 'dev-auto:r1:d1' }, { entry: null, bmnKey: null }] }), run({ ownership: 'copy', finished: true })], skipped: 0, issues: [], observedAt: ENDED },
+      result: { runs: [run({ finished: true, decisions: ['[d1] SQLite (bmn: s1/dev-auto:r1:d1)', 'old line'], decisionEntries: [{ entry: 'd1', bmnKey: 'dev-auto:r1:d1', bmnSession: 's1' }, { entry: null, bmnKey: null, bmnSession: null }] }), run({ ownership: 'copy', finished: true })], skipped: 0, issues: [], observedAt: ENDED },
       workspaceNames: { w: 'Personal' }
     }
     const view = buildAwaySummary(input({ devAuto, decisions: { decisions: [decision('dev-auto:r1:d1', 's1')], complete: true } }))
@@ -183,21 +183,31 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
     expect(withCompletedAsks({ sessions: [], gaps: {} }, [], SINCE, ENDED, { keptDays: 30, now: new Date(ENDED) }).gaps.asks).toBeUndefined()
   })
 
-  it('joins a dev-auto entry only by the identity its own run and entry make, never by a key another run or session shares', () => {
-    const other = run({ runId: 'rB', checkout: '/code/x/.claude/worktrees/epic-77', branch: 'dev-auto/epic-77', project: 'Epic 77',
-      decisions: ['[d1] borrowed key (bmn: dev-auto:r1:d1)'], decisionEntries: [{ entry: 'd1', bmnKey: 'dev-auto:r1:d1' }] })
-    const devAuto = { result: { runs: [other], skipped: 0, issues: [], observedAt: ENDED }, workspaceNames: { w: 'Personal' } }
-    const view = buildAwaySummary(input({ devAuto, decisions: { decisions: [decision('dev-auto:r1:d1', 's1')], complete: true } }))
-    expect(view.now.lines).toEqual(['Personal · dev-auto/epic-77 · Epic 77: [d1] borrowed key (bmn: dev-auto:r1:d1)'])
-    expect(view.decided.groups[0]!.records[0]!.rows.at(-1)!.text).not.toContain('also in dev-auto')
-    const own = run({ decisions: ['[d1] SQLite (bmn: dev-auto:r1:d1)'], decisionEntries: [{ entry: 'd1', bmnKey: 'dev-auto:r1:d1' }] })
-    const twice = buildAwaySummary(input({ devAuto: { ...devAuto, result: { ...devAuto.result, runs: [own] } },
-      decisions: { decisions: [decision('dev-auto:r1:d1', 's1'), decision('dev-auto:r1:d1', 's2')], complete: true } }))
-    expect(twice.now.lines).toEqual(['Personal · dev-auto/epic-76 · Epic 76: [d1] SQLite (bmn: dev-auto:r1:d1)'])
+  it('joins a dev-auto entry only by the record identity it kept and its own run\'s key, never by a key another run or session shares', () => {
+    const view = (entry: { bmnKey: string | null; bmnSession: string | null }, decisions: ReturnType<typeof decision>[], over: Partial<ReturnType<typeof run>> = {}) => {
+      const line = `[d1] SQLite (bmn: ${entry.bmnSession === null ? '' : `${entry.bmnSession}/`}${entry.bmnKey})`
+      const devAuto = { result: { runs: [run({ decisions: [line], decisionEntries: [{ entry: 'd1', ...entry }], ...over })], skipped: 0, issues: [], observedAt: ENDED }, workspaceNames: { w: 'Personal' } }
+      return buildAwaySummary(input({ devAuto, decisions: { decisions, complete: true } }))
+    }
+    const joined = (summary: ReturnType<typeof buildAwaySummary>) => summary.now.lines.length === 0
+    // Its own record, shown: one line, above.
+    expect(joined(view({ bmnKey: 'dev-auto:r1:d1', bmnSession: 's1' }, [decision('dev-auto:r1:d1', 's1')]))).toBe(true)
+    // Another run's entry borrowing that key, a record of another session with the key, a record naming another workflow entry,
+    // an entry that kept only the key: each stays apart.
+    expect(joined(view({ bmnKey: 'dev-auto:r1:d1', bmnSession: 's1' }, [decision('dev-auto:r1:d1', 's1')], { runId: 'rB' }))).toBe(false)
+    expect(joined(view({ bmnKey: 'dev-auto:r1:d1', bmnSession: 's1' }, [decision('dev-auto:r1:d1', 's2')]))).toBe(false)
+    expect(joined(view({ bmnKey: 'dev-auto:r1:d1', bmnSession: 's1' }, [decision('dev-auto:r1:d1', 's1', { references: [{ kind: 'workflow', id: 'dev-auto:other:d1', valid: false }] })]))).toBe(false)
+    const keyOnly = view({ bmnKey: 'dev-auto:r1:d1', bmnSession: null }, [decision('dev-auto:r1:d1', 's1')])
+    expect(joined(keyOnly)).toBe(false)
+    expect(keyOnly.now.legacy).toBe('Entries without an identity may repeat a record above.')
+    expect(keyOnly.decided.groups[0]!.records[0]!.rows.at(-1)!.text).not.toContain('also in dev-auto')
+    // A record cut from the list does not hide its entry.
+    const many = Array.from({ length: 31 }, (_, index) => decision(`k${String(index).padStart(2, '0')}`, 's1'))
+    expect(joined(view({ bmnKey: 'dev-auto:r1:d1', bmnSession: 's1' }, [...many, decision('dev-auto:r1:d1', 's1', { recordedAt: at(15, 7, 0) })]))).toBe(false)
   })
 
   it('links a workflow reference dev-auto identifies to its run; one no readable run holds stays words', () => {
-    const devAuto = { result: { runs: [run({ decisionEntries: [{ entry: 'd3', bmnKey: null }] })], skipped: 0, issues: [], observedAt: ENDED }, workspaceNames: { w: 'Personal' } }
+    const devAuto = { result: { runs: [run({ decisionEntries: [{ entry: 'd3', bmnKey: null, bmnSession: null }] })], skipped: 0, issues: [], observedAt: ENDED }, workspaceNames: { w: 'Personal' } }
     const record = decision('k', 's1', { affects: 'src/a.ts', references: [{ kind: 'workflow', id: 'dev-auto:r1:d3', valid: false }, { kind: 'workflow', id: 'dev-auto:r9:d3', valid: false }] })
     const affects = buildAwaySummary(input({ devAuto, decisions: { decisions: [record], complete: true } })).decided.groups[0]!.records[0]!.rows.find((row) => row.label === 'Affects')
     expect(affects).toEqual({ label: 'Affects', text: 'src/a.ts · dev-auto:r9:d3', links: [{ kind: 'workflow', id: 'dev-auto:r1:d3', text: 'Personal · dev-auto/epic-76 · Epic 76 [d3]' }] })

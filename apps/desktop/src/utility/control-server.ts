@@ -195,6 +195,8 @@ export interface ControlHandlers {
     effects: readonly HookEventEffect[]
     /** Epic 69: what the event says of a turn. Only a session's own hook may say it. */
     turn?: { conversation: string; turn: string | null; nested: boolean } | undefined
+    /** Story 76.4 AC2: the hook holds its conversation's away lock, so it may be handed the away state. */
+    awayLock?: true | undefined
   }): Promise<unknown>
   /**
    * Epic 69: one mark of a turn's start, of the hook's confirmation or of its end, from a session's own hook.
@@ -242,7 +244,7 @@ export interface ControlHandlers {
   /** Story 76.3: the owner's said state; the note only to the owner's token (R76-NFR3). */
   awayStatus(scope: ControlScope): Promise<unknown>
   /** Story 76.4: the session's hook printed the away snapshot BMN handed for this conversation; printed is never read. */
-  awayPrinted(p: { sessionId: string; agent: string; conversation: string; revision: number }): Promise<unknown>
+  awayPrinted(p: { sessionId: string; agent: string; conversation: string; revision: number; claimId: string }): Promise<unknown>
   /** Story 76.5: a decision the session's agent made while the owner is away; the host binds provenance and period. */
   recordDecision(p: { sessionId: string; incarnationId: string | null; key: string; revision: number; payload: DecisionPayload }): Promise<unknown>
   /** Story 76.5: what came of a recorded decision, under its own operation key. */
@@ -1295,7 +1297,7 @@ export class ControlServer {
       case 'hook.observe': {
         // Observations are diagnostic; the repeat watch may open or withdraw its one notice.
         const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'effects', 'fingerprint', 'apiHost', 'model', 'claudeConfigDir',
-          'conversation', 'turn', 'nested'])
+          'conversation', 'turn', 'nested', 'awayLock'])
         const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
         const event = requireText(params, 'event', RULES.source)
         if (!isHookEventName(event)) throw invalid('event must be printable ASCII without spaces')
@@ -1329,6 +1331,8 @@ export class ControlServer {
           throw invalid('conversation, turn and nested must name a conversation, a turn id and true')
         }
         if (conversation !== undefined && scope.kind !== 'session') throw unauthorized('Only a session may report its own turn')
+        // Story 76.4 AC2: the hook holds its conversation's away lock; only then may it be handed the away state.
+        if (params.awayLock !== undefined && (params.awayLock !== true || conversation === undefined)) throw invalid('awayLock must be true, with a conversation')
         const sessionId = this.target(scope, params)
         return handlers.observeHookEvent({
           sessionId,
@@ -1342,6 +1346,7 @@ export class ControlServer {
           ...(model === undefined ? {} : { model }),
           ...(claudeConfigDir === undefined ? {} : { claudeConfigDir }),
           ...(conversation === undefined ? {} : { turn: { conversation: conversation.toLowerCase(), turn: turnId ?? null, nested: params.nested === true } }),
+          ...(params.awayLock === true ? { awayLock: true } : {}),
           effects
         })
       }
@@ -1489,14 +1494,15 @@ export class ControlServer {
         })
       }
       case 'away.printed': {
-        const params = closedParams(rawParams, ['agent', 'conversation', 'revision'])
+        const params = closedParams(rawParams, ['agent', 'conversation', 'revision', 'claimId'])
         if (scope.kind !== 'session') throw unauthorized('Only a session\'s hook reports what it printed')
         const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
         const conversation = requireText(params, 'conversation', RULES.conversationReference)
         if (!CONVERSATION_REFERENCE.test(conversation)) throw invalid('conversation must name a conversation')
         const revision = params.revision
         if (!Number.isSafeInteger(revision) || (revision as number) < 0) throw invalid('revision must be a whole number')
-        return handlers.awayPrinted({ sessionId: scope.sessionId, agent, conversation: conversation.toLowerCase(), revision: revision as number })
+        const claimId = requireText(params, 'claimId', IDENTIFIER)
+        return handlers.awayPrinted({ sessionId: scope.sessionId, agent, conversation: conversation.toLowerCase(), revision: revision as number, claimId })
       }
       case 'away.status': {
         closedParams(rawParams, [])
