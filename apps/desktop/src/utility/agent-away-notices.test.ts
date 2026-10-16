@@ -1,7 +1,7 @@
 // MODULE: agent-away-notices.test.ts - which conversation is handed which away state, across starts, tool calls and restarts (Story 76.4)
 import { AWAY_AGENT_TEXT, AWAY_BACK_AGENT_TEXT, type AwayRecord } from '@bmn/protocol'
 import { describe, expect, it, vi } from 'vitest'
-import { AWAY_NOTICES_REMEMBERED, AwayNotices, type AwayNoticeAnswer, type AwayTold } from './agent-away-notices'
+import { AWAY_CLAIM_SAVE_LIMIT_MS, AWAY_NOTICES_REMEMBERED, AwayNotices, type AwayNoticeAnswer, type AwayTold } from './agent-away-notices'
 import type { AgentBriefEvent } from './agent-briefs'
 
 const NOW = new Date(2026, 9, 17, 1, 0)
@@ -160,7 +160,7 @@ describe('AwayNotices (Story 76.4 AC1-AC2)', () => {
 
   it('forgets conversations told back first, keeping every one still told away past the usual bound', async () => {
     const { tracker, ask, print } = notices()
-    for (let index = 0; index < AWAY_NOTICES_REMEMBERED; index += 1) {
+    for (let index = 0; index <= AWAY_NOTICES_REMEMBERED; index += 1) {
       const conversation = `b${index}`
       await ask(tool({ turn: { conversation, nested: false } }), away())
       await print(conversation)
@@ -171,6 +171,33 @@ describe('AwayNotices (Story 76.4 AC1-AC2)', () => {
     for (let index = 0; index < 10; index += 1) await ask(tool({ turn: { conversation: `n${index}`, nested: false } }), away(3))
     expect(tracker.toldTo('s1', 'claude', 'kept-away')).toMatchObject({ state: 'away' })
     expect(tracker.toldTo('s1', 'claude', 'b0')).toBeUndefined()
+  })
+
+  it('never forgets a conversation told away, however many there are (the final recheck\'s 10,001 conversations)', async () => {
+    const { tracker, ask } = notices()
+    const kept: Array<[string, AwayTold]> = Array.from({ length: 10_000 }, (_, index) =>
+      [AwayNotices.key('s1', 'claude', `a${index}`), { revision: 1, state: 'away', status: 'printed', incarnationId: 'i1', claimId: `c${index}` }])
+    tracker.load(kept)
+    await ask(tool({ turn: { conversation: 'a10000', nested: false } }), away())
+    expect(tracker.toldTo('s1', 'claude', 'a0')).toMatchObject({ state: 'away' })
+    expect(revisionOf(await ask(start('resume', { turn: { conversation: 'a0', nested: false } }), back()))).toBe(2)
+  })
+
+  it('hands nothing when its claim takes longer than the limit to store; the claim, stored late, is handed again next time', async () => {
+    vi.useFakeTimers()
+    try {
+      let release: () => void = () => undefined
+      let slow = true
+      const { tracker, ask } = notices({ s1: 'i1' }, (entries) => slow ? new Promise<void>((done) => { release = done; void entries }) : Promise.resolve())
+      const first = ask(tool(), away())
+      await vi.advanceTimersByTimeAsync(AWAY_CLAIM_SAVE_LIMIT_MS)
+      expect(await first).toBeNull()
+      slow = false
+      release()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(tracker.toldTo('s1', 'claude', 'c1')).toMatchObject({ state: 'away', status: 'claimed' })
+      expect(revisionOf(await ask(tool(), away()))).toBe(1)
+    } finally { vi.useRealTimers() }
   })
 
   it('hands nothing to a sub-agent, a process no longer live, an app it was not measured in or an event without a conversation', async () => {

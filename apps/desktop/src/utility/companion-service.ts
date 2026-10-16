@@ -814,12 +814,13 @@ export class CompanionService {
           // Epic 69: a tool that ran, a conversation that started or ended; it moves a turn's record and answers nothing.
           this.turns?.seen(p.sessionId, p.agent)
           if (p.turn !== undefined) this.turns?.observe({ sessionId: p.sessionId, app: p.agent, event: p.event, source: p.source, ...p.turn })
+          // Story 76.4: the away state rides beside the brief and a message, on its own rules; its claim is stored first, within
+          // its own limit, so the brief below is counted as given only when the answer goes back at once (the final recheck).
+          const notice = await this.awayNotices.answer(p, () => this.awayRecord, p.awayLock === true)
           // Epic 66.4: the hook asks for a message only when told one waits, so an ordinary tool call adds nothing.
           const waiting = await this.messages.waiting(p)
           // Story 75.6: BMN's start brief rides in this answer once per conversation and once after a compaction.
           const brief = this.briefs.answer(p)
-          // Story 76.4: the away state rides beside them, on its own rules; the hook prints all three in one answer.
-          const notice = await this.awayNotices.answer(p, () => this.awayRecord, p.awayLock === true)
           return {
             ...recorded, ...(waiting ? { messageWaiting: true } : {}), ...(brief === null ? {} : { brief }),
             ...(notice === null ? {} : { awayNotice: notice.text, awayRevision: notice.revision, awayClaim: notice.claimId })
