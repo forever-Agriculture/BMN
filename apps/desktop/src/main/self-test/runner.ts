@@ -5218,6 +5218,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       quietHours,
       morningDigest,
       healthAlerts,
+      away,
       fullerAnswers: fuller,
       telegramCue,
       survivalTable: {
