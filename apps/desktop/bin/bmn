@@ -359,7 +359,8 @@ function awayOptions(options) {
   return {
     ...(options.note === undefined ? {} : { note: options.note }),
     ...(revision === undefined ? {} : { revision }),
-    idempotencyKey: options.key ?? randomUUID()
+    // Only a key the caller chose: a retry of it never changes the state again, however much later (Story 76.3 AC1).
+    ...(options.key === undefined ? {} : { idempotencyKey: options.key })
   }
 }
 

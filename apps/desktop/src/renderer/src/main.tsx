@@ -423,7 +423,8 @@ function App(): React.JSX.Element {
     void window.aiTerminal.setAway(to, note).then(setAwayView).catch(fail('Away could not be changed'))
   }
   // Story 76.6 AC3 (Fable 76.1 §1): a closed period's summary not yet shown opens by itself once, in the focused window or,
-  // when none is, the first window that gains focus; it waits for an open dialog to close and is marked shown when it opens.
+  // when none is, the first window that gains focus; it waits for an open dialog to close and is marked shown once the dialog
+// has read the closed period (onPresented), so back arriving under the summary so far refreshes it before it counts.
   useEffect(() => {
     if (awayView?.state !== 'back' || awayView.summaryShownAt !== null || awayView.periodId === null || dialog !== null) return
     const open = (): void => setDialog((current) => current ?? { kind: 'away-summary' })
@@ -434,10 +435,6 @@ function App(): React.JSX.Element {
     window.addEventListener('focus', open, { once: true })
     return () => window.removeEventListener('focus', open)
   }, [awayView, dialog])
-  useEffect(() => {
-    if (dialog?.kind !== 'away-summary' || awayView?.state !== 'back' || awayView.summaryShownAt !== null || awayView.periodId === null) return
-    void window.aiTerminal.markAwaySummaryShown(awayView.periodId).then(setAwayView).catch(() => undefined)
-  }, [dialog?.kind, awayView])
   /** Opens a listed port in the owner's browser; the process is left alone. */
   const openPort = (sessionId: string, port: ListeningPort): void => {
     void window.aiTerminal.openPort(sessionId, port.port).catch(fail(`Could not open ${listeningPortLabel(port)}`))
@@ -2519,6 +2516,9 @@ function App(): React.JSX.Element {
           onOpenRequest={(request) => { setDialog(null); goToRequest(request) }}
           onOpenSession={(sessionId) => { setDialog(null); openSession(sessionId, true) }}
           onOpenDevAutoRuns={() => setDialog({ kind: 'dev-auto-runs' })}
+          onPresented={(periodId) => {
+            if (awayView.summaryShownAt === null) void window.aiTerminal.markAwaySummaryShown(periodId).then(setAwayView).catch(() => undefined)
+          }}
           onClose={() => setDialog(null)}
         />
       ) : null}

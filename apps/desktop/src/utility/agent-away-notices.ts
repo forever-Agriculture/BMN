@@ -9,6 +9,13 @@ import type { AgentBriefEvent } from './agent-briefs'
 
 /** Conversations remembered at once; the oldest is forgotten first. */
 export const AWAY_NOTICES_REMEMBERED = 2_000
+/**
+ * How long a claim may stay unconfirmed before it counts as uncertain: longer than a hook takes from BMN's answer to its
+ * printed report (its own 3 s calls and the message allowance), so a claim still on its way is never handed twice.
+ */
+export const AWAY_CLAIM_SETTLE_MS = 15_000
+/** Retries of a save that failed, so what was handed survives a restart without waiting for the next change. */
+const SAVE_RETRY_MS = 5_000
 /** SessionStart sources after which the conversation has lost what it was told. */
 const LOST_SOURCES: readonly string[] = Object.freeze(['compact', 'clear'])
 
@@ -22,6 +29,8 @@ export interface AwayTold {
   state: 'away' | 'back'
   status: 'claimed' | 'printed'
   incarnationId: string
+  /** When BMN answered with it; absent in a record kept before it was stored, which reads as long settled. */
+  claimedAt?: string
 }
 
 export interface AwayNoticeAnswer {
@@ -39,6 +48,7 @@ export interface AwayNoticeAnswer {
  */
 export class AwayNotices {
   private readonly told = new Map<string, AwayTold>()
+  private retry: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly options: {
     liveIncarnationId(sessionId: string): string | null | undefined
@@ -64,13 +74,21 @@ export class AwayNotices {
     const known = this.told.get(key)
     if (record.state === 'none' || (known !== undefined && known.revision > record.revision)) return null
     const lost = start && LOST_SOURCES.includes(p.source ?? '')
+    // One claim at a time per conversation: while one is on its way in this process, a later state waits for its report,
+    // so a hook still delivering an older revision can never print after a newer one (76.4 AC2).
+    const settling = known?.status === 'claimed' && known.incarnationId === p.incarnationId && known.claimedAt !== undefined &&
+      this.options.now().getTime() - Date.parse(known.claimedAt) < AWAY_CLAIM_SETTLE_MS
+    if (settling && !lost) return null
+    // A claim never reported printed, by another process or past its settle time, may or may not have reached the agent:
+    // it is reconciled by handing the current state again (76.4 AC2), also after a restart and in a resumed process.
+    const uncertain = known?.status === 'claimed'
     const due = record.state === 'away'
-      ? known === undefined || known.revision !== record.revision || known.state !== 'away' || lost
-      : known !== undefined && (known.state === 'away' || lost) && (known.revision !== record.revision || lost)
+      ? known === undefined || known.revision !== record.revision || known.state !== 'away' || lost || uncertain
+      : known !== undefined && (known.state === 'away' || lost || uncertain) && (known.revision !== record.revision || lost || uncertain)
     if (!due) return null
     const text = awayNotice(record, this.options.now())
     if (text === null) return null
-    this.remember(key, { revision: record.revision, state: record.state, status: 'claimed', incarnationId: p.incarnationId })
+    this.remember(key, { revision: record.revision, state: record.state, status: 'claimed', incarnationId: p.incarnationId, claimedAt: this.options.now().toISOString() })
     return { text, revision: record.revision }
   }
 
@@ -96,7 +114,15 @@ export class AwayNotices {
       if (oldest === undefined) break
       this.told.delete(oldest)
     }
-    void this.options.save([...this.told.entries()]).catch(() => undefined)
+    this.save()
+  }
+
+  /** Saves everything held; a failed save is tried again until one succeeds, a newer save taking its place. */
+  private save(): void {
+    if (this.retry !== null) { clearTimeout(this.retry); this.retry = null }
+    void this.options.save([...this.told.entries()]).catch(() => {
+      this.retry ??= setTimeout(() => { this.retry = null; this.save() }, SAVE_RETRY_MS)
+    })
   }
 
   static key(sessionId: string, agent: string, conversation: string): string {

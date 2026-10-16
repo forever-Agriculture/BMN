@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   AWAY_NOTE_LIMIT,
-  AWAY_OPERATIONS_KEPT,
   EMPTY_AWAY_RECORD,
   agentAwayView,
   applyAwayChange,
@@ -19,7 +18,7 @@ import {
 
 const T0 = '2026-10-14T19:10:00.000Z'
 const T1 = '2026-10-15T04:40:00.000Z'
-const empty = (): AwayRecord => ({ ...EMPTY_AWAY_RECORD, operations: [] })
+const empty = (): AwayRecord => ({ ...EMPTY_AWAY_RECORD })
 const change = (over: Partial<AwayChange>): AwayChange => ({ to: 'away', source: 'app', periodId: 'p-1', ...over })
 const changed = (record: AwayRecord, over: Partial<AwayChange>, now = T0): AwayRecord => {
   const result = applyAwayChange(record, change(over), now)
@@ -67,26 +66,10 @@ describe('applyAwayChange (Story 76.3 AC1)', () => {
     expect(changed(empty(), { agentSessionId: 's-1' }).agentSessionId).toBeNull()
   })
 
-  it('returns the first result for a retried operation key and remembers only the recent keys', () => {
-    const away = changed(empty(), { operationKey: 'k-1' })
-    expect(away.operations).toEqual([{ key: 'k-1', revision: 1 }])
-    const retried = applyAwayChange(away, change({ to: 'back', operationKey: 'k-1' }), T1)
-    expect(retried).toEqual({ outcome: 'repeated', record: away })
-    let record = away
-    for (let index = 0; index < AWAY_OPERATIONS_KEPT + 5; index += 1) {
-      record = changed(record, { note: `n${index}`, operationKey: `n-${index}` })
-    }
-    expect(record.operations).toHaveLength(AWAY_OPERATIONS_KEPT)
-    expect(record.operations.some((item) => item.key === 'k-1')).toBe(false)
-  })
-
-  it('remembers a key that changed nothing, so replaying it after a later change still changes nothing', () => {
-    const noop = applyAwayChange(empty(), change({ to: 'back', operationKey: 'tg-7' }), T0)
-    expect(noop.outcome).toBe('unchanged')
-    expect(noop.record.operations).toEqual([{ key: 'tg-7', revision: 0, unchanged: true }])
-    const away = changed(noop.record, { operationKey: 'k-2' })
-    expect(applyAwayChange(away, change({ to: 'back', operationKey: 'tg-7' }), T1)).toEqual({ outcome: 'unchanged', record: away })
-    expect(parseAwayRecord(JSON.parse(JSON.stringify(away))).operations).toEqual(away.operations)
+  it('answers a key the store already applied as its first time did and changes nothing', () => {
+    const away = changed(empty(), {})
+    expect(applyAwayChange(away, change({ to: 'back', operationKey: 'k-1' }), T1, { unchanged: false })).toEqual({ outcome: 'repeated', record: away })
+    expect(applyAwayChange(away, change({ to: 'back', operationKey: 'k-1' }), T1, { unchanged: true })).toEqual({ outcome: 'unchanged', record: away })
   })
 
   it('refuses an overlong note whole, a note with back and control or direction characters', () => {

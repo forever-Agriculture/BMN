@@ -74,7 +74,7 @@ describe('awaySummaryData (Story 76.6 AC1-AC2)', () => {
       messages: { printed: 1, queued: 1, uncertain: 1, expired: 0 }, handoffs: [{ receiver: 'Name s2', state: 'printed' }]
     })
     expect(data.activity!.sessions.find((session) => session.sessionId === 's2')!.exits).toEqual([{ at: IN, code: 1, signal: null }])
-    expect(data.activity!.gaps).toEqual({})
+    expect(data.activity!.gaps).toEqual({ changes: { kind: 'partial', read: 2, skipped: 1 } })
   })
 
   it('says when a source was cut and when the period is older than what is retained', () => {

@@ -1,5 +1,5 @@
 // MODULE: away-summary-dialog.tsx - "While you were away": one period's summary, read-only; every row only navigates (Story 76.6, Fable's notes 76.1 §4)
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import {
   buildAwaySummary,
   withCompletedAsks,
@@ -27,11 +27,22 @@ export interface AwaySummarySources {
 export function awaySummaryView(sources: AwaySummarySources, attention: readonly AttentionRecord[] | null, workspaces: readonly WorkspaceRecord[], now: Date): AwaySummaryView {
   const { payload } = sources
   const since = payload.away.since ?? now.toISOString()
-  const activity = payload.activity === null ? null : withCompletedAsks(payload.activity, sources.asks?.asks ?? null, since, payload.away.state === 'away' ? null : payload.away.endedAt)
+  const activity = payload.activity === null ? null : withCompletedAsks(payload.activity, sources.asks?.asks ?? null, since,
+    payload.away.state === 'away' ? null : payload.away.endedAt, sources.asks === null ? undefined : { keptDays: sources.asks.keptDays, now })
   return buildAwaySummary({
     ...payload, activity, now, attention,
     devAuto: sources.devAuto === null ? null : { result: sources.devAuto, workspaceNames: Object.fromEntries(workspaces.map((workspace) => [workspace.workspaceId, workspace.name])) }
   })
+}
+
+/** What the dialog reads again on: a new period, or back closing the one it shows (Astra's review, 76.6 AC1/AC3). */
+export function awaySummaryReadKey(away: Pick<OwnerAwayView, 'periodId' | 'revision'>): string {
+  return `${away.periodId ?? ''}:${away.revision}`
+}
+
+/** The closed period a successful read showed, which only then counts as presented; a period still open is never. */
+export function presentedClosedPeriod(payload: Pick<AwaySummaryPayload, 'away'>): string | null {
+  return payload.away.state === 'back' ? payload.away.periodId : null
 }
 
 function Incomplete(props: { on: boolean }): React.JSX.Element | null {
@@ -47,12 +58,17 @@ export function AwaySummaryDialog(props: {
   onOpenRequest(request: AttentionRecord): void
   onOpenSession(sessionId: string): void
   onOpenDevAutoRuns(): void
+  /** The summary of this closed period was read and is in front of him. */
+  onPresented(periodId: string): void
   onClose(): void
 }): React.JSX.Element {
   const [sources, setSources] = useState<AwaySummarySources | null>(null)
   const [unavailable, setUnavailable] = useState<string | null>(null)
   const [openKey, setOpenKey] = useState<string | null>(null)
 
+  const onPresented = useRef(props.onPresented)
+  onPresented.current = props.onPresented
+  const readKey = awaySummaryReadKey(props.away)
   useEffect(() => {
     let cancelled = false
     void Promise.all([
@@ -60,10 +76,17 @@ export function AwaySummaryDialog(props: {
       window.aiTerminal.teamAsks().catch(() => null),
       window.aiTerminal.readDevAutoRuns().catch(() => null)
     ]).then(([payload, asks, devAuto]) => {
-      if (!cancelled) setSources({ payload, asks, devAuto })
-    }).catch((error: unknown) => { if (!cancelled) setUnavailable(failureDetail(error, 'The summary could not be read')) })
+      if (cancelled) return
+      setUnavailable(null)
+      setSources({ payload, asks, devAuto })
+      const closed = presentedClosedPeriod(payload)
+      if (closed !== null) onPresented.current(closed)
+    }).catch((error: unknown) => {
+      // A failed read shows no older snapshot in its place, and the period is not marked presented, so it opens again.
+      if (!cancelled) { setSources(null); setUnavailable(failureDetail(error, 'The summary could not be read')) }
+    })
     return () => { cancelled = true }
-  }, [props.away.periodId])
+  }, [readKey])
 
   const view = useMemo(
     () => sources === null ? null : awaySummaryView(sources, props.attention, props.workspaces, new Date(props.now)),

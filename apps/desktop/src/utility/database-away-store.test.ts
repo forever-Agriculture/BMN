@@ -41,6 +41,25 @@ describe('away store', () => {
     expect(getAway(database).state).toBe('away')
   })
 
+  it('keeps every key it applied, so a replay after many later operations still changes nothing', () => {
+    expect(changeAway(database, { to: 'back', source: 'cli', operationKey: 'K' }, T0).outcome).toBe('unchanged')
+    expect(changeAway(database, { to: 'away', source: 'cli', operationKey: 'A' }, T0).outcome).toBe('changed')
+    for (let index = 0; index < 150; index += 1) changeAway(database, { to: 'away', source: 'cli', note: `n${index % 2}`, operationKey: `n-${index}` }, T0)
+    expect(changeAway(database, { to: 'back', source: 'cli', operationKey: 'K' }, T1).outcome).toBe('unchanged')
+    expect(changeAway(database, { to: 'back', source: 'cli', operationKey: 'A' }, T1).outcome).toBe('repeated')
+    expect(getAway(database).state).toBe('away')
+  })
+
+  it('moves the keys a record kept itself out on its first change, so they still hold', () => {
+    database.prepare('INSERT INTO app_setting(key, value_json, updated_at) VALUES (?, ?, ?)').run(AWAY_RECORD_KEY, JSON.stringify({
+      version: 1, state: 'away', revision: 4, periodId: 'p-1', since: T0, endedAt: null, source: 'app', endedBy: null, agentSessionId: null,
+      note: null, summaryShownAt: null, operations: [{ key: 'old-back', revision: 3, unchanged: true }]
+    }), T0)
+    expect(changeAway(database, { to: 'away', source: 'app', note: 'n' }, T1).outcome).toBe('changed')
+    expect(changeAway(database, { to: 'back', source: 'app', operationKey: 'old-back' }, T1).outcome).toBe('unchanged')
+    expect(getAway(database).state).toBe('away')
+  })
+
   it('applies one change after another against what the one before left', () => {
     const first = changeAway(database, { to: 'away', source: 'app', expectedRevision: 0 }, T0)
     const second = changeAway(database, { to: 'back', source: 'telegram', expectedRevision: 0 }, T1)

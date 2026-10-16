@@ -170,6 +170,32 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
     expect(view.decided.groups[0]!.records[0]!.rows.at(-1)!.text).toBe('Wed 23:41 by Builder (Claude Code) · also in dev-auto\'s handoff')
   })
 
+  it('qualifies every count whose source was not read whole: changes partly captured, messages, files and asks cut or past retention', () => {
+    const view = buildAwaySummary(input({ activity: {
+      sessions: [activity('s1', { turnsEnded: 1, changesAtLeast: true, messages: { printed: 500, queued: 0, uncertain: 0, expired: 0 }, published: ['a.md'], publishedCount: 1, asksCompleted: ['reviewer'] })],
+      gaps: { changes: { kind: 'partial', read: 0, skipped: 1 }, messages: { kind: 'truncated', at: 500 }, files: { kind: 'truncated', at: 200 } }
+    } }))
+    expect(view.happened.blocks[0]!.lines).toEqual(['1 turn ended, changed files not all recorded', 'Published a.md and perhaps more', '1 teammate ask completed · reviewer', 'Messages: at least 500 printed'])
+    expect(view.couldNotRead).toBe('Could not read in full: turn changes (partial: 0 read, 1 skipped), published files (cut at 200 listings), messages (cut at 500 listings).')
+    expect(view.happened.incomplete).toBe(true)
+    const old = withCompletedAsks({ sessions: [], gaps: {} }, [], SINCE, ENDED, { keptDays: 30, now: new Date(Date.parse(SINCE) + 31 * 86_400_000) })
+    expect(old.gaps.asks).toEqual({ kind: 'expired' })
+    expect(withCompletedAsks({ sessions: [], gaps: {} }, [], SINCE, ENDED, { keptDays: 30, now: new Date(ENDED) }).gaps.asks).toBeUndefined()
+  })
+
+  it('joins a dev-auto entry only by the identity its own run and entry make, never by a key another run or session shares', () => {
+    const other = run({ runId: 'rB', checkout: '/code/x/.claude/worktrees/epic-77', branch: 'dev-auto/epic-77', project: 'Epic 77',
+      decisions: ['[d1] borrowed key (bmn: dev-auto:r1:d1)'], decisionEntries: [{ entry: 'd1', bmnKey: 'dev-auto:r1:d1' }] })
+    const devAuto = { result: { runs: [other], skipped: 0, issues: [], observedAt: ENDED }, workspaceNames: { w: 'Personal' } }
+    const view = buildAwaySummary(input({ devAuto, decisions: { decisions: [decision('dev-auto:r1:d1', 's1')], complete: true } }))
+    expect(view.now.lines).toEqual(['Personal · dev-auto/epic-77 · Epic 77: [d1] borrowed key (bmn: dev-auto:r1:d1)'])
+    expect(view.decided.groups[0]!.records[0]!.rows.at(-1)!.text).not.toContain('also in dev-auto')
+    const own = run({ decisions: ['[d1] SQLite (bmn: dev-auto:r1:d1)'], decisionEntries: [{ entry: 'd1', bmnKey: 'dev-auto:r1:d1' }] })
+    const twice = buildAwaySummary(input({ devAuto: { ...devAuto, result: { ...devAuto.result, runs: [own] } },
+      decisions: { decisions: [decision('dev-auto:r1:d1', 's1'), decision('dev-auto:r1:d1', 's2')], complete: true } }))
+    expect(twice.now.lines).toEqual(['Personal · dev-auto/epic-76 · Epic 76: [d1] SQLite (bmn: dev-auto:r1:d1)'])
+  })
+
   it('links a workflow reference dev-auto identifies to its run; one no readable run holds stays words', () => {
     const devAuto = { result: { runs: [run({ decisionEntries: [{ entry: 'd3', bmnKey: null }] })], skipped: 0, issues: [], observedAt: ENDED }, workspaceNames: { w: 'Personal' } }
     const record = decision('k', 's1', { affects: 'src/a.ts', references: [{ kind: 'workflow', id: 'dev-auto:r1:d3', valid: false }, { kind: 'workflow', id: 'dev-auto:r9:d3', valid: false }] })

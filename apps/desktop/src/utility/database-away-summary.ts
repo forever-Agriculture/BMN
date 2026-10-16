@@ -57,6 +57,7 @@ export function awaySummaryData(database: DatabaseConnection, call: AwaySummaryC
      WHERE ended_at IS NOT NULL AND ended_at >= ? AND ended_at < ? ORDER BY ended_at LIMIT ?`
   ).all(call.since, until, AWAY_ACTIVITY_LIMITS.turns + 1) as Array<{ session_id: string; app: string; totals_state: string; totals_json: string | null }>
   if (turns.length > AWAY_ACTIVITY_LIMITS.turns) gaps.turns = { kind: 'truncated', at: AWAY_ACTIVITY_LIMITS.turns }
+  let partial = 0
   for (const turn of turns.slice(0, AWAY_ACTIVITY_LIMITS.turns)) {
     const entry = of(turn.session_id)
     entry.turnsEnded += 1
@@ -64,8 +65,10 @@ export function awaySummaryData(database: DatabaseConnection, call: AwaySummaryC
     let files: number
     try { files = turn.totals_json === null ? 0 : Number((JSON.parse(turn.totals_json) as { files?: unknown }).files) || 0 } catch { files = 0 }
     if (files > 0) entry.turnsWithChanges += 1
-    else if (turn.totals_state !== 'complete' && turn.totals_state !== 'none') entry.changesAtLeast = true
+    // A turn whose changes were not captured whole says its count is a floor, and the source says so in its gap line.
+    if (turn.totals_state !== 'complete' && turn.totals_state !== 'none') { entry.changesAtLeast = true; partial += 1 }
   }
+  if (partial > 0) gaps.changes = { kind: 'partial', read: Math.min(turns.length, AWAY_ACTIVITY_LIMITS.turns) - partial, skipped: partial }
 
   const files = database.prepare(
     `SELECT session_id, original_name FROM artifact

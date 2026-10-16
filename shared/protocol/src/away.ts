@@ -8,8 +8,6 @@ export type AwayState = 'none' | 'away' | 'back'
 
 /** The longest note; longer input is refused, never cut (R76-NFR3). */
 export const AWAY_NOTE_LIMIT = 200
-/** Operation keys remembered, so a retried operation returns its first result instead of changing the record again. */
-export const AWAY_OPERATIONS_KEPT = 100
 /** The raw setting that holds the record (R76-NFR4: no new table). */
 export const AWAY_RECORD_KEY = 'owner-away-v1'
 
@@ -31,14 +29,11 @@ export interface AwayRecord {
   note: string | null
   /** When the summary of the closed period was first shown; null until then. */
   summaryShownAt: string | null
-  /** Recent operation keys and the revision each produced. */
-  /** Operation keys already applied; `unchanged` marks one that changed nothing, so its replay answers the same. */
-  operations: Array<{ key: string; revision: number; unchanged?: true }>
 }
 
 export const EMPTY_AWAY_RECORD: AwayRecord = Object.freeze({
   version: 1, state: 'none', revision: 0, periodId: null, since: null, endedAt: null, source: null, endedBy: null,
-  agentSessionId: null, note: null, summaryShownAt: null, operations: []
+  agentSessionId: null, note: null, summaryShownAt: null
 }) as AwayRecord
 
 export interface AwayChange {
@@ -82,36 +77,29 @@ export function awayNoteProblem(note: unknown): string | null {
  * value makes BMN go by the desk input as before, never by a half-read state.
  */
 export function parseAwayRecord(value: unknown): AwayRecord {
-  if (typeof value !== 'object' || value === null) return { ...EMPTY_AWAY_RECORD, operations: [] }
+  if (typeof value !== 'object' || value === null) return { ...EMPTY_AWAY_RECORD }
   const row = value as Record<string, unknown>
   const state = row.state
-  if (row.version !== 1 || (state !== 'none' && state !== 'away' && state !== 'back')) return { ...EMPTY_AWAY_RECORD, operations: [] }
+  if (row.version !== 1 || (state !== 'none' && state !== 'away' && state !== 'back')) return { ...EMPTY_AWAY_RECORD }
   const revision = Number.isSafeInteger(row.revision) && (row.revision as number) >= 0 ? row.revision as number : 0
   const since = orNull(row.since, isIso)
   const periodId = orNull(row.periodId, isText)
-  if (state !== 'none' && (since === null || periodId === null)) return { ...EMPTY_AWAY_RECORD, revision, operations: [] }
+  if (state !== 'none' && (since === null || periodId === null)) return { ...EMPTY_AWAY_RECORD, revision }
   const note = isText(row.note) && awayNoteProblem(row.note) === null ? row.note : null
-  const operations = Array.isArray(row.operations)
-    ? row.operations.filter((item): item is { key: string; revision: number } => typeof item === 'object' && item !== null &&
-      isText((item as { key: unknown }).key) && Number.isSafeInteger((item as { revision: unknown }).revision)).slice(-AWAY_OPERATIONS_KEPT)
-      .map((item) => ({ key: item.key, revision: item.revision, ...((item as { unchanged?: unknown }).unchanged === true ? { unchanged: true as const } : {}) }))
-    : []
   return {
     version: 1, state, revision, periodId, since,
     endedAt: state === 'back' ? orNull(row.endedAt, isIso) : null,
     source: orNull(row.source, isSource), endedBy: state === 'back' ? orNull(row.endedBy, isSource) : null,
-    agentSessionId: orNull(row.agentSessionId, isText), note, summaryShownAt: state === 'back' ? orNull(row.summaryShownAt, isIso) : null,
-    operations
+    agentSessionId: orNull(row.agentSessionId, isText), note, summaryShownAt: state === 'back' ? orNull(row.summaryShownAt, isIso) : null
   }
 }
 
 /**
  * The one change rule (Story 76.3 AC1). A repeated away keeps the period's since and note unless a note is given; a repeated
- * back, or a back with nothing said, changes nothing; a stale revision changes nothing; a retried operation key returns the
- * revision it produced the first time and changes nothing, also when the first time changed nothing.
+ * back, or a back with nothing said, changes nothing; a stale revision changes nothing. A retried operation key (`applied`,
+ * what the store kept of its first time, every key ever applied) changes nothing and answers as the first time did.
  */
-export function applyAwayChange(current: AwayRecord, change: AwayChange, now: string): AwayChangeResult {
-  const applied = change.operationKey === undefined ? undefined : current.operations.find((item) => item.key === change.operationKey)
+export function applyAwayChange(current: AwayRecord, change: AwayChange, now: string, applied?: { unchanged: boolean }): AwayChangeResult {
   if (applied !== undefined) return { outcome: applied.unchanged ? 'unchanged' : 'repeated', record: current }
   if (change.source === 'agent' && (change.expectedRevision === undefined || !change.agentSessionId)) {
     return { outcome: 'invalid', record: current, reason: 'An agent names the away revision it saw and its session' }
@@ -122,28 +110,25 @@ export function applyAwayChange(current: AwayRecord, change: AwayChange, now: st
   }
   const problem = awayNoteProblem(change.note)
   if (problem !== null) return { outcome: 'invalid', record: current, reason: problem }
-  const remember = (record: AwayRecord, unchanged = false): AwayRecord => change.operationKey === undefined ? record
-    : { ...record, operations: [...record.operations, { key: change.operationKey, revision: record.revision, ...(unchanged ? { unchanged: true as const } : {}) }].slice(-AWAY_OPERATIONS_KEPT) }
-  // A no-op is remembered too, so its key replayed after a later change still changes nothing (Telegram redelivery included).
   if (change.to === 'back') {
-    if (current.state !== 'away') return { outcome: 'unchanged', record: remember(current, true) }
-    return { outcome: 'changed', record: remember({ ...current, state: 'back', revision: current.revision + 1, endedAt: now, endedBy: change.source, summaryShownAt: null }) }
+    if (current.state !== 'away') return { outcome: 'unchanged', record: current }
+    return { outcome: 'changed', record: { ...current, state: 'back', revision: current.revision + 1, endedAt: now, endedBy: change.source, summaryShownAt: null } }
   }
   if (current.state === 'away') {
-    if (change.note === undefined || change.note === current.note) return { outcome: 'unchanged', record: remember(current, true) }
-    return { outcome: 'changed', record: remember({ ...current, revision: current.revision + 1, note: change.note }) }
+    if (change.note === undefined || change.note === current.note) return { outcome: 'unchanged', record: current }
+    return { outcome: 'changed', record: { ...current, revision: current.revision + 1, note: change.note } }
   }
   return {
     outcome: 'changed',
-    record: remember({
+    record: {
       version: 1, state: 'away', revision: current.revision + 1, periodId: change.periodId, since: now, endedAt: null,
       source: change.source, endedBy: null, agentSessionId: change.source === 'agent' ? change.agentSessionId ?? null : null,
-      note: change.note ?? null, summaryShownAt: null, operations: current.operations
-    })
+      note: change.note ?? null, summaryShownAt: null
+    }
   }
 }
 
-/** What the owner's own surfaces get: everything but the operation keys. */
+/** What the owner's own surfaces get. */
 export interface OwnerAwayView {
   state: AwayState
   revision: number

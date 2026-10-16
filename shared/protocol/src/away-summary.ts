@@ -10,12 +10,12 @@ export const AWAY_SUMMARY_LIMITS = Object.freeze({
 })
 
 /** The sources the summary reads; each says on its own whether it was read in full. */
-export type AwaySourceName = 'requests' | 'decisions' | 'turns' | 'files' | 'messages' | 'asks' | 'exits' | 'dev-auto'
+export type AwaySourceName = 'requests' | 'decisions' | 'turns' | 'changes' | 'files' | 'messages' | 'asks' | 'exits' | 'dev-auto'
 const SOURCE_WORDS: Readonly<Record<AwaySourceName, string>> = Object.freeze({
-  requests: 'requests', decisions: 'decision records', turns: 'turn endings', files: 'published files', messages: 'messages',
+  requests: 'requests', decisions: 'decision records', turns: 'turn endings', changes: 'turn changes', files: 'published files', messages: 'messages',
   asks: 'teammate asks', exits: 'session exits', 'dev-auto': 'dev-auto runs'
 })
-const SOURCE_ORDER: readonly AwaySourceName[] = Object.freeze(['requests', 'decisions', 'turns', 'files', 'messages', 'asks', 'exits', 'dev-auto'])
+const SOURCE_ORDER: readonly AwaySourceName[] = Object.freeze(['requests', 'decisions', 'turns', 'changes', 'files', 'messages', 'asks', 'exits', 'dev-auto'])
 
 /** Why a source was not read in full: missing, unreadable, partial, truncated or no longer retained are told apart. */
 export type AwaySourceGap =
@@ -78,8 +78,12 @@ const emptyActivity = (sessionId: string): AwaySessionActivity => ({
  * The period's completed teammate asks, by the session that asked, added to the host's activity; asks that could not be
  * read are named as a gap. An ask answered after the period ended or by the owner's own shell is not an agent's activity.
  */
-export function withCompletedAsks(activity: AwayPeriodActivity, asks: readonly TeamAskLine[] | null, since: string, until: string | null): AwayPeriodActivity {
+export function withCompletedAsks(activity: AwayPeriodActivity, asks: readonly TeamAskLine[] | null, since: string, until: string | null,
+  retention?: { keptDays: number; now: Date }): AwayPeriodActivity {
   if (asks === null) return { ...activity, gaps: { ...activity.gaps, asks: { kind: 'unreadable' } } }
+  // Team › Asks keeps a record its own number of days: a period that began before that may have lost some.
+  const expired = retention !== undefined && Date.parse(since) < retention.now.getTime() - retention.keptDays * 86_400_000
+  if (expired) activity = { ...activity, gaps: { ...activity.gaps, asks: { kind: 'expired' } } }
   const sessions = new Map(activity.sessions.map((session) => [session.sessionId, { ...session, asksCompleted: [...session.asksCompleted] }]))
   for (const ask of asks) {
     if (ask.state !== 'answered' || ask.by.kind !== 'session' || ask.endedAt === null) continue
@@ -263,8 +267,13 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   const joined = new Set<string>()
   const keyCounts = new Map<string, number>()
   for (const record of records) keyCounts.set(record.key, (keyCounts.get(record.key) ?? 0) + 1)
+  // An entry joins its record only by identity: the key dev-auto kept is the one its own run id and entry id make
+  // (dev-auto:<run id>:<entry>), and exactly one BMN record in this list carries it; anything else stays apart.
+  const identity = (run: DevAutoRunsResult['runs'][number], entry: { entry: string | null; bmnKey: string | null }): string | null =>
+    run.runId !== null && entry.entry !== null && entry.bmnKey === `dev-auto:${run.runId}:${entry.entry}` && keyCounts.get(entry.bmnKey) === 1 ? entry.bmnKey : null
   for (const run of input.devAuto?.result.runs ?? []) {
-    for (const entry of run.decisionEntries ?? []) if (entry.bmnKey !== null && entry.entry !== null && keyCounts.get(entry.bmnKey) === 1) joined.add(entry.bmnKey)
+    if (run.ownership === 'copy' || run.unavailable) continue
+    for (const entry of run.decisionEntries ?? []) { const key = identity(run, entry); if (key !== null) joined.add(key) }
   }
   const shown = records.slice(0, AWAY_SUMMARY_LIMITS.decisions)
   // A workflow entry is identified as dev-auto names it (dev-auto:<run id>:<entry>, Story 76.7) and found in a run BMN can read
@@ -311,20 +320,21 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   const activityBlocks = (input.activity?.sessions ?? []).map((activity) => {
     const lines: string[] = []
     if (activity.turnsEnded > 0) {
-      const changed = activity.turnsWithChanges > 0 ? `, ${activity.changesAtLeast ? 'at least ' : ''}${activity.turnsWithChanges} with changed files` : ''
+      const changed = activity.turnsWithChanges > 0 ? `, ${activity.changesAtLeast ? 'at least ' : ''}${activity.turnsWithChanges} with changed files`
+        : activity.changesAtLeast ? ', changed files not all recorded' : ''
       lines.push(`${atLeast('turns')}${plural(activity.turnsEnded, 'turn')} ended${changed}`)
     }
     if (activity.publishedCount > 0) {
       const names = activity.published.slice(0, AWAY_SUMMARY_LIMITS.published)
-      lines.push(`Published ${names.join(', ')}${activity.publishedCount > names.length ? ` +${activity.publishedCount - names.length}` : ''}`)
+      lines.push(`Published ${names.join(', ')}${activity.publishedCount > names.length ? ` +${atLeast('files')}${activity.publishedCount - names.length}` : gaps.files !== undefined ? ' and perhaps more' : ''}`)
     }
     if (activity.asksCompleted.length > 0) {
       const roles = [...new Set(activity.asksCompleted)].slice(0, 3)
-      lines.push(`${plural(activity.asksCompleted.length, 'teammate ask')} completed · ${roles.join(', ')}`)
+      lines.push(`${atLeast('asks')}${plural(activity.asksCompleted.length, 'teammate ask')} completed · ${roles.join(', ')}`)
     }
     const counts = (['printed', 'queued', 'uncertain', 'expired'] as const).filter((state) => activity.messages[state] > 0).map((state) => `${activity.messages[state]} ${state}`)
     const handoffs = activity.handoffs.map((handoff) => `Handoff to ${handoff.receiver} ${handoff.state}`)
-    if (counts.length > 0 || handoffs.length > 0) lines.push([...(counts.length > 0 ? [`Messages: ${counts.join(', ')}`] : []), ...handoffs].join(' · '))
+    if (counts.length > 0 || handoffs.length > 0) lines.push([...(counts.length > 0 ? [`Messages: ${atLeast('messages')}${counts.join(', ')}`] : []), ...handoffs].join(' · '))
     for (const exit of activity.exits) {
       lines.push(`Exited ${clockWords(exit.at)}${exit.code !== null ? ` (exit ${exit.code})` : exit.signal !== null ? ` (signal ${exit.signal})` : ''}`)
     }
@@ -336,7 +346,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   }).filter((block) => block.lines.length > 0)
   const rank = new Map(input.order.map((id, index) => [id, index]))
   activityBlocks.sort((a, b) => (rank.get(a.sessionId) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.sessionId) ?? Number.MAX_SAFE_INTEGER))
-  const activityGaps = (['turns', 'files', 'messages', 'asks', 'exits'] as const).some((source) => gaps[source] !== undefined)
+  const activityGaps = (['turns', 'changes', 'files', 'messages', 'asks', 'exits'] as const).some((source) => gaps[source] !== undefined)
   const happened: AwaySummaryView['happened'] = {
     incomplete: activityGaps,
     blocks: activityBlocks.slice(0, AWAY_SUMMARY_LIMITS.sessions),
@@ -355,7 +365,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     if (/^BLOCKED\b/i.test(run.status ?? '')) nowLines.push(`${label}: ${oneLine(run.status ?? '', 220)}`)
     run.decisions.forEach((decision, index) => {
       const entry = run.decisionEntries?.[index]
-      if (entry?.bmnKey && entry.entry !== null && joined.has(entry.bmnKey)) return
+      if (entry !== undefined && identity(run, entry) !== null) return
       if (!entry || entry.entry === null) legacy = true
       nowLines.push(`${label}: ${oneLine(decision, 220)}`)
     })

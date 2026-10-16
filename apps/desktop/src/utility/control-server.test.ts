@@ -1701,11 +1701,13 @@ describe('away state (Story 76.3)', () => {
 
     expectError(await agent.request('away.set', { to: 'away' }), ERROR_CODES.invalidArgument)
     expectError(await agent.request('away.set', { to: 'away', revision: 3, note: 'mine' }), ERROR_CODES.invalidArgument)
+    expectError(await agent.request('away.set', { to: 'away', revision: 3, note: null }), ERROR_CODES.invalidArgument)
+    expect((await owner.request('away.set', { to: 'away', note: null })).error).toBeUndefined()
     expectError(await owner.request('away.set', { to: 'asleep' }), ERROR_CODES.invalidArgument)
     expectError(await owner.request('away.set', { to: 'away', revision: -1 }), ERROR_CODES.invalidArgument)
     expectError(await owner.request('away.set', { to: 'away', extra: true }), ERROR_CODES.invalidArgument)
     expectError(await owner.request('away.status', { verbose: true }), ERROR_CODES.invalidArgument)
-    expect(fixture.handlers.changeAway).toHaveBeenCalledTimes(2)
+    expect(fixture.handlers.changeAway).toHaveBeenCalledTimes(3)
   })
 })
 

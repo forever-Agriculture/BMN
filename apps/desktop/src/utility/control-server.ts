@@ -1512,7 +1512,8 @@ export class ControlServer {
         // An agent says it only on the owner's words, against the state it saw: a stale revision changes nothing.
         if (scope.kind === 'session' && revision === undefined) throw invalid('An agent names the away revision it saw (bmn away --status)')
         // The note comes only from the owner's own hands (Story 76.1, Fable's question 1).
-        if (scope.kind === 'session' && note !== undefined && note !== null) throw invalid('Only the owner sets a note; say away without one')
+        // Clearing it is setting it: an agent sends no note field at all, null included (Astra's review).
+        if (scope.kind === 'session' && note !== undefined) throw invalid('Only the owner sets a note; say away without one')
         const operationKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
         return handlers.changeAway({
           scope, to,

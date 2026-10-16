@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AttentionRecord, OwnerAwayView, TeamAskLine, WorkspaceRecord } from '@bmn/protocol'
 import { awayTooltip } from './away-check'
-import { awaySummaryView, type AwaySummarySources } from './away-summary-dialog'
+import { awaySummaryReadKey, awaySummaryView, presentedClosedPeriod, type AwaySummarySources } from './away-summary-dialog'
 
 const at = (day: number, hours: number, minutes: number): string => new Date(2026, 9, day, hours, minutes).toISOString()
 const away: OwnerAwayView = {
@@ -34,6 +34,15 @@ describe('awaySummaryView (Story 76.6 AC1, AC3)', () => {
     const view = awaySummaryView(sources({ asks: null, devAuto: null }), [], workspaces, new Date(2026, 9, 15, 7, 41))
     expect(view.couldNotRead).toBe('Could not read in full: teammate asks (unreadable), dev-auto runs (unreadable).')
     expect(view.happened.empty).toBe('No retained activity found for this period; some sources could not be read.')
+  })
+})
+
+describe('summary so far turning into the return summary (Astra review finding 7)', () => {
+  it('reads again when back closes the open period, and counts only a read of the closed period as presented', () => {
+    const open = { ...away, state: 'away' as const, revision: 1, endedAt: null, endedBy: null }
+    expect(awaySummaryReadKey(open)).not.toBe(awaySummaryReadKey(away))
+    expect(presentedClosedPeriod({ away: open })).toBeNull()
+    expect(presentedClosedPeriod({ away })).toBe('p')
   })
 })
 
