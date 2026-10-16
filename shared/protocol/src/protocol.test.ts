@@ -140,7 +140,8 @@ describe('protocol surface', () => {
         'presence.set',
         'away.get',
         'away.set',
-        'away.summaryShown'
+        'away.summaryShown',
+        'away.summary'
       ])
     )
     // Story 75.3 removed the two methods of custom templates and the six of launch sets (91 before); Story 75.4 the
