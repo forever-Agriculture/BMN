@@ -6,7 +6,7 @@ import {
   SESSION_MESSAGE_HANDOVER, SESSION_MESSAGE_LIST_LIMIT, type SessionMessageListRow, type SessionMessageState
 } from '@bmn/protocol'
 import {
-  SessionMessagesDialog, messageHandover, messageNote, messagePairPauseWords, messagePauseWords, messageRows, messagesReadAgainAt
+  SessionMessagesDialog, messageHandover, messageNote, messagePairPauseWords, messagePauseWords, messageRows, messagesReadOnTimer
 } from './session-messages-dialog'
 
 const NOW = Date.parse('2026-10-13T12:00:00.000Z')
@@ -145,11 +145,14 @@ describe('what the hourly limit holds, in words (Story 66.3, 75.4)', () => {
   })
 })
 
-describe('the open list reads again by itself when a pause lets go (Story 75.7)', () => {
+describe('the open list reads again by itself while a read failed or a pause shows (Story 75.7)', () => {
   const pair = (until: string) => ({ firstSessionId: 'a', firstName: 'Lead', secondSessionId: 'b', secondName: 'Planner', pausedAt: iso(-30), until })
-  it('names the earliest pause still ahead, and nothing once each has passed', () => {
-    expect(messagesReadAgainAt({ workspacePause: null, pairPauses: [] }, NOW)).toBeNull()
-    expect(messagesReadAgainAt({ workspacePause: { at: iso(-50), until: iso(10) }, pairPauses: [pair(iso(4)), pair(iso(20))] }, NOW)).toBe(Date.parse(iso(4)))
-    expect(messagesReadAgainAt({ workspacePause: { at: iso(-50), until: iso(-1) }, pairPauses: [pair(iso(0))] }, NOW)).toBeNull()
+  it('reads on a timer while a read failed or a workspace or pair pause shows, whatever its time says, and not otherwise', () => {
+    expect(messagesReadOnTimer(null, false)).toBe(false)
+    expect(messagesReadOnTimer(null, true)).toBe(true)
+    expect(messagesReadOnTimer({ workspacePause: null, pairPauses: [] }, false)).toBe(false)
+    // A pause whose time has passed still shows until a read lifts it: it keeps the timer, so no render can drop it.
+    expect(messagesReadOnTimer({ workspacePause: { at: iso(-50), until: iso(-1) }, pairPauses: [] }, false)).toBe(true)
+    expect(messagesReadOnTimer({ workspacePause: null, pairPauses: [pair(iso(10))] }, false)).toBe(true)
   })
 })
