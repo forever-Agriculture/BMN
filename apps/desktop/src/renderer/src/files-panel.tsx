@@ -1,17 +1,13 @@
-// MODULE: files-panel.tsx - the Files side panel: artifact preview/actions and addressed input drafts
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+// MODULE: files-panel.tsx - the Files side panel: artifact preview/actions and addressed input drafts (no handoff since Story 75.5)
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  HANDOFF_OUTLINE,
   type ArtifactRecord,
-  type AttentionRecord,
   type InputDraftRecord,
   type SessionRecord,
   type WorkspaceRecord
 } from '@bmn/protocol'
-import { sameHandoffDraft } from './workspace-handoff-review'
 import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
-import { handoffPreparedBy } from './session-presentation'
 import {
   ImageViewport,
   artifactIcon,
@@ -22,35 +18,6 @@ import {
 import './files-panel.css'
 
 const ATTACH_KEY = 'attach'
-
-export interface HandoffArtifactChoice {
-  artifactId: string
-  artifact: ArtifactRecord | null
-  selected: boolean
-  disabled: boolean
-}
-
-/** Keeps unavailable selected originals removable, including IDs absent from the current artifact list. */
-export function handoffArtifactChoices(
-  artifacts: readonly ArtifactRecord[],
-  selectedIds: ReadonlySet<string>
-): HandoffArtifactChoice[] {
-  const choices: HandoffArtifactChoice[] = artifacts.map((artifact) => {
-    const selected = selectedIds.has(artifact.artifactId)
-    return {
-      artifactId: artifact.artifactId,
-      artifact,
-      selected,
-      disabled: !selected && (artifact.state !== 'ready' || selectedIds.size >= 10)
-    }
-  })
-  for (const artifactId of selectedIds) {
-    if (!artifacts.some((artifact) => artifact.artifactId === artifactId)) {
-      choices.push({ artifactId, artifact: null, selected: true, disabled: false })
-    }
-  }
-  return choices
-}
 
 function formatClock(iso: string): string {
   const date = new Date(iso)
@@ -69,13 +36,8 @@ export function FilesPanel(props: {
   sessionIncarnationId: string | null
   artifacts: ArtifactRecord[]
   drafts: InputDraftRecord[]
-  attention?: AttentionRecord[]
-  requestedHandoffDraftId?: string | null
-  requestedHandoffReviewDraft?: InputDraftRecord | null
-  onHandoffOpened?(): void
   sessions: SessionRecord[]
   workspaces: WorkspaceRecord[]
-  onOpenSession(sessionId: string, draftId?: string): boolean
   onRefreshDrafts(): Promise<void>
   onClose(): void
   onFailure(message: string): void
@@ -86,44 +48,17 @@ export function FilesPanel(props: {
   const [outcomes, setOutcomes] = useState<Record<string, { text: string; failed: boolean }>>({})
   const [announcement, setAnnouncement] = useState('')
   const [expanded, setExpanded] = useState(false)
-  const [handoffOpen, setHandoffOpen] = useState(false)
-  const [handoffDraftId, setHandoffDraftId] = useState<string | null>(null)
-  const [handoffExpectedUpdatedAt, setHandoffExpectedUpdatedAt] = useState<string | null>(null)
-  const [handoffTargetId, setHandoffTargetId] = useState('')
-  const [handoffText, setHandoffText] = useState('')
-  const handoffTextId = useId()
-  const handoffTextArea = useRef<HTMLTextAreaElement>(null)
-  const handoffForm = useRef<HTMLFormElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
-  const dismissingHandoffs = useRef(new Set<string>())
-  const [handoffArtifactIds, setHandoffArtifactIds] = useState<ReadonlySet<string>>(new Set())
-  const [requestedReviewError, setRequestedReviewError] = useState<string | null>(null)
 
   useLayoutEffect(() => {
-    // Plain Files opens over the terminal; do not leave keyboard focus on a covered pane button.
-    // A requested handoff owns its existing editor/card focus instead.
-    if (!props.requestedHandoffDraftId) closeButton.current?.focus({ preventScroll: true })
+    // Files opens over the terminal; do not leave keyboard focus on a covered pane button.
+    closeButton.current?.focus({ preventScroll: true })
   }, [])
 
   const sessionArtifacts = useMemo(
     () => props.artifacts.filter((artifact) => artifact.sessionId === props.session?.sessionId),
     [props.artifacts, props.session?.sessionId]
   )
-  const handoffChoices = useMemo(
-    () => handoffArtifactChoices(sessionArtifacts, handoffArtifactIds),
-    [sessionArtifacts, handoffArtifactIds]
-  )
-  const availableDestinations = useMemo(() => {
-    const visibleWorkspaces = new Set(
-      props.workspaces.filter((workspace) => workspace.archivedAt === null).map((workspace) => workspace.workspaceId)
-    )
-    return props.sessions.filter((session) =>
-      session.sessionId !== props.session?.sessionId &&
-      session.archivedAt === null &&
-      visibleWorkspaces.has(session.workspaceId)
-    )
-  }, [props.sessions, props.workspaces, props.session?.sessionId])
-
   const sessionDescription = (sessionId: string | null): string => {
     const record = sessionId ? props.sessions.find((session) => session.sessionId === sessionId) : undefined
     if (!record) return 'Removed session'
@@ -134,54 +69,7 @@ export function FilesPanel(props: {
     return `${workspace?.name ?? 'Removed workspace'} › ${record.name} (saved name) · ${record.cwd} · ${state}`
   }
 
-  const revealHandoff = (draftId?: string): void => {
-    requestAnimationFrame(() => {
-      const element = draftId ? document.getElementById(`handoff-${draftId}`) : handoffForm.current
-      element?.scrollIntoView({ block: 'start' })
-      const focus = draftId ? element : handoffTextArea.current
-      focus?.focus({ preventScroll: true })
-    })
-  }
-
-  const relevantHandoffs = props.drafts.filter((draft) =>
-    draft.origin === 'handoff' &&
-    (draft.sourceSessionId === props.session?.sessionId || draft.sessionId === props.session?.sessionId)
-  )
-  const legacyDrafts = props.drafts.filter((draft) =>
-    draft.origin !== 'handoff' && draft.sessionId === props.session?.sessionId
-  )
-
-  const beginHandoff = (draft?: InputDraftRecord): void => {
-    setHandoffDraftId(draft?.draftId ?? null)
-    setHandoffExpectedUpdatedAt(draft?.updatedAt ?? null)
-    setHandoffTargetId(draft?.sessionId ?? availableDestinations[0]?.sessionId ?? '')
-    setHandoffText(draft?.text ?? '')
-    setHandoffArtifactIds(new Set(draft?.artifactIds ?? []))
-    setHandoffOpen(true)
-    revealHandoff()
-    if (draft) dismissHandoffReminder(draft)
-  }
-
-  const dismissHandoffReminder = (draft: InputDraftRecord): void => {
-    const request = props.attention?.find((record) => record.state === 'open' && record.kind === 'handoff' &&
-      record.requestKey === `handoff:${draft.draftId}` && record.sessionId === draft.sourceSessionId)
-    if (!request) return
-    const key = `${request.requestId}:${request.revision}`
-    if (dismissingHandoffs.current.has(key)) return
-    dismissingHandoffs.current.add(key)
-    void window.aiTerminal.resolveAttention(request.requestId, 'Opened in BMN; reminder cleared',
-      { kind: request.kind, revision: request.revision }, 'owner', 'withdrawn')
-      .catch((error: unknown) => props.onFailure(failureDetail(error, 'Could not clear the handoff reminder')))
-      .finally(() => dismissingHandoffs.current.delete(key))
-  }
-
-  useLayoutEffect(() => {
-    if (handoffOpen) revealHandoff()
-  }, [handoffOpen, handoffDraftId])
-
-  const editingDraft = props.drafts.find((draft) => draft.draftId === handoffDraftId)
-  const preparation = handoffPreparedBy(editingDraft,
-    props.sessions.find((session) => session.sessionId === editingDraft?.sourceSessionId), props.attention ?? [])
+  const drafts = props.drafts.filter((draft) => draft.origin !== 'handoff' && draft.sessionId === props.session?.sessionId)
 
   const featured = useMemo<ArtifactRecord | null>(() => {
     if (sessionArtifacts.length === 0) return null
@@ -201,29 +89,7 @@ export function FilesPanel(props: {
 
   useEffect(() => {
     setSelectedId(null)
-    setHandoffOpen(false)
   }, [props.session?.sessionId])
-
-  useEffect(() => {
-    const requestedId = props.requestedHandoffReviewDraft?.draftId ?? props.requestedHandoffDraftId
-    if (!requestedId) return
-    const draft = props.drafts.find((item) => item.draftId === requestedId &&
-      item.origin === 'handoff' && (item.state === 'draft' || item.state === 'uncertain') &&
-      (item.sourceSessionId === props.session?.sessionId || item.sessionId === props.session?.sessionId))
-    const destination = props.sessions.find((item) => item.sessionId === draft?.sessionId)
-    const destinationWorkspace = props.workspaces.find((item) => item.workspaceId === destination?.workspaceId)
-    if (!props.requestedHandoffReviewDraft && !draft) return
-    if (!draft || (props.requestedHandoffReviewDraft && !sameHandoffDraft(draft, props.requestedHandoffReviewDraft)) ||
-      !destination || destination.archivedAt !== null || destinationWorkspace?.archivedAt !== null) {
-      setRequestedReviewError('The handoff or destination changed. Refresh results before review.')
-      props.onHandoffOpened?.()
-      return
-    }
-    setRequestedReviewError(null)
-    if (draft.state === 'draft' && draft.sourceSessionId === props.session?.sessionId) beginHandoff(draft)
-    else { revealHandoff(draft.draftId); dismissHandoffReminder(draft) }
-    props.onHandoffOpened?.()
-  }, [props.requestedHandoffDraftId, props.requestedHandoffReviewDraft, props.drafts, props.session?.sessionId])
 
   const { preview, error: previewError, loading: previewLoading } = useArtifactPreview(featuredId)
 
@@ -310,8 +176,6 @@ export function FilesPanel(props: {
         </button>
       </header>
 
-      {requestedReviewError ? <p className="inline-error" role="alert">{requestedReviewError}</p> : null}
-
       {sessionArtifacts.length === 0 ? (
         <div className="files-empty">
           <p>No artifacts yet.</p>
@@ -396,7 +260,7 @@ export function FilesPanel(props: {
                   {isPending(`deliver:${featured.artifactId}`) ? 'Delivering…' : 'Deliver to session'}
                 </button>
               </div>
-              <p className="handoff-note">Deliver destination: {sessionDescription(props.session?.sessionId ?? null)}. {!props.sessionLive ? 'Deliver needs a live destination.' : 'Appends the path without Enter.'}</p>
+              <p className="deliver-note">Deliver destination: {sessionDescription(props.session?.sessionId ?? null)}. {!props.sessionLive ? 'Deliver needs a live destination.' : 'Appends the path without Enter.'}</p>
               {(['open', 'save', 'show', 'deliver'] as const).map((action) => <div key={action}>{actionOutcome(`${action}:${featured.artifactId}`)}</div>)}
               <div className="files-meta-rows">
                 <div className="files-meta-row">
@@ -444,212 +308,11 @@ export function FilesPanel(props: {
         )
       )}
 
-      <section className="files-handoffs" aria-label="Handoffs">
-        <div className="files-section-heading">
-          <p className="eyebrow">Handoffs</p>
-          <button type="button" disabled={!props.session || availableDestinations.length === 0} onClick={() => beginHandoff()}>
-            Prepare handoff
-          </button>
-        </div>
-        {handoffOpen && props.session ? (
-          <form ref={handoffForm} className="handoff-form" onSubmit={(event) => {
-            event.preventDefault()
-            const sourceSessionId = props.session!.sessionId
-            const key = `handoff-save:${handoffDraftId ?? 'new'}`
-            void run(key, async () => {
-              const saved = await window.aiTerminal.saveHandoffDraft({
-                ...(handoffDraftId ? { draftId: handoffDraftId } : {}),
-                sourceSessionId,
-                sessionId: handoffTargetId,
-                text: handoffText,
-                artifactIds: [...handoffArtifactIds],
-                ...(handoffExpectedUpdatedAt ? { expectedUpdatedAt: handoffExpectedUpdatedAt } : {})
-              })
-              setHandoffDraftId(saved.draftId)
-              setHandoffExpectedUpdatedAt(saved.updatedAt)
-              setHandoffOpen(false)
-              outcome(key, 'Saved. Not sent.', `handoff-save:${saved.draftId}`)
-              revealHandoff(saved.draftId)
-            }, 'Could not save the handoff')
-          }}>
-            <strong>{handoffDraftId ? 'Edit handoff' : 'Prepare handoff'}</strong>
-            <p className="handoff-route"><span>From</span>{sessionDescription(props.session.sessionId)}</p>
-            <label>Destination
-              <select required value={handoffTargetId} onChange={(event) => setHandoffTargetId(event.target.value)}>
-                <option value="">Choose a different session</option>
-                {availableDestinations.map((destination) => (
-                  <option key={destination.sessionId} value={destination.sessionId}>
-                    {sessionDescription(destination.sessionId)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {handoffTargetId && !availableDestinations.some((item) => item.sessionId === handoffTargetId) ? (
-              <p className="inline-error" role="status">The saved destination is unavailable. Choose another session.</p>
-            ) : null}
-            {preparation ? <p className="handoff-note">{preparation.byline}</p> : null}
-            {preparation?.stale ? <p className="handoff-note" role="status">prepared by an earlier process of this session</p> : null}
-            <div className="handoff-text">
-              <div className="handoff-text-heading">
-                <label htmlFor={handoffTextId}>Summary or question</label>
-                {/* Story 35.2: an optional outline, offered only while there is nothing to overwrite. */}
-                <button type="button" disabled={handoffText !== ''} onClick={() => {
-                  setHandoffText(HANDOFF_OUTLINE)
-                  handoffTextArea.current?.focus()
-                }}>Insert outline</button>
-              </div>
-              <textarea id={handoffTextId} ref={handoffTextArea} rows={6} required value={handoffText} onChange={(event) => setHandoffText(event.target.value)} />
-            </div>
-            {handoffChoices.length > 0 ? (
-              <fieldset className="handoff-files">
-                <legend>Original files · up to 10</legend>
-                {handoffChoices.map((choice) => (
-                  <label key={choice.artifactId}>
-                    <input
-                      type="checkbox"
-                      checked={choice.selected}
-                      disabled={choice.disabled}
-                      onChange={(event) => setHandoffArtifactIds((current) => {
-                        const next = new Set(current)
-                        if (event.target.checked) next.add(choice.artifactId)
-                        else next.delete(choice.artifactId)
-                        return next
-                      })}
-                    />
-                    <span>{choice.artifact
-                      ? `${choice.artifact.originalName} · ${formatBytes(choice.artifact.byteLength)} · ${originLabel(choice.artifact)}`
-                      : `${choice.artifactId} · original unavailable`}</span>
-                  </label>
-                ))}
-              </fieldset>
-            ) : null}
-            <p className="handoff-note">Save for review. Nothing is sent.</p>
-            {actionOutcome(`handoff-save:${handoffDraftId ?? 'new'}`)}
-            <div className="actions">
-              <button type="submit" className="primary" disabled={isPending(`handoff-save:${handoffDraftId ?? 'new'}`)}>
-                {isPending(`handoff-save:${handoffDraftId ?? 'new'}`) ? 'Saving…' : 'Save handoff'}
-              </button>
-              <button type="button" onClick={() => {
-                setHandoffOpen(false)
-                if (handoffDraftId) revealHandoff(handoffDraftId)
-              }}>Cancel</button>
-            </div>
-          </form>
-        ) : null}
-        {relevantHandoffs.length > 0 ? (
-          <ul className="files-draft-list handoff-list">
-            {relevantHandoffs.filter((draft) => !handoffOpen || draft.draftId !== handoffDraftId).map((draft) => {
-              const files = draft.artifactIds.map((artifactId) =>
-                props.artifacts.find((artifact) => artifact.artifactId === artifactId))
-              const isSource = draft.sourceSessionId === props.session?.sessionId
-              const isDestination = draft.sessionId === props.session?.sessionId
-              const target = props.sessions.find((session) => session.sessionId === draft.sessionId)
-              const workspace = target
-                ? props.workspaces.find((item) => item.workspaceId === target.workspaceId)
-                : undefined
-              const targetAvailable = !!target && target.archivedAt === null && workspace?.archivedAt === null
-              const pasteKey = `handoff-paste:${draft.draftId}`
-              const discardKey = `draft-discard:${draft.draftId}`
-              const retryKey = `handoff-retry:${draft.draftId}`
-              const busy = isPending(pasteKey) || isPending(discardKey) || isPending(retryKey)
-              const stateLabel = draft.state === 'accepted'
-                ? 'Pasted to terminal — not submitted'
-                : draft.state === 'uncertain'
-                  ? 'Paste outcome uncertain — inspect the destination before retrying'
-                  : draft.state === 'draft' ? 'Draft' : draft.detail ?? 'Not sent'
-              return (
-                <li key={draft.draftId} id={`handoff-${draft.draftId}`} tabIndex={-1} className="files-draft handoff-card">
-                  <p className="files-draft-meta">{formatClock(draft.createdAt)} · {stateLabel}</p>
-                  <p className="handoff-route"><span>From</span>{sessionDescription(draft.sourceSessionId)}</p>
-                  <p className="handoff-route"><span>To</span>{sessionDescription(draft.sessionId)}</p>
-                  {!targetAvailable ? <p className="inline-error">Destination unavailable. Edit the draft and choose another session.</p> : null}
-                  <pre className="files-draft-text">{draft.text ?? ''}</pre>
-                  {files.length > 0 ? (
-                    <ul className="handoff-file-summary">
-                      {files.map((artifact, index) => (
-                        <li key={draft.artifactIds[index]}>
-                          {artifact
-                            ? `${artifact.originalName} · ${formatBytes(artifact.byteLength)} · ${originLabel(artifact)}`
-                            : `${draft.artifactIds[index]} · original unavailable`}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  {isDestination && draft.state === 'draft' ? (
-                    <p className="handoff-note">Paste appends this package to current input and does not press Enter.</p>
-                  ) : null}
-                  <div className="files-draft-actions">
-                    {!isDestination && targetAvailable ? (
-                      <button type="button" disabled={busy} onClick={() => {
-                        props.onOpenSession(draft.sessionId, draft.draftId)
-                      }}>
-                        Open destination
-                      </button>
-                    ) : null}
-                    {isSource && draft.state === 'draft' ? (
-                      <button type="button" disabled={busy} onClick={() => beginHandoff(draft)}>Edit</button>
-                    ) : null}
-                    {isDestination && draft.state === 'draft' ? (
-                      <button
-                        type="button"
-                        className="primary"
-                        disabled={!props.sessionLive || !props.sessionIncarnationId || busy}
-                        title={props.sessionLive ? 'Append without pressing Enter' : 'Paste needs the named live destination'}
-                        onClick={() => {
-                          if (!props.sessionIncarnationId) return
-                          void run(pasteKey, async () => {
-                            try {
-                              const result = await window.aiTerminal.sendDraft(draft.draftId, false, {
-                                expectedIncarnationId: props.sessionIncarnationId!,
-                                expectedUpdatedAt: draft.updatedAt
-                              })
-                              if (result.state === 'accepted') {
-                                outcome(pasteKey, 'Pasted to terminal — not submitted.')
-                              } else if (result.state === 'uncertain') {
-                                outcome(pasteKey, 'Paste outcome uncertain — inspect the destination before retrying.')
-                              } else {
-                                throw new Error('The handoff changed before paste. Review it before trying again.')
-                              }
-                            } finally {
-                              await props.onRefreshDrafts()
-                            }
-                          }, 'Could not paste the handoff')
-                        }}
-                      >
-                        {isPending(pasteKey) ? 'Pasting…' : 'Paste handoff'}
-                      </button>
-                    ) : null}
-                    {draft.state === 'uncertain' ? (
-                      <button type="button" disabled={busy} onClick={() => {
-                        void run(retryKey, async () => {
-                          await window.aiTerminal.retryHandoffDraft(draft.draftId)
-                          outcome(retryKey, 'Created a separate retry draft. Check for a possible duplicate before pasting.')
-                        }, 'Could not create a retry draft')
-                      }}>Create retry draft</button>
-                    ) : null}
-                    {draft.state === 'draft' ? (
-                      <button type="button" disabled={busy} onClick={() => {
-                        void run(discardKey, async () => {
-                          await window.aiTerminal.discardDraft(draft.draftId)
-                        }, 'Could not discard the handoff')
-                      }}>{isPending(discardKey) ? 'Discarding…' : 'Discard'}</button>
-                    ) : null}
-                  </div>
-                  {actionOutcome(`handoff-save:${draft.draftId}`)}
-                  {actionOutcome(pasteKey)}
-                  {actionOutcome(retryKey)}
-                </li>
-              )
-            })}
-          </ul>
-        ) : null}
-      </section>
-
-      {legacyDrafts.length > 0 && (
+      {drafts.length > 0 && (
         <section className="files-drafts" aria-label="Drafts">
           <p className="eyebrow">Drafts</p>
           <ul className="files-draft-list">
-            {legacyDrafts.map((draft) => {
+            {drafts.map((draft) => {
               const artifact = draft.artifactId ? props.artifacts.find((item) => item.artifactId === draft.artifactId) ?? null : null
               const typeKey = `draft-type:${draft.draftId}`
               const sendKey = `draft-send:${draft.draftId}`
@@ -681,7 +344,7 @@ export function FilesPanel(props: {
                     }}>{isPending(sendKey) ? 'Sending…' : 'Send with Enter'}</button>
                     {draft.state === 'uncertain' ? <button type="button" disabled={busy} onClick={() => {
                       void run(retryKey, async () => {
-                        await window.aiTerminal.retryHandoffDraft(draft.draftId)
+                        await window.aiTerminal.retryDraft(draft.draftId)
                         await props.onRefreshDrafts()
                       }, 'Could not create a retry draft')
                     }}>{isPending(retryKey) ? 'Creating retry…' : 'Create retry draft'}</button> : null}

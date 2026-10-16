@@ -1,11 +1,9 @@
-// MODULE: workspace-results.tsx - read-only workspace reports and pending handoff review
+// MODULE: workspace-results.tsx - read-only workspace reports
 import { useEffect, useRef, useState } from 'react'
-import type {
-  ArtifactRecord, AttentionRecord, InputDraftRecord, ProgressRecord, SessionRecord, WorkspaceRecord
-} from '@bmn/protocol'
+import type { ArtifactRecord, ProgressRecord, SessionRecord, WorkspaceRecord } from '@bmn/protocol'
 import { Dialog } from './dialog'
 import { evidenceRows } from './progress-evidence-dialog'
-import { handoffPreparedBy, progressPresentation, type ProgressPresentation } from './session-presentation'
+import { progressPresentation, type ProgressPresentation } from './session-presentation'
 import { failureDetail } from './bridge-error'
 import { boundedRead } from './bounded-read'
 import './workspace-results.css'
@@ -17,14 +15,6 @@ export interface WorkspaceReportRow {
   evidence: ReturnType<typeof evidenceRows>
 }
 
-export interface WorkspaceHandoffRow {
-  draft: InputDraftRecord
-  source: string
-  destination: string
-  preparation: string
-  destinationAvailable: boolean
-}
-
 /** Distinguishes a replaced source row even when two writes share a clock tick. */
 export function sameProgressRecord(a: ProgressRecord, b: ProgressRecord): boolean {
   return a.sessionId === b.sessionId && a.source === b.source &&
@@ -34,19 +24,17 @@ export function sameProgressRecord(a: ProgressRecord, b: ProgressRecord): boolea
     JSON.stringify(a.evidence) === JSON.stringify(b.evidence)
 }
 
-/** Current records only; source and destination membership are resolved from addressed IDs. */
+/**
+ * Current reports only, grouped by the workspace's open sessions. A handoff delivers itself (Story 75.5), so
+ * nothing here waits for the owner; a delivered one shows in Messages.
+ */
 export function workspaceResults(
   workspaceId: string,
   sessions: readonly SessionRecord[],
-  workspaces: readonly WorkspaceRecord[],
   reports: readonly ProgressRecord[],
-  drafts: readonly InputDraftRecord[],
   artifacts: readonly ArtifactRecord[],
-  attention: readonly AttentionRecord[],
   now: number
-): { sessions: Array<{ session: SessionRecord; reports: WorkspaceReportRow[] }>; handoffs: WorkspaceHandoffRow[] } {
-  const byId = new Map(sessions.map((session) => [session.sessionId, session]))
-  const workspaceById = new Map(workspaces.map((workspace) => [workspace.workspaceId, workspace]))
+): { sessions: Array<{ session: SessionRecord; reports: WorkspaceReportRow[] }> } {
   const visible = sessions.filter((session) => session.workspaceId === workspaceId && session.archivedAt === null)
   const grouped = visible.map((session) => ({
     session,
@@ -61,40 +49,13 @@ export function workspaceResults(
       .toSorted((a, b) => b.record.observedAt.localeCompare(a.record.observedAt) ||
         a.record.source.localeCompare(b.record.source))
   }))
-  const describe = (sessionId: string | null): string => {
-    const session = sessionId ? byId.get(sessionId) : undefined
-    if (!session) return 'Removed session'
-    const workspace = workspaceById.get(session.workspaceId)
-    return `${workspace?.name ?? 'Removed workspace'} › ${session.name}`
-  }
-  const handoffs = drafts.filter((draft) => {
-    if (draft.origin !== 'handoff' || (draft.state !== 'draft' && draft.state !== 'uncertain')) return false
-    const source = draft.sourceSessionId ? byId.get(draft.sourceSessionId) : undefined
-    const destination = byId.get(draft.sessionId)
-    return source?.workspaceId === workspaceId || destination?.workspaceId === workspaceId
-  }).map((draft): WorkspaceHandoffRow => {
-    const source = draft.sourceSessionId ? byId.get(draft.sourceSessionId) : undefined
-    const destination = byId.get(draft.sessionId)
-    const destinationWorkspace = destination ? workspaceById.get(destination.workspaceId) : undefined
-    const preparation = handoffPreparedBy(draft, source, attention)
-    return {
-      draft,
-      source: describe(draft.sourceSessionId),
-      destination: describe(draft.sessionId),
-      preparation: preparation?.byline ?? 'Prepared by owner',
-      destinationAvailable: !!destination && destination.archivedAt === null && destinationWorkspace?.archivedAt === null
-    }
-  }).toSorted((a, b) => b.draft.updatedAt.localeCompare(a.draft.updatedAt))
-  return { sessions: grouped, handoffs }
+  return { sessions: grouped }
 }
 
 interface ResultSnapshot {
   sessions: SessionRecord[]
-  workspaces: WorkspaceRecord[]
   reports: ProgressRecord[]
-  drafts: InputDraftRecord[]
   artifacts: ArtifactRecord[]
-  attention: AttentionRecord[]
   checkedAt: string
 }
 
@@ -104,34 +65,25 @@ export function WorkspaceResultsDialog(props: {
   onOpenRuns(): void
   onClose(): void
   onOpenReport(session: SessionRecord, report: ProgressRecord): void
-  onReviewHandoff(draft: InputDraftRecord, signal: AbortSignal): Promise<void>
 }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<ResultSnapshot | null>(null)
   const [state, setState] = useState<'loading' | 'ready' | 'unavailable'>('loading')
   const [error, setError] = useState<string | null>(null)
   const sequence = useRef(0)
   const mounted = useRef(true)
-  const reviewControllers = useRef(new Set<AbortController>())
 
   async function load(preserveError = false): Promise<void> {
     const request = ++sequence.current
     setState('loading')
     if (!preserveError) setError(null)
     try {
-      const { workspaces, allSessions, reports, drafts, artifacts, attention } = await boundedRead((async () => {
-        const workspaces = await window.aiTerminal.listWorkspaces(true)
-        const allSessions = (await Promise.all(workspaces.map((workspace) =>
-          window.aiTerminal.listSessions(workspace.workspaceId)))).flat()
-        const [reports, drafts, artifacts, attention] = await Promise.all([
-          window.aiTerminal.listProgress(),
-          window.aiTerminal.listDrafts(),
-          window.aiTerminal.listArtifacts(null),
-          window.aiTerminal.listAttention()
-        ])
-        return { workspaces, allSessions, reports, drafts, artifacts, attention }
-      })())
+      const [sessions, reports, artifacts] = await boundedRead(Promise.all([
+        window.aiTerminal.listSessions(props.workspace.workspaceId),
+        window.aiTerminal.listProgress(),
+        window.aiTerminal.listArtifacts(null)
+      ]))
       if (!mounted.current || request !== sequence.current) return
-      setSnapshot({ sessions: allSessions, workspaces, reports, drafts, artifacts, attention, checkedAt: new Date().toISOString() })
+      setSnapshot({ sessions, reports, artifacts, checkedAt: new Date().toISOString() })
       setState('ready')
     } catch (cause) {
       if (!mounted.current || request !== sequence.current) return
@@ -147,14 +99,11 @@ export function WorkspaceResultsDialog(props: {
     return () => {
       mounted.current = false
       sequence.current += 1
-      for (const controller of reviewControllers.current) controller.abort()
-      reviewControllers.current.clear()
     }
   }, [props.workspace.workspaceId])
 
   const results = snapshot && state === 'ready' ? workspaceResults(
-    props.workspace.workspaceId, snapshot.sessions, snapshot.workspaces, snapshot.reports,
-    snapshot.drafts, snapshot.artifacts, snapshot.attention, props.now
+    props.workspace.workspaceId, snapshot.sessions, snapshot.reports, snapshot.artifacts, props.now
   ) : null
 
   async function openReport(session: SessionRecord, report: ProgressRecord): Promise<void> {
@@ -176,28 +125,9 @@ export function WorkspaceResultsDialog(props: {
     }
   }
 
-  async function reviewHandoff(draft: InputDraftRecord): Promise<void> {
-    for (const pending of reviewControllers.current) pending.abort()
-    reviewControllers.current.clear()
-    const controller = new AbortController()
-    reviewControllers.current.add(controller)
-    try {
-      await boundedRead(props.onReviewHandoff(draft, controller.signal))
-    } catch (cause) {
-      const superseded = controller.signal.aborted
-      controller.abort()
-      if (!mounted.current || superseded) return
-      setError(failureDetail(cause, 'Handoff changed or is unavailable. Refresh and review it again.'))
-      await load(true)
-    } finally {
-      controller.abort()
-      reviewControllers.current.delete(controller)
-    }
-  }
-
   return (
     <Dialog label={`Workspace results — ${props.workspace.name}`} onClose={props.onClose} className="workspace-results-dialog">
-      <p className="dialog-note">Agent report: reported by the agent; BMN has not verified it. Current reports and handoffs; use History for earlier records.</p>
+      <p className="dialog-note">Agent report: reported by the agent; BMN has not verified it. Current reports; use History for earlier records.</p>
       <div className="workspace-results-toolbar">
         <button type="button" onClick={() => void load()}>Refresh results</button>
         <button type="button" onClick={props.onOpenRuns}>dev-auto runs…</button>
@@ -232,19 +162,6 @@ export function WorkspaceResultsDialog(props: {
                   )}
                 </li>
               ))}
-            </ul>
-          )}
-          <h3>Handoffs awaiting you</h3>
-          {results.handoffs.length === 0 ? <p>No pending or uncertain handoffs in the current draft list for this workspace.</p> : (
-            <ul className="workspace-results-handoffs">
-              {results.handoffs.map((row) => <li key={row.draft.draftId}>
-                <p><strong>{row.draft.state === 'uncertain' ? 'Paste outcome uncertain' : 'Saved draft'}</strong> · updated {new Date(row.draft.updatedAt).toLocaleString()}</p>
-                <p>From {row.source}</p>
-                <p>To {row.destination}</p>
-                <p>{row.preparation}</p>
-                {!row.destinationAvailable ? <p>Destination unavailable. Fresh review required.</p> : null}
-                <button type="button" onClick={() => void reviewHandoff(row.draft)}>Review handoff</button>
-              </li>)}
             </ul>
           )}
         </>

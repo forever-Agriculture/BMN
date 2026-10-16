@@ -1,5 +1,4 @@
 // MODULE: database-companion-store.ts - artifacts, attention, progress, receipts, drafts, Telegram message map and settings rows
-import { createHash } from 'node:crypto'
 import {
   AGENT_HISTORY_KEEP_DAYS,
   ARCHIVE_DELETE_AFTER_DAYS,
@@ -37,7 +36,9 @@ import {
   type IdentityName,
   type InputDraftRecord,
   type InputDraftState,
-  type HandoffReviewSnapshot,
+  type SessionHandoffState,
+  type SessionMessageState,
+  sessionHandoffState,
   MAX_CLAUDE_CONFIG_DIRS,
   MAX_PROGRESS_EVIDENCE,
   type ProgressEvidence,
@@ -48,10 +49,9 @@ import {
 } from '@bmn/protocol'
 import { isAbsolute, normalize } from 'node:path'
 import type { DatabaseConnection } from './database-initialization'
-import { MESSAGE_OPERATIONS } from './database-message-store'
+import { admitHandoff, HANDOFF_MESSAGE_KEY, MESSAGE_OPERATIONS, type SendOutcome } from './database-message-store'
 import { TURN_OPERATIONS } from './database-turn-store'
 import { selectSession, selectWorkspace, WorkspaceStoreError } from './database-workspace-store'
-import { clipOutsideSecrets } from './secret-mask'
 
 interface ArtifactRow {
   artifact_id: string
@@ -793,46 +793,6 @@ export function getDraft(database: DatabaseConnection, draftId: string): InputDr
   return draftFromRow(row)
 }
 
-/** One worker transaction reads the exact draft and both addressed sessions as a coherent revision. */
-export function readHandoffReview(
-  database: DatabaseConnection,
-  draftId: string,
-  workspaceId: string,
-  expectedToken: string | null = null
-): HandoffReviewSnapshot {
-  const unavailable = (): never => {
-    throw new WorkspaceStoreError(ERROR_CODES.revisionConflict,
-      'The handoff or destination changed. Refresh results before review.')
-  }
-  let draft: InputDraftRecord
-  try { draft = getDraft(database, draftId) } catch { return unavailable() }
-  if (draft.origin !== 'handoff' || (draft.state !== 'draft' && draft.state !== 'uncertain') ||
-    draft.sourceSessionId === null) return unavailable()
-  let source: HandoffReviewSnapshot['source']
-  let destination: HandoffReviewSnapshot['destination']
-  let sourceWorkspace: HandoffReviewSnapshot['sourceWorkspace']
-  let destinationWorkspace: HandoffReviewSnapshot['destinationWorkspace']
-  try {
-    source = selectSession(database, draft.sourceSessionId)
-    destination = selectSession(database, draft.sessionId)
-    sourceWorkspace = selectWorkspace(database, source.workspaceId)
-    destinationWorkspace = selectWorkspace(database, destination.workspaceId)
-  } catch { return unavailable() }
-  const route = draft.state === 'draft' ? source : destination
-  const routeWorkspace = draft.state === 'draft' ? sourceWorkspace : destinationWorkspace
-  if (destination.archivedAt !== null || destinationWorkspace.archivedAt !== null ||
-    route.archivedAt !== null || routeWorkspace.archivedAt !== null ||
-    (source.workspaceId !== workspaceId && destination.workspaceId !== workspaceId)) return unavailable()
-  const token = createHash('sha256').update(JSON.stringify([
-    draft, source.sessionId, source.workspaceId, source.revision, source.archivedAt,
-    destination.sessionId, destination.workspaceId, destination.revision, destination.archivedAt,
-    sourceWorkspace.workspaceId, sourceWorkspace.revision, sourceWorkspace.archivedAt,
-    destinationWorkspace.workspaceId, destinationWorkspace.revision, destinationWorkspace.archivedAt
-  ])).digest('hex')
-  if (expectedToken !== null && token !== expectedToken) return unavailable()
-  return { draft, source, destination, sourceWorkspace, destinationWorkspace, token }
-}
-
 /** Only a definite pre-write draft may change its message before a retry claims it. */
 export function replaceDraftText(database: DatabaseConnection, draftId: string, expectedUpdatedAt: string, text: string, now: string): InputDraftRecord {
   const updated = database.prepare("UPDATE input_draft SET text = ?, updated_at = ? WHERE draft_id = ? AND state = 'draft' AND updated_at = ?")
@@ -861,62 +821,6 @@ function monotonicDraftTime(previous: string, now: string): string {
   return new Date(Math.max(nowMs, previousMs + 1)).toISOString()
 }
 
-export function updateHandoffDraft(
-  database: DatabaseConnection,
-  draftId: string,
-  params: {
-    sessionId: string
-    sourceSessionId: string
-    text: string
-    artifactIds: string[]
-    expectedUpdatedAt: string
-  },
-  now: string
-): InputDraftRecord {
-  const current = getDraft(database, draftId)
-  if (current.origin !== 'handoff') invalid('Only a handoff draft can be edited here')
-  if (current.state !== 'draft') invalid('Only an unsent handoff can be edited')
-  if (current.updatedAt !== params.expectedUpdatedAt) {
-    throw new WorkspaceStoreError(ERROR_CODES.revisionConflict, 'The handoff changed after this preview opened')
-  }
-  const updatedAt = monotonicDraftTime(current.updatedAt, now)
-  database.prepare(
-    `UPDATE input_draft
-     SET session_id = ?, source_session_id = ?, text = ?, artifact_ids_json = ?, detail = NULL,
-       attempted_incarnation_id = NULL, updated_at = ?
-     WHERE draft_id = ?`
-  ).run(
-    params.sessionId,
-    params.sourceSessionId,
-    params.text,
-    JSON.stringify(params.artifactIds),
-    updatedAt,
-    draftId
-  )
-  return getDraft(database, draftId)
-}
-
-export function claimHandoffDraft(
-  database: DatabaseConnection,
-  draftId: string,
-  expectedUpdatedAt: string,
-  attemptedIncarnationId: string,
-  now: string
-): { record: InputDraftRecord; claimed: boolean } {
-  const current = getDraft(database, draftId)
-  if (current.origin !== 'handoff') invalid('Only a handoff draft can use guarded paste')
-  if (current.state !== 'draft') return { record: current, claimed: false }
-  if (current.updatedAt !== expectedUpdatedAt) {
-    throw new WorkspaceStoreError(ERROR_CODES.revisionConflict, 'The handoff changed after this preview opened')
-  }
-  database.prepare(
-    `UPDATE input_draft
-     SET state = 'uncertain', detail = 'Pasting…', attempted_incarnation_id = ?, updated_at = ?
-     WHERE draft_id = ?`
-  ).run(attemptedIncarnationId, monotonicDraftTime(current.updatedAt, now), draftId)
-  return { record: getDraft(database, draftId), claimed: true }
-}
-
 /** Persist a legacy input attempt before crossing the non-transactional PTY boundary. */
 export function claimInputDraft(
   database: DatabaseConnection,
@@ -926,7 +830,7 @@ export function claimInputDraft(
   now: string
 ): { record: InputDraftRecord; claimed: boolean } {
   const current = getDraft(database, draftId)
-  if (current.origin === 'handoff') invalid('A handoff must use its guarded paste')
+  if (current.origin === 'handoff') invalid('A handoff is never typed into a terminal')
   if (current.state !== 'draft') return { record: current, claimed: false }
   if (current.updatedAt !== expectedUpdatedAt) {
     throw new WorkspaceStoreError(ERROR_CODES.revisionConflict, 'The draft changed before sending')
@@ -940,96 +844,77 @@ export function claimInputDraft(
   return { record: getDraft(database, draftId), claimed: updated.changes === 1 }
 }
 
-export function finishHandoffDraft(
-  database: DatabaseConnection,
-  draftId: string,
-  state: 'draft' | 'accepted',
-  detail: string | null,
-  now: string
-): InputDraftRecord {
-  const current = getDraft(database, draftId)
-  if (current.origin !== 'handoff' || current.state !== 'uncertain') {
-    invalid('The handoff has no in-flight paste attempt')
-  }
-  database.prepare('UPDATE input_draft SET state = ?, detail = ?, updated_at = ? WHERE draft_id = ?')
-    .run(state, detail, monotonicDraftTime(current.updatedAt, now), draftId)
-  if (state === 'accepted' && current.preparedBy === 'agent' && current.requestId) {
-    if (getAttention(database, current.requestId).state === 'open') {
-      closeAttention(database, { requestId: current.requestId }, 'answered', 'pasted, not submitted', now, 'owner')
+/**
+ * Story 75.5: one transaction stores a handoff whole or not at all: its message under the message limits, the
+ * artifact row of its stored file, and its delivery record, which names the message by its key and holds the
+ * stored file and the attached files the way a draft holds files, so a purge of either side keeps them while the
+ * record stands. A refusal stores nothing; the send one past an hourly limit stores only the pause it caused, as a
+ * message's does. The stored bytes are the caller's to remove when nothing was stored.
+ */
+export function queueAgentHandoff(database: DatabaseConnection, p: {
+  handoffId: string
+  messageId: string
+  senderSessionId: string
+  receiverSessionId: string
+  senderRoot: string
+  stamp: string
+  pointer: string
+  text: string
+  file: ArtifactRecord
+  attachmentIds: string[]
+  receiverRefusal: string | null
+}, now: string): SendOutcome {
+  const outcome = admitHandoff(database, {
+    messageId: p.messageId, senderSessionId: p.senderSessionId, receiverSessionId: p.receiverSessionId,
+    senderRoot: p.senderRoot, stamp: p.stamp, text: p.pointer, receiverRefusal: p.receiverRefusal
+  }, now)
+  if (!outcome.accepted) return outcome
+  for (const artifactId of p.attachmentIds) {
+    const file = database.prepare('SELECT session_id, direction, state FROM artifact WHERE artifact_id = ?').get(artifactId) as
+      { session_id: string | null; direction: string; state: string } | undefined
+    if (file?.session_id !== p.senderSessionId || file.direction !== 'output' || file.state !== 'ready') {
+      invalid('Every handoff file must be a ready file this session published')
     }
   }
-  return getDraft(database, draftId)
-}
-
-/** One worker transaction owns the cap, draft and source request, so no partial petition appears. */
-export function prepareAgentHandoff(database: DatabaseConnection, p: {
-  draftId: string
-  requestId: string
-  sourceSessionId: string
-  sourceIncarnationId: string
-  destinationSessionId: string
-  destinationName: string
-  text: string
-  artifactIds: string[]
-}, now: string): { draftId: string; requestId: string; state: 'draft' } {
-  const pending = database.prepare(
-    "SELECT COUNT(*) AS count FROM input_draft WHERE prepared_by = 'agent' AND source_session_id = ? AND state = 'draft'"
-  ).get(p.sourceSessionId) as { count: number }
-  if (pending.count >= 3) invalid('This session already has three pending handoffs')
-  const recent = database.prepare(
-    "SELECT created_at FROM input_draft WHERE prepared_by = 'agent' AND source_session_id = ? ORDER BY created_at DESC LIMIT 1"
-  ).get(p.sourceSessionId) as { created_at: string } | undefined
-  if (recent && Date.parse(now) - Date.parse(recent.created_at) < 10_000) {
-    invalid('Wait 10 seconds before preparing another handoff')
-  }
-  createDraft(database, {
-    draftId: p.draftId,
-    sessionId: p.destinationSessionId,
-    origin: 'handoff',
-    originKey: null,
-    sourceSessionId: p.sourceSessionId,
-    requestId: p.requestId,
-    text: p.text,
-    artifactId: null,
-    artifactIds: p.artifactIds,
-    attemptedIncarnationId: null,
-    state: 'draft',
-    detail: null,
-    preparedBy: 'agent'
-  }, now)
-  const titlePrefix = 'Asks to hand off to "'
-  const title = `${titlePrefix}${p.destinationName.slice(0, 200 - titlePrefix.length - 1)}"`
-  // The preview may reach Telegram, which masks secrets; a cut through one would leave half a key unmasked.
-  const body = `${clipOutsideSecrets(p.text, 200)}${p.artifactIds.length ? `\n${p.artifactIds.length} files` : ''}`
-  openAttention(database, {
-    sessionId: p.sourceSessionId,
-    incarnationId: p.sourceIncarnationId,
-    requestKey: `handoff:${p.draftId}`,
-    kind: 'handoff',
-    title,
-    body,
-    expiresAt: new Date(Date.parse(now) + 24 * 60 * 60 * 1000).toISOString(),
-    origin: 'cli'
-  }, p.requestId, now)
-  return { draftId: p.draftId, requestId: p.requestId, state: 'draft' }
+  insertArtifact(database, p.file)
+  database.prepare(
+    `INSERT INTO input_draft(draft_id, session_id, origin, origin_key, source_session_id, request_id, text, artifact_id,
+       artifact_ids_json, attempted_incarnation_id, state, detail, created_at, updated_at, prepared_by)
+     VALUES (?, ?, 'handoff', ?, ?, ?, ?, ?, ?, NULL, 'submitted', NULL, ?, ?, 'agent')`
+  ).run(
+    p.handoffId, p.receiverSessionId, `${HANDOFF_MESSAGE_KEY}${p.messageId}`, p.senderSessionId, p.messageId, p.text,
+    p.file.artifactId, JSON.stringify(p.attachmentIds), now, now
+  )
+  return outcome
 }
 
 /** A token reads only its own agent-prepared metadata, never the owner's edits or other sessions. */
 export interface AgentHandoffSummary {
   draftId: string
   destinationSessionId: string
-  state: InputDraftState
+  /** Where a handoff queued since Story 75.5 stands by its message; one from before keeps its draft's state. */
+  state: InputDraftState | SessionHandoffState
   updatedAt: string
 }
 
-export function listAgentHandoffs(database: DatabaseConnection, sourceSessionId: string): AgentHandoffSummary[] {
+export function listAgentHandoffs(database: DatabaseConnection, sourceSessionId: string, now: string): AgentHandoffSummary[] {
   const rows = database.prepare(
-    "SELECT draft_id, session_id, state, updated_at FROM input_draft WHERE prepared_by = 'agent' AND source_session_id = ? ORDER BY created_at DESC"
-  ).all(sourceSessionId) as Pick<DraftRow, 'draft_id' | 'session_id' | 'state' | 'updated_at'>[]
-  return rows.map((row) => ({
-    draftId: row.draft_id, destinationSessionId: row.session_id,
-    state: row.state, updatedAt: row.updated_at
-  }))
+    `SELECT d.draft_id, d.session_id, d.state, d.updated_at, d.origin_key, m.state AS message_state, m.expires_at, m.claimed_at
+     FROM input_draft d LEFT JOIN session_message m ON d.origin_key = '${HANDOFF_MESSAGE_KEY}' || m.message_id
+     WHERE d.prepared_by = 'agent' AND d.source_session_id = ? ORDER BY d.created_at DESC, d.rowid DESC`
+  ).all(sourceSessionId) as Array<Pick<DraftRow, 'draft_id' | 'session_id' | 'state' | 'updated_at' | 'origin_key'> & {
+    message_state: SessionMessageState | null; expires_at: string | null; claimed_at: string | null
+  }>
+  return rows.map((row) => {
+    const queued = row.origin_key?.startsWith(HANDOFF_MESSAGE_KEY) === true
+    return {
+      draftId: row.draft_id, destinationSessionId: row.session_id,
+      state: queued
+        ? sessionHandoffState(row.message_state === null ? null : { state: row.message_state, expiresAt: row.expires_at ?? now }, Date.parse(now))
+        : row.state,
+      updatedAt: queued ? row.claimed_at ?? row.updated_at : row.updated_at
+    }
+  })
 }
 
 /** The source may withdraw its petition, but an owner-edited draft remains for the owner to judge. */
@@ -1037,6 +922,10 @@ export function withdrawAgentHandoff(
   database: DatabaseConnection, sourceSessionId: string, draftId: string, now: string
 ): AttentionRecord {
   const draft = getDraft(database, draftId)
+  const key = (database.prepare('SELECT origin_key FROM input_draft WHERE draft_id = ?').get(draftId) as { origin_key: string | null }).origin_key
+  if (draft.sourceSessionId === sourceSessionId && key?.startsWith(HANDOFF_MESSAGE_KEY) === true) {
+    invalid('A handoff BMN queued delivers itself and cannot be withdrawn; if no hook takes it, it expires two hours after it was sent')
+  }
   if (draft.preparedBy !== 'agent' || draft.sourceSessionId !== sourceSessionId ||
       draft.state !== 'draft' || !draft.requestId) {
     invalid('Only an open handoff from this session can be withdrawn')
@@ -1056,18 +945,14 @@ export function withdrawAgentHandoff(
   return closeAttention(database, { requestId: draft.requestId }, 'withdrawn', 'withdrawn by agent', now, 'cli')
 }
 
-/** Owner discard and its attention resolution are one stored outcome. */
-export function discardHandoffDraft(database: DatabaseConnection, draftId: string, now: string): InputDraftRecord {
+/**
+ * The owner discards a Telegram or control draft. A handoff's row is kept as it is (Story 75.5): one from before
+ * stays stored and unsent, and one queued since is its delivery record.
+ */
+export function discardDraft(database: DatabaseConnection, draftId: string, now: string): InputDraftRecord {
   const draft = getDraft(database, draftId)
-  if (draft.origin === 'handoff' && draft.state !== 'draft') invalid('Only an unsent handoff can be discarded')
-  const record = updateDraft(database, draftId, 'discarded', null, now)
-  if (draft.preparedBy === 'agent' && draft.requestId) {
-    const request = getAttention(database, draft.requestId)
-    if (request.state === 'open') {
-      closeAttention(database, { requestId: draft.requestId }, 'answered', 'discarded', now, 'owner')
-    }
-  }
-  return record
+  if (draft.origin === 'handoff') invalid('A handoff is kept as it is; it cannot be discarded here')
+  return updateDraft(database, draftId, 'discarded', null, now)
 }
 
 /** A restarted source makes its old petition visibly stale without changing the draft's state. */
@@ -1091,9 +976,10 @@ export function markStaleAgentHandoffs(
   return changed
 }
 
+/** The owner's drafts: Telegram and control input. No handoff is in any owner queue (Story 75.5). */
 export function listDrafts(database: DatabaseConnection): InputDraftRecord[] {
   return (database.prepare(
-    `SELECT * FROM input_draft WHERE state != 'discarded'
+    `SELECT * FROM input_draft WHERE state != 'discarded' AND origin != 'handoff'
      ORDER BY created_at DESC, rowid DESC LIMIT 200`
   ).all() as DraftRow[]).map(draftFromRow)
 }
@@ -1511,17 +1397,13 @@ export const COMPANION_OPERATIONS = Object.freeze({
   replaceDraftText,
   getDraft,
   updateDraft,
-  updateHandoffDraft,
-  claimHandoffDraft,
   claimInputDraft,
-  finishHandoffDraft,
-  prepareAgentHandoff,
+  queueAgentHandoff,
   listAgentHandoffs,
   withdrawAgentHandoff,
-  discardHandoffDraft,
+  discardDraft,
   markStaleAgentHandoffs,
   listDrafts,
-  readHandoffReview,
   putTelegramMessage,
   getTelegramMessage,
   putTelegramCard,

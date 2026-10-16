@@ -119,8 +119,7 @@ describe('protocol surface', () => {
         'guard.clear',
         'ports.list',
         'progress.list',
-        'draft.list', 'handoff.review',
-        'draft.save',
+        'draft.list',
         'draft.retry',
         'draft.send',
         'draft.discard',
@@ -144,8 +143,9 @@ describe('protocol surface', () => {
       ])
     )
     // Story 75.3 removed the two methods of custom templates and the six of launch sets (91 before); Story 75.4 the
-    // owner's Paste, Pause and pair Resume of messages and the Resume of turn recording (83 before).
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(79)
+    // owner's Paste, Pause and pair Resume of messages and the Resume of turn recording (83 before); Story 75.5 the
+    // owner's review and save of a handoff (79 before).
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(77)
   })
 
   it('exports the initial stable error codes', () => {

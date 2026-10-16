@@ -4,7 +4,6 @@ import { isRetiredApp, type RosterRetiredHarness } from './agents-roster'
 import type { AttentionPrompt } from './attention-prompt'
 import type { AttentionProducerBinding } from './attention-producer'
 import type { ManualChoices } from './manual-choices'
-import type { SessionRecord, WorkspaceRecord } from './workspace'
 import { DEFAULT_TELEGRAM_QUIET_HOURS, type TelegramQuietHours } from './telegram-quiet'
 import { DEFAULT_TELEGRAM_MORNING_DIGEST, type TelegramMorningDigest } from './telegram-digest'
 import { DEFAULT_TELEGRAM_HEALTH_ALERTS, type TelegramHealthAlerts } from './telegram-health'
@@ -527,13 +526,17 @@ export interface ProgressRecord {
 
 export type InputDraftState = 'draft' | 'accepted' | 'submitted' | 'uncertain' | 'discarded'
 
-/** Addressed input that was not delivered automatically; it never follows focus. */
+/**
+ * Addressed input that was not delivered automatically; it never follows focus. Since Story 75.5 a handoff is
+ * delivered by the receiving agent's own hook and its row is its delivery record; a handoff draft from before is
+ * kept as it was, shown to nobody and never sent.
+ */
 export interface InputDraftRecord {
   draftId: string
   sessionId: string
   origin: 'telegram' | 'control' | 'handoff'
   sourceSessionId: string | null
-  /** Null for owner and legacy drafts; an agent-prepared handoff still needs owner delivery. */
+  /** Null for owner and legacy drafts; 'agent' for every handoff an agent prepared. */
   preparedBy: 'agent' | null
   requestId: string | null
   text: string | null
@@ -544,26 +547,6 @@ export interface InputDraftRecord {
   detail: string | null
   createdAt: string
   updatedAt: string
-}
-
-export interface HandoffDraftSaveParams {
-  draftId?: string
-  sourceSessionId: string
-  sessionId: string
-  text: string
-  artifactIds: string[]
-  expectedUpdatedAt?: string
-}
-
-/** One coherent owner-only read of an exact handoff and its addressed sessions. */
-export interface HandoffReviewSnapshot {
-  draft: InputDraftRecord
-  source: SessionRecord
-  destination: SessionRecord
-  sourceWorkspace: WorkspaceRecord
-  destinationWorkspace: WorkspaceRecord
-  /** Opaque revision of rows needed for review; never an authorization token. */
-  token: string
 }
 
 export interface DraftSendExpectation {

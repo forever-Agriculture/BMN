@@ -66,8 +66,6 @@ import {
   type FileReferencePasteReceipt,
   type FileReferenceSearchParams,
   type FileReferenceSearchResult,
-  type HandoffDraftSaveParams,
-  type HandoffReviewSnapshot,
   type ClosePromptDecision,
   type ClosePromptRequest,
   type InputDraftRecord,
@@ -653,15 +651,7 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   listDrafts(): Promise<InputDraftRecord[]> {
     return invokeBridge('aiterm:draft:list', {})
   },
-  readHandoffReview(draftId: string, workspaceId: string, expectedToken?: string): Promise<HandoffReviewSnapshot> {
-    return invokeBridge('aiterm:handoff:review', {
-      draftId, workspaceId, ...(expectedToken === undefined ? {} : { expectedToken })
-    })
-  },
-  saveHandoffDraft(params: HandoffDraftSaveParams): Promise<InputDraftRecord> {
-    return invokeBridge('aiterm:draft:save', params)
-  },
-  retryHandoffDraft(draftId: string): Promise<InputDraftRecord> {
+  retryDraft(draftId: string): Promise<InputDraftRecord> {
     return invokeBridge('aiterm:draft:retry', { draftId })
   },
   sendDraft(draftId: string, submit: boolean, expected?: DraftSendExpectation): Promise<InputDraftRecord> {

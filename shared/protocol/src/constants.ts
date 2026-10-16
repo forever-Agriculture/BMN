@@ -62,8 +62,6 @@ export const METHOD_REGISTRY = Object.freeze({
   portsList: 'ports.list',
   progressList: 'progress.list',
   draftList: 'draft.list',
-  handoffReview: 'handoff.review',
-  draftSave: 'draft.save',
   draftRetry: 'draft.retry',
   draftSend: 'draft.send',
   draftDiscard: 'draft.discard',

@@ -47,8 +47,6 @@ import type {
   FileReferencePasteReceipt,
   FileReferenceSearchParams,
   FileReferenceSearchResult,
-  HandoffDraftSaveParams,
-  HandoffReviewSnapshot,
   HookCheckReport,
   HookEventRecord,
   HookEventsView,
@@ -320,11 +318,9 @@ export interface AiTerminalBridge {
     body?: string
   }): Promise<{ opened: boolean; requestKey: string; reason?: string }>
   listProgress(): Promise<ProgressRecord[]>
+  /** Telegram and control drafts; no handoff is in any owner queue (Story 75.5). */
   listDrafts(): Promise<InputDraftRecord[]>
-  /** Read-only exact handoff and addressed sessions in one stored revision. */
-  readHandoffReview(draftId: string, workspaceId: string, expectedToken?: string): Promise<HandoffReviewSnapshot>
-  saveHandoffDraft(params: HandoffDraftSaveParams): Promise<InputDraftRecord>
-  retryHandoffDraft(draftId: string): Promise<InputDraftRecord>
+  retryDraft(draftId: string): Promise<InputDraftRecord>
   sendDraft(draftId: string, submit: boolean, expected?: DraftSendExpectation): Promise<InputDraftRecord>
   discardDraft(draftId: string): Promise<InputDraftRecord>
   /** Epic 66: one workspace's latest messages between its sessions, with what the hourly limit holds. Read-only (Story 75.4). */

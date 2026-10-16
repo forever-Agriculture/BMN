@@ -40,8 +40,8 @@ feature stops. This page sums up the product and how to install it.
   [What survives](docs/architecture.md#what-survives) says what each ending keeps.
   ([Process lifecycle and resume](docs/features.md#process-lifecycle-and-resume))
 - **Agent control (`bmn`).** Every session gets the `bmn` command. An agent can list sessions,
-  publish a file, report progress, ask you a question, prepare an owner-delivered handoff, or send
-  text to its own session. Each session gets a token scoped to that session. `bmn hooks check` says
+  publish a file, report progress, ask you a question, hand a longer package to another session's
+  agent (BMN delivers it itself), leave a peer a short message, or send text to its own session. Each session gets a token scoped to that session. `bmn hooks check` says
   which of BMN's hook entries each harness's own settings file carries, and
   `bmn hooks install <agent>` adds the missing ones without touching anything else.
   ([Agent attention](docs/features.md#agent-attention-needs-you-progress-and-handoffs),
@@ -51,7 +51,7 @@ feature stops. This page sums up the product and how to install it.
   requests stay until answered or explicitly dismissed. Its status button opens the request card. OpenCode subagent requests appear here too. Repeated
   Claude Code or Codex tool calls can open one informational notice; BMN never stops the agent.
   Progress reports are shown as the agent's claims, with any files it published as evidence.
-  A workspace's **Review results…** view groups those reports and pending handoffs; Session
+  A workspace's **Review results…** view groups those reports; Session
   details distinguishes hook entries **Configured** in Preferences from events **Observed by BMN**.
 - **Files.** Published files, attachments and pasted images are stored as immutable originals with
   a hash. The Files panel previews them and offers Open, Save As, Show in Folder and Deliver to

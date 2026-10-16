@@ -111,7 +111,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       writeFileSync(${JSON.stringify(ready)},JSON.stringify({ready:true}));
       setInterval(()=>{if(!existsSync(${JSON.stringify(command)}))return;const c=JSON.parse(readFileSync(${JSON.stringify(command)},'utf8'));unlinkSync(${JSON.stringify(command)});
         if(c.kind==='focus'){process.stdout.write(c.enabled?'\\x1b[?1004h':'\\x1b[?1004l');atomic(${JSON.stringify(join(root, 'response.json'))},JSON.stringify({key:c.key}));return;}
-        const response=c.kind==='handoff'?call(['handoff',${JSON.stringify(target.session.sessionId)},'--text','Please review this short synthetic handoff.','--key',c.key,'--json']):
+        const response=c.kind==='handoff'?(r=>({status:r.status,stderr:r.stderr}))(spawnSync(${JSON.stringify(process.execPath)},[${JSON.stringify(cli)},'handoff',${JSON.stringify(target.session.sessionId)},'--text','Please review this short synthetic handoff.','--key',c.key,'--json'],{encoding:'utf8'})):
           ['manual','notice','review'].includes(c.kind)?call(['ask',c.key,c.title??'Manual question','--kind',c.kind==='manual'?'question':c.kind,'--body',c.body??'Synthetic request body','--json']):
           c.kind==='restricted'?call(['hook','opencode'],JSON.stringify({hook_event_name:'question.asked',id:c.key,questions:c.questions})):
           call(['hook','codex'],JSON.stringify({hook_event_name:'PreToolUse',tool_name:'functions.request_user_input_async',tool_use_id:c.key,tool_input:{questions:c.questions}}));
@@ -382,37 +382,25 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await card('Revised review neighbor').waitFor() // review shortcut opens its card
     assert.ok(await page.getByRole('button',{name:'Close session requests',exact:true}).evaluate(el=>el===document.activeElement), 'Review shortcut retains card focus')
     await card('Revised review neighbor').getByRole('button', { name: 'Dismiss', exact: true }).click()
-    await emit({ kind: 'handoff', key: 'handoff' }); await openCard()
-    const handoff = card('Handoff to')
-    assert.ok((await handoff.innerText()).includes('Destination'))
-    assert.ok((await handoff.innerText()).includes(root))
-    await handoff.getByRole('button', { name: 'Open handoff', exact: true }).click()
-    await page.waitForSelector('.handoff-form textarea')
-    assert.equal(readFileSync(input, 'utf8'), '')
-    const draft = (await page.evaluate(() => window.aiTerminal.listDrafts())).find(d => d.sourceSessionId === sid && d.state === 'draft')
-    assert.ok(draft)
-    result.savedDraftId = draft.draftId
-    await page.getByRole('button', { name: 'Save handoff', exact: true }).click()
-    result.saveTransition = { expectedDraftId: draft.draftId, editorBeforeWait: await page.locator('.handoff-form').count() }
-    await page.waitForSelector('.handoff-form', { state: 'detached' })
-    await page.locator('#handoff-'+draft.draftId).waitFor()
-    const savedDraft = (await page.evaluate(() => window.aiTerminal.listDrafts())).find(d => d.draftId === draft.draftId)
-    assert.equal(savedDraft.state, 'draft')
-    assert.equal(savedDraft.text, draft.text)
+    await page.keyboard.press('Escape')
+    // Story 75.5: a handoff delivers itself, so it opens no request, card or editor; one to a session no agent's hook
+    // was heard from is refused to its sender with the reason, and nothing is typed anywhere.
+    await emit({ kind: 'handoff', key: 'handoff' })
+    const refused = JSON.parse(readFileSync(join(root, 'response.json'), 'utf8')).response
+    assert.notEqual(refused.status, 0)
+    assert.match(refused.stderr, /^bmn: INVALID_ARGUMENT: \S/)
+    assert.equal((await page.evaluate(() => window.aiTerminal.listAttention())).filter(r => r.kind === 'handoff').length, 0)
+    assert.equal(await page.locator('.handoff-form').count(), 0)
     assert.equal(readFileSync(sourceInput, 'utf8'), '')
     assert.equal(readFileSync(input, 'utf8'), '')
-    assert.equal(await page.locator('#handoff-'+draft.draftId).count(), 1)
-    assert.match(await page.locator('#handoff-'+draft.draftId+' .files-action-outcome').innerText(), /Saved\. Not sent\./)
-    await page.keyboard.press('Escape')
+    result.handoffRefused = refused.stderr.trim()
     await select(target.session.sessionId)
-    await emit({kind:'notice',key:'handoff-review-navigation',title:'Handoff review navigation'})
     await page.getByRole('button',{name:`Actions for ${workspace.name}`,exact:true}).click()
     await page.getByRole('menuitem',{name:'Review results…',exact:true}).click()
-    await page.getByRole('button',{name:'Review handoff',exact:true}).click()
-    await waitState('handoff-review-navigation','withdrawn')
-    await page.waitForSelector('.handoff-form textarea')
-    await page.getByRole('button',{name:'Save handoff',exact:true}).click()
-    await page.waitForSelector('.handoff-form',{state:'detached'})
+    await page.locator('dialog.workspace-results-dialog[open] .workspace-results-sessions').waitFor()
+    assert.equal(await page.getByRole('button',{name:'Review handoff',exact:true}).count(), 0)
+    assert.equal(await page.getByText('Handoffs awaiting you').count(), 0)
+    await page.keyboard.press('Escape')
     await emit({ kind: 'review', key: 'stopped-review', title: 'Survives restart' })
     writeFileSync(targetTrigger,'')
     await waitState('other-review','open')
@@ -464,7 +452,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     assert.equal((await restarted.evaluate(() => window.aiTerminal.listAttention())).find(r => r.requestKey === 'stopped-review').state, 'withdrawn')
     result.status = 'passed'
     result.checks = ['notice-only selection/notification/pointer', 'no acknowledgement on arrival/remount', 'snapshot exact text/reopen/lifetime',
-      'read-only multi-question', 'focus arrival/removal/revision/outside/Escape', 'review shortcut', 'handoff Files preserves draft/no input', 'stopped restart/archived actions']
+      'read-only multi-question', 'focus arrival/removal/revision/outside/Escape', 'review shortcut', 'handoff refused to its sender, no request/editor/input', 'stopped restart/archived actions']
     writeAtomic(join(evidence, 'result.json'), JSON.stringify(result, null, 2))
     console.log('PASS Epic59 pane requests', JSON.stringify(result.checks))
   } catch (error) {

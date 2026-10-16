@@ -15,13 +15,12 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   artifactBytesUsed,
-  claimHandoffDraft,
+  claimInputDraft,
   closeAttention,
   commitQuietDelivery,
   createDraft,
-  discardHandoffDraft,
+  discardDraft,
   expireAttention,
-  finishHandoffDraft,
   getAttention,
   getDraft,
   getReceipt,
@@ -39,16 +38,15 @@ import {
   markStaleAgentHandoffs,
   appendAttentionBody,
   openAttention,
-  prepareAgentHandoff,
   putReceipt,
   putSettingsSection,
   putRawSetting,
   switchHealthAlertsOff,
   putTelegramMessage,
+  queueAgentHandoff,
   quietDelivered,
   setArtifactState,
   updateDraft,
-  updateHandoffDraft,
   upsertProgress,
   usageNoticeExists,
   withdrawAgentHandoff
@@ -106,18 +104,28 @@ function progress(observedAt: string, state: ProgressState = 'claimed-done'): Om
   }
 }
 
-function agentHandoff(draftId: string, requestId: string, createdAt: string = now) {
-  return {
-    draftId,
-    requestId,
-    sourceSessionId: 's1',
-    sourceIncarnationId: 'incarnation-1',
-    destinationSessionId: 's2',
-    destinationName: 'Two',
-    text: 'A result for the other session',
-    artifactIds: [] as string[],
-    createdAt
-  }
+/** A handoff an agent prepared for the owner to paste, as stored before Story 75.5: a draft and its open request. */
+function legacyHandoff(draftId: string, requestId: string, createdAt: string = now): void {
+  database.prepare(
+    `INSERT INTO input_draft(draft_id, session_id, origin, origin_key, source_session_id, request_id, text, artifact_id,
+       artifact_ids_json, attempted_incarnation_id, state, detail, created_at, updated_at, prepared_by)
+     VALUES (?, 's2', 'handoff', NULL, 's1', ?, 'A result for the other session', NULL, '[]', NULL, 'draft', NULL, ?, ?, 'agent')`
+  ).run(draftId, requestId, createdAt, createdAt)
+  openAttention(database, {
+    sessionId: 's1', incarnationId: 'incarnation-1', requestKey: `handoff:${draftId}`, kind: 'handoff',
+    title: 'Asks to hand off to "Two"', body: 'A result for the other session',
+    expiresAt: new Date(Date.parse(createdAt) + 24 * 60 * 60 * 1000).toISOString()
+  }, requestId, createdAt)
+}
+
+/** A handoff queued since Story 75.5: its delivery record, stored file and waiting message, stored whole. */
+function queuedHandoff(handoffId: string, attachmentIds: string[] = [], at: string = now) {
+  return queueAgentHandoff(database, {
+    handoffId, messageId: `message-${handoffId}`, senderSessionId: 's1', receiverSessionId: 's2', senderRoot: '/work',
+    stamp: '[BMN handoff from session "One" (s1) in /work]', pointer: `Handoff ${handoffId}: read all of it`,
+    text: 'A result for the other session', file: { ...published(`stored-${handoffId}`), originalName: `handoff-${handoffId}.md` },
+    attachmentIds, receiverRefusal: null
+  }, at)
 }
 
 describe('companion store', () => {
@@ -503,167 +511,55 @@ describe('companion store', () => {
     expect(listDrafts(database)).toEqual([])
   })
 
-  it('persists handoff metadata, edits monotonically, and claims one paste attempt', () => {
-    insertArtifact(database, artifact('handoff-file', 10))
-    const created = createDraft(database, {
-      draftId: 'handoff-1', sessionId: 's2', origin: 'handoff', originKey: null,
-      sourceSessionId: 's1', requestId: null, text: 'Review this', artifactId: null,
-      artifactIds: ['handoff-file'], attemptedIncarnationId: null,
-      state: 'draft', detail: null
-    }, now).record
-    expect(created).toMatchObject({
-      sourceSessionId: 's1', sessionId: 's2', artifactIds: ['handoff-file'], state: 'draft'
-    })
-
-    const edited = updateHandoffDraft(database, created.draftId, {
-      sessionId: 's2', sourceSessionId: 's1', text: 'Review this now',
-      artifactIds: ['handoff-file'], expectedUpdatedAt: created.updatedAt
-    }, '2026-09-14T11:00:00.000Z')
-    expect(Date.parse(edited.updatedAt)).toBe(Date.parse(created.updatedAt) + 1)
-    expect(() => updateHandoffDraft(database, created.draftId, {
-      sessionId: 's2', sourceSessionId: 's1', text: 'Stale edit', artifactIds: [],
-      expectedUpdatedAt: created.updatedAt
-    }, now)).toThrow(expect.objectContaining({ code: ERROR_CODES.revisionConflict }))
-
-    const firstClaim = claimHandoffDraft(database, edited.draftId, edited.updatedAt, 'incarnation-2', now)
-    const duplicate = claimHandoffDraft(database, edited.draftId, edited.updatedAt, 'incarnation-2', now)
-    expect(firstClaim).toMatchObject({ claimed: true, record: { state: 'uncertain', detail: 'Pasting…' } })
-    expect(duplicate).toMatchObject({ claimed: false, record: { state: 'uncertain' } })
-    const accepted = finishHandoffDraft(database, edited.draftId, 'accepted', 'Pasted to terminal — not submitted', now)
-    expect(accepted).toMatchObject({
-      state: 'accepted', attemptedIncarnationId: 'incarnation-2',
-      detail: 'Pasted to terminal — not submitted'
-    })
-    expect(() => updateHandoffDraft(database, edited.draftId, {
-      sessionId: 's2', sourceSessionId: 's1', text: 'Too late', artifactIds: [],
-      expectedUpdatedAt: accepted.updatedAt
-    }, now)).toThrow(/Only an unsent handoff/)
+  it('keeps a handoff from before Story 75.5 stored and readable, out of the owner\'s drafts and never sent', () => {
+    legacyHandoff('legacy', 'legacy-request')
+    expect(getDraft(database, 'legacy')).toMatchObject({ origin: 'handoff', state: 'draft', text: 'A result for the other session' })
+    expect(listDrafts(database)).toEqual([])
+    expect(listAgentHandoffs(database, 's1', now)).toEqual([{ draftId: 'legacy', destinationSessionId: 's2', state: 'draft', updatedAt: now }])
+    expect(listAgentHandoffs(database, 's2', now)).toEqual([])
+    expect(() => claimInputDraft(database, 'legacy', now, 'incarnation-2', now)).toThrow('A handoff is never typed into a terminal')
+    expect(() => discardDraft(database, 'legacy', now)).toThrow('A handoff is kept as it is; it cannot be discarded here')
   })
 
-  it('never cuts the handoff preview through a secret, and keeps the draft whole (Astra review)', () => {
-    // A synthetic AWS key id; not a real credential.
-    const text = `${'a'.repeat(185)} AKIAABCDEFGHIJKLMNOP and more`
-    prepareAgentHandoff(database, { ...agentHandoff('secret-draft', 'secret-request'), text }, now)
-    expect(getAttention(database, 'secret-request')?.body).toBe(`${'a'.repeat(185)} `)
-    expect(getDraft(database, 'secret-draft')?.text).toBe(text)
-    // Astra recheck: a second key overlapping the first is not left split at the cut either.
-    const overlapping = `${'x'.repeat(149)} AIza${'_'.repeat(10)}AIza${'B'.repeat(35)} tail`
-    const later = new Date(Date.parse(now) + 60_000).toISOString()
-    prepareAgentHandoff(database, { ...agentHandoff('overlap-draft', 'overlap-request', later), text: overlapping }, later)
-    expect(getAttention(database, 'overlap-request')?.body).toBe(`${'x'.repeat(149)} `)
+  it('lets the agent withdraw its old open petition, and expiry discards an old pending draft', () => {
+    legacyHandoff('withdrawn', 'withdrawn-request')
+    expect(withdrawAgentHandoff(database, 's1', 'withdrawn', '2026-09-14T12:00:01.000Z'))
+      .toMatchObject({ state: 'withdrawn', resolution: 'withdrawn by agent', resolvedBy: 'cli' })
+    expect(getDraft(database, 'withdrawn')).toMatchObject({ state: 'discarded', detail: 'Withdrawn by the agent' })
+
+    legacyHandoff('expired', 'expired-request')
+    expect(expireAttention(database, '2026-09-15T12:00:00.000Z')).toBe(1)
+    expect(getDraft(database, 'expired')).toMatchObject({ state: 'discarded', detail: 'The handoff request expired' })
   })
 
-  it('creates an agent petition and exposes only its own metadata projection', () => {
-    const prepared = prepareAgentHandoff(database, agentHandoff('agent-draft', 'agent-request'), now)
-
-    expect(prepared).toEqual({ draftId: 'agent-draft', requestId: 'agent-request', state: 'draft' })
-    expect(getDraft(database, 'agent-draft')).toMatchObject({
-      draftId: 'agent-draft', sessionId: 's2', sourceSessionId: 's1', preparedBy: 'agent',
-      requestId: 'agent-request', text: 'A result for the other session', state: 'draft'
-    })
-    expect(getAttention(database, 'agent-request')).toMatchObject({
-      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'handoff:agent-draft',
-      kind: 'handoff', title: 'Asks to hand off to "Two"', body: 'A result for the other session',
-      state: 'open', openedBy: 'cli', expiresAt: '2026-09-15T12:00:00.000Z'
-    })
-    expect(listAgentHandoffs(database, 's1')).toEqual([{
-      draftId: 'agent-draft', destinationSessionId: 's2', state: 'draft',
-      updatedAt: now
-    }])
-    expect(listAgentHandoffs(database, 's2')).toEqual([])
-  })
-
-  it('rolls back a petition when the draft and attention cannot commit together', () => {
-    openAttention(database, {
-      sessionId: 's2', incarnationId: null, requestKey: 'occupied', kind: 'notice', title: 'Occupied'
-    }, 'request-clash', now)
-
-    expect(() => database.transaction(() => prepareAgentHandoff(
-      database, agentHandoff('rolled-back-draft', 'request-clash'), now
-    ))()).toThrow()
-    expect(() => getDraft(database, 'rolled-back-draft')).toThrow(expect.objectContaining({ code: ERROR_CODES.notFound }))
-    expect(listAgentHandoffs(database, 's1')).toEqual([])
-    expect(listAttention(database)).toHaveLength(1)
-  })
-
-  it('enforces the ten-second rate limit and three pending handoff cap', () => {
-    const at = (seconds: number) => new Date(Date.parse(now) + seconds * 1000).toISOString()
-    const prepare = (number: number, seconds: number) => prepareAgentHandoff(
-      database, agentHandoff(`agent-draft-${number}`, `agent-request-${number}`, at(seconds)), at(seconds)
-    )
-
-    prepare(1, 0)
-    expect(() => prepare(2, 1)).toThrow(/Wait 10 seconds/)
-    prepare(2, 10)
-    prepare(3, 20)
-    expect(() => prepare(4, 30)).toThrow(/three pending handoffs/)
-    expect(listAgentHandoffs(database, 's1')).toHaveLength(3)
-    expect(listAttention(database).filter((record) => record.kind === 'handoff' && record.state === 'open'))
-      .toHaveLength(3)
-  })
-
-  it('withdraws a draft before owner editing and keeps owner edits after withdrawal', () => {
-    const first = prepareAgentHandoff(database, agentHandoff('withdraw-before', 'withdraw-before-request'), now)
-    const firstRequest = withdrawAgentHandoff(database, 's1', first.draftId, '2026-09-14T12:00:01.000Z')
-    expect(firstRequest).toMatchObject({ state: 'withdrawn', resolution: 'withdrawn by agent', resolvedBy: 'cli' })
-    expect(getDraft(database, first.draftId)).toMatchObject({ state: 'discarded', detail: 'Withdrawn by the agent' })
-
-    const second = prepareAgentHandoff(
-      database, agentHandoff('withdraw-after', 'withdraw-after-request', '2026-09-14T12:00:10.000Z'),
-      '2026-09-14T12:00:10.000Z'
-    )
-    const edited = updateHandoffDraft(database, second.draftId, {
-      sessionId: 's2', sourceSessionId: 's1', text: 'Owner edit kept here', artifactIds: [],
-      expectedUpdatedAt: getDraft(database, second.draftId).updatedAt
-    }, '2026-09-14T12:00:11.000Z')
-    const secondRequest = withdrawAgentHandoff(database, 's1', second.draftId, '2026-09-14T12:00:12.000Z')
-    expect(secondRequest).toMatchObject({ state: 'withdrawn', resolution: 'withdrawn by agent', resolvedBy: 'cli' })
-    expect(secondRequest.body).toContain('The agent withdrew this; the owner\'s edits are kept')
-    expect(getDraft(database, second.draftId)).toMatchObject({
-      state: 'draft', text: 'Owner edit kept here',
-      detail: "The agent withdrew this; the owner's edits are kept"
-    })
-    expect(Date.parse(getDraft(database, second.draftId).updatedAt)).toBeGreaterThan(Date.parse(edited.updatedAt))
-  })
-
-  it('resolves delivery, owner discard, and expiry with the draft state', () => {
-    const delivered = prepareAgentHandoff(database, agentHandoff('delivered', 'delivered-request'), now)
-    const claimed = claimHandoffDraft(database, delivered.draftId, now, 'incarnation-2', '2026-09-14T12:00:01.000Z')
-    expect(claimed.claimed).toBe(true)
-    const accepted = finishHandoffDraft(
-      database, delivered.draftId, 'accepted', 'Pasted to terminal — not submitted', '2026-09-14T12:00:02.000Z'
-    )
-    expect(accepted).toMatchObject({ state: 'accepted', detail: 'Pasted to terminal — not submitted' })
-    expect(getAttention(database, delivered.requestId)).toMatchObject({
-      state: 'answered', resolution: 'pasted, not submitted', resolvedBy: 'owner'
-    })
-
-    const discarded = prepareAgentHandoff(
-      database, agentHandoff('discarded', 'discarded-request', '2026-09-14T12:00:10.000Z'),
-      '2026-09-14T12:00:10.000Z'
-    )
-    expect(discardHandoffDraft(database, discarded.draftId, '2026-09-14T12:00:11.000Z')).toMatchObject({
-      state: 'discarded'
-    })
-    expect(getAttention(database, discarded.requestId)).toMatchObject({
-      state: 'answered', resolution: 'discarded', resolvedBy: 'owner'
-    })
-
-    const expiredAt = '2026-09-14T12:00:20.000Z'
-    const expired = prepareAgentHandoff(database, agentHandoff('expired', 'expired-request', expiredAt), expiredAt)
-    expect(expireAttention(database, '2026-09-15T12:00:20.000Z')).toBe(1)
-    expect(getAttention(database, expired.requestId)).toMatchObject({ state: 'expired', resolvedBy: 'expiry' })
-    expect(getDraft(database, expired.draftId)).toMatchObject({
-      state: 'discarded', detail: 'The handoff request expired'
-    })
-  })
-
-  it('marks a pending source request stale once its incarnation changes', () => {
-    const prepared = prepareAgentHandoff(database, agentHandoff('stale', 'stale-request'), now)
+  it('marks an old pending petition stale once its source runs another process', () => {
+    legacyHandoff('stale', 'stale-request')
     expect(markStaleAgentHandoffs(database, { s1: 'incarnation-new' })).toBe(1)
-    expect(getAttention(database, prepared.requestId).body)
-      .toContain('prepared by an earlier process of this session')
+    expect(getAttention(database, 'stale-request').body).toContain('prepared by an earlier process of this session')
     expect(markStaleAgentHandoffs(database, { s1: 'incarnation-new' })).toBe(0)
+  })
+
+  it('stores a queued handoff whole: one delivery record holding its stored file and attachments, and one message (Story 75.5)', () => {
+    insertArtifact(database, published('attached'))
+    expect(database.transaction(() => queuedHandoff('h1', ['attached']))()).toEqual({ accepted: true, messageId: 'message-h1', state: 'waiting' })
+    expect(getDraft(database, 'h1')).toMatchObject({
+      origin: 'handoff', sessionId: 's2', sourceSessionId: 's1', preparedBy: 'agent', requestId: 'message-h1',
+      artifactId: 'stored-h1', artifactIds: ['attached'], state: 'submitted', text: 'A result for the other session'
+    })
+    expect(listAgentHandoffs(database, 's1', now)).toEqual([{ draftId: 'h1', destinationSessionId: 's2', state: 'queued', updatedAt: now }])
+    expect(listDrafts(database)).toEqual([])
+    expect(listAttention(database)).toEqual([])
+    expect(() => withdrawAgentHandoff(database, 's1', 'h1', now)).toThrow(/delivers itself and cannot be withdrawn/)
+    expect(() => discardDraft(database, 'h1', now)).toThrow(/kept as it is/)
+    expect(() => claimInputDraft(database, 'h1', now, 'incarnation-2', now)).toThrow('A handoff is never typed into a terminal')
+  })
+
+  it('leaves no record, stored file or message when an attached file is not this session\'s ready output', () => {
+    insertArtifact(database, { ...published('other'), sessionId: 's2' })
+    expect(() => database.transaction(() => queuedHandoff('h2', ['other']))()).toThrow('Every handoff file must be a ready file this session published')
+    expect(() => getDraft(database, 'h2')).toThrow(expect.objectContaining({ code: ERROR_CODES.notFound }))
+    expect(listArtifacts(database, 's1').map((row) => row.artifactId)).toEqual([])
+    expect((database.prepare('SELECT COUNT(*) AS count FROM session_message').get() as { count: number }).count).toBe(0)
   })
 
   it('maps Telegram messages to sessions', () => {

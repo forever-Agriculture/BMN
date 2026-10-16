@@ -269,6 +269,35 @@ describe('archive retention', () => {
     }
   )
 
+  it('keeps a queued handoff\'s stored file and attachments while its record stands, through either side\'s purge (Story 75.5)', () => {
+    retention(30)
+    session('sender', DEFAULT_WORKSPACE_ID, daysAgo(31))
+    session('receiver', DEFAULT_WORKSPACE_ID, null)
+    artifact('stored', 'sender')
+    artifact('attached', 'sender')
+    database.prepare(
+      `INSERT INTO session_message(message_id, workspace_id, sender_session_id, receiver_session_id, sender_root, stamp, text,
+         sent_at, expires_at, state) VALUES ('m1', ?, 'sender', 'receiver', '/work', '[stamp]', 'pointer', ?, ?, 'printed')`
+    ).run(DEFAULT_WORKSPACE_ID, now, now)
+    database.prepare(
+      `INSERT INTO input_draft(draft_id, session_id, origin, origin_key, source_session_id, request_id, text, artifact_id,
+         artifact_ids_json, state, created_at, updated_at, prepared_by)
+       VALUES ('queued', 'receiver', 'handoff', 'handoff-message:m1', 'sender', 'm1', 'Synthetic handoff', 'stored', '["attached"]',
+         'submitted', ?, ?, 'agent')`
+    ).run(now, now)
+
+    // The sender goes: its message goes with it, and the record keeps both files, unlinked.
+    expect(purgeExpiredArchives(database, now)).toEqual({ sessionIds: ['sender'], workspaceIds: [], originals: [] })
+    expect(artifactSessions()).toEqual([{ artifact_id: 'attached', session_id: null }, { artifact_id: 'stored', session_id: null }])
+    expect(database.prepare('SELECT COUNT(*) AS n FROM session_message').get()).toEqual({ n: 0 })
+    expect(database.prepare("SELECT source_session_id FROM input_draft WHERE draft_id = 'queued'").get()).toEqual({ source_session_id: null })
+
+    // The receiver goes later: the record goes, and the files it alone kept go with it.
+    database.prepare("UPDATE session SET archived_at = ? WHERE session_id = 'receiver'").run(daysAgo(31))
+    expect(purgeExpiredArchives(database, now).originals.map((original) => original.artifactId)).toEqual(['attached', 'stored'])
+    expect(artifactSessions()).toEqual([])
+  })
+
   it('keeps a file named by two kept handoffs until the last of their sessions is deleted', () => {
     retention(30)
     session('source', DEFAULT_WORKSPACE_ID, daysAgo(31))

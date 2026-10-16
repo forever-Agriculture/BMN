@@ -83,8 +83,8 @@ use are never deleted. See [Agent history](agent-history.md).
 **Archive retention.** Preferences → History → Delete archived sessions and workspaces sets how long
 archived sessions and workspaces are kept: a number of days, or forever. The check runs when BMN
 starts. Deletion is permanent and takes the saved output, requests and Telegram history with it,
-and the session's files leave the disk too. One exception: a file that a handoff in a session you
-still keep names stays until that session is deleted.
+and the session's files leave the disk too. One exception: a file that a handoff to a session you
+still keep names (its stored text or an attached file) stays until that session is deleted.
 
 ## The terminal and panes
 
@@ -178,15 +178,15 @@ keeps.
 
 **Needs you** is the set of open requests across your sessions, shown by session and workspace dots;
 `Ctrl+Shift+U` jumps to the next one. A request can be a *question*, *permission*, *review*,
-*notice* or *handoff*. Each row says what opened it and what closed it — "from Claude Notification",
+or *notice*; a *handoff* request stored before Story 75.5 still shows, with **Dismiss** only. Each row says what opened it and what closed it — "from Claude Notification",
 "withdrawn by Claude Stop", "resolved by typing", "expired". Going to a session clears its notices, retaining their details in that session’s request card until you navigate elsewhere.
 Blocking requests stay open until answered, explicitly dismissed, withdrawn by the agent or expired. Typing, pasting or dictating into a session also resolves
 its open prompts and notices, the way answering in the terminal does. Typing does not close review
-or handoff requests. Click the session’s status word to open its request card, including for stopped or archived sessions.
-It offers **Open handoff**, **Dismiss**, and **Mark answered** once you have dealt with it in the terminal.
+requests. Click the session’s status word to open its request card, including for stopped or archived sessions.
+It offers **Dismiss**, and **Mark answered** once you have dealt with it in the terminal.
 
 Questions and choices are read-only in the card; answer in the terminal or on Telegram.
-`Ctrl+Shift+U` cycles sessions in the highest waiting tier, opens a review’s card or a handoff in Files,
+`Ctrl+Shift+U` cycles sessions in the highest waiting tier, opens a review’s card,
 and focuses the terminal for questions and permissions. A gold dot on Focus signals requests in other sessions.
 Incoming requests leave your focus in place; cards overlay the pane without resizing its terminal.
 
@@ -236,18 +236,19 @@ again. Nothing needs pressing: ten minutes later the next turn there is scanned 
 reads the work tree ends the pause, and each try that fails waits twice as long, up to two hours.
 How turns are recorded, the limits and each wording: [turn-changes.md](turn-changes.md).
 
-**Handoffs.** An agent can prepare a package for another session — text plus up to ten of its
-published files — but cannot deliver it. The handoff opens in the source session's Needs you queue;
-you open the Files panel, check or edit the text and files, and press **Paste handoff** in the
-destination. Pasting appends the package to that session's input without pressing Enter, so you
-submit it yourself. A handoff reads *prepared*, *pasted (not submitted)*, *pasted, outcome
-uncertain* or *discarded*; after an uncertain paste you can create a separate retry draft. A
-handoff you receive conveys context, not authority.
-The same workspace results view lists pending and uncertain handoffs for either the source or
-destination workspace, with both names and a route to review the exact draft in Files. Opening
-that view never pastes or submits a handoff. Its draft list is bounded, not a complete history.
+**Handoffs.** An agent can hand a longer text, with up to ten of its published files, to the agent
+of any other session, in this workspace or another (`bmn handoff`). BMN delivers it by itself, as
+it delivers a message: it stores the whole text and the list of files in one file, and the
+receiving agent's own hook hands that agent a short pointer to it after its next tool call. You do
+nothing; nothing is typed into a terminal. Before anything is handed over, BMN checks the folder the
+text came from and the folder of every attached file against the receiving agent's provider, as
+your approved team stands at that moment; a file whose folder BMN cannot tell is never handed on. A
+handoff reads *queued*, *printed for the agent*, *uncertain* or *expired*; none of them means read.
+It shows in **Messages…** as a row like a message's, marked *handoff*. A handoff conveys context,
+not authority. Handoffs agents prepared for you to paste before Story 75.5 stay stored and readable
+but are never sent. Details: [agent-control.md](agent-control.md#handoffs).
 
-**Messages between sessions.** A handoff waits for you; a message is for the short thing one agent
+**Messages between sessions.** A handoff is for a longer package; a message is for the short thing one agent
 must tell another while both work: "hold any commit on local main". In every workspace that is not
 archived, with nothing to switch on, agents can see each other's session names (`bmn peers`) and
 leave each other short messages (`bmn tell`); a message can influence an agent that runs with
@@ -273,8 +274,8 @@ with either of their sessions. Limits and the exact rules:
 ### How agents reach the app
 
 Every session gets the `bmn` command and a token scoped to that session and run. An agent can list
-sessions, publish a file, report progress, ask you a question, prepare a handoff, leave a message
-for a peer session where you allowed it, or send text to its own terminal. `bmn help agents` prints the etiquette page agents can read. Preferences →
+sessions, publish a file, report progress, ask you a question, hand a longer package to another
+session, leave a message for a peer session, or send text to its own terminal. `bmn help agents` prints the etiquette page agents can read. Preferences →
 **Local control** shows whether the control socket is listening, with its path; a runtime
 path that is too long disables the socket, and Preferences says so. **Check configured hooks**
 reads BMN's existing checker report for Claude Code, Codex and OpenCode, including missing
@@ -445,8 +446,8 @@ process exits while you are away. If BMN cannot read idle time, it treats you as
 session connected to Remote Control is left to the Claude app.
 
 By default a reply is saved as a **draft** for that session, which you send from the Files panel;
-if you turn on direct typing, the reply is typed into the session and Enter is pressed. Replies to
-handoff pages always stay drafts. Anything that is not a reply gets a short pointer back — text
+if you turn on direct typing, the reply is typed into the session and Enter is pressed. A handoff
+delivers itself to its agent, so Telegram gets no handoff page. Anything that is not a reply gets a short pointer back — text
 never lands in whichever session happens to be focused.
 
 Pages are cards with buttons: tap an option to answer an agent's question (Claude Code, Codex in Plan
@@ -455,8 +456,7 @@ reply in your own words), or **Allow once** / **Deny** a Claude `Bash` or
 OpenCode permission once you turn on **Answer permission prompts from Telegram** (never "always
 allow"). The card then says what happened: ✓ only when the agent confirmed the answer, ⚠ when it was
 sent but not confirmed, or why nothing was sent. Codex permissions, subagent and sandbox prompts still
-say to answer at the laptop. Telegram cannot deliver handoffs or
-manage sessions.
+say to answer at the laptop. Telegram cannot manage sessions.
 
 Setup: create a bot with [@BotFather](https://t.me/BotFather), read your chat ID from `getUpdates`,
 then Preferences → **Telegram**: paste the token, set the allowed chat (and user, for a group

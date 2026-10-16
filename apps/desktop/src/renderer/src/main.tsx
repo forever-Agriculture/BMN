@@ -51,7 +51,6 @@ import { ProgressEvidenceDialog } from './progress-evidence-dialog'
 import { WorkspaceResultsDialog } from './workspace-results'
 import { SessionMessagesDialog } from './session-messages-dialog'
 import { DevAutoRunsDialog } from './dev-auto-runs'
-import { prepareWorkspaceHandoffReview, sameHandoffDraft } from './workspace-handoff-review'
 import { HookObservationView } from './hook-observation-view'
 import { PlanUseDialog, PlanUseView } from './plan-use-view'
 import { SessionPortsSection, portDetail, portsFor } from './session-ports'
@@ -113,7 +112,6 @@ import {
   preferencesGearCue,
   progressPresentation,
   requestsAnsweredByTyping,
-  handoffDraftForAttention,
   sessionAttention,
   sessionProcessLive,
   sessionStatus,
@@ -216,9 +214,6 @@ function App(): React.JSX.Element {
   const liveRef = useRef(new Map<string, LiveStartup>())
   const sessionsRef = useRef<SessionRecord[]>([])
   const workspacesRef = useRef<WorkspaceRecord[]>([])
-  const draftsRef = useRef<InputDraftRecord[]>([])
-  /** Mutations that can supersede a pending results-to-Files review in this window. */
-  const handoffReviewEpoch = useRef(0)
   const armedRef = useRef(false)
   /** The resume-after-stop offer is read once per window, not on every renderer recovery. */
   const interruptedOfferChecked = useRef(false)
@@ -261,8 +256,6 @@ function App(): React.JSX.Element {
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
   const [panel, setPanel] = useState<SidePanel>(null)
   const sessionNameInput = useRef<HTMLInputElement>(null)
-  const [requestedHandoffDraftId, setRequestedHandoffDraftId] = useState<string | null>(null)
-  const [requestedHandoffReviewDraft, setRequestedHandoffReviewDraft] = useState<InputDraftRecord | null>(null)
   const [focusMode, setFocusMode] = useState(false)
   const [menu, setMenu] = useState<MenuAnchor | null>(null)
   const [dialog, setDialog] = useState<ShellDialog | null>(null)
@@ -336,15 +329,10 @@ function App(): React.JSX.Element {
   liveRef.current = new Map(Object.entries(live))
   sessionsRef.current = sessions
   workspacesRef.current = workspaces
-  draftsRef.current = drafts
   activityRef.current = activity
   const activeWorkspaceId = tree.selectedWorkspaceId
   const activeWorkspaceRef = useRef(activeWorkspaceId)
   activeWorkspaceRef.current = activeWorkspaceId
-  const workspaceSelection = useRef({ id: activeWorkspaceId, generation: 0 })
-  if (workspaceSelection.current.id !== activeWorkspaceId) {
-    workspaceSelection.current = { id: activeWorkspaceId, generation: workspaceSelection.current.generation + 1 }
-  }
   const activeWorkspace = workspaces.find((item) => item.workspaceId === activeWorkspaceId)
   useEffect(() => {
     if (tree.showArchived || !activeWorkspace || activeWorkspace.archivedAt === null) return
@@ -658,7 +646,6 @@ function App(): React.JSX.Element {
       await controller.capture()
     })
     const stopAppEvent = window.aiTerminal.onAppEvent((message) => {
-      if (message.topic === 'drafts') handoffReviewEpoch.current += 1
       void refresh[message.topic](message.sessionId).catch(fail('Companion data refresh failed'))
     })
     const stopOpenSession = window.aiTerminal.onOpenSession((sessionId) => openSessionRef.current(sessionId))
@@ -898,7 +885,6 @@ function App(): React.JSX.Element {
     workspace: WorkspaceRecord,
     change: Omit<Parameters<Window['aiTerminal']['updateWorkspace']>[0], 'workspaceId' | 'expectedRevision'>
   ): Promise<void> => {
-    handoffReviewEpoch.current += 1
     const updated = await window.aiTerminal.updateWorkspace({
       workspaceId: workspace.workspaceId,
       expectedRevision: workspace.revision,
@@ -935,7 +921,6 @@ function App(): React.JSX.Element {
   }
 
   const moveSession = async (records: readonly SessionRecord[], index: number, direction: -1 | 1): Promise<void> => {
-    handoffReviewEpoch.current += 1
     const changes = adjacentPositionUpdates(records, index, direction)
     const updated = await Promise.all(changes.map(({ record, position }) =>
       window.aiTerminal.updateSession({ sessionId: record.sessionId, expectedRevision: record.revision, position })
@@ -946,7 +931,6 @@ function App(): React.JSX.Element {
 
   /** Archive hides a stopped session and closes its pane; every record it owns is kept for Restore. */
   const archiveSession = async (record: SessionRecord, archived: boolean): Promise<void> => {
-    handoffReviewEpoch.current += 1
     const updated = await window.aiTerminal.updateSession({ sessionId: record.sessionId, expectedRevision: record.revision, archived })
     setSessions((current) => current.map((item) => item.sessionId === updated.sessionId ? updated : item))
     if (archived) {
@@ -1389,21 +1373,8 @@ function App(): React.JSX.Element {
   }
 
   const recordAttentionOpened = (request: AttentionRecord): void => {
-    if (request.kind === 'handoff') {
-      const draft = handoffDraftForAttention(request, drafts)
-      const draftId = draft?.draftId ?? (request.requestKey.startsWith('handoff:')
-        ? request.requestKey.slice('handoff:'.length) : '')
-      if (draftId) {
-        setRequestedHandoffDraftId(draftId)
-        setPanel('files')
-        if (!draft) void refresh.drafts().catch(fail('Draft refresh failed'))
-      } else {
-        brief('This handoff is no longer available. Refreshing drafts.')
-        void refresh.drafts().catch(fail('Draft refresh failed'))
-      }
-      return
-    }
-    if (request.kind === 'review') {
+    // A handoff request stored before Story 75.5 opens its card, where Dismiss is all it offers.
+    if (request.kind === 'review' || request.kind === 'handoff') {
       requestAnimationFrame(() => {
         const anchor = document.querySelector<HTMLElement>(`[data-session-requests="${request.sessionId}"]`)
         setRequestCard({ sessionId: request.sessionId, anchor })
@@ -2197,14 +2168,8 @@ function App(): React.JSX.Element {
             requests={attention.filter(request => request.sessionId === requestCard.sessionId)}
             cleared={snapshotsFor(requestCard.sessionId)} phone={telegramStatus?.quietHours}
             place={place} now={now} anchor={requestCard.anchor}
-            onOpenHandoff={request => { recordAttentionOpened(request); closeRequestCard(false) }}
             onAcknowledge={request => {
               void dismissAttentionReminder(window.aiTerminal, request, 'Dismissed in BMN', refresh.attention).catch(fail('Request update failed'))
-            }}
-            handoffDestination={request => {
-              const draft = handoffDraftForAttention(request, drafts)
-              const destination = sessions.find(session => session.sessionId === draft?.sessionId)
-              return destination ? { ...place(destination.sessionId), cwd: destination.cwd } : null
             }}
             onMarkAnswered={request => {
               if (answering.current.has(request.requestId)) return
@@ -2250,20 +2215,8 @@ function App(): React.JSX.Element {
               sessionIncarnationId={selectedSessionId ? live[selectedSessionId]?.incarnationId ?? null : null}
               artifacts={artifacts}
               drafts={drafts}
-              attention={attention}
-              requestedHandoffDraftId={requestedHandoffDraftId}
-              requestedHandoffReviewDraft={requestedHandoffReviewDraft}
-              onHandoffOpened={() => {
-                setRequestedHandoffDraftId(null)
-                setRequestedHandoffReviewDraft(null)
-              }}
               sessions={sessions}
               workspaces={workspaces}
-              onOpenSession={(sessionId, draftId) => {
-                const opened = openSession(sessionId)
-                if (opened && draftId) setRequestedHandoffDraftId(draftId)
-                return opened
-              }}
               onRefreshDrafts={refresh.drafts}
               onClose={() => {
                 setPanel(null)
@@ -2389,7 +2342,6 @@ function App(): React.JSX.Element {
                     if (editingSessionId) {
                       const current = sessions.find((session) => session.sessionId === editingSessionId)
                       if (!current) throw new Error('The session being edited no longer exists')
-                      handoffReviewEpoch.current += 1
                       const updated = await window.aiTerminal.updateSession(sessionUpdateParams(current, sessionForm))
                       setSessions((records) => records.map((record) =>
                         record.sessionId === updated.sessionId ? updated : record
@@ -2705,37 +2657,6 @@ function App(): React.JSX.Element {
                 : [...current, session])
               openProgressDetail(session, opened, report.incarnationId)
             }
-          }}
-          onReviewHandoff={async (draft, signal) => {
-            const workspaceId = dialog.workspace.workspaceId
-            const openedFromWorkspaceId = dialog.openedFromWorkspaceId
-            const selectionGeneration = workspaceSelection.current.generation
-            const reviewEpoch = handoffReviewEpoch.current
-            const prepared = await prepareWorkspaceHandoffReview(draft, workspaceId, window.aiTerminal, () =>
-              activeWorkspaceRef.current === openedFromWorkspaceId &&
-              workspaceSelection.current.generation === selectionGeneration &&
-              handoffReviewEpoch.current === reviewEpoch &&
-              dialogRef.current === dialog, signal)
-            const { snapshot, route } = prepared
-            const currentDraft = draftsRef.current.find((item) => item.draftId === prepared.draft.draftId)
-            const currentSource = sessionsRef.current.find((item) => item.sessionId === snapshot.source.sessionId)
-            const currentDestination = sessionsRef.current.find((item) => item.sessionId === snapshot.destination.sessionId)
-            const currentSourceWorkspace = workspacesRef.current.find((item) => item.workspaceId === snapshot.sourceWorkspace.workspaceId)
-            const currentDestinationWorkspace = workspacesRef.current.find((item) => item.workspaceId === snapshot.destinationWorkspace.workspaceId)
-            if (!currentDraft || !sameHandoffDraft(currentDraft, prepared.draft) ||
-              currentSource?.revision !== snapshot.source.revision ||
-              currentDestination?.revision !== snapshot.destination.revision ||
-              currentSourceWorkspace?.revision !== snapshot.sourceWorkspace.revision ||
-              currentDestinationWorkspace?.revision !== snapshot.destinationWorkspace.revision ||
-              currentDestination?.archivedAt !== null || currentDestinationWorkspace?.archivedAt !== null ||
-              (prepared.draft.state === 'draft' &&
-                (currentSource?.archivedAt !== null || currentSourceWorkspace?.archivedAt !== null))) {
-              throw new Error('The handoff or destination changed. Refresh results before review.')
-            }
-            applyTreeSessionAction(selectTreeSession(sessionsRef.current, route.sessionId))
-            setRequestedHandoffReviewDraft(prepared.draft)
-            setPanel('files')
-            setDialog(null)
           }}
         />
       ) : null}

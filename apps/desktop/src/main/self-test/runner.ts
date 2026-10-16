@@ -51,8 +51,6 @@ import {
   type BoundConversationBinding,
   ERROR_CODES,
   type ExplicitConversationBinding,
-  HANDOFF_OUTLINE,
-  type InputDraftRecord,
   type InterruptedSessionCohort,
   isTerminalOutputMessage,
   type LayoutGetResult,
@@ -834,11 +832,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       artifactId: publishedEvidence.first
     }
 
-    const handoffArtifact = await client.request<ArtifactRecord>(METHOD_REGISTRY.artifactImportBytes, {
-      sessionId: secondSession.sessionId,
-      name: 'handoff-self-test.txt',
-      bytes: new TextEncoder().encode('synthetic handoff original\n')
-    })
     // Story 32.1: what holds an agent comes first, whatever order the requests arrived in.
     const expectedResponseTitles = ['Allow the self-test action', 'Choose the self-test answer', 'Review the self-test result']
     writeFixtureCommand(session, 'bmn ask self-race "A stale notice" --kind notice')
@@ -1269,20 +1262,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         `the renderer did not preserve attention triage semantics: ${JSON.stringify(preloadProbe.attentionTriage)}`
       )
     }
-    if (
-      typeof preloadProbe.handoffFlow.draftId !== 'string' ||
-      preloadProbe.handoffFlow.targetSessionId !== session.sessionId ||
-      preloadProbe.handoffFlow.editedText !== HANDOFF_OUTLINE.replace('Goal:', 'Goal: Edited handoff line one\nQuestion line two') ||
-      Object.values(preloadProbe.handoffFlow.outline ?? {}).length !== 8 ||
-      Object.values(preloadProbe.handoffFlow.outline ?? {}).some((value) => value !== true) ||
-      preloadProbe.handoffFlow.fileName !== handoffArtifact.originalName ||
-      preloadProbe.handoffFlow.acceptedState !== 'accepted' ||
-      !preloadProbe.handoffFlow.existingInputPreserved ||
-      preloadProbe.handoffFlow.payloadOccurrences !== 1 ||
-      !preloadProbe.handoffFlow.attentionResponsesPreserved ||
-      !preloadProbe.handoffFlow.discardedDraftHidden
-    ) {
-      throw new Error(`the renderer did not complete the explicit handoff flow: ${JSON.stringify(preloadProbe.handoffFlow)}`)
+    if (preloadProbe.filesWithoutHandoffs !== true) {
+      throw new Error('the Files panel still offers a handoff section or form (Story 75.5)')
     }
     const fileReferenceFlow = preloadProbe.fileReferenceFlow
     const referencedFile = realpathSync(join(fileReferenceRoot, 'src', 'parser.ts'))
@@ -1796,19 +1777,40 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       "writeFileSync(file('petition-result.txt'), 'Published by the petition source\\n')",
       "const published = JSON.parse(cli(['publish', file('petition-result.txt'), '--key', 'electron-petition-file', '--json']))",
       "writeFileSync(file('published.json'), JSON.stringify(published))",
-      `writeFileSync(file('prepared.json'), cli(['handoff', ${JSON.stringify(petitionDestination.session.sessionId)}, '--text', ${JSON.stringify(petitionText)}, '--file-id', published.artifactId, '--key', 'electron-petition', '--json']))`,
-      "await wait('status-gate')",
+      // Story 75.5: a handoff delivers itself, so one this session cannot hand over is refused to it at once, with the
+      // reason. Here the self-test's app answers for no folder's repository; the unit tests cover each other reason.
+      `const refused = spawnSync('bmn', ['handoff', ${JSON.stringify(petitionDestination.session.sessionId)}, '--text', ${JSON.stringify(petitionText)}, '--file-id', published.artifactId, '--key', 'electron-petition'], { encoding: 'utf8' })`,
       "writeFileSync(file('status.txt'), cli(['handoff', 'status']))",
-      "writeFileSync(file('snapshot.json'), cli(['snapshot', '--json']))"
+      "writeFileSync(file('snapshot.json'), cli(['snapshot', '--json']))",
+      "writeFileSync(file('refused.json'), JSON.stringify({ status: refused.status, stdout: refused.stdout, stderr: refused.stderr }))"
     ])
     const petitionSource = await host.createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
       name: 'Petition source', cwd: isolatedCwd, executable: petitionExecutable,
       argv: [], cols: 80, rows: 24 }, true)
-    await untilFileExists(join(petitionDirectory, 'prepared.json'), 'prepared an agent handoff')
+    await untilFileExists(join(petitionDirectory, 'refused.json'), 'refused an agent handoff to a plain program')
     const petitionPublished = JSON.parse(readFileSync(join(petitionDirectory, 'published.json'), 'utf8')) as { artifactId: string }
-    const petitionRequest = await acceptanceWait(async () =>
-      (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
-        .find(row => row.sessionId === petitionSource.session.sessionId && row.kind === 'handoff' && row.state === 'open'), 'source handoff request')
+    const petitionRefusal = JSON.parse(readFileSync(join(petitionDirectory, 'refused.json'), 'utf8')) as {
+      status: number | null; stdout: string; stderr: string
+    }
+    const petitionSnapshot = JSON.parse(readFileSync(join(petitionDirectory, 'snapshot.json'), 'utf8'))
+    const petitionFiles = await client.request<ArtifactRecord[]>(METHOD_REGISTRY.artifactList, { sessionId: petitionSource.session.sessionId })
+    const petitionMessages = await client.request<{ messages: Array<{ senderSessionId: string }> }>(METHOD_REGISTRY.messagesList, {
+      workspaceId: DEFAULT_WORKSPACE_ID
+    })
+    const agentHandoff = {
+      refusedWithReason: petitionRefusal.status !== 0 && /^bmn: INVALID_ARGUMENT: \S/.test(petitionRefusal.stderr),
+      noRequest: !(await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+        .some(row => row.sessionId === petitionSource.session.sessionId && row.kind === 'handoff'),
+      noStoredFile: petitionFiles.length === 1 && petitionFiles[0]?.artifactId === petitionPublished.artifactId,
+      noMessage: !petitionMessages.messages.some(row => row.senderSessionId === petitionSource.session.sessionId),
+      nothingTyped: !terminalModeProgramInput(destinationHarness.input).includes(petitionText),
+      status: readFileSync(join(petitionDirectory, 'status.txt'), 'utf8').trim(),
+      bounded: Array.isArray(petitionSnapshot.handoffs) && petitionSnapshot.handoffs.length === 0
+    }
+    if (!agentHandoff.refusedWithReason || !agentHandoff.noRequest || !agentHandoff.noStoredFile || !agentHandoff.noMessage ||
+      !agentHandoff.nothingTyped || agentHandoff.status !== 'No handoffs from this session' || !agentHandoff.bounded) {
+      throw new Error(`a refused handoff left something behind: ${JSON.stringify({ ...agentHandoff, petitionRefusal })}`)
+    }
     await host.recoverApplicationRenderer(host.applicationWindow)
     const beforeResultsInput = terminalModeProgramInput(destinationHarness.input)
     const workspaceResultsUi = await host.applicationWindow.webContents.executeJavaScript(`(async () => {
@@ -1834,8 +1836,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       }
       if (!settled) throw new Error('recovered terminal layout did not settle before results read');
       const beforeRefits = refits();
-      const requestBefore = (await window.aiTerminal.listAttention())
-        .find(row => row.requestId === ${JSON.stringify(petitionRequest.requestId)});
       const menuButton = await wait(() => [...document.querySelectorAll('.workspace-group')]
         .find(group => group.textContent.includes('Petition source'))?.querySelector('.row-menu-button'), 'workspace menu');
       const openResults = async () => {
@@ -1844,7 +1844,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
           .find(row => row.textContent.trim() === 'Review results…'), 'results action')).click();
         return wait(() => {
           const dialog = document.querySelector('dialog.workspace-results-dialog[open]');
-          return dialog?.querySelector('.workspace-results-handoffs') ? dialog : null;
+          return dialog?.querySelector('.workspace-results-sessions') ? dialog : null;
         }, 'results dialog');
       };
       let dialog = await openResults();
@@ -1854,10 +1854,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const reportShown = !!report && report.textContent.includes('Reported verified') &&
         report.textContent.includes('evidence');
       const evidenceShown = !!report && report.textContent.includes('checks.log');
-      const handoff = [...dialog.querySelectorAll('.workspace-results-handoffs > li')]
-        .find(row => row.textContent.includes('Petition source') && row.textContent.includes('Petition destination'));
-      const pendingHandoffShown = !!handoff && handoff.textContent.includes('Saved draft') &&
-        handoff.textContent.includes('Prepared by the agent');
+      // Story 75.5: Review results ends after Agent reports.
+      const noHandoffSection = !dialog.textContent.includes('Handoffs awaiting you') &&
+        ![...dialog.querySelectorAll('button')].some(button => button.textContent.includes('handoff'));
       report?.querySelector('button')?.click();
       const progress = await wait(() => document.querySelector('dialog.progress-evidence-dialog[open]'), 'progress details');
       const progressMatches = progress.textContent.includes('Self-test checks passed') &&
@@ -1869,86 +1868,14 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         throw new Error('results or progress detail refit after recovery: ' +
           JSON.stringify({ beforeRefits, afterOpen: refitsAfterOpen, refitsAfterRead }));
       }
-      dialog = await openResults();
-      const review = [...dialog.querySelectorAll('.workspace-results-handoffs > li')]
-        .find(row => row.textContent.includes('Petition source') && row.textContent.includes('Petition destination'));
-      review?.querySelector('button')?.click();
-      const form = await wait(() => document.querySelector('.handoff-form'), 'exact handoff review');
-      const exactDraftReviewed = form.querySelector('textarea')?.value === ${JSON.stringify(petitionText)} &&
-        form.querySelector('select')?.value === ${JSON.stringify(petitionDestination.session.sessionId)};
-      [...form.querySelectorAll('button')].find(b => b.textContent === 'Cancel')?.click();
-      document.querySelector('.files-close')?.click();
-      const requestAfter = (await window.aiTerminal.listAttention())
-        .find(row => row.requestId === ${JSON.stringify(petitionRequest.requestId)});
-      return { reportShown: reportShown && progressMatches, evidenceShown, pendingHandoffShown,
-        exactDraftReviewed, reminderCleared: requestBefore?.state === 'open' &&
-          requestAfter?.state === 'withdrawn' && requestAfter.resolvedBy === 'owner' &&
-          requestAfter.resolution === 'Opened in BMN; reminder cleared' };
-    })()`) as {
-      reportShown: boolean; evidenceShown: boolean; pendingHandoffShown: boolean;
-      exactDraftReviewed: boolean; reminderCleared: boolean
-    }
+      return { reportShown: reportShown && progressMatches, evidenceShown, noHandoffSection };
+    })()`) as { reportShown: boolean; evidenceShown: boolean; noHandoffSection: boolean }
     const workspaceResultsAcceptance = {
       ...workspaceResultsUi,
       ptyInputUnchanged: terminalModeProgramInput(destinationHarness.input) === beforeResultsInput
     }
     if (Object.values(workspaceResultsAcceptance).some((value) => value !== true)) {
-      throw new Error(`workspace results did not read and review safely: ${JSON.stringify(workspaceResultsAcceptance)}`)
-    }
-    const beforePetitionPaste = terminalModeProgramInput(destinationHarness.input)
-    const petitionEditor = await host.applicationWindow.webContents.executeJavaScript(`(async () => {
-      const wait = async (read) => { const end = Date.now() + 10000; while (Date.now() < end) {
-        const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
-      } throw new Error('petition UI timed out'); };
-      const files = await wait(() => document.querySelector('.session-terminal.selected button[title="Files"]') ||
-        [...document.querySelectorAll('.session-terminal.selected button')].find(b => b.textContent === 'Files'));
-      files.click();
-      const saved = await wait(() => [...document.querySelectorAll('.handoff-card')].find(r => r.textContent.includes(${JSON.stringify(petitionText)})));
-      [...saved.querySelectorAll('button')].find(b => b.textContent === 'Edit').click();
-      const form = await wait(() => document.querySelector('.handoff-form'));
-      const result = { destination: form.querySelector('select').value, text: form.querySelector('textarea').value, byline: form.textContent,
-        fileListed: form.textContent.includes('petition-result.txt') };
-      [...form.querySelectorAll('button')].find(b => b.textContent === 'Cancel').click();
-      const card = await wait(() => [...document.querySelectorAll('.handoff-card')].find(r => r.textContent.includes(${JSON.stringify(petitionText)})));
-      [...card.querySelectorAll('button')].find(b => b.textContent === 'Open destination').click();
-      const paste = await wait(() => [...document.querySelectorAll('.handoff-card button')].find(b => b.textContent === 'Paste handoff' && !b.disabled));
-      paste.click(); return result;
-    })()`) as { destination: string; text: string; byline: string; fileListed: boolean }
-    const petitionResolved = await acceptanceWait(async () =>
-      (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
-        .find(row => row.requestId === petitionRequest.requestId && row.state !== 'open'), 'owner paste resolution')
-    const pastedDraft = await acceptanceWait(async () =>
-      (await client.request<InputDraftRecord[]>(METHOD_REGISTRY.draftList, {}))
-        .find(row => row.draftId === petitionRequest.requestKey?.slice('handoff:'.length) && row.state === 'accepted'), 'persisted handoff paste');
-    const petitionPayload = await acceptanceWait(async () => {
-      const input = terminalModeProgramInput(destinationHarness.input).slice(beforePetitionPaste.length)
-      return input.includes(petitionText) ? input : undefined
-    }, 'destination PTY paste')
-    writeFileSync(join(petitionDirectory, 'status-gate'), '')
-    await untilFileExists(join(petitionDirectory, 'snapshot.json'), 'read bounded handoff status')
-    const petitionSnapshot = JSON.parse(readFileSync(join(petitionDirectory, 'snapshot.json'), 'utf8'))
-    const agentHandoff = {
-      preparedWithoutDelivery: !beforePetitionPaste.includes(petitionText),
-      ...petitionEditor, destinationMatches: petitionEditor.destination === petitionDestination.session.sessionId,
-      state: petitionResolved.state, resolvedBy: petitionResolved.resolvedBy, resolution: petitionResolved.resolution,
-      payloadOccurrences: petitionPayload.split(petitionText).length - 1,
-      agentOwnerStamp: petitionPayload.includes('prepared by the agent, delivered by the owner'),
-      publishedFile: petitionEditor.fileListed && petitionPayload.includes('- petition-result.txt: ') &&
-        petitionPayload.includes(petitionPublished.artifactId),
-      bracketedPaste: petitionPayload.includes('\u001b[200~') && petitionPayload.includes('\u001b[201~'),
-      noSubmit: !petitionPayload.includes('\r'),
-      status: readFileSync(join(petitionDirectory, 'status.txt'), 'utf8'),
-      bounded: petitionSnapshot.handoffs?.length === 1 &&
-        JSON.stringify(Object.keys(petitionSnapshot.handoffs[0]).sort()) === JSON.stringify(['destinationSessionId', 'draftId', 'state', 'updatedAt'])
-    }
-    if (!agentHandoff.preparedWithoutDelivery || !agentHandoff.destinationMatches || agentHandoff.text !== petitionText ||
-      !agentHandoff.byline.includes('Prepared by the agent in Petition source') ||
-      agentHandoff.resolvedBy !== 'owner' || agentHandoff.state !== 'withdrawn' ||
-      pastedDraft.detail !== 'Pasted to terminal — not submitted' ||
-      agentHandoff.payloadOccurrences !== 1 || !agentHandoff.agentOwnerStamp || !agentHandoff.publishedFile ||
-      !agentHandoff.bracketedPaste || !agentHandoff.noSubmit || !agentHandoff.status.includes('pasted (not submitted)') ||
-      !agentHandoff.bounded) {
-      throw new Error(`the agent's handoff was not prepared, then pasted by the owner: ${JSON.stringify(agentHandoff)}`)
+      throw new Error(`workspace results did not read safely: ${JSON.stringify(workspaceResultsAcceptance)}`)
     }
     // The raw-mode synthetic receiver records the exact PTY bytes for this owner-confirmed file send.
     const beforeFileReferenceWire = terminalModeProgramInput(destinationHarness.input)
@@ -3186,8 +3113,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     if (!voicePersistedAfterRestart) {
       throw new Error(`the voice vocabulary did not survive the restart: ${JSON.stringify(restoredSettings.voice)}`)
     }
-    const restoredDrafts = await client.request<InputDraftRecord[]>(METHOD_REGISTRY.draftList, {})
-    const restoredHandoff = restoredDrafts.find((draft) => draft.draftId === preloadProbe.handoffFlow.draftId)
     console.error('[BMN] self-test phase: restored state queried')
     const restoredBindings = await Promise.all(identities.map((identity) =>
       client.request(METHOD_REGISTRY.sessionBindingGet, { sessionId: identity.sessionId })
@@ -3248,11 +3173,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       restoredLayout.sessionView[session.sessionId]?.scrollLine !== 19 ||
       restoredLayout.sessionView[session.sessionId]?.followTail !== false ||
       JSON.stringify(restoredBindings.map(persistedBindingView)) !==
-        JSON.stringify(expectedBindings.map(persistedBindingView)) ||
-      restoredHandoff?.state !== 'accepted' ||
-      restoredHandoff.detail !== 'Pasted to terminal — not submitted' ||
-      !restoredHandoff.artifactIds.includes(handoffArtifact.artifactId) ||
-      restoredHandoff.attemptedIncarnationId === null
+        JSON.stringify(expectedBindings.map(persistedBindingView))
     ) {
       throw new Error('workspace/session order, layout, or bindings did not restore')
     }
@@ -4757,12 +4678,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       client.request(METHOD_REGISTRY.artifactPreview, { artifactId: evidenceOriginal.artifactId }),
       ERROR_CODES.notFound, 'The stored original is missing'
     )
-    const crossWorkspaceDraft = await client.request<InputDraftRecord>(METHOD_REGISTRY.draftSave, {
-      sourceSessionId: petitionSource.session.sessionId,
-      sessionId: routingSession.session.sessionId,
-      text: 'Synthetic cross-workspace handoff',
-      artifactIds: []
-    })
     const sourceWorkspace = (await client.request<WorkspaceRecord[]>(METHOD_REGISTRY.workspaceList, {
       includeArchived: true
     })).find((row) => row.workspaceId === DEFAULT_WORKSPACE_ID)
@@ -4780,7 +4695,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
           .find(row => row.textContent.trim() === 'Review results…'), 'results action')).click();
         return wait(() => {
           const dialog = document.querySelector('dialog.workspace-results-dialog[open]');
-          return dialog?.querySelector('.workspace-results-handoffs') ? dialog : null;
+          return dialog?.querySelector('.workspace-results-sessions') ? dialog : null;
         }, 'results ' + name);
       };
       const sourceName = ${JSON.stringify(sourceWorkspace.name)};
@@ -4788,35 +4703,14 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const sourceDialog = await open(sourceName);
       const sourceReport = sourceDialog.textContent.includes('Self-test checks passed');
       const missingEvidence = sourceDialog.textContent.includes('checks.log · Original unavailable');
-      const sourceRows = [...sourceDialog.querySelectorAll('.workspace-results-handoffs > li')]
-        .filter(row => row.textContent.includes('Petition source') && row.textContent.includes('Child routing'));
-      const sourceHandoffOnce = sourceRows.length === 1 &&
-        sourceRows[0].textContent.includes(sourceName) && sourceRows[0].textContent.includes(destinationName);
       sourceDialog.querySelector('.app-dialog-heading button').click();
       const destinationDialog = await open(destinationName);
       const destinationNoReport = destinationDialog.textContent.includes('No progress reported') &&
         !destinationDialog.textContent.includes('Self-test checks passed');
-      const destinationRows = [...destinationDialog.querySelectorAll('.workspace-results-handoffs > li')]
-        .filter(row => row.textContent.includes('Petition source') && row.textContent.includes('Child routing'));
-      const destinationHandoffOnce = destinationRows.length === 1 &&
-        destinationRows[0].textContent.includes(sourceName) && destinationRows[0].textContent.includes(destinationName);
-      destinationRows[0]?.querySelector('button')?.click();
-      const form = await wait(() => document.querySelector('.handoff-form'), 'cross-workspace review');
-      const routeExact = form.querySelector('textarea')?.value === 'Synthetic cross-workspace handoff' &&
-        form.querySelector('select')?.value === ${JSON.stringify(routingSession.session.sessionId)};
-      [...form.querySelectorAll('button')].find(b => b.textContent === 'Cancel')?.click();
-      document.querySelector('.files-close')?.click();
-      return { sourceReport, missingEvidence, sourceHandoffOnce, destinationNoReport,
-        destinationHandoffOnce, routeExact };
-    })()`) as {
-      sourceReport: boolean; missingEvidence: boolean; sourceHandoffOnce: boolean;
-      destinationNoReport: boolean; destinationHandoffOnce: boolean; routeExact: boolean
-    }
-    const crossWorkspaceResults = {
-      ...crossWorkspaceUi,
-      noAutoDelivery: (await client.request<InputDraftRecord[]>(METHOD_REGISTRY.draftList, {}))
-        .find((row) => row.draftId === crossWorkspaceDraft.draftId)?.state === 'draft'
-    }
+      destinationDialog.querySelector('.app-dialog-heading button').click();
+      return { sourceReport, missingEvidence, destinationNoReport };
+    })()`) as { sourceReport: boolean; missingEvidence: boolean; destinationNoReport: boolean }
+    const crossWorkspaceResults = crossWorkspaceUi
     if (Object.values(crossWorkspaceResults).some((value) => value !== true)) {
       throw new Error(`cross-workspace results failed: ${JSON.stringify(crossWorkspaceResults)}`)
     }
@@ -5228,7 +5122,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       workspaceResults: workspaceResultsAcceptance,
       crossWorkspaceResults,
       hiddenPaneSize: preloadProbe.hiddenPaneSize,
-      handoffFlow: preloadProbe.handoffFlow,
+      filesWithoutHandoffs: preloadProbe.filesWithoutHandoffs,
       agentHandoff,
       fileReferenceWire,
       sixelRender,

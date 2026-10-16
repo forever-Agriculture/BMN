@@ -107,20 +107,8 @@ export interface RendererIntegrationProbe {
     revisedPromptPreserved?: boolean
     unavailableTargetIgnored?: boolean
   }
-  handoffFlow: {
-    draftId: string
-    targetSessionId: string
-    editedText: string
-    /** Story 35.2: Insert outline offered on an empty box, off once it holds text, and the outline pasted whole. */
-    outline: Record<'outlineOfferedEmpty' | 'outlineFilled' | 'outlineFocused' | 'outlineOfferedAgain' | 'outlineOffAfterTyping' |
-      'outlineOffForWhitespace' | 'outlineOffForSavedText' | 'pastedWhole', boolean>
-    fileName: string
-    acceptedState: string
-    existingInputPreserved: boolean
-    payloadOccurrences: number
-    attentionResponsesPreserved: boolean
-    discardedDraftHidden: boolean
-  }
+  /** Story 75.5: a handoff delivers itself, so the Files panel holds no handoff section or form. */
+  filesWithoutHandoffs: boolean
   fileReferenceFlow: FileReferenceFlowProbe
   voiceFlow: VoiceFlowProbe
 }

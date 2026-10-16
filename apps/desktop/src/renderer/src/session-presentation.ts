@@ -14,7 +14,6 @@ import {
   type HookCompaction,
   type HookEventRecordAgent,
   type HookOriginRecord,
-  type InputDraftRecord,
   type ProgressEvidence,
   type ProgressRecord,
   type ProgressState,
@@ -541,31 +540,6 @@ export function neighbor<T>(items: readonly T[], current: T | null, direction: -
   const index = current === null ? -1 : items.indexOf(current)
   if (index === -1) return items[0] ?? null
   return items[(index + direction + items.length) % items.length] ?? null
-}
-
-/** Only an open petition's pending draft can enter the handoff editor. */
-export function handoffDraftForAttention(
-  request: AttentionRecord,
-  drafts: readonly InputDraftRecord[]
-): InputDraftRecord | null {
-  if (request.kind !== 'handoff' || request.state !== 'open') return null
-  return drafts.find((draft) => draft.origin === 'handoff' && draft.state === 'draft' &&
-    draft.sourceSessionId === request.sessionId && request.requestKey === `handoff:${draft.draftId}`) ?? null
-}
-
-export function handoffPreparedBy(
-  draft: InputDraftRecord | undefined,
-  source: Pick<SessionRecord, 'name' | 'lastProcess'> | undefined,
-  requests: readonly AttentionRecord[]
-): { byline: string; stale: boolean } | null {
-  if (draft?.preparedBy !== 'agent') return null
-  const request = requests.find((item) => item.kind === 'handoff' &&
-    item.sessionId === draft.sourceSessionId && item.requestKey === `handoff:${draft.draftId}`)
-  return {
-    byline: `Prepared by the agent in ${source?.name ?? 'Removed session'}`,
-    stale: !!request?.incarnationId && !!source?.lastProcess &&
-      request.incarnationId !== source.lastProcess.incarnationId
-  }
 }
 
 /** Cross-session cue includes stopped and archived sessions, counting each session once per group. */

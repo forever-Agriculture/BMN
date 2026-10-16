@@ -55,11 +55,13 @@ const USAGE_LINES = [
 
 const TEST_MESSAGE_DISABLED_TITLE = 'Send a test message once Telegram is connected and polling'
 
-/** Request kinds quiet hours can let through, in display order; the stored values stay lowercase. */
+/**
+ * Request kinds quiet hours can let through, in display order; the stored values stay lowercase. A handoff
+ * delivers itself to its agent (Story 75.5), so a stored "handoff" is kept but no longer offered.
+ */
 const QUIET_ALLOW_KINDS: ReadonlyArray<{ kind: AttentionKind; label: string }> = [
   { kind: 'permission', label: 'Permission' },
   { kind: 'question', label: 'Question' },
-  { kind: 'handoff', label: 'Handoff' },
   { kind: 'review', label: 'Review' },
   { kind: 'notice', label: 'Notice' }
 ]

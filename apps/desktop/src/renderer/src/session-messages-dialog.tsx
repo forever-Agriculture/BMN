@@ -33,12 +33,15 @@ export interface MessageRowView {
   firstLine: string
 }
 
-/** The list's rows, newest first as the host gave them, and never more than the list's bound. */
+/**
+ * The list's rows, newest first as the host gave them, and never more than the list's bound. A handoff BMN hands
+ * over itself (Story 75.5) is a row of the same shape whose state says "handoff" first.
+ */
 export function messageRows(listing: Pick<SessionMessageListing, 'messages'>, now: number): MessageRowView[] {
   return listing.messages.slice(0, SESSION_MESSAGE_LIST_LIMIT).map((message) => ({
     message,
     route: `${message.senderName} → ${message.receiverName}`,
-    state: sessionMessageStateWord(message, now),
+    state: message.kind === 'handoff' ? `handoff · ${sessionMessageStateWord(message, now)}` : sessionMessageStateWord(message, now),
     firstLine: sessionMessageFirstLine(message.text)
   }))
 }

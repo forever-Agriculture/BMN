@@ -354,26 +354,39 @@ async function runHook(
 }
 
 describe('bmn handoff CLI', () => {
-  it('prepares once with a required key and exact source token, then reads bounded status', async () => {
+  it('queues once with a required key, the exact source token and the folder it ran in, then reads bounded status (Story 75.5)', async () => {
     const fixture = await cliFixture()
     const args = ['handoff', 'session-2', '--text', 'A result', '--file-id', 'output-1', '--key', 'handoff-1']
     const first = await runCli(args, { env: fixture.sessionEnv })
     const repeat = await runCli(args, { env: fixture.sessionEnv })
 
-    expect(first).toEqual({ code: 0, stdout: 'Handoff prepared as draft draft-1; the owner must deliver it\n', stderr: '' })
+    expect(first).toEqual({
+      code: 0, stderr: '',
+      stdout: 'Handoff draft-1 is queued for session session-2; BMN hands it to the agent there after its next tool call. ' +
+        'Its state: bmn handoff status\n'
+    })
     expect(repeat.stdout).toContain('already done earlier; not repeated')
     expect(fixture.handlers.prepareHandoff).toHaveBeenCalledTimes(1)
     expect(fixture.handlers.prepareHandoff).toHaveBeenCalledWith({
       sourceSessionId: 'session-1', sourceIncarnationId: 'incarnation-1',
-      destinationSessionId: 'session-2', text: 'A result', artifactIds: ['output-1']
+      destinationSessionId: 'session-2', text: 'A result', artifactIds: ['output-1'], senderCwd: process.cwd()
     })
 
-    fixture.handlers.snapshot.mockResolvedValue({ watermark: 14, sessions: [], attention: [],
-      handoffs: [{ draftId: 'draft-1', destinationSessionId: 'session-2', state: 'accepted',
-        updatedAt: '2026-09-22T12:00:00.000Z' }] })
-    const status = await runCli(['handoff', 'status', 'draft-1'], { env: fixture.sessionEnv })
-    expect(status.stdout).toBe('draft-1\tpasted (not submitted)\tsession-2\t2026-09-22T12:00:00.000Z\n')
+    const row = (draftId: string, state: string) => ({ draftId, destinationSessionId: 'session-2', state, updatedAt: '2026-09-22T12:00:00.000Z' })
+    fixture.handlers.snapshot.mockResolvedValue({ watermark: 14, sessions: [], attention: [], handoffs: [
+      row('h-queued', 'queued'), row('h-printed', 'printed'), row('h-uncertain', 'uncertain'), row('h-expired', 'expired'),
+      row('h-old', 'draft'), row('h-pasted', 'accepted')
+    ] })
+    const status = await runCli(['handoff', 'status'], { env: fixture.sessionEnv })
+    expect(status.stdout.split('\n').filter(Boolean).map((line) => line.split('\t')[1])).toEqual([
+      'queued, not handed over yet', 'printed for the agent, not proven read', 'uncertain: handed over, not confirmed',
+      'expired, never handed over', 'prepared, never sent', 'pasted (not submitted)'
+    ])
+    const one = await runCli(['handoff', 'status', 'h-queued'], { env: fixture.sessionEnv })
+    expect(one.stdout).toBe('h-queued\tqueued, not handed over yet\tsession-2\t2026-09-22T12:00:00.000Z\n')
     expect(status.stdout).not.toContain('A result')
+    fixture.handlers.snapshot.mockResolvedValue({ watermark: 15, sessions: [], attention: [], handoffs: [] })
+    expect((await runCli(['handoff', 'status'], { env: fixture.sessionEnv })).stdout).toBe('No handoffs from this session\n')
   })
 
   it('takes literal text after -- and refuses missing keys, duplicate IDs and cross-session options', async () => {

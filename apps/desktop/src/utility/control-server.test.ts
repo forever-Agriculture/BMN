@@ -128,7 +128,7 @@ function fakeHandlers(current: Map<string, string>) {
     })),
     reportProgress: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     openAttention: vi.fn(async (): Promise<unknown> => ({ opened: true })),
-    prepareHandoff: vi.fn(async (): Promise<unknown> => ({ draftId: 'draft-1', requestId: 'request-1', state: 'draft' })),
+    prepareHandoff: vi.fn(async (): Promise<unknown> => ({ draftId: 'draft-1', state: 'queued' })),
     listPeers: vi.fn(async (): Promise<unknown> => ({ on: true, paused: false, peers: [] })),
     sendMessage: vi.fn(async (): Promise<unknown> => ({ messageId: 'message-1', state: 'waiting' })),
     messageStatus: vi.fn(async (): Promise<unknown> => ({ messages: [] })),
@@ -516,6 +516,7 @@ describe('control server handoff preparation', () => {
     destinationSessionId: 'session-2',
     text: 'A bounded result',
     artifactIds: ['published-1'],
+    senderCwd: '/synthetic/code/app',
     idempotencyKey: 'handoff-1'
   }
 
@@ -539,13 +540,14 @@ describe('control server handoff preparation', () => {
 
     const response = await agent.request('handoff.prepare', handoff)
 
-    expect(response.result).toEqual({ draftId: 'draft-1', requestId: 'request-1', state: 'draft' })
+    expect(response.result).toEqual({ draftId: 'draft-1', state: 'queued' })
     expect(fixture.handlers.prepareHandoff).toHaveBeenLastCalledWith({
       sourceSessionId: 'session-1',
       sourceIncarnationId: 'incarnation-1',
       destinationSessionId: 'session-2',
       text: 'A bounded result',
-      artifactIds: ['published-1']
+      artifactIds: ['published-1'],
+      senderCwd: '/synthetic/code/app'
     })
   })
 
@@ -554,7 +556,9 @@ describe('control server handoff preparation', () => {
     ['carriage return', { ...handoff, text: 'line\rbreak' }],
     ['oversized text', { ...handoff, text: 'x'.repeat(16 * 1024 + 1) }],
     ['too many files', { ...handoff, artifactIds: Array.from({ length: 11 }, (_, index) => `file-${index}`) }],
-    ['non-array files', { ...handoff, artifactIds: 'published-1' }]
+    ['non-array files', { ...handoff, artifactIds: 'published-1' }],
+    ['no folder', { ...handoff, senderCwd: undefined }],
+    ['a relative folder', { ...handoff, senderCwd: 'code/app' }]
   ])('rejects %s before invoking the handler', async (_label, params) => {
     const fixture = await serverFixture()
     const agent = await authenticated(fixture, sessionToken(fixture))
@@ -571,8 +575,8 @@ describe('control server handoff preparation', () => {
     const duplicate = await agent.request('handoff.prepare', handoff)
     const conflict = await agent.request('handoff.prepare', { ...handoff, text: 'Changed result' })
 
-    expect(first.result).toEqual({ draftId: 'draft-1', requestId: 'request-1', state: 'draft' })
-    expect(duplicate.result).toEqual({ draftId: 'draft-1', requestId: 'request-1', state: 'draft', duplicate: true })
+    expect(first.result).toEqual({ draftId: 'draft-1', state: 'queued' })
+    expect(duplicate.result).toEqual({ draftId: 'draft-1', state: 'queued', duplicate: true })
     expectError(conflict, ERROR_CODES.revisionConflict)
     expect(conflict.error?.message).toBe('idempotency key reused with different parameters')
     expect(fixture.handlers.prepareHandoff).toHaveBeenCalledTimes(1)
@@ -1337,7 +1341,7 @@ describe('format characters in agent text (Story 34.1)', () => {
     const client = await authenticated(fixture, sessionToken(fixture))
 
     await client.request('handoff.prepare', {
-      destinationSessionId: 'session-2', text: 'Done\u2066 here\u2069\n\tnext', artifactIds: [], idempotencyKey: 'h'
+      destinationSessionId: 'session-2', text: 'Done\u2066 here\u2069\n\tnext', artifactIds: [], senderCwd: '/synthetic', idempotencyKey: 'h'
     })
 
     expect(fixture.handlers.prepareHandoff).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'Done here\n\tnext' }))
@@ -1346,7 +1350,7 @@ describe('format characters in agent text (Story 34.1)', () => {
   it.each([
     ['attention.open', { requestKey: 'q', kind: 'question', title: '\u202E\u200B' }, 'title must be 1..200 characters'],
     ['progress.report', { source: 'agent', state: 'running', label: '\uFEFF' }, 'label must be 1..200 characters'],
-    ['handoff.prepare', { destinationSessionId: 'session-2', text: '\u2066\u2069', artifactIds: [], idempotencyKey: 'e' },
+    ['handoff.prepare', { destinationSessionId: 'session-2', text: '\u2066\u2069', artifactIds: [], senderCwd: '/synthetic', idempotencyKey: 'e' },
       'text must be 1..16384 bytes']
   ])('%s refuses a field that held only format characters as empty', async (method, params, message) => {
     const fixture = await serverFixture()

@@ -232,6 +232,11 @@ notice snapshots belong only to the current renderer selection and are not a per
 
 ### Cross-harness handoff, both directions (Epic 7 usefulness)
 
+- Superseded by Story 75.5 (2026-10-16): a handoff no longer waits for the owner's paste. BMN stores
+  the whole text and its files and hands the receiving agent a pointer through that agent's own
+  hook, as it hands over a message. The paste-based trial below and its harness went with the
+  owner's paste; the new path is checked live, one handoff per app on an isolated build, in its
+  own result line.
 - Promise: a real Claude→Codex and a real Codex→Claude handoff, synthetic content, normal harness
   permissions — the chosen summary pasted once, existing destination input retained without
   submission, every selected original readable after the owner submits.
@@ -239,8 +244,8 @@ notice snapshots belong only to the current renderer selection and are not a per
   permission modes, synthetic files) once per direction; verify the paste count, no Enter, the
   retained input, and the destination reading the selected original after submission; record
   remaining friction.
-- Harnesses: tracked [cross-harness trial](../scripts/test/cross-harness-trial.ts), invoked only
-  with its [explicit Vitest config](../scripts/test/cross-harness.vitest.config.mjs). Its
+- Harnesses: the cross-harness trial (`scripts/test/cross-harness-trial.ts`, removed in Story 75.5),
+  invoked only with its explicit Vitest config. Its
   launcher uses the tracked [disposable-provider-env.mjs](../scripts/lib/disposable-provider-env.mjs)
   guard and refuses to start either provider without separately provisioned private profiles under
   `/tmp/bmn-cross-harness-profiles-*`; no compliant rerun has yet been made.
@@ -279,6 +284,7 @@ One line per distinct trial, newest last. Receipts live under `.dev-auto/evidenc
 | OpenCode real harness | UNVERIFIED — isolated-config real-provider harness not built in this run's window; no synthetic run labelled real | [opencode-real-session-2026-09-25.md](../.dev-auto/evidence/survival/opencode-real-session-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
 | cross-harness claude→codex | UNVERIFIED — ran, but on the owner's inherited profiles (NFR35 method non-compliance); disposable-root credentials need owner authorization | [cross-harness-claude-to-codex-2026-09-25.md](../.dev-auto/evidence/survival/cross-harness-claude-to-codex-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
 | cross-harness codex→claude | UNVERIFIED — same method non-compliance | [cross-harness-codex-to-claude-2026-09-25.md](../.dev-auto/evidence/survival/cross-harness-codex-to-claude-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| handoff delivered by the receiving agent's hook (Story 75.5), one per app: shell → codex 0.162.1, shell → claude 2.1.301, isolated build and profiles, synthetic text and attachment; each agent read the stored text and the attachment and the handoff read printed | PASS | [receipt-2026-10-16.md](../.dev-auto/evidence/75-5-live/receipt-2026-10-16.md) | 75.5 tree on e4d8a4d | 2026-10-16 |
 
 One line per distinct trial, the latest receipt linked; FAIL and UNVERIFIED lines stay with their
 reasons rather than being dropped. PASS (partial) rows keep their unexercised cells named in the

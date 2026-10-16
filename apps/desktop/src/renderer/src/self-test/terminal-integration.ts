@@ -1,5 +1,4 @@
 // MODULE: terminal-integration.ts - the renderer's behavioural self-test, run from the selected pane of a test-mode window
-import { HANDOFF_OUTLINE } from '@bmn/protocol'
 import type { Terminal } from '@xterm/xterm'
 import { isBridgeError } from '../bridge-error'
 import { splitArgv } from '../launch-template'
@@ -144,143 +143,15 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
   console.warn('[BMN] renderer behavioural integration: returned to source session')
   const destination = sessionsBeforeForm.find((session) =>
     session.sessionId !== handle.startup.sessionId && session.archivedAt === null)
-  if (!destination) throw new Error('the handoff destination fixture was not available')
+  if (!destination) throw new Error('the second session fixture was not available')
   const filesButton = [...(handle.section.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
     .find((button) => button.textContent?.trim() === 'Files')
   if (!filesButton) throw new Error('the Files button was not rendered')
   filesButton.click()
   const filesPanel = await waitFor(() => document.querySelector<HTMLElement>('.files-panel'))
-  const prepareHandoff = await waitFor(() => [...filesPanel.querySelectorAll<HTMLButtonElement>('button')]
-    .find((button) => button.textContent?.trim() === 'Prepare handoff'))
-  prepareHandoff.click()
-  const handoffForm = await waitFor(() => filesPanel.querySelector<HTMLFormElement>('.handoff-form'))
-  console.warn('[BMN] renderer behavioural integration: handoff form opened')
-  const destinationSelect = handoffForm.querySelector<HTMLSelectElement>('select')
-  const handoffTextarea = handoffForm.querySelector<HTMLTextAreaElement>('textarea')
-  const artifactChoice = [...handoffForm.querySelectorAll<HTMLLabelElement>('.handoff-files label')]
-    .find((label) => label.textContent?.includes('handoff-self-test.txt'))
-    ?.querySelector<HTMLInputElement>('input[type="checkbox"]')
-  if (!destinationSelect || !handoffTextarea || !artifactChoice) {
-    throw new Error('the complete handoff preparation form was not rendered')
-  }
-  const setControlValue = (control: HTMLSelectElement | HTMLTextAreaElement, value: string): void => {
-    const prototype = control instanceof HTMLSelectElement
-      ? HTMLSelectElement.prototype
-      : HTMLTextAreaElement.prototype
-    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
-    if (!setter) throw new Error('the handoff form value setter was unavailable')
-    setter.call(control, value)
-    control.dispatchEvent(new Event(control instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
-  }
-  setControlValue(destinationSelect, destination.sessionId)
-  // Story 35.2: Insert outline fills the empty box once, and is off while the box holds anything.
-  const insertOutline = [...handoffForm.querySelectorAll<HTMLButtonElement>('button')]
-    .find((button) => button.textContent?.trim() === 'Insert outline')
-  if (!insertOutline) throw new Error('the Insert outline button was not rendered')
-  const outlineOfferedEmpty = handoffTextarea.value === '' && !insertOutline.disabled
-  insertOutline.click()
-  const outlineFilled = await waitFor(() => handoffTextarea.value === HANDOFF_OUTLINE && insertOutline.disabled ? true : undefined)
-  const outlineFocused = document.activeElement === handoffTextarea
-  setControlValue(handoffTextarea, '')
-  const outlineOfferedAgain = await waitFor(() => insertOutline.disabled ? undefined : true)
-  setControlValue(handoffTextarea, 'x')
-  const outlineOffAfterTyping = await waitFor(() => insertOutline.disabled ? true : undefined)
-  // Spaces and line breaks are text the owner typed: the outline never replaces them.
-  setControlValue(handoffTextarea, ' \n\t')
-  const outlineOffForWhitespace = await waitFor(() => insertOutline.disabled ? true : undefined)
-  setControlValue(handoffTextarea, '')
-  await waitFor(() => insertOutline.disabled ? undefined : true)
-  insertOutline.click()
-  await waitFor(() => handoffTextarea.value === HANDOFF_OUTLINE ? true : undefined)
-  const createdText = handoffTextarea.value.replace('Goal:', 'Goal: Synthetic handoff line one\nQuestion line two')
-  setControlValue(handoffTextarea, createdText)
-  const outlineFlow = {
-    outlineOfferedEmpty, outlineFilled, outlineFocused, outlineOfferedAgain, outlineOffAfterTyping, outlineOffForWhitespace
-  }
-  artifactChoice.click()
-  handoffForm.requestSubmit()
-  const createdHandoff = await waitFor(async () => (await window.aiTerminal.listDrafts()).find((draft) =>
-    draft.origin === 'handoff' &&
-    draft.sourceSessionId === handle.startup.sessionId &&
-    draft.sessionId === destination.sessionId &&
-    draft.text === createdText &&
-    draft.artifactIds.length === 1
-  ))
-  console.warn('[BMN] renderer behavioural integration: handoff saved')
-  const sourceCard = await waitFor(() => [...filesPanel.querySelectorAll<HTMLElement>('.handoff-card')]
-    .find((card) => card.textContent?.includes('Synthetic handoff line one')))
-  const editHandoff = [...sourceCard.querySelectorAll<HTMLButtonElement>('button')]
-    .find((button) => button.textContent?.trim() === 'Edit')
-  if (!editHandoff) throw new Error('the saved handoff edit action was not rendered')
-  editHandoff.click()
-  const editForm = await waitFor(() => filesPanel.querySelector<HTMLFormElement>('.handoff-form'))
-  const editTextarea = editForm.querySelector<HTMLTextAreaElement>('textarea')
-  if (!editTextarea) throw new Error('the reopened handoff text was not rendered')
-  const outlineOffForSavedText = [...editForm.querySelectorAll<HTMLButtonElement>('button')]
-    .find((button) => button.textContent?.trim() === 'Insert outline')?.disabled === true
-  // A saved outline handoff is edited and pasted as any other.
-  const editedText = editTextarea.value.replace('Synthetic handoff line one', 'Edited handoff line one')
-  setControlValue(editTextarea, editedText)
-  editForm.requestSubmit()
-  const editedHandoff = await waitFor(async () => (await window.aiTerminal.listDrafts()).find((draft) =>
-    draft.draftId === createdHandoff.draftId &&
-    draft.text === editedText &&
-    draft.updatedAt !== createdHandoff.updatedAt
-  ))
-  console.warn('[BMN] renderer behavioural integration: handoff edited')
-  const editedCard = await waitFor(() => [...filesPanel.querySelectorAll<HTMLElement>('.handoff-card')]
-    .find((card) => card.textContent?.includes('Edited handoff line one')))
-  const openDestination = [...editedCard.querySelectorAll<HTMLButtonElement>('button')]
-    .find((button) => button.textContent?.trim() === 'Open destination')
-  if (!openDestination) throw new Error('the handoff destination action was not rendered')
-  openDestination.click()
-  await waitFor(async () => {
-    const selected = (await window.aiTerminal.getLayout(handle.startup.workspaceId)).layout.selectedSessionId
-    return selected === destination.sessionId ? true : undefined
-  })
-  const destinationCard = await waitFor(() => [...document.querySelectorAll<HTMLElement>('.handoff-card')]
-    .find((card) => card.textContent?.includes('Edited handoff line one')))
-  const pasteHandoff = [...destinationCard.querySelectorAll<HTMLButtonElement>('button')]
-    .find((button) => button.textContent?.trim() === 'Paste handoff')
-  if (!pasteHandoff || pasteHandoff.disabled) throw new Error('the destination paste action was unavailable')
-  pasteHandoff.click()
-  const acceptedHandoff = await waitFor(async () => (await window.aiTerminal.listDrafts()).find((draft) =>
-    draft.draftId === editedHandoff.draftId && draft.state === 'accepted'
-  ))
-  console.warn('[BMN] renderer behavioural integration: handoff pasted')
-  const terminalText = await waitFor(() => {
-    const snapshot = window.__aitermTest?.snapshot(destination.sessionId)
-    const text = snapshot?.bufferLines.join('\n') ?? ''
-    return text.includes('EXISTING-HANDOFF-PREFIX') && text.includes('Edited handoff line one') && text.includes('How to check:')
-      ? text
-      : undefined
-  })
-  const payloadOccurrences = terminalText.split('Edited handoff line one').length - 1
-  const remainingAfterHandoff = (await window.aiTerminal.listAttention())
-    .filter((request) => request.state === 'open' && request.kind !== 'notice')
-    .map((request) => request.title)
-    .toSorted()
-  const discardCandidate = await window.aiTerminal.saveHandoffDraft({
-    sourceSessionId: handle.startup.sessionId,
-    sessionId: destination.sessionId,
-    text: 'Discard this handoff',
-    artifactIds: []
-  })
-  const discardCard = await waitFor(() => [...document.querySelectorAll<HTMLElement>('.handoff-card')]
-    .find((card) => card.textContent?.includes('Discard this handoff')))
-  const discardHandoff = [...discardCard.querySelectorAll<HTMLButtonElement>('button')]
-    .find((button) => button.textContent?.trim() === 'Discard')
-  if (!discardHandoff) throw new Error('the handoff discard action was not rendered')
-  discardHandoff.click()
-  const discardedDraftHidden = await waitFor(async () =>
-    (await window.aiTerminal.listDrafts()).some((draft) => draft.draftId === discardCandidate.draftId)
-      ? undefined
-      : true)
-  returnSessionButton.click()
-  await waitFor(async () => {
-    const selected = (await window.aiTerminal.getLayout(handle.startup.workspaceId)).layout.selectedSessionId
-    return selected === handle.startup.sessionId ? true : undefined
-  })
+  // A handoff delivers itself (Story 75.5): the panel ends after the artifact cards, with no handoff section or form.
+  const filesWithoutHandoffs = ![...filesPanel.querySelectorAll<HTMLElement>('h3, h4, button, form')]
+    .some((element) => /handoff/i.test(element.textContent ?? '') || element.matches('.handoff-form'))
   const closeFiles = await waitFor(() => document.querySelector<HTMLButtonElement>('.files-close'))
   closeFiles.click()
   console.warn('[BMN] renderer behavioural integration: file references started')
@@ -293,19 +164,6 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
     refitCount: () => handle.refitCount()
   })
   console.warn('[BMN] renderer behavioural integration: file references complete')
-  const handoffFlow = {
-    draftId: acceptedHandoff.draftId,
-    targetSessionId: destination.sessionId,
-    editedText,
-    outline: { ...outlineFlow, outlineOffForSavedText, pastedWhole: terminalText.includes('Where it stands:') },
-    fileName: 'handoff-self-test.txt',
-    acceptedState: acceptedHandoff.state,
-    existingInputPreserved: terminalText.includes('EXISTING-HANDOFF-PREFIX'),
-    payloadOccurrences,
-    attentionResponsesPreserved:
-      JSON.stringify(remainingAfterHandoff) === JSON.stringify(remainingResponseTitles),
-    discardedDraftHidden
-  }
   // The inspector lives in the details panel, opened the way the owner opens it.
   const moreButton = handle.section.current?.querySelector<HTMLButtonElement>('button[data-action="more"]')
   if (!moreButton) throw new Error('the pane More button was not rendered')
@@ -604,7 +462,7 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
     workspaceMarkers,
     progressEvidenceSurface,
     hiddenPaneSize: { shown: shownSize, hidden: hiddenSize },
-    handoffFlow,
+    filesWithoutHandoffs,
     fileReferenceFlow,
     voiceFlow,
     attentionTriage: {

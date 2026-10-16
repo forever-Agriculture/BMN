@@ -5,9 +5,10 @@
 // the home's shell settings add. One workspace carries what the owner-facing controls act on (the before set of
 // 4e2c44f also held a launch set and a custom template, gone with Story 75.3, and the confirmations of the two
 // workspace switches, gone with Story 75.4, which left messages and turn changes always on), and a session whose
-// shell publishes a file, reports progress with it as evidence, prepares a handoff for a second session and tries to
-// leave that session a message, all with BMN's own `bmn` commands; since Story 75.4 the message is refused, because
-// the second session runs a plain shell and no agent.
+// shell publishes a file, reports progress with it as evidence, asks for a review and tries to leave a second session
+// a message, all with BMN's own `bmn` commands; since Story 75.4 the message is refused, because the second session
+// runs a plain shell and no agent. The before set's seed prepared a handoff for the owner to paste instead of the review
+// request; Story 75.5 made handoffs deliver themselves, so nothing of one waits on these screens.
 // No agent runs, nothing leaves the machine and no file of the owner's is read. The script asserts nothing: it opens
 // each screen, saves what the window shows in each colour mode and writes shots.json naming the screens, the parts
 // and the buttons each capture showed. A screen that cannot be opened is listed with the reason, and the run goes on.
@@ -262,14 +263,14 @@ published=$(B publish report.md --key seed-publish)
 echo "$published"
 id=$(printf '%s\\n' "$published" | sed -n 's/.* as \\([^ ]*\\).*/\\1/p')
 B progress claimed-done 'Story 1.2 search filters' --detail 'Filters added; unit tests pass.' --evidence-id "$id" --source synthetic
-B handoff '${reviewerId}' --text 'Please review the search filter change in src/search.ts; the tests are in search.test.ts.' --key seed-handoff
+B ask seed-review 'Review the search filter change in src/search.ts' --kind review --body 'The tests are in search.test.ts.'
 B tell '${reviewerId}' --text 'The search filter change is ready for your review.' --key seed-tell
 echo seeded
 `)
     const builder = await startSession('Builder', ['-ic', `bash '${seed}'; exec bash -i`])
     if (builder.failed) throw new Error(`the Builder session was not started: ${builder.failed}`)
     const builderId = builder.session.sessionId
-    note('session "Builder" started: its shell publishes report.md, reports progress with it, prepares a handoff for Reviewer and leaves Reviewer a message')
+    note('session "Builder" started: its shell publishes report.md, reports progress with it, asks for a review and leaves Reviewer a message')
     await sleep(6_000)
     // Sessions started through the bridge reach the window's view of running processes on its next load.
     await page.reload()
@@ -296,24 +297,24 @@ echo seeded
       await page.locator('button[aria-label="More actions for Builder"]').click()
       await page.locator('[role="menu"]').first().waitFor()
     }, { region: '[role="menu"]', scroll: '[role="menu"]' })
-    await screen('files-panel-builder', 'Pane header › Files of Builder: the published report and the handoff it prepared', async () => {
+    await screen('files-panel-builder', 'Pane header › Files of Builder: the published report', async () => {
       await builderRow.click()
       await page.locator(`.session-terminal[data-session-id="${builderId}"] button[aria-label="Files"]`).click()
       await page.locator('aside.files-panel').waitFor()
     }, { region: 'aside.files-panel', scroll: 'aside.files-panel', close: async () => { await page.locator('button[aria-label="Close files"]').click() } })
-    await screen('files-panel-reviewer', 'Pane header › Files of Reviewer: the handoff waiting for the owner to review and paste', async () => {
+    await screen('files-panel-reviewer', 'Pane header › Files of Reviewer: nothing waits here for the owner (Story 75.5)', async () => {
       await reviewerRow.click()
       await page.locator(`.session-terminal[data-session-id="${reviewerId}"] button[aria-label="Files"]`).click()
       await page.locator('aside.files-panel').waitFor()
     }, { region: 'aside.files-panel', scroll: 'aside.files-panel', close: async () => { await page.locator('button[aria-label="Close files"]').click() } })
-    await screen('request-card', 'Builder\'s request control: the request card its handoff opened, with Open handoff', async () => {
+    await screen('request-card', 'Builder\'s request control: the request card its review request opened', async () => {
       await builderRow.click()
       const control = page.locator(`[data-session-requests="${builderId}"]`)
       await control.waitFor({ timeout: 5_000 })
       await control.click()
       await page.locator('.session-request-card').first().waitFor()
     }, { region: '.session-request-card', close: escape })
-    await screen('review-results', 'Workspace ⋯ › Review results…: agent reports with evidence, handoffs awaiting the owner', async () => {
+    await screen('review-results', 'Workspace ⋯ › Review results…: agent reports with evidence', async () => {
       await openWorkspaceMenu()
       await page.getByRole('menuitem', { name: /^Review results/ }).click()
       await page.locator('dialog.workspace-results-dialog').waitFor()

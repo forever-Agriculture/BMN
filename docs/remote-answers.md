@@ -108,7 +108,7 @@ Epic 46 retains async call identity and declared options, including omitted opti
 its ordinary-message Telegram route. Desktop question cards let you select options or enter Other,
 then **Copy answer** for manual submission. Copying clears the reminder and writes only to the
 clipboard; paste into the session yourself. Opening or dismissing a card also clears its reminder,
-without sending an answer or granting permission. Saved handoff drafts remain available in Files.
+without sending an answer or granting permission.
 `accepted:true` acknowledges presentation, not an answer. Generic
 `UserPromptSubmit` closes attention under the existing hook rule but does not confirm a Telegram
 answer or prove question consumption. The owner approved submitting Telegram choices/Other and card

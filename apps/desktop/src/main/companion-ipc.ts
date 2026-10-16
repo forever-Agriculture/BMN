@@ -59,8 +59,6 @@ const ROUTES = {
   'aiterm:attention:terminal-notice': METHOD_REGISTRY.attentionTerminalNotice,
   'aiterm:progress:list': METHOD_REGISTRY.progressList,
   'aiterm:draft:list': METHOD_REGISTRY.draftList,
-  'aiterm:handoff:review': METHOD_REGISTRY.handoffReview,
-  'aiterm:draft:save': METHOD_REGISTRY.draftSave,
   'aiterm:draft:retry': METHOD_REGISTRY.draftRetry,
   'aiterm:draft:send': METHOD_REGISTRY.draftSend,
   'aiterm:draft:discard': METHOD_REGISTRY.draftDiscard,

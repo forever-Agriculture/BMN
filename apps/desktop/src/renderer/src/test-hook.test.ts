@@ -182,19 +182,7 @@ describe('renderer acceptance hook', () => {
         focusStableAfterIncomingUpdate: true,
         firstResponseRow: { age: '1 s ago · expires in 10 min', label: 'Permission · Allow · Work › A · 1 s ago · expires in 10 min' }
       },
-      handoffFlow: {
-        draftId: 'handoff-1',
-        targetSessionId: 'session-b',
-        editedText: 'Edited handoff',
-        outline: { outlineOfferedEmpty: true, outlineFilled: true, outlineFocused: true, outlineOfferedAgain: true,
-          outlineOffAfterTyping: true, outlineOffForWhitespace: true, outlineOffForSavedText: true, pastedWhole: true },
-        fileName: 'result.txt',
-        acceptedState: 'accepted',
-        existingInputPreserved: true,
-        payloadOccurrences: 1,
-        attentionResponsesPreserved: true,
-        discardedDraftHidden: true
-      },
+      filesWithoutHandoffs: true,
       voiceFlow: {
         suggested: ['SessionManager'],
         editedApproved: 'pty-host',

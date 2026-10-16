@@ -53,7 +53,7 @@ session. It uses a bot you create and own. It is off by default.
   whether there is a battery, it decides nothing and raises no battery or mains alert, and a test
   says so. A battery that was there and can no longer be read counts as no longer detected. If you also run a watch of your own (a
   script on a timer), switch one of them off, or both will message you. Linux only.
-- When an agent asks for your attention (`bmn ask`, `bmn handoff`, or a Claude Code, Codex or OpenCode hook), the bot
+- When an agent asks for your attention (`bmn ask`, or a Claude Code, Codex or OpenCode hook), the bot
   sends you the request while you are away from the desk and the request is still unanswered. If
   BMN cannot read idle time, it treats you as away. Claude sessions connected to Remote Control
   are left to the Claude app. Optionally it also tells you when a session's process exits while you
@@ -62,12 +62,11 @@ session. It uses a bot you create and own. It is off by default.
 - Reply to that message in Telegram. By default the reply is saved as a **draft** for that exact
   session, and you send it from the Files panel. If you turn on **Type replies into the session and
   press Enter**, text replies to current-process cards are submitted to their exact session, including
-  informational and handoff cards. A handoff-card reply goes to its source session and does not deliver
-  the handoff. A pending native question or permission keeps a conversation reply as a draft.
+  informational cards. A pending native question or permission keeps a conversation reply as a draft.
 - A message that is not a reply to a notification gets a short answer asking you to reply to one,
   so text never lands in whichever session happens to be focused.
-- It cannot deliver handoffs or manage sessions remotely; inspect and deliver handoffs in BMN's Files
-  panel.
+- It cannot manage sessions remotely. A handoff delivers itself to its agent (Story 75.5), so no
+  handoff reaches Telegram; a reply to a handoff card sent before then goes to its source session.
 
 ## Tap to answer
 
@@ -194,8 +193,8 @@ typed line cannot pick an option. If Telegram refuses a card's formatting, it is
   appears, even run into other text; the `sk-` shape also takes a hyphenated word ending in `sk` with a
   long slug (`task-add-…`), which is hidden too. A permission whose command had part hidden, or held invisible characters, gets no
   Allow button: answer it at the laptop. A handoff preview is never cut through a secret. A tapped option still answers that option.
-  Only what leaves for Telegram is masked; the terminal, saved output, Needs you, Files and handoff
-  drafts keep the exact text. Invisible and direction-changing characters are removed as well.
+  Only what leaves for Telegram is masked; the terminal, saved output, Needs you, Files and stored
+  handoffs keep the exact text. Invisible and direction-changing characters are removed as well.
 
 ## One program per bot
 

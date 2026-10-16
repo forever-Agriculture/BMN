@@ -56,7 +56,9 @@ describe('Morning digest and Quiet hours rows', () => {
     expect(input(markup, 'preferences-telegram-digest-time')).toContain('aria-label="Morning digest time"')
     expect(markup).toContain('<label for="preferences-telegram-quiet">Quiet hours</label>')
     expect(markup).toContain('role="group" aria-labelledby="preferences-telegram-quiet-allow"')
-    for (const kind of ['Permission', 'Question', 'Handoff', 'Review', 'Notice']) expect(markup).toContain(`/>${kind}</label>`)
+    for (const kind of ['Permission', 'Question', 'Review', 'Notice']) expect(markup).toContain(`/>${kind}</label>`)
+    // A handoff delivers itself to its agent (Story 75.5): Let through holds four boxes.
+    expect(markup).not.toContain('/>Handoff</label>')
   })
 
   it('keeps dependent controls and their values while a feature is off, and disables them', () => {

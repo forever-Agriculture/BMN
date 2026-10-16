@@ -1,7 +1,7 @@
-// MODULE: session-messages.ts - what the host does with a message between sessions: stamp, refuse or store, the hook's take (Epic 66, Story 75.4)
+// MODULE: session-messages.ts - what the host does with a message or a handoff between sessions: stamp, refuse or store, the hook's take (Epic 66, Stories 75.4, 75.5)
 import { randomUUID } from 'node:crypto'
 import { realpath, stat } from 'node:fs/promises'
-import { isAbsolute } from 'node:path'
+import { dirname, isAbsolute } from 'node:path'
 import {
   ERROR_CODES,
   ROSTER_APP_NAMES,
@@ -11,6 +11,7 @@ import {
   SESSION_MESSAGE_WORKSPACE_HOURLY,
   cleanSessionMessageName,
   cleanSessionMessageText,
+  sessionHandoffStamp,
   sessionMessageReceiverRefusal,
   sessionMessageStamp,
   sessionMessageStateWord,
@@ -24,6 +25,7 @@ import {
   type SessionRecord
 } from '@bmn/protocol'
 import type { DatabaseWorkerClient } from './database-client'
+import type { HandoffAttachmentSource, SendOutcome } from './database-message-store'
 import { HostControlError } from './session-manager'
 
 export type { MessageDestination }
@@ -82,6 +84,8 @@ export class SessionMessages {
    * lives here for this run only, as a prompt guard stop does, and the next refused event writes it again.
    */
   private readonly held = new Map<string, string>()
+  /** Story 75.5: the root of the folder each attached file was published from, by file, once BMN found it this run. */
+  private readonly roots = new Map<string, string>()
 
   constructor(private readonly options: SessionMessagesOptions) {}
 
@@ -94,6 +98,30 @@ export class SessionMessages {
       this.held.delete(oldest)
     }
     return true
+  }
+
+  /**
+   * The root of the folder an attached file was published from, by the prompt guard's rule, or null when BMN
+   * cannot find that folder or tell its root: a file whose source is unknown is never handed on.
+   */
+  private async attachmentRoot(file: HandoffAttachmentSource): Promise<string | null> {
+    const known = this.roots.get(file.artifactId)
+    if (known !== undefined) return known
+    if (file.sourcePath === null || !isAbsolute(file.sourcePath)) return null
+    const folder = await this.existingFolder(dirname(file.sourcePath))
+    if (folder === null) return null
+    let root: string
+    try {
+      root = await this.options.sourceRoot(folder)
+    } catch {
+      return null
+    }
+    this.roots.set(file.artifactId, root)
+    for (const oldest of this.roots.keys()) {
+      if (this.roots.size <= HELD_MAX) break
+      this.roots.delete(oldest)
+    }
+    return root
   }
 
   /** The list as the owner reads it: each waiting message with the reason a hook was not handed it, if any. */
@@ -167,6 +195,18 @@ export class SessionMessages {
     }, this.iso())
     this.options.changed()
     if (outcome.accepted) return { messageId: outcome.messageId, state: outcome.state }
+    return this.paused(outcome, p)
+  }
+
+  /**
+   * A send one past an hourly limit, a message's or a handoff's: it stored the pause it caused, which gets its one
+   * notice on the sending session, and the send is refused with the reason.
+   */
+  async paused(
+    outcome: Extract<SendOutcome, { accepted: false }>,
+    p: { senderSessionId: string; senderIncarnationId: string; destinationSessionId: string }
+  ): Promise<never> {
+    this.options.changed()
     const sent = cleanSessionMessageName(outcome.senderName)
     const received = cleanSessionMessageName(outcome.receiverName)
     await this.options.notice(outcome.paused === 'pair'
@@ -183,6 +223,51 @@ export class SessionMessages {
           body: 'They are allowed again by themselves once fewer were sent in the last hour; Messages… in the command palette shows them. BMN stopped nothing else.'
         }).catch(() => undefined)
     return invalid(outcome.reason)
+  }
+
+  /**
+   * Story 75.5: what a handoff needs before it is stored. The sender's root comes from the folder its command ran
+   * in, as a message's does; every attached file's folder must still be found and its root told, or the handoff is
+   * refused, since a file whose source is unknown is never handed on. The provider is asked at hand-over, for all
+   * of these roots. The receiver must run an agent that takes messages (Story 75.4).
+   */
+  async prepareHandoff(p: {
+    senderSessionId: string
+    senderIncarnationId: string
+    senderCwd: string
+    destinationSessionId: string
+    attachments: readonly HandoffAttachmentSource[]
+  }): Promise<{ senderRoot: string; stamp: string; receiverRefusal: string | null }> {
+    this.sameProcess(p.senderSessionId, p.senderIncarnationId)
+    const sender = await this.options.session(p.senderSessionId)
+    if (!sender) invalid('The sending session is unavailable')
+    const folder = await this.existingFolder(p.senderCwd)
+    if (folder === null) invalid('BMN cannot find the folder this command ran in; run bmn handoff from an existing folder')
+    let senderRoot: string
+    try {
+      senderRoot = await this.options.sourceRoot(folder)
+    } catch {
+      return invalid('BMN cannot tell which repository the folder this command ran in belongs to; try again')
+    }
+    for (const file of p.attachments) {
+      if (await this.attachmentRoot(file) === null) {
+        invalid(`BMN cannot tell which folder ${cleanSessionMessageName(file.name)} came from, so it hands it to nobody; nothing was sent`)
+      }
+    }
+    const stamp = sessionHandoffStamp({
+      sessionId: sender.sessionId, name: sender.name, folder: senderRoot,
+      app: appName(agentNow(this.options.foreground(sender.sessionId)))
+    })
+    this.sameProcess(p.senderSessionId, p.senderIncarnationId)
+    return {
+      senderRoot, stamp,
+      receiverRefusal: sessionMessageReceiverRefusal(this.options.foreground(p.destinationSessionId), (app) => appName(app) ?? 'an app')
+    }
+  }
+
+  /** A handoff was stored: the Messages dialog shows it. */
+  handoffQueued(): void {
+    this.options.changed()
   }
 
   private async existingFolder(path: string): Promise<string | null> {
@@ -218,8 +303,9 @@ export class SessionMessages {
    * `message.take`, asked by the receiving agent's own hook after a tool call: the oldest message that may be
    * handed over at this moment, claimed in one step, or nothing. The store answers for expiry, memberships and
    * the hourly limit's pauses; this asks, per message, whether the provider the hook resolved may see private
-   * work in the root stored with that message. A message refused for its provider stays waiting and the list says why
-   * for as long as this run lasts; a later one from another folder is not held up behind it. One message per event.
+   * work in the root stored with that message, and for a handoff in the root of every attached file's folder too
+   * (Story 75.5). A message refused for its provider stays waiting and the list says why for as long as this run
+   * lasts; a later one from another folder is not held up behind it. One message per event.
    */
   async take(p: {
     sessionId: string
@@ -232,20 +318,40 @@ export class SessionMessages {
     if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return { message: null }
     const database = this.options.database
     const candidates = await database.companion('messageTakeCandidates', p.sessionId, this.iso())
-    // One question per folder: the messages of one sender's repository share its answer for this event.
+    // One question per folder: the messages of one repository share its answer for this event.
     const answers = new Map<string, { allowed: boolean; reason: string }>()
-    for (const candidate of candidates) {
-      let answer = answers.get(candidate.senderRoot)
+    const ask = async (root: string): Promise<{ allowed: boolean; reason: string }> => {
+      let answer = answers.get(root)
       if (answer === undefined) {
         try {
-          answer = await this.options.providerAnswer(p.destination, candidate.senderRoot)
+          answer = await this.options.providerAnswer(p.destination, root)
         } catch {
           answer = { allowed: false, reason: 'BMN could not read the approved team' }
         }
-        answers.set(candidate.senderRoot, answer)
+        answers.set(root, answer)
       }
-      if (!answer.allowed) {
-        const detail = `Not handed over by the hook: ${stripFormatCharacters(answer.reason)}.`.slice(0, 400)
+      return answer
+    }
+    for (const candidate of candidates) {
+      let refusal: string | null = null
+      for (const file of candidate.attachments) {
+        const root = await this.attachmentRoot(file)
+        if (root === null) {
+          refusal = `BMN cannot tell which folder ${cleanSessionMessageName(file.name)} came from`
+          break
+        }
+        const answer = await ask(root)
+        if (!answer.allowed) {
+          refusal = answer.reason
+          break
+        }
+      }
+      if (refusal === null) {
+        const answer = await ask(candidate.senderRoot)
+        if (!answer.allowed) refusal = answer.reason
+      }
+      if (refusal !== null) {
+        const detail = `Not handed over by the hook: ${stripFormatCharacters(refusal)}.`.slice(0, 400)
         if (this.hold(candidate.messageId, detail)) this.options.changed()
         continue
       }

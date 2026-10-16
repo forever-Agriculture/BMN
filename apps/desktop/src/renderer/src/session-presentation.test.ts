@@ -1,5 +1,5 @@
 // MODULE: session-presentation.test.ts - status, tags, progress staleness and needs-you navigation
-import { usageClock, usageWindowName, type AttentionRecord, type HookOriginRecord, type InputDraftRecord, type ProgressRecord, type SessionRecord, type UsageReading } from '@bmn/protocol'
+import { usageClock, usageWindowName, type AttentionRecord, type HookOriginRecord, type ProgressRecord, type SessionRecord, type UsageReading } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -9,8 +9,6 @@ import { PlanWindows } from './plan-use-view'
 import {
   activeHookOrigin,
   agentTag,
-  handoffDraftForAttention,
-  handoffPreparedBy,
   attentionActionWhenOpened,
   otherSessionRequestCue,
   displayPath,
@@ -460,7 +458,7 @@ describe('session presentation', () => {
     const markup = renderToStaticMarkup(createElement(SessionRequestCard, {
       requests: applyAttentionWithdrawal([cleared], cleared, { ...cleared, state: 'withdrawn', revision: cleared.revision + 1 }), cleared: [{ request: cleared, phone: { active: false, until: '07:00', waiting: 1, capacityBlocked: false, requests: { n: 'uncertain' }, uncertainRevisions: { n: [2] } } }],
       now, anchor: null, place: () => ({ workspace: 'Work', session: 'Builder' }),
-      onOpenHandoff: () => undefined, onAcknowledge: () => undefined, onMarkAnswered: () => undefined, onClose: () => undefined
+      onAcknowledge: () => undefined, onMarkAnswered: () => undefined, onClose: () => undefined
     }))
     expect(markup).toContain('Exact notice body')
     expect(markup.match(/<article /g)).toHaveLength(1)
@@ -476,7 +474,7 @@ describe('session presentation', () => {
     const popover = (requests: AttentionRecord[]): string => renderToStaticMarkup(createElement(SessionRequestCard, {
       requests, cleared: [], now, anchor: null,
       place: () => ({ workspace: 'Work', session: 'Builder' }),
-      onOpenHandoff: () => undefined, onAcknowledge: () => undefined,
+      onAcknowledge: () => undefined,
       onMarkAnswered: () => undefined, onClose: () => undefined
     }))
     const soon = { ...request('soon', 's1', '2026-09-14T11:55:00.000Z'), expiresAt: '2026-09-14T12:10:00.000Z' }
@@ -498,7 +496,7 @@ describe('session presentation', () => {
       ],
       cleared: [], now, anchor: null,
       place: () => ({ workspace: 'Work', session: 'Builder' }),
-      onOpenHandoff: () => undefined, onAcknowledge: () => undefined,
+      onAcknowledge: () => undefined,
       onMarkAnswered: () => undefined, onClose: () => undefined
     }))
     const actions = [...markup.matchAll(/<div class="actions">(.*?)<\/div>/gu)].map((match) => match[1]!)
@@ -553,7 +551,7 @@ describe('session presentation', () => {
           multiSelect: false, options: [{ label: 'Gold', description: null }, { label: 'Black', description: null }] }]
       } }],
       cleared: [], now, anchor: null, place: () => ({ workspace: 'Work', session: 'Builder' }),
-      onOpenHandoff: () => undefined, onAcknowledge: () => undefined,
+      onAcknowledge: () => undefined,
       onMarkAnswered: () => undefined, onClose: () => undefined
     }))
     expect(markup).not.toContain('<input')
@@ -603,61 +601,29 @@ describe('session presentation', () => {
 })
 
 
-describe('agent handoff entry and provenance', () => {
+describe('a handoff request stored before Story 75.5', () => {
   const petition: AttentionRecord = {
     ...request('petition', 'source', '2026-09-14T11:00:00.000Z'),
     kind: 'handoff', requestKey: 'handoff:draft-1', incarnationId: 'process-1', openedBy: 'cli'
   }
-  const draft: InputDraftRecord = {
-    draftId: 'draft-1', sessionId: 'destination', sourceSessionId: 'source', origin: 'handoff',
-    preparedBy: 'agent', requestId: null, text: 'Result for you', artifactId: null, artifactIds: ['file-1'],
-    attemptedIncarnationId: null, state: 'draft', detail: null,
-    createdAt: '2026-09-14T11:00:00.000Z', updatedAt: '2026-09-14T11:00:00.000Z'
-  }
-  const source = {
-    name: 'Builder',
-    lastProcess: { incarnationId: 'process-1', state: 'live' as const, exitCode: null, signal: null, detail: null }
-  }
 
-  it('opens the petition’s addressed editable draft and keeps it actionable without typing resolution', () => {
-    expect(handoffDraftForAttention(petition, [draft])).toBe(draft)
-    expect(draft.sessionId).toBe('destination')
-    expect(draft.text).toBe('Result for you')
-    expect(draft.artifactIds).toEqual(['file-1'])
+  it('waits for Dismiss, not for typing, and keeps its provenance', () => {
     expect(openAttentionGroups([petition]).responses).toEqual([petition])
     expect(attentionActionWhenOpened(petition)).toBeNull()
     expect(requestsAnsweredByTyping([petition], 'source')).toEqual([])
     expect(attentionProvenance(petition)).toBe('from bmn handoff')
   })
 
-  it('offers Open handoff and acknowledgement without a terminal-answer action', () => {
+  it('renders its card with Dismiss only', () => {
     const markup = renderToStaticMarkup(createElement(SessionRequestCard, {
       requests: [petition], cleared: [], now, anchor: null,
       place: () => ({ workspace: 'Work', session: 'Builder' }),
-      onOpenHandoff: () => undefined, onAcknowledge: () => undefined,
-      onMarkAnswered: () => undefined, onClose: () => undefined
+      onAcknowledge: () => undefined, onMarkAnswered: () => undefined, onClose: () => undefined
     }))
-    expect(markup).toContain('Open handoff')
     expect(markup).toContain('from bmn handoff')
     expect(markup).toContain('Dismiss')
+    expect(markup).not.toContain('Open handoff')
     expect(markup).not.toContain('Mark answered')
-  })
-
-  it('does not open another source’s draft, a completed draft, or a closed petition', () => {
-    expect(handoffDraftForAttention(petition, [{ ...draft, sourceSessionId: 'other' }])).toBeNull()
-    expect(handoffDraftForAttention(petition, [{ ...draft, state: 'accepted' }])).toBeNull()
-    expect(handoffDraftForAttention({ ...petition, state: 'withdrawn' }, [draft])).toBeNull()
-    expect(handoffDraftForAttention({ ...petition, requestKey: 'handoff:other' }, [draft])).toBeNull()
-  })
-
-  it('attributes agent preparation and detects only that draft’s earlier source process', () => {
-    expect(handoffPreparedBy(draft, source, [petition])).toEqual({
-      byline: 'Prepared by the agent in Builder', stale: false
-    })
-    const restarted = { ...source, lastProcess: { ...source.lastProcess, incarnationId: 'process-2' } }
-    expect(handoffPreparedBy(draft, restarted, [petition])?.stale).toBe(true)
-    expect(handoffPreparedBy(draft, restarted, [{ ...petition, requestKey: 'handoff:other' }])?.stale).toBe(false)
-    expect(handoffPreparedBy({ ...draft, preparedBy: null }, source, [petition])).toBeNull()
   })
 })
 

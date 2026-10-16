@@ -13,9 +13,7 @@ export function SessionRequestCard(props: {
   place(sessionId: string): SessionPlace
   now: number
   anchor: HTMLElement | null
-  onOpenHandoff(request: AttentionRecord): void
   onAcknowledge(request: AttentionRecord): void
-  handoffDestination?(request: AttentionRecord): (SessionPlace & { cwd: string }) | null
   onMarkAnswered(request: AttentionRecord): void
   onClose(returnFocus: boolean): void
 }): React.JSX.Element {
@@ -71,7 +69,6 @@ export function SessionRequestCard(props: {
     const expiry = expiryText(request.expiresAt, props.now)
     const kind = request.manualChoices ? request.kind === 'permission' ? 'Manual decision' : 'Manual question'
       : request.kind === 'notice' ? 'Update' : `${request.kind[0]!.toUpperCase()}${request.kind.slice(1)}`
-    const destination = request.kind === 'handoff' ? props.handoffDestination?.(request) : null
     const questions = request.manualChoices ? [manualChoiceQuestion(request.title, request.manualChoices)]
       : request.prompt?.type === 'questions' ? request.prompt.questions : null
     return <article key={`${request.requestId}:${request.revision}:${cleared}`} data-request-id={request.requestId}
@@ -84,8 +81,7 @@ export function SessionRequestCard(props: {
         <span className="attention-kind">{cleared ? 'Cleared update' : kind}</span>
         <span className="age">{expiry ? `${age} · ${expiry}` : age}</span>
       </div>
-      {!(request.manualChoices || questions?.length === 1 && questions[0]?.text === request.title) ? <h3>{destination ? `Handoff to ${destination.workspace} › ${destination.session}` : request.title}</h3> : null}
-      {destination ? <p className="attention-destination">{destination.cwd}</p> : null}
+      {!(request.manualChoices || questions?.length === 1 && questions[0]?.text === request.title) ? <h3>{request.title}</h3> : null}
       {questions ? <div className="attention-questions">{questions.map((question, index) =>
         <section key={index} aria-label={stripFormatCharacters(question.text)}>
           <h4>{stripFormatCharacters(question.text)}</h4>
@@ -106,8 +102,7 @@ export function SessionRequestCard(props: {
       {phone?.uncertainRevisions[request.requestId]?.some(revision => revision !== request.revision)
         ? <p className="seen">Phone: an earlier revision may not have arrived</p> : null}
       {!cleared ? <div className="actions">
-        {request.kind === 'handoff' ? <button type="button" className="primary" onClick={() => props.onOpenHandoff(request)}>Open handoff</button> : null}
-        <button type="button" className={request.kind === 'handoff' ? undefined : 'primary'}
+        <button type="button" className="primary"
           onClick={() => props.onAcknowledge(request)} title="Clear this reminder; keep the task or draft.">Dismiss</button>
         {actionable && request.kind !== 'handoff' ? <button type="button" title="Close this request after answering it in the terminal"
           onClick={() => props.onMarkAnswered(request)}>Mark answered</button> : null}

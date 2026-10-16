@@ -46,7 +46,7 @@ claim changes nothing. The claim-shaped flows and their state:
 
 | Claim | Establish | Revalidate | Release | State |
 | --- | --- | --- | --- | --- |
-| Handoff draft paste | draft → *uncertain* in one database transaction, keyed by the draft's update time (`claimHandoffDraft`, `database-companion-store.ts`) | claim conflicts on a changed update time; destination re-read and incarnation re-checked after the claim (`sendDraftLocked`, `companion-service.ts`) | `finishHandoffDraft` accepts only the *uncertain* claim it holds: definite pre-write failures finish back to *draft*, and a PTY write of unknown outcome deliberately stays *uncertain* | UNVERIFIED: one gap |
+| Handoff hand-over (Story 75.5) | the record, its stored file's row and its message are stored in one database transaction under the message limits (`queueAgentHandoff`, `database-companion-store.ts`); the stored file is removed when that transaction stores nothing | the hook's claim is the message's (`claimMessageForHook`); the provider is asked for the sender's and every attached file's folder, and the receiving process re-checked, before and after the claim (`take`, `session-messages.ts`) | a claim made for a process the terminal no longer runs is given back (`releaseMessageClaim`); a lost answer leaves it *uncertain* | UNVERIFIED: no live race test |
 | Conversation identity | synchronous check-and-set (`claimConversation`, `session-manager.ts`) | swap re-checks the held identity around the in-flight store write | identity-checked rollback and teardown (`swapConversationClaim`, `removeIfCurrent`) | UNVERIFIED: one gap |
 | Cohort resume action | one recorded promise per idempotency key, set before any `await` (`resumeCohort`, `session-manager.ts`) | repeats return the recorded outcome | entries are kept for the process lifetime: the record *is* the idempotency | Protected |
 | Repeat-watch state | per-session notice queue; state read and written inside the queued operation (`observeHookEvent`, `companion-service.ts`) | the open notice row and the live incarnation are re-read before opening or withdrawing | queue tail removes itself when still current | UNVERIFIED: three gaps |
@@ -160,9 +160,9 @@ a claim, not as verified success. A question stays open until it is answered or 
 Explicit owner navigation withdraws only captured notice revisions through the existing guarded owner resolution.
 The renderer retains their read-only detail until navigation elsewhere; request cards overlay panes and never
 write terminal input. Mounting, reconciliation and request arrival never perform this withdrawal.
-The optional workspace results view reads the latest report per session and named source,
-its evidence references and the bounded draft list. It rechecks the exact report or handoff
-before routing the owner to the existing detail or Files flow; the view cannot deliver a draft.
+The optional workspace results view reads the latest report per session and named source and
+its evidence references. It rechecks the exact report before routing the owner to the existing
+detail; it holds no handoffs, which deliver themselves (Story 75.5).
 
 **Hook configuration and observation are separate facts.** A bounded utility read runs BMN's
 existing hook checker, redacts configuration contents and gives Preferences a dated report.

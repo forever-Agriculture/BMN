@@ -101,13 +101,17 @@ export interface ControlHandlers {
     producer?: AttentionProducer
     manualChoices?: ManualChoices
   }): Promise<unknown>
-  /** A session may address one destination; only the handler creates the owner-delivered draft. */
+  /**
+   * A session may address one destination, in any workspace; the handler stores the handoff and queues it for the
+   * receiving agent's own hook (Story 75.5).
+   */
   prepareHandoff(p: {
     sourceSessionId: string
     sourceIncarnationId: string
     destinationSessionId: string
     text: string
     artifactIds: string[]
+    senderCwd: string
   }): Promise<unknown>
   /** Epic 66: the sessions a session may message. Never reachable by the owner token. */
   listPeers(sessionId: string): Promise<unknown>
@@ -963,7 +967,7 @@ export class ControlServer {
         }))
       }
       case 'handoff.prepare': {
-        const params = closedParams(rawParams, ['destinationSessionId', 'text', 'artifactIds', 'idempotencyKey'])
+        const params = closedParams(rawParams, ['destinationSessionId', 'text', 'artifactIds', 'senderCwd', 'idempotencyKey'])
         if (scope.kind !== 'session') throw unauthorized('Only a session may prepare a handoff')
         const destinationSessionId = requireText(params, 'destinationSessionId', RULES.sessionId)
         const handoffText = requireText(params, 'text', {
@@ -973,13 +977,17 @@ export class ControlServer {
           throw invalid('Handoff text may contain only newline and tab control characters')
         }
         const artifactIds = readIdentifiers(params, 'artifactIds', 10)
+        // Story 75.5: the folder the command ran in, whose repository the provider check at hand-over covers.
+        const senderCwd = requireText(params, 'senderCwd', RULES.path)
+        if (!isAbsolute(senderCwd)) throw invalid('senderCwd must be absolute')
         const idempotencyKey = requireText(params, 'idempotencyKey', RULES.idempotencyKey)
         return this.idempotent(scope, method, idempotencyKey, params, () => handlers.prepareHandoff({
           sourceSessionId: scope.sessionId,
           sourceIncarnationId: scope.incarnationId,
           destinationSessionId,
           text: handoffText,
-          artifactIds
+          artifactIds,
+          senderCwd
         }))
       }
       case 'peers.list': {
