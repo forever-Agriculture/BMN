@@ -41,6 +41,7 @@ import type {
   ClosePromptRequest,
   ControlInfo,
   OwnerAwayView,
+  AwaySummaryPayload,
   DraftSendExpectation,
   FileReferenceReadParams,
   FileReferenceReadResult,
@@ -335,6 +336,7 @@ export interface AiTerminalBridge {
   getAway(): Promise<OwnerAwayView>
   setAway(to: 'away' | 'back', note?: string | null): Promise<OwnerAwayView>
   markAwaySummaryShown(periodId: string): Promise<OwnerAwayView>
+  awaySummary(): Promise<AwaySummaryPayload>
   /** Writes a backup to a folder the owner picks and checks the copy at once (Story 75.7); null when he cancels. */
   exportBackup(): Promise<BackupExportResult | null>
   /** Epic 60.5: the team file, the approved version, pending differences with consequences, and approval history. */

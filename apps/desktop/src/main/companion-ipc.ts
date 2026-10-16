@@ -77,7 +77,8 @@ const ROUTES = {
   'aiterm:control:info': METHOD_REGISTRY.controlInfo,
   'aiterm:away:get': METHOD_REGISTRY.awayGet,
   'aiterm:away:set': METHOD_REGISTRY.awaySet,
-  'aiterm:away:summary-shown': METHOD_REGISTRY.awaySummaryShown
+  'aiterm:away:summary-shown': METHOD_REGISTRY.awaySummaryShown,
+  'aiterm:away:summary': METHOD_REGISTRY.awaySummary
 } as const
 
 const PASTE_IMAGE_TYPES = new Map([['image/png', 'png'], ['image/jpeg', 'jpg'], ['image/webp', 'webp'], ['image/gif', 'gif']])

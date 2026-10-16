@@ -148,7 +148,7 @@ describe('protocol surface', () => {
     // owner's review and save of a handoff (79 before); Story 75.7 the separate check of a backup, which an export now
     // runs on its own copy (77 before); Story 75.9 the owner's hooks check, which BMN's start now does with an install
     // (76 before). Story 76.3 adds the owner's away state: read, change, and its summary shown (75 before).
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(78)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(79)
   })
 
   it('exports the initial stable error codes', () => {

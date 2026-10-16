@@ -59,6 +59,7 @@ import {
   type BackupExportResult,
   type ControlInfo,
   type OwnerAwayView,
+  type AwaySummaryPayload,
   type DraftSendExpectation,
   type FileReferenceReadParams,
   type FileReferenceReadResult,
@@ -709,6 +710,10 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   markAwaySummaryShown(periodId: string): Promise<OwnerAwayView> {
     return invokeBridge('aiterm:away:summary-shown', { periodId })
+  },
+  /** Story 76.6: the current away period's summary sources, closed or still running. */
+  awaySummary(): Promise<AwaySummaryPayload> {
+    return invokeBridge('aiterm:away:summary', {})
   },
   exportBackup(): Promise<BackupExportResult | null> {
     return invokeBridge('aiterm:backup:export', {})

@@ -1,5 +1,7 @@
 // MODULE: telegram-away.test.ts - what counts as the owner's /away or /back from Telegram, and the replies (Story 76.3 AC4)
 import { describe, expect, it } from 'vitest'
+import { awayTelegramWaiting, type AttentionRecord } from '@bmn/protocol'
+import { phoneField } from './quiet-hours-delivery'
 import { awayReplyText, backReplyText, telegramAwayCommand } from './telegram-away'
 
 const text = (value: string, over: Partial<{ textSource: 'text' | 'caption' | null; file: unknown }> = {}) =>
@@ -54,5 +56,22 @@ describe('replies', () => {
     expect(backReplyText({ since, endedAt, changed: true, waiting: null, now })).toMatch(/could not be read; see the laptop\.$/)
     expect(backReplyText({ since, endedAt, changed: true, waiting: ['api: Push to origin?'], more: 3, now }).split('\n')).toEqual([
       'Back. Away 9 h 30 min, Wed 22:10 – Thu 07:40.', 'Waiting on you', 'api: Push to origin?', '3 more on the laptop.'])
+  })
+
+  it('masks a key and home paths in each field and keeps the whole reply within the digest bound (Story 76.6 AC4)', () => {
+    const since = at(14, 22, 10)
+    const endedAt = at(15, 7, 40)
+    const home = '/home/someone'
+    const attention = Array.from({ length: 10 }, (_, index) => ({
+      requestId: `r${index}`, sessionId: 's1', state: 'open', openedAt: `2026-10-15T0${index}:00:00.000Z`, kind: 'permission', title: 't',
+      prompt: { type: 'permission', command: `cat ${home}/x && echo sk-ant-api03-${'A'.repeat(40)} ${'y'.repeat(400)}` }
+    })) as unknown as AttentionRecord[]
+    const { lines, more } = awayTelegramWaiting(attention, () => `${home}/Builder`, (value, limit) => phoneField(value, home, limit))
+    expect(lines[0]).toMatch(/^~\/Builder: cat ~\/x && echo /)
+    expect(lines.join('\n')).not.toContain('sk-ant-api03-AAAA')
+    expect(lines.every((line) => line.length <= 120 + 2 + 220)).toBe(true)
+    const reply = backReplyText({ since, endedAt, changed: true, waiting: lines, more, now, limit: 1_000 })
+    expect(reply.length).toBeLessThanOrEqual(1_000)
+    expect(reply).toMatch(/\d+ more on the laptop\.$/)
   })
 })

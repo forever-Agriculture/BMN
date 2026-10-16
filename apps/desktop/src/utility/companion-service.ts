@@ -40,6 +40,7 @@ import {
   type AwayRecord,
   agentAwayView,
   AWAY_QUESTION_REFUSAL,
+  awayTelegramWaiting,
   AWAY_REFUSED_QUESTION_TOOLS,
   effectiveAway,
   ownerAwayView,
@@ -1245,6 +1246,16 @@ export class CompanionService {
         const result = await this.changeAway({ to, source: 'app', ...(params.note === undefined ? {} : { note: params.note as string | null }) })
         if (result.outcome === 'invalid') invalid(result.reason)
         return ownerAwayView(result.record)
+      }
+      case METHOD_REGISTRY.awaySummary: {
+        // Story 76.6: the current period, closed or still running; the renderer adds the live requests, asks and dev-auto runs.
+        const record = this.awayRecord
+        if (record.periodId === null || record.since === null) throw new HostControlError(ERROR_CODES.notFound, 'There is no away period yet')
+        const keepDays = await this.history.status().then((status) => status.confirmedKeepDays ?? null).catch(() => null)
+        const data = await this.options.database.companion('awaySummaryData', {
+          periodId: record.periodId, since: record.since, until: record.state === 'away' ? null : record.endedAt, now: this.iso(), keepDays
+        })
+        return { away: ownerAwayView(record), ...data }
       }
       case METHOD_REGISTRY.awaySummaryShown: {
         const periodId = params.periodId
@@ -3140,6 +3151,19 @@ export class CompanionService {
     }
   }
 
+  /** Story 76.6 AC4: Waiting on you for the `/back` reply, masked and clipped per field; null when it could not be read. */
+  private async telegramWaiting(): Promise<{ waiting: string[] | null; more: number }> {
+    try {
+      const database = this.options.database
+      const [attention, names] = await Promise.all([database.companion('listAttention'), database.companion('awaySessionNames')])
+      const home = this.options.home ?? homedir()
+      const { lines, more } = awayTelegramWaiting(attention, (sessionId) => names[sessionId] ?? null, (text, limit) => phoneField(text, home, limit))
+      return { waiting: lines, more }
+    } catch {
+      return { waiting: null, more: 0 }
+    }
+  }
+
   /**
    * Story 76.3 AC4: the state change carries the update's key, stored in the same operation, so a redelivered update neither
    * repeats nor reverses it. The reply is claimed before it is sent and sent again only when Telegram definitely refused
@@ -3162,7 +3186,10 @@ export class CompanionService {
       ? record.state === 'away' && record.since !== null
         ? awayReplyText({ since: record.since, repeated: result.outcome !== 'repeated' && before === 'away', note, now: this.now() })
         : 'Not away; nothing changed.'
-      : backReplyText({ since: record.since, endedAt: record.endedAt, changed: record.state === 'back' && (result.outcome === 'changed' || result.outcome === 'repeated'), now: this.now() })
+      : backReplyText({
+        since: record.since, endedAt: record.endedAt, changed: record.state === 'back' && (result.outcome === 'changed' || result.outcome === 'repeated'),
+        now: this.now(), ...await this.telegramWaiting()
+      })
     const replyKey = `telegram-away-reply:${bot}:${reply.updateId}`
     const database = this.options.database
     if (await database.companion('getReceipt', replyKey)) return
