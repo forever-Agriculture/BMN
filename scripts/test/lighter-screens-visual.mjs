@@ -245,6 +245,17 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
         return { failed: JSON.stringify(error, Object.getOwnPropertyNames(error ?? {})) }
       }
     }, { workspaceId: workspace.workspaceId, cwd: work, name, argv })
+    // Story 76.6: an away period with nothing in it, taken before any session works: back opens the summary by itself, once.
+    const setAway = (to, note) => page.evaluate(([to, note]) => window.aiTerminal.setAway(to, note ?? undefined), [to, note])
+    const summaryDialog = page.locator('dialog.away-summary-dialog')
+    if (wanted('away-summary-empty')) {
+      await setAway('away')
+      await sleep(400)
+      await setAway('back')
+    }
+    await screen('away-summary-empty', 'Back after an away with nothing in it: the summary opened by itself, once', async () => {
+      await summaryDialog.waitFor()
+    }, { region: 'dialog.away-summary-dialog', scroll: 'dialog.away-summary-dialog', close: escape })
     const reviewer = await startSession('Reviewer', ['--noprofile', '--norc', '-i'])
     if (reviewer.failed) throw new Error(`the Reviewer session was not started: ${reviewer.failed}`)
     note(`session "Reviewer" started: a plain shell in ${work}`)
@@ -349,6 +360,70 @@ echo seeded
       await launcher.waitFor()
       await launcher.locator('details.advanced > summary').click().catch(() => undefined)
     }, { region: '.session-launcher', scroll: '.session-launcher', close: async () => { await page.locator('button[aria-label="Close new session"]').click() } })
+
+    // ---- Story 76.1/76.3/76.6: the Away check, the note, the palette rows and the summary ------------------------
+    if (['away-note', 'head-away', 'palette-away', 'away-summary'].some(wanted)) {
+      await screen('away-note', 'Palette › I\'m away…: the note mode with a note typed; Enter sets away', async () => {
+        await palette('away')
+        await page.locator('#palette-away').click()
+        await page.locator('dialog[open] input').waitFor()
+        await page.keyboard.type('back by 8, don\'t merge 76')
+      }, { region: 'dialog[open]', close: async () => { await page.keyboard.press('Enter') } })
+      const awayNow = await page.evaluate(() => window.aiTerminal.getAway())
+      if (awayNow.state !== 'away') await setAway('away', 'back by 8, don\'t merge 76')
+      // A session that does what an agent does while he is away: its hook names its conversation, it publishes a file,
+      // records two decisions (one with references BMN checks, one depending on it and on one not in the list),
+      // reports an outcome and leaves a question as a card.
+      const night = join(root, 'night.sh')
+      writeFileSync(join(work, 'plan.md'), '# Synthetic plan\n')
+      writeFileSync(night, `B() { if command -v bmn >/dev/null; then bmn "$@"; else '${process.execPath}' '${cli}' "$@"; fi; }
+cd '${work}'
+printf '%s' '{"hook_event_name":"SessionStart","source":"startup","session_id":"6f1c2a4e-0b7d-4c3a-9e21-5a8b7c6d4e3f","transcript_path":"/tmp/synthetic.jsonl"}' | B hook claude > /dev/null
+rev=$(B away --status --json | sed -n 's/.*"revision":\\([0-9]*\\).*/\\1/p')
+published=$(B publish plan.md --key night-publish)
+id=$(printf '%s\\n' "$published" | sed -n 's/.* as \\([^ ]*\\).*/\\1/p')
+B decision record --key filter-state --revision "$rev" --choice 'Keep the filter state in the URL, not in local storage' --reason 'The acceptance text names shareable links; storage would break them' --affects 'src/search.ts, search.test.ts' --reverse 'Revert the commit on dev-auto/epic-76; nothing else reads the URL yet' --ref "session:${reviewerId}" --ref "artifact:$id" --ref 'workflow:dev-auto/epic-76#d3'
+B decision record --key cache-key --revision "$rev" --choice 'Key the result cache by the normalised query string' --reason 'Two spellings of one query should share a cache entry' --affects 'src/cache.ts' --reverse 'Return to the raw query as the key' --depends filter-state --depends router-shape
+B decision outcome --key filter-state --op build --result done
+B ask night-colour 'Which colour should the made-up badge be?' --kind question --body 'Gold or grey'
+echo night-seeded
+`)
+      const nightSession = await startSession('Night', ['-ic', `bash '${night}'; exec bash -i`])
+      if (nightSession.failed) note(`the Night session was not started: ${nightSession.failed}`)
+      await sleep(6_000)
+      await screen('head-away', 'The window head while away: the checked box and "Away since …", its words a button', async () => {}, { region: '.app-header' })
+      await screen('palette-away', 'Palette, "away" typed while away: I\'m back with since and source', async () => { await palette('away') }, { region: 'dialog[open]', close: escape })
+      await screen('away-summary-so-far', 'The head\'s words pressed while away: While you are away, the summary so far', async () => {
+        await page.locator('.away-check button.away-words').click()
+        await summaryDialog.waitFor()
+      }, { region: 'dialog.away-summary-dialog', scroll: 'dialog.away-summary-dialog', close: escape })
+      await screen('away-summary', 'Palette › I\'m back: the summary opened by itself, a decision opened in place', async () => {
+        await palette('back')
+        await page.locator('#palette-away').click()
+        await summaryDialog.waitFor()
+        await summaryDialog.locator('section[aria-label="Decided for you, recorded by agents"] .message-row').first().click()
+      }, { region: 'dialog.away-summary-dialog', scroll: 'dialog.away-summary-dialog', close: escape })
+      await screen('palette-while-away', 'Palette, "while" typed after back: While you were away… with the period', async () => { await palette('while') }, { region: 'dialog[open]', close: escape })
+      // A long night: more decisions and requests than the summary lists, so each list says what it cut.
+      const long = join(root, 'long.sh')
+      writeFileSync(long, `B() { if command -v bmn >/dev/null; then bmn "$@"; else '${process.execPath}' '${cli}' "$@"; fi; }
+cd '${work}'
+printf '%s' '{"hook_event_name":"SessionStart","source":"startup","session_id":"7a2d3b5f-1c8e-4d4b-8f32-6b9c8d7e5f40","transcript_path":"/tmp/synthetic-long.jsonl"}' | B hook claude > /dev/null
+rev=$(B away --status --json | sed -n 's/.*"revision":\\([0-9]*\\).*/\\1/p')
+for n in $(seq 1 34); do B decision record --key "long-$n" --revision "$rev" --choice "Synthetic choice number $n for the long night" --reason 'A made-up reason' --affects 'src/long.ts' --reverse 'Revert it' > /dev/null; done
+for n in $(seq 1 42); do B ask "long-ask-$n" "Synthetic question number $n" --kind question > /dev/null; done
+echo long-seeded
+`)
+      if (wanted('away-summary-long')) {
+        await setAway('away')
+        const longSession = await startSession('Long night', ['-ic', `bash '${long}'; exec bash -i`])
+        if (longSession.failed) note(`the Long night session was not started: ${longSession.failed}`)
+        await sleep(20_000)
+        await setAway('back')
+      }
+      await screen('away-summary-long', 'Back after a long night: each list cut with its count', async () => { await summaryDialog.waitFor() },
+        { region: 'dialog.away-summary-dialog', scroll: 'dialog.away-summary-dialog', close: escape })
+    }
 
     // ---- Preferences ------------------------------------------------------------------------------------------
     const dialog = page.locator('.preferences-dialog')
