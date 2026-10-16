@@ -39,7 +39,8 @@ export interface ArtifactPreview {
 }
 
 export type AttentionKind = 'question' | 'permission' | 'review' | 'notice' | 'handoff'
-export type AttentionState = 'open' | 'answered' | 'withdrawn' | 'expired'
+/** `recorded`: a decision an agent recorded while the owner was away (Story 76.5); never open, never waiting on him. */
+export type AttentionState = 'open' | 'answered' | 'withdrawn' | 'expired' | 'recorded'
 
 /** Agent-authored handoff text may contain line breaks and tabs, but no other C0/C1 controls. */
 export function hasDisallowedHandoffControl(value: string): boolean {

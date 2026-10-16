@@ -103,6 +103,8 @@ async function cliFixture() {
       ({ recorded: true, argv: [...p.argv], reportedAt: '2026-09-29T10:15:00.000Z' })),
     clearResumeCommand: vi.fn<ControlHandlers['clearResumeCommand']>(async () => ({ cleared: true })),
     awayPrinted: vi.fn<ControlHandlers['awayPrinted']>(async () => ({ recorded: true })),
+    recordDecision: vi.fn<ControlHandlers['recordDecision']>(async (p) => ({ outcome: 'recorded', key: p.key, periodId: 'period-1', revision: p.revision, recordedAt: '2026-10-16T23:00:00.000Z' })),
+    decisionOutcome: vi.fn<ControlHandlers['decisionOutcome']>(async (p) => ({ outcome: 'appended', key: p.key, outcomes: 1 })),
     awayStatus: vi.fn<ControlHandlers['awayStatus']>(async (scope) => scope.kind === 'owner'
       ? { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3, note: 'back by 8' }
       : { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3 }),
@@ -5425,5 +5427,35 @@ describe('bmn away and bmn back (Story 76.3)', () => {
     const refused = await runCli(['away'], { env: fixture.sessionEnv })
     expect(refused.code).toBe(1)
     expect(refused.stderr).toMatch(/^bmn: INVALID_ARGUMENT: An agent names the away revision/)
+  })
+})
+
+describe('bmn decision (Story 76.5)', () => {
+  it('records a decision with repeated --ref and --depends, and reports an outcome', async () => {
+    const fixture = await cliFixture()
+    const recorded = await runCli(['decision', 'record', '--key', 'storage-format', '--revision', '3', '--choice', 'JSON array', '--reason', 'No dependency',
+      '--affects', 'src/store.js', '--reverse', 'Replace it', '--ref', 'session:session-2', '--ref', 'workflow:run#1', '--depends', 'earlier'], { env: fixture.sessionEnv })
+    expect(recorded).toEqual({ code: 0, stdout: 'Decision storage-format recorded (away revision 3)\n', stderr: '' })
+    expect(fixture.handlers.recordDecision).toHaveBeenCalledWith(expect.objectContaining({
+      key: 'storage-format', revision: 3,
+      payload: expect.objectContaining({ references: [{ kind: 'session', id: 'session-2' }, { kind: 'workflow', id: 'run#1' }], depends: ['earlier'] })
+    }))
+    const outcome = await runCli(['decision', 'outcome', '--key', 'storage-format', '--op', 'built', '--result', 'done'], { env: fixture.sessionEnv })
+    expect(outcome).toEqual({ code: 0, stdout: 'Outcome built for decision storage-format reported\n', stderr: '' })
+  })
+
+  it('exits 2 on usage, 1 when BMN refuses, and sends nothing for a usage error', async () => {
+    const fixture = await cliFixture()
+    for (const args of [
+      ['decision', 'record', '--key', 'k'],
+      ['decision', 'record', '--key', 'k', '--revision', 'x', '--choice', 'c', '--reason', 'r', '--affects', 'a', '--reverse', 'v'],
+      ['decision', 'outcome', '--key', 'k', '--op', 'o', '--result', 'maybe'],
+      ['decision', 'outcome', '--key', 'k', '--op', 'o', '--result', 'done', '--choice', 'c'],
+      ['decision', 'forget']
+    ]) expect((await runCli(args, { env: fixture.sessionEnv })).code, args.join(' ')).toBe(2)
+    expect(fixture.handlers.recordDecision).not.toHaveBeenCalled()
+    fixture.handlers.decisionOutcome.mockRejectedValueOnce(new Error('synthetic'))
+    const refused = await runCli(['decision', 'outcome', '--key', 'k', '--op', 'o', '--result', 'done'], { env: fixture.sessionEnv })
+    expect(refused.code).toBe(1)
   })
 })

@@ -747,6 +747,22 @@ export class CompanionService {
         reportRefusal: (method, sessionId, reason) => this.logRefusal(method, sessionId, reason),
         awayStatus: async (scope) => scope.kind === 'owner' ? this.awayForOwner() : this.awayForAgent(),
         awayPrinted: async (p) => ({ recorded: this.awayNotices.printed(p.sessionId, p.agent, p.conversation, p.revision) }),
+        // Story 76.5: BMN binds the decision to this process's conversation, as its own hook reported it, never the caller's word.
+        recordDecision: (p) => this.controlCall(async () => {
+          const producer = p.incarnationId === null ? null : this.producers.stamp(p.sessionId, p.incarnationId)
+          if (producer === null || p.incarnationId === null) {
+            throw new HostControlError(ERROR_CODES.notFound, 'BMN does not know which conversation this process is in; nothing was recorded. Keep the decision in your workflow\'s log and say BMN\'s list may be incomplete')
+          }
+          const result = await this.options.database.companion('recordDecision', {
+            sessionId: p.sessionId, incarnationId: p.incarnationId, key: p.key, payload: p.payload, expectedRevision: p.revision,
+            provenance: { agentCli: producer.agentCli, conversation: producer.conversationReference }
+          }, this.iso())
+          return { outcome: result.outcome, key: result.record.key, periodId: result.record.periodId, revision: result.record.revision, recordedAt: result.record.recordedAt }
+        }),
+        decisionOutcome: (p) => this.controlCall(async () => {
+          const result = await this.options.database.companion('addDecisionOutcome', p, this.iso())
+          return { outcome: result.outcome, key: result.record.key, outcomes: result.record.outcomes.length }
+        }),
         changeAway: (p) => this.controlCall(async () => {
           const result = await this.changeAway({
             to: p.to, source: p.scope.kind === 'owner' ? 'cli' : 'agent',

@@ -5,6 +5,10 @@ import { createConnection, createServer, type Server, type Socket } from 'node:n
 import { dirname, isAbsolute } from 'node:path'
 import {
   AGENT_ATTENTION_ORIGINS,
+  DECISION_LIMITS,
+  DECISION_REFERENCE_KINDS,
+  type DecisionPayload,
+  type DecisionReferenceKind,
   ERROR_CODES,
   GUARD_AGENTS,
   GUARD_CAUSES,
@@ -239,6 +243,10 @@ export interface ControlHandlers {
   awayStatus(scope: ControlScope): Promise<unknown>
   /** Story 76.4: the session's hook printed the away snapshot BMN handed for this conversation; printed is never read. */
   awayPrinted(p: { sessionId: string; agent: string; conversation: string; revision: number }): Promise<unknown>
+  /** Story 76.5: a decision the session's agent made while the owner is away; the host binds provenance and period. */
+  recordDecision(p: { sessionId: string; incarnationId: string | null; key: string; revision: number; payload: DecisionPayload }): Promise<unknown>
+  /** Story 76.5: what came of a recorded decision, under its own operation key. */
+  decisionOutcome(p: { sessionId: string; key: string; op: string; result: 'done' | 'failed'; evidence: string[] }): Promise<unknown>
   /**
    * Story 76.3: away or back. The owner's token says it as `cli`; a session's agent only on his words, naming the revision
    * it saw, as `agent`. `operationKey` makes a retry return the first result.
@@ -365,7 +373,12 @@ const RULES = {
   guardLine: { min: 1, max: 600, unit: 'characters', controls: 'reject', strip: true },
   timestamp: { min: 1, max: 64, unit: 'characters', controls: 'reject' },
   /** Story 76.3: his own note; the store refuses one over 200 characters rather than cutting it. */
-  awayNote: { min: 0, max: 4096, unit: 'characters', controls: 'reject' }
+  awayNote: { min: 0, max: 4096, unit: 'characters', controls: 'reject' },
+  /** Story 76.5: a decision's words, shown to the owner as inert text. */
+  decisionChoice: { min: 1, max: DECISION_LIMITS.choice, unit: 'characters', controls: 'reject', strip: true },
+  decisionReason: { min: 1, max: DECISION_LIMITS.reason, unit: 'characters', controls: 'allow-whitespace', strip: true },
+  decisionAffects: { min: 1, max: DECISION_LIMITS.affects, unit: 'characters', controls: 'allow-whitespace', strip: true },
+  decisionReverse: { min: 1, max: DECISION_LIMITS.reverse, unit: 'characters', controls: 'allow-whitespace', strip: true }
 } satisfies Record<string, TextRule>
 
 const utf8 = new TextDecoder('utf-8', { fatal: true })
@@ -492,6 +505,12 @@ function acceptableOrigin(value: unknown, scope: ControlScope): boolean {
 const ORIGIN_REFUSAL_QUIET_MS = 60_000
 
 /** A bounded array of identifiers, for a repeatable option; absent means an empty list, never inherited. */
+/** A decision key or operation key: letters, digits and . _ : - only, at most 120. */
+function decisionKey(value: string, key: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(value)) throw invalid(`${key} must be letters, digits and . _ : - (at most 120)`)
+  return value
+}
+
 function readIdentifiers(params: Params, key: string, max: number): string[] {
   const value = params[key]
   if (value === undefined) return []
@@ -1434,6 +1453,40 @@ export class ControlServer {
         readText(params, 'idempotencyKey', RULES.idempotencyKey)
         const sessionId = this.target(scope, params)
         return handlers.clearResumeCommand({ sessionId, incarnationId: scope.incarnationId })
+      }
+      case 'decision.record': {
+        const params = closedParams(rawParams, ['key', 'revision', 'choice', 'reason', 'affects', 'reverse', 'references', 'depends'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session\'s agent records a decision it made')
+        const key = decisionKey(requireText(params, 'key', IDENTIFIER), 'key')
+        const revision = params.revision
+        if (!Number.isSafeInteger(revision) || (revision as number) < 0) throw invalid('revision must be the away revision you saw (bmn away --status)')
+        const references = readIdentifiers(params, 'references', DECISION_LIMITS.references).map((text) => {
+          const at = text.indexOf(':')
+          const kind = text.slice(0, at) as DecisionReferenceKind
+          const id = text.slice(at + 1)
+          if (at < 1 || !DECISION_REFERENCE_KINDS.includes(kind) || id === '') throw invalid('a reference is KIND:ID with KIND one of session, artifact, workflow')
+          return { kind, id }
+        })
+        const depends = readIdentifiers(params, 'depends', DECISION_LIMITS.depends).map((text) => decisionKey(text, 'depends'))
+        return handlers.recordDecision({
+          sessionId: scope.sessionId, incarnationId: incarnationOf(scope), key, revision: revision as number,
+          payload: {
+            choice: requireText(params, 'choice', RULES.decisionChoice), reason: requireText(params, 'reason', RULES.decisionReason),
+            affects: requireText(params, 'affects', RULES.decisionAffects), reverse: requireText(params, 'reverse', RULES.decisionReverse),
+            references, depends
+          }
+        })
+      }
+      case 'decision.outcome': {
+        const params = closedParams(rawParams, ['key', 'op', 'result', 'evidenceIds'])
+        if (scope.kind !== 'session') throw unauthorized('Only the session that recorded a decision reports its outcome')
+        const result = params.result
+        if (result !== 'done' && result !== 'failed') throw invalid('result must be done or failed')
+        return handlers.decisionOutcome({
+          sessionId: scope.sessionId, key: decisionKey(requireText(params, 'key', IDENTIFIER), 'key'),
+          op: decisionKey(requireText(params, 'op', IDENTIFIER), 'op'), result,
+          evidence: readIdentifiers(params, 'evidenceIds', DECISION_LIMITS.evidence)
+        })
       }
       case 'away.printed': {
         const params = closedParams(rawParams, ['agent', 'conversation', 'revision'])

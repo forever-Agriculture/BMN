@@ -265,3 +265,55 @@ export function awayNotice(record: Pick<AwayRecord, 'state' | 'since' | 'endedAt
   if (record.state === 'back' && record.endedAt !== null) return `${awayNoticeStamp('back', record.endedAt, record.revision, now)}\n${AWAY_BACK_AGENT_TEXT}`
   return null
 }
+
+/** Story 76.5: what a recorded decision may name: a BMN session, a published file, or an entry of the agent's own workflow. */
+export type DecisionReferenceKind = 'session' | 'artifact' | 'workflow'
+export const DECISION_REFERENCE_KINDS: readonly DecisionReferenceKind[] = Object.freeze(['session', 'artifact', 'workflow'])
+export const DECISION_LIMITS = Object.freeze({ key: 120, choice: 300, reason: 1000, affects: 1000, reverse: 600, references: 8, depends: 8, outcomes: 20, evidence: 8 })
+
+export interface DecisionReference {
+  kind: DecisionReferenceKind
+  id: string
+  /** Whether BMN found it, its own, when the decision was recorded; a workflow entry is never BMN's to check. */
+  valid: boolean
+}
+
+export interface DecisionOutcome {
+  op: string
+  result: 'done' | 'failed'
+  evidence: string[]
+  /** Who reported it: always the agent; never the owner's approval or a verification. */
+  reporter: 'agent'
+  at: string
+}
+
+/** One decision an agent recorded while he was away, bound by BMN to its session, conversation, process and period. */
+export interface DecisionRecord {
+  key: string
+  sessionId: string
+  choice: string
+  reason: string
+  affects: string
+  reverse: string
+  references: DecisionReference[]
+  depends: string[]
+  periodId: string
+  revision: number
+  agentCli: string
+  conversation: string
+  incarnationId: string
+  recordedAt: string
+  outcomes: DecisionOutcome[]
+}
+
+/** The payload an agent sends; everything else BMN binds itself. */
+export type DecisionPayload = Pick<DecisionRecord, 'choice' | 'reason' | 'affects' | 'reverse' | 'depends'> & {
+  references: Array<Pick<DecisionReference, 'kind' | 'id'>>
+}
+
+/** Whether a retry carries the same decision: the agent's own fields only, in order. */
+export function sameDecisionPayload(record: DecisionRecord, payload: DecisionPayload): boolean {
+  return record.choice === payload.choice && record.reason === payload.reason && record.affects === payload.affects &&
+    record.reverse === payload.reverse && JSON.stringify(record.depends) === JSON.stringify(payload.depends) &&
+    JSON.stringify(record.references.map(({ kind, id }) => ({ kind, id }))) === JSON.stringify(payload.references.map(({ kind, id }) => ({ kind, id })))
+}

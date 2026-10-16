@@ -4149,6 +4149,26 @@ describe('Away (Story 76.3)', () => {
     expect(resumed.awayNotice?.endsWith(AWAY_BACK_AGENT_TEXT)).toBe(true)
   })
 
+  it('records a decision only for a process whose conversation BMN knows, and never shows or pages it (Story 76.5)', async () => {
+    const handlers = service['control']['options'].handlers
+    const decision = { sessionId: 's1', incarnationId: 'incarnation-1', key: 'storage-format', revision: 1,
+      payload: { choice: 'JSON array', reason: 'No dependency', affects: 'src/store.js', reverse: 'Replace it', references: [], depends: [] } }
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await expect(handlers.recordDecision(decision)).rejects.toThrow(/does not know which conversation/)
+    service['options'].manager.observeConversation = vi.fn(async () => ({ accepted: true as const, binding: null })) as never
+    await handlers.observeConversation({ sessionId: 's1', incarnationId: 'incarnation-1', agentCli: 'claude',
+      conversationReference: '0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e', source: 'startup' })
+    emitted.length = 0
+    expect(await handlers.recordDecision(decision)).toMatchObject({ outcome: 'recorded', key: 'storage-format', revision: 1 })
+    expect(COMPANION_OPERATIONS.listAttention(database)).toEqual([])
+    expect(emitted.filter(event => event.topic === 'attention')).toEqual([])
+    expect(COMPANION_OPERATIONS.listPeriodDecisions(database, service.awayForOwner().periodId!).decisions[0]).toMatchObject({
+      conversation: '0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e', agentCli: 'claude', incarnationId: 'incarnation-1'
+    })
+    expect(await handlers.decisionOutcome({ sessionId: 's1', key: 'storage-format', op: 'built', result: 'done', evidence: [] })).toMatchObject({ outcome: 'appended' })
+    expect(writes).toHaveLength(0)
+  })
+
   it('leaves a caption, another bot and other words to their own routing', async () => {
     const sent: string[] = []
     fakeTelegram(async (message) => { sent.push(message); return { messageId: sent.length } })

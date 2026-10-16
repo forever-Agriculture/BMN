@@ -70,6 +70,14 @@ Commands:
                                             given; a repeated back changes nothing. Only the owner sets a note
                                             (at most 200 characters), and only he sees it
   away --status [--json]                    Away or back, since when, and the revision
+  decision record --key K --revision R --choice T --reason T --affects T --reverse T [--ref KIND:ID]... [--depends KEY]...
+                                            A consequential choice you made while the owner is away (Decided for
+                                            you). BMN binds it to your conversation, process and away period; the
+                                            same key and text return the first record, other text fails. --ref is
+                                            session:ID, artifact:ID or workflow:ID. Exit 0 recorded, 1 refused or
+                                            BMN unreachable (keep it in your workflow's log), 2 usage
+  decision outcome --key K --op OP --result done|failed [--evidence-id ID]...
+                                            What came of it, appended under its own operation key
   resolve <request-key> <resolution>        Resolve an attention request
   send <text> | --text-file - [--submit] [--key K]
                                             Paste text into the session; --submit also presses Enter

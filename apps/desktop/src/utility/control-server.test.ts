@@ -150,6 +150,8 @@ function fakeHandlers(current: Map<string, string>) {
       ({ recorded: true, argv: [...p.argv], reportedAt: '2026-09-29T10:15:00.000Z' })),
     clearResumeCommand: vi.fn(async (): Promise<unknown> => ({ cleared: true })),
     awayPrinted: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
+    recordDecision: vi.fn(async (): Promise<unknown> => ({ outcome: 'recorded' })),
+    decisionOutcome: vi.fn(async (): Promise<unknown> => ({ outcome: 'appended' })),
     awayStatus: vi.fn(async (scope: { kind: string }): Promise<unknown> => scope.kind === 'owner'
       ? { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3, note: 'back by 8' }
       : { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3 }),
@@ -1733,5 +1735,35 @@ describe('away snapshot and refusal (Story 76.4)', () => {
     expectError(await owner.request('away.printed', { agent: 'claude', conversation, revision: 7 }), ERROR_CODES.unauthorized)
     expectError(await agent.request('away.printed', { agent: 'claude', conversation: 'nope', revision: 7 }), ERROR_CODES.invalidArgument)
     expectError(await agent.request('away.printed', { agent: 'claude', conversation, revision: -1 }), ERROR_CODES.invalidArgument)
+  })
+})
+
+describe('decision records (Story 76.5)', () => {
+  const RECORD = { key: 'storage-format', revision: 3, choice: 'JSON array', reason: 'No dependency', affects: 'src/store.js', reverse: 'Replace src/store.js',
+    references: ['session:session-2', 'workflow:dev-auto/epic-76#d1'], depends: ['earlier-choice'] }
+
+  it('takes a decision from a session only, with its references parsed and the session from the credential', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    expect((await agent.request('decision.record', RECORD)).error).toBeUndefined()
+    expect(fixture.handlers.recordDecision).toHaveBeenCalledWith({
+      sessionId: 'session-1', incarnationId: 'incarnation-1', key: 'storage-format', revision: 3,
+      payload: { choice: 'JSON array', reason: 'No dependency', affects: 'src/store.js', reverse: 'Replace src/store.js',
+        references: [{ kind: 'session', id: 'session-2' }, { kind: 'workflow', id: 'dev-auto/epic-76#d1' }], depends: ['earlier-choice'] }
+    })
+    expectError(await owner.request('decision.record', RECORD), ERROR_CODES.unauthorized)
+    for (const bad of [{ revision: undefined }, { key: 'has space' }, { references: ['file:x'] }, { references: [':x'] }, { choice: '' }, { sessionId: 'session-2' }]) {
+      expectError(await agent.request('decision.record', { ...RECORD, ...bad }), ERROR_CODES.invalidArgument)
+    }
+    expect(fixture.handlers.recordDecision).toHaveBeenCalledTimes(1)
+  })
+
+  it('takes an outcome from a session only, done or failed', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    expect((await agent.request('decision.outcome', { key: 'storage-format', op: 'built', result: 'done', evidenceIds: ['artifact-1'] })).error).toBeUndefined()
+    expect(fixture.handlers.decisionOutcome).toHaveBeenCalledWith({ sessionId: 'session-1', key: 'storage-format', op: 'built', result: 'done', evidence: ['artifact-1'] })
+    expectError(await agent.request('decision.outcome', { key: 'storage-format', op: 'built', result: 'approved' }), ERROR_CODES.invalidArgument)
   })
 })

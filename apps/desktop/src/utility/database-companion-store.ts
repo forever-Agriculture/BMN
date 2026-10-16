@@ -52,6 +52,7 @@ import type { DatabaseConnection } from './database-initialization'
 import { admitHandoff, HANDOFF_MESSAGE_KEY, MESSAGE_OPERATIONS, type SendOutcome } from './database-message-store'
 import { TURN_OPERATIONS } from './database-turn-store'
 import { AWAY_OPERATIONS } from './database-away-store'
+import { DECISION_OPERATIONS } from './database-decision-store'
 import { selectSession, selectWorkspace, WorkspaceStoreError } from './database-workspace-store'
 
 interface ArtifactRow {
@@ -440,13 +441,13 @@ export function usageNoticeExists(database: DatabaseConnection, keyPrefix: strin
   ).get(keyPrefix.length, keyPrefix, from, to) !== undefined
 }
 
-/** Every open request plus the most recent closed ones. */
+/** Every open request plus the most recent closed ones; a recorded decision is neither (Story 76.5 AC4). */
 export function listAttention(database: DatabaseConnection): AttentionRecord[] {
   const open = database.prepare(
     "SELECT * FROM attention_request WHERE state = 'open' ORDER BY opened_at, rowid"
   ).all() as AttentionRow[]
   const closed = database.prepare(
-    "SELECT * FROM attention_request WHERE state != 'open' ORDER BY resolved_at DESC, rowid DESC LIMIT 50"
+    "SELECT * FROM attention_request WHERE state NOT IN ('open', 'recorded') ORDER BY resolved_at DESC, rowid DESC LIMIT 50"
   ).all() as AttentionRow[]
   return [...open, ...closed].map(attentionFromRow)
 }
@@ -1422,7 +1423,8 @@ export const COMPANION_OPERATIONS = Object.freeze({
   putRawSetting,
   ...MESSAGE_OPERATIONS,
   ...TURN_OPERATIONS,
-  ...AWAY_OPERATIONS
+  ...AWAY_OPERATIONS,
+  ...DECISION_OPERATIONS
 })
 
 export type CompanionOperations = typeof COMPANION_OPERATIONS

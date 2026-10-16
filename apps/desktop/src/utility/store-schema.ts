@@ -740,5 +740,53 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
       UPDATE session SET receive_messages = 1 WHERE receive_messages <> 1;
       UPDATE workspace SET session_messages_paused_at = NULL, session_messages_paused_by = NULL
         WHERE session_messages_paused_by = 'owner';`
+  },
+  {
+    // Story 76.5: a decision an agent records while the owner is away is a notice in a new `recorded` state, never open,
+    // with its fields in decision_json. SQLite needs a rebuild to widen the state CHECK; every row, column and index is
+    // kept as it is, and a key is unique per session among recorded decisions.
+    version: 29,
+    sql: `
+      CREATE TABLE attention_request_next (
+        request_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES session(session_id),
+        incarnation_id TEXT,
+        request_key TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('question', 'permission', 'review', 'notice', 'handoff')),
+        title TEXT NOT NULL,
+        body TEXT,
+        state TEXT NOT NULL CHECK (state IN ('open', 'answered', 'withdrawn', 'expired', 'recorded')),
+        resolution TEXT,
+        opened_at TEXT NOT NULL,
+        expires_at TEXT,
+        resolved_at TEXT,
+        seen_at TEXT,
+        revision INTEGER NOT NULL,
+        opened_by TEXT,
+        resolved_by TEXT,
+        prompt_json TEXT NULL CHECK (prompt_json IS NULL OR json_valid(prompt_json)),
+        producer_json TEXT NULL CHECK (producer_json IS NULL OR json_valid(producer_json)),
+        manual_choices_json TEXT NULL CHECK (manual_choices_json IS NULL OR json_valid(manual_choices_json)),
+        telegram_quiet_held_at INTEGER,
+        telegram_quiet_eligible INTEGER NOT NULL DEFAULT 0 CHECK (telegram_quiet_eligible IN (0, 1)),
+        telegram_quiet_attempt_revision INTEGER,
+        decision_json TEXT NULL CHECK (decision_json IS NULL OR json_valid(decision_json)),
+        CHECK ((state = 'recorded') = (decision_json IS NOT NULL)),
+        CHECK (state <> 'recorded' OR kind = 'notice')
+      );
+      INSERT INTO attention_request_next
+        SELECT request_id, session_id, incarnation_id, request_key, kind, title, body, state, resolution, opened_at, expires_at,
+               resolved_at, seen_at, revision, opened_by, resolved_by, prompt_json, producer_json, manual_choices_json,
+               telegram_quiet_held_at, telegram_quiet_eligible, telegram_quiet_attempt_revision, NULL
+        FROM attention_request;
+      DROP TABLE attention_request;
+      ALTER TABLE attention_request_next RENAME TO attention_request;
+      CREATE UNIQUE INDEX attention_open_key ON attention_request(session_id, request_key)
+        WHERE state = 'open';
+      CREATE INDEX attention_quiet_held ON attention_request(telegram_quiet_held_at)
+        WHERE telegram_quiet_held_at IS NOT NULL AND telegram_quiet_attempt_revision IS NULL;
+      CREATE UNIQUE INDEX attention_decision_key ON attention_request(session_id, request_key)
+        WHERE state = 'recorded';
+    `
   }
 ])
