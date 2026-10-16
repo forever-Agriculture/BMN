@@ -100,6 +100,8 @@ export interface ControlHandlers {
     prompt?: AttentionPrompt
     producer?: AttentionProducer
     manualChoices?: ManualChoices
+    /** Story 76.4: the session's own hook may still refuse this blocking question before its native request opens. */
+    awayRefusable?: boolean
   }): Promise<unknown>
   /**
    * A session may address one destination, in any workspace; the handler stores the handoff and queues it for the
@@ -235,6 +237,8 @@ export interface ControlHandlers {
   clearResumeCommand(p: { sessionId: string; incarnationId: string }): Promise<unknown>
   /** Story 76.3: the owner's said state; the note only to the owner's token (R76-NFR3). */
   awayStatus(scope: ControlScope): Promise<unknown>
+  /** Story 76.4: the session's hook printed the away snapshot BMN handed for this conversation; printed is never read. */
+  awayPrinted(p: { sessionId: string; agent: string; conversation: string; revision: number }): Promise<unknown>
   /**
    * Story 76.3: away or back. The owner's token says it as `cli`; a session's agent only on his words, naming the revision
    * it saw, as `agent`. `operationKey` makes a retry return the first result.
@@ -1121,7 +1125,7 @@ export class ControlServer {
       case 'attention.open': {
         const params = closedParams(rawParams, [
           'sessionId', 'requestKey', 'kind', 'title', 'body', 'expiresAt', 'idempotencyKey', 'phoneNotified',
-          'origin', 'prompt', 'producer', 'manualChoices'
+          'origin', 'prompt', 'producer', 'manualChoices', 'awayRefusable'
         ])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         if (requestKey.startsWith('handoff:')) throw invalid('The handoff request key is reserved')
@@ -1149,6 +1153,11 @@ export class ControlServer {
         if (manualChoices === null || manualChoices && (prompt || origin !== 'cli' || !['question', 'permission'].includes(kind))) {
           throw invalid('manualChoices require a CLI question or decision with 2–8 distinct choices and no native prompt')
         }
+        // Only a session's own hook, for its own question tool, says it can still refuse the question.
+        const awayRefusable = readBoolean(params, 'awayRefusable')
+        if (awayRefusable !== undefined && (scope.kind !== 'session' || kind !== 'question' || !origin?.startsWith('hook:'))) {
+          throw invalid('awayRefusable is for a session hook\'s own question')
+        }
         const sessionId = this.target(scope, params)
         return this.idempotent(scope, method, idempotencyKey, params, () => handlers.openAttention({
           sessionId,
@@ -1162,7 +1171,8 @@ export class ControlServer {
           ...(origin === undefined ? {} : { origin }),
           ...(prompt === undefined ? {} : { prompt }),
           ...(manualChoices ? { manualChoices } : {}),
-          ...(producer === undefined ? {} : { producer })
+          ...(producer === undefined ? {} : { producer }),
+          ...(awayRefusable === true ? { awayRefusable } : {})
         }))
       }
       case 'conversation.observe': {
@@ -1424,6 +1434,16 @@ export class ControlServer {
         readText(params, 'idempotencyKey', RULES.idempotencyKey)
         const sessionId = this.target(scope, params)
         return handlers.clearResumeCommand({ sessionId, incarnationId: scope.incarnationId })
+      }
+      case 'away.printed': {
+        const params = closedParams(rawParams, ['agent', 'conversation', 'revision'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session\'s hook reports what it printed')
+        const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
+        const conversation = requireText(params, 'conversation', RULES.conversationReference)
+        if (!CONVERSATION_REFERENCE.test(conversation)) throw invalid('conversation must name a conversation')
+        const revision = params.revision
+        if (!Number.isSafeInteger(revision) || (revision as number) < 0) throw invalid('revision must be a whole number')
+        return handlers.awayPrinted({ sessionId: scope.sessionId, agent, conversation: conversation.toLowerCase(), revision: revision as number })
       }
       case 'away.status': {
         closedParams(rawParams, [])

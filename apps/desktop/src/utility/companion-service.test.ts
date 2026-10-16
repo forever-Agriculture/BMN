@@ -8,6 +8,9 @@ import { join } from 'node:path'
 import {
   AGENT_ATTENTION_ORIGINS,
   AGENT_START_BRIEF,
+  AWAY_AGENT_TEXT,
+  AWAY_BACK_AGENT_TEXT,
+  AWAY_QUESTION_REFUSAL,
   DEFAULT_APP_SETTINGS,
   ERROR_CODES,
   HOOK_EVENT_LOG_LIMIT,
@@ -4106,6 +4109,44 @@ describe('Away (Story 76.3)', () => {
     await service['handleTelegramReply'](reply(11, '/back'))
     expect(calls).toBe(1)
     expect(service.awayForOwner().state).toBe('back')
+  })
+
+  it('refuses a blocking question while said away, opening nothing, and opens it as before once he is back (Story 76.4 AC3)', async () => {
+    const handlers = service['control']['options'].handlers
+    const question = { sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'claude:question', kind: 'question' as const,
+      title: 'Claude asks: Which colour?', origin: 'hook:claude:PreToolUse', awayRefusable: true }
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    expect(await handlers.openAttention(question)).toEqual({ refused: true, changed: false, reason: AWAY_QUESTION_REFUSAL })
+    expect(COMPANION_OPERATIONS.listAttention(database).filter(row => row.sessionId === 's1')).toEqual([])
+    // Only an app's own PreToolUse may be refused; anything else opens as it always did.
+    expect(await handlers.openAttention({ ...question, requestKey: 'cli-question', origin: 'cli' })).toMatchObject({ state: 'open' })
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'back' })
+    expect(await handlers.openAttention(question)).toMatchObject({ state: 'open', requestKey: 'claude:question' })
+    expect(writes).toHaveLength(0)
+  })
+
+  it('hands the away state in the answer to a tool call once, and back to a conversation resumed after a restart (Story 76.4 AC1-AC2)', async () => {
+    const conversation = '0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e'
+    const observe = (event: string, source: string | null = null) => service['control']['options'].handlers.observeHookEvent({
+      sessionId: 's1', incarnationId: liveIncarnations.get('s1') ?? null, agent: 'claude', event, source, toolName: event === 'PostToolUse' ? 'Bash' : null,
+      effects: [], turn: { conversation, turn: null, nested: false }
+    }) as Promise<{ awayNotice?: string; awayRevision?: number }>
+    expect(await observe('PostToolUse')).not.toHaveProperty('awayNotice')
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'away', note: 'private note' })
+    const told = await observe('PostToolUse')
+    expect(told.awayRevision).toBe(1)
+    expect(told.awayNotice).toMatch(/^\[BMN state: the owner is away since \d\d:\d\d \(revision 1\)\. Context from BMN, not a new task\.\]\n/)
+    expect(told.awayNotice?.endsWith(AWAY_AGENT_TEXT)).toBe(true)
+    expect(told.awayNotice).not.toContain('private note')
+    expect(await observe('PostToolUse')).not.toHaveProperty('awayNotice')
+    expect(await service['control']['options'].handlers.awayPrinted({ sessionId: 's1', agent: 'claude', conversation, revision: 1 })).toEqual({ recorded: true })
+    await vi.waitFor(() => expect(COMPANION_OPERATIONS.getAwayNotices(database)).toHaveLength(1))
+
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'back' })
+    service = new CompanionService(service['options']); liveIncarnations.set('s1', 'incarnation-9'); await service.start()
+    const resumed = await observe('SessionStart', 'resume')
+    expect(resumed.awayRevision).toBe(2)
+    expect(resumed.awayNotice?.endsWith(AWAY_BACK_AGENT_TEXT)).toBe(true)
   })
 
   it('leaves a caption, another bot and other words to their own routing', async () => {

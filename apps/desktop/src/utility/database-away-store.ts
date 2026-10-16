@@ -46,4 +46,28 @@ export function markAwaySummaryShown(database: DatabaseConnection, periodId: str
   return next
 }
 
-export const AWAY_OPERATIONS = Object.freeze({ getAway, changeAway, markAwaySummaryShown })
+/** Which conversation was handed which away state (Story 76.4), kept so a resume after a restart is told back. */
+export const AWAY_NOTICES_KEY = 'away-notices-v1'
+export interface StoredAwayTold { revision: number; state: 'away' | 'back'; status: 'claimed' | 'printed'; incarnationId: string }
+
+export function getAwayNotices(database: DatabaseConnection): Array<[string, StoredAwayTold]> {
+  const row = database.prepare('SELECT value_json FROM app_setting WHERE key = ?').get(AWAY_NOTICES_KEY) as { value_json: string } | undefined
+  let value: unknown
+  try { value = row ? JSON.parse(row.value_json) : null } catch { value = null }
+  if (typeof value !== 'object' || value === null || (value as { version?: unknown }).version !== 1 || !Array.isArray((value as { entries?: unknown }).entries)) return []
+  return ((value as { entries: unknown[] }).entries).filter((entry): entry is [string, StoredAwayTold] => {
+    if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string' || typeof entry[1] !== 'object' || entry[1] === null) return false
+    const told = entry[1] as Record<string, unknown>
+    return Number.isSafeInteger(told.revision) && (told.state === 'away' || told.state === 'back') &&
+      (told.status === 'claimed' || told.status === 'printed') && typeof told.incarnationId === 'string'
+  })
+}
+
+export function putAwayNotices(database: DatabaseConnection, entries: Array<[string, StoredAwayTold]>, now: string): void {
+  database.prepare(
+    `INSERT INTO app_setting(key, value_json, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`
+  ).run(AWAY_NOTICES_KEY, JSON.stringify({ version: 1, entries }), now)
+}
+
+export const AWAY_OPERATIONS = Object.freeze({ getAway, changeAway, markAwaySummaryShown, getAwayNotices, putAwayNotices })

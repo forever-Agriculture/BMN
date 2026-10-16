@@ -258,6 +258,40 @@ Submission is not delivery
   A call that returns proves it was submitted, not that anything was read or acted on.
   --key is the only retry contract (publish, send, handoff, tell); without it do not resend.
 
+While the owner is away
+  bmn away --status shows away or back, since when, and the revision. Set it (bmn away --revision R,
+  bmn back --revision R) only on the owner's own words to you, never because he seems to be gone.
+  While he is away BMN refuses your blocking question tool (Claude Code's AskUserQuestion, Codex's
+  request_user_input) and hands you this text, word for word:
+  The owner is away. Continue the task already authorised, including independent work while another
+  part waits. Decide ordinary implementation choices within existing authority without asking: your
+  recommended option, reasonably reversible, within the assigned scope, keeping requirements,
+  acceptance criteria and every existing restriction; state the assumption. Before dependent work,
+  record a consequential assumption (one that materially affects behaviour, interfaces, data
+  handling, dependencies, cost or reversal effort) with \`bmn decision record\`: the choice, evidence
+  and uncertainty, affected work and how to reverse it; keep a reversible checkpoint and verify the
+  smallest relevant boundary before building on it. Routine steps need no record. If BMN refuses or
+  cannot be reached, write the same intent to your workflow's existing durable log, say BMN's list
+  may be incomplete, and go on; if neither can be written, park only the work that depends on it.
+  Away adds no authority: irreversible actions, destructive cleanup, external writes (push, merge,
+  deploy, sending messages), credentials, private-data transfers, scope or acceptance changes and
+  paid work need the owner's authorisation naming scope and target; an authorisation you already
+  have stays valid within its limits, and a cap he gave for paid work covers only that spending.
+  Before running a command, prefer a method already permitted (a tool's working-directory option
+  instead of a compound cd); an approval procedure your app offers may be used where policy permits,
+  and you proceed only if it is granted; a denial by the owner, policy or a reviewer is binding:
+  never retry it through another tool, shell, identity or wording; an unclear refusal is not
+  permission. Do not ask the absent owner in conversation to run a command: keep an existing native
+  permission request as it is; otherwise, where your workflow permits questions, leave one
+  non-blocking \`bmn ask\` card saying what is needed and why; where it says to record instead, record
+  it there. When evidence cannot settle a consequential technical choice, consult only if existing
+  dispatch consent, provider and data rules and remaining spend and retry allowances permit: one
+  \`bmn team ask --role consultant\` with one stable key and a bounded time limit, no recursion, no
+  other provider; on a refusal, timeout or uncertain completion read the existing ask record instead
+  of asking again; advice grants no authority: you decide and record. Withdraw a card when it stops
+  mattering. Stops, refusals, retry limits and owner-only checks stay binding. If no authorised work
+  remains, finish with what completed and what waits; do not invent work.
+
 bmn hook is not yours
   bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.
   Manual cards: ask ... --choices-json JSON. BMN adds Other; phone answers send ordinary messages.
@@ -2613,9 +2647,10 @@ function guardReport(agent, event, verdict) {
  * answer form and then reported as printed, which never means read. BMN's word that something waits, resolving,
  * taking and reporting share one limit, counted from `reported`, the moment the event's report was sent; past it
  * nothing is printed, and a claim BMN made anyway stays "taken, not confirmed". A brief BMN handed for this
- * event (Story 75.6) goes first in the same answer; `said.printed` tells the caller that the answer went out.
+ * event (Story 75.6) and the away state (Story 76.4) go first in the same answer; `said.printed` tells the caller that the
+ * answer went out.
  */
-async function handMessage(agent, event, agentPid, procRoot, socketPath, token, reported, brief, said) {
+async function handMessage(agent, event, agentPid, procRoot, socketPath, token, reported, before, said) {
   if (!agentPid || (event.agent_id !== undefined && event.agent_id !== null)) return
   let guard
   try {
@@ -2636,14 +2671,14 @@ async function handMessage(agent, event, agentPid, procRoot, socketPath, token, 
   const report = (outcomes) => {
     const message = outcomes[0]?.result?.message
     if (!isObject(message) || typeof message.stamp !== 'string' || typeof message.text !== 'string') return undefined
-    writeSync(1, contextAnswer(event, [brief, `${message.stamp}\n${message.text}`]))
+    writeSync(1, contextAnswer(event, [...before, `${message.stamp}\n${message.text}`]))
     said.printed = true
     return { method: 'message.report', params: { messageId: message.messageId, claimId: message.claimId, pid: agentPid } }
   }
   await callEach(socketPath, token, [take, report], Math.max(1, left())).catch(() => undefined)
 }
 
-/** The one answer that puts text in front of the agent: BMN's brief, a message, or both, in that order. */
+/** The one answer that puts text in front of the agent: BMN's brief, the away state and a message, in that order. */
 function contextAnswer(event, parts) {
   return JSON.stringify({
     hookSpecificOutput: { hookEventName: event.hook_event_name, additionalContext: parts.filter((part) => part !== null).join('\n\n') }
@@ -2666,9 +2701,10 @@ async function markTurnStart(marks, mark, socketPath, token) {
 }
 
 /**
- * Hooks must never disturb the agent: exit 0 whatever happens, and nothing on stdout, with three
- * exceptions: the answer that stops a prompt the guard refused, and BMN's start brief and a message for its
- * own agent, which share one answer.
+ * Hooks must never disturb the agent: exit 0 whatever happens, and nothing on stdout, with these
+ * exceptions: the answer that stops a prompt the guard refused, the refusal of a blocking question while the
+ * owner said away (Story 76.4), and BMN's start brief, the away state and a message for its own agent, which
+ * share one answer.
  */
 async function runHook(args) {
   const [agent] = args
@@ -2718,6 +2754,10 @@ async function runHook(args) {
   const ended = mark?.edge === 'end' ? [{ method: 'turn.mark', params: { requestId: randomUUID(), ...mark } }] : []
   const requests = [...ended, ...report, ...hookRequests(agent, event)]
   const opens = requests.filter((request) => request.method === 'attention.open')
+  // Story 76.4 AC3: the typed agent's own blocking question, in its main conversation, can still be refused here, before its
+  // native request opens; BMN says whether it is (only while the owner said away).
+  const refusable = awayRefusableQuestion(agent, event) ? opens.find((request) => request.params.kind === 'question') : undefined
+  if (refusable !== undefined) refusable.params.awayRefusable = true
   if (agent === 'claude' && opens.length > 0 && claudeRemoteControlled(agentPid, event.session_id)) {
     for (const request of opens) request.params.phoneNotified = true
   }
@@ -2735,22 +2775,56 @@ async function runHook(args) {
   const calls = [...requests, (outcomes) => {
     reported = Date.now()
     // Story 75.6: a conversation's start names the conversation whatever turn changes do, so BMN can brief it once.
-    const facts = marks !== null && (turns || event.hook_event_name === 'SessionStart') ? marks.turnFacts(agent, event) : {}
+    // Story 76.4: and a tool call names it too, so the away state can follow the conversation it was handed to.
+    const facts = marks !== null && (turns || ['SessionStart', 'PostToolUse'].includes(event.hook_event_name)) ? marks.turnFacts(agent, event) : {}
     return hookObservation(agent, event, requests, outcomes, apiHost, model, configDir, facts)
   }]
   const outcomes = await callEach(socketPath, token, calls, HOOK_TIMEOUT_MS).catch(() => [])
   // BMN's answer to the report of this event says when a message waits for this session and carries its start
   // brief when one is due; without either the hook adds nothing to the event.
+  const refusal = refusable === undefined ? undefined : outcomes[requests.indexOf(refusable)]?.result
+  if (refusal?.refused === true && typeof refusal.reason === 'string') {
+    // The measured refusal (Story 76.2): both forms, each app reads the one it knows. Nothing else is printed for this event.
+    writeSync(1, refusalAnswer(event, refusal.reason))
+    return 0
+  }
   const answer = outcomes[requests.length]?.result
   const brief = typeof answer?.brief === 'string' && answer.brief !== '' ? answer.brief : null
+  const notice = typeof answer?.awayNotice === 'string' && answer.awayNotice !== '' && Number.isSafeInteger(answer.awayRevision) ? answer.awayNotice : null
   const said = { printed: false }
   if (answer?.messageWaiting === true) {
     // Should one event ever carry both a turn's start and a message, they share the one allowance (R69-NFR5).
-    await handMessage(agent, event, agentPid, procRoot, socketPath, token, mark?.edge === 'start' ? marked : reported, brief, said)
+    await handMessage(agent, event, agentPid, procRoot, socketPath, token, mark?.edge === 'start' ? marked : reported, [brief, notice], said)
       .catch(() => undefined)
   }
-  if (!said.printed && brief !== null) writeSync(1, contextAnswer(event, [brief]))
+  if (!said.printed && (brief !== null || notice !== null)) {
+    writeSync(1, contextAnswer(event, [brief, notice]))
+    said.printed = true
+  }
+  if (notice !== null && said.printed) {
+    // Printed, never read: BMN keeps that it went out (Story 76.4 AC2); a lost report leaves it "claimed", which counts too.
+    const conversation = marks?.turnFacts(agent, event).conversation
+    if (conversation !== undefined) {
+      await callEach(socketPath, token, [{ method: 'away.printed', params: { agent, conversation, revision: answer.awayRevision } }], HOOK_TIMEOUT_MS)
+        .catch(() => undefined)
+    }
+  }
   return 0
+}
+
+/** The typed agent's blocking question tool in its main conversation: never Codex's asynchronous one, never a permission. */
+function awayRefusableQuestion(agent, event) {
+  if (event.hook_event_name !== 'PreToolUse' || (event.agent_id !== undefined && event.agent_id !== null)) return false
+  if (agent === 'claude') return event.tool_name === 'AskUserQuestion'
+  return agent === 'codex' && userInputTool(event.tool_name) && !asyncUserInputTool(event.tool_name)
+}
+
+/** A PreToolUse refusal in the hook-specific form and the older decision form (measured in Story 76.2 for both apps). */
+function refusalAnswer(event, reason) {
+  return JSON.stringify({
+    decision: 'block', reason,
+    hookSpecificOutput: { hookEventName: event.hook_event_name, permissionDecision: 'deny', permissionDecisionReason: reason }
+  })
 }
 
 /**

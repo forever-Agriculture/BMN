@@ -149,6 +149,7 @@ function fakeHandlers(current: Map<string, string>) {
     reportResumeCommand: vi.fn(async (p: Parameters<ControlHandlers['reportResumeCommand']>[0]): Promise<unknown> =>
       ({ recorded: true, argv: [...p.argv], reportedAt: '2026-09-29T10:15:00.000Z' })),
     clearResumeCommand: vi.fn(async (): Promise<unknown> => ({ cleared: true })),
+    awayPrinted: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     awayStatus: vi.fn(async (scope: { kind: string }): Promise<unknown> => scope.kind === 'owner'
       ? { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3, note: 'back by 8' }
       : { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3 }),
@@ -1703,5 +1704,34 @@ describe('away state (Story 76.3)', () => {
     expectError(await owner.request('away.set', { to: 'away', extra: true }), ERROR_CODES.invalidArgument)
     expectError(await owner.request('away.status', { verbose: true }), ERROR_CODES.invalidArgument)
     expect(fixture.handlers.changeAway).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('away snapshot and refusal (Story 76.4)', () => {
+  const QUESTION_PROMPT = { type: 'questions', harness: 'claude', shape: 'choice', requestRef: null, toolUseId: 'toolu_1',
+    questions: [{ id: null, header: null, text: 'Which colour?', multiSelect: false, options: [{ label: 'Blue', description: null }, { label: 'Green', description: null }] }] }
+
+  it("lets only a session hook's own question say it can still be refused", async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    const question = { requestKey: 'claude:question', kind: 'question', title: 'Claude asks: Which colour?', origin: 'hook:claude:PreToolUse', prompt: QUESTION_PROMPT }
+    expect((await agent.request('attention.open', { ...question, awayRefusable: true })).error).toBeUndefined()
+    expect((fixture.handlers.openAttention.mock.calls.at(-1) as unknown[] | undefined)?.[0]).toMatchObject({ awayRefusable: true })
+    expectError(await agent.request('attention.open', { ...question, requestKey: 'mine', origin: 'cli', prompt: undefined, awayRefusable: true }), ERROR_CODES.invalidArgument)
+    expectError(await owner.request('attention.open', { ...question, sessionId: 'session-1', awayRefusable: true }), ERROR_CODES.invalidArgument)
+    expectError(await agent.request('attention.open', { ...question, awayRefusable: 'yes' }), ERROR_CODES.invalidArgument)
+  })
+
+  it('takes a printed report from a session only, for a named conversation and revision', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    const conversation = '0A0A0A0A-1B1B-2C2C-3D3D-4E4E4E4E4E4E'
+    expect((await agent.request('away.printed', { agent: 'claude', conversation, revision: 7 })).error).toBeUndefined()
+    expect(fixture.handlers.awayPrinted).toHaveBeenCalledWith({ sessionId: 'session-1', agent: 'claude', conversation: conversation.toLowerCase(), revision: 7 })
+    expectError(await owner.request('away.printed', { agent: 'claude', conversation, revision: 7 }), ERROR_CODES.unauthorized)
+    expectError(await agent.request('away.printed', { agent: 'claude', conversation: 'nope', revision: 7 }), ERROR_CODES.invalidArgument)
+    expectError(await agent.request('away.printed', { agent: 'claude', conversation, revision: -1 }), ERROR_CODES.invalidArgument)
   })
 })

@@ -39,6 +39,8 @@ import {
   type AwayChangeResult,
   type AwayRecord,
   agentAwayView,
+  AWAY_QUESTION_REFUSAL,
+  AWAY_REFUSED_QUESTION_TOOLS,
   effectiveAway,
   ownerAwayView,
   parseAwayRecord,
@@ -120,6 +122,7 @@ import { TelegramConnector, TelegramConnectorError, maskToken, redactToken, type
 import { awayReplyText, backReplyText, telegramAwayCommand, type TelegramAwayCommand } from './telegram-away'
 import { SessionMessages, type MessageDestination } from './session-messages'
 import { AgentBriefs } from './agent-briefs'
+import { AwayNotices } from './agent-away-notices'
 import { foregroundProcessFolder } from './foreground-process'
 import type { TurnChangesPort, TurnStoreKeeper } from './turn-changes-engine'
 import { TurnRecorder, turnPausesFile } from './turn-changes-recorder'
@@ -478,6 +481,7 @@ export class CompanionService {
   /** Epic 66: messages the sessions of one workspace leave each other. */
   private readonly messages: SessionMessages
   private readonly briefs: AgentBriefs
+  private readonly awayNotices: AwayNotices
   private lastMessageSweepAt = 0
   /** Each bounded log has its own serialized append queue. */
   private repeatWrites: Promise<void> = Promise.resolve()
@@ -594,6 +598,11 @@ export class CompanionService {
     this.briefs = new AgentBriefs({
       liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
       now: () => this.now().getTime()
+    })
+    this.awayNotices = new AwayNotices({
+      liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
+      now: () => this.now(),
+      save: (entries) => options.database.companion('putAwayNotices', entries, this.iso())
     })
     this.messages = new SessionMessages({
       database: options.database,
@@ -713,7 +722,14 @@ export class CompanionService {
         listSessions: (scope) => this.controlCall(async () => this.listedSessions(scope)),
         publishArtifact: (p) => this.controlCall(() => this.publishArtifact(p)),
         reportProgress: (p) => this.controlCall(() => this.reportProgress(p)),
-        openAttention: (p) => this.controlCall(async () => this.publicAttention(await this.openAttention(p))),
+        openAttention: (p) => this.controlCall(async () => {
+          // Story 76.4 AC3: while he said away, the blocking question the hook can still refuse opens nothing: no card, no
+          // native request; the hook refuses the tool with this reason. An already open dialog is never touched.
+          if (p.awayRefusable === true && this.awayRecord.state === 'away' && this.refusableQuestion(p.origin)) {
+            return { refused: true, changed: false, reason: AWAY_QUESTION_REFUSAL }
+          }
+          return this.publicAttention(await this.openAttention(p))
+        }),
         prepareHandoff: (p) => this.controlCall(() => this.queueAgentHandoff(p)),
         listPeers: (sessionId) => this.controlCall(() => this.messages.peers(sessionId)),
         sendMessage: (p) => this.controlCall(() => this.messages.send(p)),
@@ -730,6 +746,7 @@ export class CompanionService {
         dropTurnMark: (sessionId, requestId) => this.turns?.dropped(sessionId, requestId),
         reportRefusal: (method, sessionId, reason) => this.logRefusal(method, sessionId, reason),
         awayStatus: async (scope) => scope.kind === 'owner' ? this.awayForOwner() : this.awayForAgent(),
+        awayPrinted: async (p) => ({ recorded: this.awayNotices.printed(p.sessionId, p.agent, p.conversation, p.revision) }),
         changeAway: (p) => this.controlCall(async () => {
           const result = await this.changeAway({
             to: p.to, source: p.scope.kind === 'owner' ? 'cli' : 'agent',
@@ -782,7 +799,12 @@ export class CompanionService {
           const waiting = await this.messages.waiting(p)
           // Story 75.6: BMN's start brief rides in this answer once per conversation and once after a compaction.
           const brief = this.briefs.answer(p)
-          return { ...recorded, ...(waiting ? { messageWaiting: true } : {}), ...(brief === null ? {} : { brief }) }
+          // Story 76.4: the away state rides beside them, on its own rules; the hook prints all three in one answer.
+          const notice = this.awayNotices.answer(p, this.awayRecord)
+          return {
+            ...recorded, ...(waiting ? { messageWaiting: true } : {}), ...(brief === null ? {} : { brief }),
+            ...(notice === null ? {} : { awayNotice: notice.text, awayRevision: notice.revision })
+          }
         }),
         reportUsage: (p) => this.controlCall(async () => this.recordUsage(p)),
         reportGuard: (p) => this.controlCall(async () => this.recordGuard(p)),
@@ -886,6 +908,7 @@ export class CompanionService {
   async start(): Promise<void> {
     // Story 76.3 (R76-NFR1): the said state is restored before anything at start can deliver.
     this.awayRecord = await this.options.database.companion('getAway')
+    this.awayNotices.load(await this.options.database.companion('getAwayNotices'))
     // Epic 69: a turn stored as open has nobody left to end it.
     await this.turns?.start()
     await this.sessionsChanged()
@@ -1256,6 +1279,11 @@ export class CompanionService {
       this.emit('away', null)
     }
     return result
+  }
+
+  /** A blocking question tool of an app whose refusal Story 76.2 measured clean, reported by that app's own PreToolUse. */
+  private refusableQuestion(origin: string | undefined): boolean {
+    return Object.keys(AWAY_REFUSED_QUESTION_TOOLS).some((agent) => origin === `hook:${agent}:PreToolUse`)
   }
 
   /** What the owner's surfaces see. */

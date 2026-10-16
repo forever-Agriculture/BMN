@@ -226,3 +226,42 @@ export function awayPeriodWords(fromIso: string, toIso: string, now: Date = new 
   const day = (at: Date): string => old ? `${MONTHS[at.getMonth()]} ${at.getDate()}, ${clock(at)}` : `${WEEKDAYS[at.getDay()]} ${clock(at)}`
   return dayStart(from) === dayStart(to) ? `${day(from)} – ${clock(to)}` : `${day(from)} – ${day(to)}`
 }
+
+/**
+ * What an agent is told while the owner is away (Story 76.4 AC4), word for word as Story 76.2 measured it whole on
+ * PostToolUse in both apps; `bmn help agents` prints the same text and a test fails when the two drift.
+ */
+export const AWAY_AGENT_TEXT = 'The owner is away. Continue the task already authorised, including independent work while another part waits. Decide ordinary implementation choices within existing authority without asking: your recommended option, reasonably reversible, within the assigned scope, keeping requirements, acceptance criteria and every existing restriction; state the assumption. Before dependent work, record a consequential assumption (one that materially affects behaviour, interfaces, data handling, dependencies, cost or reversal effort) with `bmn decision record`: the choice, evidence and uncertainty, affected work and how to reverse it; keep a reversible checkpoint and verify the smallest relevant boundary before building on it. Routine steps need no record. If BMN refuses or cannot be reached, write the same intent to your workflow\'s existing durable log, say BMN\'s list may be incomplete, and go on; if neither can be written, park only the work that depends on it. Away adds no authority: irreversible actions, destructive cleanup, external writes (push, merge, deploy, sending messages), credentials, private-data transfers, scope or acceptance changes and paid work need the owner\'s authorisation naming scope and target; an authorisation you already have stays valid within its limits, and a cap he gave for paid work covers only that spending. Before running a command, prefer a method already permitted (a tool\'s working-directory option instead of a compound cd); an approval procedure your app offers may be used where policy permits, and you proceed only if it is granted; a denial by the owner, policy or a reviewer is binding: never retry it through another tool, shell, identity or wording; an unclear refusal is not permission. Do not ask the absent owner in conversation to run a command: keep an existing native permission request as it is; otherwise, where your workflow permits questions, leave one non-blocking `bmn ask` card saying what is needed and why; where it says to record instead, record it there. When evidence cannot settle a consequential technical choice, consult only if existing dispatch consent, provider and data rules and remaining spend and retry allowances permit: one `bmn team ask --role consultant` with one stable key and a bounded time limit, no recursion, no other provider; on a refusal, timeout or uncertain completion read the existing ask record instead of asking again; advice grants no authority: you decide and record. Withdraw a card when it stops mattering. Stops, refusals, retry limits and owner-only checks stay binding. If no authorised work remains, finish with what completed and what waits; do not invent work.'
+/** What an agent told away is told when he is back (Story 76.2's measured second text). */
+export const AWAY_BACK_AGENT_TEXT = 'The owner is back. Ask the owner directly again where your workflow permits; what you decided while away stays recorded.'
+
+/** Where the snapshot rides, per app and the version Story 76.2 measured it read once and whole, five of five. */
+export const AWAY_NOTICE_HANDOVER: Readonly<Record<string, { event: string; version: string } | undefined>> = Object.freeze({
+  claude: { event: 'PostToolUse', version: '2.1.301' },
+  codex: { event: 'PostToolUse', version: '0.162.1' }
+})
+
+/**
+ * The blocking question tool BMN refuses while he is away, per app, where Story 76.2 measured the refusal clean: decided in
+ * PreToolUse before the native request opens, no prompt, the reason read and one `bmn ask` in its place, five of five. Codex's
+ * asynchronous question and every permission tool are never refused.
+ */
+export const AWAY_REFUSED_QUESTION_TOOLS: Readonly<Record<string, { tool: string; version: string } | undefined>> = Object.freeze({
+  claude: { tool: 'AskUserQuestion', version: '2.1.301' },
+  codex: { tool: 'request_user_input', version: '0.162.1' }
+})
+
+/** The refusal's reason, as measured (Story 76.2 AC3). */
+export const AWAY_QUESTION_REFUSAL = 'BMN: the owner is away, so this question was not shown to anyone and will not be answered now. Do not ask it again in conversation. Leave it as one non-blocking card instead: bmn ask <key> "<the question>" --kind question --body "<the choices>" (one stable key per question), then continue with any work that does not depend on the answer and say what waits on it.'
+
+/** The snapshot's first line: state, since and revision, and that it is context, not a task (the measured stamp). */
+export function awayNoticeStamp(state: 'away' | 'back', at: string, revision: number, now: Date = new Date()): string {
+  return `[BMN state: the owner is ${state} since ${awayMomentWords(at, now)} (revision ${revision}). Context from BMN, not a new task.]`
+}
+
+/** The whole snapshot an agent is handed for this record, or null when nothing was said. */
+export function awayNotice(record: Pick<AwayRecord, 'state' | 'since' | 'endedAt' | 'revision'>, now: Date = new Date()): string | null {
+  if (record.state === 'away' && record.since !== null) return `${awayNoticeStamp('away', record.since, record.revision, now)}\n${AWAY_AGENT_TEXT}`
+  if (record.state === 'back' && record.endedAt !== null) return `${awayNoticeStamp('back', record.endedAt, record.revision, now)}\n${AWAY_BACK_AGENT_TEXT}`
+  return null
+}

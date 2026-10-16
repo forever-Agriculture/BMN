@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { spawn as spawnPty } from 'node-pty'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth, writeOwnerToken } from './control-auth'
-import { ERROR_CODES, HANDOFF_OUTLINE } from '@bmn/protocol'
+import { AWAY_AGENT_TEXT, ERROR_CODES, HANDOFF_OUTLINE } from '@bmn/protocol'
 import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
 import { readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
@@ -102,6 +102,7 @@ async function cliFixture() {
     reportResumeCommand: vi.fn<ControlHandlers['reportResumeCommand']>(async (p) =>
       ({ recorded: true, argv: [...p.argv], reportedAt: '2026-09-29T10:15:00.000Z' })),
     clearResumeCommand: vi.fn<ControlHandlers['clearResumeCommand']>(async () => ({ cleared: true })),
+    awayPrinted: vi.fn<ControlHandlers['awayPrinted']>(async () => ({ recorded: true })),
     awayStatus: vi.fn<ControlHandlers['awayStatus']>(async (scope) => scope.kind === 'owner'
       ? { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3, note: 'back by 8' }
       : { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3 }),
@@ -593,9 +594,11 @@ describe('bmn help agents', () => {
     expect(brief.code).toBe(0)
     expect(brief.stderr).toBe('')
     const lines = brief.stdout.split('\n').slice(0, -1)
-    // Story 72.6 AC1 adds at most three lines, for bmn team ask, to the 39 before it.
-    expect(lines.length).toBeLessThanOrEqual(42)
+    // Story 72.6 AC1 adds at most three lines, for bmn team ask, to the 39 before it; Story 76.4 AC4 adds the away section:
+    // six lines and the away text word for word, wrapped at 100 columns (the brief points here for it).
+    expect(lines.length).toBeLessThanOrEqual(42 + 7 + Math.ceil(AWAY_AGENT_TEXT.length / 90))
     expect(lines.filter((line) => line.length > 100)).toEqual([])
+    expect(brief.stdout.replace(/\s+/g, ' ')).toContain(AWAY_AGENT_TEXT)
     for (const rule of [
       'BMN_CONTROL_SOCKET',
       '`bmn help`',
@@ -1791,6 +1794,72 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
 
       expect(result).toEqual({ code: 0, stderr: '', stdout: JSON.stringify({ decision: 'block', reason: "Moonshot AI can't see private work in ~/code/app. Allow it in BMN." }) })
       expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('the away state and the refused question (Story 76.4)', () => {
+    const BRIEF = 'BMN brief: synthetic text for the hook test'
+    const NOTICE = '[BMN state: the owner is away since 22:10 (revision 7). Context from BMN, not a new task.]\nThe owner is away. Synthetic.'
+    const QUESTION = { questions: [{ question: 'Which colour should the made-up button be?', header: 'Colour', options: [{ label: 'Blue', description: 'cool' }, { label: 'Green', description: 'calm' }] }] }
+    const asks = (session: { workspace: string; record: string }, tool: string, more: Record<string, unknown> = {}) => JSON.stringify({
+      hook_event_name: 'PreToolUse', tool_name: tool, tool_input: QUESTION, tool_use_id: 'toolu_synthetic_1',
+      cwd: session.workspace, session_id: SESSION, transcript_path: session.record, ...more
+    })
+    const REASON = 'BMN: the owner is away, synthetic reason.'
+    const refusal = { decision: 'block', reason: REASON, hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: REASON } }
+
+    it.each(['codex', 'claude'] as const)('puts the brief, the away state and a waiting message in one %s answer, in that order, and reports the state printed', async (app) => {
+      const fixture = await cliFixture()
+      const session = app === 'codex' ? await codexSession(fixture.root) : await claudeSession(fixture.root)
+      fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, messageWaiting: true, brief: BRIEF, awayNotice: NOTICE, awayRevision: 7 })
+      fixture.handlers.takeMessage.mockResolvedValue({ message: MESSAGE })
+
+      const result = await runCli(['hook', app], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
+
+      expect(result).toEqual({
+        code: 0, stderr: '',
+        stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `${BRIEF}\n\n${NOTICE}\n\n${STAMP}\nhold any commit on local main\nI am about to merge` } })
+      })
+      expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({ turn: { conversation: SESSION, nested: false } })
+      expect(fixture.handlers.awayPrinted).toHaveBeenCalledWith({ sessionId: 'session-1', agent: app, conversation: SESSION, revision: 7 })
+    })
+
+    it('prints the state alone after a tool call, and nothing for a malformed one', async () => {
+      const fixture = await cliFixture()
+      const session = await claudeSession(fixture.root)
+      const env = { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }
+      fixture.handlers.observeHookEvent.mockResolvedValueOnce({ recorded: true, awayNotice: NOTICE, awayRevision: 7 })
+      expect(await runCli(['hook', 'claude'], { env, input: afterTool(session) })).toEqual({
+        code: 0, stderr: '', stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: NOTICE } })
+      })
+      for (const answer of [{ recorded: true, awayNotice: NOTICE }, { recorded: true, awayNotice: '', awayRevision: 7 }, { recorded: true, awayNotice: 3, awayRevision: 7 }]) {
+        fixture.handlers.observeHookEvent.mockResolvedValueOnce(answer)
+        expect(await runCli(['hook', 'claude'], { env, input: afterTool(session) })).toEqual(QUIET)
+      }
+      expect(fixture.handlers.awayPrinted).toHaveBeenCalledTimes(1)
+    })
+
+    it.each([['claude', 'AskUserQuestion'], ['codex', 'request_user_input']] as const)('refuses %s\'s blocking question when BMN says so, and prints only the refusal', async (app, tool) => {
+      const fixture = await cliFixture()
+      const session = app === 'codex' ? await codexSession(fixture.root) : await claudeSession(fixture.root)
+      const env = { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }
+      fixture.handlers.openAttention.mockResolvedValueOnce({ refused: true, changed: false, reason: REASON })
+
+      expect(await runCli(['hook', app], { env, input: asks(session, tool) })).toEqual({ code: 0, stderr: '', stdout: JSON.stringify(refusal) })
+      expect(fixture.handlers.openAttention.mock.calls[0]?.[0]).toMatchObject({ kind: 'question', awayRefusable: true })
+      // Back: BMN opens the question as before and the hook prints nothing.
+      expect(await runCli(['hook', app], { env, input: asks(session, tool) })).toEqual(QUIET)
+    })
+
+    it("never offers to refuse Codex's asynchronous question or a sub-agent's", async () => {
+      const cases: Array<['codex' | 'claude', string, Record<string, unknown>]> = [['codex', 'request_user_input_async', {}], ['claude', 'AskUserQuestion', { agent_id: 'a1b2c3' }]]
+      for (const [app, tool, more] of cases) {
+        const fixture = await cliFixture()
+        const session = app === 'codex' ? await codexSession(fixture.root) : await claudeSession(fixture.root)
+        fixture.handlers.openAttention.mockResolvedValue({ refused: true, changed: false, reason: REASON })
+        expect(await runCli(['hook', app], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: asks(session, tool, more) })).toEqual(QUIET)
+        for (const [call] of fixture.handlers.openAttention.mock.calls) expect(call).not.toHaveProperty('awayRefusable')
+      }
     })
   })
 })
