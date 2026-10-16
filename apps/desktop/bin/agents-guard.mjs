@@ -343,7 +343,7 @@ function claudeConversation(input) {
 export function messageStanding(agent) {
   const app = appName(agent)
   const measured = MESSAGE_HANDOVER[agent]
-  if (measured === undefined) return `messages: not handed over by a hook in ${app}; your Paste in Messages delivers them`
+  if (measured === undefined) return `messages: none; a message or handoff for ${app} is refused to its sender`
   if (guardState().state !== 'active') return `messages: not handed over until a team is approved (measured on ${app} ${measured.version})`
   return `messages: handed to a working agent by this hook after a tool call (measured on ${app} ${measured.version})`
 }

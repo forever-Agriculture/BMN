@@ -564,7 +564,7 @@ describe('where a receiving agent sends work, for a message (Epic 66.4)', () => 
     approve(team())
     expect(messageStanding('codex')).toBe('messages: handed to a working agent by this hook after a tool call (measured on Codex 0.162.1)')
     expect(messageStanding('claude')).toBe('messages: handed to a working agent by this hook after a tool call (measured on Claude Code 2.1.296)')
-    expect(messageStanding('opencode')).toBe('messages: not handed over by a hook in OpenCode; your Paste in Messages delivers them')
+    expect(messageStanding('opencode')).toBe('messages: none; a message or handoff for OpenCode is refused to its sender')
   })
 })
 

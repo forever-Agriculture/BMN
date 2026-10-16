@@ -275,7 +275,9 @@ with either of their sessions. Limits and the exact rules:
 
 Every session gets the `bmn` command and a token scoped to that session and run. An agent can list
 sessions, publish a file, report progress, ask you a question, hand a longer package to another
-session, leave a message for a peer session, or send text to its own terminal. `bmn help agents` prints the etiquette page agents can read. Preferences →
+session, leave a message for a peer session, or send text to its own terminal. When a Claude Code
+or Codex conversation starts, BMN hands its agent a short brief of what to send and when, once, and
+once more after a compaction ([agent-control.md](agent-control.md#bmns-start-brief)). `bmn help agents` prints the etiquette page agents can read. Preferences →
 **Local control** shows whether the control socket is listening, with its path; a runtime
 path that is too long disables the socket, and Preferences says so. **Check configured hooks**
 reads BMN's existing checker report for Claude Code, Codex and OpenCode, including missing

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   AGENT_ATTENTION_ORIGINS,
+  AGENT_START_BRIEF,
   DEFAULT_APP_SETTINGS,
   ERROR_CODES,
   HOOK_EVENT_LOG_LIMIT,
@@ -3227,6 +3228,22 @@ describe('messages between sessions, through the service (Epic 66, Story 75.4)',
     expect((await listing()).pairPauses).toEqual([])
     expect((await tell()).state).toBe('waiting')
     expect(COMPANION_OPERATIONS.listAttention(database)).toHaveLength(1)
+    expect(writes).toEqual([])
+  })
+
+  it('answers a session\'s own report of a conversation\'s start with BMN\'s brief, once, and again after a compaction (Story 75.6)', async () => {
+    const conversation = '0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e'
+    const report = (source: string, event = 'SessionStart', incarnationId = 'incarnation-2', nested = false) => handlers().observeHookEvent({
+      sessionId: 's2', incarnationId, agent: 'claude', event, source, toolName: null, effects: [], turn: { conversation, turn: null, nested }
+    })
+    expect(await report('startup', 'SessionStart', 'an-earlier-process')).toEqual({ recorded: true })
+    expect(await report('startup', 'SessionStart', 'incarnation-2', true)).toEqual({ recorded: true })
+    expect(await report('startup')).toEqual({ recorded: true, brief: AGENT_START_BRIEF })
+    expect(await report('startup')).toEqual({ recorded: true })
+    expect(await report('resume')).toEqual({ recorded: true })
+    expect(await report('compact', 'UserPromptSubmit')).toEqual({ recorded: true })
+    expect(await report('compact')).toEqual({ recorded: true, brief: AGENT_START_BRIEF })
+    expect(await report('compact')).toEqual({ recorded: true })
     expect(writes).toEqual([])
   })
 

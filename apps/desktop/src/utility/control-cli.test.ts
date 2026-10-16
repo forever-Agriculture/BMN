@@ -1711,10 +1711,83 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
 
     expect(withTeam.stdout).toContain('  messages: handed to a working agent by this hook after a tool call (measured on Codex 0.162.1)')
     expect(withTeam.stdout).toContain('  messages: handed to a working agent by this hook after a tool call (measured on Claude Code 2.1.296)')
-    expect(withTeam.stdout).toContain('  messages: not handed over by a hook in OpenCode; your Paste in Messages delivers them')
+    expect(withTeam.stdout).toContain('  messages: none; a message or handoff for OpenCode is refused to its sender')
     expect(withoutTeam.stdout).toContain('  messages: not handed over until a team is approved (measured on Codex 0.162.1)')
     expect(asJson.agents.find((row) => row.agent === 'codex')?.messages).toMatch(/^messages: handed to a working agent/)
     expect(asJson.agents.find((row) => row.agent === 'claude')?.messages).toMatch(/^messages: handed to a working agent/)
+  })
+
+  describe("BMN's start brief (Story 75.6)", () => {
+    const BRIEF = 'BMN brief: synthetic text for the hook test'
+    const start = (session: { workspace: string; record: string }, source = 'startup') => JSON.stringify({
+      hook_event_name: 'SessionStart', source, cwd: session.workspace, session_id: SESSION, transcript_path: session.record
+    })
+
+    it.each(['codex', 'claude'] as const)('prints the brief BMN answered for a new conversation in %s\'s measured answer form, and reports the conversation without the turn-changes file', async (app) => {
+      const fixture = await cliFixture()
+      const session = app === 'codex' ? await codexSession(fixture.root) : await claudeSession(fixture.root)
+      fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, brief: BRIEF })
+
+      const result = await runCli(['hook', app], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: start(session) })
+
+      expect(result).toEqual({ code: 0, stderr: '', stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: BRIEF } }) })
+      expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
+      expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({
+        agent: app, event: 'SessionStart', source: 'startup', turn: { conversation: SESSION, turn: null, nested: false }
+      })
+      expect(fixture.handlers.takeMessage).not.toHaveBeenCalled()
+    })
+
+    it('prints nothing when BMN answers no brief, an empty one or a malformed one', async () => {
+      const fixture = await cliFixture()
+      const session = await claudeSession(fixture.root)
+      const env = { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }
+      for (const answer of [{ recorded: true }, { recorded: true, brief: '' }, { recorded: true, brief: 42 }]) {
+        fixture.handlers.observeHookEvent.mockResolvedValueOnce(answer)
+        expect(await runCli(['hook', 'claude'], { env, input: start(session, 'resume') })).toEqual(QUIET)
+      }
+    })
+
+    it.each(['codex', 'claude'] as const)('puts the brief and a waiting message in one %s answer after a tool call, the brief first', async (app) => {
+      const fixture = await cliFixture()
+      const session = app === 'codex' ? await codexSession(fixture.root) : await claudeSession(fixture.root)
+      fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, messageWaiting: true, brief: BRIEF })
+      fixture.handlers.takeMessage.mockResolvedValue({ message: MESSAGE })
+
+      const result = await runCli(['hook', app], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
+
+      expect(result).toEqual({
+        code: 0, stderr: '',
+        stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `${BRIEF}\n\n${STAMP}\nhold any commit on local main\nI am about to merge` } })
+      })
+      expect(fixture.handlers.reportMessage).toHaveBeenCalledTimes(1)
+    })
+
+    it('prints the brief alone, once, when the waiting message is not handed over', async () => {
+      const fixture = await cliFixture()
+      const session = await codexSession(fixture.root)
+      fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, messageWaiting: true, brief: BRIEF })
+      fixture.handlers.takeMessage.mockResolvedValue({ message: null })
+
+      const result = await runCli(['hook', 'codex'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
+
+      expect(result).toEqual({ code: 0, stderr: '', stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: BRIEF } }) })
+      expect(fixture.handlers.reportMessage).not.toHaveBeenCalled()
+    })
+
+    it('never puts the brief on a refused prompt: the stop goes out alone and BMN is not asked for it', async () => {
+      const fixture = await cliFixture()
+      const session = await guardedSession(fixture.root, ['claude', '--resume'], MOONSHOT_SESSION)
+      fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, brief: BRIEF })
+
+      const result = await runCli(['hook', 'claude'], {
+        env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home },
+        input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', cwd: session.workspace, session_id: OBSERVED_REFERENCE, prompt: PROMPT_SENTINEL })
+      })
+
+      expect(result).toEqual({ code: 0, stderr: '', stdout: JSON.stringify({ decision: 'block', reason: "Moonshot AI can't see private work in ~/code/app. Allow it in BMN." }) })
+      expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
+    })
   })
 })
 

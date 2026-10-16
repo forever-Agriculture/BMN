@@ -2384,9 +2384,10 @@ function guardReport(agent, event, verdict) {
  * the message came from, whether that provider may read it. What comes back is printed in the app's measured
  * answer form and then reported as printed, which never means read. BMN's word that something waits, resolving,
  * taking and reporting share one limit, counted from `reported`, the moment the event's report was sent; past it
- * nothing is printed, and a claim BMN made anyway stays "taken, not confirmed".
+ * nothing is printed, and a claim BMN made anyway stays "taken, not confirmed". A brief BMN handed for this
+ * event (Story 75.6) goes first in the same answer; `said.printed` tells the caller that the answer went out.
  */
-async function handMessage(agent, event, agentPid, procRoot, socketPath, token, reported) {
+async function handMessage(agent, event, agentPid, procRoot, socketPath, token, reported, brief, said) {
   if (!agentPid || (event.agent_id !== undefined && event.agent_id !== null)) return
   let guard
   try {
@@ -2407,10 +2408,18 @@ async function handMessage(agent, event, agentPid, procRoot, socketPath, token, 
   const report = (outcomes) => {
     const message = outcomes[0]?.result?.message
     if (!isObject(message) || typeof message.stamp !== 'string' || typeof message.text !== 'string') return undefined
-    writeSync(1, JSON.stringify({ hookSpecificOutput: { hookEventName: event.hook_event_name, additionalContext: `${message.stamp}\n${message.text}` } }))
+    writeSync(1, contextAnswer(event, [brief, `${message.stamp}\n${message.text}`]))
+    said.printed = true
     return { method: 'message.report', params: { messageId: message.messageId, claimId: message.claimId, pid: agentPid } }
   }
   await callEach(socketPath, token, [take, report], Math.max(1, left())).catch(() => undefined)
+}
+
+/** The one answer that puts text in front of the agent: BMN's brief, a message, or both, in that order. */
+function contextAnswer(event, parts) {
+  return JSON.stringify({
+    hookSpecificOutput: { hookEventName: event.hook_event_name, additionalContext: parts.filter((part) => part !== null).join('\n\n') }
+  })
 }
 
 /**
@@ -2429,8 +2438,9 @@ async function markTurnStart(marks, mark, socketPath, token) {
 }
 
 /**
- * Hooks must never disturb the agent: exit 0 whatever happens, and nothing on stdout, with two
- * exceptions: the answer that stops a prompt the guard refused, and a message for its own agent.
+ * Hooks must never disturb the agent: exit 0 whatever happens, and nothing on stdout, with three
+ * exceptions: the answer that stops a prompt the guard refused, and BMN's start brief and a message for its
+ * own agent, which share one answer.
  */
 async function runHook(args) {
   const [agent] = args
@@ -2496,15 +2506,22 @@ async function runHook(args) {
   let reported = Date.now()
   const calls = [...requests, (outcomes) => {
     reported = Date.now()
-    return hookObservation(agent, event, requests, outcomes, apiHost, model, configDir, turns ? marks.turnFacts(agent, event) : {})
+    // Story 75.6: a conversation's start names the conversation whatever turn changes do, so BMN can brief it once.
+    const facts = marks !== null && (turns || event.hook_event_name === 'SessionStart') ? marks.turnFacts(agent, event) : {}
+    return hookObservation(agent, event, requests, outcomes, apiHost, model, configDir, facts)
   }]
   const outcomes = await callEach(socketPath, token, calls, HOOK_TIMEOUT_MS).catch(() => [])
-  // BMN's answer to the report of this event says when a message waits for this session; without that word
-  // the hook adds nothing to the event.
-  if (outcomes[requests.length]?.result?.messageWaiting === true) {
+  // BMN's answer to the report of this event says when a message waits for this session and carries its start
+  // brief when one is due; without either the hook adds nothing to the event.
+  const answer = outcomes[requests.length]?.result
+  const brief = typeof answer?.brief === 'string' && answer.brief !== '' ? answer.brief : null
+  const said = { printed: false }
+  if (answer?.messageWaiting === true) {
     // Should one event ever carry both a turn's start and a message, they share the one allowance (R69-NFR5).
-    await handMessage(agent, event, agentPid, procRoot, socketPath, token, mark?.edge === 'start' ? marked : reported).catch(() => undefined)
+    await handMessage(agent, event, agentPid, procRoot, socketPath, token, mark?.edge === 'start' ? marked : reported, brief, said)
+      .catch(() => undefined)
   }
+  if (!said.printed && brief !== null) writeSync(1, contextAnswer(event, [brief]))
   return 0
 }
 

@@ -192,5 +192,35 @@ Resume, recorded as such.
 What 75.6 takes from this: both apps have a working path, `SessionStart` with
 `additionalContext`. BMN briefs a new conversation once, and once more after compaction, because
 the brief does not survive it (owner decision, 2026-10-16). It does not brief on resume or a
-sub-agent. In Claude Code a brief must not ride on an answer that refuses the prompt: BMN keeps
-it for the next answer that does not.
+sub-agent. In Claude Code a brief must not ride on an answer that refuses the prompt. Built in
+Story 75.6 ([agent-control.md](agent-control.md#bmns-start-brief)): the brief rides only the answer
+to `SessionStart`, so it never shares an answer with a prompt's refusal or a message.
+
+### Do agents use what the brief names? (Story 75.6)
+
+Measured 2026-10-16 with BMN's own brief on an isolated build of the Story 75.6 tree, the same
+installed apps and isolated profiles (Codex 0.162.1 on its cheapest model, low effort; Claude Code
+2.1.301 on Haiku in don't-ask mode with a short allow list). Each run opens two sessions in one
+workspace, both running the app, and gives the first a made-up task that never names a `bmn`
+command; the second is the peer the task mentions. A run is a hit when the app's own record of the
+first conversation shows the fitting command among the agent's tool calls. Records and the judge
+(`seeded-judge.py`) are kept under `_bmad-output/planning-artifacts/reference-75-lighter/brief/`.
+
+| Task (fitting command) | Codex, first brief | Codex, final brief | Claude Code, first brief | Claude Code, final brief |
+| --- | --- | --- | --- | --- |
+| Another agent waits for what you finished (`tell` or `handoff`) | 3 of 3 | 3 of 3 | 2 of 3 | 3 of 3 |
+| A change needs another agent's attention (`tell` or `handoff`) | 2 of 3 | 3 of 3 | 1 of 3 | 1 of 3, then 3 of 3 |
+| A result needs evidence (`publish`, then `progress --evidence-id`) | 3 of 3 | 3 of 3 | 3 of 3 | 3 of 3 |
+
+- The first brief lacked one line. Twice Claude Code reached for its own `SendMessage` tool, which
+  answered "No agent named 'Frontend' is reachable". The final brief says another BMN session is
+  reached only with the `bmn` commands, never with the app's own agent messaging; no run after it
+  used the app's own messaging.
+- Codex's one miss on the first brief renamed the function and told nobody.
+- Claude Code's two misses on the final brief, and its third on the first brief, were the
+  measurement's allow list: a check command was refused, and the agent took Bash as closed and said it
+  would have run `bmn tell`. With `node` on the list, the same task was 3 of 3.
+- A hit is the command chosen, not delivered: in three hits the message never reached BMN. Twice
+  the allow list refused a compound command around `bmn tell`; once Codex's sandbox refused the
+  socket (`EPERM`) and the agent did not ask to run outside it, although the brief and the error both
+  say to.

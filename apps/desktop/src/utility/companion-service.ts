@@ -111,6 +111,7 @@ import { PortWatch } from './port-watch'
 import { AGENT_HISTORY_STATE_KEY, AgentHistory, readHistoryState, type AgentHistoryAdapter } from './agent-history'
 import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
 import { SessionMessages, type MessageDestination } from './session-messages'
+import { AgentBriefs } from './agent-briefs'
 import { foregroundProcessFolder } from './foreground-process'
 import type { TurnChangesPort, TurnStoreKeeper } from './turn-changes-engine'
 import { TurnRecorder } from './turn-changes-recorder'
@@ -468,6 +469,7 @@ export class CompanionService {
   private readonly history: AgentHistory
   /** Epic 66: messages the sessions of one workspace leave each other. */
   private readonly messages: SessionMessages
+  private readonly briefs: AgentBriefs
   private lastMessageSweepAt = 0
   /** Each bounded log has its own serialized append queue. */
   private repeatWrites: Promise<void> = Promise.resolve()
@@ -580,6 +582,10 @@ export class CompanionService {
       now: () => this.now(),
       log: (line) => process.stderr.write(line),
       changed: () => this.emit('settings', null)
+    })
+    this.briefs = new AgentBriefs({
+      liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
+      now: () => this.now().getTime()
     })
     this.messages = new SessionMessages({
       database: options.database,
@@ -748,7 +754,10 @@ export class CompanionService {
           this.turns?.seen(p.sessionId, p.agent)
           if (p.turn !== undefined) this.turns?.observe({ sessionId: p.sessionId, app: p.agent, event: p.event, source: p.source, ...p.turn })
           // Epic 66.4: the hook asks for a message only when told one waits, so an ordinary tool call adds nothing.
-          return await this.messages.waiting(p) ? { ...recorded, messageWaiting: true } : recorded
+          const waiting = await this.messages.waiting(p)
+          // Story 75.6: BMN's start brief rides in this answer once per conversation and once after a compaction.
+          const brief = this.briefs.answer(p)
+          return { ...recorded, ...(waiting ? { messageWaiting: true } : {}), ...(brief === null ? {} : { brief }) }
         }),
         reportUsage: (p) => this.controlCall(async () => this.recordUsage(p)),
         reportGuard: (p) => this.controlCall(async () => this.recordGuard(p)),

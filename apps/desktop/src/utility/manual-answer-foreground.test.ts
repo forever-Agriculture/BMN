@@ -55,7 +55,9 @@ it.skipIf(process.platform !== 'linux').each(['exit', 'suspend', 'replace', 'dir
     const candidateCli = join(repo, 'apps/desktop/bin/bmn')
     writeFileSync(stub, `import json, os, shutil, signal, subprocess, sys
 assert os.path.realpath(shutil.which('bmn')) == os.path.realpath(sys.argv[2]), 'candidate CLI mismatch'
-subprocess.run(['bmn', 'hook', 'codex'], input=json.dumps({'hook_event_name':'SessionStart','source':'startup','session_id':'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'}), text=True, check=True)
+# Like Codex, the stub takes what its hook answers (BMN's start brief, Story 75.6); nothing of it reaches the terminal.
+start = subprocess.run(['bmn', 'hook', 'codex'], input=json.dumps({'hook_event_name':'SessionStart','source':'startup','session_id':'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'}), text=True, check=True, stdout=subprocess.PIPE)
+assert 'BMN brief:' in json.loads(start.stdout)['hookSpecificOutput']['additionalContext']
 choices=json.dumps({'options':[{'label':'Wait','description':None},{'label':'Proceed','description':None}]})
 for key in ['positive','retained']:
     subprocess.run(['bmn','ask',key,'Synthetic decision','--kind','question','--choices-json',choices], check=True, stdout=subprocess.DEVNULL)
