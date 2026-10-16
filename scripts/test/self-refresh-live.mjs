@@ -173,10 +173,6 @@ done
     await page.locator(`.session-row > button[data-session-id="${sessionId}"]`).click()
     await until(async () => (await page.evaluate((id) => window.aiTerminal.getHookObservation(id), sessionId)).state === 'observed', 'the stand-in agent to report its start', 30_000)
     await sleep(1_500)
-    const openWorkspaceMenu = async () => {
-      await page.locator(`button[aria-label="Actions for ${workspace.name}"]`).click()
-      await page.locator('[role="menu"]').first().waitFor()
-    }
     const palette = async (text) => {
       await page.locator('button[aria-label="Command palette"]').click()
       await page.locator('#palette-results').waitFor()
@@ -186,8 +182,8 @@ done
 
     // ---- Review results: an agent's report shows while the view is open (topic progress) -------------------------
     phase('Review results')
-    await openWorkspaceMenu()
-    await page.getByRole('menuitem', { name: /^Review results/ }).click()
+    // Story 75.10: Review results opens from the palette, for the active workspace.
+    await palette('Review results')
     const results = page.locator('dialog.workspace-results-dialog').first()
     await results.waitFor()
     await sleep(1_000)
@@ -258,25 +254,22 @@ done
     const dialog = page.locator('dialog.preferences-dialog')
     await dialog.waitFor()
     const nav = dialog.locator('nav.preferences-nav')
-    // A parent's button carries its Needs-you mark in its name, so pages are found by their text, as agents-rules-visual does.
-    const go = async (parent, label) => {
-      if (parent) {
-        await nav.locator('.nav-parent > .nav-item', { hasText: new RegExp(`^${parent}`) }).click()
-        await nav.locator('.nav-sub .nav-item', { hasText: new RegExp(`^${label}$`) }).click()
-      } else {
-        await nav.locator('.nav-group .nav-item', { hasText: new RegExp(`^${label}$`) }).click()
-      }
+    // A page's button carries its Needs-you mark in its name, so pages are found by their text; Agents and Integrations
+    // show their views in the control under the page head (Story 75.10).
+    const go = async (label, view = null) => {
+      await nav.locator('.nav-item', { hasText: new RegExp(`^${label}`) }).click()
+      if (view !== null) await dialog.locator('.preferences-page:not([hidden]) .page-views [role="radio"]', { hasText: new RegExp(`^${view}$`) }).click()
       await sleep(400)
     }
-    await go(null, 'Telegram')
+    await go('Notifications')
     await noButton(dialog, ['Refresh'])
     const telegramShown = await readsDuring('aiterm:telegram:status', WATCH_MS)
     check('Telegram status reads at most once per 30 s while its page is shown', telegramShown >= 1 && telegramShown <= Math.ceil(WATCH_MS / EVERY_MS) + 1, { readsIn65s: telegramShown })
-    await go(null, 'Appearance')
+    await go('General')
     const telegramHidden = await readsDuring('aiterm:telegram:status', 40_000)
     check('Telegram status reads nothing while another page is shown', telegramHidden === 0, { readsIn40s: telegramHidden })
 
-    await go('Rules', 'Health')
+    await go('Integrations', 'Health')
     await noButton(dialog, ['Check now'])
     await until(async () => (await dialog.textContent()).includes('0.162.1'), 'Health to read Codex 0.162.1')
     const healthIdle = await readsDuring('aiterm:rules:snapshot', 35_000)
@@ -286,7 +279,7 @@ done
     const healthMs = await timed('Health to show Codex 0.170.0', async () => (await dialog.textContent()).includes('0.170.0'), 30_000)
     check('Health shows an app version changed outside BMN when the window gets the focus', healthMs < 20_000, { ms: healthMs })
 
-    await go('Rules', 'Skills')
+    await go('Integrations', 'Skills')
     await noButton(dialog, ['Check now'])
     mkdirSync(join(home, '.claude/skills/small-steps'), { recursive: true })
     writeFileSync(join(home, '.claude/skills/small-steps/SKILL.md'), '---\nname: small-steps\ndescription: One change, then check it.\n---\n\nSynthetic.\n')
@@ -294,11 +287,11 @@ done
     const skillsMs = await timed('Skills to show small-steps', async () => (await dialog.textContent()).includes('small-steps'), 30_000)
     check('Skills shows a skill added outside BMN when the window gets the focus', skillsMs < 20_000, { ms: skillsMs })
 
-    await go('Rules', 'Tools')
+    await go('Integrations', 'Tools')
     await noButton(dialog, ['Check now'])
     check('Tools offers no Check now', true, {})
 
-    await go('Team', 'Agents')
+    await go('Agents', 'Team')
     writeFileSync(join(agentsDir, 'roster.md'), roster.replace('schema_version: 2', 'schema_version: [2'))
     await focus()
     const brokenMs = await timed('Team to say its file needs fixing', async () => (await dialog.textContent()).includes('The team file needs fixing'), 15_000)
@@ -312,7 +305,7 @@ done
     // ---- Backup: Export checks its copy at once ----------------------------------------------------------------
     phase('Backup')
     await application.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }) }, backups)
-    await go(null, 'Backup')
+    await go('Data')
     await noButton(dialog, ['Verify a backup…'])
     await dialog.getByRole('button', { name: 'Export backup…' }).click()
     const outcome = dialog.locator('.preferences-success, .preferences-error').last()

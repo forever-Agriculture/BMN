@@ -587,7 +587,7 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
         copy: async () => ({ ok: false, copied: false, message: 'The self-test copies no sign-in' })
       }
     } : {}),
-    // Team › Asks (73.1): the folder he exports an ask into.
+    // Agents › Asks (73.1): the folder he exports an ask into.
     chooseAskExportFolder: async (event) => {
       if (selfTestTaps?.headless) throw new MainIpcError(ERROR_CODES.invalidArgument, 'File dialogs are unavailable in this run')
       const dialogOptions = { title: 'Export the ask into…', properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'> }

@@ -151,7 +151,7 @@ case "$1" in --version) echo "$v";; *) exit 1;; esac`)
     await application.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; window.show(); window.setContentSize(1280, 860) })
     return page
   }
-  /** Rules › Health in Preferences, found by text: a parent's name carries its Needs-you mark. */
+  /** Integrations › Health in Preferences (Story 75.10), found by text: a page's name carries its Needs-you mark. */
   const openHealth = async (page) => {
     const dialog = page.locator('dialog.preferences-dialog')
     if (await dialog.count() === 0) {
@@ -162,9 +162,9 @@ case "$1" in --version) echo "$v";; *) exit 1;; esac`)
       await dialog.waitFor()
     }
     const nav = dialog.locator('nav.preferences-nav')
-    await nav.locator('.nav-parent > .nav-item', { hasText: /^Rules/ }).click()
-    await nav.locator('.nav-sub .nav-item', { hasText: /^Health$/ }).click()
-    await dialog.locator('.page-title', { hasText: /^Health$/ }).waitFor()
+    await nav.locator('.nav-item', { hasText: /^Integrations/ }).click()
+    await dialog.locator('.page-views [role="radio"]', { hasText: /^Health$/ }).click()
+    await dialog.locator('.page-views [role="radio"][aria-checked="true"]', { hasText: /^Health$/ }).waitFor()
     return dialog.locator('.preferences-main')
   }
   const focus = (page) => page.evaluate(() => { window.dispatchEvent(new Event('focus')) })

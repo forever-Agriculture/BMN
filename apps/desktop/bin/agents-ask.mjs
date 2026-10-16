@@ -539,7 +539,7 @@ function pickedResearcher(data, { environment, now, fenceVersions, fenceTests })
   if (able.some((entry) => entry.id === chosen)) return { id: chosen }
   if (dropped !== null) {
     const name = data.agents.find((agent) => agent.id === dropped)?.name ?? dropped
-    return { why: `${name} is no longer one of your team's researchers, so no researcher is picked. Pick one on Models (Preferences › Team › Models), or name one with --agent.` }
+    return { why: `${name} is no longer one of your team's researchers, so no researcher is picked. Pick one on Models (Preferences › Agents › Models), or name one with --agent.` }
   }
   if (able.length > 0) return { id: able[0].id }
   const each = offered.filter((entry) => !entry.ok).map((entry) => `${entry.name}: ${entry.why}`)
@@ -579,7 +579,7 @@ export async function runAsk({
   if (problem !== null) return refused(problem.code, problem.message)
   record.question = question
   if (!owner && !agentsMayAsk()) {
-    return refused('ASKING_OFF', 'the owner switched "Agents may ask the web" off in BMN (Preferences › Team › Models), so only the owner asks there; ask the owner')
+    return refused('ASKING_OFF', 'the owner switched "Agents may ask the web" off in BMN (Preferences › Agents › Models), so only the owner asks there; ask the owner')
   }
   // A first look, before anything is taken or made; the place itself is reserved further down, under the writer's mark.
   if (askedCount(started) >= ASK_PER_DAY) return refused('DAY_LIMIT', DAY_LIMIT_WORDS)

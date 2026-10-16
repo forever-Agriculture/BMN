@@ -41,10 +41,10 @@ export interface ProgressEvidenceProbe {
   }
   /** Escape closes it and hands focus back to the word that opened it. */
   focusReturnedToStrip: boolean
-  /** Closing a detail opened from the More menu hands focus back to that menu's button. */
-  focusReturnedToMenuButton: boolean
-  /** The keyboard route: the pane's More menu, since xterm eats Tab inside the terminal. */
-  openedFromPaneMenu: boolean
-  /** This pane's own detail, opened from its menu: the same surface with nothing behind the claim. */
+  /** Closing a detail opened from the palette hands focus back to what had it before the palette. */
+  focusReturnedToOpener: boolean
+  /** The keyboard route: the palette's Progress details (Story 75.10), since xterm eats Tab inside the terminal. */
+  openedFromPalette: boolean
+  /** This pane's own detail, opened from the palette: the same surface with nothing behind the claim. */
   bareDialog: { title: string; body: string }
 }

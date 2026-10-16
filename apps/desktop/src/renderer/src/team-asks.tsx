@@ -1,4 +1,4 @@
-// MODULE: team-asks.tsx - Story 73.1: Preferences › Team › Asks: a read-only record of every ask his agents made on this computer, newest first, with what was readable and what the teammate's mode could read (72.9), who answered and its sub-agents, the answer as the teammate's own words, the usage, Stop, Copy, Export and Remove
+// MODULE: team-asks.tsx - Story 73.1: Preferences › Agents › Asks: a read-only record of every ask his agents made on this computer, newest first, with what was readable and what the teammate's mode could read (72.9), who answered and its sub-agents, the answer as the teammate's own words, the usage, Stop, Copy, Export and Remove
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { TeamAskDetail, TeamAskLine, TeamAskProjectState, TeamAskState, TeamAskSubagentView, TeamAskUsageView, TeamAsksSnapshot } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
@@ -200,7 +200,7 @@ export interface TeamAsksProps {
   now?: Date
 }
 
-/** Team › Asks: the places in use, every ask newest first, an opened one in place, and Remove all. Asking is the agents'; the page only reads and controls. */
+/** Agents › Asks: the places in use, every ask newest first, an opened one in place, and Remove all. Asking is the agents'; the page only reads and controls. */
 export function TeamAsks(props: TeamAsksProps): React.JSX.Element {
   const { snapshot } = props
   const headId = useId()

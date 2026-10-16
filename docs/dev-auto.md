@@ -11,7 +11,7 @@ to the corresponding live session.
 
 ## Morning digest
 
-Enable Morning digest and choose a local time in Preferences → Telegram. It is off by default,
+Enable Morning digest and choose a local time in Preferences → Notifications → Telegram. It is off by default,
 and needs Telegram enabled and connected. It obeys quiet hours and skips days with no eligible send.
 
 The message groups finished runs, new decisions still present in current handoffs, requests waiting

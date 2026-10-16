@@ -3,7 +3,7 @@ import { DEFAULT_APP_SETTINGS, type AppSettings, type BackupExportResult, type T
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { BackupOutcome, PREFERENCES_NAVIGATION, PreferencesDialog, TelegramStatusList, pageParent, type PreferencesPage } from './preferences-dialog'
+import { AGENTS_VIEWS, BackupOutcome, INTEGRATIONS_VIEWS, PREFERENCES_PAGES, PreferencesDialog, TelegramStatusList, openedAt, type PreferencesPlace } from './preferences-dialog'
 
 const ERROR = 'Another client is polling this bot token; stop the other client or revoke the token in BotFather'
 const status = (lastError: string | null): TelegramStatus => ({
@@ -137,38 +137,86 @@ describe('Health alerts row (Story 62.2)', () => {
   })
 })
 
-describe('the left navigation and its pages (Story 60.5 AC1)', () => {
-  const dialog = (initialPage?: PreferencesPage): string => renderToStaticMarkup(createElement(PreferencesDialog, {
+describe('six pages in one flat list (Story 75.10 AC1)', () => {
+  const dialog = (initialPage?: PreferencesPlace): string => renderToStaticMarkup(createElement(PreferencesDialog, {
     settings: DEFAULT_APP_SETTINGS, initialPage, onSettings: () => undefined, onClose: () => undefined,
     saveVoice: async () => DEFAULT_APP_SETTINGS, suggestVocabulary: () => ({ ok: false as const, reason: 'test' }) }))
   const navigation = (markup: string): string => /<nav class="preferences-nav"[^>]*>(.*?)<\/nav>/s.exec(markup)![1] as string
-  const items = (markup: string): string[] => [...navigation(markup).matchAll(/<button[^>]*class="nav-item"[^>]*>(?:<svg.*?<\/svg>)?([A-Za-z ]+)/g)].map((match) => match[1] as string)
+  const items = (markup: string): string[] => [...navigation(markup).matchAll(/<button[^>]*class="nav-item"[^>]*>([A-Za-z ]+)/g)].map((match) => match[1] as string)
+  /** The view control under a page head: each segment's word and whether it is lit. */
+  const views = (markup: string): string[] => [...(/<div class="page-views">(.*?)<\/div><\/div>/s.exec(markup)?.[1] ?? '').matchAll(/aria-checked="(true|false)"[^>]*>([A-Za-z ]+)<\/button>/g)]
+    .map((match) => `${match[2]}${match[1] === 'true' ? ' (lit)' : ''}`)
 
-  it('lists Team and Rules first with their icons, then Workspace, Phone and Machine', () => {
-    expect(PREFERENCES_NAVIGATION.map((entry) => 'parent' in entry ? `${entry.label}: ${entry.pages.map((page) => page.label).join(', ')}` : `${entry.group}: ${entry.pages.map((page) => page.label).join(', ')}`)).toEqual([
-      'Team: Agents, Roles, Asks, Models, Changes', 'Rules: Editor, Skills, Tools, Health', 'Workspace: Appearance, Terminal, Notifications, Voice', 'Phone: Telegram', 'Machine: Local control, History, Backup'
-    ])
+  it('lists General, Agents, Integrations, Notifications, Voice and Data, with no icon, group head or sub-list', () => {
+    expect(PREFERENCES_PAGES.map((entry) => entry.label)).toEqual(['General', 'Agents', 'Integrations', 'Notifications', 'Voice', 'Data'])
     const markup = dialog()
     expect(markup).toContain('<nav class="preferences-nav" aria-label="Preference pages">')
-    expect(count(navigation(markup), '<svg class="page-icon"')).toBe(2)
-    expect(markup).not.toMatch(/Jump to section|<select aria-label="Preferences section"/)
+    expect(items(markup)).toEqual(['General', 'Agents', 'Integrations', 'Notifications', 'Voice', 'Data'])
+    expect(navigation(markup)).not.toMatch(/<svg|nav-head|nav-sub|nav-parent|nav-group|aria-expanded/)
   })
 
-  it('opens on Team with only Team\'s sub-pages showing', () => {
-    expect(items(dialog())).toEqual(['Team', 'Agents', 'Roles', 'Asks', 'Models', 'Changes', 'Rules', 'Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'Local control', 'History', 'Backup'])
-    expect(dialog()).toMatch(/aria-current="true" aria-expanded="true">.*?Team/)
-    expect(dialog()).toContain('<button type="button" class="nav-item" aria-current="page">Agents</button>')
-    expect([pageParent('team'), pageParent('models'), pageParent('changes'), pageParent('health'), pageParent('skills'), pageParent('voice')]).toEqual(['team', 'team', 'team', 'rules', 'rules', null])
+  it('opens on Agents › Team, with the view control under the head: Team, Roles, Models, Changes, Asks', () => {
+    expect(AGENTS_VIEWS.map((entry) => entry.label)).toEqual(['Team', 'Roles', 'Models', 'Changes', 'Asks'])
+    const markup = dialog()
+    expect(markup).toContain('<button type="button" class="nav-item" aria-current="page">Agents</button>')
+    expect(markup).toContain('<div class="preferences-page team-page">')
+    // The team is still being read, and the head already says the page's name rather than the view's.
+    expect(markup).toMatch(/<header class="page-head"><h3 class="page-title" id="[^"]+">Agents<\/h3>/)
+    expect(views(markup)).toEqual(['Team (lit)', 'Roles', 'Models', 'Changes', 'Asks'])
   })
 
-  it('keeps every earlier section as its own page, one showing at a time', () => {
-    const markup = dialog('control')
-    expect(items(markup)).toEqual(['Team', 'Rules', 'Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'Local control', 'History', 'Backup'])
-    expect(markup).toContain('<button type="button" class="nav-item" aria-current="page">Local control</button>')
-    expect(count(markup, '<div class="preferences-page" hidden="">')).toBe(7)
-    expect(count(markup, '<div class="preferences-page">')).toBe(1)
-    expect(markup).toMatch(/<div class="preferences-page"><section class="preferences-section" id="agent-control-section"><h3>Local control<\/h3>/)
-    for (const title of ['Appearance', 'Terminal', 'Notifications', 'Voice', 'History', 'Backup']) expect(markup).toMatch(new RegExp(`<h3[^>]*>${title}</h3>`))
+  it('opens Integrations on Health, or on the view it was asked for: Health, Rules, Skills, Tools', () => {
+    expect(INTEGRATIONS_VIEWS.map((entry) => entry.label)).toEqual(['Health', 'Rules', 'Skills', 'Tools'])
+    const health = dialog('health')
+    expect(health).toContain('<button type="button" class="nav-item" aria-current="page">Integrations</button>')
+    expect(health).toMatch(/<h3 class="page-title" id="[^"]+">Integrations<\/h3>/)
+    expect(views(health)).toEqual(['Health (lit)', 'Rules', 'Skills', 'Tools'])
+    expect(views(dialog('skills'))).toEqual(['Health', 'Rules', 'Skills (lit)', 'Tools'])
+  })
+
+  it('opens Session details\' Hooks link on Integrations › Health, and keeps the head and its views together at the top', () => {
+    expect(openedAt({ page: 'general', agents: 'roles', integrations: 'tools' }, 'hooks')).toEqual({ page: 'integrations', agents: 'roles', integrations: 'health' })
+    const hooks = dialog('hooks')
+    expect(hooks).toContain('<button type="button" class="nav-item" aria-current="page">Integrations</button>')
+    expect(views(hooks)).toEqual(['Health (lit)', 'Rules', 'Skills', 'Tools'])
+    expect(hooks).toMatch(/<div class="page-top"><header class="page-head"><h3 class="page-title" id="[^"]+">Integrations<\/h3>.*?<\/header><div class="page-views">/s)
+    // A page without views keeps its head alone.
+    expect(dialog('general')).toMatch(/<div class="preferences-page"><header class="page-head"><h3 class="page-title">General<\/h3>/)
+  })
+
+  it('makes Local control Health\'s last section, keeping its id, and shows it on no other view', () => {
+    const health = dialog('integrations')
+    expect(health).toMatch(/<section class="preferences-section" id="agent-control-section"><h4 class="group-head">Local control<span class="caption">/)
+    expect(health.indexOf('id="agent-control-section"')).toBeGreaterThan(health.indexOf('class="preferences-page rules-page"'))
+    expect(dialog('rules')).not.toContain('agent-control-section')
+    expect(dialog('agents')).not.toContain('agent-control-section')
+  })
+
+  it('merges Appearance and Terminal into General, Desktop and Telegram into Notifications, History and Backup into Data, each under its own section head', () => {
+    const heads = (markup: string, page: string): string[] => {
+      const shown = new RegExp(`<div class="preferences-page"><header class="page-head"><h3 class="page-title"[^>]*>${page}</h3>.*?(?=<div class="preferences-page"|</main>)`, 's').exec(markup)?.[0] ?? ''
+      return [...shown.matchAll(/<h4 class="group-head"[^>]*>([A-Za-z ]+)/g)].map((match) => match[1] as string)
+    }
+    expect(heads(dialog('general'), 'General')).toEqual(['Appearance', 'Terminal'])
+    expect(heads(dialog('notifications'), 'Notifications')).toEqual(['Desktop', 'Telegram'])
+    expect(heads(dialog('data'), 'Data')).toEqual(['History', 'Backup'])
+    // One page shows at a time; the others are rendered hidden.
+    const general = dialog('general')
+    expect(count(general, '<div class="preferences-page" hidden="">')).toBe(3)
+    expect(count(general, '<div class="preferences-page">')).toBe(1)
+    // Every setting stays reachable: the rows of the pages that merged.
+    for (const row of ['Identity', 'Color mode', 'Terminal font size', 'Let programs copy to the clipboard', 'Desktop notifications', 'Bot token', 'Keep agent history', 'Export backup…']) {
+      expect(dialog(), row).toContain(row)
+    }
+  })
+
+  it('opens where it was left, unless it was opened for a page or view', () => {
+    const last = { page: 'data', agents: 'models', integrations: 'tools' } as const
+    expect(openedAt(last)).toEqual(last)
+    expect(openedAt(last, 'health')).toEqual({ page: 'integrations', agents: 'models', integrations: 'health' })
+    expect(openedAt(last, 'roles')).toEqual({ page: 'agents', agents: 'roles', integrations: 'tools' })
+    expect(openedAt(last, 'voice')).toEqual({ ...last, page: 'voice' })
+    expect(openedAt(last, 'agents')).toEqual({ ...last, page: 'agents' })
   })
 })
 

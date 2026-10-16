@@ -114,10 +114,10 @@ describe('whether the guard applies at all (60.8 AC2)', () => {
 
     writeFileSync(join(state, 'current'), '{ not json')
     expect(prompt('claude', pid)).toMatchObject({ outcome: 'stop', cause: 'state', allow: false })
-    expect(prompt('claude', pid).line).toBe('BMN stopped this prompt: The approved team on disk is damaged. Open BMN Preferences › Team and approve the team.')
+    expect(prompt('claude', pid).line).toBe('BMN stopped this prompt: The approved team on disk is damaged. Open BMN Preferences › Agents and approve the team.')
 
     rmSync(join(state, 'current'))
-    expect(prompt('claude', pid).line).toBe('BMN stopped this prompt: The approved team is missing. Open BMN Preferences › Team and approve the team.')
+    expect(prompt('claude', pid).line).toBe('BMN stopped this prompt: The approved team is missing. Open BMN Preferences › Agents and approve the team.')
     expect(guardStanding('claude')).toMatch(/^prompt guard: stopping every prompt\. The approved team is missing\./)
 
     writeFileSync(join(state, 'current'), pointer)
@@ -133,7 +133,7 @@ describe('whether the guard applies at all (60.8 AC2)', () => {
     writeFileSync(generationPath(1), JSON.stringify(earlier))
     writeFileSync(currentPointerPath(), JSON.stringify({ generation: 1, hash: earlier.hash }))
 
-    expect(guardState()).toEqual({ state: 'broken', fix: 'The approved team is from an earlier BMN. Open BMN Preferences › Team and approve it again.' })
+    expect(guardState()).toEqual({ state: 'broken', fix: 'The approved team is from an earlier BMN. Open BMN Preferences › Agents and approve it again.' })
     expect(prompt('claude', session(['claude']))).toMatchObject({ outcome: 'stop', cause: 'state', allow: false })
   })
 
@@ -372,7 +372,7 @@ describe('a destination BMN cannot tell (60.8 AC1, AC3)', () => {
   it('stops when nothing is recorded about where the app sends work', () => {
     approve(team((text) => edit(text, 'codex: {provider: openai, basis: observed-default}\n', '')))
 
-    expect(prompt('codex', session(['codex'])).line).toBe('BMN stopped this prompt: it cannot tell where this Codex session sends work (nothing is recorded about where Codex sends work). Set it in BMN Preferences › Rules › Health.')
+    expect(prompt('codex', session(['codex'])).line).toBe('BMN stopped this prompt: it cannot tell where this Codex session sends work (nothing is recorded about where Codex sends work). Set it in BMN Preferences › Integrations › Health.')
   })
 })
 
@@ -425,7 +425,7 @@ describe('a decision that takes too long (60.8 AC2)', () => {
     const input = { agent: 'claude', pid: session(['claude']), procRoot: proc, event: { cwd: workspace } }
     // On this thread the same prompt would pass: the provider may see private work.
     expect(decide(input)).toMatchObject({ outcome: 'pass' })
-    const failed = { outcome: 'stop', cause: 'state', allow: false, line: 'BMN stopped this prompt: its check failed. Open BMN Preferences › Team; if the team shows no problem, start the session again.' }
+    const failed = { outcome: 'stop', cause: 'state', allow: false, line: 'BMN stopped this prompt: its check failed. Open BMN Preferences › Agents; if the team shows no problem, start the session again.' }
     const thread = (fire: (emitter: EventEmitter) => void) => () => {
       const emitter = new EventEmitter()
       queueMicrotask(() => fire(emitter))

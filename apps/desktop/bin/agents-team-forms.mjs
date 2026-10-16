@@ -45,7 +45,7 @@ export const ASK_RUN_FILES = Object.freeze({
 
 /**
  * What each form's own mode can read, as 72.9 AC1 recorded it: the record, `bmn team asks show` and
- * Team › Asks say it, and consent is judged for it (R72-NFR6): `computer` reads any file the owner's
+ * Agents › Asks say it, and consent is judged for it (R72-NFR6): `computer` reads any file the owner's
  * user can read, `folder` only its working folder, `text` nothing beyond the asker's text.
  */
 export const ASK_READS = Object.freeze({

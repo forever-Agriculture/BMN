@@ -1,4 +1,4 @@
-// MODULE: team-state.ts - Epic 60.5: the Team and Rules › Health pages' shared staged edits, review and approval, held once by the Preferences dialog
+// MODULE: team-state.ts - Epic 60.5: the Team and Integrations › Health pages' shared staged edits, review and approval, held once by the Preferences dialog
 import { useCallback, useEffect, useState } from 'react'
 import type {
   AgentsApprovalRequest,
@@ -15,7 +15,7 @@ import { onUpdateEnded } from './rules-preferences'
 import { changedSections, groupDifferences, sameData, type DiffGroup, type RosterSection } from './roster-staging'
 
 const PREVIEW_DELAY_MS = 250
-/** How long a message that something worked stays; one offering Undo stays longer, and that undo remains under Rules › Editor › Earlier versions. */
+/** How long a message that something worked stays; one offering Undo stays longer, and that undo remains under Integrations › Rules › Earlier versions. */
 const NOTICE_MS = 5_000
 const UNDO_NOTICE_MS = 12_000
 
@@ -39,6 +39,8 @@ export interface TeamConfirmation {
   title: string
   action: string
   preview: AgentsPreview
+  /** BMN's proposals, staged by the approving press itself: Cancel puts back what was staged before it, so nothing is half-taken (Story 75.10). */
+  unstage?: { staged: RosterDataShape | null }
 }
 
 export interface TeamState {
@@ -67,6 +69,8 @@ export interface TeamState {
   setNotice(notice: TeamNotice | null): void
   /** Asks to approve; shows the confirmation for a first approval, when the approval also updates rules files or when `always` is set, otherwise commits. */
   requestApproval(request: AgentsApprovalRequest, words: { title: string; action: string }, always?: boolean): Promise<void>
+  /** Stages BMN's pending proposals and asks to approve them at once; Cancel takes them out again (Story 75.10). */
+  approveProposals(next: RosterDataShape, words: { title: string; action: string }): Promise<void>
   commit(): Promise<void>
   cancelConfirmation(): void
   revert(scope: string[] | null): Promise<void>
@@ -202,15 +206,16 @@ export function useTeamState(): TeamState {
     setPendingNotes({})
   }
 
-  function stage(next: RosterDataShape): void {
+  function stage(next: RosterDataShape): boolean {
     setNotice(null)
     setConfirmation(null)
     if (outsideDiffs.length > 0) {
       // An approval takes the whole team, so edits made here never ride on changes nobody reviewed.
       setNotice({ ok: false, text: 'Keep or revert the changes made outside BMN first.' })
-      return
+      return false
     }
     setStaged(sameData(next, base) ? null : next)
+    return true
   }
 
   async function settle(run: () => Promise<AgentsOutcome>, failure: string): Promise<AgentsOutcome | null> {
@@ -260,13 +265,14 @@ export function useTeamState(): TeamState {
     setSnapshot(latest)
   }
 
-  async function requestApproval(request: AgentsApprovalRequest, words: { title: string; action: string }, always = false): Promise<void> {
+  async function requestApproval(request: AgentsApprovalRequest, words: { title: string; action: string }, always = false, unstage?: TeamConfirmation['unstage']): Promise<void> {
     if (shown === null || busy) return
     setBusy(true)
     setNotice(null)
     let result: AgentsPreview
     try {
-      result = request.kind === 'staged' && preview !== null ? preview : await window.aiTerminal.previewAgents(request)
+      // The preview is reused only for the data it was computed for; data staged by this same press is previewed afresh.
+      result = request.kind === 'staged' && preview !== null && computed?.data === request.data ? preview : await window.aiTerminal.previewAgents(request)
     } catch (error) {
       setNotice({ ok: false, text: failureDetail(error, 'Could not preview the change') })
       setBusy(false)
@@ -278,8 +284,20 @@ export function useTeamState(): TeamState {
       return
     }
     const hidden = request.kind === 'sections' && rowHidesDetail(result)
-    if (confirmsBeforeCommit(always || hidden, snapshot?.approved === null, result.teamUpdate.length)) setConfirmation({ request, preview: result, ...words })
+    if (confirmsBeforeCommit(always || hidden, snapshot?.approved === null, result.teamUpdate.length)) setConfirmation({ request, preview: result, ...words, ...(unstage ? { unstage } : {}) })
     else await run(request, [])
+  }
+
+  async function approveProposals(next: RosterDataShape, words: { title: string; action: string }): Promise<void> {
+    if (busy) return
+    const before = staged
+    if (!stage(next)) return
+    await requestApproval({ kind: 'staged', data: next }, words, true, { staged: before })
+  }
+
+  function cancelConfirmation(): void {
+    if (confirmation?.unstage) setStaged(confirmation.unstage.staged)
+    setConfirmation(null)
   }
 
   async function commit(): Promise<void> {
@@ -342,7 +360,7 @@ export function useTeamState(): TeamState {
   return {
     snapshot, loadError, base, data, approved, hasStaged: staged !== null, preview, outside, changed, busy, notice, confirmation, rulesUndo,
     needsOwner: staged !== null || outsideDiffs.length > 0 || (snapshot !== null && snapshot.file.exists && snapshot.approved === null),
-    stage, discard, reload, setNotice, requestApproval, commit, cancelConfirmation: () => setConfirmation(null), revert, saveNotes, undoRulesUpdate, confirmRulesUndo, cancelRulesUndo: () => setRulesUndo(null),
+    stage, discard, reload, setNotice, requestApproval, approveProposals, commit, cancelConfirmation, revert, saveNotes, undoRulesUpdate, confirmRulesUndo, cancelRulesUndo: () => setRulesUndo(null),
     pendingNotes, setPendingNote: (agent, text) => setPendingNotes((notes) => ({ ...notes, [agent]: text }))
   }
 }

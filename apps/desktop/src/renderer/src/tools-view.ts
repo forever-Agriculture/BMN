@@ -1,4 +1,4 @@
-// MODULE: tools-view.ts - Story 60.12: what Rules › Tools shows and stages: a tool's scope and state in words, the plain rows of Add tool and Edit, and the team with a tool set or removed
+// MODULE: tools-view.ts - Story 60.12: what Integrations › Tools shows and stages: a tool's scope and state in words, the plain rows of Add tool and Edit, and the team with a tool set or removed
 import {
   ROSTER_HARNESSES, appDisplayName, isRetiredApp, type RosterDataShape, type RosterHarness, type RosterToolShape, type ToolProposalView, type ToolStateName, type ToolsAppView
 } from '@bmn/protocol'

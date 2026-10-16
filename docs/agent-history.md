@@ -1,6 +1,6 @@
 # Agent history
 
-One BMN setting, **Preferences → History → Keep agent history** (10, 30 or 90 days, or Never; default 30), decides how long every agent keeps a session nobody has touched. Each agent deletes by its own mechanism: Claude Code (and `claude glm`) through its own `cleanupPeriodDays` setting, Codex and OpenCode through their own delete commands, run by BMN. "Untouched" always means **last activity**, never creation time.
+One BMN setting, **Preferences → Data → Keep agent history** (10, 30 or 90 days, or Never; default 30), decides how long every agent keeps a session nobody has touched. Each agent deletes by its own mechanism: Claude Code (and `claude glm`) through its own `cleanupPeriodDays` setting, Codex and OpenCode through their own delete commands, run by BMN. "Untouched" always means **last activity**, never creation time.
 
 Nothing is written or deleted until the owner presses **Start cleanup** once. That press writes every Claude folder that differs and starts the first Codex/OpenCode run. Later, a longer limit or Never applies at once; a shorter one asks again with new counts. A Claude folder learned since, or one whose value was edited by hand, is never rewritten silently: it shows `now → next` and waits for the next Start cleanup. A learned folder that already holds the limit is listed as pending too, and follows later changes only once the owner has confirmed it. While anything waits, the Preferences button carries the one attention dot.
 

@@ -140,7 +140,7 @@ export interface AgentsIpcOptions {
   autoTestKinds?: readonly AutoTestKind[]
   /** What BMN installs by itself at start (Story 75.9); all where absent. A test run names what it means to see, so nothing is written into the owner's own apps. */
   startInstalls?: readonly StartInstall[]
-  /** Team › Asks (73.1): the folder the owner exports an ask into; null when he cancels. Absent where there is no window. */
+  /** Agents › Asks (73.1): the folder the owner exports an ask into; null when he cancels. Absent where there is no window. */
   chooseAskExportFolder?(event: IpcMainInvokeEvent): Promise<string | null>
 }
 
@@ -164,7 +164,7 @@ const RULES_ENV_MARKS = ['OPENCODE_CONFIG_CONTENT'] as const
 const PROBE_OUTCOME_WORDS: Readonly<Record<string, string>> = { pass: 'passed', fail: 'failed', inconclusive: 'was inconclusive', unavailable: 'was unavailable' }
 /** The command whose `--version` names each app's installed version. */
 const APP_COMMANDS: Readonly<Record<RosterHarness, string>> = { claude: 'claude', codex: 'codex', opencode: 'opencode' }
-/** How many approved versions Team › Changes describes; older ones stay in `bmn roster status`. */
+/** How many approved versions Agents › Changes describes; older ones stay in `bmn roster status`. */
 const HISTORY_LIMIT = 40
 const CLI_TIMEOUT_MS = 30_000
 const PROBE_TIMEOUT_MS = 240_000
@@ -506,7 +506,7 @@ function inspectApp(harness: RosterHarness, environment: NodeJS.ProcessEnv): App
 }
 
 /**
- * One row of Rules › Health › Agent apps (60.6 AC4). Any installed version is supported (owner
+ * One row of Integrations › Health › Agent apps (60.6 AC4). Any installed version is supported (owner
  * decision 2026-10-10); the row only says whether BMN's tests ran against it.
  */
 function appView(harness: RosterHarness, context: RulesIpcContext): AgentAppView {
@@ -529,7 +529,7 @@ function appView(harness: RosterHarness, context: RulesIpcContext): AgentAppView
   }
 }
 
-/** One row of Rules › Health › Context limits (60.9 AC3): the default the app's file holds, and whether BMN may change it. */
+/** One row of Integrations › Health › Context limits (60.9 AC3): the default the app's file holds, and whether BMN may change it. */
 function contextView(harness: ContextLimitApp, version: string | null, generation: Generation | null, context: RulesIpcContext): ContextLimitView {
   const row = contextDefault(harness, { environment: context.env, version })
   return {
@@ -555,7 +555,7 @@ function contextView(harness: ContextLimitApp, version: string | null, generatio
 }
 
 /**
- * Rules › Skills and Health's Skills group (60.11 AC5): the skills folder, each skill's state in
+ * Integrations › Skills and Health's Skills group (60.11 AC5): the skills folder, each skill's state in
  * each app, and where each app reads skills. A skill's description is its first line only, and
  * never its text; the versions are the ones Health's Agent apps rows show.
  */
@@ -624,7 +624,7 @@ function skillsPlanFrom(result: CliResult): SkillsPlan {
 }
 
 /**
- * Rules › Tools and Health's Tools group (60.12 AC6): each approved tool's state in each app and
+ * Integrations › Tools and Health's Tools group (60.12 AC6): each approved tool's state in each app and
  * where each app keeps its tools. Nothing an app's entry holds is part of it, only names and states.
  */
 function toolsView(apps: AgentAppView[], team: ReturnType<typeof approvedForPages>, context: RulesIpcContext): ToolsView {
@@ -1381,7 +1381,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     return rulesOutcome(ctx, result, (report) => `${ROSTER_APP_NAMES[harness]} loading test ${PROBE_OUTCOME_WORDS[String(report.outcome)] ?? String(report.outcome)}: ${String(report.detail)}`)
   })
 
-  // Team › Models (60.10). One research at a time; it runs in this process so Stop can end it and the page can say how far it is.
+  // Agents › Models (60.10). One research at a time; it runs in this process so Stop can end it and the page can say how far it is.
   let research: { researcher: string; done: number; total: number; lookup: boolean; controller: AbortController } | null = null
   let researchEnded: ResearchSnapshot['ended'] = null
   let researcherList: ResearcherView[] | null = null
@@ -1561,7 +1561,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     }
   })
 
-  // Team › Models, "Web questions" (64.3). The owner's own Ask runs in this process, as a research does; an agent's runs in its own.
+  // Agents › Models, "Web questions" (64.3). The owner's own Ask runs in this process, as a research does; an agent's runs in its own.
   let asking: { controller: AbortController } | null = null
   const questionsSnapshot = (): WebQuestionsSnapshot => {
     const kept = readQuestions()
@@ -1647,7 +1647,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     await removeQuestions(params.id, context().now())
     return questionsSnapshot()
   })
-  // Team › Asks (73.1). Every ask on this computer is read from its record, whoever asked; asking is the agents' (`bmn team ask`),
+  // Agents › Asks (73.1). Every ask on this computer is read from its record, whoever asked; asking is the agents' (`bmn team ask`),
   // and the owner here reads, stops, removes and exports.
   const asksSnapshot = (): TeamAsksSnapshot => appAsks({ now: context().now() })
   /** An engine refusal of one ask (gone, still running, exists) is told in its own words. */

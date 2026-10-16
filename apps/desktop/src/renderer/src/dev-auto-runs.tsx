@@ -4,6 +4,7 @@ import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
 import { boundedRead } from './bounded-read'
 import { SELF_REFRESH_MS, useSelfRefresh } from './self-refresh'
+import { shortDate } from './team-preferences'
 import './dev-auto.css'
 
 export function DevAutoRunsDialog({ workspaceId, workspaces, onClose, onOpenSession }: {
@@ -60,7 +61,7 @@ export function DevAutoRunsDialog({ workspaceId, workspaces, onClose, onOpenSess
   </li>
   return <Dialog label="dev-auto runs" onClose={onClose} className="workspace-results-dialog dev-auto-dialog">
     <div className="workspace-results-toolbar">
-      {result ? <span>Read {new Date(result.observedAt).toLocaleString()}</span> : null}</div>
+      {result ? <span>Read {shortDate(result.observedAt)}</span> : null}</div>
     {loading && result === null ? <p role="status">Reading dev-auto runs…</p> : null}
     {error ? <p role="alert">{error}</p> : null}
     {result ? <>

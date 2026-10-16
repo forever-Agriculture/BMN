@@ -74,14 +74,14 @@ model is hosted; Session details adds a Model row with the model name and API ho
 unrecognised model shows no flag rather than a guess. How it is decided:
 [Agent control](agent-control.md#model-origin-flag).
 
-**Agent history.** Preferences → History → Keep agent history (10, 30 or 90 days, or Never; default
+**Agent history.** Preferences → Data → Keep agent history (10, 30 or 90 days, or Never; default
 30) is one limit for every agent: Claude Code and `claude glm` get it as their own
 `cleanupPeriodDays`, and BMN deletes Codex and OpenCode sessions untouched for longer through their
 own delete commands, at most 200 per agent per daily run. Nothing is written or deleted until you
 press Start cleanup once; the Preferences button shows the attention dot while it waits. Sessions in
 use are never deleted. See [Agent history](agent-history.md).
 
-**Archive retention.** Preferences → History → Delete archived sessions and workspaces sets how long
+**Archive retention.** Preferences → Data → Delete archived sessions and workspaces sets how long
 archived sessions and workspaces are kept: a number of days, or forever. The check runs when BMN
 starts. Deletion is permanent and takes the saved output, requests and Telegram history with it,
 and the session's files leave the disk too. One exception: a file that a handoff to a session you
@@ -119,7 +119,7 @@ that multiplexer and may reject pets. Saved output is text only; pet pixels are 
   (or the primary selection, on Linux) as plain text, up to 192 KiB, and says "Copied from
   *session* (*N* characters)". No program can read the clipboard: a read request gets no answer.
   Only output that arrives live, while BMN's window is open, copies; reopening the window or
-  rebuilding a view never copies again. Preferences → Terminal → **Let programs copy to the clipboard** turns it
+  rebuilding a view never copies again. Preferences → General → **Let programs copy to the clipboard** turns it
   off.
 - **Keys that belong to the program.** `Ctrl+Shift+\` sends the next key straight to the terminal —
   use it first for a literal `Ctrl+V`. Right-click pastes even while a program reads mouse input;
@@ -199,7 +199,7 @@ the pane header. **Progress details** opens a read-only view of the report: who 
 and any files the session published as evidence. Read it by one rule: *done* is the agent's claim,
 shown as "Agent reports done", never BMN's verdict. A file the agent deleted later stays in the
 report as a named, unavailable reference.
-From a workspace's ⋯ menu, **Review results…** groups each session's latest report per named
+From the command palette, **Review results…** groups, for the active workspace, each session's latest report per named
 source, with observation time, current or previous run, ten-minute freshness and evidence
 availability. It names sessions with no report. This view reads current records, and reads them
 again by itself when an agent reports or publishes and when the window gets the focus; it does not
@@ -209,8 +209,8 @@ judge whether an agent succeeded or promise a report history.
 Claude Code and Codex sessions in every workspace that is not archived, with nothing to switch on,
 BMN scans the Git work tree the agent runs in when a prompt is sent and again when the turn ends,
 and keeps what differs between the two scans. The
-pane's header then shows one quiet button for the latest turn, "4 files +120 −33", and the pane's
-⋯ menu and the session's menu have **Turn changes…**; both open the same read-only dialog. It
+pane's header then shows one quiet button for the latest turn, "4 files +120 −33", and the command
+palette has **Turn changes…** for the selected session; both open the same read-only dialog. It
 lists the latest 50 turns still kept, newest first: time, app, how the turn ended, and its totals.
 A turn opens to its files by path, 2,000 at a time when it has more, each with its state and the
 lines it gained and lost, and a file opens to its difference under its own row.
@@ -263,13 +263,13 @@ Claude Code or Codex agent gets a waiting message from its own hook after its ne
 when its provider may see the sender's folder ([measured per app](session-messages.md)). A message
 for a session where no such agent is in front now (OpenCode, a plain shell, an agent that has
 exited into its shell, a stopped session) is refused to its sender with the reason, so nothing
-waits where nothing would take it. **Messages…** in the command palette or the workspace's ⋯ menu
-lists the latest 200, read-only.
+waits where nothing would take it. **Messages…** in the command palette
+lists the latest 200 of the active workspace, read-only.
 
 Twelve messages between two sessions in an hour pause that pair, forty in a workspace pause the
 workspace, and you get one notice for it; the pause lifts by itself once fewer were sent in the
 last hour, and what was refused meanwhile is not sent later. Messages never go to Telegram. They are kept as
-long as Preferences → History → Keep agent history says, counted from sending, and are deleted
+long as Preferences → Data → Keep agent history says, counted from sending, and are deleted
 with either of their sessions. Limits and the exact rules:
 [agent-control.md](agent-control.md#messages-between-sessions).
 
@@ -280,12 +280,12 @@ sessions, publish a file, report progress, ask you a question, hand a longer pac
 session, leave a message for a peer session, or send text to its own terminal. When a Claude Code
 or Codex conversation starts, BMN hands its agent a short brief of what to send and when, once, and
 once more after a compaction ([agent-control.md](agent-control.md#bmns-start-brief)). `bmn help agents` prints the etiquette page agents can read. Preferences →
-**Local control** shows whether the control socket is listening, with its path; a runtime
+Integrations › Health › **Local control** shows whether the control socket is listening, with its path; a runtime
 path that is too long disables the socket, and Preferences says so.
 
 BMN wires its hooks itself: at every start it adds, for Claude Code, Codex and OpenCode where each
 is set up, the entries an event has none of, after backing the file up, and leaves an entry it did
-not write, one changed outside it or one inside a matcher as it is. Rules › Health › **Hooks** says
+not write, one changed outside it or one inside a matcher as it is. Integrations › Health › **Hooks** says
 what it found, with no button; an entry in a file does not prove a hook fired, and Codex asks once
 in `/hooks` before it runs new ones. `bmn hooks check` reports which of BMN's entries each
 harness's own settings file carries, and `bmn hooks install claude` (or `codex`, `opencode`) adds
@@ -293,7 +293,7 @@ the missing ones by hand after backing the file up. A harness with no hook can s
 the terminal's own OSC 9, 777 or 99 notification. OSC 9's leading `4` parameter (`4` or `4;…`)
 is reserved for progress and ignored, including malformed forms or prose using that parameter.
 Ordinary text such as `4 tests passed` remains a notice. BMN presents a notice, which clears when
-you type into the session. The session's ⋯ menu has **Hook events…**, a short list of
+you type into the session. The command palette has **Hook events…** for the selected session, a short list of
 what the harness actually reported, which answers "why is there no request for this?".
 Session details shows the latest harness event **Observed by BMN** for that session's current
 process run, with its receipt time and a link to Hook events. **Not observed in this run**
@@ -317,10 +317,12 @@ program that already runs as your user.
 
 ### The team and one rules master
 
-Preferences → **Team** keeps the agents you work with in one file you own: each agent's class
+Preferences → **Agents** keeps the agents you work with in one file you own: each agent's class
 (knight, queen, rook, bishop or pawn), app, model and provider, which roles it may take and in what
 order, and whether its provider may see private work. Nothing in that file takes effect until you
-approve it there; every approval is a numbered version you can open or restore. Agents read the
+approve it there; every approval is a numbered version you can open or restore. What BMN itself
+proposes (a judge, who researches, read-only reviewers, Luna on OpenCode Go, removing a retired app)
+waits in one card at the top of Agents › Team, with one **Approve…** for all of it. Agents read the
 approved team with `bmn team`, and a lead runs `bmn roster check` before it hands work to another
 agent.
 
@@ -374,7 +376,7 @@ sessions you start yourself and can change it, one line of the app's own setting
 showing the difference. Both work for Codex and Claude Code, and only on an app version where
 BMN's own test there showed that the app takes the setting; until then the limit is kept but not applied.
 
-Preferences → **Rules** keeps one rules text and writes it into each agent app's own rules file
+Preferences → Integrations › **Rules** keeps one rules text and writes it into each agent app's own rules file
 (Claude Code, Codex and OpenCode), shows each file's difference before it writes, and can
 undo an install. An app whose provider may not see private work receives only the sections you
 marked public, and so does OpenCode, whose own configuration BMN does not read in full. Details and limits are in [agent-control.md](agent-control.md#the-team-team-file-check-and-rules).
@@ -466,14 +468,14 @@ sent but not confirmed, or why nothing was sent. Codex permissions, subagent and
 say to answer at the laptop. Telegram cannot manage sessions.
 
 Setup: create a bot with [@BotFather](https://t.me/BotFather), read your chat ID from `getUpdates`,
-then Preferences → **Telegram**: paste the token, set the allowed chat (and user, for a group
+then Preferences → **Notifications**, under Telegram: paste the token, set the allowed chat (and user, for a group
 chat), choose what to notify about, enable, and send a test message. The token is stored with
 owner-only permissions and never shown again. Use a bot that no other program polls. Details in
 [telegram.md](telegram.md).
 
 ## Backups
 
-Preferences → **Backup** has one action. **Export backup…** writes a consistent snapshot — the
+Preferences → **Data**, under Backup, has one action. **Export backup…** writes a consistent snapshot — the
 database plus the stored files it references — with a hash manifest, and lists what it excluded.
 It then checks the copy at once, against the manifest and against the backup's own database, and
 says the result with the export: how many files checked out, or each file that did not. Exports are
@@ -481,7 +483,7 @@ manual: there is no schedule and no built-in restore step.
 
 ## Customization
 
-Preferences → **Appearance**: an identity for the header (Knight, Cross or Boss), a color mode for
+Preferences → **General**: an identity for the header (Knight, Cross or Boss), a color mode for
 the app and the terminal — Black (default), Steel, Brown, Dark — and the terminal font size, which
 `Ctrl +` / `Ctrl −` / `Ctrl 0` also change. Identity and colors are switchable from the palette
 too. The session launch form offers a close-behaviour choice; **Edit launch
@@ -509,7 +511,7 @@ full shortcut table is in the [README](../README.md#keyboard).
   copy of the files in the Git work tree an agent runs in: every tracked file and every
   untracked file Git does not ignore, secrets in them included. The copies are in
   `~/.local/share/bmn/turn-changes/`, in owner-only folders, one per session; nothing is written
-  into your repository. A turn and its copies are kept as long as Preferences → History → Keep
+  into your repository. A turn and its copies are kept as long as Preferences → Data → Keep
   agent history says, counted from the turn's end, and are removed with their session. Removal
   runs when BMN starts and every hour; one that failed is tried again and reads "Removal
   pending" until it is done. Archiving the workspace stops new copies and removes none before its
@@ -545,4 +547,9 @@ Pins store paths only, and never send content to an agent.
 
 Collapsed workspace groups retain the selected unarchived session row and hide its
 siblings. Counts and Move up/down still refer to the complete group. In Preferences,
-the list on the left opens one page at a time; changing page neither saves nor resets edits.
+the list on the left holds six pages, General, Agents, Integrations, Notifications, Voice and Data,
+and opens one at a time; Agents (Team, Roles, Models, Changes, Asks) and Integrations (Health,
+Rules, Skills, Tools) switch their views with the control under the page head. Changing page
+neither saves nor resets edits. The ⋯ menus hold what you do by hand; what you only read (Review
+results, Messages, Progress details, Turn changes, Hook events, dev-auto runs, Plan use) opens from
+the command palette.

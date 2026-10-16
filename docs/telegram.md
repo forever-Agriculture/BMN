@@ -5,7 +5,7 @@ session. It uses a bot you create and own. It is off by default.
 
 ## What it does
 
-- **Quiet hours** in Preferences → Telegram are off by default. Choose different local start
+- **Quiet hours** in Preferences → Notifications → Telegram are off by default. Choose different local start
   and end times, including overnight windows. New request and exit messages wait; session dots and request cards,
   desktop notifications, existing-card edits, replies and the test message stay available.
   Allow chosen request kinds through in Preferences, or up to 20 sessions from their menus.
@@ -21,7 +21,7 @@ session. It uses a bot you create and own. It is off by default.
   fills up, held requests wait instead of risking duplicate messages; ordinary paging keeps its rules.
   A private marker on each held request preserves recovery beyond the 200-entry history cap.
   Expired desktop reminders stay retired; an already eligible offline backlog survives restart.
-- **Morning digest** in Preferences → Telegram is off by default. Choose a local time to receive
+- **Morning digest** in Preferences → Notifications → Telegram is off by default. Choose a local time to receive
   one message with Done, Decided for you, Waiting on you and Blocked items from your dev-auto runs.
   It sends workspace and checkout names, selected epics, Status, current decisions and owner-item
   titles, with secrets masked and home-folder paths shortened. Copied handoffs are excluded;
@@ -29,7 +29,7 @@ session. It uses a bot you create and own. It is off by default.
   It needs Telegram connected and obeys quiet hours. A late start can send that day's digest;
   missed days are skipped. An uncertain send is not repeated that day. Reading a digest never
   answers a request or changes a run.
-- **Health alerts** in Preferences → Telegram are off by default. With the switch on, BMN reads
+- **Health alerts** in Preferences → Notifications → Telegram are off by default. With the switch on, BMN reads
   this machine's temperatures, battery and mains about once a minute and messages you when a
   reading crosses its limit: CPU 100 °C on one reading or 95 °C on three in a row; NVIDIA GPU
   87 °C; integrated GPU 95 °C; a drive 80 °C; battery voltage outside 3.0–4.45 V per cell; the
@@ -148,7 +148,7 @@ What can be tapped (see [remote-answers.md](remote-answers.md) for how each is v
 | Subagent and sandbox prompts | answer at the laptop | answer at the laptop | answer at the laptop |
 
 Permission buttons appear only after you tick **Answer permission prompts from Telegram** in
-Preferences → Telegram (off by default). They answer the exact prompt on screen, once; there is no
+Preferences → Notifications → Telegram (off by default). They answer the exact prompt on screen, once; there is no
 "always allow". A command too long to show whole (over 3,000 characters) gets no buttons: the card
 says **The command is too long to show here. Answer at the laptop.** With the setting off, a permission card ends **Answer this at the laptop.**
 
@@ -162,7 +162,7 @@ typed line cannot pick an option. If Telegram refuses a card's formatting, it is
 2. Find your chat ID: send any message to your new bot, then open
    `https://api.telegram.org/bot<token>/getUpdates` in a browser and read `message.chat.id`. For a
    private chat it is also your user ID.
-3. In BMN, open **Preferences → Telegram**:
+3. In BMN, open **Preferences → Notifications → Telegram**:
    - paste the **Bot token** and save it;
    - enter the **Allowed chat ID** (and, for a group chat, the **Allowed user ID**);
    - choose **Notify on**: Needs-you requests, or Needs-you requests and session exits;

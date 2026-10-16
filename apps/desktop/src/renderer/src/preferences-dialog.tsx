@@ -1,4 +1,4 @@
-// MODULE: preferences-dialog.tsx - owner-facing preferences: a left navigation over pages for the team, the rules, appearance, terminal, notifications, voice, Telegram, local control, history and backup
+// MODULE: preferences-dialog.tsx - owner-facing preferences: six pages in a left column (General, Agents, Integrations, Notifications, Voice, Data), Agents and Integrations with a control over their views
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type {
   AppearanceSettings,
@@ -7,6 +7,7 @@ import type {
   BackupVerifyResult,
   ControlInfo,
   NotificationSettings,
+  RulesSnapshot,
   TerminalSettings,
   TelegramStatus,
   VoiceSettings
@@ -19,13 +20,13 @@ import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
 import { HistoryPreferences } from './history-preferences'
 import { useResearchState } from './models-preferences'
-import { TeamLedger, TeamPreferences, TeamToast, type TeamPage } from './team-preferences'
+import { PageHead, PageViewsContext, TeamLedger, TeamPreferences, TeamToast, teamProposals, useOpenCodeGo, type PageViews, type TeamPage } from './team-preferences'
 import { useTeamState } from './team-state'
 import { SELF_REFRESH_MS, useSelfRefresh } from './self-refresh'
 import { RulesPreferences, useRulesState, type RecognisedSessions } from './rules-preferences'
 import type { RunInSession } from './session-command'
 import type { ReportedModel } from './model-suggestions'
-import { Dot, RulesIcon, TeamIcon } from './roster-marks'
+import { Dot } from './roster-marks'
 import { parseTelegramForm, type TelegramFormFields } from './telegram-form'
 import './preferences-dialog.css'
 
@@ -94,26 +95,48 @@ const QUIET_ALLOW_KINDS: ReadonlyArray<{ kind: AttentionKind; label: string }> =
   { kind: 'notice', label: 'Notice' }
 ]
 
-/** Every page of the dialog. Team and Rules head the navigation and open their sub-pages; the rest are grouped. */
-export type PreferencesPage = 'team' | 'roles' | 'asks' | 'models' | 'changes' | 'rules' | 'skills' | 'tools' | 'health' | 'appearance' | 'terminal' | 'notifications' | 'voice' | 'telegram' | 'control' | 'history' | 'backup'
+/** The six pages, one flat list in the left column (Story 75.10). */
+export type PreferencesPage = 'general' | 'agents' | 'integrations' | 'notifications' | 'voice' | 'data'
+/** The views of Agents; it opens on Team. */
+export type AgentsView = 'team' | 'roles' | 'models' | 'changes' | 'asks'
+/** The views of Integrations; it opens on Health, whose last section is Local control. */
+export type IntegrationsView = 'health' | 'rules' | 'skills' | 'tools'
+/** Where Preferences opens: a page, one view of Agents or Integrations, or Health's Hooks section (Session details' link). */
+export type PreferencesPlace = PreferencesPage | AgentsView | IntegrationsView | 'hooks'
 
-/** The page Preferences last showed, kept while BMN runs; a new start opens on Team. */
-let lastPage: PreferencesPage = 'team'
-
-export const PREFERENCES_NAVIGATION: ReadonlyArray<
-  | { parent: 'team' | 'rules'; label: string; pages: ReadonlyArray<{ page: PreferencesPage; label: string }> }
-  | { group: string; pages: ReadonlyArray<{ page: PreferencesPage; label: string }> }
-> = [
-  { parent: 'team', label: 'Team', pages: [{ page: 'team', label: 'Agents' }, { page: 'roles', label: 'Roles' }, { page: 'asks', label: 'Asks' }, { page: 'models', label: 'Models' }, { page: 'changes', label: 'Changes' }] },
-  { parent: 'rules', label: 'Rules', pages: [{ page: 'rules', label: 'Editor' }, { page: 'skills', label: 'Skills' }, { page: 'tools', label: 'Tools' }, { page: 'health', label: 'Health' }] },
-  { group: 'Workspace', pages: [{ page: 'appearance', label: 'Appearance' }, { page: 'terminal', label: 'Terminal' }, { page: 'notifications', label: 'Notifications' }, { page: 'voice', label: 'Voice' }] },
-  { group: 'Phone', pages: [{ page: 'telegram', label: 'Telegram' }] },
-  { group: 'Machine', pages: [{ page: 'control', label: 'Local control' }, { page: 'history', label: 'History' }, { page: 'backup', label: 'Backup' }] }
+export const PREFERENCES_PAGES: ReadonlyArray<{ page: PreferencesPage; label: string }> = [
+  { page: 'general', label: 'General' }, { page: 'agents', label: 'Agents' }, { page: 'integrations', label: 'Integrations' },
+  { page: 'notifications', label: 'Notifications' }, { page: 'voice', label: 'Voice' }, { page: 'data', label: 'Data' }
+]
+export const AGENTS_VIEWS: ReadonlyArray<{ view: AgentsView; label: string }> = [
+  { view: 'team', label: 'Team' }, { view: 'roles', label: 'Roles' }, { view: 'models', label: 'Models' }, { view: 'changes', label: 'Changes' }, { view: 'asks', label: 'Asks' }
+]
+export const INTEGRATIONS_VIEWS: ReadonlyArray<{ view: IntegrationsView; label: string }> = [
+  { view: 'health', label: 'Health' }, { view: 'rules', label: 'Rules' }, { view: 'skills', label: 'Skills' }, { view: 'tools', label: 'Tools' }
 ]
 
-/** The navigation parent a page sits under, or null for a grouped page. */
-export function pageParent(page: PreferencesPage): 'team' | 'rules' | null {
-  return page === 'team' || page === 'roles' || page === 'asks' || page === 'models' || page === 'changes' ? 'team' : page === 'rules' || page === 'skills' || page === 'tools' || page === 'health' ? 'rules' : null
+/** The page Preferences shows and the view each of Agents and Integrations was left on. */
+export interface PreferencesShown { page: PreferencesPage; agents: AgentsView; integrations: IntegrationsView }
+
+/** What Preferences last showed, kept while BMN runs; a new start opens on Agents › Team. */
+let lastShown: PreferencesShown = { page: 'agents', agents: 'team', integrations: 'health' }
+
+/** Whether the rules, skills or tools need the owner: the Needs-you dot on Integrations. */
+export function rulesNeedOwner(snapshot: RulesSnapshot): boolean {
+  return (snapshot.health.state === 'checked' && snapshot.master.exists && snapshot.health.targets.some((target) => target.state !== 'current'))
+    || snapshot.skills.pending > 0 || snapshot.skills.exposed > 0 || snapshot.tools.pending > 0 || snapshot.tools.exposed > 0
+}
+
+/** What the last read of the rules said for that dot, kept while BMN runs, so a new opening shows it from the first paint. */
+let lastRulesNeedOwner = false
+
+/** Where Preferences opens: where it was left, or the page or view it was opened for. */
+export function openedAt(last: PreferencesShown, place?: PreferencesPlace): PreferencesShown {
+  if (place === undefined) return last
+  if (place === 'hooks') return { ...last, page: 'integrations', integrations: 'health' }
+  if (AGENTS_VIEWS.some((entry) => entry.view === place)) return { ...last, page: 'agents', agents: place as AgentsView }
+  if (INTEGRATIONS_VIEWS.some((entry) => entry.view === place)) return { ...last, page: 'integrations', integrations: place as IntegrationsView }
+  return { ...last, page: place as PreferencesPage }
 }
 
 /**
@@ -142,8 +165,8 @@ export function TelegramStatusList(props: { status: TelegramStatus; cueShown: bo
 
 export function PreferencesDialog(props: {
   settings: AppSettings
-  /** The page to open on; otherwise the last one shown. */
-  initialPage?: PreferencesPage | undefined
+  /** The page or view to open on; otherwise the last one shown. */
+  initialPage?: PreferencesPlace | undefined
   onSettings(next: AppSettings): void
   onClose(): void
   /** Saves the voice section through the app's queue, built from the latest settings. */
@@ -154,60 +177,89 @@ export function PreferencesDialog(props: {
   telegramCue?: string | null
   /** The model names apps reported in sessions that are running now; the Team pages offer them. */
   reportedModels?: readonly ReportedModel[]
-  /** How many running sessions BMN recognises as each app; Rules › Health says it beside an update. */
+  /** How many running sessions BMN recognises as each app; Integrations › Health says it beside an update. */
   recognisedSessions?: RecognisedSessions
-  /** The name a session has now; Team › Models says who asked a web question by it. */
+  /** The name a session has now; Agents › Models says who asked a web question by it. */
   sessionName?(id: string): string | undefined
-  /** Opens a new shell session and runs a command there; Rules › Health offers it for an app's update command. */
+  /** Opens a new shell session and runs a command there; Integrations › Health offers it for an app's update command. */
   onRunInSession?: RunInSession | undefined
 }): React.JSX.Element {
   const onSettings = useRef(props.onSettings)
   onSettings.current = props.onSettings
 
   // --- Pages ---------------------------------------------------------------
-  // Preferences opens where the owner left it, unless it was opened for one page.
-  const [page, setPage] = useState<PreferencesPage>(props.initialPage ?? lastPage)
-  useEffect(() => { lastPage = page }, [page])
-  // An agent and New agent open under Team › Agents, never as navigation items.
+  // Preferences opens where the owner left it, unless it was opened for one page or view.
+  const [shown, setShown] = useState<PreferencesShown>(() => openedAt(lastShown, props.initialPage))
+  useEffect(() => { lastShown = shown }, [shown])
+  const page = shown.page
+  // An agent and New agent open in place under Agents › Team, never as views of their own.
   const [teamPage, setTeamPage] = useState<TeamPage>({ name: 'agents' })
   const team = useTeamState()
   const rules = useRulesState()
   const research = useResearchState()
   const main = useRef<HTMLElement | null>(null)
-  const parent = pageParent(page)
   // What each app may read, and which app versions count as accepted, follow the approved team.
   const approvedVersion = team.snapshot?.approved?.generation ?? null
   const refreshRules = rules.refresh
   useEffect(() => refreshRules(), [approvedVersion, refreshRules])
 
-  function go(next: PreferencesPage): void {
-    setPage(next)
-    if (next === 'team') setTeamPage({ name: 'agents' })
+  // Session details' Hooks link lands on Health's Hooks section, just under the head and its views, once Health has drawn it.
+  const landOn = useRef(props.initialPage === 'hooks' ? 'health-hooks' : null)
+  useEffect(() => {
+    const target = landOn.current === null ? null : main.current?.querySelector<HTMLElement>(`#${landOn.current}`)
+    if (!target || !main.current) return
+    landOn.current = null
+    const below = target.closest('.preferences-page')?.querySelector('.page-top')?.getBoundingClientRect().bottom ?? main.current.getBoundingClientRect().top
+    main.current.scrollTop += target.getBoundingClientRect().top - below
+  }, [rules.snapshot])
+
+  function show(next: Partial<PreferencesShown>): void {
+    landOn.current = null
+    setShown((current) => ({ ...current, ...next }))
     main.current?.scrollTo({ top: 0 })
+  }
+
+  function go(next: PreferencesPage): void {
+    show({ page: next })
+    if (next === 'agents') setTeamPage({ name: 'agents' })
   }
 
   function goTeam(next: TeamPage): void {
     setTeamPage(next)
-    setPage(next.name === 'roles' ? 'roles' : next.name === 'asks' ? 'asks' : next.name === 'models' ? 'models' : next.name === 'changes' ? 'changes' : 'team')
-    main.current?.scrollTo({ top: 0 })
+    show({ page: 'agents', agents: next.name === 'roles' || next.name === 'asks' || next.name === 'models' || next.name === 'changes' ? next.name : 'team' })
   }
 
-  const shownTeamPage: TeamPage = page === 'roles' ? { name: 'roles' } : page === 'asks' ? { name: 'asks' } : page === 'models' ? { name: 'models' } : page === 'changes' ? { name: 'changes' } : teamPage
+  const shownTeamPage: TeamPage = shown.agents === 'team' ? teamPage : { name: shown.agents }
+  const agentsViews: PageViews = {
+    title: 'Agents',
+    views: { options: AGENTS_VIEWS.map((entry) => entry.view), value: shown.agents, optionLabel: (view) => AGENTS_VIEWS.find((entry) => entry.view === view)?.label ?? view,
+      onChange: (view) => goTeam(view === 'team' ? { name: 'agents' } : { name: view as Exclude<AgentsView, 'team'> }) }
+  }
+  const integrationsViews: PageViews = {
+    title: 'Integrations',
+    views: { options: INTEGRATIONS_VIEWS.map((entry) => entry.view), value: shown.integrations, optionLabel: (view) => INTEGRATIONS_VIEWS.find((entry) => entry.view === view)?.label ?? view,
+      onChange: (view) => show({ page: 'integrations', integrations: view as IntegrationsView }) }
+  }
   // An agent's app or host is recorded as BMN inspected that app, so the pages that stage one read the apps once.
-  const stagesDestination = parent === 'team' && (shownTeamPage.name === 'agent' || shownTeamPage.name === 'new')
+  const stagesDestination = page === 'agents' && (shownTeamPage.name === 'agent' || shownTeamPage.name === 'new')
   const ensureRules = rules.ensure
   useEffect(() => { if (stagesDestination) ensureRules() }, [stagesDestination, ensureRules])
   // The same pages offer the names research found; reading them asks no app anything.
   const peekResearch = research.peek
   const ensureResearch = research.ensure
-  const startsAgent = parent === 'team' && shownTeamPage.name === 'new'
+  const startsAgent = page === 'agents' && shownTeamPage.name === 'new'
   // New agent offers Look up, which needs to know who may research.
   useEffect(() => { if (startsAgent) ensureResearch(approvedVersion); else if (stagesDestination) peekResearch() }, [startsAgent, stagesDestination, ensureResearch, peekResearch, approvedVersion])
-  const rulesNeedOwner = (rules.snapshot?.health.state === 'checked' && rules.snapshot.master.exists && rules.snapshot.health.targets.some((target) => target.state !== 'current'))
-    || (rules.snapshot?.skills.pending ?? 0) > 0 || (rules.snapshot?.skills.exposed ?? 0) > 0
-    || (rules.snapshot?.tools.pending ?? 0) > 0 || (rules.snapshot?.tools.exposed ?? 0) > 0
-  // Staged edits are approved from the footer on the pages that stage them; New agent has its own.
-  const ledger = (parent === 'team' && shownTeamPage.name !== 'new') || page === 'health' || page === 'skills' || page === 'tools'
+  const integrationsNeedOwner = rules.snapshot === null ? lastRulesNeedOwner : rulesNeedOwner(rules.snapshot)
+  useEffect(() => { if (rules.snapshot !== null) lastRulesNeedOwner = integrationsNeedOwner }, [rules.snapshot, integrationsNeedOwner])
+  // BMN's pending team proposals, one card on Agents › Team (Story 75.10): who researches is read from the approved team
+  // without asking the apps, and whether OpenCode lists Luna's model only while Agents › Team shows, since it starts OpenCode.
+  const peekForProposals = research.peek
+  useEffect(() => { if (page === 'agents') peekForProposals() }, [page, peekForProposals])
+  const openCodeGo = useOpenCodeGo(team, page === 'agents' && shown.agents === 'team')
+  const proposals = team.data === null ? null : teamProposals(team.data, { lunaListed: openCodeGo.view?.listed === true, researchers: research.snapshot?.choice ?? null })
+  // Staged edits are approved from the footer on the views that stage them; New agent has its own.
+  const ledger = (page === 'agents' && shownTeamPage.name !== 'new') || (page === 'integrations' && shown.integrations !== 'rules')
   const pageOf = (id: PreferencesPage, children: ReactNode): React.JSX.Element => <div className="preferences-page" hidden={page !== id}>{children}</div>
 
   // --- Appearance ---------------------------------------------------------
@@ -320,7 +372,7 @@ export function PreferencesDialog(props: {
   }
   // Story 75.7: the status reads itself again while the Telegram page is on screen: when BMN says Telegram changed, when
   // the window comes back and every 30 s for the polling line. It is never a press, and it never touches the form.
-  useSelfRefresh(refreshTelegramStatus, { topics: ['telegram'], everyMs: SELF_REFRESH_MS, shown: () => page === 'telegram' })
+  useSelfRefresh(refreshTelegramStatus, { topics: ['telegram'], everyMs: SELF_REFRESH_MS, shown: () => page === 'notifications' })
 
   // --- Telegram: token ---------------------------------------------------
   const [tokenInput, setTokenInput] = useState('')
@@ -499,40 +551,108 @@ export function PreferencesDialog(props: {
     }
   }
 
+  // Local control is Health's last section (Story 75.10, owner decision): how agents in BMN's sessions reach it.
+  const localControl = (
+      <section className="preferences-section" id="agent-control-section">
+        <h4 className="group-head">Local control<span className="caption">how agents in BMN&apos;s sessions reach it</span></h4>
+        <div className="preferences-row">
+          <div className="preferences-row-label">
+            <span>Listening</span>
+          </div>
+          <div className="preferences-row-control">
+            {controlInfo ? (
+              <p>
+                {controlInfo.listening ? 'Yes' : 'No'} · {controlInfo.detail}
+              </p>
+            ) : (
+              <p className="preferences-help">Loading…</p>
+            )}
+          </div>
+        </div>
+        {controlInfo && (
+          <>
+            <div className="preferences-row">
+              <div className="preferences-row-label">
+                <span>Socket path</span>
+              </div>
+              <div className="preferences-row-control">
+                <code className="preferences-mono preferences-path" title={controlInfo.socketPath}><bdi>{controlInfo.socketPath}</bdi></code>
+                <button type="button" disabled={copying === 'socket'} onClick={() => void copyText('socket', controlInfo.socketPath)}>
+                  Copy
+                </button>
+              </div>
+            </div>
+            <div className="preferences-row">
+              <div className="preferences-row-label">
+                <span>CLI path</span>
+              </div>
+              <div className="preferences-row-control">
+                <code className="preferences-mono preferences-path" title={controlInfo.cliPath}><bdi>{controlInfo.cliPath}</bdi></code>
+                <button type="button" disabled={copying === 'cli'} onClick={() => void copyText('cli', controlInfo.cliPath)}>
+                  Copy
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+        {controlError && (
+          <p className="preferences-error" role="alert">
+            {controlError}
+          </p>
+        )}
+        {copyError && (
+          <p className="preferences-error" role="alert">
+            {copyError}
+          </p>
+        )}
+        {copyMessage && (
+          <p className="preferences-success" role="status">
+            {copyMessage}
+          </p>
+        )}
+        <details className="advanced">
+          <summary>Advanced</summary>
+          <div className="advanced-body">
+            <p>For Codex, trust hooks with /hooks in Codex and check a real Hook events entry.</p>
+            <pre className="preferences-usage">{USAGE_LINES.join('\n')}</pre>
+            <p>Sessions started by BMN get BMN_CONTROL_SOCKET and BMN_TOKEN automatically.</p>
+          </div>
+        </details>
+      </section>
+  )
+
   return (
     <Dialog label="Preferences" className="preferences-dialog" onClose={props.onClose}>
       <div className="preferences-frame">
       <nav className="preferences-nav" aria-label="Preference pages">
-        {PREFERENCES_NAVIGATION.map((entry) => 'parent' in entry ? (
-          <div key={entry.parent} className="nav-parent">
-            <button type="button" className="nav-item" aria-current={parent === entry.parent ? 'true' : undefined} aria-expanded={parent === entry.parent}
-              onClick={() => go(entry.parent)}>
-              {entry.parent === 'team' ? <TeamIcon /> : <RulesIcon />}{entry.label}
-              {(entry.parent === 'team' ? team.needsOwner : rulesNeedOwner) ? <Dot label="Needs you" /> : null}
-            </button>
-            {parent === entry.parent ? (
-              <div className="nav-sub">
-                {entry.pages.map((item) => (
-                  <button key={item.page} type="button" className="nav-item" aria-current={page === item.page ? 'page' : undefined} onClick={() => go(item.page)}>{item.label}</button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : (
-          <div key={entry.group} className="nav-group" role="group" aria-label={entry.group}>
-            <span className="nav-head" aria-hidden="true">{entry.group}</span>
-            {entry.pages.map((item) => (
-              <button key={item.page} type="button" className="nav-item" aria-current={page === item.page ? 'page' : undefined} onClick={() => go(item.page)}>{item.label}</button>
-            ))}
-          </div>
+        {PREFERENCES_PAGES.map((item) => (
+          <button key={item.page} type="button" className="nav-item" aria-current={page === item.page ? 'page' : undefined} onClick={() => go(item.page)}>
+            {item.label}
+            {(item.page === 'agents' && (team.needsOwner || proposals !== null)) || (item.page === 'integrations' && integrationsNeedOwner) ? <Dot label="Needs you" /> : null}
+          </button>
         ))}
       </nav>
       <main className="preferences-main" ref={main}>
-      {parent === 'team' ? <div className="preferences-page team-page"><TeamPreferences team={team} page={shownTeamPage} apps={rules.snapshot?.apps ?? null} context={rules.snapshot?.context ?? null} reported={props.reportedModels ?? []} research={research} {...(props.sessionName ? { sessionName: props.sessionName } : {})} go={goTeam} /></div> : null}
-      {parent === 'rules' ? <div className="preferences-page rules-page"><RulesPreferences rules={rules} team={team} page={page === 'health' ? 'health' : page === 'skills' ? 'skills' : page === 'tools' ? 'tools' : 'editor'} recognised={props.recognisedSessions ?? {}} onRunInSession={props.onRunInSession} /></div> : null}
-      {pageOf('appearance', <>
+      {page === 'agents' ? (
+        <div className="preferences-page team-page">
+          <PageViewsContext.Provider value={agentsViews}>
+            <TeamPreferences team={team} page={shownTeamPage} apps={rules.snapshot?.apps ?? null} context={rules.snapshot?.context ?? null} reported={props.reportedModels ?? []} research={research}
+              {...(props.sessionName ? { sessionName: props.sessionName } : {})} proposals={proposals} openCodeGo={openCodeGo} go={goTeam} />
+          </PageViewsContext.Provider>
+        </div>
+      ) : null}
+      {page === 'integrations' ? (
+        <div className="preferences-page rules-page">
+          <PageViewsContext.Provider value={integrationsViews}>
+            <RulesPreferences rules={rules} team={team} page={shown.integrations === 'rules' ? 'editor' : shown.integrations} recognised={props.recognisedSessions ?? {}} onRunInSession={props.onRunInSession} />
+          </PageViewsContext.Provider>
+          {shown.integrations === 'health' ? localControl : null}
+        </div>
+      ) : null}
+      {pageOf('general', <>
+      <PageHead title="General" />
       <section className="preferences-section">
-        <h3>Appearance</h3>
+        <h4 className="group-head">Appearance</h4>
         <div className="preferences-row">
           <div className="preferences-row-label">
             <span>Identity</span>
@@ -625,11 +745,8 @@ export function PreferencesDialog(props: {
           </p>
         )}
       </section>
-      </>)}
-
-      {pageOf('terminal', <>
       <section className="preferences-section">
-        <h3>Terminal</h3>
+        <h4 className="group-head">Terminal</h4>
         <div className="preferences-row">
           <div className="preferences-row-label">
             <span>Clipboard</span>
@@ -657,8 +774,9 @@ export function PreferencesDialog(props: {
       </>)}
 
       {pageOf('notifications', <>
+      <PageHead title="Notifications" />
       <section className="preferences-section">
-        <h3>Notifications</h3>
+        <h4 className="group-head">Desktop</h4>
         <div className="preferences-row">
           <div className="preferences-row-label">
             <label htmlFor="preferences-desktop-notifications">Desktop notifications</label>
@@ -680,15 +798,8 @@ export function PreferencesDialog(props: {
           </p>
         )}
       </section>
-      </>)}
-
-      {pageOf('voice', <VoicePreferences settings={props.settings.voice} save={props.saveVoice} suggest={props.suggestVocabulary} />)}
-
-      {pageOf('telegram', <>
       <section className="preferences-section">
-        <div className="preferences-section-head">
-          <h3>Telegram</h3>
-        </div>
+        <h4 className="group-head">Telegram</h4>
         {props.telegramCue ? (
           <div className="history-confirm telegram-cue" role="status">
             <span className="status-dot needs-you" aria-hidden="true" />
@@ -1096,80 +1207,13 @@ export function PreferencesDialog(props: {
       </section>
       </>)}
 
-      {pageOf('history', <HistoryPreferences settings={props.settings} onSettings={(next) => onSettings.current(next)} />)}
+      {pageOf('voice', <VoicePreferences settings={props.settings.voice} save={props.saveVoice} suggest={props.suggestVocabulary} />)}
 
-      {pageOf('control', <>
-      <section className="preferences-section" id="agent-control-section">
-        <h3>Local control</h3>
-        <div className="preferences-row">
-          <div className="preferences-row-label">
-            <span>Listening</span>
-          </div>
-          <div className="preferences-row-control">
-            {controlInfo ? (
-              <p>
-                {controlInfo.listening ? 'Yes' : 'No'} · {controlInfo.detail}
-              </p>
-            ) : (
-              <p className="preferences-help">Loading…</p>
-            )}
-          </div>
-        </div>
-        {controlInfo && (
-          <>
-            <div className="preferences-row">
-              <div className="preferences-row-label">
-                <span>Socket path</span>
-              </div>
-              <div className="preferences-row-control">
-                <code className="preferences-mono preferences-path" title={controlInfo.socketPath}><bdi>{controlInfo.socketPath}</bdi></code>
-                <button type="button" disabled={copying === 'socket'} onClick={() => void copyText('socket', controlInfo.socketPath)}>
-                  Copy
-                </button>
-              </div>
-            </div>
-            <div className="preferences-row">
-              <div className="preferences-row-label">
-                <span>CLI path</span>
-              </div>
-              <div className="preferences-row-control">
-                <code className="preferences-mono preferences-path" title={controlInfo.cliPath}><bdi>{controlInfo.cliPath}</bdi></code>
-                <button type="button" disabled={copying === 'cli'} onClick={() => void copyText('cli', controlInfo.cliPath)}>
-                  Copy
-                </button>
-              </div>
-            </div>
-          </>
-        )}
-        {controlError && (
-          <p className="preferences-error" role="alert">
-            {controlError}
-          </p>
-        )}
-        {copyError && (
-          <p className="preferences-error" role="alert">
-            {copyError}
-          </p>
-        )}
-        {copyMessage && (
-          <p className="preferences-success" role="status">
-            {copyMessage}
-          </p>
-        )}
-        <details className="advanced">
-          <summary>Advanced</summary>
-          <div className="advanced-body">
-            <p>For Codex, trust hooks with /hooks in Codex and check a real Hook events entry.</p>
-            <pre className="preferences-usage">{USAGE_LINES.join('\n')}</pre>
-            <p>Sessions started by BMN get BMN_CONTROL_SOCKET and BMN_TOKEN automatically.</p>
-          </div>
-        </details>
-      </section>
-      </>)}
-
-      {pageOf('backup', <>
+      {pageOf('data', <>
+      <PageHead title="Data" />
+      <HistoryPreferences settings={props.settings} onSettings={(next) => onSettings.current(next)} />
       <section className="preferences-section">
-        <h3>Backup</h3>
+        <h4 className="group-head">Backup</h4>
         <div className="preferences-row">
           <div className="preferences-row-label">
             <span>Export</span>

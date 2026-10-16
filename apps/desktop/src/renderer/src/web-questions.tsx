@@ -1,4 +1,4 @@
-// MODULE: web-questions.tsx - Story 64.3: Preferences › Team › Models › Web questions: what was asked of the web and by whom, the owner's own Ask, the question under way, and the switch for agents
+// MODULE: web-questions.tsx - Story 64.3: Preferences › Agents › Models › Web questions: what was asked of the web and by whom, the owner's own Ask, the question under way, and the switch for agents
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { ROSTER_APP_NAMES, WEB_QUESTION_MARKS, type RosterHarness, type WebQuestionAsker, type WebQuestionClaim, type WebQuestionOutcome, type WebQuestionView, type WebQuestionsSnapshot } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
@@ -143,7 +143,7 @@ export interface WebQuestionsProps {
   now?: Date
 }
 
-/** Team › Models › Web questions: the switch, the owner's own Ask, the question under way and the kept ones. */
+/** Agents › Models › Web questions: the switch, the owner's own Ask, the question under way and the kept ones. */
 export function WebQuestions(props: WebQuestionsProps): React.JSX.Element {
   const { snapshot } = props
   const headId = useId()

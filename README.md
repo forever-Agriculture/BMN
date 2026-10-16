@@ -185,7 +185,7 @@ leaves them in place rather than risking an automatic move.
 ## Privacy and security
 
 - No telemetry, analytics or update checks.
-- Once you keep a team file (Preferences → Team), BMN asks GitHub, without credentials and at most
+- Once you keep a team file (Preferences → Agents), BMN asks GitHub, without credentials and at most
   once a day per workspace, whether the repository a session opens in is public. Nothing else
   leaves the machine unasked.
 - The renderer is sandboxed with context isolation and no Node.js access; it reaches the rest of

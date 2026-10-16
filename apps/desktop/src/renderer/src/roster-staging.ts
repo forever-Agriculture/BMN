@@ -983,7 +983,7 @@ export function changeModel(data: RosterDataShape, id: string, model: string, ap
 
 /**
  * Adds an agent as active, with its provider when the roster does not know it and, for an app the
- * roster has no destination for, that app recorded as BMN inspected it (`apps`, from Rules › Health)
+ * roster has no destination for, that app recorded as BMN inspected it (`apps`, from Integrations › Health)
  * or else on the owner's word (public work only until it is inspected). A model the team already
  * runs brings its recorded price and capacity along.
  */

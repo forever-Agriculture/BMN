@@ -9,6 +9,8 @@
 // a message, all with BMN's own `bmn` commands; since Story 75.4 the message is refused, because the second session
 // runs a plain shell and no agent. The before set's seed prepared a handoff for the owner to paste instead of the review
 // request; Story 75.5 made handoffs deliver themselves, so nothing of one waits on these screens.
+// Since Story 75.10 Review results and Messages open from the palette, and Preferences has six pages, Agents and
+// Integrations with a control over their views; the after set (reference-75-lighter/after) is taken with this script.
 // No agent runs, nothing leaves the machine and no file of the owner's is read. The script asserts nothing: it opens
 // each screen, saves what the window shows in each colour mode and writes shots.json naming the screens, the parts
 // and the buttons each capture showed. A screen that cannot be opened is listed with the reason, and the run goes on.
@@ -312,21 +314,22 @@ echo seeded
       await control.click()
       await page.locator('.session-request-card').first().waitFor()
     }, { region: '.session-request-card', close: escape })
-    await screen('review-results', 'Workspace ⋯ › Review results…: agent reports with evidence', async () => {
-      await openWorkspaceMenu()
-      await page.getByRole('menuitem', { name: /^Review results/ }).click()
-      await page.locator('dialog.workspace-results-dialog').waitFor()
-    }, { region: 'dialog.workspace-results-dialog', scroll: 'dialog.workspace-results-dialog', close: escape })
-    await screen('messages', 'Workspace ⋯ › Messages…: the message Builder left for Reviewer, Paste and the per-app hand-over', async () => {
-      await openWorkspaceMenu()
-      await page.getByRole('menuitem', { name: /^Messages/ }).click()
-      await page.locator('dialog.session-messages-dialog').waitFor()
-    }, { region: 'dialog.session-messages-dialog', scroll: 'dialog.session-messages-dialog', close: escape })
     const palette = async (text = '') => {
       await page.locator('button[aria-label="Command palette"]').click()
       await page.locator('#palette-results').waitFor()
       if (text) await page.keyboard.type(text)
     }
+    // Story 75.10: the read-only views open from the palette, for the active workspace.
+    await screen('review-results', 'Palette › Review results…: agent reports with evidence', async () => {
+      await palette('Review results')
+      await page.locator('#palette-review-results').click()
+      await page.locator('dialog.workspace-results-dialog').waitFor()
+    }, { region: 'dialog.workspace-results-dialog', scroll: 'dialog.workspace-results-dialog', close: escape })
+    await screen('messages', 'Palette › Messages…: what Builder\'s shell tried to leave Reviewer', async () => {
+      await palette('Messages')
+      await page.locator('#palette-messages').click()
+      await page.locator('dialog.session-messages-dialog').waitFor()
+    }, { region: 'dialog.session-messages-dialog', scroll: 'dialog.session-messages-dialog', close: escape })
     await screen('palette', 'Command palette, nothing typed: every command and session entry, top to bottom', async () => { await palette() },
       { region: 'dialog[open]', scroll: '#palette-results', close: escape })
     await screen('new-session', 'Palette › New session…: the agent buttons, with Advanced', async () => {
@@ -346,35 +349,39 @@ echo seeded
       await page.locator('.preferences-button').click()
       await dialog.waitFor()
     }
-    const go = async (parent, sub) => {
+    // Story 75.10: six pages in one list; Agents and Integrations show their views in the control under the page head.
+    const go = async (label, view = null) => {
       await openPreferences()
-      if (parent !== null) {
-        await nav.locator('.nav-parent > .nav-item', { hasText: new RegExp(`^${parent}`) }).first().click()
-        if (sub) await nav.locator('.nav-sub .nav-item', { hasText: new RegExp(`^${sub}$`) }).click()
-      } else {
-        await nav.locator('.nav-group .nav-item', { hasText: new RegExp(`^${sub}`) }).first().click()
-      }
+      await nav.locator('.nav-item', { hasText: new RegExp(`^${label}`) }).first().click()
+      if (view !== null) await main.locator('.page-views [role="radio"]', { hasText: new RegExp(`^${view}$`) }).click()
       await sleep(900)
     }
     const navigation = [
-      ['team', 'Team', 'Agents'], ['roles', 'Team', 'Roles'], ['asks', 'Team', 'Asks'], ['models', 'Team', 'Models'], ['changes', 'Team', 'Changes'],
-      ['rules', 'Rules', 'Editor'], ['skills', 'Rules', 'Skills'], ['tools', 'Rules', 'Tools'], ['health', 'Rules', 'Health'],
-      ['appearance', null, 'Appearance'], ['terminal', null, 'Terminal'], ['notifications', null, 'Notifications'], ['voice', null, 'Voice'],
-      ['telegram', null, 'Telegram'], ['local-control', null, 'Local control'], ['history', null, 'History'], ['backup', null, 'Backup']
+      ['general', 'General'],
+      ['agents-team', 'Agents', 'Team'], ['agents-roles', 'Agents', 'Roles'], ['agents-models', 'Agents', 'Models'], ['agents-changes', 'Agents', 'Changes'], ['agents-asks', 'Agents', 'Asks'],
+      ['integrations-health', 'Integrations', 'Health'], ['integrations-rules', 'Integrations', 'Rules'], ['integrations-skills', 'Integrations', 'Skills'], ['integrations-tools', 'Integrations', 'Tools'],
+      ['notifications', 'Notifications'], ['voice', 'Voice'], ['data', 'Data']
     ]
-    for (const [name, parent, sub] of navigation) {
-      await screen(`preferences-${name}`, `Preferences › ${parent === null ? '' : `${parent} › `}${sub}`, () => go(parent, sub),
+    for (const [name, label, view = null] of navigation) {
+      await screen(`preferences-${name}`, `Preferences › ${label}${view === null ? '' : ` › ${view}`}`, () => go(label, view),
         { region: '.preferences-dialog', scroll: '.preferences-dialog .preferences-main' })
     }
-    await screen('preferences-agent', 'Preferences › Team › Agents › Opus: the agent page', async () => {
-      await go('Team', 'Agents')
+    await screen('preferences-agent', 'Preferences › Agents › Team › Opus: the agent page, Team still lit', async () => {
+      await go('Agents', 'Team')
       await main.locator('.agent-card', { has: page.locator('.agent-open', { hasText: /^Opus$/ }) }).locator('.agent-open').click()
       await main.locator('.page-head').waitFor()
     }, { region: '.preferences-dialog', scroll: '.preferences-dialog .preferences-main' })
-    await screen('preferences-new-agent', 'Preferences › Team › Agents › New agent', async () => {
-      await go('Team', 'Agents')
+    await screen('preferences-new-agent', 'Preferences › Agents › Team › New agent', async () => {
+      await go('Agents', 'Team')
       await main.getByRole('button', { name: 'New agent' }).click()
     }, { region: '.preferences-dialog', scroll: '.preferences-dialog .preferences-main' })
+    // The narrow layout keeps the six pages in one row (Fable's notes ask for one look at 540).
+    await screen('preferences-narrow', 'Preferences at 540 px wide: the six pages in one row, Agents › Team', async () => {
+      await escape()
+      await resize([540, 700])
+      await sleep(400)
+      await go('Agents', 'Team')
+    }, { region: '.preferences-dialog', close: async () => { await escape(); await resize(SIZE); await sleep(400) } })
     await escape()
   } catch (error) {
     manifest.error = String(error?.stack ?? error)

@@ -64,19 +64,6 @@
   flex: 1 1 0;
 }
 
-/* The section head carries its one small action (Telegram's Refresh) on the heading's line. */
-.preferences-dialog .preferences-section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 24px;
-  margin: 0 0 12px;
-}
-
-.preferences-dialog .preferences-section-head h3 {
-  margin: 0;
-}
-
 .preferences-dialog .telegram-status {
   grid-template-columns: 200px minmax(0, 1fr);
   column-gap: 16px;
@@ -665,16 +652,6 @@
   border-right: 1px solid var(--hairline);
 }
 
-.preferences-dialog .nav-head {
-  display: block;
-  margin: 14px 8px 4px;
-  color: var(--faint);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
 .preferences-dialog .nav-item {
   justify-content: flex-start;
   gap: 8px;
@@ -701,19 +678,29 @@
   margin-left: auto;
 }
 
-.preferences-dialog .nav-sub {
-  padding: 2px 0 4px;
+/* Story 75.10: Agents and Integrations show their views in one segmented line right under the page head's hairline;
+   head and views stay at the top together while the page scrolls. */
+.preferences-dialog .page-top {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0 0 6px;
+  background: var(--surface);
 }
 
-.preferences-dialog .nav-sub .nav-item {
-  min-height: 24px;
-  padding: 2px 8px 2px 32px;
-  font-size: 12px;
+.preferences-dialog .page-top > .page-head {
+  position: static;
+  margin: 0;
 }
 
-.preferences-dialog .nav-sub .nav-item[aria-current] {
-  background: transparent;
-  font-weight: 600;
+.preferences-dialog .page-views {
+  padding: 10px 0 2px;
+}
+
+/* The attention mark in a head's status stands clear of its first word. */
+.preferences-dialog .page-head .faint > .needs-dot {
+  margin-right: 6px;
+  vertical-align: middle;
 }
 
 .preferences-dialog .preferences-main {
@@ -734,7 +721,6 @@
 }
 
 .preferences-dialog .preferences-page > .preferences-section > h3,
-.preferences-dialog .preferences-page > .preferences-section > .preferences-section-head,
 .preferences-dialog .page-head {
   position: sticky;
   top: 0;
@@ -750,7 +736,6 @@
 }
 
 .preferences-dialog .preferences-page > .preferences-section > h3,
-.preferences-dialog .preferences-page > .preferences-section > .preferences-section-head h3,
 .preferences-dialog .page-title {
   margin: 0;
   color: var(--text);
@@ -1072,9 +1057,8 @@
   margin-top: 8px;
 }
 
-/* Marks: a chess piece per class, the page icons, and the dot. */
-.preferences-dialog .piece,
-.preferences-dialog .page-icon {
+/* Marks: a chess piece per class and the dot. */
+.preferences-dialog .piece {
   flex: none;
   width: 16px;
   height: 16px;
@@ -2062,22 +2046,9 @@
     border-right: 0;
     border-bottom: 1px solid var(--hairline);
     scrollbar-width: none;
-    mask: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
   }
 
-  .preferences-dialog .nav-head {
-    display: none;
-  }
-
-  .preferences-dialog :is(.nav-parent, .nav-group, .nav-sub) {
-    display: flex;
-    flex: none;
-    gap: 2px;
-    padding: 0;
-  }
-
-  .preferences-dialog .nav-item,
-  .preferences-dialog .nav-sub .nav-item {
+  .preferences-dialog .nav-item {
     flex: none;
     width: auto;
     min-height: 26px;

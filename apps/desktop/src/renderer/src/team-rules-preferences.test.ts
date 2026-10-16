@@ -20,6 +20,8 @@ import {
   forgetUpdateWatches,
   diffSummary,
   earlierVersions,
+  healthNeedsCount,
+  needsFirst,
   hookRowWords,
   hookRows,
   rulesStatus,
@@ -45,7 +47,7 @@ import {
 } from './rules-preferences'
 import {
   Chain, TeamLedger, TeamPreferences, TeamToast, compactHint, compactRefusal, contextLimitHint, firstApprovalWords, researcherWords, hostKind, limitRefusal, nothingInEffectWords, outsideCountWords,
-  retiredAppProposalWords, shortDate, type TeamPage
+  retiredAppClause, shortDate, teamProposals, type TeamPage
 } from './team-preferences'
 import { ModelList } from './model-field'
 import { fenceResultWords, fenceWords, noResearcherWords, researcherHint, researchedModels, type ResearchState } from './models-preferences'
@@ -106,7 +108,7 @@ const SNAPSHOT: AgentsSnapshot = {
 const team = (extra: Partial<TeamState> = {}): TeamState => ({
   snapshot: SNAPSHOT, loadError: null, base: DATA, data: DATA, approved: DATA, hasStaged: false, preview: null, outside: { groups: [], general: [] },
   changed: new Set(), busy: false, notice: null, confirmation: null, needsOwner: false, stage: noop, discard: noop, reload: later, setNotice: noop,
-  requestApproval: later, commit: later, cancelConfirmation: noop, revert: later, saveNotes: later, pendingNotes: {}, setPendingNote: noop, undoRulesUpdate: later, rulesUndo: null, confirmRulesUndo: later, cancelRulesUndo: noop, ...extra
+  requestApproval: later, approveProposals: later, commit: later, cancelConfirmation: noop, revert: later, saveNotes: later, pendingNotes: {}, setPendingNote: noop, undoRulesUpdate: later, rulesUndo: null, confirmRulesUndo: later, cancelRulesUndo: noop, ...extra
 })
 const pageMarkup = (page: TeamPage, state: TeamState = team()): string => renderToStaticMarkup(createElement(TeamPreferences, { team: state, page, go: noop }))
 const ledgerMarkup = (state: TeamState): string => renderToStaticMarkup(createElement(TeamLedger, { team: state }))
@@ -118,7 +120,7 @@ const words = (markup: string): string => markup.replace(/<[^>]+>/g, ' ')
 /** Words of the schema and of the earlier design that no page may show (R60-NFR8). */
 const SCHEMA_WORDS = /\b(route|routes|packet|seal|generation|generations|trust|harness|roster|High|Low)\b/
 
-describe('Team › Agents (60.5 AC2)', () => {
+describe('Agents › Team (60.5 AC2)', () => {
   const markup = pageMarkup({ name: 'agents' })
 
   it('heads the page with Team, the approval date and New agent', () => {
@@ -247,17 +249,21 @@ describe('Team › a team file that still names Cursor (Epic 71, 71.2 AC3)', () 
   }
   const state = team({ snapshot: { ...SNAPSHOT, file: { ...SNAPSHOT.file, data: OLD }, approved: { ...SNAPSHOT.approved!, data: OLD } }, data: OLD, base: OLD, approved: OLD })
 
-  it('reads it, says Cursor was retired and proposes removing those lines; nothing changes until approved', () => {
-    const markup = pageMarkup({ name: 'agents' }, state)
-    expect(words(markup).replace(/\s+/g, ' ')).toContain('Cursor was retired on 14 Oct 2026. BMN&#x27;s proposal removes Composer, the Cursor route and the Cursor provider from the team file. Nothing changes until you approve it. Use proposal')
+  it('reads it, says Cursor was retired and proposes removing those lines in the one card; nothing changes until approved (Story 75.10)', () => {
+    const proposals = teamProposals(OLD, { lunaListed: false, researchers: null })
+    expect(proposals?.clauses[0]).toBe('Cursor was retired on 14 Oct 2026, so Composer, the Cursor route and the Cursor provider are taken out of the team file')
+    const markup = renderToStaticMarkup(createElement(TeamPreferences, { team: state, page: { name: 'agents' }, go: noop, proposals }))
+    expect(words(markup).replace(/\s+/g, ' ')).toContain(`BMN proposes ${proposals?.clauses.length} changes to your team: Cursor was retired on 14 Oct 2026, so Composer, the Cursor route and the Cursor provider are taken out of the team file · `)
+    expect(markup).toContain('>Approve…</button>')
+    expect(proposals?.data.agents.map((entry) => entry.id)).not.toContain('composer')
     // The agent is still shown as the file has it.
     expect(markup).toContain('<div class="agent-app">Cursor · <span class="mono">composer-2</span> · public work only</div>')
     // An agent on a retired app cannot be on: its switch shows off and takes no press (71.3).
     expect(markup).toContain('<button type="button" class="switch" role="switch" aria-checked="false" aria-label="Composer on" disabled="">')
     expect(markup).toContain('aria-checked="true" aria-label="Sol on">')
     expect(pageMarkup({ name: 'agents' })).not.toContain('was retired')
-    expect(retiredAppProposalWords({ agents: [], routes: [], providers: [], lists: true }))
-      .toBe("Cursor was retired on 14 Oct 2026. BMN's proposal removes Cursor from the apps a skill or tool is kept to from the team file. Nothing changes until you approve it.")
+    expect(retiredAppClause({ agents: [], routes: [], providers: [], lists: true }))
+      .toBe('Cursor was retired on 14 Oct 2026, so Cursor from the apps a skill or tool is kept to is taken out of the team file')
   })
 
   it('opens the agent with no app picked, says why, and suggests no model until one is', () => {
@@ -331,7 +337,7 @@ describe('the Model field (60.5: suggestions)', () => {
   })
 })
 
-describe('Team › Roles and Changes (60.5 AC5, AC6)', () => {
+describe('Agents › Roles and Changes (60.5 AC5, AC6)', () => {
   it('shows each role as one row: name, line, chain with pieces and efforts, then the fallback in words', () => {
     const markup = pageMarkup({ name: 'roles' })
     expect(markup).toContain('<b>Lead</b><span class="line-detail"> leads an epic/project start to finish</span>')
@@ -648,7 +654,7 @@ const rules = (extra: Partial<RulesState> = {}): RulesState => ({
 const rulesMarkup = (page: 'editor' | 'skills' | 'tools' | 'health', state: RulesState = rules(), teamState: TeamState = team()): string =>
   renderToStaticMarkup(createElement(RulesPreferences, { rules: state, team: teamState, page }))
 
-describe('Rules › Editor (60.6 AC1–AC3)', () => {
+describe('Integrations › Rules (60.6 AC1–AC3)', () => {
   const markup = rulesMarkup('editor')
 
   const SAVE: RulesSavePlan = {
@@ -817,13 +823,13 @@ it('Team whose file needs fixing reads it again when the owner comes back, with 
   expect(broken).not.toContain('Check now')
 })
 
-describe('Rules › Health (60.6 AC4)', () => {
+describe('Integrations › Health (60.6 AC4)', () => {
   const markup = rulesMarkup('health')
 
   it('shows one row per rules file: path, state in words, the kind of rules and the last loading test', () => {
-    expect(markup).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')} · 1 skill entry not installed yet · 1 skill exposed · 2 tool entries not installed yet · 1 tool exposed</span>`)
-    // With the skills and the tools in order, the header says only when Health was read.
-    expect(rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0, exposed: 0 }, tools: { ...RULES.tools, pending: 0, exposed: 0 } } }))).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')}</span>`)
+    expect(markup).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')} · 9 need you · 1 skill entry not installed yet · 1 skill exposed · 2 tool entries not installed yet · 1 tool exposed</span>`)
+    // With the skills and the tools counted in order, the header keeps when Health was read and the rows that need him.
+    expect(rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0, exposed: 0 }, tools: { ...RULES.tools, pending: 0, exposed: 0 } } }))).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')} · 9 need you</span>`)
     // Story 75.7: Health, Skills and Tools read themselves again by Health's rule; no button asks for it.
     for (const page of [markup, rulesMarkup('skills'), rulesMarkup('tools')]) expect(page).not.toContain('Check now')
     expect(markup).toMatch(/data-state="current"><span>Claude Code<\/span><span class="path mono" title="\/home\/synthetic\/.claude\/CLAUDE.md">~\/.claude\/CLAUDE.md<\/span><span class="health-state"><span>Current<span class="muted"> · Full rules<\/span>/)
@@ -839,8 +845,19 @@ describe('Rules › Health (60.6 AC4)', () => {
     expect(testLine({ harness: 'codex', outcome: 'unavailable', at: '2026-10-09T20:00:00.000Z' })).toBe(`Test unavailable ${shortDate('2026-10-09T20:00:00.000Z')}`)
   })
 
+  it('counts in its status every row that carries the Needs-you dot, each decided the way its row decides it (Story 75.10)', () => {
+    // Two rules files, two apps' skills, three apps' tools, one context limit and one hook file.
+    expect(markup.split('<div class="health-row"').slice(1).filter((row) => row.includes('needs-dot'))).toHaveLength(9)
+    expect(healthNeedsCount(RULES)).toBe(9)
+    expect(healthNeedsCount({ ...RULES, health: { state: 'failed', checkedAt: 'x', reason: 'unreadable' }, hooks: null })).toBe(6)
+    expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, health: { state: 'failed', checkedAt: '2026-10-09T22:13:00.000Z', reason: 'unreadable' }, hooks: null } })))).toMatch(/Checked [^·]+ · 6 need you ·/)
+    // Within each section those rows come first, the rest in their order.
+    expect([...markup.matchAll(/data-skills="([A-Za-z ]+)"/g)].map((match) => match[1])).toEqual(['Missing', 'Exposed', 'Reads the source'])
+    expect(needsFirst([1, 2, 3, 4], (row) => row % 2 === 0)).toEqual([2, 4, 1, 3])
+  })
+
   it('says what BMN found and did in each app\'s hook file at start, failure first, with no button (Story 75.9)', () => {
-    expect(markup).toContain('<h4 class="group-head">Hooks<span class="caption">BMN&#x27;s entries in each app&#x27;s hook file, installed at start</span></h4>')
+    expect(markup).toContain('<h4 class="group-head" id="health-hooks">Hooks<span class="caption">BMN&#x27;s entries in each app&#x27;s hook file, installed at start</span></h4>')
     expect([...markup.matchAll(/data-hooks="([a-z-]+)"><span>([A-Za-z ]+)<\/span>/g)].map((match) => `${match[2]} ${match[1]}`)).toEqual(['Codex left', 'Claude Code in-place', 'OpenCode in-place'])
     expect(markup).toMatch(/data-hooks="left">.*?<span><span class="needs-dot"[^>]*><\/span>5 entries in place · 2 left as they are<\/span><span class="faint">PostToolUse · changed<\/span><span class="faint">Interrupt · not BMN&#x27;s<\/span><span class="faint">Added at start: SessionStart, SessionEnd · Codex asks you once, in \/hooks, before it runs them<\/span>/)
     expect(markup).toMatch(/data-hooks="in-place"><span>Claude Code<\/span>.*?<span class="faint">9 entries in place<\/span>/)
@@ -862,7 +879,8 @@ describe('Rules › Health (60.6 AC4)', () => {
     const after = rulesMarkup('health', rules({ snapshot: { ...RULES,
       probes: [{ harness: 'claude', outcome: 'fail', at: '2026-10-09T20:00:00.000Z', version: '2.1.295' }, { harness: 'codex', outcome: 'inconclusive', at: '2026-10-09T20:00:00.000Z', version: '0.171.0', by: 'bmn' }],
       autoTests: { running: null, stopped: [{ kind: 'rules', harness: 'codex', version: '0.171.0', tries: 3, at: '2026-10-09T20:00:00.000Z' }, { kind: 'rules', harness: 'opencode', version: '1.18.32', tries: 3, at: '2026-10-09T20:00:00.000Z' }] } } }))
-    expect([...after.matchAll(/aria-label="Test ([A-Za-z ]+) again">Test again…/g)].map((match) => match[1])).toEqual(['Codex', 'Claude Code'])
+    // A failed test puts a dot on a current file too, so all three need him and keep their order (Story 75.10).
+    expect([...after.matchAll(/aria-label="Test ([A-Za-z ]+) again">Test again…/g)].map((match) => match[1])).toEqual(['Claude Code', 'Codex'])
     expect(after).toContain('<span class="faint">BMN stopped after 3 tries on 0.171.0</span>')
     const running = rulesMarkup('health', rules({ snapshot: { ...RULES, autoTests: { running: { kind: 'rules', harness: 'claude' }, stopped: [] } } }))
     expect(running).toContain('BMN is testing Claude Code now…')
@@ -889,7 +907,7 @@ describe('Rules › Health (60.6 AC4)', () => {
   })
 })
 
-describe('Rules › Health: Update… (60.6: the app\'s own updater, shown before anything runs)', () => {
+describe('Integrations › Health: Update… (60.6: the app\'s own updater, shown before anything runs)', () => {
   const markup = rulesMarkup('health')
   const apps = RULES.apps
   const sheet = (index: number, extra: Partial<Parameters<typeof UpdateSheet>[0]> = {}): string =>
@@ -1024,7 +1042,7 @@ describe('Rules › Health: Update… (60.6: the app\'s own updater, shown befor
   })
 })
 
-describe('Rules › Health: when the shell\'s settings could not be read', () => {
+describe('Integrations › Health: when the shell\'s settings could not be read', () => {
   it('says so above the apps, with the reason, and says nothing when they were read', () => {
     const page = rulesMarkup('health', rules({ snapshot: { ...RULES, ownEnvironment: 'bash did not answer in 5 seconds' } }))
     expect(words(page).replace(/\s+/g, ' ')).toContain('BMN could not read your shell&#x27;s settings (bash did not answer in 5 seconds), so it looked for the apps with its own. A session may find a program that BMN does not.')
@@ -1033,7 +1051,7 @@ describe('Rules › Health: when the shell\'s settings could not be read', () =>
   })
 })
 
-describe('Rules › Health: what an app reports after its update command was copied', () => {
+describe('Integrations › Health: what an app reports after its update command was copied', () => {
   it('remembers what the program reported then, and says what a later check read, under the app\'s row', () => {
     forgetUpdateWatches()
     const codex = RULES.apps[1]!
@@ -1203,7 +1221,7 @@ describe('context limits (60.9 AC3, AC4)', () => {
     const sol = page('sol')
     expect(sol).toContain('of 400 000 tokens')
     expect(sol).toContain('aria-label="Compact at"')
-    expect(sol).toContain('Not supported yet on Codex 0.171.0: kept but not applied until its test passes in Rules › Health.')
+    expect(sol).toContain('Not supported yet on Codex 0.171.0: kept but not applied until its test passes in Integrations › Health.')
     expect(sol).toContain('Not supported yet on Codex: kept but not applied. The app starts summarising the conversation here.')
     const luna = page('luna')
     expect(luna).toContain('capacity unknown')
@@ -1287,7 +1305,7 @@ describe('skills (60.11 AC5)', () => {
   it('Health shows one row per app: where its skills live, the state in words, Full or Public skills only and the last loading test', () => {
     const health = rulesMarkup('health')
     expect(health).toContain('<h4 class="group-head">Skills<span class="caption">where each app reads skills, and whether it has the ones it may have</span></h4>')
-    expect(words(health)).toMatch(/Checked [^·]+ · 1 skill entry not installed yet · 1 skill exposed/)
+    expect(words(health)).toMatch(/Checked [^·]+ · 9 need you · 1 skill entry not installed yet · 1 skill exposed/)
     expect(health).toMatch(/data-skills="Reads the source"><span>Claude Code<\/span><span class="health-state"><span>The skills folder itself<\/span><\/span><span class="health-state"><span>Reads the source<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code named a test skill">Listing test passed [^<]+ · stale · loading never tested<\/span>/)
     expect(health).toMatch(/data-skills="Missing"><span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.agents\/skills">~\/.agents\/skills<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Loading never tested<\/span>/)
     expect(health).toMatch(/data-skills="Exposed"><span>OpenCode<\/span>.*?Exposed<span class="muted"> · Public skills only<\/span><\/span><span class="faint" title="[^"]*">No loading test<\/span>/)
@@ -1468,7 +1486,7 @@ describe('tools (60.12 AC6)', () => {
   it('Health shows one row per app: its settings file, the state in words, Full or Public tools only and the last test', () => {
     const health = rulesMarkup('health')
     expect(health).toContain('<h4 class="group-head">Tools<span class="caption">where each app keeps its tools, and whether it has the ones it may have</span></h4>')
-    expect(words(health)).toMatch(/Checked [^·]+ · 1 skill entry not installed yet · 1 skill exposed · 2 tool entries not installed yet · 1 tool exposed/)
+    expect(words(health)).toMatch(/Checked [^·]+ · 9 need you · 1 skill entry not installed yet · 1 skill exposed · 2 tool entries not installed yet · 1 tool exposed/)
     expect(health).toMatch(/data-tools="Differs"><span>Claude Code<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.claude.json">~\/.claude.json<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Differs<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code listed the stand-in tool">Checked [^<]+ · passes variables · a run keeps to its own tools<\/span>/)
     expect(health).toMatch(/data-tools="Missing"><span>Codex<\/span>.*?Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Checked [^<]+ · variables not seen · no run seen kept to its tools<\/span>/)
     expect(health).toMatch(/data-tools="Exposed"><span>OpenCode<\/span>.*?<span class="faint" title="\/home\/synthetic\/dotfiles\/opencode.jsonc">A link: BMN does not write through it<\/span>.*?Exposed<span class="muted"> · Public tools only<\/span>/)
@@ -1503,7 +1521,7 @@ describe('tools (60.12 AC6)', () => {
   })
 })
 
-describe('Team › Models (60.10, first release)', () => {
+describe('Agents › Models (60.10, first release)', () => {
   const checked = (verified: boolean, why?: string) => ({ rank: 1 as const, verified, ...(why ? { why } : {}) })
   const found = (id: string, providerId: string, extra: Partial<ResearchModelView> = {}): ResearchModelView => ({
     id, provider: providerId === 'openai' ? 'OpenAI' : 'Anthropic', providerId, price: null, contextWindow: null,
@@ -1582,10 +1600,15 @@ describe('Team › Models (60.10, first release)', () => {
       expect(codexToolsLine([])).toBe('The fence test of this Codex version saw no other tool offered.')
     })
 
-    it('says that the choice waits for him while the team names no researcher, and takes BMN\'s proposal with one press (AC7)', () => {
+    it('says that the choice waits for him while the team names no researcher, and BMN\'s proposal is taken from the one card on Team (AC7, Story 75.10)', () => {
       const waiting = withSnapshot({ choice: { named: null, proposed: ['sol', 'luna', 'gone'] } })
-      expect(words(waiting)).toContain('Who researches is your choice and you have not made it yet, so every agent that can research is offered. BMN proposes Sol and Luna: one agent per model.')
-      expect(waiting).toContain('<button type="button" class="small">Use proposal</button>')
+      expect(words(waiting)).toContain('Who researches is your choice and you have not made it yet, so every agent that can research is offered; BMN&#x27;s proposal is on Team.')
+      expect(waiting).not.toMatch(/Use proposal|<div class="page-note with-action"[^>]*><span class="needs-dot"[^>]*><\/span><span class="note-text">Who researches/)
+      const proposals = teamProposals(DATA, { lunaListed: false, researchers: { named: null, proposed: ['sol', 'luna', 'gone'] } })
+      expect(proposals?.clauses).toContain('Sol and Luna as researchers, one agent per model')
+      expect(namedResearchers(proposals!.data)).toEqual(['sol', 'luna'])
+      // Once the approved team names its researchers, BMN proposes none.
+      expect(teamProposals(DATA, { lunaListed: false, researchers: { named: ['sol'], proposed: [] } })?.clauses ?? []).not.toContain('Sol and Luna as researchers, one agent per model')
       // The proposal is staged like any other change: the mark on each proposed agent, nothing else touched.
       const taken = nameResearchers(DATA, ['sol', 'luna'])
       expect(taken.agents.filter((entry) => entry.researcher === true).map((entry) => entry.id)).toEqual(['sol', 'luna'])
@@ -1791,11 +1814,15 @@ describe('read-only roles on Team and Health (63.2 AC4)', () => {
     expect(readOnlyProposal(DATA)).toEqual([])
     expect(readOnlyProposal(REVIEWED)).toEqual(['epic-reviewer', 'focused-reviewer', 'consultant'])
     expect(listedRoles(['epic-reviewer', 'focused-reviewer', 'consultant'])).toBe('Epic reviewer, Focused reviewer and Consultant')
+    // Roles says where the proposal is; the one card on Team takes it with the others (Story 75.10).
     const page = words(roles(REVIEWED)).replace(/\s+/g, ' ')
-    expect(page).toContain('No role is held to read-only yet BMN proposes Epic reviewer, Focused reviewer and Consultant: a run for one of them would be refused unless it is started so that it cannot write. The other roles keep write access. Use proposal')
+    expect(page).toContain('No role is held to read-only yet; BMN&#x27;s proposal is on Team.')
+    expect(page).not.toContain('Use proposal')
+    expect(teamProposals(REVIEWED, { lunaListed: false, researchers: null })?.clauses).toContain('Epic reviewer, Focused reviewer and Consultant held to read-only')
     expect(roles(REVIEWED)).not.toContain('class="role-mark"')
     // A team without such roles is offered nothing.
-    expect(roles(DATA)).not.toContain('Use proposal')
+    expect(roles(DATA)).not.toContain('BMN&#x27;s proposal is on Team')
+    expect(teamProposals(DATA, { lunaListed: false, researchers: null })?.clauses ?? []).not.toContain('held to read-only')
   })
 
   it('takes the proposal as a staged change, marks each held role, and leaves the choice to the owner from then on', () => {
@@ -1828,9 +1855,9 @@ describe('read-only roles on Team and Health (63.2 AC4)', () => {
     expect(notHeldWords(null)).toBeNull()
     expect(notHeldWords({ held: [], proposed: [] })).toBeNull()
     expect(notHeldWords({ held: ['consultant'], proposed: ['epic-reviewer'] })).toBeNull()
-    const said = 'No role is held to read-only yet, so the check passes a reviewer started with write access. Team › Roles proposes Epic reviewer and Consultant.'
+    const said = "No role is held to read-only yet, so the check passes a reviewer started with write access. BMN's proposal on Agents › Team holds Epic reviewer and Consultant to read-only."
     expect(notHeldWords({ held: [], proposed: ['epic-reviewer', 'consultant'] })).toBe(said)
-    expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, readOnlyRoles: { held: [], proposed: ['epic-reviewer', 'consultant'] } } })))).toContain(said)
+    expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, readOnlyRoles: { held: [], proposed: ['epic-reviewer', 'consultant'] } } })))).toContain(said.replace("'", '&#x27;'))
     expect(words(rulesMarkup('health'))).not.toContain('held to read-only')
   })
 })

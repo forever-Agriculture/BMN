@@ -62,7 +62,7 @@ const TEST_NAMES: Readonly<Record<AutoTestKind, string>> = {
   rules: 'loading test', skills: 'skills test', 'skills-loading': 'skill loading test', tools: 'tools test', context: 'context test', fence: 'fence test'
 }
 const WHERE: Readonly<Record<AutoTestKind, string>> = {
-  rules: 'Rules › Health', skills: 'Rules › Skills', 'skills-loading': 'Rules › Skills', tools: 'Rules › Tools', context: 'Rules › Health', fence: 'Team › Models'
+  rules: 'Integrations › Health', skills: 'Integrations › Skills', 'skills-loading': 'Integrations › Skills', tools: 'Integrations › Tools', context: 'Integrations › Health', fence: 'Agents › Models'
 }
 
 function named(names: readonly string[]): string {

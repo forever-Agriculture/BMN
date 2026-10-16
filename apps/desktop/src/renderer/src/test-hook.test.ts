@@ -162,8 +162,8 @@ describe('renderer acceptance hook', () => {
           evidenceContrast: 7.6
         },
         focusReturnedToStrip: true,
-        focusReturnedToMenuButton: true,
-        openedFromPaneMenu: true,
+        focusReturnedToOpener: true,
+        openedFromPalette: true,
         bareDialog: { title: 'Progress — Session B', body: 'No evidence attached to this report.' }
       },
       hiddenPaneSize: { shown: { cols: 80, rows: 24 }, hidden: { cols: 80, rows: 24 } },

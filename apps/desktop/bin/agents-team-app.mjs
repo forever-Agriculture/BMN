@@ -1,4 +1,4 @@
-// MODULE: agents-team-app.mjs - Story 73.1: Team › Asks: every ask on this computer listed for the owner (his agents' and any made from a shell), one opened with its answer as the teammate's words, stopped, removed or exported
+// MODULE: agents-team-app.mjs - Story 73.1: Agents › Asks: every ask on this computer listed for the owner (his agents' and any made from a shell), one opened with its answer as the teammate's words, stopped, removed or exported
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { APP_NAMES } from './agents-roster.mjs'
@@ -195,7 +195,7 @@ function teamNames() {
 }
 
 /**
- * Team › Asks: every ask on this computer, newest first, his and his agents'; records past their
+ * Agents › Asks: every ask on this computer, newest first, his and his agents'; records past their
  * days are removed first, as every ask's reservation does.
  */
 export function appAsks({ runs = teamRunsDirectory(), now = new Date() } = {}) {

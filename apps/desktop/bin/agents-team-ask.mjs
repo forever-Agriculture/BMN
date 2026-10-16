@@ -239,7 +239,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   if (project !== null && ASK_READS[form].scope !== 'text') prompt = projectPrompt(prompt, project)
   if (browser !== null) prompt = browserPrompt(prompt, browser)
   writePrivate(join(folder, ASK_RUN_FILES.prompt), prompt)
-  // The question alone, as the asker wrote it, for the record and Team › Asks (73.1); the prompt above is what is sent.
+  // The question alone, as the asker wrote it, for the record and Agents › Asks (73.1); the prompt above is what is sent.
   writePrivate(join(folder, ASK_RUN_FILES.question), request.question)
   // The forms that read history run BMN's own git, first on their PATH (72.1 AC1, 72.9 AC1).
   if (form === 'claude-read-tools' || form === 'opencode-reader') writePrivate(join(folder, ASK_RUN_FILES.bin, 'git'), readFileSync(ASK_GIT), 0o700)

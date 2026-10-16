@@ -696,7 +696,7 @@ describe('Allow here on a stopped prompt (60.8 AC3)', () => {
   })
 })
 
-describe('context limits on Rules › Health (60.9 AC1, AC3)', () => {
+describe('context limits on Integrations › Health (60.9 AC1, AC3)', () => {
   const codexTest = (window: number) => [
     'if [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi',
     'dir=""; prev=""', 'for a in "$@"; do [ "$prev" = "-C" ] && dir="$a"; prev="$a"; done', 'cat > /dev/null',
@@ -752,7 +752,7 @@ describe('context limits on Rules › Health (60.9 AC1, AC3)', () => {
   })
 })
 
-describe('BMN\'s own context testing on Rules › Health (63.1)', () => {
+describe('BMN\'s own context testing on Integrations › Health (63.1)', () => {
   /** A stand-in Codex whose session record shows `window`; every start, also for its version, leaves a line. */
   const codex = (version: string, window: number): void => stub('codex', [
     'echo "$1" >> "$HOME/codex-calls"',
@@ -844,7 +844,7 @@ describe('BMN\'s own context testing on Rules › Health (63.1)', () => {
     expect(tests()).toBe(3)
     expect(stopped).toEqual({ running: null, stopped: [{ kind: 'context', harness: 'codex', version: '0.161.0', tries: 3, at: expect.any(String) }] })
     expect(notices).toEqual([{ title: 'Codex context test stopped',
-      body: "Sol's own context limit does not hold on Codex 0.161.0: the test BMN ran by itself showed nothing, 3 times, so it stopped trying. Rules › Health has Test again." }])
+      body: "Sol's own context limit does not hold on Codex 0.161.0: the test BMN ran by itself showed nothing, 3 times, so it stopped trying. Integrations › Health has Test again." }])
     expect(statSync(join(home, '.config/bmn/agents/state/auto-tests.json')).mode & 0o777).toBe(0o600)
     // No fourth try, and nothing more said.
     later()
@@ -867,14 +867,14 @@ describe('BMN\'s own context testing on Rules › Health (63.1)', () => {
     await call<RulesSnapshot>('rules:snapshot')
     await settled()
     expect(tests()).toBe(1)
-    expect(notices).toEqual([{ title: 'Codex context test failed', body: "Sol's own context limit does not hold on Codex 0.161.0: the test BMN ran by itself failed. Rules › Health has the details and Test again." }])
+    expect(notices).toEqual([{ title: 'Codex context test failed', body: "Sol's own context limit does not hold on Codex 0.161.0: the test BMN ran by itself failed. Integrations › Health has the details and Test again." }])
     const shownNow = await call<RulesSnapshot>('rules:snapshot')
     expect(shownNow.context[0]).toMatchObject({ limitProven: false, test: { outcome: 'fail', by: 'bmn' }, limits: [{ agent: 'Sol', state: 'not-applied', reason: expect.stringContaining('the context test failed on this Codex version') }] })
     expect(shownNow.autoTests).toEqual(idle)
   })
 })
 
-describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
+describe('skills on Integrations › Skills and Health (60.11 AC1-AC5)', () => {
   /** A stub Codex that names the skills in ~/.agents/skills, whatever home folder it is started in. */
   const codexLister = [
     'if [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi',
@@ -972,7 +972,7 @@ describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
     // The next version reads no folder BMN knows: one test, one notice, and nothing more at the next start.
     stub('codex', lister('0.163.0', '.nowhere'))
     await ipc.autoTestsAtStart()
-    expect(notices).toEqual([{ title: 'Codex skills test failed', body: 'The skills test BMN ran by itself on Codex 0.163.0 failed. Rules › Skills has the details and Test again.' }])
+    expect(notices).toEqual([{ title: 'Codex skills test failed', body: 'The skills test BMN ran by itself on Codex 0.163.0 failed. Integrations › Skills has the details and Test again.' }])
     await ipc.autoTestsAtStart()
     await call('rules:auto-tests', { fresh: true })
     expect(records().slice(4)).toEqual([['capability', '0.163.0', 'fail', 'bmn']])
@@ -999,7 +999,7 @@ describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
   })
 })
 
-describe('tools on Rules › Tools and Health (60.12 AC1-AC6)', () => {
+describe('tools on Integrations › Tools and Health (60.12 AC1-AC6)', () => {
   const SECRET = 'sk-SYNTHETIC-SECRET-9f8e7d6c5b4a'
   /** A stand-in Codex: its list repeats its settings file, and a run told to take only its own tools names only those. */
   const codexTools = [
@@ -1131,7 +1131,7 @@ describe('Skills and Tools when the approved team cannot be read (R60-NFR1)', ()
   })
 })
 
-describe('research on Team › Models (60.10)', () => {
+describe('research on Agents › Models (60.10)', () => {
   const PAGE = 'https://prices.example.test/anthropic'
   const price = (input: number, output: number) => ({ input, output, source: PAGE, as_of: '2026-10-10' })
   const entry = (id: string, extra: Record<string, unknown> = {}) => ({ id, provider: 'Anthropic', listed: false, price: 'unavailable', context_window: 'unavailable', ...extra })
@@ -1477,7 +1477,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
   })
 })
 
-describe('web questions on Team › Models (64.3)', () => {
+describe('web questions on Agents › Models (64.3)', () => {
   const USES = 'https://docs.example.org/jev/uses'
   const GONE = 'https://gone.example.org/jev'
   const QUESTION = 'How do people use the Jev 1.13 model, according to public pages?'
@@ -2047,7 +2047,7 @@ describe('Luna through OpenCode Go on Team (70.4)', () => {
   })
 })
 
-describe('Team › Asks through the app (73.1 AC2, AC3)', () => {
+describe('Agents › Asks through the app (73.1 AC2, AC3)', () => {
   const SESSION = { kind: 'session', session: 'session-made-up-1', app: 'claude' } as const
   /** A run's record written by hand; with no outcome it is still going, as far as the folder says. */
   const record = (id: string, asked: string, outcome: Record<string, unknown> | null): string => {

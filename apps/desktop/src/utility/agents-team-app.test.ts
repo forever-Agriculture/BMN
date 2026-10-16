@@ -1,4 +1,4 @@
-// MODULE: agents-team-app.test.ts - Story 73.1, 72.9: Team › Asks reads every ask his agents and the command made: who asked, what was readable and what the teammate's own mode could read, who answered and its sub-agents, the answer with any credential masked, the project's state, the usage and why a run ended as it did, newest first; the owner's Stop of any ask, removal, export and 30-day retention; stand-in apps in BMN's real systemd scope, a synthetic team
+// MODULE: agents-team-app.test.ts - Story 73.1, 72.9: Agents › Asks reads every ask his agents and the command made: who asked, what was readable and what the teammate's own mode could read, who answered and its sub-agents, the answer with any credential masked, the project's state, the usage and why a run ended as it did, newest first; the owner's Stop of any ask, removal, export and 30-day retention; stand-in apps in BMN's real systemd scope, a synthetic team
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -79,7 +79,7 @@ const project = (): string => {
   return root
 }
 
-describe.skipIf(!SCOPES)('Team › Asks reads his agents\' asks (73.1)', { timeout: 40_000 }, () => {
+describe.skipIf(!SCOPES)('Agents › Asks reads his agents\' asks (73.1)', { timeout: 40_000 }, () => {
   it('lists an agent\'s ask with who asked, what was readable, who answered and its usage; opened, its whole question and the teammate\'s answer', async () => {
     const retry = file('retry.ts', 'export const retries = 3\n')
     const prepared = agentAsk('Is the retry bounded?\nIt loops on 503.', { files: [retry] })

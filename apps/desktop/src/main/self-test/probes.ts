@@ -85,8 +85,8 @@ export interface RendererIntegrationProbe {
       evidenceContrast: number
     }
     focusReturnedToStrip: boolean
-    focusReturnedToMenuButton: boolean
-    openedFromPaneMenu: boolean
+    focusReturnedToOpener: boolean
+    openedFromPalette: boolean
     bareDialog: { title: string; body: string }
   }
   hiddenPaneSize: { shown: { cols: number; rows: number }; hidden: { cols: number; rows: number } }

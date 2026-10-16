@@ -85,7 +85,8 @@ import { TurnPauseCard } from './turn-changes-card'
 import { TurnChangesDialog } from './turn-changes-dialog'
 import { dismissAttentionReminder, noticesWhenNavigating, applyAttentionWithdrawal } from './attention-actions'
 import { PopupMenu, type MenuAnchor, type MenuEntry } from './popup-menu'
-import { PreferencesDialog, type PreferencesPage } from './preferences-dialog'
+import { paneMenu, readOnlyViewCommands, sessionMenu, workspaceMenu } from './shell-menus'
+import { PreferencesDialog, type PreferencesPlace } from './preferences-dialog'
 import { reportedModels, sessionsByApp } from './model-suggestions'
 import {
   ACTIVITY_TICK_MS,
@@ -169,7 +170,7 @@ type ShellDialog =
   | { kind: 'workspace-pins'; workspaceId: string; openedFromWorkspaceId: string | null }
   /** Chooses the session for a second pane beside `sessionId`. */
   | { kind: 'split-picker'; sessionId: string | null }
-  | { kind: 'preferences'; page?: PreferencesPage }
+  | { kind: 'preferences'; page?: PreferencesPlace }
   | { kind: 'workspace-results'; workspace: WorkspaceRecord; openedFromWorkspaceId: string | null }
   /** The owner's reading of one workspace's messages between sessions (Epic 66). */
   | { kind: 'workspace-messages'; workspaceId: string; openedFromWorkspaceId: string | null }
@@ -1450,48 +1451,27 @@ function App(): React.JSX.Element {
     setMenu((current) => current?.element === element ? null : { element, label, entries })
   }
 
-  /** "Turn changes…": there whether or not any agent ever reported progress; it opens once BMN recorded here. */
-  const turnChangesEntry = (session: SessionRecord): MenuEntry => {
-    const recorded = turnRecording.some((view) => view.sessionId === session.sessionId)
-    return {
-      label: 'Turn changes…',
-      disabled: !recorded,
-      title: recorded ? undefined : 'No turn recorded here yet',
-      onSelect: () => setDialog({ kind: 'turn-changes', sessionId: session.sessionId })
-    }
-  }
-
-  const sessionMenuEntries = (session: SessionRecord, index: number, siblings: readonly SessionRecord[]): MenuEntry[] => session.archivedAt ? [
-    { label: 'Session details', onSelect: () => { selectSessionForPanel(session); setPanel('details') } },
-    'separator',
-    { label: 'Restore session', onSelect: () => void archiveSession(session, false).catch(fail('Session restore failed')) }
-  ] : [
-    { label: 'Split beside', onSelect: () => splitBeside(session), shortcut: SHORTCUT_LABELS['split-toggle'] },
-    { label: 'Session details', onSelect: () => { selectSessionForPanel(session); setPanel('details') } },
-    { label: 'Hook events…', onSelect: () => setDialog({ kind: 'hook-events', session }) },
-    turnChangesEntry(session),
-    {
-      label: settings.telegram.quietHours?.allowSessions.includes(session.sessionId) ? 'Stop allowing through quiet hours' : 'Allow through quiet hours',
-      disabled: !settings.telegram.quietHours?.allowSessions.includes(session.sessionId) && (settings.telegram.quietHours?.allowSessions.length ?? 0) >= 20,
-      onSelect: () => {
-        const quiet = settings.telegram.quietHours ?? DEFAULT_TELEGRAM_QUIET_HOURS
+  const sessionMenuEntries = (session: SessionRecord, index: number, siblings: readonly SessionRecord[]): MenuEntry[] => {
+    const quiet = settings.telegram.quietHours ?? DEFAULT_TELEGRAM_QUIET_HOURS
+    return sessionMenu({
+      archived: session.archivedAt !== null, live: !!live[session.sessionId], first: index === 0, last: index === siblings.length - 1,
+      quietAllowed: quiet.allowSessions.includes(session.sessionId), quietFull: quiet.allowSessions.length >= 20, launchDisabled: sessionLaunchDisabledReason(session)
+    }, {
+      splitBeside: () => splitBeside(session),
+      details: () => { selectSessionForPanel(session); setPanel('details') },
+      toggleQuiet: () => {
         const allowSessions = quiet.allowSessions.includes(session.sessionId)
           ? quiet.allowSessions.filter(id => id !== session.sessionId) : [...quiet.allowSessions, session.sessionId]
         void window.aiTerminal.putSettings('telegram', { ...settings.telegram, quietHours: { ...quiet, allowSessions } })
           .then(setSettings).catch(fail('Quiet-hours exception could not be saved'))
-      }
-    },
-    { label: 'Edit launch settings', onSelect: () => beginSessionEdit(session) },
-    { label: 'Move up', disabled: index === 0, onSelect: () => void moveSession(siblings, index, -1).catch(fail('Session move failed')) },
-    { label: 'Move down', disabled: index === siblings.length - 1, onSelect: () => void moveSession(siblings, index, 1).catch(fail('Session move failed')) },
-    'separator',
-    live[session.sessionId]
-      ? { label: 'Stop session…', danger: true, onSelect: () => setDialog({ kind: 'stop', session }) }
-      : { label: 'Start again', disabled: !!sessionLaunchDisabledReason(session), title: sessionLaunchDisabledReason(session), onSelect: () => relaunchSession(session) },
-    live[session.sessionId]
-      ? { label: 'Archive session', disabled: true, title: 'Stop the session before archiving it', onSelect: () => undefined }
-      : { label: 'Archive session', onSelect: () => void archiveSession(session, true).catch(error => brief(failureDetail(error, 'Session archive failed'))) }
-  ]
+      },
+      editLaunch: () => beginSessionEdit(session),
+      move: (step) => void moveSession(siblings, index, step).catch(fail('Session move failed')),
+      stop: () => setDialog({ kind: 'stop', session }),
+      startAgain: () => relaunchSession(session),
+      archive: (on) => void archiveSession(session, on).catch(on ? (error: unknown) => brief(failureDetail(error, 'Session archive failed')) : fail('Session restore failed'))
+    }, SHORTCUT_LABELS['split-toggle'])
+  }
 
   /**
    * A program that died with mouse or paste modes on leaves them armed; this returns the view to a plain terminal.
@@ -1506,68 +1486,46 @@ function App(): React.JSX.Element {
       .catch((error: unknown) => setFailure(sessionFailureDetail(session.name, error, 'Terminal modes were not reset')))
   }
 
-  const paneMenuEntries = (session: SessionRecord): MenuEntry[] => [
-    { label: 'Session details', onSelect: () => { selectSessionForPanel(session); setPanel('details') } },
-    // xterm consumes Tab inside the terminal, so the More menu is the keyboard route to the detail.
-    {
-      label: 'Progress details',
-      disabled: !observedProgressFor(session),
-      title: observedProgressFor(session) ? undefined : 'No progress reported yet',
-      onSelect: () => openProgressDetail(session, observedProgressFor(session))
+  const paneMenuEntries = (session: SessionRecord): MenuEntry[] => paneMenu({
+    live: !!live[session.sessionId], panes: layout?.split.panes.length ?? 0, stacked: layout?.split.orientation === 'stacked',
+    canStartHere: !!activeWorkspace && activeWorkspace.archivedAt === null
+  }, {
+    details: () => { selectSessionForPanel(session); setPanel('details') },
+    search: () => controllers.current.get(session.sessionId)?.openSearch(),
+    copy: () => copySelection(session.sessionId),
+    paste: () => pasteClipboard(session.sessionId),
+    selectAll: () => controllers.current.get(session.sessionId)?.selectAll(),
+    sendNextKey: () => runCommand('send-next-key'),
+    resetModes: () => resetTerminalModes(session),
+    arrange: () => {
+      if (!activeWorkspaceId) return
+      writer.apply(activeWorkspaceId, (state) =>
+        setLayoutOrientation(state, state.split.orientation === 'stacked' ? 'side-by-side' : 'stacked', allSessionIds))
     },
-    turnChangesEntry(session),
-    { label: 'Search output', shortcut: SHORTCUT_LABELS.search, onSelect: () => controllers.current.get(session.sessionId)?.openSearch() },
-    { label: 'Copy selection', shortcut: SHORTCUT_LABELS.copy, onSelect: () => copySelection(session.sessionId) },
-    { label: 'Paste', shortcut: SHORTCUT_LABELS.paste, onSelect: () => pasteClipboard(session.sessionId) },
-    { label: 'Select all', shortcut: SHORTCUT_LABELS['select-all'], onSelect: () => controllers.current.get(session.sessionId)?.selectAll() },
-    { label: 'Send next key to terminal', shortcut: SHORTCUT_LABELS['send-next-key'], onSelect: () => runCommand('send-next-key') },
-    { label: 'Reset terminal modes', disabled: !live[session.sessionId], onSelect: () => resetTerminalModes(session) },
-    {
-      label: layout?.split.orientation === 'stacked' ? 'Arrange side by side' : 'Arrange stacked',
-      disabled: (layout?.split.panes.length ?? 0) < 2,
-      onSelect: () => {
-        if (!activeWorkspaceId) return
-        writer.apply(activeWorkspaceId, (state) =>
-          setLayoutOrientation(state, state.split.orientation === 'stacked' ? 'side-by-side' : 'stacked', allSessionIds))
-      }
-    },
-    { label: 'New session in this workspace', disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, onSelect: () => beginNewSession(activeWorkspace) },
-    { label: 'Edit launch settings', onSelect: () => beginSessionEdit(session) },
-    'separator',
-    { label: 'Stop session…', danger: true, onSelect: () => setDialog({ kind: 'stop', session }) }
-  ]
+    newSession: () => beginNewSession(activeWorkspace),
+    editLaunch: () => beginSessionEdit(session),
+    stop: () => setDialog({ kind: 'stop', session })
+  }, { search: SHORTCUT_LABELS.search, copy: SHORTCUT_LABELS.copy, paste: SHORTCUT_LABELS.paste, selectAll: SHORTCUT_LABELS['select-all'], sendNextKey: SHORTCUT_LABELS['send-next-key'] })
 
-  const workspaceMenuEntries = (workspace: WorkspaceRecord, index: number, ordered: readonly WorkspaceRecord[]): MenuEntry[] => [
-    { label: 'Pinned files…', disabled: workspace.archivedAt !== null,
-      onSelect: () => setDialog({ kind: 'workspace-pins', workspaceId: workspace.workspaceId, openedFromWorkspaceId: activeWorkspaceId }) },
-    { label: 'New session here', disabled: workspace.archivedAt !== null, onSelect: () => beginNewSession(workspace) },
-    { label: 'Review results…', onSelect: () =>
-      setDialog({ kind: 'workspace-results', workspace, openedFromWorkspaceId: activeWorkspaceId }) },
-    { label: 'Messages…', onSelect: () =>
-      setDialog({ kind: 'workspace-messages', workspaceId: workspace.workspaceId, openedFromWorkspaceId: activeWorkspaceId }) },
-    { label: 'Rename…', onSelect: () => setDialog({ kind: 'rename-workspace', workspace }) },
-    { label: 'Move up', disabled: index === 0, onSelect: () => moveWorkspace(ordered, index, -1) },
-    { label: 'Move down', disabled: index === ordered.length - 1, onSelect: () => moveWorkspace(ordered, index, 1) },
-    'separator',
-    {
-      group: 'Marker',
-      selected: workspace.marker,
-      options: workspaceMarkerOptions(),
-      onChoose: (marker) => {
-        // The menu hands back a string; only a marker the protocol recognizes reaches the store.
-        if (!isWorkspaceMarker(marker)) return
-        void updateWorkspace(workspace, { marker }).catch(fail('Workspace marker change failed'))
-      }
-    },
-    'separator',
-    {
-      label: workspace.archivedAt ? 'Restore workspace' : 'Archive workspace',
-      disabled: workspace.archivedAt === null && sessions.some(session => session.workspaceId === workspace.workspaceId && processLive(session.sessionId)),
-      title: workspace.archivedAt === null && sessions.some(session => session.workspaceId === workspace.workspaceId && processLive(session.sessionId))
-        ? 'Stop this workspace’s running sessions before archiving.' : undefined,
-      onSelect: () => void updateWorkspace(workspace, { archived: workspace.archivedAt === null }).catch(error => brief(failureDetail(error, 'Workspace update failed')))
+  const workspaceMenuEntries = (workspace: WorkspaceRecord, index: number, ordered: readonly WorkspaceRecord[]): MenuEntry[] => workspaceMenu({
+    archived: workspace.archivedAt !== null, first: index === 0, last: index === ordered.length - 1,
+    running: sessions.some(session => session.workspaceId === workspace.workspaceId && processLive(session.sessionId))
+  }, {
+    group: 'Marker',
+    selected: workspace.marker,
+    options: workspaceMarkerOptions(),
+    onChoose: (marker) => {
+      // The menu hands back a string; only a marker the protocol recognizes reaches the store.
+      if (!isWorkspaceMarker(marker)) return
+      void updateWorkspace(workspace, { marker }).catch(fail('Workspace marker change failed'))
     }
-  ]
+  }, {
+    pins: () => setDialog({ kind: 'workspace-pins', workspaceId: workspace.workspaceId, openedFromWorkspaceId: activeWorkspaceId }),
+    newSession: () => beginNewSession(workspace),
+    rename: () => setDialog({ kind: 'rename-workspace', workspace }),
+    move: (step) => moveWorkspace(ordered, index, step),
+    archive: () => void updateWorkspace(workspace, { archived: workspace.archivedAt === null }).catch(error => brief(failureDetail(error, 'Workspace update failed')))
+  })
 
   const paletteCommands = (): PaletteCommand[] => {
     const shown = visibleWorkspaces(workspaces, false)
@@ -1615,11 +1573,6 @@ function App(): React.JSX.Element {
       }),
       command('next-attention', 'Go to next request needing you', nextNeedingYou, { shortcut: SHORTCUT_LABELS['attention-next'], context: `${unresolved.length} waiting` }),
       command('new-workspace', 'New workspace…', () => setDialog({ kind: 'new-workspace' })),
-      command('dev-auto-runs', 'dev-auto runs…', () => setDialog({ kind: 'dev-auto-runs' })),
-      // Read-only: what the sessions of the active workspace left each other (Story 75.4).
-      command('messages', 'Messages…', () => activeWorkspace && setDialog({
-        kind: 'workspace-messages', workspaceId: activeWorkspace.workspaceId, openedFromWorkspaceId: activeWorkspaceId
-      }), { disabled: !activeWorkspace, context: activeWorkspace?.name }),
       command('new-session', 'New session…', () => beginNewSession(activeWorkspace), { disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, context: activeWorkspace?.name }),
       command('split', (layout?.split.panes.length ?? 0) >= 2 ? 'Close split' : 'Split view…', () => toggleSplit(), { shortcut: SHORTCUT_LABELS['split-toggle'] }),
       command('pane-other', 'Switch to other pane', focusOtherPane, { shortcut: SHORTCUT_LABELS['pane-other'], disabled: (layout?.split.panes.length ?? 0) < 2 }),
@@ -1638,7 +1591,20 @@ function App(): React.JSX.Element {
           !shown.some(workspace => workspace.workspaceId === selectedRecord.workspaceId),
         context: selectedRecord ? `${workspaces.find(workspace => workspace.workspaceId === selectedRecord.workspaceId)?.name ?? ''} › ${selectedRecord.name}` : undefined
       }),
-      command('plan-use', 'Plan use…', () => setDialog({ kind: 'plan-use' })),
+      // What the owner only reads opens from here, read-only, together (Story 75.10).
+      ...readOnlyViewCommands({
+        workspace: activeWorkspace?.name ?? null, session: selectedRecord?.name ?? null,
+        progress: !!selectedRecord && !!observedProgressFor(selectedRecord),
+        turnRecorded: !!selectedRecord && turnRecording.some((view) => view.sessionId === selectedRecord.sessionId)
+      }, {
+        results: () => activeWorkspace && setDialog({ kind: 'workspace-results', workspace: activeWorkspace, openedFromWorkspaceId: activeWorkspaceId }),
+        messages: () => activeWorkspace && setDialog({ kind: 'workspace-messages', workspaceId: activeWorkspace.workspaceId, openedFromWorkspaceId: activeWorkspaceId }),
+        progress: () => openProgressDetail(selectedRecord, selectedRecord ? observedProgressFor(selectedRecord) : null),
+        turnChanges: () => selectedRecord && setDialog({ kind: 'turn-changes', sessionId: selectedRecord.sessionId }),
+        hookEvents: () => selectedRecord && setDialog({ kind: 'hook-events', session: selectedRecord }),
+        devAutoRuns: () => setDialog({ kind: 'dev-auto-runs' }),
+        planUse: () => setDialog({ kind: 'plan-use' })
+      }),
       command('file-reference', 'Open file reference…', () => openFileReference(
         selectedRecord?.sessionId ?? null,
         selectedReferenceText(selectedRecord?.sessionId ?? null),
@@ -2286,7 +2252,7 @@ function App(): React.JSX.Element {
                   origin={selectedOrigin}
                   refreshTick={now}
                   onOpenEvents={() => setDialog({ kind: 'hook-events', session: selectedRecord })}
-                  onOpenConfiguration={() => setDialog({ kind: 'preferences', page: 'health' })}
+                  onOpenConfiguration={() => setDialog({ kind: 'preferences', page: 'hooks' })}
                 />
                 <PlanUseView
                   key={`plan-use:${selectedRecord.sessionId}:${sessionIncarnation(selectedRecord) ?? ''}`}

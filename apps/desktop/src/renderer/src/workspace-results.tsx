@@ -7,6 +7,7 @@ import { progressPresentation, type ProgressPresentation } from './session-prese
 import { failureDetail } from './bridge-error'
 import { boundedRead } from './bounded-read'
 import { useSelfRefresh } from './self-refresh'
+import { shortDate } from './team-preferences'
 import './workspace-results.css'
 
 export interface WorkspaceReportRow {
@@ -132,7 +133,7 @@ export function WorkspaceResultsDialog(props: {
       <p className="dialog-note">Agent report: reported by the agent; BMN has not verified it. Current reports; use History for earlier records.</p>
       <div className="workspace-results-toolbar">
         <button type="button" onClick={props.onOpenRuns}>dev-auto runs…</button>
-        {snapshot ? <span>Read {new Date(snapshot.checkedAt).toLocaleString()}</span> : null}
+        {snapshot ? <span>Read {shortDate(snapshot.checkedAt)}</span> : null}
       </div>
       {state === 'loading' && snapshot === null ? <p role="status">Loading workspace results…</p> : null}
       {state === 'unavailable' && snapshot === null ? <p role="status">Workspace results unavailable. BMN reads them again when they change and when you come back.</p> : null}

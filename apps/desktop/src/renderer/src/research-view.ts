@@ -1,4 +1,4 @@
-// MODULE: research-view.ts - Story 60.10: what Team › Models shows of a research, worked out against the team as drafted; kept pure for tests
+// MODULE: research-view.ts - Story 60.10: what Agents › Models shows of a research, worked out against the team as drafted; kept pure for tests
 import { isRetiredApp, rosterApp, type ResearchModelView, type ResearchPrice, type ResearchSnapshot, type RosterAgentShape, type RosterDataShape, type RosterHarness, type RosterPriceShape } from '@bmn/protocol'
 import { dayWords, priceText, siteOf, updateAgent } from './roster-staging'
 

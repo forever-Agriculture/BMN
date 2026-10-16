@@ -1555,8 +1555,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       !evidenceSurface.dialog.rowAvailability.startsWith('text/plain · ') ||
       !evidenceSurface.dialog.previewText.includes('self-test: 3 checks passed') ||
       !evidenceSurface.focusReturnedToStrip ||
-      !evidenceSurface.focusReturnedToMenuButton ||
-      !evidenceSurface.openedFromPaneMenu ||
+      !evidenceSurface.focusReturnedToOpener ||
+      !evidenceSurface.openedFromPalette ||
       !evidenceSurface.bareDialog.body.includes('No evidence attached to this report.')
     ) {
       throw new Error(`the progress detail did not read honestly: ${JSON.stringify(evidenceSurface)}`)
@@ -1824,6 +1824,17 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         return snapshots[${JSON.stringify(petitionSource.session.sessionId)}] &&
           snapshots[${JSON.stringify(petitionDestination.session.sessionId)}] ? true : null;
       }, 'recovered petition panes');
+      // Story 75.10: Review results opens from the palette, for the active workspace. A rebuilt view gets its first fit
+      // when the layout next changes, and the palette's dialog is such a change: open and close it once before measuring.
+      const showPalette = async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true }));
+        return wait(() => document.querySelector('dialog.command-palette[open]'), 'palette');
+      };
+      const closePalette = async (palette) => {
+        palette.dispatchEvent(new Event('cancel', { cancelable: true }));
+        await wait(() => !document.querySelector('dialog.command-palette[open]') ? true : null, 'palette closed');
+      };
+      await closePalette(await showPalette());
       let settled = false;
       let previous = '';
       let unchangedSince = Date.now();
@@ -1836,12 +1847,15 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       }
       if (!settled) throw new Error('recovered terminal layout did not settle before results read');
       const beforeRefits = refits();
-      const menuButton = await wait(() => [...document.querySelectorAll('.workspace-group')]
-        .find(group => group.textContent.includes('Petition source'))?.querySelector('.row-menu-button'), 'workspace menu');
+      const workspaceName = (await wait(() => [...document.querySelectorAll('.workspace-group')]
+        .find(group => group.textContent.includes('Petition source')), 'workspace')).getAttribute('aria-label');
       const openResults = async () => {
-        menuButton.click();
-        (await wait(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')]
-          .find(row => row.textContent.trim() === 'Review results…'), 'results action')).click();
+        const palette = await showPalette();
+        const input = palette.querySelector('input');
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Review results');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        (await wait(() => [...palette.querySelectorAll('li[role=option]')]
+          .find(row => row.textContent.trim().startsWith('Review results…') && row.textContent.includes(workspaceName)), 'results command')).click();
         return wait(() => {
           const dialog = document.querySelector('dialog.workspace-results-dialog[open]');
           return dialog?.querySelector('.workspace-results-sessions') ? dialog : null;
@@ -2151,8 +2165,14 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       } throw new Error('repeat log UI timed out: ' + label); };
       (await wait(() => document.querySelector('button[data-session-id="${repeatSession.session.sessionId}"]'), 'session row')).click();
       await wait(() => window.__aitermTest?.snapshots()?.['${repeatSession.session.sessionId}'], 'terminal snapshot');
-      (await wait(() => document.querySelector('[aria-label="Actions for Repeat acceptance"]'), 'row menu')).click();
-      (await wait(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')].find(r => r.textContent.trim() === 'Hook events…'), 'Hook events action')).click();
+      // Story 75.10: Hook events opens from the palette, for the selected session.
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true }));
+      const palette = await wait(() => document.querySelector('dialog.command-palette[open]'), 'palette');
+      const paletteInput = palette.querySelector('input');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(paletteInput, 'Hook events');
+      paletteInput.dispatchEvent(new Event('input', { bubbles: true }));
+      (await wait(() => [...palette.querySelectorAll('li[role=option]')]
+        .find(r => r.textContent.trim().startsWith('Hook events…') && r.textContent.includes('Repeat acceptance')), 'Hook events command')).click();
       const dialog = await wait(() => document.querySelector('dialog.hook-events-dialog[open]'), 'dialog');
       const text = await wait(() => dialog.textContent.includes('same call ×3') && dialog.textContent, 'same call ×3');
       dialog.dispatchEvent(new Event('cancel', { cancelable: true }));
@@ -2888,9 +2908,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       } throw new Error('telegram cue preferences: ' + label); };
       document.querySelector('.preferences-button').click();
       const preferences = await wait(() => document.querySelector('dialog.preferences-dialog[open]'), 'Preferences');
-      const section = await wait(() => [...preferences.querySelectorAll('.preferences-section')].find(s => s.querySelector('h3')?.textContent === 'Telegram'), 'section');
+      // Story 75.10: Telegram is a section of Notifications, under its own group head.
+      const section = await wait(() => [...preferences.querySelectorAll('.preferences-section')].find(s => s.querySelector('.group-head')?.textContent === 'Telegram'), 'section');
       const text = section.querySelector('.telegram-cue')?.textContent ?? null;
-      const first = section.querySelector('.preferences-section-head')?.nextElementSibling?.classList.contains('telegram-cue') ?? false;
+      const first = section.querySelector('.group-head')?.nextElementSibling?.classList.contains('telegram-cue') ?? false;
       preferences.querySelector('.app-dialog-heading button').click();
       await wait(() => !document.querySelector('dialog.preferences-dialog[open]') ? true : null, 'close');
       return { text, first };
@@ -3761,10 +3782,15 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
           return undefined;
         }, 'the typed answer');
         const beforeList = hook.snapshot(sessionId).inputEvents;
-        const rowMenu = await wait(() => document.querySelector('[aria-label="Actions for Hook provenance"]'), 'the row menu');
-        rowMenu.click();
-        const entry = await wait(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')]
-          .find((item) => item.textContent?.trim() === 'Hook events…'), 'the Hook events entry');
+        // Story 75.10: Hook events opens from the palette, for the selected session.
+        (await wait(() => document.querySelector('button[data-session-id="' + sessionId + '"]'), 'the session row')).click();
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true }));
+        const palette = await wait(() => document.querySelector('dialog.command-palette[open]'), 'the palette');
+        const paletteInput = palette.querySelector('input');
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(paletteInput, 'Hook events');
+        paletteInput.dispatchEvent(new Event('input', { bubbles: true }));
+        const entry = await wait(() => [...palette.querySelectorAll('li[role=option]')]
+          .find((item) => item.textContent?.trim().startsWith('Hook events…') && item.textContent.includes('Hook provenance')), 'the Hook events command');
         entry.click();
         const dialog = await wait(() => document.querySelector('dialog.hook-events-dialog[open]'), 'the Hook events dialog');
         const rows = await wait(() => {
@@ -3835,7 +3861,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       events.querySelector('.app-dialog-heading button').click();
       observation = await wait(() => document.querySelector('.session-inspector .hook-observation'), 'returned observation');
       (await wait(() => [...observation.querySelectorAll('button')]
-        .find(button => button.textContent === 'Hooks in Rules › Health'), 'hooks link')).click();
+        .find(button => button.textContent === 'Hooks in Integrations › Health'), 'hooks link')).click();
       const preferences = await wait(() => document.querySelector('dialog.preferences-dialog[open]'), 'Preferences');
       // Story 75.9: the hook files are read by BMN at its start, and Health says what it found; a test run installs
       // nothing unless BMN_START_INSTALLS names hooks, so Health says they were not checked yet and offers no button.
@@ -3844,7 +3870,15 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const configured = health.textContent.includes("BMN's entries in each app's hook file, installed at start") &&
         preferences.textContent.includes('Not checked yet: BMN checks them each time it starts.');
       const missing = ![...preferences.querySelectorAll('button')].some(button => /Check configured hooks/.test(button.textContent));
-      const limit = preferences.querySelector('.nav-item[aria-current="page"]')?.textContent === 'Health';
+      // Story 75.10: the link lands on Integrations, its Health view lit, with the Hooks section in sight under the head and its views.
+      const limit = preferences.querySelector('.nav-item[aria-current="page"]')?.textContent === 'Integrations' &&
+        preferences.querySelector('.page-views [role="radio"][aria-checked="true"]')?.textContent === 'Health';
+      const landed = !!(await wait(() => {
+        const head = preferences.querySelector('#health-hooks')?.getBoundingClientRect();
+        const top = preferences.querySelector('.page-top')?.getBoundingClientRect();
+        const main = preferences.querySelector('.preferences-main')?.getBoundingClientRect();
+        return head && top && main && head.top >= top.bottom - 1 && head.bottom <= main.bottom ? true : null;
+      }, 'Hooks in sight'));
       preferences.querySelector('.app-dialog-heading button').click();
       const inputAfter = window.__aitermTest.snapshot(hookSessionId).inputEvents;
       document.querySelector('.session-inspector .panel-heading button')?.click();
@@ -3853,12 +3887,12 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const notObserved = observation.textContent.includes('Not observed in this run') &&
         !observation.textContent.includes('Broken');
       document.querySelector('.session-inspector .panel-heading button')?.click();
-      return { observed, openedEvents, configured, missing, limit, notObserved,
+      return { observed, openedEvents, configured, missing, limit, landed, notObserved,
         ptyInputUnchanged: inputBefore === inputAfter,
         attentionUnchanged: (await window.aiTerminal.listAttention()).length === beforeRequests };
     })()`) as {
       observed: boolean; openedEvents: boolean; configured: boolean; missing: boolean;
-      limit: boolean; notObserved: boolean; ptyInputUnchanged: boolean; attentionUnchanged: boolean
+      limit: boolean; landed: boolean; notObserved: boolean; ptyInputUnchanged: boolean; attentionUnchanged: boolean
     }
     const hookIntegrationAcceptance = {
       ...hookIntegrationUi,
@@ -4686,12 +4720,18 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const wait = async (read, name) => { const end = Date.now() + 10000; while (Date.now() < end) {
         const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
       } throw new Error('cross-workspace results timed out: ' + name); };
+      // Story 75.10: Review results opens from the palette for the active workspace, so each workspace is opened first.
       const open = async (name) => {
         const section = await wait(() => [...document.querySelectorAll('.workspace-group')]
           .find(row => row.getAttribute('aria-label') === name), 'workspace ' + name);
-        section.querySelector('.row-menu-button').click();
-        (await wait(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')]
-          .find(row => row.textContent.trim() === 'Review results…'), 'results action')).click();
+        section.querySelector('.workspace-row > button').click();
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true }));
+        const palette = await wait(() => document.querySelector('dialog.command-palette[open]'), 'palette for ' + name);
+        const input = palette.querySelector('input');
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Review results');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        (await wait(() => [...palette.querySelectorAll('li[role=option]')]
+          .find(row => row.textContent.trim().startsWith('Review results…') && row.textContent.includes(name)), 'results command for ' + name)).click();
         return wait(() => {
           const dialog = document.querySelector('dialog.workspace-results-dialog[open]');
           return dialog?.querySelector('.workspace-results-sessions') ? dialog : null;

@@ -21,26 +21,6 @@ export function Piece(props: { agentClass: RosterClass; named?: boolean; plate?:
   return props.plate ? <span className="piece-plate">{piece}</span> : piece
 }
 
-/** Team: three people at a round table. */
-export function TeamIcon(): React.JSX.Element {
-  return (
-    <svg className="page-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden="true" focusable="false">
-      <path d="M1.8 9.2c.3-1.8 1.2-2.8 2.2-2.8s1.9 1 2.2 2.8M5.8 8.2c.3-1.8 1.2-2.8 2.2-2.8s1.9 1 2.2 2.8M9.8 9.2c.3-1.8 1.2-2.8 2.2-2.8s1.9 1 2.2 2.8" />
-      <g fill="currentColor" stroke="none"><circle cx="4" cy="4.6" r="1.35" /><circle cx="8" cy="3.6" r="1.35" /><circle cx="12" cy="4.6" r="1.35" /></g>
-      <ellipse cx="8" cy="11.6" rx="6.6" ry="2.5" />
-    </svg>
-  )
-}
-
-/** Rules: an open book. */
-export function RulesIcon(): React.JSX.Element {
-  return (
-    <svg className="page-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      <path d="M2.5 3.2h4.3c.7 0 1.2.5 1.2 1.2v9.1c0-.7-.5-1.2-1.2-1.2H2.5zM13.5 3.2H9.2c-.7 0-1.2.5-1.2 1.2v9.1c0-.7.5-1.2 1.2-1.2h4.3z" />
-    </svg>
-  )
-}
-
 /** The attention dot: something here waits for the owner. */
 export function Dot(props: { label: string }): React.JSX.Element {
   return <span className="needs-dot" role="img" aria-label={props.label} title={props.label} />

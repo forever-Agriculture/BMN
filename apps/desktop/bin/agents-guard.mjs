@@ -54,15 +54,15 @@ export function guardState() {
   try {
     return { state: 'active', data: readApproved().data }
   } catch (error) {
-    if (!(error instanceof RosterError)) return { state: 'broken', fix: 'BMN cannot read its approved team. Open BMN Preferences › Team and approve the team.' }
+    if (!(error instanceof RosterError)) return { state: 'broken', fix: 'BMN cannot read its approved team. Open BMN Preferences › Agents and approve the team.' }
     if (error.code === 'NOT_APPROVED') {
       if (/earlier roster layout/.test(error.message)) {
-        return { state: 'broken', fix: 'The approved team is from an earlier BMN. Open BMN Preferences › Team and approve it again.' }
+        return { state: 'broken', fix: 'The approved team is from an earlier BMN. Open BMN Preferences › Agents and approve it again.' }
       }
       if (!everApproved()) return { state: 'inactive' }
-      return { state: 'broken', fix: 'The approved team is missing. Open BMN Preferences › Team and approve the team.' }
+      return { state: 'broken', fix: 'The approved team is missing. Open BMN Preferences › Agents and approve the team.' }
     }
-    return { state: 'broken', fix: 'The approved team on disk is damaged. Open BMN Preferences › Team and approve the team.' }
+    return { state: 'broken', fix: 'The approved team on disk is damaged. Open BMN Preferences › Agents and approve the team.' }
   }
 }
 
@@ -215,14 +215,14 @@ function sessionDestination(agent, data, event, agentProcess, folders) {
   const destination = destinationOf(data, agent, route)
   if (!destination.known) {
     return route.basis === 'default'
-      ? { unknown: `nothing is recorded about where ${APP_NAMES[agent]} sends work`, fix: `Set it in BMN Preferences › Rules › Health.` }
+      ? { unknown: `nothing is recorded about where ${APP_NAMES[agent]} sends work`, fix: `Set it in BMN Preferences › Integrations › Health.` }
       : { unknown: destination.reason }
   }
   if (destination.unapproved !== undefined) {
-    return { unknown: `${APP_NAMES[agent]} now sends work to ${destination.provider}, and the team records ${destination.unapproved}`, fix: 'Set the destination again in BMN Preferences › Rules › Health.' }
+    return { unknown: `${APP_NAMES[agent]} now sends work to ${destination.provider}, and the team records ${destination.unapproved}`, fix: 'Set the destination again in BMN Preferences › Integrations › Health.' }
   }
   if (destination.provider === null) {
-    return { unknown: `no provider in the team lists the address ${destination.host}`, fix: 'Add that address to its provider in BMN Preferences › Team.', host: destination.host }
+    return { unknown: `no provider in the team lists the address ${destination.host}`, fix: 'Add that address to its provider in BMN Preferences › Agents.', host: destination.host }
   }
   return { destination }
 }
@@ -281,7 +281,7 @@ function decision(input) {
   base.name = (candidates.find((entry) => (destination.default ? entry.host === 'default' : entry.host?.toLowerCase?.() === destination.host)) ?? candidates[0])?.name ?? null
   if (provider?.private_work === 'allowed') return { verdict: { ...base, outcome: 'pass', cause: 'allowed' }, destination }
   if (destination.basis === 'owner-declared') {
-    return { verdict: stop(base, 'declared', `${providerName} can't see private work in ${where}: where ${app} sends work is your word, not something BMN inspected. Record it as inspected in BMN Preferences › Rules › Health.`), destination }
+    return { verdict: stop(base, 'declared', `${providerName} can't see private work in ${where}: where ${app} sends work is your word, not something BMN inspected. Record it as inspected in BMN Preferences › Integrations › Health.`), destination }
   }
   const answer = privateWorkAnswer(data, destination, workspace)
   if (answer.allowed) return { verdict: { ...base, outcome: 'pass', cause: 'exception', exception: answer.exception?.id ?? null }, destination }
@@ -363,7 +363,7 @@ function unchecked(input) {
   return {
     agent: input.agent, app, pid: input.pid || null, start: null, folder: null, workspace: null, provider: null, host: null, name: null,
     outcome: 'stop', cause: 'state', allow: false,
-    line: 'BMN stopped this prompt: its check failed. Open BMN Preferences › Team; if the team shows no problem, start the session again.'
+    line: 'BMN stopped this prompt: its check failed. Open BMN Preferences › Agents; if the team shows no problem, start the session again.'
   }
 }
 

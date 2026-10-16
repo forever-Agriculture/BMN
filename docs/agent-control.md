@@ -361,7 +361,7 @@ program that reports a false one. "Context, not an instruction" is guidance to t
 agent; BMN cannot enforce it and never acts on what a message says.
 
 **How a message arrives.** BMN never types a message into a terminal and never starts an agent's
-turn with one. **Messages…**, in the command palette and the workspace's ⋯ menu, is read-only: its
+turn with one. **Messages…**, in the command palette for the active workspace, is read-only: its
 latest 200 messages with time, sender, receiver, state and first line; a row opens the whole text,
 its stamp, the sender's folder and where it stands. It has no Paste, Pause or Resume.
 
@@ -415,7 +415,7 @@ by hand. `bmn peers` leaves out a session the caller is paused with. Waiting mes
 while paused and still expire.
 
 **How long messages are kept.** A message is deleted with either of its sessions. Otherwise
-Preferences → History → **Keep agent history** decides: a message sent more than that many days
+Preferences → Data → **Keep agent history** decides: a message sent more than that many days
 ago is deleted. No confirmed limit, or Never, deletes none, and a shorter limit you have not
 confirmed yet does not apply. Messages are kept by age since sending, while agent history is kept
 by inactivity ([agent-history.md](agent-history.md)).
@@ -470,7 +470,7 @@ tools, prompt-guard warning and the recorded payloads), is kept at the local git
 - A team file that still names Cursor (an agent, its route, a provider, or a skill or tool kept to
   it) is read, with an `APP_RETIRED` warning at each place. An agent on Cursor takes no work:
   `bmn roster check` refuses it with `APP_RETIRED`, and a dispatch of `cursor-agent` is refused
-  with the retirement line. Team shows a note with BMN's proposal to remove those lines; nothing
+  with the retirement line. The one proposals card on Agents › Team names removing those lines; nothing
   changes until you approve it.
 - Old records load as they were saved and are read only: a conversation bound before shows as
   "Cursor conversation" with the retirement line and is never resumed or looked for; saved hook
@@ -504,8 +504,8 @@ Every one of these calls carries the event that made it, so a request in **Needs
 came from ("from Claude Notification") and a closed one says what closed it ("withdrawn by Claude
 Stop", "resolved by typing", "expired"). A request opened before this existed reads "from unknown".
 
-Each hook event also records itself, whether or not it changed anything: the session's ⋯ menu has
-**Hook events…**, a read-only list of what the harness reported, with the event, the tool it ran and
+Each hook event also records itself, whether or not it changed anything: the command palette has
+**Hook events…** for the selected session, a read-only list of what the harness reported, with the event, the tool it ran and
 what it changed. That list is the answer to "why is there no request for this?". It is kept in
 memory for this run, at most 30 events per session, and is never shown to another session.
 The owner dialog separately labels earlier host runs from an owner-only metadata snapshot: at most
@@ -653,7 +653,7 @@ inside a matcher, one in BMN's wording with a field the app will not run (change
 beside it; so is an OpenCode plugin file BMN did not write, with its `cli.json`, and a file BMN
 cannot add to. An older wording still runs and counts as in place. Every file is copied before it
 changes and written the way `install` writes it, checked once more against the bytes and the link
-it read. A second start writes nothing. Rules › Health › **Hooks** says what the start found; Codex
+it read. A second start writes nothing. Integrations › Health › **Hooks** says what the start found; Codex
 still asks once, in `/hooks`, before it runs entries it has not seen. The exit is `0` when every
 set-up app has every entry, `1` when one was left or could not be written, and `--json` prints
 each app's `state` (`checked`, `installed`, `left`, `failed` or `not-set-up`), what is in place,
@@ -828,11 +828,11 @@ BMN does not check for that, so every Codex report ends with the limit instead: 
 what is *configured*, never that a hook fired. Run `/hooks` in Codex once, then confirm the event
 shows up under Hook events. That is the check BMN cannot do for you.
 
-Rules › Health › **Hooks** shows, per app, what the install at BMN's start found, an app with an
+Integrations › Health › **Hooks** shows, per app, what the install at BMN's start found, an app with an
 entry left first: the entries in place, those added at start, and each event left as it is with
 why, without the file's contents and without a button. Session details separately shows the
 latest hook event **Observed by BMN** in that session's run, or **Not observed in this run**, and
-its **Hooks in Rules › Health** opens that section. One received event proves only that event
+its **Hooks in Integrations › Health** opens Health scrolled to that section, Local control just under it. One received event proves only that event
 reached BMN; neither view says every hook or permission path works.
 
 What BMN still refuses to add to, for both harnesses, is a file it cannot merge into without
@@ -964,8 +964,8 @@ work only" where either provider says so. Its page has the on and off control, b
 with their answer (each changed there, staged and approved like every change), the verdict in
 one line ("Private text: may be sent" or "not sent"), the price with the page it came from, and
 no row that belongs to an agent app. On a normal agent's page the app choice offers "Called by
-BMN" only while the agent holds no role. While your team holds no judge, Team says "Jev waits
-for you" and offers BMN's proposal: the agent `jev` (a bishop, `jev-1.13`, active), the role
+BMN" only while the agent holds no role. While your team holds no judge, the
+[one proposals card](#bmns-proposals-one-card) on Agents › Team names Jev: the agent `jev` (a bishop, `jev-1.13`, active), the role
 `judge`, and two providers, OpenCode's gateway (`opencode.ai`) and TypeSafe AI, each with the
 private-work answer you chose (a provider your team already names for that host keeps its own
 answer). It is a proposal: nothing can be asked until you approve it like every team change.
@@ -989,7 +989,7 @@ link points, and `bmn roster validate` says so. A changed exception shows on the
 both folders, to approve or revert, and a first approval lists every such folder first. Work in a repository nested inside a public workspace counts
 as private.
 
-**Approval.** A machine field takes effect only after you approve it in **Preferences → Team**;
+**Approval.** A machine field takes effect only after you approve it in **Preferences › Agents**;
 notes take effect at once and never reach an agent. Approval writes a numbered version under
 `state/` (folders `0700`, files `0600`) and only then moves the `current` pointer, so a crash
 leaves the previous version in force. No command approves (exit 12): agents and dev-auto read the
@@ -999,10 +999,11 @@ team; every check refuses until the first approval. The team file must still be 
 check passes (exit 3 or 4). A valid edit you have not approved yet changes nothing. A team
 approved under the earlier layout is kept as read-only history and must be approved again.
 
-**Preferences → Team** has three pages. **Agents** shows one card per agent with its class piece,
+**Preferences › Agents** shows its views in one control under the page head: **Team**, **Roles**,
+**Models**, **Changes** and **Asks** (Story 75.10). **Team** shows one card per agent with its class piece,
 app, model, provider and an on/off switch, grouped Active, Proposed and Off; a card opens the
-agent's page (identity, model, work, and under Advanced who pays, context limits, host, other
-names and the team file). **Roles** edits each role's ordered candidates. **Changes** lists every
+agent's page in place (identity, model, work, and under Advanced who pays, context limits, host, other
+names and the team file), and pressing **Team** again comes back to the cards. **Roles** edits each role's ordered candidates. **Changes** lists every
 approved version: open one to see how it differs, or restore it as a new version. Edits are
 staged. The bar at the foot counts them, **Review** shows one grouped list with its consequences
 in words ("Luna could lead", "Haiku could receive private work") and each rules file the change
@@ -1022,6 +1023,20 @@ rules master's Save sheet says the same. When the approved team can no longer be
 says so and names the last version that still reads; restoring it then lists that version's team
 and leaves the team file as it is, to keep or revert. A version that was written and never put
 into effect (BMN stopped between the two) is listed as never having taken effect.
+
+<a id="bmns-proposals-one-card"></a>**BMN's proposals: one card (Story 75.10).** What BMN proposes for
+your team waits in one card at the top of Agents › Team, with one Needs-you dot: removing an app BMN
+retired, the judge Jev, who researches, Luna (Go) where OpenCode lists her model, and holding the
+reviewer roles and the consultant to read-only, one clause each in the order BMN takes them ("BMN
+proposes 3 changes to your team: … Nothing changes until you approve it."). Its **Approve…** stages
+them all and opens the approval sheet, which groups each change as a staged edit is grouped;
+**Cancel** there takes them all out again and puts back what you had staged before, so nothing is
+half-taken. To take only some, approve and then change the one you do not want on its page, or
+make the change yourself (a role's **Read-only** switch, an agent's **Researcher** switch); Roles and
+Models say where the proposal is. With nothing approved yet the card is the first approval as well:
+"Nothing here takes effect until you approve the team for the first time. BMN's proposals are
+included: …". **Copy sign-in** for OpenCode Go is not a proposal and stays a note of its own. The
+Agents page's dot covers the card.
 
 **Asking the team.** `bmn team` prints the approved team; `bmn roster role <role>` the ordered
 chain with each candidate's eligibility. Neither prints your notes or prices.
@@ -1128,10 +1143,11 @@ be checked.
 
 Which roles are read-only is part of the team and yours to approve. BMN proposes every role whose
 name ends in `reviewer`, and `consultant`; lead, designer, helper and browser keep write access.
-A team file from before the mark holds no role: every command passes as it did, **Rules →
-Health** says that no role is held to read-only yet, and **Team → Roles** shows the proposal
-with **Use proposal**, which stages the mark for you to approve like any other change. Each
-held role shows **Read-only** beside its name; **Edit** has the switch for one role.
+A team file from before the mark holds no role: every command passes as it did, **Integrations ›
+Health** says that no role is held to read-only yet, and BMN's proposal to hold those roles waits
+in the [one proposals card](#bmns-proposals-one-card) on **Agents › Team**; **Agents › Roles** says
+where it is. Each held role shows **Read-only** beside its name; **Edit** has the switch for one
+role, so you can hold some yourself.
 
 The Claude Code form rests on a write-attempt test you authorized (2026-10-11, Claude Code
 2.1.296, Haiku, each run in its own empty throwaway folder, the model asked to write with every
@@ -1155,7 +1171,11 @@ gets only the public sections. So does OpenCode, always: it converts older confi
 shapes BMN's reading does not follow, so no setting gives it the full rules (owner decisions
 2026-10-10 and 2026-10-14). Each rendering starts with a line naming the master and its hash.
 
-**Preferences → Rules** has two pages. **Editor** edits the master with line numbers, dimmed
+**Preferences › Integrations** shows its views under the page head: **Health** (where it opens,
+with Hooks and Local control as its last sections), **Rules**, **Skills** and **Tools** (Story 75.10);
+head and views stay at the top while a view scrolls. Health's status counts the rows that carry the
+Needs-you dot ("Checked Oct 16, 13:39 · 2 need you"), and within each section those rows come first.
+**Rules** edits the master with line numbers, dimmed
 markers and an **Insert** menu for the three markers; rules that would not render are not saved,
 and every save first keeps the text it replaces, then the new text, and refuses a change or a
 swapped link made meanwhile, including a link on the way to the folder that holds the rules. Beside it, **What each app reads** shows each app's exact file, and
@@ -1305,7 +1325,7 @@ time as that folder's own), or a version without that test. A refusal carries it
 `detail` beside the code: `conflict`, `unresolved`, `missing`, `differs` or `out-of-range`. An
 agent without a limit is never asked for one.
 
-**Your own sessions.** Rules → Health → Context limits shows one row per app: its file, the agents
+**Your own sessions.** Integrations › Health › Context limits shows one row per app: its file, the agents
 that share it, the default it holds and whether the setting is tested on the installed version.
 **Change…**, offered only after a passed test, shows the file, where the write lands and the
 exact diff, and writes after you confirm: only the named key changes, every other byte stays, the
@@ -1320,7 +1340,7 @@ there reaches the runs BMN starts too: an agent whose own limit differs is refus
 You keep your skills in one folder, `~/.claude/skills/` unless the approved team file names
 another (`source:` in its `## skills` section): one folder, or link to a folder, per skill, each
 with a `SKILL.md`. BMN gives every agent app the skills it may have and tells you where they
-differ. Rules → **Skills** lists each skill with its first line, the apps it is for and its state
+differ. Integrations › **Skills** lists each skill with its first line, the apps it is for and its state
 in each; `bmn skills check` prints the same.
 
 **Where an app reads skills is tested, not assumed.** Until the skills test (`bmn skills test
@@ -1431,7 +1451,7 @@ to "no team".
 ### Tools (MCP)
 
 You keep one list of MCP tools in the team file's `## tools` section, and BMN sets each one up in
-the settings of every agent app that may have it. Rules → **Tools** lists each tool with what it
+the settings of every agent app that may have it. Integrations › **Tools** lists each tool with what it
 runs, who gets it and its state in each app; `bmn tools check` prints the same.
 
 ```yaml
@@ -1612,7 +1632,7 @@ candidate a `tools` entry with the items for exactly that set, also when the set
 
 ### Models: what research found
 
-Team → **Models** asks one of your own agents to look up what your team's models cost and how much
+Agents › **Models** asks one of your own agents to look up what your team's models cost and how much
 they hold, and shows each value with the page it was read on. Research changes nothing by itself.
 
 **Who researches.** Who researches is part of your team: an agent's page has a **Researcher**
@@ -1633,7 +1653,8 @@ that can research would be offered again.
 A team from before this choice names nobody. It keeps offering what it offered (every agent that
 can research), and Models says the choice waits for you, with BMN's proposal: the active knights
 and pawns on Claude Code and Codex whose provider may see private work, the first of each model.
-**Use proposal** stages it; nothing changes until you approve. A researcher you had picked that
+That proposal waits in the [one proposals card](#bmns-proposals-one-card) on Agents › Team, and
+Models says so; nothing changes until you approve. A researcher you had picked that
 your team no longer names falls back to none picked: Models says so, selects nobody in its place,
 and **Research now** waits until you pick again.
 
@@ -1891,12 +1912,12 @@ for, and only the project file the model asked to read reached it.
 #### Luna through OpenCode Go
 
 The first OpenCode agent is BMN's to propose and yours to approve (Story 70.4; your card "Luna via
-Go", 2026-10-14). While your team holds no OpenCode agent on her model and OpenCode lists it, Team
-shows **Luna (Go) waits for you** with **Use proposal**: the agent Luna (Go), a pawn running
+Go", 2026-10-14). While your team holds no OpenCode agent on her model and OpenCode lists it, the
+[one proposals card](#bmns-proposals-one-card) on Agents › Team names her: the agent Luna (Go), a pawn running
 `opencode-go/gpt-6-luna` in OpenCode at the efforts your Codex Luna holds (xhigh, max), last in the
 role helper, named a researcher where your team names its researchers. OpenCode Go joins as a new
-provider does, with public work only until you allow it. Using the proposal only stages it; it is
-approved like any other change, and until then nothing changes.
+provider does, with public work only until you allow it. Its **Approve…** stages her with BMN's other
+proposals and opens the approval; until you approve nothing changes.
 
 **Whether OpenCode lists her.** OpenCode lists a provider's models only where a key for it is
 named, and `opencode models` (like `opencode auth list`) run in your own OpenCode folders loads
@@ -2058,11 +2079,11 @@ A lone `-` (`… | bmn research ask -`) says "standard input" out loud and chang
   beyond public names, names of people or customers, credentials), how to read the three marks,
   and that a claim marked "not found" is not evidence. BMN never puts it into your skills folder.
   To offer it to your agents, link it there yourself (`ln -s <repository>/skills/web-question
-  ~/.claude/skills/web-question`); it then shows on Team › Skills like every other skill and
+  ~/.claude/skills/web-question`); it then shows on Integrations › Skills like every other skill and
   reaches an app only through your Install. A pointer in your global rules is your own edit.
-- **Switched off.** With "Agents may ask the web" off (Team › Models), an agent's question is
+- **Switched off.** With "Agents may ask the web" off (Agents › Models), an agent's question is
   refused with `ASKING_OFF`, told so and told to ask you; your own Ask still works.
-- **On Models.** Team › Models ends with "Web questions". The switch "Agents may ask the web" is
+- **On Models.** Agents › Models ends with "Web questions". The switch "Agents may ask the web" is
   on until you switch it off, with the day's count beside it. **Ask** sends a question of your
   own by the same route, to the researcher picked above (Ctrl+Enter or the button; Enter makes a
   new line); a refusal is shown under the field in the command's own words, and what you typed
@@ -2183,14 +2204,14 @@ printf '%s\n' 'All 12 tests passed.' | bmn judge ask --state-file - --questions-
   the limit, and
   **Try it**: paste a text and one statement, say whether the text is private (it starts as
   private), and press Ask. It goes by the same route, is refused by the same rules in the
-  command's own words and is counted like every call, under the purpose `try-it`. Team › Models
+  command's own words and is counted like every call, under the purpose `try-it`. Agents › Models
   shows the price your team records for the model with its page and date where research found
   none.
 - **Advice only.** Nothing in BMN grants, accepts, stops, spends or hides anything because of
   an answer, and nothing in BMN but the command and the judge's page asks or reads one. The
   skill `skills/jev-judge/` in the repository says what Jev proved good at and what it must
   never decide; link it into your skills folder yourself (`ln -s <repository>/skills/jev-judge
-  ~/.claude/skills/jev-judge`) and it shows on Team › Skills like every other skill. A new use
+  ~/.claude/skills/jev-judge`) and it shows on Integrations › Skills like every other skill. A new use
   is measured in `~/code/jev-eval`, on labelled cases, before anything acts on it.
 
 ### The prompt guard
@@ -2340,7 +2361,7 @@ session's first prompt was not stopped for want of its saved record in that test
 - A packet for a public-only destination relies on Claude Code's `--safe-mode` to keep your rules
   file, memory, skills and hooks out of the call. BMN does not test that itself; run one packet
   with a marker line in your rules before you turn on a public-only agent. `accepted_versions` in a team file written under the
-  earlier rule is still valid and decides nothing any more; Rules → Health removes it with its ×.
+  earlier rule is still valid and decides nothing any more; Integrations › Health removes it with its ×.
 
 ## Asking a teammate: `bmn team ask`
 
@@ -2425,7 +2446,7 @@ options, every shell redirection, a background shell) and every tool not given. 
   only the part of the master marked public (`<!-- bmn:public -->`) as OpenCode's publication allows.
 - **App versions are not a gate.** Each form names the app version it was last checked on
   (`--features`). A newer app still runs, and its record names the version it ran.
-- **What it read is recorded.** The receipt, `bmn team asks show` and Team › Asks say what the
+- **What it read is recorded.** The receipt, `bmn team asks show` and Agents › Asks say what the
   teammate's mode could read. A private ask's consent is judged for it (R72-NFR6): a form that reads
   beyond the asker's text joins the request's inputs as its mode, its root the project for Claude
   Code and none for Codex and OpenCode's reader (no folder exception covers the whole computer).
@@ -2546,7 +2567,7 @@ sha256). Then everything else the server left in `browser/` (the log, page snaps
 a picture the log does not name as a screenshot, links) and the run's temporary folder are deleted.
 A finish a crash ended is finished again from `browser.json`, never from an emptied folder: its pages
 stand, and its screenshots where the file is still the one it recorded. `asks show`, the JSON,
-Team › Asks and the export give the pages and screenshots, and each says the origin limit
+Agents › Asks and the export give the pages and screenshots, and each says the origin limit
 ("Playwright keeps the browser's requests to this address, but it is not a security boundary: a
 redirect can leave it. Downloads are refused."); the app's text in them stays plain text.
 
@@ -2578,7 +2599,7 @@ the table says (`RESULT-v8.md`, AC2). Codex logs its turn span only with
 text.
 
 The answer is the teammate's. Each sub-agent is named in the record, in `asks show` and in
-Team › Asks, and counted once by its app's basis above. The usage names that basis
+Agents › Asks, and counted once by its app's basis above. The usage names that basis
 (`usage.aggregation`) and says whether every record was read (`usage.complete`). A sub-agent
 whose usage could not be read leaves the total marked incomplete, with the reason, never a number
 passed off as whole. A session BMN cannot identify, as the teammate or as one of its sub-agents (for OpenCode, a child
@@ -2701,7 +2722,7 @@ written; a finish that fails still writes a failed outcome) → one of `answered
 `out-of-time`, `stopped`, `not-attributed`; `interrupted` (exit 1) when the supervisor ended with no
 record of the end or with no outcome written (it died with the computer, or BMN's restart ended it),
 or the asking command ended after the reservation and before the start. Nothing starts it again:
-when BMN next looks (the next ask, `bmn team asks`, show, wait, Team › Asks), whatever its scope
+when BMN next looks (the next ask, `bmn team asks`, show, wait, Agents › Asks), whatever its scope
 still holds is ended, its record is finished as `interrupted` with why, keeping what its output shows
 of its sessions and usage, and its transient files are deleted; a run of the same id in another BMN
 state is never touched. `gone` after removal, for the key window.
@@ -2793,9 +2814,9 @@ The app's own session records stay in its own home, as for any of the owner's se
 (`asks export`) is the allowlisted bundle above, never a sign-in file, an app database, a home
 folder, raw logs or an environment value.
 
-### The owner's view (Team › Asks)
+### The owner's view (Agents › Asks)
 
-Asking is the agents' (and the command's); the app does not ask. Preferences › Team › Asks lists every
+Asking is the agents' (and the command's); the app does not ask. Preferences › Agents › Asks lists every
 ask on this computer, newest first by when it was asked: who asked (a session by its name and app, or a
 shell), the teammate and effort, the role, the project, what the teammate's mode could read, the time
 against its limit, the outcome with its reason on the line, and the usage ("unknown" where the app
@@ -2817,7 +2838,7 @@ after they end.
   when the owner decides instead, what each app's mode reads, pictures, the key, the exits, reading the
   answer as advice, and that a refusal is reported, never worked around. BMN never puts it into your
   skills folder: link it yourself (`ln -s <repository>/skills/team-ask ~/.claude/skills/team-ask`), and
-  it shows on Team › Skills like every other skill; `bmn skills install` then gives it to the apps that
+  it shows on Integrations › Skills like every other skill; `bmn skills install` then gives it to the apps that
   need a copy.
 - **Auto mode.** Claude Code's auto mode, as the owner runs it, let `bmn team ask` command lines run
   when 72.1 measured them (2026-10-15), so BMN offers no permission rule for it. Should a later
@@ -2854,7 +2875,7 @@ Claude Code: denied by `dontAsk`) and the server ran only navigate; with `--inte
 interaction tools ran and the other four did not; no request reached the forbidden server and the
 project was untouched. Live asks (AC5), Luna on Codex and Haiku on Claude Code, look and interact, on a
 synthetic app: each gave the right answer in 13 to 28 seconds, with its page and screenshot in the
-record, `asks show`, Team › Asks and the export; the page's fetches off the origin were blocked, and
+record, `asks show`, Agents › Asks and the export; the page's fetches off the origin were blocked, and
 an image whose address redirected off it reached the forbidden server once per ask: the known limit
 above (`reference-74-browser/RESULT-v8.md`).
 

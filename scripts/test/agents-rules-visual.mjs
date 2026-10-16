@@ -1,5 +1,5 @@
 /* global document, window, getComputedStyle */
-// MODULE: agents-rules-visual.mjs - Epic 60.5/60.6: Preferences › Team and Rules on a synthetic roster and master in a temporary HOME
+// MODULE: agents-rules-visual.mjs - Epic 60.5/60.6: Preferences › Agents and Rules on a synthetic roster and master in a temporary HOME
 // HOME points at a scratch folder holding the synthetic roster (the unit-test fixture), a synthetic rules master and stub
 // app files. BMN itself starts with the system folders only, as from the desktop; the stub claude/codex binaries are on
 // the PATH the temporary home's shell settings add, as a version manager would, so every step that finds an app proves
@@ -165,9 +165,15 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       await page.locator('.preferences-button').click()
       await dialog.waitFor()
     }
+    // Story 75.10: six pages; the Team and Rules pages of before are views of Agents and Integrations. go() keeps the
+    // earlier names: go('Team') is Agents › Team with its cards, go('Rules') the rules editor, go(null, 'Telegram') its page.
+    const PAGE_OF = { Appearance: 'General', Terminal: 'General', Notifications: 'Notifications', Telegram: 'Notifications', Voice: 'Voice', 'Local control': 'Integrations', History: 'Data', Backup: 'Data' }
     const go = async (parent, sub) => {
-      await nav.locator(parent === null ? '.nav-group .nav-item' : '.nav-parent > .nav-item', { hasText: new RegExp(`^${parent ?? sub}`) }).click()
-      if (parent !== null && sub) await nav.locator('.nav-sub .nav-item', { hasText: new RegExp(`^${sub}$`) }).click()
+      const [label, view] = parent === 'Team' ? ['Agents', sub === undefined || sub === 'Agents' ? 'Team' : sub]
+        : parent === 'Rules' ? ['Integrations', sub === undefined || sub === 'Editor' ? 'Rules' : sub]
+          : [PAGE_OF[sub] ?? sub, sub === 'Local control' ? 'Health' : null]
+      await nav.locator('.nav-item', { hasText: new RegExp(`^${label}`) }).click()
+      if (view !== null) await main.locator('.page-views [role="radio"]', { hasText: new RegExp(`^${view}$`) }).click()
     }
     const card = (name) => main.locator('.agent-card', { has: page.locator('.agent-open', { hasText: new RegExp(`^${name}$`) }) })
     const toast = dialog.locator('.toast')
@@ -191,21 +197,24 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
 
     await openPreferences()
 
-    phase('60.5 AC1: the left navigation, and every earlier section as its own page')
-    assert.deepEqual(await nav.locator('.nav-parent > .nav-item, .nav-group .nav-item, .nav-sub .nav-item').allTextContents().then((items) => items.map((item) => item.trim())),
-      ['Team', 'Agents', 'Roles', 'Models', 'Changes', 'Rules', 'Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'Local control', 'History', 'Backup'])
+    phase('60.5 AC1, 75.10 AC1: six pages in one list; Agents and Integrations show their views under the page head')
+    assert.deepEqual(await nav.locator('.nav-item').allTextContents().then((items) => items.map((item) => item.trim())),
+      ['General', 'Agents', 'Integrations', 'Notifications', 'Voice', 'Data'])
     assert.equal(await dialog.locator('.preferences-jump').count(), 0)
-    for (const title of ['Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'Local control', 'History', 'Backup']) {
-      await go(null, title)
+    for (const [title, sections] of [['General', ['Appearance', 'Terminal']], ['Notifications', ['Desktop', 'Telegram']], ['Voice', []], ['Data', ['History', 'Backup']]]) {
+      await nav.locator('.nav-item', { hasText: new RegExp(`^${title}`) }).click()
       await main.locator('h3', { hasText: new RegExp(`^${title}$`) }).waitFor()
       assert.equal(await main.count(), 1, `${title} shares the screen with another page`)
-      assert.equal(await nav.locator('.nav-sub').count(), 0, 'sub-pages show although their parent is closed')
+      assert.deepEqual(await main.locator('h4.group-head').allTextContents(), sections, `${title} holds other sections`)
     }
-    await shot('page-appearance-1280.png')
+    await shot('page-general-1280.png')
     await go('Rules')
-    assert.deepEqual(await nav.locator('.nav-sub .nav-item').allTextContents(), ['Editor', 'Skills', 'Tools', 'Health'])
+    assert.deepEqual(await main.locator('.page-views [role="radio"]').allTextContents(), ['Health', 'Rules', 'Skills', 'Tools'])
+    await go('Rules', 'Health')
+    await main.locator('#agent-control-section h4.group-head', { hasText: /^Local control/ }).waitFor()
     await go('Team')
-    passed('Team and Rules head the navigation with their sub-pages; the eight earlier sections are pages; no jump list (60.5 AC1)')
+    assert.deepEqual(await main.locator('.page-views [role="radio"]').allTextContents(), ['Team', 'Roles', 'Models', 'Changes', 'Asks'])
+    passed('six pages, Agents and Integrations with their views under the head, Local control last on Health; no jump list (60.5 AC1, 75.10 AC1)')
 
     phase('60.5 AC6: nothing approved yet; Team says so and offers the first approval')
     await main.getByText('Nothing here takes effect until you approve the team for the first time.').waitFor()
@@ -725,7 +734,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await page.keyboard.press('Escape')
     await dialog.waitFor({ state: 'detached' })
     await openPreferences()
-    await main.locator('.page-title', { hasText: /^Health$/ }).waitFor()
+    await main.locator('.page-views [role="radio"][aria-checked="true"]', { hasText: /^Health$/ }).waitFor()
     assert.equal(await main.locator('.app-note').count(), 0, 'the answer after an update was repeated on a later visit')
     stub('codex', 'echo "codex-cli 0.161.0"')
     await outsideFocus()
@@ -778,7 +787,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     // nothing is pressed; when the shell is back at its prompt, Health reads again by itself and says what changed. The
     // updater's own sign, written when it started, was heard too and is not taken for the end of it all.
     await openPreferences()
-    await main.locator('.page-title', { hasText: /^Health$/ }).waitFor()
+    await main.locator('.page-views [role="radio"][aria-checked="true"]', { hasText: /^Health$/ }).waitFor()
     await app('Codex').locator('.app-note').getByText('The program still reports 0.161.0.', { exact: true }).waitFor()
     assert.equal(existsSync(updaterDone), false, 'the stand-in updater ended before Health was opened again, so this run shows nothing about a reading made while it ran')
     // The window's focus starts a read that is still asking the program its version when the updater ends, and that answers the
@@ -865,7 +874,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await sleep(1500)
     assert.equal(updateRuns(), 0, 'the updater ran although a start-up question took the command')
     await openPreferences()
-    await main.locator('.page-title', { hasText: /^Health$/ }).waitFor()
+    await main.locator('.page-views [role="radio"][aria-checked="true"]', { hasText: /^Health$/ }).waitFor()
     await app('Codex').locator('.app-note').getByText('The program still reports 0.161.0.', { exact: true }).waitFor()
     passed('a start-up question asked with line editing gets the command, as the sheet says it would; BMN says only that it typed it, and Health reports the version unchanged (60.13)')
 
@@ -1058,7 +1067,7 @@ done`)
     await approve()
     await notice(/^Approved · version \d+/)
     assert.equal(approved().exceptions.some((entry) => entry.provider === 'zai' && entry.folder === home), false)
-    passed('An allowed workspace shows on Team › Changes and in the agent\'s Advanced section; Remove stages it with its consequence and takes effect only on Approve (60.8 AC5)')
+    passed('An allowed workspace shows on Agents › Changes and in the agent\'s Advanced section; Remove stages it with its consequence and takes effect only on Approve (60.8 AC5)')
 
     phase('60.5 AC7 / 60.4 AC6: an approval that changes the Team phrase lists the rules files first')
     await go('Rules')
@@ -1107,7 +1116,7 @@ done`)
     assert.doesNotMatch(readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8'), /Haiku|added outside BMN/)
     passed('Approve first lists each rules file with its path and diff, commits from there, updates exactly those files; Undo shows what it puts back and waits for the owner')
 
-    phase('63.2: Team › Roles proposes the read-only roles; approved, each shows its mark and the check holds a reviewer to it')
+    phase('63.2, 75.10: BMN proposes the read-only roles in the one card on Agents › Team, whose Cancel takes everything back; held on Roles and approved, each shows its mark and the check holds a reviewer to it')
     // The check as a lead runs it for Astra as epic reviewer, with what the command says of the sandbox.
     const reviewCheck = (...access) => {
       const run = spawnSync(process.execPath, [join(appDirectory, 'bin/bmn'), 'roster', 'check', '--agent', 'astra', '--role', 'epic-reviewer', '--workspace', solWork, '--data', 'private', '--cwd', solWork, '--json', '--',
@@ -1116,20 +1125,41 @@ done`)
       return answer.verdict === 'PASS' ? { verdict: 'PASS', seen: answer.sandbox ?? 'nothing' } : { verdict: answer.code, message: answer.message }
     }
     const READ_ONLY_ACCESS = ['--sandbox', 'read-only', '-c', 'approval_policy="never"']
+    const inWordsOf = (names) => (names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`)
     const PROPOSED = ['Focused reviewer', 'Pre reviewer', 'Epic reviewer', 'Project pre reviewer', 'Final reviewer', 'Consultant']
     // A team from before the mark: nothing is held, Health says so, and a reviewer started with write access passes as it did.
     await go('Rules', 'Health')
-    await main.locator('.page-note').getByText('No role is held to read-only yet, so the check passes a reviewer started with write access. Team › Roles proposes Focused reviewer, Pre reviewer, Epic reviewer, Project pre reviewer, Final reviewer and Consultant.', { exact: true }).waitFor()
+    await main.locator('.page-note').getByText('No role is held to read-only yet, so the check passes a reviewer started with write access. BMN\'s proposal on Agents › Team holds Focused reviewer, Pre reviewer, Epic reviewer, Project pre reviewer, Final reviewer and Consultant to read-only.', { exact: true }).waitFor()
     assert.deepEqual(reviewCheck('--sandbox', 'workspace-write'), { verdict: 'PASS', seen: 'nothing' })
     await go('Team', 'Roles')
-    await main.getByText('No role is held to read-only yet', { exact: true }).waitFor()
+    await main.getByText('No role is held to read-only yet; BMN\'s proposal is on Team.', { exact: true }).waitFor()
     assert.equal(await main.locator('.role-mark').count(), 0)
     await shot('roles-read-only-proposal-1280.png')
     const beforeHeld = { roster: rosterHash(), state: stateHash() }
-    await main.getByRole('button', { name: 'Use proposal' }).click()
+    // The one card on Team names it with BMN's other proposals; Approve… stages them all and opens the approval, and
+    // Cancel there takes them all out again: nothing is half-taken (75.10).
+    await go('Team')
+    const teamCard = main.locator('.page-note.with-action[data-proposals]')
+    await teamCard.getByText(`${inWordsOf(PROPOSED)} held to read-only`, { exact: false }).waitFor()
+    await shot('team-proposals-card-1280.png')
+    await teamCard.getByRole('button', { name: 'Approve…', exact: true }).click()
+    const proposalSheet = ledger.locator('.ledger-sheet[role="group"]')
+    await proposalSheet.getByText('Epic reviewer runs would be refused unless they are started so that they cannot write').waitFor()
+    await shot('team-proposals-approval-1280.png')
+    await proposalSheet.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await ledger.waitFor({ state: 'detached' })
+    await teamCard.waitFor()
+    assert.deepEqual({ roster: rosterHash(), state: stateHash() }, beforeHeld, 'a cancelled approval wrote something')
+    // Taking some only: he holds the roles on Roles one by one, as the proposal would.
+    await go('Team', 'Roles')
+    for (const name of PROPOSED) {
+      await main.getByRole('button', { name: `Edit ${name}`, exact: true }).click()
+      await main.getByRole('switch', { name: 'Read-only' }).click()
+      await main.getByRole('button', { name: `Done editing ${name}`, exact: true }).click()
+    }
     // Staged, not approved: each proposed role carries the mark on the page, and nothing is written or held yet.
     assert.deepEqual(await main.locator('.role', { has: page.locator('.role-mark') }).locator('.list-line b').allTextContents(), PROPOSED)
-    assert.equal(await main.getByRole('button', { name: 'Use proposal' }).count(), 0)
+    assert.equal(await main.getByText('No role is held to read-only yet', { exact: false }).count(), 0)
     await ledger.getByRole('button', { name: 'Review' }).click()
     await ledger.locator('.ledger-sheet').getByText('Epic reviewer runs would be refused unless they are started so that they cannot write').waitFor()
     await ledger.locator('.ledger-sheet').getByText('Lead runs', { exact: false }).waitFor({ state: 'detached' })
@@ -1155,7 +1185,7 @@ done`)
     await outsideFocus()
     await main.locator('.page-note').getByText('No role is held to read-only yet', { exact: false }).waitFor({ state: 'detached' })
     await go('Team')
-    passed('Team › Roles proposes the reviewers and the consultant; taken and approved, each shows Read-only, Health stops saying none is held, and the check refuses a reviewer write access (63.2)')
+    passed('the one card on Team proposes the reviewers and the consultant, and Cancel leaves nothing staged; held on Roles and approved, each shows Read-only, Health stops saying none is held, and the check refuses a reviewer write access (63.2, 75.10)')
 
     phase('60.11/75.9: Skills lists each skill with its apps and state; the owner\'s test finds where Codex reads skills; the next approval links what Codex lacks by itself, leaves a folder BMN did not write, and Undo takes the link away')
     const skillsDir = join(home, '.claude/skills')
@@ -1823,8 +1853,8 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     await fenceRow.getByText(`${inWords(codexNames)} research only where this test passed for exactly the installed Codex: ${untested}.`, { exact: false }).waitFor()
     // A team from before the choice: it offers what it offered, both Opus among them, and the page says the choice waits for him.
     assert.equal(await who.getByRole('radio', { name: /Opus$/ }).count(), 2, 'a team that names no researcher does not offer both of its Opus agents')
-    const proposal = main.locator('.page-note.with-action', { hasText: 'Who researches is your choice' })
-    await proposal.getByText(`Who researches is your choice and you have not made it yet, so every agent that can research is offered. BMN proposes ${inWords(proposedNames)}: one agent per model.`, { exact: true }).waitFor()
+    const proposal = main.locator('.page-note', { hasText: 'Who researches is your choice' })
+    await proposal.getByText('Who researches is your choice and you have not made it yet, so every agent that can research is offered; BMN\'s proposal is on Team.', { exact: true }).waitFor()
     await shot('models-researchers-before-1280.png')
 
     // The row is read-only: no Run test. The test runs the very research command against the stand-in and records what it saw.
@@ -1846,8 +1876,17 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
 
     // An update of Codex: no test is on record for the new version, so the offer closes by itself. He takes BMN's proposal and approves it.
     installedCodex('0.170.0')
-    await proposal.getByRole('button', { name: 'Use proposal', exact: true }).click()
-    await notice(new RegExp(`^${inWords(proposedNames)} named as researchers\\. Approve below to keep it\\.$`))
+    // The one card on Team names whom BMN proposes; the judge still waits in it too, so he names them on each agent's page (75.10).
+    await go('Team')
+    await main.locator('.page-note.with-action[data-proposals]').getByText(`${inWords(proposedNames)} as researchers, one agent per model`, { exact: false }).waitFor()
+    for (const id of proposedIds) {
+      const agent = teamWithTwo.agents.find((entry) => entry.id === id)
+      await go('Team')
+      await card(agent.name).filter({ has: page.locator('.class-word', { hasText: new RegExp(`^${agent.class}`, 'i') }) }).locator('.agent-open').click()
+      await main.getByRole('switch', { name: 'Researcher', exact: true }).click()
+    }
+    await go('Team', 'Models')
+    await who.waitFor()
     await ledger.getByRole('button', { name: 'Review', exact: true }).click()
     await ledger.locator('.consequence', { hasText: `only ${inWords(proposedNames)} would be offered as researchers; a research with any other agent would be refused` }).waitFor()
     await ledger.getByRole('button', { name: 'Review', exact: true }).click()
@@ -1922,16 +1961,17 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
       })
       const text = async (locator) => (await locator.textContent()).replace(/\s+/g, ' ').trim()
 
-      // No judge on the team yet: the command refuses, and the Team page says Jev waits with BMN's proposal.
+      // No judge on the team yet: the command refuses, and the one card on Team proposes Jev, the last proposal left (75.10).
       const none = await judgeFromShell('dev-auto')
       assert.equal(none.code, 10, none.printed)
       assert.equal(none.said().code, 'NO_JUDGE')
       await go('Team')
-      const waits = main.locator('.page-note.with-action', { hasText: 'Jev waits for you' })
-      assert.equal(await text(waits.locator('.note-text')), 'Jev waits for you. BMN\'s proposal adds the agent Jev, the role Judge and its two providers, OpenCode Zen and TypeSafe AI, which may both see private work, as you chose. Nothing can be asked until you approve it.')
+      const waits = main.locator('.page-note.with-action[data-proposals]')
+      assert.equal(await text(waits.locator('.note-text')), 'BMN proposes 1 change to your team: Jev as Judge, with its two providers OpenCode Zen and TypeSafe AI, which may both see private work, as you chose. Nothing changes until you approve it.')
       await shot('judge-proposal-1280.png')
       const beforeProposal = { roster: rosterHash(), state: stateHash() }
-      await waits.getByRole('button', { name: 'Use proposal', exact: true }).click()
+      // Approve… stages Jev and opens the approval at once; the card goes, as nothing is left to propose.
+      await waits.getByRole('button', { name: 'Approve…', exact: true }).click()
       await waits.waitFor({ state: 'detached' })
       await card('Jev').waitFor()
       assert.equal(await text(card('Jev').locator('.class-word')), 'Bishop · Judge')
@@ -1942,8 +1982,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
       await shot('judge-card-1280.png')
       // Staged, not approved: nothing is written, and the command still refuses.
       assert.deepEqual({ roster: rosterHash(), state: stateHash() }, beforeProposal)
-      await ledger.getByRole('button', { name: 'Review', exact: true }).click()
-      const proposalReview = await text(ledger.locator('.ledger-sheet'))
+      const proposalReview = await text(ledger.locator('.ledger-sheet[role="group"]'))
       // In the page's words, never the team file's: who receives the request, who runs the model, and what approving lets happen.
       for (const said of ['Agent app: none, called by BMN', 'Receives the request: OpenCode Zen', 'Runs the model: TypeSafe AI', 'Roles: Judge', 'Jev could be asked as the judge', 'Jev could be sent private text', 'TypeSafe AI · private work: Allowed']) {
         assert.ok(proposalReview.includes(said), `the review does not say "${said}": ${proposalReview}`)
@@ -1951,11 +1990,8 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
       assert.doesNotMatch(proposalReview, /run_by|: bmn|Efforts: none|given work/)
       await shot('judge-proposal-review-1280.png')
       const versionBefore = current().generation
-      await approve()
-      // An approval that also updates the rules files commits from its sheet.
-      const sheetApprove = ledger.locator('.ledger-sheet[role="group"] button.primary')
-      await until(async () => current().generation !== versionBefore || await sheetApprove.count() > 0, 'the approval or its sheet')
-      if (current().generation === versionBefore) await sheetApprove.click()
+      // The card's approval commits from its sheet.
+      await ledger.locator('.ledger-sheet[role="group"] button.primary').click()
       await until(() => current().generation !== versionBefore, 'the approved proposal')
       const team = approved()
       assert.equal(team.schema_version, 3)
@@ -1964,7 +2000,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
         { harness: 'bmn', class: 'bishop', model: 'jev-1.13', provider: 'opencode-zen', run_by: 'typesafe', host: 'opencode.ai', enabled: true, status: 'active', roles: ['judge'], efforts: [] })
       assert.deepEqual(team.roles.find((role) => role.id === 'judge').candidates, ['jev'])
       assert.deepEqual(['opencode-zen', 'typesafe'].map((id) => team.providers.find((provider) => provider.id === id).private_work), ['allowed', 'allowed'])
-      assert.equal(await main.getByText('Jev waits for you').count(), 0, 'the proposal is still offered after its approval')
+      assert.equal(await main.locator('.page-note.with-action[data-proposals]').count(), 0, 'the proposal is still offered after its approval')
 
       // Jev's own page: the model, its two parties with their answers, the verdict and the price; nothing that belongs to an agent app.
       await go('Team')
@@ -2156,9 +2192,11 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
 
     phase('keyboard: the navigation and a card open from the keyboard')
     await resize(1280, 900)
-    await nav.locator('.nav-sub .nav-item', { hasText: 'Roles' }).focus()
+    await nav.locator('.nav-item', { hasText: /^Agents/ }).focus()
     await page.keyboard.press('Enter')
-    await main.locator('.page-title', { hasText: /^Roles$/ }).waitFor()
+    await main.locator('.page-views [role="radio"][aria-checked="true"]', { hasText: /^Team$/ }).focus()
+    await page.keyboard.press('ArrowRight')
+    await main.locator('.page-views [role="radio"][aria-checked="true"]', { hasText: /^Roles$/ }).waitFor()
     await go('Team')
     await card('Sol').locator('.agent-open').focus()
     await page.keyboard.press('Enter')

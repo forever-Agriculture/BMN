@@ -64,7 +64,7 @@ describe('BMN runs its own app tests (Story 75.8)', () => {
     const next = world.start()
     await next.trigger()
     expect(world.started).toHaveLength(3)
-    expect(world.told).toEqual([{ title: 'Codex tools test stopped', body: 'BMN ran the tools test on Codex 0.162.1 3 times and it showed nothing, so it stopped trying. Rules › Tools has Test again.' }])
+    expect(world.told).toEqual([{ title: 'Codex tools test stopped', body: 'BMN ran the tools test on Codex 0.162.1 3 times and it showed nothing, so it stopped trying. Integrations › Tools has Test again.' }])
     expect(world.disk()[autoTestId(entry())]).toEqual({ count: 3, at: new Date(world.clock.now).toISOString(), outcome: null, told: true })
     expect(next.view({ codex: '0.162.1' })).toEqual({ running: null, stopped: [{ kind: 'tools', harness: 'codex', version: '0.162.1', tries: 3, at: new Date(world.clock.now).toISOString() }] })
     // No fourth try, however late; nothing more said.
@@ -87,7 +87,7 @@ describe('BMN runs its own app tests (Story 75.8)', () => {
     failing.clock.now += AUTO_TEST_RETRY_MS * 2
     await failing.start().trigger()
     expect([failing.started.length, failing.timers]).toEqual([1, []])
-    expect(failing.told).toEqual([{ title: 'Codex tools test failed', body: 'The tools test BMN ran by itself on Codex 0.162.1 failed. Rules › Tools has the details and Test again.' }])
+    expect(failing.told).toEqual([{ title: 'Codex tools test failed', body: 'The tools test BMN ran by itself on Codex 0.162.1 failed. Integrations › Tools has the details and Test again.' }])
     // A failure is not a stop: the row says what failed, and offers Test again from that.
     expect(failing.start().view({ codex: '0.162.1' }).stopped).toEqual([])
   })
@@ -163,10 +163,10 @@ describe('BMN runs its own app tests (Story 75.8)', () => {
   it('names the agents a context test holds up, and the page that has Test again', () => {
     expect(autoTestNotice({ kind: 'context', harness: 'claude', version: '2.1.296', agents: ['Opus', 'Haiku'] }, null, false)).toEqual({
       title: 'Claude Code context test failed',
-      body: 'The own context limits of Opus and Haiku do not hold on Claude Code 2.1.296: the test BMN ran by itself failed. Rules › Health has the details and Test again.'
+      body: 'The own context limits of Opus and Haiku do not hold on Claude Code 2.1.296: the test BMN ran by itself failed. Integrations › Health has the details and Test again.'
     })
-    expect(autoTestNotice({ kind: 'fence', harness: 'opencode', version: '1.18.32' }, null, true).body).toBe('BMN ran the fence test on OpenCode 1.18.32 3 times and it showed nothing, so it stopped trying. Team › Models has Test again.')
-    expect(autoTestNotice({ kind: 'skills-loading', harness: 'codex', version: '0.162.1' }, { version: '0.162.2' }, false).body).toBe('The skill loading test BMN ran by itself on Codex 0.162.2 failed. Rules › Skills has the details and Test again.')
+    expect(autoTestNotice({ kind: 'fence', harness: 'opencode', version: '1.18.32' }, null, true).body).toBe('BMN ran the fence test on OpenCode 1.18.32 3 times and it showed nothing, so it stopped trying. Agents › Models has Test again.')
+    expect(autoTestNotice({ kind: 'skills-loading', harness: 'codex', version: '0.162.1' }, { version: '0.162.2' }, false).body).toBe('The skill loading test BMN ran by itself on Codex 0.162.2 failed. Integrations › Skills has the details and Test again.')
   })
 
   it('marks a sign-in by its credential file\'s time alone, never its contents', () => {

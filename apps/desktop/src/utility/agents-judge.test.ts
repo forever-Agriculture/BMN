@@ -253,7 +253,7 @@ describe('nothing is sent unless every check passes (65.2 AC2)', () => {
     signIn()
     expect((await refusal()).code).toMatch(/^[A-Z_]+$/)
     approve(EXAMPLE)
-    expect(await refusal()).toMatchObject({ code: 'NO_JUDGE', next: expect.stringContaining('Preferences › Team') })
+    expect(await refusal()).toMatchObject({ code: 'NO_JUDGE', next: expect.stringContaining('Preferences › Agents') })
   })
 
   it('a judge that is proposed or switched off', async () => {

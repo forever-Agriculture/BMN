@@ -270,7 +270,7 @@ export type AgentsOutcome =
   | { ok: true; snapshot: AgentsSnapshot; message: string; rulesUpdate?: AgentsRulesUpdate; openCodeSignIn?: OpenCodeSignInResult; installed?: string[] }
   | { ok: false; code: string; message: string; errors?: RosterIssueShape[]; snapshot: AgentsSnapshot }
 
-/** One agent app as Rules › Health shows it: its version and where it sends data as inspected. */
+/** One agent app as Integrations › Health shows it: its version and where it sends data as inspected. */
 export interface AgentAppView {
   harness: RosterHarness
   version: string | null
@@ -351,7 +351,7 @@ export type ContextLimitApp = (typeof CONTEXT_LIMIT_APPS)[number]
  */
 export interface ContextAgentLimit { agent: string; limit: number; state: 'applied' | 'not-applied' | 'refused'; reason?: string }
 
-/** One app's default context limit for the owner's own sessions, as Rules › Health shows it (60.9 AC3). */
+/** One app's default context limit for the owner's own sessions, as Integrations › Health shows it (60.9 AC3). */
 export interface ContextLimitView {
   harness: ContextLimitApp
   /** The app's own settings file that holds the default. */
@@ -382,7 +382,7 @@ export interface ContextLimitView {
 /** One skill's state in one app (60.11 AC2); `excluded` is a skill the app is not meant to have and does not have. */
 export type SkillStateName = 'unreadable' | 'missing' | 'link' | 'unmanaged' | 'edited-outside' | 'stale' | 'current' | 'read-directly' | 'exposed' | 'excluded'
 
-/** One app's skills, as Rules › Health shows them (60.11 AC5). */
+/** One app's skills, as Integrations › Health shows them (60.11 AC5). */
 export interface SkillsAppView {
   harness: RosterHarness
   version: string | null
@@ -411,7 +411,7 @@ export interface SkillsAppView {
   loading: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; stale: boolean; by?: 'bmn' } | null
 }
 
-/** One skill of the skills folder, as Rules › Skills shows it. */
+/** One skill of the skills folder, as Integrations › Skills shows it. */
 export interface SkillView {
   name: string
   /** The first line of its description. */
@@ -441,7 +441,7 @@ export interface SkillsPlan { ok: boolean; code: string; message?: string; planH
 /** One tool's state in one app (60.12 AC4); `excluded` is a tool the app is not meant to have and does not have, `blocked` one it cannot take as it is. */
 export type ToolStateName = 'unreadable' | 'missing' | 'unmanaged' | 'edited-outside' | 'stale' | 'current' | 'exposed' | 'excluded' | 'blocked'
 
-/** One app's tools, as Rules › Health shows them (60.12 AC6). */
+/** One app's tools, as Integrations › Health shows them (60.12 AC6). */
 export interface ToolsAppView {
   harness: RosterHarness
   version: string | null
@@ -471,7 +471,7 @@ export interface ToolsAppView {
   unlisted: { id: string; state: 'unmanaged' | 'exposed'; managed: boolean }[]
 }
 
-/** One approved tool, as Rules › Tools shows its state. */
+/** One approved tool, as Integrations › Tools shows its state. */
 export interface ToolView {
   id: string
   /** Its state in each app whose tools are supported. */
@@ -540,7 +540,7 @@ export type ResearchRunState = 'complete' | 'partial' | 'stopped' | 'failed'
 export interface ResearcherView { id: string; name: string; harness: RosterHarness; ok: boolean; why?: string; reason?: string
   /** For a Codex researcher: the tools its fence test saw offered, and whether they were compared under the provider's own model list yet. */
   fence?: { tools: string[]; compared: boolean } }
-/** Team › Models: what research has found, who may research, and the run that is going. */
+/** Agents › Models: what research has found, who may research, and the run that is going. */
 export interface ResearchSnapshot {
   last: { at: string; researcher: string; state: ResearchRunState; models: number; note?: string } | null
   previousAt: string | null
@@ -588,7 +588,7 @@ export interface WebQuestionView {
   counts?: { found: number; not_found: number; unreadable: number }
   tookMs?: number
 }
-/** Team › Models, "Web questions" (64.3): what was asked, what holds the one research lock now, the switch and the day's count. */
+/** Agents › Models, "Web questions" (64.3): what was asked, what holds the one research lock now, the switch and the day's count. */
 export interface WebQuestionsSnapshot {
   /** Newest first, at most the 200 BMN keeps. */
   questions: WebQuestionView[]
@@ -653,7 +653,7 @@ export interface TeamAskSubagentView {
 }
 /** A project's state at one end of an ask: its commit and whether its tree was clean. */
 export interface TeamAskProjectState { commit: string | null; clean: boolean | null; changed: number | null; reason: string | null }
-/** One ask as Team › Asks lists it, whoever asked. */
+/** One ask as Agents › Asks lists it, whoever asked. */
 export interface TeamAskLine {
   id: string
   /** The question's first line; null where the record holds none. */
@@ -679,7 +679,7 @@ export interface TeamAskLine {
   /** For a running ask: the main process's clock when the line was read, so elapsed time is the computer's. */
   now?: string
 }
-/** Team › Asks: every ask on this computer, newest first, the places in use and how long an answer is kept. */
+/** Agents › Asks: every ask on this computer, newest first, the places in use and how long an answer is kept. */
 export interface TeamAsksSnapshot { asks: TeamAskLine[]; places: { used: number; capacity: number }; keptDays: number }
 /** One ask opened in place: the whole question, what it read, who answered, and the answer as the teammate's own words. */
 export interface TeamAskDetail {

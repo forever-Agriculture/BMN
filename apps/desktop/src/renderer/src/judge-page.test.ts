@@ -10,7 +10,7 @@ import {
   JUDGE_PROPOSAL, agentsOnProvider, appWords, callByBmn, calledParties, formatCandidate, groupDifferences, isCalled, judgeProposal, parseCandidate, publicOnly, roleBar, setAgentClass, setProviderAnswer,
   thousands, toggleAgentRole
 } from './roster-staging'
-import { TeamPreferences, appChoices, judgeProposalWords, type TeamPage } from './team-preferences'
+import { TeamPreferences, appChoices, judgeClause, teamProposals, type TeamPage } from './team-preferences'
 import type { TeamState } from './team-state'
 
 const noop = (): void => {}
@@ -40,7 +40,7 @@ const team = (data: RosterDataShape, extra: Partial<TeamState> = {}): TeamState 
   },
   loadError: null, base: data, data, approved: data, hasStaged: false, preview: null, outside: { groups: [], general: [] },
   changed: new Set(), busy: false, notice: null, confirmation: null, needsOwner: false, stage: noop, discard: noop, reload: later, setNotice: noop,
-  requestApproval: later, commit: later, cancelConfirmation: noop, revert: later, saveNotes: later, pendingNotes: {}, setPendingNote: noop, undoRulesUpdate: later, rulesUndo: null, confirmRulesUndo: later, cancelRulesUndo: noop, ...extra
+  requestApproval: later, approveProposals: later, commit: later, cancelConfirmation: noop, revert: later, saveNotes: later, pendingNotes: {}, setPendingNote: noop, undoRulesUpdate: later, rulesUndo: null, confirmRulesUndo: later, cancelRulesUndo: noop, ...extra
 })
 const pageMarkup = (page: TeamPage, data: RosterDataShape = DATA): string => renderToStaticMarkup(createElement(TeamPreferences, { team: team(data), page, go: noop }))
 /** What the owner reads: the markup without tags. */
@@ -77,7 +77,7 @@ describe('the team file\'s own rules, kept the same on the Team pages (65.1)', (
     expect(proposed.agents.at(-1)).toMatchObject({ provider: 'zen', run_by: 'typesafe' })
     expect(proposed.providers.map((provider) => provider.id)).toEqual(['openai', 'anthropic', 'zen', 'typesafe'])
     expect(publicOnly(proposed, proposed.agents.at(-1) as RosterAgentShape)).toBe(true)
-    expect(judgeProposalWords(proposed)).toContain('Zen and TypeSafe AI; Jev gets public work only: Zen gets public work only')
+    expect(judgeClause(proposed)).toContain('Zen and TypeSafe AI; Jev gets public work only: Zen gets public work only')
   })
 
   it('private work follows both providers, in all four combinations, with the CLI\'s own reason', () => {
@@ -139,12 +139,27 @@ describe('the team file\'s own rules, kept the same on the Team pages (65.1)', (
   })
 })
 
-describe('Team › Agents with a judge (65.1 AC5, AC7)', () => {
-  it('while the team holds no judge, Team says Jev waits and offers the proposal', () => {
-    const markup = pageMarkup({ name: 'agents' }, BEFORE)
-    expect(words(markup)).toContain('Jev waits for you. BMN\'s proposal adds the agent Jev, the role Judge and its two providers, OpenCode Zen and TypeSafe AI, which may both see private work, as you chose. Nothing can be asked until you approve it.')
-    expect(markup).toMatch(/<div class="page-note with-action" role="status">.*?>Use proposal<\/button>/)
-    expect(pageMarkup({ name: 'agents' })).not.toContain('Use proposal')
+describe('Agents › Team with a judge (65.1 AC5, AC7)', () => {
+  it('while the team holds no judge, the one proposals card on Team names Jev and offers Approve… (Story 75.10)', () => {
+    const proposals = teamProposals(BEFORE, { lunaListed: false, researchers: null })
+    expect(proposals?.data).toEqual(DATA)
+    const markup = renderToStaticMarkup(createElement(TeamPreferences, { team: team(BEFORE), page: { name: 'agents' }, go: noop, proposals }))
+    expect(words(markup)).toContain('BMN proposes 1 change to your team: Jev as Judge, with its two providers OpenCode Zen and TypeSafe AI, which may both see private work, as you chose. Nothing changes until you approve it.')
+    expect(markup).toMatch(/<div class="page-note with-action" role="status" data-proposals="1">.*?>Approve…<\/button>/)
+    expect(teamProposals(DATA, { lunaListed: false, researchers: null })).toBeNull()
+    expect(pageMarkup({ name: 'agents' })).not.toMatch(/Use proposal|BMN proposes/)
+  })
+
+  it('with nothing approved, Changes shows the same card, so one Approve… carries the proposals wherever it is pressed (Story 75.10)', () => {
+    const proposals = teamProposals(BEFORE, { lunaListed: false, researchers: null })
+    const base = team(BEFORE)
+    const unapproved = team(BEFORE, { approved: null, snapshot: { ...base.snapshot!, approved: null } })
+    const changes = (shown: typeof proposals): string => renderToStaticMarkup(createElement(TeamPreferences, { team: unapproved, page: { name: 'changes' }, go: noop, proposals: shown }))
+    expect(words(changes(proposals))).toContain("Nothing here takes effect until you approve the team for the first time. BMN's proposal is included: Jev as Judge")
+    expect(changes(proposals)).toMatch(/<div class="page-note with-action" role="status" data-proposals="1">.*?>Approve…<\/button>/)
+    // Without a proposal it is the plain first approval, as before.
+    expect(changes(null)).not.toContain('data-proposals')
+    expect(words(changes(null))).toContain('Nothing here takes effect until you approve the team for the first time.')
   })
 
   it('the card shows the class, the role, "Called by BMN" with the model, and public work only where either provider says so', () => {

@@ -62,9 +62,25 @@ function stateButton(pane: HTMLElement): HTMLButtonElement {
   return button
 }
 
-function menuEntry(label: string): HTMLButtonElement | undefined {
-  return [...document.querySelectorAll<HTMLButtonElement>('.popup-menu [role="menuitem"]')]
-    .find((item) => item.textContent?.trim().startsWith(label))
+function setInputValue(input: HTMLInputElement, value: string): void {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value)
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+/**
+ * Runs Progress details from the palette by keyboard for the selected `pane`, with focus on `opener`
+ * first. It changes no selection: selecting a session marks its notices seen, which the attention
+ * checks after this one count.
+ */
+async function openFromPalette(pane: HTMLElement, opener: HTMLElement): Promise<HTMLDialogElement> {
+  if (!pane.classList.contains('selected')) throw new Error('progress evidence integration: the probing pane was not the selected one')
+  opener.focus()
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true }))
+  const input = await waitFor('the palette opened', () => document.querySelector<HTMLInputElement>('.command-palette input'))
+  setInputValue(input, 'Progress details')
+  await waitFor('the palette offered Progress details', () => document.querySelector('#palette-progress-details[aria-selected="true"]'))
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  return waitFor('the progress detail opened from the palette', () => openDialog())
 }
 
 /**
@@ -161,32 +177,20 @@ export async function runProgressEvidenceIntegration(options: {
     gridAfter: { cols: terminal.cols, rows: terminal.rows }
   }
 
-  // The keyboard route: xterm consumes Tab inside the terminal, so the pane's More menu is the way in.
-  // Closing must hand focus back to the More button, or a keyboard owner is left nowhere.
-  const more = reportingPane.querySelector<HTMLButtonElement>('.pane-actions [data-action="more"]')
-  if (!more) throw new Error('progress evidence integration: the reporting pane had no More button')
-  more.focus()
-  more.click()
-  const entry = await waitFor('the pane menu offered Progress details', () => menuEntry('Progress details'))
-  entry.click()
-  const fromMenu = await waitFor('the progress detail opened from the menu', () => openDialog())
-  fromMenu.dispatchEvent(new Event('cancel', { cancelable: true }))
-  await waitFor('the menu-opened detail closed', () => openDialog() === null)
-  const focusReturnedToMenuButton = document.activeElement === more
-
-  // The same detail for a report with nothing behind it: the surface never implies otherwise.
+  // The keyboard route: xterm consumes Tab inside the terminal, so the palette is the way in for the
+  // selected session (Story 75.10 moved Progress details there from the pane's More menu). This pane's
+  // report has nothing behind it, and the surface never implies otherwise. Closing must hand focus back
+  // to what had it before the palette opened, or a keyboard owner is left nowhere.
   const ownMore = ownPane.querySelector<HTMLButtonElement>('.pane-actions [data-action="more"]')
   if (!ownMore) throw new Error('progress evidence integration: this pane had no More button')
-  ownMore.click()
-  const ownEntry = await waitFor('this pane menu offered Progress details', () => menuEntry('Progress details'))
-  ownEntry.click()
-  const bare = await waitFor('the evidence-free detail opened', () => openDialog())
+  const bare = await openFromPalette(ownPane, ownMore)
   const bareDialog = {
     title: bare.getAttribute('aria-label') ?? '',
     body: [...bare.querySelectorAll('.dialog-note')].map((note) => text(note)).join(' | ')
   }
   bare.dispatchEvent(new Event('cancel', { cancelable: true }))
   await waitFor('the evidence-free detail closed', () => openDialog() === null)
+  const focusReturnedToOpener = document.activeElement === ownMore
 
   return {
     reportedStrip,
@@ -195,8 +199,8 @@ export async function runProgressEvidenceIntegration(options: {
     colours,
     quiet,
     focusReturnedToStrip,
-    focusReturnedToMenuButton,
-    openedFromPaneMenu: true,
+    focusReturnedToOpener,
+    openedFromPalette: true,
     bareDialog
   }
 }

@@ -1,4 +1,4 @@
-// MODULE: models-preferences.tsx - Stories 60.10, 63.3: Preferences › Team › Models: what research found for the team's models, who researches, Codex behind its fence, and Apply prices
+// MODULE: models-preferences.tsx - Stories 60.10, 63.3: Preferences › Agents › Models: what research found for the team's models, who researches, Codex behind its fence, and Apply prices
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { ROSTER_APP_NAMES, type ResearchLookup, type ResearchModelView, type ResearchSnapshot, type ResearcherView, type RosterDataShape, type RosterPriceShape } from '@bmn/protocol'
 import { offersTestAgain, stoppedTest, stoppedWords, testRunning } from './auto-test-words'
@@ -7,7 +7,7 @@ import {
   applyPrices, codexToolsLine, dayWords, fillFrom, priceChanges, priceText, researchGroups, researchStatus, siteOf, unverifiedWords, type PriceChange, type ResearchFill, type TeamModelRow
 } from './research-view'
 import { Dot, Piece } from './roster-marks'
-import { listedAgents, nameResearchers, namedResearchers, thousands } from './roster-staging'
+import { namedResearchers, thousands } from './roster-staging'
 import { PageHead, Row, shortDate } from './team-preferences'
 import type { TeamState } from './team-state'
 import { useSelfRefresh } from './self-refresh'
@@ -370,14 +370,9 @@ export function ModelsPage(props: {
       {snapshot.dropped !== null ? (
         <p className="page-note" role="status">{`${snapshot.dropped} is no longer one of your team's researchers, so no researcher is picked${able.length > 0 ? '. Pick one below' : ''}.`}</p>
       ) : null}
+      {/* BMN's proposal of who researches is taken with the others from the one card on Team (Story 75.10). */}
       {proposed.length > 0 ? (
-        <div className="page-note with-action" role="status">
-          <Dot label="Needs you" /><span className="note-text">{`Who researches is your choice and you have not made it yet, so every agent that can research is offered. BMN proposes ${listedAgents(data, proposed)}: one agent per model.`}</span>
-          <button type="button" className="small" onClick={() => {
-            team.stage(nameResearchers(data, proposed))
-            setStaged(`${listedAgents(data, proposed)} named as researchers. Approve below to keep it.`)
-          }}>Use proposal</button>
-        </div>
+        <p className="page-note">Who researches is your choice and you have not made it yet, so every agent that can research is offered; BMN&apos;s proposal is on Team.</p>
       ) : null}
       <Row label="Researcher" id={researcherId}
         hint={able.length === 0

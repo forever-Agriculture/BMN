@@ -1,5 +1,5 @@
-// MODULE: team-preferences.tsx - Epic 60.5: Preferences › Team: agents as solid cards, an agent's rows, New agent, role chains, approved versions and the approval footer
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+// MODULE: team-preferences.tsx - Epic 60.5: Preferences › Agents: agents as solid cards, an agent's rows, New agent, role chains, approved versions and the approval footer
+import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   ROSTER_APP_NAMES,
   ROSTER_CALLED_BY_BMN,
@@ -84,7 +84,9 @@ import {
   teamUpdateWords,
   thousands,
   holdProposed,
+  listedAgents,
   listedRoles,
+  nameResearchers,
   readOnlyProposal,
   toggleAgentEffort,
   toggleAgentRole,
@@ -100,9 +102,9 @@ import { displayPath } from './session-presentation'
 import type { TeamState } from './team-state'
 import { TeamAsks, useTeamAsksState } from './team-asks'
 
-/** Each agent app as BMN inspected it (Rules › Health), or null while that was not read. */
+/** Each agent app as BMN inspected it (Integrations › Health), or null while that was not read. */
 type Apps = readonly AgentAppView[] | null
-/** Each app's context-limit setting as Rules › Health reads it; null before the rules were read. */
+/** Each app's context-limit setting as Integrations › Health reads it; null before the rules were read. */
 type Context = readonly ContextLimitView[] | null
 /** What the apps reported in sessions that are running now. */
 type Reported = readonly ReportedModel[]
@@ -115,15 +117,38 @@ export function shortDate(iso: string | undefined): string {
   return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
-/** A page's title line: the title or crumb, one faint status, then its actions at the far end. */
+/**
+ * The Preferences page a view sits on, and the control over its views (Story 75.10): a page head
+ * under it says the page's name instead of the view's, keeps a crumb as it is, and draws the
+ * control right under its hairline.
+ */
+export interface PageViews {
+  title: string
+  views: { options: readonly string[]; value: string; optionLabel(value: string): string; onChange(value: string): void }
+}
+export const PageViewsContext = createContext<PageViews | null>(null)
+
+/** A page's title line: the title or crumb, one faint status, then its actions at the far end; on Agents and Integrations their views under it. */
 export function PageHead(props: { title: ReactNode; status?: ReactNode; children?: ReactNode }): React.JSX.Element {
-  return (
+  const page = useContext(PageViewsContext)
+  const titleId = useId()
+  const head = (
     <header className="page-head">
-      <h3 className="page-title">{props.title}</h3>
+      <h3 className="page-title" id={page === null ? undefined : titleId}>{page !== null && typeof props.title === 'string' ? page.title : props.title}</h3>
       {props.status ? <span className="faint">{props.status}</span> : null}
       <span className="spacer" />
       {props.children}
     </header>
+  )
+  if (page === null) return head
+  // The head and its views stay together at the top while the page scrolls.
+  return (
+    <div className="page-top">
+      {head}
+      <div className="page-views">
+        <Segmented<string> labelledBy={titleId} again options={page.views.options} value={page.views.value} optionLabel={page.views.optionLabel} onChange={page.views.onChange} />
+      </div>
+    </div>
   )
 }
 
@@ -230,7 +255,7 @@ export function NumberField(props: {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Team › Agents
+// Agents › Team
 
 /** The reason an agent is off, asked once in place before the switch moves. */
 function TurnOff(props: { agent: RosterAgentShape; onDone(reason: string | null): void }): React.JSX.Element {
@@ -324,31 +349,17 @@ function OutsideHead(props: { team: TeamState }): React.JSX.Element {
   )
 }
 
-/** Whether both of two providers of the proposal may see private work, as the team would hold them once it is taken. */
-export function judgeProposalWords(proposed: RosterDataShape): string {
+/** "Jev as Judge, with its two providers …": the judge proposal as the team would hold it once taken (65.1 AC7). */
+export function judgeClause(proposed: RosterDataShape): string {
   const jev = proposed.agents.find(isCalled)
   if (jev === undefined) return ''
   const parties = calledParties(proposed, jev)
   const names = `${parties.receives.name} and ${parties.runs.name}`
-  const answer = parties.allowed ? `${names}, which may both see private work, as you chose` : `${names}; ${jev.name} gets ${parties.reason}`
-  return `${jev.name} waits for you. BMN's proposal adds the agent ${jev.name}, the role Judge and its two providers, ${answer}. Nothing can be asked until you approve it.`
+  return `${jev.name} as Judge, with its two providers ${parties.allowed ? `${names}, which may both see private work, as you chose` : `${names}; ${jev.name} gets ${parties.reason}`}`
 }
 
-/** While the team holds no judge: BMN's proposal, taken with one press and approved like any other change (65.1 AC7). */
-function JudgeProposal(props: { team: TeamState; data: RosterDataShape }): React.JSX.Element | null {
-  const proposed = judgeProposal(props.data)
-  if (proposed === null) return null
-  return (
-    <div className="page-note with-action" role="status">
-      <Dot label="Needs you" />
-      <span className="note-text">{judgeProposalWords(proposed)}</span>
-      <button type="button" className="small" onClick={() => props.team.stage(proposed)}>Use proposal</button>
-    </div>
-  )
-}
-
-/** What BMN's proposal of Luna (Go) says (70.4): the agent, who gets her work and what happens once the owner approves. */
-export function lunaGoProposalWords(proposed: RosterDataShape): string {
+/** Luna through OpenCode Go (70.4): what she would do, who gets her work, and the sign-in an approval copies. */
+export function lunaGoClause(proposed: RosterDataShape): string {
   const luna = proposed.agents.find((agent) => agent.id === LUNA_GO_PROPOSAL.agent.id)
   if (luna === undefined) return ''
   const helper = luna.roles.includes(LUNA_GO_PROPOSAL.role)
@@ -356,7 +367,7 @@ export function lunaGoProposalWords(proposed: RosterDataShape): string {
   const roles = helper && researcher ? 'a read-only helper and a researcher' : helper ? 'a read-only helper' : researcher ? 'a researcher' : 'an agent with no role yet'
   const provider = proposed.providers.find((entry) => entry.id === luna.provider)
   const work = provider?.private_work === 'allowed' ? `${provider.name} may see private work, as you chose` : `${provider?.name ?? luna.provider} gets public work only until you allow it`
-  return `${luna.name} waits for you. OpenCode on this computer lists Luna's model on OpenCode Go, and BMN's proposal adds her as ${roles}, run by OpenCode; ${work}. Once you approve, BMN copies your OpenCode Go sign-in into its own OpenCode folder. Nothing changes until then.`
+  return `${luna.name} as ${roles}, run by OpenCode, which lists her model on OpenCode Go; ${work}, and once you approve BMN copies your OpenCode Go sign-in into its own OpenCode folder`
 }
 
 /** Why an approved agent on OpenCode Go cannot run yet: BMN's folder holds no Go sign-in. */
@@ -366,32 +377,44 @@ export function openCodeSignInWords(approved: RosterDataShape | null | undefined
   return `${who} cannot run yet: BMN's OpenCode folder holds no OpenCode Go sign-in. Copy sign-in takes yours from OpenCode on this computer, once, and nothing else of OpenCode's.`
 }
 
-/**
- * Luna through OpenCode Go (70.4), as the main process answered: BMN's proposal while OpenCode lists
- * her model and the team holds no OpenCode agent on it, taken with one press and approved like any
- * other change; and, once the approved team names an agent on OpenCode Go, the sign-in its runs need.
- */
-export function OpenCodeGoNotes(props: { team: TeamState; data: RosterDataShape; view: OpenCodeGoView | null; copying: boolean; copy(): void }): React.JSX.Element | null {
-  const { team, data, view } = props
-  if (view === null) return null
-  const proposed = view.listed ? lunaGoProposal(data) : null
+/** What OpenCode on this computer says of Luna through OpenCode Go (70.4), and the press that copies a sign-in. */
+export interface OpenCodeGoState { view: OpenCodeGoView | null; copying: boolean; copy(): void }
+
+/** Asks the main process about Luna through OpenCode Go while Agents shows and after each approval; it starts OpenCode, so never before. */
+export function useOpenCodeGo(team: TeamState, shown: boolean): OpenCodeGoState {
+  const [view, setView] = useState<OpenCodeGoView | null>(null)
+  const [copying, setCopying] = useState(false)
+  const approvedNumber = team.snapshot?.approved?.generation ?? null
+  useEffect(() => {
+    if (!shown) return undefined
+    let cancelled = false
+    window.aiTerminal.openCodeGo().then((next) => { if (!cancelled) setView(next) }).catch(() => { if (!cancelled) setView(null) })
+    return () => { cancelled = true }
+  }, [shown, approvedNumber])
+  const setNotice = team.setNotice
+  const copy = (): void => {
+    setCopying(true)
+    window.aiTerminal.openCodeGo(true)
+      .then((next) => {
+        setView(next)
+        if (next.copy !== undefined) setNotice({ ok: next.copy.ok, text: next.copy.message })
+      })
+      .catch((error: unknown) => setNotice({ ok: false, text: `The sign-in could not be copied: ${error instanceof Error ? error.message : String(error)}` }))
+      .finally(() => setCopying(false))
+  }
+  return { view, copying, copy }
+}
+
+/** Once the approved team names an agent on OpenCode Go and BMN's folder holds no sign-in for it: Copy sign-in, its own note, never part of a proposal (R75-NFR2). */
+export function OpenCodeSignInNote(props: { team: TeamState; state: OpenCodeGoState }): React.JSX.Element | null {
+  const { team, state } = props
+  if (state.view?.signedIn !== false) return null
   return (
-    <>
-      {proposed === null ? null : (
-        <div className="page-note with-action" role="status">
-          <Dot label="Needs you" />
-          <span className="note-text">{lunaGoProposalWords(proposed)}</span>
-          <button type="button" className="small" onClick={() => team.stage(proposed)}>Use proposal</button>
-        </div>
-      )}
-      {view.signedIn === false ? (
-        <div className="page-note with-action" role="status">
-          <Dot label="Needs you" />
-          <span className="note-text">{openCodeSignInWords(team.snapshot?.approved?.data)}</span>
-          <button type="button" className="small" disabled={props.copying} onClick={props.copy}>{props.copying ? 'Copying…' : 'Copy sign-in'}</button>
-        </div>
-      ) : null}
-    </>
+    <div className="page-note with-action" role="status">
+      <Dot label="Needs you" />
+      <span className="note-text">{openCodeSignInWords(team.snapshot?.approved?.data)}</span>
+      <button type="button" className="small" disabled={state.copying} onClick={state.copy}>{state.copying ? 'Copying…' : 'Copy sign-in'}</button>
+    </div>
   )
 }
 
@@ -400,51 +423,75 @@ function joined(names: readonly string[]): string {
   return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`
 }
 
-/** What the Team note says of a team file that still names a retired app (71.2 AC3, the 71.1 design notes). */
-export function retiredAppProposalWords(removed: RetiredRemoval): string {
+/** What BMN's proposal takes out of a team file that still names a retired app (71.2 AC3, the 71.1 design notes). */
+export function retiredAppClause(removed: RetiredRemoval): string {
   const parts = [...removed.agents, ...removed.routes.map((app) => `the ${appDisplayName(app)} route`), ...removed.providers.map((name) => `the ${name} provider`),
     ...(removed.lists ? [`${joined(Object.values(RETIRED_APP_NAMES))} from the apps a skill or tool is kept to`] : [])]
-  return `${RETIRED_APP_LINE} BMN's proposal removes ${joined(parts)} from the team file. Nothing changes until you approve it.`
+  return `${RETIRED_APP_LINE.replace(/\.$/, '')}, so ${joined(parts)} ${parts.length === 1 ? 'is' : 'are'} taken out of the team file`
 }
 
-/** The note a team file that still names a retired app gets, with BMN's proposal to take it out. */
-export function RetiredAppNote(props: { team: TeamState; data: RosterDataShape }): React.JSX.Element | null {
-  const proposal = retiredAppProposal(props.data)
-  if (proposal === null) return null
+/** BMN's pending proposals taken in one go (Story 75.10), each said as one clause in the order they are taken. */
+export interface TeamProposals { data: RosterDataShape; clauses: string[] }
+
+/**
+ * Every proposal BMN has pending for this team, taken one after the other in the order BMN applies
+ * them: a retired app out, the judge, the researchers, Luna through OpenCode Go (named a researcher
+ * where the team now names its researchers) and the read-only roles. Each clause is said of the team
+ * as it would be once all are taken. Null when nothing is pending.
+ */
+export function teamProposals(data: RosterDataShape, pending: { lunaListed: boolean; researchers: { named: string[] | null; proposed: readonly string[] } | null }): TeamProposals | null {
+  let next = data
+  const retired = retiredAppProposal(next)
+  if (retired !== null) next = retired.data
+  const judged = judgeProposal(next)
+  if (judged !== null) next = judged
+  const choice = pending.researchers
+  const researchers = choice !== null && choice.named === null && namedResearchers(next) === null ? choice.proposed.filter((id) => next.agents.some((agent) => agent.id === id)) : []
+  if (researchers.length > 0) next = nameResearchers(next, researchers)
+  const luna = pending.lunaListed ? lunaGoProposal(next) : null
+  if (luna !== null) next = luna
+  const held = readOnlyProposal(next)
+  if (held.length > 0) next = holdProposed(next)
+  const clauses = [
+    ...(retired === null ? [] : [retiredAppClause(retired.removed)]),
+    ...(judged === null ? [] : [judgeClause(next)]),
+    ...(researchers.length === 0 ? [] : [`${listedAgents(next, researchers)} as researchers, one agent per model`]),
+    ...(luna === null ? [] : [lunaGoClause(next)]),
+    ...(held.length === 0 ? [] : [`${listedRoles(held)} held to read-only`])
+  ]
+  return clauses.length === 0 ? null : { data: next, clauses }
+}
+
+/** The one card's paragraph: every pending proposal, or with nothing approved yet the first approval that carries them. */
+export function proposalsWords(proposals: TeamProposals, nothingInEffect: string | null): string {
+  const count = proposals.clauses.length
+  const list = proposals.clauses.join(' · ')
+  if (nothingInEffect !== null) return `${nothingInEffect} BMN's proposal${count === 1 ? ' is' : 's are'} included: ${list}.`
+  return `BMN proposes ${count} change${count === 1 ? '' : 's'} to your team: ${list}. Nothing changes until you approve it.`
+}
+
+/**
+ * BMN's pending proposals as one card at the top of Agents › Team (Story 75.10): one dot, one
+ * paragraph, one Approve… that stages them all and opens the approval; Cancel there takes them out
+ * again. With nothing approved yet it is the first approval too, so there is one approval, not two.
+ */
+function ProposalsCard(props: { team: TeamState; proposals: TeamProposals | null }): React.JSX.Element | null {
+  const { team, proposals } = props
+  const unapproved = team.snapshot !== null && team.snapshot.approved === null
+  if (proposals === null) return unapproved && !team.hasStaged ? <FirstApproval team={team} /> : null
+  const damaged = damagedApproval(team)
+  const words = proposalsWords(proposals, unapproved && !team.hasStaged ? nothingInEffectWords(damaged, team.snapshot?.approvalProblem?.lastGood ?? null) : null)
+  const title = !unapproved ? 'Approve these changes' : damaged ? 'Approve the team again' : 'Approve the team for the first time'
   return (
-    <div className="page-note with-action" role="status">
+    <div className="page-note with-action" role="status" data-proposals={proposals.clauses.length}>
       <Dot label="Needs you" />
-      <span className="note-text">{retiredAppProposalWords(proposal.removed)}</span>
-      <button type="button" className="small" onClick={() => props.team.stage(proposal.data)}>Use proposal</button>
+      <span className="note-text">{words}</span>
+      <button type="button" className="primary small" disabled={team.busy} onClick={() => void team.approveProposals(proposals.data, { title, action: 'Approve' })}>Approve…</button>
     </div>
   )
 }
 
-/** Asks the main process about Luna through OpenCode Go when the page opens and after each approval. */
-function OpenCodeGo(props: { team: TeamState; data: RosterDataShape }): React.JSX.Element | null {
-  const { team } = props
-  const [view, setView] = useState<OpenCodeGoView | null>(null)
-  const [copying, setCopying] = useState(false)
-  const approvedNumber = team.snapshot?.approved?.generation ?? null
-  useEffect(() => {
-    let cancelled = false
-    window.aiTerminal.openCodeGo().then((next) => { if (!cancelled) setView(next) }).catch(() => { if (!cancelled) setView(null) })
-    return () => { cancelled = true }
-  }, [approvedNumber])
-  const copy = (): void => {
-    setCopying(true)
-    window.aiTerminal.openCodeGo(true)
-      .then((next) => {
-        setView(next)
-        if (next.copy !== undefined) team.setNotice({ ok: next.copy.ok, text: next.copy.message })
-      })
-      .catch((error: unknown) => team.setNotice({ ok: false, text: `The sign-in could not be copied: ${error instanceof Error ? error.message : String(error)}` }))
-      .finally(() => setCopying(false))
-  }
-  return <OpenCodeGoNotes team={team} data={props.data} view={view} copying={copying} copy={copy} />
-}
-
-function AgentsPage(props: { team: TeamState; data: RosterDataShape; go(page: TeamPage): void }): React.JSX.Element {
+function AgentsPage(props: { team: TeamState; data: RosterDataShape; proposals: TeamProposals | null; openCodeGo: OpenCodeGoState | null; go(page: TeamPage): void }): React.JSX.Element {
   const { team, data } = props
   const groups = agentGroups(data)
   const prose = team.snapshot?.file.prose ?? {}
@@ -464,16 +511,14 @@ function AgentsPage(props: { team: TeamState; data: RosterDataShape; go(page: Te
       <PageHead title="Team" status={team.snapshot?.approved ? `Approved ${shortDate(team.snapshot.approved.createdAt)}` : damagedApproval(team) ? 'The approved team cannot be read' : 'Nothing approved yet'}>
         <button type="button" onClick={() => props.go({ name: 'new' })}>New agent</button>
       </PageHead>
-      {team.snapshot?.approved || team.hasStaged ? null : <FirstApproval team={team} />}
+      <ProposalsCard team={team} proposals={props.proposals} />
+      {props.openCodeGo ? <OpenCodeSignInNote team={team} state={props.openCodeGo} /> : null}
       {team.snapshot?.file.link ? (
         <p className="page-note">
           The team file is a link to <span className="path mono" title={team.snapshot.file.link}>{displayPath(team.snapshot.file.link, team.snapshot.home)}</span>.
           {' '}A change saved from these pages replaces the link with a regular file here; the file it points to stays as it is.
         </p>
       ) : null}
-      <JudgeProposal team={team} data={data} />
-      <OpenCodeGo team={team} data={data} />
-      <RetiredAppNote team={team} data={data} />
       {team.outside.groups.length > 0 ? <OutsideHead team={team} /> : null}
       {team.outside.groups.map((group) => <OutsideRow key={group.key} group={group} team={team} />)}
       {data.agents.length === 0 ? <p className="page-note">No agents yet. New agent adds the first one.</p> : null}
@@ -636,7 +681,7 @@ export function contextLimitHint(agent: Pick<RosterAgentShape, 'harness' | 'cont
   const app = appWords(agent)
   const row = context.find((entry) => entry.harness === agent.harness)
   if (row === undefined) return `Not supported yet: BMN has no context setting for ${app}. The limit is kept but not applied.`
-  if (!row.limitProven) return `Not supported yet on ${app}${row.version ? ` ${row.version}` : ''}: kept but not applied until its test passes in Rules › Health.`
+  if (!row.limitProven) return `Not supported yet on ${app}${row.version ? ` ${row.version}` : ''}: kept but not applied until its test passes in Integrations › Health.`
   if (row.min !== undefined && row.max !== undefined && (agent.context_limit < row.min || agent.context_limit > row.max)) return `${app} takes ${thousands(row.min)} to ${thousands(row.max)} tokens; a run with this limit is refused.`
   return `Added to each run BMN or dev-auto starts with this agent, and checked before it leaves. ${base}`
 }
@@ -977,7 +1022,7 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
 }
 
 // ---------------------------------------------------------------------------------------------
-// Team › Roles
+// Agents › Roles
 
 /** A role's candidates in order, each as its piece, name and effort. */
 function Steps(props: { candidates: readonly string[]; data: RosterDataShape }): React.JSX.Element {
@@ -1098,23 +1143,6 @@ export function researcherWords(data: Pick<RosterDataShape, 'agents'>, agent: Pi
   return namedResearchers(data)?.length === 0 ? `Your team names no researcher, so nobody researches: a research with ${agent.name} is refused.` : `Not offered on Models: a research with ${agent.name} is refused.`
 }
 
-/** While no role is held to read-only: what BMN proposes, taken with one press and approved like any other change (63.2 AC4). */
-function ReadOnlyProposal(props: { team: TeamState; data: RosterDataShape }): React.JSX.Element | null {
-  const proposed = readOnlyProposal(props.data)
-  if (proposed.length === 0) return null
-  return (
-    <div className="role">
-      <div className="list-line">
-        <div>
-          <b>No role is held to read-only yet</b>
-          <div className="line-detail">BMN proposes {listedRoles(proposed)}: a run for one of them would be refused unless it is started so that it cannot write. The other roles keep write access.</div>
-        </div>
-        <button type="button" className="small" onClick={() => props.team.stage(holdProposed(props.data))}>Use proposal</button>
-      </div>
-    </div>
-  )
-}
-
 function NewRole(props: { team: TeamState; data: RosterDataShape; done(): void }): React.JSX.Element {
   const [name, setName] = useState('')
   const [line, setLine] = useState('')
@@ -1157,7 +1185,8 @@ function RolesPage(props: { team: TeamState; data: RosterDataShape }): React.JSX
         <button type="button" onClick={() => setAdding(true)}>New role</button>
       </PageHead>
       {adding ? <NewRole team={team} data={data} done={() => setAdding(false)} /> : null}
-      <ReadOnlyProposal team={team} data={data} />
+      {/* BMN's read-only proposal is taken with the others from the one card on Team (Story 75.10). */}
+      {readOnlyProposal(data).length > 0 ? <p className="page-note">No role is held to read-only yet; BMN&apos;s proposal is on Team.</p> : null}
       {data.roles.map((role) => (
         <div key={role.id} className="role">
           <div className="list-line">
@@ -1177,7 +1206,7 @@ function RolesPage(props: { team: TeamState; data: RosterDataShape }): React.JSX
 }
 
 // ---------------------------------------------------------------------------------------------
-// Team › Changes
+// Agents › Changes
 
 function VersionView(props: { number: number; earlier: boolean }): React.JSX.Element {
   const [data, setData] = useState<RosterDataShape | null | 'missing'>(null)
@@ -1205,7 +1234,7 @@ function VersionView(props: { number: number; earlier: boolean }): React.JSX.Ele
   )
 }
 
-/** Team › Asks (73.1): the asks on this computer, read again while the page is open. */
+/** Agents › Asks (73.1): the asks on this computer, read again while the page is open. */
 function AsksPage(props: { home: string | null; sessionName(id: string): string | undefined }): React.JSX.Element {
   const asks = useTeamAsksState()
   if (asks.snapshot === null) {
@@ -1220,7 +1249,7 @@ function AsksPage(props: { home: string | null; sessionName(id: string): string 
   )
 }
 
-function ChangesPage(props: { team: TeamState }): React.JSX.Element {
+function ChangesPage(props: { team: TeamState; proposals: TeamProposals | null }): React.JSX.Element {
   const { team } = props
   const [viewing, setViewing] = useState<number | null>(null)
   const history = team.snapshot?.history ?? []
@@ -1233,7 +1262,8 @@ function ChangesPage(props: { team: TeamState }): React.JSX.Element {
   return (
     <>
       <PageHead title="Changes" status="Every approved version of the team" />
-      {history.length === 0 || damagedApproval(team) ? <FirstApproval team={team} /> : null}
+      {/* The first approval here is Team's card when BMN has proposals, so one Approve… carries them wherever it is pressed. */}
+      {history.length === 0 || damagedApproval(team) ? props.proposals !== null ? <ProposalsCard team={team} proposals={props.proposals} /> : <FirstApproval team={team} /> : null}
       {outside ? <p className="page-note">The team file holds changes made outside BMN. Keep or revert them on Agents before restoring a version.</p> : null}
       {team.data !== null && team.data.exceptions.length > 0 ? (
         <>
@@ -1265,7 +1295,13 @@ function ChangesPage(props: { team: TeamState }): React.JSX.Element {
 // ---------------------------------------------------------------------------------------------
 // The pages and their footer
 
-export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?: Apps; context?: Context; reported?: Reported; research?: ResearchState; sessionName?(id: string): string | undefined; go(page: TeamPage): void }): React.JSX.Element {
+export function TeamPreferences(props: {
+  team: TeamState; page: TeamPage; apps?: Apps; context?: Context; reported?: Reported; research?: ResearchState; sessionName?(id: string): string | undefined; go(page: TeamPage): void
+  /** BMN's pending proposals, one card on Team (Story 75.10). */
+  proposals?: TeamProposals | null
+  /** Luna through OpenCode Go: the sign-in note under the card. */
+  openCodeGo?: OpenCodeGoState | null
+}): React.JSX.Element {
   const { team, page } = props
   const snapshot = team.snapshot
   // Every ask on this computer is listed whatever state the team file is in: an agent's ask was made with the team it had then.
@@ -1301,10 +1337,10 @@ export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?:
   if (page.name === 'new') return <NewAgentPage key={page.fill?.model ?? ''} team={team} data={data} apps={apps} reported={reported} research={research} fill={page.fill} go={props.go} />
   if (page.name === 'roles') return <RolesPage team={team} data={data} />
   if (page.name === 'models' && research !== null) return <ModelsPage team={team} data={data} research={research} add={(fill) => props.go({ name: 'new', fill })} {...(props.sessionName ? { sessionName: props.sessionName } : {})} />
-  if (page.name === 'changes') return <ChangesPage team={team} />
+  if (page.name === 'changes') return <ChangesPage team={team} proposals={props.proposals ?? null} />
   const agent = page.name === 'agent' ? data.agents.find((entry) => entry.id === page.id) : undefined
   if (agent) return <AgentPage key={agent.id} team={team} data={data} agent={agent} apps={apps} context={props.context ?? null} reported={reported} research={research} sessionName={props.sessionName ?? (() => undefined)} go={props.go} />
-  return <AgentsPage team={team} data={data} go={props.go} />
+  return <AgentsPage team={team} data={data} proposals={props.proposals ?? null} openCodeGo={props.openCodeGo ?? null} go={props.go} />
 }
 
 function ReviewGroups(props: { groups: readonly DiffGroup[]; general: readonly string[]; data: RosterDataShape | null }): React.JSX.Element {

@@ -395,8 +395,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     assert.equal(readFileSync(input, 'utf8'), '')
     result.handoffRefused = refused.stderr.trim()
     await select(target.session.sessionId)
-    await page.getByRole('button',{name:`Actions for ${workspace.name}`,exact:true}).click()
-    await page.getByRole('menuitem',{name:'Review results…',exact:true}).click()
+    // Story 75.10: Review results… opens from the palette for the active workspace.
+    await page.locator('button[aria-label="Command palette"]').click(); await page.keyboard.type('Review results'); await page.locator('#palette-review-results').click()
     await page.locator('dialog.workspace-results-dialog[open] .workspace-results-sessions').waitFor()
     assert.equal(await page.getByRole('button',{name:'Review handoff',exact:true}).count(), 0)
     assert.equal(await page.getByText('Handoffs awaiting you').count(), 0)

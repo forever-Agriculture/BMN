@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { parseRoster, rewriteRoster, starterRoster } from '../../../bin/agents-roster.mjs'
 import { LUNA_GO_MODEL, OPENCODE_GO_PROVIDER } from '../../../bin/agents-opencode.mjs'
 import { lunaGoProposal, namedResearchers, setProviderAnswer, setResearcher } from './roster-staging'
-import { OpenCodeGoNotes, lunaGoProposalWords, openCodeSignInWords } from './team-preferences'
+import { OpenCodeSignInNote, judgeClause, lunaGoClause, openCodeSignInWords, teamProposals } from './team-preferences'
 import { approvalNotice, type TeamState } from './team-state'
 
 const noop = (): void => {}
@@ -39,10 +39,10 @@ const team = (approved: RosterDataShape, extra: Partial<TeamState> = {}): TeamSt
   },
   loadError: null, base: approved, data: approved, approved, hasStaged: false, preview: null, outside: { groups: [], general: [] },
   changed: new Set(), busy: false, notice: null, confirmation: null, needsOwner: false, stage: noop, discard: noop, reload: later, setNotice: noop,
-  requestApproval: later, commit: later, cancelConfirmation: noop, revert: later, saveNotes: later, pendingNotes: {}, setPendingNote: noop, undoRulesUpdate: later, rulesUndo: null, confirmRulesUndo: later, cancelRulesUndo: noop, ...extra
+  requestApproval: later, approveProposals: later, commit: later, cancelConfirmation: noop, revert: later, saveNotes: later, pendingNotes: {}, setPendingNote: noop, undoRulesUpdate: later, rulesUndo: null, confirmRulesUndo: later, cancelRulesUndo: noop, ...extra
 })
-const notes = (data: RosterDataShape, view: OpenCodeGoView | null, approved: RosterDataShape = data, copying = false): string =>
-  renderToStaticMarkup(createElement(OpenCodeGoNotes, { team: team(approved), data, view, copying, copy: noop }))
+const signIn = (approved: RosterDataShape, view: OpenCodeGoView | null, copying = false): string =>
+  renderToStaticMarkup(createElement(OpenCodeSignInNote, { team: team(approved), state: { view, copying, copy: noop } }))
 /** What the owner reads: the markup without tags. */
 const words = (markup: string): string => markup.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim()
 
@@ -59,7 +59,7 @@ describe('BMN proposes Luna (Go) (70.4 AC1)', () => {
     expect(PROPOSED.roles).toEqual([BEFORE.roles[0], { id: 'helper', candidates: ['luna@max', 'luna-go@max'], then: 'lead' }])
     expect(PROPOSED.harness_routes).toEqual(BEFORE.harness_routes)
     expect(namedResearchers(PROPOSED)).toEqual(['opus', 'luna-go'])
-    expect(lunaGoProposalWords(PROPOSED)).toBe('Luna (Go) waits for you. OpenCode on this computer lists Luna\'s model on OpenCode Go, and BMN\'s proposal adds her as a read-only helper and a researcher, run by OpenCode; OpenCode Go gets public work only until you allow it. Once you approve, BMN copies your OpenCode Go sign-in into its own OpenCode folder. Nothing changes until then.')
+    expect(lunaGoClause(PROPOSED)).toBe('Luna (Go) as a read-only helper and a researcher, run by OpenCode, which lists her model on OpenCode Go; OpenCode Go gets public work only until you allow it, and once you approve BMN copies your OpenCode Go sign-in into its own OpenCode folder')
   })
 
   it('is a team the team file takes', () => {
@@ -72,18 +72,18 @@ describe('BMN proposes Luna (Go) (70.4 AC1)', () => {
     const held = { ...BEFORE, providers: [...BEFORE.providers, { id: 'opencode-go', name: 'OpenCode Go', hosts: [], private_work: 'allowed' as const }] }
     const proposed = lunaGoProposal(held) as RosterDataShape
     expect(proposed.providers).toEqual(held.providers)
-    expect(lunaGoProposalWords(proposed)).toContain('; OpenCode Go may see private work, as you chose.')
+    expect(lunaGoClause(proposed)).toContain('; OpenCode Go may see private work, as you chose, and once you approve')
     // Every agent that can research does so on a team from before the mark; marking her alone would take that from the others.
     const unmarked = setResearcher(BEFORE, 'opus', false)
     expect(namedResearchers(unmarked)).toBeNull()
     const open = lunaGoProposal(unmarked) as RosterDataShape
     expect(open.agents.at(-1)?.researcher).toBeUndefined()
     expect(namedResearchers(open)).toBeNull()
-    expect(lunaGoProposalWords(open)).toContain('adds her as a read-only helper and a researcher')
+    expect(lunaGoClause(open)).toContain('Luna (Go) as a read-only helper and a researcher')
     // A team with no helper role: she joins with none, as a researcher.
     const noHelper = lunaGoProposal({ ...BEFORE, roles: BEFORE.roles.slice(0, 1) }) as RosterDataShape
     expect(noHelper.agents.at(-1)?.roles).toEqual([])
-    expect(lunaGoProposalWords(noHelper)).toContain('adds her as a researcher, run by OpenCode')
+    expect(lunaGoClause(noHelper)).toContain('Luna (Go) as a researcher, run by OpenCode')
   })
 
   it('proposes nothing once the team holds her model on OpenCode, in either form, or her id', () => {
@@ -98,23 +98,24 @@ describe('BMN proposes Luna (Go) (70.4 AC1)', () => {
   })
 })
 
-describe('the Team page shows the proposal and the sign-in (70.4)', () => {
-  it('shows the proposal only while OpenCode lists her and the team does not hold her', () => {
-    expect(notes(BEFORE, null)).toBe('')
-    const shown = notes(BEFORE, { listed: true, signedIn: null, reason: null })
-    expect(words(shown)).toBe(`${lunaGoProposalWords(PROPOSED)} Use proposal`)
-    expect(shown).toContain('class="page-note with-action"')
-    expect(notes(BEFORE, { listed: false, signedIn: null, reason: 'OpenCode is not on this computer' })).toBe('')
-    expect(notes(PROPOSED, { listed: true, signedIn: null, reason: null })).toBe('')
+describe('the Team page shows the proposal and the sign-in (70.4, Story 75.10)', () => {
+  it('names her in the one proposals card only while OpenCode lists her and the team does not hold her', () => {
+    // The team holds no judge either, so the card proposes Jev first and Luna after him.
+    const listed = teamProposals(BEFORE, { lunaListed: true, researchers: null })
+    expect(listed?.clauses).toEqual([judgeClause(listed!.data), lunaGoClause(listed!.data)])
+    expect(listed?.data.agents.at(-1)).toEqual(PROPOSED.agents.at(-1))
+    expect(teamProposals(BEFORE, { lunaListed: false, researchers: null })?.clauses).toEqual([judgeClause(listed!.data)])
+    expect(teamProposals(listed!.data, { lunaListed: true, researchers: null })).toBeNull()
   })
 
   it('asks for the sign-in where the approved team names an agent on OpenCode Go and BMN\'s folder holds none', () => {
     const approved = setProviderAnswer(PROPOSED, 'opencode-go', 'allowed')
-    expect(words(notes(approved, { listed: true, signedIn: false, reason: null }))).toBe(
+    expect(signIn(approved, null)).toBe('')
+    expect(words(signIn(approved, { listed: true, signedIn: false, reason: null }))).toBe(
       'Luna (Go) cannot run yet: BMN\'s OpenCode folder holds no OpenCode Go sign-in. Copy sign-in takes yours from OpenCode on this computer, once, and nothing else of OpenCode\'s. Copy sign-in')
-    expect(notes(approved, { listed: true, signedIn: false, reason: null }, approved, true)).toContain('disabled="">Copying…</button>')
-    expect(notes(approved, { listed: true, signedIn: true, reason: null })).toBe('')
-    expect(notes(approved, { listed: true, signedIn: null, reason: 'OpenCode is not on this computer' })).toBe('')
+    expect(signIn(approved, { listed: true, signedIn: false, reason: null }, true)).toContain('disabled="">Copying…</button>')
+    expect(signIn(approved, { listed: true, signedIn: true, reason: null })).toBe('')
+    expect(signIn(approved, { listed: true, signedIn: null, reason: 'OpenCode is not on this computer' })).toBe('')
     const two = { ...approved, agents: [...approved.agents, agent('kimi', { harness: 'opencode', provider: 'opencode-go', model: 'kimi-k3', name: 'Kimi' })] }
     expect(openCodeSignInWords(two)).toMatch(/^Luna \(Go\) and Kimi cannot run yet/)
   })

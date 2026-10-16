@@ -39,6 +39,8 @@ export function Segmented<Value extends string | number | null>(props: {
   /** A label may carry a mark before its word (Agents: seal, pips). */
   optionLabel(value: Value): ReactNode
   onChange(value: Value): void
+  /** Pressing the chosen segment calls onChange too: a view's segment brings it back to its start (Agents › Team from an agent). */
+  again?: boolean | undefined
 }): React.JSX.Element {
   const buttons = useRef<Array<HTMLButtonElement | null>>([])
   const move = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -65,7 +67,7 @@ export function Segmented<Value extends string | number | null>(props: {
             aria-checked={checked}
             tabIndex={checked || (index === 0 && !props.options.includes(props.value)) ? 0 : -1}
             disabled={props.disabled}
-            onClick={() => { if (!checked) props.onChange(option) }}
+            onClick={() => { if (!checked || props.again) props.onChange(option) }}
           >
             {props.optionLabel(option)}
           </button>
@@ -150,7 +152,7 @@ export function HistoryPreferences(props: {
   const keepDays = status?.keepDays ?? props.settings.agentHistory.keepDays
   return (
     <section className="preferences-section history-section" aria-labelledby="preferences-history-title">
-      <h3 id="preferences-history-title">History</h3>
+      <h4 className="group-head" id="preferences-history-title">History</h4>
       <div className="preferences-row">
         <div className="preferences-row-label">
           <span id="preferences-history-keep">Keep agent history</span>

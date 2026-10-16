@@ -1,4 +1,4 @@
-// MODULE: team-asks.test.ts - Story 73.1 markup and words: Team › Asks as a read-only record of his agents' asks: each line's fields and outcome, why a run ended, Stop on a running line, an opened ask with hostile answers kept as plain text, removal and retention, over synthetic asks
+// MODULE: team-asks.test.ts - Story 73.1 markup and words: Agents › Asks as a read-only record of his agents' asks: each line's fields and outcome, why a run ended, Stop on a running line, an opened ask with hostile answers kept as plain text, removal and retention, over synthetic asks
 import type { TeamAskDetail, TeamAskLine, TeamAskReads, TeamAsksSnapshot } from '@bmn/protocol'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -40,7 +40,7 @@ const detail = (fields: Partial<TeamAskDetail> = {}): TeamAskDetail => ({
   teammate: { app: 'codex', appName: 'Codex', appVersion: '0.162.1', model: 'gpt-6-astra', session: '01a13c80-made-up', sessionSource: 'thread.started' }, subagents: [], masked: [], ...fields
 })
 
-describe('the words of Team › Asks', () => {
+describe('the words of Agents › Asks', () => {
   it('has one or two plain words for every outcome, and words for one it does not know', () => {
     expect(ASK_OUTCOME_WORDS).toEqual({ running: 'Asking now', answered: 'Answered', failed: 'Failed', refused: 'Refused', 'out-of-time': 'Out of time', stopped: 'Stopped', 'not-attributed': 'Not attributed', interrupted: 'Cut short' })
     expect(outcomeWords('some-new-state')).toBe('Some new state')
@@ -86,7 +86,7 @@ describe('the words of Team › Asks', () => {
   })
 })
 
-describe('Team › Asks', () => {
+describe('Agents › Asks', () => {
   it('lists every ask newest first with when, who asked whom at which effort, the role, the project, what was readable, the time, the usage and the outcome (AC2)', () => {
     const html = render()
     const text = words(html)

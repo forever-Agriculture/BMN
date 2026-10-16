@@ -1,5 +1,5 @@
 /* global window */
-// MODULE: start-installs-live.mjs - Story 75.9: what BMN installs by itself. At its start it adds the hook entries each app set up here lacks and leaves a changed or foreign one, which Rules › Health lists; a skill reaches an app once BMN's own test of it passed; Save writes the rules and every app's file at once and Undo puts both back; a second start changes nothing
+// MODULE: start-installs-live.mjs - Story 75.9: what BMN installs by itself. At its start it adds the hook entries each app set up here lacks and leaves a changed or foreign one, which Integrations › Health lists; a skill reaches an app once BMN's own test of it passed; Save writes the rules and every app's file at once and Undo puts both back; a second start changes nothing
 // The app runs in test mode with a temporary HOME and XDG folders (removed at the end), on the unit-test roster, a
 // synthetic rules master, a Claude Code settings file holding a gated BMN entry, a foreign one and a setting of its own,
 // an empty Codex folder, an empty OpenCode folder, two synthetic skills (one of which Codex already holds a folder of its
@@ -149,9 +149,10 @@ esac`)
       await page.keyboard.press('Enter')
       await dialog.waitFor()
     }
+    // Story 75.10: Integrations shows Health, Rules (the editor), Skills and Tools as views under its head.
     const nav = dialog.locator('nav.preferences-nav')
-    await nav.locator('.nav-parent > .nav-item', { hasText: /^Rules/ }).click()
-    await nav.locator('.nav-sub .nav-item', { hasText: new RegExp(`^${sub}$`) }).click()
+    await nav.locator('.nav-item', { hasText: /^Integrations/ }).click()
+    await dialog.locator('.page-views [role="radio"]', { hasText: new RegExp(`^${sub === 'Editor' ? 'Rules' : sub}$`) }).click()
     return dialog.locator('.preferences-main')
   }
   const focus = (page) => page.evaluate(() => { window.dispatchEvent(new Event('focus')) })
@@ -191,7 +192,7 @@ esac`)
       readlinkSync(join(codexSkills, 'evidence-first')) === join(skillsDir, 'evidence-first') && readFileSync(join(codexSkills, 'small-steps/own.md'), 'utf8') === 'own\n',
       { skills: state().skills })
 
-    // ---- Rules › Health › Hooks ------------------------------------------------------------------------------------
+    // ---- Integrations › Health › Hooks ------------------------------------------------------------------------------------
     phase('Health › Hooks')
     let main = await openRules(page, 'Health')
     await main.locator('h4.group-head', { hasText: /^Hooks/ }).waitFor()
@@ -212,7 +213,7 @@ esac`)
     await main.locator('h4.group-head', { hasText: /^Hooks/ }).scrollIntoViewIfNeeded()
     await shot(page, 'health-hooks-1280.png')
 
-    // ---- Rules › Editor: Save writes every app's file, Undo puts both back --------------------------------------------
+    // ---- Integrations › Rules: Save writes every app's file, Undo puts both back --------------------------------------------
     phase('Save and Undo')
     main = await openRules(page, 'Editor')
     const editor = main.locator('.rules-editor textarea')
