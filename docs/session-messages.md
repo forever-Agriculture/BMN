@@ -162,3 +162,34 @@ stamped text once; and Messages read *printed for the agent*. Two runs of two.
   noticed, as for the [prompt guard](agent-control.md#the-prompt-guard).
 - A new version of an app is not measured by itself. The table names the version; after an
   update the hand-over is unproven until this page is measured again.
+
+## The start-of-conversation brief (Story 75.2)
+
+Can BMN hand an agent a short brief once, when its conversation starts? Measured 2026-10-16 the
+same way: the installed apps in isolated profiles inside an isolated BMN built from `4e2c44f`, a
+made-up 1,500-character brief holding three marked words, a probe hook answering in place of
+BMN's. The scripts and raw records are kept under
+`_bmad-output/planning-artifacts/reference-75-lighter/brief/` (not committed; one row per run in
+its `RESULT-runs.md`).
+
+| Case | Codex 0.162.1 | Claude Code 2.1.301 |
+| --- | --- | --- |
+| New conversation: `SessionStart` (source `startup`) answers with `additionalContext` | **PASS**, five of five: the whole text once in the record (one developer message), the first command named the three words | **PASS**, five of five: one `hook_additional_context` entry, the first command named the three words |
+| Resume (`codex resume`, `claude --resume`) | `SessionStart` source `resume`; the brief is still known, 2 of 2 | `SessionStart` source `resume`; the brief is still known, 1 of 1 |
+| Compaction (`/compact`) | `PostCompact` (manual), then `SessionStart` source `compact`; the brief was lost 1 of 3 | `PreCompact` (manual), then `SessionStart` source `compact`; the brief was lost 1 of 1 |
+| BMN restart during a conversation | the session's process ends with BMN; BMN's Resume refuses an agent typed into a shell, so the conversation goes on only as a resume (above) or a new one | the same |
+| Sub-agent | no `SessionStart` for it; it is a fork that already holds the parent's brief (it ran `echo sub-got ALPHA-…`) | `SubagentStart`/`SubagentStop`, no `SessionStart`; it did not know the brief (`echo sub-nothing`) |
+| Brief and a waiting message in one `PostToolUse` answer | **PASS**: both whole, once | **PASS**: one entry with both, whole |
+| Brief and a prompt-guard refusal in one `UserPromptSubmit` answer | the prompt was refused and the brief kept; the next prompt's first command named the three words | the prompt was refused and **the brief dropped**: no entry, the next prompt did not know it |
+
+A waiting message and a guard refusal never share one event: messages travel on `PostToolUse`,
+the guard answers `UserPromptSubmit`, and the probe answered each within BMN's shared hook
+deadline. Every run with no answer in this table failed in the harness before the agent worked
+(a Codex update offer covered the prompt) and was run again; a restart run ends at BMN's refused
+Resume, recorded as such.
+
+What 75.6 takes from this: both apps have a working path, `SessionStart` with
+`additionalContext`. BMN briefs a new conversation once, and once more after compaction, because
+the brief does not survive it (owner decision, 2026-10-16). It does not brief on resume or a
+sub-agent. In Claude Code a brief must not ride on an answer that refuses the prompt: BMN keeps
+it for the next answer that does not.
