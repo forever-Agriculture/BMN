@@ -46,6 +46,7 @@ export function AwaySummaryDialog(props: {
   now: number
   onOpenRequest(request: AttentionRecord): void
   onOpenSession(sessionId: string): void
+  onOpenDevAutoRuns(): void
   onClose(): void
 }): React.JSX.Element {
   const [sources, setSources] = useState<AwaySummarySources | null>(null)
@@ -138,6 +139,7 @@ export function AwaySummaryDialog(props: {
                                       {row.text !== '' || index > 0 ? ' · ' : null}
                                       <button type="button" className="away-link" onClick={() => {
                                         if (link.kind === 'session') props.onOpenSession(link.id)
+                                        else if (link.kind === 'workflow') props.onOpenDevAutoRuns()
                                         else void window.aiTerminal.openArtifact(link.id).catch(() => undefined)
                                       }}>{link.text}</button>
                                     </Fragment>

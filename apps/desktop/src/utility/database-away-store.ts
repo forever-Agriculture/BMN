@@ -32,8 +32,10 @@ export function getAway(database: DatabaseConnection): AwayRecord {
  * applied one after another, each against the record the one before it left. The period id is made here, never by a caller.
  */
 export function changeAway(database: DatabaseConnection, change: Omit<AwayChange, 'periodId'>, now: string): AwayChangeResult {
-  const result = applyAwayChange(readRecord(database), { ...change, periodId: randomUUID() }, now)
-  if (result.outcome === 'changed') writeRecord(database, result.record, now)
+  const current = readRecord(database)
+  const result = applyAwayChange(current, { ...change, periodId: randomUUID() }, now)
+  // An unchanged state with a remembered key is written too: the key is what makes a later replay a no-op.
+  if (result.outcome === 'changed' || result.record !== current) writeRecord(database, result.record, now)
   return result
 }
 

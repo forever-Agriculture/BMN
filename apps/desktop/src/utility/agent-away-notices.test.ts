@@ -42,6 +42,26 @@ describe('AwayNotices (Story 76.4 AC1-AC2)', () => {
     expect(tracker.answer(tool(), away(3))?.revision).toBe(3)
   })
 
+  it('hands one of two overlapping hooks of one conversation the change: the claim is taken before the answer returns', async () => {
+    const { tracker } = notices()
+    const [first, second] = await Promise.all([Promise.resolve().then(() => tracker.answer(tool(), away())), Promise.resolve().then(() => tracker.answer(tool(), away()))])
+    expect([first?.revision ?? null, second?.revision ?? null].toSorted()).toEqual([1, null])
+  })
+
+  it('keeps handing when the record cannot be saved, and saves everything again with the next change', async () => {
+    const saved: Array<Array<[string, AwayTold]>> = []
+    let fail = true
+    const tracker = new AwayNotices({ liveIncarnationId: () => 'i1', now: () => NOW,
+      save: async (entries) => { if (fail) throw new Error('disk full'); saved.push(entries) } })
+    expect(tracker.answer(tool(), away())?.revision).toBe(1)
+    await Promise.resolve()
+    expect(saved).toEqual([])
+    fail = false
+    expect(tracker.answer(tool({ turn: { conversation: 'c2', nested: false } }), away())?.revision).toBe(1)
+    await Promise.resolve()
+    expect(saved.at(-1)?.map(([key]) => key.split(String.fromCharCode(0))[2])).toEqual(['c1', 'c2'])
+  })
+
   it('never hands an away that is already over when it was never handed (they coalesce only then)', () => {
     const { tracker } = notices()
     expect(tracker.answer(tool(), back())).toBeNull()

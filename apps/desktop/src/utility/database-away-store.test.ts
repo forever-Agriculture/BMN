@@ -34,6 +34,13 @@ describe('away store', () => {
     expect(getAway(database)).toEqual(away.record)
   })
 
+  it('stores the key of an operation that changed nothing, so its redelivery after a later away ends nothing', () => {
+    expect(changeAway(database, { to: 'back', source: 'telegram', operationKey: 'telegram:bot:41' }, T0).outcome).toBe('unchanged')
+    expect(changeAway(database, { to: 'away', source: 'app' }, T0).outcome).toBe('changed')
+    expect(changeAway(database, { to: 'back', source: 'telegram', operationKey: 'telegram:bot:41' }, T1).outcome).toBe('unchanged')
+    expect(getAway(database).state).toBe('away')
+  })
+
   it('applies one change after another against what the one before left', () => {
     const first = changeAway(database, { to: 'away', source: 'app', expectedRevision: 0 }, T0)
     const second = changeAway(database, { to: 'back', source: 'telegram', expectedRevision: 0 }, T1)

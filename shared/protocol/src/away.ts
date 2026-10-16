@@ -32,7 +32,8 @@ export interface AwayRecord {
   /** When the summary of the closed period was first shown; null until then. */
   summaryShownAt: string | null
   /** Recent operation keys and the revision each produced. */
-  operations: Array<{ key: string; revision: number }>
+  /** Operation keys already applied; `unchanged` marks one that changed nothing, so its replay answers the same. */
+  operations: Array<{ key: string; revision: number; unchanged?: true }>
 }
 
 export const EMPTY_AWAY_RECORD: AwayRecord = Object.freeze({
@@ -93,6 +94,7 @@ export function parseAwayRecord(value: unknown): AwayRecord {
   const operations = Array.isArray(row.operations)
     ? row.operations.filter((item): item is { key: string; revision: number } => typeof item === 'object' && item !== null &&
       isText((item as { key: unknown }).key) && Number.isSafeInteger((item as { revision: unknown }).revision)).slice(-AWAY_OPERATIONS_KEPT)
+      .map((item) => ({ key: item.key, revision: item.revision, ...((item as { unchanged?: unknown }).unchanged === true ? { unchanged: true as const } : {}) }))
     : []
   return {
     version: 1, state, revision, periodId, since,
@@ -106,12 +108,11 @@ export function parseAwayRecord(value: unknown): AwayRecord {
 /**
  * The one change rule (Story 76.3 AC1). A repeated away keeps the period's since and note unless a note is given; a repeated
  * back, or a back with nothing said, changes nothing; a stale revision changes nothing; a retried operation key returns the
- * revision it produced the first time and changes nothing.
+ * revision it produced the first time and changes nothing, also when the first time changed nothing.
  */
 export function applyAwayChange(current: AwayRecord, change: AwayChange, now: string): AwayChangeResult {
-  if (change.operationKey !== undefined && current.operations.some((item) => item.key === change.operationKey)) {
-    return { outcome: 'repeated', record: current }
-  }
+  const applied = change.operationKey === undefined ? undefined : current.operations.find((item) => item.key === change.operationKey)
+  if (applied !== undefined) return { outcome: applied.unchanged ? 'unchanged' : 'repeated', record: current }
   if (change.source === 'agent' && (change.expectedRevision === undefined || !change.agentSessionId)) {
     return { outcome: 'invalid', record: current, reason: 'An agent names the away revision it saw and its session' }
   }
@@ -121,14 +122,15 @@ export function applyAwayChange(current: AwayRecord, change: AwayChange, now: st
   }
   const problem = awayNoteProblem(change.note)
   if (problem !== null) return { outcome: 'invalid', record: current, reason: problem }
-  const remember = (record: AwayRecord): AwayRecord => change.operationKey === undefined ? record
-    : { ...record, operations: [...record.operations, { key: change.operationKey, revision: record.revision }].slice(-AWAY_OPERATIONS_KEPT) }
+  const remember = (record: AwayRecord, unchanged = false): AwayRecord => change.operationKey === undefined ? record
+    : { ...record, operations: [...record.operations, { key: change.operationKey, revision: record.revision, ...(unchanged ? { unchanged: true as const } : {}) }].slice(-AWAY_OPERATIONS_KEPT) }
+  // A no-op is remembered too, so its key replayed after a later change still changes nothing (Telegram redelivery included).
   if (change.to === 'back') {
-    if (current.state !== 'away') return { outcome: 'unchanged', record: current }
+    if (current.state !== 'away') return { outcome: 'unchanged', record: remember(current, true) }
     return { outcome: 'changed', record: remember({ ...current, state: 'back', revision: current.revision + 1, endedAt: now, endedBy: change.source, summaryShownAt: null }) }
   }
   if (current.state === 'away') {
-    if (change.note === undefined || change.note === current.note) return { outcome: 'unchanged', record: current }
+    if (change.note === undefined || change.note === current.note) return { outcome: 'unchanged', record: remember(current, true) }
     return { outcome: 'changed', record: remember({ ...current, revision: current.revision + 1, note: change.note }) }
   }
   return {

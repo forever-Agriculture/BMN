@@ -121,8 +121,8 @@ export interface AwayWaitingRow {
   command: boolean
   before: boolean
 }
-/** A link opens a session or a published file BMN validated; anything else stays words. */
-export interface AwayDecisionRow { label: string; text: string; muted?: boolean; links?: Array<{ kind: 'session' | 'artifact'; id: string; text: string }> }
+/** A link opens a session, a published file or a dev-auto run BMN validated; anything else stays words. */
+export interface AwayDecisionRow { label: string; text: string; muted?: boolean; links?: Array<{ kind: 'session' | 'artifact' | 'workflow'; id: string; text: string }> }
 export interface AwayDecisionView { key: string; sessionId: string; time: string; choice: string; rows: AwayDecisionRow[] }
 
 export interface AwaySummaryView {
@@ -267,12 +267,22 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     for (const entry of run.decisionEntries ?? []) if (entry.bmnKey !== null && entry.entry !== null && keyCounts.get(entry.bmnKey) === 1) joined.add(entry.bmnKey)
   }
   const shown = records.slice(0, AWAY_SUMMARY_LIMITS.decisions)
+  // A workflow entry is identified as dev-auto names it (dev-auto:<run id>:<entry>, Story 76.7) and found in a run BMN can read
+  // that owns its checkout; the store cannot check it when the record is written, so the summary checks it when it reads.
+  const workflowEntry = (id: string): string | null => {
+    const [tool, runId, entry] = id.split(':')
+    if (tool !== 'dev-auto' || !runId || !entry || id.split(':').length !== 3) return null
+    const run = input.devAuto?.result.runs.find((item) => item.runId === runId && item.ownership !== 'copy' && !item.unavailable &&
+      (item.decisionEntries ?? []).some((candidate) => candidate.entry === entry))
+    return run === undefined ? null : `${devAutoLabel(run, input.devAuto!.workspaceNames)} [${entry}]`
+  }
   const decisionView = (record: DecisionRecord): AwayDecisionView => {
-    const linked = (reference: DecisionRecord['references'][number]): boolean =>
-      reference.valid && (reference.kind === 'session' || reference.kind === 'artifact' && input.artifactNames[reference.id] !== undefined)
+    const linked = (reference: DecisionRecord['references'][number]): boolean => reference.kind === 'workflow' ? workflowEntry(reference.id) !== null
+      : reference.valid && (reference.kind === 'session' || reference.kind === 'artifact' && input.artifactNames[reference.id] !== undefined)
     const links = record.references.filter(linked).map((reference) => reference.kind === 'session'
       ? { kind: 'session' as const, id: reference.id, text: where(reference.id) }
-      : { kind: 'artifact' as const, id: reference.id, text: input.artifactNames[reference.id]! })
+      : reference.kind === 'workflow' ? { kind: 'workflow' as const, id: reference.id, text: workflowEntry(reference.id)! }
+        : { kind: 'artifact' as const, id: reference.id, text: input.artifactNames[reference.id]! })
     const named = record.references.filter((reference) => !linked(reference)).map((reference) => reference.id)
     const last = record.outcomes.at(-1)
     const app = awayAppName(record.agentCli)

@@ -170,6 +170,13 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
     expect(view.decided.groups[0]!.records[0]!.rows.at(-1)!.text).toBe('Wed 23:41 by Builder (Claude Code) · also in dev-auto\'s handoff')
   })
 
+  it('links a workflow reference dev-auto identifies to its run; one no readable run holds stays words', () => {
+    const devAuto = { result: { runs: [run({ decisionEntries: [{ entry: 'd3', bmnKey: null }] })], skipped: 0, issues: [], observedAt: ENDED }, workspaceNames: { w: 'Personal' } }
+    const record = decision('k', 's1', { affects: 'src/a.ts', references: [{ kind: 'workflow', id: 'dev-auto:r1:d3', valid: false }, { kind: 'workflow', id: 'dev-auto:r9:d3', valid: false }] })
+    const affects = buildAwaySummary(input({ devAuto, decisions: { decisions: [record], complete: true } })).decided.groups[0]!.records[0]!.rows.find((row) => row.label === 'Affects')
+    expect(affects).toEqual({ label: 'Affects', text: 'src/a.ts · dev-auto:r9:d3', links: [{ kind: 'workflow', id: 'dev-auto:r1:d3', text: 'Personal · dev-auto/epic-76 · Epic 76 [d3]' }] })
+  })
+
   it('a folder that is not a repository is no gap in dev-auto; a real skip is named with its count and an empty Now says so', () => {
     const devAuto = (issues: string[]) => ({ result: { runs: [], skipped: issues.length, issues, observedAt: ENDED }, workspaceNames: { w: 'Personal' } })
     const plain = buildAwaySummary(input({ devAuto: devAuto(['/home/me/notes: Not a repository']) }))

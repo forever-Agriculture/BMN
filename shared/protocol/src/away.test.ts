@@ -80,6 +80,15 @@ describe('applyAwayChange (Story 76.3 AC1)', () => {
     expect(record.operations.some((item) => item.key === 'k-1')).toBe(false)
   })
 
+  it('remembers a key that changed nothing, so replaying it after a later change still changes nothing', () => {
+    const noop = applyAwayChange(empty(), change({ to: 'back', operationKey: 'tg-7' }), T0)
+    expect(noop.outcome).toBe('unchanged')
+    expect(noop.record.operations).toEqual([{ key: 'tg-7', revision: 0, unchanged: true }])
+    const away = changed(noop.record, { operationKey: 'k-2' })
+    expect(applyAwayChange(away, change({ to: 'back', operationKey: 'tg-7' }), T1)).toEqual({ outcome: 'unchanged', record: away })
+    expect(parseAwayRecord(JSON.parse(JSON.stringify(away))).operations).toEqual(away.operations)
+  })
+
   it('refuses an overlong note whole, a note with back and control or direction characters', () => {
     const long = 'x'.repeat(AWAY_NOTE_LIMIT + 1)
     expect(applyAwayChange(empty(), change({ note: long }), T0)).toMatchObject({ outcome: 'invalid', record: empty() })

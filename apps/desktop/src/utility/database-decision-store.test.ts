@@ -3,8 +3,9 @@ import { createRequire } from 'node:module'
 import type { DecisionPayload } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { changeAway } from './database-away-store'
-import { getAttention, listAttention, openAttention } from './database-companion-store'
+import { getAttention, listAttention, openAttention, putSettingsSection } from './database-companion-store'
 import { DECISION_PERIOD_LIMIT, addDecisionOutcome, listPeriodDecisions, recordDecision, type DecisionRecordCall } from './database-decision-store'
+import { purgeExpiredArchives } from './database-archive-purge'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import { DATABASE_MIGRATIONS, DEFAULT_WORKSPACE_ID } from './store-schema'
 
@@ -80,6 +81,18 @@ describe('recordDecision (Story 76.5 AC1-AC2)', () => {
     expect(listAttention(database)).toEqual([])
     const opened = openAttention(database, { sessionId: 's1', incarnationId: 'i1', requestKey: 'decision:shared', kind: 'question', title: 'Q' }, 'r-1', T1)
     expect(getAttention(database, opened.requestId).state).toBe('open')
+  })
+})
+
+describe('recorded decisions and the archive purge (Story 76.5 consumer audit)', () => {
+  it('go with a session the purge deletes, as its other rows do, and stay for a session it keeps', () => {
+    const record = away()
+    recordDecision(database, call({ key: 'kept' }), T1)
+    recordDecision(database, call({ sessionId: 's2', key: 'purged' }), T1)
+    putSettingsSection(database, 'archive', { deleteAfterDays: 10 }, T1)
+    database.prepare('UPDATE session SET archived_at = ? WHERE session_id = ?').run(T0, 's2')
+    expect(purgeExpiredArchives(database, '2026-10-30T00:00:00.000Z').sessionIds).toEqual(['s2'])
+    expect(listPeriodDecisions(database, record.periodId!).decisions.map((item) => [item.sessionId, item.key])).toEqual([['s1', 'kept']])
   })
 })
 

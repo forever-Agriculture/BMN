@@ -2518,6 +2518,7 @@ function App(): React.JSX.Element {
           now={now}
           onOpenRequest={(request) => { setDialog(null); goToRequest(request) }}
           onOpenSession={(sessionId) => { setDialog(null); openSession(sessionId, true) }}
+          onOpenDevAutoRuns={() => setDialog({ kind: 'dev-auto-runs' })}
           onClose={() => setDialog(null)}
         />
       ) : null}
