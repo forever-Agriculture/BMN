@@ -1,5 +1,5 @@
 /* global window, document, getComputedStyle */
-// MODULE: lighter-screens-visual.mjs - Epic 75.1/75.10: every Preferences page, the three ⋯ menus, the Files panel, Review results and the palette, captured on synthetic data
+// MODULE: lighter-screens-visual.mjs - Epic 75.1/75.10/76.1: the window head (focus mode, 540 px), every Preferences page, the three ⋯ menus, the Files panel, Review results and the palette, captured on synthetic data
 // The app runs in test mode with a temporary HOME and XDG folders (removed at the end). The temporary home holds the
 // unit-test roster, a synthetic rules master and two synthetic skills; stand-ins for claude and codex sit on the PATH
 // the home's shell settings add. One workspace carries what the owner-facing controls act on (the before set of
@@ -286,6 +286,16 @@ echo seeded
 
     // ---- main window -----------------------------------------------------------------------------------------
     await screen('main-window', 'Main window, Builder selected: sidebar, pane header and the session\'s output', async () => { await builderRow.click() })
+    // Story 76.1: the window head where the Away check goes, which must survive focus mode and a narrow window.
+    await screen('head-focus', 'Focus mode (Ctrl Shift Z), Builder selected: the window head without the sidebar', async () => {
+      await builderRow.click()
+      await page.keyboard.press('Control+Shift+Z')
+      await page.locator('.workspace-body.focus-mode').waitFor()
+    }, { region: '.app-header', close: async () => { await page.keyboard.press('Control+Shift+Z'); await page.locator('.workspace-body.focus-mode').waitFor({ state: 'detached' }) } })
+    await screen('head-narrow', 'Main window at 540 px wide, Builder selected: the window head and what it keeps', async () => {
+      await builderRow.click()
+      await resize([540, 700])
+    }, { region: '.app-header', close: async () => { await resize(SIZE) } })
     await screen('workspace-menu', 'Workspace ⋯ (sidebar): every entry, the Marker group', openWorkspaceMenu,
       { region: '[role="menu"]', scroll: '[role="menu"]' })
     await screen('session-menu', 'Session ⋯ (sidebar row of Builder): every entry', async () => {
