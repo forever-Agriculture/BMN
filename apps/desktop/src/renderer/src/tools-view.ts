@@ -105,13 +105,13 @@ export function toolStateHint(state: ToolStateName | undefined, app: Pick<ToolsA
   if (app === undefined || !app.supported) return `Tools are not supported yet in ${name}: Health says how BMN's test of it stands`
   switch (state) {
     case 'current': return `${name} has it`
-    case 'missing': return `Not in ${name} yet: Install… adds it`
+    case 'missing': return `Not in ${name} yet: BMN adds it at its next start or approval`
     case 'excluded': return `${name} gets public tools only`
     case 'blocked': return detail ?? `${name} cannot take this tool as it is`
     case 'unreadable': return detail ?? `BMN cannot read ${name}'s entry`
     case undefined: return `Checked once you approve it`
-    case 'stale': return `${name} has an older version: Install… updates it`
-    default: return detail ?? `${name} holds something else under this name: Install… shows it`
+    case 'stale': return `${name} has an older version: BMN updates it at its next start or approval`
+    default: return detail ?? `${name} holds something else under this name, which BMN leaves as it is: remove it there and BMN adds the tool`
   }
 }
 

@@ -42,9 +42,31 @@ export declare function checkTargets(environment?: NodeJS.ProcessEnv | Record<st
 export declare function installRules(harnesses: RulesHarness[], options?: { yes?: boolean; asJson?: boolean; environment?: NodeJS.ProcessEnv | Record<string, string>; now?: Date; afterConfirm?: () => void; beforeTarget?: (harness: RulesHarness, index: number) => void; expectedPlanHash?: string }): Promise<InstallResult>
 export declare function planInstall(harnesses: RulesHarness[], options?: { environment?: NodeJS.ProcessEnv | Record<string, string> }): Promise<{ code: string; message?: string; planHash: string | null; plans: unknown[] }>
 export declare function planView(result: Awaited<ReturnType<typeof planInstall>>): { code: string; message?: string; plan_hash: string | null; targets: { harness: RulesHarness; path: string; resolved_path: string; kind: string; change: string; rendering: RenderingKind; reason: string; team_form: string; link_target?: string; diff: string; fold: string[] }[] }
-/** An old transaction may name an app BMN retired (Epic 71); it is listed as it was saved. */
-export declare function listTransactions(): { id: string; valid: boolean; created_at?: string; state?: string; reason?: string; targets?: (RulesHarness | RetiredApp)[] }[]
-export declare function restoreTransaction(id: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string }): Promise<{ code: string; restored?: RulesHarness[]; message?: string; plan_hash?: string; targets?: { harness: RulesHarness; path: string; resolved_path: string; becomes: string; diff: string }[]; left?: { harness: RetiredApp; path: string; reason: string }[] }>
+/** One app's file as a save or an install plans it. */
+export interface TargetPlan { harness: RulesHarness; path: string; resolved: string; prior: PathState; rendering: Rendering; kind: string; change: string; diff: string; fold: string[] }
+/** Story 75.9: what saving a text writes, the master and each app's file, bound by one hash. */
+export interface SavePlan {
+  code: string; message?: string; errors?: MasterIssue[]; master?: Master; prior?: PathState; priorHash?: string | null; changesMaster?: boolean; diff?: string
+  plans: TargetPlan[]; blocked: { harness: RulesHarness; reason: string }[]; planHash: string | null
+}
+export declare function planSave(text: string, options?: { environment?: NodeJS.ProcessEnv | Record<string, string> }): Promise<SavePlan>
+export interface SaveResult extends InstallResult {
+  failed: { harness: RulesHarness; path: string; code: string; message: string }[]
+  blocked: { harness: RulesHarness; reason: string }[]
+  errors?: MasterIssue[]
+  /** Whether the master changed; a save of the same text only writes the apps' files. */
+  master?: boolean
+}
+export declare function saveRules(text: string, options: {
+  expectedHash: string | null; expectedLink?: string | null; expectedDirectory?: string | null; expectedPlanHash?: string
+  environment?: NodeJS.ProcessEnv | Record<string, string>; now?: Date; beforeTarget?: (harness: RulesHarness, index: number) => void
+}): Promise<SaveResult>
+/** An old transaction may name an app BMN retired (Epic 71); it is listed as it was saved. `master` marks a save's (Story 75.9). */
+export declare function listTransactions(): { id: string; valid: boolean; created_at?: string; state?: string; reason?: string; targets?: (RulesHarness | RetiredApp)[]; master?: true }[]
+export declare function restoreTransaction(id: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string }): Promise<{
+  code: string; restored?: RulesHarness[]; message?: string; plan_hash?: string; targets?: { harness: RulesHarness; path: string; resolved_path: string; becomes: string; diff: string }[]
+  left?: { harness: RetiredApp; path: string; reason: string }[]; master?: true | { path: string; becomes: string; diff: string }
+}>
 export declare function masterHistory(): { revision: number; hash: string; bytes: number; at: string; reason: string; intact: boolean }[]
 export declare function writeMaster(expected: PathState, text: string, reason: string, options?: { now?: Date }): PathState
 export declare function revertMaster(revision: number, options?: { yes?: boolean; asJson?: boolean }): Promise<{ code: string; revision?: number }>

@@ -250,7 +250,10 @@ export type AgentsApprovalRequest =
   | { kind: 'sections'; scope: string[] }
   | { kind: 'restore'; number: number }
 
-/** What happened to the rules files after an approval that showed them. */
+/**
+ * What happened to the rules files after an approval that showed them. `installed` (Story 75.9) says what the
+ * skills and tools installs BMN ran after it changed, in words; each is undone under Earlier installs.
+ */
 export interface AgentsRulesUpdate { transaction: string | null; written: RosterHarness[]; skipped: RosterHarness[]; failed?: string }
 
 /** What became of the OpenCode Go sign-in an approval copied into BMN's OpenCode folder (70.4). */
@@ -264,7 +267,7 @@ export interface OpenCodeSignInResult { ok: boolean; copied: boolean; message: s
 export interface OpenCodeGoView { listed: boolean; signedIn: boolean | null; reason: string | null; copy?: OpenCodeSignInResult }
 
 export type AgentsOutcome =
-  | { ok: true; snapshot: AgentsSnapshot; message: string; rulesUpdate?: AgentsRulesUpdate; openCodeSignIn?: OpenCodeSignInResult }
+  | { ok: true; snapshot: AgentsSnapshot; message: string; rulesUpdate?: AgentsRulesUpdate; openCodeSignIn?: OpenCodeSignInResult; installed?: string[] }
   | { ok: false; code: string; message: string; errors?: RosterIssueShape[]; snapshot: AgentsSnapshot }
 
 /** One agent app as Rules › Health shows it: its version and where it sends data as inspected. */
@@ -777,10 +780,35 @@ export interface RulesSnapshot {
    * environment instead: why, in words. A session may then find other programs than BMN does.
    */
   ownEnvironment?: string
-  /** An old install may name an app BMN retired (Epic 71); it is listed as it was saved. */
-  transactions: { id: string; createdAt?: string; state?: string; reason?: string; targets?: RosterListedApp[]; valid: boolean }[]
+  /** BMN's hook entries in each app's own hook file, as its install at start found and left them (Story 75.9); null until it has run. */
+  hooks: HooksAtStart | null
+  /** An old install may name an app BMN retired (Epic 71); it is listed as it was saved. `master` marks a save, whose Undo puts the master back too (Story 75.9). */
+  transactions: { id: string; createdAt?: string; state?: string; reason?: string; targets?: RosterListedApp[]; valid: boolean; master?: boolean }[]
   history: { revision: number; at: string; hash: string; bytes: number; reason: string; intact: boolean }[] | null
 }
+
+/** Why BMN left one hook event as it is: inside a matcher, its own wording with a field the app will not run, or an entry it did not write (Story 75.9). */
+export const HOOK_LEFT_WHY = Object.freeze(['gated', 'changed', 'foreign', 'unreadable', 'unparsable', 'unusable', 'numbers', 'failed'] as const)
+export type HookLeftWhy = (typeof HOOK_LEFT_WHY)[number]
+
+/** One app's hook file after BMN's install at start: what is in place, what it added, and what it left as it is. */
+export interface HookAppAtStart {
+  harness: RosterHarness
+  file: string
+  /** `not-set-up`: the app keeps no settings folder on this computer, and BMN created none. */
+  state: 'checked' | 'installed' | 'left' | 'failed' | 'not-set-up'
+  /** Events whose entry is in place, added now or before; `older` of them in an older wording that still runs. */
+  placed: string[]
+  older: string[]
+  installed: string[]
+  /** Events BMN left as they are, each with why; a whole file it could not add to has `why` on the app instead. */
+  left: { event: string; why: HookLeftWhy }[]
+  why?: HookLeftWhy
+}
+
+export type HooksAtStart =
+  | { state: 'checked'; checkedAt: string; apps: HookAppAtStart[] }
+  | { state: 'failed'; checkedAt: string; reason: string }
 
 export interface RulesPlanTarget {
   harness: RosterHarness
@@ -819,6 +847,23 @@ export interface RulesPlan {
   ok: boolean; code: string; message?: string; planHash: string | null; targets: RulesPlanTarget[]
   /** An undo's targets in an app BMN retired (Epic 71): left as they are, never written. */
   left?: { harness: RosterRetiredHarness; path: string }[]
+  /** An undo of a save puts the master back too (Story 75.9): what it becomes and the diff. */
+  master?: { path: string; becomes: string; diff: string }
 }
 
-export type RulesOutcome = { ok: true; message: string; snapshot: RulesSnapshot } | { ok: false; code: string; message: string; snapshot: RulesSnapshot }
+/**
+ * What Save writes (Story 75.9): the master's own change and each app's file, as an install plans it, bound by
+ * one hash; an app whose destination no longer inspects as approved is `blocked` and not written.
+ */
+export interface RulesSavePlan extends RulesMasterPlan {
+  ok: boolean
+  code: string
+  message?: string
+  changesMaster: boolean
+  planHash: string | null
+  targets: RulesPlanTarget[]
+  blocked: { harness: RosterHarness; reason: string }[]
+}
+
+/** `undo` names the transaction a save wrote, which the Notice offers to undo (Story 75.9). */
+export type RulesOutcome = { ok: true; message: string; snapshot: RulesSnapshot; undo?: string } | { ok: false; code: string; message: string; snapshot: RulesSnapshot; undo?: string }

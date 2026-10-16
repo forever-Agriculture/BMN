@@ -12,6 +12,9 @@ import {
   type ContextLimitApp,
   type ContextLimitPlan,
   type ContextLimitView,
+  type HookAppAtStart,
+  type HookLeftWhy,
+  type HooksAtStart,
   type RosterDataShape,
   type RosterHarness,
   type RosterIssueShape,
@@ -22,13 +25,12 @@ import {
   type RulesProbeView,
   type RulesRenderingKind,
   type RulesRenderingView,
-  type RulesRevertPlan,
+  type RulesSavePlan,
   type RulesSnapshot,
   type RulesTargetState,
   type SkillStateName,
   type SkillView,
   type SkillsAppView,
-  type SkillsPlan,
   type RosterToolShape,
   type ToolProposalView,
   type ToolView,
@@ -146,32 +148,87 @@ const SKILLS_INSTALL = 'skills install'
 /** The reason a tools install records. */
 const TOOLS_INSTALL = 'tools install'
 
-/** Installs and saves, newest first, as Earlier versions lists them. */
+/** Saves and installs, newest first, as Earlier versions lists them: a save with Undo…, a version kept from before with Restore…. */
 export type Earlier =
   | { kind: 'install'; id: string; at: string | undefined; title: string; detail: string; usable: boolean }
   | { kind: 'save'; revision: number; at: string; title: string; detail: string; usable: boolean }
 
+/** The master versions a save, an install or a Team update keeps for itself: its own entry stands for them (Story 75.9). */
+const KEPT_BY_TRANSACTION = /^(before )?(save|install|team update) /
+
 export function earlierVersions(snapshot: Pick<RulesSnapshot, 'transactions' | 'history'>): Earlier[] {
   // A skills or tools install is undone on its own page, where it was made.
   const installs: Earlier[] = snapshot.transactions.filter((entry) => entry.reason !== SKILLS_INSTALL && entry.reason !== TOOLS_INSTALL).map((entry) => ({
-    kind: 'install', id: entry.id, at: entry.createdAt, usable: entry.valid && entry.state === 'complete',
-    title: !entry.valid ? 'An install that cannot be read' : entry.reason === 'team update' ? 'Team line updated' : 'Installed',
-    detail: (entry.targets ?? []).map(appDisplayName).join(', ') + (entry.valid && entry.state !== 'complete' ? ' · did not finish' : '')
+    kind: 'install', id: entry.id, at: entry.createdAt, usable: entry.valid && (entry.state === 'complete' || entry.state === 'partial'),
+    title: !entry.valid ? 'A save that cannot be read' : entry.reason === 'team update' ? 'Team line updated' : entry.master ? 'Saved and installed' : 'Installed',
+    detail: (entry.targets ?? []).map(appDisplayName).join(', ')
+      + (entry.valid && entry.state === 'partial' ? ' · not every app written' : entry.valid && entry.state !== 'complete' ? ' · did not finish' : '')
   }))
-  const saves: Earlier[] = (snapshot.history ?? []).map((entry) => ({
-    kind: 'save', revision: entry.revision, at: entry.at, usable: entry.intact, title: entry.intact ? 'Saved' : 'A saved version that cannot be read', detail: kilobytes(entry.bytes)
+  const saves: Earlier[] = (snapshot.history ?? []).filter((entry) => !KEPT_BY_TRANSACTION.test(entry.reason)).map((entry) => ({
+    kind: 'save', revision: entry.revision, at: entry.at, usable: entry.intact, detail: kilobytes(entry.bytes),
+    title: !entry.intact ? 'A saved version that cannot be read' : entry.reason.startsWith('undo ') ? 'Put back by Undo' : 'Saved'
   }))
   return [...installs, ...saves].sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''))
 }
 
+/** Story 75.9: the Rules page's status line, a file BMN could not write first ("Saved Oct 16, 13:38 · Codex not written"). */
+export function rulesStatus(snapshot: Pick<RulesSnapshot, 'master' | 'health'>): { text: string; needs: boolean } {
+  if (!snapshot.master.exists) return { text: 'No rules yet', needs: false }
+  const saved = shortDate(snapshot.master.savedAt ?? undefined)
+  const differ = snapshot.health.state === 'checked' ? snapshot.health.targets.filter((target) => target.state !== 'current').map((target) => ROSTER_APP_NAMES[target.harness]) : []
+  if (differ.length > 0) return { text: `Saved ${saved} · ${andWords(differ)} not written`, needs: true }
+  return { text: `Saved and installed ${saved}`, needs: false }
+}
+
+/** "Claude Code, Codex and OpenCode". */
+function andWords(names: readonly string[]): string {
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`
+}
+
+/** A rules file in Health in words (Story 75.9): what differs first, with what puts it right. */
+export function targetStateWords(state: RulesTargetState): string {
+  if (state === 'current' || state === 'unreadable') return STATE_WORDS[state]
+  if (state === 'edited-outside') return 'Differs · edited outside BMN · Save the rules to rewrite it'
+  if (state === 'stale') return 'Differs from the rules · Save the rules to rewrite it'
+  return `${STATE_WORDS[state]} · Save the rules to write it`
+}
+
+/** Why BMN left a hook event as it is, in words (Story 75.9). */
+export const HOOK_LEFT_WORDS: Readonly<Record<HookLeftWhy, string>> = {
+  gated: 'inside a matcher', changed: 'changed', foreign: 'not BMN\'s', unreadable: 'the file cannot be read', unparsable: 'the file is not valid JSON',
+  unusable: 'not a hook file BMN can add to', numbers: 'holds a number BMN cannot write back unchanged', failed: 'could not be written'
+}
+
+/** One app's row in Health › Hooks: whether it needs him, its line, and the faint lines under it, one left entry per line. */
+export function hookRowWords(app: HookAppAtStart): { needs: boolean; head: string; lines: string[] } {
+  if (app.state === 'not-set-up') return { needs: false, head: 'Not set up on this computer', lines: [] }
+  const count = app.placed.length
+  const inPlace = `${count} entr${count === 1 ? 'y' : 'ies'} in place`
+  const added = app.installed.length > 0 ? [`Added at start: ${app.installed.join(', ')}${app.harness === 'codex' ? ' · Codex asks you once, in /hooks, before it runs them' : ''}`] : []
+  const older = app.older.length > 0 ? [`${app.older.join(', ')} · in an older wording, which still runs`] : []
+  if (app.why !== undefined) return { needs: true, head: `The file · ${HOOK_LEFT_WORDS[app.why]} · left as it is`, lines: [] }
+  if (app.left.length === 0) return { needs: false, head: inPlace, lines: [...added, ...older] }
+  return {
+    needs: true, head: `${inPlace} · ${app.left.length === 1 ? 'one left as it is' : `${app.left.length} left as they are`}`,
+    lines: [...app.left.map((entry) => `${entry.event} · ${HOOK_LEFT_WORDS[entry.why]}`), ...added, ...older]
+  }
+}
+
+/** Health › Hooks rows, failure first. */
+export function hookRows(hooks: Extract<HooksAtStart, { state: 'checked' }>): HookAppAtStart[] {
+  return [...hooks.apps].sort((a, b) => Number(hookRowWords(b).needs) - Number(hookRowWords(a).needs))
+}
+
 type Pending =
-  | { kind: 'save'; text: string; plan: RulesMasterPlan }
-  | { kind: 'install'; plan: RulesPlan }
-  | { kind: 'undo'; transaction: string; plan: RulesPlan }
-  | { kind: 'restore'; revision: number; plan: RulesRevertPlan }
+  // A save writes the master and every app's file (Story 75.9); `revision` marks an earlier version being saved again.
+  | { kind: 'save'; text: string; plan: RulesSavePlan; revision?: number }
+  // `near` says where it was asked for: the Notice's Undo shows its sheet under the Notice.
+  | { kind: 'undo'; transaction: string; plan: RulesPlan; near?: 'notice' }
   | { kind: 'test'; harness: RosterHarness }
-  | { kind: 'skills'; plan: SkillsPlan }
   | { kind: 'tools'; plan: ToolsPlan }
+
+/** A notice under a page's head; `undo` names the save it can undo (Story 75.9). */
+export interface RulesNotice { ok: boolean; text: string; undo?: string }
 
 export interface RulesState {
   snapshot: RulesSnapshot | null
@@ -183,26 +240,25 @@ export interface RulesState {
   /** The unsaved draft as a save would check it; null while clean or being computed. */
   draftPlan: RulesMasterPlan | null
   busy: boolean
-  notice: { ok: boolean; text: string } | null
+  notice: RulesNotice | null
   pending: Pending | null
   setDraft(text: string): void
-  setNotice(notice: { ok: boolean; text: string } | null): void
+  setNotice(notice: RulesNotice | null): void
   /** Reads the rules once; later reads are Health's rule (Story 75.7). */
   ensure(): void
   /** Reads them again if they were read before: an approval changes what each app may read. */
   refresh(): void
   load(): Promise<void>
+  /** Shows what saving the draft writes: the master and each app's file. A clean draft writes only the apps' files that differ. */
   beginSave(): Promise<void>
-  beginInstall(): Promise<void>
-  /** Shows what a skills install would link, copy or remove in each app. */
-  beginSkillsInstall(): Promise<void>
-  /** Shows the entries a tools install would set or remove in each app's settings; `removeUnlisted` adds the entries that are not on the list. */
-  beginToolsInstall(removeUnlisted: boolean): Promise<void>
-  beginUndo(transaction: string): Promise<void>
+  /** Shows what removing the entries that are not on the tools list would change in each app's settings. */
+  beginToolsRemoval(): Promise<void>
+  beginUndo(transaction: string, near?: 'notice'): Promise<void>
+  /** Shows what saving an earlier version again writes, the master and each app's file. */
   beginRestore(revision: number): Promise<void>
   beginTest(harness: RosterHarness): void
-  /** Carries out what the sheet shows. With `then: 'install'`, a save is followed by the sheet that shows what each app would get. */
-  confirm(then?: 'install'): Promise<void>
+  /** Carries out what the sheet shows. */
+  confirm(): Promise<void>
   cancel(): void
   /** Carries out one Health action and shows what came of it; resolves to whether it was done. An unsaved draft stays. */
   run(task: () => Promise<RulesOutcome>): Promise<boolean>
@@ -215,7 +271,7 @@ export function useRulesState(): RulesState {
   const [draft, setDraft] = useState('')
   const [draftPlan, setDraftPlan] = useState<RulesMasterPlan | null>(null)
   const [pending, setPending] = useState<Pending | null>(null)
-  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
+  const [notice, setNotice] = useState<RulesNotice | null>(null)
   const [began, setBegan] = useState<number | null>(null)
   // A read of the machine and an action are told apart, so the end of one never says the other is over.
   const [reading, setReading] = useState(false)
@@ -299,21 +355,15 @@ export function useRulesState(): RulesState {
     }
   }
 
-  async function confirm(then?: 'install'): Promise<void> {
+  async function confirm(): Promise<void> {
     if (pending === null) return
     let run: () => Promise<RulesOutcome>
     if (pending.kind === 'save') {
-      // The text the diff was shown for, never the editor's later state.
+      // The text the plan was shown for, never the editor's later state, bound to that plan.
       const { text, plan } = pending
-      run = () => window.aiTerminal.saveRulesMaster(text, plan.expectedHash, plan.expectedLink, plan.expectedDirectory)
-    } else if (pending.kind === 'install') {
-      const { planHash } = pending.plan
-      if (planHash === null) return
-      run = () => window.aiTerminal.installRules(planHash)
-    } else if (pending.kind === 'skills') {
-      const { planHash } = pending.plan
-      if (planHash === null) return
-      run = () => window.aiTerminal.installSkills(planHash)
+      if (plan.planHash === null) return
+      const planHash = plan.planHash
+      run = () => window.aiTerminal.saveRules(text, plan.expectedHash, plan.expectedLink, plan.expectedDirectory, planHash)
     } else if (pending.kind === 'tools') {
       const { planHash, removeUnlisted } = pending.plan
       if (planHash === null) return
@@ -323,10 +373,6 @@ export function useRulesState(): RulesState {
       if (plan.planHash === null) return
       const planHash = plan.planHash
       run = () => window.aiTerminal.restoreRules(transaction, planHash)
-    } else if (pending.kind === 'restore') {
-      const { text, expectedHash, expectedLink, expectedDirectory } = pending.plan
-      if (text === undefined) return
-      run = () => window.aiTerminal.saveRulesMaster(text, expectedHash, expectedLink ?? null, expectedDirectory ?? null)
     } else {
       const { harness } = pending
       run = () => window.aiTerminal.probeRules(harness)
@@ -337,23 +383,10 @@ export function useRulesState(): RulesState {
       adopt(outcome.snapshot)
       setNotice({
         ok: outcome.ok,
-        text: outcome.ok ? (pending.kind === 'restore' ? 'Restored · not installed yet' : outcome.message)
-          : outcome.code === 'REVISION_CONFLICT' ? 'Something changed since this was shown. Reloaded without writing.' : outcome.message
+        text: outcome.ok || outcome.code !== 'REVISION_CONFLICT' ? outcome.message : 'Something changed since this was shown. Reloaded without writing.',
+        ...(outcome.undo === undefined ? {} : { undo: outcome.undo })
       })
       setPending(null)
-      // Save and install…: the saved rules go straight to the sheet that shows each app's file. Nothing is written there before Install.
-      if (then === 'install' && outcome.ok && pending.kind === 'save') {
-        try {
-          const plan = await window.aiTerminal.planRulesInstall()
-          if (plan.ok) {
-            // The install sheet under it says what is still to do.
-            setNotice({ ok: true, text: 'Saved' })
-            setPending({ kind: 'install', plan })
-          } else setNotice({ ok: false, text: `Saved, not installed. ${plan.message ?? 'Install cannot run now'}` })
-        } catch (error) {
-          setNotice({ ok: false, text: `Saved, not installed. ${failureDetail(error, 'Could not prepare the install')}` })
-        }
-      }
     } catch (error) {
       setNotice({ ok: false, text: failureDetail(error, 'That could not be done') })
     } finally {
@@ -392,28 +425,26 @@ export function useRulesState(): RulesState {
   return {
     snapshot, began, loadError, draft, dirty, draftPlan, busy, notice, pending, setDraft, setNotice, ensure, refresh, load, run,
     beginSave: () => {
+      // A clean draft saves the rules as they are: only the apps' files that differ are written.
       const text = draft
-      return begin(async () => ({ kind: 'save', text, plan: await window.aiTerminal.planRulesMaster(text) }))
+      return begin(async () => {
+        const plan = await window.aiTerminal.planRulesSave(text)
+        return plan.valid && !plan.ok ? plan.message ?? 'The rules cannot be saved now' : { kind: 'save', text, plan }
+      })
     },
-    beginInstall: () => begin(async () => {
-      const plan = await window.aiTerminal.planRulesInstall()
-      return plan.ok ? { kind: 'install', plan } : plan.message ?? 'Install cannot run now'
+    beginToolsRemoval: () => begin(async () => {
+      const plan = await window.aiTerminal.planToolsInstall(true)
+      return plan.ok ? { kind: 'tools', plan } : plan.message ?? 'The tools cannot be changed now'
     }),
-    beginSkillsInstall: () => begin(async () => {
-      const plan = await window.aiTerminal.planSkillsInstall()
-      return plan.ok ? { kind: 'skills', plan } : plan.message ?? 'The skills cannot be installed now'
-    }),
-    beginToolsInstall: (removeUnlisted) => begin(async () => {
-      const plan = await window.aiTerminal.planToolsInstall(removeUnlisted)
-      return plan.ok ? { kind: 'tools', plan } : plan.message ?? 'The tools cannot be installed now'
-    }),
-    beginUndo: (transaction) => begin(async () => {
+    beginUndo: (transaction, near) => begin(async () => {
       const plan = await window.aiTerminal.planRulesRestore(transaction)
-      return plan.ok ? { kind: 'undo', transaction, plan } : plan.message ?? 'That install cannot be undone'
+      return plan.ok ? { kind: 'undo', transaction, plan, ...(near === undefined ? {} : { near }) } : plan.message ?? 'That cannot be undone'
     }),
     beginRestore: (revision) => begin(async () => {
-      const plan = await window.aiTerminal.planRulesRevertMaster(revision)
-      return plan.ok ? { kind: 'restore', revision, plan } : plan.message ?? 'That version cannot be read'
+      const earlier = await window.aiTerminal.planRulesRevertMaster(revision)
+      if (!earlier.ok || earlier.text === undefined) return earlier.message ?? 'That version cannot be read'
+      const plan = await window.aiTerminal.planRulesSave(earlier.text)
+      return plan.ok ? { kind: 'save', text: earlier.text, plan, revision } : plan.message ?? 'That version cannot be saved now'
     }),
     beginTest: (harness) => { setNotice(null); setPending({ kind: 'test', harness }) },
     confirm,
@@ -475,38 +506,24 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
   if (pending === null) return null
   const common = { busy: rules.busy, onConfirm: () => void rules.confirm(), onCancel: rules.cancel }
   switch (pending.kind) {
-    case 'save':
+    case 'save': {
+      const plan = pending.plan
+      const count = plan.targets.length
+      const restoring = pending.revision !== undefined
+      const title = !plan.valid ? 'These rules cannot be saved'
+        : restoring ? `Restore this version · ${diffSummary(plan.diff)}`
+          : plan.changesMaster ? `Save the rules · ${diffSummary(plan.diff)}` : count === 0 ? 'Every app already has the saved rules' : `Write the saved rules to ${count} app${count === 1 ? '' : 's'}`
       return (
-        <Sheet {...common} title={pending.plan.valid ? `Save the rules · ${diffSummary(pending.plan.diff)}` : 'These rules cannot be saved'} action="Save" ready={pending.plan.valid && pending.plan.diff !== ''}
-          note={pending.plan.valid ? 'The text before this save is kept under Earlier versions.' : 'An app could not read them as written.'}
-          also={pending.plan.valid ? { label: 'Save and install…', onClick: () => void rules.confirm('install') } : undefined}>
-          <Issues issues={pending.plan.errors} />
-          <LinkNote link={pending.plan.expectedLink} home={home} what="The rules file" />
-          {pending.plan.diff ? <pre className="diff">{diffBody(pending.plan.diff)}</pre> : null}
-        </Sheet>
-      )
-    case 'install': {
-      const count = pending.plan.targets.length
-      return (
-        <Sheet {...common} title={count === 0 ? 'Every app already has the current rules' : `Install to ${count} agent app${count === 1 ? '' : 's'}`} action="Install"
-          ready={count > 0 && pending.plan.planHash !== null} note={count === 0 ? undefined : 'Undo install, under Earlier versions, puts the files back.'}>
-          <Targets targets={pending.plan.targets} home={home} words={changeWords} />
-        </Sheet>
-      )
-    }
-    case 'skills': {
-      const count = pending.plan.targets.length
-      const open = pending.plan.exposed
-      return (
-        <Sheet {...common} title={count === 0 ? 'Every app already has its skills' : `Change ${count} skill entr${count === 1 ? 'y' : 'ies'}`} action="Install"
-          ready={count > 0 && pending.plan.planHash !== null} note={count === 0 ? undefined : 'Undo install, under Earlier installs, puts every entry back.'}>
-          <Targets targets={pending.plan.targets} home={home} words={(target) => `${(target as SkillsPlan['targets'][number]).skill} · ${target.kind}`} />
-          {open.length > 0 ? (
-            <div role="status">
-              <p className="preferences-help"><Dot label="Needs you" />{open.length === 1 ? 'One skill stays' : `${open.length} skills stay`} exposed whatever is installed:</p>
-              {open.map((entry) => <p key={`${entry.harness}:${entry.skill}`} className="preferences-help">{entry.fix}</p>)}
-            </div>
-          ) : null}
+        <Sheet {...common} title={title} action={restoring ? 'Restore' : 'Save'} ready={plan.valid && plan.ok && plan.planHash !== null && (plan.changesMaster || count > 0)}
+          note={!plan.valid ? 'An app could not read them as written.' : count === 0 && !plan.changesMaster ? undefined
+            : `${count > 0 ? 'Each app\'s file below is written at once. ' : ''}Undo, under Earlier versions, puts the rules and every file back.`}>
+          <Issues issues={plan.errors} />
+          <LinkNote link={plan.changesMaster ? plan.expectedLink : null} home={home} what="The rules file" />
+          {plan.changesMaster && plan.diff ? <pre className="diff">{diffBody(plan.diff)}</pre> : null}
+          <Targets targets={plan.targets} home={home} words={changeWords} />
+          {plan.blocked.map((entry) => (
+            <p key={entry.harness} className="preferences-help" role="status"><Dot label="Needs you" />{ROSTER_APP_NAMES[entry.harness]} is not written: {entry.reason}</p>
+          ))}
         </Sheet>
       )
     }
@@ -514,8 +531,8 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
       const count = pending.plan.targets.length
       const { exposed, blocked } = pending.plan
       return (
-        <Sheet {...common} title={count === 0 ? 'Every app already has its tools' : `Change ${count} tool entr${count === 1 ? 'y' : 'ies'}`} action="Install"
-          ready={count > 0 && pending.plan.planHash !== null} note={count === 0 ? undefined : 'Only these entries change in each file. Undo install, under Earlier installs, puts them back.'}>
+        <Sheet {...common} title={count === 0 ? 'No app holds such an entry now' : `Change ${count} tool entr${count === 1 ? 'y' : 'ies'}`} action="Change"
+          ready={count > 0 && pending.plan.planHash !== null} note={count === 0 ? undefined : 'Only these entries change in each file. Undo, under Earlier installs, puts them back.'}>
           {pending.plan.targets.map((target) => (
             <details key={`${target.harness}:${target.tool}`} className="target">
               <summary>
@@ -541,9 +558,21 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
         </Sheet>
       )
     }
-    case 'undo':
+    case 'undo': {
+      const master = pending.plan.master
+      // Skills and tools install themselves (Story 75.9): what the list still gives an app comes back, which the sheet says.
+      const reason = rules.snapshot?.transactions.find((entry) => entry.id === pending.transaction)?.reason
+      const again = reason === SKILLS_INSTALL || reason === TOOLS_INSTALL
+        ? ` BMN installs again at its next start or approval what your list still gives an app; keep the ${reason === SKILLS_INSTALL ? 'skill' : 'tool'} from that app to keep it out.` : ''
       return (
-        <Sheet {...common} title="Undo this install" action="Undo install" ready={pending.plan.planHash !== null} note="Each file goes back to what it was before that install.">
+        <Sheet {...common} title={master ? 'Undo this save' : 'Undo this install'} action="Undo" ready={pending.plan.planHash !== null}
+          note={master ? 'The rules and each file go back to what they were before that save. Nothing is installed again.' : `Each file goes back to what it was before that install.${again}`}>
+          {master ? (
+            <details className="target">
+              <summary><span>The rules</span><span className="target-file"><span className="path mono" title={master.path}>{displayPath(master.path, home)}</span><span className="muted">{diffSummary(master.diff)}</span></span><span className="muted" /></summary>
+              <pre className="diff">{diffBody(master.diff) || 'No change.'}</pre>
+            </details>
+          ) : null}
           <Targets targets={pending.plan.targets} home={home} words={undoWords} />
           {(pending.plan.left ?? []).map((target) => (
             <p key={target.path} className="preferences-help">
@@ -552,14 +581,7 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
           ))}
         </Sheet>
       )
-    case 'restore':
-      return (
-        <Sheet {...common} title={`Restore this version · ${diffSummary(pending.plan.diff)}`} action="Restore" ready={pending.plan.text !== undefined && pending.plan.diff !== ''}
-          note="The current text is kept under Earlier versions. Nothing is installed.">
-          <LinkNote link={pending.plan.expectedLink} home={home} what="The rules file" />
-          {pending.plan.diff ? <pre className="diff">{diffBody(pending.plan.diff)}</pre> : null}
-        </Sheet>
-      )
+    }
     case 'test':
       return (
         <Sheet {...common} title={`Test whether ${ROSTER_APP_NAMES[pending.harness]} loads the rules`} action="Send test"
@@ -569,9 +591,17 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
 }
 
 function Notice(props: { rules: RulesState }): React.JSX.Element | null {
-  const notice = props.rules.notice
+  const { rules } = props
+  const notice = rules.notice
   if (notice === null) return null
-  return <p className={notice.ok ? 'preferences-success' : 'preferences-error'} role={notice.ok ? 'status' : 'alert'}>{notice.text}</p>
+  // After a save, its small Undo, as the Team page's after an approval (Story 75.9).
+  const undo = notice.undo
+  return (
+    <p className={notice.ok ? 'preferences-success' : 'preferences-error'} role={notice.ok ? 'status' : 'alert'}>
+      {notice.text}
+      {undo === undefined ? null : <> · <button type="button" className="small" disabled={rules.busy || rules.pending !== null} onClick={() => void rules.beginUndo(undo, 'notice')}>Undo</button></>}
+    </p>
+  )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -645,28 +675,18 @@ function EditorPage(props: { rules: RulesState }): React.JSX.Element {
   const [previewApp, setPreviewApp] = useState<RosterHarness>('claude')
   const pending = rules.pending
   const targets = snapshot.health.state === 'checked' ? snapshot.health.targets : []
+  // A file edited outside BMN, or one a save could not write, is put back by Save without a change to the rules (Story 75.9).
   const differ = targets.filter((target) => target.state !== 'current').length
-  const installed = snapshot.transactions.find((entry) => entry.valid && entry.state === 'complete' && entry.reason !== 'team update' && entry.reason !== SKILLS_INSTALL && entry.reason !== TOOLS_INSTALL)?.createdAt
   const renderings: readonly RulesRenderingView[] = rules.dirty && rules.draftPlan?.valid ? rules.draftPlan.renderings : snapshot.renderings
   const rendering = renderings.find((entry) => entry.harness === previewApp)
   const errors: readonly RosterIssueShape[] = rules.dirty ? rules.draftPlan?.errors ?? [] : snapshot.master.errors
   const earlier = earlierVersions(snapshot)
-  const status = !snapshot.master.exists ? 'No rules yet'
-    : `Saved ${shortDate(snapshot.master.savedAt ?? undefined)} · ${installed ? `last installed ${shortDate(installed)}` : 'never installed'}`
+  const status = rulesStatus(snapshot)
   return (
     <>
-      <PageHead title="Rules" status={status}>
-        {snapshot.master.exists && differ > 0 ? (
-          <>
-            <Dot label="Needs you" />
-            <span className="muted">{differ} app{differ === 1 ? '' : 's'} differ{differ === 1 ? 's' : ''}</span>
-            <button type="button" className={pending?.kind === 'install' ? undefined : 'primary'} disabled={rules.busy || rules.dirty || pending !== null}
-              title={rules.dirty ? 'Save or discard your edits first' : undefined} onClick={() => void rules.beginInstall()}>Install…</button>
-          </>
-        ) : null}
-      </PageHead>
+      <PageHead title="Rules" status={<>{status.needs ? <Dot label="Needs you" /> : null}{status.text}</>} />
       <Notice rules={rules} />
-      {pending?.kind === 'install' ? <PendingSheet rules={rules} /> : null}
+      {pending?.kind === 'undo' && pending.near === 'notice' ? <PendingSheet rules={rules} /> : null}
       <div className="editor-head">
         <span className="faint mono" id={pathId} title={snapshot.masterPath}>{displayPath(snapshot.masterPath, snapshot.home)}</span>
         <span className="faint">· {kilobytes(new TextEncoder().encode(rules.draft).length)} · {lineCount(rules.draft)} lines{rules.dirty ? ' · unsaved' : ''}</span>
@@ -681,10 +701,11 @@ function EditorPage(props: { rules: RulesState }): React.JSX.Element {
       <RulesEditor value={rules.draft} readOnly={pending !== null} labelledBy={pathId} area={area} onChange={rules.setDraft} />
       {errors.length > 0 ? <div role="alert"><p className="preferences-error">An app could not read these rules as written:</p><Issues issues={errors} /></div> : null}
       <div className="inline editor-actions">
-        <button type="button" disabled={rules.busy || !rules.dirty || errors.length > 0 || pending !== null} onClick={() => void rules.beginSave()}>Save…</button>
+        <button type="button" disabled={rules.busy || (!rules.dirty && (differ === 0 || !snapshot.master.exists)) || errors.length > 0 || pending !== null}
+          title={!rules.dirty && differ > 0 ? 'Writes the saved rules into the apps whose file differs' : undefined} onClick={() => void rules.beginSave()}>Save…</button>
         <button type="button" disabled={rules.busy || !rules.dirty || pending !== null} onClick={() => rules.setDraft(snapshot.master.text ?? '')}>Discard</button>
       </div>
-      {pending?.kind === 'save' ? <PendingSheet rules={rules} /> : null}
+      {pending?.kind === 'save' && pending.revision === undefined ? <PendingSheet rules={rules} /> : null}
 
       <details className="advanced" open>
         <summary>What each app reads</summary>
@@ -702,17 +723,18 @@ function EditorPage(props: { rules: RulesState }): React.JSX.Element {
 
       <details className="advanced">
         <summary>Earlier versions</summary>
-        {earlier.length === 0 ? <p className="preferences-help">Nothing yet. Every save and install is kept here.</p> : null}
+        {earlier.length === 0 ? <p className="preferences-help">Nothing yet. Every save is kept here.</p> : null}
         {earlier.map((entry) => (
           <div key={entry.kind === 'install' ? entry.id : `save-${entry.revision}`} className="list-line">
             <div><b>{entry.title}</b> <span className="line-detail">{shortDate(entry.at)}{entry.detail ? ` · ${entry.detail}` : ''}</span></div>
             {entry.kind === 'install'
-              ? <button type="button" className="small" disabled={rules.busy || !entry.usable || pending !== null} aria-label={`Undo the install of ${shortDate(entry.at)}`} onClick={() => void rules.beginUndo(entry.id)}>Undo install…</button>
+              ? <button type="button" className="small" disabled={rules.busy || !entry.usable || rules.dirty || pending !== null} aria-label={`Undo the ${entry.title === 'Installed' || entry.title === 'Team line updated' ? 'install' : 'save'} of ${shortDate(entry.at)}`}
+                  title={rules.dirty ? 'Save or discard your edits first' : undefined} onClick={() => void rules.beginUndo(entry.id)}>Undo…</button>
               : <button type="button" className="small" disabled={rules.busy || !entry.usable || rules.dirty || pending !== null} aria-label={`Restore the version saved ${shortDate(entry.at)}`}
                   title={rules.dirty ? 'Save or discard your edits first' : undefined} onClick={() => void rules.beginRestore(entry.revision)}>Restore…</button>}
           </div>
         ))}
-        {pending?.kind === 'undo' || pending?.kind === 'restore' ? <PendingSheet rules={rules} /> : null}
+        {(pending?.kind === 'undo' && pending.near === undefined) || (pending?.kind === 'save' && pending.revision !== undefined) ? <PendingSheet rules={rules} /> : null}
       </details>
     </>
   )
@@ -1116,11 +1138,12 @@ export function skillStateHint(state: SkillStateName | undefined, app: Pick<Skil
   switch (state) {
     case 'current': return `${name} has it`
     case 'read-directly': return `${name} reads the skills folder itself`
-    case 'missing': return `Not in ${name} yet: Install… adds it`
+    case 'missing': return `Not in ${name} yet: BMN adds it at its next start or approval`
     case 'excluded': return `${name} gets public skills only`
     case 'unreadable': return 'BMN cannot read this skill'
     case undefined: return `Not checked in ${name}`
-    default: return `${name} holds something else under this name: Install… shows it`
+    case 'stale': return `${name} has an older copy: BMN updates it at its next start or approval`
+    default: return `${name} holds something else under this name, which BMN leaves as it is: remove it there and BMN adds the skill`
   }
 }
 
@@ -1193,17 +1216,8 @@ function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
   const top = useHealthRule<HTMLDivElement>(rules)
   return (
     <>
-      <PageHead title="Skills" status={view.source.readable ? `${count} skill${count === 1 ? '' : 's'}` : 'The skills folder cannot be read'}>
-        {view.pending > 0 ? (
-          <>
-            <Dot label="Needs you" />
-            <span className="muted">{view.pending} to install</span>
-            <button type="button" className={pending?.kind === 'skills' ? undefined : 'primary'} disabled={!idle} onClick={() => void rules.beginSkillsInstall()}>Install…</button>
-          </>
-        ) : null}
-      </PageHead>
+      <PageHead title="Skills" status={view.source.readable ? `${count} skill${count === 1 ? '' : 's'}${view.pending > 0 ? ` · ${view.pending} not installed yet` : ''}` : 'The skills folder cannot be read'} />
       <Notice rules={rules} />
-      {pending?.kind === 'skills' ? <PendingSheet rules={rules} /> : null}
       <div className="editor-head">
         <span className="faint mono" title={view.source.path}>{displayPath(view.source.path, snapshot.home)}</span>
         <span className="faint">· one folder per skill, each with a SKILL.md</span>
@@ -1217,7 +1231,7 @@ function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
       </div>
       {count === 0 && view.source.readable ? <p className="preferences-help">No skills in this folder yet.</p> : null}
       {view.markedMissing.length > 0 ? <p className="preferences-help">The team marks {named(view.markedMissing)}, which the folder does not hold.</p> : null}
-      <p className="preferences-help">A skill reaches every app unless you keep it to some. An app that gets public work only receives just the skills you mark Public. A change here takes effect once you approve it; Install… then updates each app.</p>
+      <p className="preferences-help">A skill reaches every app unless you keep it to some. An app that gets public work only receives just the skills you mark Public. A change here takes effect once you approve it, and BMN then installs it in each app; it also installs at every start what an app lacks.</p>
 
       <details className="advanced">
         <summary>Earlier installs</summary>
@@ -1225,7 +1239,7 @@ function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
         {installs.map((entry) => (
           <div key={entry.id} className="list-line">
             <div><b>{entry.valid ? 'Installed' : 'An install that cannot be read'}</b> <span className="line-detail">{shortDate(entry.createdAt)}{entry.targets?.length ? ` · ${entry.targets.map(appDisplayName).join(', ')}` : ''}{entry.valid && entry.state !== 'complete' ? ' · did not finish' : ''}</span></div>
-            <button type="button" className="small" disabled={!idle || !entry.valid} aria-label={`Undo the skills install of ${shortDate(entry.createdAt)}`} onClick={() => void rules.beginUndo(entry.id)}>Undo install…</button>
+            <button type="button" className="small" disabled={!idle || !entry.valid} aria-label={`Undo the skills install of ${shortDate(entry.createdAt)}`} onClick={() => void rules.beginUndo(entry.id)}>Undo…</button>
           </div>
         ))}
         {pending?.kind === 'undo' ? <PendingSheet rules={rules} /> : null}
@@ -1500,17 +1514,8 @@ function ToolsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Ele
   }
   return (
     <>
-      <PageHead title="Tools" status={`${count} tool${count === 1 ? '' : 's'}`}>
-        {view.pending > 0 ? (
-          <>
-            <Dot label="Needs you" />
-            <span className="muted">{view.pending} to install</span>
-            <button type="button" className={pending?.kind === 'tools' ? undefined : 'primary'} disabled={!idle} onClick={() => void rules.beginToolsInstall(false)}>Install…</button>
-          </>
-        ) : null}
-      </PageHead>
+      <PageHead title="Tools" status={`${count} tool${count === 1 ? '' : 's'}${view.pending > 0 ? ` · ${view.pending} not installed yet` : ''}`} />
       <Notice rules={rules} />
-      {pending?.kind === 'tools' ? <PendingSheet rules={rules} /> : null}
       {view.error ? <p className="preferences-error" role="alert">{view.error}</p> : null}
       {view.exposed > 0 ? (
         <p className="page-note" role="status"><Dot label="Needs you" />{view.exposed === 1 ? 'One tool is in an app that may not have it.' : `${view.exposed} tools are in apps that may not have them.`} Mark the tool Public, or remove its entry in that app.</p>
@@ -1539,11 +1544,12 @@ function ToolsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Ele
             </div>
           ))}
           <div className="inline tool-actions">
-            <button type="button" className="small" disabled={!idle} onClick={() => void rules.beginToolsInstall(true)}>Remove them from the apps…</button>
+            <button type="button" className="small" disabled={!idle} onClick={() => void rules.beginToolsRemoval()}>Remove them from the apps…</button>
           </div>
+          {pending?.kind === 'tools' ? <PendingSheet rules={rules} /> : null}
         </>
       ) : null}
-      <p className="preferences-help">A tool names environment variables and never holds their values. It reaches every app unless you keep it to some apps, or to the runs of some agents. A change here takes effect once you approve it; Install… then updates each app's settings.</p>
+      <p className="preferences-help">A tool names environment variables and never holds their values. It reaches every app unless you keep it to some apps, or to the runs of some agents. A change here takes effect once you approve it, and BMN then installs it in each app's settings; it also installs at every start what an app lacks.</p>
 
       <details className="advanced">
         <summary>Earlier installs</summary>
@@ -1551,7 +1557,7 @@ function ToolsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Ele
         {installs.map((entry) => (
           <div key={entry.id} className="list-line">
             <div><b>{entry.valid ? 'Installed' : 'An install that cannot be read'}</b> <span className="line-detail">{shortDate(entry.createdAt)}{entry.targets?.length ? ` · ${entry.targets.map(appDisplayName).join(', ')}` : ''}{entry.valid && entry.state !== 'complete' ? ' · did not finish' : ''}</span></div>
-            <button type="button" className="small" disabled={!idle || !entry.valid} aria-label={`Undo the tools install of ${shortDate(entry.createdAt)}`} onClick={() => void rules.beginUndo(entry.id)}>Undo install…</button>
+            <button type="button" className="small" disabled={!idle || !entry.valid} aria-label={`Undo the tools install of ${shortDate(entry.createdAt)}`} onClick={() => void rules.beginUndo(entry.id)}>Undo…</button>
           </div>
         ))}
         {pending?.kind === 'undo' ? <PendingSheet rules={rules} /> : null}
@@ -1676,9 +1682,9 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
   const providerName = (id: string): string => data?.providers.find((provider) => provider.id === id)?.name ?? id
   const withheld = health.state === 'checked' ? health.targets.filter((target) => target.kind === 'public').map((target) => ROSTER_APP_NAMES[target.harness]) : []
   const skillsCount = [
-    ...(snapshot.skills.pending > 0 ? [`${snapshot.skills.pending} skill entr${snapshot.skills.pending === 1 ? 'y' : 'ies'} to install`] : []),
+    ...(snapshot.skills.pending > 0 ? [`${snapshot.skills.pending} skill entr${snapshot.skills.pending === 1 ? 'y' : 'ies'} not installed yet`] : []),
     ...(snapshot.skills.exposed > 0 ? [`${snapshot.skills.exposed} skill${snapshot.skills.exposed === 1 ? '' : 's'} exposed`] : []),
-    ...(snapshot.tools.pending > 0 ? [`${snapshot.tools.pending} tool entr${snapshot.tools.pending === 1 ? 'y' : 'ies'} to install`] : []),
+    ...(snapshot.tools.pending > 0 ? [`${snapshot.tools.pending} tool entr${snapshot.tools.pending === 1 ? 'y' : 'ies'} not installed yet`] : []),
     ...(snapshot.tools.exposed > 0 ? [`${snapshot.tools.exposed} tool${snapshot.tools.exposed === 1 ? '' : 's'} exposed`] : [])
   ].join(' · ')
   return (
@@ -1687,7 +1693,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
       <Notice rules={rules} />
       {notHeldWords(snapshot.readOnlyRoles) === null ? null : <p className="page-note" role="status"><Dot label="Needs you" />{notHeldWords(snapshot.readOnlyRoles)}</p>}
       <h4 className="group-head" ref={top}>Rules files</h4>
-      {health.state === 'failed' ? <p className="preferences-error" role="alert">{health.reason}</p> : health.targets.map((target) => {
+      {health.state === 'failed' ? <p className="preferences-error" role="alert">{health.reason}</p> : [...health.targets].sort((a, b) => Number(b.state !== 'current') - Number(a.state !== 'current')).map((target) => {
         const test = snapshot.probes.find((entry) => entry.harness === target.harness)
         const stopped = stoppedTest(snapshot.autoTests, 'rules', target.harness)
         const again = target.kind === 'full' && offersTestAgain(snapshot.autoTests, 'rules', target.harness, test?.outcome === 'fail' && test.stale !== true)
@@ -1696,7 +1702,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
             <span>{ROSTER_APP_NAMES[target.harness]}</span>
             <span className="path mono" title={target.path}>{displayPath(target.path, snapshot.home)}</span>
             <span className="health-state">
-              <span>{target.state === 'current' && !again ? null : <Dot label="Needs you" />}{STATE_WORDS[target.state]} <span className="muted">· {KIND_WORDS[target.kind]}</span></span>
+              <span>{target.state === 'current' && !again ? null : <Dot label="Needs you" />}{targetStateWords(target.state)}{target.state === 'current' ? <span className="muted"> · {KIND_WORDS[target.kind]}</span> : null}</span>
               <span className="faint" title={test?.detail}>{target.kind !== 'full' ? 'No loading test' : testRunning(snapshot.autoTests, 'rules', target.harness) ? runningWords(target.harness) : stopped !== undefined ? stoppedWords(stopped) : testLine(test)}</span>
             </span>
             {again
@@ -1776,6 +1782,44 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
       <ToolsHealth rules={rules} action={action} setAction={setAction} />
 
       <ContextLimits rules={rules} action={action} setAction={setAction} />
+
+      <HooksHealth hooks={snapshot.hooks} home={snapshot.home} />
+    </>
+  )
+}
+
+/** "13:31": the time of day BMN checked something at start. */
+function clockTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+/** Health › Hooks (Story 75.9): what BMN's install at start found in each app's hook file, failure first; there is no button. */
+function HooksHealth(props: { hooks: HooksAtStart | null; home: string | null }): React.JSX.Element {
+  const { hooks } = props
+  return (
+    <>
+      <h4 className="group-head">Hooks<span className="caption">BMN's entries in each app's hook file, installed at start</span></h4>
+      {hooks === null ? <p className="preferences-help">Not checked yet: BMN checks them each time it starts.</p>
+        : hooks.state === 'failed' ? <p className="preferences-error" role="alert">{hooks.reason}</p>
+          : hookRows(hooks).map((app) => {
+            const words = hookRowWords(app)
+            return (
+              <div key={app.harness} className="health-row" data-hooks={words.needs ? 'left' : 'in-place'}>
+                <span>{ROSTER_APP_NAMES[app.harness]}</span>
+                <span className="path mono" title={app.file}>{displayPath(app.file, props.home)}</span>
+                <span className="health-state">
+                  <span className={words.needs ? undefined : 'faint'}>{words.needs ? <Dot label="Needs you" /> : null}{words.head}</span>
+                  {words.lines.map((line) => <span key={line} className="faint">{line}</span>)}
+                </span>
+                <span />
+              </div>
+            )
+          })}
+      {hooks === null ? null : (
+        <p className="preferences-help">
+          Checked at start, {clockTime(hooks.checkedAt)}. BMN adds an entry only where an event has none of its own; an entry it did not write, changed, or inside a matcher is left as it is.
+        </p>
+      )}
     </>
   )
 }

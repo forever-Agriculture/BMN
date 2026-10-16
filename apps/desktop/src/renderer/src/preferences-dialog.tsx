@@ -6,8 +6,6 @@ import type {
   BackupExportResult,
   BackupVerifyResult,
   ControlInfo,
-  HookCheckAgent,
-  HookCheckReport,
   NotificationSettings,
   TerminalSettings,
   TelegramStatus,
@@ -28,7 +26,6 @@ import { RulesPreferences, useRulesState, type RecognisedSessions } from './rule
 import type { RunInSession } from './session-command'
 import type { ReportedModel } from './model-suggestions'
 import { Dot, RulesIcon, TeamIcon } from './roster-marks'
-import { createHookCheckRunner } from './hook-check-runner'
 import { parseTelegramForm, type TelegramFormFields } from './telegram-form'
 import './preferences-dialog.css'
 
@@ -97,10 +94,6 @@ const QUIET_ALLOW_KINDS: ReadonlyArray<{ kind: AttentionKind; label: string }> =
   { kind: 'notice', label: 'Notice' }
 ]
 
-const HOOK_CHECK_NAMES: Readonly<Record<HookCheckAgent, string>> = {
-  claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode'
-}
-
 /** Every page of the dialog. Team and Rules head the navigation and open their sub-pages; the rest are grouped. */
 export type PreferencesPage = 'team' | 'roles' | 'asks' | 'models' | 'changes' | 'rules' | 'skills' | 'tools' | 'health' | 'appearance' | 'terminal' | 'notifications' | 'voice' | 'telegram' | 'control' | 'history' | 'backup'
 
@@ -149,7 +142,8 @@ export function TelegramStatusList(props: { status: TelegramStatus; cueShown: bo
 
 export function PreferencesDialog(props: {
   settings: AppSettings
-  initialSection?: 'agent-control' | undefined
+  /** The page to open on; otherwise the last one shown. */
+  initialPage?: PreferencesPage | undefined
   onSettings(next: AppSettings): void
   onClose(): void
   /** Saves the voice section through the app's queue, built from the latest settings. */
@@ -172,7 +166,7 @@ export function PreferencesDialog(props: {
 
   // --- Pages ---------------------------------------------------------------
   // Preferences opens where the owner left it, unless it was opened for one page.
-  const [page, setPage] = useState<PreferencesPage>(props.initialSection === 'agent-control' ? 'control' : lastPage)
+  const [page, setPage] = useState<PreferencesPage>(props.initialPage ?? lastPage)
   useEffect(() => { lastPage = page }, [page])
   // An agent and New agent open under Team › Agents, never as navigation items.
   const [teamPage, setTeamPage] = useState<TeamPage>({ name: 'agents' })
@@ -454,28 +448,6 @@ export function PreferencesDialog(props: {
   // --- Local agent control -------------------------------------------------
   const [controlInfo, setControlInfo] = useState<ControlInfo | null>(null)
   const [controlError, setControlError] = useState<string | null>(null)
-  const [hookCheck, setHookCheck] = useState<HookCheckReport | null>(null)
-  const [hookCheckBusy, setHookCheckBusy] = useState(false)
-  const [hookCheckError, setHookCheckError] = useState<string | null>(null)
-  const hookCheckRunner = useRef<ReturnType<typeof createHookCheckRunner> | null>(null)
-  if (hookCheckRunner.current === null) {
-    hookCheckRunner.current = createHookCheckRunner(
-      () => window.aiTerminal.checkHookConfiguration(),
-      (event) => {
-        if (event.kind === 'started') {
-          setHookCheckBusy(true)
-          setHookCheckError(null)
-        } else if (event.kind === 'checked') {
-          setHookCheck(event.report)
-          setHookCheckBusy(false)
-        } else {
-          setHookCheck(null)
-          setHookCheckError(failureDetail(event.cause, 'Hook configuration check unavailable'))
-          setHookCheckBusy(false)
-        }
-      }
-    )
-  }
   const [copying, setCopying] = useState<'socket' | 'cli' | null>(null)
   const [copyMessage, setCopyMessage] = useState<string | null>(null)
   const [copyError, setCopyError] = useState<string | null>(null)
@@ -494,12 +466,6 @@ export function PreferencesDialog(props: {
       cancelled = true
     }
   }, [])
-
-  useEffect(() => () => { hookCheckRunner.current?.cancel() }, [])
-
-  async function checkHooks(): Promise<void> {
-    await hookCheckRunner.current?.run()
-  }
 
   async function copyText(kind: 'socket' | 'cli', text: string): Promise<void> {
     setCopying(kind)
@@ -1180,41 +1146,6 @@ export function PreferencesDialog(props: {
             {controlError}
           </p>
         )}
-        <div className="preferences-row">
-          <div className="preferences-row-label"><span>Harness hooks</span></div>
-          <div className="preferences-row-control">
-            <button type="button" onClick={() => void checkHooks()}>
-              {hookCheckBusy ? 'Checking…' : 'Check configured hooks'}
-            </button>
-            <p className="preferences-help">Configured entries do not prove hooks fired.</p>
-            {hookCheck ? (
-              <div className="hook-check-report" role="status">
-                <p>Checked {new Date(hookCheck.checkedAt).toLocaleString()} · snapshot of harness files</p>
-                {hookCheck.state === 'failed' ? (
-                  <p>Unavailable: {hookCheck.reason}</p>
-                ) : hookCheck.agents.map((agent) => (
-                  <section key={agent.agent} aria-label={agent.agent === 'claude' ? 'Claude Code hooks' : `${agent.agent} hooks`}>
-                    <h4>{HOOK_CHECK_NAMES[agent.agent]}</h4>
-                    <p>{agent.state === 'read'
-                      ? agent.missing.length === 0 ? 'Configured' : 'Missing entry'
-                      : agent.state === 'missing' ? 'File missing · Missing entry' : 'Unable to read'}
-                      {' · '}file {agent.state}: <code>{agent.file}</code>
-                    </p>
-                    <ul>
-                      {agent.entries.map((entry) => <li key={entry.event}>
-                        {entry.event} · {entry.state === 'missing'
-                          ? entry.optional ? 'Optional entry absent' : 'Missing entry'
-                          : entry.state === 'wired (older wording)' ? 'Configured (older wording)' : 'Configured'}
-                      </li>)}
-                    </ul>
-                    {agent.missing.length > 0 ? <p>Missing entries: {agent.missing.join(', ')}</p> : null}
-                  </section>
-                ))}
-              </div>
-            ) : null}
-            {hookCheckError ? <p className="preferences-error" role="alert">{hookCheckError}</p> : null}
-          </div>
-        </div>
         {copyError && (
           <p className="preferences-error" role="alert">
             {copyError}

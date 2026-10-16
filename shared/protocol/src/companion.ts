@@ -397,47 +397,6 @@ export const HOOK_EVENT_LOG_LIMIT = 30
 export const MAX_HOOK_EVENT_EFFECTS = 8
 
 /**
- * The harnesses whose own hook files `bmn hooks check` reads. A report says what is *configured*,
- * never that a hook fired; the labels for that limit live with the report, not in the data.
- */
-export const HOOK_CHECK_AGENTS = Object.freeze(['claude', 'codex', 'opencode'] as const)
-export type HookCheckAgent = (typeof HOOK_CHECK_AGENTS)[number]
-
-/** What the checker could do with one harness's hook file; the reason detail stays out of the window. */
-export const HOOK_CHECK_FILE_STATES = Object.freeze(['read', 'missing', 'unreadable', 'unparsable', 'unusable'] as const)
-export type HookCheckFileState = (typeof HOOK_CHECK_FILE_STATES)[number]
-
-/** One expected entry as the checker read it: wired by BMN's own wording, an older one, or absent. */
-export const HOOK_CHECK_ENTRY_STATES = Object.freeze(['wired', 'wired (older wording)', 'missing'] as const)
-export type HookCheckEntryState = (typeof HOOK_CHECK_ENTRY_STATES)[number]
-
-export interface HookCheckEntry {
-  /** The harness's own event name the entry belongs to; `plugin` for OpenCode. */
-  event: string
-  /** Optional entries are reported but never required of the owner. */
-  optional: boolean
-  state: HookCheckEntryState
-}
-
-/** One harness's file as the checker read it: a path and states, never the file's contents. */
-export interface HookCheckAgentReport {
-  agent: HookCheckAgent
-  file: string
-  state: HookCheckFileState
-  entries: readonly HookCheckEntry[]
-  /** The required entries the file did not carry; an exit code of 1 for this is report data. */
-  missing: readonly string[]
-}
-
-/**
- * A dated snapshot of what the hook checker found configured, or why no snapshot could be taken.
- * It is not a live watch of harness settings, and never a verdict that hooks work.
- */
-export type HookCheckReport =
-  | { state: 'checked'; checkedAt: string; ok: boolean; agents: readonly HookCheckAgentReport[] }
-  | { state: 'failed'; checkedAt: string; reason: string }
-
-/**
  * The latest harness event one run of a session actually reported to BMN, kept independently of the
  * bounded hook-event log so a summary survives that log's evictions. Terminal OSC notices are logged
  * as `terminal` and never count as a harness observation.

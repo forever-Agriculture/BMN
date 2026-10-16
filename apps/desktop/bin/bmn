@@ -42,7 +42,7 @@ const PIPED_FIELDS = {
 const MAX_ANSWER_WAIT_SECONDS = 25
 /** Options that may be repeated; each occurrence appends, so the order given is the order stored. */
 const LIST_OPTIONS = new Set(['evidence-id', 'file-id'])
-const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help', 'outline', 'clear', 'yes'])
+const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help', 'outline', 'clear', 'yes', 'absent'])
 const GLOBAL_OPTIONS = ['json', 'owner', 'token-file', 'socket', 'help']
 /**
  * Story 35.2: what `bmn handoff --outline` prints. bin/bmn runs unbundled, so this is a copy of HANDOFF_OUTLINE in
@@ -113,7 +113,8 @@ Commands:
   hooks check [agent] [--file PATH]         Say which of BMN's hook entries each agent's own hook file
                                             carries: wired, wired (older wording) or missing
   hooks install <agent> [--file PATH]       Review and approve each hook-file change before installation;
-                                            use --yes for a non-interactive script
+                                            use --yes for a non-interactive script; --absent --yes adds only
+                                            the entries an app lacks entirely, as BMN does at start
   statusline check|install|uninstall [--file PATH]
                                             Put one line in front of Claude Code's own status-line command so
                                             its plan use reaches BMN; the command itself is kept unchanged
@@ -166,6 +167,7 @@ Exit status: 0 success, 1 remote or connection error, 2 usage error
 
 const HOOKS_USAGE = `Usage: bmn hooks check [agent] [--file PATH] [--json]
        bmn hooks install <agent> [--file PATH] [--json] [--yes]
+       bmn hooks install [agent] --absent --yes [--file PATH] [--json]
        bmn hooks print opencode
 
 Agents: ${['claude', 'codex', 'opencode'].join('|')}. With no agent, check reads every one of them.
@@ -187,6 +189,14 @@ install previews the exact target and diff on stderr and asks Yes (default No) b
         event, after copying the file to <file>.bmn-backup-<timestamp>. It never
         removes, reorders or rewrites an entry, and writes nothing when nothing is
         missing.
+        --absent is what BMN runs by itself at every start, for every app set up on
+        this computer (one whose settings folder exists): it adds an entry only where
+        the event has none of BMN's in any shape. An event whose entry sits inside a
+        matcher, is BMN's wording with a field the app will not run (changed), or
+        names bmn hook <agent> in a wording BMN did not write (not BMN's) is left
+        as it is and listed; so is an OpenCode plugin file BMN did not write, and a
+        file BMN cannot add to. A second run writes nothing. Exit 0 when every
+        set-up app has every entry, 1 when one was left or could not be written.
 
 OpenCode (2.0.28 and later) loads BMN's terminal plugin, bmn/tui.ts in its config
 folder, only when cli.json there names the bmn folder in "plugins". check compares
@@ -1765,7 +1775,7 @@ async function runHooks(argv) {
   const [action, agent, ...rest] = parsed.positionals
   try {
     for (const name of Object.keys(parsed.options)) {
-      if (!['json', 'file', 'help', 'yes'].includes(name)) throw new UsageError(`hooks does not accept --${name}`)
+      if (!['json', 'file', 'help', 'yes', 'absent'].includes(name)) throw new UsageError(`hooks does not accept --${name}`)
     }
     if (parsed.options.help || action === undefined) {
       process.stdout.write(`${HOOKS_USAGE}\n`)
@@ -1778,8 +1788,10 @@ async function runHooks(argv) {
     }
     if (!['check', 'install'].includes(action)) throw new UsageError(`hooks expects check or install, not ${action}`)
     if (action !== 'install' && parsed.options.yes) throw new UsageError('--yes is only for hooks install')
+    if (action !== 'install' && parsed.options.absent) throw new UsageError('--absent is only for hooks install')
+    if (parsed.options.absent && !parsed.options.yes) throw new UsageError('hooks install --absent writes without asking: it needs --yes')
     if (rest.length > 0) throw new UsageError(`hooks ${action} takes at most one agent`)
-    if (action === 'install' && agent === undefined) throw new UsageError('hooks install expects one agent')
+    if (action === 'install' && agent === undefined && !parsed.options.absent) throw new UsageError('hooks install expects one agent')
     if (parsed.options.file !== undefined && agent === undefined) {
       throw new UsageError('--file needs the agent whose file it is')
     }
@@ -1787,6 +1799,7 @@ async function runHooks(argv) {
     const pathFor = (name) => parsed.options.file === undefined
       ? hookFilePath(name)
       : absoluteUncollapsed(parsed.options.file)
+    if (action === 'install' && parsed.options.absent) return await installAbsentCommand(agents, pathFor, parsed.options.json === true)
     return action === 'check'
       ? await checkHooksCommand(agents, pathFor, parsed.options.json === true)
       : await installHooksCommand(agents[0], pathFor(agents[0]), parsed.options.json === true, parsed.options.yes === true)
@@ -2088,6 +2101,168 @@ async function installHooksCommand(agent, path, asJson, yes) {
   lines.push('', diff, '', trust)
   process.stdout.write(`${lines.join('\n')}\n`)
   return 0
+}
+
+// ---------------------------------------------------------------------------------------------
+// Story 75.9: the entries BMN installs by itself when it starts
+
+/** Why BMN left an event as it is: an entry of its own wording the app will not run, one inside a matcher, or one it did not write. */
+const LEFT_WHY = { changed: 'changed', gated: 'gated', foreign: 'not BMN\'s' }
+
+/** The folder an app keeps its settings in: an app that never ran here has none, and BMN creates none for it. */
+function appSetUp(agent, path) {
+  return existsSync(agent === 'opencode' ? dirname(openCodeFiles(path).entry) : dirname(path))
+}
+
+/**
+ * One app's events as the start-up install reads them. Only an event with no entry of BMN's in any shape is
+ * absent; an event carrying one BMN would not answer for - inside a matcher, in BMN's wording but with a
+ * field the app will not run, or naming `bmn hook <agent>` in a wording BMN did not write - is left as it is,
+ * so nothing is ever added beside it. An older wording still runs and counts as in place.
+ */
+function absentVerdicts(agent, report) {
+  const placed = []
+  const older = []
+  const absent = []
+  const left = []
+  for (const row of report.events) {
+    if (row.state === 'wired' || row.state === 'wired (older wording)') {
+      placed.push(row.event)
+      if (row.state !== 'wired') older.push(row.event)
+    } else if ((row.gated ?? []).length > 0) {
+      left.push({ event: row.event, why: 'gated' })
+    } else if ((row.unrecognised ?? []).length > 0) {
+      const ours = row.unrecognised.some((command) => ['wired', 'older'].includes(hookEntryState(command, agent)))
+      left.push({ event: row.event, why: ours ? 'changed' : 'foreign' })
+    } else if (!row.optional) {
+      absent.push(row.event)
+    }
+  }
+  return { placed, older, absent, left }
+}
+
+/** What the start-up install found for a file it could not add to, by the file's state. */
+function unusableFile(file, path) {
+  if (file.state === 'unreadable') return { why: 'unreadable', detail: `cannot read ${path} (${file.detail})` }
+  if (file.state === 'unparsable') return { why: 'unparsable', detail: `${path} is not valid JSON (${file.detail})` }
+  return { why: 'unusable', detail: `${path} is not a hook file BMN can add to: ${file.detail}` }
+}
+
+/**
+ * Writes one hook file BMN read as `before`: a copy first when the file exists, then the replacement staged
+ * and checked once more against the bytes and the link that were read. Returns the backup's path, if any.
+ */
+function writeHookFile(path, before, target, nextText) {
+  const unchanged = () => {
+    holdAtTestGate()
+    if (linkTarget(path) !== target) throw new CliError('REVISION_CONFLICT', `${path} changed target while bmn was reading it; nothing was written`)
+    if ((currentText(path) ?? null) !== before) throw new CliError('REVISION_CONFLICT', `${path} changed while bmn was reading it; nothing was written`)
+  }
+  unchanged()
+  let backup = null
+  if (before !== null) {
+    backup = `${path}.bmn-backup-${new Date().toISOString()}`
+    copyFileSync(path, backup)
+  }
+  writeAtomically(path, nextText, unchanged)
+  return backup
+}
+
+function absentClaudeOrCodex(agent, path) {
+  const file = readHookFile(path, agent)
+  if (file.state !== 'read' && file.state !== 'missing') return { state: 'left', placed: [], older: [], installed: [], left: [], ...unusableFile(file, path) }
+  const verdicts = absentVerdicts(agent, checkHooks(agent, path, file))
+  const done = { placed: verdicts.placed, older: verdicts.older, left: verdicts.left }
+  if (verdicts.absent.length === 0) return { state: 'checked', ...done, installed: [] }
+  if (rewrittenNumbers(file.text).length > 0) {
+    return { state: 'left', ...done, installed: [], why: 'numbers', detail: `${path} holds a number BMN cannot write back unchanged` }
+  }
+  const nextText = `${JSON.stringify(installHooks(agent, file.data, verdicts.absent), null, jsonIndent(file.text))}\n`
+  const backup = writeHookFile(path, file.state === 'missing' ? null : file.text, linkTarget(path), nextText)
+  return { state: 'installed', ...done, placed: [...verdicts.placed, ...verdicts.absent], installed: verdicts.absent, ...(backup === null ? {} : { backups: [backup] }) }
+}
+
+/**
+ * OpenCode's two entries: the plugin file and its folder named in cli.json. A plugin file there that is not
+ * BMN's is left, and so is cli.json then, which would otherwise make OpenCode load it; BMN's own plugin in an
+ * older wording, or OpenCode 1's plugin still beside it, counts as in place and is left for `hooks install`.
+ * A cli.json BMN cannot add to leaves both files as they are, as `hooks install` does.
+ */
+function absentOpenCode(path) {
+  const { entry, cli: cliPath } = openCodeFiles(path)
+  const before = currentText(path)
+  const cli = readOpenCodeCli(cliPath)
+  const older = olderOpenCodePlugins(path)
+  const placed = []
+  const olderEvents = []
+  const absent = []
+  const left = []
+  if (before === null) absent.push('plugin')
+  else if (openCodeBMNText(before)) {
+    placed.push('plugin')
+    if (before !== OPENCODE_PLUGIN || older.length > 0) olderEvents.push('plugin')
+  } else left.push({ event: 'plugin', why: 'foreign' })
+  if (cli.state !== 'read' && cli.state !== 'missing') {
+    return { state: 'left', placed, older: olderEvents, installed: [], left, why: cli.state, detail: cli.reason.replace(/; BMN leaves it untouched$/, '') }
+  }
+  if (cli.plugins.includes(entry)) placed.push('cli.json')
+  else if (left.length === 0) absent.push('cli.json')
+  const done = { placed, older: olderEvents, left }
+  if (absent.length === 0) return { state: 'checked', ...done, installed: [] }
+  if (absent.includes('cli.json') && rewrittenNumbers(cli.text ?? '').length > 0) {
+    return { state: 'left', ...done, installed: [], why: 'numbers', detail: `${cliPath} holds a number BMN cannot write back unchanged` }
+  }
+  const backups = []
+  // The plugin first and cli.json second, as `hooks install` writes them: a stop between leaves a plugin OpenCode does not load yet.
+  if (absent.includes('plugin')) writeHookFile(path, null, linkTarget(path), OPENCODE_PLUGIN)
+  if (absent.includes('cli.json')) {
+    const nextText = `${JSON.stringify({ ...cli.data, plugins: [...cli.plugins, entry] }, null, cli.text === null ? 2 : jsonIndent(cli.text))}\n`
+    const backup = writeHookFile(cliPath, cli.text, linkTarget(cliPath), nextText)
+    if (backup !== null) backups.push(backup)
+  }
+  return { state: 'installed', ...done, placed: [...placed, ...absent], installed: absent, ...(backups.length === 0 ? {} : { backups }) }
+}
+
+/**
+ * `hooks install --absent`: what BMN runs at every start. Each app set up on this computer gets the entries it
+ * lacks entirely and nothing else; what BMN leaves is listed with why. A second run writes nothing. Exit 0 when
+ * every set-up app has every entry BMN expects, 1 when one was left or could not be written.
+ */
+async function installAbsentCommand(agents, pathFor, asJson) {
+  const results = []
+  for (const agent of agents) {
+    const path = pathFor(agent)
+    if (!appSetUp(agent, path)) {
+      results.push({ agent, file: path, state: 'not-set-up', placed: [], older: [], installed: [], left: [] })
+      continue
+    }
+    try {
+      results.push({ agent, file: path, ...(agent === 'opencode' ? absentOpenCode(path) : absentClaudeOrCodex(agent, path)) })
+    } catch (error) {
+      const detail = error instanceof CliError ? error.message : `cannot write ${path} (${error.code ?? error.message})`
+      results.push({ agent, file: path, state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', detail })
+    }
+  }
+  const ok = results.every((result) => result.state !== 'failed' && result.state !== 'left' && result.left.length === 0)
+  if (asJson) {
+    writeSync(1, `${JSON.stringify({ ok, agents: results }, null, 2)}\n`)
+    return ok ? 0 : 1
+  }
+  const lines = results.map((result) => {
+    const name = HOOK_AGENTS[result.agent]
+    if (result.state === 'not-set-up') return `${name}: not set up on this computer; nothing written`
+    const head = `${name}  ${result.file}`
+    const body = [
+      ...(result.installed.length > 0 ? [`  added: ${result.installed.join(', ')}`] : []),
+      `  in place: ${result.placed.length}${result.older.length > 0 ? ` (${result.older.join(', ')} in an older wording)` : ''}`,
+      ...result.left.map((row) => `  ${row.event}: ${LEFT_WHY[row.why] ?? row.why}, left as it is${row.detail ? ` (${row.detail})` : ''}`),
+      ...(result.detail ? [`  ${result.detail}; left as it is`] : []),
+      ...(result.backups ?? []).map((backup) => `  backup: ${backup}`)
+    ]
+    return [head, ...body].join('\n')
+  })
+  process.stdout.write(`${lines.join('\n\n')}\n`)
+  return ok ? 0 : 1
 }
 
 /**

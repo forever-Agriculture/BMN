@@ -78,7 +78,7 @@ import {
 import { installFileReferenceIpcHandlers } from './file-reference-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
 import { installVoiceIpcHandlers } from './voice-ipc'
-import { installAgentsIpcHandlers, messageTeamAnswer } from './agents-ipc'
+import { START_INSTALLS, installAgentsIpcHandlers, messageTeamAnswer, type StartInstall } from './agents-ipc'
 import { createSessionEnvironmentReader } from './session-environment'
 import { transcribeRecording } from './voice-engine'
 import {
@@ -329,8 +329,7 @@ function hostEnvironment(repoRoot: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     BMN_REPO_ROOT: repoRoot,
-    BMN_CLI_PATH: bmnCliPath(),
-    BMN_CLI_SCRIPT: bmnCliScript()
+    BMN_CLI_PATH: bmnCliPath()
   }
 }
 
@@ -577,6 +576,8 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
     judgeTestPort: () => (rendererTestMode ? process.env.BMN_JUDGE_TEST_PORT ?? null : null),
     // A test run starts none of BMN's own app tests unless it names them (`all` or a list): the self-test keeps the owner's HOME and his apps' sign-ins (Story 75.8).
     ...(rendererTestMode || selfTest ? { autoTestKinds: testRunAutoTests(process.env.BMN_AUTO_TESTS) } : {}),
+    // Nor does it install anything by itself at start unless it names it (Story 75.9): the self-test's HOME holds the owner's own hook files.
+    ...(rendererTestMode || selfTest ? { startInstalls: testRunStartInstalls(process.env.BMN_START_INSTALLS) } : {}),
     // The self-test keeps the owner's HOME, where his approved team is read, and opens Preferences on Team: it asks
     // no OpenCode, so nothing runs in BMN's OpenCode folder under his real roots (packaged smoke of 2026-10-15).
     ...(selfTest ? {
@@ -595,9 +596,10 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
       return picked.canceled ? null : picked.filePaths[0] ?? null
     }
   })
-  // Once the shell's own program path is known, so an app is tested with the program a session would start (Story 75.8).
+  // Once the shell's own program path is known, so an app is tested with the program a session would start (Story 75.8),
+  // after BMN's hook entries, skills and tools are installed, so the tests read them in place (Story 75.9).
   void sessionEnvironment.refresh().finally(() => {
-    void agentsIpc.autoTestsAtStart()
+    void agentsIpc.installsAtStart().finally(() => agentsIpc.autoTestsAtStart())
   })
   installVoiceIpcHandlers(bridgeIpc, {
     senderIsAllowed,
@@ -1006,6 +1008,11 @@ const selfTest = process.argv.includes('--self-test')
 function testRunAutoTests(value: string | undefined): AutoTestKind[] {
   if (value === 'all') return [...AUTO_TEST_KINDS]
   return (value ?? '').split(',').filter((kind): kind is AutoTestKind => (AUTO_TEST_KINDS as readonly string[]).includes(kind))
+}
+/** What a test run lets BMN install by itself at start: `all`, or a comma-separated list; nothing otherwise. */
+function testRunStartInstalls(value: string | undefined): StartInstall[] {
+  if (value === 'all') return [...START_INSTALLS]
+  return (value ?? '').split(',').filter((kind): kind is StartInstall => (START_INSTALLS as readonly string[]).includes(kind))
 }
 const rendererTestMode = process.argv.includes('--bmn-test-mode')
 if (selfTest) {

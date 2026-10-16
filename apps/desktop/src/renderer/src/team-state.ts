@@ -100,22 +100,22 @@ export function rowHidesDetail(preview: Pick<AgentsPreview, 'differences' | 'con
   return preview.consequences.length > 0 || preview.differences.some((difference) => difference.field === null)
 }
 
-/** "Rules updated in 2 apps", with what was left for Install when a file changed meanwhile. */
+/** "Rules updated in 2 apps", with what was left for Save in Rules when a file changed meanwhile. */
 export function rulesUpdateWords(update: NonNullable<Extract<AgentsOutcome, { ok: true }>['rulesUpdate']>): string {
   const written = update.written.length
   const parts = [written > 0 ? `Rules updated in ${written} app${written === 1 ? '' : 's'}` : 'No rules file was updated']
-  if (update.skipped.length > 0) parts.push(`${update.skipped.length} changed meanwhile and wait${update.skipped.length === 1 ? 's' : ''} for Install`)
+  if (update.skipped.length > 0) parts.push(`${update.skipped.length} changed meanwhile; Save in Rules rewrites ${update.skipped.length === 1 ? 'it' : 'them'}`)
   if (update.failed !== undefined) parts.push(`stopped: ${update.failed}`)
   return parts.join(' · ')
 }
 
-/** What an approval that went through says: its message, the rules files it updated, and the OpenCode Go sign-in it copied (70.4). */
+/** What an approval that went through says: its message, the rules files it updated, the skills and tools it installed (75.9) and the OpenCode Go sign-in it copied (70.4). */
 export function approvalNotice(result: Extract<AgentsOutcome, { ok: true }>): TeamNotice {
   const update = result.rulesUpdate
   const signIn = result.openCodeSignIn
   return {
     ok: update?.failed === undefined && signIn?.ok !== false,
-    text: [result.message, ...(update === undefined ? [] : [rulesUpdateWords(update)]), ...(signIn === undefined ? [] : [signIn.message])].join(' · '),
+    text: [result.message, ...(update === undefined ? [] : [rulesUpdateWords(update)]), ...(result.installed ?? []), ...(signIn === undefined ? [] : [signIn.message])].join(' · '),
     ...(update?.transaction ? { undo: update.transaction } : {})
   }
 }

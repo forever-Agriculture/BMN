@@ -3835,17 +3835,16 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       events.querySelector('.app-dialog-heading button').click();
       observation = await wait(() => document.querySelector('.session-inspector .hook-observation'), 'returned observation');
       (await wait(() => [...observation.querySelectorAll('button')]
-        .find(button => button.textContent === 'Check configured hooks in Preferences'), 'configuration link')).click();
+        .find(button => button.textContent === 'Hooks in Rules › Health'), 'hooks link')).click();
       const preferences = await wait(() => document.querySelector('dialog.preferences-dialog[open]'), 'Preferences');
-      const limit = preferences.textContent.includes('Configured entries do not prove hooks fired.') &&
-        preferences.textContent.includes('trust hooks with /hooks');
-      (await wait(() => [...preferences.querySelectorAll('button')]
-        .find(button => button.textContent === 'Check configured hooks'), 'check button')).click();
-      const report = await wait(() => preferences.querySelector('.hook-check-report'), 'dated hook check');
-      const configured = report.textContent.includes('Claude Code') &&
-        report.textContent.includes('Configured') && report.textContent.includes('Checked ');
-      const missing = report.textContent.includes('Codex') &&
-        report.textContent.includes('OpenCode') && report.textContent.includes('Missing entry');
+      // Story 75.9: the hook files are read by BMN at its start, and Health says what it found; a test run installs
+      // nothing unless BMN_START_INSTALLS names hooks, so Health says they were not checked yet and offers no button.
+      const health = await wait(() => [...preferences.querySelectorAll('.group-head')]
+        .find(head => head.textContent.startsWith('Hooks')), 'Health › Hooks');
+      const configured = health.textContent.includes("BMN's entries in each app's hook file, installed at start") &&
+        preferences.textContent.includes('Not checked yet: BMN checks them each time it starts.');
+      const missing = ![...preferences.querySelectorAll('button')].some(button => /Check configured hooks/.test(button.textContent));
+      const limit = preferences.querySelector('.nav-item[aria-current="page"]')?.textContent === 'Health';
       preferences.querySelector('.app-dialog-heading button').click();
       const inputAfter = window.__aitermTest.snapshot(hookSessionId).inputEvents;
       document.querySelector('.session-inspector .panel-heading button')?.click();

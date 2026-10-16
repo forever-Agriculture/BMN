@@ -3,7 +3,7 @@ import { DEFAULT_APP_SETTINGS, type AppSettings, type BackupExportResult, type T
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { BackupOutcome, PREFERENCES_NAVIGATION, PreferencesDialog, TelegramStatusList, pageParent } from './preferences-dialog'
+import { BackupOutcome, PREFERENCES_NAVIGATION, PreferencesDialog, TelegramStatusList, pageParent, type PreferencesPage } from './preferences-dialog'
 
 const ERROR = 'Another client is polling this bot token; stop the other client or revoke the token in BotFather'
 const status = (lastError: string | null): TelegramStatus => ({
@@ -138,8 +138,8 @@ describe('Health alerts row (Story 62.2)', () => {
 })
 
 describe('the left navigation and its pages (Story 60.5 AC1)', () => {
-  const dialog = (initialSection?: 'agent-control'): string => renderToStaticMarkup(createElement(PreferencesDialog, {
-    settings: DEFAULT_APP_SETTINGS, initialSection, onSettings: () => undefined, onClose: () => undefined,
+  const dialog = (initialPage?: PreferencesPage): string => renderToStaticMarkup(createElement(PreferencesDialog, {
+    settings: DEFAULT_APP_SETTINGS, initialPage, onSettings: () => undefined, onClose: () => undefined,
     saveVoice: async () => DEFAULT_APP_SETTINGS, suggestVocabulary: () => ({ ok: false as const, reason: 'test' }) }))
   const navigation = (markup: string): string => /<nav class="preferences-nav"[^>]*>(.*?)<\/nav>/s.exec(markup)![1] as string
   const items = (markup: string): string[] => [...navigation(markup).matchAll(/<button[^>]*class="nav-item"[^>]*>(?:<svg.*?<\/svg>)?([A-Za-z ]+)/g)].map((match) => match[1] as string)
@@ -162,7 +162,7 @@ describe('the left navigation and its pages (Story 60.5 AC1)', () => {
   })
 
   it('keeps every earlier section as its own page, one showing at a time', () => {
-    const markup = dialog('agent-control')
+    const markup = dialog('control')
     expect(items(markup)).toEqual(['Team', 'Rules', 'Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'Local control', 'History', 'Backup'])
     expect(markup).toContain('<button type="button" class="nav-item" aria-current="page">Local control</button>')
     expect(count(markup, '<div class="preferences-page" hidden="">')).toBe(7)

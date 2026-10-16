@@ -348,6 +348,28 @@ describe('check and install with links (60.11 AC2-AC4)', () => {
     expect(states('codex')).toEqual({ alpha: 'link', beta: 'unmanaged', gamma: 'missing' })
   })
 
+  it('leaves a foreign link and a folder BMN did not write when it installs by itself, and adds the rest (Story 75.9)', async () => {
+    const foreign = skill('elsewhere', { at: join(home, 'foreign') })
+    mkdirSync(codexFolder(), { recursive: true })
+    symlinkSync(foreign, join(codexFolder(), 'alpha'))
+    const mine = skill('beta', { at: codexFolder(), extra: { 'own.md': 'own\n' } })
+    const before = treeHash(mine)
+    const plan = skillsPlanView(await planSkillsInstall(['codex'], { environment: env, versions: VERSIONS, absent: true }))
+    expect(plan.targets.map((target) => [target.skill, target.change])).toEqual([['gamma', 'missing']])
+    expect(plan.left).toEqual([
+      { harness: 'codex', skill: 'alpha', path: join(codexFolder(), 'alpha'), change: 'link', words: 'replaces a link that points somewhere else' },
+      { harness: 'codex', skill: 'beta', path: join(codexFolder(), 'beta'), change: 'unmanaged', words: 'takes over an entry BMN did not write (unmanaged)' }
+    ])
+    const result = await install(['codex'], { absent: true, expectedPlanHash: plan.plan_hash! })
+    expect(result.code).toBe('OK')
+    expect(states('codex')).toEqual({ alpha: 'link', beta: 'unmanaged', gamma: 'current' })
+    expect(readlinkSync(join(codexFolder(), 'alpha'))).toBe(foreign)
+    expect(treeHash(mine)).toBe(before)
+    // The plan an install by itself was bound to is not the whole plan: the owner's own install would take both over.
+    expect((await planSkillsInstall(['codex'], { environment: env, versions: VERSIONS })).planHash).not.toBe(plan.plan_hash)
+    expect((await planSkillsInstall(['codex'], { environment: env, versions: VERSIONS, absent: true })).targets).toEqual([])
+  })
+
   it('lists a skills install made before Cursor was retired as saved, and its undo leaves the Cursor folder as it is (Epic 71)', async () => {
     const result = await install(['codex'])
     const manifestPath = join(home, '.config/bmn/agents/state/rules/transactions', result.transaction!, 'manifest.json')

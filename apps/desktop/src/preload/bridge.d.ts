@@ -22,12 +22,12 @@ import type {
   TeamAskDetail,
   TeamAsksSnapshot,
   ResearchSnapshot,
-  SkillsPlan,
   ToolProposalView,
   ToolsPlan,
   RulesOutcome,
   RulesMasterPlan,
   RulesPlan,
+  RulesSavePlan,
   RulesRevertPlan,
   RulesSnapshot,
   AppSettings,
@@ -47,7 +47,6 @@ import type {
   FileReferencePasteReceipt,
   FileReferenceSearchParams,
   FileReferenceSearchResult,
-  HookCheckReport,
   HookEventRecord,
   HookEventsView,
   HookObservation,
@@ -301,12 +300,6 @@ export interface AiTerminalBridge {
    */
   openPort(sessionId: string, port: number): Promise<{ url: string }>
   /**
-   * Read-only: a dated snapshot of what the hook checker found configured for Claude Code, Codex
-   * and OpenCode. Never writes a hook file, and carries no configuration contents; exit 1 with a
-   * report is report data.
-   */
-  checkHookConfiguration(): Promise<HookCheckReport>
-  /**
    * A terminal notification (OSC 9, 99 or 777) the view read out of this session's own output.
    * Only the window can see it, so only the window reports it; it opens a notice and nothing else.
    */
@@ -363,9 +356,9 @@ export interface AiTerminalBridge {
   /** Epic 60.6: the master, each app's rendering, health from `bmn rules check`, loading tests, the agent apps, installs and history. */
   rulesSnapshot(): Promise<RulesSnapshot>
   planRulesMaster(text: string): Promise<RulesMasterPlan>
-  saveRulesMaster(text: string, expectedHash: string | null, expectedLink: string | null, expectedDirectory: string | null): Promise<RulesOutcome>
-  planRulesInstall(): Promise<RulesPlan>
-  installRules(planHash: string): Promise<RulesOutcome>
+  /** Story 75.9: what saving `text` writes, the master and each app's file, then the save itself, bound to that plan; Undo puts both back. */
+  planRulesSave(text: string): Promise<RulesSavePlan>
+  saveRules(text: string, expectedHash: string | null, expectedLink: string | null, expectedDirectory: string | null, planHash: string): Promise<RulesOutcome>
   planRulesRestore(transaction: string): Promise<RulesPlan>
   restoreRules(transaction: string, planHash: string): Promise<RulesOutcome>
   planRulesRevertMaster(revision: number): Promise<RulesRevertPlan>
@@ -378,14 +371,11 @@ export interface AiTerminalBridge {
   testContextLimit(harness: ContextLimitApp): Promise<RulesOutcome>
   /** BMN's own tests (Story 75.8): `fresh` makes it look now, without it the call waits for the tests under way. */
   autoTests(fresh: boolean): Promise<AutoTestsView>
-  /** Story 60.11: what a skills install would link, copy or remove in each app, then the install itself, bound to that plan. */
-  planSkillsInstall(): Promise<SkillsPlan>
-  installSkills(planHash: string): Promise<RulesOutcome>
   /** Owner-run: asks the app which skills it sees, first in an empty home folder, then with one test skill placed where its skills live. */
   testSkills(harness: RosterHarness): Promise<RulesOutcome>
   /** Owner-run: one prompt to that app's provider, to see whether the app hands a test skill to its model. */
   testSkillsLoading(harness: RosterHarness): Promise<RulesOutcome>
-  /** Story 60.12: what a tools install would set or remove in each app's settings, then the install itself, bound to that plan. */
+  /** Story 60.12: what removing the entries that are not on the list would change in each app's settings, then the change itself, bound to that plan (75.9: the rest installs itself). */
   planToolsInstall(removeUnlisted?: boolean): Promise<ToolsPlan>
   installTools(planHash: string, removeUnlisted?: boolean): Promise<RulesOutcome>
   /** Owner-run: starts the app in an empty home folder and asks which tools it sees there. */

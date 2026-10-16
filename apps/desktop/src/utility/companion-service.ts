@@ -91,7 +91,6 @@ import type { DatabaseWorkerClient } from './database-client'
 import type { SendOutcome } from './database-message-store'
 import type { ApplicationRoots } from './roots'
 import { HostControlError, type SessionIdentity, type SessionManager } from './session-manager'
-import { runHookConfigurationCheck } from './hook-configuration-check'
 import { codexRolloutPath } from './conversation-binding'
 import { readCodexUsage } from './codex-usage'
 import { searchFileReferences } from './file-reference-search'
@@ -173,8 +172,6 @@ export interface CompanionServiceOptions {
   manager: SessionManager
   roots: ApplicationRoots
   cliPath: string
-  /** The script `cliPath` runs; the packaged `cliPath` is a shell launcher that node cannot load. */
-  cliScriptPath?: string
   emit(message: AppEventMessage): void
   fetch?: typeof fetch
   /** The Bot API origin; only the self-test host sets it, to a local fake. */
@@ -1034,9 +1031,6 @@ export class CompanionService {
       case METHOD_REGISTRY.hookOriginsList:
         // Read-only: each session's own latest origin, never another session's facts beside it.
         return [...this.hookOrigins.values()]
-      case METHOD_REGISTRY.hooksCheck:
-        // The owner's own read-only check, dated on arrival; the window decides what a stale answer is worth.
-        return runHookConfigurationCheck(this.options.cliScriptPath ?? this.options.cliPath, { now: this.now })
       case METHOD_REGISTRY.attentionTerminalNotice: {
         // Only the owner's own window reaches this switch, and only it can see a session's output,
         // so a session token has no way in: the control socket has no method for this at all.

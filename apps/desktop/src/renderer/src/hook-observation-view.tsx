@@ -92,7 +92,7 @@ export function HookObservationView(props: {
       <div className="actions hook-observation-actions">
         {observation?.state === 'observed' && observation.detailAvailable
           ? <button type="button" className="small" onClick={props.onOpenEvents}>Open Hook events</button> : null}
-        <button type="button" className="small" onClick={props.onOpenConfiguration}>Check configured hooks in Preferences</button>
+        <button type="button" className="small" onClick={props.onOpenConfiguration}>Hooks in Rules › Health</button>
       </div>
       <small>One observed event proves it reached BMN. It does not prove every hook or permission path works.</small>
     </section>

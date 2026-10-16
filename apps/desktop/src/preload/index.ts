@@ -30,12 +30,12 @@ import {
   type TeamAskDetail,
   type TeamAsksSnapshot,
   type ResearchSnapshot,
-  type SkillsPlan,
   type ToolProposalView,
   type ToolsPlan,
   type RulesOutcome,
   type RulesMasterPlan,
   type RulesPlan,
+  type RulesSavePlan,
   type RulesRevertPlan,
   type RulesSnapshot,
   type AppSettings,
@@ -46,7 +46,6 @@ import {
   type AutoTestsView,
   type HookEventRecord,
   type HookEventsView,
-  type HookCheckReport,
   type HookObservation,
   type HookOriginRecord,
   type SessionPorts,
@@ -633,9 +632,6 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   openPort(sessionId: string, port: number): Promise<{ url: string }> {
     return invokeBridge('aiterm:ports:open', { sessionId, port })
   },
-  checkHookConfiguration(): Promise<HookCheckReport> {
-    return invokeBridge('aiterm:hooks:check', {})
-  },
   reportTerminalNotice(params: {
     sessionId: string
     incarnationId: string
@@ -744,14 +740,11 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   planRulesMaster(text: string): Promise<RulesMasterPlan> {
     return invokeBridge('aiterm:rules:plan-master', { text })
   },
-  saveRulesMaster(text: string, expectedHash: string | null, expectedLink: string | null, expectedDirectory: string | null): Promise<RulesOutcome> {
-    return invokeBridge('aiterm:rules:save-master', { text, expectedHash, expectedLink, expectedDirectory })
+  planRulesSave(text: string): Promise<RulesSavePlan> {
+    return invokeBridge('aiterm:rules:plan-save', { text })
   },
-  planRulesInstall(): Promise<RulesPlan> {
-    return invokeBridge('aiterm:rules:plan-install', {})
-  },
-  installRules(planHash: string): Promise<RulesOutcome> {
-    return invokeBridge('aiterm:rules:install', { planHash })
+  saveRules(text: string, expectedHash: string | null, expectedLink: string | null, expectedDirectory: string | null, planHash: string): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:save', { text, expectedHash, expectedLink, expectedDirectory, planHash })
   },
   planRulesRestore(transaction: string): Promise<RulesPlan> {
     return invokeBridge('aiterm:rules:plan-restore', { transaction })
@@ -777,12 +770,6 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   /** BMN's own tests (Story 75.8): `fresh` makes it look now, without it the call waits for the tests under way. Resolves when none is. */
   autoTests(fresh: boolean): Promise<AutoTestsView> {
     return invokeBridge('aiterm:rules:auto-tests', { fresh })
-  },
-  planSkillsInstall(): Promise<SkillsPlan> {
-    return invokeBridge('aiterm:rules:skills-plan', {})
-  },
-  installSkills(planHash: string): Promise<RulesOutcome> {
-    return invokeBridge('aiterm:rules:skills-install', { planHash })
   },
   testSkills(harness: RosterHarness): Promise<RulesOutcome> {
     return invokeBridge('aiterm:rules:skills-test', { harness })

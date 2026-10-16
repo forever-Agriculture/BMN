@@ -340,7 +340,6 @@ async function start(): Promise<void> {
     turnChanges,
     roots,
     cliPath,
-    cliScriptPath: process.env.BMN_CLI_SCRIPT ?? cliPath,
     ...(process.argv.includes('--self-test-host') ? { now: () => selfTestClock ?? new Date() } : {}),
     // Electron self-test only (Story 30.3): Telegram talks to the main process's local fake Bot API.
     ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN

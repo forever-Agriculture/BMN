@@ -1,5 +1,5 @@
 // MODULE: team-rules-preferences.test.ts - Epic 60.5/60.6 markup: shape and plain words carry meaning, every control is named, no schema word reaches the owner
-import type { AgentsPreview, AgentsSnapshot, ResearchModelView, ResearchSnapshot, RosterAgentShape, RosterDataShape, RosterDiffShape, RosterListedApp, RosterToolShape, RulesSnapshot, SkillsPlan, ToolProposalView, ToolsPlan } from '@bmn/protocol'
+import type { AgentsPreview, AgentsSnapshot, ResearchModelView, ResearchSnapshot, RosterAgentShape, RosterDataShape, RosterDiffShape, RosterListedApp, RosterToolShape, RulesPlan, RulesSavePlan, RulesSnapshot, ToolProposalView, ToolsPlan } from '@bmn/protocol'
 import { createElement, createRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
@@ -20,6 +20,10 @@ import {
   forgetUpdateWatches,
   diffSummary,
   earlierVersions,
+  hookRowWords,
+  hookRows,
+  rulesStatus,
+  targetStateWords,
   endedSince,
   onUpdateEnded,
   updateEnded,
@@ -447,8 +451,8 @@ describe('the approval footer (60.5 AC7)', () => {
 
   it('says what an approval did to the rules files and offers Undo', () => {
     expect(rulesUpdateWords({ transaction: 't', written: ['claude', 'codex'], skipped: [] })).toBe('Rules updated in 2 apps')
-    expect(rulesUpdateWords({ transaction: 't', written: ['claude'], skipped: ['codex'] })).toBe('Rules updated in 1 app · 1 changed meanwhile and waits for Install')
-    expect(rulesUpdateWords({ transaction: null, written: [], skipped: ['claude', 'codex'], failed: 'disk full' })).toBe('No rules file was updated · 2 changed meanwhile and wait for Install · stopped: disk full')
+    expect(rulesUpdateWords({ transaction: 't', written: ['claude'], skipped: ['codex'] })).toBe('Rules updated in 1 app · 1 changed meanwhile; Save in Rules rewrites it')
+    expect(rulesUpdateWords({ transaction: null, written: [], skipped: ['claude', 'codex'], failed: 'disk full' })).toBe('No rules file was updated · 2 changed meanwhile; Save in Rules rewrites them · stopped: disk full')
     const markup = toastMarkup(team({ notice: { ok: true, text: 'Approved · version 5 · Rules updated in 2 apps', undo: 't' } }))
     expect(markup).toContain('<div class="toast" role="status"><span>Approved · version 5 · Rules updated in 2 apps</span>')
     expect(markup).toContain('>Undo</button>')
@@ -627,12 +631,19 @@ const RULES: RulesSnapshot = {
     { id: 't1', createdAt: '2026-10-08T14:02:00.000Z', state: 'complete', reason: 'install', targets: ['claude', 'codex'], valid: true },
     { id: 't0', valid: false }
   ],
-  history: [{ revision: 1, at: '2026-10-08T13:58:00.000Z', hash: 'h', bytes: 290, reason: 'saved', intact: true }, { revision: 2, at: '2026-10-09T09:00:00.000Z', hash: 'i', bytes: 2000, reason: 'saved', intact: false }]
+  history: [{ revision: 1, at: '2026-10-08T13:58:00.000Z', hash: 'h', bytes: 290, reason: 'saved', intact: true }, { revision: 2, at: '2026-10-09T09:00:00.000Z', hash: 'i', bytes: 2000, reason: 'saved', intact: false }],
+  hooks: {
+    state: 'checked', checkedAt: '2026-10-09T21:31:00.000Z', apps: [
+      { harness: 'claude', file: '/home/synthetic/.claude/settings.json', state: 'checked', placed: ['Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'], older: [], installed: [], left: [] },
+      { harness: 'codex', file: '/home/synthetic/.codex/hooks.json', state: 'installed', placed: ['PreToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'], older: [], installed: ['SessionStart', 'SessionEnd'], left: [{ event: 'PostToolUse', why: 'changed' }, { event: 'Interrupt', why: 'foreign' }] },
+      { harness: 'opencode', file: '/home/synthetic/.config/opencode/bmn/tui.ts', state: 'not-set-up', placed: [], older: [], installed: [], left: [] }
+    ]
+  }
 }
 
 const rules = (extra: Partial<RulesState> = {}): RulesState => ({
   snapshot: RULES, began: Date.parse('2026-10-09T22:13:00.000Z'), loadError: null, draft: RULES.master.text ?? '', dirty: false, draftPlan: null, busy: false, notice: null, pending: null, setDraft: noop, setNotice: noop,
-  ensure: noop, refresh: noop, load: later, beginSave: later, beginInstall: later, beginSkillsInstall: later, beginToolsInstall: later, beginUndo: later, beginRestore: later, beginTest: noop, confirm: later, cancel: noop, run: async () => true, ...extra
+  ensure: noop, refresh: noop, load: later, beginSave: later, beginToolsRemoval: later, beginUndo: later, beginRestore: later, beginTest: noop, confirm: later, cancel: noop, run: async () => true, ...extra
 })
 const rulesMarkup = (page: 'editor' | 'skills' | 'tools' | 'health', state: RulesState = rules(), teamState: TeamState = team()): string =>
   renderToStaticMarkup(createElement(RulesPreferences, { rules: state, team: teamState, page }))
@@ -640,32 +651,66 @@ const rulesMarkup = (page: 'editor' | 'skills' | 'tools' | 'health', state: Rule
 describe('Rules › Editor (60.6 AC1–AC3)', () => {
   const markup = rulesMarkup('editor')
 
+  const SAVE: RulesSavePlan = {
+    ok: true, code: 'OK', valid: true, errors: [], diff: '--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new', expectedHash: 'a'.repeat(64), expectedLink: null, expectedDirectory: '/home/synthetic/.config/bmn/agents',
+    renderings: [], changesMaster: true, planHash: 'p'.repeat(64), blocked: [],
+    targets: [
+      { harness: 'claude', path: '/home/synthetic/.claude/CLAUDE.md', kind: 'updates BMN\'s file', change: 'stale', diff: '-old\n+new', rendering: 'full' },
+      { harness: 'opencode', path: '/home/synthetic/.config/opencode/AGENTS.md', kind: 'creates the file', change: 'missing', diff: '+new', rendering: 'public' }
+    ]
+  }
+
   it('says a linked rules file would be replaced by a regular file, on the sheet that saves it', () => {
-    const plan = { valid: true, errors: [], diff: '--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new', expectedHash: 'a'.repeat(64), expectedLink: '/home/synthetic/dotfiles/global-rules.md', expectedDirectory: '/home/synthetic/.config/bmn/agents', renderings: [] }
+    const plan = { ...SAVE, expectedLink: '/home/synthetic/dotfiles/global-rules.md' }
     const linked = words(rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan } }))).replace(/\s+/g, ' ')
     expect(linked).toContain('The rules file is a link to ~/dotfiles/global-rules.md . This replaces the link with a regular file here; the file it points to stays as it is.')
-    expect(rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan: { ...plan, expectedLink: null } } }))).not.toContain('is a link to')
+    expect(rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan: SAVE } }))).not.toContain('is a link to')
   })
 
-  it('offers Save and install… beside Save, only for rules that can be saved, and says that neither installs unseen', () => {
-    const plan = { valid: true, errors: [], diff: '--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new', expectedHash: 'a'.repeat(64), expectedLink: null, expectedDirectory: '/home/synthetic/.config/bmn/agents', renderings: [] }
-    const sheet = rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan } }))
-    expect(sheet).toContain('<button type="button" class="primary">Save</button><button type="button">Save and install…</button><button type="button">Cancel</button>')
-    // The two buttons say what each does; the note keeps only what they do not.
-    expect(sheet).toContain('<span class="muted">The text before this save is kept under Earlier versions.</span>')
-    // Rules an app could not read are not saved, so there is nothing to install either.
-    const refused = rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan: { ...plan, valid: false, errors: [{ code: 'RULES_MARKER', message: 'A public section is not closed.' }] } } }))
+  it('saves and installs in one step: the sheet lists each app\'s file, Undo puts them back with the rules, and no Install… is left (Story 75.9)', () => {
+    const sheet = rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan: SAVE } }))
+    expect(sheet).toContain('aria-label="Save the rules · +1 −1"')
+    expect(sheet).toContain('<button type="button" class="primary">Save</button><button type="button">Cancel</button>')
+    expect(words(sheet)).toContain('Each app&#x27;s file below is written at once. Undo, under Earlier versions, puts the rules and every file back.')
+    expect(sheet).toMatch(/<summary><span>Claude Code<\/span>.*?<span class="muted">\+1 −1<\/span><\/span><span class="muted">Full rules<\/span><\/summary>/)
+    expect(sheet).toMatch(/<summary><span>OpenCode<\/span>.*?<span class="muted">New file<\/span><\/span><span class="muted">Public sections only<\/span><\/summary>/)
+    expect(sheet).not.toContain('Install…')
+    // An app whose destination no longer inspects as approved is named, and not written.
+    const blocked = words(rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan: { ...SAVE, blocked: [{ harness: 'codex', reason: 'it sends data to a custom host; set its destination again' }] } } })))
+    expect(blocked).toContain('Codex is not written: it sends data to a custom host; set its destination again')
+    // Rules an app could not read are not saved.
+    const refused = rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan: { ...SAVE, ok: false, code: 'MASTER_INVALID', valid: false, planHash: null, targets: [], errors: [{ code: 'RULES_MARKER', message: 'A public section is not closed.' }] } } }))
     expect(refused).toContain('These rules cannot be saved')
-    expect(refused).not.toContain('Save and install…')
-    // While a save is being written neither button can be pressed again.
-    expect(rulesMarkup('editor', rules({ busy: true, pending: { kind: 'save', text: 'new', plan } }))).toContain('<button type="button" class="primary" disabled="">Working…</button><button type="button" disabled="">Save and install…</button>')
+    expect(refused).toContain('<button type="button" class="primary" disabled="">Save</button>')
+    // With the rules unchanged, Save writes only the files that differ.
+    const files = rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'same', plan: { ...SAVE, changesMaster: false, diff: '' } } }))
+    expect(files).toContain('aria-label="Write the saved rules to 2 apps"')
+    expect(rulesMarkup('editor', rules({ busy: true, pending: { kind: 'save', text: 'new', plan: SAVE } }))).toContain('<button type="button" class="primary" disabled="">Working…</button><button type="button" disabled="">Cancel</button>')
   })
 
-  it('heads the page with the save and install dates and, since an app differs, the dot, the count and Install…', () => {
-    expect(markup).toContain(`<span class="faint">Saved ${shortDate('2026-10-09T21:50:00.000Z')} · last installed ${shortDate('2026-10-08T14:02:00.000Z')}</span>`)
-    expect(markup).toContain('<span class="muted">2 apps differ</span><button type="button" class="primary">Install…</button>')
+  it('heads the page with the save, a file BMN could not write first, and keeps Save… on while an app differs (Story 75.9)', () => {
+    expect(markup).toMatch(/<span class="faint"><span class="needs-dot"[^>]*><\/span>Saved [^<]+ · Codex and OpenCode not written<\/span>/)
+    expect(markup).not.toContain('Install…')
+    // A clean draft can still be saved: that writes the saved rules into the apps whose file differs.
+    expect(markup).toContain('<button type="button" title="Writes the saved rules into the apps whose file differs">Save…</button>')
     const current = rulesMarkup('editor', rules({ snapshot: { ...RULES, health: { state: 'checked', checkedAt: RULES.health.checkedAt, ok: true, targets: [] } } }))
-    expect(current).not.toContain('Install…')
+    expect(current).toContain(`<span class="faint">Saved and installed ${shortDate('2026-10-09T21:50:00.000Z')}</span>`)
+    expect(current).toContain('<button type="button" disabled="">Save…</button>')
+    expect(rulesStatus({ master: { ...RULES.master, exists: false }, health: RULES.health })).toEqual({ text: 'No rules yet', needs: false })
+  })
+
+  it('says after a save where the rules went, a failure first, with a small Undo that opens its sheet there (Story 75.9)', () => {
+    const notice = rulesMarkup('editor', rules({ notice: { ok: true, text: 'Saved and installed to Claude Code, Codex and OpenCode', undo: 't5' } }))
+    expect(notice).toContain('<p class="preferences-success" role="status">Saved and installed to Claude Code, Codex and OpenCode · <button type="button" class="small">Undo</button></p>')
+    const undo: RulesPlan = {
+      ok: true, code: 'OK', planHash: 'u'.repeat(64), master: { path: RULES.masterPath, becomes: 'its earlier bytes', diff: '-new\n+old' },
+      targets: [{ harness: 'claude', path: '/home/synthetic/.claude/CLAUDE.md', kind: 'its earlier bytes', change: 'file', diff: '-new\n+old' }]
+    }
+    const sheet = rulesMarkup('editor', rules({ notice: { ok: true, text: 'Saved', undo: 't5' }, pending: { kind: 'undo', transaction: 't5', plan: undo, near: 'notice' } }))
+    expect(sheet.indexOf('aria-label="Undo this save"')).toBeLessThan(sheet.indexOf('class="editor-head"'))
+    expect(words(sheet)).toContain('The rules and each file go back to what they were before that save. Nothing is installed again.')
+    expect(sheet).toContain('<summary><span>The rules</span>')
+    expect(sheet).toContain('<button type="button" class="primary">Undo</button>')
   })
 
   it('shows the path and size, numbers every line and dims the markers', () => {
@@ -684,16 +729,26 @@ describe('Rules › Editor (60.6 AC1–AC3)', () => {
     expect(markup).toContain('aria-label="What Claude Code reads">FULL TEXT</pre>')
   })
 
-  it('lists installs with Undo install… and saves with Restore…, newest first', () => {
+  it('lists saves and installs with Undo… and versions kept from before with Restore…, newest first', () => {
     expect(earlierVersions(RULES).map((entry) => `${entry.title} | ${entry.detail} | ${entry.usable}`)).toEqual([
       'Team line updated | Claude Code | true',
       'A saved version that cannot be read | 2.0 KB | false',
       'Installed | Claude Code, Codex | true',
       'Saved | 290 B | true',
-      'An install that cannot be read |  | false'
+      'A save that cannot be read |  | false'
     ])
-    expect(count(markup, '>Undo install…</button>')).toBe(3)
+    expect(count(markup, '>Undo…</button>')).toBe(3)
     expect(count(markup, '>Restore…</button>')).toBe(2)
+    // A save keeps the master versions it wrote for itself: its own entry stands for them (Story 75.9).
+    const saved = earlierVersions({
+      transactions: [{ id: 't5', createdAt: '2026-10-10T10:00:00.000Z', state: 'partial', reason: 'save', targets: ['claude', 'codex'], valid: true, master: true }],
+      history: [
+        { revision: 3, at: '2026-10-10T10:00:00.000Z', hash: 'j', bytes: 300, reason: 'before save t5', intact: true },
+        { revision: 4, at: '2026-10-10T10:00:00.000Z', hash: 'k', bytes: 310, reason: 'save t5', intact: true },
+        { revision: 5, at: '2026-10-10T11:00:00.000Z', hash: 'j', bytes: 300, reason: 'undo t5', intact: true }
+      ]
+    })
+    expect(saved.map((entry) => `${entry.title} | ${entry.detail} | ${entry.usable}`)).toEqual(['Put back by Undo | 300 B | true', 'Saved and installed | Claude Code, Codex · not every app written | true'])
   })
 
   it('names an install made before Cursor was retired, and its undo says the Cursor file is left as it is (Epic 71)', () => {
@@ -706,6 +761,18 @@ describe('Rules › Editor (60.6 AC1–AC3)', () => {
     const sheet = words(rulesMarkup('editor', rules({ pending: { kind: 'undo', transaction: 't9', plan } }))).replace(/\s+/g, ' ')
     expect(sheet).toContain('Undo this install')
     expect(sheet).toContain('Cursor was retired on 14 Oct 2026. ~/.cursor/rules/bmn-global-rules.mdc is left as it is.')
+  })
+
+  it('says, undoing a skills install, that BMN installs again what the list still gives an app (Story 75.9)', () => {
+    const snapshot = { ...RULES, transactions: [{ id: 't7', createdAt: '2026-10-16T10:00:00.000Z', state: 'complete', reason: 'skills install', targets: ['codex'] as RosterListedApp[], valid: true }] }
+    const plan = { ok: true, code: 'OK', planHash: 'h', targets: [{ harness: 'codex' as const, path: '/home/synthetic/.agents/skills/alpha', kind: 'link', change: 'link', diff: '' }] }
+    const sheet = words(rulesMarkup('skills', rules({ snapshot, pending: { kind: 'undo', transaction: 't7', plan } }))).replace(/\s+/g, ' ')
+    expect(sheet).toContain('Undo this install')
+    expect(sheet).toContain('Each file goes back to what it was before that install. BMN installs again at its next start or approval what your list still gives an app; keep the skill from that app to keep it out.')
+    const rulesInstall = { ...RULES, transactions: [{ ...snapshot.transactions[0]!, reason: 'install' }] }
+    const plain = words(rulesMarkup('editor', rules({ snapshot: rulesInstall, pending: { kind: 'undo', transaction: 't7', plan } }))).replace(/\s+/g, ' ')
+    expect(plain).toContain('Each file goes back to what it was before that install.')
+    expect(plain).not.toContain('installs again')
   })
 
   it('Insert adds a section on its own lines, and the Team phrase where the cursor is', () => {
@@ -754,19 +821,38 @@ describe('Rules › Health (60.6 AC4)', () => {
   const markup = rulesMarkup('health')
 
   it('shows one row per rules file: path, state in words, the kind of rules and the last loading test', () => {
-    expect(markup).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')} · 1 skill entry to install · 1 skill exposed · 2 tool entries to install · 1 tool exposed</span>`)
+    expect(markup).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')} · 1 skill entry not installed yet · 1 skill exposed · 2 tool entries not installed yet · 1 tool exposed</span>`)
     // With the skills and the tools in order, the header says only when Health was read.
     expect(rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0, exposed: 0 }, tools: { ...RULES.tools, pending: 0, exposed: 0 } } }))).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')}</span>`)
     // Story 75.7: Health, Skills and Tools read themselves again by Health's rule; no button asks for it.
     for (const page of [markup, rulesMarkup('skills'), rulesMarkup('tools')]) expect(page).not.toContain('Check now')
-    expect(markup).toMatch(/data-state="current"><span>Claude Code<\/span><span class="path mono" title="\/home\/synthetic\/.claude\/CLAUDE.md">~\/.claude\/CLAUDE.md<\/span><span class="health-state"><span>Current <span class="muted">· Full rules<\/span>/)
+    expect(markup).toMatch(/data-state="current"><span>Claude Code<\/span><span class="path mono" title="\/home\/synthetic\/.claude\/CLAUDE.md">~\/.claude\/CLAUDE.md<\/span><span class="health-state"><span>Current<span class="muted"> · Full rules<\/span>/)
     // A loading test sends one prompt, and says so (Story 75.8 AC2).
     expect(markup).toContain(`<span class="faint">Test passed ${shortDate('2026-10-09T20:00:00.000Z')} · stale · one prompt sent</span>`)
-    expect(markup).toMatch(/data-state="stale">.*?aria-label="Needs you".*?Differs from the rules <span class="muted">· Full rules<\/span><\/span><span class="faint">Not tested yet<\/span>/)
-    expect(markup).toMatch(/data-state="missing">.*?Missing <span class="muted">· Public sections only<\/span><\/span><span class="faint">No loading test<\/span>/)
+    expect(markup).toMatch(/data-state="stale">.*?aria-label="Needs you".*?Differs from the rules · Save the rules to rewrite it<\/span><span class="faint">Not tested yet<\/span>/)
+    expect(markup).toMatch(/data-state="missing">.*?Missing · Save the rules to write it<\/span><span class="faint">No loading test<\/span>/)
+    // A file that differs is a failure, listed first (Story 75.9).
+    expect([...markup.matchAll(/data-state="([a-z-]+)"/g)].map((match) => match[1])).toEqual(['stale', 'missing', 'current'])
+    expect(targetStateWords('edited-outside')).toBe('Differs · edited outside BMN · Save the rules to rewrite it')
     expect(testLine(undefined)).toBe('Not tested yet')
     expect(testLine({ harness: 'codex', outcome: 'pass', at: '2026-10-09T20:00:00.000Z', version: '0.171.0', by: 'bmn' })).toBe(`Test passed ${shortDate('2026-10-09T20:00:00.000Z')} on 0.171.0 · by BMN · one prompt sent`)
     expect(testLine({ harness: 'codex', outcome: 'unavailable', at: '2026-10-09T20:00:00.000Z' })).toBe(`Test unavailable ${shortDate('2026-10-09T20:00:00.000Z')}`)
+  })
+
+  it('says what BMN found and did in each app\'s hook file at start, failure first, with no button (Story 75.9)', () => {
+    expect(markup).toContain('<h4 class="group-head">Hooks<span class="caption">BMN&#x27;s entries in each app&#x27;s hook file, installed at start</span></h4>')
+    expect([...markup.matchAll(/data-hooks="([a-z-]+)"><span>([A-Za-z ]+)<\/span>/g)].map((match) => `${match[2]} ${match[1]}`)).toEqual(['Codex left', 'Claude Code in-place', 'OpenCode in-place'])
+    expect(markup).toMatch(/data-hooks="left">.*?<span><span class="needs-dot"[^>]*><\/span>5 entries in place · 2 left as they are<\/span><span class="faint">PostToolUse · changed<\/span><span class="faint">Interrupt · not BMN&#x27;s<\/span><span class="faint">Added at start: SessionStart, SessionEnd · Codex asks you once, in \/hooks, before it runs them<\/span>/)
+    expect(markup).toMatch(/data-hooks="in-place"><span>Claude Code<\/span>.*?<span class="faint">9 entries in place<\/span>/)
+    expect(markup).toContain('Not set up on this computer')
+    expect(words(markup)).toMatch(/Checked at start, \d\d:\d\d\. BMN adds an entry only where an event has none of its own/)
+    expect(markup).not.toContain('Check configured hooks')
+    expect(hookRowWords({ harness: 'claude', file: 'f', state: 'left', placed: [], older: [], installed: [], left: [], why: 'unparsable' })).toEqual({ needs: true, head: 'The file · the file is not valid JSON · left as it is', lines: [] })
+    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'checked', placed: ['plugin', 'cli.json'], older: ['plugin'], installed: [], left: [] }))
+      .toEqual({ needs: false, head: '2 entries in place', lines: ['plugin · in an older wording, which still runs'] })
+    expect(hookRows({ state: 'checked', checkedAt: 'x', apps: [] })).toEqual([])
+    expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, hooks: null } })))).toContain('Not checked yet: BMN checks them each time it starts.')
+    expect(rulesMarkup('health', rules({ snapshot: { ...RULES, hooks: { state: 'failed', checkedAt: 'x', reason: 'The hook install timed out' } } }))).toContain('<p class="preferences-error" role="alert">The hook install timed out</p>')
   })
 
   it('offers no Test…: Test again… only after a failure or once BMN stopped trying, and only where the app may receive private work (Story 75.8)', () => {
@@ -776,7 +862,7 @@ describe('Rules › Health (60.6 AC4)', () => {
     const after = rulesMarkup('health', rules({ snapshot: { ...RULES,
       probes: [{ harness: 'claude', outcome: 'fail', at: '2026-10-09T20:00:00.000Z', version: '2.1.295' }, { harness: 'codex', outcome: 'inconclusive', at: '2026-10-09T20:00:00.000Z', version: '0.171.0', by: 'bmn' }],
       autoTests: { running: null, stopped: [{ kind: 'rules', harness: 'codex', version: '0.171.0', tries: 3, at: '2026-10-09T20:00:00.000Z' }, { kind: 'rules', harness: 'opencode', version: '1.18.32', tries: 3, at: '2026-10-09T20:00:00.000Z' }] } } }))
-    expect([...after.matchAll(/aria-label="Test ([A-Za-z ]+) again">Test again…/g)].map((match) => match[1])).toEqual(['Claude Code', 'Codex'])
+    expect([...after.matchAll(/aria-label="Test ([A-Za-z ]+) again">Test again…/g)].map((match) => match[1])).toEqual(['Codex', 'Claude Code'])
     expect(after).toContain('<span class="faint">BMN stopped after 3 tries on 0.171.0</span>')
     const running = rulesMarkup('health', rules({ snapshot: { ...RULES, autoTests: { running: { kind: 'rules', harness: 'claude' }, stopped: [] } } }))
     expect(running).toContain('BMN is testing Claude Code now…')
@@ -1138,7 +1224,7 @@ describe('skills (60.11 AC5)', () => {
   const page = rulesMarkup('skills')
 
   it('shows one row per skill: its name, the first line of its description, Public and its state in each app', () => {
-    expect(page).toContain('<h3 class="page-title">Skills</h3><span class="faint">3 skills</span>')
+    expect(page).toContain('<h3 class="page-title">Skills</h3><span class="faint">3 skills · 1 not installed yet</span>')
     expect(page).toContain('<span class="faint mono" title="/home/synthetic/.claude/skills">~/.claude/skills</span>')
     expect(page).toContain('<b class="mono">alpha</b><span class="faint" title="First synthetic skill.">First synthetic skill.</span>')
     expect([...page.matchAll(/aria-label="alpha in ([A-Za-z ]+): ([^"]+)"/g)].map((match) => `${match[1]}: ${match[2]}`)).toEqual(['Claude Code: Reads it', 'Codex: Linked', 'OpenCode: Exposed'])
@@ -1150,9 +1236,10 @@ describe('skills (60.11 AC5)', () => {
     expect(words(page)).toContain('One skill can be seen by an app that may not have it. Mark the skill Public, or move it out of the skills folder.')
   })
 
-  it('offers Install… with the count while entries are to install, and keeps a skill it cannot read out of reach', () => {
-    expect(page).toMatch(/<span class="muted">1 to install<\/span><button type="button" class="primary">Install…<\/button>/)
-    expect(rulesMarkup('skills', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0 } } }))).not.toContain('Install…</button>')
+  it('offers no Install…: what is not installed yet is said in the head, and BMN installs it (Story 75.9); a skill it cannot read stays out of reach', () => {
+    expect(page).toContain('<span class="faint">3 skills · 1 not installed yet</span>')
+    expect(page).not.toContain('Install…')
+    expect(words(page)).toContain('A change here takes effect once you approve it, and BMN then installs it in each app; it also installs at every start what an app lacks.')
     expect(page).toContain('<b class="mono">Bad_Name</b><span class="faint">the name must be lowercase letters, digits and hyphens</span>')
     expect(page).toMatch(/aria-label="Bad_Name is public" disabled=""/)
   })
@@ -1190,29 +1277,8 @@ describe('skills (60.11 AC5)', () => {
     ])
   })
 
-  it('shows the install as entries with what each becomes in words, never a skill\'s lines, and what stays exposed', () => {
-    const plan: SkillsPlan = {
-      ok: true, code: 'OK', planHash: 'h'.repeat(64),
-      targets: [
-        { harness: 'codex', skill: 'beta', path: '/home/synthetic/.agents/skills/beta', kind: 'adds the skill', change: 'missing', diff: '', note: 'A link to the skill in the skills folder.' },
-        { harness: 'codex', skill: 'gamma', path: '/home/synthetic/.agents/skills/gamma', kind: 'takes over an entry BMN did not write (unmanaged)', change: 'unmanaged', diff: '', note: 'the folder there differs from the skill in SKILL.md' }
-      ],
-      exposed: [{ harness: 'opencode', skill: 'alpha', fix: 'OpenCode reads the skills folder itself: move alpha out of it, or mark it public' }]
-    }
-    const sheet = rulesMarkup('skills', rules({ pending: { kind: 'skills', plan } }))
-    expect(sheet).toContain('aria-label="Change 2 skill entries"')
-    expect(words(sheet)).toContain('Undo install, under Earlier installs, puts every entry back.')
-    expect(sheet).toContain('<span class="muted">beta · adds the skill</span>')
-    expect(sheet).toContain('<p class="preferences-help">the folder there differs from the skill in SKILL.md</p>')
-    expect(sheet).not.toContain('<pre class="diff">')
-    expect(words(sheet)).toContain('One skill stays exposed whatever is installed:')
-    expect(sheet).toContain('<p class="preferences-help">OpenCode reads the skills folder itself: move alpha out of it, or mark it public</p>')
-    const none = rulesMarkup('skills', rules({ pending: { kind: 'skills', plan: { ...plan, targets: [] } } }))
-    expect(none).toMatch(/aria-label="Every app already has its skills".*<button type="button" class="primary" disabled="">Install<\/button>/s)
-  })
-
   it('lists its own installs with Undo, and leaves them out of the rules\' earlier versions', () => {
-    expect(page).toMatch(/<summary>Earlier installs<\/summary><div class="list-line"><div><b>Installed<\/b> <span class="line-detail">[^<]+ · Codex<\/span><\/div><button type="button" class="small" aria-label="Undo the skills install of [^"]+">Undo install…<\/button>/)
+    expect(page).toMatch(/<summary>Earlier installs<\/summary><div class="list-line"><div><b>Installed<\/b> <span class="line-detail">[^<]+ · Codex<\/span><\/div><button type="button" class="small" aria-label="Undo the skills install of [^"]+">Undo…<\/button>/)
     expect(earlierVersions(RULES).some((entry) => entry.kind === 'install' && entry.id === 't3')).toBe(false)
     expect(undoWords({ change: 'folder', diff: '' })).toBe('Put back as it was')
     expect(undoWords({ change: 'entry', diff: '' })).toBe('Put back as it was')
@@ -1221,7 +1287,7 @@ describe('skills (60.11 AC5)', () => {
   it('Health shows one row per app: where its skills live, the state in words, Full or Public skills only and the last loading test', () => {
     const health = rulesMarkup('health')
     expect(health).toContain('<h4 class="group-head">Skills<span class="caption">where each app reads skills, and whether it has the ones it may have</span></h4>')
-    expect(words(health)).toMatch(/Checked [^·]+ · 1 skill entry to install · 1 skill exposed/)
+    expect(words(health)).toMatch(/Checked [^·]+ · 1 skill entry not installed yet · 1 skill exposed/)
     expect(health).toMatch(/data-skills="Reads the source"><span>Claude Code<\/span><span class="health-state"><span>The skills folder itself<\/span><\/span><span class="health-state"><span>Reads the source<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code named a test skill">Listing test passed [^<]+ · stale · loading never tested<\/span>/)
     expect(health).toMatch(/data-skills="Missing"><span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.agents\/skills">~\/.agents\/skills<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Loading never tested<\/span>/)
     expect(health).toMatch(/data-skills="Exposed"><span>OpenCode<\/span>.*?Exposed<span class="muted"> · Public skills only<\/span><\/span><span class="faint" title="[^"]*">No loading test<\/span>/)
@@ -1254,7 +1320,9 @@ describe('skills (60.11 AC5)', () => {
     expect(skillStateWords('unreadable', app, true)).toBe("Can't read")
     expect(skillStateWords(undefined, { supported: false, format: null }, true)).toBe('Not yet')
     expect(skillStateHint('excluded', { ...app, kind: 'public' }, true, 'OpenCode')).toBe('OpenCode gets public skills only')
-    expect(skillStateHint('missing', app, true, 'Codex')).toBe('Not in Codex yet: Install… adds it')
+    expect(skillStateHint('missing', app, true, 'Codex')).toBe('Not in Codex yet: BMN adds it at its next start or approval')
+    expect(skillStateHint('stale', app, true, 'Codex')).toBe('Codex has an older copy: BMN updates it at its next start or approval')
+    expect(skillStateHint('unmanaged', app, true, 'Codex')).toBe('Codex holds something else under this name, which BMN leaves as it is: remove it there and BMN adds the skill')
     expect(skillStateHint(undefined, { ...app, supported: false }, true, 'OpenCode')).toBe('Skills are not supported yet in OpenCode: Health says how BMN\'s test of it stands')
     const base = { supported: false, version: '0.171.0', test: null, listing: null, loading: null, kind: 'full' as const, testable: true }
     expect(skillsTestLine({ ...base, version: null })).toBe('The app is not found')
@@ -1283,7 +1351,7 @@ describe('tools (60.12 AC6)', () => {
   const page = rulesMarkup('tools', rules(), team({ data: WITH, base: WITH, approved: WITH }))
 
   it('shows one row per tool: its name, what it runs, the variables it names, Public and its state in each app', () => {
-    expect(page).toContain('<h3 class="page-title">Tools</h3><span class="faint">3 tools</span>')
+    expect(page).toContain('<h3 class="page-title">Tools</h3><span class="faint">3 tools · 2 not installed yet</span>')
     expect(page).toContain('<b>Docs</b><span class="faint mono" title="docs.example.test">docs.example.test</span>')
     expect(page).toContain('<b>Notes</b><span class="faint mono" title="notes-tool · needs NOTES_TOKEN">notes-tool · needs NOTES_TOKEN</span>')
     expect([...page.matchAll(/aria-label="Docs in ([A-Za-z ]+): ([^"]+)"/g)].map((match) => `${match[1]}: ${match[2]}`)).toEqual(['Claude Code: Set up', 'Codex: Missing', 'OpenCode: Not public'])
@@ -1305,14 +1373,14 @@ describe('tools (60.12 AC6)', () => {
     expect(page).not.toContain('aria-label="Browser in ')
   })
 
-  it('offers Install… with the count, Add tool, From your apps… and each tool\'s Edit and Remove', () => {
-    expect(page).toMatch(/<span class="muted">2 to install<\/span><button type="button" class="primary">Install…<\/button>/)
-    expect(rulesMarkup('tools', rules({ snapshot: { ...RULES, tools: { ...RULES.tools, pending: 0 } } }), team({ data: WITH }))).not.toContain('Install…</button>')
+  it('offers no Install… (Story 75.9), and Add tool, From your apps… and each tool\'s Edit and Remove', () => {
+    expect(page).toContain('· 2 not installed yet</span>')
+    expect(page).not.toContain('Install…')
     expect(page).toContain('<button type="button">Add tool</button><button type="button">From your apps…</button>')
     expect(page).toContain('<button type="button" class="small" aria-label="Edit Notes">Edit</button><button type="button" class="small" aria-label="Remove Notes" title="Takes it off your list; approve to keep that">Remove</button>')
     // A team with no tools says so and still offers both ways in.
     const none = rulesMarkup('tools')
-    expect(none).toContain('<span class="faint">0 tools</span>')
+    expect(none).toContain('<span class="faint">0 tools · 2 not installed yet</span>')
     expect(words(none)).toContain('No tools on your list yet.')
     expect(none).toContain('>Add tool</button>')
   })
@@ -1368,9 +1436,9 @@ describe('tools (60.12 AC6)', () => {
     expect(words(renderToStaticMarkup(createElement(ToolProposals, { found: [], data: WITH, onAdd: noop, onCancel: noop })))).toContain('Your apps hold no tool entries.')
   })
 
-  it('shows the install entry by entry with what each holds now and would hold, and what stays exposed or blocked', () => {
+  it('shows a removal entry by entry with what each holds now and would hold, and what stays exposed or blocked', () => {
     const plan: ToolsPlan = {
-      ok: true, code: 'OK', planHash: 'h'.repeat(64), removeUnlisted: false,
+      ok: true, code: 'OK', planHash: 'h'.repeat(64), removeUnlisted: true,
       targets: [
         { harness: 'codex', tool: 'docs', path: '/home/synthetic/.codex/config.toml', action: 'set', words: 'adds the tool', before: null, after: '[mcp_servers.docs]\nurl = "https://docs.example.test/mcp"' },
         { harness: 'claude', tool: 'notes', path: '/home/synthetic/.claude.json', action: 'set', words: 'replaces an entry changed outside BMN', before: '{"command":"old","env":{"TOKEN":"•••"}}', after: '{"type":"stdio","command":"notes-tool"}' }
@@ -1380,7 +1448,7 @@ describe('tools (60.12 AC6)', () => {
     }
     const sheet = rulesMarkup('tools', rules({ pending: { kind: 'tools', plan } }), team({ data: WITH }))
     expect(sheet).toContain('aria-label="Change 2 tool entries"')
-    expect(words(sheet)).toContain('Only these entries change in each file. Undo install, under Earlier installs, puts them back.')
+    expect(words(sheet)).toContain('Only these entries change in each file. Undo, under Earlier installs, puts them back.')
     expect(sheet).toContain('<span class="muted">docs · adds the tool</span>')
     expect(sheet).toContain('<pre class="diff">+[mcp_servers.docs]\n+url = &quot;https://docs.example.test/mcp&quot;</pre>')
     expect(sheet).toContain('<pre class="diff">-{&quot;command&quot;:&quot;old&quot;,&quot;env&quot;:{&quot;TOKEN&quot;:&quot;•••&quot;}}\n+{&quot;type&quot;:&quot;stdio&quot;,&quot;command&quot;:&quot;notes-tool&quot;}</pre>')
@@ -1389,19 +1457,18 @@ describe('tools (60.12 AC6)', () => {
     expect(words(sheet)).toContain('One entry is not changed:')
     expect(sheet).toContain('<p class="preferences-help">Codex, notes: Codex takes a variable only under its own name</p>')
     const none = rulesMarkup('tools', rules({ pending: { kind: 'tools', plan: { ...plan, targets: [] } } }), team({ data: WITH }))
-    expect(none).toMatch(/aria-label="Every app already has its tools".*<button type="button" class="primary" disabled="">Install<\/button>/s)
+    expect(none).toMatch(/aria-label="No app holds such an entry now".*<button type="button" class="primary" disabled="">Change<\/button>/s)
   })
 
   it('lists its own installs with Undo, and leaves them out of the rules\' earlier versions and install date', () => {
-    expect(page).toMatch(/<summary>Earlier installs<\/summary><div class="list-line"><div><b>Installed<\/b> <span class="line-detail">[^<]+ · Claude Code<\/span><\/div><button type="button" class="small" aria-label="Undo the tools install of [^"]+">Undo install…<\/button>/)
+    expect(page).toMatch(/<summary>Earlier installs<\/summary><div class="list-line"><div><b>Installed<\/b> <span class="line-detail">[^<]+ · Claude Code<\/span><\/div><button type="button" class="small" aria-label="Undo the tools install of [^"]+">Undo…<\/button>/)
     expect(earlierVersions(RULES).some((entry) => entry.kind === 'install' && entry.id === 't4')).toBe(false)
-    expect(rulesMarkup('editor')).toContain(`last installed ${shortDate('2026-10-08T14:02:00.000Z')}`)
   })
 
   it('Health shows one row per app: its settings file, the state in words, Full or Public tools only and the last test', () => {
     const health = rulesMarkup('health')
     expect(health).toContain('<h4 class="group-head">Tools<span class="caption">where each app keeps its tools, and whether it has the ones it may have</span></h4>')
-    expect(words(health)).toMatch(/Checked [^·]+ · 1 skill entry to install · 1 skill exposed · 2 tool entries to install · 1 tool exposed/)
+    expect(words(health)).toMatch(/Checked [^·]+ · 1 skill entry not installed yet · 1 skill exposed · 2 tool entries not installed yet · 1 tool exposed/)
     expect(health).toMatch(/data-tools="Differs"><span>Claude Code<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.claude.json">~\/.claude.json<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Differs<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code listed the stand-in tool">Checked [^<]+ · passes variables · a run keeps to its own tools<\/span>/)
     expect(health).toMatch(/data-tools="Missing"><span>Codex<\/span>.*?Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Checked [^<]+ · variables not seen · no run seen kept to its tools<\/span>/)
     expect(health).toMatch(/data-tools="Exposed"><span>OpenCode<\/span>.*?<span class="faint" title="\/home\/synthetic\/dotfiles\/opencode.jsonc">A link: BMN does not write through it<\/span>.*?Exposed<span class="muted"> · Public tools only<\/span>/)

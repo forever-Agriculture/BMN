@@ -281,14 +281,15 @@ session, leave a message for a peer session, or send text to its own terminal. W
 or Codex conversation starts, BMN hands its agent a short brief of what to send and when, once, and
 once more after a compaction ([agent-control.md](agent-control.md#bmns-start-brief)). `bmn help agents` prints the etiquette page agents can read. Preferences →
 **Local control** shows whether the control socket is listening, with its path; a runtime
-path that is too long disables the socket, and Preferences says so. **Check configured hooks**
-reads BMN's existing checker report for Claude Code, Codex and OpenCode, including missing
-entries and a check time. It changes no harness file. **Configured** describes entries in a
-file; it does not prove a hook fired.
+path that is too long disables the socket, and Preferences says so.
 
-For Claude Code, Codex and OpenCode, `bmn hooks check` reports which of BMN's entries each
+BMN wires its hooks itself: at every start it adds, for Claude Code, Codex and OpenCode where each
+is set up, the entries an event has none of, after backing the file up, and leaves an entry it did
+not write, one changed outside it or one inside a matcher as it is. Rules › Health › **Hooks** says
+what it found, with no button; an entry in a file does not prove a hook fired, and Codex asks once
+in `/hooks` before it runs new ones. `bmn hooks check` reports which of BMN's entries each
 harness's own settings file carries, and `bmn hooks install claude` (or `codex`, `opencode`) adds
-the missing ones after backing the file up. A harness with no hook can still page you by writing
+the missing ones by hand after backing the file up. A harness with no hook can still page you by writing
 the terminal's own OSC 9, 777 or 99 notification. OSC 9's leading `4` parameter (`4` or `4;…`)
 is reserved for progress and ignored, including malformed forms or prose using that parameter.
 Ordinary text such as `4 tests passed` remains a notice. BMN presents a notice, which clears when
@@ -330,7 +331,9 @@ blocked**. Claude Code and Codex take that answer through their prompt hook; tha
 versions obey has not been tested live yet, and the card says so. OpenCode is not covered.
 
 Rules → **Skills** gives every agent app the skills you keep in one folder: a link, or a copy
-where the app does not follow links, installed and undone as one step after you saw the list. A
+where the app does not follow links, which BMN installs by itself after an approval, after its own
+test of an app passed and at its start, as one step you can undo; it leaves an entry it did not
+write as it is. A
 skill can be kept to some apps, and an app that gets public work only receives just the skills
 you mark Public; a skill an app can see but may not have is shown as exposed. Nothing is written
 for an app until its own test, on the installed version, showed where it reads skills. A second
@@ -338,8 +341,8 @@ test you run yourself sends one prompt and shows whether the app hands a skill t
 has not run on a live app yet.
 
 Rules → **Tools** keeps one list of MCP tools and sets each up in every agent app's own settings:
-only the tool's entry changes there, every other byte of the file stays, and an install is undone
-as one step. A tool names environment variables and never holds their values. It reaches every
+only the tool's entry changes there, every other byte of the file stays, BMN installs by itself as
+it does the skills, and an install is undone as one step. A tool names environment variables and never holds their values. It reaches every
 app, some apps, or only the runs of some agents. Once a tool is on the list, the check before a
 hand-off passes a Claude Code run only when it is kept to exactly its own tools, which BMN can do
 after its tools test. It does not judge the tools of a Codex run, and the receipt says so: no

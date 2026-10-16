@@ -55,7 +55,6 @@ const ROUTES = {
   'aiterm:guard:keep': METHOD_REGISTRY.guardKeep,
   'aiterm:guard:clear': METHOD_REGISTRY.guardClear,
   'aiterm:ports:list': METHOD_REGISTRY.portsList,
-  'aiterm:hooks:check': METHOD_REGISTRY.hooksCheck,
   'aiterm:attention:terminal-notice': METHOD_REGISTRY.attentionTerminalNotice,
   'aiterm:progress:list': METHOD_REGISTRY.progressList,
   'aiterm:draft:list': METHOD_REGISTRY.draftList,

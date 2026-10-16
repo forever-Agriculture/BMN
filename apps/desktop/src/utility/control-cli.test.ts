@@ -4210,6 +4210,254 @@ describe('OpenCode hooks', () => {
   })
 })
 
+/** One app's row of `hooks install --absent --json`. */
+interface AbsentReport {
+  agent: string; file: string; state: string; placed: string[]; older: string[]; installed: string[]
+  left: { event: string; why: string }[]; why?: string; detail?: string; backups?: string[]
+}
+
+/** `hooks install --absent --json` for one app's file, parsed: what BMN runs by itself at every start (Story 75.9). */
+async function installAbsent(agent: string, path: string, env?: Record<string, string>): Promise<{ code: number | null; report: AbsentReport }> {
+  const result = await runHooks(['install', agent, '--absent', '--yes', '--file', path, '--json'], env)
+  return { code: result.code, report: JSON.parse(result.stdout).agents[0] }
+}
+
+describe('bmn hooks install --absent (Story 75.9 AC3)', () => {
+  it('writes only with --yes, only for install, and needs the agent a --file belongs to', async () => {
+    const path = await hookFileFixture()
+    const unasked = await runHooks(['install', 'claude', '--absent', '--file', path])
+    expect(unasked.code).toBe(2)
+    expect(unasked.stderr).toContain('hooks install --absent writes without asking: it needs --yes')
+    const check = await runHooks(['check', 'claude', '--absent', '--file', path])
+    expect(check.code).toBe(2)
+    expect(check.stderr).toContain('--absent is only for hooks install')
+    const nobody = await runHooks(['install', '--absent', '--yes', '--file', path])
+    expect(nobody.code).toBe(2)
+    expect(nobody.stderr).toContain('--file needs the agent whose file it is')
+    expect(existsSync(path)).toBe(false)
+  })
+
+  it('adds every Claude Code entry beside the owner\'s own hooks, copies the file first, and writes nothing the second time', async () => {
+    const path = await hookFileFixture({ model: 'kept', hooks: { Stop: [entryGroup('echo owner')] } })
+    const first = await installAbsent('claude', path)
+    expect(first.code).toBe(0)
+    expect(first.report).toMatchObject({ agent: 'claude', file: path, state: 'installed', installed: CLAUDE_EVENTS, placed: CLAUDE_EVENTS, older: [], left: [] })
+    expect(first.report.backups).toHaveLength(1)
+    const after = JSON.parse(await readFile(path, 'utf8'))
+    expect(after.model).toBe('kept')
+    expect(after.hooks.Stop).toEqual([entryGroup('echo owner'), entryGroup(DOCUMENTED_CLAUDE)])
+    expect(after.hooks.PreToolUse[0].matcher).toBe('AskUserQuestion')
+    expect((await runHooks(['check', 'claude', '--file', path])).code).toBe(0)
+    const text = await readFile(path, 'utf8')
+    const second = await installAbsent('claude', path)
+    expect(second.code).toBe(0)
+    expect(second.report).toMatchObject({ state: 'checked', installed: [], placed: CLAUDE_EVENTS, left: [] })
+    expect(await readFile(path, 'utf8')).toBe(text)
+    expect(await backupsOf(path)).toHaveLength(1)
+  })
+
+  it('creates a missing file in a settings folder that exists, and nothing for an app never set up here', async () => {
+    const path = await hookFileFixture()
+    const created = await installAbsent('claude', path)
+    expect(created.code).toBe(0)
+    expect(created.report).toMatchObject({ state: 'installed', installed: CLAUDE_EVENTS })
+    expect(created.report.backups).toBeUndefined()
+    expect(Object.keys(JSON.parse(await readFile(path, 'utf8')).hooks)).toEqual(CLAUDE_EVENTS)
+    const nowhere = join(dirname(path), 'never-ran', 'settings.json')
+    const absent = await installAbsent('claude', nowhere)
+    expect(absent.code).toBe(0)
+    expect(absent.report).toMatchObject({ state: 'not-set-up', installed: [], left: [] })
+    expect(existsSync(dirname(nowhere))).toBe(false)
+  })
+
+  it('leaves a gated, a changed and a foreign entry as they are, adds nothing beside them, and counts an older wording in place', async () => {
+    const gated = { matcher: 'Bash', hooks: [{ type: 'command', command: DOCUMENTED_CLAUDE, timeout: 5 }] }
+    const path = await hookFileFixture({
+      hooks: {
+        Notification: [entryGroup(OLDER_CLAUDE)],
+        PostToolUse: [gated],
+        Stop: [entryGroup('bmn hook claude --verbose')],
+        SessionEnd: [entryGroup(DOCUMENTED_CLAUDE, 0)]
+      }
+    })
+    const first = await installAbsent('claude', path)
+    expect(first.code).toBe(1)
+    expect(first.report).toMatchObject({
+      state: 'installed',
+      installed: ['PreToolUse', 'PermissionRequest', 'PostToolUseFailure', 'UserPromptSubmit', 'SessionStart'],
+      older: ['Notification'],
+      left: [{ event: 'PostToolUse', why: 'gated' }, { event: 'Stop', why: 'foreign' }, { event: 'SessionEnd', why: 'changed' }]
+    })
+    const after = JSON.parse(await readFile(path, 'utf8')).hooks
+    expect(after.Notification).toEqual([entryGroup(OLDER_CLAUDE)])
+    expect(after.PostToolUse).toEqual([gated])
+    expect(after.Stop).toEqual([entryGroup('bmn hook claude --verbose')])
+    expect(after.SessionEnd).toEqual([entryGroup(DOCUMENTED_CLAUDE, 0)])
+    const text = await readFile(path, 'utf8')
+    const second = await runHooks(['install', 'claude', '--absent', '--yes', '--file', path])
+    expect(second.code).toBe(1)
+    expect(second.stdout).toContain('in place: 6 (Notification in an older wording)')
+    expect(second.stdout).toContain('PostToolUse: gated, left as it is')
+    expect(second.stdout).toContain('Stop: not BMN\'s, left as it is')
+    expect(second.stdout).toContain('SessionEnd: changed, left as it is')
+    expect(second.stdout).not.toContain('added:')
+    expect(await readFile(path, 'utf8')).toBe(text)
+    expect(await backupsOf(path)).toHaveLength(1)
+  })
+
+  it.each([
+    ['unparsable', '{ "hooks": {', /is not valid JSON/],
+    ['unusable', '{ "hooks": [] }\n', /is not a hook file BMN can add to: "hooks" is not an object/],
+    ['numbers', '{ "keepMe": 1e400, "hooks": {} }\n', /holds a number BMN cannot write back unchanged/]
+  ] as const)('leaves a Claude Code file it cannot add to untouched: %s', async (why, text, detail) => {
+    const path = await hookFileFixture(text)
+    const result = await installAbsent('claude', path)
+    expect(result.code).toBe(1)
+    expect(result.report).toMatchObject({ state: 'left', why, installed: [] })
+    expect(result.report.detail).toMatch(detail)
+    expect(await readFile(path, 'utf8')).toBe(text)
+    expect(await backupsOf(path)).toEqual([])
+  })
+
+  it('leaves a file it cannot read untouched', async () => {
+    const path = await hookFileFixture({ hooks: {} })
+    await chmod(path, 0o000)
+    try {
+      const result = await installAbsent('claude', path)
+      expect(result.code).toBe(1)
+      expect(result.report).toMatchObject({ state: 'left', why: 'unreadable', installed: [] })
+    } finally {
+      await chmod(path, 0o600)
+    }
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ hooks: {} })
+  })
+
+  it('writes through a linked settings file and keeps the link', async () => {
+    const real = await hookFileFixture({ hooks: {} }, 'real-settings.json')
+    const link = join(dirname(real), 'settings.json')
+    await symlink(real, link)
+    const result = await installAbsent('claude', link)
+    expect(result.code).toBe(0)
+    expect((await lstat(link)).isSymbolicLink()).toBe(true)
+    expect(Object.keys(JSON.parse(await readFile(real, 'utf8')).hooks)).toEqual(CLAUDE_EVENTS)
+  })
+
+  it('refuses rather than overwriting a file another writer changed while it was reading', async () => {
+    const path = await hookFileFixture({ hooks: {} })
+    const gate = join(dirname(path), 'gate')
+    const installing = runHooks(['install', 'claude', '--absent', '--yes', '--file', path, '--json'], { BMN_HOOKS_TEST_GATE: gate })
+    const deadline = Date.now() + 10_000
+    while (!existsSync(`${gate}.waiting`)) {
+      if (Date.now() > deadline) throw new Error('the installer never reached its check')
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    await writeFile(path, `${JSON.stringify({ hooks: {}, other: 'ADDED BY SOMEBODY ELSE' }, null, 2)}\n`)
+    await writeFile(gate, '')
+    const result = await installing
+    expect(result.code).toBe(1)
+    expect(JSON.parse(result.stdout).agents[0]).toMatchObject({ state: 'failed', why: 'failed' })
+    expect(JSON.parse(result.stdout).agents[0].detail).toContain('changed while bmn was reading it')
+    expect(JSON.parse(await readFile(path, 'utf8')).other).toBe('ADDED BY SOMEBODY ELSE')
+    expect((await readdir(dirname(path))).filter((entry) => entry.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('adds Codex\'s expected events and never an optional one, and leaves a gated or changed Codex entry', async () => {
+    const empty = await hookFileFixture(undefined, 'hooks.json')
+    const created = await installAbsent('codex', empty)
+    expect(created.code).toBe(0)
+    expect(created.report).toMatchObject({ state: 'installed', installed: CODEX_EVENTS })
+    expect(Object.keys(JSON.parse(await readFile(empty, 'utf8')).hooks)).toEqual(CODEX_EVENTS)
+    const wired = await codexFixture()
+    const text = await readFile(wired, 'utf8')
+    expect(await installAbsent('codex', wired)).toMatchObject({ code: 0, report: { state: 'checked', installed: [] } })
+    expect(await readFile(wired, 'utf8')).toBe(text)
+    const mixed = await codexFixture({
+      hooks: {
+        // Codex reads a null matcher as none: wired.
+        PreToolUse: [{ matcher: null, hooks: [{ type: 'command', command: DOCUMENTED_CODEX, timeout: 5 }] }],
+        Stop: [{ matcher: 'Bash', hooks: [{ type: 'command', command: DOCUMENTED_CODEX, timeout: 5 }] }],
+        SessionEnd: [entryGroup(DOCUMENTED_CODEX, 1.5)],
+        Interrupt: []
+      }
+    })
+    const result = await installAbsent('codex', mixed)
+    expect(result.code).toBe(1)
+    expect(result.report).toMatchObject({
+      state: 'installed', installed: ['Interrupt'],
+      left: [{ event: 'Stop', why: 'gated' }, { event: 'SessionEnd', why: 'changed' }]
+    })
+    const after = JSON.parse(await readFile(mixed, 'utf8')).hooks
+    expect(after.Stop).toHaveLength(1)
+    expect(after.SessionEnd).toEqual([entryGroup(DOCUMENTED_CODEX, 1.5)])
+    expect(after.PermissionRequest).toBeUndefined()
+    expect(after.PostCompact).toBeUndefined()
+  })
+
+  it('adds OpenCode\'s plugin and its cli.json entry, keeps BMN\'s older plugin, and leaves another plugin and its cli.json alone', async () => {
+    const path = await openCodeFixture()
+    const entry = dirname(path)
+    const cli = join(dirname(entry), 'cli.json')
+    const printed = (await runHooks(['print', 'opencode'])).stdout
+    const fresh = await installAbsent('opencode', path)
+    expect(fresh.code).toBe(0)
+    expect(fresh.report).toMatchObject({ state: 'installed', installed: ['plugin', 'cli.json'], placed: ['plugin', 'cli.json'] })
+    expect(await readFile(path, 'utf8')).toBe(printed)
+    expect(JSON.parse(await readFile(cli, 'utf8'))).toEqual({ plugins: [entry] })
+    expect(await installAbsent('opencode', path)).toMatchObject({ code: 0, report: { state: 'checked', installed: [] } })
+
+    const older = '// Shipped by BMN\n// bmn hook opencode\n'
+    await writeFile(path, older)
+    expect(await installAbsent('opencode', path)).toMatchObject({ code: 0, report: { state: 'checked', older: ['plugin'], installed: [] } })
+    expect(await readFile(path, 'utf8')).toBe(older)
+
+    const foreign = await openCodeFixture('// the owner\'s own plugin\n')
+    const foreignCli = join(dirname(dirname(foreign)), 'cli.json')
+    const left = await installAbsent('opencode', foreign)
+    expect(left.code).toBe(1)
+    expect(left.report).toMatchObject({ state: 'checked', installed: [], left: [{ event: 'plugin', why: 'foreign' }] })
+    expect(await readFile(foreign, 'utf8')).toBe('// the owner\'s own plugin\n')
+    expect(existsSync(foreignCli)).toBe(false)
+  })
+
+  it.each([
+    ['unparsable', '{ "plugins": [ // a comment\n] }\n'],
+    ['unusable', '{ "plugins": "one" }\n']
+  ] as const)('writes neither OpenCode file when cli.json cannot be added to: %s', async (why, text) => {
+    const path = await openCodeFixture()
+    const cli = join(dirname(dirname(path)), 'cli.json')
+    await writeFile(cli, text)
+    const result = await installAbsent('opencode', path)
+    expect(result.code).toBe(1)
+    expect(result.report).toMatchObject({ state: 'left', why, installed: [] })
+    expect(result.report.detail).not.toContain('BMN leaves it untouched')
+    expect(existsSync(path)).toBe(false)
+    expect(await readFile(cli, 'utf8')).toBe(text)
+  })
+
+  it('reads every app\'s own place in a home: installs where the app is set up, skips the one that is not, and a second start changes nothing', async () => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), 'aithooks-')))
+    createdRoots.add(home)
+    await mkdir(join(home, '.claude'))
+    await mkdir(join(home, '.config', 'opencode'), { recursive: true })
+    const env = { HOME: home, CODEX_HOME: '', OPENCODE_CONFIG_DIR: '', XDG_CONFIG_HOME: '' }
+    const run = async () => runHooks(['install', '--absent', '--yes', '--json'], env)
+    const first = await run()
+    expect(first.code).toBe(0)
+    expect(JSON.parse(first.stdout).agents.map((each: { agent: string; state: string }) => [each.agent, each.state])).toEqual([
+      ['claude', 'installed'], ['codex', 'not-set-up'], ['opencode', 'installed']
+    ])
+    expect(existsSync(join(home, '.codex'))).toBe(false)
+    const files = [join(home, '.claude', 'settings.json'), join(home, '.config', 'opencode', 'bmn', 'tui.ts'), join(home, '.config', 'opencode', 'cli.json')]
+    const texts = await Promise.all(files.map((file) => readFile(file, 'utf8')))
+    const second = await run()
+    expect(second.code).toBe(0)
+    expect(JSON.parse(second.stdout).agents.map((each: { state: string }) => each.state)).toEqual(['checked', 'not-set-up', 'checked'])
+    expect(await Promise.all(files.map((file) => readFile(file, 'utf8')))).toEqual(texts)
+    const words = await runHooks(['install', '--absent', '--yes'], env)
+    expect(words.stdout).toContain('Codex: not set up on this computer; nothing written')
+  })
+})
+
 // Payloads recorded from the real harnesses on 2026-09-27 (docs/remote-answers.md), sanitised.
 const REMOTE_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'test-fixtures', 'remote-answers')
 

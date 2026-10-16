@@ -81,7 +81,9 @@ describe('a tool\'s state in words', () => {
     expect(toolStateWords('exposed', on, false)).toBe('Exposed')
     expect(toolStateWords('missing', { supported: false }, true)).toBe('Not yet')
     expect(toolStateWords(undefined, on, true)).toBe('Not yet')
-    expect(toolStateHint('missing', on, true, 'Codex')).toBe('Not in Codex yet: Install… adds it')
+    expect(toolStateHint('missing', on, true, 'Codex')).toBe('Not in Codex yet: BMN adds it at its next start or approval')
+    // Story 75.9: what BMN installs by itself never takes over an entry it did not write.
+    expect(toolStateHint('unmanaged', on, true, 'Codex')).toBe('Codex holds something else under this name, which BMN leaves as it is: remove it there and BMN adds the tool')
     expect(toolStateHint('blocked', on, true, 'Codex', 'Codex has no way to pass an environment variable as an argument')).toBe('Codex has no way to pass an environment variable as an argument')
     expect(toolStateHint('exposed', on, false, 'OpenCode')).toBe('OpenCode holds this tool but may not have it')
     expect(toolStateHint('missing', { supported: false }, true, 'OpenCode')).toBe('Tools are not supported yet in OpenCode: Health says how BMN\'s test of it stands')

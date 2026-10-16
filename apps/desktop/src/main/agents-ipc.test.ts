@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 import { createServer, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { LUNA_GO_PROPOSAL, type AutoTestKind, type AutoTestsView } from '@bmn/protocol'
-import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, OpenCodeGoView, JudgeTried, JudgeView, ResearchLookup, ResearchSnapshot, WebQuestionAsked, WebQuestionsSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan, TeamAskDetail, TeamAsksSnapshot, ToolProposalView, ToolsPlan } from '@bmn/protocol'
+import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, OpenCodeGoView, JudgeTried, JudgeView, ResearchLookup, ResearchSnapshot, WebQuestionAsked, WebQuestionsSnapshot, RosterDataShape, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSavePlan, RulesSnapshot, TeamAskDetail, TeamAsksSnapshot, ToolProposalView, ToolsPlan } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CODEX_RESEARCH_TOOLS_SEEN, fenceTestsPath, researchFormHash, teamRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import { contextTests } from '../../bin/agents-context.mjs'
@@ -119,15 +119,20 @@ const activate = (data: RosterDataShape, id: string): RosterDataShape => ({ ...d
 const bindings = (preview: AgentsPreview) => preview.teamUpdate.map((target) => ({ harness: target.harness, binding: target.binding }))
 const file = (path: string): string => readFileSync(join(home, path), 'utf8')
 
-/** A team approved from the file, the rules saved and installed into the four apps. */
+/** Saves `text` as the rules the way Rules › Save does (Story 75.9): the plan the sheet shows, then the save bound to it. */
+async function saveRulesText(text: string): Promise<RulesOutcome> {
+  const plan = await call<RulesSavePlan>('rules:plan-save', { text })
+  return call<RulesOutcome>('rules:save', { text, expectedHash: plan.expectedHash, expectedLink: plan.expectedLink, expectedDirectory: plan.expectedDirectory, planHash: plan.planHash })
+}
+
+/** A team approved from the file, the rules saved and so installed into the apps. */
 async function approvedAndInstalled(): Promise<AgentsSnapshot> {
   writeFileSync(rosterFile(), EXAMPLE)
   const first = await call<AgentsOutcome>('agents:approve', { shown: await shown() })
   expect(first).toMatchObject({ ok: true, message: 'Approved · version 1' })
-  expect(await call<RulesOutcome>('rules:save-master', { text: MASTER, expectedHash: null, expectedLink: null })).toMatchObject({ ok: true })
-  const plan = await call<RulesPlan>('rules:plan-install')
+  const plan = await call<RulesSavePlan>('rules:plan-save', { text: MASTER })
   expect(plan.targets.map((target) => [target.harness, target.rendering])).toEqual([['claude', 'full'], ['codex', 'full'], ['opencode', 'public']])
-  expect(await call<RulesOutcome>('rules:install', { planHash: plan.planHash })).toMatchObject({ ok: true })
+  expect(await saveRulesText(MASTER)).toMatchObject({ ok: true, message: 'Saved and installed to Claude Code, Codex and OpenCode' })
   expect(file('.claude/CLAUDE.md')).toContain('The team: Claude Code (Opus, Fable), Codex (Sol, Astra, Luna) (roles, efforts and limits: `bmn team`).')
   return snapshot()
 }
@@ -376,11 +381,10 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     }
     appEnv = {}
     expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
-    expect(await call<RulesOutcome>('rules:save-master', { text: MASTER, expectedHash: null, expectedLink: null })).toMatchObject({ ok: true })
     // Inspected and allowed private work, and still public: OpenCode gets public work only (owner decisions
-    // 2026-10-10 and 2026-10-14), with OpenCode 2 installed too.
+    // 2026-10-10 and 2026-10-14), with OpenCode 2 installed too. Planning a save writes nothing.
     stub('opencode', 'echo "opencode v2.0.28"')
-    const planned = async () => (await call<RulesPlan>('rules:plan-install')).targets.find((target) => target.harness === 'opencode')
+    const planned = async () => (await call<RulesSavePlan>('rules:plan-save', { text: MASTER })).targets.find((target) => target.harness === 'opencode')
     expect(await planned()).toMatchObject({ rendering: 'public' })
     appEnv = { OPENCODE_CONFIG: join(home, 'other.json') }
     expect(await planned()).toMatchObject({ rendering: 'public' })
@@ -432,7 +436,7 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     let source: { env: NodeJS.ProcessEnv; source: 'shell' | 'app'; reason?: string } = { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }, source: 'app', reason: 'bash did not answer in 5 seconds' }
     const own = new Map<string, (event: never, params: Record<string, unknown>) => unknown>()
     installAgentsIpcHandlers({ handle: (channel, listener) => { own.set(channel, listener) } }, {
-      senderIsAllowed: () => true, cliScript: () => SCRIPT,
+      senderIsAllowed: () => true, cliScript: () => SCRIPT, autoTestKinds: [],
       sessionEnvironment: { current: () => source, refresh: async () => { asked += 1; if (asked > 1) source = { env: { HOME: home, PATH: `${shellOnly}:${stubs}:/usr/bin:/bin` }, source: 'shell' } } }
     })
     const read = async (): Promise<RulesSnapshot> => await own.get('aiterm:rules:snapshot')?.(undefined as never, {}) as RulesSnapshot
@@ -506,22 +510,23 @@ describe('a link on the way to the team file or the rules (R60-NFR2)', () => {
 
   it('refuses to save the rules into a copy of the folder their diff was shown for', async () => {
     linked()
-    expect(await call<RulesOutcome>('rules:save-master', { text: MASTER, expectedHash: null, expectedLink: null })).toMatchObject({ ok: true })
+    expect(await saveRulesText(MASTER)).toMatchObject({ ok: true })
     const next = MASTER.replace('Answer first.', 'Answer first, plainly.')
-    const plan = await call<RulesMasterPlan>('rules:plan-master', { text: next })
+    const plan = await call<RulesSavePlan>('rules:plan-save', { text: next })
     expect(plan).toMatchObject({ valid: true, expectedLink: null, expectedDirectory: stores().a })
     retarget()
-    const save = { text: next, expectedHash: plan.expectedHash, expectedLink: plan.expectedLink, expectedDirectory: plan.expectedDirectory }
-    expect(await call<RulesOutcome>('rules:save-master', save)).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    const save = { text: next, expectedHash: plan.expectedHash, expectedLink: plan.expectedLink, expectedDirectory: plan.expectedDirectory, planHash: plan.planHash }
+    expect(await call<RulesOutcome>('rules:save', save)).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
     expect(readFileSync(join(stores().b, 'global-rules.md'), 'utf8')).toBe(MASTER)
     back()
-    expect(await call<RulesOutcome>('rules:save-master', save)).toMatchObject({ ok: true })
+    expect(await call<RulesOutcome>('rules:save', save)).toMatchObject({ ok: true })
     expect(readFileSync(join(stores().a, 'global-rules.md'), 'utf8')).toBe(next)
-    // Restoring an earlier version is bound the same way.
+    // Restoring an earlier version is a save of its text, bound the same way.
     const revert = await call<RulesRevertPlan>('rules:plan-revert-master', { revision: 1 })
     expect(revert).toMatchObject({ ok: true, expectedDirectory: stores().a })
+    const again = await call<RulesSavePlan>('rules:plan-save', { text: revert.text })
     retarget()
-    expect(await call<RulesOutcome>('rules:save-master', { text: revert.text, expectedHash: revert.expectedHash, expectedLink: revert.expectedLink, expectedDirectory: revert.expectedDirectory }))
+    expect(await call<RulesOutcome>('rules:save', { text: revert.text, expectedHash: again.expectedHash, expectedLink: again.expectedLink, expectedDirectory: again.expectedDirectory, planHash: again.planHash }))
       .toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
     expect(readFileSync(join(stores().b, 'global-rules.md'), 'utf8')).toBe(next)
   })
@@ -530,10 +535,94 @@ describe('a link on the way to the team file or the rules (R60-NFR2)', () => {
 describe('the rules snapshot (60.6)', () => {
   it('says when the rules were saved, and that there are none before the first save', async () => {
     expect(await call<RulesSnapshot>('rules:snapshot')).toMatchObject({ home, master: { exists: false, savedAt: null }, health: { state: 'failed' } })
-    await call<RulesOutcome>('rules:save-master', { text: MASTER, expectedHash: null, expectedLink: null })
+    await saveRulesText(MASTER)
     const rules = await call<RulesSnapshot>('rules:snapshot')
     expect(rules.master).toMatchObject({ exists: true, text: MASTER })
     expect(Date.parse(rules.master.savedAt ?? '')).toBeGreaterThan(Date.now() - 60_000)
+  })
+})
+
+describe('Save installs the rules, and Undo puts the rules and the files back together (Story 75.9)', () => {
+  const NEXT = MASTER.replace('Answer first.', 'Answer first, plainly.')
+
+  it('writes the master and every app\'s file as one transaction; Undo restores both and installs nothing again (AC1, AC2)', async () => {
+    await approvedAndInstalled()
+    const saved = await saveRulesText(NEXT)
+    expect(saved).toMatchObject({ ok: true, message: 'Saved and installed to Claude Code, Codex and OpenCode', undo: expect.any(String) })
+    expect(file('.config/bmn/agents/global-rules.md')).toBe(NEXT)
+    expect(file('.claude/CLAUDE.md')).toContain('Answer first, plainly.')
+    // OpenCode gets the public rendering only: the public section, never the Team line.
+    expect(file('.config/opencode/AGENTS.md')).toContain('Answer first, plainly.')
+    expect(file('.config/opencode/AGENTS.md')).not.toContain('The team:')
+    expect(saved.snapshot.transactions[0]).toMatchObject({ reason: 'save', state: 'complete', master: true, targets: ['claude', 'codex', 'opencode'] })
+    const undo = await call<RulesPlan>('rules:plan-restore', { transaction: saved.undo })
+    expect(undo.master).toMatchObject({ path: join(home, '.config/bmn/agents/global-rules.md'), becomes: 'its earlier bytes' })
+    expect(undo.targets.map((target) => target.harness)).toEqual(['claude', 'codex', 'opencode'])
+    const transactions = saved.snapshot.transactions.length
+    expect(await call<RulesOutcome>('rules:restore', { transaction: saved.undo, planHash: undo.planHash }))
+      .toMatchObject({ ok: true, message: 'Put back the rules and their files in Claude Code, Codex and OpenCode' })
+    expect(file('.config/bmn/agents/global-rules.md')).toBe(MASTER)
+    expect(file('.claude/CLAUDE.md')).not.toContain('Answer first, plainly.')
+    expect(file('.config/opencode/AGENTS.md')).not.toContain('Answer first, plainly.')
+    // Nothing was installed again: no new transaction, and every file is the one the save before wrote.
+    const after = await call<RulesSnapshot>('rules:snapshot')
+    expect(after.transactions).toHaveLength(transactions)
+    expect(after.health).toMatchObject({ state: 'checked', ok: true })
+  })
+
+  it('reports a file it could not write for its app and still writes the others; Save without a change writes what differs (AC1)', async () => {
+    await approvedAndInstalled()
+    chmodSync(join(home, '.codex'), 0o500)
+    try {
+      const saved = await saveRulesText(NEXT)
+      expect(saved).toMatchObject({ ok: false, code: 'PARTIAL', undo: expect.any(String) })
+      expect(saved.message).toMatch(/^Codex not written: .+ · Saved and installed to Claude Code and OpenCode$/)
+      expect(file('.claude/CLAUDE.md')).toContain('Answer first, plainly.')
+      expect(file('.codex/AGENTS.md')).not.toContain('Answer first, plainly.')
+      expect(saved.snapshot.transactions[0]).toMatchObject({ reason: 'save', state: 'partial', master: true })
+    } finally {
+      chmodSync(join(home, '.codex'), 0o700)
+    }
+    const again = await call<RulesSavePlan>('rules:plan-save', { text: NEXT })
+    expect(again).toMatchObject({ ok: true, changesMaster: false, diff: '' })
+    expect(again.targets.map((target) => [target.harness, target.change])).toEqual([['codex', 'stale']])
+    expect(await saveRulesText(NEXT)).toMatchObject({ ok: true, message: 'Installed to Codex' })
+    // A file edited outside BMN is put back the same way, with no change to the rules.
+    writeFileSync(join(home, '.claude/CLAUDE.md'), 'edited by hand\n')
+    const outside = await call<RulesSavePlan>('rules:plan-save', { text: NEXT })
+    expect(outside.targets.map((target) => [target.harness, target.change])).toEqual([['claude', 'edited-outside']])
+    expect(await saveRulesText(NEXT)).toMatchObject({ ok: true, message: 'Installed to Claude Code' })
+    expect(file('.claude/CLAUDE.md')).toContain('Answer first, plainly.')
+    expect(await saveRulesText(NEXT)).toMatchObject({ ok: true, message: 'Every app already had these rules' })
+    // A plan the files moved away from is refused, and nothing is written.
+    const stale = await call<RulesSavePlan>('rules:plan-save', { text: MASTER })
+    writeFileSync(join(home, '.claude/CLAUDE.md'), 'edited again\n')
+    expect(await call<RulesOutcome>('rules:save', { text: MASTER, expectedHash: stale.expectedHash, expectedLink: stale.expectedLink, expectedDirectory: stale.expectedDirectory, planHash: stale.planHash }))
+      .toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    expect(file('.config/bmn/agents/global-rules.md')).toBe(NEXT)
+  })
+})
+
+describe('BMN\'s hook entries install themselves at start (Story 75.9 AC3)', () => {
+  it('adds only the absent entries in each app set up here, lists what it left, keeps the rest of the file, and a second start changes nothing', async () => {
+    mkdirSync(join(home, '.claude'), { recursive: true })
+    writeFileSync(join(home, '.claude/settings.json'), `${JSON.stringify({ theme: 'dark', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'timeout 3 bmn hook claude' }] }] } }, null, 2)}\n`)
+    await ipc.installsAtStart()
+    const first = (await call<RulesSnapshot>('rules:snapshot')).hooks
+    expect(first?.state).toBe('checked')
+    const apps = first?.state === 'checked' ? first.apps : []
+    expect(apps.map((app) => [app.harness, app.state, app.installed.length, app.left])).toEqual([
+      ['claude', 'installed', 8, [{ event: 'Stop', why: 'foreign' }]], ['codex', 'not-set-up', 0, []], ['opencode', 'not-set-up', 0, []]
+    ])
+    const settings = JSON.parse(file('.claude/settings.json')) as { theme: string; hooks: Record<string, unknown[]> }
+    expect(settings.theme).toBe('dark')
+    expect(settings.hooks.Stop).toEqual([{ hooks: [{ type: 'command', command: 'timeout 3 bmn hook claude' }] }])
+    expect(readdirSync(join(home, '.claude')).filter((name) => name.startsWith('settings.json.bmn-backup-'))).toHaveLength(1)
+    const bytes = file('.claude/settings.json')
+    await ipc.installsAtStart()
+    expect(file('.claude/settings.json')).toBe(bytes)
+    const second = (await call<RulesSnapshot>('rules:snapshot')).hooks
+    expect(second?.state === 'checked' ? second.apps.map((app) => [app.harness, app.state, app.installed]) : null).toEqual([['claude', 'checked', []], ['codex', 'not-set-up', []], ['opencode', 'not-set-up', []]])
   })
 })
 
@@ -562,7 +651,8 @@ describe('Allow here on a stopped prompt (60.8 AC3)', () => {
     mkdirSync(join(workspace, '.git'), { recursive: true })
     writeFileSync(join(workspace, '.git/HEAD'), 'ref: refs/heads/main\n')
     installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
-      senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin` }), procRoot: proc
+      // No test of BMN's own starts here: one left running would read the next test's home.
+      senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin` }), procRoot: proc, autoTestKinds: []
     })
     writeFileSync(rosterFile(), GUARDED)
     expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
@@ -809,7 +899,9 @@ describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
     expect(before.apps.map((app) => [app.harness, app.supported, app.state, app.testable])).toEqual([
       ['claude', false, 'Not supported yet', true], ['codex', false, 'Not supported yet', true], ['opencode', false, 'Not supported yet', true]
     ])
-    expect(await call<SkillsPlan>('rules:skills-plan')).toMatchObject({ ok: false, code: 'SKILLS_UNSUPPORTED', targets: [] })
+    // Story 75.9: skills install themselves, but never before an app's test passed.
+    await ipc.installsAtStart()
+    expect(existsSync(join(home, '.agents/skills/alpha'))).toBe(false)
 
     const tested = await call<RulesOutcome>('rules:skills-test', { harness: 'codex' })
     expect(tested).toMatchObject({ ok: true, message: `Codex skills test passed: Codex reads skills from ~/.agents/skills; Codex lists a test skill placed in ${join(home, '.agents/skills')}; no prompt was sent, so this shows the app finds a skill there, not that a model uses it` })
@@ -819,15 +911,12 @@ describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
     expect(tested.snapshot.skills).toMatchObject({ pending: 2, exposed: 0 })
     expect(tested.snapshot.skills.skills.map((entry) => entry.states)).toEqual([{ codex: 'missing' }, { codex: 'missing' }])
 
-    const plan = await call<SkillsPlan>('rules:skills-plan')
-    expect(plan).toMatchObject({ ok: true, exposed: [] })
-    expect(plan.targets.map((target) => [target.harness, target.skill, target.kind, target.note, target.diff])).toEqual([
-      ['codex', 'alpha', 'adds the skill', 'A link to the skill in the skills folder.', ''], ['codex', 'beta', 'adds the skill', 'A link to the skill in the skills folder.', '']
-    ])
-    expect(JSON.stringify([before, tested, plan])).not.toContain('SYNTHETIC-BODY')
-    expect(await call<RulesOutcome>('rules:skills-install', { planHash: 'f'.repeat(64) })).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
-    const installed = await call<RulesOutcome>('rules:skills-install', { planHash: plan.planHash })
-    expect(installed).toMatchObject({ ok: true, message: 'Changed 2 skill entries. Sessions started before this keep the skills they had.' })
+    expect(JSON.stringify([before, tested])).not.toContain('SYNTHETIC-BODY')
+    // Once the test passed, an approval installs them at once, as one transaction that Undo puts back (Story 75.9).
+    const data = (await snapshot()).file.data as RosterDataShape
+    const approval = await call<AgentsOutcome>('agents:save', { shown: await shown(), data: activate(data, 'haiku') })
+    expect(approval).toMatchObject({ ok: true, installed: ['Skills installed: 2 entries changed'] })
+    const installed = { snapshot: await rulesSnapshot() }
     expect(readlinkSync(join(home, '.agents/skills/alpha'))).toBe(join(home, '.claude/skills/alpha'))
     expect(installed.snapshot.skills).toMatchObject({ pending: 0, exposed: 0 })
     expect(installed.snapshot.skills.apps[1]).toMatchObject({ state: 'Linked' })
@@ -865,14 +954,18 @@ describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
     // A first install: BMN finds where Codex reads skills, then whether it lists one placed there, and sends no prompt.
     await ipc.autoTestsAtStart()
     expect(records()).toEqual([['capability', '0.161.0', 'pass', 'bmn'], ['listing', '0.161.0', 'pass', 'bmn']])
+    // Story 75.9: the passed test is what lets BMN install the skills there, so it does at once, as one transaction Undo puts back.
+    expect(readlinkSync(join(home, '.agents/skills/alpha'))).toBe(join(home, '.claude/skills/alpha'))
+    expect((await call<RulesSnapshot>('rules:snapshot')).transactions[0]).toMatchObject({ reason: 'skills install', targets: ['codex'], state: 'complete' })
 
     stub('codex', lister('0.162.0', '.agents/skills'))
     const reading = await call<RulesSnapshot>('rules:snapshot')
     expect(reading.autoTests.running).toEqual({ kind: 'skills', harness: 'codex' })
     await call('rules:auto-tests', { fresh: false })
     const after = (await call<RulesSnapshot>('rules:snapshot')).skills.apps[1]!
-    expect(after).toMatchObject({ supported: true, state: 'Missing', test: { version: '0.162.0', outcome: 'pass', by: 'bmn' }, listing: { version: '0.162.0', outcome: 'pass', by: 'bmn' } })
-    // Only where the app reads skills and a listing in a home of its own: nothing was put where Codex keeps them.
+    expect(after).toMatchObject({ supported: true, state: 'Linked', test: { version: '0.162.0', outcome: 'pass', by: 'bmn' }, listing: { version: '0.162.0', outcome: 'pass', by: 'bmn' } })
+    // The tests list in a home of their own; where Codex keeps skills holds only the one install.
+    expect(readdirSync(join(home, '.agents/skills'))).toEqual(['alpha'])
     expect(records().slice(2)).toEqual([['capability', '0.162.0', 'pass', 'bmn'], ['listing', '0.162.0', 'pass', 'bmn']])
     expect(notices).toEqual([])
 

@@ -627,6 +627,19 @@ describe('install and undo (60.12 AC4)', () => {
     expect(states('claude').notes).toBe('unmanaged')
   })
 
+  it('leaves an entry it did not write when it installs by itself, and says so as not changed (Story 75.9)', async () => {
+    const own = '{\n  "mcpServers": {\n    "notes": { "command": "notes-tool", "args": [] }\n  }\n}\n'
+    put(claudeFile(), own)
+    const planned = await planToolsInstall(['claude'], { environment: env, versions: VERSIONS, absent: true })
+    expect(planned.targets.map((target) => target.tool)).not.toContain('notes')
+    expect(planned.blocked).toContainEqual({ harness: 'claude', tool: 'notes', path: claudeFile(), fix: 'BMN did not write this entry, so it leaves it as it is: remove it there and BMN writes the tool' })
+    const result = await install(['claude'], { absent: true })
+    expect(result.code).toBe('OK')
+    expect(result.written.map((entry) => entry.tool)).not.toContain('notes')
+    expect(states('claude').notes).toBe('unmanaged')
+    expect(readAppTools('claude', env).entries.get('notes')!.value).toEqual({ command: 'notes-tool', args: [] })
+  })
+
   it('leaves entries that are not on the list until their removal is asked for, and never removes one it could not put back', async () => {
     put(codexFile(), '[mcp_servers.mine]\ncommand = "mine-tool"\n\n[mcp_servers.keyed]\ncommand = "keyed-tool"\n\n[mcp_servers.keyed.env]\nKEYED = "' + SECRET + '"\n')
     await install(['codex'])

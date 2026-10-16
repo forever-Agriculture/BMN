@@ -448,12 +448,16 @@ const CHANGE_WORDS = {
   stale: 'updates BMN\'s entry'
 }
 
+/** What an install BMN starts by itself (`--absent`, Story 75.9) leaves as it is: an entry BMN did not write, or one changed outside it. */
+const LEFT_BY_ITSELF = ['link', 'unmanaged', 'edited-outside']
+
 /**
  * What an install would do, without doing it: per app, the entries to link, copy or remove, each
  * with what the path holds now, plus the skills that stay exposed whatever is installed, and one
  * hash of all of it that a confirmed install must match. `harnesses` empty means every supported app.
+ * `absent` keeps only what BMN adds, updates or removes of its own, and lists the rest under `left`.
  */
-export async function planSkillsInstall(harnesses = [], { environment = process.env, versions, tests = skillsTests() } = {}) {
+export async function planSkillsInstall(harnesses = [], { environment = process.env, versions, tests = skillsTests(), absent = false } = {}) {
   const generation = approvedIfAny()
   const { routeFor, routeStillMatches } = await import('./agents-rules.mjs')
   const check = checkSkills({ environment, tests, versions, generation })
@@ -497,7 +501,10 @@ export async function planSkillsInstall(harnesses = [], { environment = process.
     }
   }
   for (const target of targets) target.resolved = `${target.prior.directory}/${basename(target.path)}`
-  return { code: 'OK', source: check.source.path, targets, exposed, planHash: skillsPlanHash(targets) }
+  if (!absent) return { code: 'OK', source: check.source.path, targets, exposed, planHash: skillsPlanHash(targets) }
+  const kept = targets.filter((target) => !LEFT_BY_ITSELF.includes(target.change))
+  const left = targets.filter((target) => LEFT_BY_ITSELF.includes(target.change)).map((target) => ({ harness: target.harness, skill: target.skill, path: target.path, change: target.change, words: target.words }))
+  return { code: 'OK', source: check.source.path, targets: kept, exposed, left, planHash: skillsPlanHash(kept) }
 }
 
 function skillsPlanHash(targets) {
@@ -510,7 +517,7 @@ export function skillsPlanView(result) {
     code: result.code, ...(result.message ? { message: result.message } : {}), plan_hash: result.planHash, source: result.source ?? null,
     targets: result.targets.map((target) => ({ harness: target.harness, skill: target.skill, path: target.path, resolved_path: target.resolved, action: target.action, change: target.change,
       words: target.words, ...(target.detail ? { detail: target.detail } : {}), ...(target.prior.kind === 'link' ? { link_target: target.prior.target } : {}) })),
-    exposed: result.exposed
+    exposed: result.exposed, ...(result.left === undefined ? {} : { left: result.left })
   }
 }
 
@@ -600,9 +607,9 @@ function recordOf(target) {
  * a complete private copy with its modes and its own links kept as links. A failure part-way stops
  * and keeps the manifest, so `bmn rules restore --transaction` can undo what changed.
  */
-export async function installSkills(harnesses = [], { yes = false, asJson = false, environment = process.env, versions, now = new Date(), expectedPlanHash, afterConfirm, beforeTarget, afterTarget } = {}) {
+export async function installSkills(harnesses = [], { yes = false, asJson = false, environment = process.env, versions, now = new Date(), expectedPlanHash, absent = false, afterConfirm, beforeTarget, afterTarget } = {}) {
   const { confirm } = await import('./agents-rules.mjs')
-  const planned = await planSkillsInstall(harnesses, { environment, versions })
+  const planned = await planSkillsInstall(harnesses, { environment, versions, absent })
   if (planned.code !== 'OK') return { code: planned.code, message: planned.message, transaction: null, written: [], exposed: [] }
   if (expectedPlanHash !== undefined && expectedPlanHash !== planned.planHash) {
     return { code: 'REVISION_CONFLICT', message: 'the skills or the folders changed since the plan was shown; review it again', transaction: null, written: [], exposed: planned.exposed }
@@ -613,7 +620,7 @@ export async function installSkills(harnesses = [], { yes = false, asJson = fals
   if (!await confirm('Change these skills entries?', planDetails(planned), { yes, asJson })) return { code: 'NOT_CONFIRMED', transaction: null, written: [], exposed: planned.exposed }
   // The answer may come long after the list: plan again and write only what was confirmed.
   afterConfirm?.()
-  const confirmed = await planSkillsInstall(harnesses, { environment, versions })
+  const confirmed = await planSkillsInstall(harnesses, { environment, versions, absent })
   if (confirmed.code !== 'OK') return { code: confirmed.code, message: confirmed.message, transaction: null, written: [], exposed: [] }
   if (confirmed.planHash !== planned.planHash) {
     return { code: 'REVISION_CONFLICT', message: 'the skills or the folders changed while the confirmation was open; nothing was written', transaction: null, written: [], exposed: confirmed.exposed }
@@ -1228,6 +1235,7 @@ export function skillsLoadingAutoPlan({ versions, tests = skillsTests(), environ
 
 export const SKILLS_USAGE = `Usage: bmn skills check [--json]                    One state per app and per skill; exit 0 only when every supported app has its skills
        bmn skills install [app…] [--plan] [--yes]   Link or copy each app's skills, and remove what an app may no longer have, as one transaction
+       bmn skills install --absent [--plan] [--yes] The same, leaving an entry BMN did not write or one changed outside it: what BMN runs by itself
        bmn skills test <app> [--json]               Owner-run: find where the app reads skills, then whether it lists a skill placed there (no prompt)
        bmn skills test <app> --prompt [--json]      Owner-run: one prompt to that app's provider, to see whether the app hands a test skill to its model
        bmn skills test <app> --auto [--json]        BMN's own run of the first: a new app version needs no press (marked as BMN's)
@@ -1278,17 +1286,18 @@ export async function runSkillsCommand(argv) {
       return code
     }
     if (action === 'install') {
-      const { options, positionals } = readOptions(rest, { flags: ['json', 'plan', 'yes'], values: ['expect-plan'] })
+      const { options, positionals } = readOptions(rest, { flags: ['json', 'plan', 'yes', 'absent'], values: ['expect-plan'] })
       asJson = options.json === true
       const unknown = positionals.filter((name) => !HARNESSES.includes(name))
       if (unknown.length > 0) return usage(appRefusal(unknown[0], `skills install expects apps from ${HARNESSES.join(', ')}, not ${unknown.join(', ')}`))
       const versions = await installedVersions()
+      const absent = options.absent === true
       if (options.plan) {
-        const planned = await planSkillsInstall(positionals, { versions })
+        const planned = await planSkillsInstall(positionals, { versions, absent })
         out(asJson ? JSON.stringify(skillsPlanView(planned), null, 2) : planned.code !== 'OK' ? `${planned.code}: ${planned.message}` : planDetails(planned) || 'Every app already has its skills.')
         return planned.code === 'OK' ? 0 : EXIT.refusal
       }
-      const result = await installSkills(positionals, { yes: options.yes === true, asJson, versions, expectedPlanHash: options['expect-plan'] })
+      const result = await installSkills(positionals, { yes: options.yes === true, asJson, versions, absent, expectedPlanHash: options['expect-plan'] })
       if (asJson) out(JSON.stringify(result, null, 2))
       else if (result.code === 'OK') {
         out([result.message ?? `Changed ${result.written.length} entr${result.written.length === 1 ? 'y' : 'ies'} (transaction ${result.transaction}).`,

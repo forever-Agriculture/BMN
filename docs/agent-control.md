@@ -84,7 +84,8 @@ Commands:
   hooks check [agent] [--file PATH]         Say which of BMN's hook entries each agent's own hook file
                                             carries: wired, wired (older wording) or missing
   hooks install <agent> [--file PATH]       Review and approve each hook-file change before installation;
-                                            use --yes for a non-interactive script
+                                            use --yes for a non-interactive script; --absent --yes adds only
+                                            the entries an app lacks entirely, as BMN does at start
   statusline check|install|uninstall [--file PATH]
                                             Put one line in front of Claude Code's own status-line command so
                                             its plan use reaches BMN; the command itself is kept unchanged
@@ -644,7 +645,21 @@ unchecked.
 
 ### Wiring the hooks
 
-Two commands do it, and neither needs BMN to be running:
+BMN wires them itself (Story 75.9). At every start it runs `bmn hooks install --absent --yes` for
+each app set up on this computer, one whose settings folder exists; it creates no folder for an app
+that never ran here. It adds an entry only where an event has none of BMN's in any shape. An entry
+inside a matcher, one in BMN's wording with a field the app will not run (changed), or one naming
+`bmn hook <agent>` in a wording BMN did not write (not BMN's) is left as it is, and nothing is added
+beside it; so is an OpenCode plugin file BMN did not write, with its `cli.json`, and a file BMN
+cannot add to. An older wording still runs and counts as in place. Every file is copied before it
+changes and written the way `install` writes it, checked once more against the bytes and the link
+it read. A second start writes nothing. Rules › Health › **Hooks** says what the start found; Codex
+still asks once, in `/hooks`, before it runs entries it has not seen. The exit is `0` when every
+set-up app has every entry, `1` when one was left or could not be written, and `--json` prints
+each app's `state` (`checked`, `installed`, `left`, `failed` or `not-set-up`), what is in place,
+in an older wording, added and left, with why.
+
+By hand, or in a script, two commands do it, and neither needs BMN to be running:
 
 ```bash
 bmn hooks check              # what each agent's own hook file carries, for every event BMN expects
@@ -813,10 +828,11 @@ BMN does not check for that, so every Codex report ends with the limit instead: 
 what is *configured*, never that a hook fired. Run `/hooks` in Codex once, then confirm the event
 shows up under Hook events. That is the check BMN cannot do for you.
 
-Preferences → **Local control** can show a dated, read-only `hooks check` report for
-Claude Code, Codex and OpenCode. It shows configured and missing entries without exposing the
-file contents. Session details separately shows the latest hook event **Observed by BMN** in
-that session's run, or **Not observed in this run**. One received event proves only that event
+Rules › Health › **Hooks** shows, per app, what the install at BMN's start found, an app with an
+entry left first: the entries in place, those added at start, and each event left as it is with
+why, without the file's contents and without a button. Session details separately shows the
+latest hook event **Observed by BMN** in that session's run, or **Not observed in this run**, and
+its **Hooks in Rules › Health** opens that section. One received event proves only that event
 reached BMN; neither view says every hook or permission path works.
 
 What BMN still refuses to add to, for both harnesses, is a file it cannot merge into without
@@ -1143,10 +1159,15 @@ shapes BMN's reading does not follow, so no setting gives it the full rules (own
 markers and an **Insert** menu for the three markers; rules that would not render are not saved,
 and every save first keeps the text it replaces, then the new text, and refuses a change or a
 swapped link made meanwhile, including a link on the way to the folder that holds the rules. Beside it, **What each app reads** shows each app's exact file, and
-**Earlier versions** lists saves and installs with **Restore…** and **Undo…**. **Install…** shows
-every file's difference, including a link, a hand-written file or an outside edit it replaces,
-and writes them in one step; a file that is a link is replaced by a regular file, and the file it
-pointed to is never written. The full rules are written, updated or sent in a test on any
+**Save…** saves and installs in one step (Story 75.9): its sheet shows the rules' difference and
+every app file's, including a link, a hand-written file or an outside edit it replaces, and Save
+writes the rules and then every file. An app whose destination no longer matches is named and not
+written; a file that cannot be written is named while the others are written, and the head says
+"Saved … · Codex not written" with its mark until a later Save writes it. With no edit, **Save…**
+rewrites only the files that differ. **Undo**, in the notice after a save or as **Undo…** under
+**Earlier versions**, puts the rules and every file that save wrote back together and installs
+nothing again; **Restore…** saves an earlier version again, so it installs too. A file that is a
+link is replaced by a regular file, and the file it pointed to is never written. The full rules are written, updated or sent in a test on any
 installed version of Claude Code or Codex; only one whose version cannot be read (not installed,
 or not on `PATH`) is refused them. OpenCode never gets them. Each action confirms against the exact plan it showed, plans again
 once you confirm, and refuses if the files changed since. A plan is bound to the folder that
@@ -1379,14 +1400,20 @@ skills you marked **Public** (`public`). The approval names the apps a change re
 `bmn skills check` exits 0 only when at least one app is supported, the folder is readable and
 every skill is `current`, `read-directly` or `excluded` in every supported app.
 
-**Install.** `bmn skills install [app…]`, or **Install…** on the Skills page, lists every entry
+**Install.** BMN installs the skills by itself (Story 75.9): after an approval, after its own test of
+an app passed, and at its start, it runs `bmn skills install --absent`, which adds what an app lacks
+and updates or removes BMN's own entries, and leaves an entry BMN did not write, or one changed
+outside it, as it is; the Skills page names that entry, and BMN adds the skill once it is gone.
+Each such install is its own transaction under **Earlier installs**; its **Undo…** puts the entries
+back, and what the list still gives an app comes back at the next start or approval, so keep the
+skill from that app to keep it out. `bmn skills install [app…]` by hand lists every entry
 first and writes after you confirm: a link to the skill where the app follows links, or a copy
 with BMN's line in its `SKILL.md` where it does not. An entry BMN did not write is named, with
 its link target or the files that differ, and replaced only then; a link is replaced as a link,
 and what it points at is never written. Entries an app may no longer have, and entries of a skill
 that left the folder, are removed in the same install. It is one transaction: every entry's prior
 state is kept under BMN's own private state, a folder as a complete copy with its modes and its
-own links, and **Undo install…** (or `bmn rules restore --transaction <id>`) puts all of it back.
+own links, and **Undo…** (or `bmn rules restore --transaction <id>`) puts all of it back.
 An install that ended part-way is undone too: BMN notes each entry before it writes it, puts back
 one that still holds exactly what the install meant to leave, and stops at one that changed
 since, naming it. That holds for every entry of the install, finished or not.
@@ -1502,8 +1529,11 @@ Entries an app holds that are not on your list are named too: `unmanaged`, or `e
 app gets public work only. `bmn tools check` exits 0 only when at least one app is supported,
 every tool is `current` or `excluded` in every supported app, and nothing is exposed.
 
-**Install.** `bmn tools install [app…]`, or **Install…** on the Tools page, shows every entry it
-would add, replace or remove and writes after you confirm. An app rewrites its own settings file
+**Install.** BMN installs the tools by itself, as it does the skills (Story 75.9): after an approval,
+after its own test of an app passed, and at its start, with `bmn tools install --absent`, which
+leaves an entry BMN did not write, or one changed outside it, and names it as not changed.
+`bmn tools install [app…]` by hand shows every entry it would add, replace or remove and writes
+after you confirm. An app rewrites its own settings file
 all the time (`~/.claude.json` holds much besides tools), so BMN never rewrites the file: it
 changes only the named entries in the file as it is at that moment and leaves every other byte,
 comments included. It refuses when an entry's exact text changed since you saw it (a comment
@@ -1511,7 +1541,7 @@ inside it counts), when the file now sits in another folder than the one shown, 
 settings file is a link. Entries that are not on your list stay until you ask for their removal
 (`--remove-unlisted`). It is one transaction; what each entry held is kept as that entry's own
 text, never the file. Before each write BMN notes the exact text it is about to leave, so
-**Undo install…** (or `bmn rules restore --transaction <id>`) knows an entry the install wrote
+**Undo…** (or `bmn rules restore --transaction <id>`) knows an entry the install wrote
 even when the install ended right after. Undo puts an entry back, in the file as it is then,
 only while the entry still reads exactly as the install left it; a comment changed inside it
 counts, and Undo then stops and names the entry. An entry that holds a value inline is never replaced or

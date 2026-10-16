@@ -82,9 +82,11 @@ export declare function withHeader(text: string, name: string, sourceHash: strin
 
 export interface SkillsTarget { harness: SkillsHarness; skill: string; path: string; resolved_path: string; action: 'link' | 'copy' | 'remove'; change: string; words: string; detail?: string; link_target?: string }
 export interface SkillsExposure { harness: SkillsHarness; skill: string; path?: string; fix: string }
-export interface SkillsPlan { code: string; message?: string; source?: string; planHash: string | null; targets: unknown[]; exposed: SkillsExposure[] }
-export declare function planSkillsInstall(harnesses?: string[], options?: { environment?: Environment; versions?: SkillsVersions; tests?: SkillsTestEntry[] }): Promise<SkillsPlan>
-export declare function skillsPlanView(result: SkillsPlan): { code: string; message?: string; plan_hash: string | null; source: string | null; targets: SkillsTarget[]; exposed: SkillsExposure[] }
+/** An entry an install BMN starts by itself leaves as it is (Story 75.9): one BMN did not write, or one changed outside it. */
+export interface SkillsLeft { harness: string; skill: string; path: string; change: string; words: string }
+export interface SkillsPlan { code: string; message?: string; source?: string; planHash: string | null; targets: unknown[]; exposed: SkillsExposure[]; left?: SkillsLeft[] }
+export declare function planSkillsInstall(harnesses?: string[], options?: { environment?: Environment; versions?: SkillsVersions; tests?: SkillsTestEntry[]; absent?: boolean }): Promise<SkillsPlan>
+export declare function skillsPlanView(result: SkillsPlan): { code: string; message?: string; plan_hash: string | null; source: string | null; targets: SkillsTarget[]; exposed: SkillsExposure[]; left?: SkillsLeft[] }
 export interface SkillsInstallResult {
   code: string
   message?: string
@@ -93,7 +95,7 @@ export interface SkillsInstallResult {
   exposed: SkillsExposure[]
 }
 export declare function installSkills(harnesses?: string[], options?: {
-  yes?: boolean; asJson?: boolean; environment?: Environment; versions?: SkillsVersions; now?: Date; expectedPlanHash?: string
+  yes?: boolean; asJson?: boolean; environment?: Environment; versions?: SkillsVersions; now?: Date; expectedPlanHash?: string; absent?: boolean
   afterConfirm?: () => void; beforeTarget?: (target: { harness: string; skill: string; path: string }, index: number) => void
   afterTarget?: (target: { harness: string; skill: string; path: string }, index: number) => void
 }): Promise<SkillsInstallResult>

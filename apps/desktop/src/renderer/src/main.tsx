@@ -85,7 +85,7 @@ import { TurnPauseCard } from './turn-changes-card'
 import { TurnChangesDialog } from './turn-changes-dialog'
 import { dismissAttentionReminder, noticesWhenNavigating, applyAttentionWithdrawal } from './attention-actions'
 import { PopupMenu, type MenuAnchor, type MenuEntry } from './popup-menu'
-import { PreferencesDialog } from './preferences-dialog'
+import { PreferencesDialog, type PreferencesPage } from './preferences-dialog'
 import { reportedModels, sessionsByApp } from './model-suggestions'
 import {
   ACTIVITY_TICK_MS,
@@ -169,7 +169,7 @@ type ShellDialog =
   | { kind: 'workspace-pins'; workspaceId: string; openedFromWorkspaceId: string | null }
   /** Chooses the session for a second pane beside `sessionId`. */
   | { kind: 'split-picker'; sessionId: string | null }
-  | { kind: 'preferences'; section?: 'agent-control' }
+  | { kind: 'preferences'; page?: PreferencesPage }
   | { kind: 'workspace-results'; workspace: WorkspaceRecord; openedFromWorkspaceId: string | null }
   /** The owner's reading of one workspace's messages between sessions (Epic 66). */
   | { kind: 'workspace-messages'; workspaceId: string; openedFromWorkspaceId: string | null }
@@ -2286,7 +2286,7 @@ function App(): React.JSX.Element {
                   origin={selectedOrigin}
                   refreshTick={now}
                   onOpenEvents={() => setDialog({ kind: 'hook-events', session: selectedRecord })}
-                  onOpenConfiguration={() => setDialog({ kind: 'preferences', section: 'agent-control' })}
+                  onOpenConfiguration={() => setDialog({ kind: 'preferences', page: 'health' })}
                 />
                 <PlanUseView
                   key={`plan-use:${selectedRecord.sessionId}:${sessionIncarnation(selectedRecord) ?? ''}`}
@@ -2567,7 +2567,7 @@ function App(): React.JSX.Element {
       {dialog?.kind === 'preferences' ? (
         <PreferencesDialog
           settings={settings}
-          initialSection={dialog.section}
+          initialPage={dialog.page}
           onSettings={setSettings}
           onClose={() => setDialog(null)}
           saveVoice={(change) => voiceSettingsWriter.update(change)}

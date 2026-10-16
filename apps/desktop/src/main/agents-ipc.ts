@@ -44,8 +44,12 @@ import {
   type RosterDataShape,
   type RosterHarness,
   type RosterRetiredHarness,
+  HOOK_LEFT_WHY,
+  type HookAppAtStart,
+  type HooksAtStart,
   type RulesOutcome,
   type RulesPlan,
+  type RulesSavePlan,
   type RulesProbeView,
   type RulesRenderingView,
   type AutoTestsView,
@@ -65,7 +69,7 @@ import { HARNESSES, RosterError, agentsDirectory, parseRoster, proseOf, readOnly
 import { approvedIfAny, listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
 import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, inspectRoute, fenceTests, limitStanding, privateWorkAnswer, versionStanding, workspaceRoot, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import {
-  applyTeamUpdate, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planTeamUpdate, probeAutoPlan, probeInspector, render, writeMaster, type RulesHarness
+  applyTeamUpdate, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planSave, planTeamUpdate, planView, probeAutoPlan, probeInspector, render, saveRules, type RulesHarness, type SavePlan, type SaveResult
 } from '../../bin/agents-rules.mjs'
 import { pathState, replaceFileSafely, writeAtomically } from '../../bin/safe-config-write.mjs'
 import { unifiedDiff } from '../../bin/text-diff.mjs'
@@ -134,14 +138,22 @@ export interface AgentsIpcOptions {
   autoTestsLater?: AutoTestsSeams['later']
   /** The tests BMN may start by itself; all where absent. A test run names the ones it means to see, so none starts an app behind its back. */
   autoTestKinds?: readonly AutoTestKind[]
+  /** What BMN installs by itself at start (Story 75.9); all where absent. A test run names what it means to see, so nothing is written into the owner's own apps. */
+  startInstalls?: readonly StartInstall[]
   /** Team › Asks (73.1): the folder the owner exports an ask into; null when he cancels. Absent where there is no window. */
   chooseAskExportFolder?(event: IpcMainInvokeEvent): Promise<string | null>
 }
+
+/** What BMN installs by itself when it starts (Story 75.9): its hook entries, then the approved skills and tools. */
+export const START_INSTALLS = ['hooks', 'skills', 'tools'] as const
+export type StartInstall = (typeof START_INSTALLS)[number]
 
 /** What installing the handlers hands back to the app. */
 export interface AgentsIpcHandle {
   /** BMN has started: every app test a new install, version, rules, skills or sign-in needs runs now (Story 75.8). Resolves when that is done. */
   autoTestsAtStart(): Promise<void>
+  /** BMN has started: its missing hook entries, then the approved skills and tools, are installed (Story 75.9). Never rejects. */
+  installsAtStart(): Promise<void>
 }
 
 /** Variables the rules CLI reads to find each app's file and its destination; nothing else of this process's environment. */
@@ -472,6 +484,8 @@ export interface RulesIpcContext {
   autoTests?(versions: Partial<Record<RosterHarness, string | null>>): AutoTestsView
   /** Something BMN reads its tests against may have changed (an install, a restore): it looks for tests to run. */
   autoTestsLook?(): void
+  /** What BMN's install of its hook entries at start found and did (Story 75.9); null before it ran. */
+  hooks?(): HooksAtStart | null
 }
 
 /** What an inspection resolved: the app's installed version and where it sends data. */
@@ -733,19 +747,78 @@ export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnap
     skills: skillsView(apps, pages, context),
     tools: toolsView(apps, pages, context),
     ...(context.ownEnvironment === undefined ? {} : { ownEnvironment: context.ownEnvironment }),
+    hooks: context.hooks?.() ?? null,
     transactions: listTransactions().slice(0, 10).map((entry) => ({
       id: entry.id, valid: entry.valid, ...(entry.created_at ? { createdAt: entry.created_at } : {}),
-      ...(entry.state ? { state: entry.state } : {}), ...(entry.reason ? { reason: entry.reason } : {}), ...(entry.targets ? { targets: entry.targets } : {})
+      ...(entry.state ? { state: entry.state } : {}), ...(entry.reason ? { reason: entry.reason } : {}), ...(entry.targets ? { targets: entry.targets } : {}),
+      ...(entry.master ? { master: true } : {})
     })),
     history
   }
 }
 
-function planFrom(result: CliResult, kind: 'install' | 'restore'): RulesPlan {
+/** "Claude Code, Codex and OpenCode". */
+function andList(names: readonly string[]): string {
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`
+}
+
+/**
+ * Story 75.9: what a save says, a failure first: "Codex not written: … · Saved and installed to Claude Code and OpenCode".
+ * A save of the same text writes only the apps' files, and says Installed.
+ */
+export function savedWords(result: Pick<SaveResult, 'written' | 'failed' | 'blocked' | 'master'>): string {
+  const failures = [
+    ...result.failed.map((entry) => `${ROSTER_APP_NAMES[entry.harness]} not written: ${entry.message}`),
+    ...result.blocked.map((entry) => `${ROSTER_APP_NAMES[entry.harness]} not written: ${entry.reason}`)
+  ]
+  const written = result.written.map((entry) => ROSTER_APP_NAMES[entry.harness])
+  const done = written.length > 0 ? `${result.master === true ? 'Saved and installed' : 'Installed'} to ${andList(written)}`
+    : result.master === true ? 'Saved; no app\'s file was written' : 'Every app already had these rules'
+  return [...failures, done].join(' · ')
+}
+
+/** A save plan as the Rules page shows it: the master's diff and what it would be checked against, then each app's file. */
+function savePlanFrom(result: SavePlan, text: string, generation: Generation | null): RulesSavePlan {
+  const valid = result.code !== 'MASTER_INVALID'
+  const prior = result.prior
+  return {
+    ok: result.code === 'OK', code: result.code, ...(result.message === undefined ? {} : { message: result.message }),
+    valid, errors: result.errors ?? [], diff: result.diff ?? '', changesMaster: result.changesMaster === true,
+    expectedHash: result.priorHash ?? null, expectedLink: prior?.kind === 'link' ? prior.target ?? null : null, expectedDirectory: prior?.directory ?? '',
+    renderings: valid ? renderAll(masterPath(), text, generation) : [],
+    planHash: result.planHash, targets: planTargets(result.code === 'OK' ? planView(result as never).targets as unknown as Record<string, unknown>[] : []),
+    blocked: result.blocked.map((entry) => ({ harness: entry.harness as RosterHarness, reason: entry.reason }))
+  }
+}
+
+/** What `hooks install --absent --json` printed, as Health › Hooks shows it; a report BMN cannot read is a failed check. */
+export function hooksFrom(result: CliResult, checkedAt: string): HooksAtStart {
   const report = parseJson(result.stdout)
-  if (result.failed || report === null) return { ok: false, code: 'IO_ERROR', message: `The ${kind} plan could not be read${result.failed ? ` (${result.failed})` : ''}`, planHash: null, targets: [] }
-  if (report.code !== 'OK') return { ok: false, code: String(report.code ?? 'IO_ERROR'), message: String(report.message ?? 'The plan was refused'), planHash: null, targets: [] }
-  const targets = Array.isArray(report.targets) ? (report.targets as Record<string, unknown>[]).map((row) => ({
+  const failed = (reason: string): HooksAtStart => ({ state: 'failed', checkedAt, reason })
+  if (result.failed) return failed(`The hook install ${result.failed}`)
+  if (report === null || !Array.isArray(report.agents)) return failed(result.stderr.trim().split('\n').pop() || 'The hook install printed a report BMN cannot read')
+  const names = (value: unknown): string[] => (Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.length <= 64) : [])
+  const why = (value: unknown): HookAppAtStart['why'] => (HOOK_LEFT_WHY as readonly unknown[]).includes(value) ? value as HookAppAtStart['why'] : undefined
+  const states: readonly HookAppAtStart['state'][] = ['checked', 'installed', 'left', 'failed', 'not-set-up']
+  const apps: HookAppAtStart[] = []
+  for (const row of report.agents as Record<string, unknown>[]) {
+    if (!(HARNESSES as readonly unknown[]).includes(row?.agent) || !states.includes(row.state as HookAppAtStart['state'])) return failed('The hook install printed a report BMN cannot read')
+    const left = Array.isArray(row.left) ? (row.left as Record<string, unknown>[]).flatMap((entry) => {
+      const reason = why(entry?.why)
+      return typeof entry?.event === 'string' && reason !== undefined ? [{ event: entry.event, why: reason }] : []
+    }) : []
+    const reason = why(row.why)
+    apps.push({
+      harness: row.agent as RosterHarness, file: String(row.file ?? ''), state: row.state as HookAppAtStart['state'],
+      placed: names(row.placed), older: names(row.older), installed: names(row.installed), left, ...(reason === undefined ? {} : { why: reason })
+    })
+  }
+  return { state: 'checked', checkedAt, apps }
+}
+
+/** One plan's targets as the CLI's JSON names them, in the panel's shape. */
+function planTargets(rows: Record<string, unknown>[]): RulesPlan['targets'] {
+  return rows.map((row) => ({
     harness: row.harness as RosterHarness, path: String(row.path), kind: String(row.kind ?? row.becomes ?? ''), change: String(row.change ?? row.becomes ?? ''), diff: String(row.diff ?? ''),
     ...(typeof row.resolved_path === 'string' && row.resolved_path !== row.path ? { resolvedPath: row.resolved_path } : {}),
     ...(row.rendering === 'full' ? { rendering: 'full' as const } : row.rendering === 'public' ? { rendering: 'public' as const } : {}),
@@ -753,9 +826,20 @@ function planFrom(result: CliResult, kind: 'install' | 'restore'): RulesPlan {
     ...(typeof row.note === 'string' ? { note: row.note } : {}),
     ...(typeof row.tool === 'string' ? { entry: row.tool } : {}),
     ...(Array.isArray(row.fold) ? { fold: (row.fold as unknown[]).map(String) } : {})
-  })) : []
+  }))
+}
+
+function planFrom(result: CliResult, kind: 'restore'): RulesPlan {
+  const report = parseJson(result.stdout)
+  if (result.failed || report === null) return { ok: false, code: 'IO_ERROR', message: `The ${kind} plan could not be read${result.failed ? ` (${result.failed})` : ''}`, planHash: null, targets: [] }
+  if (report.code !== 'OK') return { ok: false, code: String(report.code ?? 'IO_ERROR'), message: String(report.message ?? 'The plan was refused'), planHash: null, targets: [] }
+  const targets = planTargets(Array.isArray(report.targets) ? report.targets as Record<string, unknown>[] : [])
+  const master = report.master !== null && typeof report.master === 'object' ? report.master as Record<string, unknown> : null
   const left = Array.isArray(report.left) ? (report.left as Record<string, unknown>[]).filter((row) => isRetiredApp(row.harness)).map((row) => ({ harness: row.harness as RosterRetiredHarness, path: String(row.path) })) : []
-  return { ok: true, code: 'OK', planHash: typeof report.plan_hash === 'string' ? report.plan_hash : null, targets, ...(left.length > 0 ? { left } : {}) }
+  return {
+    ok: true, code: 'OK', planHash: typeof report.plan_hash === 'string' ? report.plan_hash : null, targets, ...(left.length > 0 ? { left } : {}),
+    ...(master === null ? {} : { master: { path: String(master.path ?? ''), becomes: String(master.becomes ?? ''), diff: String(master.diff ?? '') } })
+  }
 }
 
 async function rulesOutcome(context: RulesIpcContext, result: CliResult, success: (report: Record<string, unknown>) => string): Promise<RulesOutcome> {
@@ -814,9 +898,12 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       script: options.cliScript(), env: rulesEnvironment(environment), probeEnv: probeEnvironment(environment), now: options.now ?? (() => new Date()),
       ...(session?.source === 'app' ? { ownEnvironment: session.reason ?? 'the shell could not be asked' } : {}),
       autoTests: (versions) => autoTests.view(versions),
-      autoTestsLook: () => { void autoTests.trigger() }
+      autoTestsLook: () => { void autoTests.trigger() },
+      hooks: () => hooksAtStart
     }
   }
+  /** What the hook install at start found, kept while BMN runs: Health shows it with no button (Story 75.9). */
+  let hooksAtStart: HooksAtStart | null = null
   const installedVersion = (harness: ContextLimitApp, ctx: RulesIpcContext): string | null => inspectApp(harness, ctx.env).resolution.version
   /** Where BMN keeps how often it started each of its own tests (Story 75.8), so a restart does not start one again and again. */
   const triesPath = (): string => `${agentsDirectory()}/state/auto-tests.json`
@@ -904,7 +991,10 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
           : entry.kind === 'skills-loading' ? ['skills', 'test', entry.harness, '--prompt', '--auto', '--json']
             : entry.kind === 'tools' ? ['tools', 'test', entry.harness, '--auto', '--json']
               : ['context', 'test', entry.harness, '--json', '--auto']
-      return outcomeOf(await runCli(ctx.script, argv, ctx.probeEnv, PROBE_TIMEOUT_MS))
+      const result = outcomeOf(await runCli(ctx.script, argv, ctx.probeEnv, PROBE_TIMEOUT_MS))
+      // Story 75.9: a passed skills or tools test is what lets BMN install them in that app, so it installs them then.
+      if ((entry.kind === 'skills' || entry.kind === 'tools') && result?.outcome === 'pass') await installSkillsAndTools([entry.kind])
+      return result
     },
     tell: (notice) => options.notifyApp?.(notice),
     read: readTries,
@@ -929,6 +1019,32 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     }
   }
   /**
+   * Story 75.9 (owner card 2026-10-16): the skills and tools install themselves, as Install… did once pressed: after an
+   * approval, which is what changes them, after BMN's own test of an app passed, and at BMN's start. Each install is bound to the plan read just before it
+   * and kept as its own transaction, undone under Earlier installs. Like the hooks, an entry BMN did not write, or one
+   * changed outside it, is left as it is (`--absent`), and so is one that is not on the list. What changed or failed comes back in words; it never rejects.
+   */
+  const installSkillsAndTools = async (kinds: readonly ('skills' | 'tools')[] = ['skills', 'tools']): Promise<string[]> => {
+    const said: string[] = []
+    for (const kind of kinds) {
+      const name = kind === 'skills' ? 'Skills' : 'Tools'
+      try {
+        const ctx = context()
+        const planned = await runCli(ctx.script, [kind, 'install', '--plan', '--absent', '--json'], ctx.env)
+        const plan = kind === 'skills' ? skillsPlanFrom(planned) : toolsPlanFrom(planned, false)
+        if (!plan.ok || plan.planHash === null || plan.targets.length === 0) continue
+        const report = parseJson((await runCli(ctx.script, [kind, 'install', '--absent', '--expect-plan', plan.planHash, '--yes', '--json'], ctx.env)).stdout)
+        const changed = Array.isArray(report?.written) ? report.written.length : 0
+        if (report?.code === 'OK') said.push(`${name} installed: ${changed} entr${changed === 1 ? 'y' : 'ies'} changed`)
+        else said.push(`${name} not installed: ${String(report?.message ?? 'the install did not run')}`)
+        ctx.autoTestsLook?.()
+      } catch (error) {
+        said.push(`${name} not installed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    return said
+  }
+  /**
    * Runs an approval, then updates the Team phrase in exactly the rules files the owner was shown
    * beside it. An approval that showed none updates none; a failure there leaves the approval standing.
    */
@@ -950,6 +1066,9 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       }
       done = { ...result, rulesUpdate }
     }
+    // Story 75.9: what the approval changed in the skills and tools reaches the apps at once, with Undo under Earlier installs.
+    const installed = await installSkillsAndTools()
+    if (installed.length > 0) done = { ...done, installed }
     const signIn = await signInAfterApproval(result.snapshot)
     return signIn === null ? done : { ...done, openCodeSignIn: signIn }
   }
@@ -1104,38 +1223,32 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       renderings: errors.length === 0 ? renderAll(masterPath(), text, approvedOrProblem().generation) : []
     }
   })
-  handle('aiterm:rules:save-master', async (params) => {
+  handle('aiterm:rules:plan-save', async (params) => {
+    const text = textParam(params, 'text')
+    const ctx = context()
+    return savePlanFrom(await planSave(text, { environment: ctx.env }), text, approvedOrProblem().generation)
+  })
+  // Story 75.9: Save writes the master and every app's file as one transaction; Undo puts them back together.
+  handle('aiterm:rules:save', async (params) => {
     const text = textParam(params, 'text')
     const expectedHash = params.expectedHash === null ? null : textParam(params, 'expectedHash', 64)
     const expectedLink = params.expectedLink === undefined || params.expectedLink === null ? null : textParam(params, 'expectedLink', 4096)
     const expectedDirectory = params.expectedDirectory === undefined || params.expectedDirectory === null ? null : textParam(params, 'expectedDirectory', 4096)
+    const planHash = textParam(params, 'planHash', 64)
     const ctx = context()
     try {
-      const state = pathState(masterPath())
-      const current = state.kind === 'missing' ? null : state.kind === 'file' ? state.text : readFileSync(masterPath(), 'utf8')
-      // The same bytes in another folder are not the rules that were shown: a link on the way moved (R60-NFR2).
-      if ((current === null ? null : sha256(current)) !== expectedHash || (state.kind === 'link' ? state.target : null) !== expectedLink
-        || (expectedDirectory !== null && expectedDirectory !== state.directory)) {
-        throw new RosterError('REVISION_CONFLICT', 'the rules changed since they were shown; reload to see them')
-      }
-      writeMaster(state, text, 'saved in Preferences > Rules', { now: ctx.now() })
-      return { ok: true, message: 'Saved · not installed yet', snapshot: await rulesSnapshot(ctx) } satisfies RulesOutcome
+      const result = await saveRules(text, { expectedHash, expectedLink, expectedDirectory, expectedPlanHash: planHash, environment: ctx.env, now: ctx.now() })
+      // The rules each app reads changed: their loading tests are owed again.
+      ctx.autoTestsLook?.()
+      const snapshot = await rulesSnapshot(ctx)
+      const undo = result.transaction === null ? {} : { undo: result.transaction }
+      if (result.code !== 'OK') return { ok: false, code: result.code, message: result.message ?? 'The rules were not saved', snapshot, ...undo } satisfies RulesOutcome
+      const words = savedWords(result)
+      return (result.failed.length > 0 || result.blocked.length > 0 ? { ok: false, code: 'PARTIAL', message: words, snapshot, ...undo } : { ok: true, message: words, snapshot, ...undo }) satisfies RulesOutcome
     } catch (error) {
       const code = typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : 'IO_ERROR'
       return { ok: false, code, message: error instanceof Error ? error.message : String(error), snapshot: await rulesSnapshot(ctx) } satisfies RulesOutcome
     }
-  })
-  handle('aiterm:rules:plan-install', async () => {
-    const ctx = context()
-    return planFrom(await runCli(ctx.script, ['rules', 'install', '--plan', '--json'], ctx.env), 'install')
-  })
-  handle('aiterm:rules:install', async (params) => {
-    const planHash = textParam(params, 'planHash', 64)
-    const ctx = context()
-    const result = await runCli(ctx.script, ['rules', 'install', '--expect-plan', planHash, '--yes', '--json'], ctx.env)
-    return rulesOutcome(ctx, result, (report) => report.transaction === null || report.transaction === undefined
-      ? 'Every app already had the current rules'
-      : `Installed to ${(report.written as unknown[]).length} agent app${(report.written as unknown[]).length === 1 ? '' : 's'}. Sessions started before this keep their old rules.`)
   })
   handle('aiterm:rules:plan-restore', async (params) => {
     const id = textParam(params, 'transaction', 80)
@@ -1151,8 +1264,10 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       const apps = ((report.restored as RosterHarness[] | undefined) ?? []).map((harness) => ROSTER_APP_NAMES[harness] ?? harness)
       // A retired app's files are left as they are (Epic 71), and the message says so.
       const left = Array.isArray(report.left) && report.left.length > 0 ? ` ${RETIRED_APP_LINE} Its files are left as they are.` : ''
+      // Story 75.9: the Undo of a save puts the rules themselves back too.
+      if (report.master === true) return `${apps.length === 0 ? 'Put back the rules' : `Put back the rules and their files in ${andList(apps)}`}${left === '' ? '' : `.${left}`}`
       if (apps.length === 0) return `Nothing was put back.${left}`
-      return `Put back the ${report.kind === 'skills' ? 'skills' : report.kind === 'tools' ? 'tools' : 'rules'} in ${apps.length <= 1 ? apps.join('') : `${apps.slice(0, -1).join(', ')} and ${apps.at(-1) as string}`}${left === '' ? '' : `.${left}`}`
+      return `Put back the ${report.kind === 'skills' ? 'skills' : report.kind === 'tools' ? 'tools' : 'rules'} in ${andList(apps)}${left === '' ? '' : `.${left}`}`
     })
   })
   handle('aiterm:rules:plan-revert-master', (params) => {
@@ -1211,21 +1326,6 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   handle('aiterm:rules:auto-tests', async (params) => {
     await (params.fresh === true ? autoTests.trigger() : autoTests.settled())
     return autoTests.view(lookedAt)
-  })
-  handle('aiterm:rules:skills-plan', async () => {
-    const ctx = context()
-    return skillsPlanFrom(await runCli(ctx.script, ['skills', 'install', '--plan', '--json'], ctx.env))
-  })
-  handle('aiterm:rules:skills-install', async (params) => {
-    const planHash = textParam(params, 'planHash', 64)
-    const ctx = context()
-    const result = await runCli(ctx.script, ['skills', 'install', '--expect-plan', planHash, '--yes', '--json'], ctx.env)
-    return rulesOutcome(ctx, result, (report) => {
-      const changed = Array.isArray(report.written) ? report.written.length : 0
-      const open = Array.isArray(report.exposed) ? report.exposed.length : 0
-      const done = changed === 0 ? 'Every app already had its skills.' : `Changed ${changed} skill entr${changed === 1 ? 'y' : 'ies'}. Sessions started before this keep the skills they had.`
-      return open === 0 ? done : `${done} ${open} skill${open === 1 ? ' stays' : 's stay'} exposed.`
-    })
   })
   handle('aiterm:rules:skills-test', async (params) => {
     const harness = harnessParam(params.harness)
@@ -1639,7 +1739,17 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     }
     return { reply, view: judgeView() }
   })
-  return { autoTestsAtStart: () => autoTests.trigger() }
+  const startKinds = new Set<StartInstall>(options.startInstalls ?? START_INSTALLS)
+  return {
+    autoTestsAtStart: () => autoTests.trigger(),
+    installsAtStart: async () => {
+      if (startKinds.has('hooks')) {
+        const ctx = context()
+        hooksAtStart = hooksFrom(await runCli(ctx.script, ['hooks', 'install', '--absent', '--yes', '--json'], ctx.env), ctx.now().toISOString())
+      }
+      await installSkillsAndTools([...startKinds].filter((kind): kind is 'skills' | 'tools' => kind !== 'hooks'))
+    }
+  }
 }
 
 const TEAM_ASK_ID = /^\d{8}T\d{6}-[0-9a-f]{8}$/u
