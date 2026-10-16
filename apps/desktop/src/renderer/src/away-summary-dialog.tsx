@@ -1,5 +1,5 @@
 // MODULE: away-summary-dialog.tsx - "While you were away": one period's summary, read-only; every row only navigates (Story 76.6, Fable's notes 76.1 §4)
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
   buildAwaySummary,
   withCompletedAsks,
@@ -121,10 +121,9 @@ export function AwaySummaryDialog(props: {
                     const open = openKey === id
                     return (
                       <li key={id}>
-                        <button type="button" className="message-row" aria-expanded={open} onClick={() => setOpenKey(open ? null : id)}>
+                        <button type="button" className="message-row away-decision-row" aria-expanded={open} onClick={() => setOpenKey(open ? null : id)}>
                           <span className="age">{record.time}</span>
-                          <span className="route">{record.key}</span>
-                          <span className="state" />
+                          <span className="route" title={record.key}>{record.key}</span>
                           <span className="first-line" title={record.choice}>{record.choice}</span>
                         </button>
                         {open ? (
@@ -134,8 +133,14 @@ export function AwaySummaryDialog(props: {
                                 <dt>{row.label}</dt>
                                 <dd className={row.muted ? 'faint' : undefined}>
                                   {row.text}
-                                  {row.links?.map((link) => (
-                                    <button key={link.sessionId} type="button" className="link away-link" onClick={() => props.onOpenSession(link.sessionId)}>{link.text}</button>
+                                  {row.links?.map((link, index) => (
+                                    <Fragment key={`${link.kind}:${link.id}`}>
+                                      {row.text !== '' || index > 0 ? ' · ' : null}
+                                      <button type="button" className="away-link" onClick={() => {
+                                        if (link.kind === 'session') props.onOpenSession(link.id)
+                                        else void window.aiTerminal.openArtifact(link.id).catch(() => undefined)
+                                      }}>{link.text}</button>
+                                    </Fragment>
                                   ))}
                                 </dd>
                               </div>

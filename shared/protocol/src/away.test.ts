@@ -140,6 +140,7 @@ describe('time words (Fable, Story 76.1)', () => {
   it('words durations and periods', () => {
     expect(awayDurationWords(at(15, 7, 5), at(15, 7, 40))).toBe('35 min')
     expect(awayDurationWords(at(14, 22, 10), at(15, 7, 40))).toBe('9 h 30 min')
+    expect(awayDurationWords(at(14, 22, 10), at(14, 22, 10))).toBe('under a minute')
     expect(awayDurationWords(at(14, 22, 0), at(15, 7, 0))).toBe('9 h')
     expect(awayDurationWords(at(12, 6, 0), at(14, 9, 0))).toBe('2 d 3 h')
     expect(awayPeriodWords(at(14, 22, 10), at(15, 7, 40), now)).toBe('Wed 22:10 – Thu 07:40')

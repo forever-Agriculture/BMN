@@ -41,6 +41,7 @@ import {
   agentAwayView,
   AWAY_QUESTION_REFUSAL,
   awayTelegramWaiting,
+  AWAY_NOTE_LIMIT,
   AWAY_REFUSED_QUESTION_TOOLS,
   effectiveAway,
   ownerAwayView,
@@ -3172,15 +3173,16 @@ export class CompanionService {
   private async telegramAway(connector: TelegramConnector, reply: InboundReply, command: TelegramAwayCommand, bot: string): Promise<void> {
     const operationKey = `telegram:${bot}:${reply.updateId}`
     const before = this.awayRecord.state
-    let note: 'none' | 'kept' | 'replaced' | 'too-long' = 'none'
+    const noteBefore = this.awayRecord.note
+    let note: 'none' | 'kept' | 'replaced' | 'too-long' | 'refused' = 'none'
     let result = await this.changeAway(command.to === 'away'
       ? { to: 'away', source: 'telegram', operationKey, ...(command.note === null ? {} : { note: command.note }) }
       : { to: 'back', source: 'telegram', operationKey })
     if (result.outcome === 'invalid' && command.to === 'away') {
-      // Leaving never fails for a long note: away is set and only the note is refused (Fable's question 2).
-      note = 'too-long'
+      // Leaving never fails for a refused note: away is set and only the note is refused (Fable's question 2), with its reason.
+      note = command.note !== null && [...command.note].length > AWAY_NOTE_LIMIT ? 'too-long' : 'refused'
       result = await this.changeAway({ to: 'away', source: 'telegram', operationKey })
-    } else if (command.to === 'away' && command.note !== null) note = before === 'away' ? 'replaced' : 'kept'
+    } else if (command.to === 'away' && command.note !== null) note = before === 'away' && noteBefore !== command.note ? 'replaced' : 'kept'
     const record = result.record
     const text = command.to === 'away'
       ? record.state === 'away' && record.since !== null

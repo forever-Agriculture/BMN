@@ -121,7 +121,8 @@ export interface AwayWaitingRow {
   command: boolean
   before: boolean
 }
-export interface AwayDecisionRow { label: string; text: string; muted?: boolean; links?: Array<{ sessionId: string; text: string }> }
+/** A link opens a session or a published file BMN validated; anything else stays words. */
+export interface AwayDecisionRow { label: string; text: string; muted?: boolean; links?: Array<{ kind: 'session' | 'artifact'; id: string; text: string }> }
 export interface AwayDecisionView { key: string; sessionId: string; time: string; choice: string; rows: AwayDecisionRow[] }
 
 export interface AwaySummaryView {
@@ -135,9 +136,13 @@ export interface AwaySummaryView {
   now: { lines: string[]; legacy: string | null; more: string | null; empty: string | null; incomplete: boolean }
 }
 
+/** The request card's own kind words (session-request-card.tsx). */
 const KIND_WORDS: Readonly<Record<AttentionKind, string>> = Object.freeze({
-  question: 'Question', permission: 'Permission', review: 'Review', notice: 'Notice', handoff: 'Handoff'
+  question: 'Question', permission: 'Permission', review: 'Review', notice: 'Update', handoff: 'Handoff'
 })
+const kindWords = (record: AttentionRecord): string => record.manualChoices
+  ? record.kind === 'permission' ? 'Manual decision' : 'Manual question'
+  : KIND_WORDS[record.kind] ?? record.kind
 const pad = (value: number): string => String(value).padStart(2, '0')
 const clockWords = (iso: string): string => {
   const at = new Date(iso)
@@ -241,7 +246,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   const waitingRows: AwayWaitingRow[] = open.slice(0, AWAY_SUMMARY_LIMITS.waiting).map((record) => {
     const command = record.prompt?.type === 'permission' && record.prompt.command !== null ? record.prompt.command : null
     return {
-      requestId: record.requestId, sessionId: record.sessionId, age: awayAgeWords(record.openedAt, now), kind: KIND_WORDS[record.kind] ?? record.kind,
+      requestId: record.requestId, sessionId: record.sessionId, age: awayAgeWords(record.openedAt, now), kind: kindWords(record),
       title: oneLine(command ?? record.title, 200), command: command !== null, before: Date.parse(record.openedAt) < since
     }
   })
@@ -263,10 +268,12 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   }
   const shown = records.slice(0, AWAY_SUMMARY_LIMITS.decisions)
   const decisionView = (record: DecisionRecord): AwayDecisionView => {
-    const links = record.references.filter((reference) => reference.valid && reference.kind === 'session')
-      .map((reference) => ({ sessionId: reference.id, text: where(reference.id) }))
-    const named = record.references.filter((reference) => !(reference.valid && reference.kind === 'session')).map((reference) =>
-      reference.valid && reference.kind === 'artifact' ? input.artifactNames[reference.id] ?? reference.id : reference.id)
+    const linked = (reference: DecisionRecord['references'][number]): boolean =>
+      reference.valid && (reference.kind === 'session' || reference.kind === 'artifact' && input.artifactNames[reference.id] !== undefined)
+    const links = record.references.filter(linked).map((reference) => reference.kind === 'session'
+      ? { kind: 'session' as const, id: reference.id, text: where(reference.id) }
+      : { kind: 'artifact' as const, id: reference.id, text: input.artifactNames[reference.id]! })
+    const named = record.references.filter((reference) => !linked(reference)).map((reference) => reference.id)
     const last = record.outcomes.at(-1)
     const app = awayAppName(record.agentCli)
     const rows: AwayDecisionRow[] = [
@@ -276,7 +283,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
       ...(record.depends.length > 0 ? [{ label: 'Depends on', text: record.depends.map((key) => `${key} (${keys.has(key) ? 'above' : 'not in this list'})`).join(' · ') }] : []),
       { label: 'To reverse', text: record.reverse },
       last === undefined ? { label: 'Outcome', text: 'Outcome unknown', muted: true }
-        : { label: 'Outcome', text: `Agent reported ${last.result} ${clockWords(last.at)}${last.result === 'failed' ? ` · ${last.op}` : ''}` },
+        : { label: 'Outcome', text: `Agent reported ${last.result} ${clockWords(last.at)}${last.result === 'failed' ? ` · ${last.evidence[0] ?? last.op}` : ''}` },
       { label: 'Recorded', text: `${awayMomentWords(record.recordedAt, now)} by ${name(record.sessionId) ?? 'a session BMN no longer holds'}${app ? ` (${app})` : ''}${joined.has(record.key) ? ' · also in dev-auto\'s handoff' : ''}` }
     ]
     return { key: record.key, sessionId: record.sessionId, time: clockWords(record.recordedAt), choice: oneLine(record.choice.split('\n')[0] ?? '', 160), rows }

@@ -2502,7 +2502,7 @@ function App(): React.JSX.Element {
             return {
               label: 'Away now',
               context: length === 0 ? 'no note' : length > AWAY_NOTE_LIMIT ? `Too long by ${length - AWAY_NOTE_LIMIT} character${length - AWAY_NOTE_LIMIT === 1 ? '' : 's'}`
-                : length > 160 ? `${AWAY_NOTE_LIMIT} characters at most` : text.trim(),
+                : length > 160 ? `${AWAY_NOTE_LIMIT} characters at most` : '',
               disabled: length > AWAY_NOTE_LIMIT,
               run: () => sayAway('away', text.trim() === '' ? undefined : text.trim())
             }

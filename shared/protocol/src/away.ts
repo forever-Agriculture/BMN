@@ -210,6 +210,7 @@ export function awaySinceWords(since: string, now: Date = new Date()): string {
 export function awayDurationWords(fromIso: string, toIso: string): string {
   const minutes = Math.max(0, Math.round((Date.parse(toIso) - Date.parse(fromIso)) / 60_000))
   if (!Number.isFinite(minutes)) return '--'
+  if (minutes < 1) return 'under a minute'
   if (minutes < 60) return `${minutes} min`
   const hours = Math.floor(minutes / 60)
   if (hours < 24) return minutes % 60 === 0 ? `${hours} h` : `${hours} h ${minutes % 60} min`

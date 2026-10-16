@@ -23,12 +23,14 @@ export function telegramAwayCommand(reply: Pick<InboundReply, 'text' | 'textSour
 }
 
 /** The `/away` reply (Fable, Story 76.1): the note is never echoed, only whether it was kept. */
-export function awayReplyText(p: { since: string; repeated: boolean; note: 'none' | 'kept' | 'replaced' | 'too-long'; now?: Date }): string {
+export function awayReplyText(p: { since: string; repeated: boolean; note: 'none' | 'kept' | 'replaced' | 'too-long' | 'refused'; now?: Date }): string {
   const since = awayMomentWords(p.since, p.now)
   if (p.repeated) {
-    return `Still away since ${since}.${p.note === 'replaced' ? ' Note replaced.' : p.note === 'too-long' ? ' Note not kept: longer than 200 characters.' : ''}`
+    return `Still away since ${since}.${p.note === 'replaced' ? ' Note replaced.' : p.note === 'too-long' ? ' Note not kept: longer than 200 characters. Send /away again with a shorter one.'
+      : p.note === 'refused' ? ' Note not kept: it holds control or direction characters.' : ''}`
   }
   if (p.note === 'too-long') return `Away since ${since}. Note not kept: longer than 200 characters. Send /away again with a shorter one.`
+  if (p.note === 'refused') return `Away since ${since}. Note not kept: it holds control or direction characters. Send /away again without them.`
   return `Away since ${since}.${p.note === 'kept' ? ' Note kept on the laptop.' : ''} Agents go on and leave what is yours as cards. Send /back when you return.`
 }
 

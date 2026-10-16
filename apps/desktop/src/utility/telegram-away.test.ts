@@ -45,6 +45,8 @@ describe('replies', () => {
     expect(awayReplyText({ since, repeated: false, note: 'too-long', now })).toContain('Note not kept: longer than 200 characters.')
     expect(awayReplyText({ since, repeated: true, note: 'none', now })).toBe('Still away since Wed 22:10.')
     expect(awayReplyText({ since, repeated: true, note: 'replaced', now })).toBe('Still away since Wed 22:10. Note replaced.')
+    expect(awayReplyText({ since, repeated: true, note: 'too-long', now })).toBe('Still away since Wed 22:10. Note not kept: longer than 200 characters. Send /away again with a shorter one.')
+    expect(awayReplyText({ since, repeated: false, note: 'refused', now })).toBe('Away since Wed 22:10. Note not kept: it holds control or direction characters. Send /away again without them.')
   })
 
   it('says back with the period, then what waits, cut with a count', () => {

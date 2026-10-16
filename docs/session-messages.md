@@ -272,7 +272,9 @@ unit tests cover it).
 
 Two product findings went into 76.4: BMN's own `PreToolUse` hook opened a "<app> asks:" question
 card for the refused question, which then ended answered (a phantom card; 76.4 opens none for a
-refused question), and Codex marks the agent's own `bmn ask` card answered later in the same turn.
+refused question). A note at the time said Codex marked the agent's own `bmn ask` card answered later in
+the turn; the live run of 76.4 showed the harness closed it, by pressing a key in the session to read
+Codex's warnings, which BMN takes as the owner answering in the terminal (resolved by input).
 
 ### The decision boundary (AC4)
 
@@ -315,3 +317,15 @@ refused compound command. The away text is for the owner's working models, as me
 Automatic hand-over covers interactive primary conversations of Claude Code and Codex only. An
 OpenCode session, a plain shell, a sub-agent and a dispatched teammate are handed nothing; they read
 the state with `bmn away --status`.
+
+### The live run of 76.4 and 76.5
+
+On the build with 76.4 and 76.5 (`12fab09`), BMN's own hooks only, Claude Code 2.1.302 on Opus/high
+and Codex 0.162.1 on Sol/high, one run each (`away-live-L3-*` in the records): away said from the
+owner's CLI while the app waited at its prompt reached the agent at its next tool call, stamp and
+whole text in the app's record; Claude Code's question tool was refused with the reason and the agent
+left one `bmn ask` card instead and went on; Codex, in its default mode without a blocking question
+tool, was told only and also left one card; each recorded its settings-format choice with
+`bmn decision record`, bound by BMN to its conversation; after `bmn back` the summary opened by itself,
+the resumed conversation was told the owner is back, and Claude Code's question after back was not
+refused.

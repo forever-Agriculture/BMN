@@ -85,6 +85,10 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
       ['Personal › Reviewer (archived 05:00)', [['Question', 'Title r1', true, false]]],
       ['A session BMN no longer holds', [['Question', 'Title r4', false, false]]]
     ])
+    // The request card's kind words: an update, a manual decision and a manual question.
+    const kinds = buildAwaySummary(input({ attention: [request('n1', 's1', at(15, 1, 0), { kind: 'notice' }),
+      request('n2', 's1', at(15, 1, 1), { kind: 'permission', manualChoices: { options: [], allowOther: true } }), request('n3', 's1', at(15, 1, 2), { manualChoices: { options: [], allowOther: true } })] }))
+    expect(kinds.waiting.groups[0]!.rows.map((row) => row.kind)).toEqual(['Update', 'Manual decision', 'Manual question'])
     const many = Array.from({ length: AWAY_SUMMARY_LIMITS.waiting + 3 }, (_, index) => request(`m${index}`, 's1', at(15, 1, index % 60)))
     const bounded = buildAwaySummary(input({ attention: many }))
     expect(bounded.waiting.groups.flatMap((group) => group.rows)).toHaveLength(AWAY_SUMMARY_LIMITS.waiting)
@@ -95,7 +99,7 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
     const records = [
       decision('cache-key', 's1', { recordedAt: at(14, 23, 0) }),
       decision('storage', 's1', {
-        depends: ['cache-key', 'elsewhere'], outcomes: [{ op: 'build', result: 'failed', evidence: [], reporter: 'agent', at: at(15, 6, 12) }],
+        depends: ['cache-key', 'elsewhere'], outcomes: [{ op: 'build', result: 'failed', evidence: ['two tests fail in search.test.ts'], reporter: 'agent', at: at(15, 6, 12) }],
         references: [{ kind: 'session', id: 's2', valid: true }, { kind: 'artifact', id: 'a1', valid: true }, { kind: 'artifact', id: 'a2', valid: false }, { kind: 'workflow', id: 'dev-auto:r1:d3', valid: false }]
       })
     ]
@@ -104,10 +108,10 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
     expect(storage.rows).toEqual([
       { label: 'Choice', text: 'Choice storage' },
       { label: 'Reason', text: 'A reason' },
-      { label: 'Affects', text: 'src/store.js · report.md · a2 · dev-auto:r1:d3', links: [{ sessionId: 's2', text: 'Personal › Reviewer (archived 05:00)' }] },
+      { label: 'Affects', text: 'src/store.js · a2 · dev-auto:r1:d3', links: [{ kind: 'session', id: 's2', text: 'Personal › Reviewer (archived 05:00)' }, { kind: 'artifact', id: 'a1', text: 'report.md' }] },
       { label: 'Depends on', text: 'cache-key (above) · elsewhere (not in this list)' },
       { label: 'To reverse', text: 'Revert the commit' },
-      { label: 'Outcome', text: 'Agent reported failed 06:12 · build' },
+      { label: 'Outcome', text: 'Agent reported failed 06:12 · two tests fail in search.test.ts' },
       { label: 'Recorded', text: 'Wed 23:41 by Builder (Claude Code)' }
     ])
     expect(view.decided.groups[0]!.records[0]!.rows.find((row) => row.label === 'Outcome')).toEqual({ label: 'Outcome', text: 'Outcome unknown', muted: true })

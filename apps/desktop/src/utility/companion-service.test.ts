@@ -4088,13 +4088,20 @@ describe('Away (Story 76.3)', () => {
     await service['handleTelegramReply'](reply(1, '/away dentist at 9'))
     expect(service.awayForOwner()).toMatchObject({ state: 'back', endedBy: 'telegram', revision: 2 })
     expect(sent).toHaveLength(2)
-    expect(sent[1]).toMatch(/^Back\. Away 0 min, /)
+    expect(sent[1]).toMatch(/^Back\. Away under a minute, /)
 
     await service['handleTelegramReply'](reply(3, '/back'))
     expect(sent[2]).toBe('Not away; nothing changed.')
     await service['handleTelegramReply'](reply(4, `/away ${'x'.repeat(201)}`))
     expect(service.awayForOwner()).toMatchObject({ state: 'away', note: null, revision: 3 })
     expect(sent[3]).toContain('Note not kept: longer than 200 characters.')
+    await service['handleTelegramReply'](reply(5, '/away dentist at 9'))
+    expect(sent[4]).toMatch(/^Still away since \d\d:\d\d\. Note replaced\.$/)
+    await service['handleTelegramReply'](reply(6, '/away dentist at 9'))
+    expect(sent[5]).toMatch(/^Still away since \d\d:\d\d\.$/)
+    await service['handleTelegramReply'](reply(7, '/away left\u202Eright'))
+    expect(service.awayForOwner()).toMatchObject({ state: 'away', note: 'dentist at 9' })
+    expect(sent[6]).toMatch(/Note not kept: it holds control or direction characters\.$/)
   })
 
   it('sends a reply again only when Telegram said no; a lost answer is never resent', async () => {

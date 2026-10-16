@@ -187,7 +187,8 @@ export function CommandPalette(props: {
       <ul id="palette-results" className="palette-results" role="listbox" aria-label="Results">
         {results.length === 0 ? <li className="popover-empty">{props.emptyMessage ?? 'No matching results.'}</li> : null}
         {results.map((command, index) => {
-          const heading = command.group !== lastGroup ? command.group : null
+          // A single typed entry (the away note) is not a menu: it carries no group heading.
+          const heading = !props.entry && command.group !== lastGroup ? command.group : null
           lastGroup = command.group
           return [
             heading ? <li key={`group-${heading}`} className="group eyebrow" role="presentation">{heading}</li> : null,
