@@ -1,7 +1,6 @@
 import { basename } from 'node:path'
 import {
   METHOD_REGISTRY,
-  type LaunchTemplateRecord,
   type LayoutGetResult,
   type ProtocolMethod,
   type SessionCreateParams,
@@ -21,7 +20,6 @@ export interface WorkspaceStartupState {
   activeWorkspaceId: string | null
   workspaces: WorkspaceRecord[]
   sessions: SessionRecord[]
-  templates: LaunchTemplateRecord[]
   layouts: WorkspaceLayoutState[]
   layoutNotices: string[]
 }
@@ -47,12 +45,10 @@ export async function loadWorkspaceStartup(client: StartupHostClient): Promise<W
       workspaceId: workspace.workspaceId
     })
   ))
-  const templates = await client.request<LaunchTemplateRecord[]>(METHOD_REGISTRY.templateList, {})
   return {
     activeWorkspaceId: workspaces.find((workspace) => workspace.archivedAt === null)?.workspaceId ?? null,
     workspaces,
     sessions,
-    templates,
     layouts: layoutResults.map((result) => result.layout),
     layoutNotices: layoutResults.flatMap((result) => (result.notice ? [result.notice] : []))
   }

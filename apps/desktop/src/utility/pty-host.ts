@@ -16,11 +16,6 @@ import {
   isSessionCreateParams,
   isSessionStopParams,
   isSessionUpdateParams,
-  isTemplateCreateParams,
-  isLaunchSetCreateParams,
-  isLaunchSetUpdateParams,
-  isLaunchSetDeleteParams,
-  isLaunchSetStartParams,
   isTerminalAckMessage,
   isTerminalInputMessage,
   isWorkspaceCreateParams,
@@ -51,7 +46,6 @@ import {
 
 /** How long the host waits for the app's answer about a message's folder or provider before it reads none. */
 const MESSAGE_TEAM_ANSWER_MS = 200
-import { LaunchSetCoordinator } from './launch-set-coordinator'
 import { nativeLoadFailureMessage } from './native-load-error'
 import { ensureApplicationRoots, resolveApplicationRoots } from './roots'
 import { installBundledTerminfo } from './terminal-graphics'
@@ -69,7 +63,6 @@ import { TurnRetention } from './turn-changes-retention'
 import { TURN_STORE_FOLDER } from './turn-changes-store'
 import {
   HostControlError,
-  PersistedSessionStartError,
   SessionManager,
   findStoredSession,
   resolveHomeDirectory,
@@ -395,39 +388,6 @@ async function start(): Promise<void> {
     log: (line) => process.stderr.write(line),
     changed: () => companionService.turnsChanged()
   }).start()
-  const launchSets = new LaunchSetCoordinator({
-    getSet: (workspaceId, setId) => database.getLaunchSet(workspaceId, setId),
-    retired: (started) => companionService.retiredLaunchNotice(started.sessionId, started.incarnationId),
-    listWorkspaces: () => database.listWorkspaces(),
-    validate: validateLaunch,
-    create: async (params) => {
-      const identity = await manager.create(params)
-      if (process.argv.includes('--self-test-host') &&
-          params.argv.includes('--bmn-self-test-fail-after-start')) {
-        // The Electron fixture needs a deterministic failure after preflight and persistence.
-        // It stops only its synthetic process, leaving the ordinary exited row inspectable.
-        await manager.stop(identity)
-        throw new PersistedSessionStartError(
-          identity.sessionId,
-          new HostControlError(ERROR_CODES.ioError, 'Synthetic launch failed after process creation')
-        )
-      }
-      try {
-        const attached = manager.attach(identity)
-        return { ...identity, attachment: {
-          attachmentId: attached.attachmentId,
-          streamSeq: attached.streamSeq,
-          captureStartedAt: attached.captureStartedAt,
-          modes: attached.modes
-        } }
-      } catch {
-        // A very short command may exit before its terminal attaches. It still created a normal
-        // persisted session and therefore counts as started, with no live pane to attach.
-        return identity
-      }
-    }
-  })
-
   function connectTerminalPort(port: TerminalPort): void {
     terminalPort = port
     port.on('message', (event) => {
@@ -781,45 +741,6 @@ async function start(): Promise<void> {
         }
         await manager.stop(identity(params), params.cause)
         return { stopped: true }
-      case METHOD_REGISTRY.templateList:
-        return database.listTemplates()
-      case METHOD_REGISTRY.templateCreate:
-        if (!isTemplateCreateParams(params)) {
-          throw new HostControlError(ERROR_CODES.invalidArgument, 'Template create parameters are invalid')
-        }
-        return database.createTemplate({ ...params, cwd: resolveHomeDirectory(params.cwd) })
-      case METHOD_REGISTRY.launchSetList:
-        return database.listLaunchSets(stringValue(params, 'workspaceId'))
-      case METHOD_REGISTRY.launchSetGet:
-        return database.getLaunchSet(stringValue(params, 'workspaceId'), stringValue(params, 'setId'))
-      case METHOD_REGISTRY.launchSetCreate:
-        if (!isLaunchSetCreateParams(params)) {
-          throw new HostControlError(ERROR_CODES.invalidArgument, 'Launch set create parameters are invalid')
-        }
-        return database.createLaunchSet(params)
-      case METHOD_REGISTRY.launchSetUpdate:
-        if (!isLaunchSetUpdateParams(params)) {
-          throw new HostControlError(ERROR_CODES.invalidArgument, 'Launch set update parameters are invalid')
-        }
-        return database.updateLaunchSet(params)
-      case METHOD_REGISTRY.launchSetDelete:
-        if (!isLaunchSetDeleteParams(params)) {
-          throw new HostControlError(ERROR_CODES.invalidArgument, 'Launch set delete parameters are invalid')
-        }
-        return database.deleteLaunchSet(params)
-      case METHOD_REGISTRY.launchSetStart:
-        if (!terminalPort) {
-          throw new HostControlError(ERROR_CODES.ioError, 'The terminal byte channel is not connected', true)
-        }
-        if (!isLaunchSetStartParams(params)) {
-          throw new HostControlError(ERROR_CODES.invalidArgument, 'Launch set start parameters are invalid')
-        }
-        return launchSets.start(params).then((result) => {
-          if (result.entries.some((entry) => entry.outcome === 'started')) {
-            void companionService.sessionsChanged().catch(() => undefined)
-          }
-          return result
-        })
       case METHOD_REGISTRY.layoutGet:
         return database.getLayout(stringValue(params, 'workspaceId'))
       case METHOD_REGISTRY.layoutPut:

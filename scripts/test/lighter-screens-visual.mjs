@@ -2,8 +2,9 @@
 // MODULE: lighter-screens-visual.mjs - Epic 75.1/75.10: every Preferences page, the three ⋯ menus, the Files panel, Review results and the palette, captured on synthetic data
 // The app runs in test mode with a temporary HOME and XDG folders (removed at the end). The temporary home holds the
 // unit-test roster, a synthetic rules master and two synthetic skills; stand-ins for claude and codex sit on the PATH
-// the home's shell settings add. One workspace carries what the owner-facing controls act on: a launch set and a
-// custom template, the confirmations of both workspace switches (captured before they are switched on), then
+// the home's shell settings add. One workspace carries what the owner-facing controls act on (the before set of
+// 4e2c44f also held a launch set and a custom template, gone with Story 75.3): the confirmations of both workspace
+// switches (captured before they are switched on), then
 // messages and turn changes on, and a session whose shell publishes a file, reports progress with it as evidence,
 // prepares a handoff for a second session and leaves that session a message, all with BMN's own `bmn` commands.
 // No agent runs, nothing leaves the machine and no file of the owner's is read. The script asserts nothing: it opens
@@ -17,7 +18,6 @@
 //   BMN_LIGHTER_MODES=black  fewer modes (default black,steel). A narrowed run writes its own shots.json, so give it a folder of its own.
 //   BMN_LIGHTER_BINARY=<packaged bmn>  the screens of a packaged build, as electron-normal-start --binary.
 import { execFileSync } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -236,21 +236,6 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     // ---- synthetic workspace data -----------------------------------------------------------------------------
     const workspaceNow = () => page.evaluate(async () => (await window.aiTerminal.listWorkspaces()).find((item) => !item.archivedAt))
     const workspace = await workspaceNow()
-    const inShell = (command) => ['-ic', `${command}; exec bash -i`]
-    try {
-      await page.evaluate(async ({ workspaceId, entries }) => window.aiTerminal.createLaunchSet({ workspaceId, name: 'Review pair', entries }), {
-        workspaceId: workspace.workspaceId,
-        entries: [['Claude', 'claude'], ['Codex', 'codex']].map(([name, command]) => ({
-          entryId: randomUUID(), name, executable: '/bin/bash', argv: inShell(command), backgroundChoice: null, terminalGraphics: null
-        }))
-      })
-      note('launch set "Review pair" saved with a Claude and a Codex entry')
-    } catch (error) { note(`launch set not saved: ${firstLine(error)}`) }
-    try {
-      await page.evaluate(async ({ cwd, argv }) => window.aiTerminal.createTemplate({ name: 'Quick review', executable: '/bin/bash', argv, cwd }),
-        { cwd: work, argv: inShell('claude --model haiku') })
-      note('custom template "Quick review" saved')
-    } catch (error) { note(`template not saved: ${firstLine(error)}`) }
     const startSession = (name, argv) => page.evaluate(async ({ workspaceId, cwd, name, argv }) => {
       try {
         return { session: (await window.aiTerminal.createSession({ workspaceId, name, cwd, executable: '/bin/bash', argv, cols: 100, rows: 24, backgroundChoice: 'stop' })).session }
@@ -354,11 +339,6 @@ echo seeded
       await page.getByRole('menuitem', { name: /^Messages/ }).click()
       await page.locator('dialog.session-messages-dialog').waitFor()
     }, { region: 'dialog.session-messages-dialog', scroll: 'dialog.session-messages-dialog', close: escape })
-    await screen('launch-sets', 'Workspace ⋯ › Save a launch set…: the saved set', async () => {
-      await openWorkspaceMenu()
-      await page.getByRole('menuitem', { name: /^Save a launch set/ }).click()
-      await page.locator('dialog.launch-sets-dialog').waitFor()
-    }, { region: 'dialog.launch-sets-dialog', close: escape })
     const palette = async (text = '') => {
       await page.locator('button[aria-label="Command palette"]').click()
       await page.locator('#palette-results').waitFor()
@@ -366,7 +346,7 @@ echo seeded
     }
     await screen('palette', 'Command palette, nothing typed: every command and session entry, top to bottom', async () => { await palette() },
       { region: 'dialog[open]', scroll: '#palette-results', close: escape })
-    await screen('new-session', 'Palette › New session…: the agent buttons and the custom template tile, with Advanced', async () => {
+    await screen('new-session', 'Palette › New session…: the agent buttons, with Advanced', async () => {
       await palette('New session')
       await page.keyboard.press('Enter')
       const launcher = page.locator('.session-launcher')

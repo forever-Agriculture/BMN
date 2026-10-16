@@ -175,13 +175,9 @@ migrations, through one worker. Backups hold a consistent database snapshot, the
 and a hash manifest; verification checks the files against the manifest and against the backup's
 own database.
 
-**Saved sets are definitions.** One workspace-owned SQLite row stores each named set's copied,
-ordered command entries. Starting one takes a process-lifetime idempotency key in the utility,
-validates every entry before the first start, and calls the normal session creation path in
-order. Each created session remains an ordinary record; a failed entry can also leave an exited
-record when its process ends during startup. No attempt table or automatic replay exists. The
-renderer can only request this owner action through its authorized preload route; the session
-control socket has no launch-set method.
+**Launch sets and custom templates are gone** (Story 75.3, 2026-10-16). Their `launch_set` and
+`launch_template` tables stay, with the migrations that made them, until a later migration drops
+them; no code reads or writes them, and no IPC channel, preload method or protocol type serves them.
 
 **Git identity is an observation.** The utility makes bounded, shell-free Git reads for one
 selected directory. It reports repository root, branch state and linked worktree status with an

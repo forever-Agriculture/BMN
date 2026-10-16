@@ -2,7 +2,6 @@
 import { join } from 'node:path'
 import {
   METHOD_REGISTRY,
-  type LaunchTemplateRecord,
   type ProtocolMethod,
   type SavedOutputCaptureOutcome,
   type SessionRecord
@@ -34,9 +33,7 @@ export class SelfTestRecorder implements SelfTestTaps {
   /** Every renderer layout.put request main forwards, counted before the host answers. */
   layoutPutRequests = 0
   readonly layoutPutSelections: Array<string | null> = []
-  launchSetStartRequests = 0
   rendererLaunchBlockedSessionId: string | undefined
-  rendererUnavailableTemplate: LaunchTemplateRecord | undefined
   /** Paths Show in folder received; the automated run never opens a file manager. */
   readonly shownFileReferences: string[] = []
   /** Story 32.2: app notices the self-test records instead of showing. */
@@ -51,7 +48,6 @@ export class SelfTestRecorder implements SelfTestTaps {
   voiceFetchCalls = 0
   /** Acknowledgements from the production lifecycle flush, distinct from activity captures. */
   readonly lifecycleCaptures: Array<{ sessionId: string; status: SavedOutputCaptureOutcome['status'] }> = []
-  private launchSetReadGate: { entered(): void; released: Promise<void> } | null = null
   private botApi: Promise<FakeBotApi> | null = null
 
   /** The stand-in engine and model live in the isolated data folder; the transcript is synthetic. */
@@ -92,16 +88,6 @@ export class SelfTestRecorder implements SelfTestTaps {
     return this.botApi
   }
 
-  /** Holds the next renderer launch-set read until the self-test releases it. */
-  pauseNextLaunchSetRead = (): { entered: Promise<void>; release(): void } => {
-    let enter!: () => void
-    let release!: () => void
-    const entered = new Promise<void>((resolve) => { enter = resolve })
-    const released = new Promise<void>((resolve) => { release = resolve })
-    this.launchSetReadGate = { entered: enter, released }
-    return { entered, release }
-  }
-
   async hostLaunch(base: NodeJS.ProcessEnv): Promise<{ environment: NodeJS.ProcessEnv; args: string[] }> {
     return {
       environment: {
@@ -114,37 +100,24 @@ export class SelfTestRecorder implements SelfTestTaps {
     }
   }
 
-  rendererState<State extends { sessions: SessionRecord[]; templates: LaunchTemplateRecord[] }>(state: State): State {
+  rendererState<State extends { sessions: SessionRecord[] }>(state: State): State {
     return {
       ...state,
       sessions: state.sessions.map((session) =>
         session.sessionId === this.rendererLaunchBlockedSessionId
           ? { ...session, launchDisabledReason: SELF_TEST_LAUNCH_DISABLED_REASON }
           : session
-      ),
-      templates: this.rendererUnavailableTemplate
-        ? [...state.templates, this.rendererUnavailableTemplate]
-        : state.templates
+      )
     }
   }
 
   async workspaceRequest(method: ProtocolMethod, params: object): Promise<void> {
-    if (method === METHOD_REGISTRY.launchSetGet && this.launchSetReadGate) {
-      const gate = this.launchSetReadGate
-      this.launchSetReadGate = null
-      gate.entered()
-      await gate.released
-    }
     if (method === METHOD_REGISTRY.layoutPut) {
       this.layoutPutRequests += 1
       const selectedSessionId = (params as { state?: { selectedSessionId?: unknown } })
         .state?.selectedSessionId
       this.layoutPutSelections.push(typeof selectedSessionId === 'string' ? selectedSessionId : null)
     }
-  }
-
-  launchSetStarted(): void {
-    this.launchSetStartRequests += 1
   }
 
   fileReferenceClient(client: { request<Result>(method: ProtocolMethod, params: object): Promise<Result> }) {

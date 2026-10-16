@@ -1,6 +1,5 @@
 // MODULE: contract.ts - the one seam between production main-process code and the self-test (types only)
 import type {
-  LaunchTemplateRecord,
   ProtocolMethod,
   SavedOutputCaptureOutcome,
   SessionRecord
@@ -19,11 +18,10 @@ export interface SelfTestTaps {
   readonly headless: true
   /** The environment and argv for a terminal host the self-test starts. */
   hostLaunch(base: NodeJS.ProcessEnv): Promise<{ environment: NodeJS.ProcessEnv; args: string[] }>
-  /** The renderer boundary probes: a session whose launch is refused and a template that cannot start. */
-  rendererState<State extends { sessions: SessionRecord[]; templates: LaunchTemplateRecord[] }>(state: State): State
+  /** The renderer boundary probe: a session whose launch is refused. */
+  rendererState<State extends { sessions: SessionRecord[] }>(state: State): State
   /** Every renderer workspace request main forwards, before the host answers. */
   workspaceRequest(method: ProtocolMethod, params: object): Promise<void>
-  launchSetStarted(): void
   fileReferenceClient(client: RequestClient): RequestClient
   shownInFolder(path: string): void
   appNotice(notice: { title: string; body: string }): void

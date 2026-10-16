@@ -12,7 +12,7 @@ import { runVoiceIntegration } from './voice-self-test'
 export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal>): Promise<TerminalIntegrationProbe> {
   console.warn('[BMN] renderer behavioural integration: started')
   const workspaces = await window.aiTerminal.listWorkspaces(true)
-  const sessionsBeforeTemplate = await window.aiTerminal.listSessions(handle.startup.workspaceId)
+  const sessionsBeforeForm = await window.aiTerminal.listSessions(handle.startup.workspaceId)
   await window.aiTerminal.resizeTerminal(
     handle.startup.sessionId,
     handle.terminal.cols,
@@ -142,7 +142,7 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
     return selected === handle.startup.sessionId ? true : undefined
   })
   console.warn('[BMN] renderer behavioural integration: returned to source session')
-  const destination = sessionsBeforeTemplate.find((session) =>
+  const destination = sessionsBeforeForm.find((session) =>
     session.sessionId !== handle.startup.sessionId && session.archivedAt === null)
   if (!destination) throw new Error('the handoff destination fixture was not available')
   const filesButton = [...(handle.section.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
@@ -345,64 +345,57 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
   )].find((item) => item.textContent?.trim() === 'New session in this workspace'))
   newSessionItem.click()
   console.warn('[BMN] renderer behavioural integration: new session panel opened')
-  const templatePicker = await waitFor(() => document.querySelector<HTMLSelectElement>(
-    'select[aria-label="Launch template"]'
-  ))
-  const templateOption = [...templatePicker.options]
-    .find((option) => option.value.length > 0 && !option.disabled)
-  const unavailableTemplateOption = [...templatePicker.options]
-    .find((option) => option.value.length > 0 && option.disabled)
-  const templateForm = templatePicker.closest('form')
-  if (!templateOption || !unavailableTemplateOption || !templateForm) {
-    throw new Error('the real available and unavailable template options were not rendered')
-  }
+  // An ordinary session typed into the form (Story 75.3: templates are gone); it later drives the quit, restart
+  // and resume checks the template-made session carried.
+  const sessionForm = await waitFor(() => document.querySelector<HTMLFormElement>('form.create-form'))
   const input = (label: string): HTMLInputElement => {
-    const element = templateForm.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)
-    if (!element) throw new Error(`the template form field ${label} was not rendered`)
+    const element = sessionForm.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)
+    if (!element) throw new Error(`the session form field ${label} was not rendered`)
     return element
   }
-  const unavailableTemplate = {
-    name: unavailableTemplateOption.textContent?.trim() ?? '',
-    disabled: unavailableTemplateOption.disabled,
-    title: unavailableTemplateOption.title
+  const type = (label: string, value: string): void => {
+    const element = input(label)
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(element, value)
+    element.dispatchEvent(new Event('input', { bubbles: true }))
   }
-  const templateName = templateOption.textContent?.trim()
-  if (!templateName) throw new Error('the real template option had no visible name')
-  templatePicker.value = templateOption.value
-  templatePicker.dispatchEvent(new Event('change', { bubbles: true }))
-  await waitFor(() => input('Session name').value === templateName ? true : undefined)
-  console.warn('[BMN] renderer behavioural integration: template selected')
-  const expectedTemplateSession = {
+  const sourceCwd = sessionsBeforeForm.find((session) => session.sessionId === handle.startup.sessionId)?.cwd
+  if (!sourceCwd) throw new Error('the selected session had no directory to start the form-made session in')
+  type('Session name', 'Form-made shell')
+  type('Executable', '/bin/bash')
+  type('Arguments', '--noprofile --norc')
+  type('Working directory', sourceCwd)
+  const closeChoice = sessionForm.querySelector<HTMLSelectElement>('select[aria-label="When windows close"]')
+  if (!closeChoice) throw new Error('the session form field When windows close was not rendered')
+  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(closeChoice, 'stop')
+  closeChoice.dispatchEvent(new Event('change', { bubbles: true }))
+  await waitFor(() => input('Session name').value === 'Form-made shell' && closeChoice.value === 'stop' ? true : undefined)
+  console.warn('[BMN] renderer behavioural integration: session form filled')
+  const expectedFormSession = {
     name: input('Session name').value,
     executable: input('Executable').value,
     argv: splitArgv(input('Arguments').value),
     cwd: input('Working directory').value,
-    backgroundChoice: (() => {
-      const value = templateForm.querySelector<HTMLSelectElement>(
-        'select[aria-label="When windows close"]'
-      )?.value
-      return value === 'hide' || value === 'stop' ? value : null
-    })()
+    backgroundChoice: 'stop' as const
   }
   const shownSize = { cols: handle.terminal.cols, rows: handle.terminal.rows }
   // requestSubmit is a no-op while Create waits for the repository identity read.
-  await waitFor(() => templateForm.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled === false
+  await waitFor(() => sessionForm.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled === false
     ? true : undefined)
-  templateForm.requestSubmit()
-  console.warn('[BMN] renderer behavioural integration: template form submitted')
-  const knownSessionIds = new Set(sessionsBeforeTemplate.map((session) => session.sessionId))
-  const templateCreatedSession = await waitFor(async () => {
+  sessionForm.requestSubmit()
+  console.warn('[BMN] renderer behavioural integration: session form submitted')
+  const knownSessionIds = new Set(sessionsBeforeForm.map((session) => session.sessionId))
+  const formCreatedSession = await waitFor(async () => {
     const records = await window.aiTerminal.listSessions(handle.startup.workspaceId)
     return records.find((record) =>
       !knownSessionIds.has(record.sessionId) &&
-      record.name === expectedTemplateSession.name &&
-      record.executable === expectedTemplateSession.executable &&
-      JSON.stringify(record.argv) === JSON.stringify(expectedTemplateSession.argv) &&
-      record.cwd === expectedTemplateSession.cwd &&
-      record.backgroundChoice === expectedTemplateSession.backgroundChoice
+      record.name === expectedFormSession.name &&
+      record.executable === expectedFormSession.executable &&
+      JSON.stringify(record.argv) === JSON.stringify(expectedFormSession.argv) &&
+      record.cwd === expectedFormSession.cwd &&
+      record.backgroundChoice === expectedFormSession.backgroundChoice
     )
   })
-  console.warn('[BMN] renderer behavioural integration: template session created')
+  console.warn('[BMN] renderer behavioural integration: form session created')
   // The new session took this pane. Let its resize observer and the resize request settle while hidden.
   await waitFor(() => handle.section.current?.classList.contains('session-terminal-hidden') ? true : undefined)
   await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
@@ -586,14 +579,13 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
     sessionMethodSessionId: handle.startup.sessionId,
     bridgeErrorCodes: { staleLayoutPut, unknownSessionSavedOutput },
     launchUnavailable,
-    unavailableTemplate,
-    templateCreatedSession: {
-      sessionId: templateCreatedSession.sessionId,
-      name: templateCreatedSession.name,
-      executable: templateCreatedSession.executable,
-      argv: templateCreatedSession.argv,
-      cwd: templateCreatedSession.cwd,
-      backgroundChoice: templateCreatedSession.backgroundChoice
+    formCreatedSession: {
+      sessionId: formCreatedSession.sessionId,
+      name: formCreatedSession.name,
+      executable: formCreatedSession.executable,
+      argv: formCreatedSession.argv,
+      cwd: formCreatedSession.cwd,
+      backgroundChoice: formCreatedSession.backgroundChoice
     },
     treeSelection: {
       sessionId: handle.startup.sessionId,

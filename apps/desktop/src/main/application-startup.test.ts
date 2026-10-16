@@ -11,11 +11,9 @@ import {
 import { describe, expect, it, vi } from 'vitest'
 import { initializeDatabase, type DatabaseConnection } from '../utility/database-initialization'
 import {
-  createTemplate,
   createWorkspace,
   getLayout,
   listSessions,
-  listTemplates,
   listWorkspaces,
   putLayout,
   updateWorkspace
@@ -55,8 +53,6 @@ function storeClient(database: DatabaseConnection): StartupHostClient & { method
           return listSessions(database, String(input.workspaceId)) as Result
         case METHOD_REGISTRY.layoutGet:
           return getLayout(database, String(input.workspaceId)) as Result
-        case METHOD_REGISTRY.templateList:
-          return listTemplates(database) as Result
         default:
           throw new Error(`unexpected startup method ${method}`)
       }
@@ -126,39 +122,24 @@ describe('application startup', () => {
     }
   })
 
-  it('starts with one corrupt template unavailable while healthy records remain usable', async () => {
+  it('starts beside a template and a launch set stored before Story 75.3, reading neither', async () => {
     const database = new BetterSqlite3(':memory:')
     try {
       initializeDatabase(database, now)
       insertSession(database, 'session-healthy', DEFAULT_WORKSPACE_ID)
-      database.transaction(() => createTemplate(database, {
-        name: 'Healthy template',
-        executable: '/bin/bash',
-        argv: ['--noprofile'],
-        cwd: '/workspace/healthy'
-      }, 'template-healthy', now))()
-      database.transaction(() => createTemplate(database, {
-        name: 'Broken template',
-        executable: '/bin/bash',
-        argv: ['before-corruption'],
-        cwd: '/workspace/broken'
-      }, 'template-broken', now))()
-      database.prepare('UPDATE launch_template SET argv_json = ? WHERE template_id = ?')
-        .run('{broken-json', 'template-broken')
+      database.prepare(`INSERT INTO launch_template(
+        template_id, name, executable, argv_json, cwd, background_choice, terminal_graphics, revision, created_at
+      ) VALUES ('template-old', 'Old template', '/bin/bash', '{broken-json', '/workspace', NULL, NULL, 1, ?)`).run(now)
+      database.prepare(`INSERT INTO launch_set(set_id, workspace_id, name, entries_json, revision, created_at)
+        VALUES ('set-old', ?, 'Old set', '[]', 1, ?)`).run(DEFAULT_WORKSPACE_ID, now)
 
       const startup = await loadWorkspaceStartup(storeClient(database))
-      const templates = new Map(startup.templates.map((template) => [template.templateId, template]))
 
       expect(startup.workspaces.map((workspace) => workspace.workspaceId))
         .toEqual([DEFAULT_WORKSPACE_ID])
       expect(startup.sessions).toHaveLength(1)
       expect(startup.sessions[0]).toMatchObject({ sessionId: 'session-healthy', argv: [] })
-      expect(templates.get('template-healthy')).toMatchObject({ argv: ['--noprofile'] })
-      expect(templates.get('template-healthy')).not.toHaveProperty('launchDisabledReason')
-      expect(templates.get('template-broken')).toMatchObject({
-        argv: [],
-        launchDisabledReason: expect.stringContaining('Recreate this launch template')
-      })
+      expect(startup).not.toHaveProperty('templates')
       expect(startup.layouts).toEqual([emptyWorkspaceLayout(DEFAULT_WORKSPACE_ID)])
     } finally {
       database.close()

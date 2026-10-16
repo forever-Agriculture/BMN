@@ -5,7 +5,6 @@ export interface PickerOption {
   id: string
   label: string
   hint: string
-  disabledReason?: string | undefined
 }
 
 export function AgentPicker(props: {
@@ -14,18 +13,17 @@ export function AgentPicker(props: {
   onPick(option: PickerOption): void
 }): React.JSX.Element {
   const group = useRef<HTMLDivElement>(null)
-  const enabled = props.options.filter((option) => !option.disabledReason)
-  const focusIndex = Math.max(0, enabled.findIndex((option) => option.id === props.selectedId))
+  const options = props.options
+  const focusIndex = Math.max(0, options.findIndex((option) => option.id === props.selectedId))
   const move = (index: number): void => {
-    const next = enabled[(index + enabled.length) % enabled.length]
+    const next = options[(index + options.length) % options.length]
     if (!next) return
     props.onPick(next)
     group.current?.querySelector<HTMLButtonElement>(`[data-option="${CSS.escape(next.id)}"]`)?.focus()
   }
   return (
     <div ref={group} className="agent-picker" role="radiogroup" aria-label="Agent">
-      {props.options.map((option) => {
-        const index = enabled.indexOf(option)
+      {options.map((option, index) => {
         return (
           <button
             key={option.id}
@@ -33,8 +31,7 @@ export function AgentPicker(props: {
             role="radio"
             data-option={option.id}
             aria-checked={option.id === props.selectedId}
-            disabled={!!option.disabledReason}
-            title={option.disabledReason ?? option.hint}
+            title={option.hint}
             tabIndex={index === focusIndex ? 0 : -1}
             onClick={() => props.onPick(option)}
             onKeyDown={(event) => {
@@ -42,13 +39,13 @@ export function AgentPicker(props: {
               const back = event.key === 'ArrowLeft' || event.key === 'ArrowUp'
               if (forward || back) move(index + (forward ? 1 : -1))
               else if (event.key === 'Home') move(0)
-              else if (event.key === 'End') move(enabled.length - 1)
+              else if (event.key === 'End') move(options.length - 1)
               else return
               event.preventDefault()
             }}
           >
             <span className="agent-name">{option.label}</span>
-            <span className="agent-hint">{option.disabledReason ?? option.hint}</span>
+            <span className="agent-hint">{option.hint}</span>
           </button>
         )
       })}

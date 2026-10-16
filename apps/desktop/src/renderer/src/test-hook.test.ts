@@ -92,14 +92,9 @@ describe('renderer acceptance hook', () => {
         resumeDisabled: true,
         resumeTitle: 'stored arguments are invalid'
       },
-      unavailableTemplate: {
-        name: 'Broken template — unavailable',
-        disabled: true,
-        title: 'stored arguments are invalid'
-      },
-      templateCreatedSession: {
-        sessionId: 'session-template',
-        name: 'Template session',
+      formCreatedSession: {
+        sessionId: 'session-form',
+        name: 'Form session',
         executable: '/bin/bash',
         argv: ['--noprofile'],
         cwd: '/workspace',

@@ -9,16 +9,14 @@ export async function runCheckoutPeersSelfTest(window: BrowserWindow, params: {
   workspaceId: string
   workspaceName: string
   peerWorkspaceId: string
-  peerWorkspaceName: string
-}): Promise<{ latePeerBlocked: boolean; secondClickStarted: boolean; bothPreviewsNamedPeer: boolean;
-  previewPreservedTerminal: boolean; setPreviewDidNotStart: boolean }> {
+}): Promise<{ latePeerBlocked: boolean; secondClickStarted: boolean; previewPreservedTerminal: boolean }> {
   const checkout = join(params.directory, 'checkout-peer-probe')
   mkdirSync(checkout, { recursive: true })
   execFileSync('git', ['-C', checkout, 'init', '-q', '-b', 'main'])
   execFileSync('git', ['-C', checkout, '-c', 'user.name=BMN Test', '-c', 'user.email=bmn@example.invalid',
     'commit', '--allow-empty', '-qm', 'fixture'])
-  const executable = join(params.directory, 'launch-set-good')
-  const ordinary = await window.webContents.executeJavaScript(`(async () => {
+  const executable = join(params.directory, 'repository-launch-good')
+  return await window.webContents.executeJavaScript(`(async () => {
     const checkout = ${JSON.stringify(checkout)};
     const executable = ${JSON.stringify(executable)};
     const workspaceId = ${JSON.stringify(params.workspaceId)};
@@ -41,9 +39,6 @@ export async function runCheckoutPeersSelfTest(window: BrowserWindow, params: {
       setter.call(input, value);
       input.dispatchEvent(new Event('input', { bubbles: true }));
     };
-    const previousDialog = document.querySelector('.launch-sets-dialog[open]');
-    previousDialog?.querySelector('[aria-label^="Close Launch sets"]')?.click();
-    await wait(() => !document.querySelector('.launch-sets-dialog[open]'), 'close prior set dialog');
     const group = [...document.querySelectorAll('.workspace-group')]
       .find(item => item.getAttribute('aria-label') === workspaceName);
     group.querySelector('.workspace-row .row-menu-button').click();
@@ -75,58 +70,4 @@ export async function runCheckoutPeersSelfTest(window: BrowserWindow, params: {
       (await window.aiTerminal.listSessions(workspaceId)).length === before + 1, 'reviewed start');
     return { latePeerBlocked, secondClickStarted, previewPreservedTerminal };
   })()`) as { latePeerBlocked: boolean; secondClickStarted: boolean; previewPreservedTerminal: boolean }
-
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('checkout peer renderer reload timed out')), 8000)
-    window.webContents.once('did-finish-load', () => { clearTimeout(timer); resolve() })
-    window.webContents.reload()
-  })
-  const setPreview = await window.webContents.executeJavaScript(`(async () => {
-    const checkout = ${JSON.stringify(checkout)};
-    const executable = ${JSON.stringify(executable)};
-    const workspaceId = ${JSON.stringify(params.workspaceId)};
-    const workspaceName = ${JSON.stringify(params.workspaceName)};
-    const peerWorkspaceName = ${JSON.stringify(params.peerWorkspaceName)};
-    const wait = async (read, label) => {
-      const deadline = Date.now() + 12000;
-      for (;;) {
-        const result = await read();
-        if (result) return result;
-        if (Date.now() > deadline) throw new Error('checkout peer set: ' + label);
-        await new Promise(resolve => setTimeout(resolve, 25));
-      }
-    };
-    await wait(() => [...document.querySelectorAll('.workspace-group')]
-      .some(item => item.getAttribute('aria-label') === workspaceName), 'workspace startup');
-    const saved = await window.aiTerminal.createLaunchSet({ workspaceId, name: 'Checkout peer preview set',
-      entries: [{ entryId: crypto.randomUUID(), name: 'Set entry', executable,
-        argv: ['--set-command'], backgroundChoice: null, terminalGraphics: null }] });
-    const before = (await window.aiTerminal.listSessions(workspaceId)).length;
-    const group = [...document.querySelectorAll('.workspace-group')]
-      .find(item => item.getAttribute('aria-label') === workspaceName);
-    group.querySelector('.workspace-row .row-menu-button').click();
-    const menu = await wait(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')]
-      .find(item => item.textContent.trim() === 'Save a launch set…'), 'manage menu');
-    menu.click();
-    const dialog = await wait(() => document.querySelector('.launch-sets-dialog[open]'), 'set dialog');
-    const picker = await wait(() => dialog.querySelector('[aria-label="Saved launch set"]'), 'set picker');
-    picker.value = saved.setId;
-    picker.dispatchEvent(new Event('change', { bubbles: true }));
-    await wait(() => [...dialog.querySelectorAll('button')].some(item => item.textContent.trim() === 'Launch set…'),
-      'launch button');
-    [...dialog.querySelectorAll('button')].find(item => item.textContent.trim() === 'Launch set…').click();
-    const input = await wait(() => dialog.querySelector('[aria-label="Set launch directory"]'), 'launch preview');
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-    setter.call(input, checkout);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    const warning = await wait(() => dialog.textContent.includes('share this checkout') &&
-      dialog.textContent.includes(peerWorkspaceName + ' / Different command checkout peer')
-      ? dialog.textContent : null, 'cross-workspace peer warning');
-    const bothPreviewsNamedPeer = warning.includes('Reviewed checkout launch') &&
-      dialog.querySelectorAll('.inline-warning').length === 1;
-    const setPreviewDidNotStart = (await window.aiTerminal.listSessions(workspaceId)).length === before;
-    dialog.querySelector('[aria-label^="Close Launch sets"]')?.click();
-    return { bothPreviewsNamedPeer, setPreviewDidNotStart };
-  })()`) as { bothPreviewsNamedPeer: boolean; setPreviewDidNotStart: boolean }
-  return { ...ordinary, ...setPreview }
 }

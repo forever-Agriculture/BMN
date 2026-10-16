@@ -20,10 +20,9 @@ feature stops. This page sums up the product and how to install it.
 ## What it does
 
 - **Workspaces and sessions.** Named workspaces hold independent sessions. A session is a shell,
-  Claude Code, Codex, OpenCode, or any command, with its own working directory. Launch templates,
-  rename, archive and edit launch settings. Save a workspace launch set of up to eight copied
-  commands, review its one directory and repository identity, then start fresh sessions explicitly.
-  Session details also shows the saved directory's read-only Git identity. Layout, order and selection survive a restart, but
+  Claude Code, Codex, OpenCode, or any command, with its own working directory. Rename, archive
+  and edit launch settings. The New session form shows the directory's repository identity before
+  it starts anything. Session details also shows the saved directory's read-only Git identity. Layout, order and selection survive a restart, but
   nothing starts automatically. After Quit, BMN offers to resume what it stopped in one dialog
   that shows each command and starts nothing until you press the button. A queued source update
   waits for BMN to exit; Quit first if you want that resume-all offer after the update.

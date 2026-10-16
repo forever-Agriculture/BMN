@@ -241,20 +241,16 @@ export function useCheckoutPeers(
   }
 }
 
-export function CheckoutPeerWarning({ report, loading, similarNames = [], similarUnavailable = false }: {
+export function CheckoutPeerWarning({ report, loading }: {
   report: CheckoutComparison | undefined
   loading: boolean
-  similarNames?: readonly string[]
-  similarUnavailable?: boolean
 }): React.JSX.Element | null {
   if (loading) return <p role="status">Checking selected launch directories for live checkout peers…</p>
-  if (!report || (report.peers.length === 0 && !report.incomplete && similarNames.length === 0 && !similarUnavailable)) return null
+  if (!report || (report.peers.length === 0 && !report.incomplete)) return null
   return <p className="inline-warning" role="status">
     {report.peers.length > 0 ? <>Selected launch directories share this checkout with live BMN sessions: {
       report.peers.map((peer) => `${peer.workspaceName} / ${peer.sessionName}`).join(', ')
     }. These sessions may edit the same files. Current shell directories and activity are not checked. </> : null}
-    {similarNames.length > 0 ? <>Similar live sessions already use this directory and command: {similarNames.join(', ')}. Starting creates new sessions. </> : null}
-    {similarUnavailable ? <>Could not check for matching live commands. </> : null}
     {report.incomplete ? <>Checkout peer check incomplete; review existing sessions before starting.</> : null}
   </p>
 }

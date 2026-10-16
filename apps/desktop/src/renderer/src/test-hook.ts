@@ -58,12 +58,7 @@ export interface TerminalIntegrationProbe {
     resumeDisabled: boolean
     resumeTitle: string
   }
-  unavailableTemplate: {
-    name: string
-    disabled: boolean
-    title: string
-  }
-  templateCreatedSession: {
+  formCreatedSession: {
     sessionId: string
     name: string
     executable: string

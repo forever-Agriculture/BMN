@@ -128,7 +128,8 @@ export const ATTENTION_ORIGINS = Object.freeze([
   'watch:repeat',
   'watch:usage',
   'watch:messages',
-  // A launch-set entry that would start a retired app opened as a plain terminal (Epic 71).
+  // A launch-set entry that would start a retired app opened as a plain terminal (Epic 71). Launch sets are gone
+  // (Story 75.3); the origin stays so a notice stored before then still reads.
   'launch:retired'
 ] as const)
 

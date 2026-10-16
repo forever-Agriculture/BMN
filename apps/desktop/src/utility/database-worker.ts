@@ -3,10 +3,6 @@ import { createRequire } from 'node:module'
 import { parentPort, workerData } from 'node:worker_threads'
 import type {
   SessionUpdateParams,
-  LaunchSetCreateParams,
-  LaunchSetUpdateParams,
-  LaunchSetDeleteParams,
-  TemplateCreateParams,
   WorkspaceCreateParams,
   WorkspaceUpdateParams
 } from '@bmn/protocol'
@@ -33,16 +29,9 @@ import {
 } from './database-session-store'
 import {
   WorkspaceStoreError,
-  createTemplate,
-  createLaunchSet,
-  updateLaunchSet,
-  deleteLaunchSet,
-  listLaunchSets,
-  getLaunchSet,
   createWorkspace,
   getLayout,
   listSessions,
-  listTemplates,
   listWorkspaces,
   putLayout,
   updateSession,
@@ -215,30 +204,6 @@ function handle(request: WorkerRequest): unknown {
         params as unknown as SessionUpdateParams,
         new Date().toISOString()
       ))()
-    case 'template-list':
-      return listTemplates(database)
-    case 'template-create':
-      return database.transaction(() => createTemplate(
-        database,
-        params as unknown as TemplateCreateParams,
-        randomUUID(),
-        new Date().toISOString()
-      ))()
-    case 'launch-set-list':
-      return listLaunchSets(database, requiredString(params, 'workspaceId'))
-    case 'launch-set-get':
-      return getLaunchSet(database, requiredString(params, 'workspaceId'), requiredString(params, 'setId'))
-    case 'launch-set-create':
-      return database.transaction(() => createLaunchSet(
-        database, params as unknown as LaunchSetCreateParams, randomUUID(), new Date().toISOString()
-      ))()
-    case 'launch-set-update':
-      return database.transaction(() => updateLaunchSet(database, params as unknown as LaunchSetUpdateParams))()
-    case 'launch-set-delete':
-      return database.transaction(() => {
-        deleteLaunchSet(database, params as unknown as LaunchSetDeleteParams)
-        return { deleted: true }
-      })()
     case 'layout-get':
       return getLayout(database, requiredString(params, 'workspaceId'))
     case 'layout-put':

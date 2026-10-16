@@ -234,8 +234,7 @@ input[type='radio'] {
   outline: none;
 }
 
-.eyebrow,
-.launch-sets-dialog legend {
+.eyebrow {
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
@@ -1775,56 +1774,6 @@ input[type='radio'] {
 
 .repository-identity.compact button {
   margin-left: auto;
-}
-
-.launch-sets-dialog .retired-entry {
-  white-space: nowrap;
-}
-
-.launch-sets-dialog {
-  width: min(720px, calc(100vw - 32px));
-}
-
-.launch-sets-dialog :is(form, fieldset) {
-  display: grid;
-  gap: 8px;
-}
-
-/* Each entry is a section under a hairline, headed like one, not an outlined box (Story 40.3). */
-.launch-sets-dialog fieldset {
-  margin: 0;
-  padding: 10px 0 0;
-  border: 0;
-  border-top: 1px solid var(--hairline);
-  border-radius: 0;
-}
-
-.launch-sets-dialog legend {
-  padding: 0 6px 0 0;
-}
-
-.launch-sets-dialog label {
-  display: grid;
-  gap: 4px;
-}
-
-.launch-sets-dialog .actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-/* Beside a 32 px plate, a select in the same row is no taller. */
-.launch-sets-dialog .actions select {
-  min-height: 32px;
-  height: 32px;
-  padding-top: 4px;
-  padding-bottom: 4px;
-}
-
-.launch-sets-dialog code {
-  overflow-wrap: anywhere;
 }
 
 /* ---------- Launcher form ---------- */

@@ -27,7 +27,6 @@ import {
   type GuardStop,
   listeningPortLabel,
   type InterruptedSessionCohort,
-  type LaunchTemplateRecord,
   type ProgressRecord,
   type ClosePromptRequest,
   type SessionRecord,
@@ -61,7 +60,6 @@ import { PlanUseDialog, PlanUseView } from './plan-use-view'
 import { SessionPortsSection, portDetail, portsFor } from './session-ports'
 import { createProgramCopyBurst, programCopyMessage } from './program-copy-toast'
 import { ResumeInterruptedDialog } from './resume-interrupted-dialog'
-import { LaunchSetsDialog } from './launch-sets-dialog'
 import { RepositoryIdentityView, identityChanged, useRepositoryIdentity } from './repository-identity'
 import { CheckoutPeerWarning, newlyDiscoveredCheckoutRisk, useCheckoutPeers } from './checkout-peers'
 import {
@@ -79,9 +77,7 @@ import {
   INITIAL_SESSION_FORM,
   LAUNCH_AGENTS,
   applyLaunchAgent,
-  applyLaunchTemplate,
   launchAgentOf,
-  quoteArgv,
   sessionCreateParams,
   sessionLaunchForm,
   sessionUpdateParams,
@@ -191,7 +187,6 @@ type ShellDialog =
   | { kind: 'new-workspace' }
   | { kind: 'dev-auto-runs'; workspaceId?: string }
   | { kind: 'rename-workspace'; workspace: WorkspaceRecord }
-  | { kind: 'launch-sets'; workspace: WorkspaceRecord; initialMode: 'manage' | 'launch' }
   | { kind: 'locate'; session: SessionRecord; binding: ConversationBindingState }
   | { kind: 'stop'; session: SessionRecord }
   /** Shows the exact command before Resume starts anything. */
@@ -245,7 +240,6 @@ function App(): React.JSX.Element {
   const [announcement, setAnnouncement] = useState('')
   const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([])
   const [sessions, setSessions] = useState<SessionRecord[]>([])
-  const [templates, setTemplates] = useState<LaunchTemplateRecord[]>([])
   const [layouts, setLayouts] = useState<Record<string, WorkspaceLayoutState>>({})
   const [live, setLive] = useState<Record<string, LiveStartup>>({})
   const [tree, setTree] = useState<WorkspaceTreeState>(() => initialWorkspaceTree([], null))
@@ -257,7 +251,6 @@ function App(): React.JSX.Element {
   const [sessionForm, setSessionForm] = useState<SessionLaunchForm>(INITIAL_SESSION_FORM)
   const sessionFormRef = useRef(sessionForm)
   sessionFormRef.current = sessionForm
-  const [pickedTemplateId, setPickedTemplateId] = useState('')
   const [editingSessionId, setEditingSessionId] = useState<string>()
   /** The new-session form was opened from Split: the created session opens beside the current pane. */
   const [newSessionSplit, setNewSessionSplit] = useState(false)
@@ -539,7 +532,6 @@ function App(): React.JSX.Element {
     setStartup(next)
     setWorkspaces(next.workspaces)
     setSessions(next.sessions)
-    setTemplates(next.templates)
     writer.reset(next.layouts)
     setLayouts(writer.layouts())
     setLive(Object.fromEntries(next.liveSessions.map((item) => [item.sessionId, item])))
@@ -1018,7 +1010,6 @@ function App(): React.JSX.Element {
     }
     setEditingSessionId(undefined)
     setNewSessionSplit(split)
-    setPickedTemplateId('')
     const recentCwd = sessions.findLast((session) => session.workspaceId === workspace?.workspaceId)?.cwd
     setSessionForm({ ...INITIAL_SESSION_FORM, cwd: workspace?.defaultCwd ?? recentCwd ?? home ?? INITIAL_SESSION_FORM.cwd })
     setFormError(undefined)
@@ -1043,7 +1034,6 @@ function App(): React.JSX.Element {
     selectSessionForPanel(session)
     setEditingSessionId(session.sessionId)
     setNewSessionSplit(false)
-    setPickedTemplateId('')
     setSessionForm(sessionLaunchForm(session))
     setFormError(undefined)
     setPanel('new')
@@ -1626,10 +1616,6 @@ function App(): React.JSX.Element {
       setDialog({ kind: 'workspace-results', workspace, openedFromWorkspaceId: activeWorkspaceId }) },
     { label: 'Messages…', onSelect: () =>
       setDialog({ kind: 'workspace-messages', workspaceId: workspace.workspaceId, openedFromWorkspaceId: activeWorkspaceId }) },
-    { label: 'Save a launch set…', disabled: workspace.archivedAt !== null,
-      onSelect: () => setDialog({ kind: 'launch-sets', workspace, initialMode: 'manage' }) },
-    { label: 'Launch set…', disabled: workspace.archivedAt !== null,
-      onSelect: () => setDialog({ kind: 'launch-sets', workspace, initialMode: 'launch' }) },
     { label: 'Rename…', onSelect: () => setDialog({ kind: 'rename-workspace', workspace }) },
     { label: 'Move up', disabled: index === 0, onSelect: () => moveWorkspace(ordered, index, -1) },
     { label: 'Move down', disabled: index === ordered.length - 1, onSelect: () => moveWorkspace(ordered, index, 1) },
@@ -1734,10 +1720,6 @@ function App(): React.JSX.Element {
       command('new-workspace', 'New workspace…', () => setDialog({ kind: 'new-workspace' })),
       command('dev-auto-runs', 'dev-auto runs…', () => setDialog({ kind: 'dev-auto-runs' })),
       command('new-session', 'New session…', () => beginNewSession(activeWorkspace), { disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, context: activeWorkspace?.name }),
-      command('save-launch-set', 'Save a launch set…', () => activeWorkspace && setDialog({ kind: 'launch-sets', workspace: activeWorkspace, initialMode: 'manage' }),
-        { disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, context: activeWorkspace?.name }),
-      command('launch-set', 'Launch set…', () => activeWorkspace && setDialog({ kind: 'launch-sets', workspace: activeWorkspace, initialMode: 'launch' }),
-        { disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, context: activeWorkspace?.name }),
       command('split', (layout?.split.panes.length ?? 0) >= 2 ? 'Close split' : 'Split view…', () => toggleSplit(), { shortcut: SHORTCUT_LABELS['split-toggle'] }),
       command('pane-other', 'Switch to other pane', focusOtherPane, { shortcut: SHORTCUT_LABELS['pane-other'], disabled: (layout?.split.panes.length ?? 0) < 2 }),
       command('focus', focusMode ? 'Leave focus mode' : 'Focus mode', () => setFocusMode((value) => !value), { shortcut: SHORTCUT_LABELS['focus-toggle'] }),
@@ -1827,28 +1809,12 @@ function App(): React.JSX.Element {
     panel === 'new' && activeWorkspaceId && !editingSessionId ? sessionForm.cwd : null,
     sessions, workspaces, activeLiveIds, `new:${activeWorkspaceId ?? ''}:${sessionForm.cwd}`
   )
-  const pickerOptions: PickerOption[] = [
-    ...LAUNCH_AGENTS.map((agent) => ({ id: agent.id, label: agent.label, hint: agent.command ?? 'bash' })),
-    ...templates.map((template) => ({
-      id: `template:${template.templateId}`,
-      label: template.name,
-      hint: `${template.executable.split('/').pop() ?? template.executable} ${quoteArgv(template.argv)}`.trim(),
-      disabledReason: template.launchDisabledReason
-    }))
-  ]
-  const selectedPickerId = pickedTemplateId ? `template:${pickedTemplateId}` : launchAgentOf(sessionForm)
+  const pickerOptions: PickerOption[] = LAUNCH_AGENTS.map((agent) => ({ id: agent.id, label: agent.label, hint: agent.command ?? 'bash' }))
+  const selectedPickerId = launchAgentOf(sessionForm)
   const pickLaunchOption = (option: PickerOption): void => {
-    const template = templates.find((item) => `template:${item.templateId}` === option.id)
-    if (template) {
-      setPickedTemplateId(template.templateId)
-      setSessionForm((current) => applyLaunchTemplate(current, template))
-      return
-    }
     const agent = LAUNCH_AGENTS.find((item) => item.id === option.id)
     if (!agent) return
-    const pickedTemplateName = templates.find((item) => item.templateId === pickedTemplateId)?.name
-    setPickedTemplateId('')
-    setSessionForm((current) => applyLaunchAgent(current, agent.id, pickedTemplateName ? [pickedTemplateName] : []))
+    setSessionForm((current) => applyLaunchAgent(current, agent.id))
   }
   const resolvedCommand = `${sessionForm.executable} ${sessionForm.argv}`.trim()
   const observedProgressFor = (session: SessionRecord): ProgressPresentation | null => progressPresentation(
@@ -2567,39 +2533,15 @@ function App(): React.JSX.Element {
               <details className="advanced" open={!!editingSessionId || undefined}>
                 <summary><span>Advanced</span><code>{resolvedCommand}</code></summary>
                 <div className="advanced-body">
-                  <label className="field">Template
-                    <select aria-label="Launch template" value={pickedTemplateId} onChange={(event) => {
-                      const id = event.target.value
-                      const template = templates.find((item) => item.templateId === id)
-                      if (template?.launchDisabledReason) {
-                        event.currentTarget.value = ''
-                        setPickedTemplateId('')
-                        return
-                      }
-                      setPickedTemplateId(id)
-                      setSessionForm((current) => applyLaunchTemplate(current, template))
-                    }}><option value="">No template</option>{templates.map((template) => (
-                      <option
-                        key={template.templateId}
-                        value={template.templateId}
-                        disabled={!!template.launchDisabledReason}
-                        title={template.launchDisabledReason}
-                      >
-                        {template.name}{template.launchDisabledReason ? ' — unavailable' : ''}
-                      </option>
-                    ))}</select>
-                  </label>
                   <label className="field">Command
                     <input aria-label="Executable" className="mono" value={sessionForm.executable} onChange={(event) => {
                       const executable = event.target.value
-                      setPickedTemplateId('')
                       setSessionForm((current) => ({ ...current, executable }))
                     }} />
                   </label>
                   <label className="field">Arguments
                     <input aria-label="Arguments" className="mono" value={sessionForm.argv} onChange={(event) => {
                       const argv = event.target.value
-                      setPickedTemplateId('')
                       setSessionForm((current) => ({ ...current, argv }))
                     }} />
                   </label>
@@ -2656,23 +2598,6 @@ function App(): React.JSX.Element {
             resumeInterruptedCohort(dialog.cohort.cohortId, idempotencyKey, entries)}
         />
       ) : null}
-      {dialog?.kind === 'launch-sets' ? <LaunchSetsDialog
-        workspace={dialog.workspace}
-        workspaces={workspaces}
-        templates={templates}
-        sessions={sessions}
-        liveSessionIds={activeLiveIds}
-        initialMode={dialog.initialMode}
-        onClose={() => setDialog(null)}
-        onStarted={(started) => {
-          setSessions((current) => {
-            const ids = new Set(current.map((record) => record.sessionId))
-            return [...current, ...started.sessions.filter((record) => !ids.has(record.sessionId))]
-          })
-          setLive((current) => ({ ...current, ...Object.fromEntries(started.startups.map((startup) => [startup.sessionId, startup])) }))
-        }}
-        onOpenSession={(sessionId) => { openSession(sessionId); setDialog(null) }}
-      /> : null}
       {dialog?.kind === 'palette' ? (
         <CommandPalette
           commands={paletteCommands()}

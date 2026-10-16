@@ -40,7 +40,6 @@ export const ALLOWED = {
   // Tests of the retirement message, the team file that still names it, and each old record.
   'apps/desktop/src/renderer/src/conversation-resume.test.ts': 'an old binding on screen',
   'apps/desktop/src/renderer/src/hook-events-dialog.test.ts': 'an old hook row',
-  'apps/desktop/src/renderer/src/launch-set-editor.test.ts': 'a saved launch set entry, said on its line',
   'apps/desktop/src/renderer/src/launch-template.test.ts': 'a form saved for it',
   'apps/desktop/src/renderer/src/roster-staging.test.ts': 'the team file proposal',
   'apps/desktop/src/renderer/src/session-presentation.test.ts': 'its name on an old session',
@@ -57,7 +56,6 @@ export const ALLOWED = {
   'apps/desktop/src/utility/control-server.test.ts': 'the guard report refusing it',
   'apps/desktop/src/utility/conversation-binding.test.ts': 'an old binding',
   'apps/desktop/src/utility/hook-event-history.test.ts': 'an old hook row in the saved log',
-  'apps/desktop/src/utility/launch-set-coordinator.test.ts': 'a saved launch set entry',
   'apps/desktop/src/utility/session-manager.test.ts': 'an old binding, never resumed',
   'apps/desktop/src/utility/store-schema.test.ts': 'the migration that once allowed its bindings',
   'apps/desktop/src/utility/telegram-cards.test.ts': 'an old request on its Telegram card',

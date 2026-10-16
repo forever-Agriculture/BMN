@@ -85,13 +85,6 @@ import {
   type ConversationBindingState,
   type SessionResumePreview,
   type ExplicitConversationBinding,
-  type LaunchTemplateRecord,
-  type LaunchSetRecord,
-  type LaunchSetCreateParams,
-  type LaunchSetUpdateParams,
-  type LaunchSetDeleteParams,
-  type LaunchSetStartParams,
-  type LaunchSetStartResult,
   type LayoutGetResult,
   type SavedOutputCapture,
   type SavedOutputCatalog,
@@ -160,7 +153,6 @@ interface ApplicationStartupSuccess {
   activeWorkspaceId: string | null
   workspaces: WorkspaceRecord[]
   sessions: SessionRecord[]
-  templates: LaunchTemplateRecord[]
   layouts: WorkspaceLayoutState[]
   layoutNotices: string[]
   liveSessions: StartupSuccess[]
@@ -500,49 +492,6 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   readDevAutoRuns(workspaceId?: string): Promise<DevAutoRunsResult> {
     return invokeBridge('aiterm:dev-auto:runs', workspaceId ? { workspaceId } : {})
-  },
-  normalizeLaunchDirectories(directories: string[]): Promise<string[]> {
-    return invokeBridge('aiterm:launch-directory:normalize', { directories })
-  },
-  listTemplates(): Promise<LaunchTemplateRecord[]> {
-    return invokeBridge('aiterm:template:list', {})
-  },
-  createTemplate(params: {
-    name: string
-    executable: string
-    argv: string[]
-    cwd: string
-    backgroundChoice?: 'hide' | 'stop' | null
-  }): Promise<LaunchTemplateRecord> {
-    return invokeBridge('aiterm:template:create', params)
-  },
-  listLaunchSets(workspaceId: string): Promise<LaunchSetRecord[]> {
-    return invokeBridge('aiterm:launch-set:list', { workspaceId })
-  },
-  getLaunchSet(workspaceId: string, setId: string): Promise<LaunchSetRecord> {
-    return invokeBridge('aiterm:launch-set:get', { workspaceId, setId })
-  },
-  createLaunchSet(params: LaunchSetCreateParams): Promise<LaunchSetRecord> {
-    return invokeBridge('aiterm:launch-set:create', params)
-  },
-  updateLaunchSet(params: LaunchSetUpdateParams): Promise<LaunchSetRecord> {
-    return invokeBridge('aiterm:launch-set:update', params)
-  },
-  deleteLaunchSet(params: LaunchSetDeleteParams): Promise<{ deleted: true }> {
-    return invokeBridge('aiterm:launch-set:delete', params)
-  },
-  async startLaunchSet(params: LaunchSetStartParams): Promise<LaunchSetStartResult & {
-    sessions: SessionRecord[]
-    startups: StartupSuccess[]
-  }> {
-    const result = await invokeBridge<LaunchSetStartResult & {
-      sessions: SessionRecord[]
-      startups: StartupSuccess[]
-    }>('aiterm:launch-set:start', params)
-    for (const startup of result.startups) {
-      recordLiveSession(startup, result.sessions.find((session) => session.sessionId === startup.sessionId))
-    }
-    return result
   },
   getLayout(workspaceId: string): Promise<LayoutGetResult> {
     return invokeBridge('aiterm:layout:get', { workspaceId })

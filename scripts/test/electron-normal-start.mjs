@@ -24,7 +24,7 @@ const MAIN_SELF_TEST_MARKERS = [
   'Stored arguments are unavailable in the renderer boundary probe.', // self-test/taps.ts
   'Conflict: terminated by other getUpdates request', // fake-bot-api.ts
   'ses_f1b971253ffeDV9XIFvU67lmdh', // agent-history-self-test.ts
-  'launch set exact command preview missing' // launch-set-repository-self-test.ts
+  'changed branch started an ordinary session' // repository-launch-self-test.ts
 ]
 
 /** One message unique to each renderer self-test module; none may sit in the renderer's entry chunk. */

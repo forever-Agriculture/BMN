@@ -121,20 +121,6 @@ export interface SessionRecord {
   receiveMessages?: boolean
 }
 
-export interface LaunchTemplateRecord {
-  templateId: string
-  name: string
-  executable: string
-  argv: string[]
-  cwd: string
-  backgroundChoice: BackgroundChoice | null
-  terminalGraphics: TerminalGraphicsChoice
-  revision: number
-  createdAt: string
-  /** Actionable reason persisted launch metadata cannot currently be applied. */
-  launchDisabledReason?: string
-}
-
 export interface WorkspaceLayoutState {
   workspaceId: string
   selectedSessionId: string | null
@@ -313,17 +299,6 @@ export interface SessionCohortResumeResult {
   entries: SessionCohortResumeEntryResult[]
 }
 
-export type TemplateListParams = Record<string, never>
-
-export interface TemplateCreateParams {
-  name: string
-  executable: string
-  argv: string[]
-  cwd: string
-  backgroundChoice?: BackgroundChoice | null
-  terminalGraphics?: TerminalGraphicsChoice
-}
-
 export interface LayoutGetParams {
   workspaceId: string
 }
@@ -364,8 +339,6 @@ export type SessionCreateResult = {
   binding: PersistedConversationBinding
 }
 export type SessionUpdateResult = SessionRecord
-export type TemplateListResult = LaunchTemplateRecord[]
-export type TemplateCreateResult = LaunchTemplateRecord
 /**
  * A layout is a per-workspace view cache. When the persisted row is unreadable or invalid the host
  * returns that workspace's empty layout at the row's revision plus a visible notice; the row is
@@ -393,10 +366,6 @@ const SESSION_RECORD_KEYS = [
 ] as const
 const SESSION_RECORD_OPTIONAL_KEYS = ['launchDisabledReason', 'reportedResume', 'receiveMessages'] as const
 const SESSION_PROCESS_KEYS = ['incarnationId', 'state', 'exitCode', 'signal', 'detail'] as const
-const TEMPLATE_RECORD_KEYS = [
-  'templateId', 'name', 'executable', 'argv', 'cwd', 'backgroundChoice', 'terminalGraphics', 'revision', 'createdAt'
-] as const
-const TEMPLATE_RECORD_OPTIONAL_KEYS = ['launchDisabledReason'] as const
 const WORKSPACE_UPDATE_FIELDS = ['name', 'defaultCwd', 'position', 'marker', 'archived', 'pinnedFilePaths', 'sessionMessages', 'turnChanges'] as const
 const SESSION_UPDATE_FIELDS = [
   'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'terminalGraphics', 'archived', 'receiveMessages'
@@ -514,26 +483,6 @@ export function isSessionRecord(value: unknown): value is SessionRecord {
     (value.lastProcess === null || isSessionProcessStatus(value.lastProcess)) &&
     (!('reportedResume' in value) || parseReportedResumeCommand(value.reportedResume) !== null) &&
     (!('receiveMessages' in value) || typeof value.receiveMessages === 'boolean')
-  )
-}
-
-export function isLaunchTemplateRecord(value: unknown): value is LaunchTemplateRecord {
-  if (!isRecord(value) || !hasExactKeys(value, TEMPLATE_RECORD_KEYS, TEMPLATE_RECORD_OPTIONAL_KEYS)) {
-    return false
-  }
-  return (
-    isIdentifier(value.templateId) &&
-    isName(value.name) &&
-    isIdentifier(value.executable) &&
-    isStringArray(value.argv) &&
-    typeof value.cwd === 'string' &&
-    isBackgroundChoice(value.backgroundChoice) &&
-    isTerminalGraphicsChoice(value.terminalGraphics) &&
-    isRevision(value.revision) &&
-    isRfc3339(value.createdAt) &&
-    (!('launchDisabledReason' in value) ||
-      (typeof value.launchDisabledReason === 'string' &&
-        value.launchDisabledReason.trim().length > 0))
   )
 }
 
@@ -668,23 +617,6 @@ export function isSessionCohortResumeParams(value: unknown): value is SessionCoh
   return true
 }
 
-export function isTemplateCreateParams(value: unknown): value is TemplateCreateParams {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, ['name', 'executable', 'argv', 'cwd'], ['backgroundChoice', 'terminalGraphics'])
-  ) {
-    return false
-  }
-  return (
-    isName(value.name) &&
-    isIdentifier(value.executable) &&
-    isStringArray(value.argv) &&
-    typeof value.cwd === 'string' &&
-    (!('backgroundChoice' in value) || isBackgroundChoice(value.backgroundChoice)) &&
-    (!('terminalGraphics' in value) || isTerminalGraphicsChoice(value.terminalGraphics))
-  )
-}
-
 export function isWorkspaceLayoutState(
   value: unknown,
   workspaceSessionIds: ReadonlySet<string> | readonly string[]
@@ -740,80 +672,3 @@ export function isWorkspaceLayoutState(
   return true
 }
 
-/** Copied command definitions: no template binding or per-entry directory. */
-export interface LaunchSetEntry {
-  entryId: string
-  name: string
-  executable: string
-  argv: string[]
-  backgroundChoice: BackgroundChoice | null
-  terminalGraphics: TerminalGraphicsChoice
-}
-export interface LaunchSetCreateParams {
-  workspaceId: string
-  name: string
-  entries: LaunchSetEntry[]
-}
-export interface LaunchSetUpdateParams extends LaunchSetCreateParams {
-  setId: string
-  expectedRevision: number
-}
-export interface LaunchSetDeleteParams {
-  workspaceId: string
-  setId: string
-  expectedRevision: number
-}
-export interface LaunchSetListParams { workspaceId: string }
-export interface LaunchSetRecord extends LaunchSetCreateParams {
-  setId: string
-  revision: number
-  createdAt: string
-}
-
-function isLaunchSetText(value: unknown, max: number, empty = false): value is string {
-  return typeof value === 'string' && (empty || value.trim().length > 0) &&
-    value.length <= max && !value.includes('\0')
-}
-export function isLaunchSetEntry(value: unknown): value is LaunchSetEntry {
-  return isRecord(value) &&
-    hasExactKeys(value, ['entryId', 'name', 'executable', 'argv', 'backgroundChoice', 'terminalGraphics']) &&
-    isLaunchSetText(value.entryId, 128) && isName(value.name) &&
-    isLaunchSetText(value.name, WORKSPACE_NAME_MAX_LENGTH) &&
-    isLaunchSetText(value.executable, 4096) &&
-    isStringArray(value.argv) && value.argv.length <= 256 &&
-    value.argv.every((arg) => isLaunchSetText(arg, 16384, true)) &&
-    value.argv.reduce((total, arg) => total + arg.length, 0) <= 65536 &&
-    isBackgroundChoice(value.backgroundChoice) && isTerminalGraphicsChoice(value.terminalGraphics)
-}
-function isLaunchSetDefinition(value: Record<string, unknown>): boolean {
-  return isLaunchSetText(value.workspaceId, 128) &&
-    isLaunchSetText(value.name, WORKSPACE_NAME_MAX_LENGTH) &&
-    Array.isArray(value.entries) && value.entries.length >= 1 && value.entries.length <= 8 &&
-    value.entries.every(isLaunchSetEntry) &&
-    new Set(value.entries.map((entry) => entry.entryId)).size === value.entries.length
-}
-export function isLaunchSetCreateParams(value: unknown): value is LaunchSetCreateParams {
-  return isRecord(value) && hasExactKeys(value, ['workspaceId', 'name', 'entries']) &&
-    isLaunchSetDefinition(value)
-}
-export function isLaunchSetUpdateParams(value: unknown): value is LaunchSetUpdateParams {
-  return isRecord(value) &&
-    hasExactKeys(value, ['workspaceId', 'name', 'entries', 'setId', 'expectedRevision']) &&
-    isLaunchSetDefinition(value) && isLaunchSetText(value.setId, 128) &&
-    isRevision(value.expectedRevision)
-}
-export function isLaunchSetDeleteParams(value: unknown): value is LaunchSetDeleteParams {
-  return isRecord(value) && hasExactKeys(value, ['workspaceId', 'setId', 'expectedRevision']) &&
-    isLaunchSetText(value.workspaceId, 128) && isLaunchSetText(value.setId, 128) &&
-    isRevision(value.expectedRevision)
-}
-export function isLaunchSetListParams(value: unknown): value is LaunchSetListParams {
-  return isRecord(value) && hasExactKeys(value, ['workspaceId']) &&
-    isLaunchSetText(value.workspaceId, 128)
-}
-export function isLaunchSetRecord(value: unknown): value is LaunchSetRecord {
-  return isRecord(value) &&
-    hasExactKeys(value, ['workspaceId', 'name', 'entries', 'setId', 'revision', 'createdAt']) &&
-    isLaunchSetDefinition(value) && isLaunchSetText(value.setId, 128) &&
-    isRevision(value.revision) && isRfc3339(value.createdAt)
-}

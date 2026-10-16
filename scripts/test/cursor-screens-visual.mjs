@@ -18,7 +18,6 @@
 //   BMN_CURSOR_MODES=black  fewer modes. A narrowed run writes its own shots.json, so give it a folder of its own.
 //   BMN_CURSOR_BINARY=<packaged bmn>  the screens of a packaged build (Story 71.3 AC3), as electron-normal-start --binary.
 import { execFileSync } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -325,23 +324,9 @@ while :; do [ -e '${quit}' ] && exit 0; sleep 0.2; done`)
       if (close) await close().catch(() => undefined)
     }
 
-    phase('workspace data: a launch set and a template that name Cursor, turn changes on, then a Cursor session')
+    // Launch sets and templates that named Cursor were captured here until Story 75.3 removed both.
+    phase('workspace data: turn changes on, then a Cursor session')
     const workspace = await page.evaluate(async () => (await window.aiTerminal.listWorkspaces()).find((item) => !item.archivedAt))
-    const inShell = (command) => ['-ic', `${command}; exec bash -i`]
-    try {
-      await page.evaluate(async ({ workspaceId, entries }) => window.aiTerminal.createLaunchSet({ workspaceId, name: 'Review trio', entries }), {
-        workspaceId: workspace.workspaceId,
-        entries: [['Claude', 'claude'], ['Codex', 'codex'], ['Cursor', 'cursor-agent']].map(([name, command]) => ({
-          entryId: randomUUID(), name, executable: '/bin/bash', argv: inShell(command), backgroundChoice: null, terminalGraphics: null
-        }))
-      })
-      note('launch set "Review trio" saved with Claude, Codex and Cursor entries')
-    } catch (error) { note(`launch set not saved: ${String(error?.message ?? error).split('\n')[0]}`) }
-    try {
-      await page.evaluate(async ({ cwd, argv }) => window.aiTerminal.createTemplate({ name: 'Cursor review', executable: '/bin/bash', argv, cwd }),
-        { cwd: work, argv: inShell('cursor-agent --model gpt-5') })
-      note('template "Cursor review" saved')
-    } catch (error) { note(`template not saved: ${String(error?.message ?? error).split('\n')[0]}`) }
     try {
       await page.evaluate(async (workspace) => window.aiTerminal.updateWorkspace({ workspaceId: workspace.workspaceId, expectedRevision: workspace.revision, turnChanges: true }), workspace)
       note('turn changes switched on for the workspace')
@@ -471,26 +456,12 @@ while :; do [ -e '${quit}' ] && exit 0; sleep 0.2; done`)
       }
       await launcher.waitFor()
     }
-    await screen('new-session', 'Palette › New session…: the agent picker lists every app and the saved template', openLauncher, { region: '.session-launcher' })
+    await screen('new-session', 'Palette › New session…: the agent picker lists every app', openLauncher, { region: '.session-launcher' })
     await screen('new-session-cursor-picked', 'New session with Cursor picked: the name and the command it fills in (Advanced shows the command)', async () => {
       await openLauncher()
       await pickIfOffered(launcher.getByRole('radio', { name: /^Cursor\b/ }))
       await launcher.locator('details.advanced > summary').click()
     }, { scroll: '.session-launcher', region: '.session-launcher', close: async () => { await page.locator('button[aria-label="Close new session"]').click() } })
-    const launchSets = page.locator('dialog.launch-sets-dialog')
-    await screen('launch-set-saved', 'Palette › Save a launch set…: the saved set with its Cursor entry', async () => {
-      await palette('Save a launch set')
-      await page.keyboard.press('Enter')
-      await launchSets.locator('ol li').first().waitFor()
-    }, { region: 'dialog.launch-sets-dialog' })
-    await screen('launch-set-launch', 'The same set, Launch set…: the preview before starting its entries', async () => {
-      if (!await launchSets.isVisible()) {
-        await palette('Save a launch set')
-        await page.keyboard.press('Enter')
-      }
-      await launchSets.getByRole('button', { name: 'Launch set…' }).click()
-      await launchSets.locator('h3').waitFor()
-    }, { region: 'dialog.launch-sets-dialog', close: async () => { await page.keyboard.press('Escape') } })
     await screen('workspace-messages', 'Workspace menu › Messages…: who gets a waiting message by its own hook and who only by Paste', async () => {
       await page.locator(`button[aria-label="Actions for ${workspace.name}"]`).click()
       await page.getByRole('menuitem', { name: /^Messages/ }).click()

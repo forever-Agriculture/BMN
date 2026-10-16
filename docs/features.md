@@ -32,10 +32,9 @@ anything else installed. **New session…** opens the launcher beside the termin
 
 - **Terminal, Claude Code, Codex, OpenCode** — one click picks what runs. An agent starts inside an
   interactive bash (`bash -ic 'claude; exec bash -i'`), so your shell stays open when the agent
-  exits. Saved templates appear as further cards; a template whose command is missing is marked
-  unavailable and cannot be picked.
+  exits.
 - **Name, Directory** — the name follows the pick until you type your own.
-- **Advanced** — Template, Command, Arguments, when windows close (ask, keep running, or stop; a
+- **Advanced** — Command, Arguments, when windows close (ask, keep running, or stop; a
   close prompt can remember your answer) and terminal images. The summary line always shows the
   exact command that will run. Arguments use shell quoting, so `'a b'` stays one argument.
 
@@ -44,21 +43,13 @@ in the command palette for the selected pane. This edits the next launch, preser
 process and split layout. Sessions can be moved up and down, and
 archived once stopped; **Restore session** brings an archived one back.
 
-**Launch sets** in a workspace menu or the palette save 1–8 ordered command definitions. You can
-copy an existing template into a set; later edits to either one do not change the other. The set
-editor stores arguments as an exact JSON array, so an argument containing spaces stays one
-argument. Saving, reordering or deleting a set starts and stops nothing. **Launch set…** shows
-every command and one directory for the whole set. It warns about matching live sessions and
-starts fresh sessions only after **Start N new sessions**. Entries start in order; a failure stops
-later entries, while already started sessions stay available. The result names each started,
-failed or not-started entry and links to saved sessions where BMN has one. A new deliberate launch
-uses a new preview.
+Launch sets and custom templates were removed on 2026-10-16 (Story 75.3); sets and templates saved
+before then stay in the database, unread.
 
 **Repository identity** in Session details reads the session's saved launch directory and shows
 its Git root, branch or detached/unborn state, linked worktree status and read time. The New
-session launcher shows the same read-only check as one line under its directory, and the launch-set
-preview shows it beside its selected directory.
-BMN checks again when you press Create or Start; if a known identity changed, it shows the new
+session launcher shows the same read-only check as one line under its directory.
+BMN checks again when you press Create; if a known identity changed, it shows the new
 value for review before another press. A non-repository or unavailable Git result is named and
 does not by itself block an otherwise valid launch. This describes the selected directory at the
 time shown, not where a running shell may have moved later. BMN never checks out a branch or
@@ -71,8 +62,7 @@ from the environment the command runs in, so the new session starts clean. BMN t
 commands — Claude, Codex, OpenCode, Gemini, Aider, Shell — but the deeper
 integration (attention hooks and conversation resume) is built for Claude Code, Codex and OpenCode.
 Any other CLI still runs as a normal terminal session, without those. Cursor was retired on
-2026-10-14 ([Agent control](agent-control.md#cursor-retired)): a saved launch set entry that starts
-it opens as a plain terminal and says so once.
+2026-10-14 ([Agent control](agent-control.md#cursor-retired)).
 
 **Model origin flag.** While a Claude Code, Codex or OpenCode run reports through its own hooks,
 its sidebar row, pane heading and Session details show the agent it really is (not "Shell") and
@@ -487,7 +477,7 @@ database. Exports are manual: there is no schedule and no built-in restore step.
 Preferences → **Appearance**: an identity for the header (Knight, Cross or Boss), a color mode for
 the app and the terminal — Black (default), Steel, Brown, Dark — and the terminal font size, which
 `Ctrl +` / `Ctrl −` / `Ctrl 0` also change. Identity and colors are switchable from the palette
-too. The session launch form offers templates and a close-behaviour choice; **Edit launch
+too. The session launch form offers a close-behaviour choice; **Edit launch
 settings** lets you change the saved command and close behaviour. Elsewhere in Preferences are
 archive retention, the Hold Space toggle and voice settings, and the Telegram connection.
 

@@ -1,7 +1,6 @@
-// MODULE: launch-template.ts - the session launch form, template application and its create/update params
+// MODULE: launch-template.ts - the session launch form, the four agent buttons and its create/update params
 import type {
   BackgroundChoice,
-  LaunchTemplateRecord,
   SessionCreateParams,
   SessionRecord,
   SessionUpdateParams,
@@ -51,19 +50,11 @@ function agentArgv(agent: LaunchAgent): string[] {
   return agent.command ? ['-ic', `${agent.command}; exec bash -i`] : []
 }
 
-/**
- * Picking an agent fills the launch; a name the owner typed survives, a suggested one (an agent's,
- * or `suggestedNames` such as the picked template's) follows the pick.
- */
-export function applyLaunchAgent(
-  form: SessionLaunchForm,
-  agentId: LaunchAgentId,
-  suggestedNames: readonly string[] = []
-): SessionLaunchForm {
+/** Picking an agent fills the launch; a name the owner typed survives, an agent's suggested one follows the pick. */
+export function applyLaunchAgent(form: SessionLaunchForm, agentId: LaunchAgentId): SessionLaunchForm {
   const agent = LAUNCH_AGENTS.find((item) => item.id === agentId)
   if (!agent) return form
-  const typedName = form.name.trim() !== '' && !suggestedNames.includes(form.name) &&
-    !LAUNCH_AGENTS.some((item) => item.name === form.name)
+  const typedName = form.name.trim() !== '' && !LAUNCH_AGENTS.some((item) => item.name === form.name)
   return {
     ...form,
     name: typedName ? form.name : agent.name,
@@ -128,22 +119,6 @@ export const BACKGROUND_CHOICE_OPTIONS: ReadonlyArray<{ value: '' | BackgroundCh
   { value: 'hide', label: 'Keep running when windows close' },
   { value: 'stop', label: 'Stop when windows close' }
 ]
-
-/** Choosing an available template fills its fields; unavailable or missing templates are inert. */
-export function applyLaunchTemplate(
-  form: SessionLaunchForm,
-  template: LaunchTemplateRecord | undefined
-): SessionLaunchForm {
-  if (!template || template.launchDisabledReason) return form
-  return {
-    name: template.name,
-    executable: template.executable,
-    argv: quoteArgv(template.argv),
-    cwd: template.cwd,
-    backgroundChoice: template.backgroundChoice,
-    terminalGraphics: form.terminalGraphics ?? template.terminalGraphics
-  }
-}
 
 export function sessionLaunchForm(session: SessionRecord): SessionLaunchForm {
   return {

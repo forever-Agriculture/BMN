@@ -327,21 +327,6 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       await page.keyboard.press('Escape')
       await sleep(200)
 
-      phase(`${colorMode}: launch sets`)
-      await page.locator('.workspace-row .row-menu-button').first().click()
-      await page.getByRole('menuitem', { name: 'Save a launch set…' }).click()
-      await page.waitForSelector('.launch-sets-dialog')
-      await page.locator('.launch-sets-dialog button', { hasText: 'New set' }).click()
-      await sleep(400)
-      await shot(`${colorMode}-launch-sets.png`, '.launch-sets-dialog')
-      assertSelects(await readSelects(page, '.launch-sets-dialog'), `${colorMode} launch sets`, 1)
-      assertOneLine(await readHelp(page, '.launch-sets-dialog small'), `${colorMode} launch sets`, 1)
-      const fieldsets = await page.evaluate(() => [...document.querySelectorAll('.launch-sets-dialog fieldset')]
-        .map((fieldset) => getComputedStyle(fieldset).borderLeftWidth))
-      assert.ok(fieldsets.length > 0 && fieldsets.every((width) => width === '0px'), `${colorMode} fieldsets outlined: ${fieldsets}`)
-      await page.keyboard.press('Escape')
-      await sleep(200)
-
       phase(`${colorMode}: session launcher`)
       await page.locator('.workspace-row .row-menu-button').first().click()
       await page.getByRole('menuitem', { name: 'New session here' }).click()

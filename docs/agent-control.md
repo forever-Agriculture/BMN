@@ -440,15 +440,8 @@ tools, prompt-guard warning and the recorded payloads), is kept at the local git
 - A rules, skills or tools install made before still lists Cursor under Earlier installs. Its undo
   (`bmn rules restore`) puts back the other apps' files and leaves each Cursor file as it is,
   naming it with the retirement line; nothing is written under `~/.cursor`.
-- A saved launch set entry that starts `cursor-agent` opens as a plain terminal, and that session
-  gets one notice from BMN: "Cursor was retired on 14 Oct 2026." The saved set is not changed.
-  An entry is for Cursor when it starts `cursor-agent` first: as its own program, as the program
-  `env` runs, or as the first program of a shell's `-c` line (that entry opens as its shell), as
-  the New session form wrote it (`bash -ic 'cursor-agent; exec bash -i'`). In that line BMN passes
-  over `NAME=value` settings and an `exec` or `command`, and takes quotes and backslashes away; it
-  reads nothing after the first program, and a substitution, redirection or keyword before it
-  means the entry is not for Cursor. Every other entry runs exactly as saved, also one that names
-  `cursor-agent` in a prompt, a path or a later command.
+- Launch sets are gone (Story 75.3, 2026-10-16); a set saved with a Cursor entry stays in the
+  database, unread. A notice BMN left on a session that such an entry opened still reads.
 
 ### Notifications from any program
 

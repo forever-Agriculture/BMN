@@ -28,9 +28,7 @@ import type {
   FakeBotCall,
   FakeBotStep
 } from '../fake-bot-api'
-import {
-  runLaunchSetRepositorySelfTest
-} from '../launch-set-repository-self-test'
+import { runRepositoryLaunchSelfTest } from '../repository-launch-self-test'
 import { runCheckoutPeersSelfTest } from '../checkout-peers-self-test'
 import { runQuietHoursSelfTest } from './quiet-hours'
 import { runMorningDigestSelfTest } from './morning-digest'
@@ -57,7 +55,6 @@ import {
   type InputDraftRecord,
   type InterruptedSessionCohort,
   isTerminalOutputMessage,
-  type LaunchTemplateRecord,
   type LayoutGetResult,
   METHOD_REGISTRY,
   type PersistedConversationBinding,
@@ -537,16 +534,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       defaultCwd: isolatedCwd,
       position: 1
     })
-    const rendererTemplate = await client.request<LaunchTemplateRecord>(
-      METHOD_REGISTRY.templateCreate,
-      {
-        name: 'Template-picked shell',
-        executable: '/bin/bash',
-        argv: ['--noprofile', '--norc'],
-        cwd: isolatedCwd,
-        backgroundChoice: 'stop'
-      }
-    )
     const secondSession = await client.request<SessionIdentity>(METHOD_REGISTRY.sessionCreate, {
       workspaceId: DEFAULT_WORKSPACE_ID,
       name: 'Same CLI chat B',
@@ -557,12 +544,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       rows: 24
     })
     taps.rendererLaunchBlockedSessionId = secondSession.sessionId
-    taps.rendererUnavailableTemplate = {
-      ...rendererTemplate,
-      templateId: 'renderer-unavailable-template',
-      name: 'Unavailable launch template',
-      launchDisabledReason: SELF_TEST_LAUNCH_DISABLED_REASON
-    }
     const thirdSession = await client.request<SessionIdentity>(METHOD_REGISTRY.sessionCreate, {
       workspaceId: secondWorkspace.workspaceId,
       name: 'Archived running chat',
@@ -1505,23 +1486,14 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       )
     }
     if (
-      preloadProbe.unavailableTemplate.name !== 'Unavailable launch template — unavailable' ||
-      preloadProbe.unavailableTemplate.disabled !== true ||
-      preloadProbe.unavailableTemplate.title !== SELF_TEST_LAUNCH_DISABLED_REASON
+      preloadProbe.formCreatedSession.name !== 'Form-made shell' ||
+      preloadProbe.formCreatedSession.executable !== '/bin/bash' ||
+      JSON.stringify(preloadProbe.formCreatedSession.argv) !== JSON.stringify(['--noprofile', '--norc']) ||
+      preloadProbe.formCreatedSession.cwd !== isolatedCwd ||
+      preloadProbe.formCreatedSession.backgroundChoice !== 'stop'
     ) {
       throw new Error(
-        `the renderer did not disable the unavailable template: ${JSON.stringify(preloadProbe.unavailableTemplate)}`
-      )
-    }
-    if (
-      preloadProbe.templateCreatedSession.name !== rendererTemplate.name ||
-      preloadProbe.templateCreatedSession.executable !== rendererTemplate.executable ||
-      JSON.stringify(preloadProbe.templateCreatedSession.argv) !== JSON.stringify(rendererTemplate.argv) ||
-      preloadProbe.templateCreatedSession.cwd !== rendererTemplate.cwd ||
-      preloadProbe.templateCreatedSession.backgroundChoice !== rendererTemplate.backgroundChoice
-    ) {
-      throw new Error(
-        `the real renderer template pick created the wrong session: ${JSON.stringify(preloadProbe.templateCreatedSession)}`
+        `the real renderer session form created the wrong session: ${JSON.stringify(preloadProbe.formCreatedSession)}`
       )
     }
     const rendererProbeLayoutSelections = taps.layoutPutSelections.slice(
@@ -1662,25 +1634,25 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         `a hidden pane resized its terminal: ${JSON.stringify(preloadProbe.hiddenPaneSize)}`
       )
     }
-    const templateRuntime = host.runtimes.get(preloadProbe.templateCreatedSession.sessionId)
-    const applicationQuitTarget = templateRuntime
+    const formRuntime = host.runtimes.get(preloadProbe.formCreatedSession.sessionId)
+    const applicationQuitTarget = formRuntime
       ? runningTargetForRuntime({
-          ...templateRuntime.session,
-          executable: templateRuntime.executable,
-          processState: templateRuntime.processState,
-          ...(templateRuntime.backgroundChoice
-            ? { backgroundChoice: templateRuntime.backgroundChoice }
+          ...formRuntime.session,
+          executable: formRuntime.executable,
+          processState: formRuntime.processState,
+          ...(formRuntime.backgroundChoice
+            ? { backgroundChoice: formRuntime.backgroundChoice }
             : {})
         })
       : undefined
-    if (!applicationQuitTarget) throw new Error('the template-created session was not live')
+    if (!applicationQuitTarget) throw new Error('the form-created session was not live')
     await host.stopCurrentTargets([applicationQuitTarget], 'application-quit')
     const defaultSessionsAfterLifecycleStop = await client.request<SessionRecord[]>(
       METHOD_REGISTRY.sessionList,
       { workspaceId: DEFAULT_WORKSPACE_ID }
     )
     const lifecycleStoppedBeforeRestart = defaultSessionsAfterLifecycleStop.find(
-      (record) => record.sessionId === preloadProbe.templateCreatedSession.sessionId
+      (record) => record.sessionId === preloadProbe.formCreatedSession.sessionId
     )?.lastProcess
     if (
       lifecycleStoppedBeforeRestart?.state !== 'interrupted' ||
@@ -2413,7 +2385,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
 
     // Return selection to the lifecycle fixture expected by the existing restart checks.
     await host.applicationWindow.webContents.executeJavaScript(`(() => {
-      const row = document.querySelector('.session-row button[data-session-id="' + ${JSON.stringify(preloadProbe.templateCreatedSession.sessionId)} + '"]');
+      const row = document.querySelector('.session-row button[data-session-id="' + ${JSON.stringify(preloadProbe.formCreatedSession.sessionId)} + '"]');
       if (!row) throw new Error('the lifecycle fixture disappeared after acceptance');
       row.click();
     })()`)
@@ -2646,10 +2618,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     }
     const rendererStoppedPanelLabel = await stoppedPanelLabel(
       host.applicationWindow,
-      preloadProbe.templateCreatedSession.sessionId
+      preloadProbe.formCreatedSession.sessionId
     )
     const expectedStoppedPanelLabel =
-      `Interrupted · ${lifecycleStoppedBeforeRestart!.detail} · ${rendererTemplate.cwd}`
+      `Interrupted · ${lifecycleStoppedBeforeRestart!.detail} · ${preloadProbe.formCreatedSession.cwd}`
     if (rendererStoppedPanelLabel !== expectedStoppedPanelLabel) {
       throw new Error(
         `the stopped panel did not render the recorded process label: ${JSON.stringify(rendererStoppedPanelLabel)}`
@@ -2660,7 +2632,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const resumeConfirmation = await resumeConfirmationShown(
       host.applicationWindow,
       { sessionId: reportingSession.sessionId, name: 'Hook-reported Codex' },
-      preloadProbe.templateCreatedSession.sessionId
+      preloadProbe.formCreatedSession.sessionId
     )
     const liveAfterCancel = (await client.request<HostHealth>(METHOD_REGISTRY.healthGet, {})).liveSessions
     if (liveAfterCancel !== liveBeforeConfirmation) {
@@ -3112,7 +3084,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     // Close details and return selection to the lifecycle fixture the restart checks expect.
     await host.applicationWindow.webContents.executeJavaScript(`(async () => {
       document.querySelector('.session-inspector .panel-heading button')?.click();
-      const row = document.querySelector('.session-row button[data-session-id="' + ${JSON.stringify(preloadProbe.templateCreatedSession.sessionId)} + '"]');
+      const row = document.querySelector('.session-row button[data-session-id="' + ${JSON.stringify(preloadProbe.formCreatedSession.sessionId)} + '"]');
       if (!row) throw new Error('the lifecycle fixture disappeared after the model origin phase');
       row.click();
     })()`)
@@ -3255,7 +3227,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         `after, ${survivingRendererCrash.openRequestsAfter} before`)
     }
     const lifecycleStoppedAfterRestart = restoredDefaultSessions.find(
-      (record) => record.sessionId === preloadProbe.templateCreatedSession.sessionId
+      (record) => record.sessionId === preloadProbe.formCreatedSession.sessionId
     )?.lastProcess
     if (
       lifecycleStoppedAfterRestart?.state !== 'interrupted' ||
@@ -3272,7 +3244,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         .map((item) => item.sessionId).join(',') !==
         defaultSessionsAfterLifecycleStop.map((item) => item.sessionId).join(',') ||
       restoredArchivedSessions[0]?.sessionId !== thirdSession.sessionId ||
-      restoredLayout.selectedSessionId !== preloadProbe.templateCreatedSession.sessionId ||
+      restoredLayout.selectedSessionId !== preloadProbe.formCreatedSession.sessionId ||
       restoredLayout.sessionView[session.sessionId]?.scrollLine !== 19 ||
       restoredLayout.sessionView[session.sessionId]?.followTail !== false ||
       JSON.stringify(restoredBindings.map(persistedBindingView)) !==
@@ -3292,7 +3264,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     // while selection still has the identity bar, selected fill and stronger weight.
     const interruptedSidebarAcceptance = await acceptanceWait(async () =>
       await host.applicationWindow!.webContents.executeJavaScript(`(() => {
-        const button = document.querySelector('.session-row.selected > button[data-session-id="${preloadProbe.templateCreatedSession.sessionId}"]');
+        const button = document.querySelector('.session-row.selected > button[data-session-id="${preloadProbe.formCreatedSession.sessionId}"]');
         const row = button?.closest('.session-row');
         const name = row?.querySelector('.session-name');
         if (!button || !row || !name) return undefined;
@@ -4731,50 +4703,31 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error(`a second terminal notice resized, rebuilt or wrote to its pane: ${JSON.stringify(aroundSecondNotice)}`)
     }
 
-    console.error('[BMN] self-test phase: launch sets and repository identity')
-    const launchSetRepository = await runLaunchSetRepositorySelfTest(host.applicationWindow, {
+    console.error('[BMN] self-test phase: repository identity of ordinary launches')
+    const repositoryLaunch = await runRepositoryLaunchSelfTest(host.applicationWindow, {
       workspaceId: DEFAULT_WORKSPACE_ID,
       workspaceName: restoredWorkspaces.find((item) => item.workspaceId === DEFAULT_WORKSPACE_ID)!.name,
       directory: isolatedCwd,
       existingSessionId: session.sessionId
-    }, {
-      pauseNextSetRead: taps.pauseNextLaunchSetRead,
-      startRequestCount: () => taps.launchSetStartRequests
     })
-    if (!launchSetRepository.savedWithoutStart ||
-        !launchSetRepository.cancelledPendingStart ||
-        !launchSetRepository.equivalentDirectoryWarning ||
-        !launchSetRepository.previewBranch.includes('Branch main') ||
-        !launchSetRepository.changedBranchBlocked ||
-        JSON.stringify(launchSetRepository.startedOrder) !== JSON.stringify(['First', 'Second', 'Third']) ||
-        !launchSetRepository.selectionPreserved ||
-        JSON.stringify(launchSetRepository.partialOutcomes) !== JSON.stringify(['started', 'failed', 'not-started']) ||
-        launchSetRepository.retryAddedSessions !== 2 ||
-        launchSetRepository.reconnectAddedSessions !== 0 ||
-        !launchSetRepository.failedSessionLinked ||
-        !launchSetRepository.preparationPreservedTerminals ||
-        !launchSetRepository.keyboardFocusInDialog ||
-        !launchSetRepository.editDeletePreservedSessions ||
-        JSON.stringify(launchSetRepository.reorderedEntries) !== JSON.stringify(['First', 'Third', 'Second']) ||
-        !launchSetRepository.ordinaryChangedBlocked ||
-        !launchSetRepository.nonRepositoryStarted ||
-        !launchSetRepository.detailRoots[0]?.includes(isolatedCwd) ||
-        !launchSetRepository.detailRoots[1]?.includes(join(isolatedCwd, 'nested-launch-repo')) ||
-        launchSetRepository.detailRoots.length !== 2 ||
-        launchSetRepository.detailRoots[0] === launchSetRepository.detailRoots[1] ||
-        !/^git version /u.test(launchSetRepository.gitVersion)) {
-      throw new Error(`launch set or repository acceptance failed: ${JSON.stringify(launchSetRepository)}`)
+    if (!repositoryLaunch.previewBranch.includes('Branch main') ||
+        !repositoryLaunch.preparationPreservedTerminals ||
+        !repositoryLaunch.ordinaryChangedBlocked ||
+        !repositoryLaunch.nonRepositoryStarted ||
+        !repositoryLaunch.detailRoots[0]?.includes(isolatedCwd) ||
+        !repositoryLaunch.detailRoots[1]?.includes(join(isolatedCwd, 'nested-launch-repo')) ||
+        repositoryLaunch.detailRoots.length !== 2 ||
+        repositoryLaunch.detailRoots[0] === repositoryLaunch.detailRoots[1] ||
+        !/^git version /u.test(repositoryLaunch.gitVersion)) {
+      throw new Error(`repository acceptance failed: ${JSON.stringify(repositoryLaunch)}`)
     }
     const checkoutPeers = await runCheckoutPeersSelfTest(host.applicationWindow, {
       directory: isolatedCwd,
       workspaceId: DEFAULT_WORKSPACE_ID,
       workspaceName: restoredWorkspaces.find((item) => item.workspaceId === DEFAULT_WORKSPACE_ID)!.name,
-      peerWorkspaceId: routingWorkspace.workspaceId,
-      peerWorkspaceName: routingWorkspace.name
+      peerWorkspaceId: routingWorkspace.workspaceId
     })
-    if (!checkoutPeers.latePeerBlocked || !checkoutPeers.secondClickStarted ||
-      !checkoutPeers.bothPreviewsNamedPeer || !checkoutPeers.previewPreservedTerminal ||
-      !checkoutPeers.setPreviewDidNotStart) {
+    if (!checkoutPeers.latePeerBlocked || !checkoutPeers.secondClickStarted || !checkoutPeers.previewPreservedTerminal) {
       throw new Error(`checkout peer acceptance failed: ${JSON.stringify(checkoutPeers)}`)
     }
 
@@ -5245,7 +5198,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       bridgeErrorCodesTyped: preloadProbe.bridgeErrorCodes,
       resumeConfirmationShownToOwner,
       rendererLaunchUnavailable: preloadProbe.launchUnavailable,
-      rendererUnavailableTemplate: preloadProbe.unavailableTemplate,
       rendererStoppedPanelLabel,
       stoppedStaleProgress,
       rendererInverseTextContrast,
@@ -5254,7 +5206,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       closePrompt,
       registeredInvokeChannels,
       envelopedInvokeChannels,
-      templateCreatedSession: preloadProbe.templateCreatedSession,
+      formCreatedSession: preloadProbe.formCreatedSession,
       treeSelectionLayoutPut: preloadProbe.treeSelection,
       crossWorkspaceSplit: preloadProbe.crossWorkspaceSplit,
       workspaceMarkers: preloadProbe.workspaceMarkers,
@@ -5309,7 +5261,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       hookIntegration: hookIntegrationAcceptance,
       harnessObservations: { opencode: openCodeObservationUi, codex: codexObservationUi },
       terminalNotice,
-      launchSetRepository,
+      repositoryLaunch,
       checkoutPeers,
       modelOrigin: { flags: modelOriginFlags, afterRestart: modelOriginAfterRestart },
       remoteAnswers,
@@ -5365,7 +5317,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     host.processTracking.unconfirmedExits.clear()
     host.sessionRecords.clear()
     taps.rendererLaunchBlockedSessionId = undefined
-    taps.rendererUnavailableTemplate = undefined
   }
   if (!graceful) throw new Error('the real terminal host did not shut down gracefully')
   console.log(JSON.stringify({ ...receipt, graceful }))

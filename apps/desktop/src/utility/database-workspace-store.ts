@@ -1,35 +1,22 @@
 import {
   isPinnedFilePaths,
   DEFAULT_WORKSPACE_MARKER,
-  isLaunchSetCreateParams,
-  isLaunchSetUpdateParams,
-  isLaunchSetDeleteParams,
-  isLaunchSetListParams,
-  isLaunchSetRecord,
-  type LaunchSetCreateParams,
-  type LaunchSetUpdateParams,
-  type LaunchSetDeleteParams,
-  type LaunchSetRecord,
   ERROR_CODES,
   emptyWorkspaceLayout,
-  isLaunchTemplateRecord,
   isSessionRecord,
   parseReportedResumeCommand,
-  isTemplateCreateParams,
   isWorkspaceCreateParams,
   isWorkspaceLayoutState,
   isWorkspaceMarker,
   isWorkspaceRecord,
   isWorkspaceUpdateParams,
   isSessionUpdateParams,
-  type LaunchTemplateRecord,
   type LayoutGetResult,
   type ProtocolErrorCode,
   type ReportedResumeCommand,
   type SessionProcessStatus,
   type SessionRecord,
   type SessionUpdateParams,
-  type TemplateCreateParams,
   type WorkspaceCreateParams,
   type WorkspaceLayoutState,
   type WorkspaceRecord,
@@ -98,18 +85,6 @@ const SESSION_SELECT = `SELECT s.session_id, s.workspace_id, s.name, s.cwd, s.ex
          WHERE latest.session_id = s.session_id
          ORDER BY latest.started_at DESC, latest.rowid DESC LIMIT 1
        )`
-
-interface TemplateRow {
-  template_id: string
-  name: string
-  executable: string
-  argv_json: string
-  cwd: string
-  background_choice: string | null
-  terminal_graphics: string | null
-  revision: number
-  created_at: string
-}
 
 function invalid(message: string): never {
   throw new WorkspaceStoreError(ERROR_CODES.invalidArgument, message)
@@ -248,32 +223,6 @@ function sessionRecord(row: SessionRow): SessionRecord {
   }
   if (!isSessionRecord(record)) {
     throw new WorkspaceStoreError(ERROR_CODES.ioError, 'A stored session record is invalid')
-  }
-  return record
-}
-
-function templateRecord(row: TemplateRow): LaunchTemplateRecord {
-  const record: LaunchTemplateRecord = {
-    templateId: row.template_id,
-    name: row.name,
-    executable: row.executable,
-    ...storedArgvFields(
-      row.argv_json,
-      'This launch template',
-      'Recreate this launch template before applying it.'
-    ),
-    cwd: row.cwd,
-    backgroundChoice:
-      row.background_choice === 'hide' || row.background_choice === 'stop'
-        ? row.background_choice
-        : null,
-    terminalGraphics: row.terminal_graphics === 'sixel' || row.terminal_graphics === 'standard'
-      ? row.terminal_graphics : null,
-    revision: row.revision,
-    createdAt: row.created_at
-  }
-  if (!isLaunchTemplateRecord(record)) {
-    throw new WorkspaceStoreError(ERROR_CODES.ioError, 'A stored launch template record is invalid')
   }
   return record
 }
@@ -451,50 +400,6 @@ export function updateSession(
   return selectSession(database, current.sessionId)
 }
 
-export function listTemplates(database: DatabaseConnection): LaunchTemplateRecord[] {
-  const rows = database
-    .prepare(
-      `SELECT template_id, name, executable, argv_json, cwd, background_choice, terminal_graphics,
-              revision, created_at
-       FROM launch_template ORDER BY name, created_at, template_id`
-    )
-    .all() as TemplateRow[]
-  return rows.map(templateRecord)
-}
-
-export function createTemplate(
-  database: DatabaseConnection,
-  params: TemplateCreateParams,
-  templateId: string,
-  now: string
-): LaunchTemplateRecord {
-  if (!isTemplateCreateParams(params)) invalid('Template create parameters are invalid')
-  database
-    .prepare(
-      `INSERT INTO launch_template(
-        template_id, name, executable, argv_json, cwd, background_choice, terminal_graphics, revision, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`
-    )
-    .run(
-      templateId,
-      params.name.trim(),
-      params.executable,
-      JSON.stringify(params.argv),
-      params.cwd,
-      params.backgroundChoice ?? null,
-      params.terminalGraphics ?? null,
-      now
-    )
-  const row = database
-    .prepare(
-      `SELECT template_id, name, executable, argv_json, cwd, background_choice, terminal_graphics,
-              revision, created_at
-       FROM launch_template WHERE template_id = ?`
-    )
-    .get(templateId) as TemplateRow
-  return templateRecord(row)
-}
-
 export function getLayout(
   database: DatabaseConnection,
   workspaceId: string
@@ -580,91 +485,4 @@ export function putLayout(
     return conflict('Workspace layout', workspaceId, currentRevision)
   }
   return next
-}
-
-interface LaunchSetRow {
-  set_id: string
-  workspace_id: string
-  name: string
-  entries_json: string
-  revision: number
-  created_at: string
-}
-function launchSetRecord(row: LaunchSetRow): LaunchSetRecord {
-  let entries: unknown
-  try { entries = JSON.parse(row.entries_json) } catch { entries = null }
-  const record = {
-    setId: row.set_id, workspaceId: row.workspace_id, name: row.name,
-    entries, revision: row.revision, createdAt: row.created_at
-  }
-  if (!isLaunchSetRecord(record)) {
-    throw new WorkspaceStoreError(ERROR_CODES.ioError, 'A stored launch set record is invalid')
-  }
-  return record
-}
-function requireActiveLaunchWorkspace(database: DatabaseConnection, workspaceId: string): void {
-  if (selectWorkspace(database, workspaceId).archivedAt !== null) {
-    invalid('Archived workspaces cannot change or launch sets')
-  }
-}
-export function listLaunchSets(database: DatabaseConnection, workspaceId: string): LaunchSetRecord[] {
-  if (!isLaunchSetListParams({ workspaceId })) invalid('Launch set workspace is invalid')
-  selectWorkspace(database, workspaceId)
-  return (database.prepare(
-    'SELECT * FROM launch_set WHERE workspace_id = ? ORDER BY name, created_at, set_id'
-  ).all(workspaceId) as LaunchSetRow[]).map(launchSetRecord)
-}
-export function getLaunchSet(
-  database: DatabaseConnection, workspaceId: string, setId: string
-): LaunchSetRecord {
-  const row = database.prepare('SELECT * FROM launch_set WHERE workspace_id = ? AND set_id = ?')
-    .get(workspaceId, setId) as LaunchSetRow | undefined
-  if (!row) return missing('launch set')
-  return launchSetRecord(row)
-}
-export function createLaunchSet(
-  database: DatabaseConnection, params: LaunchSetCreateParams, setId: string, now: string
-): LaunchSetRecord {
-  if (!isLaunchSetCreateParams(params) ||
-      !isLaunchSetRecord({ ...params, setId, revision: 1, createdAt: now })) {
-    invalid('Launch set create parameters are invalid')
-  }
-  return database.transaction(() => {
-    requireActiveLaunchWorkspace(database, params.workspaceId)
-    database.prepare(
-      'INSERT INTO launch_set(set_id, workspace_id, name, entries_json, revision, created_at) VALUES (?, ?, ?, ?, 1, ?)'
-    ).run(setId, params.workspaceId, params.name.trim(), JSON.stringify(params.entries), now)
-    return getLaunchSet(database, params.workspaceId, setId)
-  })()
-}
-export function updateLaunchSet(
-  database: DatabaseConnection, params: LaunchSetUpdateParams
-): LaunchSetRecord {
-  if (!isLaunchSetUpdateParams(params)) invalid('Launch set update parameters are invalid')
-  return database.transaction(() => {
-    requireActiveLaunchWorkspace(database, params.workspaceId)
-    const current = getLaunchSet(database, params.workspaceId, params.setId)
-    if (current.revision !== params.expectedRevision) {
-      return conflict('Launch set', params.setId, current.revision)
-    }
-    const result = database.prepare(
-      'UPDATE launch_set SET name = ?, entries_json = ?, revision = revision + 1 WHERE set_id = ? AND workspace_id = ? AND revision = ?'
-    ).run(params.name.trim(), JSON.stringify(params.entries), params.setId, params.workspaceId, params.expectedRevision)
-    if (Number(result.changes) !== 1) return conflict('Launch set', params.setId, current.revision)
-    return getLaunchSet(database, params.workspaceId, params.setId)
-  })()
-}
-export function deleteLaunchSet(database: DatabaseConnection, params: LaunchSetDeleteParams): void {
-  if (!isLaunchSetDeleteParams(params)) invalid('Launch set delete parameters are invalid')
-  database.transaction(() => {
-    requireActiveLaunchWorkspace(database, params.workspaceId)
-    const current = getLaunchSet(database, params.workspaceId, params.setId)
-    if (current.revision !== params.expectedRevision) {
-      return conflict('Launch set', params.setId, current.revision)
-    }
-    const result = database.prepare(
-      'DELETE FROM launch_set WHERE set_id = ? AND workspace_id = ? AND revision = ?'
-    ).run(params.setId, params.workspaceId, params.expectedRevision)
-    if (Number(result.changes) !== 1) conflict('Launch set', params.setId, current.revision)
-  })()
 }

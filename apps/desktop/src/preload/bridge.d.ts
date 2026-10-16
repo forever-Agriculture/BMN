@@ -76,13 +76,6 @@ import type {
   ConversationBindingState,
   SessionResumePreview,
   ExplicitConversationBinding,
-  LaunchTemplateRecord,
-  LaunchSetRecord,
-  LaunchSetCreateParams,
-  LaunchSetUpdateParams,
-  LaunchSetDeleteParams,
-  LaunchSetStartParams,
-  LaunchSetStartResult,
   LayoutGetResult,
   LayoutPutParams,
   ProtocolErrorCode,
@@ -169,7 +162,6 @@ export interface ApplicationStartupSuccess {
   activeWorkspaceId: string | null
   workspaces: WorkspaceRecord[]
   sessions: SessionRecord[]
-  templates: LaunchTemplateRecord[]
   layouts: WorkspaceLayoutState[]
   /** Visible notices for workspaces whose persisted layout was unreadable and opened empty. */
   layoutNotices: string[]
@@ -227,24 +219,6 @@ export interface AiTerminalBridge {
   updateSession(params: SessionUpdateParams): Promise<SessionRecord>
   inspectRepository(directory: string): Promise<RepositoryIdentity>
   readDevAutoRuns(workspaceId?: string): Promise<DevAutoRunsResult>
-  normalizeLaunchDirectories(directories: string[]): Promise<string[]>
-  listTemplates(): Promise<LaunchTemplateRecord[]>
-  createTemplate(params: {
-    name: string
-    executable: string
-    argv: string[]
-    cwd: string
-    backgroundChoice?: 'hide' | 'stop' | null
-  }): Promise<LaunchTemplateRecord>
-  listLaunchSets(workspaceId: string): Promise<LaunchSetRecord[]>
-  getLaunchSet(workspaceId: string, setId: string): Promise<LaunchSetRecord>
-  createLaunchSet(params: LaunchSetCreateParams): Promise<LaunchSetRecord>
-  updateLaunchSet(params: LaunchSetUpdateParams): Promise<LaunchSetRecord>
-  deleteLaunchSet(params: LaunchSetDeleteParams): Promise<{ deleted: true }>
-  startLaunchSet(params: LaunchSetStartParams): Promise<LaunchSetStartResult & {
-    sessions: SessionRecord[]
-    startups: TerminalStartupSuccess[]
-  }>
   getLayout(workspaceId: string): Promise<LayoutGetResult>
   putLayout(params: LayoutPutParams): Promise<WorkspaceLayoutState>
   /** Quits the app; the owner is asked first when sessions are running. */

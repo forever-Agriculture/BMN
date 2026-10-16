@@ -20,12 +20,10 @@ import {
   TERMINAL_SCROLLBACK_LINES,
   isCompatibleProtocol,
   isRpcRequest,
-  isLaunchTemplateRecord,
   isSessionCreateParams,
   isSessionRecord,
   isSessionStopParams,
   isSessionUpdateParams,
-  isTemplateCreateParams,
   isTerminalByteMessage,
   isTerminalExitMessage,
   isTerminalViewDisconnectedMessage,
@@ -39,7 +37,6 @@ import {
   isWorkspaceUpdateParams,
   emptyWorkspaceLayout,
   effectiveTerminalGraphics,
-  isLaunchSetEntry,
   type RpcRequest
 } from './index'
 
@@ -86,14 +83,6 @@ describe('protocol surface', () => {
         'session.cohort.resume',
         'repository.inspect',
         'devAuto.runs',
-        'template.list',
-        'template.create',
-        'launchSet.list',
-        'launchSet.get',
-        'launchSet.create',
-        'launchSet.update',
-        'launchSet.delete',
-        'launchSet.start',
         'layout.get',
         'layout.put',
         'terminal.attach',
@@ -158,7 +147,8 @@ describe('protocol surface', () => {
         'presence.set'
       ])
     )
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(91)
+    // Story 75.3 removed template.list, template.create and the six launchSet methods (91 before).
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(83)
   })
 
   it('exports the initial stable error codes', () => {
@@ -329,17 +319,6 @@ describe('protocol surface', () => {
       detail: null
     }
   }
-  const templateRecord = {
-    templateId: 'template-1',
-    name: 'Shell',
-    executable: '/bin/bash',
-    argv: [],
-    cwd: '/workspace',
-    backgroundChoice: null,
-    terminalGraphics: null,
-    revision: 1,
-    createdAt: '2026-09-13T00:00:00.000Z'
-  }
   const sessionCreate = {
     workspaceId: 'workspace-1',
     name: 'Shell',
@@ -349,7 +328,6 @@ describe('protocol surface', () => {
     cols: 80,
     rows: 24
   }
-  const templateCreate = { name: 'Shell', executable: '/bin/bash', argv: [], cwd: '/workspace' }
 
   it('gives every session graphics by default and accepts explicit overrides', () => {
     expect(effectiveTerminalGraphics(null)).toBe('sixel')
@@ -358,12 +336,6 @@ describe('protocol surface', () => {
     expect(isSessionCreateParams({ ...sessionCreate, terminalGraphics: 'sixel' })).toBe(true)
     expect(isSessionCreateParams({ ...sessionCreate, terminalGraphics: 'kitty' })).toBe(false)
     expect(isSessionUpdateParams({ sessionId: 's', expectedRevision: 1, terminalGraphics: null })).toBe(true)
-    expect(isTemplateCreateParams({ ...templateCreate, terminalGraphics: 'standard' })).toBe(true)
-    const entry = { entryId: 'e', name: 'Codex', executable: 'codex', argv: [],
-      backgroundChoice: null, terminalGraphics: null }
-    expect(isLaunchSetEntry(entry)).toBe(true)
-    expect(isLaunchSetEntry({ ...entry, terminalGraphics: 'kitty' })).toBe(false)
-    expect(isLaunchSetEntry({ ...entry, terminalGraphics: undefined })).toBe(false)
   })
 
   it('accepts only a non-empty per-record launch-disabled reason', () => {
@@ -377,18 +349,11 @@ describe('protocol surface', () => {
     expect(isSessionRecord({ ...sessionRecord, archivedAt: 'yesterday' })).toBe(false)
     expect(isSessionRecord(Object.fromEntries(Object.entries(sessionRecord).filter(([key]) => key !== 'archivedAt'))))
       .toBe(false)
-    expect(isLaunchTemplateRecord({
-      ...templateRecord,
-      argv: [],
-      launchDisabledReason: 'Stored arguments are unreadable; recreate this template.'
-    })).toBe(true)
-    expect(isLaunchTemplateRecord({ ...templateRecord, launchDisabledReason: '' })).toBe(false)
   })
 
   it.each([
     ['WorkspaceRecord', isWorkspaceRecord as (value: unknown) => boolean, workspaceRecord],
     ['SessionRecord', isSessionRecord as (value: unknown) => boolean, sessionRecord],
-    ['LaunchTemplateRecord', isLaunchTemplateRecord as (value: unknown) => boolean, templateRecord],
     ['WorkspaceCreateParams', isWorkspaceCreateParams as (value: unknown) => boolean, { name: 'Personal' }],
     ['WorkspaceUpdateParams', isWorkspaceUpdateParams as (value: unknown) => boolean, {
       workspaceId: 'workspace-1', expectedRevision: 1, name: 'Renamed'
@@ -399,8 +364,7 @@ describe('protocol surface', () => {
     }],
     ['SessionStopParams', isSessionStopParams as (value: unknown) => boolean, {
       sessionId: 'session-1', incarnationId: 'incarnation-1', cause: 'explicit'
-    }],
-    ['TemplateCreateParams', isTemplateCreateParams as (value: unknown) => boolean, templateCreate]
+    }]
   ])('closes the %s shape: accepts the exact shape and rejects an unknown key', (_name, validate, exact) => {
     expect(validate(exact)).toBe(true)
     expect(validate({ ...exact, sessionOrder: ['session-1'] })).toBe(false)

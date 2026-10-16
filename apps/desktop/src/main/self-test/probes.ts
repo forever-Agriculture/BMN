@@ -16,8 +16,7 @@ export interface RendererIntegrationProbe {
     resumeDisabled: boolean
     resumeTitle: string
   }
-  unavailableTemplate: { name: string; disabled: boolean; title: string }
-  templateCreatedSession: {
+  formCreatedSession: {
     sessionId: string
     name: string
     executable: string

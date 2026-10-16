@@ -1,19 +1,15 @@
 // MODULE: index.ts - Electron main process: windows, bridge IPC and host lifecycle; `--self-test` loads ./self-test
 import { chmodSync, mkdirSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
   ERROR_CODES,
   METHOD_REGISTRY,
-  isLaunchSetStartParams,
   type AppSettings,
   type ClosePromptDecision,
   type ClosePromptMode,
   type ClosePromptSession,
   type ExplicitConversationBinding,
   type InterruptedSessionCohort,
-  type LaunchTemplateRecord,
-  type LaunchSetStartResult,
   type SavedOutputCapture,
   type SavedOutputCaptureOutcome,
   type SavedOutputSnapshot,
@@ -60,7 +56,6 @@ import { acquireRootScopedSingleInstance, focusExistingWindow } from './single-i
 import { trackAllowedSender } from './allowed-senders'
 import { createDevelopmentRoot } from './development-root'
 import { installSavedOutputIpcHandler } from './saved-output-ipc'
-import { shouldAdoptLaunchSetRuntime } from './launch-set-runtime'
 import { refreshVisibilityOnOpen } from './visibility-refresh'
 import {
   bridgeInvokeRegistrar,
@@ -193,7 +188,6 @@ interface ApplicationStartupSuccess {
   activeWorkspaceId: string | null
   workspaces: WorkspaceRecord[]
   sessions: SessionRecord[]
-  templates: LaunchTemplateRecord[]
   layouts: WorkspaceLayoutState[]
   layoutNotices: string[]
   liveSessions: StartupSuccess[]
@@ -522,7 +516,7 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
         if (selfTestTaps) await selfTestTaps.workspaceRequest(method, params)
         const result = await requireHostClient().request<Result>(method, params)
         if (selfTestTaps && method === METHOD_REGISTRY.sessionList) {
-          return selfTestTaps.rendererState({ sessions: result as SessionRecord[], templates: [] }).sessions as Result
+          return selfTestTaps.rendererState({ sessions: result as SessionRecord[] }).sessions as Result
         }
         if (method === METHOD_REGISTRY.sessionUpdate) {
           const record = result as SessionRecord
@@ -543,76 +537,6 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
         throw new MainIpcError(ERROR_CODES.invalidArgument, 'Session create parameters must be an object')
       }
       return createSessionRuntime(params as SessionCreateParams, rendererTestMode)
-    }
-  })
-  bridgeIpc.handle('aiterm:launch-directory:normalize', (event, value: unknown) => {
-    if (!senderIsAllowed(event)) {
-      throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
-    }
-    const directories = (value as { directories?: unknown } | null)?.directories
-    if (!Array.isArray(directories) || directories.length > 256 ||
-        !directories.every((item) => typeof item === 'string' && item.length <= 4096)) {
-      throw new MainIpcError(ERROR_CODES.invalidArgument, 'Launch directories are invalid')
-    }
-    return directories.map((directory: string) => resolve(
-      directory === '~' || directory.startsWith('~/')
-        ? join(homedir(), directory.slice(1)) : directory
-    ))
-  })
-  bridgeIpc.handle('aiterm:launch-set:start', async (event, value: unknown) => {
-    if (!senderIsAllowed(event)) {
-      throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
-    }
-    if (!isLaunchSetStartParams(value)) {
-      throw new MainIpcError(ERROR_CODES.invalidArgument, 'Launch set start parameters are invalid')
-    }
-    selfTestTaps?.launchSetStarted()
-    const client = requireHostClient()
-    const result = await client.request<LaunchSetStartResult>(METHOD_REGISTRY.launchSetStart, value)
-    const records = await client.request<SessionRecord[]>(METHOD_REGISTRY.sessionList, {
-      workspaceId: result.workspaceId
-    })
-    const byId = new Map(records.map((record) => [record.sessionId, record]))
-    const sessions: SessionRecord[] = []
-    const startups: StartupSuccess[] = []
-    for (const entry of result.entries) {
-      if (!entry.sessionId) continue
-      const record = byId.get(entry.sessionId)
-      if (!record) throw new Error('A started session was not saved')
-      sessionRecords.set(record.sessionId, record)
-      refreshOpenedWorkspace(record.cwd)
-      sessions.push(record)
-      if (!shouldAdoptLaunchSetRuntime(
-        entry, record,
-        entry.incarnationId ? client.sessionProcessState(record.sessionId, entry.incarnationId) : undefined
-      )) continue
-      const existing = runtimes.get(record.sessionId)
-      if (existing) {
-        startups.push(startupForRuntime(existing))
-        continue
-      }
-      const attachment = { sessionId: entry.sessionId, incarnationId: entry.incarnationId,
-        ...entry.attachment }
-      const runtime: ApplicationRuntime = {
-        client, session: attachment, attachment, rendererPort: hostRendererPort!,
-        dimensions: { cols: value.cols, rows: value.rows },
-        cwd: record.cwd, executable: record.executable, workspaceId: record.workspaceId,
-        name: record.name, testMode: rendererTestMode, processState: 'live',
-        ...(record.backgroundChoice ? { backgroundChoice: record.backgroundChoice } : {})
-      }
-      runtimes.set(record.sessionId, runtime)
-      startups.push(startupForRuntime(runtime))
-    }
-    return {
-      ...result,
-      entries: result.entries.map((entry) => ({
-        entryId: entry.entryId, name: entry.name, outcome: entry.outcome,
-        ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
-        ...(entry.incarnationId ? { incarnationId: entry.incarnationId } : {}),
-        ...(entry.error ? { error: entry.error } : {})
-      })),
-      sessions,
-      startups
     }
   })
   installCompanionIpcHandlers(bridgeIpc, {

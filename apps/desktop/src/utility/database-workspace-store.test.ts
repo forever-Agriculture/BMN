@@ -1,4 +1,4 @@
-// MODULE: database-workspace-store.test.ts - workspace, session, template, layout and launch-set records read and written through SQLite
+// MODULE: database-workspace-store.test.ts - workspace, session and layout records read and written through SQLite
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -16,12 +16,9 @@ import { insertConversationBinding } from './database-binding-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import {
   WorkspaceStoreError,
-  createLaunchSet, deleteLaunchSet, updateLaunchSet, listLaunchSets, getLaunchSet,
-  createTemplate,
   createWorkspace,
   getLayout,
   listSessions,
-  listTemplates,
   listWorkspaces,
   putLayout,
   selectSession,
@@ -254,7 +251,7 @@ describe('workspace database store', () => {
     }
   })
 
-  it('round-trips templates and validates layout writes with optimistic revisions', () => {
+  it('validates layout writes with optimistic revisions', () => {
     const database = new BetterSqlite3(':memory:')
     try {
       initializeDatabase(database, now)
@@ -272,20 +269,6 @@ describe('workspace database store', () => {
         cwd: '/workspace/b',
         argv: []
       })
-      const template = database.transaction(() => createTemplate(
-        database,
-        {
-          name: 'Codex review',
-          executable: '/usr/bin/codex',
-          argv: ['--model', 'gpt'],
-          cwd: '/workspace',
-          backgroundChoice: 'stop'
-        },
-        'template-codex',
-        now
-      ))()
-      expect(listTemplates(database)).toEqual([template])
-
       expect(getLayout(database, DEFAULT_WORKSPACE_ID)).toEqual({
         layout: {
           workspaceId: DEFAULT_WORKSPACE_ID,
@@ -624,49 +607,6 @@ describe('workspace database store', () => {
       database.close()
     }
   })
-
-  it('degrades one corrupt template argv record without hiding healthy stored records', () => {
-    const database = new BetterSqlite3(':memory:')
-    try {
-      initializeDatabase(database, now)
-      insertSession(database, {
-        sessionId: 'session-healthy',
-        workspaceId: DEFAULT_WORKSPACE_ID,
-        position: 0,
-        cwd: '/workspace/healthy',
-        argv: ['healthy-session']
-      })
-      const healthyTemplate = database.transaction(() => createTemplate(database, {
-        name: 'Healthy template',
-        executable: '/bin/bash',
-        argv: ['--noprofile'],
-        cwd: '/workspace/healthy'
-      }, 'template-healthy', now))()
-      database.transaction(() => createTemplate(database, {
-        name: 'Broken template',
-        executable: '/bin/bash',
-        argv: ['before-corruption'],
-        cwd: '/workspace/broken'
-      }, 'template-broken', now))()
-      database.prepare('UPDATE launch_template SET argv_json = ? WHERE template_id = ?')
-        .run('{not-json', 'template-broken')
-
-      const templates = new Map(listTemplates(database)
-        .map((template) => [template.templateId, template]))
-      expect(templates.get('template-broken')).toMatchObject({
-        argv: [],
-        launchDisabledReason: expect.stringContaining('Recreate this launch template')
-      })
-      expect(templates.get('template-healthy')).toEqual(healthyTemplate)
-      expect(listSessions(database, DEFAULT_WORKSPACE_ID)[0]).toMatchObject({
-        sessionId: 'session-healthy',
-        argv: ['healthy-session']
-      })
-      expect(listWorkspaces(database)).toHaveLength(1)
-    } finally {
-      database.close()
-    }
-  })
 })
 
 describe('missing records (Story 38.1 FR73)', () => {
@@ -677,8 +617,7 @@ describe('missing records (Story 38.1 FR73)', () => {
       const id = 'b3f1c2d4-0000-4000-8000-00000000abcd'
       for (const [read, message] of [
         [() => selectSession(database, id), 'The session was not found'],
-        [() => selectWorkspace(database, id), 'The workspace was not found'],
-        [() => getLaunchSet(database, DEFAULT_WORKSPACE_ID, id), 'The launch set was not found']
+        [() => selectWorkspace(database, id), 'The workspace was not found']
       ] as const) {
         expect(read).toThrowError(expect.objectContaining({ code: ERROR_CODES.notFound, message }))
       }
@@ -892,72 +831,6 @@ describe('workspace identity marker', () => {
   })
 })
 
-describe('copied launch set definitions', () => {
-  const entry = { entryId: 'entry-a', name: 'Shell', executable: '/bin/sh', argv: ['-c', 'printf "a b"'],
-    backgroundChoice: null, terminalGraphics: null }
-  const params = { workspaceId: DEFAULT_WORKSPACE_ID, name: 'Daily', entries: [entry] }
-  it('persists copied commands, stable IDs, ordered edits and revision-checked deletion', () => {
-    const db = new BetterSqlite3(':memory:')
-    try {
-      initializeDatabase(db, now)
-      expect(listLaunchSets(db, DEFAULT_WORKSPACE_ID)).toEqual([])
-      const template = createTemplate(db, { cwd: '/template', name: 'Shell', executable: entry.executable, argv: entry.argv }, 'template-copy', now)
-      const copied = { entryId: entry.entryId, name: template.name, executable: template.executable, argv: template.argv,
-        backgroundChoice: template.backgroundChoice, terminalGraphics: template.terminalGraphics }
-      const saved = createLaunchSet(db, { ...params, entries: [copied] }, 'set-a', now)
-      copied.argv.push('mutated')
-      db.prepare('DELETE FROM launch_template WHERE template_id = ?').run(template.templateId)
-      expect(getLaunchSet(db, params.workspaceId, saved.setId).entries[0]?.argv).toEqual(entry.argv)
-      const second = { ...entry, entryId: 'entry-b' }
-      const edited = updateLaunchSet(db, { ...params, setId: saved.setId, expectedRevision: 1, name: 'Renamed', entries: [second, entry] })
-      expect(edited).toMatchObject({ revision: 2, name: 'Renamed', entries: [second, entry] })
-      expect(() => updateLaunchSet(db, { ...params, setId: saved.setId, expectedRevision: 1 })).toThrow(/revision 2/)
-      expect(() => deleteLaunchSet(db, { workspaceId: params.workspaceId, setId: saved.setId, expectedRevision: 1 })).toThrow(/revision 2/)
-      expect(getLaunchSet(db, params.workspaceId, saved.setId)).toEqual(edited)
-      deleteLaunchSet(db, { workspaceId: params.workspaceId, setId: saved.setId, expectedRevision: 2 })
-      expect(listLaunchSets(db, params.workspaceId)).toEqual([])
-      expect(db.prepare('SELECT COUNT(*) AS n FROM session').get()).toEqual({ n: 0 })
-    } finally { db.close() }
-  })
-  it('rejects invalid commands, extra fields, duplicate IDs and inactive ownership without partial writes', () => {
-    const db = new BetterSqlite3(':memory:')
-    try {
-      initializeDatabase(db, now)
-      for (const invalidParams of [
-        { ...params, entries: [] }, { ...params, entries: Array(9).fill(entry) },
-        { ...params, entries: [entry, entry] }, { ...params, name: 'x'.repeat(300) },
-        { ...params, entries: [{ ...entry, cwd: '/hidden' }] },
-        { ...params, entries: [{ ...entry, executable: '\0' }] },
-        { ...params, entries: [{ ...entry, argv: ['x'.repeat(65537)] }] },
-        { ...params, workspaceId: 'missing' }
-      ]) expect(() => createLaunchSet(db, invalidParams, 'bad', now)).toThrow()
-      const saved = createLaunchSet(db, params, 'good', now)
-      updateWorkspace(db, { workspaceId: params.workspaceId, expectedRevision: 1, archived: true }, now)
-      expect(() => createLaunchSet(db, params, 'bad', now)).toThrow(/Archived/)
-      expect(() => updateLaunchSet(db, { ...params, setId: 'good', expectedRevision: 1 })).toThrow(/Archived/)
-      expect(() => deleteLaunchSet(db, { workspaceId: params.workspaceId, setId: 'good', expectedRevision: 1 })).toThrow(/Archived/)
-      expect(listLaunchSets(db, params.workspaceId)).toEqual([saved])
-    } finally { db.close() }
-  })
-  it('survives reopening and the actual VACUUM INTO backup operation', async () => {
-    const folder = await mkdtemp(join(tmpdir(), 'bmn-launch-set-'))
-    const path = join(folder, 'source.sqlite')
-    let db = new BetterSqlite3(path)
-    try {
-      initializeDatabase(db, now)
-      const saved = createLaunchSet(db, params, 'set-backup', now)
-      db.close()
-      db = new BetterSqlite3(path)
-      initializeDatabase(db, now)
-      expect(listLaunchSets(db, params.workspaceId)).toEqual([saved])
-      const backup = join(folder, 'backup.sqlite')
-      db.prepare('VACUUM INTO ?').run(backup)
-      const copy = new BetterSqlite3(backup)
-      try { expect(listLaunchSets(copy, params.workspaceId)).toEqual([saved]) } finally { copy.close() }
-    } finally { db.close(); await rm(folder, { recursive: true, force: true }) }
-  })
-})
-
 it('migrates pre-graphics sessions, templates and ordered launch-set JSON to null choices', () => {
   const db = new BetterSqlite3(':memory:')
   try {
@@ -979,8 +852,10 @@ it('migrates pre-graphics sessions, templates and ordered launch-set JSON to nul
       VALUES ('old-set', ?, 'Old', ?, 1, ?)`).run(DEFAULT_WORKSPACE_ID, JSON.stringify(oldEntries), now)
     initializeDatabase(db, now)
     expect(listSessions(db, DEFAULT_WORKSPACE_ID)[0]?.terminalGraphics).toBeNull()
-    expect(listTemplates(db)[0]?.terminalGraphics).toBeNull()
-    expect(getLaunchSet(db, DEFAULT_WORKSPACE_ID, 'old-set').entries).toEqual(
+    // The tables stay readable after Story 75.3 removed what used them; the migration still runs on old rows.
+    expect(db.prepare('SELECT terminal_graphics FROM launch_template').get()).toEqual({ terminal_graphics: null })
+    const migrated = db.prepare('SELECT entries_json FROM launch_set WHERE set_id = ?').get('old-set') as { entries_json: string }
+    expect(JSON.parse(migrated.entries_json)).toEqual(
       oldEntries.map((entry) => ({ ...entry, terminalGraphics: null }))
     )
   } finally { db.close() }
@@ -1005,7 +880,6 @@ it('leaves damaged legacy launch-set arrays invalid without blocking the graphic
     for (const [index, entries] of invalid.entries()) {
       expect(db.prepare('SELECT entries_json FROM launch_set WHERE set_id = ?').get(`damaged-${index}`))
         .toMatchObject({ entries_json: entries })
-      expect(() => getLaunchSet(db, DEFAULT_WORKSPACE_ID, `damaged-${index}`)).toThrow(/invalid/)
     }
   } finally { db.close() }
 })

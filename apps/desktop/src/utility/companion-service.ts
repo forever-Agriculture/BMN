@@ -18,7 +18,6 @@ import {
   countryFlag,
   modelOrigin,
   PROGRESS_STALE_AFTER_MS,
-  RETIRED_APP_LINE,
   TERMINAL_NOTICE_BODY_MAX,
   TERMINAL_NOTICE_CODES,
   TERMINAL_NOTICE_TITLE_MAX,
@@ -1332,14 +1331,6 @@ export class CompanionService {
     // Read while the turn was being removed: nothing of it is shown as kept.
     if (!(await this.turnKept(sessionId, turnId))) return { kept: false }
     return difference.state === 'text' || difference.state === 'binary' ? { kept: true, difference } : { kept: true, unavailable: turnUnavailable(difference.reason) }
-  }
-
-  /** Epic 71: the one Notice on a session a launch-set entry for a retired app opened as a plain terminal. */
-  async retiredLaunchNotice(sessionId: string, incarnationId: string): Promise<void> {
-    await this.openAttention({
-      sessionId, incarnationId, requestKey: 'launch:retired', kind: 'notice', origin: 'launch:retired',
-      title: RETIRED_APP_LINE, body: 'This entry of the launch set opened as a plain terminal. Edit the set to remove it.'
-    })
   }
 
   /** Epic 69: the sweep removed a turn, or a removal now waits or no longer does; the window reads again. */
