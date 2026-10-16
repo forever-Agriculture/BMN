@@ -1754,7 +1754,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
       })}
       {pending?.kind === 'test' ? <PendingSheet rules={rules} /> : null}
       <p className="preferences-help">
-        A loading test starts the app once and sends it the rules in one prompt. BMN runs it by itself after an app update or a change to the rules.{withheld.length > 0 ? ` It is off for ${withheld.join(' and ')}, which ${withheld.length === 1 ? 'gets' : 'get'} only the public sections.` : ''}
+        A loading test starts the app once and sends it the rules in one prompt. BMN runs it by itself after an app update or a change to the rules.{withheld.length > 0 ? ` It is off for ${named(withheld)}, which ${withheld.length === 1 ? 'gets' : 'get'} only the public sections.` : ''}
       </p>
 
       <h4 className="group-head">Agent apps<span className="caption">the program BMN finds, its version and where it sends data</span></h4>

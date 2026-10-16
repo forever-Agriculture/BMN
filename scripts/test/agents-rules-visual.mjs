@@ -631,8 +631,9 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await go('Rules', 'Health')
     const fileRow = (name) => main.locator('.health-row[data-state]', { has: page.locator(':scope > span:first-child', { hasText: new RegExp(`^${name}$`) }) })
     assert.deepEqual(await Promise.all(['Claude Code', 'Codex', 'OpenCode'].map((name) => fileRow(name).getAttribute('data-state'))), ['link', 'unmanaged', 'missing'])
-    assert.match(await fileRow('Claude Code').locator('.health-state').textContent(), /Link · Full rules/)
-    assert.match(await fileRow('OpenCode').locator('.health-state').textContent(), /Missing · Public sections only/)
+    // A file that is not current says what Save does to it (75.9); the kind of rules shows on a current file only.
+    assert.match(await fileRow('Claude Code').locator('.health-state').textContent(), /Link · Save the rules to write it/)
+    assert.match(await fileRow('OpenCode').locator('.health-state').textContent(), /Missing · Save the rules to write it/)
     assert.equal(await main.getByRole('button', { name: /^Test .+ again$/ }).count(), 0, 'Test again is offered before any test failed or stopped')
     await main.getByText('It is off for OpenCode, which gets only the public sections.', { exact: false }).waitFor()
     await shot('health-1280.png')
@@ -884,7 +885,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     writeFileSync(codexConfig, '# mine\nmodel_context_window = 380000\n\n[projects."/synthetic"]\ntrust_level = "trusted"\n')
     await outsideFocus()
     await limitRow('Codex').getByText('380 000 tokens', { exact: true }).waitFor()
-    await limitRow('Codex').getByText('Not supported yet · not tested on 0.161.0').waitFor()
+    await limitRow('Codex').getByText('Not supported yet · BMN tests 0.161.0 by itself').waitFor()
     await limitRow('Codex').getByText(/^Shared by /).waitFor()
     await limitRow('Claude Code').getByText('App default', { exact: true }).waitFor()
     assert.equal(await main.getByRole('button', { name: 'Change the default context limit of Codex' }).isDisabled(), true, 'Change… is offered before the setting was tested')
@@ -970,7 +971,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await shot('health-context-auto-1280.png')
     stub('codex', 'echo "codex-cli 0.161.0"')
     await outsideFocus()
-    await limitRow('Codex').getByText('Setting tested on 0.161.0 · one prompt sent').waitFor()
+    await limitRow('Codex').getByText('Setting tested on 0.161.0', { exact: true }).waitFor()
     passed('a new app version is not tested in a run that names no test, and the limit is said not to be applied; BMN\'s own run of the test is named on Health; the check passes Sol only with exactly its limit, before and after (63.1, 75.8)')
 
     phase('60.8: a prompt bound for a provider that may not see private work is stopped; Allow here records that workspace')
@@ -1136,8 +1137,17 @@ done`)
     assert.equal(await main.locator('.role-mark').count(), 0)
     await shot('roles-read-only-proposal-1280.png')
     const beforeHeld = { roster: rosterHash(), state: stateHash() }
+    // He stages a change of his own first, what Consultant does when all its agents fail (holding a role himself would
+    // end BMN's read-only proposal, 63.2); the card then carries all six on top of his draft.
+    const chainEditor = main.locator('.chain-editor')
+    const thenChosen = async () => (await chainEditor.locator('[role="radio"][aria-checked="true"]').textContent()).trim()
+    await main.getByRole('button', { name: 'Edit Consultant', exact: true }).click()
+    const thenBefore = await thenChosen()
+    const thenMine = ['Skip', 'Ask me'].find((words) => words !== thenBefore)
+    await chainEditor.getByRole('radio', { name: thenMine, exact: true }).click()
+    await main.getByRole('button', { name: 'Done editing Consultant', exact: true }).click()
     // The one card on Team names it with BMN's other proposals; Approve… stages them all and opens the approval, and
-    // Cancel there takes them all out again: nothing is half-taken (75.10).
+    // Cancel there takes them all out again, his own staged change kept: nothing is half-taken (75.10).
     await go('Team')
     const teamCard = main.locator('.page-note.with-action[data-proposals]')
     await teamCard.getByText(`${inWordsOf(PROPOSED)} held to read-only`, { exact: false }).waitFor()
@@ -1147,11 +1157,16 @@ done`)
     await proposalSheet.getByText('Epic reviewer runs would be refused unless they are started so that they cannot write').waitFor()
     await shot('team-proposals-approval-1280.png')
     await proposalSheet.getByRole('button', { name: 'Cancel', exact: true }).click()
-    await ledger.waitFor({ state: 'detached' })
+    await proposalSheet.waitFor({ state: 'detached' })
     await teamCard.waitFor()
     assert.deepEqual({ roster: rosterHash(), state: stateHash() }, beforeHeld, 'a cancelled approval wrote something')
-    // Taking some only: he holds the roles on Roles one by one, as the proposal would.
     await go('Team', 'Roles')
+    assert.equal(await main.locator('.role-mark').count(), 0, 'Cancel kept the proposals')
+    await main.getByRole('button', { name: 'Edit Consultant', exact: true }).click()
+    assert.equal(await thenChosen(), thenMine, 'Cancel did not keep his own staged change')
+    await chainEditor.getByRole('radio', { name: thenBefore, exact: true }).click()
+    await main.getByRole('button', { name: 'Done editing Consultant', exact: true }).click()
+    // Taking them on Roles instead: he holds each role one by one, as the proposal would.
     for (const name of PROPOSED) {
       await main.getByRole('button', { name: `Edit ${name}`, exact: true }).click()
       await main.getByRole('switch', { name: 'Read-only' }).click()

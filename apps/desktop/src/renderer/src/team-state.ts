@@ -274,12 +274,15 @@ export function useTeamState(): TeamState {
       // The preview is reused only for the data it was computed for; data staged by this same press is previewed afresh.
       result = request.kind === 'staged' && preview !== null && computed?.data === request.data ? preview : await window.aiTerminal.previewAgents(request)
     } catch (error) {
+      // What this press staged goes out again, as Cancel would take it out (Story 75.10).
+      if (unstage) setStaged(unstage.staged)
       setNotice({ ok: false, text: failureDetail(error, 'Could not preview the change') })
       setBusy(false)
       return
     }
     setBusy(false)
     if (!result.valid) {
+      if (unstage) setStaged(unstage.staged)
       setNotice({ ok: false, text: 'This would not be a valid team; nothing was changed.', issues: result.errors })
       return
     }

@@ -876,6 +876,8 @@ describe('Integrations › Health (60.6 AC4)', () => {
     expect(markup).not.toContain('Test…')
     expect(markup).not.toMatch(/aria-label="Test [A-Za-z ]+ again"/)
     expect(markup).toContain('A loading test starts the app once and sends it the rules in one prompt. BMN runs it by itself after an app update or a change to the rules. It is off for OpenCode, which gets only the public sections.')
+    const allPublic = RULES.health.state === 'checked' ? { ...RULES.health, targets: RULES.health.targets.map((target) => ({ ...target, kind: 'public' as const })) } : RULES.health
+    expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, health: allPublic } })))).toContain('It is off for Claude Code, Codex and OpenCode, which get only the public sections.')
     const after = rulesMarkup('health', rules({ snapshot: { ...RULES,
       probes: [{ harness: 'claude', outcome: 'fail', at: '2026-10-09T20:00:00.000Z', version: '2.1.295' }, { harness: 'codex', outcome: 'inconclusive', at: '2026-10-09T20:00:00.000Z', version: '0.171.0', by: 'bmn' }],
       autoTests: { running: null, stopped: [{ kind: 'rules', harness: 'codex', version: '0.171.0', tries: 3, at: '2026-10-09T20:00:00.000Z' }, { kind: 'rules', harness: 'opencode', version: '1.18.32', tries: 3, at: '2026-10-09T20:00:00.000Z' }] } } }))

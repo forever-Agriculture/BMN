@@ -415,6 +415,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     assert.equal(otherReview.state, 'open')
     result.stoppedReview = { requestId: stoppedReview.requestId, revision: stoppedReview.revision, sessionId: sid }
     result.otherReview = { requestId: otherReview.requestId, revision: otherReview.revision, sessionId: target.session.sessionId }
+    // The source's request control is in its pane, shown once the source is selected again.
+    await select(sid)
     await page.locator(`.session-terminal[data-session-id="${sid}"] .pane-exit`).waitFor()
     await openCard()
     await card('Survives restart').waitFor()

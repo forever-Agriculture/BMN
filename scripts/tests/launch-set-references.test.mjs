@@ -19,7 +19,8 @@ const ALLOWED = {
   'apps/desktop/src/utility/store-schema.test.ts': 'tests of those migrations',
   'apps/desktop/src/utility/database-workspace-store.test.ts': 'the graphics migration over old rows',
   'apps/desktop/src/utility/database-archive-purge.test.ts': 'the cascade of an old set row when its workspace is purged',
-  'apps/desktop/src/main/application-startup.test.ts': 'startup beside old rows, reading neither'
+  'apps/desktop/src/main/application-startup.test.ts': 'startup beside old rows, reading neither',
+  'apps/desktop/src/renderer/src/shell-menus.test.ts': 'checks that no menu offers them any more (Story 75.10)'
 }
 
 describe('launch sets and custom templates are gone (Story 75.3)', () => {
