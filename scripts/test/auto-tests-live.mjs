@@ -190,6 +190,8 @@ case "$1" in --version) echo "$v";; *) exit 1;; esac`)
     if (installed.status !== 0) throw new Error(`rules install failed: ${installed.stderr}`)
     let main = await openHealth(page)
     await until(() => APPS.every((app) => bmnRecords(app, FIRST[app]).length > 0), 'a test BMN ran by itself of every app', 120_000)
+    // The rules' loading test sends a prompt and ends after the listing tests; its line is read once it has a record.
+    await until(() => bmnRecords('claude', FIRST.claude).some((entry) => entry.test === 'rules'), 'BMN\'s rules test of Claude Code', 300_000)
     await settled(page)
     await focus(page)
     await settled(page)
