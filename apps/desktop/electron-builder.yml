@@ -104,6 +104,11 @@ extraResources:
     to: bin/ask-browser-relay.mjs
   - from: bin/ask-browser-config.json
     to: bin/ask-browser-config.json
+  # Epic 77: `bmn plan`, the project's plan and board; the app bundles its own copy of the reader.
+  - from: bin/plan-cli.mjs
+    to: bin/plan-cli.mjs
+  - from: bin/plan-board.mjs
+    to: bin/plan-board.mjs
   # The --self-test stand-in agents draw these recorded dialogs; the packaged smoke runs that phase too.
   - from: src/utility/test-fixtures/remote-answers
     to: self-test/remote-answers
