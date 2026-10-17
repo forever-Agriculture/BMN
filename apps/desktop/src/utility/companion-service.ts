@@ -639,7 +639,7 @@ export class CompanionService {
       submitMessage: (record, request, text, current, markWritten) =>
         this.submitTelegramAnswerMessage(record, request, text, current, markWritten),
       answerPermissions: async () => (await options.database.companion('getSettings')).telegram.answerPermissions,
-      expired: (sessionId) => this.cards.changed(sessionId)
+      countdownChanged: (sessionId) => this.cards.changed(sessionId)
     })
     this.cards = new TelegramCardKeeper({
       connector: () => this.telegram && this.telegramHealth?.state === 'polling' ? this.telegram : undefined,

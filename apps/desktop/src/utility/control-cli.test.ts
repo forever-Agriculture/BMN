@@ -4766,6 +4766,19 @@ describe('structured prompts from the recorded hooks (Epic 30)', () => {
         write(join(root, 'claude', 'plugins', 'installed_plugins.json'), { plugins: { 'guard@market': [{ installPath: join(root, 'plugin') }] } })
         write(join(root, 'plugin', 'hooks', 'hooks.json'), { hooks: { PermissionRequest: [{ matcher: '.*', hooks: [other] }] } })
       })).resolves.toBeNull()
+      // Settings Claude was started with (`--settings` file or JSON) count too; one it cannot read counts as another hook.
+      const launchedWith = (root: string, ...args: string[]): void => {
+        mkdirSync(join(root, 'proc', '7001'), { recursive: true })
+        writeFileSync(join(root, 'proc', '7001', 'cmdline'), ['claude', '--model', 'haiku', ...args, 'do it', ''].join('\0'))
+      }
+      await expect(refFor((root) => launchedWith(root, '--settings', JSON.stringify({ hooks: { PermissionRequest: [{ hooks: [other] }] } }))))
+        .resolves.toBeNull()
+      await expect(refFor((root) => {
+        write(join(root, 'launch.json'), { hooks: { PermissionRequest: [{ hooks: [own] }], PostToolUse: [{ hooks: [other] }] } })
+        launchedWith(root, `--settings=${join(root, 'launch.json')}`)
+      })).resolves.toMatch(UUID)
+      await expect(refFor((root) => launchedWith(root, '--settings', join(root, 'missing.json')))).resolves.toBeNull()
+      await expect(refFor((root) => launchedWith(root, '--settings', 'relative.json'))).resolves.toBeNull()
     })
 
     it('never waits for an input the card could not show whole, a subagent, a question or another tool', async () => {

@@ -111,8 +111,8 @@ export interface RemoteAnswerDependencies {
   write(sessionId: string, bytes: Uint8Array): void
   answerPermissions(): Promise<boolean>
   producerCurrent?(record: AttentionRecord): boolean
-  /** A Claude permission's own countdown ran out in this session: its card is read again (Epic 78). */
-  expired?(sessionId: string): void
+  /** A Claude permission's own countdown ran out, or was stopped at the desk, in this session: its card is read again. */
+  countdownChanged?(sessionId: string): void
   /** Durable, idempotent ordinary message submission, revalidating the card immediately before input. */
   submitMessage?(record: AttentionRecord, request: AnswerRequest, text: string,
     current: () => boolean, markWritten: () => void): Promise<AnswerOutcome>
@@ -132,6 +132,9 @@ export interface AnswerTiming {
 
 /** How long after its last ask a Claude hook still counts as waiting: it asks again at once. */
 const HOOK_GAP_MS = 2_000
+
+/** The question line of Claude's permission dialogs: Bash, Write (create) and Edit. */
+const CLAUDE_PERMISSION_QUESTION = /Do you want to (proceed\?|create |make this edit)/
 
 /** A countdown is read off the screen to the second, and drawn late: it counts as run out this much early. */
 const EXPIRY_MARGIN_MS = 2_000
@@ -316,6 +319,8 @@ interface Tracked {
   requestKey: string
   sessionId: string
   incarnationId: string | null
+  /** The request revision the prompt below belongs to: a countdown read for another revision does not apply. */
+  revision: number
   prompt: AttentionPrompt
   epoch: number
   visible: boolean
@@ -413,9 +418,14 @@ export class RemoteAnswers {
     if (current) {
       const before = current.prompt
       current.prompt = prompt
-      // A new prompt in the slot ends the wait of the hook that asked for the one before it.
+      current.revision = record.revision
+      // A new prompt in the slot ends the wait of the hook that asked for the one before it, its countdown, and any
+      // confirmation still awaited for it: an identical successor's report speaks for the successor (review F1).
       if (before.harness === 'claude' && before.requestRef !== null && before.requestRef !== prompt.requestRef) {
         this.hookWaiters.delete(before.requestRef)
+        this.forgetCountdown(record.requestId, before.requestRef)
+        const pending = this.pending.get(record.requestId)
+        if (pending) pending.closed = true
         for (const wake of [...(this.takers.get(record.sessionId) ?? [])]) wake()
       }
     } else {
@@ -423,6 +433,7 @@ export class RemoteAnswers {
         requestKey: record.requestKey,
         sessionId: record.sessionId,
         incarnationId: record.incarnationId,
+        revision: record.revision,
         prompt,
         epoch: 1,
         visible: false
@@ -446,22 +457,15 @@ export class RemoteAnswers {
   deadline(record: AttentionRecord, now: number): PromptDeadline {
     const prompt = record.prompt
     if (!prompt || prompt.type !== 'permission' || prompt.harness !== 'claude' || record.incarnationId === null) return { state: 'unknown' }
-    const key = `${record.requestId}:${record.revision}`
-    const known = this.deadlines.get(key)
+    const known = this.deadlines.get(`${record.requestId}:${record.revision}`)
     if (known !== undefined) return { state: 'at', at: known }
     const screen = this.deps.screen(record.sessionId, record.incarnationId)
     if (!screen) return { state: 'unknown' }
     const lines = screen.lines()
-    const left = claudeCountdownMs(lines)
-    if (left !== null) {
-      this.deadlines.set(key, now + left)
-      const timer = setTimeout(() => this.expire(record, key), Math.max(0, left - EXPIRY_MARGIN_MS))
-      timer.unref?.()
-      this.expiryTimers.set(key, timer)
-      return { state: 'at', at: now + left }
-    }
+    const at = this.readCountdown(record.requestId, record.revision, prompt.requestRef, lines, now)
+    if (at !== null) return { state: 'at', at }
     // A permission dialog drawn with no countdown line has none; with no dialog drawn, nothing is known.
-    return lines.some((line) => /Do you want to proceed\?/.test(line)) ? { state: 'none' } : { state: 'unknown' }
+    return lines.some((line) => CLAUDE_PERMISSION_QUESTION.test(line)) ? { state: 'none' } : { state: 'unknown' }
   }
 
   /** Whether Claude's own countdown on this request revision has run out (Epic 78, Story 78.2 AC4). */
@@ -470,22 +474,50 @@ export class RemoteAnswers {
   }
 
   /**
-   * The countdown ran out: Claude has denied the request by itself, or is about to. A card sent for it can no longer
-   * answer, its hook stops waiting, and the card is read again so its buttons go.
+   * The first reading of Claude's countdown for one request revision and prompt, and the timer that ends it there:
+   * read when a card is drawn and by the screen watcher, whichever sees it first (review F3).
    */
-  private expire(record: AttentionRecord, key: string): void {
+  private readCountdown(requestId: string, revision: number, ref: string | null, lines: readonly string[], now: number): number | null {
+    const key = `${requestId}:${revision}`
+    const known = this.deadlines.get(key)
+    if (known !== undefined) return known
+    const left = claudeCountdownMs(lines)
+    if (left === null) return null
+    this.deadlines.set(key, now + left)
+    const timer = setTimeout(() => this.expire(requestId, revision, ref), Math.max(0, left - EXPIRY_MARGIN_MS))
+    timer.unref?.()
+    this.expiryTimers.set(key, timer)
+    return now + left
+  }
+
+  /** Drops a request's countdown readings and timers, and the expiry of its hook ref when one is named. */
+  private forgetCountdown(requestId: string, ref: string | null): void {
+    for (const key of [...this.deadlines.keys()]) if (key.startsWith(`${requestId}:`)) this.deadlines.delete(key)
+    for (const [key, timer] of [...this.expiryTimers]) {
+      if (key.startsWith(`${requestId}:`)) { clearTimeout(timer); this.expiryTimers.delete(key) }
+    }
+    for (const key of [...this.expiredKeys]) if (key.startsWith(`${requestId}:`)) this.expiredKeys.delete(key)
+    if (ref !== null) this.expiredRefs.delete(ref)
+  }
+
+  /**
+   * The countdown ran out: Claude has denied the request by itself, or is about to. A card sent for it can no longer
+   * answer, its hook stops waiting, and the card is read again so its buttons go. A timer for a revision or prompt
+   * the request no longer holds does nothing (review F2).
+   */
+  private expire(requestId: string, revision: number, ref: string | null): void {
+    const key = `${requestId}:${revision}`
     this.expiryTimers.delete(key)
-    const entry = this.tracked.get(record.requestId)
-    if (!entry) return
+    const entry = this.tracked.get(requestId)
+    if (!entry || entry.revision !== revision || entry.prompt.requestRef !== ref) return
     this.expiredKeys.add(key)
     entry.epoch += 1
-    const ref = entry.prompt.requestRef
     if (entry.prompt.harness === 'claude' && ref !== null) {
       this.expiredRefs.add(ref)
       this.hookWaiters.delete(ref)
     }
-    for (const wake of [...(this.takers.get(record.sessionId) ?? [])]) wake()
-    this.deps.expired?.(record.sessionId)
+    for (const wake of [...(this.takers.get(entry.sessionId) ?? [])]) wake()
+    this.deps.countdownChanged?.(entry.sessionId)
   }
 
   /** The dialog epoch a card is sent for; null when the request is not followed. */
@@ -528,13 +560,7 @@ export class RemoteAnswers {
 
   /** Called once a request is no longer open, by whatever closed it. */
   closed(record: AttentionRecord): void {
-    for (const key of [...this.deadlines.keys()]) if (key.startsWith(`${record.requestId}:`)) this.deadlines.delete(key)
-    for (const [key, timer] of [...this.expiryTimers]) {
-      if (key.startsWith(`${record.requestId}:`)) { clearTimeout(timer); this.expiryTimers.delete(key) }
-    }
-    for (const key of [...this.expiredKeys]) if (key.startsWith(`${record.requestId}:`)) this.expiredKeys.delete(key)
-    const closedRef = this.tracked.get(record.requestId)?.prompt.requestRef ?? record.prompt?.requestRef ?? null
-    if (closedRef !== null) this.expiredRefs.delete(closedRef)
+    this.forgetCountdown(record.requestId, this.tracked.get(record.requestId)?.prompt.requestRef ?? record.prompt?.requestRef ?? null)
     const pending = this.pending.get(record.requestId)
     if (pending) pending.closed = true
     this.tracked.delete(record.requestId)
@@ -1139,12 +1165,34 @@ export class RemoteAnswers {
         // A dialog that leaves the screen is over: whatever shows next is a different one.
         if (entry.visible && !visible) entry.epoch += 1
         entry.visible = visible
+        if (entry.prompt.harness === 'claude' && entry.prompt.type === 'permission') this.followCountdown(requestId, entry, lines)
       }
     }
     watch.check = check
     watch.unsubscribe = screen.onChange(check)
     this.watches.set(sessionId, watch)
     void screen.settled().then(check)
+  }
+
+  /**
+   * Claude's countdown on a permission, as the screen shows it: read when it appears, whether or not a card was drawn
+   * yet or is held; dropped when the dialog is still drawn without it, which is a key pressed at the desk (review F3).
+   */
+  private followCountdown(requestId: string, entry: Tracked, lines: readonly string[]): void {
+    const key = `${requestId}:${entry.revision}`
+    if (claudeCountdownMs(lines) !== null) {
+      if (!this.deadlines.has(key)) {
+        this.readCountdown(requestId, entry.revision, entry.prompt.requestRef, lines, Date.now())
+        this.deps.countdownChanged?.(entry.sessionId)
+      }
+      return
+    }
+    if (this.expiryTimers.has(key) && lines.some((line) => CLAUDE_PERMISSION_QUESTION.test(line))) {
+      clearTimeout(this.expiryTimers.get(key))
+      this.expiryTimers.delete(key)
+      this.deadlines.delete(key)
+      this.deps.countdownChanged?.(entry.sessionId)
+    }
   }
 
   private unwatchIdle(sessionId: string): void {
