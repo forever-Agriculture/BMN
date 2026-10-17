@@ -2969,7 +2969,7 @@ describe('answers from the phone go only into the dialog that asked (Epic 30.2)'
     sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'claude:permission', kind: 'permission' as const,
     title: 'Claude wants to use Bash', origin: 'hook:claude:PermissionRequest',
     prompt: {
-      type: 'permission' as const, harness: 'claude' as const, shape: 'permission' as const, requestRef: null, toolUseId: null,
+      type: 'permission' as const, harness: 'claude' as const, shape: 'permission' as const, requestRef: 'ref-bash', toolUseId: null,
       tool: 'Bash', command: 'touch spike-allow.txt', cwd: '/work/project', description: 'Create spike-allow.txt file'
     }
   }

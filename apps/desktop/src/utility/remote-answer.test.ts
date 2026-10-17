@@ -52,7 +52,7 @@ const CODEX_TWO: AttentionPrompt = {
   ]
 }
 const CLAUDE_BASH: AttentionPrompt = {
-  type: 'permission', harness: 'claude', shape: 'permission', requestRef: null, toolUseId: null,
+  type: 'permission', harness: 'claude', shape: 'permission', requestRef: 'ref-bash', toolUseId: null,
   tool: 'Bash', command: 'touch spike-allow.txt', cwd: '/work/project', description: 'Create spike-allow.txt file'
 }
 const OPENCODE_QUESTION: AttentionPrompt = {
@@ -88,6 +88,8 @@ interface Harness {
   permissions: { on: boolean }
   /** What the program draws next when it reads a key. */
   onKey: ((key: string) => void) | undefined
+  /** Sessions told a Claude countdown ran out. */
+  expired: string[]
 }
 
 const engines: RemoteAnswers[] = []
@@ -103,7 +105,8 @@ function harness(initial?: { record: AttentionRecord; lines?: string[] }): Harne
     writes: [],
     live: new Map([['s1', 'inc-1'], ['s2', 'inc-2']]),
     permissions: { on: true },
-    onKey: undefined
+    onKey: undefined,
+    expired: []
   }
   h.engine = new RemoteAnswers({
     getAttention: async (requestId) => h.records.get(requestId) ?? null,
@@ -115,6 +118,7 @@ function harness(initial?: { record: AttentionRecord; lines?: string[] }): Harne
       h.onKey?.(key)
     },
     answerPermissions: async () => h.permissions.on,
+    expired: (sessionId) => h.expired.push(sessionId),
     timing: { stepMs: 200, confirmMs: 250, pickupMs: 150, lateMs: 2_000 }
   })
   engines.push(h.engine)
@@ -148,13 +152,15 @@ describe('which shapes have a route (decision 7)', () => {
     expect(answerRoute(CLAUDE_SINGLE)).toBe('claude-keys')
     expect(answerRoute(CODEX_TWO)).toBe('codex-keys')
     expect(answerRoute(OPENCODE_QUESTION)).toBe('opencode-api')
-    expect(answerRoute(CLAUDE_BASH)).toBe('claude-keys')
+    // Epic 78: a Claude permission is answered by its own hook, by keys once that has stopped; with no ref, not at all.
+    expect(answerRoute(CLAUDE_BASH)).toBe('claude-hook')
+    expect(answerRoute({ ...CLAUDE_BASH, requestRef: null })).toBeNull()
     expect(answerRoute(OPENCODE_PERMISSION)).toBe('opencode-api')
     expect(answerRoute(null)).toBeNull()
     expect(answerRoute({ ...CLAUDE_SINGLE, shape: 'multi-select' })).toBeNull()
     expect(answerRoute({ ...CODEX_TWO, shape: 'async-choice' })).toBe('codex-message')
     expect(answerRoute({ ...OPENCODE_QUESTION, shape: 'subagent' })).toBeNull()
-    expect(answerRoute({ ...CLAUDE_BASH, tool: 'Edit' })).toBeNull()
+    expect(answerRoute({ ...CLAUDE_BASH, tool: 'Edit', requestRef: null })).toBeNull()
     expect(answerRoute({ ...CLAUDE_BASH, command: null })).toBeNull()
     expect(answerRoute({ ...CLAUDE_BASH, harness: 'codex' })).toBeNull()
     expect(answerRoute({ ...OPENCODE_PERMISSION, shape: 'sandbox-network' })).toBeNull()
@@ -480,7 +486,7 @@ describe('answering a Claude permission through its own waiting hook (Epic 78)',
   })
 
   it('answers an Edit only through its waiting hook, never by keys (Story 78.3)', async () => {
-    const EDIT: AttentionPrompt = { ...HOOKED, tool: 'Edit', command: 'Edit /a, replacing one occurrence of (1 characters):\na\nwith (1 characters):\nb' }
+    const EDIT: AttentionPrompt = { ...HOOKED, tool: 'Edit', command: 'Edit /a, replacing one occurrence of (1 characters):\na\nwith (1 characters):\nb\n(end of change)' }
     const h = harness({ record: record(EDIT), lines: BLANK })
     await expect(ask(h, allow)).resolves.toEqual({ state: 'refused', reason: 'unsupported' })
     const waiting = hookAsks(h)
@@ -490,6 +496,13 @@ describe('answering a Claude permission through its own waiting hook (Epic 78)',
     h.engine.evidence('s1', 'claude:permission', evidence({ permission: 'allowed', tool: 'Edit', command: EDIT.type === 'permission' ? EDIT.command : null }))
     await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['Allow once'] })
     expect(h.writes).toEqual([])
+  })
+
+  it('once its hook was told to stop, a tap goes by keys at once, not to the hook that left', async () => {
+    const h = harness({ record: record(HOOKED), lines: BLANK })
+    await expect(hookAsks(h, 'ref-1', 0)).resolves.toEqual([])
+    h.engine.hookEnded('s1', 'inc-1', 'ref-1')
+    await expect(ask(h, allow)).resolves.toEqual({ state: 'refused', reason: 'not-on-screen' })
   })
 
   it('with no hook waiting, goes by keys on the recognised dialog as before', async () => {
@@ -547,6 +560,26 @@ describe('Claude\'s own countdown on a permission (Story 78.5)', () => {
     expect(claudeCountdownMs([COUNTDOWN])).toBe(119_000)
     expect(claudeCountdownMs([' ⚠ Claude Code will automatically deny this request in 0:05, to avoid'])).toBe(5_000)
     expect(claudeCountdownMs(['Do you want to proceed?', 'deny in 1:59'])).toBeNull()
+  })
+
+  it('at the countdown, ends the hook\'s wait, refuses a later tap as expired and has the card read again', async () => {
+    const SOON = ' ⚠ Claude Code will automatically deny this request in 0:02, to avoid blocking progress on an unattended session'
+    const HOOKED: AttentionPrompt = { ...CLAUDE_BASH, requestRef: 'ref-1' }
+    const h = harness({ record: record(HOOKED), lines: ['Bash command', '  touch spike-allow.txt', SOON, 'Do you want to proceed?'] })
+    const waiting = h.engine.take('s1', 'inc-1', 5_000, undefined, 'ref-1')
+    await settle()
+    expect(h.engine.hookWanted('s1', 'inc-1', 'ref-1')).toBe(true)
+    const epoch = h.engine.epochOf('request-1')!
+    // Read when the card is composed: 2 s left, less the margin, runs out at once.
+    expect(h.engine.deadline(record(HOOKED), Date.now()).state).toBe('at')
+    await expect(waiting).resolves.toEqual([])
+    expect(h.engine.hookWanted('s1', 'inc-1', 'ref-1')).toBe(false)
+    expect(h.engine.expired(record(HOOKED))).toBe(true)
+    expect(h.expired).toEqual(['s1'])
+    await expect(ask(h, allow, { epoch })).resolves.toEqual({ state: 'refused', reason: 'expired' })
+    expect(h.writes).toEqual([])
+    // A new revision of the request has its own countdown.
+    expect(h.engine.expired(record(HOOKED, { revision: 2 }))).toBe(false)
   })
 
   it('keeps the first reading, says none for a dialog drawn without one, unknown without a screen', () => {

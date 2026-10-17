@@ -121,16 +121,27 @@ the answer (`answer.take` with that ref, 25 s at a time, up to 590 s; the entry'
 exactly `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}` for Allow once
 and `behavior: "deny"` with a short message for Deny; never `updatedInput`, `updatedPermissions`, a mode or a rule.
 It stops with no decision as soon as BMN says the request is over (closed, replaced by another prompt in the slot,
-or another process), Telegram is off or permission answers are off, or BMN cannot be reached. The card's buttons
-then use the keys route below, as before. Every other input (another field such as `dangerouslyDisableSandbox`, a
-subagent, another tool) keeps the keys route or none.
+another process, or Claude's own countdown ran out), Telegram is off or permission answers are off, or BMN cannot be
+reached; from then on BMN counts it as gone at once. A Bash card's buttons then use the keys route below, as before.
+
+- **Only deciding hook.** The hook gives no ref when it sees another `PermissionRequest` hook that could decide the
+  request (the first decision wins): in the managed, user, project or local settings, or in a plugin a settings file
+  enables, whose matcher could match the tool. An entry it cannot read counts as another hook.
+- **No ref, no buttons.** Every other input (another field such as `dangerouslyDisableSandbox`, a command that needs
+  cleaning or is too long, a subagent, another tool) and every request with another deciding hook gets no ref, and a
+  Claude permission without a ref gets no buttons: some approval-relevant part would not be on the card.
+- **Claude's countdown.** Once the deadline read off Claude's countdown (Story 78.5) has passed, less 2 s for a
+  reading to the second, the request counts as expired: the hook stops waiting, a tap is refused ("the laptop's
+  countdown ran out, so this request is no longer available") and the card is drawn again without buttons. A key
+  pressed at the desk stops Claude's countdown but not BMN's; the card then still sends the owner to the laptop.
 
 **Tool families with buttons:** `Bash`; `Write` and `Edit` through the hook only (Story 78.3), when their input
 holds only `file_path` and `content`, or `file_path`, `old_string`, `new_string` and `replace_all`. The card shows the
 whole change as one text, each part after its length in characters so no content can pass for another part:
-`Write <path>, the whole file (N characters):` then the content; `Edit <path>, replacing one occurrence|every
-occurrence of (N characters):` then the old text, `with (M characters):` then the new. A change longer than the card
-goes as a file (Story 78.4). Not measured, so no buttons: MCP tools, `WebFetch`, `NotebookEdit` and every other tool.
+`Write <path>, the whole file (N characters):` then the content and `(end of file)`; `Edit <path>, replacing one
+occurrence|every occurrence of (N characters):` then the old text, `with (M characters):` then the new and
+`(end of change)`. The end mark keeps a closing line break or spaces exact (Claude's Write content usually ends in
+one; measured live on 2.1.302). A change longer than the card goes as a file (Story 78.4). Not measured, so no buttons: MCP tools, `WebFetch`, `NotebookEdit` and every other tool.
 
 ## Codex 0.157.1
 

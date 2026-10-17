@@ -50,7 +50,7 @@ function runCli(
     // The lead's own harness pointers must not decide a hook test: base URLs and config homes are
     // set per test or absent, never inherited from whoever runs the suite.
     if (key.startsWith('BMN_') || key.startsWith('AITERM_') ||
-      key === 'ANTHROPIC_BASE_URL' || key === 'OPENAI_BASE_URL' || key === 'CLAUDE_CONFIG_DIR') delete env[key]
+      key === 'ANTHROPIC_BASE_URL' || key === 'OPENAI_BASE_URL' || key === 'CLAUDE_CONFIG_DIR' || key === 'CLAUDE_PROJECT_DIR') delete env[key]
   }
   if (args[0] === 'hook' || args[0] === 'hooks') env.HOME = NO_TEAM_HOME
   return new Promise((resolve) => {
@@ -4717,14 +4717,15 @@ describe('structured prompts from the recorded hooks (Epic 30)', () => {
     it('shows a Write or an Edit whole, each text after its length, and reports the same text when it ran (Story 78.3)', async () => {
       const fixture = await cliFixture()
       const event = await permission()
-      await runHook(fixture, 'claude', { ...event, tool_name: 'Write', tool_input: { file_path: '/work/project/notes.md', content: '# Notes\nwith (2 characters):\nx' } })
+      // A file's closing line break and spaces stay exact (2.1.302 live: Write's content ends in one).
+      await runHook(fixture, 'claude', { ...event, tool_name: 'Write', tool_input: { file_path: '/work/project/notes.md', content: '# Notes\nwith (2 characters):\nx \n' } })
       expect(lastOpen(fixture).prompt).toMatchObject({
         tool: 'Write', requestRef: expect.stringMatching(UUID),
-        command: 'Write /work/project/notes.md, the whole file (30 characters):\n# Notes\nwith (2 characters):\nx'
+        command: 'Write /work/project/notes.md, the whole file (32 characters):\n# Notes\nwith (2 characters):\nx \n\n(end of file)'
       })
       const edit = { file_path: '/work/project/a.ts', old_string: 'const é = 1', new_string: 'const é = 2', replace_all: true }
       await runHook(fixture, 'claude', { ...event, tool_name: 'Edit', tool_input: edit })
-      const shown = 'Edit /work/project/a.ts, replacing every occurrence of (11 characters):\nconst é = 1\nwith (11 characters):\nconst é = 2'
+      const shown = 'Edit /work/project/a.ts, replacing every occurrence of (11 characters):\nconst é = 1\nwith (11 characters):\nconst é = 2\n(end of change)'
       expect(lastOpen(fixture).prompt).toMatchObject({ tool: 'Edit', requestRef: expect.stringMatching(UUID), command: shown })
       await runHook(fixture, 'claude', { ...event, tool_name: 'Edit', tool_input: { ...edit, replace_all: undefined } })
       expect((lastOpen(fixture).prompt as { command: string }).command).toContain('replacing one occurrence of')
@@ -4739,6 +4740,32 @@ describe('structured prompts from the recorded hooks (Epic 30)', () => {
       const first = refOf(fixture)
       await runHook(fixture, 'claude', await permission())
       expect(refOf(fixture)).not.toBe(first)
+    })
+
+    it('waits only when its own hook is the only deciding one it can see (Story 78.1: the first decision wins)', async () => {
+      const own = { type: 'command', timeout: 600, command: '[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0' }
+      const other = { type: 'command', command: 'approve-everything.sh' }
+      const write = (path: string, data: unknown): void => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, JSON.stringify(data)) }
+      const refFor = async (setup: (root: string, project: string) => void): Promise<string | null> => {
+        const fixture = await cliFixture()
+        const project = join(fixture.root, 'project')
+        setup(fixture.root, project)
+        await runHook(fixture, 'claude', { ...(await permission()), cwd: project })
+        return (lastOpen(fixture).prompt as { requestRef: string | null }).requestRef
+      }
+      await expect(refFor((root) => write(join(root, 'claude', 'settings.json'), { hooks: { PermissionRequest: [{ hooks: [own] }] } })))
+        .resolves.toMatch(UUID)
+      // Another tool's matcher does not decide a Bash request.
+      await expect(refFor((root) => write(join(root, 'claude', 'settings.json'), { hooks: { PermissionRequest: [{ hooks: [own] }, { matcher: 'Edit|Write', hooks: [other] }] } })))
+        .resolves.toMatch(UUID)
+      await expect(refFor((root) => write(join(root, 'claude', 'settings.json'), { hooks: { PermissionRequest: [{ hooks: [own, other] }] } }))).resolves.toBeNull()
+      await expect(refFor((_root, project) => write(join(project, '.claude', 'settings.local.json'), { hooks: { PermissionRequest: [{ matcher: 'Bash', hooks: [other] }] } })))
+        .resolves.toBeNull()
+      await expect(refFor((root) => {
+        write(join(root, 'claude', 'settings.json'), { enabledPlugins: { 'guard@market': true } })
+        write(join(root, 'claude', 'plugins', 'installed_plugins.json'), { plugins: { 'guard@market': [{ installPath: join(root, 'plugin') }] } })
+        write(join(root, 'plugin', 'hooks', 'hooks.json'), { hooks: { PermissionRequest: [{ matcher: '.*', hooks: [other] }] } })
+      })).resolves.toBeNull()
     })
 
     it('never waits for an input the card could not show whole, a subagent, a question or another tool', async () => {

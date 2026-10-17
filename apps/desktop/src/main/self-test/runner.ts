@@ -2844,6 +2844,42 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       ]) || openCodeMore.keys !== '[["Rate limiting"],["Sessions"]]' || openCodeMore.request?.resolvedBy !== 'telegram') {
       throw new Error(`fuller telegram answers went wrong: ${JSON.stringify(fuller)}`)
     }
+    // Epic 78: a Claude permission is allowed from its card through the hook that waits for it, with no key typed.
+    console.error('[BMN] self-test phase: permission through the hook')
+    const telegramNow = (await client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})).telegram
+    await client.request(METHOD_REGISTRY.settingsPut, { section: 'telegram', value: { ...telegramNow, answerPermissions: true } })
+    const hookFrom = bot.calls.length
+    const keysBefore = readFileSync(join(answerDirectory, 'keys.log'), 'utf8')
+    bot.tapOn('touch spike-allow.txt', [{ tap: 'Allow once' }])
+    writeFileSync(join(answerDirectory, 'fire-hook-allow'), '')
+    const hookBy = Date.now() + 30_000
+    while (!existsSync(join(answerDirectory, 'done-hook-allow'))) {
+      if (Date.now() > hookBy) throw new Error(`the hook permission never finished: ${JSON.stringify(bot.calls.slice(hookFrom))}`)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    const hookCard = (): FakeBotCall | undefined => bot.calls.slice(hookFrom).find((call) =>
+      call.method === 'sendMessage' && String(call.body.text).includes('touch spike-allow.txt'))
+    const allowedBy = Date.now() + 15_000
+    const allowedEdit = (): boolean => bot.calls.slice(hookFrom).some((call) => call.method === 'editMessageText' &&
+      call.body.message_id === hookCard()?.messageId && String(call.body.text).includes('✓ <i>Allowed once</i>'))
+    while (!allowedEdit() && Date.now() < allowedBy) await new Promise((resolve) => setTimeout(resolve, 100))
+    await client.request(METHOD_REGISTRY.settingsPut, { section: 'telegram', value: {
+      ...(await client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})).telegram, answerPermissions: false } })
+    const hookRequest = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+      .filter((row) => row.sessionId === answerSession.sessionId && row.requestKey === 'claude:permission')
+      .sort((left, right) => right.openedAt.localeCompare(left.openedAt))[0]
+    const hookPermission = {
+      printed: readFileSync(join(answerDirectory, 'hook-out-hook-allow'), 'utf8').trim(),
+      keysTyped: readFileSync(join(answerDirectory, 'keys.log'), 'utf8').slice(keysBefore.length),
+      allowedOnCard: allowedEdit(),
+      request: hookRequest ? { state: hookRequest.state, resolvedBy: hookRequest.resolvedBy } : null
+    }
+    console.error(`[BMN] self-test phase: permission through the hook ${JSON.stringify(hookPermission)}`)
+    if (hookPermission.printed !== '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}' ||
+      hookPermission.keysTyped !== '' || !hookPermission.allowedOnCard ||
+      hookPermission.request?.state !== 'answered' || hookPermission.request.resolvedBy !== 'telegram') {
+      throw new Error(`the permission through the hook went wrong: ${JSON.stringify(hookPermission)}`)
+    }
     // Story 34.2: a `bmn ask` body quoting a key reaches the Bot API with the key hidden and the card saying so.
     console.error('[BMN] self-test phase: telegram secret masking')
     const secretKey = 'sk-ant-api03-' + 'SelfTestSyntheticKey_0123456789'

@@ -116,7 +116,7 @@ import { DIGEST_KEY, DevAutoMorningDigest } from './dev-auto-digest'
 import { HEALTH_ALERTS_KEY, HealthAlerts } from './health-alerts'
 import { readMachineHealth, type HealthReaderOptions } from './machine-health'
 import { readDevAutoRuns } from './dev-auto-runs'
-import { manualCardFits } from './telegram-cards'
+import { manualCardFits, REFUSAL_WORDS } from './telegram-cards'
 import { createScanMemory, procReader, scanSessionPorts, type ProcReader } from './listening-ports'
 import { PortWatch } from './port-watch'
 import { AGENT_HISTORY_STATE_KEY, AgentHistory, readHistoryState, type AgentHistoryAdapter } from './agent-history'
@@ -638,7 +638,8 @@ export class CompanionService {
       write: (sessionId, bytes) => options.manager.writeToSession(sessionId, bytes),
       submitMessage: (record, request, text, current, markWritten) =>
         this.submitTelegramAnswerMessage(record, request, text, current, markWritten),
-      answerPermissions: async () => (await options.database.companion('getSettings')).telegram.answerPermissions
+      answerPermissions: async () => (await options.database.companion('getSettings')).telegram.answerPermissions,
+      expired: (sessionId) => this.cards.changed(sessionId)
     })
     this.cards = new TelegramCardKeeper({
       connector: () => this.telegram && this.telegramHealth?.state === 'polling' ? this.telegram : undefined,
@@ -815,6 +816,8 @@ export class CompanionService {
           // Claude's hook waits only while its request is open here and a phone could answer it (Epic 78).
           const answers = await this.answers.take(p.sessionId, p.incarnationId, await this.phoneMayAnswer() ? p.waitMs : 0, undefined, p.requestRef)
           const waiting = answers.length === 0 && this.answers.hookWanted(p.sessionId, p.incarnationId, p.requestRef) && await this.phoneMayAnswer()
+          // The hook leaves on either; an answer tapped after that must not wait for it.
+          if (!waiting) this.answers.hookEnded(p.sessionId, p.incarnationId, p.requestRef)
           return { answers, waiting }
         }),
         observeHookEvent: (p) => this.controlCall(async () => {
@@ -2039,6 +2042,7 @@ export class CompanionService {
       const settings = await this.options.database.companion('getSettings')
       if (!settings.telegram.answerPermissions) return { answerable: false, reason: 'permissions-off' }
       if (!this.nativeProducerCurrent(record)) return { answerable: false, reason: 'unsupported' }
+      if (this.answers.expired(record)) return { answerable: false, reason: 'unsupported', detail: REFUSAL_WORDS.expired }
       return { answerable: true, deny: this.answers.canDeny(record) }
     }
     return { answerable: true, deny: false }

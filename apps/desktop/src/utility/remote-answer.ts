@@ -64,6 +64,8 @@ export type AnswerRefusal =
   | 'not-delivered'
   /** OpenCode's server refused the reply the plugin posted; nothing was applied. */
   | 'api-refused'
+  /** Claude's own countdown on this permission ran out (Epic 78): what Claude did is unknown, and nothing was sent. */
+  | 'expired'
 
 export type AnswerOutcome =
   | { state: 'refused'; reason: AnswerRefusal }
@@ -109,6 +111,8 @@ export interface RemoteAnswerDependencies {
   write(sessionId: string, bytes: Uint8Array): void
   answerPermissions(): Promise<boolean>
   producerCurrent?(record: AttentionRecord): boolean
+  /** A Claude permission's own countdown ran out in this session: its card is read again (Epic 78). */
+  expired?(sessionId: string): void
   /** Durable, idempotent ordinary message submission, revalidating the card immediately before input. */
   submitMessage?(record: AttentionRecord, request: AnswerRequest, text: string,
     current: () => boolean, markWritten: () => void): Promise<AnswerOutcome>
@@ -128,6 +132,9 @@ export interface AnswerTiming {
 
 /** How long after its last ask a Claude hook still counts as waiting: it asks again at once. */
 const HOOK_GAP_MS = 2_000
+
+/** A countdown is read off the screen to the second, and drawn late: it counts as run out this much early. */
+const EXPIRY_MARGIN_MS = 2_000
 
 const DEFAULT_TIMING: AnswerTiming = { stepMs: 3_000, confirmMs: 10_000, pickupMs: 5_000, lateMs: 10 * 60_000 }
 
@@ -152,11 +159,12 @@ export function answerRoute(prompt: AttentionPrompt | null): AnswerRoute | null 
   if (prompt.shape !== 'permission' || prompt.command === null) return null
   if (prompt.harness === 'opencode') return 'opencode-api'
   if (prompt.harness !== 'claude') return null
-  // A request ref is set only by a `PermissionRequest` hook that waits for this answer with the input whole
-  // (Epic 78); while it waits it answers instead of keys, which stay the way once it has stopped. Write and Edit
+  // A request ref is set only by a `PermissionRequest` hook that waits for this answer with the input whole and
+  // sees no other deciding hook (Epic 78); without one, some approval-relevant part is not on the card, so no
+  // buttons. While the hook waits it answers; once it has stopped, keys answer a Bash dialog. Write and Edit
   // (Story 78.3) have only the hook: their dialogs were never driven by keys.
-  if (prompt.tool === 'Bash') return prompt.requestRef !== null ? 'claude-hook' : 'claude-keys'
-  return (prompt.tool === 'Write' || prompt.tool === 'Edit') && prompt.requestRef !== null ? 'claude-hook' : null
+  if (prompt.requestRef === null) return null
+  return prompt.tool === 'Bash' || prompt.tool === 'Write' || prompt.tool === 'Edit' ? 'claude-hook' : null
 }
 
 /**
@@ -372,6 +380,10 @@ export class RemoteAnswers {
   private readonly lateListeners = new Set<(requestId: string, outcome: AnswerOutcome) => void>()
   /** The countdown first read for a request revision: it only runs down, so the first reading stands. */
   private readonly deadlines = new Map<string, number>()
+  /** At each request revision's deadline, what ends it; and the revisions and hook refs whose countdown ran out. */
+  private readonly expiryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly expiredKeys = new Set<string>()
+  private readonly expiredRefs = new Set<string>()
   /** Per answer being typed, the listener that notes screen changes since its last key. */
   private readonly stopScreenTracking = new Map<string, () => void>()
 
@@ -443,10 +455,37 @@ export class RemoteAnswers {
     const left = claudeCountdownMs(lines)
     if (left !== null) {
       this.deadlines.set(key, now + left)
+      const timer = setTimeout(() => this.expire(record, key), Math.max(0, left - EXPIRY_MARGIN_MS))
+      timer.unref?.()
+      this.expiryTimers.set(key, timer)
       return { state: 'at', at: now + left }
     }
     // A permission dialog drawn with no countdown line has none; with no dialog drawn, nothing is known.
     return lines.some((line) => /Do you want to proceed\?/.test(line)) ? { state: 'none' } : { state: 'unknown' }
+  }
+
+  /** Whether Claude's own countdown on this request revision has run out (Epic 78, Story 78.2 AC4). */
+  expired(record: AttentionRecord): boolean {
+    return this.expiredKeys.has(`${record.requestId}:${record.revision}`)
+  }
+
+  /**
+   * The countdown ran out: Claude has denied the request by itself, or is about to. A card sent for it can no longer
+   * answer, its hook stops waiting, and the card is read again so its buttons go.
+   */
+  private expire(record: AttentionRecord, key: string): void {
+    this.expiryTimers.delete(key)
+    const entry = this.tracked.get(record.requestId)
+    if (!entry) return
+    this.expiredKeys.add(key)
+    entry.epoch += 1
+    const ref = entry.prompt.requestRef
+    if (entry.prompt.harness === 'claude' && ref !== null) {
+      this.expiredRefs.add(ref)
+      this.hookWaiters.delete(ref)
+    }
+    for (const wake of [...(this.takers.get(record.sessionId) ?? [])]) wake()
+    this.deps.expired?.(record.sessionId)
   }
 
   /** The dialog epoch a card is sent for; null when the request is not followed. */
@@ -490,6 +529,12 @@ export class RemoteAnswers {
   /** Called once a request is no longer open, by whatever closed it. */
   closed(record: AttentionRecord): void {
     for (const key of [...this.deadlines.keys()]) if (key.startsWith(`${record.requestId}:`)) this.deadlines.delete(key)
+    for (const [key, timer] of [...this.expiryTimers]) {
+      if (key.startsWith(`${record.requestId}:`)) { clearTimeout(timer); this.expiryTimers.delete(key) }
+    }
+    for (const key of [...this.expiredKeys]) if (key.startsWith(`${record.requestId}:`)) this.expiredKeys.delete(key)
+    const closedRef = this.tracked.get(record.requestId)?.prompt.requestRef ?? record.prompt?.requestRef ?? null
+    if (closedRef !== null) this.expiredRefs.delete(closedRef)
     const pending = this.pending.get(record.requestId)
     if (pending) pending.closed = true
     this.tracked.delete(record.requestId)
@@ -587,9 +632,15 @@ export class RemoteAnswers {
   hookWanted(sessionId: string, incarnationId: string | null, requestRef: string): boolean {
     for (const entry of this.tracked.values()) {
       if (entry.sessionId === sessionId && entry.incarnationId === incarnationId && entry.prompt.harness === 'claude' &&
-        entry.prompt.type === 'permission' && entry.prompt.requestRef === requestRef) return true
+        entry.prompt.type === 'permission' && entry.prompt.requestRef === requestRef) return !this.expiredRefs.has(requestRef)
     }
     return false
+  }
+
+  /** The hook got its answer or was told to stop: from now on it waits for nothing, so keys are the way. */
+  hookEnded(sessionId: string, incarnationId: string | null, requestRef: string): void {
+    const waiter = this.hookWaiters.get(requestRef)
+    if (waiter && waiter.sessionId === sessionId && waiter.incarnationId === incarnationId) this.hookWaiters.delete(requestRef)
   }
 
   private hookWaiter(sessionId: string, incarnationId: string, requestRef: string): { sessionId: string; incarnationId: string; inFlight: number; lastSeen: number } | undefined {
@@ -670,6 +721,8 @@ export class RemoteAnswers {
   }
 
   dispose(): void {
+    for (const timer of this.expiryTimers.values()) clearTimeout(timer)
+    this.expiryTimers.clear()
     for (const watch of this.watches.values()) watch.unsubscribe()
     this.watches.clear()
     for (const requestId of [...this.pending.keys()]) this.finishPending(requestId)
@@ -683,6 +736,7 @@ export class RemoteAnswers {
     if (this.deps.producerCurrent && !this.deps.producerCurrent(record)) return refused('changed')
     if (record.incarnationId !== request.incarnationId ||
       this.deps.liveIncarnationId(record.sessionId) !== request.incarnationId) return refused('gone')
+    if (this.expired(record)) return refused('expired')
     if (record.revision !== request.revision || this.epochOf(record.requestId) !== request.epoch) return refused('changed')
     const prompt = record.prompt
     const route = answerRoute(prompt)
