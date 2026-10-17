@@ -480,6 +480,67 @@
   box-shadow: 0 0 0 1px var(--identity);
 }
 
+/* A hidden value: one plate of dots of one width in every kind of file; its length and an eye sit at the right
+   edge of its line, in a layer that does not scroll sideways (Story 67.3). */
+.ql-code .ql-secret {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 4px;
+  color: color-mix(in srgb, var(--text) 62%, var(--ground));
+  background: var(--ql-plate-2);
+  letter-spacing: 0.12em;
+  line-height: 18px;
+  vertical-align: 1px;
+}
+
+.ql-code .ql-secret-shown {
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px var(--ql-plate-2);
+}
+
+.ql-code .ql-secret-notes {
+  position: absolute;
+  inset: 0 14px 0 auto;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.ql-code .ql-secret-note {
+  position: absolute;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 10px;
+  color: var(--muted);
+  background: linear-gradient(to right, transparent, var(--ground) 10px);
+  font: 11.5px var(--font-chrome);
+  white-space: nowrap;
+}
+
+.ql-code .ql-secret-note.shown {
+  color: var(--text);
+}
+
+.quick-look .ql-eye {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+  pointer-events: auto;
+}
+
+.quick-look .ql-eye:hover,
+.quick-look .ql-eye[aria-pressed='true'] {
+  color: var(--text);
+  background: var(--ql-plate-2);
+}
+
 /* The find and go-to-line rows and the quiet "Changed on disk" row sit under the path row, inside the file. */
 .ql-find,
 .ql-changed {

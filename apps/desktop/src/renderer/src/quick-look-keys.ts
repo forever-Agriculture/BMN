@@ -15,6 +15,8 @@ export interface QuickLookFooterState {
   /** What Esc does now, innermost first. */
   escape: EscapeStep
   folded: boolean
+  /** The shown file hides values, which Ctrl+R shows one at a time. */
+  secrets?: boolean
   /** True when Alt+← has a file to return to. */
   back: boolean
   forward: boolean
@@ -41,7 +43,8 @@ export function quickLookFooter(state: QuickLookFooterState): QuickLookHint[] {
       ]
     case 'file':
       // The board's order for a source file: move, tree, go to line, find, back, Esc.
-      return [hint('Move', '↑ ↓'), tree, hint('Go to line', 'Ctrl G'), hint('Find in file', 'Ctrl F'), ...trail, escape]
+      return [hint('Move', '↑ ↓'), tree, hint('Go to line', 'Ctrl G'), hint('Find in file', 'Ctrl F'),
+        ...(state.secrets ? [hint('Reveal 10 s', 'Ctrl R')] : []), ...trail, escape]
     case 'find':
       return [hint('Next', 'Enter'), hint('Previous', 'Shift Enter'), hint('Case', 'Alt C'), escape]
     case 'goto':

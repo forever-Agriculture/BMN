@@ -757,7 +757,7 @@ three lines of context, a `+` or `−` before each changed line and three neutra
   is one plate of ten dots whatever its length, in added, removed and unchanged lines alike; a key
   block of many lines stays that many masked lines. A hunk in which every removed line reads the
   same as the added line in its place once masked says "Secret value changed".
-- **The rule** (`apps/desktop/src/utility/secret-ranges.ts`, shared with the terminal's own mask):
+- **The rule** (`shared/protocol/src/secret-ranges.ts`, shared with the terminal's own mask):
   in a file named `.env`, `.env.<anything>` or `<name>.env`, every value; in JSON, YAML and TOML
   files and lock files, a value whose name contains key, token, secret, password, passwd, auth,
   credential, cookie or private; in those config files and not in lock files, any unbroken run of

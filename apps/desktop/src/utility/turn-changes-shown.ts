@@ -5,8 +5,7 @@
 // those lines, so a value is the same plate in an added, a removed and a context line, and a key block of
 // many lines stays that many lines. Nothing here can be asked to show a value. The search for values is
 // stopped by the same `stop` as the comparison and looks at each line only as far as it can be shown.
-import type { TurnShownDifference, TurnShownHunk, TurnShownLine } from '@bmn/protocol'
-import { secretRanges, type SecretRange } from './secret-ranges'
+import { secretRanges, type SecretRange, type TurnShownDifference, type TurnShownHunk, type TurnShownLine } from '@bmn/protocol'
 import { DiffStopped, type UnifiedDifference } from './turn-changes-diff'
 
 export interface ShownLimits {

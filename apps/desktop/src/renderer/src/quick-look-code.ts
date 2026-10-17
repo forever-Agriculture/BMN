@@ -16,10 +16,22 @@ import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile'
 import { shell } from '@codemirror/legacy-modes/mode/shell'
 import { toml } from '@codemirror/legacy-modes/mode/toml'
 import { EditorSelection, EditorState, StateEffect, StateField, type Extension } from '@codemirror/state'
-import { Decoration, type DecorationSet, EditorView, drawSelection, highlightSpecialChars, keymap, lineNumbers } from '@codemirror/view'
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  ViewPlugin,
+  type ViewUpdate,
+  WidgetType,
+  drawSelection,
+  highlightSpecialChars,
+  keymap,
+  lineNumbers
+} from '@codemirror/view'
 import { tagHighlighter, tags } from '@lezer/highlight'
-import type { QuickLookLanguage } from '@bmn/protocol'
+import type { QuickLookLanguage, SecretRange } from '@bmn/protocol'
 import type { FindMatch } from './quick-look-find'
+import { maskedSlice } from './quick-look-secrets'
 
 /**
  * Syntax as classes, never colours: quick-look.css draws each class in a grey derived from the colour mode's own
@@ -73,6 +85,9 @@ export interface CodeViewInput {
   /** The line kept at the top, as a reload or a remembered place keeps it; the target line is then not centred. */
   topLine?: number | null
   label: string
+  /** The values hidden from the first frame, so a secret is never drawn before its plate. */
+  secrets?: SecretView
+  onRevealSecret?: (index: number) => void
 }
 
 /** Find's matches, each on a plate, the current one on a stronger plate (Story 67.2 AC1). */
@@ -101,6 +116,179 @@ export function showFindMatches(view: EditorView, matches: readonly FindMatch[],
     effects: [setFindMarks.of({ matches, current }), ...(reveal && match ? [EditorView.scrollIntoView(match.from, { y: 'center' })] : [])],
     ...(reveal && match ? { selection: EditorSelection.range(match.from, match.to) } : {})
   })
+}
+
+/** What the view hides: the stretches, the one shown now, and how many seconds it has left (Story 67.3). */
+export interface SecretView {
+  ranges: readonly SecretRange[]
+  revealed: number | null
+  secondsLeft: number
+}
+
+const NO_SECRETS: SecretView = { ranges: [], revealed: null, secondsLeft: 0 }
+const setSecrets = StateEffect.define<SecretView>()
+/** One fixed width for every hidden value, so the plate says nothing about its length; the note at the edge does. */
+const DOTS = '\u2022'.repeat(12)
+
+class HiddenValue extends WidgetType {
+  constructor(readonly length: number) {
+    super()
+  }
+
+  override eq(other: HiddenValue): boolean {
+    return other.length === this.length
+  }
+
+  toDOM(): HTMLElement {
+    const plate = document.createElement('span')
+    plate.className = 'ql-secret'
+    plate.textContent = DOTS
+    plate.setAttribute('role', 'img')
+    plate.setAttribute('aria-label', `hidden value, ${this.length} ${this.length === 1 ? 'character' : 'characters'}`)
+    return plate
+  }
+}
+
+function secretMarks(secrets: SecretView, length: number): DecorationSet {
+  return Decoration.set(secrets.ranges.flatMap(([start, end], index) => {
+    if (end <= start || end > length) return []
+    return [index === secrets.revealed
+      ? Decoration.mark({ class: 'ql-secret-shown' }).range(start, end)
+      : Decoration.replace({ widget: new HiddenValue(end - start) }).range(start, end)]
+  }))
+}
+
+const secretState = StateField.define<{ secrets: SecretView; marks: DecorationSet }>({
+  create: () => ({ secrets: NO_SECRETS, marks: Decoration.none }),
+  update(value, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setSecrets)) return { secrets: effect.value, marks: secretMarks(effect.value, transaction.state.doc.length) }
+    }
+    return value
+  },
+  // The caret steps over a hidden value as over one character, so it never sits inside one.
+  provide: (field) => [EditorView.decorations.from(field, (value) => value.marks), EditorView.atomicRanges.of((view) => view.state.field(field).marks)]
+})
+
+/** Shows which values are hidden and which one is shown, with its seconds left. */
+export function showSecrets(view: EditorView, secrets: SecretView): void {
+  view.dispatch({ effects: setSecrets.of(secrets) })
+}
+
+const EYE = 'M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8zM8 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z'
+
+interface SecretNote {
+  index: number
+  top: number
+  height: number
+  length: number
+  shown: boolean
+}
+
+/**
+ * The note at the right edge of a line that holds a hidden value: its length and an eye, or "Shown · hides in 8 s".
+ * Drawn in a layer over the view, not in the line, so it stays at the edge while long lines scroll sideways.
+ */
+function secretNotes(onReveal: (index: number) => void): Extension {
+  return ViewPlugin.fromClass(class {
+    readonly layer: HTMLElement
+    readonly onScroll = (): void => this.schedule()
+
+    constructor(readonly view: EditorView) {
+      this.layer = document.createElement('div')
+      this.layer.className = 'ql-secret-notes'
+      view.dom.appendChild(this.layer)
+      view.scrollDOM.addEventListener('scroll', this.onScroll, { passive: true })
+      this.schedule()
+    }
+
+    update(update: ViewUpdate): void {
+      if (update.viewportChanged || update.geometryChanged || update.transactions.some((each) => each.effects.some((effect) => effect.is(setSecrets)))) {
+        this.schedule()
+      }
+    }
+
+    schedule(): void {
+      this.view.requestMeasure({ key: this, read: (view) => this.measure(view), write: (notes) => this.draw(notes) })
+    }
+
+    measure(view: EditorView): { notes: SecretNote[]; secondsLeft: number } {
+      const { secrets } = view.state.field(secretState)
+      const origin = view.dom.getBoundingClientRect().top
+      const box = view.scrollDOM.getBoundingClientRect()
+      const notes: SecretNote[] = []
+      secrets.ranges.forEach(([start, end], index) => {
+        if (end < view.viewport.from || start > view.viewport.to) return
+        const block = view.lineBlockAt(start)
+        const top = block.top + view.documentTop - origin
+        if (top + block.height <= box.top - origin || top >= box.bottom - origin) return
+        notes.push({ index, top, height: block.height, length: end - start, shown: index === secrets.revealed })
+      })
+      return { notes, secondsLeft: secrets.secondsLeft }
+    }
+
+    draw({ notes, secondsLeft }: { notes: SecretNote[]; secondsLeft: number }): void {
+      this.layer.replaceChildren(...notes.map((note) => {
+        const row = document.createElement('div')
+        row.className = `ql-secret-note${note.shown ? ' shown' : ''}`
+        row.style.top = `${note.top}px`
+        row.style.height = `${note.height}px`
+        const label = document.createElement('span')
+        label.textContent = note.shown ? `Shown · hides in ${secondsLeft} s` : `${note.length} chars`
+        const eye = document.createElement('button')
+        eye.type = 'button'
+        eye.className = 'ql-eye'
+        eye.setAttribute('aria-label', note.shown ? 'Hide this value' : 'Show this value for 10 seconds')
+        eye.setAttribute('aria-pressed', String(note.shown))
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+        svg.setAttribute('viewBox', '0 0 16 16')
+        svg.setAttribute('width', '14')
+        svg.setAttribute('height', '14')
+        svg.setAttribute('aria-hidden', 'true')
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+        path.setAttribute('d', EYE)
+        path.setAttribute('fill', 'none')
+        path.setAttribute('stroke', 'currentColor')
+        path.setAttribute('stroke-width', '1.3')
+        svg.appendChild(path)
+        eye.appendChild(svg)
+        eye.addEventListener('mousedown', (event) => event.preventDefault())
+        eye.addEventListener('click', () => onReveal(note.index))
+        row.append(label, eye)
+        return row
+      }))
+    }
+
+    destroy(): void {
+      this.view.scrollDOM.removeEventListener('scroll', this.onScroll)
+      this.layer.remove()
+    }
+  })
+}
+
+/**
+ * A copy or cut of a selection that holds a hidden value puts "[secret hidden]" in its place; with no selection,
+ * the caret's line is copied, as the view does by itself.
+ */
+const maskedCopy = EditorView.domEventHandlers({
+  copy: (event, view) => copyMasked(event, view),
+  cut: (event, view) => copyMasked(event, view)
+})
+
+function copyMasked(event: ClipboardEvent, view: EditorView): boolean {
+  const { secrets } = view.state.field(secretState)
+  if (secrets.ranges.length === 0 || !event.clipboardData) return false
+  const text = view.state.doc.toString()
+  const chosen = view.state.selection.ranges.filter((range) => !range.empty)
+  const parts = chosen.length > 0
+    ? chosen.map((range) => maskedSlice(text, secrets.ranges, range.from, range.to, secrets.revealed))
+    : view.state.selection.ranges.map((range) => {
+      const line = view.state.doc.lineAt(range.head)
+      return `${maskedSlice(text, secrets.ranges, line.from, line.to, secrets.revealed)}`
+    })
+  event.clipboardData.setData('text/plain', parts.join(view.state.lineBreak) + (chosen.length > 0 ? '' : view.state.lineBreak))
+  event.preventDefault()
+  return true
 }
 
 /** The line the caret is on. */
@@ -136,6 +324,12 @@ export function createCodeView(parent: HTMLElement, input: CodeViewInput, extra:
     languageExtension(input.language),
     syntaxHighlighting(greys),
     findMarks,
+    secretState.init(() => {
+      const secrets = input.secrets ?? NO_SECRETS
+      return { secrets, marks: secretMarks(secrets, input.content.length) }
+    }),
+    secretNotes((index) => input.onRevealSecret?.(index)),
+    maskedCopy,
     EditorView.contentAttributes.of({ 'aria-label': input.label, 'aria-readonly': 'true' }),
     extra
   ]

@@ -1,4 +1,4 @@
-// MODULE: secret-ranges.ts - where secret values are in a text: the known shapes, and the wider rule that goes by a file's name (R67-NFR7); shared by what BMN sends to Telegram and what it shows of a file's difference
+// MODULE: secret-ranges.ts - where secret values are in a text: the known shapes, and the wider rule that goes by a file's name (R67-NFR7); shared by what BMN sends to Telegram, what it shows of a file's difference and what Quick look masks (Story 67.3)
 //
 // Masking is a courtesy on screen, not detection: a value none of this finds is shown, and nothing that
 // uses these ranges may say or imply that unmasked text is safe.
@@ -6,6 +6,9 @@
 // A file's text is read by loops over its characters that ask their caller again and again, never by a
 // pattern left alone with a whole file: a pattern cannot be stopped, and one of them runs out of stack on
 // a run of ten million characters. Patterns are used on short pieces only.
+
+/** What a hidden secret reads as when text leaves the screen: on a Telegram card, or copied from Quick look. */
+export const SECRET_MASK = '[secret hidden]'
 
 /** One stretch of a text, from `start` up to and not including `end`. */
 export type SecretRange = [start: number, end: number]

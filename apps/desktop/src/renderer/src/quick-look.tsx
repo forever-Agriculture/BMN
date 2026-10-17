@@ -13,7 +13,7 @@ import {
   type QuickLookRootResult,
   type QuickLookSource
 } from '@bmn/protocol'
-import { createCodeView, goToPosition, showFindMatches, topVisibleLine } from './quick-look-code'
+import { createCodeView, goToPosition, showFindMatches, showSecrets, topVisibleLine, type SecretView } from './quick-look-code'
 import { findCountLabel, findMatches, matchAt, stepMatch, type FindMatch } from './quick-look-find'
 import {
   EMPTY_TRAIL,
@@ -27,6 +27,16 @@ import {
   trailVisit,
   type Trail
 } from './quick-look-place'
+import {
+  maskedSlice,
+  outsideSecrets,
+  quickLookSecretRanges,
+  reveal,
+  revealSecondsLeft,
+  secretOnLine,
+  viewText,
+  type Reveal
+} from './quick-look-secrets'
 import { treeKey, treeRows, type TreeListing, type TreeRow } from './quick-look-tree'
 import { quickLookFooter, type QuickLookFocus } from './quick-look-keys'
 import './quick-look.css'
@@ -145,6 +155,10 @@ function FileFacts(props: { result: Extract<QuickLookReadResult, { status: 'unav
 /** The file read-only in CodeMirror; recreated for each read so a reload starts from the bytes on disk. */
 function CodeView(props: {
   result: Extract<QuickLookReadResult, { status: 'ready' }>
+  /** The file's text with one `\n` per line ending, as the view, find and the masks count it. */
+  text: string
+  secrets: SecretView
+  onRevealSecret(index: number): void
   line: number | null
   column: number | null
   topLine: number | null
@@ -159,15 +173,21 @@ function CodeView(props: {
   onView.current = props.onView
   const onTop = useRef(props.onTop)
   onTop.current = props.onTop
+  const onReveal = useRef(props.onRevealSecret)
+  onReveal.current = props.onRevealSecret
+  const secrets = useRef(props.secrets)
+  secrets.current = props.secrets
+  const shown = useRef<EditorView | null>(null)
   const focus = useRef(props.focus)
   focus.current = props.focus
   useEffect(() => {
     if (!host.current) return
     const type = quickLookFileType(props.result.path)
     const view = createCodeView(host.current, {
-      content: props.result.content, language: type.language, line: props.line, column: props.column, topLine: props.topLine,
-      label: `${quickLookName(props.result.path)}, read only`
+      content: props.text, language: type.language, line: props.line, column: props.column, topLine: props.topLine,
+      label: `${quickLookName(props.result.path)}, read only`, secrets: secrets.current, onRevealSecret: (index) => onReveal.current(index)
     })
+    shown.current = view
     onView.current(view)
     if (focus.current) view.focus()
     let frame = 0
@@ -180,15 +200,21 @@ function CodeView(props: {
     return () => {
       cancelAnimationFrame(frame)
       view.scrollDOM.removeEventListener('scroll', report)
+      shown.current = null
       onView.current(null)
       view.destroy()
     }
-  }, [props.result, props.line, props.column, props.topLine])
+  }, [props.result, props.text, props.line, props.column, props.topLine])
+  useEffect(() => {
+    if (shown.current && shown.current.state.doc.length === props.text.length) showSecrets(shown.current, props.secrets)
+  }, [props.secrets, props.text])
   return <div className="ql-code" ref={host} onFocus={props.onFocus} />
 }
 
 export function QuickLook(props: {
   request: QuickLookRequest
+  /** In test mode the sheet offers `window.__aitermQuickLook`, which returns only masked text. */
+  testMode?: boolean
   onClose(): void
 }): React.JSX.Element {
   const dialog = useRef<HTMLDialogElement>(null)
@@ -215,6 +241,8 @@ export function QuickLook(props: {
   const [changed, setChanged] = useState(false)
   const [peeking, setPeeking] = useState(false)
   const [goneNote, setGoneNote] = useState<string | null>(null)
+  const [shownSecret, setShownSecret] = useState<Reveal | null>(null)
+  const [now, setNow] = useState(() => Date.now())
   const source = props.request.source
   const onClose = useRef(props.onClose)
   onClose.current = props.onClose
@@ -229,7 +257,14 @@ export function QuickLook(props: {
   const root = rootInfo?.status === 'ready' ? (atGitRoot && rootInfo.gitRoot ? rootInfo.gitRoot : rootInfo.sessionFolder) : null
   const rows = useMemo(() => (root ? treeRows(root, listings, expanded) : []), [root, listings, expanded])
   const ready = file?.result?.status === 'ready' ? file.result : null
-  const matches = useMemo(() => (ready && find.query ? findMatches(ready.content, find.query, find.matchCase) : []), [ready, find.query, find.matchCase])
+  const text = useMemo(() => (ready ? viewText(ready.content) : ''), [ready])
+  // Values that look like secrets are hidden as soon as the file is drawn; masking does not find every secret.
+  const secretRanges = useMemo(() => (ready ? quickLookSecretRanges(ready.path, ready.canonicalPath, text) : []), [ready, text])
+  const revealed = shownSecret && shownSecret.index < secretRanges.length ? shownSecret.index : null
+  const secondsLeft = revealSecondsLeft(shownSecret, now)
+  const secrets = useMemo<SecretView>(() => ({ ranges: secretRanges, revealed, secondsLeft }), [secretRanges, revealed, secondsLeft])
+  const matches = useMemo(() => (ready && find.query ? outsideSecrets(findMatches(text, find.query, find.matchCase), secretRanges, revealed) : []),
+    [ready, text, find.query, find.matchCase, secretRanges, revealed])
   const currentMatch = find.of === matches ? find.current : matchAt(matches, findAnchor.current)
   const findRef = useRef({ matches, current: currentMatch, open: find.open })
   findRef.current = { matches, current: currentMatch, open: find.open }
@@ -261,6 +296,7 @@ export function QuickLook(props: {
       setTrail((current) => trailVisit(current, { path, line, column }, here))
     }
     setFile({ path, line, column, topLine: options.topLine ?? null, result: null })
+    setShownSecret(null)
     setFeedback('')
     setChanged(false)
     setGoneNote(null)
@@ -286,6 +322,7 @@ export function QuickLook(props: {
     const { path } = file
     const topLine = currentTop()
     keepTop.current = true
+    setShownSecret(null)
     setChanged(false)
     void read(path).then((result) => setFile((current) => (current?.path === path ? { ...current, topLine, result } : current)))
   }
@@ -297,8 +334,36 @@ export function QuickLook(props: {
     open(next.entry.path, next.entry.line, next.entry.column, { way: 'trail', topLine: next.entry.topLine ?? null })
   }
 
+  /** Shows one hidden value for ten seconds, or hides it again; any other shown value hides first (Story 67.3). */
+  const toggleSecret = (index: number): void => setShownSecret((current) => (current?.index === index ? null : reveal(index, Date.now())))
+
+  // The countdown of a shown value, and its end.
+  useEffect(() => {
+    if (!shownSecret) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => {
+      const at = Date.now()
+      setNow(at)
+      if (at >= shownSecret.until) setShownSecret(null)
+    }, 250)
+    return () => window.clearInterval(timer)
+  }, [shownSecret])
+
+  // Test mode only: what the sheet shows of the file, with every hidden value masked, never the value itself.
+  const hookRef = useRef<() => { path: string | null; text: string | null; hidden: number; revealed: number | null }>(() => ({ path: null, text: null, hidden: 0, revealed: null }))
+  hookRef.current = () => ({ path: ready?.path ?? null, text: ready ? maskedSlice(text, secretRanges, 0, text.length, revealed) : null, hidden: secretRanges.length, revealed })
+  useEffect(() => {
+    if (!props.testMode) return
+    const target = window as unknown as { __aitermQuickLook?: { snapshot(): ReturnType<typeof hookRef.current> } }
+    const hook = { snapshot: () => hookRef.current() }
+    target.__aitermQuickLook = hook
+    return () => { if (target.__aitermQuickLook === hook) delete target.__aitermQuickLook }
+  }, [props.testMode])
+
   // The sheet is a native modal: the window dims behind it, focus stays inside, and no layout changes, so no
-  // terminal is resized. Esc arrives as the dialog's cancel event and closes the innermost thing first.
+  // terminal is resized. Esc is taken as a key (see onSheetKey) so the browser raises no close request: Chromium
+  // makes a repeated, refused close request final and closes the dialog itself. A cancel event from elsewhere still
+  // closes the innermost thing first, and a dialog the browser closed anyway closes the sheet, so the two agree.
   useEffect(() => {
     const element = dialog.current
     if (!element) return
@@ -307,9 +372,12 @@ export function QuickLook(props: {
       event.preventDefault()
       cancelRef.current()
     }
+    const closed = (): void => onClose.current()
     element.addEventListener('cancel', cancel)
+    element.addEventListener('close', closed)
     return () => {
       element.removeEventListener('cancel', cancel)
+      element.removeEventListener('close', closed)
       if (element.open) element.close()
     }
   }, [])
@@ -327,6 +395,7 @@ export function QuickLook(props: {
         if (!peekingRef.current) {
           peekingRef.current = true
           setPeeking(true)
+          setShownSecret(null)
         }
         return
       }
@@ -343,6 +412,7 @@ export function QuickLook(props: {
     const blur = (): void => {
       peekingRef.current = false
       setPeeking(false)
+      setShownSecret(null)
     }
     const other = (event: Event): void => { if (peekingRef.current) swallow(event as KeyboardEvent) }
     window.addEventListener('keydown', down, true)
@@ -508,11 +578,13 @@ export function QuickLook(props: {
     return next
   })
 
-  const escape = escapeStep({ focus: focusArea === 'tree' ? 'tree' : focusArea === 'field' ? 'field' : 'file', typed: typed.length > 0, goTo: goTo.open, find: find.open })
+  const escape = escapeStep({ focus: focusArea === 'tree' ? 'tree' : focusArea === 'field' ? 'field' : 'file', typed: typed.length > 0, revealed: revealed !== null,
+    goTo: goTo.open, find: find.open })
   const cancelRef = useRef<() => void>(() => undefined)
   cancelRef.current = () => {
     switch (escape) {
       case 'clear-typed': setTyped(''); return
+      case 'hide-secret': setShownSecret(null); return
       case 'close-goto':
         setGoTo({ open: false, text: '', invalid: false })
         setFocusArea('file')
@@ -553,6 +625,11 @@ export function QuickLook(props: {
       onClose.current()
       return
     }
+    if (plain && !event.shiftKey && event.key === 'Escape' && !event.nativeEvent.isComposing) {
+      take()
+      cancelRef.current()
+      return
+    }
     if (ctrl && !event.shiftKey && event.code === 'KeyB') {
       take()
       setFolded((value) => {
@@ -572,6 +649,16 @@ export function QuickLook(props: {
       if (codeView.current) showFindMatches(codeView.current, [], -1, false)
       setGoTo({ open: true, text: '', invalid: false })
       setFocusArea('goto')
+      return
+    }
+    if (ctrl && !event.shiftKey && event.code === 'KeyR') {
+      take()
+      const view = codeView.current
+      if (!view || secretRanges.length === 0) return
+      const line = view.state.doc.lineAt(view.state.selection.main.head)
+      const index = secretOnLine(secretRanges, line.from, line.to)
+      if (index === null) setFeedback('No hidden value on this line.')
+      else toggleSecret(index)
       return
     }
     if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
@@ -607,7 +694,7 @@ export function QuickLook(props: {
   const home = rootInfo?.home ?? null
   const unavailable = file?.result?.status === 'unavailable' ? file.result : null
   const type = file ? quickLookFileType(file.path) : null
-  const footer = quickLookFooter({ focus: focusArea, fileOpen: !!ready, escape, folded, back: canGoBack(trail), forward: canGoForward(trail) })
+  const footer = quickLookFooter({ focus: focusArea, fileOpen: !!ready, escape, folded, secrets: secretRanges.length > 0, back: canGoBack(trail), forward: canGoForward(trail) })
 
   return (
     <dialog ref={dialog} className={`app-dialog quick-look${peeking ? ' peeking' : ''}`} aria-label="Quick look" onKeyDownCapture={onSheetKey}>
@@ -686,7 +773,7 @@ export function QuickLook(props: {
                   </div>
                 ) : null}
                 {ready.byteLength === 0 ? <p className="ql-message">Empty file. Nothing to show.</p> : (
-                  <CodeView result={ready} line={file.line} column={file.column} topLine={file.topLine} focus={focusArea === 'file'}
+                  <CodeView result={ready} text={text} secrets={secrets} onRevealSecret={toggleSecret} line={file.line} column={file.column} topLine={file.topLine} focus={focusArea === 'file'}
                     onTop={(path, line) => { shownTop.current = { path, line } }}
                     onView={(view) => {
                       codeView.current = view

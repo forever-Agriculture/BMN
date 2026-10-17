@@ -414,7 +414,15 @@ through the files you opened. While the sheet is open, a shown file that changes
 `F8` hides the sheet so you can read the terminals behind; no key reaches them, and releasing it brings
 the sheet back as it was. `Escape` closes the innermost thing first (typed letters, go to line, find)
 and the sheet last. Each root keeps its last file, scroll, open folders and search in memory until BMN
-quits; nothing is written to disk.
+quits; nothing is written to disk. Values that look like secrets show as a plate of dots with their
+length: every value of a `.env` file; in JSON, JSONC, YAML and TOML a value whose name holds key, token,
+secret, password, passwd, auth, credential, cookie or private, a known key shape, or one unbroken run of
+32 or more letters, digits, `-`, `_`, `+` or `=` (lock files are spared that last rule); known key shapes
+in any other text. `Ctrl+R` on the caret's line, or the eye at the end of the line, shows one value for
+ten seconds; it hides again on `Escape`, when the window loses focus, on leaving the file, on closing the
+sheet and on a peek. A copied selection holds `[secret hidden]` in place of a hidden value, and find in
+the file does not look inside one. Masking hides values that look like secrets; it does not find every
+secret.
 
 **File references.** `Ctrl+click` a path an agent printed, such as `src/parser.ts:42:7`, or use
 **Open file reference…** in the palette, to see a read-only snapshot of that file at the line and

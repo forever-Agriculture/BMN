@@ -2616,7 +2616,7 @@ function App(): React.JSX.Element {
         })}
         onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === 'quick-look' ? (
-        <QuickLook key={JSON.stringify(dialog.request)} request={dialog.request} onClose={() => closeQuickLook(dialog.returnTo)} />
+        <QuickLook key={JSON.stringify(dialog.request)} request={dialog.request} testMode={startup?.testMode === true} onClose={() => closeQuickLook(dialog.returnTo)} />
       ) : null}
       {dialog?.kind === 'file-reference' ? (
         <FileReferenceDialog

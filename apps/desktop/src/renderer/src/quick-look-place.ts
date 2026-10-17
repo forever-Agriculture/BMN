@@ -87,21 +87,24 @@ export function forgetPlaces(): void {
   places.clear()
 }
 
-export type EscapeStep = 'clear-typed' | 'close-goto' | 'close-find' | 'close-sheet'
+export type EscapeStep = 'clear-typed' | 'hide-secret' | 'close-goto' | 'close-find' | 'close-sheet'
 
 export interface EscapeState {
   focus: 'field' | 'tree' | 'file'
   typed: boolean
+  /** A hidden value is shown for its ten seconds (Story 67.3). */
+  revealed?: boolean
   goTo: boolean
   find: boolean
 }
 
 /**
  * Esc closes the innermost open thing first and the sheet last: letters typed in the tree while it has the keys,
- * then the go-to-line row, then the find row, then any letters left typed.
+ * then a value shown for ten seconds, then the go-to-line row, then the find row, then any letters left typed.
  */
 export function escapeStep(state: EscapeState): EscapeStep {
   if (state.focus === 'tree' && state.typed) return 'clear-typed'
+  if (state.revealed) return 'hide-secret'
   if (state.goTo) return 'close-goto'
   if (state.find) return 'close-find'
   if (state.typed) return 'clear-typed'
@@ -110,6 +113,7 @@ export function escapeStep(state: EscapeState): EscapeStep {
 
 export const ESCAPE_LABELS: Record<EscapeStep, string> = {
   'clear-typed': 'Clear typed',
+  'hide-secret': 'Hide value',
   'close-goto': 'Close go to line',
   'close-find': 'Close find',
   'close-sheet': 'Close'

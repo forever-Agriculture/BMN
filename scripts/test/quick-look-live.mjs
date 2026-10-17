@@ -1,11 +1,11 @@
-/* global window, document, getComputedStyle */
+/* global window, document, getComputedStyle, HTMLDialogElement, DataTransfer, ClipboardEvent */
 // MODULE: quick-look-live.mjs - Epic 67's isolated Electron run of Quick look on a made-up project: the three ways in, a highlighted file under the unchanged page policy with no worker, the file states, the tree, find, go to line, changed on disk, the trail, the peek, the remembered place, and no terminal resized or typed into
 // The app runs in test mode with temporary HOME and XDG folders (removed at the end); the project, its files and the
 // terminal program are made up here. Nothing leaves the machine and no file of the owner's is read. Prints PASS or
 // FAIL per check and writes result.json and screenshots to the evidence folder.
 // Usage: node scripts/test/quick-look-live.mjs [--binary <packaged bmn>]   (needs `pnpm run build` first without --binary)
 import assert from 'node:assert/strict'
-import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { _electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
@@ -22,6 +22,10 @@ const check = (name, ok, detail = {}) => {
   writeFileSync(join(evidence, 'result.json'), `${JSON.stringify({ build: tested.build, checks }, null, 2)}\n`)
 }
 const SIZES = [[1653, 1300], [1380, 1300], [1280, 900], [1000, 700], [800, 500]]
+// Made-up secret values: none may appear in the page's text before Ctrl+R, in the test hook, or in any log.
+const CANARY = 'canary-QL67-7f3kZq9-made-up'
+const CANARY_TWO = 'canary-QL67-second-made-up'
+const CANARY_JSON = 'canary-QL67-json-made-up'
 
 /** A small made-up project: a joined folder chain, generated folders, and each kind of file the sheet tells apart. */
 function writeProject(project) {
@@ -51,6 +55,8 @@ function writeProject(project) {
   file('node_modules/left-pad/index.js', 'module.exports = 1\n')
   file('dist/bundle.js', 'console.log(1)\n')
   file('README.md', '# Made-up project\n')
+  file('.env', `# made-up values\nMADEUP_API_KEY=${CANARY}\nMADEUP_PORT=made-up-port\nMADEUP_TOKEN=${CANARY_TWO}\n`)
+  file('docs/opencode.jsonc', `{\n  // made-up config\n  "model": "made-up/model",\n  "provider": { "options": { "apiKey": "${CANARY_JSON}" } }\n}\n`)
   file('empty.txt', '')
   writeFileSync(join(project, 'archive.zip'), Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x14, 0x00]))
   writeFileSync(join(project, 'big.log'), Buffer.alloc(2 * 1024 * 1024 + 1, 0x61))
@@ -79,9 +85,12 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     }
   })
   mkdirSync(join(root, 'home'), { recursive: true })
+  const navigations = []
   try {
     const page = await app.firstWindow()
     page.setDefaultTimeout(15_000)
+    page.on('framenavigated', (frame) => navigations.push({ at: Date.now(), url: frame.url().slice(-60) }))
+    page.on('load', () => navigations.push({ at: Date.now(), load: true }))
     const violations = []
     page.on('console', (message) => { if (/Content Security Policy|Refused to/u.test(message.text())) violations.push(message.text()) })
     await page.waitForSelector('.session-row')
@@ -98,6 +107,21 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
       window.__qlViolations = window.__qlViolations ?? []
       window.__qlViolations.push(`${event.violatedDirective} ${event.blockedURI}`)
     }))
+    // Every close of the sheet is recorded: one the browser makes by itself (a refused close request it made final)
+    // would leave the app thinking the sheet is open.
+    await page.evaluate(() => {
+      window.__qlEvents = []
+      const original = HTMLDialogElement.prototype.close
+      HTMLDialogElement.prototype.close = function close(...args) {
+        if (this.classList.contains('quick-look')) window.__qlEvents.push({ at: Date.now(), kind: 'close()', stack: new Error().stack.split('\n').slice(1, 6).join(' | ') })
+        return original.apply(this, args)
+      }
+      for (const kind of ['cancel', 'close']) {
+        document.addEventListener(kind, (event) => {
+          if (event.target?.classList?.contains('quick-look')) window.__qlEvents.push({ at: Date.now(), kind, cancelable: event.cancelable, activation: navigator.userActivation?.isActive })
+        }, true)
+      }
+    })
     await page.locator(`.session-row > button[data-session-id="${sessionId}"]`).click()
     await page.waitForFunction((id) => window.__aitermTest?.snapshot(id)?.bufferLines.some((line) => line.includes('QUICK LOOK FIXTURE')), sessionId)
     await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.setMinimumSize(0, 0); w.setContentSize(1408, 880); w.show() })
@@ -379,6 +403,95 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     check('a remembered file that no longer exists opens the tree with one line saying so', (await sheet.locator('.ql-empty').textContent()) === 'The last file, gone.txt, is no longer there.' &&
       await page.evaluate(() => document.activeElement?.classList.contains('ql-tree') === true), { line: await sheet.locator('.ql-empty').textContent() })
     await page.screenshot({ path: join(evidence, 'place.png') })
+
+    // ---- Story 67.3: a secret stays masked until he asks (made-up canary values only) ----
+    const pageText = () => sheet.evaluate((element) => element.innerText)
+    const hook = () => page.evaluate(() => window.__aitermQuickLook?.snapshot() ?? null)
+    const caretTo = async (line) => {
+      await page.keyboard.press('Control+g')
+      await page.keyboard.type(String(line))
+      await page.keyboard.press('Enter')
+      await page.waitForTimeout(100)
+    }
+    const shownCount = () => sheet.locator('.ql-secret-note.shown').count()
+    await openRow('.env')
+    await sheet.locator('.ql-code .ql-secret').first().waitFor()
+    const envState = { text: await pageText(), plates: await sheet.locator('.ql-code .ql-secret').count(), hook: await hook(),
+      labels: await sheet.locator('.ql-code .ql-secret').evaluateAll((all) => all.map((each) => each.getAttribute('aria-label'))),
+      notes: await sheet.locator('.ql-secret-note').allTextContents() }
+    check('a .env file opens with every value masked: no value in the page\'s text, one plate per value',
+      !envState.text.includes(CANARY) && !envState.text.includes(CANARY_TWO) && !envState.text.includes('made-up-port') && envState.plates === 3 && envState.text.includes('MADEUP_API_KEY'),
+      { plates: envState.plates })
+    check('a plate\'s accessible name is "hidden value" with its length, and its length shows at the edge of its line',
+      envState.labels[0] === `hidden value, ${CANARY.length} characters` && envState.notes.includes(`${CANARY.length} chars`), { labels: envState.labels, notes: envState.notes })
+    check('the test hook returns the masked text', envState.hook?.text?.includes('[secret hidden]') && !envState.hook.text.includes(CANARY) && !JSON.stringify(envState.hook).includes(CANARY),
+      { hidden: envState.hook?.hidden })
+    await sheet.locator('.ql-code .cm-content').focus()
+    await page.keyboard.press('Control+a')
+    const copied = await sheet.locator('.ql-code .cm-content').evaluate((content) => {
+      const data = new DataTransfer()
+      content.dispatchEvent(new ClipboardEvent('copy', { clipboardData: data, bubbles: true, cancelable: true }))
+      return data.getData('text/plain')
+    })
+    check('copying a selection that holds a masked value copies "[secret hidden]" in its place', copied.includes('MADEUP_API_KEY=[secret hidden]') && !copied.includes(CANARY), { copied })
+    await page.keyboard.press('Control+f')
+    await sheet.locator('.ql-find input').fill('CANARY')
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-find .ql-count')?.textContent === 'No matches')
+    await sheet.locator('.ql-find input').fill('MADEUP')
+    await page.waitForFunction(() => / of 3$/u.test(document.querySelector('dialog.quick-look .ql-find .ql-count')?.textContent ?? ''))
+    check('find in the file neither matches inside a masked value nor counts it', true)
+    await page.keyboard.press('Escape')
+
+    await caretTo(2)
+    await page.keyboard.press('Control+r')
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-secret-note.shown') !== null)
+    const revealedState = { text: await pageText(), note: await sheet.locator('.ql-secret-note.shown').textContent(), footer: await footerText() }
+    await page.waitForTimeout(2100)
+    const later = await sheet.locator('.ql-secret-note.shown').textContent()
+    check('Ctrl+R on the caret\'s line shows its value for ten seconds with a countdown', revealedState.text.includes(CANARY) && revealedState.note === 'Shown · hides in 10 s' && /hides in [78] s/u.test(later),
+      { note: revealedState.note, later })
+    await caretTo(4)
+    await page.keyboard.press('Control+r')
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-secret-note.shown') !== null)
+    const secondShown = await pageText()
+    check('one value is shown at a time', secondShown.includes(CANARY_TWO) && !secondShown.includes(CANARY) && await shownCount() === 1)
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-secret-note.shown') === null, null, { timeout: 12_000 })
+    check('it hides by itself after ten seconds', !(await pageText()).includes(CANARY_TWO))
+
+    const hidesOn = async (name, act) => {
+      await caretTo(2)
+      await page.keyboard.press('Control+r')
+      await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-secret-note.shown') !== null)
+      const label = /Hide value/u.test(await footerText())
+      await act()
+      await page.waitForTimeout(150)
+      return { name, hidden: !(await pageText()).includes(CANARY) && await shownCount() === 0, label }
+    }
+    const onEsc = await hidesOn('Esc', () => page.keyboard.press('Escape'))
+    const sheetStays = await sheet.count()
+    const onBlur = await hidesOn('blur', () => page.evaluate(() => window.dispatchEvent(new Event('blur'))))
+    const onPeek = await hidesOn('peek', async () => { await page.keyboard.down('F8'); await page.waitForTimeout(100); await page.keyboard.up('F8') })
+    const onLeave = await hidesOn('leaving the file', async () => {
+      await openRow('README.md')
+      await page.keyboard.press('Alt+ArrowLeft')
+      await sheet.locator('.ql-path').filter({ hasText: '.env' }).waitFor()
+      await sheet.locator('.ql-code .ql-secret').first().waitFor()
+    })
+    check('a shown value hides on Esc (which says so first), on window blur, on a peek and on leaving the file',
+      onEsc.hidden && onEsc.label && sheetStays === 1 && onBlur.hidden && onPeek.hidden && onLeave.hidden, { onEsc, onBlur, onPeek, onLeave })
+    await sheet.locator('.ql-secret-note .ql-eye').first().click()
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-secret-note.shown') !== null)
+    check('the eye at the edge of the line shows the value too', (await pageText()).includes(CANARY))
+    await page.keyboard.press('Escape')
+
+    await sheet.locator('.ql-tr', { hasText: 'docs' }).first().click()
+    await sheet.locator('.ql-tr', { hasText: 'opencode.jsonc' }).waitFor()
+    await openRow('opencode.jsonc')
+    await sheet.locator('.ql-code .ql-secret').first().waitFor()
+    const jsonc = await pageText()
+    check('a JSONC file masks a value whose name says so and shows the rest', !jsonc.includes(CANARY_JSON) && jsonc.includes('"apiKey"') && jsonc.includes('made-up/model') &&
+      await sheet.locator('.ql-code .ql-secret').count() === 1, { plates: await sheet.locator('.ql-code .ql-secret').count() })
+    await page.screenshot({ path: join(evidence, 'masked.png') })
     await page.keyboard.press('Escape')
     await sheet.waitFor({ state: 'detached' })
 
@@ -404,8 +517,14 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
           await page.keyboard.press('ArrowDown')
           await page.keyboard.press('ArrowUp')
         } else {
-          check(`${layout} ${width}×${height}: the tree starts folded and the top field has focus`, await sheet.locator('.ql-left').count() === 0 &&
-            await page.evaluate(() => document.activeElement?.getAttribute('aria-label') === 'Go to file'))
+          // The root's remembered file opens again, so focus is in it once it is read, else in the top field.
+          await page.waitForTimeout(400)
+          const focus = await page.evaluate(() => ({
+            file: !!document.querySelector('dialog.quick-look .ql-code'), inFile: !!document.activeElement?.closest('.ql-code'),
+            inField: document.activeElement?.getAttribute('aria-label') === 'Go to file'
+          }))
+          check(`${layout} ${width}×${height}: the tree starts folded; focus is in the open file, else the top field`, await sheet.locator('.ql-left').count() === 0 &&
+            (focus.file ? focus.inFile : focus.inField), focus)
         }
         await page.keyboard.down('F8')
         await page.waitForTimeout(250)
@@ -426,10 +545,30 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
       if (layout !== 'normal') await action.click()
     }
     check('no byte reached the terminal program', readFileSync(input, 'utf8') === '')
+    const dialogEvents = await page.evaluate(() => window.__qlEvents)
+    const browserCloses = dialogEvents.filter((event, index) => event.kind === 'close' && dialogEvents[index - 1]?.kind !== 'close()')
+    check('the browser never closed the sheet by itself; every Esc stayed with the sheet', browserCloses.length === 0 &&
+      dialogEvents.every((event) => event.kind !== 'cancel' || event.cancelable), { browserCloses: browserCloses.length, cancels: dialogEvents.filter((event) => event.kind === 'cancel').length })
+    // The made-up values reached no log or state file of the app's own folders.
+    const leaks = []
+    const walk = (folder) => {
+      for (const entry of readdirSync(folder, { withFileTypes: true })) {
+        const path = join(folder, entry.name)
+        if (entry.isDirectory()) walk(path)
+        else if (entry.isFile() && statSync(path).size < 64 * 1024 * 1024) {
+          const bytes = readFileSync(path)
+          if ([CANARY, CANARY_TWO, CANARY_JSON].some((value) => bytes.includes(value))) leaks.push(path)
+        }
+      }
+    }
+    for (const folder of [...Object.values(roots), join(root, 'home')]) walk(folder)
+    check('no made-up secret value reached a log or a state file', leaks.length === 0, { leaks })
     assert.ok(checks.every((each) => each.result === 'PASS'), 'a Quick look check failed')
     console.log('PASS: Quick look live run')
   } catch (error) {
-    appendFileSync(join(evidence, 'error.txt'), `${error?.stack ?? error}\n`)
+    const events = await app.windows()[0]?.evaluate(() => window.__qlEvents ?? []).catch(() => [])
+    console.log('Quick look dialog events', JSON.stringify(events?.slice(-12).map(({ at, kind, cancelable }) => ({ at, kind, cancelable }))), 'navigations', JSON.stringify(navigations))
+    appendFileSync(join(evidence, 'error.txt'), `${new Date().toISOString()} ${error?.stack ?? error}\n`)
     throw error
   } finally {
     await app.evaluate(({ app: electronApp }) => electronApp.exit(0)).catch(() => undefined)
