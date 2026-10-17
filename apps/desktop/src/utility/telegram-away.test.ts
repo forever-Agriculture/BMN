@@ -68,7 +68,6 @@ describe('replies', () => {
       'api: rmdir .. (Closed when the agent ended its turn)', '2 more on the laptop.'])
     expect(backReplyText({ since, endedAt, changed: true, waiting: [], wentOn: [], now })).toBe('Back. Away 9 h 30 min, Wed 22:10 – Thu 07:40. Nothing waits on you.')
     expect(backReplyText({ since, endedAt, changed: true, waiting: [], wentOn: null, now })).toMatch(/Went on without you could not be read; see the laptop\.$/)
-    expect(backReplyText({ since, endedAt, changed: true, waiting: [], wentOn: ['a: b (c)'], wentOnAtLeast: true, now })).toMatch(/At least some more on the laptop\.$/)
     const long = (name: string) => Array.from({ length: 10 }, (_, index) => `${name}${index}: ${'x'.repeat(80)}`)
     const reply = backReplyText({ since, endedAt, changed: true, waiting: long('w'), wentOn: long('g'), now, limit: 1_400 })
     expect(reply.length).toBeLessThanOrEqual(1_400)

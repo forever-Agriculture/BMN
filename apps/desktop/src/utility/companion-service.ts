@@ -3193,7 +3193,7 @@ export class CompanionService {
    * on without him (Epic 78, owner 2026-10-17). Each is null when it could not be read.
    */
   private async telegramWaiting(period: { since: string | null; endedAt: string | null }): Promise<{
-    waiting: string[] | null; more: number; wentOn: string[] | null; wentOnMore: number; wentOnAtLeast: boolean
+    waiting: string[] | null; more: number; wentOn: string[] | null; wentOnMore: number
   }> {
     const database = this.options.database
     const home = this.options.home ?? homedir()
@@ -3204,7 +3204,6 @@ export class CompanionService {
     let more = 0
     let wentOn: string[] | null = null
     let wentOnMore = 0
-    let wentOnAtLeast = false
     if (names !== null) {
       try {
         ({ lines: waiting, more } = awayTelegramWaiting(await database.companion('listAttention'), name, field))
@@ -3213,11 +3212,11 @@ export class CompanionService {
         try {
           const closed = await database.companion('awayWentOn', { since: period.since, until: period.endedAt, limit: AWAY_SUMMARY_LIMITS.wentOn })
           ;({ lines: wentOn, more: wentOnMore } = awayTelegramWentOn(closed.records, name, field))
-          wentOnAtLeast = !closed.complete
+          wentOnMore += closed.total - closed.records.length
         } catch { /* said as could not be read */ }
       }
     }
-    return { waiting, more, wentOn, wentOnMore, wentOnAtLeast }
+    return { waiting, more, wentOn, wentOnMore }
   }
 
   /**

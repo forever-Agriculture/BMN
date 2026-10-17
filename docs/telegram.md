@@ -75,8 +75,9 @@ session. It uses a bot you create and own. It is off by default.
   cards and answers go on as before.
 - Away (Epic 76): `/back` answers with the period, **Waiting on you** (the cards still open) and **Went on without
   you** (Epic 78, owner 2026-10-17): every question, permission or review of the period that closed without your
-  answer, because its agent went on, withdrew it or it expired, as "Session: subject (how it closed)", ten at most
-  with the rest counted. A card answered from Telegram, in BMN or at the desk is not listed. The laptop's away summary
+  answer, because its agent went on, withdrew it, replaced it with its next prompt in the same place (a Claude
+  permission its countdown denied, then the next one) or it expired, as "Session: subject (how it closed)", ten at
+  most with the rest counted. The laptop lists up to 500 and counts any beyond exactly. A card answered from Telegram, in BMN or at the desk is not listed. The laptop's away summary
   shows the same list under its own heading, whichever way you said you were back.
 - It cannot manage sessions remotely. A handoff delivers itself to its agent (Story 75.5), so no
   handoff reaches Telegram; a reply to a handoff card sent before then goes to its source session.

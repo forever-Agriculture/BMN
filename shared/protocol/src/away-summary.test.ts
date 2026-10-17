@@ -48,7 +48,7 @@ const input = (over: Partial<AwaySummaryInput> = {}): AwaySummaryInput => ({
     { sessionId: 's1', name: 'Builder', workspace: 'Personal', archivedAt: null },
     { sessionId: 's2', name: 'Reviewer', workspace: 'Personal', archivedAt: at(15, 5, 0) }
   ],
-  order: ['s1', 's2'], attention: [], decisions: { decisions: [], complete: true }, wentOn: { records: [], complete: true }, activity: { sessions: [], gaps: {} }, artifactNames: {},
+  order: ['s1', 's2'], attention: [], decisions: { decisions: [], complete: true }, wentOn: { records: [], complete: true, total: 0 }, activity: { sessions: [], gaps: {} }, artifactNames: {},
   devAuto: { result: { runs: [], skipped: 0, issues: [], observedAt: ENDED }, workspaceNames: { w: 'Personal' } },
   ...over
 })
@@ -263,6 +263,7 @@ describe('Went on without you (Epic 78, owner 2026-10-17)', () => {
     expect(awayWentOnWords({ state: 'withdrawn', resolvedBy: 'cli' })).toBe('Withdrawn by the agent')
     expect(awayWentOnWords({ state: 'expired', resolvedBy: 'expiry' })).toBe('Expired unanswered')
     expect(awayWentOnWords({ state: 'withdrawn', resolvedBy: null })).toBe('Closed without your answer')
+    expect(awayWentOnWords({ state: 'withdrawn', resolvedBy: 'hook:claude:PermissionRequest', resolution: 'Replaced by the agent\'s next prompt' })).toBe('Replaced by the agent\'s next prompt')
   })
 
   it('lists every card of the period that closed without his answer, by session, the command as its title', () => {
@@ -272,7 +273,8 @@ describe('Went on without you (Epic 78, owner 2026-10-17)', () => {
           closed('w1', 's1', at(14, 23, 5), { kind: 'permission', prompt: BASH, resolvedBy: 'hook:claude:Stop' }),
           closed('w2', 's2', at(15, 1, 0), { resolvedBy: 'cli' })
         ],
-        complete: true
+        complete: true,
+        total: 2
       }
     }))
     expect(view.wentOn.count).toBe(2)
@@ -290,11 +292,13 @@ describe('Went on without you (Epic 78, owner 2026-10-17)', () => {
     expect(unread.wentOn.incomplete).toBe(true)
     expect(unread.wentOn.empty).toBeNull()
     expect(unread.couldNotRead).toBe('Could not read in full: requests closed without you (unreadable).')
-    const records = Array.from({ length: AWAY_SUMMARY_LIMITS.wentOn + 1 }, (_, index) => closed(`c${index}`, 's1', at(15, 1, index % 60)))
-    const cut = buildAwaySummary(input({ wentOn: { records, complete: false } }))
+    // Everything the host read is shown; what it could not hold is counted exactly.
+    const records = Array.from({ length: AWAY_SUMMARY_LIMITS.wentOn }, (_, index) => closed(`c${index}`, 's1', at(15, 1, index % 60)))
+    const cut = buildAwaySummary(input({ wentOn: { records, complete: false, total: AWAY_SUMMARY_LIMITS.wentOn + 61 } }))
     expect(cut.wentOn.groups[0]!.rows).toHaveLength(AWAY_SUMMARY_LIMITS.wentOn)
-    expect(cut.wentOn.more).toBe('1 more · each session\'s Needs you history has them.')
-    expect(cut.couldNotRead).toBe(`Could not read in full: requests closed without you (cut at ${AWAY_SUMMARY_LIMITS.wentOn + 1} listings).`)
+    expect(cut.wentOn.count).toBe(AWAY_SUMMARY_LIMITS.wentOn + 61)
+    expect(cut.wentOn.more).toBe(`61 more closed than this list holds; the oldest ${AWAY_SUMMARY_LIMITS.wentOn} are shown.`)
+    expect(cut.couldNotRead).toBe(`Could not read in full: requests closed without you (cut at ${AWAY_SUMMARY_LIMITS.wentOn} listings).`)
   })
 
   it('gives the /back reply up to ten "Session: subject (how)" lines and counts the rest', () => {

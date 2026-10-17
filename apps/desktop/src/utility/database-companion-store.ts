@@ -1,4 +1,5 @@
 // MODULE: database-companion-store.ts - artifacts, attention, progress, receipts, drafts, Telegram message map and settings rows
+import { randomUUID } from 'node:crypto'
 import {
   AGENT_HISTORY_KEEP_DAYS,
   ARCHIVE_DELETE_AFTER_DAYS,
@@ -23,6 +24,7 @@ import {
   type AttentionProducerBinding,
   validateVocabulary,
   AWAY_OWNER_ORIGINS,
+  AWAY_REPLACED_RESOLUTION,
   type AppearanceSettings,
   type AppSettings,
   type AgentHistoryKeepDays,
@@ -232,6 +234,9 @@ const CLAUDE_PERMISSION_NOTICE = 'hook:claude:Notification'
  */
 export type AttentionOpenResult = AttentionRecord & { changed: boolean }
 
+/** The kinds whose dialog, replaced by the agent's next one in its slot, is kept as closed without an answer. */
+const REPLACEABLE_KINDS: ReadonlySet<AttentionKind> = new Set(['question', 'permission', 'review'])
+
 export function openAttention(
   database: DatabaseConnection,
   params: AttentionOpenParams,
@@ -282,6 +287,17 @@ export function openAttention(
         return { ...getAttention(database, existing.request_id), changed: false }
       }
       return { ...attentionFromRow(existing), changed: false }
+    }
+    // Another dialog of the agent takes the slot (a Claude permission its countdown denied, then the next one): the one
+    // before is kept as closed without an answer, under an id of its own, so it is not lost to his return (Epic 78).
+    if (stored !== null && params.prompt !== undefined && merged === null && REPLACEABLE_KINDS.has(existing.kind)) {
+      database.prepare(
+        `INSERT INTO attention_request(request_id, session_id, incarnation_id, request_key, kind, title, body,
+           state, resolution, opened_at, expires_at, resolved_at, seen_at, revision, opened_by, resolved_by, prompt_json, producer_json, manual_choices_json)
+         SELECT ?, session_id, incarnation_id, request_key, kind, title, body, 'withdrawn', ?, opened_at, expires_at, ?, seen_at, revision,
+           opened_by, ?, prompt_json, producer_json, manual_choices_json
+         FROM attention_request WHERE request_id = ?`
+      ).run(randomUUID(), AWAY_REPLACED_RESOLUTION, now, params.origin ?? null, existing.request_id)
     }
     database.prepare(
       `UPDATE attention_request SET kind = ?, title = ?, body = ?, expires_at = ?, incarnation_id = ?,
@@ -459,15 +475,14 @@ export function listAttention(database: DatabaseConnection): AttentionRecord[] {
  * 2026-10-17): withdrawn or expired between `since` and `until` by anything but his own routes. Oldest first, cut at
  * `limit` with `complete` false.
  */
-export function awayWentOn(database: DatabaseConnection, call: { since: string; until: string; limit: number }): { records: AttentionRecord[]; complete: boolean } {
+export function awayWentOn(database: DatabaseConnection, call: { since: string; until: string; limit: number }): { records: AttentionRecord[]; complete: boolean; total: number } {
   const owner = AWAY_OWNER_ORIGINS.map(() => '?').join(', ')
-  const rows = database.prepare(
-    `SELECT * FROM attention_request
-     WHERE kind IN ('question', 'permission', 'review') AND state IN ('withdrawn', 'expired')
-       AND resolved_at >= ? AND resolved_at < ? AND COALESCE(resolved_by, '') NOT IN (${owner})
-     ORDER BY resolved_at, rowid LIMIT ?`
-  ).all(call.since, call.until, ...AWAY_OWNER_ORIGINS, call.limit + 1) as AttentionRow[]
-  return { records: rows.slice(0, call.limit).map(attentionFromRow), complete: rows.length <= call.limit }
+  const where = `kind IN ('question', 'permission', 'review') AND state IN ('withdrawn', 'expired')
+     AND resolved_at >= ? AND resolved_at < ? AND COALESCE(resolved_by, '') NOT IN (${owner})`
+  const args = [call.since, call.until, ...AWAY_OWNER_ORIGINS]
+  const { total } = database.prepare(`SELECT COUNT(*) AS total FROM attention_request WHERE ${where}`).get(...args) as { total: number }
+  const rows = database.prepare(`SELECT * FROM attention_request WHERE ${where} ORDER BY resolved_at, rowid LIMIT ?`).all(...args, call.limit) as AttentionRow[]
+  return { records: rows.map(attentionFromRow), complete: rows.length === total, total }
 }
 
 /** Private delivery metadata never enters AttentionRecord, receipts or agent APIs. */

@@ -12,7 +12,7 @@ const away: OwnerAwayView = {
 const sources = (over: Partial<AwaySummarySources> = {}): AwaySummarySources => ({
   payload: {
     away, sessions: [{ sessionId: 's1', name: 'Builder', workspace: 'Personal', archivedAt: null }], order: ['s1'],
-    decisions: { decisions: [], complete: true }, wentOn: { records: [], complete: true }, activity: { sessions: [], gaps: {} }, artifactNames: {}
+    decisions: { decisions: [], complete: true }, wentOn: { records: [], complete: true, total: 0 }, activity: { sessions: [], gaps: {} }, artifactNames: {}
   },
   asks: { asks: [{ by: { kind: 'session', session: 's1' }, state: 'answered', role: 'reviewer', endedAt: at(15, 1, 0) } as unknown as TeamAskLine], places: { used: 0, capacity: 1 }, keptDays: 30 },
   devAuto: { runs: [], skipped: 0, issues: [], observedAt: at(15, 7, 40) },

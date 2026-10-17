@@ -6,7 +6,7 @@ import type { DevAutoRunsResult } from './dev-auto'
 
 /** Fable's bounds (Story 76.1 §4–5). */
 export const AWAY_SUMMARY_LIMITS = Object.freeze({
-  waiting: 40, wentOn: 40, decisions: 30, sessions: 20, lines: 8, published: 3, now: 20, telegramWaiting: 10, telegramWentOn: 10,
+  waiting: 40, wentOn: 500, decisions: 30, sessions: 20, lines: 8, published: 3, now: 20, telegramWaiting: 10, telegramWentOn: 10,
   telegramSession: 120, telegramTitle: 220
 })
 
@@ -109,7 +109,7 @@ export interface AwaySummaryPayload {
    * 2026-10-17: "If the work continues and I'm away I want to receive all cards in the end when I'm back"); null when
    * they could not be read.
    */
-  wentOn: { records: AttentionRecord[]; complete: boolean } | null
+  wentOn: { records: AttentionRecord[]; complete: boolean; total: number } | null
   activity: AwayPeriodActivity | null
   /** Names of the published files that decision references point at and BMN found. */
   artifactNames: Record<string, string>
@@ -186,9 +186,13 @@ const requestSubject = (record: AttentionRecord): { text: string; command: boole
 /** The origins that are the owner himself: what one of them closed was answered, not gone on without him. */
 export const AWAY_OWNER_ORIGINS = Object.freeze(['owner', 'input', 'telegram'] as const)
 
+/** What the store says of a dialog the agent's next one replaced in its slot (Epic 78). */
+export const AWAY_REPLACED_RESOLUTION = 'Replaced by the agent\'s next prompt'
+
 /** How a request closed without his answer, from what closed it. */
-export function awayWentOnWords(record: Pick<AttentionRecord, 'state' | 'resolvedBy'>): string {
+export function awayWentOnWords(record: Pick<AttentionRecord, 'state' | 'resolvedBy' | 'resolution'>): string {
   if (record.state === 'expired') return 'Expired unanswered'
+  if (record.resolution === AWAY_REPLACED_RESOLUTION) return AWAY_REPLACED_RESOLUTION
   const by = record.resolvedBy ?? ''
   if (by === 'cli') return 'Withdrawn by the agent'
   const event = /^hook:[^:]+:(.+)$/.exec(by)?.[1]
@@ -276,6 +280,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   if (input.attention === null) gaps.requests = { kind: 'unreadable' }
   if (input.wentOn === null) gaps['went-on'] = { kind: 'unreadable' }
   else if (!input.wentOn.complete) gaps['went-on'] = { kind: 'truncated', at: input.wentOn.records.length }
+  const wentOnTotal = input.wentOn === null ? 0 : Math.max(input.wentOn.total, input.wentOn.records.length)
   if (input.decisions === null) gaps.decisions = { kind: 'unreadable' }
   else if (!input.decisions.complete) gaps.decisions = { kind: 'truncated', at: input.decisions.decisions.length }
   if (input.activity === null) for (const source of ['turns', 'files', 'messages', 'exits'] as const) gaps[source] = { kind: 'unreadable' }
@@ -306,9 +311,10 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     empty: input.attention !== null && open.length === 0 ? 'Nothing waits on you.' : null
   }
 
-  // Went on without you: every card of the period that closed without his answer, so none is lost while he was away.
+  // Went on without you: every card of the period that closed without his answer, so none is lost while he was away;
+  // the host reads up to the bound, all of it shown, and counts the rest exactly.
   const closed = input.wentOn?.records ?? []
-  const wentOnRows: AwayWentOnRow[] = closed.slice(0, AWAY_SUMMARY_LIMITS.wentOn).map((record) => {
+  const wentOnRows: AwayWentOnRow[] = closed.map((record) => {
     const subject = requestSubject(record)
     return {
       requestId: record.requestId, sessionId: record.sessionId, time: clockWords(record.resolvedAt ?? record.openedAt), kind: kindWords(record),
@@ -316,10 +322,10 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     }
   })
   const wentOn: AwaySummaryView['wentOn'] = {
-    count: closed.length,
+    count: wentOnTotal,
     incomplete: gaps['went-on'] !== undefined,
     groups: bySession(wentOnRows, input.order).map(([sessionId, rows]) => ({ sessionId, where: where(sessionId), rows })),
-    more: closed.length > AWAY_SUMMARY_LIMITS.wentOn ? `${closed.length - AWAY_SUMMARY_LIMITS.wentOn} more · each session's Needs you history has them.` : null,
+    more: wentOnTotal > closed.length ? `${wentOnTotal - closed.length} more closed than this list holds; the oldest ${closed.length} are shown.` : null,
     empty: input.wentOn !== null && closed.length === 0 ? 'No card closed without you.' : null
   }
 

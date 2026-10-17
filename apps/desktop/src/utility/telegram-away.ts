@@ -66,7 +66,7 @@ export function awayReplyText(p: { since: string; repeated: boolean; note: 'none
  */
 export function backReplyText(p: {
   since: string | null; endedAt: string | null; changed: boolean; waiting?: string[] | null; more?: number
-  wentOn?: string[] | null; wentOnMore?: number; wentOnAtLeast?: boolean; now?: Date; limit?: number
+  wentOn?: string[] | null; wentOnMore?: number; now?: Date; limit?: number
 }): string {
   if (!p.changed || p.since === null || p.endedAt === null) return 'Not away; nothing changed.'
   const head = `Back. Away ${awayDurationWords(p.since, p.endedAt)}, ${awayPeriodWords(p.since, p.endedAt, p.now)}.`
@@ -76,15 +76,15 @@ export function backReplyText(p: {
   let more = p.more ?? 0
   const wentOn = p.wentOn === undefined ? undefined : p.wentOn === null ? null : [...p.wentOn]
   let wentOnMore = p.wentOnMore ?? 0
-  const moreWords = (count: number, atLeast: boolean): string[] => count > 0 || atLeast ? [`${atLeast ? 'At least ' : ''}${count > 0 ? count : 'some'} more on the laptop.`] : []
+  const moreWords = (count: number): string[] => count > 0 ? [`${count} more on the laptop.`] : []
   const text = (): string => {
     const parts = [
       waiting === null ? `${head} Waiting on you could not be read; see the laptop.`
         : waiting.length === 0 ? `${head} Nothing waits on you.`
-          : [head, 'Waiting on you', ...waiting, ...moreWords(more, false)].join('\n')
+          : [head, 'Waiting on you', ...waiting, ...moreWords(more)].join('\n')
     ]
     if (wentOn === null) parts.push('Went on without you could not be read; see the laptop.')
-    else if (wentOn !== undefined && (wentOn.length > 0 || wentOnMore > 0)) parts.push(['Went on without you', ...wentOn, ...moreWords(wentOnMore, p.wentOnAtLeast === true)].join('\n'))
+    else if (wentOn !== undefined && (wentOn.length > 0 || wentOnMore > 0)) parts.push(['Went on without you', ...wentOn, ...moreWords(wentOnMore)].join('\n'))
     return parts.join('\n\n')
   }
   while (text().length > limit) {

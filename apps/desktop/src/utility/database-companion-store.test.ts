@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   artifactBytesUsed,
   claimInputDraft,
+  awayWentOn,
   closeAttention,
   commitQuietDelivery,
   createDraft,
@@ -922,5 +923,52 @@ describe('morning digest stored settings', () => {
       expect(() => putSettingsSection(database, 'telegram', { ...value, morningDigest: { enabled: true, time } }, now)).toThrow(/Morning digest/)
     }
     expect(getSettings(database).telegram.morningDigest).toEqual(value.morningDigest)
+  })
+})
+
+describe('cards that went on without him (Epic 78, owner 2026-10-17)', () => {
+  const at = (seconds: number): string => new Date(Date.parse('2026-10-17T10:00:00.000Z') + seconds * 1000).toISOString()
+  const permission = (requestRef: string, command: string) => ({
+    sessionId: 's1', incarnationId: 'i1', requestKey: 'claude:permission', kind: 'permission' as const, title: `Run ${command}?`,
+    origin: 'hook:claude:PermissionRequest',
+    prompt: { type: 'permission', harness: 'claude', shape: 'permission', requestRef, toolUseId: null, tool: 'Bash', command, cwd: '/work' } as AttentionPrompt
+  })
+  const period = (until: number) => awayWentOn(database, { since: at(0), until: at(until), limit: 500 })
+
+  it('keeps a dialog the agent\'s next one replaced in its slot, while the next one waits and after it closes', () => {
+    openAttention(database, permission('ref-a', 'rmdir ..'), 'r1', at(1))
+    // Claude's countdown denied A unseen; B takes the slot.
+    openAttention(database, permission('ref-b', 'touch b'), 'r2', at(125))
+    const waiting = period(130)
+    expect(waiting).toMatchObject({ complete: true, total: 1 })
+    expect(waiting.records.map((record) => [record.prompt?.type === 'permission' && record.prompt.command, record.state, record.resolution, record.resolvedAt]))
+      .toEqual([['rmdir ..', 'withdrawn', 'Replaced by the agent\'s next prompt', at(125)]])
+    expect(waiting.records[0]!.requestId).not.toMatch(/^r[12]$/)
+    // The open request keeps its id, now holding B, so its card and answers stay bound to it.
+    expect(getAttention(database, 'r1')).toMatchObject({ state: 'open', prompt: { requestRef: 'ref-b' } })
+    closeAttention(database, { sessionId: 's1', requestKey: 'claude:permission' }, 'withdrawn', null, at(200), 'hook:claude:Stop')
+    expect(period(300).records.map((record) => record.prompt?.type === 'permission' && record.prompt.command)).toEqual(['rmdir ..', 'touch b'])
+    // The same dialog reported again is not a replacement.
+    openAttention(database, permission('ref-c', 'touch c'), 'r3', at(301))
+    openAttention(database, permission('ref-c', 'touch c'), 'r4', at(302))
+    expect(period(400).total).toBe(2)
+  })
+
+  it('lists only what closed in the period without his answer, and counts past what it returns', () => {
+    const open = (key: string, second: number) => openAttention(database, { sessionId: 's1', incarnationId: 'i1', requestKey: key, kind: 'question', title: key, origin: 'cli' }, key, at(second))
+    const close = (key: string, second: number, origin: string, state: 'withdrawn' | 'expired' | 'answered' = 'withdrawn') =>
+      closeAttention(database, { sessionId: 's1', requestKey: key }, state, null, at(second), origin)
+    open('before', 0); database.prepare("UPDATE attention_request SET state = 'withdrawn', resolved_at = ?, resolved_by = 'cli' WHERE request_id = 'before'").run('2026-10-17T09:59:59.000Z')
+    open('agent', 1); close('agent', 2, 'cli')
+    open('expired', 1); close('expired', 3, 'expiry', 'expired')
+    for (const origin of ['owner', 'input', 'telegram']) { open(origin, 1); close(origin, 4, origin) }
+    open('answered', 1); close('answered', 5, 'hook:claude:PostToolUse', 'answered')
+    openAttention(database, { sessionId: 's1', incarnationId: 'i1', requestKey: 'notice', kind: 'notice', title: 'n', origin: 'cli' }, 'notice', at(1)); close('notice', 6, 'cli')
+    open('after', 1); close('after', 100, 'cli')
+    expect(period(50).records.map((record) => record.requestId)).toEqual(['agent', 'expired'])
+    for (let index = 0; index < 101; index += 1) { open(`q${index}`, 1); close(`q${index}`, 10, 'hook:claude:Stop') }
+    const cut = awayWentOn(database, { since: at(0), until: at(50), limit: 40 })
+    expect(cut.records).toHaveLength(40)
+    expect(cut).toMatchObject({ complete: false, total: 103 })
   })
 })
