@@ -2,7 +2,7 @@
 // MODULE: migrate-bmad-plan.mjs - Story 77.6: move a BMAD plan (epics.md, sprint-status.yaml, references) into BMN's plan/ format in a staging folder, with a manifest of every file and text span, a verified archive, a span check and a rehearsed rollback; the originals are never touched
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, posix, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -274,7 +274,10 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
       return anchor ? dead(`${planRoot}/shared/front-matter.md`) : { path: `${planRoot}/shared/front-matter.md`, anchor: '' }
     }
     // A file that leaves with the retired folders (_bmad/, the apps' bmad-* skills) is linked at its archived copy.
-    if (exists(target) && placeOf(target) === null && retired(target)) return { path: `${archiveFolder}/files/${target}${line}`, anchor: anchor ?? '', absolute: true }
+    if (exists(target) && placeOf(target) === null && retired(target)) {
+      const path = `${archiveFolder}/files/${target}${line}`
+      return { ...(anchor && !anchorExists(target, anchor) ? dead(path) : { path, anchor: anchor ?? '' }), absolute: true }
+    }
     // Only what exists moves; a path under _bmad-output that names nothing is a gone target.
     let place = exists(target) ? placeOf(target) : null
     // A folder link (a reference-* folder) moves with its folder.
@@ -631,6 +634,29 @@ export function checkLinks({ repo, stage, manifest }) {
   const archived = `${manifest.archive ?? join(homedir(), 'projects', `bmn-archive-${manifest.date}`)}/files/`
   const roots = manifest.retired ?? ['_bmad-output', '_bmad']
   const listed = new Set(manifest.files.map((file) => file.path))
+  const archiveRoot = archived.slice(0, -1)
+  const recordedLinks = new Map(manifest.files.filter((file) => file.link !== null).map((file) => [file.path, file.link]))
+  // Where an archived path finally leads: its path inside the archive, or null once a link leaves it. The verified
+  // archive answers once it exists; before that, the links the manifest records (copied verbatim) are followed.
+  const finalInArchive = (inner) => {
+    if (existsSync(archiveRoot)) {
+      let real
+      try { real = realpathSync(join(archiveRoot, inner)) } catch { return undefined }
+      const base = realpathSync(archiveRoot)
+      return real.startsWith(`${base}/`) ? real.slice(base.length + 1) : null
+    }
+    let path = inner
+    for (let hop = 0; hop < 40; hop++) {
+      const parts = path.split('/')
+      const index = parts.findIndex((_, at) => recordedLinks.has(parts.slice(0, at + 1).join('/')))
+      if (index < 0) return listed.has(path) || [...listed].some((file) => file.startsWith(`${path}/`)) ? path : undefined
+      const linkPath = parts.slice(0, index + 1).join('/')
+      const to = posix.resolve(posix.dirname(`${archiveRoot}/${linkPath}`), recordedLinks.get(linkPath), ...parts.slice(index + 1))
+      if (!to.startsWith(`${archiveRoot}/`)) return null
+      path = to.slice(archiveRoot.length + 1)
+    }
+    return null
+  }
   // The layout after the switch: plan/ is the stage, and every retired root is gone even while it still exists.
   const resolveFile = (target) => {
     if (target === 'plan' || target.startsWith('plan/')) return join(stage, target.slice(5))
@@ -644,11 +670,19 @@ export function checkLinks({ repo, stage, manifest }) {
       const inRepo = dest.startsWith(`${repo}/`)
       if (dest.startsWith(archived)) {
         // An archived copy: in the verified archive once it exists, else a file the manifest archives.
-        let inner = dest.slice(archived.length).split('#')[0]
+        const [innerPart, anchor] = dest.slice(archived.length).split('#', 2)
+        let inner = innerPart
         try { inner = decodeURI(inner) } catch { /* as written */ }
         inner = inner.replace(/:\d+(?::\d+)?$/u, '')
-        const there = existsSync(archived) ? existsSync(join(archived, inner)) : listed.has(inner) || [...listed].some((file) => file.startsWith(`${inner}/`))
-        if (!there) failures.push(`${at}: link ${dest} names nothing in the archive`)
+        const final = finalInArchive(inner)
+        if (final === undefined) { failures.push(`${at}: link ${dest} names nothing in the archive`); continue }
+        if (final === null) { failures.push(`${at}: link ${dest} is a link that leads out of the archive`); continue }
+        if (!anchor || !final.endsWith('.md')) continue
+        const full = existsSync(archiveRoot) ? join(archiveRoot, final) : join(repo, final)
+        if (!anchorCache.has(full)) anchorCache.set(full, anchorsOf(readFileSync(full, 'utf8')))
+        let plain = anchor
+        try { plain = decodeURIComponent(anchor) } catch { /* as written */ }
+        if (!anchorCache.get(full).has(anchor) && !anchorCache.get(full).has(plain)) failures.push(`${at}: link ${dest} names no heading of ${inner}`)
         continue
       }
       if (/^[a-z][a-z0-9+.-]*:/iu.test(dest) || (dest.startsWith('/') && !inRepo) || dest.startsWith('<')) continue

@@ -215,6 +215,36 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     expect(checkSpans({ repo, stage, manifest })).toEqual(['_bmad-output/planning-artifacts/late-note.md is not in the manifest (new since staging): stage again'])
   })
 
+  it('an archive link reaches a file inside the archive and a heading of it, before and after archiving (Sol final recheck F5)', () => {
+    const { root, repo } = fixture()
+    writeFileSync(join(repo, '.claude/skills/bmad-help/SKILL.md'), '---\nname: bmad-help\n---\n\n## Use\n\nHow.\n')
+    writeFileSync(join(repo, '_bmad/bmm/notes.md'), '# Notes\n')
+    symlinkSync('SKILL.md', join(repo, '.claude/skills/bmad-help/inside.md'))
+    symlinkSync(join(repo, '_bmad/bmm/notes.md'), join(repo, '.claude/skills/bmad-help/escape.md'))
+    const epics = join(repo, '_bmad-output/planning-artifacts/epics.md')
+    writeFileSync(epics, readFileSync(epics, 'utf8').replace('### Story 1.1: Do It', 'Archive: [use](../../.claude/skills/bmad-help/SKILL.md#use), [no heading](../../.claude/skills/bmad-help/SKILL.md#no-such-heading), [inside](../../.claude/skills/bmad-help/inside.md#use).\n\n### Story 1.1: Do It'))
+    const stage = join(root, 'out', 'plan')
+    const kept = join(root, 'kept')
+    const manifest = stagePlan({ repo, stage, date: '2026-10-17', docs: ['docs/architecture.md'], archive: kept })
+    expect(checkSpans({ repo, stage, manifest })).toEqual([])
+    const epicOne = join(stage, 'epics/001-first-thing.md')
+    const first = readFileSync(epicOne, 'utf8')
+    const help = `${kept}/files/.claude/skills/bmad-help`
+    expect(first).toContain(`[use](${help}/SKILL.md#use), [no heading](${help}/SKILL.md), [inside](${help}/inside.md#use)`)
+    expect(manifest.gone).toContainEqual(expect.objectContaining({ kind: 'anchor', target: '.claude/skills/bmad-help/SKILL.md', anchor: 'no-such-heading' }))
+    writeFileSync(epicOne, `${first}\n[escape](${help}/escape.md) and [bad](${help}/SKILL.md#nope)\n`)
+    const refused = [
+      `plan/epics/001-first-thing.md: link ${help}/escape.md is a link that leads out of the archive`,
+      `plan/epics/001-first-thing.md: link ${help}/SKILL.md#nope names no heading of .claude/skills/bmad-help/SKILL.md`
+    ]
+    expect(checkLinks({ repo, stage, manifest })).toEqual(refused)
+    writeFileSync(epicOne, first)
+    expect(archive({ repo, manifest, folder: kept })).toEqual([])
+    expect(checkLinks({ repo, stage, manifest })).toEqual([])
+    writeFileSync(epicOne, `${first}\n[escape](${help}/escape.md) and [bad](${help}/SKILL.md#nope)\n`)
+    expect(checkLinks({ repo, stage, manifest })).toEqual(refused)
+  })
+
   it('archives byte-identical originals, verifies them and rehearses the rollback on a copy', () => {
     const { root, repo } = fixture()
     const stage = join(root, 'out', 'plan')
