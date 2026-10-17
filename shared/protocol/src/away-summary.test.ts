@@ -5,6 +5,8 @@ import type { DecisionRecord, OwnerAwayView } from './away'
 import {
   AWAY_SUMMARY_LIMITS,
   awayTelegramWaiting,
+  awayTelegramWentOn,
+  awayWentOnWords,
   buildAwaySummary,
   withCompletedAsks,
   type AwaySessionActivity,
@@ -46,7 +48,7 @@ const input = (over: Partial<AwaySummaryInput> = {}): AwaySummaryInput => ({
     { sessionId: 's1', name: 'Builder', workspace: 'Personal', archivedAt: null },
     { sessionId: 's2', name: 'Reviewer', workspace: 'Personal', archivedAt: at(15, 5, 0) }
   ],
-  order: ['s1', 's2'], attention: [], decisions: { decisions: [], complete: true }, activity: { sessions: [], gaps: {} }, artifactNames: {},
+  order: ['s1', 's2'], attention: [], decisions: { decisions: [], complete: true }, wentOn: { records: [], complete: true }, activity: { sessions: [], gaps: {} }, artifactNames: {},
   devAuto: { result: { runs: [], skipped: 0, issues: [], observedAt: ENDED }, workspaceNames: { w: 'Personal' } },
   ...over
 })
@@ -244,6 +246,63 @@ describe('awayTelegramWaiting (Story 76.6 AC4)', () => {
     const { lines, more } = awayTelegramWaiting(attention, () => 'Builder', field)
     expect(lines).toHaveLength(10)
     expect(lines[0]).toBe('[Builder]: [Title r0]')
+    expect(more).toBe(2)
+  })
+})
+
+describe('Went on without you (Epic 78, owner 2026-10-17)', () => {
+  const BASH = { type: 'permission' as const, harness: 'claude' as const, shape: 'permission' as const, requestRef: 'ref-1', toolUseId: null, tool: 'Bash', command: 'rmdir ..', cwd: null }
+  const closed = (id: string, sessionId: string, resolvedAt: string, over: Partial<AttentionRecord> = {}): AttentionRecord =>
+    request(id, sessionId, SINCE, { state: 'withdrawn', resolvedAt, ...over })
+
+  it('names how each card closed without him', () => {
+    expect(awayWentOnWords({ state: 'withdrawn', resolvedBy: 'hook:claude:Stop' })).toBe('Closed when the agent ended its turn')
+    expect(awayWentOnWords({ state: 'withdrawn', resolvedBy: 'hook:codex:SessionEnd' })).toBe('Closed when the session ended')
+    expect(awayWentOnWords({ state: 'withdrawn', resolvedBy: 'hook:claude:UserPromptSubmit' })).toBe('Closed by a new message to the agent')
+    expect(awayWentOnWords({ state: 'withdrawn', resolvedBy: 'hook:claude:PostToolUse' })).toBe('Closed when the agent went on')
+    expect(awayWentOnWords({ state: 'withdrawn', resolvedBy: 'cli' })).toBe('Withdrawn by the agent')
+    expect(awayWentOnWords({ state: 'expired', resolvedBy: 'expiry' })).toBe('Expired unanswered')
+    expect(awayWentOnWords({ state: 'withdrawn', resolvedBy: null })).toBe('Closed without your answer')
+  })
+
+  it('lists every card of the period that closed without his answer, by session, the command as its title', () => {
+    const view = buildAwaySummary(input({
+      wentOn: {
+        records: [
+          closed('w1', 's1', at(14, 23, 5), { kind: 'permission', prompt: BASH, resolvedBy: 'hook:claude:Stop' }),
+          closed('w2', 's2', at(15, 1, 0), { resolvedBy: 'cli' })
+        ],
+        complete: true
+      }
+    }))
+    expect(view.wentOn.count).toBe(2)
+    expect(view.wentOn.incomplete).toBe(false)
+    expect(view.wentOn.empty).toBeNull()
+    expect(view.wentOn.groups.map((group) => [group.where, group.rows.map((row) => [row.time, row.kind, row.title, row.command, row.how])])).toEqual([
+      ['Personal › Builder', [['23:05', 'Permission', 'rmdir ..', true, 'Closed when the agent ended its turn']]],
+      ['Personal › Reviewer (archived 05:00)', [['01:00', 'Question', 'Title w2', false, 'Withdrawn by the agent']]]
+    ])
+  })
+
+  it('says none closed without him, and names a list it could not read or was cut', () => {
+    expect(buildAwaySummary(input()).wentOn.empty).toBe('No card closed without you.')
+    const unread = buildAwaySummary(input({ wentOn: null }))
+    expect(unread.wentOn.incomplete).toBe(true)
+    expect(unread.wentOn.empty).toBeNull()
+    expect(unread.couldNotRead).toBe('Could not read in full: requests closed without you (unreadable).')
+    const records = Array.from({ length: AWAY_SUMMARY_LIMITS.wentOn + 1 }, (_, index) => closed(`c${index}`, 's1', at(15, 1, index % 60)))
+    const cut = buildAwaySummary(input({ wentOn: { records, complete: false } }))
+    expect(cut.wentOn.groups[0]!.rows).toHaveLength(AWAY_SUMMARY_LIMITS.wentOn)
+    expect(cut.wentOn.more).toBe('1 more · each session\'s Needs you history has them.')
+    expect(cut.couldNotRead).toBe(`Could not read in full: requests closed without you (cut at ${AWAY_SUMMARY_LIMITS.wentOn + 1} listings).`)
+  })
+
+  it('gives the /back reply up to ten "Session: subject (how)" lines and counts the rest', () => {
+    const records = Array.from({ length: 12 }, (_, index) => closed(`c${index}`, 's1', at(15, 1, index), { resolvedBy: 'cli' }))
+    const field = (text: string, limit: number): string => `[${text.slice(0, limit)}]`
+    const { lines, more } = awayTelegramWentOn(records, () => 'Builder', field)
+    expect(lines).toHaveLength(10)
+    expect(lines[0]).toBe('[Builder]: [Title c0] (Withdrawn by the agent)')
     expect(more).toBe(2)
   })
 })

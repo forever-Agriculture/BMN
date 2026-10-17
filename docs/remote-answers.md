@@ -136,9 +136,13 @@ reached; from then on BMN counts it as gone at once. A Bash card's buttons then 
   on 2.1.302, 2/2: `Stop` 2.4 s and 3.3 s after the dialog went). BMN closes the request on that step as on any other
   (`Stop`, `UserPromptSubmit`, the next tool's `PostToolUse`, or a new `PermissionRequest` in the slot), which ends the
   hook's wait and the card's buttons. A tap in between reaches a hook whose allow Claude ignores after expiry (78.1,
-  2/2), so the card says it was sent, unconfirmed. The deadline the card shows (Story 78.5) is read off Claude's
-  countdown when the card is drawn and only informs; for a prompt that replaced another in the slot it is "unknown",
-  since the screen may still show the earlier dialog's countdown. A prompt that replaces another also never inherits
+  2/2), so the card says it was sent, unconfirmed (the owner's choice, 2026-10-17: a card stays while the question
+  waits for him and closes when the agent goes on). The deadline the card shows (Story 78.5) is read off Claude's
+  countdown and only informs: BMN follows the screen for every open Claude permission, buttons or not, draws the card
+  again when a countdown appears after it was sent, and says there is none once a key at the desk takes the countdown
+  away while the dialog stays. A prompt that replaced another in the slot takes only a countdown that ends later than
+  the earlier one's (each starts afresh at two minutes), so the earlier dialog's countdown still drawn is never its
+  deadline; until then it is "unknown". A prompt that replaces another also never inherits
   its pending answer: an identical successor's report never confirms the earlier tap. If an expired request is
   followed by a long tool that needs no permission, its card stays until that tool ends.
 

@@ -73,6 +73,11 @@ session. It uses a bot you create and own. It is off by default.
   (`/help@OtherBot`) is ignored. At each start BMN sets the bot's menu to `/away`, `/back` and `/help` when it
   differs; if Telegram refuses, Preferences → Telegram status shows **Bot menu: not set** with the reason, and
   cards and answers go on as before.
+- Away (Epic 76): `/back` answers with the period, **Waiting on you** (the cards still open) and **Went on without
+  you** (Epic 78, owner 2026-10-17): every question, permission or review of the period that closed without your
+  answer, because its agent went on, withdrew it or it expired, as "Session: subject (how it closed)", ten at most
+  with the rest counted. A card answered from Telegram, in BMN or at the desk is not listed. The laptop's away summary
+  shows the same list under its own heading, whichever way you said you were back.
 - It cannot manage sessions remotely. A handoff delivers itself to its agent (Story 75.5), so no
   handoff reaches Telegram; a reply to a handoff card sent before then goes to its source session.
 

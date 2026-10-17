@@ -33,7 +33,8 @@ import {
   type SessionUsage,
   type TelegramStatus,
   type UsageReading,
-  type UsageWindow
+  type UsageWindow,
+  type AwaySummaryPayload
 } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deadlineLine, CompanionService } from './companion-service'
@@ -4122,6 +4123,30 @@ describe('Away (Story 76.3)', () => {
     await service['handleTelegramReply'](reply(7, '/away left\u202Eright'))
     expect(service.awayForOwner()).toMatchObject({ state: 'away', note: 'dentist at 9' })
     expect(sent[6]).toMatch(/Note not kept: it holds control or direction characters\.$/)
+  })
+
+  it('gives him every card that went on without him at /back and in the summary, never one he answered (Epic 78, owner 2026-10-17)', async () => {
+    const sent: string[] = []
+    fakeTelegram(async (message) => { sent.push(message); return { messageId: sent.length } })
+    const handlers = service['control']['options'].handlers
+    const open = (requestKey: string, title: string) => handlers.openAttention({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey, kind: 'question', title, origin: 'cli' })
+    await open('before', 'Closed before he left')
+    await handlers.withdrawAttention({ sessionId: 's1', requestKey: 'before', origin: 'hook:claude:Stop' })
+    clock = new Date(Date.parse(clock) + 1_000).toISOString()
+    await service['handleTelegramReply'](reply(40, '/away'))
+    await open('moved-on', 'Ship the hotfix?')
+    await handlers.withdrawAttention({ sessionId: 's1', requestKey: 'moved-on', origin: 'hook:claude:Stop' })
+    await open('his', 'Answered from the phone')
+    await handlers.withdrawAttention({ sessionId: 's1', requestKey: 'his', origin: 'telegram' })
+    await open('waits', 'Still waits')
+    clock = new Date(Date.parse(clock) + 1_000).toISOString()
+    const summary = await service.route(METHOD_REGISTRY.awaySummary, {}) as AwaySummaryPayload
+    expect(summary.wentOn?.records.map((record) => record.title)).toEqual(['Ship the hotfix?'])
+    await service['handleTelegramReply'](reply(41, '/back'))
+    const back = sent.at(-1)!.split('\n')
+    expect(back).toContain('Went on without you')
+    expect(back.slice(back.indexOf('Went on without you') + 1)).toEqual([expect.stringMatching(/: Ship the hotfix\? \(Closed when the agent ended its turn\)$/)])
+    expect(back.slice(back.indexOf('Waiting on you') + 1, back.indexOf('Waiting on you') + 2)).toEqual([expect.stringMatching(/: Still waits$/)])
   })
 
   it('answers /help and any other command for this bot with help, before cards and sessions, and ignores another bot\'s (Story 78.6)', async () => {

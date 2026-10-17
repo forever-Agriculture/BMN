@@ -22,6 +22,7 @@ import {
   type ManualChoices,
   type AttentionProducerBinding,
   validateVocabulary,
+  AWAY_OWNER_ORIGINS,
   type AppearanceSettings,
   type AppSettings,
   type AgentHistoryKeepDays,
@@ -451,6 +452,22 @@ export function listAttention(database: DatabaseConnection): AttentionRecord[] {
     "SELECT * FROM attention_request WHERE state NOT IN ('open', 'recorded') ORDER BY resolved_at DESC, rowid DESC LIMIT 50"
   ).all() as AttentionRow[]
   return [...open, ...closed].map(attentionFromRow)
+}
+
+/**
+ * One away period's questions, permissions and reviews that closed without the owner's answer (Epic 78, owner
+ * 2026-10-17): withdrawn or expired between `since` and `until` by anything but his own routes. Oldest first, cut at
+ * `limit` with `complete` false.
+ */
+export function awayWentOn(database: DatabaseConnection, call: { since: string; until: string; limit: number }): { records: AttentionRecord[]; complete: boolean } {
+  const owner = AWAY_OWNER_ORIGINS.map(() => '?').join(', ')
+  const rows = database.prepare(
+    `SELECT * FROM attention_request
+     WHERE kind IN ('question', 'permission', 'review') AND state IN ('withdrawn', 'expired')
+       AND resolved_at >= ? AND resolved_at < ? AND COALESCE(resolved_by, '') NOT IN (${owner})
+     ORDER BY resolved_at, rowid LIMIT ?`
+  ).all(call.since, call.until, ...AWAY_OWNER_ORIGINS, call.limit + 1) as AttentionRow[]
+  return { records: rows.slice(0, call.limit).map(attentionFromRow), complete: rows.length <= call.limit }
 }
 
 /** Private delivery metadata never enters AttentionRecord, receipts or agent APIs. */
@@ -1391,6 +1408,7 @@ export const COMPANION_OPERATIONS = Object.freeze({
   expireAttention,
   markAttentionSeen,
   listAttention,
+  awayWentOn,
   usageNoticeExists,
   upsertProgress,
   listProgress,

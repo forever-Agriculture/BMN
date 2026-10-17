@@ -32,7 +32,7 @@ const HANDOFF_KEY = 'handoff-message:'
  * sent with where each stands, and the exits a record proves; with the sessions the summary may name, in sidebar order.
  * Each source is bounded and says when it was cut or is no longer retained; counts are never summed past a cut.
  */
-export function awaySummaryData(database: DatabaseConnection, call: AwaySummaryCall): Omit<AwaySummaryPayload, 'away'> {
+export function awaySummaryData(database: DatabaseConnection, call: AwaySummaryCall): Omit<AwaySummaryPayload, 'away' | 'wentOn'> {
   const until = call.until ?? call.now
   const gaps: Partial<Record<AwaySourceName, AwaySourceGap>> = {}
   if (call.keepDays !== null && Date.parse(call.since) < Date.parse(call.now) - call.keepDays * 86_400_000) {

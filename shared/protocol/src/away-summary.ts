@@ -6,16 +6,17 @@ import type { DevAutoRunsResult } from './dev-auto'
 
 /** Fable's bounds (Story 76.1 §4–5). */
 export const AWAY_SUMMARY_LIMITS = Object.freeze({
-  waiting: 40, decisions: 30, sessions: 20, lines: 8, published: 3, now: 20, telegramWaiting: 10, telegramSession: 120, telegramTitle: 220
+  waiting: 40, wentOn: 40, decisions: 30, sessions: 20, lines: 8, published: 3, now: 20, telegramWaiting: 10, telegramWentOn: 10,
+  telegramSession: 120, telegramTitle: 220
 })
 
 /** The sources the summary reads; each says on its own whether it was read in full. */
-export type AwaySourceName = 'requests' | 'decisions' | 'turns' | 'changes' | 'files' | 'messages' | 'asks' | 'exits' | 'dev-auto'
+export type AwaySourceName = 'requests' | 'went-on' | 'decisions' | 'turns' | 'changes' | 'files' | 'messages' | 'asks' | 'exits' | 'dev-auto'
 const SOURCE_WORDS: Readonly<Record<AwaySourceName, string>> = Object.freeze({
-  requests: 'requests', decisions: 'decision records', turns: 'turn endings', changes: 'turn changes', files: 'published files', messages: 'messages',
+  requests: 'requests', 'went-on': 'requests closed without you', decisions: 'decision records', turns: 'turn endings', changes: 'turn changes', files: 'published files', messages: 'messages',
   asks: 'teammate asks', exits: 'session exits', 'dev-auto': 'dev-auto runs'
 })
-const SOURCE_ORDER: readonly AwaySourceName[] = Object.freeze(['requests', 'decisions', 'turns', 'changes', 'files', 'messages', 'asks', 'exits', 'dev-auto'])
+const SOURCE_ORDER: readonly AwaySourceName[] = Object.freeze(['requests', 'went-on', 'decisions', 'turns', 'changes', 'files', 'messages', 'asks', 'exits', 'dev-auto'])
 
 /** Why a source was not read in full: missing, unreadable, partial, truncated or no longer retained are told apart. */
 export type AwaySourceGap =
@@ -103,6 +104,12 @@ export interface AwaySummaryPayload {
   /** Session ids in sidebar order. */
   order: string[]
   decisions: { decisions: DecisionRecord[]; complete: boolean } | null
+  /**
+   * The period's questions, permissions and reviews that closed without his answer, oldest first (Epic 78, owner
+   * 2026-10-17: "If the work continues and I'm away I want to receive all cards in the end when I'm back"); null when
+   * they could not be read.
+   */
+  wentOn: { records: AttentionRecord[]; complete: boolean } | null
   activity: AwayPeriodActivity | null
   /** Names of the published files that decision references point at and BMN found. */
   artifactNames: Record<string, string>
@@ -125,6 +132,17 @@ export interface AwayWaitingRow {
   command: boolean
   before: boolean
 }
+export interface AwayWentOnRow {
+  requestId: string
+  sessionId: string
+  /** When it closed. */
+  time: string
+  kind: string
+  title: string
+  command: boolean
+  /** How it closed without him. */
+  how: string
+}
 /** A link opens a session, a published file or a dev-auto run BMN validated; anything else stays words. */
 export interface AwayDecisionRow { label: string; text: string; muted?: boolean; links?: Array<{ kind: 'session' | 'artifact' | 'workflow'; id: string; text: string }> }
 export interface AwayDecisionView { key: string; sessionId: string; time: string; choice: string; rows: AwayDecisionRow[] }
@@ -135,6 +153,7 @@ export interface AwaySummaryView {
   note: string | null
   couldNotRead: string | null
   waiting: { open: number; groups: Array<{ sessionId: string; where: string; rows: AwayWaitingRow[] }>; more: string | null; empty: string | null }
+  wentOn: { count: number; incomplete: boolean; groups: Array<{ sessionId: string; where: string; rows: AwayWentOnRow[] }>; more: string | null; empty: string | null }
   decided: { incomplete: boolean; groups: Array<{ sessionId: string; where: string; records: AwayDecisionView[] }>; more: string | null; empty: string | null; tail: string }
   happened: { incomplete: boolean; blocks: Array<{ sessionId: string; head: string; lines: string[] }>; more: string | null; empty: string | null }
   now: { lines: string[]; legacy: string | null; more: string | null; empty: string | null; incomplete: boolean }
@@ -156,6 +175,30 @@ const plural = (count: number, one: string, many = `${one}s`): string => `${coun
 const oneLine = (text: string, limit: number): string => {
   const line = text.replace(/\s+/g, ' ').trim()
   return line.length > limit ? `${line.slice(0, limit - 1)}…` : line
+}
+
+/** What a request shows as its subject: the exact command of a permission, else its title. */
+const requestSubject = (record: AttentionRecord): { text: string; command: boolean } => {
+  const command = record.prompt?.type === 'permission' && record.prompt.command !== null ? record.prompt.command : null
+  return command !== null ? { text: command, command: true } : { text: record.title, command: false }
+}
+
+/** The origins that are the owner himself: what one of them closed was answered, not gone on without him. */
+export const AWAY_OWNER_ORIGINS = Object.freeze(['owner', 'input', 'telegram'] as const)
+
+/** How a request closed without his answer, from what closed it. */
+export function awayWentOnWords(record: Pick<AttentionRecord, 'state' | 'resolvedBy'>): string {
+  if (record.state === 'expired') return 'Expired unanswered'
+  const by = record.resolvedBy ?? ''
+  if (by === 'cli') return 'Withdrawn by the agent'
+  const event = /^hook:[^:]+:(.+)$/.exec(by)?.[1]
+  switch (event) {
+    case 'Stop': return 'Closed when the agent ended its turn'
+    case 'SessionEnd': return 'Closed when the session ended'
+    case 'UserPromptSubmit': return 'Closed by a new message to the agent'
+    case undefined: return 'Closed without your answer'
+    default: return 'Closed when the agent went on'
+  }
 }
 
 /** An app's name from its harness id; another id stands as itself. */
@@ -231,6 +274,8 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   const where = (sessionId: string): string => whereWords(sessions.get(sessionId), now)
   const gaps: Partial<Record<AwaySourceName, AwaySourceGap>> = { ...(input.activity?.gaps ?? {}) }
   if (input.attention === null) gaps.requests = { kind: 'unreadable' }
+  if (input.wentOn === null) gaps['went-on'] = { kind: 'unreadable' }
+  else if (!input.wentOn.complete) gaps['went-on'] = { kind: 'truncated', at: input.wentOn.records.length }
   if (input.decisions === null) gaps.decisions = { kind: 'unreadable' }
   else if (!input.decisions.complete) gaps.decisions = { kind: 'truncated', at: input.decisions.decisions.length }
   if (input.activity === null) for (const source of ['turns', 'files', 'messages', 'exits'] as const) gaps[source] = { kind: 'unreadable' }
@@ -259,6 +304,23 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     groups: bySession(waitingRows, input.order).map(([sessionId, rows]) => ({ sessionId, where: where(sessionId), rows })),
     more: open.length > AWAY_SUMMARY_LIMITS.waiting ? `${open.length - AWAY_SUMMARY_LIMITS.waiting} more · Go to next request needing you walks them.` : null,
     empty: input.attention !== null && open.length === 0 ? 'Nothing waits on you.' : null
+  }
+
+  // Went on without you: every card of the period that closed without his answer, so none is lost while he was away.
+  const closed = input.wentOn?.records ?? []
+  const wentOnRows: AwayWentOnRow[] = closed.slice(0, AWAY_SUMMARY_LIMITS.wentOn).map((record) => {
+    const subject = requestSubject(record)
+    return {
+      requestId: record.requestId, sessionId: record.sessionId, time: clockWords(record.resolvedAt ?? record.openedAt), kind: kindWords(record),
+      title: oneLine(subject.text, 200), command: subject.command, how: awayWentOnWords(record)
+    }
+  })
+  const wentOn: AwaySummaryView['wentOn'] = {
+    count: closed.length,
+    incomplete: gaps['went-on'] !== undefined,
+    groups: bySession(wentOnRows, input.order).map(([sessionId, rows]) => ({ sessionId, where: where(sessionId), rows })),
+    more: closed.length > AWAY_SUMMARY_LIMITS.wentOn ? `${closed.length - AWAY_SUMMARY_LIMITS.wentOn} more · each session's Needs you history has them.` : null,
+    empty: input.wentOn !== null && closed.length === 0 ? 'No card closed without you.' : null
   }
 
   // Decided for you: the period's records; a dev-auto entry joined to its record by their recorded identity shows here once.
@@ -391,6 +453,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     note: away.note,
     couldNotRead,
     waiting,
+    wentOn,
     decided,
     happened,
     now: nowView
@@ -412,4 +475,18 @@ export function awayTelegramWaiting(
     return `${field(sessionName(record.sessionId) ?? 'A session', AWAY_SUMMARY_LIMITS.telegramSession)}: ${field(command ?? record.title, AWAY_SUMMARY_LIMITS.telegramTitle)}`
   })
   return { lines, more: open.length - lines.length }
+}
+
+/**
+ * The `/back` reply's Went on without you (Epic 78, owner 2026-10-17): up to ten "Session: subject (how)" lines of the
+ * period's cards that closed without his answer, oldest first, each part through the phone's masking and bound.
+ */
+export function awayTelegramWentOn(
+  records: readonly AttentionRecord[],
+  sessionName: (sessionId: string) => string | null,
+  field: (text: string, limit: number) => string
+): { lines: string[]; more: number } {
+  const lines = records.slice(0, AWAY_SUMMARY_LIMITS.telegramWentOn).map((record) =>
+    `${field(sessionName(record.sessionId) ?? 'A session', AWAY_SUMMARY_LIMITS.telegramSession)}: ${field(requestSubject(record).text, AWAY_SUMMARY_LIMITS.telegramTitle)} (${awayWentOnWords(record)})`)
+  return { lines, more: records.length - lines.length }
 }

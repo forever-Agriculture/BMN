@@ -133,6 +133,33 @@ export function AwaySummaryDialog(props: {
             {view.waiting.more !== null ? <small className="away-more">{view.waiting.more}</small> : null}
           </section>
 
+          <section className="inspector-section" aria-label="Went on without you">
+            <h3><span>Went on without you<Incomplete on={view.wentOn.incomplete} /></span><span className="away-count">{view.wentOn.count} closed</span></h3>
+            {view.wentOn.empty !== null ? <p className="dialog-note">{view.wentOn.empty}</p> : null}
+            {view.wentOn.groups.map((group) => (
+              <div key={group.sessionId} className="away-group">
+                <p className="away-where">{group.where}</p>
+                <ul className="message-list">
+                  {group.rows.map((row) => (
+                    <li key={row.requestId}>
+                      <button type="button" className="message-row" onClick={() => {
+                        const request = requests.get(row.requestId)
+                        if (request) props.onOpenRequest(request)
+                        else props.onOpenSession(row.sessionId)
+                      }}>
+                        <span className="age">{row.time}</span>
+                        <span className="route">{row.kind}</span>
+                        <span className="state">{row.how}</span>
+                        <span className={row.command ? 'first-line away-command' : 'first-line'} title={row.title}>{row.title}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+            {view.wentOn.more !== null ? <small className="away-more">{view.wentOn.more}</small> : null}
+          </section>
+
           <section className="inspector-section" aria-label="Decided for you, recorded by agents">
             <h3><span>Decided for you — recorded by agents<Incomplete on={view.decided.incomplete} /></span></h3>
             {view.decided.empty !== null ? <p className="dialog-note">{view.decided.empty}</p> : null}

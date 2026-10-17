@@ -41,6 +41,8 @@ import {
   agentAwayView,
   AWAY_QUESTION_REFUSAL,
   awayTelegramWaiting,
+  awayTelegramWentOn,
+  AWAY_SUMMARY_LIMITS,
   AWAY_NOTE_LIMIT,
   AWAY_REFUSED_QUESTION_TOOLS,
   effectiveAway,
@@ -638,7 +640,9 @@ export class CompanionService {
       write: (sessionId, bytes) => options.manager.writeToSession(sessionId, bytes),
       submitMessage: (record, request, text, current, markWritten) =>
         this.submitTelegramAnswerMessage(record, request, text, current, markWritten),
-      answerPermissions: async () => (await options.database.companion('getSettings')).telegram.answerPermissions
+      answerPermissions: async () => (await options.database.companion('getSettings')).telegram.answerPermissions,
+      countdownChanged: (sessionId) => this.cards.changed(sessionId),
+      now: () => this.now().getTime()
     })
     this.cards = new TelegramCardKeeper({
       connector: () => this.telegram && this.telegramHealth?.state === 'polling' ? this.telegram : undefined,
@@ -1265,10 +1269,14 @@ export class CompanionService {
         const record = this.awayRecord
         if (record.periodId === null || record.since === null) throw new HostControlError(ERROR_CODES.notFound, 'There is no away period yet')
         const keepDays = await this.history.status().then((status) => status.confirmedKeepDays ?? null).catch(() => null)
+        const now = this.iso()
+        const until = record.state === 'away' ? null : record.endedAt
         const data = await this.options.database.companion('awaySummaryData', {
-          periodId: record.periodId, since: record.since, until: record.state === 'away' ? null : record.endedAt, now: this.iso(), keepDays
+          periodId: record.periodId, since: record.since, until, now, keepDays
         })
-        return { away: ownerAwayView(record), ...data }
+        const wentOn = await this.options.database.companion('awayWentOn', { since: record.since, until: until ?? now, limit: AWAY_SUMMARY_LIMITS.wentOn })
+          .catch(() => null)
+        return { away: ownerAwayView(record), ...data, wentOn }
       }
       case METHOD_REGISTRY.awaySummaryShown: {
         const periodId = params.periodId
@@ -3180,17 +3188,36 @@ export class CompanionService {
     }
   }
 
-  /** Story 76.6 AC4: Waiting on you for the `/back` reply, masked and clipped per field; null when it could not be read. */
-  private async telegramWaiting(): Promise<{ waiting: string[] | null; more: number }> {
-    try {
-      const database = this.options.database
-      const [attention, names] = await Promise.all([database.companion('listAttention'), database.companion('awaySessionNames')])
-      const home = this.options.home ?? homedir()
-      const { lines, more } = awayTelegramWaiting(attention, (sessionId) => names[sessionId] ?? null, (text, limit) => phoneField(text, home, limit))
-      return { waiting: lines, more }
-    } catch {
-      return { waiting: null, more: 0 }
+  /**
+   * Story 76.6 AC4: Waiting on you for the `/back` reply, masked and clipped per field; and the period's cards that went
+   * on without him (Epic 78, owner 2026-10-17). Each is null when it could not be read.
+   */
+  private async telegramWaiting(period: { since: string | null; endedAt: string | null }): Promise<{
+    waiting: string[] | null; more: number; wentOn: string[] | null; wentOnMore: number; wentOnAtLeast: boolean
+  }> {
+    const database = this.options.database
+    const home = this.options.home ?? homedir()
+    const field = (text: string, limit: number): string => phoneField(text, home, limit)
+    const names = await database.companion('awaySessionNames').catch(() => null)
+    const name = (sessionId: string): string | null => names?.[sessionId] ?? null
+    let waiting: string[] | null = null
+    let more = 0
+    let wentOn: string[] | null = null
+    let wentOnMore = 0
+    let wentOnAtLeast = false
+    if (names !== null) {
+      try {
+        ({ lines: waiting, more } = awayTelegramWaiting(await database.companion('listAttention'), name, field))
+      } catch { /* said as could not be read */ }
+      if (period.since !== null && period.endedAt !== null) {
+        try {
+          const closed = await database.companion('awayWentOn', { since: period.since, until: period.endedAt, limit: AWAY_SUMMARY_LIMITS.wentOn })
+          ;({ lines: wentOn, more: wentOnMore } = awayTelegramWentOn(closed.records, name, field))
+          wentOnAtLeast = !closed.complete
+        } catch { /* said as could not be read */ }
+      }
     }
+    return { waiting, more, wentOn, wentOnMore, wentOnAtLeast }
   }
 
   /**
@@ -3218,7 +3245,7 @@ export class CompanionService {
         : 'Not away; nothing changed.'
       : backReplyText({
         since: record.since, endedAt: record.endedAt, changed: record.state === 'back' && (result.outcome === 'changed' || result.outcome === 'repeated'),
-        now: this.now(), ...await this.telegramWaiting()
+        now: this.now(), ...await this.telegramWaiting(record)
       })
     return this.telegramCommandReply(connector, reply, text, bot)
   }

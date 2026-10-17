@@ -88,6 +88,9 @@ interface Harness {
   permissions: { on: boolean }
   /** What the program draws next when it reads a key. */
   onKey: ((key: string) => void) | undefined
+  /** The clock countdowns are read against, and the sessions whose card was to be drawn again for one. */
+  clock: number
+  countdowns: string[]
 }
 
 const engines: RemoteAnswers[] = []
@@ -103,7 +106,9 @@ function harness(initial?: { record: AttentionRecord; lines?: string[] }): Harne
     writes: [],
     live: new Map([['s1', 'inc-1'], ['s2', 'inc-2']]),
     permissions: { on: true },
-    onKey: undefined
+    onKey: undefined,
+    clock: 1_000,
+    countdowns: []
   }
   h.engine = new RemoteAnswers({
     getAttention: async (requestId) => h.records.get(requestId) ?? null,
@@ -115,6 +120,8 @@ function harness(initial?: { record: AttentionRecord; lines?: string[] }): Harne
       h.onKey?.(key)
     },
     answerPermissions: async () => h.permissions.on,
+    countdownChanged: (sessionId) => h.countdowns.push(sessionId),
+    now: () => h.clock,
     timing: { stepMs: 200, confirmMs: 250, pickupMs: 150, lateMs: 2_000 }
   })
   engines.push(h.engine)
@@ -569,28 +576,56 @@ describe('Claude\'s own countdown on a permission (Story 78.5)', () => {
     expect(claudeCountdownMs(['Do you want to proceed?', 'deny in 1:59'])).toBeNull()
   })
 
-  it('shows no deadline for a prompt that replaced another: the countdown drawn may still be the earlier one\'s', () => {
+  const DIALOG = (countdown: string | null) => ['Bash command', '  touch spike-allow.txt', ...(countdown ? [countdown] : []), 'Do you want to proceed?']
+
+  it('gives a prompt that replaced another its own deadline, never the earlier dialog\'s still drawn', async () => {
     const HOOKED_BASH: AttentionPrompt = { ...CLAUDE_BASH, requestRef: 'ref-1' }
-    const h = harness({ record: record(HOOKED_BASH), lines: ['Bash command', '  touch spike-allow.txt', COUNTDOWN, 'Do you want to proceed?'] })
+    const h = harness({ record: record(HOOKED_BASH), lines: DIALOG(COUNTDOWN) })
     expect(h.engine.deadline(record(HOOKED_BASH), 1_000)).toEqual({ state: 'at', at: 120_000 })
     const successor = record({ ...HOOKED_BASH, command: 'touch other.txt', requestRef: 'ref-2' }, { revision: 2 })
+    h.clock = 3_000
     open(h, successor)
-    expect(h.engine.deadline(successor, 2_000)).toEqual({ state: 'unknown' })
+    await settle()
+    // Still the earlier countdown (1:58 left at 3 s ends with it): not the successor's.
+    h.screens.get('s1')!.show(DIALOG(' ⚠ Claude Code will automatically deny this request in 1:58, to avoid'))
+    expect(h.engine.deadline(successor, 3_000)).toEqual({ state: 'unknown' })
+    expect(h.countdowns).toEqual([])
+    // The successor's own countdown starts afresh, and its card is drawn again with it.
+    h.clock = 5_000
+    h.screens.get('s1')!.show(DIALOG(COUNTDOWN))
+    expect(h.countdowns).toEqual(['s1'])
+    expect(h.engine.deadline(successor, 6_000)).toEqual({ state: 'at', at: 124_000 })
     // The deadline only informs the card: nothing expires on it, and the successor's hook is still wanted.
     expect(h.engine.hookWanted('s1', 'inc-1', 'ref-2')).toBe(true)
   })
 
-  it('keeps the first reading, says none for a dialog drawn without one, unknown without a screen', () => {
-    const h = harness({ record: record(CLAUDE_BASH), lines: ['Bash command', '  touch spike-allow.txt', COUNTDOWN, 'Do you want to proceed?'] })
-    expect(h.engine.deadline(record(CLAUDE_BASH), 1_000)).toEqual({ state: 'at', at: 120_000 })
-    h.screens.get('s1')!.show([' ⚠ Claude Code will automatically deny this request in 1:10, to avoid', 'Do you want to proceed?'])
-    expect(h.engine.deadline(record(CLAUDE_BASH), 50_000)).toEqual({ state: 'at', at: 120_000 })
-    h.screens.get('s1')!.show(['Do you want to proceed?'])
-    expect(h.engine.deadline(record(CLAUDE_BASH, { revision: 2 }), 50_000)).toEqual({ state: 'none' })
+  it('follows a key pressed at the desk, and a countdown drawn after the card, even on a card without buttons', async () => {
+    const UNBOUND: AttentionPrompt = { ...CLAUDE_BASH, requestRef: null }
+    const h = harness({ record: record(UNBOUND), lines: DIALOG(null) })
+    expect(h.engine.deadline(record(UNBOUND), 1_000)).toEqual({ state: 'none' })
+    await settle()
+    h.clock = 2_000
+    h.screens.get('s1')!.show(DIALOG(COUNTDOWN))
+    expect(h.countdowns).toEqual(['s1'])
+    expect(h.engine.deadline(record(UNBOUND), 3_000)).toEqual({ state: 'at', at: 121_000 })
+    // One key at the desk takes the countdown line away while the dialog stays: Claude no longer denies it by itself.
+    h.screens.get('s1')!.show(DIALOG(null))
+    expect(h.countdowns).toEqual(['s1', 's1'])
+    expect(h.engine.deadline(record(UNBOUND), 4_000)).toEqual({ state: 'none' })
     h.screens.get('s1')!.show(['❯ '])
-    expect(h.engine.deadline(record(CLAUDE_BASH, { revision: 3 }), 50_000)).toEqual({ state: 'unknown' })
-    h.live.delete('s1')
-    expect(h.engine.deadline(record(CLAUDE_BASH, { revision: 4 }), 50_000)).toEqual({ state: 'unknown' })
+    expect(h.engine.deadline(record(UNBOUND), 5_000)).toEqual({ state: 'none' })
+    expect(h.countdowns).toEqual(['s1', 's1'])
+  })
+
+  it('keeps the first reading, says none for a dialog drawn without one, unknown without a dialog or a screen', () => {
+    const h = harness({ record: record(CLAUDE_BASH), lines: DIALOG(COUNTDOWN) })
+    expect(h.engine.deadline(record(CLAUDE_BASH), 1_000)).toEqual({ state: 'at', at: 120_000 })
+    h.screens.get('s1')!.show(DIALOG(' ⚠ Claude Code will automatically deny this request in 1:10, to avoid'))
+    expect(h.engine.deadline(record(CLAUDE_BASH), 50_000)).toEqual({ state: 'at', at: 120_000 })
+    const other = harness({ record: record(CLAUDE_BASH), lines: ['❯ '] })
+    expect(other.engine.deadline(record(CLAUDE_BASH), 1_000)).toEqual({ state: 'unknown' })
+    other.live.delete('s1')
+    expect(other.engine.deadline(record(CLAUDE_BASH), 1_000)).toEqual({ state: 'unknown' })
     expect(h.engine.deadline(record(OPENCODE_PERMISSION), 50_000)).toEqual({ state: 'unknown' })
   })
 })

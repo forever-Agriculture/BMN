@@ -60,6 +60,22 @@ describe('replies', () => {
       'Back. Away 9 h 30 min, Wed 22:10 – Thu 07:40.', 'Waiting on you', 'api: Push to origin?', '3 more on the laptop.'])
   })
 
+  it('adds the cards that went on without him after what waits, cut first when the reply is too long (Epic 78)', () => {
+    const since = at(14, 22, 10)
+    const endedAt = at(15, 7, 40)
+    expect(backReplyText({ since, endedAt, changed: true, waiting: [], wentOn: ['api: rmdir .. (Closed when the agent ended its turn)'], wentOnMore: 2, now }).split('\n')).toEqual([
+      'Back. Away 9 h 30 min, Wed 22:10 – Thu 07:40. Nothing waits on you.', '', 'Went on without you',
+      'api: rmdir .. (Closed when the agent ended its turn)', '2 more on the laptop.'])
+    expect(backReplyText({ since, endedAt, changed: true, waiting: [], wentOn: [], now })).toBe('Back. Away 9 h 30 min, Wed 22:10 – Thu 07:40. Nothing waits on you.')
+    expect(backReplyText({ since, endedAt, changed: true, waiting: [], wentOn: null, now })).toMatch(/Went on without you could not be read; see the laptop\.$/)
+    expect(backReplyText({ since, endedAt, changed: true, waiting: [], wentOn: ['a: b (c)'], wentOnAtLeast: true, now })).toMatch(/At least some more on the laptop\.$/)
+    const long = (name: string) => Array.from({ length: 10 }, (_, index) => `${name}${index}: ${'x'.repeat(80)}`)
+    const reply = backReplyText({ since, endedAt, changed: true, waiting: long('w'), wentOn: long('g'), now, limit: 1_400 })
+    expect(reply.length).toBeLessThanOrEqual(1_400)
+    expect(reply.split('\n').filter((line) => line.startsWith('w')).length).toBe(10)
+    expect(reply).toMatch(/\n\d+ more on the laptop\.$/)
+  })
+
   it('masks a key and home paths in each field and keeps the whole reply within the digest bound (Story 76.6 AC4)', () => {
     const since = at(14, 22, 10)
     const endedAt = at(15, 7, 40)

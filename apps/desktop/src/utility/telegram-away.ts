@@ -60,22 +60,35 @@ export function awayReplyText(p: { since: string; repeated: boolean; note: 'none
 
 /**
  * The `/back` reply (Story 76.6 AC4): back and the period, then Waiting on you as "Session: title" lines already masked and
- * clipped, then "N more on the laptop." when cut; within the digest's size bound, lines dropped from the end to keep it.
+ * clipped, then "N more on the laptop." when cut; then the period's cards that went on without him (Epic 78, owner
+ * 2026-10-17), the same way. Within the digest's size bound, lines are dropped from the end of each list to keep it.
  * No note, no decisions.
  */
-export function backReplyText(p: { since: string | null; endedAt: string | null; changed: boolean; waiting?: string[] | null; more?: number; now?: Date; limit?: number }): string {
+export function backReplyText(p: {
+  since: string | null; endedAt: string | null; changed: boolean; waiting?: string[] | null; more?: number
+  wentOn?: string[] | null; wentOnMore?: number; wentOnAtLeast?: boolean; now?: Date; limit?: number
+}): string {
   if (!p.changed || p.since === null || p.endedAt === null) return 'Not away; nothing changed.'
   const head = `Back. Away ${awayDurationWords(p.since, p.endedAt)}, ${awayPeriodWords(p.since, p.endedAt, p.now)}.`
   if (p.waiting === undefined) return head
-  if (p.waiting === null) return `${head} Waiting on you could not be read; see the laptop.`
-  if (p.waiting.length === 0) return `${head} Nothing waits on you.`
   const limit = p.limit ?? TELEGRAM_TEXT_LIMIT - 160
-  const lines = [...p.waiting]
+  const waiting = p.waiting === null ? null : [...p.waiting]
   let more = p.more ?? 0
-  const text = (): string => [head, 'Waiting on you', ...lines, ...(more > 0 ? [`${more} more on the laptop.`] : [])].join('\n')
-  while (lines.length > 1 && text().length > limit) {
-    lines.pop()
-    more += 1
+  const wentOn = p.wentOn === undefined ? undefined : p.wentOn === null ? null : [...p.wentOn]
+  let wentOnMore = p.wentOnMore ?? 0
+  const moreWords = (count: number, atLeast: boolean): string[] => count > 0 || atLeast ? [`${atLeast ? 'At least ' : ''}${count > 0 ? count : 'some'} more on the laptop.`] : []
+  const text = (): string => {
+    const parts = [
+      waiting === null ? `${head} Waiting on you could not be read; see the laptop.`
+        : waiting.length === 0 ? `${head} Nothing waits on you.`
+          : [head, 'Waiting on you', ...waiting, ...moreWords(more, false)].join('\n')
+    ]
+    if (wentOn === null) parts.push('Went on without you could not be read; see the laptop.')
+    else if (wentOn !== undefined && (wentOn.length > 0 || wentOnMore > 0)) parts.push(['Went on without you', ...wentOn, ...moreWords(wentOnMore, p.wentOnAtLeast === true)].join('\n'))
+    return parts.join('\n\n')
+  }
+  while (text().length > limit) {
+    if (wentOn && wentOn.length > 1) { wentOn.pop(); wentOnMore += 1 } else if (waiting && waiting.length > 1) { waiting.pop(); more += 1 } else break
   }
   return text()
 }
