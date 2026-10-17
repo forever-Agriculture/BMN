@@ -37,7 +37,16 @@ export interface ConnectorHealth {
   rejectedUpdates: number
   /** When the current run of transient failures began; null once Telegram answers. */
   failingSince: string | null
+  /** Story 78.6: whether the bot's menu holds BMN's three commands; absent until BMN has checked it. */
+  menu?: { state: 'set' | 'failed'; error: string | null }
 }
+
+/** Story 78.6: the bot's menu, BMN's own and nothing else (the retired bridge's commands are gone). */
+export const BOT_COMMANDS: readonly { command: string; description: string }[] = Object.freeze([
+  { command: 'away', description: 'Say you are away; agents leave what is yours as cards' },
+  { command: 'back', description: 'Say you are back and see what waits for you' },
+  { command: 'help', description: 'What you can do from here' }
+])
 
 export interface InboundReply {
   updateId: number
@@ -358,6 +367,7 @@ export class TelegramConnector {
   private backoffMs = 0
   private offsetLoaded = false
   private username: string | null = null
+  private menuChecked = false
   private nextOffset: number | null = null
 
   constructor(options: TelegramConnectorOptions) {
@@ -411,6 +421,27 @@ export class TelegramConnector {
 
   health(): ConnectorHealth {
     return { ...this.current }
+  }
+
+  /**
+   * Story 78.6: once per start or reconnect, the bot's menu is set to BMN's three commands when it differs. Its own
+   * call, never awaited by polling or delivery; a failure is only said in the connector's health.
+   */
+  private async keepMenu(signal: AbortSignal): Promise<void> {
+    if (this.menuChecked) return
+    this.menuChecked = true
+    try {
+      const timeout = (): AbortSignal => AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
+      const listed = await this.call('getMyCommands', {}, timeout())
+      const same = Array.isArray(listed) && listed.length === BOT_COMMANDS.length && BOT_COMMANDS.every((wanted, index) =>
+        isRecord(listed[index]) && listed[index].command === wanted.command && listed[index].description === wanted.description)
+      if (!same) await this.call('setMyCommands', { commands: BOT_COMMANDS }, timeout())
+      this.publish({ menu: { state: 'set', error: null } })
+    } catch (error) {
+      if (signal.aborted) return
+      this.menuChecked = false
+      this.publish({ menu: { state: 'failed', error: this.redact(error instanceof Error ? error.message : String(error)) } })
+    }
   }
 
   /** Story 76.3: this bot's own username, so `/away@ThisBot` is its command and `/away@OtherBot` is not. */
@@ -540,11 +571,13 @@ export class TelegramConnector {
     this.lockNonce = lock.nonce
     if (signal.aborted) return
     this.verified = false
+    this.menuChecked = false
     this.backoffMs = 0
     try {
       this.rememberBot(await this.call('getMe', {}, AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])))
       this.verified = true
       this.publish({ state: 'polling', detail: 'Waiting for Telegram replies', failingSince: null })
+      void this.keepMenu(signal)
     } catch (error) {
       if (signal.aborted) return
       if (await this.recordFailure(error) === 'halt') throw this.sanitized(error)
@@ -562,6 +595,7 @@ export class TelegramConnector {
         if (!this.verified) {
           this.rememberBot(await this.call('getMe', {}, AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])))
           this.verified = true
+          void this.keepMenu(signal)
         }
         const updates = await this.getUpdates(signal)
         this.backoffMs = 0

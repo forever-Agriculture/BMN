@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  BOT_COMMANDS,
   TelegramConnector,
   maskToken,
   redactToken,
@@ -375,6 +376,39 @@ describe('telegram connector polling', () => {
     expect(await lockFiles(h.lockDirectory)).toEqual([])
     expect(h.api.count('getUpdates')).toBe(1)
     expect(h.sleeps).toEqual([])
+  })
+})
+
+describe('the bot menu BMN keeps (Story 78.6)', () => {
+  it('sets /away, /back and /help when the menu differs, and says so in health', async () => {
+    const h = await harness()
+    h.api.handlers.set('getMyCommands', () => ok([{ command: 'status', description: 'retired bridge' }]))
+    h.api.handlers.set('setMyCommands', () => ok(true))
+    await h.connector.start()
+    await vi.waitFor(() => expect(h.connector.health().menu).toEqual({ state: 'set', error: null }))
+    const set = h.api.calls.find((call) => call.method === 'setMyCommands')
+    expect((set?.body.commands as { command: string }[]).map((command) => command.command)).toEqual(['away', 'back', 'help'])
+    expect(set?.body.commands).toEqual(BOT_COMMANDS)
+  })
+
+  it('leaves a menu that already holds them', async () => {
+    const h = await harness()
+    h.api.handlers.set('getMyCommands', () => ok(BOT_COMMANDS))
+    await h.connector.start()
+    await vi.waitFor(() => expect(h.connector.health().menu).toEqual({ state: 'set', error: null }))
+    expect(h.api.count('setMyCommands')).toBe(0)
+  })
+
+  it('reports a refused menu in health and keeps polling and delivering', async () => {
+    const h = await harness()
+    h.api.handlers.set('getMyCommands', () => ok([]))
+    h.api.handlers.set('setMyCommands', () => apiError(400, 'Bad Request: too many commands'))
+    h.api.updates.push(() => ok([messageUpdate(51, { text: 'still here', messageId: 950 })]))
+    await h.connector.start()
+    await vi.waitFor(() => expect(h.connector.health().menu?.state).toBe('failed'))
+    await vi.waitFor(() => expect(h.replies.map((reply) => reply.text)).toEqual(['still here']))
+    expect(h.connector.health().state).toBe('polling')
+    expect(h.connector.health().menu?.error).not.toContain(TOKEN)
   })
 })
 

@@ -46,6 +46,7 @@ import type { SessionManager } from './session-manager'
 import type { ProcReader } from './listening-ports'
 import type { ScreenLike } from './remote-answer'
 import { TelegramConnectorError, type TelegramConnector, type InboundReply } from './telegram-connector'
+import { TELEGRAM_HELP_TEXT } from './telegram-away'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
 import { startFakeBotApi } from '../main/fake-bot-api'
 
@@ -4121,6 +4122,27 @@ describe('Away (Story 76.3)', () => {
     await service['handleTelegramReply'](reply(7, '/away left\u202Eright'))
     expect(service.awayForOwner()).toMatchObject({ state: 'away', note: 'dentist at 9' })
     expect(sent[6]).toMatch(/Note not kept: it holds control or direction characters\.$/)
+  })
+
+  it('answers /help and any other command for this bot with help, before cards and sessions, and ignores another bot\'s (Story 78.6)', async () => {
+    const sent: string[] = []
+    fakeTelegram(async (message) => { sent.push(message); return { messageId: sent.length } })
+    const once = service['handleTelegramReplyOnce'] = vi.fn(async () => undefined)
+    await service['handleTelegramReply'](reply(30, '/help'))
+    await service['handleTelegramReply'](reply(30, '/help'))
+    await service['handleTelegramReply'](reply(31, '/help@bmn_synthetic_bot'))
+    await service['handleTelegramReply']({ ...reply(32, '/compact'), replyToMessageId: 77 })
+    await service['handleTelegramReply'](reply(33, '/help@other_bot'))
+    await service['handleTelegramReply'](reply(34, '/start@other_bot'))
+    expect(sent).toHaveLength(3)
+    for (const message of sent) expect(message).toBe(TELEGRAM_HELP_TEXT)
+    expect(TELEGRAM_HELP_TEXT).toMatch(/Reply to a card/)
+    for (const command of ['/away', '/back', '/help']) expect(TELEGRAM_HELP_TEXT).toContain(command)
+    expect(once).not.toHaveBeenCalled()
+    expect(service.awayForOwner().state).not.toBe('away')
+    // Ordinary text still takes its own route.
+    await service['handleTelegramReply'](reply(35, 'help me'))
+    expect(once).toHaveBeenCalledTimes(1)
   })
 
   it('sends a reply again only when Telegram said no; a lost answer is never resent', async () => {

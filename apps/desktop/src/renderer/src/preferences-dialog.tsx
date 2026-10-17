@@ -159,6 +159,12 @@ export function TelegramStatusList(props: { status: TelegramStatus; cueShown: bo
         : <dd className={status.lastError ? 'error' : 'none'}>{status.lastError ?? 'none'}</dd>}
       <dt>Rejected updates</dt>
       <dd>{status.rejectedUpdates}</dd>
+      {status.menu && <>
+        <dt>Bot menu</dt>
+        {status.menu.state === 'set'
+          ? <dd>/away · /back · /help</dd>
+          : <dd className="error">not set: {status.menu.error ?? 'Telegram refused it'}</dd>}
+      </>}
     </dl>
   )
 }

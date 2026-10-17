@@ -67,6 +67,12 @@ session. It uses a bot you create and own. It is off by default.
   informational cards. A pending native question or permission keeps a conversation reply as a draft.
 - A message that is not a reply to a notification gets a short answer asking you to reply to one,
   so text never lands in whichever session happens to be focused.
+- Commands (Epic 78): **/help** answers with one short message: reply to a card to answer it, its buttons, `/away`,
+  `/back` and `/help`. `/away` and `/back` keep their meaning; any other command for this bot (`/start`, `/compact`,
+  also as a reply to a card) gets the same help and never reaches a session; a command addressed to another bot
+  (`/help@OtherBot`) is ignored. At each start BMN sets the bot's menu to `/away`, `/back` and `/help` when it
+  differs; if Telegram refuses, Preferences → Telegram status shows **Bot menu: not set** with the reason, and
+  cards and answers go on as before.
 - It cannot manage sessions remotely. A handoff delivers itself to its agent (Story 75.5), so no
   handoff reaches Telegram; a reply to a handoff card sent before then goes to its source session.
 

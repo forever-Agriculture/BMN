@@ -726,6 +726,8 @@ export interface TelegramStatus {
   rejectedUpdates: number
   /** When the current run of transient failures began; null once Telegram answers. */
   failingSince: string | null
+  /** Story 78.6: whether the bot's menu holds /away, /back and /help; absent until BMN has checked it. */
+  menu?: { state: 'set' | 'failed'; error: string | null }
   quietHours?: {
     active: boolean
     until: string

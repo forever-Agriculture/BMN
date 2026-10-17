@@ -22,6 +22,30 @@ export function telegramAwayCommand(reply: Pick<InboundReply, 'text' | 'textSour
   return { to: 'away', note: note === '' ? null : note }
 }
 
+/**
+ * Story 78.6: any other command in the message's own text. `help` for `/help` (or `/help@ThisBot`), `unknown` for another
+ * command addressed to this bot (no suffix, or its own), `elsewhere` for one addressed to another bot (ignored), and null
+ * for text that is not a command, which keeps its own routing. `/away` and `/back` are read before this.
+ */
+export function telegramOtherCommand(reply: Pick<InboundReply, 'text' | 'textSource' | 'file'>, botUsername: () => string | null): 'help' | 'unknown' | 'elsewhere' | null {
+  if (reply.textSource !== 'text' || reply.file !== null || typeof reply.text !== 'string') return null
+  const match = /^\/([A-Za-z0-9_]{1,32})(?:@([A-Za-z0-9_]{1,64}))?(?:\s|$)/.exec(reply.text.trim())
+  if (!match) return null
+  const [, word, suffix] = match
+  if (suffix !== undefined && suffix.toLowerCase() !== botUsername()?.toLowerCase()) return 'elsewhere'
+  return word!.toLowerCase() === 'help' ? 'help' : 'unknown'
+}
+
+/** Story 78.6: the whole of what the owner can do here, in one short message. */
+export const TELEGRAM_HELP_TEXT = [
+  'What you can do here:',
+  '• Reply to a card to answer it; the reply goes to that card\'s session.',
+  '• Tap a card\'s buttons: an option for a question, Allow once or Deny for a permission. Each answers once.',
+  '• /away: say you are away. Agents go on and leave what is yours as cards.',
+  '• /back: say you are back and see what waits for you.',
+  '• /help: this message.'
+].join('\n')
+
 /** The `/away` reply (Fable, Story 76.1): the note is never echoed, only whether it was kept. */
 export function awayReplyText(p: { since: string; repeated: boolean; note: 'none' | 'kept' | 'replaced' | 'too-long' | 'refused'; now?: Date }): string {
   const since = awayMomentWords(p.since, p.now)

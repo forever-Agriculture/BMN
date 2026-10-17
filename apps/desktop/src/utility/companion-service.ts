@@ -121,7 +121,7 @@ import { createScanMemory, procReader, scanSessionPorts, type ProcReader } from 
 import { PortWatch } from './port-watch'
 import { AGENT_HISTORY_STATE_KEY, AgentHistory, readHistoryState, type AgentHistoryAdapter } from './agent-history'
 import { TelegramConnector, TelegramConnectorError, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
-import { awayReplyText, backReplyText, telegramAwayCommand, type TelegramAwayCommand } from './telegram-away'
+import { TELEGRAM_HELP_TEXT, awayReplyText, backReplyText, telegramAwayCommand, telegramOtherCommand, type TelegramAwayCommand } from './telegram-away'
 import { SessionMessages, type MessageDestination } from './session-messages'
 import { AgentBriefs } from './agent-briefs'
 import { AwayNotices } from './agent-away-notices'
@@ -3040,6 +3040,7 @@ export class CompanionService {
         lastError: redact(this.telegramHealth.lastError),
         rejectedUpdates: this.telegramHealth.rejectedUpdates,
         failingSince: this.telegramHealth.failingSince,
+        ...(this.telegramHealth.menu ? { menu: { state: this.telegramHealth.menu.state, error: redact(this.telegramHealth.menu.error) } } : {}),
         ...(quietHours ? { quietHours } : {})
       }
     }
@@ -3153,6 +3154,10 @@ export class CompanionService {
     // Story 76.3: /away and /back come before Other answers and ordinary replies, whether or not they reply to a card.
     const away = telegramAwayCommand(reply, () => connector.botUsername())
     if (away) return this.telegramAway(connector, reply, away, bot)
+    // Story 78.6: /help, and any other command for this bot, is answered with help before a card or a session sees it.
+    const other = telegramOtherCommand(reply, () => connector.botUsername())
+    if (other === 'elsewhere') return
+    if (other !== null) return this.telegramCommandReply(connector, reply, TELEGRAM_HELP_TEXT, bot)
     const key = `telegram-reply:${bot}:${reply.updateId}`
     const pending = this.telegramReplyOperations.get(key)
     if (pending) return pending
@@ -3213,6 +3218,11 @@ export class CompanionService {
         since: record.since, endedAt: record.endedAt, changed: record.state === 'back' && (result.outcome === 'changed' || result.outcome === 'repeated'),
         now: this.now(), ...await this.telegramWaiting()
       })
+    return this.telegramCommandReply(connector, reply, text, bot)
+  }
+
+  /** The bot's own reply to a command, once per update, retried only when Telegram said no. */
+  private async telegramCommandReply(connector: TelegramConnector, reply: InboundReply, text: string, bot: string): Promise<void> {
     const replyKey = `telegram-away-reply:${bot}:${reply.updateId}`
     const database = this.options.database
     if (await database.companion('getReceipt', replyKey)) return
