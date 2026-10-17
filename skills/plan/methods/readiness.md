@@ -8,9 +8,10 @@ Run before asking the owner for his go on an epic (or a set of epics). The quest
 2. **Traceability back.** Each story names what it covers; a story covering nothing is cut or tied to a requirement.
 3. **Missing decisions.** For each story, name the decisions it relies on (a data shape, a library, a screen, a limit, a provider, who may do what). Each is recorded (the epic's Decisions, `PLAN.md` Decisions, a truth document) or it is a finding. A decision only the owner can make becomes a card; a technical one you decide and record.
 4. **Conflicts.** Compare the epic with the truth documents it touches, with `PLAN.md`'s constraints and with other unfinished epics (their Boundary and their stories on the same files). Every disagreement is a finding: name both sides with their locations.
-5. **Story shape.** Each story: one lead session; depends only on earlier stories; numbered testable criteria; a named Verification; starting points that exist (open each `file:line`).
-6. **Truth impact** names every document the stories change.
-7. **Order and gates.** Stop gates (measure first) come first; owner-only checks are their own story; the Boundary names what is out of scope.
+5. **Story shape.** Each story: one lead session; depends only on earlier stories; numbered testable criteria; a named Verification.
+6. **Starting points, story by story.** For every story (owner checks, blocked and dropped ones included) open each `file:line` it names in this pass and mark it `exists` (that code is there today, at that line) or `new` (an earlier story creates it; name the story). A story with no `exists` anchor in a project that has code is a finding, unless it names the file it creates and the existing caller that will use it. Put the table (story, anchor, exists/new, what is there) in `plan/references/<epic>/readiness-<date>.md` and link it from Reviews.
+7. **Truth impact** names every document the stories change.
+8. **Order and gates.** Stop gates (measure first) come first; owner-only checks are their own story; the Boundary names what is out of scope.
 
 ## Verdict
 

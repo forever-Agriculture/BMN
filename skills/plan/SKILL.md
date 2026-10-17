@@ -2,7 +2,7 @@
 name: plan
 description: Plan a project's work with the owner: frame a project, plan or revise epics and stories with testable criteria, check readiness before his go, and keep the board he reads (plan/status.yaml, or a BMAD project's own files). Use for any planning, epic or story writing, readiness check, change of course, brainstorm, idea critique or planning research in any project; not for implementation.
 ---
-# MODULE: SKILL.md - Story 77.3: the plan skill: how any agent plans a project in BMN's own format (or a BMAD project's existing files) to at least BMAD's standard, with methods loaded on demand
+# MODULE: SKILL.md - Story 77.3 (revision 2: starting points story by story): the plan skill: how any agent plans a project in BMN's own format (or a BMAD project's existing files) to at least BMAD's standard, with methods loaded on demand
 
 # Plan
 
@@ -21,7 +21,7 @@ Read `PLAN.md` (the frame) and only the epic files and rows your task needs; ope
 
 ## The rules every plan keeps
 
-1. **Ground it.** Read the code and the measured use before writing a word: what exists today, with `file:line` starting points you opened yourself. Count real use where it decides scope (rows in a database, transcripts, logs), read-only. A claim you did not check is marked as such.
+1. **Ground it.** Read the code and the measured use before writing a word: what exists today, with `file:line` starting points you opened yourself, for every story (a later story's code is not a starting point on its own). Count real use where it decides scope (rows in a database, transcripts, logs), read-only. A claim you did not check is marked as such.
 2. **His words, dated.** Quote the owner's words with their date in the epic's Why and wherever a decision rests on them. Never invent a past decision; look it up (`~/brain`, the plan's Decisions, the epic Logs).
 3. **One card per decision.** A choice only he can make (scope, money, privacy, public interfaces, a trade-off the evidence cannot settle) goes to him as one selectable card with your recommendation first, in the session (AskUserQuestion; `bmn ask` only mirrors it). Log each answer in the epic's Decisions with its date. Decide everything else yourself and say so in one line.
 4. **Small stories.** One lead session finishes a story. A story has a user-visible or owner-visible result, depends only on earlier stories, and creates only what it needs (no "set up everything" stories). A stop gate (measure first) is its own story, first.
@@ -38,7 +38,7 @@ Read `PLAN.md` (the frame) and only the epic files and rows your task needs; ope
 
 Copy `templates/epic.md` to `plan/epics/NNN-slug.md` (three digits at least). Fill Outcome, Why, Boundary and dependencies (order of stories, what is out of scope), Truth impact and Stories; add What exists today, Requirements and Decisions when they carry weight. Keep an active epic under 60 KiB: measurements and long evidence go to `plan/references/<epic>/` and are linked.
 
-Add its rows to `status.yaml` by editing the file in place: `epic-N: backlog # Suggested lead: … · short note` and one `N-M-slug: backlog` per story, below the last epic's rows. Keep every other line as it is; notes stay under 160 characters (the run log goes in the epic's Log). Change an existing row with `bmn plan set <row> <status> --expect TOKEN` (the token from `bmn plan status --json`), never by rewriting the file.
+Add its rows (and, at his go, the epic's number in `queue:`) to `status.yaml` by editing the file in place; `bmn plan set` only changes rows that exist: `epic-N: backlog # Suggested lead: … · short note` and one `N-M-slug: backlog` per story, below the last epic's rows. Keep every other line as it is; notes stay under 160 characters (the run log goes in the epic's Log). Change an existing row with `bmn plan set <row> <status> --expect TOKEN` (the token from `bmn plan status --json`), never by rewriting the file. It keeps the board's last 20 versions under `$XDG_STATE_HOME/bmn/plan-versions/` (default `~/.local/state`).
 
 Identifiers are never renumbered: a dropped story keeps its number and gets status `dropped` with the decision in its note.
 

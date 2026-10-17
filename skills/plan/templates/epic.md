@@ -36,7 +36,7 @@ The owner, <YYYY-MM-DD>: "<his words>".
 
 As <the owner / a user>, I want <capability>, so that <benefit>.
 
-**Coverage:** <requirements>. **Starting points:** <file:line>.
+**Coverage:** <requirements>. **Starting points:** <file:line of code that exists today, opened by you; then any file an earlier story creates, with that story>.
 
 **Acceptance criteria:**
 1. **Given** <state>, **when** <action>, **then** <observable result>.
