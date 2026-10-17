@@ -116,7 +116,7 @@ import { DIGEST_KEY, DevAutoMorningDigest } from './dev-auto-digest'
 import { HEALTH_ALERTS_KEY, HealthAlerts } from './health-alerts'
 import { readMachineHealth, type HealthReaderOptions } from './machine-health'
 import { readDevAutoRuns } from './dev-auto-runs'
-import { manualCardFits, REFUSAL_WORDS } from './telegram-cards'
+import { manualCardFits } from './telegram-cards'
 import { createScanMemory, procReader, scanSessionPorts, type ProcReader } from './listening-ports'
 import { PortWatch } from './port-watch'
 import { AGENT_HISTORY_STATE_KEY, AgentHistory, readHistoryState, type AgentHistoryAdapter } from './agent-history'
@@ -638,8 +638,7 @@ export class CompanionService {
       write: (sessionId, bytes) => options.manager.writeToSession(sessionId, bytes),
       submitMessage: (record, request, text, current, markWritten) =>
         this.submitTelegramAnswerMessage(record, request, text, current, markWritten),
-      answerPermissions: async () => (await options.database.companion('getSettings')).telegram.answerPermissions,
-      countdownChanged: (sessionId) => this.cards.changed(sessionId)
+      answerPermissions: async () => (await options.database.companion('getSettings')).telegram.answerPermissions
     })
     this.cards = new TelegramCardKeeper({
       connector: () => this.telegram && this.telegramHealth?.state === 'polling' ? this.telegram : undefined,
@@ -2042,7 +2041,6 @@ export class CompanionService {
       const settings = await this.options.database.companion('getSettings')
       if (!settings.telegram.answerPermissions) return { answerable: false, reason: 'permissions-off' }
       if (!this.nativeProducerCurrent(record)) return { answerable: false, reason: 'unsupported' }
-      if (this.answers.expired(record)) return { answerable: false, reason: 'unsupported', detail: REFUSAL_WORDS.expired }
       return { answerable: true, deny: this.answers.canDeny(record) }
     }
     return { answerable: true, deny: false }

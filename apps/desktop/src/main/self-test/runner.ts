@@ -2880,6 +2880,45 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       hookPermission.request?.state !== 'answered' || hookPermission.request.resolvedBy !== 'telegram') {
       throw new Error(`the permission through the hook went wrong: ${JSON.stringify(hookPermission)}`)
     }
+    // Epic 78 [d4]: Claude's countdown ran out and it reports its next step; the waiting hook ends undecided and the
+    // card loses its buttons.
+    console.error('[BMN] self-test phase: permission closed by the agent\'s next step')
+    await client.request(METHOD_REGISTRY.settingsPut, { section: 'telegram', value: {
+      ...(await client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})).telegram, answerPermissions: true } })
+    const stopFrom = bot.calls.length
+    writeFileSync(join(answerDirectory, 'fire-hook-stop'), '')
+    await untilFileExists(join(answerDirectory, 'opened-hook-stop'), 'started the waiting hook')
+    const stopCard = (): FakeBotCall | undefined => bot.calls.slice(stopFrom).find((call) =>
+      call.method === 'sendMessage' && String(call.body.text).includes('touch spike-allow.txt'))
+    const keyboardOf = (body: Record<string, unknown>): number =>
+      ((body.reply_markup as { inline_keyboard?: unknown[][] } | undefined)?.inline_keyboard ?? []).flat().length
+    const stopCardBy = Date.now() + 30_000
+    while (!(stopCard() && keyboardOf(stopCard()!.body) > 0) && Date.now() < stopCardBy) await new Promise((resolve) => setTimeout(resolve, 100))
+    const cardButtons = stopCard() ? keyboardOf(stopCard()!.body) : 0
+    writeFileSync(join(answerDirectory, 'fire-hook-stop-end'), '')
+    const stopBy = Date.now() + 30_000
+    while (!existsSync(join(answerDirectory, 'done-hook-stop')) && Date.now() < stopBy) await new Promise((resolve) => setTimeout(resolve, 100))
+    const lastEdit = (): FakeBotCall | undefined => bot.calls.slice(stopFrom).filter((call) => call.method === 'editMessageText' &&
+      call.body.message_id === stopCard()?.messageId).pop()
+    const closedBy = Date.now() + 15_000
+    while (!lastEdit() && Date.now() < closedBy) await new Promise((resolve) => setTimeout(resolve, 100))
+    await client.request(METHOD_REGISTRY.settingsPut, { section: 'telegram', value: {
+      ...(await client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})).telegram, answerPermissions: false } })
+    const stopRequest = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+      .filter((row) => row.sessionId === answerSession.sessionId && row.requestKey === 'claude:permission')
+      .sort((left, right) => right.openedAt.localeCompare(left.openedAt))[0]
+    const closedByNextStep = {
+      cardButtons,
+      finished: existsSync(join(answerDirectory, 'done-hook-stop')),
+      printed: existsSync(join(answerDirectory, 'hook-out-hook-stop')) ? readFileSync(join(answerDirectory, 'hook-out-hook-stop'), 'utf8') : null,
+      lastEdit: lastEdit() ? { buttons: keyboardOf(lastEdit()!.body), text: String(lastEdit()!.body.text).split('\n').pop() } : null,
+      request: stopRequest ? { state: stopRequest.state, resolvedBy: stopRequest.resolvedBy } : null
+    }
+    console.error(`[BMN] self-test phase: permission closed by the agent's next step ${JSON.stringify(closedByNextStep)}`)
+    if (closedByNextStep.cardButtons === 0 || !closedByNextStep.finished || closedByNextStep.printed !== '' ||
+      closedByNextStep.lastEdit === null || closedByNextStep.lastEdit.buttons !== 0 || closedByNextStep.request?.state === 'open') {
+      throw new Error(`the permission closed by the agent's next step went wrong: ${JSON.stringify(closedByNextStep)}`)
+    }
     // Story 34.2: a `bmn ask` body quoting a key reaches the Bot API with the key hidden and the card saying so.
     console.error('[BMN] self-test phase: telegram secret masking')
     const secretKey = 'sk-ant-api03-' + 'SelfTestSyntheticKey_0123456789'

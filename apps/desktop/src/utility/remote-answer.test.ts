@@ -88,8 +88,6 @@ interface Harness {
   permissions: { on: boolean }
   /** What the program draws next when it reads a key. */
   onKey: ((key: string) => void) | undefined
-  /** Sessions told a Claude countdown ran out. */
-  expired: string[]
 }
 
 const engines: RemoteAnswers[] = []
@@ -105,8 +103,7 @@ function harness(initial?: { record: AttentionRecord; lines?: string[] }): Harne
     writes: [],
     live: new Map([['s1', 'inc-1'], ['s2', 'inc-2']]),
     permissions: { on: true },
-    onKey: undefined,
-    expired: []
+    onKey: undefined
   }
   h.engine = new RemoteAnswers({
     getAttention: async (requestId) => h.records.get(requestId) ?? null,
@@ -118,7 +115,6 @@ function harness(initial?: { record: AttentionRecord; lines?: string[] }): Harne
       h.onKey?.(key)
     },
     answerPermissions: async () => h.permissions.on,
-    countdownChanged: (sessionId) => h.expired.push(sessionId),
     timing: { stepMs: 200, confirmMs: 250, pickupMs: 150, lateMs: 2_000 }
   })
   engines.push(h.engine)
@@ -573,57 +569,15 @@ describe('Claude\'s own countdown on a permission (Story 78.5)', () => {
     expect(claudeCountdownMs(['Do you want to proceed?', 'deny in 1:59'])).toBeNull()
   })
 
-  it('at the countdown, ends the hook\'s wait, refuses a later tap as expired and has the card read again', async () => {
-    const SOON = ' ⚠ Claude Code will automatically deny this request in 0:02, to avoid blocking progress on an unattended session'
-    const HOOKED: AttentionPrompt = { ...CLAUDE_BASH, requestRef: 'ref-1' }
-    const h = harness({ record: record(HOOKED), lines: ['Bash command', '  touch spike-allow.txt', SOON, 'Do you want to proceed?'] })
-    const waiting = h.engine.take('s1', 'inc-1', 5_000, undefined, 'ref-1')
-    // Read off the screen as it is drawn: 2 s left, less the margin, runs out at once.
-    await expect(waiting).resolves.toEqual([])
-    expect(h.engine.deadline(record(HOOKED), Date.now()).state).toBe('at')
-    expect(h.engine.hookWanted('s1', 'inc-1', 'ref-1')).toBe(false)
-    expect(h.engine.expired(record(HOOKED))).toBe(true)
-    expect(h.expired).toContain('s1')
-    await expect(ask(h, allow, { epoch: 1 })).resolves.toEqual({ state: 'refused', reason: 'expired' })
-    expect(h.writes).toEqual([])
-    // A new revision of the request has its own countdown.
-    expect(h.engine.expired(record(HOOKED, { revision: 2 }))).toBe(false)
-  })
-
-  const countdown = (left: string): string => ` ⚠ Claude Code will automatically deny this request in ${left}, to avoid blocking progress on an unattended session`
-  const HOOKED_BASH: AttentionPrompt = { ...CLAUDE_BASH, requestRef: 'ref-1' }
-  const DIALOG = ['Bash command', '  touch spike-allow.txt', 'Do you want to proceed?']
-  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
-  it('an old revision\'s timer leaves the prompt that replaced it answerable (review F2)', async () => {
-    const h = harness({ record: record(HOOKED_BASH), lines: [...DIALOG.slice(0, 2), countdown('0:03'), DIALOG[2]!] })
-    expect(h.engine.deadline(record(HOOKED_BASH), Date.now()).state).toBe('at')
-    const successor = record({ ...HOOKED_BASH, requestRef: 'ref-2' }, { revision: 2 })
-    h.screens.get('s1')!.show(DIALOG)
+  it('shows no deadline for a prompt that replaced another: the countdown drawn may still be the earlier one\'s', () => {
+    const HOOKED_BASH: AttentionPrompt = { ...CLAUDE_BASH, requestRef: 'ref-1' }
+    const h = harness({ record: record(HOOKED_BASH), lines: ['Bash command', '  touch spike-allow.txt', COUNTDOWN, 'Do you want to proceed?'] })
+    expect(h.engine.deadline(record(HOOKED_BASH), 1_000)).toEqual({ state: 'at', at: 120_000 })
+    const successor = record({ ...HOOKED_BASH, command: 'touch other.txt', requestRef: 'ref-2' }, { revision: 2 })
     open(h, successor)
-    await pause(1_300)
+    expect(h.engine.deadline(successor, 2_000)).toEqual({ state: 'unknown' })
+    // The deadline only informs the card: nothing expires on it, and the successor's hook is still wanted.
     expect(h.engine.hookWanted('s1', 'inc-1', 'ref-2')).toBe(true)
-    expect(h.engine.expired(successor)).toBe(false)
-  })
-
-  it('follows the countdown on the screen with no card drawn, and drops it when a desk key stops it (review F3)', async () => {
-    const h = harness({ record: record(HOOKED_BASH), lines: DIALOG })
-    await settle()
-    // A key pressed at the desk: the dialog stays, its countdown goes, and nothing expires.
-    h.screens.get('s1')!.show([...DIALOG.slice(0, 2), countdown('0:03'), DIALOG[2]!])
-    await settle()
-    expect(h.expired).toEqual(['s1'])
-    h.screens.get('s1')!.show(DIALOG)
-    await settle()
-    await pause(1_300)
-    expect(h.engine.hookWanted('s1', 'inc-1', 'ref-1')).toBe(true)
-    expect(h.engine.deadline(record(HOOKED_BASH), Date.now())).toEqual({ state: 'none' })
-    // Drawn late and left to run out: the hook stops waiting without any card asking for the deadline.
-    const waiting = h.engine.take('s1', 'inc-1', 5_000, undefined, 'ref-1')
-    await settle()
-    h.screens.get('s1')!.show([...DIALOG.slice(0, 2), countdown('0:02'), DIALOG[2]!])
-    await expect(waiting).resolves.toEqual([])
-    expect(h.engine.hookWanted('s1', 'inc-1', 'ref-1')).toBe(false)
   })
 
   it('keeps the first reading, says none for a dialog drawn without one, unknown without a screen', () => {

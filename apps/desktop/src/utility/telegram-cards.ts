@@ -476,8 +476,7 @@ export const REFUSAL_WORDS: Readonly<Record<AnswerRefusal, string>> = Object.fre
   'permissions-off': 'Nothing was sent: permission answers from Telegram are off.',
   claimed: 'Another answer is already on its way.',
   'not-delivered': 'Nothing was sent: the agent did not pick up the answer.',
-  'api-refused': 'OpenCode rejected the answer; nothing was applied.',
-  expired: 'Nothing was sent: the laptop\'s countdown ran out, so this request is no longer available.'
+  'api-refused': 'OpenCode rejected the answer; nothing was applied.'
 })
 
 export function endingLine(ending: CardEnding): string {

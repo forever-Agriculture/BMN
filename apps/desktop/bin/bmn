@@ -1458,14 +1458,17 @@ function phoneAnswerable(agent, event, launch = { pid: 0, procRoot: '/proc' }) {
  * (Story 78.1, 10/10), so BMN waits for the phone only when its hook is the only deciding one it can see: in the
  * settings Claude reads (managed, user, project, local, and any `--settings` it was started with) and in the hooks of
  * plugins a settings file enables. A file that cannot be read is passed over, except a `--settings` one; a group or
- * entry that cannot be read, or a matcher that cannot be read, counts.
+ * entry that cannot be read, or a matcher that cannot be read, counts, and so does a launch line BMN cannot read:
+ * without it no hook can be ruled out (review F4).
  */
 function otherPermissionHook(event, launch = { pid: 0, procRoot: '/proc' }) {
   const readJson = (path) => { try { return JSON.parse(readFileSync(path, 'utf8')) } catch { return undefined } }
   // `--settings <file or JSON>` adds hooks no fixed file shows (the review's case); one that cannot be read counts.
   const launched = []
-  let argv = []
-  try { argv = readFileSync(join(launch.procRoot, String(launch.pid), 'cmdline'), 'utf8').split('\0') } catch { /* no launch line to read */ }
+  if (!launch.pid) return true
+  let argv
+  try { argv = readFileSync(join(launch.procRoot, String(launch.pid), 'cmdline'), 'utf8').split('\0').filter((arg) => arg !== '') } catch { return true }
+  if (argv.length === 0) return true
   for (const [index, arg] of argv.entries()) {
     const value = arg === '--settings' ? argv[index + 1] : arg.startsWith('--settings=') ? arg.slice('--settings='.length) : undefined
     if (value === undefined) continue

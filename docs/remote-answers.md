@@ -127,17 +127,20 @@ reached; from then on BMN counts it as gone at once. A Bash card's buttons then 
 - **Only deciding hook.** The hook gives no ref when it sees another `PermissionRequest` hook that could decide the
   request (the first decision wins): in the managed, user, project or local settings, in the `--settings` file or JSON
   Claude was started with (read from its process's command line), or in a plugin a settings file enables, whose
-  matcher could match the tool. An entry, or a `--settings` file, it cannot read counts as another hook.
+  matcher could match the tool. An entry, or a `--settings` file, it cannot read counts as another hook, and so does a
+  launch line it cannot read (then no hook can be ruled out).
 - **No ref, no buttons.** Every other input (another field such as `dangerouslyDisableSandbox`, a command that needs
   cleaning or is too long, a subagent, another tool) and every request with another deciding hook gets no ref, and a
   Claude permission without a ref gets no buttons: some approval-relevant part would not be on the card.
-- **Claude's countdown.** BMN's screen watcher reads Claude's countdown (Story 78.5) as soon as it is drawn, with or
-  without a card, for that request revision and prompt only. Once that deadline has passed, less 2 s for a reading
-  to the second, the request counts as expired: the hook stops waiting, a tap is refused ("the laptop's countdown ran
-  out, so this request is no longer available") and the card is drawn again without buttons. A key pressed at the
-  desk stops Claude's countdown: the dialog stays drawn without it, so BMN drops its deadline too. A prompt that
-  replaces another in the slot gets neither its countdown nor its pending answer: an identical successor's report
-  never confirms the earlier tap.
+- **Claude's countdown.** Claude fires no hook event when its countdown denies a request; its next step does (measured
+  on 2.1.302, 2/2: `Stop` 2.4 s and 3.3 s after the dialog went). BMN closes the request on that step as on any other
+  (`Stop`, `UserPromptSubmit`, the next tool's `PostToolUse`, or a new `PermissionRequest` in the slot), which ends the
+  hook's wait and the card's buttons. A tap in between reaches a hook whose allow Claude ignores after expiry (78.1,
+  2/2), so the card says it was sent, unconfirmed. The deadline the card shows (Story 78.5) is read off Claude's
+  countdown when the card is drawn and only informs; for a prompt that replaced another in the slot it is "unknown",
+  since the screen may still show the earlier dialog's countdown. A prompt that replaces another also never inherits
+  its pending answer: an identical successor's report never confirms the earlier tap. If an expired request is
+  followed by a long tool that needs no permission, its card stays until that tool ends.
 
 **Tool families with buttons:** `Bash`; `Write` and `Edit` through the hook only (Story 78.3), when their input
 holds only `file_path` and `content`, or `file_path`, `old_string`, `new_string` and `replace_all`. The card shows the

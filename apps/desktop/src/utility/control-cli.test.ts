@@ -336,6 +336,8 @@ async function procTree(root: string, agent: ProcessStat): Promise<string> {
     await mkdir(join(proc, String(pid)), { recursive: true })
     const fields = [parent, agent.group, agent.group, agent.tty, agent.foreground, 4194304, 0]
     await writeFile(join(proc, String(pid), 'stat'), `${pid} (${comm}) S ${fields.join(' ')}\n`)
+    // The launch line the permission hook reads (Epic 78); a test that sets its own keeps it.
+    if (!existsSync(join(proc, String(pid), 'cmdline'))) await writeFile(join(proc, String(pid), 'cmdline'), `${comm}\0`)
   }
   await write(process.pid, 'sh', 7001)
   await write(7001, agent.comm, 1)
@@ -4779,6 +4781,11 @@ describe('structured prompts from the recorded hooks (Epic 30)', () => {
       })).resolves.toMatch(UUID)
       await expect(refFor((root) => launchedWith(root, '--settings', join(root, 'missing.json')))).resolves.toBeNull()
       await expect(refFor((root) => launchedWith(root, '--settings', 'relative.json'))).resolves.toBeNull()
+      // A launch line BMN cannot read, or an empty one, rules out nothing (review F4): no ref.
+      await expect(refFor((root) => { mkdirSync(join(root, 'proc', '7001', 'cmdline'), { recursive: true }) })).resolves.toBeNull()
+      await expect(refFor((root) => { mkdirSync(join(root, 'proc', '7001'), { recursive: true }); writeFileSync(join(root, 'proc', '7001', 'cmdline'), '') }))
+        .resolves.toBeNull()
+      await expect(refFor((root) => launchedWith(root))).resolves.toMatch(UUID)
     })
 
     it('never waits for an input the card could not show whole, a subagent, a question or another tool', async () => {
