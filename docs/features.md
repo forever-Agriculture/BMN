@@ -433,6 +433,24 @@ words and path. A link to a file opens it in Quick look (at its line or heading)
 scrolls there, and an outside link only shows its address; `Enter` copies it. Nothing opens a browser.
 Masks, find, "Changed on disk" and the remembered place work on the page as in source.
 
+The top field finds files. `Ctrl+P` puts the keys in **Go to file**, the palette's name search under
+the shown root (the same caps and wording); ↑ ↓ move and `Enter` opens. `Ctrl+Shift+G`, from a terminal
+or in the sheet, switches it to **Contents**: literal text of 2 to 256 characters, never a pattern,
+with **Aa** (`Alt+C`) for case and **W** (`Alt+W`) for whole words. Each key waits 150 ms and cancels
+the search before it; one search runs per window, and closing the sheet stops it. Inside a Git work
+tree it reads what Git tracks plus untracked files Git does not ignore, under the root, so an ignored
+`.env` is never searched and a quiet line says ignored files were skipped; in any other folder it
+walks as the name search does, without `.git`, `node_modules`, the generated folders or links. It
+reads regular UTF-8 text files of at most 1 MiB, at most 20,000 files and 2,000 matching lines, and
+cuts each line to 240 characters around its match. The header counts matches, files and files read;
+"Partial results · limit reached" names the limit that stopped it, "N files could not be read" counts
+files it could not open, and `Escape` stops a running search. Results are grouped by file; ↑ ↓ show
+each match in the file, `Enter` moves the keys into it with the match marked and "Match 2 of 8" with
+previous and next, and `Escape` goes back to the results and then to the tree. A matching line is
+masked as the file view masks it before it leaves the search, and a hidden value is never matched.
+Nothing is indexed, watched or stored, and files are read a few at a time so the terminals keep
+printing.
+
 **File references.** `Ctrl+click` a path an agent printed, such as `src/parser.ts:42:7`, or use
 **Open file reference…** in the palette, to see a read-only snapshot of that file at the line and
 column, with **Copy reference** and **Show in Folder**. Relative paths resolve from the session's

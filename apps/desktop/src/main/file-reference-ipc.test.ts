@@ -173,6 +173,24 @@ describe('Quick look IPC', () => {
     expect(await failure(() => handlers.get('aiterm:quick-look:read')!(allowed, { sessionId: 's', path: '/a/../etc/passwd' }))).toMatchObject({ code: 'INVALID_ARGUMENT' })
   })
 
+  it('owns one search per window, forwards only the search\'s fields and refuses another sender (Story 67.5)', async () => {
+    const { handlers, requests } = install()
+    const other = { allowed: true, sender: { id: 2 } } as unknown as IpcMainInvokeEvent
+    await handlers.get('aiterm:quick-look:search')!(allowed, { sessionId: 'session-1', requestId: 'r1', root: '/home/me/project', mode: 'contents', query: 'formatBytes', matchCase: true, ownerId: 'forged' })
+    await handlers.get('aiterm:quick-look:search')!(other, { workspaceId: 'workspace-1', requestId: 'r2', root: '/home/me/project', mode: 'files', query: 'parser' })
+    await handlers.get('aiterm:quick-look:search-cancel')!(allowed, { requestId: 'r1', ownerId: 'forged' })
+    expect(requests).toEqual([
+      { method: METHOD_REGISTRY.quickLookSearch, params: { sessionId: 'session-1', ownerId: 'quick-look:1', requestId: 'r1', root: '/home/me/project', mode: 'contents', query: 'formatBytes', matchCase: true, wholeWord: false } },
+      { method: METHOD_REGISTRY.quickLookSearch, params: { workspaceId: 'workspace-1', ownerId: 'quick-look:2', requestId: 'r2', root: '/home/me/project', mode: 'files', query: 'parser', matchCase: false, wholeWord: false } },
+      { method: METHOD_REGISTRY.quickLookSearchCancel, params: { ownerId: 'quick-look:1', requestId: 'r1' } }
+    ])
+    for (const channel of ['aiterm:quick-look:search', 'aiterm:quick-look:search-cancel']) {
+      expect(await failure(() => handlers.get(channel)!(stranger, { sessionId: 'session-1', requestId: 'r', root: '/a', mode: 'files', query: 'ab' }))).toMatchObject({ code: 'UNAUTHORIZED' })
+    }
+    expect(await failure(() => handlers.get('aiterm:quick-look:search')!(allowed, { sessionId: 's', requestId: 'r', root: '/a', mode: 'regex', query: 'ab' }))).toMatchObject({ code: 'INVALID_ARGUMENT' })
+    expect(await failure(() => handlers.get('aiterm:quick-look:search')!(allowed, { sessionId: 's', requestId: 'r', root: 'relative', mode: 'files', query: 'ab' }))).toMatchObject({ code: 'INVALID_ARGUMENT' })
+  })
+
   it('has no control-socket method and no bmn command that reaches Quick look (Story 67.1)', () => {
     const here = dirname(fileURLToPath(import.meta.url))
     const server = readFileSync(join(here, '..', 'utility', 'control-server.ts'), 'utf8')
@@ -181,6 +199,6 @@ describe('Quick look IPC', () => {
       expect(text).not.toMatch(/quick\.look|quickLook/u)
     }
     const methods = Object.entries(METHOD_REGISTRY).filter(([, method]) => method.startsWith('quick.look.')).map(([name]) => name)
-    expect(methods).toEqual(['quickLookRoot', 'quickLookList', 'quickLookRead', 'quickLookIdentity'])
+    expect(methods).toEqual(['quickLookRoot', 'quickLookList', 'quickLookRead', 'quickLookIdentity', 'quickLookSearch', 'quickLookSearchCancel'])
   })
 })

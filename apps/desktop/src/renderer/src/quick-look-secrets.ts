@@ -72,7 +72,7 @@ export function reveal(index: number, now: number): Reveal {
   return { index, until: now + REVEAL_SECONDS * 1000 }
 }
 
-/** Whole seconds left, counting down from ten; zero once it has hidden. */
+/** Whole seconds left, counting down from ten; zero once it has hidden. A clock read before the reveal still says ten. */
 export function revealSecondsLeft(shown: Reveal | null, now: number): number {
-  return shown ? Math.max(0, Math.ceil((shown.until - now) / 1000)) : 0
+  return shown ? Math.min(REVEAL_SECONDS, Math.max(0, Math.ceil((shown.until - now) / 1000))) : 0
 }

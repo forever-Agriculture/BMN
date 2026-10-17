@@ -6,7 +6,8 @@ import type { FileReferenceSearchResult } from '@bmn/protocol'
 export const FILE_SEARCH_MAX_DEPTH = 6
 export const FILE_SEARCH_MAX_ENTRIES = 20_000
 export const FILE_SEARCH_MAX_RESULTS = 50
-const GENERATED_DIRECTORIES = new Set(['dist', 'build', 'out', 'coverage', '.next', '.cache'])
+/** Folders the walk never enters, besides `.git` and `node_modules`. */
+export const GENERATED_DIRECTORIES: ReadonlySet<string> = new Set(['dist', 'build', 'out', 'coverage', '.next', '.cache'])
 
 export async function searchFileReferences(
   root: string | null,

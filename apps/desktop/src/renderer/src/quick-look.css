@@ -118,7 +118,7 @@
   margin-left: auto;
 }
 
-.quick-look .ql-mode > button {
+.quick-look :is(.ql-mode, .ql-switch) > button {
   display: inline-flex;
   align-items: center;
   height: 24px;
@@ -131,7 +131,7 @@
   font-weight: 500;
 }
 
-.quick-look .ql-mode > button.on {
+.quick-look :is(.ql-mode, .ql-switch) > button.on {
   color: var(--text);
   background: var(--ql-plate-2);
 }
@@ -969,23 +969,190 @@
 }
 
 /* Thin scrollbars as the board draws them: a plate thumb, no arrows. */
-.quick-look :is(.cm-scroller, .ql-tree, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar {
+.quick-look :is(.cm-scroller, .ql-tree, .ql-results-list, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
-.quick-look :is(.cm-scroller, .ql-tree, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar-track,
-.quick-look :is(.cm-scroller, .ql-tree, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar-corner {
+.quick-look :is(.cm-scroller, .ql-tree, .ql-results-list, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar-track,
+.quick-look :is(.cm-scroller, .ql-tree, .ql-results-list, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-.quick-look :is(.cm-scroller, .ql-tree, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar-thumb {
+.quick-look :is(.cm-scroller, .ql-tree, .ql-results-list, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 999px;
   background: var(--ql-plate-2);
   background-clip: padding-box;
 }
 
-.quick-look :is(.cm-scroller, .ql-tree, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar-button {
+.quick-look :is(.cm-scroller, .ql-tree, .ql-results-list, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar-button {
   display: none;
+}
+
+/* The top field's results (Story 67.5): the left column widens to the board's search frame; rows are the tree's
+   rows, a match a soft gold plate, the line he is on the tree's gold edge. No icons, no colour beyond that. */
+.ql-left.ql-searching {
+  width: 384px;
+}
+
+.ql-results {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ql-results-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 34px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--text);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.ql-results-read {
+  overflow: hidden;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+}
+
+.ql-results-note,
+.ql-results-status {
+  flex: none;
+  margin: 0;
+  padding: 6px 12px 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.ql-results-status {
+  padding-top: 14px;
+}
+
+.ql-results-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 0;
+}
+
+.ql-rf,
+.ql-rg-head,
+.ql-rl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  padding: 0 12px 0 10px;
+  border-left: 2px solid transparent;
+  font: 12px var(--font-mono);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.ql-rf:hover,
+.ql-rl:hover {
+  background: var(--hover);
+}
+
+.ql-rf.sel,
+.ql-rl.sel {
+  border-left-color: var(--identity);
+  background: var(--selected);
+}
+
+.ql-rf-name,
+.ql-rg-name {
+  flex: none;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.ql-rf-dir,
+.ql-rg-dir {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.ql-rg-head {
+  gap: 6px;
+  margin-top: 4px;
+  padding-left: 4px;
+}
+
+.ql-rg-count {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ql-rl-no {
+  flex: none;
+  width: 34px;
+  color: var(--ql-gutter);
+  font-size: 11px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.ql-rl-text {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ql-text);
+  text-overflow: ellipsis;
+}
+
+.ql-rl-text mark {
+  border-radius: 2px;
+  color: var(--text);
+  background: var(--ql-match);
+}
+
+.ql-rl.sel .ql-rl-text mark {
+  background: var(--ql-match-active);
+}
+
+.quick-look .ql-in .ql-toggle {
+  flex: none;
+  height: 22px;
+  min-width: 24px;
+}
+
+/* Previous and next match in the path row. */
+.ql-match-nav {
+  display: inline-flex;
+  gap: 2px;
+  margin-right: 6px;
+}
+
+.quick-look .ql-icon-button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--ql-plate);
+}
+
+.quick-look .ql-icon-button:hover {
+  color: var(--text);
+  background: var(--ql-plate-2);
 }

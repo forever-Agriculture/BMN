@@ -1244,7 +1244,7 @@ function App(): React.JSX.Element {
    * Opens Quick look over the window (Story 67.1): rooted at the selected session's launch folder, or at the active
    * workspace's folder when no session is selected. The pane that had focus gets it back when the sheet closes.
    */
-  const openQuickLook = (open: QuickLookRequest['open'] = null, sessionId: string | null = selectedSessionId): void => {
+  const openQuickLook = (open: QuickLookRequest['open'] = null, sessionId: string | null = selectedSessionId, search: QuickLookRequest['search'] = null): void => {
     const focused = document.activeElement instanceof HTMLElement
       ? document.activeElement.closest<HTMLElement>('[data-session-id]')?.dataset.sessionId ?? null : null
     const record = sessionsRef.current.find((session) => session.sessionId === sessionId && session.archivedAt === null)
@@ -1255,7 +1255,7 @@ function App(): React.JSX.Element {
     }
     setDialog({
       kind: 'quick-look',
-      request: { source: record ? { sessionId: record.sessionId } : { workspaceId: workspace!.workspaceId }, open },
+      request: { source: record ? { sessionId: record.sessionId } : { workspaceId: workspace!.workspaceId }, open, ...(search ? { search } : {}) },
       returnTo: focused ?? record?.sessionId ?? null,
       openedFromWorkspaceId: activeWorkspaceId
     })
@@ -1488,6 +1488,7 @@ function App(): React.JSX.Element {
       case 'attention-next': return nextNeedingYou()
       case 'palette': return setDialog({ kind: 'palette' })
       case 'quick-look': return openQuickLook()
+      case 'quick-look-contents': return openQuickLook(null, selectedSessionId, 'contents')
       case 'recent-sessions': return setDialog({ kind: 'recent-sessions', sessionIds: [...recentSessions.current] })
       case 'copy': return copySelection(selectedSessionId)
       case 'paste': return pasteClipboard(selectedSessionId)
@@ -1654,6 +1655,7 @@ function App(): React.JSX.Element {
       command('search', 'Search terminal output', () => runCommand('search'), { shortcut: SHORTCUT_LABELS.search, disabled: !selectedSessionId || !live[selectedSessionId] }),
       command('files', panel === 'files' ? 'Close files' : 'Show files', () => setPanel(panel === 'files' ? null : 'files')),
       command('quick-look', 'Project files…', () => openQuickLook(), { shortcut: SHORTCUT_LABELS['quick-look'], context: selectedRecord?.name ?? activeWorkspace?.name, disabled: !selectedRecord && !activeWorkspace }),
+      command('quick-look-contents', 'Search project contents…', () => openQuickLook(null, selectedSessionId, 'contents'), { shortcut: SHORTCUT_LABELS['quick-look-contents'], context: selectedRecord?.name ?? activeWorkspace?.name, disabled: !selectedRecord && !activeWorkspace }),
       command('details', 'Session details', () => setPanel('details'), { disabled: !selectedRecord }),
       command(`edit-launch-${selectedRecord?.sessionId ?? 'none'}`, 'Edit launch settings', () => {
         const current = sessionsRef.current.find(session => session.sessionId === selectedRecord?.sessionId &&

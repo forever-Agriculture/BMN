@@ -87,7 +87,7 @@ export function forgetPlaces(): void {
   places.clear()
 }
 
-export type EscapeStep = 'clear-typed' | 'hide-secret' | 'close-goto' | 'close-find' | 'close-sheet'
+export type EscapeStep = 'clear-typed' | 'hide-secret' | 'close-goto' | 'close-find' | 'stop-search' | 'clear-search' | 'back-to-results' | 'close-sheet'
 
 export interface EscapeState {
   focus: 'field' | 'tree' | 'file'
@@ -96,17 +96,25 @@ export interface EscapeState {
   revealed?: boolean
   goTo: boolean
   find: boolean
+  /** The top field holds a search: one still running, or its results (Story 67.5). */
+  search?: 'searching' | 'results' | null
+  /** The open file was opened from those results. */
+  fromResults?: boolean
 }
 
 /**
  * Esc closes the innermost open thing first and the sheet last: letters typed in the tree while it has the keys,
- * then a value shown for ten seconds, then the go-to-line row, then the find row, then any letters left typed.
+ * then a value shown for ten seconds, then the go-to-line row, then the find row, then a running search, its results
+ * (back to the tree) or a file opened from them (back to the results), then any letters left typed.
  */
 export function escapeStep(state: EscapeState): EscapeStep {
   if (state.focus === 'tree' && state.typed) return 'clear-typed'
   if (state.revealed) return 'hide-secret'
   if (state.goTo) return 'close-goto'
   if (state.find) return 'close-find'
+  if (state.focus === 'field' && state.search === 'searching') return 'stop-search'
+  if (state.focus === 'field' && state.search) return 'clear-search'
+  if (state.focus === 'file' && state.fromResults && state.search) return 'back-to-results'
   if (state.typed) return 'clear-typed'
   return 'close-sheet'
 }
@@ -116,5 +124,8 @@ export const ESCAPE_LABELS: Record<EscapeStep, string> = {
   'hide-secret': 'Hide value',
   'close-goto': 'Close go to line',
   'close-find': 'Close find',
+  'stop-search': 'Stop search',
+  'clear-search': 'Back to tree',
+  'back-to-results': 'Back to results',
   'close-sheet': 'Close'
 }

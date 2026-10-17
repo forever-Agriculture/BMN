@@ -66,6 +66,8 @@ describe('Quick look footer', () => {
   it('shows Back only when there is a file to return to (Story 67.2 AC7)', () => {
     expect(quickLookFooter({ ...base, focus: 'file' }).map((hint) => hint.label)).not.toContain('Back')
     expect(quickLookFooter({ ...base, focus: 'file', back: true }).find((hint) => hint.label === 'Back')).toEqual({ keys: ['Alt ←'], label: 'Back' })
-    expect(quickLookFooter({ ...base, focus: 'field', forward: true }).map((hint) => hint.label)).toEqual(['Forward', 'Tree', 'Close'])
+    expect(quickLookFooter({ ...base, focus: 'field', forward: true }).map((hint) => hint.label)).toEqual(['Search contents', 'Forward', 'Tree', 'Close'])
+    expect(quickLookFooter({ ...base, focus: 'field', search: 'contents', escape: 'clear-search' }).map((hint) => hint.label)).toEqual(['Match', 'Open at line', 'Case', 'Whole word', 'Back to tree'])
+    expect(quickLookFooter({ ...base, focus: 'field', search: 'files', escape: 'stop-search' }).map((hint) => hint.label)).toEqual(['Move', 'Open', 'Stop search'])
   })
 })

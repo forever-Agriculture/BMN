@@ -21,6 +21,7 @@ export type AppCommand =
   | 'send-next-key'
   | 'voice-toggle'
   | 'quick-look'
+  | 'quick-look-contents'
 
 export interface ShortcutEvent {
   key: string
@@ -52,7 +53,8 @@ export const SHORTCUT_LABELS: Readonly<Record<AppCommand, string>> = Object.free
   'font-reset': 'Ctrl 0',
   'send-next-key': 'Ctrl Shift \\',
   'voice-toggle': 'Ctrl Shift Space',
-  'quick-look': 'Ctrl Shift E'
+  'quick-look': 'Ctrl Shift E',
+  'quick-look-contents': 'Ctrl Shift G'
 })
 
 const CTRL_SHIFT_CODES: Readonly<Record<string, AppCommand>> = Object.freeze({
@@ -72,7 +74,8 @@ const CTRL_SHIFT_CODES: Readonly<Record<string, AppCommand>> = Object.freeze({
   KeyZ: 'focus-toggle',
   Backslash: 'send-next-key',
   Space: 'voice-toggle',
-  KeyE: 'quick-look'
+  KeyE: 'quick-look',
+  KeyG: 'quick-look-contents'
 })
 
 /**

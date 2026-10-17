@@ -23,6 +23,7 @@ import {
   type ExplicitConversationBinding,
   type HelloParams,
   type ProtocolErrorCode,
+  type QuickLookSearchResult,
   type RpcFailure,
   type RpcId,
   type RpcRequest,
@@ -38,6 +39,8 @@ import type { AnswerRequest } from './remote-answer'
 import { DatabaseClientError, DatabaseWorkerClient } from './database-client'
 import { readFileReference } from './file-reference-reader'
 import { listQuickLookFolder, quickLookIdentity, quickLookRoot, quickLookSourceFolder, readQuickLookFile } from './quick-look'
+import { QuickLookSearches, searchQuickLookContents } from './quick-look-search'
+import { searchFileReferences } from './file-reference-search'
 import { inspectRepositoryIdentity } from './repository-identity'
 import { readDevAutoRuns } from './dev-auto-runs'
 import { isDevAutoRunsParams } from '@bmn/protocol'
@@ -568,6 +571,28 @@ async function start(): Promise<void> {
     return quickLookSourceFolder({ kind: 'session', liveLaunchDirectory: manager.liveLaunchDirectory(sessionId) ?? null, storedCwd: session.cwd })
   }
 
+  const quickLookSearches = new QuickLookSearches()
+
+  /**
+   * Quick look's top field (Story 67.5): "Go to file" through the name search, or "Contents". The root must be the
+   * source's folder or the Git root above it, the two roots the sheet offers.
+   */
+  async function quickLookSearch(params: Record<string, unknown>): Promise<QuickLookSearchResult> {
+    const ownerId = stringValue(params, 'ownerId')
+    const requestId = stringValue(params, 'requestId')
+    const root = stringValue(params, 'root')
+    const query = textValue(params, 'query')
+    const mode = params.mode
+    if (mode !== 'files' && mode !== 'contents') throw new HostControlError(ERROR_CODES.invalidArgument, 'Control parameter mode is invalid')
+    const roots = await quickLookRoot(await quickLookFolderFor(params))
+    if (roots.status !== 'ready' || (root !== roots.sessionFolder && root !== roots.gitRoot)) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'Search only the folder Quick look shows')
+    }
+    return quickLookSearches.run(ownerId, requestId, async (signal) => mode === 'files'
+      ? { mode: 'files' as const, ...(await searchFileReferences(root, query, signal)) }
+      : searchQuickLookContents(root, { query, matchCase: params.matchCase === true, wholeWord: params.wholeWord === true }, signal))
+  }
+
   async function route(request: RpcRequest): Promise<unknown> {
     if (!handshaken && request.method !== METHOD_REGISTRY.hello) {
       throw new HostControlError(
@@ -870,6 +895,11 @@ async function start(): Promise<void> {
       case METHOD_REGISTRY.quickLookIdentity:
         await quickLookFolderFor(params)
         return quickLookIdentity(stringValue(params, 'path'))
+      case METHOD_REGISTRY.quickLookSearch:
+        return quickLookSearch(params)
+      case METHOD_REGISTRY.quickLookSearchCancel:
+        quickLookSearches.cancel(stringValue(params, 'ownerId'), stringValue(params, 'requestId'))
+        return { cancelled: true }
       case METHOD_REGISTRY.fileReferenceRead: {
         if ((params.sessionId !== undefined) === (params.workspaceId !== undefined)) {
           throw new HostControlError(ERROR_CODES.invalidArgument, 'Choose exactly one source session or workspace')

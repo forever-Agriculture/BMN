@@ -1,5 +1,5 @@
 // MODULE: quick-look.ts - Quick look's limits, host results and the pure facts its sheet shows about a file (Epic 67)
-import type { FileReferenceUnavailableReason } from './file-reference'
+import type { FileReferenceSearchResult, FileReferenceUnavailableReason } from './file-reference'
 
 /** The largest file shown as text (R67-NFR2); a larger one shows its facts only. */
 export const QUICK_LOOK_READ_MAX_BYTES = 2 * 1024 * 1024
@@ -89,6 +89,74 @@ export function sameQuickLookIdentity(read: QuickLookIdentity, now: QuickLookIde
   return now.status === 'ready' && now.identity.byteLength === read.byteLength && now.identity.modifiedNs === read.modifiedNs
     && now.identity.inode === read.inode
 }
+
+/** Search contents takes literal text of this many characters (Story 67.5 AC2). */
+export const QUICK_LOOK_SEARCH_MIN_CHARS = 2
+export const QUICK_LOOK_SEARCH_MAX_CHARS = 256
+/** A file over this many bytes is not searched (AC3). */
+export const QUICK_LOOK_SEARCH_MAX_FILE_BYTES = 1024 * 1024
+/** At most this many files are searched and this many matching lines returned; past either the results are partial. */
+export const QUICK_LOOK_SEARCH_MAX_FILES = 20_000
+export const QUICK_LOOK_SEARCH_MAX_LINES = 2_000
+/** A matching line is cut to this many characters around its match. */
+export const QUICK_LOOK_SEARCH_LINE_CHARS = 240
+
+/**
+ * One search of the sheet's top field: "Go to file" by name, or "Contents" for literal text. The window's own
+ * channel adds who owns it, so one search runs per window and a newer one cancels the older.
+ */
+export type QuickLookSearchParams = QuickLookSource & {
+  requestId: string
+  /** The sheet's root: the source's folder or the Git root above it. */
+  root: string
+  mode: 'files' | 'contents'
+  query: string
+  matchCase?: boolean
+  wholeWord?: boolean
+}
+
+export type QuickLookSearchCancelParams = { requestId: string }
+
+/** One matching line, masked and cut; the match is `[matchStart, matchEnd)` of `text`. */
+export interface QuickLookContentsLine {
+  line: number
+  /** The match's first character on its line, from 1, as the file view counts it. */
+  column: number
+  /** The match's length in the file. */
+  length: number
+  text: string
+  matchStart: number
+  matchEnd: number
+  cutBefore: boolean
+  cutAfter: boolean
+}
+
+export interface QuickLookContentsFile {
+  path: string
+  lines: QuickLookContentsLine[]
+}
+
+export interface QuickLookContentsResult {
+  mode: 'contents'
+  root: string
+  /** What was searched: what Git tracks plus untracked files it does not ignore, or the name search's walk. */
+  scope: 'git' | 'walk'
+  files: QuickLookContentsFile[]
+  /** Matching lines returned, at most QUICK_LOOK_SEARCH_MAX_LINES. */
+  matchCount: number
+  /** Files whose text was searched. */
+  filesRead: number
+  /** Files that could not be read. */
+  unreadable: number
+  /** The limit that cut the search short; null when it covered its whole scope. */
+  limit: 'files' | 'lines' | null
+  cancelled: boolean
+  /** Why nothing could be searched, or null. */
+  unavailable: string | null
+  elapsedMs: number
+}
+
+export type QuickLookSearchResult = ({ mode: 'files' } & FileReferenceSearchResult) | QuickLookContentsResult
 
 /** The language a file is coloured as; null shows it plain. */
 export type QuickLookLanguage =

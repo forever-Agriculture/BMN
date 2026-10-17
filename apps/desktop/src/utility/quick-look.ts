@@ -32,7 +32,7 @@ export interface QuickLookOptions {
 
 const pause = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 
-async function gitTopLevel(folder: string): Promise<string | null> {
+export async function gitTopLevel(folder: string): Promise<string | null> {
   try {
     const output = (await repositoryGit(folder, ['rev-parse', '--show-toplevel'], 16 * 1024)).trim()
     return output && isAbsolute(output) ? output : null

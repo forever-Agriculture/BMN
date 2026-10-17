@@ -29,6 +29,9 @@ describe('app keymap', () => {
     // Story 67.1: Quick look opens and closes on Ctrl+Shift+E, which no longer reaches the terminal program.
     expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyE', key: 'E' }))).toBe('quick-look')
     expect(SHORTCUT_LABELS['quick-look']).toBe('Ctrl Shift E')
+    expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyG', key: 'G' }))).toBe('quick-look-contents')
+    expect(SHORTCUT_LABELS['quick-look-contents']).toBe('Ctrl Shift G')
+    expect(resolveShortcut(key({ ctrlKey: true, code: 'KeyP', key: 'p' }))).toBeNull()
   })
 
   it('works on a Cyrillic layout because chords use the physical key', () => {

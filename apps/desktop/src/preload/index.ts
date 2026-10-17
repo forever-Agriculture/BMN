@@ -67,6 +67,8 @@ import {
   type QuickLookReadParams,
   type QuickLookIdentityParams,
   type QuickLookIdentityResult,
+  type QuickLookSearchParams,
+  type QuickLookSearchResult,
   type QuickLookReadResult,
   type QuickLookRootResult,
   type QuickLookSource,
@@ -597,6 +599,12 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   quickLookIdentity(params: QuickLookIdentityParams): Promise<QuickLookIdentityResult> {
     return invokeBridge('aiterm:quick-look:identity', params)
+  },
+  quickLookSearch(params: QuickLookSearchParams): Promise<QuickLookSearchResult> {
+    return invokeBridge('aiterm:quick-look:search', params)
+  },
+  cancelQuickLookSearch(requestId: string): Promise<{ cancelled: true }> {
+    return invokeBridge('aiterm:quick-look:search-cancel', { requestId })
   },
   listAttention(): Promise<AttentionRecord[]> {
     return invokeBridge('aiterm:attention:list', {})

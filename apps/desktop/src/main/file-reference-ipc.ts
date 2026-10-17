@@ -4,6 +4,7 @@ import {
   ERROR_CODES,
   FILE_REFERENCE_MAX_LENGTH,
   METHOD_REGISTRY,
+  QUICK_LOOK_SEARCH_MAX_CHARS,
   hasControlOrFormatCharacter,
   type FileReferencePasteParams,
   type FileReferencePasteReceipt,
@@ -15,6 +16,7 @@ import {
   type QuickLookIdentityResult,
   type QuickLookReadResult,
   type QuickLookRootResult,
+  type QuickLookSearchResult,
   type QuickLookSource
 } from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
@@ -135,6 +137,29 @@ export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, 
     })
   })
 
+
+  // One search per window: the window is the owner, so a newer search from it aborts the older (Story 67.5).
+  handle('aiterm:quick-look:search', (event, params) => {
+    const input = objectParams(params)
+    if (input.mode !== 'files' && input.mode !== 'contents') invalid('Choose Files or Contents')
+    const query = typeof input.query === 'string' ? input.query : invalid('The search query')
+    if (query.length > QUICK_LOOK_SEARCH_MAX_CHARS * 2) invalid('The search query is too long')
+    return actions.client().request<QuickLookSearchResult>(METHOD_REGISTRY.quickLookSearch, {
+      ...quickLookSource(input),
+      ownerId: `quick-look:${event.sender.id}`,
+      requestId: boundedText(input.requestId, 'The search'),
+      root: displayedFilePath(input.root),
+      mode: input.mode,
+      query,
+      matchCase: input.matchCase === true,
+      wholeWord: input.wholeWord === true
+    })
+  })
+
+  handle('aiterm:quick-look:search-cancel', (event, params) => actions.client().request(METHOD_REGISTRY.quickLookSearchCancel, {
+    ownerId: `quick-look:${event.sender.id}`,
+    requestId: boundedText(objectParams(params).requestId, 'The search')
+  }))
 
   handle('aiterm:file-reference:show', (event, params) => {
     const path = displayedFilePath(objectParams(params).path)

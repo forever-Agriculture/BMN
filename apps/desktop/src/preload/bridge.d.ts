@@ -49,6 +49,8 @@ import type {
   QuickLookReadParams,
   QuickLookIdentityParams,
   QuickLookIdentityResult,
+  QuickLookSearchParams,
+  QuickLookSearchResult,
   QuickLookReadResult,
   QuickLookRootResult,
   QuickLookSource,
@@ -263,6 +265,9 @@ export interface AiTerminalBridge {
   readQuickLookFile(params: QuickLookReadParams): Promise<QuickLookReadResult>
   /** The shown file's size, modified time and inode now, which the sheet compares every 2 s (Story 67.2). */
   quickLookIdentity(params: QuickLookIdentityParams): Promise<QuickLookIdentityResult>
+  /** Go to file or Contents (Story 67.5): one search per window, a newer one cancelling the older. */
+  quickLookSearch(params: QuickLookSearchParams): Promise<QuickLookSearchResult>
+  cancelQuickLookSearch(requestId: string): Promise<{ cancelled: true }>
   listAttention(): Promise<AttentionRecord[]>
   markAttentionSeen(requestId: string): Promise<AttentionRecord>
   resolveAttention(

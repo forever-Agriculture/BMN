@@ -103,4 +103,13 @@ describe('Esc order', () => {
     expect(escapeStep({ focus: 'file', typed: true, goTo: false, find: false })).toBe('clear-typed')
     expect(escapeStep({ focus: 'field', typed: false, goTo: false, find: false })).toBe('close-sheet')
   })
+
+  it('stops a running search, then goes from a file opened from results back to them, then to the tree (Story 67.5)', () => {
+    expect(escapeStep({ focus: 'field', typed: false, goTo: false, find: false, search: 'searching' })).toBe('stop-search')
+    expect(escapeStep({ focus: 'field', typed: false, goTo: false, find: false, search: 'results' })).toBe('clear-search')
+    expect(escapeStep({ focus: 'file', typed: false, goTo: false, find: false, search: 'results', fromResults: true })).toBe('back-to-results')
+    expect(escapeStep({ focus: 'file', typed: false, goTo: false, find: true, search: 'results', fromResults: true })).toBe('close-find')
+    expect(escapeStep({ focus: 'file', typed: false, revealed: true, goTo: false, find: false, search: 'results', fromResults: true })).toBe('hide-secret')
+    expect(escapeStep({ focus: 'file', typed: false, goTo: false, find: false, search: null, fromResults: true })).toBe('close-sheet')
+  })
 })

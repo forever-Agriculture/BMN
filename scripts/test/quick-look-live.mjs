@@ -1,10 +1,11 @@
 /* global window, document, location, getComputedStyle, HTMLDialogElement, DataTransfer, ClipboardEvent */
-// MODULE: quick-look-live.mjs - Epic 67's isolated Electron run of Quick look on a made-up project: the three ways in, a highlighted file under the unchanged page policy with no worker, the file states, the tree, find, go to line, changed on disk, the trail, the peek, the remembered place, and no terminal resized or typed into
+// MODULE: quick-look-live.mjs - Epic 67's isolated Electron run of Quick look on a made-up project: the three ways in, a highlighted file under the unchanged page policy with no worker, the file states, the tree, find, go to line, changed on disk, the trail, the peek, the remembered place, go to file and contents search with the terminals' output timed, and no terminal resized or typed into
 // The app runs in test mode with temporary HOME and XDG folders (removed at the end); the project, its files and the
 // terminal program are made up here. Nothing leaves the machine and no file of the owner's is read. Prints PASS or
 // FAIL per check and writes result.json and screenshots to the evidence folder.
 // Usage: node scripts/test/quick-look-live.mjs [--binary <packaged bmn>]   (needs `pnpm run build` first without --binary)
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { _electron } from 'playwright'
@@ -27,6 +28,8 @@ const CANARY = 'canary-QL67-7f3kZq9-made-up'
 const CANARY_TWO = 'canary-QL67-second-made-up'
 const CANARY_JSON = 'canary-QL67-json-made-up'
 const PAGE_KEY = 'sk-madeupQL67pagekey0123456789abcdef'
+// A word only one made-up file holds, so a search's traces can be looked for in the app's folders afterwards.
+const PROBE = 'QL67searchprobe'
 
 /** A small made-up project: a joined folder chain, generated folders, and each kind of file the sheet tells apart. */
 function writeProject(project) {
@@ -56,6 +59,8 @@ function writeProject(project) {
   file('node_modules/left-pad/index.js', 'module.exports = 1\n')
   file('dist/bundle.js', 'console.log(1)\n')
   file('README.md', '# Made-up project\n')
+  file('.gitignore', '.env\n')
+  file('notes/probe.txt', `A made-up note holding ${PROBE} once.\n`)
   file('.env', `# made-up values\nMADEUP_API_KEY=${CANARY}\nMADEUP_PORT=made-up-port\nMADEUP_TOKEN=${CANARY_TWO}\n`)
   file('docs/plan.md', [
     '---', 'title: Made-up plan', '---', '# Made-up plan', '',
@@ -81,11 +86,14 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const fixture = join(root, 'terminal.mjs')
   const input = join(root, 'input.txt')
   writeProject(project)
+  // The project lies inside a made-up Git work tree whose root is the temporary folder, so the tree shows no `.git`
+  // row and the contents search reads what Git tracks plus untracked files it does not ignore.
+  execFileSync('git', ['init', '-q', root], { stdio: 'ignore', env: { PATH: process.env.PATH, HOME: root, GIT_CONFIG_NOSYSTEM: '1' } })
   // The terminal program counts what reaches it: nothing Quick look does may arrive here.
   writeFileSync(fixture, `import {appendFileSync,writeFileSync} from 'node:fs';
 writeFileSync(${JSON.stringify(input)},'');process.stdin.setRawMode(true);
 process.stdin.on('data',b=>appendFileSync(${JSON.stringify(input)},b));
-let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '+n+'   ')},200);`)
+let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '+n+'   ')},10);`)
   const env = { ...process.env }
   if (env.WAYLAND_DISPLAY && !isAbsolute(env.WAYLAND_DISPLAY)) env.WAYLAND_DISPLAY = join(env.XDG_RUNTIME_DIR, env.WAYLAND_DISPLAY)
   for (const key of ['BMN_TOKEN', 'BMN_SESSION_ID', 'BMN_CONTROL_SOCKET', 'BMN_PTY_INCARNATION_ID', 'PROMPT_COMMAND']) delete env[key]
@@ -607,6 +615,177 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
       { requests, violations, pagePolicyViolations })
     await page.keyboard.press('Escape')
     await sheet.waitFor({ state: 'detached' })
+
+    // ---- go to file and search contents (Story 67.5) ----
+    const quick = () => page.evaluate(() => window.__aitermQuickLook?.snapshot())
+    /** Waits for the search state to satisfy `test`; on a timeout the error carries the state it saw. */
+    const waitSearch = async (test, arg, timeout = 15_000) => {
+      try {
+        await page.waitForFunction(test, arg, { timeout })
+      } catch (error) {
+        const state = await quick().catch(() => null)
+        throw new Error(`${error.message}; search state ${JSON.stringify(state?.search ?? null).slice(0, 1500)}`, { cause: error })
+      }
+    }
+    const searchDone = () => page.waitForFunction(() => { const state = window.__aitermQuickLook?.snapshot().search; return !!state && state.fresh && !state.searching && !!state.header })
+    const activeLabel = () => page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.className ?? null)
+    const dataBefore = []
+    const listFiles = (folder, into) => {
+      for (const entry of readdirSync(folder, { withFileTypes: true })) {
+        const path = join(folder, entry.name)
+        if (entry.isDirectory()) listFiles(path, into)
+        else if (entry.isFile()) into.push(path)
+      }
+      return into
+    }
+    listFiles(roots.data, dataBefore)
+    await terminal.focus()
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.waitFor()
+    await page.keyboard.press('Control+p')
+    check('Ctrl+P puts focus in "Go to file"', await activeLabel() === 'Go to file')
+    await page.keyboard.type('parser')
+    await waitSearch(() => { const state = window.__aitermQuickLook?.snapshot().search; return state?.query === 'parser' && state.fresh && !state.searching && !!state.header })
+    const named = await quick()
+    check('Go to file lists files by name in the left column', named.search.mode === 'files' && named.search.header.count === '1 file' &&
+      await sheet.locator('.ql-left.ql-searching .ql-rf-name').first().textContent() === 'parser.ts', { header: named.search.header, rows: named.search.rows })
+    await page.keyboard.press('Enter')
+    await sheet.locator('.ql-code .cm-content').waitFor()
+    check('Enter opens the file found by name, with the keys in it', (await quick()).path?.endsWith('/parser.ts') && await page.evaluate(() => !!document.activeElement?.closest('.ql-code')))
+    await page.keyboard.press('Escape')
+    check('Esc from a file opened from results goes back to them', await activeLabel() === 'Go to file' && await sheet.locator('.ql-searching').count() === 1)
+    await page.keyboard.press('Escape')
+    await page.waitForFunction(() => document.activeElement?.classList.contains('ql-tree'))
+    check('Esc again clears the search and goes back to the tree', await sheet.locator('.ql-searching').count() === 0)
+
+    await page.keyboard.press('Control+Shift+G')
+    check('Ctrl+Shift+G in the sheet switches the top field to Contents, with Aa and W off', await activeLabel() === 'Search contents' &&
+      await sheet.locator('.ql-in .ql-toggle[aria-pressed="true"]').count() === 0 && await sheet.locator('.ql-in .ql-toggle').count() === 2)
+    await page.keyboard.type('v')
+    await sheet.locator('.ql-results-status').filter({ hasText: 'Type at least 2 characters' }).waitFor()
+    check('one character asks for two', true)
+    await page.keyboard.type('alue1')
+    await searchDone()
+    const contents = await quick()
+    check('a search counts matches, files and files read, and says ignored files were skipped', contents.search.header.count === '11 matches in 1 file' &&
+      /^\d+ files read · \d+\.\d s$/u.test(contents.search.header.read) && contents.search.header.notes.includes('Files Git ignores were skipped.'), { header: contents.search.header })
+    check('the footer shows the search keys', /Match.*Open at line.*Case.*Whole word.*Back to tree/u.test(await footerText()), { footer: await footerText() })
+    await page.keyboard.press('Alt+w')
+    await waitSearch(() => { const state = window.__aitermQuickLook?.snapshot().search; return state?.wholeWord && state.fresh && !state.searching && state.header?.count === '1 match in 1 file' })
+    check('W (Alt+W) matches whole words only', true)
+    await page.keyboard.press('Alt+w')
+    await page.keyboard.press('Alt+c')
+    await page.keyboard.press('Control+a')
+    await page.keyboard.type('VALUE1')
+    await waitSearch(() => { const state = window.__aitermQuickLook?.snapshot().search; return state?.matchCase && state.query === 'VALUE1' && state.fresh && !state.searching && state.header?.count === 'No matches' })
+    check('Aa (Alt+C) matches case', true)
+    await page.keyboard.press('Alt+c')
+    await page.keyboard.press('Control+a')
+    await page.keyboard.type('value1')
+    await waitSearch(() => { const state = window.__aitermQuickLook?.snapshot().search; return !state?.matchCase && state?.query === 'value1' && state.fresh && !state.searching && state.header?.count === '11 matches in 1 file' })
+    await page.keyboard.press('ArrowDown')
+    await waitSearch(() => window.__aitermQuickLook?.snapshot().search?.opened === 'Match 2 of 11')
+    await sheet.locator('.ql-code .cm-content').waitFor()
+    check('↓ shows the next match in the file and the keys stay in the field', await activeLabel() === 'Search contents' &&
+      (await sheet.locator('.ql-path').textContent()).includes('Match 2 of 11'))
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() => !!document.activeElement?.closest('.ql-code'))
+    await page.waitForFunction(() => document.querySelectorAll('dialog.quick-look .ql-code .ql-match-current').length === 1)
+    const opened = await quick()
+    check('Enter opens the file at that line with the match marked and "Match 2 of 11"', opened.search.opened === 'Match 2 of 11' &&
+      (await sheet.locator('.ql-code .ql-match-current').textContent()) === 'value1' && /parser\.ts:\d+/u.test(await sheet.locator('.ql-path').textContent()), { opened: opened.search.opened, mark: opened.search.mark })
+    await sheet.locator('button[aria-label="Next match"]').click()
+    await waitSearch(() => window.__aitermQuickLook?.snapshot().search?.opened === 'Match 3 of 11')
+    check('next goes to the following match', true)
+    await page.screenshot({ path: join(evidence, 'search.png') })
+    await sheet.locator('.ql-code .cm-content').focus()
+    await page.keyboard.press('Escape')
+    check('Esc goes back to the results', await activeLabel() === 'Search contents')
+
+    await page.keyboard.press('Control+a')
+    await page.keyboard.type('canary')
+    await waitSearch(() => { const state = window.__aitermQuickLook?.snapshot().search; return state?.query === 'canary' && state.fresh && !state.searching && !!state.header })
+    const ignored = await quick()
+    check('a word only an ignored .env holds is not found, and the header says why', ignored.search.header.count === 'No matches' &&
+      ignored.search.header.notes.includes('Files Git ignores were skipped.'), { header: ignored.search.header })
+    await page.keyboard.press('Control+a')
+    await page.keyboard.type('made-up words')
+    await waitSearch(() => { const state = window.__aitermQuickLook?.snapshot().search; return state?.query === 'made-up words' && state.fresh && !state.searching && !!state.header })
+    const masked = await quick()
+    const maskedRows = await sheet.locator('.ql-results-list').textContent()
+    check('a matching line is masked before it is shown', masked.search.rows.some((row) => row.includes('[secret hidden]')) && !JSON.stringify(masked).includes(PAGE_KEY) && !maskedRows.includes(PAGE_KEY),
+      { rows: masked.search.rows })
+    await page.keyboard.press('Control+a')
+    await page.keyboard.type(PROBE)
+    await waitSearch((probe) => { const state = window.__aitermQuickLook?.snapshot().search; return state?.query === probe && state.fresh && !state.searching && state.header?.count === '1 match in 1 file' }, PROBE)
+    check('a word in an untracked file Git does not ignore is found', true)
+
+    // 20,000 made-up files: the terminal's counter, printed every 10 ms, keeps arriving while they are searched.
+    const bulk = join(project, 'zz-bulk')
+    for (let group = 0; group < 100; group += 1) {
+      mkdirSync(join(bulk, `g${group}`), { recursive: true })
+      for (let index = 0; index < 200; index += 1) writeFileSync(join(bulk, `g${group}`, `f${index}.ts`), `export const value${index} = ${index}\n`)
+    }
+    const watchTicks = () => page.evaluate((id) => {
+      window.__qlTicks = { last: null, at: performance.now(), gaps: [], stop: false }
+      const read = () => {
+        const state = window.__qlTicks
+        if (state.stop) return
+        const tick = /tick (\d+)/u.exec(window.__aitermTest.snapshot(id).bufferLines.join(' '))?.[1] ?? null
+        const now = performance.now()
+        if (tick !== state.last) {
+          if (state.last !== null) state.gaps.push(now - state.at)
+          state.last = tick
+          state.at = now
+        }
+        setTimeout(read, 2)
+      }
+      read()
+    }, sessionId)
+    const stopTicks = () => page.evaluate(() => {
+      window.__qlTicks.stop = true
+      const gaps = window.__qlTicks.gaps
+      return { changes: gaps.length, longest: Math.round(Math.max(0, ...gaps)), median: Math.round([...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)] ?? 0) }
+    })
+    await watchTicks()
+    await page.waitForTimeout(1500)
+    const quiet = await stopTicks()
+    await page.keyboard.press('Control+a')
+    await watchTicks()
+    const startedAt = Date.now()
+    await page.keyboard.type('zebra-made-up')
+    await waitSearch(() => { const state = window.__aitermQuickLook?.snapshot().search; return state?.query === 'zebra-made-up' && state.fresh && !state.searching && !!state.header }, undefined, 60_000)
+    const during = await stopTicks()
+    const timed = await quick()
+    check('the terminal\'s counter shows no gap over 100 ms while 20,000 made-up files are searched', during.changes > 50 && during.longest <= 100,
+      { quiet, during, searchMs: Date.now() - startedAt, read: timed.search.header.read })
+    check('past 20,000 files the results say they are partial and name the limit', timed.search.header.count === 'No matches' &&
+      timed.search.header.notes.includes('Partial results · limit reached: 20,000 files searched') && !/\ball\b|complete/iu.test(JSON.stringify(timed.search.header)), { header: timed.search.header })
+    await page.keyboard.press('Control+a')
+    await page.keyboard.type('zebra-stopped')
+    await waitSearch(() => window.__aitermQuickLook?.snapshot().search?.searching === true)
+    await page.waitForTimeout(150)
+    await page.keyboard.press('Escape')
+    await waitSearch(() => { const state = window.__aitermQuickLook?.snapshot().search; return state?.query === 'zebra-stopped' && state.fresh && !state.searching && !!state.header })
+    const stopped = await quick()
+    check('Esc stops a running search and the results say they are partial', stopped.search.header.notes.includes('Partial results · search stopped'), { header: stopped.search.header })
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Escape')
+    await sheet.waitFor({ state: 'detached' })
+    rmSync(bulk, { recursive: true, force: true })
+    await terminal.focus()
+    await page.keyboard.press('Control+Shift+G')
+    await sheet.waitFor()
+    check('Ctrl+Shift+G from a terminal opens Quick look in Contents mode', await activeLabel() === 'Search contents')
+    await page.keyboard.press('Escape')
+    await sheet.waitFor({ state: 'detached' })
+    const dataAfter = listFiles(roots.data, [])
+    const traces = []
+    for (const folder of [...Object.values(roots), join(root, 'home')]) {
+      for (const path of listFiles(folder, [])) if (statSync(path).size < 64 * 1024 * 1024 && readFileSync(path).includes(PROBE)) traces.push(path)
+    }
+    check('nothing is written under the data folder by a search, and the searched word is in no app file', dataAfter.filter((path) => !dataBefore.includes(path)).length === 0 && traces.length === 0,
+      { added: dataAfter.filter((path) => !dataBefore.includes(path)), traces })
 
     // ---- the terminal is untouched: normal, focus and split views at five sizes, through a peek ----
     for (const layout of ['normal', 'focus', 'split']) {

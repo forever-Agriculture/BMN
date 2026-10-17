@@ -97,5 +97,7 @@ describe('the reveal', () => {
     const second = reveal(1, 2_000)
     expect(second).toEqual({ index: 1, until: 12_000 })
     expect(revealSecondsLeft(null, 0)).toBe(0)
+    // The sheet's clock may have been read before the reveal; the countdown still starts at ten.
+    expect(revealSecondsLeft(first, 400)).toBe(10)
   })
 })

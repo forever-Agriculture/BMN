@@ -5,9 +5,11 @@ import { maskSecrets } from './secret-mask'
 const execute = promisify(execFile)
 
 /** No inherited Git overrides, shell, optional locks or unbounded output. */
-export async function repositoryGit(directory: string, argv: string[], maxBuffer = 256 * 1024): Promise<string> {
+export async function repositoryGit(directory: string, argv: string[], maxBuffer = 256 * 1024,
+  options: { timeout?: number; signal?: AbortSignal } = {}): Promise<string> {
   const result = await execute('git', ['-C', directory, ...argv], {
-    timeout: 2_000, maxBuffer, encoding: 'utf8', windowsHide: true,
+    timeout: options.timeout ?? 2_000, maxBuffer, encoding: 'utf8', windowsHide: true,
+    ...(options.signal ? { signal: options.signal } : {}),
     env: {
       PATH: process.env.PATH, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
       LC_ALL: 'C', GIT_OPTIONAL_LOCKS: '0'

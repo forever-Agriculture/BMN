@@ -11,6 +11,7 @@ import {
   sameQuickLookIdentity,
   type QuickLookReadResult,
   type QuickLookRootResult,
+  type QuickLookSearchResult,
   type QuickLookSource
 } from '@bmn/protocol'
 import { createCodeView, goToPosition, showFindMatches, showSecrets, topVisibleLine, type SecretView } from './quick-look-code'
@@ -41,6 +42,20 @@ import {
 } from './quick-look-secrets'
 import { treeKey, treeRows, type TreeListing, type TreeRow } from './quick-look-tree'
 import { quickLookFooter, type QuickLookFocus } from './quick-look-keys'
+import { SearchResults } from './quick-look-results'
+import {
+  CONTENTS_SEARCH_WAIT_MS,
+  FILES_SEARCH_WAIT_MS,
+  contentsHeader,
+  filesHeader,
+  flatMatches,
+  matchInText,
+  matchLabel,
+  rowPieces,
+  searchable,
+  stepSearchMatch,
+  type QuickLookSearchMode
+} from './quick-look-search'
 import './quick-look.css'
 
 /** Below this sheet width the tree starts folded, so that the file keeps 80 columns. */
@@ -55,6 +70,8 @@ export interface QuickLookRequest {
   source: QuickLookSource
   /** A file to show at once, at its place. */
   open?: { path: string; line: number | null; column: number | null } | null
+  /** Open with the top field in "Contents" mode (Ctrl+Shift+G, Story 67.5). */
+  search?: 'contents' | null
 }
 
 interface OpenFile {
@@ -77,8 +94,46 @@ interface FindState {
   of: readonly FindMatch[] | null
 }
 
-/** How a file comes to be opened: a new visit adds to the trail, a step along it or a recalled place does not. */
-type OpenWay = 'visit' | 'trail' | 'recall'
+/**
+ * How a file comes to be opened: a new visit adds to the trail, a step along it, a recalled place or a match shown
+ * while ↑ ↓ move through results does not.
+ */
+type OpenWay = 'visit' | 'trail' | 'recall' | 'preview'
+
+interface SearchState {
+  searching: boolean
+  /** The running search, which Esc stops. */
+  requestId: string | null
+  result: QuickLookSearchResult | null
+  failure: string | null
+  /** The mode, text and switches the result answers. */
+  answers: string | null
+}
+
+const IDLE_SEARCH: SearchState = { searching: false, requestId: null, result: null, failure: null, answers: null }
+
+/** What test mode's hook returns: masked text only, never a hidden value. */
+interface QuickLookTestSnapshot {
+  path: string | null
+  text: string | null
+  hidden: number
+  revealed: number | null
+  search: {
+    mode: QuickLookSearchMode
+    query: string
+    matchCase: boolean
+    wholeWord: boolean
+    searching: boolean
+    /** The shown result answers the field as it is now. */
+    fresh: boolean
+    picked: number
+    failure: string | null
+    header: { count: string; read: string; notes: string[] } | null
+    rows: string[]
+    opened: string | null
+    mark: { from: number; to: number } | null
+  } | null
+}
 
 function failureText(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback
@@ -240,7 +295,7 @@ export function QuickLook(props: {
   const [typed, setTyped] = useState('')
   const [folded, setFolded] = useState(() => Math.min(1160, window.innerWidth - 32) < QUICK_LOOK_TREE_FOLD_WIDTH)
   // The open file has focus, or the tree when none is open; with the tree folded, the top field.
-  const [focusArea, setFocusArea] = useState<QuickLookFocus>(() => props.request.open ? 'file' : folded ? 'field' : 'tree')
+  const [focusArea, setFocusArea] = useState<QuickLookFocus>(() => props.request.search === 'contents' ? 'field' : props.request.open ? 'file' : folded ? 'field' : 'tree')
   const [file, setFile] = useState<OpenFile | null>(null)
   const [feedback, setFeedback] = useState('')
   const [find, setFind] = useState<FindState>({ open: false, query: '', matchCase: false, current: -1, of: null })
@@ -254,6 +309,19 @@ export function QuickLook(props: {
   const [pageStatus, setPageStatus] = useState('')
   const pageView = useRef<MarkdownPageHandle | null>(null)
   const [now, setNow] = useState(() => Date.now())
+  // The top field: "Go to file" by name or "Contents", its switches, the search it runs and the result ↑ ↓ are on.
+  const [searchMode, setSearchMode] = useState<QuickLookSearchMode>(props.request.search === 'contents' ? 'contents' : 'files')
+  const [query, setQuery] = useState('')
+  const [matchCase, setMatchCase] = useState(false)
+  const [wholeWord, setWholeWord] = useState(false)
+  const [search, setSearch] = useState<SearchState>(IDLE_SEARCH)
+  const [picked, setPicked] = useState(0)
+  /** The match the open file was opened at, as an index into the contents results. */
+  const [openedMatch, setOpenedMatch] = useState<number | null>(null)
+  /** The open file was opened from the results, so Esc goes back to them. */
+  const [fromResults, setFromResults] = useState(false)
+  /** Set once he moves to the top field or types in it; a remembered file opening late then leaves the keys there. */
+  const fieldClaimed = useRef(props.request.search === 'contents')
   const source = props.request.source
   const onClose = useRef(props.onClose)
   onClose.current = props.onClose
@@ -289,6 +357,15 @@ export function QuickLook(props: {
   const currentMatch = find.of === matches ? find.current : matchAt(matches, findAnchor.current)
   const findRef = useRef({ matches, current: currentMatch, open: find.open })
   findRef.current = { matches, current: currentMatch, open: find.open }
+  const showResults = searchMode === 'files' ? query.trim().length > 0 : query.length > 0
+  const flat = useMemo(() => (search.result?.mode === 'contents' ? flatMatches(search.result) : []), [search.result])
+  const fileHits = search.result?.mode === 'files' ? search.result.files : []
+  const openedSearch = openedMatch !== null && file && flat[openedMatch]?.path === file.path ? flat[openedMatch]! : null
+  // The match the file was opened at is marked as find marks one, while find is closed.
+  const searchMark = useMemo(() => (openedSearch && ready ? matchInText(text, openedSearch) : null), [openedSearch, ready, text])
+  const shownMatches = find.open ? matches : searchMark ? (rendered ? matchesOnPage([searchMark], runs) : [searchMark]) : []
+  const searchMarkRef = useRef(searchMark)
+  searchMarkRef.current = find.open ? null : searchMark
 
   const list = useCallback((folder: string): void => {
     setListings((current) => new Map(current).set(folder, current.get(folder) ?? { entries: null, more: 0, unavailable: null }))
@@ -310,9 +387,11 @@ export function QuickLook(props: {
   const currentTop = useCallback((): number | null => (shownTop.current && shownTop.current.path === shownPath.current ? shownTop.current.line : null), [])
 
   const open = useCallback((path: string, line: number | null = null, column: number | null = null,
-    options: { way?: OpenWay; topLine?: number | null; focus?: boolean; heading?: string | null } = {}): void => {
+    options: { way?: OpenWay; topLine?: number | null; focus?: boolean; heading?: string | null; match?: number | null; fromResults?: boolean } = {}): void => {
     const way = options.way ?? 'visit'
-    if (way !== 'trail') {
+    setOpenedMatch(options.match ?? null)
+    setFromResults(options.fromResults === true)
+    if (way !== 'trail' && way !== 'preview') {
       const here = currentTop()
       setTrail((current) => trailVisit(current, { path, line, column }, here))
     }
@@ -390,11 +469,23 @@ export function QuickLook(props: {
   }, [shownSecret])
 
   // Test mode only: what the sheet shows of the file, with every hidden value masked, never the value itself.
-  const hookRef = useRef<() => { path: string | null; text: string | null; hidden: number; revealed: number | null }>(() => ({ path: null, text: null, hidden: 0, revealed: null }))
-  hookRef.current = () => ({ path: ready?.path ?? null, text: ready ? maskedSlice(text, secretRanges, 0, text.length, revealed) : null, hidden: secretRanges.length, revealed })
+  const hookRef = useRef<() => QuickLookTestSnapshot>(() => ({ path: null, text: null, hidden: 0, revealed: null, search: null }))
+  hookRef.current = () => ({
+    path: ready?.path ?? null, text: ready ? maskedSlice(text, secretRanges, 0, text.length, revealed) : null, hidden: secretRanges.length, revealed,
+    search: showResults ? {
+      mode: searchMode, query, matchCase, wholeWord, searching: search.searching, fresh: search.answers === searchKey, picked, failure: search.failure,
+      header: search.result?.mode === 'contents' ? contentsHeader(search.result) : search.result?.mode === 'files' ? { count: filesHeader(search.result), read: '', notes: [] } : null,
+      rows: search.result?.mode === 'contents' ? search.result.files.flatMap((each) => each.lines.map((line) => {
+        const pieces = rowPieces(line)
+        return `${quickLookName(each.path)}:${line.line} ${pieces.before}[${pieces.match}]${pieces.after}`
+      })) : fileHits.map((hit) => hit.path),
+      opened: openedSearch ? matchLabel(openedMatch!, flat.length) : null,
+      mark: searchMark
+    } : null
+  })
   useEffect(() => {
     if (!props.testMode) return
-    const target = window as unknown as { __aitermQuickLook?: { snapshot(): ReturnType<typeof hookRef.current> } }
+    const target = window as unknown as { __aitermQuickLook?: { snapshot(): QuickLookTestSnapshot } }
     const hook = { snapshot: () => hookRef.current() }
     target.__aitermQuickLook = hook
     return () => { if (target.__aitermQuickLook === hook) delete target.__aitermQuickLook }
@@ -500,7 +591,8 @@ export function QuickLook(props: {
     const wanted = asked.current
     asked.current = null
     if (wanted) open(wanted.path, wanted.line, wanted.column)
-    else if (place?.file) open(place.file.path, null, null, { way: 'recall', topLine: place.file.topLine })
+    // Opened for a search, or once he went to the top field, the remembered file opens without taking the keys.
+    else if (place?.file) open(place.file.path, null, null, { way: 'recall', topLine: place.file.topLine, focus: !fieldClaimed.current })
     else {
       setFile(null)
       if (focusArea === 'file') setFocusArea(folded ? 'field' : 'tree')
@@ -536,6 +628,91 @@ export function QuickLook(props: {
     }
   }, [ready, changed, source])
 
+  // The top field searches after a short wait; a newer query, a switch, closing the sheet or a new root cancels
+  // the older search, and one search runs per window (Story 67.5).
+  const searching = !!root && searchable(searchMode, query)
+  const searchKey = JSON.stringify([root, searchMode, query, matchCase, wholeWord])
+  useEffect(() => {
+    if (!root || !searching) {
+      setSearch(IDLE_SEARCH)
+      return
+    }
+    const requestId = crypto.randomUUID()
+    let live = true
+    const timer = window.setTimeout(() => {
+      setSearch((current) => ({ ...current, searching: true, requestId, failure: null }))
+      void window.aiTerminal.quickLookSearch({ ...source, requestId, root, mode: searchMode, query, matchCase, wholeWord })
+        .then((result) => {
+          if (!live) return
+          setSearch({ searching: false, requestId: null, result, failure: null, answers: searchKey })
+          setPicked(0)
+        })
+        .catch((error: unknown) => { if (live) setSearch({ searching: false, requestId: null, result: null, failure: failureText(error, 'The search failed.'), answers: searchKey }) })
+    }, searchMode === 'files' ? FILES_SEARCH_WAIT_MS : CONTENTS_SEARCH_WAIT_MS)
+    return () => {
+      live = false
+      window.clearTimeout(timer)
+      void window.aiTerminal.cancelQuickLookSearch(requestId).catch(() => undefined)
+    }
+  }, [root, searching, searchMode, query, matchCase, wholeWord, source, searchKey])
+
+  /** Shows a match of the contents results: while ↑ ↓ move, without the keys; with Enter, in the file with the keys. */
+  const showMatch = (index: number, withKeys: boolean): void => {
+    const match = flat[index]
+    if (!match) return
+    setPicked(index)
+    if (file?.result && file.path === match.path && file.line === match.line && file.column === match.column) {
+      setOpenedMatch(index)
+      if (withKeys) {
+        const here = currentTop()
+        setTrail((current) => trailVisit(current, { path: match.path, line: match.line, column: match.column }, here))
+        setFromResults(true)
+        setFocusArea('file')
+      }
+      return
+    }
+    open(match.path, match.line, match.column, { way: withKeys ? 'visit' : 'preview', focus: withKeys, match: index, fromResults: true })
+  }
+
+  /** The next or previous match from the open one, across files. */
+  const stepResult = (direction: 1 | -1): void => {
+    const next = stepSearchMatch(openedMatch ?? picked, flat.length, direction)
+    if (next >= 0) showMatch(next, focusArea === 'file')
+  }
+
+  const onFieldKey = (event: React.KeyboardEvent): void => {
+    const plain = !event.ctrlKey && !event.altKey && !event.metaKey
+    const total = searchMode === 'contents' ? flat.length : fileHits.length
+    if (plain && !event.shiftKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+      event.preventDefault()
+      if (total === 0) return
+      const next = stepSearchMatch(picked, total, event.key === 'ArrowDown' ? 1 : -1)
+      if (searchMode === 'contents') showMatch(next, false)
+      else setPicked(next)
+      return
+    }
+    if (plain && event.key === 'Enter') {
+      event.preventDefault()
+      if (searchMode === 'contents') showMatch(Math.max(0, picked), true)
+      else if (fileHits[picked]) open(fileHits[picked]!.path, null, null, { fromResults: true })
+      return
+    }
+    if (event.altKey && !event.ctrlKey && !event.metaKey && searchMode === 'contents' && (event.code === 'KeyC' || event.code === 'KeyW')) {
+      event.preventDefault()
+      if (event.code === 'KeyC') setMatchCase((value) => !value)
+      else setWholeWord((value) => !value)
+    }
+  }
+
+  /** Ctrl+P and Ctrl+Shift+G: the top field in its mode, its text selected. */
+  const focusField = (mode: QuickLookSearchMode): void => {
+    fieldClaimed.current = true
+    setSearchMode(mode)
+    setFocusArea('field')
+    field.current?.focus()
+    field.current?.select()
+  }
+
   // Focus follows the area the keys belong to; a peek leaves it where it was.
   useEffect(() => {
     if (peeking) return
@@ -548,6 +725,14 @@ export function QuickLook(props: {
     else if (focusArea === 'goto') goToField.current?.focus()
     else field.current?.focus()
   }, [focusArea, folded, peeking])
+
+  // A file that is being read has no view to hold the keys, and the view it replaces took focus with it: the sheet
+  // keeps it, so a key pressed in that moment still reaches the sheet and not the page behind.
+  useEffect(() => {
+    const element = dialog.current
+    const active = document.activeElement
+    if (element?.open && (!active || active === document.body || !element.contains(active))) element.focus({ preventScroll: true })
+  })
 
   useEffect(() => {
     if (focusArea === 'tree' && selected === null && rows.length > 0) {
@@ -621,7 +806,7 @@ export function QuickLook(props: {
   })
 
   const escape = escapeStep({ focus: focusArea === 'tree' ? 'tree' : focusArea === 'field' ? 'field' : 'file', typed: typed.length > 0, revealed: revealed !== null,
-    goTo: goTo.open, find: find.open })
+    goTo: goTo.open, find: find.open, search: search.searching ? 'searching' : showResults ? 'results' : null, fromResults })
   const cancelRef = useRef<() => void>(() => undefined)
   cancelRef.current = () => {
     switch (escape) {
@@ -632,6 +817,17 @@ export function QuickLook(props: {
         setFocusArea('file')
         return
       case 'close-find': closeFind(); return
+      case 'stop-search':
+        if (search.requestId) void window.aiTerminal.cancelQuickLookSearch(search.requestId).catch(() => undefined)
+        return
+      case 'clear-search':
+        setQuery('')
+        setFocusArea(folded ? 'field' : 'tree')
+        return
+      case 'back-to-results':
+        setFocusArea('field')
+        field.current?.focus()
+        return
       case 'close-sheet': onClose.current()
     }
   }
@@ -665,6 +861,16 @@ export function QuickLook(props: {
     if (ctrl && event.shiftKey && event.code === 'KeyE') {
       take()
       onClose.current()
+      return
+    }
+    if (ctrl && !event.shiftKey && event.code === 'KeyP') {
+      take()
+      focusField('files')
+      return
+    }
+    if (ctrl && event.shiftKey && event.code === 'KeyG') {
+      take()
+      focusField('contents')
       return
     }
     if (plain && !event.shiftKey && event.key === 'Escape' && !event.nativeEvent.isComposing) {
@@ -749,24 +955,47 @@ export function QuickLook(props: {
   const unavailable = file?.result?.status === 'unavailable' ? file.result : null
   const type = file ? quickLookFileType(file.path) : null
   const footer = quickLookFooter({ focus: focusArea, fileOpen: !!ready, escape, folded, secrets: secretRanges.length > 0, back: canGoBack(trail), forward: canGoForward(trail),
-    markdown: page ? (rendered ? 'rendered' : 'source') : null })
+    markdown: page ? (rendered ? 'rendered' : 'source') : null, search: showResults ? searchMode : null })
 
   return (
-    <dialog ref={dialog} className={`app-dialog quick-look${peeking ? ' peeking' : ''}`} aria-label="Quick look" onKeyDownCapture={onSheetKey}>
+    <dialog ref={dialog} className={`app-dialog quick-look${peeking ? ' peeking' : ''}`} aria-label="Quick look" tabIndex={-1} onKeyDownCapture={onSheetKey}>
       {peeking ? <p className="ql-peek" role="status">Peeking · release F8 to return</p> : null}
       <div className="ql-top">
         <label className={`ql-in${focusArea === 'field' ? ' focus' : ''}`}>
           <SearchGlyph />
-          <input ref={field} aria-label="Go to file" placeholder="Go to file" spellCheck={false} onFocus={() => setFocusArea('field')} />
+          <input ref={field} aria-label={searchMode === 'files' ? 'Go to file' : 'Search contents'} placeholder={searchMode === 'files' ? 'Go to file' : 'Search contents'}
+            spellCheck={false} value={query} maxLength={256} onChange={(event) => { fieldClaimed.current = true; setQuery(event.target.value); setPicked(0) }}
+            onKeyDown={onFieldKey} onFocus={() => setFocusArea('field')} />
+          {searchMode === 'contents' ? (
+            <>
+              <button type="button" className={`ql-toggle${matchCase ? ' on' : ''}`} aria-pressed={matchCase} title="Match case (Alt C)"
+                onMouseDown={(event) => event.preventDefault()} onClick={() => setMatchCase((value) => !value)}>Aa</button>
+              <button type="button" className={`ql-toggle${wholeWord ? ' on' : ''}`} aria-pressed={wholeWord} title="Whole word (Alt W)"
+                onMouseDown={(event) => event.preventDefault()} onClick={() => setWholeWord((value) => !value)}>W</button>
+            </>
+          ) : null}
         </label>
-        <div className="ql-seg" role="group" aria-label="Search">
-          <span className={focusArea === 'field' ? 'on' : ''}>Files</span>
-          <span>Contents</span>
+        <div className="ql-seg ql-switch" role="group" aria-label="Search">
+          <button type="button" className={searchMode === 'files' ? 'on' : ''} aria-pressed={searchMode === 'files'} title="Go to file (Ctrl P)" onClick={() => focusField('files')}>Files</button>
+          <button type="button" className={searchMode === 'contents' ? 'on' : ''} aria-pressed={searchMode === 'contents'} title="Search contents (Ctrl Shift G)" onClick={() => focusField('contents')}>Contents</button>
         </div>
         <kbd>Esc</kbd>
       </div>
       <div className="ql-body">
-        {folded ? null : (
+        {showResults ? (
+          <aside className="ql-left ql-searching" aria-label={searchMode === 'files' ? 'Go to file' : 'Search contents'}>
+            <SearchResults root={root} picked={picked}
+              search={{ mode: searchMode, searching: search.searching, result: search.result, failure: search.failure,
+                waiting: !root ? 'This folder is unavailable' : searchMode === 'contents' && !searchable('contents', query) ? 'Type at least 2 characters' : null }}
+              onOpen={(index) => {
+                if (searchMode === 'contents') showMatch(index, true)
+                else if (fileHits[index]) {
+                  setPicked(index)
+                  open(fileHits[index]!.path, null, null, { fromResults: true })
+                }
+              }} />
+          </aside>
+        ) : folded ? null : (
           <aside className="ql-left" aria-label="Project">
             <div className="ql-head">
               {root ? <><b className="ql-root-name">{rootName}</b><span className="ql-root" title={root}>{quickLookHomePath(root, home)}</span></> : null}
@@ -800,12 +1029,27 @@ export function QuickLook(props: {
             ready ? (
               <>
                 <PathRow path={file.path} root={root} line={file.line}
-                  facts={[type?.label, `${quickLookCount(ready.lineCount)} ${ready.lineCount === 1 ? 'line' : 'lines'}`, quickLookSize(ready.byteLength)].join(' · ')}
-                  actions={page ? (
-                    <span className="ql-seg ql-mode" role="group" aria-label="Markdown view">
-                      <button type="button" className={rendered ? 'on' : ''} aria-pressed={rendered} onClick={() => switchMarkdown('rendered')}>Rendered</button>
-                      <button type="button" className={rendered ? '' : 'on'} aria-pressed={!rendered} onClick={() => switchMarkdown('source')}>Source</button>
-                    </span>
+                  facts={openedSearch ? matchLabel(openedMatch!, flat.length)
+                    : [type?.label, `${quickLookCount(ready.lineCount)} ${ready.lineCount === 1 ? 'line' : 'lines'}`, quickLookSize(ready.byteLength)].join(' · ')}
+                  actions={page || openedSearch ? (
+                    <>
+                      {openedSearch ? (
+                        <span className="ql-match-nav" role="group" aria-label="Matches">
+                          <button type="button" className="ql-icon-button" aria-label="Previous match" title="Previous match" onClick={() => stepResult(-1)}>
+                            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4 10l4-4 4 4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                          </button>
+                          <button type="button" className="ql-icon-button" aria-label="Next match" title="Next match" onClick={() => stepResult(1)}>
+                            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                          </button>
+                        </span>
+                      ) : null}
+                      {page ? (
+                        <span className="ql-seg ql-mode" role="group" aria-label="Markdown view">
+                          <button type="button" className={rendered ? 'on' : ''} aria-pressed={rendered} onClick={() => switchMarkdown('rendered')}>Rendered</button>
+                          <button type="button" className={rendered ? '' : 'on'} aria-pressed={!rendered} onClick={() => switchMarkdown('source')}>Source</button>
+                        </span>
+                      ) : null}
+                    </>
                   ) : null} />
                 {pageTooLarge ? <p className="ql-note">Over 512 KB, so shown as source.</p> : null}
                 {ready.canonicalPath !== ready.path ? <p className="ql-note">Through symlink · {ready.canonicalPath}</p> : null}
@@ -836,7 +1080,7 @@ export function QuickLook(props: {
                 ) : null}
                 {ready.byteLength === 0 ? <p className="ql-message">Empty file. Nothing to show.</p> : rendered && page ? (
                   <MarkdownPageView ref={pageView} page={page} path={ready.path} ranges={secretRanges} revealed={revealed} secondsLeft={secondsLeft}
-                    matches={matches} current={currentMatch} line={file.line} heading={file.heading} topLine={file.topLine} focus={focusArea === 'file'}
+                    matches={shownMatches} current={find.open ? currentMatch : 0} line={file.line} heading={file.heading} topLine={file.topLine} focus={focusArea === 'file'}
                     status={pageStatus} onStatus={setPageStatus} onReveal={toggleSecret}
                     onTop={(line) => { shownTop.current = { path: ready.path, line } }}
                     onOpenFile={(path, line, column, heading) => open(path, line, column, { heading })}
@@ -849,7 +1093,7 @@ export function QuickLook(props: {
                       // A reload keeps find's marks on the new text.
                       if (view && findRef.current.open && findRef.current.matches.length > 0) {
                         showFindMatches(view, findRef.current.matches, Math.min(findRef.current.current, findRef.current.matches.length - 1), false)
-                      }
+                      } else if (view && searchMarkRef.current) showFindMatches(view, [searchMarkRef.current], 0, false)
                     }} onFocus={() => setFocusArea('file')} />
                 )}
               </>
