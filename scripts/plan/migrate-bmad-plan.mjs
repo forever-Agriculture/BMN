@@ -2,7 +2,7 @@
 // MODULE: migrate-bmad-plan.mjs - Story 77.6: move a BMAD plan (epics.md, sprint-status.yaml, references) into BMN's plan/ format in a staging folder, with a manifest of every file and text span, a verified archive, a span check and a rehearsed rollback; the originals are never touched
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, posix, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -253,7 +253,9 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
   const anchorExists = (target, anchor) => {
     if (!target.endsWith('.md') || !exists(target)) return true
     if (!sourceAnchors.has(target)) sourceAnchors.set(target, anchorsOf(readFileSync(join(repo, target), 'utf8')))
-    return sourceAnchors.get(target).has(anchor)
+    let plain = anchor
+    try { plain = decodeURIComponent(anchor) } catch { /* as written */ }
+    return sourceAnchors.get(target).has(anchor) || sourceAnchors.get(target).has(plain)
   }
   // A link into epics.md goes to the file its heading moved to; any other moved file keeps its path under plan/.
   // An anchor that led nowhere before the move either is left out (the link goes to the file) and recorded.
@@ -635,28 +637,13 @@ export function checkLinks({ repo, stage, manifest }) {
   const roots = manifest.retired ?? ['_bmad-output', '_bmad']
   const listed = new Set(manifest.files.map((file) => file.path))
   const archiveRoot = archived.slice(0, -1)
-  const recordedLinks = new Map(manifest.files.filter((file) => file.link !== null).map((file) => [file.path, file.link]))
-  // Where an archived path finally leads: its path inside the archive, or null once a link leaves it. The verified
-  // archive answers once it exists; before that, the links the manifest records (copied verbatim) are followed.
-  const finalInArchive = (inner) => {
-    if (existsSync(archiveRoot)) {
-      let real
-      try { real = realpathSync(join(archiveRoot, inner)) } catch { return undefined }
-      const base = realpathSync(archiveRoot)
-      return real.startsWith(`${base}/`) ? real.slice(base.length + 1) : null
-    }
-    let path = inner
-    for (let hop = 0; hop < 40; hop++) {
-      const parts = path.split('/')
-      const index = parts.findIndex((_, at) => recordedLinks.has(parts.slice(0, at + 1).join('/')))
-      if (index < 0) return listed.has(path) || [...listed].some((file) => file.startsWith(`${path}/`)) ? path : undefined
-      const linkPath = parts.slice(0, index + 1).join('/')
-      const to = posix.resolve(posix.dirname(`${archiveRoot}/${linkPath}`), recordedLinks.get(linkPath), ...parts.slice(index + 1))
-      if (!to.startsWith(`${archiveRoot}/`)) return null
-      path = to.slice(archiveRoot.length + 1)
-    }
-    return null
-  }
+  const recordedLinks = new Set(manifest.files.filter((file) => file.link !== null).map((file) => file.path))
+  // An archive link must name a plain path through no link at all: the manifest's links before archiving, the
+  // archive's own after. Following links is not needed for BMAD's files and is where escapes hide (Sol F5).
+  const throughLink = (inner) => inner.split('/').some((_, at, parts) => {
+    const prefix = parts.slice(0, at + 1).join('/')
+    return recordedLinks.has(prefix) || Boolean(existsSync(archiveRoot) && lstatSync(join(archiveRoot, prefix), { throwIfNoEntry: false })?.isSymbolicLink())
+  })
   // The layout after the switch: plan/ is the stage, and every retired root is gone even while it still exists.
   const resolveFile = (target) => {
     if (target === 'plan' || target.startsWith('plan/')) return join(stage, target.slice(5))
@@ -674,11 +661,12 @@ export function checkLinks({ repo, stage, manifest }) {
         let inner = innerPart
         try { inner = decodeURI(inner) } catch { /* as written */ }
         inner = inner.replace(/:\d+(?::\d+)?$/u, '')
-        const final = finalInArchive(inner)
-        if (final === undefined) { failures.push(`${at}: link ${dest} names nothing in the archive`); continue }
-        if (final === null) { failures.push(`${at}: link ${dest} is a link that leads out of the archive`); continue }
-        if (!anchor || !final.endsWith('.md')) continue
-        const full = existsSync(archiveRoot) ? join(archiveRoot, final) : join(repo, final)
+        if (inner.split('/').some((part) => part === '' || part === '.' || part === '..')) { failures.push(`${at}: link ${dest} is not a plain path into the archive`); continue }
+        if (throughLink(inner)) { failures.push(`${at}: link ${dest} passes through a link`); continue }
+        const there = existsSync(archiveRoot) ? existsSync(join(archiveRoot, inner)) : listed.has(inner) || [...listed].some((file) => file.startsWith(`${inner}/`))
+        if (!there) { failures.push(`${at}: link ${dest} names nothing in the archive`); continue }
+        if (!anchor || !inner.endsWith('.md')) continue
+        const full = existsSync(archiveRoot) ? join(archiveRoot, inner) : join(repo, inner)
         if (!anchorCache.has(full)) anchorCache.set(full, anchorsOf(readFileSync(full, 'utf8')))
         let plain = anchor
         try { plain = decodeURIComponent(anchor) } catch { /* as written */ }
