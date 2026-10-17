@@ -161,9 +161,9 @@ describe('who answers (72.2 AC1)', () => {
     expect(refusal(() => resolveTeammate(data(), { role: 'designer', smallWork: true }, context())).message).toContain('names no small-work candidate')
   })
 
-  it('an effort must be one the phase allows; several and none chosen is refused with the list', () => {
+  it('an effort must be one the phase allows; with none chosen the first the team lists is taken (Story 76.8)', () => {
     expect(resolveTeammate(data(), { role: 'consultant', effort: 'high' }, context())).toMatchObject({ agent: { id: 'astra' }, effort: 'high' })
-    expect(refusal(() => resolveTeammate(data(), { role: 'consultant' }, context()))).toMatchObject({ code: 'EFFORT_REQUIRED', alternatives: ['astra@medium', 'astra@high'] })
+    expect(resolveTeammate(data(), { role: 'consultant' }, context())).toMatchObject({ agent: { id: 'astra' }, effort: 'medium' })
     expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer', effort: 'high' }, context()))).toMatchObject({ code: 'EFFORT_NOT_ALLOWED', alternatives: ['astra@medium'] })
     // The small-work phase allows its own effort only.
     expect(refusal(() => resolveTeammate(data(), { role: 'epic-reviewer', smallWork: true, effort: 'medium' }, context())).code).toBe('EFFORT_NOT_ALLOWED')

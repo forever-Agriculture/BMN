@@ -52,14 +52,17 @@ export function phaseEfforts(role, agent, phase) {
   return initialEfforts(role, agent)
 }
 
-/** The effort of an ask: the one asked for, if the phase allows it; the phase's one; else the asker must choose. */
+/**
+ * The effort of an ask: the one asked for, if the phase allows it; else the first the phase allows, as the owner's team lists
+ * them (Story 76.8: an agent's consultation refused for a missing --effort was its one consultation, lost).
+ */
 function pickEffort(efforts, asked, agent, phase) {
   if (asked !== undefined) {
     if (!efforts.includes(asked)) refuse('EFFORT_NOT_ALLOWED', `${agent.id} is asked at ${efforts.join(' or ')} ${phase === 'recheck' ? 'for a recheck' : 'here'}, not ${asked}`, efforts.map((effort) => `${agent.id}@${effort}`))
     return asked
   }
-  if (efforts.length === 1) return efforts[0]
-  refuse('EFFORT_REQUIRED', `${agent.id} may be asked at ${efforts.join(', ')}: choose one with --effort`, efforts.map((effort) => `${agent.id}@${effort}`))
+  if (efforts.length > 0) return efforts[0]
+  refuse('EFFORT_REQUIRED', `${agent.id} names no effort for this ask: choose one with --effort`, [])
   return null
 }
 

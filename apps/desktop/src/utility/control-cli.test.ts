@@ -5179,7 +5179,22 @@ describe('manual structured ask inputs', () => {
     expect((await runCli(['ask', 'piped', 'Decision', '--kind', 'permission', '--choices-file', '-'], { env: fixture.sessionEnv, input: JSON.stringify(choices) })).code).toBe(0)
     expect(fixture.handlers.openAttention).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'permission', manualChoices: { ...choices, allowOther: true } }))
   })
+  it('accepts the plain lists agents write first, as labels or as label objects, in the strict form (Story 76.8)', async () => {
+    const fixture = await cliFixture()
+    expect((await runCli(['ask', 'labels', 'Release?', '--kind', 'permission', '--choices-json', '["Release now","Hold"]'], { env: fixture.sessionEnv })).code).toBe(0)
+    expect(fixture.handlers.openAttention).toHaveBeenLastCalledWith(expect.objectContaining({ manualChoices: { options: [{ label: 'Release now', description: null }, { label: 'Hold', description: null }], allowOther: true } }))
+    const objects = JSON.stringify([{ id: 'release', label: 'Release now', description: 'Runs deploy.sh' }, { label: 'Hold' }])
+    expect((await runCli(['ask', 'objects', 'Release?', '--choices-json', objects], { env: fixture.sessionEnv })).code).toBe(0)
+    expect(fixture.handlers.openAttention).toHaveBeenLastCalledWith(expect.objectContaining({ manualChoices: { options: [{ label: 'Release now', description: 'Runs deploy.sh' }, { label: 'Hold', description: null }], allowOther: true } }))
+    // A refusal shows both forms, so the next try can succeed.
+    const refused = await runCli(['ask', 'one', 'Release?', '--choices-json', '["Only one"]'], { env: fixture.sessionEnv })
+    expect(refused.code).toBe(2)
+    expect(refused.stderr).toContain('["Release now","Hold"]')
+    expect(refused.stderr).toContain('{"options":[{"label":"Release now"')
+  })
   it.each([
+    ['--choices-json', '["Same","Same"]'],
+    ['--choices-json', '[1,2]'],
     ['--kind', 'notice', '--choices-json', JSON.stringify(choices)],
     ['--choices-json', '{}'],
     ['--choices-json', JSON.stringify({ ...choices, allowOther: false })],

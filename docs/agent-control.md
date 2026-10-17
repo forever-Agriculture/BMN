@@ -60,6 +60,7 @@ Commands:
                                             attached evidence certifies nothing.
   ask <request-key> <title> [--kind K] [--body B | --body-file -] [--expires ISO]
       [--choices-json JSON | --choices-file -]  Explicit 2–8 options; BMN adds Other.
+                                            Choices: '["Release now","Hold"]' or {"options":[{"label","description"}]}.
                                             Ask for attention; kind is one of
                                             question|permission|review|notice (default question)
   withdraw <request-key>                    Withdraw an attention request
@@ -2410,7 +2411,7 @@ bmn team asks export <id> --output PATH
 | `--role R` | The team role whose teammate answers. Required, except with `--image`: a picture ask goes to the `designer` unless a role is named; and with `--origin`: a browser ask goes to `browser`. |
 | `--question TEXT`, `--question-file -` | The question; `-` reads standard input as the other long-text options do (one trailing newline dropped, a terminal refused). Exactly one. |
 | `--agent A` | Ask this teammate; refused with the reason and the eligible alternatives when it is not valid now, never passed over. Where the owner approved a choice for the role in the project, it answers, and naming someone else is refused (`PROJECT_CHOICE_CONFLICT`; "Your teammate for a project"). |
-| `--effort E` | One effort the role's applicable phase allows; several allowed and none given or saved is refused with the list. |
+| `--effort E` | One effort the role's applicable phase allows; with none given or saved, the first one the team lists for that teammate (Story 76.8). |
 | `--small-work` | The role's small-work candidate. |
 | `--recheck-of ID` | A recheck of that earlier run: same project and role, its teammate, the role's recheck effort; refused (`PROJECT_CHOICE_CONFLICT`) where the owner's choice for the role there names another teammate. |
 | `--project P` | The folder the teammate works in (default: the asking session's repository root; with none, an empty folder of the run's own). Not `/`, the home folder, or a folder that holds or lies in a credential or app configuration location (`PROJECT_INVALID`). |
@@ -3153,7 +3154,8 @@ the owner's instructions. Retry only with the same --key. More: bmn help agents.
 These checks separate sessions from each other inside the app. They are not a sandbox against a
 malicious program that already runs as your user and can read your files.
 
-Manual checkpoint cards need explicit choices; BMN does not infer buttons from prose:
+Manual checkpoint cards need explicit choices; BMN does not infer buttons from prose. A plain list of labels
+(`'["Continue","Wait"]'`) or of `{label, description}` objects is the same as the full form (Story 76.8):
 
 ```sh
 bmn ask synthetic-checkpoint "Continue the synthetic check?" --choices-json \

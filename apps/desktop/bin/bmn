@@ -90,6 +90,7 @@ Commands:
                                             attached evidence certifies nothing.
   ask <request-key> <title> [--kind K] [--body B | --body-file -] [--expires ISO]
       [--choices-json JSON | --choices-file -]  Explicit 2–8 options; BMN adds Other.
+                                            Choices: '["Release now","Hold"]' or {"options":[{"label","description"}]}.
                                             Ask for attention; kind is one of
                                             ${ATTENTION_KINDS.join('|')} (default question)
   withdraw <request-key>                    Withdraw an attention request
@@ -323,17 +324,24 @@ class UsageError extends Error {}
 /** A refusal with a stable code; the shared config writer throws the same class. */
 const CliError = ConfigWriteError
 
+/**
+ * The choices of a manual card: `{"options":[{"label","description"}]}`, or the plain list agents write first, of labels or of
+ * `{label, description?}` objects (Story 76.8: two agents could not leave a card from the error alone). Other keys of an
+ * option are ignored; the result is always the strict form.
+ */
 function cliManualChoices(json, kind, title, requestKey) {
-  const bad = () => { throw new UsageError('choices require a question/permission and 2–8 unique labels (1–200 characters), with null/0–500 character descriptions') }
+  const bad = () => { throw new UsageError('choices are 2–8 unique labels (1–200 characters) for a question or permission ask, as --choices-json \'["Release now","Hold"]\' or \'{"options":[{"label":"Release now","description":"Runs deploy.sh"},{"label":"Hold","description":null}]}\'') }
   let data
   try { data = JSON.parse(json) } catch { return bad() }
+  if (Array.isArray(data)) data = { options: data }
   if (!['question', 'permission'].includes(kind) || !isObject(data) || Object.keys(data).join() !== 'options' ||
     !Array.isArray(data.options) || data.options.length < 2 || data.options.length > 8) return bad()
+  data = { options: data.options.map((option) => typeof option === 'string' ? { label: option, description: null }
+    : isObject(option) ? { label: option.label, description: option.description ?? null } : option) }
   const labels = new Set()
   const safe = value => typeof value === 'string' && !/[\u0000-\u001f\u007f-\u009f\p{Cf}]/u.test(value)
   for (const option of data.options) {
-    if (!isObject(option) || Object.keys(option).length !== 2 || !Object.hasOwn(option, 'label') || !Object.hasOwn(option, 'description') ||
-      !safe(option.label) || !option.label.trim() || option.label.length > 200 || labels.has(option.label) ||
+    if (!isObject(option) || !safe(option.label) || !option.label.trim() || option.label.length > 200 || labels.has(option.label) ||
       option.description !== null && (!safe(option.description) || option.description.length > 500)) return bad()
     labels.add(option.label)
   }
