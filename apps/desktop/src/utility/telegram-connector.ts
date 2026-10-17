@@ -17,6 +17,16 @@ const BACKOFF_INITIAL_MS = 1_000
 const BACKOFF_MAX_MS = 60_000
 const LOCK_ATTEMPTS = 3
 
+/**
+ * A test run's Bot API origin (Story 76.8: a packaged BMN started with --bmn-test-mode sets away from a fake Telegram):
+ * only for the host started in test mode, and only a loopback HTTP origin, so the bot token never leaves the machine.
+ */
+export function testTelegramOrigin(argv: readonly string[], env: NodeJS.ProcessEnv): string | null {
+  const origin = env.BMN_TEST_TELEGRAM_ORIGIN
+  if (!argv.includes('--bmn-test-host') || origin === undefined) return null
+  return /^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/u.test(origin) ? origin : null
+}
+
 export type ConnectorState = 'disabled' | 'starting' | 'polling' | 'backoff' | 'conflict' | 'unauthorized' | 'stopped'
 
 export interface ConnectorHealth {

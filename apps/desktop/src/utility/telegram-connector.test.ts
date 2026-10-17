@@ -8,6 +8,7 @@ import {
   TelegramConnector,
   maskToken,
   redactToken,
+  testTelegramOrigin,
   type ConnectorHealth,
   type InboundReply,
   type TelegramConnectorOptions
@@ -188,6 +189,18 @@ async function lockFiles(directory: string): Promise<string[]> {
 async function settle(): Promise<void> {
   for (let tick = 0; tick < 20; tick += 1) await new Promise((resolve) => setImmediate(resolve))
 }
+
+describe('a test run\'s Bot API origin (Story 76.8)', () => {
+  it('points a test-mode host at a loopback origin only, and never a normal host', () => {
+    const origin = 'http://127.0.0.1:43123'
+    expect(testTelegramOrigin(['node', 'host', '--bmn-test-host'], { BMN_TEST_TELEGRAM_ORIGIN: origin })).toBe(origin)
+    expect(testTelegramOrigin(['node', 'host'], { BMN_TEST_TELEGRAM_ORIGIN: origin })).toBeNull()
+    expect(testTelegramOrigin(['node', 'host', '--bmn-test-host'], {})).toBeNull()
+    for (const other of ['https://api.telegram.org', 'http://example.invalid:80', 'http://127.0.0.1:43123/path', 'http://127.0.0.1.example.invalid:1', 'http://localhost:43123']) {
+      expect(testTelegramOrigin(['--bmn-test-host'], { BMN_TEST_TELEGRAM_ORIGIN: other })).toBeNull()
+    }
+  })
+})
 
 describe('telegram connector polling', () => {
   it('delivers an authorized text reply and persists the next offset before polling again', async () => {

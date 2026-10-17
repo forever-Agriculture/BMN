@@ -58,6 +58,7 @@ import { codexHistoryAdapter } from './agent-history-codex'
 import { openCodeHistoryAdapter } from './agent-history-opencode'
 import { conversationReferenceExists } from './conversation-binding'
 import type { OpenReadOnly } from './agent-history-store'
+import { testTelegramOrigin } from './telegram-connector'
 import { TurnChangesClient } from './turn-changes-client'
 import { TurnRetention } from './turn-changes-retention'
 import { TURN_STORE_FOLDER } from './turn-changes-store'
@@ -345,6 +346,8 @@ async function start(): Promise<void> {
     ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN
       ? { telegramApiOrigin: process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN }
       : {}),
+    // A test-mode run (Story 76.8): Telegram talks to the run's own loopback fake Bot API.
+    ...(testTelegramOrigin(process.argv, process.env) === null ? {} : { telegramApiOrigin: testTelegramOrigin(process.argv, process.env)! }),
     historyAdapters: historyAdapters(),
     // Electron self-test only (Story 62.2): the health watch reads a fixture tree and starts no nvidia-smi.
     ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_SYSFS_ROOT
