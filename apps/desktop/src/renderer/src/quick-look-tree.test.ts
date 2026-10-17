@@ -52,10 +52,20 @@ describe('Quick look tree', () => {
 })
 
 describe('Quick look footer', () => {
-  it('shows the keys of the state it is in, and what Esc does there', () => {
-    expect(quickLookFooter({ focus: 'tree', fileOpen: false, typed: false, folded: false }).map((hint) => hint.label))
+  const base = { fileOpen: true, escape: 'close-sheet' as const, folded: false, back: false, forward: false }
+  it('shows the keys of the state it is in, and what Esc does there (Stories 67.1, 67.2)', () => {
+    expect(quickLookFooter({ ...base, focus: 'tree', fileOpen: false }).map((hint) => hint.label))
       .toEqual(['Move', 'Fold', 'Open', 'Jump to name', 'Hide tree', 'Close'])
-    expect(quickLookFooter({ focus: 'tree', fileOpen: true, typed: true, folded: false }).at(-1)).toEqual({ keys: ['Esc'], label: 'Clear typed' })
-    expect(quickLookFooter({ focus: 'file', fileOpen: true, typed: false, folded: true }).map((hint) => hint.label)).toEqual(['Move', 'Show tree', 'Close'])
+    expect(quickLookFooter({ ...base, focus: 'tree', escape: 'clear-typed' }).at(-1)).toEqual({ keys: ['Esc'], label: 'Clear typed' })
+    expect(quickLookFooter({ ...base, focus: 'file', folded: true }).map((hint) => hint.label))
+      .toEqual(['Move', 'Show tree', 'Go to line', 'Find in file', 'Close'])
+    expect(quickLookFooter({ ...base, focus: 'find', escape: 'close-find' }).map((hint) => hint.label)).toEqual(['Next', 'Previous', 'Case', 'Close find'])
+    expect(quickLookFooter({ ...base, focus: 'goto', escape: 'close-goto' }).map((hint) => hint.label)).toEqual(['Go', 'Close go to line'])
+  })
+
+  it('shows Back only when there is a file to return to (Story 67.2 AC7)', () => {
+    expect(quickLookFooter({ ...base, focus: 'file' }).map((hint) => hint.label)).not.toContain('Back')
+    expect(quickLookFooter({ ...base, focus: 'file', back: true }).find((hint) => hint.label === 'Back')).toEqual({ keys: ['Alt ←'], label: 'Back' })
+    expect(quickLookFooter({ ...base, focus: 'field', forward: true }).map((hint) => hint.label)).toEqual(['Forward', 'Tree', 'Close'])
   })
 })

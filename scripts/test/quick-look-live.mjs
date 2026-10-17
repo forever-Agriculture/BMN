@@ -1,11 +1,11 @@
 /* global window, document, getComputedStyle */
-// MODULE: quick-look-live.mjs - Epic 67's isolated Electron run of Quick look on a made-up project: the three ways in, a highlighted file under the unchanged page policy with no worker, the file states, the tree, and no terminal resized or typed into
+// MODULE: quick-look-live.mjs - Epic 67's isolated Electron run of Quick look on a made-up project: the three ways in, a highlighted file under the unchanged page policy with no worker, the file states, the tree, find, go to line, changed on disk, the trail, the peek, the remembered place, and no terminal resized or typed into
 // The app runs in test mode with temporary HOME and XDG folders (removed at the end); the project, its files and the
 // terminal program are made up here. Nothing leaves the machine and no file of the owner's is read. Prints PASS or
 // FAIL per check and writes result.json and screenshots to the evidence folder.
 // Usage: node scripts/test/quick-look-live.mjs [--binary <packaged bmn>]   (needs `pnpm run build` first without --binary)
 import assert from 'node:assert/strict'
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { _electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
@@ -102,6 +102,7 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await page.waitForFunction((id) => window.__aitermTest?.snapshot(id)?.bufferLines.some((line) => line.includes('QUICK LOOK FIXTURE')), sessionId)
     await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.setMinimumSize(0, 0); w.setContentSize(1408, 880); w.show() })
     const sheet = page.locator('dialog.quick-look[open]')
+    const snapshot = () => page.evaluate((id) => window.__aitermTest.snapshot(id), sessionId)
     const terminal = page.locator(`.session-terminal[data-session-id="${sessionId}"] .xterm-helper-textarea`)
 
     // ---- three ways in: the key, the pane's Project plate, the palette ----
@@ -137,6 +138,7 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     check('"Project files…" in the palette opens it', true)
 
     // ---- the tree: root, joined chain, dimmed names, links, keys ----
+    await sheet.locator('.ql-head .ql-root-name').waitFor()
     const rootRow = await sheet.locator('.ql-head').textContent()
     check('the root row names the session folder', rootRow.includes('project'), { rootRow })
     await sheet.locator('.ql-tr').first().waitFor()
@@ -193,11 +195,194 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     const large = await sheet.locator('.ql-main').textContent()
     check('a file over 2 MB shows its facts and no content', /Large/u.test(large) && /over 2 MB, not shown/u.test(large) && /2,097,153 bytes/u.test(large), { large: large.slice(0, 240) })
     await page.screenshot({ path: join(evidence, 'edge.png') })
+
+    // ---- Story 67.2: find, go to line, changed on disk, the trail, the peek and the remembered place ----
+    const topLine = () => sheet.evaluate((element) => {
+      const top = element.querySelector('.cm-scroller').getBoundingClientRect().top
+      const shown = [...element.querySelectorAll('.cm-lineNumbers .cm-gutterElement')].filter((each) => each.offsetHeight > 0 && each.textContent)
+      // The first line with any part in view, as the sheet counts the top line it keeps.
+      return Number(shown.find((each) => each.getBoundingClientRect().bottom > top + 0.5)?.textContent ?? 0)
+    })
+    const lineVisible = (text) => sheet.evaluate((element, wanted) => {
+      const box = element.querySelector('.cm-scroller').getBoundingClientRect()
+      const line = [...element.querySelectorAll('.cm-line')].find((each) => each.textContent.startsWith(wanted))
+      if (!line) return false
+      const rect = line.getBoundingClientRect()
+      return rect.top >= box.top && rect.bottom <= box.bottom
+    }, text)
+    const footerText = () => sheet.locator('.ql-hints').textContent()
+    await openRow('parser.ts')
+    await sheet.locator('.ql-code .cm-content').click()
+    await page.keyboard.press('Control+f')
+    await sheet.locator('.ql-find input[aria-label="Find in file"]').waitFor()
+    check('Ctrl+F opens a find row with focus in it', await page.evaluate(() => document.activeElement?.getAttribute('aria-label') === 'Find in file'))
+    await page.keyboard.type('value1')
+    const count = () => sheet.locator('.ql-find .ql-count').textContent()
+    // Find starts at the first match from the caret, so the count reads "N of 11".
+    const ofEleven = () => page.waitForFunction(() => / of 11$/u.test(document.querySelector('dialog.quick-look .ql-find .ql-count')?.textContent ?? ''))
+    await ofEleven()
+    const first = await count()
+    check('find counts "N of 11" for literal text', /^\d+ of 11$/u.test(first), { count: first })
+    const at = (text) => Number(text.split(' ')[0])
+    await page.keyboard.press('Enter')
+    const second = await count()
+    await page.keyboard.press('Shift+Enter')
+    const back = await count()
+    check('Enter goes to the next match and Shift+Enter to the previous, wrapping', at(second) === at(first) % 11 + 1 && back === first, { first, second, back })
+    const plates = await sheet.evaluate((element) => {
+      const mark = element.querySelector('.ql-match:not(.ql-match-current)')
+      const current = element.querySelector('.ql-match-current')
+      return { marks: element.querySelectorAll('.ql-match').length, plate: mark ? getComputedStyle(mark).backgroundColor : null,
+        current: current ? getComputedStyle(current).backgroundColor : null, text: current ? getComputedStyle(current).color : null,
+        plain: getComputedStyle(element.querySelector('.cm-line')).color }
+    })
+    check('matches are marked by plates, the text keeps its grey', plates.marks > 1 && plates.plate && plates.plate !== 'rgba(0, 0, 0, 0)' && plates.current !== plates.plate, plates)
+    await sheet.locator('.ql-find input').fill('VALUE1')
+    await ofEleven()
+    await page.keyboard.press('Alt+c')
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-find .ql-count')?.textContent === 'No matches')
+    const caseOn = await sheet.locator('.ql-toggle').getAttribute('aria-pressed')
+    await page.keyboard.press('Alt+c')
+    await ofEleven()
+    check('"Aa" matches case only when it is on', caseOn === 'true', { caseOn })
+    await page.keyboard.press('Enter')
+    const currentText = await sheet.evaluate((element) => element.querySelector('.ql-match-current')?.closest('.cm-line')?.textContent ?? '')
+    const footerFind = await footerText()
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(150)
+    const afterFind = { row: await sheet.locator('.ql-find').count(), open: await sheet.count(), inFile: await page.evaluate(() => !!document.activeElement?.closest('.ql-code')),
+      current: currentText !== '' && await lineVisible(currentText), footer: await footerText() }
+    check('Esc closes the find row first, leaves the file at the current match, and the footer says what Esc does', afterFind.row === 0 && afterFind.open === 1 && afterFind.inFile &&
+      afterFind.current && /Close find/u.test(footerFind) && /EscClose/u.test(afterFind.footer.replace(/\s/gu, '')), { ...afterFind, footerFind })
+
+    await page.keyboard.press('Control+g')
+    await sheet.locator('input[aria-label="Go to line"]').waitFor()
+    await page.keyboard.type('44:7')
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(150)
+    check('Ctrl+G goes to a line and a column (44:7)', await sheet.locator('input[aria-label="Go to line"]').count() === 0 && await lineVisible('export const value35 '))
+
+    // Changed on disk: the file is rewritten while shown; the row offers a reload that keeps the top line.
+    await page.keyboard.press('Control+g')
+    await page.keyboard.type('60')
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(200)
+    const topBefore = await topLine()
+    const parser = join(project, 'apps/desktop/src/parser.ts')
+    writeFileSync(parser, `${readFileSync(parser, 'utf8')}export const added = 1\n`)
+    await page.bringToFront()
+    await sheet.locator('.ql-changed').waitFor({ timeout: 6000 })
+    const changedRow = (await sheet.locator('.ql-changed').textContent()).replace(/\s+/gu, ' ')
+    check('a file rewritten while shown gives "Changed on disk · Reload" (F5) and nothing reloads by itself', /Changed on disk · Reload/u.test(changedRow) && /7\d lines/u.test(await sheet.locator('.ql-path').textContent()), { changedRow })
+    const linesBefore = await sheet.locator('.ql-path').textContent()
+    await page.keyboard.press('F5')
+    await page.waitForFunction((before) => document.querySelector('dialog.quick-look .ql-path')?.textContent !== before, linesBefore)
+    await page.waitForTimeout(200)
+    const topAfter = await topLine()
+    check('F5 reloads the file and keeps the top visible line', await sheet.locator('.ql-changed').count() === 0 && topAfter === topBefore && topBefore > 1, { topBefore, topAfter })
+
+    // The trail: open another file, Alt+← returns to the previous file and line, Alt+→ goes forward again.
+    const parserTop = await topLine()
+    await openRow('README.md')
+    const withBack = /Back/u.test(await footerText())
+    await page.keyboard.press('Alt+ArrowLeft')
+    await sheet.locator('.ql-path').filter({ hasText: 'parser.ts' }).waitFor()
+    await page.waitForTimeout(200)
+    const returnedTo = await topLine()
+    await page.keyboard.press('Alt+ArrowRight')
+    await sheet.locator('.ql-path').filter({ hasText: 'README.md' }).waitFor()
+    check('Alt+← returns to the previous file at the line he left, Alt+→ goes forward', withBack && returnedTo === parserTop && returnedTo > 1, { parserTop, returnedTo, withBack })
+    await page.keyboard.press('Alt+ArrowLeft')
+    await sheet.locator('.ql-path').filter({ hasText: 'parser.ts' }).waitFor()
+    await page.waitForTimeout(200)
+
+    // The peek: holding F8 shows the terminals behind; no key reaches the sheet or a terminal; release restores.
+    // A query whose one match is low in the file, so the peek starts scrolled down.
+    await sheet.locator('.ql-code .cm-content').focus()
+    await page.keyboard.press('Control+f')
+    await sheet.locator('.ql-find input').fill('Splits')
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-find .ql-count')?.textContent === '1 of 1')
+    await page.waitForTimeout(150)
+    const queryBefore = await sheet.locator('.ql-find input').inputValue()
+    const peekBefore = { top: await topLine(), snap: await snapshot(), scroll: await sheet.locator('.cm-scroller').evaluate((element) => element.scrollTop) }
+    await page.keyboard.down('F8')
+    await page.waitForTimeout(100)
+    const peekState = await sheet.evaluate((element) => ({
+      peeking: element.classList.contains('peeking'), label: element.querySelector('.ql-peek')?.textContent ?? '',
+      backdrop: getComputedStyle(element, '::backdrop').backgroundColor, shadow: getComputedStyle(element).boxShadow,
+      content: getComputedStyle(element.querySelector('.ql-body')).opacity, outline: getComputedStyle(element).outlineStyle
+    }))
+    await page.keyboard.press('a')
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Control+Shift+E')
+    await page.waitForTimeout(700)
+    const peekDuring = await snapshot()
+    await page.keyboard.up('F8')
+    await page.waitForTimeout(200)
+    const tick = (snap) => Number(/tick (\d+)/u.exec(snap.bufferLines.join(' '))?.[1] ?? 0)
+    const peekAfter = { open: await sheet.count(), peeking: await sheet.evaluate((element) => element.classList.contains('peeking')), top: await topLine(),
+      scroll: await sheet.locator('.cm-scroller').evaluate((element) => element.scrollTop), query: await sheet.locator('.ql-find input').inputValue(),
+      inFind: await page.evaluate(() => document.activeElement?.getAttribute('aria-label') === 'Find in file') }
+    check('holding F8 hides the content, its shadow and the backdrop and leaves a hairline outline with "Peeking · release F8 to return"',
+      peekState.peeking && peekState.label === 'Peeking · release F8 to return' && peekState.backdrop === 'rgba(0, 0, 0, 0)' && peekState.shadow === 'none' && peekState.content === '0' && peekState.outline === 'solid', peekState)
+    check('the terminal keeps painting during a peek and no key pressed reaches it or the sheet', tick(peekDuring) > tick(peekBefore.snap) && peekDuring.inputEvents === peekBefore.snap.inputEvents && peekAfter.open === 1,
+      { before: tick(peekBefore.snap), during: tick(peekDuring), input: [peekBefore.snap.inputEvents, peekDuring.inputEvents] })
+    check('releasing F8 restores the same file, scroll position, query and focus', !peekAfter.peeking && peekAfter.scroll === peekBefore.scroll && peekBefore.scroll > 0 && peekAfter.query === queryBefore && peekAfter.inFind,
+      { before: peekBefore.scroll, queryBefore, ...peekAfter })
+    await page.keyboard.down('F8')
+    await page.waitForTimeout(100)
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')))
+    await page.waitForTimeout(100)
+    const blurred = await sheet.evaluate((element) => element.classList.contains('peeking'))
+    await page.keyboard.up('F8')
+    check('the window losing focus ends a peek', !blurred)
+    await page.keyboard.press('Escape')
+
+    // The remembered place: closing and opening again returns to the file, its top line, the open folders and the search.
+    // Typing a query walks through its matches, so the place is taken after the search, just before closing.
+    await page.keyboard.press('Control+f')
+    await page.keyboard.press('Control+a')
+    await page.keyboard.type('needle')
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Control+g')
+    await page.keyboard.type('60')
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(200)
+    const placeTop = await topLine()
+    await page.keyboard.press('Escape')
+    await sheet.waitFor({ state: 'detached' })
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.locator('.ql-path').filter({ hasText: 'parser.ts' }).waitFor()
+    await sheet.locator('.ql-code .cm-content').waitFor()
+    await page.waitForTimeout(250)
+    const recalledTop = await topLine()
+    check('the footer shows Back only when there is somewhere to go', !/Back/u.test(await footerText()), { footer: await footerText() })
+    const treeNames = await sheet.locator('.ql-tr .ql-nm').allTextContents()
+    await page.keyboard.press('Control+f')
+    const recalledQuery = await sheet.locator('.ql-find input').inputValue()
+    await page.keyboard.press('Escape')
+    check('opening Quick look on the root returns to the last file, its top line, the open folders and the last search',
+      recalledTop === placeTop && placeTop > 1 && treeNames.includes('parser.ts') && recalledQuery === 'needle', { placeTop, recalledTop, recalledQuery, folders: treeNames.includes('parser.ts') })
+    // Each opening lists the root afresh, so a file made now is in the tree when the sheet opens again.
+    writeFileSync(join(project, 'gone.txt'), 'soon gone\n')
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.waitFor({ state: 'detached' })
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.waitFor()
+    await openRow('gone.txt')
+    await page.keyboard.press('Escape')
+    await sheet.waitFor({ state: 'detached' })
+    rmSync(join(project, 'gone.txt'))
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.waitFor()
+    await sheet.locator('.ql-empty').filter({ hasText: 'no longer there' }).waitFor()
+    check('a remembered file that no longer exists opens the tree with one line saying so', (await sheet.locator('.ql-empty').textContent()) === 'The last file, gone.txt, is no longer there.' &&
+      await page.evaluate(() => document.activeElement?.classList.contains('ql-tree') === true), { line: await sheet.locator('.ql-empty').textContent() })
+    await page.screenshot({ path: join(evidence, 'place.png') })
     await page.keyboard.press('Escape')
     await sheet.waitFor({ state: 'detached' })
 
-    // ---- the terminal is untouched: normal, focus and split views at five sizes ----
-    const snapshot = () => page.evaluate((id) => window.__aitermTest.snapshot(id), sessionId)
+    // ---- the terminal is untouched: normal, focus and split views at five sizes, through a peek ----
     for (const layout of ['normal', 'focus', 'split']) {
       const action = page.locator('.session-terminal.selected .pane-actions button').filter({ hasText: layout === 'focus' ? 'Focus' : 'Split' })
       if (layout !== 'normal') await action.click()
@@ -222,6 +407,9 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
           check(`${layout} ${width}×${height}: the tree starts folded and the top field has focus`, await sheet.locator('.ql-left').count() === 0 &&
             await page.evaluate(() => document.activeElement?.getAttribute('aria-label') === 'Go to file'))
         }
+        await page.keyboard.down('F8')
+        await page.waitForTimeout(250)
+        await page.keyboard.up('F8')
         await page.waitForTimeout(250)
         const during = await snapshot()
         await page.keyboard.press('Escape')

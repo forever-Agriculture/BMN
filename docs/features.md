@@ -407,6 +407,14 @@ or goes to its parent, `Enter` opens a file, typed letters jump to a name (`Esca
 `Ctrl+B` folds the tree and `Tab` moves between the tree and the file. A UTF-8 text file of at most
 2 MiB shows with line numbers and grey syntax colour for the common languages; long lines scroll
 sideways. An empty, binary or larger file says what it is, with **Show in Folder** and **Copy path**.
+In a file, `Ctrl+F` finds literal text (**Aa** or `Alt+C` matches case, `Enter` and `Shift+Enter` step
+through "3 of 12"), `Ctrl+G` goes to a line or `line:column`, and `Alt+←`/`Alt+→` go back and forward
+through the files you opened. While the sheet is open, a shown file that changes on disk gets a
+"Changed on disk · Reload" row (`F5`); nothing reloads by itself and nothing watches the file. Holding
+`F8` hides the sheet so you can read the terminals behind; no key reaches them, and releasing it brings
+the sheet back as it was. `Escape` closes the innermost thing first (typed letters, go to line, find)
+and the sheet last. Each root keeps its last file, scroll, open folders and search in memory until BMN
+quits; nothing is written to disk.
 
 **File references.** `Ctrl+click` a path an agent printed, such as `src/parser.ts:42:7`, or use
 **Open file reference…** in the palette, to see a read-only snapshot of that file at the line and

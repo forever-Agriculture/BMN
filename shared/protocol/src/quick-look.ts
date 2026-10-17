@@ -48,6 +48,16 @@ export interface QuickLookFileFacts {
   modifiedAt: string
 }
 
+/**
+ * Which bytes a shown file had when it was read: its size, its modified time to the nanosecond and its inode. The
+ * sheet asks for it again every 2 s and offers a reload when it differs (Story 67.2 AC2); nothing watches the file.
+ */
+export interface QuickLookIdentity {
+  byteLength: number
+  modifiedNs: string
+  inode: string
+}
+
 export type QuickLookReadResult =
   | {
       status: 'ready'
@@ -58,6 +68,7 @@ export type QuickLookReadResult =
       byteLength: number
       lineCount: number
       modifiedAt: string
+      identity: QuickLookIdentity
     }
   | {
       status: 'unavailable'
@@ -67,6 +78,17 @@ export type QuickLookReadResult =
       message: string
       facts: QuickLookFileFacts | null
     }
+
+export type QuickLookIdentityParams = QuickLookSource & { path: string }
+
+/** The file at a path now; `gone` when nothing readable is there or it is no longer a regular file. */
+export type QuickLookIdentityResult = { status: 'ready'; identity: QuickLookIdentity } | { status: 'gone' }
+
+/** True when the file read then and the file at its path now hold the same bytes, as far as size, time and inode tell. */
+export function sameQuickLookIdentity(read: QuickLookIdentity, now: QuickLookIdentityResult): boolean {
+  return now.status === 'ready' && now.identity.byteLength === read.byteLength && now.identity.modifiedNs === read.modifiedNs
+    && now.identity.inode === read.inode
+}
 
 /** The language a file is coloured as; null shows it plain. */
 export type QuickLookLanguage =

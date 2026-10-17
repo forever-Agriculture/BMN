@@ -65,6 +65,8 @@ import {
   type QuickLookListParams,
   type QuickLookListResult,
   type QuickLookReadParams,
+  type QuickLookIdentityParams,
+  type QuickLookIdentityResult,
   type QuickLookReadResult,
   type QuickLookRootResult,
   type QuickLookSource,
@@ -592,6 +594,9 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   readQuickLookFile(params: QuickLookReadParams): Promise<QuickLookReadResult> {
     return invokeBridge('aiterm:quick-look:read', params)
+  },
+  quickLookIdentity(params: QuickLookIdentityParams): Promise<QuickLookIdentityResult> {
+    return invokeBridge('aiterm:quick-look:identity', params)
   },
   listAttention(): Promise<AttentionRecord[]> {
     return invokeBridge('aiterm:attention:list', {})

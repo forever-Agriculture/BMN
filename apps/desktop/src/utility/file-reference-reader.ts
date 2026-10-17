@@ -1,5 +1,5 @@
 // MODULE: file-reference-reader.ts - reads one owner-addressed local text file as a bounded, read-only snapshot
-import { constants, type Stats } from 'node:fs'
+import { constants, type BigIntStats } from 'node:fs'
 import { open, realpath, stat, type FileHandle } from 'node:fs/promises'
 import { isAbsolute, normalize, resolve } from 'node:path'
 import {
@@ -54,14 +54,14 @@ function sizeLabel(bytes: number): string {
 }
 
 /** True when `path` still resolves to itself and names the same file as the open handle's `stats`. */
-async function namesSameFile(path: string, stats: Stats): Promise<boolean> {
+async function namesSameFile(path: string, stats: BigIntStats): Promise<boolean> {
   const resolved = await realpath(path).catch(() => null)
   if (resolved !== path) return false
-  const named = await stat(path).catch(() => null)
+  const named = await stat(path, { bigint: true }).catch(() => null)
   return named !== null && named.dev === stats.dev && named.ino === stats.ino
 }
 
-function kindOf(stats: Stats): string {
+function kindOf(stats: BigIntStats): string {
   if (stats.isDirectory()) return 'a folder'
   if (stats.isFIFO()) return 'a pipe'
   if (stats.isSocket()) return 'a socket'
@@ -125,7 +125,17 @@ export async function readFileReference(
 }
 
 export type LocalTextFileRead =
-  | { status: 'ready'; canonicalPath: string; content: string; byteLength: number; lineCount: number; modifiedAt: string; readAt: string }
+  | {
+      status: 'ready'
+      canonicalPath: string
+      content: string
+      byteLength: number
+      lineCount: number
+      modifiedAt: string
+      readAt: string
+      /** The open handle's size, modified time and inode before the read, which Quick look compares later. */
+      identity: { byteLength: number; modifiedNs: string; inode: string }
+    }
   | {
       status: 'unavailable'
       reason: FileReferenceUnavailableReason
@@ -169,10 +179,11 @@ export async function readLocalTextFile(resolvedPath: string, options: FileRefer
     return unavailable('unreadable', 'The file could not be opened.', canonicalPath)
   }
   try {
-    const stats = await handle.stat()
+    const stats = await handle.stat({ bigint: true })
     if (!stats.isFile()) return unavailable('not-a-file', `This path is ${kindOf(stats)}; only regular files are shown.`, canonicalPath)
-    facts = { byteLength: stats.size, modifiedAt: stats.mtime.toISOString() }
-    if (stats.size > maxBytes) {
+    const size = Number(stats.size)
+    facts = { byteLength: size, modifiedAt: stats.mtime.toISOString() }
+    if (size > maxBytes) {
       return unavailable('too-large', `The file is larger than ${sizeLabel(maxBytes)}; open it in an editor.`, canonicalPath)
     }
     await options.afterCheck?.()
@@ -206,7 +217,8 @@ export async function readLocalTextFile(resolvedPath: string, options: FileRefer
       byteLength: length,
       lineCount: fileReferenceLines(content).length,
       modifiedAt: stats.mtime.toISOString(),
-      readAt: (options.now?.() ?? new Date()).toISOString()
+      readAt: (options.now?.() ?? new Date()).toISOString(),
+      identity: { byteLength: size, modifiedNs: stats.mtimeNs.toString(), inode: `${stats.dev}:${stats.ino}` }
     }
   } catch (error) {
     const code = errorCode(error)

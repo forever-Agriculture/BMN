@@ -8,17 +8,33 @@ import {
   quickLookName,
   quickLookPathParts,
   quickLookSize,
+  sameQuickLookIdentity,
   type QuickLookReadResult,
   type QuickLookRootResult,
   type QuickLookSource
 } from '@bmn/protocol'
-import { createCodeView } from './quick-look-code'
+import { createCodeView, goToPosition, showFindMatches, topVisibleLine } from './quick-look-code'
+import { findCountLabel, findMatches, matchAt, stepMatch, type FindMatch } from './quick-look-find'
+import {
+  EMPTY_TRAIL,
+  canGoBack,
+  canGoForward,
+  escapeStep,
+  parseGoToLine,
+  recalledPlace,
+  rememberPlace,
+  trailStep,
+  trailVisit,
+  type Trail
+} from './quick-look-place'
 import { treeKey, treeRows, type TreeListing, type TreeRow } from './quick-look-tree'
 import { quickLookFooter, type QuickLookFocus } from './quick-look-keys'
 import './quick-look.css'
 
 /** Below this sheet width the tree starts folded, so that the file keeps 80 columns. */
 export const QUICK_LOOK_TREE_FOLD_WIDTH = 940
+/** How often a shown file's identity is asked for while the window has focus (Story 67.2 AC2). */
+export const QUICK_LOOK_IDENTITY_MS = 2000
 
 export interface QuickLookRequest {
   source: QuickLookSource
@@ -30,8 +46,22 @@ interface OpenFile {
   path: string
   line: number | null
   column: number | null
+  /** The line kept at the top after a reload or from the remembered place. */
+  topLine: number | null
   result: QuickLookReadResult | null
 }
+
+interface FindState {
+  open: boolean
+  query: string
+  matchCase: boolean
+  current: number
+  /** The matches `current` counts in; for newer matches the current one is worked out again, so a count never mixes two queries. */
+  of: readonly FindMatch[] | null
+}
+
+/** How a file comes to be opened: a new visit adds to the trail, a step along it or a recalled place does not. */
+type OpenWay = 'visit' | 'trail' | 'recall'
 
 function failureText(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback
@@ -117,29 +147,43 @@ function CodeView(props: {
   result: Extract<QuickLookReadResult, { status: 'ready' }>
   line: number | null
   column: number | null
+  topLine: number | null
   focus: boolean
   onView(view: EditorView | null): void
+  /** The line at the top, reported as the file scrolls, so a place is kept without measuring a closing sheet. */
+  onTop(path: string, line: number): void
   onFocus(): void
 }): React.JSX.Element {
   const host = useRef<HTMLDivElement>(null)
   const onView = useRef(props.onView)
   onView.current = props.onView
+  const onTop = useRef(props.onTop)
+  onTop.current = props.onTop
   const focus = useRef(props.focus)
   focus.current = props.focus
   useEffect(() => {
     if (!host.current) return
     const type = quickLookFileType(props.result.path)
     const view = createCodeView(host.current, {
-      content: props.result.content, language: type.language, line: props.line, column: props.column,
+      content: props.result.content, language: type.language, line: props.line, column: props.column, topLine: props.topLine,
       label: `${quickLookName(props.result.path)}, read only`
     })
     onView.current(view)
     if (focus.current) view.focus()
+    let frame = 0
+    const report = (): void => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => { if (view.dom.isConnected) onTop.current(props.result.path, topVisibleLine(view)) })
+    }
+    view.scrollDOM.addEventListener('scroll', report, { passive: true })
+    report()
     return () => {
+      cancelAnimationFrame(frame)
+      view.scrollDOM.removeEventListener('scroll', report)
       onView.current(null)
       view.destroy()
     }
-  }, [props.result, props.line, props.column])
+  }, [props.result, props.line, props.column, props.topLine])
   return <div className="ql-code" ref={host} onFocus={props.onFocus} />
 }
 
@@ -150,6 +194,8 @@ export function QuickLook(props: {
   const dialog = useRef<HTMLDialogElement>(null)
   const tree = useRef<HTMLDivElement>(null)
   const field = useRef<HTMLInputElement>(null)
+  const findField = useRef<HTMLInputElement>(null)
+  const goToField = useRef<HTMLInputElement>(null)
   const codeView = useRef<EditorView | null>(null)
   const [rootInfo, setRootInfo] = useState<QuickLookRootResult | null>(null)
   const [rootError, setRootError] = useState<string | null>(null)
@@ -163,12 +209,30 @@ export function QuickLook(props: {
   const [focusArea, setFocusArea] = useState<QuickLookFocus>(() => props.request.open ? 'file' : folded ? 'field' : 'tree')
   const [file, setFile] = useState<OpenFile | null>(null)
   const [feedback, setFeedback] = useState('')
+  const [find, setFind] = useState<FindState>({ open: false, query: '', matchCase: false, current: -1, of: null })
+  const [goTo, setGoTo] = useState<{ open: boolean; text: string; invalid: boolean }>({ open: false, text: '', invalid: false })
+  const [trail, setTrail] = useState<Trail>(EMPTY_TRAIL)
+  const [changed, setChanged] = useState(false)
+  const [peeking, setPeeking] = useState(false)
+  const [goneNote, setGoneNote] = useState<string | null>(null)
   const source = props.request.source
   const onClose = useRef(props.onClose)
   onClose.current = props.onClose
+  const peekingRef = useRef(false)
+  /** The line at the top of the shown file, as its view last reported it. */
+  const shownTop = useRef<{ path: string; line: number } | null>(null)
+  /** Where find starts looking: the caret when the row opened. */
+  const findAnchor = useRef(0)
+  /** Set by a reload, so the next marking of find's matches does not scroll. */
+  const keepTop = useRef(false)
 
   const root = rootInfo?.status === 'ready' ? (atGitRoot && rootInfo.gitRoot ? rootInfo.gitRoot : rootInfo.sessionFolder) : null
   const rows = useMemo(() => (root ? treeRows(root, listings, expanded) : []), [root, listings, expanded])
+  const ready = file?.result?.status === 'ready' ? file.result : null
+  const matches = useMemo(() => (ready && find.query ? findMatches(ready.content, find.query, find.matchCase) : []), [ready, find.query, find.matchCase])
+  const currentMatch = find.of === matches ? find.current : matchAt(matches, findAnchor.current)
+  const findRef = useRef({ matches, current: currentMatch, open: find.open })
+  findRef.current = { matches, current: currentMatch, open: find.open }
 
   const list = useCallback((folder: string): void => {
     setListings((current) => new Map(current).set(folder, current.get(folder) ?? { entries: null, more: 0, unavailable: null }))
@@ -179,16 +243,59 @@ export function QuickLook(props: {
       .catch((error: unknown) => setListings((current) => new Map(current).set(folder, { entries: [], more: 0, unavailable: failureText(error, 'This folder is unavailable') })))
   }, [source])
 
-  const open = useCallback((path: string, line: number | null = null, column: number | null = null, focus = true): void => {
-    setFile({ path, line, column, result: null })
+  const read = useCallback((path: string): Promise<QuickLookReadResult> => window.aiTerminal.readQuickLookFile({ ...source, path })
+    .catch((error: unknown): QuickLookReadResult => ({
+      status: 'unavailable', path, canonicalPath: null, reason: 'unreadable', message: failureText(error, 'The file could not be read.'), facts: null
+    })), [source])
+
+  const shownPath = useRef<string | null>(null)
+  shownPath.current = file?.path ?? null
+  /** The shown file's top line, as its view last reported it; read through refs, so a memoised opener sees it too. */
+  const currentTop = useCallback((): number | null => (shownTop.current && shownTop.current.path === shownPath.current ? shownTop.current.line : null), [])
+
+  const open = useCallback((path: string, line: number | null = null, column: number | null = null,
+    options: { way?: OpenWay; topLine?: number | null; focus?: boolean } = {}): void => {
+    const way = options.way ?? 'visit'
+    if (way !== 'trail') {
+      const here = currentTop()
+      setTrail((current) => trailVisit(current, { path, line, column }, here))
+    }
+    setFile({ path, line, column, topLine: options.topLine ?? null, result: null })
     setFeedback('')
-    if (focus) setFocusArea('file')
-    void window.aiTerminal.readQuickLookFile({ ...source, path })
-      .then((result) => setFile((current) => (current?.path === path && current.line === line && current.column === column ? { ...current, result } : current)))
-      .catch((error: unknown) => setFile((current) => current?.path === path ? {
-        ...current, result: { status: 'unavailable', path, canonicalPath: null, reason: 'unreadable', message: failureText(error, 'The file could not be read.'), facts: null }
-      } : current))
-  }, [source])
+    setChanged(false)
+    setGoneNote(null)
+    setGoTo({ open: false, text: '', invalid: false })
+    setFind((current) => ({ ...current, current: -1, of: null }))
+    findAnchor.current = 0
+    if (options.focus !== false) setFocusArea('file')
+    void read(path).then((result) => {
+      // A remembered file that is gone leaves the tree open with one line saying so (Story 67.2 AC4).
+      if (way === 'recall' && result.status === 'unavailable' && result.reason === 'missing') {
+        setFile((current) => (current?.path === path ? null : current))
+        setGoneNote(`The last file, ${quickLookName(path)}, is no longer there.`)
+        setFocusArea((current) => (current === 'file' ? 'tree' : current))
+        return
+      }
+      setFile((current) => (current?.path === path && current.line === line && current.column === column && !current.result ? { ...current, result } : current))
+    })
+  }, [read, currentTop])
+
+  /** Reads the shown file again and keeps the line at the top; nothing reloads by itself (Story 67.2 AC2). */
+  const reload = (): void => {
+    if (!file) return
+    const { path } = file
+    const topLine = currentTop()
+    keepTop.current = true
+    setChanged(false)
+    void read(path).then((result) => setFile((current) => (current?.path === path ? { ...current, topLine, result } : current)))
+  }
+
+  const step = (direction: -1 | 1): void => {
+    const next = trailStep(trail, direction, currentTop())
+    if (!next) return
+    setTrail(next.trail)
+    open(next.entry.path, next.entry.line, next.entry.column, { way: 'trail', topLine: next.entry.topLine ?? null })
+  }
 
   // The sheet is a native modal: the window dims behind it, focus stays inside, and no layout changes, so no
   // terminal is resized. Esc arrives as the dialog's cancel event and closes the innermost thing first.
@@ -207,29 +314,130 @@ export function QuickLook(props: {
     }
   }, [])
 
+  // Holding F8 peeks at the terminals: no key pressed meanwhile reaches the sheet or a terminal, and releasing it
+  // or leaving the window brings the sheet back as it was (Story 67.2 AC3).
+  useEffect(() => {
+    const swallow = (event: KeyboardEvent): void => {
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    }
+    const down = (event: KeyboardEvent): void => {
+      if (event.key === 'F8' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+        swallow(event)
+        if (!peekingRef.current) {
+          peekingRef.current = true
+          setPeeking(true)
+        }
+        return
+      }
+      if (peekingRef.current) swallow(event)
+    }
+    const up = (event: KeyboardEvent): void => {
+      if (!peekingRef.current) return
+      swallow(event)
+      if (event.key === 'F8') {
+        peekingRef.current = false
+        setPeeking(false)
+      }
+    }
+    const blur = (): void => {
+      peekingRef.current = false
+      setPeeking(false)
+    }
+    const other = (event: Event): void => { if (peekingRef.current) swallow(event as KeyboardEvent) }
+    window.addEventListener('keydown', down, true)
+    window.addEventListener('keyup', up, true)
+    window.addEventListener('keypress', other, true)
+    window.addEventListener('blur', blur)
+    return () => {
+      window.removeEventListener('keydown', down, true)
+      window.removeEventListener('keyup', up, true)
+      window.removeEventListener('keypress', other, true)
+      window.removeEventListener('blur', blur)
+    }
+  }, [])
+
   useEffect(() => {
     let current = true
     void window.aiTerminal.quickLookRoot(source)
       .then((result) => { if (current) setRootInfo(result) })
       .catch((error: unknown) => { if (current) setRootError(failureText(error, 'This folder is unavailable')) })
-    if (props.request.open) open(props.request.open.path, props.request.open.line, props.request.open.column)
     return () => { current = false }
   }, [])
 
+  // Each root keeps its place while BMN runs: the last file and its top line, the open folders and the last search.
+  // A file asked for by the opening wins over the remembered one (Story 67.2 AC4).
+  const placeRef = useRef<(shown: string) => void>(() => undefined)
+  placeRef.current = (shown) => {
+    const top = currentTop()
+    rememberPlace(shown, {
+      file: file ? { path: file.path, topLine: top ?? file.topLine ?? file.line ?? 1 } : null,
+      expanded: [...expanded],
+      find: find.query ? { query: find.query, matchCase: find.matchCase } : null
+    })
+  }
+  const asked = useRef(props.request.open ?? null)
   useEffect(() => {
     if (!root) return
-    setExpanded(new Set())
+    const place = recalledPlace(root)
+    setExpanded(new Set(place?.expanded ?? []))
     setSelected(null)
     setTyped('')
+    setTrail(EMPTY_TRAIL)
+    setFind((current) => place?.find ? { ...current, query: place.find.query, matchCase: place.find.matchCase, current: -1, of: null } : current)
     list(root)
+    for (const folder of place?.expanded ?? []) list(folder)
+    const wanted = asked.current
+    asked.current = null
+    if (wanted) open(wanted.path, wanted.line, wanted.column)
+    else if (place?.file) open(place.file.path, null, null, { way: 'recall', topLine: place.file.topLine })
+    else {
+      setFile(null)
+      if (focusArea === 'file') setFocusArea(folded ? 'field' : 'tree')
+    }
+    return () => placeRef.current(root)
   }, [root])
 
-  // Focus follows the area the keys belong to: the open file, or the tree when none is open.
+  // A root that cannot be read still shows the file the opening asked for.
   useEffect(() => {
+    if ((rootInfo?.status !== 'unavailable' && !rootError) || !asked.current) return
+    const wanted = asked.current
+    asked.current = null
+    open(wanted.path, wanted.line, wanted.column)
+  }, [rootInfo, rootError])
+
+  // While the sheet is open and the window has focus, the shown file's identity is asked for every 2 s and once
+  // when focus returns; a difference offers a reload, nothing more (Story 67.2 AC2).
+  useEffect(() => {
+    if (!ready || changed) return
+    let live = true
+    const check = (): void => {
+      if (!document.hasFocus()) return
+      void window.aiTerminal.quickLookIdentity({ ...source, path: ready.path })
+        .then((now) => { if (live && !sameQuickLookIdentity(ready.identity, now)) setChanged(true) })
+        .catch(() => undefined)
+    }
+    const timer = window.setInterval(check, QUICK_LOOK_IDENTITY_MS)
+    window.addEventListener('focus', check)
+    return () => {
+      live = false
+      window.clearInterval(timer)
+      window.removeEventListener('focus', check)
+    }
+  }, [ready, changed, source])
+
+  // Focus follows the area the keys belong to; a peek leaves it where it was.
+  useEffect(() => {
+    if (peeking) return
     if (focusArea === 'tree' && !folded) tree.current?.focus()
     else if (focusArea === 'file') codeView.current?.focus()
+    else if (focusArea === 'find') {
+      findField.current?.focus()
+      findField.current?.select()
+    }
+    else if (focusArea === 'goto') goToField.current?.focus()
     else field.current?.focus()
-  }, [focusArea, folded])
+  }, [focusArea, folded, peeking])
 
   useEffect(() => {
     if (focusArea === 'tree' && selected === null && rows.length > 0) {
@@ -243,6 +451,53 @@ export function QuickLook(props: {
     tree.current?.querySelector<HTMLElement>(`[data-path="${CSS.escape(selected)}"]`)?.scrollIntoView({ block: 'nearest' })
   }, [selected])
 
+  // A new query or case marks its matches and goes to the first one from the caret; a reload only marks them, so
+  // the line at the top stays.
+  useEffect(() => {
+    const view = codeView.current
+    const reveal = !keepTop.current
+    keepTop.current = false
+    if (!view || !find.open) return
+    const current = matchAt(matches, findAnchor.current)
+    setFind((state) => ({ ...state, current, of: matches }))
+    showFindMatches(view, matches, current, reveal)
+  }, [matches, find.open])
+
+  const findStep = (direction: 1 | -1): void => {
+    const view = codeView.current
+    if (!view) return
+    const current = stepMatch(matches, currentMatch, direction)
+    setFind((state) => ({ ...state, current, of: matches }))
+    showFindMatches(view, matches, current, true)
+  }
+
+  const openFind = (): void => {
+    if (codeView.current) findAnchor.current = codeView.current.state.selection.main.from
+    setGoTo({ open: false, text: '', invalid: false })
+    setFind((state) => ({ ...state, open: true }))
+    setFocusArea('find')
+    findField.current?.select()
+  }
+
+  const closeFind = (): void => {
+    setFind((state) => ({ ...state, open: false }))
+    if (codeView.current) showFindMatches(codeView.current, [], -1, false)
+    setFocusArea('file')
+  }
+
+  const submitGoTo = (): void => {
+    const view = codeView.current
+    if (!view) return
+    const target = parseGoToLine(goTo.text, view.state.doc.lines)
+    if (!target) {
+      setGoTo((state) => ({ ...state, invalid: true }))
+      return
+    }
+    goToPosition(view, target.line, target.column)
+    setGoTo({ open: false, text: '', invalid: false })
+    setFocusArea('file')
+  }
+
   const expand = (path: string): void => {
     setExpanded((current) => new Set(current).add(path))
     if (!listings.has(path)) list(path)
@@ -253,13 +508,18 @@ export function QuickLook(props: {
     return next
   })
 
+  const escape = escapeStep({ focus: focusArea === 'tree' ? 'tree' : focusArea === 'field' ? 'field' : 'file', typed: typed.length > 0, goTo: goTo.open, find: find.open })
   const cancelRef = useRef<() => void>(() => undefined)
   cancelRef.current = () => {
-    if (typed) {
-      setTyped('')
-      return
+    switch (escape) {
+      case 'clear-typed': setTyped(''); return
+      case 'close-goto':
+        setGoTo({ open: false, text: '', invalid: false })
+        setFocusArea('file')
+        return
+      case 'close-find': closeFind(); return
+      case 'close-sheet': onClose.current()
     }
-    onClose.current()
   }
 
   const onTreeKey = (event: React.KeyboardEvent): void => {
@@ -280,38 +540,78 @@ export function QuickLook(props: {
     }
   }
 
+  // The sheet's own keys are taken before the file's view sees them, so CodeMirror never handles them.
   const onSheetKey = (event: React.KeyboardEvent): void => {
-    if (event.ctrlKey && event.shiftKey && !event.altKey && event.code === 'KeyE') {
+    const plain = !event.ctrlKey && !event.altKey && !event.metaKey
+    const ctrl = event.ctrlKey && !event.altKey && !event.metaKey
+    const take = (): void => {
       event.preventDefault()
+      event.stopPropagation()
+    }
+    if (ctrl && event.shiftKey && event.code === 'KeyE') {
+      take()
       onClose.current()
       return
     }
-    if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === 'KeyB') {
-      event.preventDefault()
+    if (ctrl && !event.shiftKey && event.code === 'KeyB') {
+      take()
       setFolded((value) => {
         if (!value && focusArea === 'tree') setFocusArea(file ? 'file' : 'field')
         return !value
       })
       return
     }
-    if (event.key === 'Tab' && !event.ctrlKey && !event.altKey) {
-      event.preventDefault()
-      const order: QuickLookFocus[] = [...(folded ? [] : ['tree' as const]), ...(file?.result?.status === 'ready' ? ['file' as const] : [])]
+    if (ctrl && !event.shiftKey && event.code === 'KeyF' && ready && ready.byteLength > 0) {
+      take()
+      openFind()
+      return
+    }
+    if (ctrl && !event.shiftKey && event.code === 'KeyG' && ready && ready.byteLength > 0) {
+      take()
+      setFind((state) => (state.open ? { ...state, open: false } : state))
+      if (codeView.current) showFindMatches(codeView.current, [], -1, false)
+      setGoTo({ open: true, text: '', invalid: false })
+      setFocusArea('goto')
+      return
+    }
+    if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      take()
+      step(event.key === 'ArrowLeft' ? -1 : 1)
+      return
+    }
+    if (plain && event.key === 'F5') {
+      take()
+      if (changed) reload()
+      return
+    }
+    if (plain && event.key === 'Tab') {
+      take()
+      const order: QuickLookFocus[] = [...(folded ? [] : ['tree' as const]), ...(ready ? ['file' as const] : [])]
       if (order.length === 0) return
       const index = order.indexOf(focusArea)
       setFocusArea(order[(index + (event.shiftKey ? order.length - 1 : 1)) % order.length]!)
     }
   }
 
+  const onFindKey = (event: React.KeyboardEvent): void => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      findStep(event.shiftKey ? -1 : 1)
+    } else if (event.altKey && !event.ctrlKey && event.code === 'KeyC') {
+      event.preventDefault()
+      setFind((state) => ({ ...state, matchCase: !state.matchCase }))
+    }
+  }
+
   const rootName = root ? quickLookName(root) || root : null
   const home = rootInfo?.home ?? null
-  const ready = file?.result?.status === 'ready' ? file.result : null
   const unavailable = file?.result?.status === 'unavailable' ? file.result : null
   const type = file ? quickLookFileType(file.path) : null
-  const footer = quickLookFooter({ focus: focusArea, fileOpen: !!ready, typed: typed.length > 0, folded })
+  const footer = quickLookFooter({ focus: focusArea, fileOpen: !!ready, escape, folded, back: canGoBack(trail), forward: canGoForward(trail) })
 
   return (
-    <dialog ref={dialog} className="app-dialog quick-look" aria-label="Quick look" onKeyDown={onSheetKey}>
+    <dialog ref={dialog} className={`app-dialog quick-look${peeking ? ' peeking' : ''}`} aria-label="Quick look" onKeyDownCapture={onSheetKey}>
+      {peeking ? <p className="ql-peek" role="status">Peeking · release F8 to return</p> : null}
       <div className="ql-top">
         <label className={`ql-in${focusArea === 'field' ? ' focus' : ''}`}>
           <SearchGlyph />
@@ -360,9 +660,41 @@ export function QuickLook(props: {
                 <PathRow path={file.path} root={root} line={file.line}
                   facts={[type?.label, `${quickLookCount(ready.lineCount)} ${ready.lineCount === 1 ? 'line' : 'lines'}`, quickLookSize(ready.byteLength)].join(' · ')} />
                 {ready.canonicalPath !== ready.path ? <p className="ql-note">Through symlink · {ready.canonicalPath}</p> : null}
+                {changed ? (
+                  <div className="ql-changed" role="status">
+                    <span>Changed on disk</span>{' '}<span aria-hidden="true">·</span>{' '}
+                    <button type="button" className="ql-link-button" onClick={reload}>Reload</button>{' '}<kbd>F5</kbd>
+                  </div>
+                ) : null}
+                {find.open ? (
+                  <div className="ql-find" role="search" aria-label="Find in file">
+                    <input ref={findField} className="ql-find-in" aria-label="Find in file" placeholder="Find in file" spellCheck={false}
+                      value={find.query} onChange={(event) => setFind((state) => ({ ...state, query: event.target.value }))}
+                      onKeyDown={onFindKey} onFocus={() => setFocusArea('find')} />
+                    <button type="button" className={`ql-toggle${find.matchCase ? ' on' : ''}`} aria-pressed={find.matchCase} title="Match case (Alt C)"
+                      onClick={() => setFind((state) => ({ ...state, matchCase: !state.matchCase }))}>Aa</button>
+                    <span className="ql-count" aria-live="polite">{findCountLabel(matches, currentMatch, find.query)}</span>
+                  </div>
+                ) : null}
+                {goTo.open ? (
+                  <div className="ql-find" role="group" aria-label="Go to line">
+                    <input ref={goToField} className="ql-find-in" aria-label="Go to line" placeholder="Line, or line:column" spellCheck={false}
+                      value={goTo.text} onChange={(event) => setGoTo({ open: true, text: event.target.value, invalid: false })}
+                      onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); submitGoTo() } }}
+                      onFocus={() => setFocusArea('goto')} />
+                    <span className="ql-count">{goTo.invalid ? 'Type a line, or a line and a column: 44 or 44:7' : `1–${quickLookCount(ready.lineCount)}`}</span>
+                  </div>
+                ) : null}
                 {ready.byteLength === 0 ? <p className="ql-message">Empty file. Nothing to show.</p> : (
-                  <CodeView result={ready} line={file.line} column={file.column} focus={focusArea === 'file'}
-                    onView={(view) => { codeView.current = view }} onFocus={() => setFocusArea('file')} />
+                  <CodeView result={ready} line={file.line} column={file.column} topLine={file.topLine} focus={focusArea === 'file'}
+                    onTop={(path, line) => { shownTop.current = { path, line } }}
+                    onView={(view) => {
+                      codeView.current = view
+                      // A reload keeps find's marks on the new text.
+                      if (view && findRef.current.open && findRef.current.matches.length > 0) {
+                        showFindMatches(view, findRef.current.matches, Math.min(findRef.current.current, findRef.current.matches.length - 1), false)
+                      }
+                    }} onFocus={() => setFocusArea('file')} />
                 )}
               </>
             ) : unavailable ? (
@@ -374,7 +706,7 @@ export function QuickLook(props: {
                 <FileFacts result={unavailable} onFeedback={setFeedback} />
               </>
             ) : <PathRow path={file.path} root={root} line={file.line} facts="Reading…" />
-          ) : <p className="ql-empty">{root ? 'Choose a file in the tree.' : rootInfo ? '' : 'Reading the project…'}</p>}
+          ) : <p className="ql-empty">{goneNote ?? (root ? 'Choose a file in the tree.' : rootInfo ? '' : 'Reading the project…')}</p>}
           {feedback ? <p className="ql-feedback" aria-live="polite">{feedback}</p> : null}
         </section>
       </div>

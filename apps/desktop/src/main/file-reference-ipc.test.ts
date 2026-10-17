@@ -151,19 +151,21 @@ it('addresses workspace previews exclusively through the owner window and retain
 })
 
 describe('Quick look IPC', () => {
-  it('forwards Quick look\'s source and path only, refuses another sender, and lets a shown file be revealed (Story 67.1)', async () => {
+  it('forwards Quick look\'s source and path only, refuses another sender, and lets a shown file be revealed (Stories 67.1, 67.2)', async () => {
     const { handlers, requests, shown } = install()
     await handlers.get('aiterm:quick-look:root')!(allowed, { sessionId: 'session-1', extra: 'ignored' })
     await handlers.get('aiterm:quick-look:list')!(allowed, { workspaceId: 'workspace-1', folder: '/home/me/project/src' })
     await handlers.get('aiterm:quick-look:read')!(allowed, { sessionId: 'session-1', path: '/home/me/project/src/a.ts', line: 4 })
+    await handlers.get('aiterm:quick-look:identity')!(allowed, { sessionId: 'session-1', path: '/home/me/project/src/a.ts', inode: 'x' })
     expect(requests).toEqual([
       { method: METHOD_REGISTRY.quickLookRoot, params: { sessionId: 'session-1' } },
       { method: METHOD_REGISTRY.quickLookList, params: { workspaceId: 'workspace-1', folder: '/home/me/project/src' } },
-      { method: METHOD_REGISTRY.quickLookRead, params: { sessionId: 'session-1', path: '/home/me/project/src/a.ts' } }
+      { method: METHOD_REGISTRY.quickLookRead, params: { sessionId: 'session-1', path: '/home/me/project/src/a.ts' } },
+      { method: METHOD_REGISTRY.quickLookIdentity, params: { sessionId: 'session-1', path: '/home/me/project/src/a.ts' } }
     ])
     await handlers.get('aiterm:file-reference:show')!(allowed, { path: '/home/me/project/src/a.ts' })
     expect(shown).toEqual(['/home/me/project/src/a.ts'])
-    for (const channel of ['aiterm:quick-look:root', 'aiterm:quick-look:list', 'aiterm:quick-look:read']) {
+    for (const channel of ['aiterm:quick-look:root', 'aiterm:quick-look:list', 'aiterm:quick-look:read', 'aiterm:quick-look:identity']) {
       expect(await failure(() => handlers.get(channel)!(stranger, { sessionId: 'session-1', folder: '/a', path: '/a' }))).toMatchObject({ code: 'UNAUTHORIZED' })
     }
     expect(await failure(() => handlers.get('aiterm:quick-look:read')!(allowed, { sessionId: 's', workspaceId: 'w', path: '/a' }))).toMatchObject({ code: 'INVALID_ARGUMENT' })
@@ -179,6 +181,6 @@ describe('Quick look IPC', () => {
       expect(text).not.toMatch(/quick\.look|quickLook/u)
     }
     const methods = Object.entries(METHOD_REGISTRY).filter(([, method]) => method.startsWith('quick.look.')).map(([name]) => name)
-    expect(methods).toEqual(['quickLookRoot', 'quickLookList', 'quickLookRead'])
+    expect(methods).toEqual(['quickLookRoot', 'quickLookList', 'quickLookRead', 'quickLookIdentity'])
   })
 })

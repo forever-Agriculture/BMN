@@ -10,6 +10,7 @@ import {
   quickLookInside,
   type QuickLookEntry,
   type QuickLookEntryKind,
+  type QuickLookIdentityResult,
   type QuickLookListResult,
   type QuickLookReadResult,
   type QuickLookRootResult
@@ -169,6 +170,18 @@ export async function readQuickLookFile(path: string, options: FileReferenceRead
     content: read.content,
     byteLength: read.byteLength,
     lineCount: read.lineCount,
-    modifiedAt: read.modifiedAt
+    modifiedAt: read.modifiedAt,
+    identity: read.identity
   }
+}
+
+/**
+ * The shown file's identity now, through its links as the read follows them: one `stat`, never a watcher. A path
+ * with nothing readable at it, or no longer a regular file, is `gone`.
+ */
+export async function quickLookIdentity(path: string): Promise<QuickLookIdentityResult> {
+  if (!isAbsolute(path)) return { status: 'gone' }
+  const stats = await stat(normalize(path), { bigint: true }).catch(() => null)
+  if (!stats?.isFile()) return { status: 'gone' }
+  return { status: 'ready', identity: { byteLength: Number(stats.size), modifiedNs: stats.mtimeNs.toString(), inode: `${stats.dev}:${stats.ino}` } }
 }

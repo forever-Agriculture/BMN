@@ -12,6 +12,7 @@ import {
   type FileReferenceReadResult,
   type ProtocolMethod,
   type QuickLookListResult,
+  type QuickLookIdentityResult,
   type QuickLookReadResult,
   type QuickLookRootResult,
   type QuickLookSource
@@ -124,6 +125,13 @@ export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, 
       // A file shown as text, or by its facts, may be revealed in its folder, as the preview's may.
       if (result.status === 'ready' || result.facts) remember(event.sender.id, result.canonicalPath ?? result.path)
       return result
+    })
+  })
+
+  handle('aiterm:quick-look:identity', (_event, params) => {
+    const input = objectParams(params)
+    return actions.client().request<QuickLookIdentityResult>(METHOD_REGISTRY.quickLookIdentity, {
+      ...quickLookSource(input), path: displayedFilePath(input.path)
     })
   })
 

@@ -1,10 +1,10 @@
 // MODULE: quick-look.test.ts - Quick look's root rules, one-folder listing and bounded read on made-up folders (Story 67.1)
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { QUICK_LOOK_READ_MAX_BYTES } from '@bmn/protocol'
-import { listQuickLookFolder, quickLookRoot, quickLookSourceFolder, readQuickLookFile } from './quick-look'
+import { QUICK_LOOK_READ_MAX_BYTES, sameQuickLookIdentity, type QuickLookIdentity } from '@bmn/protocol'
+import { listQuickLookFolder, quickLookIdentity, quickLookRoot, quickLookSourceFolder, readQuickLookFile } from './quick-look'
 
 let root: string
 
@@ -136,5 +136,50 @@ describe('Quick look read', () => {
     file('target.ts', 'export {}\n')
     symlinkSync(join(root, 'target.ts'), join(root, 'alias.ts'))
     expect(await readQuickLookFile(join(root, 'alias.ts'))).toMatchObject({ status: 'ready', path: join(root, 'alias.ts'), canonicalPath: join(root, 'target.ts') })
+  })
+})
+
+describe('Quick look identity', () => {
+  const readIdentity = async (path: string): Promise<QuickLookIdentity> => {
+    const read = await readQuickLookFile(path)
+    if (read.status !== 'ready') throw new Error('read failed')
+    return read.identity
+  }
+
+  it('is the same while the file is untouched and matches the read\'s own (Story 67.2)', async () => {
+    file('a.ts', 'one\n')
+    const read = await readIdentity(join(root, 'a.ts'))
+    const now = await quickLookIdentity(join(root, 'a.ts'))
+    expect(now).toEqual({ status: 'ready', identity: read })
+    expect(sameQuickLookIdentity(read, now)).toBe(true)
+  })
+
+  it('differs for a changed size, a changed time, a replaced file and a deleted file (Story 67.2)', async () => {
+    file('a.ts', 'one\n')
+    const read = await readIdentity(join(root, 'a.ts'))
+    writeFileSync(join(root, 'a.ts'), 'one more\n')
+    expect(sameQuickLookIdentity(read, await quickLookIdentity(join(root, 'a.ts')))).toBe(false)
+
+    file('b.ts', 'same\n')
+    const before = await readIdentity(join(root, 'b.ts'))
+    utimesSync(join(root, 'b.ts'), new Date(2001, 0, 1), new Date(2001, 0, 1))
+    expect(sameQuickLookIdentity(before, await quickLookIdentity(join(root, 'b.ts')))).toBe(false)
+
+    file('c.ts', 'same\n')
+    const original = await readIdentity(join(root, 'c.ts'))
+    file('c.next', 'same\n')
+    // Same size and, to the millisecond, the same time: only the inode tells the files apart.
+    const at = new Date(Number(BigInt(original.modifiedNs) / 1_000_000n))
+    utimesSync(join(root, 'c.next'), at, at)
+    renameSync(join(root, 'c.next'), join(root, 'c.ts'))
+    const replaced = await quickLookIdentity(join(root, 'c.ts'))
+    expect(replaced).toMatchObject({ status: 'ready', identity: { byteLength: original.byteLength } })
+    expect(sameQuickLookIdentity(original, replaced)).toBe(false)
+
+    rmSync(join(root, 'c.ts'))
+    expect(await quickLookIdentity(join(root, 'c.ts'))).toEqual({ status: 'gone' })
+    mkdirSync(join(root, 'now-a-folder'))
+    expect(await quickLookIdentity(join(root, 'now-a-folder'))).toEqual({ status: 'gone' })
+    expect(await quickLookIdentity('relative.ts')).toEqual({ status: 'gone' })
   })
 })

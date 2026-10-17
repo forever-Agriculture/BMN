@@ -37,7 +37,7 @@ import { CompanionService, UNROUTED } from './companion-service'
 import type { AnswerRequest } from './remote-answer'
 import { DatabaseClientError, DatabaseWorkerClient } from './database-client'
 import { readFileReference } from './file-reference-reader'
-import { listQuickLookFolder, quickLookRoot, quickLookSourceFolder, readQuickLookFile } from './quick-look'
+import { listQuickLookFolder, quickLookIdentity, quickLookRoot, quickLookSourceFolder, readQuickLookFile } from './quick-look'
 import { inspectRepositoryIdentity } from './repository-identity'
 import { readDevAutoRuns } from './dev-auto-runs'
 import { isDevAutoRunsParams } from '@bmn/protocol'
@@ -867,6 +867,9 @@ async function start(): Promise<void> {
       case METHOD_REGISTRY.quickLookRead:
         await quickLookFolderFor(params)
         return readQuickLookFile(stringValue(params, 'path'))
+      case METHOD_REGISTRY.quickLookIdentity:
+        await quickLookFolderFor(params)
+        return quickLookIdentity(stringValue(params, 'path'))
       case METHOD_REGISTRY.fileReferenceRead: {
         if ((params.sessionId !== undefined) === (params.workspaceId !== undefined)) {
           throw new HostControlError(ERROR_CODES.invalidArgument, 'Choose exactly one source session or workspace')

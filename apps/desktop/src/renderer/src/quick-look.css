@@ -469,6 +469,118 @@
   background: var(--selected);
 }
 
+/* Find's matches sit on plates, the current one on a stronger plate; the text keeps its own grey (Story 67.2 AC1). */
+.ql-code .ql-match {
+  border-radius: 2px;
+  background: var(--ql-match);
+}
+
+.ql-code .ql-match-current {
+  background: var(--ql-match-active);
+  box-shadow: 0 0 0 1px var(--identity);
+}
+
+/* The find and go-to-line rows and the quiet "Changed on disk" row sit under the path row, inside the file. */
+.ql-find,
+.ql-changed {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.quick-look .ql-find-in {
+  width: min(320px, 50%);
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  border-radius: 6px;
+  outline: none;
+  color: var(--text);
+  background: var(--ground);
+  box-shadow: none;
+  font: 12px var(--font-mono);
+}
+
+.quick-look .ql-find-in:focus {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 14%, transparent);
+}
+
+.quick-look .ql-toggle {
+  height: 24px;
+  min-width: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  font: 600 11.5px var(--font-mono);
+}
+
+.quick-look .ql-toggle.on {
+  color: var(--text);
+  background: var(--ql-plate-2);
+}
+
+.ql-count {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ql-changed {
+  color: var(--muted);
+}
+
+.quick-look .ql-link-button {
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text);
+  background: var(--ql-plate-2);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Holding F8: the sheet's content, its shadow and the backdrop go, a hairline outline and one line stay, and the
+   terminals behind are read through it. Nothing is unmounted, so the file, its scroll and the query come back. */
+.quick-look.peeking {
+  outline: 1px solid color-mix(in srgb, var(--text) 32%, transparent);
+  background: transparent;
+  box-shadow: none;
+}
+
+.quick-look.peeking::backdrop {
+  background: transparent;
+  backdrop-filter: none;
+  animation: none;
+}
+
+.quick-look.peeking > :not(.ql-peek) {
+  opacity: 0;
+}
+
+.ql-peek {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  z-index: 1;
+  margin: 0;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--raised);
+  font-size: 12px;
+  transform: translateX(-50%);
+}
+
 .ql-syn-def {
   color: var(--ql-def);
   font-weight: 600;

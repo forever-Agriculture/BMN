@@ -15,10 +15,11 @@ import { diff } from '@codemirror/legacy-modes/mode/diff'
 import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile'
 import { shell } from '@codemirror/legacy-modes/mode/shell'
 import { toml } from '@codemirror/legacy-modes/mode/toml'
-import { EditorSelection, EditorState, type Extension } from '@codemirror/state'
-import { Decoration, EditorView, drawSelection, highlightSpecialChars, keymap, lineNumbers } from '@codemirror/view'
+import { EditorSelection, EditorState, StateEffect, StateField, type Extension } from '@codemirror/state'
+import { Decoration, type DecorationSet, EditorView, drawSelection, highlightSpecialChars, keymap, lineNumbers } from '@codemirror/view'
 import { tagHighlighter, tags } from '@lezer/highlight'
 import type { QuickLookLanguage } from '@bmn/protocol'
+import type { FindMatch } from './quick-look-find'
 
 /**
  * Syntax as classes, never colours: quick-look.css draws each class in a grey derived from the colour mode's own
@@ -69,9 +70,48 @@ export interface CodeViewInput {
   /** The line he came for, 1-based; marked in gold and scrolled to the middle. */
   line: number | null
   column: number | null
-  /** The line shown at the top instead, as a reload keeps it. */
+  /** The line kept at the top, as a reload or a remembered place keeps it; the target line is then not centred. */
   topLine?: number | null
   label: string
+}
+
+/** Find's matches, each on a plate, the current one on a stronger plate (Story 67.2 AC1). */
+const setFindMarks = StateEffect.define<{ matches: readonly FindMatch[]; current: number }>()
+const matchMark = Decoration.mark({ class: 'ql-match' })
+const currentMatchMark = Decoration.mark({ class: 'ql-match ql-match-current' })
+
+const findMarks = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(marks, transaction) {
+    for (const effect of transaction.effects) {
+      if (!effect.is(setFindMarks)) continue
+      const length = transaction.state.doc.length
+      return Decoration.set(effect.value.matches.filter((match) => match.to <= length)
+        .map((match, index) => (index === effect.value.current ? currentMatchMark : matchMark).range(match.from, match.to)))
+    }
+    return marks
+  },
+  provide: (field) => EditorView.decorations.from(field)
+})
+
+/** Marks find's matches; with `reveal`, selects the current one and scrolls it to the middle. */
+export function showFindMatches(view: EditorView, matches: readonly FindMatch[], current: number, reveal: boolean): void {
+  const match = matches[current]
+  view.dispatch({
+    effects: [setFindMarks.of({ matches, current }), ...(reveal && match ? [EditorView.scrollIntoView(match.from, { y: 'center' })] : [])],
+    ...(reveal && match ? { selection: EditorSelection.range(match.from, match.to) } : {})
+  })
+}
+
+/** The line the caret is on. */
+export function caretLine(view: EditorView): number {
+  return view.state.doc.lineAt(view.state.selection.main.head).number
+}
+
+/** Moves the caret to a line and column and puts that line in the middle. */
+export function goToPosition(view: EditorView, line: number, column: number | null): void {
+  const at = positionOf(view.state, line, column)
+  view.dispatch({ selection: EditorSelection.cursor(at), effects: EditorView.scrollIntoView(at, { y: 'center' }) })
 }
 
 /** The document position of a 1-based line and column, clamped into the document. */
@@ -95,6 +135,7 @@ export function createCodeView(parent: HTMLElement, input: CodeViewInput, extra:
     keymap.of(standardKeymap),
     languageExtension(input.language),
     syntaxHighlighting(greys),
+    findMarks,
     EditorView.contentAttributes.of({ 'aria-label': input.label, 'aria-readonly': 'true' }),
     extra
   ]
@@ -104,18 +145,20 @@ export function createCodeView(parent: HTMLElement, input: CodeViewInput, extra:
     extensions.push(EditorView.decorations.of(Decoration.set([Decoration.line({ class: 'ql-target' }).range(doc.line(input.line).from)])))
   }
   const view = new EditorView({ parent, state: EditorState.create({ doc, extensions }) })
-  if (input.line !== null && input.line >= 1) {
-    const at = positionOf(view.state, input.line, input.column)
-    view.dispatch({ selection: EditorSelection.cursor(at), effects: EditorView.scrollIntoView(at, { y: 'center' }) })
-  } else if (input.topLine && input.topLine > 1) {
-    const at = positionOf(view.state, input.topLine, 1)
-    view.dispatch({ selection: EditorSelection.cursor(at), effects: EditorView.scrollIntoView(at, { y: 'start' }) })
+  const target = input.line !== null && input.line >= 1 ? positionOf(view.state, input.line, input.column) : null
+  if (input.topLine && input.topLine >= 1) {
+    // A reload or a remembered place keeps the line that was at the top; the target line stays marked.
+    const top = positionOf(view.state, input.topLine, 1)
+    view.dispatch({ selection: EditorSelection.cursor(target ?? top), effects: EditorView.scrollIntoView(top, { y: 'start', yMargin: 0 }) })
+  } else if (target !== null) {
+    view.dispatch({ selection: EditorSelection.cursor(target), effects: EditorView.scrollIntoView(target, { y: 'center' }) })
   }
   return view
 }
 
 /** The first line whose top is in view, for keeping a place across a reload. */
 export function topVisibleLine(view: EditorView): number {
-  const block = view.lineBlockAtHeight(view.scrollDOM.scrollTop - view.documentTop + view.scrollDOM.getBoundingClientRect().top)
+  // The scroller's top edge, measured from the document's top: both in window coordinates, so scrolling is included.
+  const block = view.lineBlockAtHeight(Math.max(0, view.scrollDOM.getBoundingClientRect().top - view.documentTop))
   return view.state.doc.lineAt(block.from).number
 }

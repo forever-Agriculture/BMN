@@ -1,6 +1,8 @@
-// MODULE: quick-look-keys.ts - the one line of keys Quick look's footer shows for whatever has focus (Story 67.1 AC10)
+// MODULE: quick-look-keys.ts - the one line of keys Quick look's footer shows for whatever has focus (Stories 67.1 AC10, 67.2 AC5)
+import { ESCAPE_LABELS, type EscapeStep } from './quick-look-place'
 
-export type QuickLookFocus = 'field' | 'tree' | 'file'
+/** Where the keys go: the top field, the tree, the open file, or the file's find or go-to-line row. */
+export type QuickLookFocus = 'field' | 'tree' | 'file' | 'find' | 'goto'
 
 export interface QuickLookHint {
   keys: string[]
@@ -10,36 +12,41 @@ export interface QuickLookHint {
 export interface QuickLookFooterState {
   focus: QuickLookFocus
   fileOpen: boolean
-  /** Letters typed in the tree, which Esc clears before it closes anything. */
-  typed: boolean
+  /** What Esc does now, innermost first. */
+  escape: EscapeStep
   folded: boolean
+  /** True when Alt+← has a file to return to. */
+  back: boolean
+  forward: boolean
 }
 
 const hint = (label: string, ...keys: string[]): QuickLookHint => ({ keys, label })
 
 /** The keys of the state the sheet is in, left to right; "Hold F8 Show terminals" stands apart at the right. */
 export function quickLookFooter(state: QuickLookFooterState): QuickLookHint[] {
-  const escape = hint(state.typed ? 'Clear typed' : 'Close', 'Esc')
-  if (state.focus === 'tree') {
-    return [
-      hint('Move', '↑ ↓'),
-      hint('Fold', '← →'),
-      hint('Open', 'Enter'),
-      hint('Jump to name', 'A–Z'),
-      ...(state.fileOpen ? [hint('File', 'Tab')] : []),
-      hint('Hide tree', 'Ctrl B'),
-      escape
-    ]
+  const escape = hint(ESCAPE_LABELS[state.escape], 'Esc')
+  const trail = [...(state.back ? [hint('Back', 'Alt ←')] : []), ...(state.forward ? [hint('Forward', 'Alt →')] : [])]
+  const tree = state.folded ? hint('Show tree', 'Ctrl B') : hint('Tree', 'Tab')
+  switch (state.focus) {
+    case 'tree':
+      return [
+        hint('Move', '↑ ↓'),
+        hint('Fold', '← →'),
+        hint('Open', 'Enter'),
+        hint('Jump to name', 'A–Z'),
+        ...(state.fileOpen ? [hint('File', 'Tab')] : []),
+        hint('Hide tree', 'Ctrl B'),
+        ...trail,
+        escape
+      ]
+    case 'file':
+      // The board's order for a source file: move, tree, go to line, find, back, Esc.
+      return [hint('Move', '↑ ↓'), tree, hint('Go to line', 'Ctrl G'), hint('Find in file', 'Ctrl F'), ...trail, escape]
+    case 'find':
+      return [hint('Next', 'Enter'), hint('Previous', 'Shift Enter'), hint('Case', 'Alt C'), escape]
+    case 'goto':
+      return [hint('Go', 'Enter'), escape]
+    case 'field':
+      return [...trail, tree, escape]
   }
-  if (state.focus === 'file') {
-    return [
-      hint('Move', '↑ ↓'),
-      ...(state.folded ? [hint('Show tree', 'Ctrl B')] : [hint('Tree', 'Tab')]),
-      escape
-    ]
-  }
-  return [
-    ...(state.folded ? [hint('Show tree', 'Ctrl B')] : [hint('Tree', 'Tab')]),
-    escape
-  ]
 }
