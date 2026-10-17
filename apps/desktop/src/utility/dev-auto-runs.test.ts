@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import type { AttentionRecord, SessionRecord, WorkspaceRecord } from '@bmn/protocol'
 import { afterEach, describe, expect, it } from 'vitest'
 import { phoneField } from './quiet-hours-delivery'
-import { handoffFinished, parseBoard, parseHandoff, parseWorktrees, readDevAutoRuns, selectedEpics, worktreeText } from './dev-auto-runs'
+import { handoffFinished, parseHandoff, parseWorktrees, readDevAutoRuns, selectedEpics, worktreeText } from './dev-auto-runs'
 
 const roots: string[] = []
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })))
@@ -40,9 +40,6 @@ describe('read-only dev-auto runs', () => {
     expect(parsed.decisions).toEqual(['saved decision', 'second decision'])
     expect(parseHandoff('Some prose says COMPLETE').status).toBeNull()
     expect(selectedEpics('BMN; Epics 50–52, source path')).toEqual([50, 51, 52])
-    expect(parseBoard('elsewhere:\n  epic-57: done\ndevelopment_status:\n  epic-57: in-progress # note\n  57-1-name: review\n  epic-58: backlog\n  epic-59: done\nother:\n  epic-57: done', [57])).toEqual([
-      { key: 'epic-57', status: 'in-progress', comment: 'note' }, { key: '57-1-name', status: 'review', comment: '' }
-    ])
     expect(parseWorktrees('worktree /a\0HEAD hash\0branch refs/heads/main\0\0worktree /b\0detached\0\0')).toEqual([
       { checkout: '/a', branch: 'main' }, { checkout: '/b', branch: null }
     ])
@@ -127,6 +124,21 @@ describe('read-only dev-auto runs', () => {
     expect(result.runs[0]!.board).toMatchObject({ checkout: child, rows: [{ status: 'review' }] })
     git(child, 'rm', '--cached', 'planning/sprint-status.yaml')
     expect((await readDevAutoRuns([workspace(child)], [], [])).runs[0]!.board).toMatchObject({ checkout: main, rows: [{ status: 'backlog' }] })
+  })
+  it('reads BMN\'s own plan from the default checkout and a BMAD board of any size, through bmn plan\'s reader (Story 77.1)', async () => {
+    const root = fixture(), main = join(root, 'main'); repo(main)
+    file(main, '.gitignore', '/plan/\n'); git(main, 'add', '.gitignore'); git(main, '-c', 'user.name=Fixture', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'ignore')
+    const child = join(root, 'child'); git(main, 'worktree', 'add', '-qb', 'child', child)
+    file(child, '.dev-auto/handoff.md', handoff(child, 'child'))
+    file(main, 'plan/status.yaml', 'format: bmn-plan\nschema_version: 1\nqueue:\n  - 57\ndevelopment_status:\n  epic-57: ready # go 2026-10-17\r\n  57-1-a: backlog\n  epic-60: done\n')
+    expect((await readDevAutoRuns([workspace(child)], [], [])).runs[0]!.board).toMatchObject({ checkout: main, unavailable: null, rows: [{ key: 'epic-57', status: 'ready', comment: 'go 2026-10-17' }, { key: '57-1-a' }] })
+    rmSync(join(main, 'plan'), { recursive: true })
+    const filler = Array.from({ length: 4000 }, (_, index) => `  ${index + 100}-1-filler: done # ${'x'.repeat(150)}`).join('\n')
+    file(main, '_bmad-output/implementation-artifacts/sprint-status.yaml', `development_status:\n${filler}\n  epic-57: review # last\n`)
+    const board = (await readDevAutoRuns([workspace(child)], [], [])).runs[0]!.board
+    expect(board).toMatchObject({ checkout: main, unavailable: null, rows: [{ key: 'epic-57', status: 'review', comment: 'last' }] })
+    file(main, 'plan/status.yaml', 'format: bmn-plan\nschema_version: 1\ndevelopment_status:\n')
+    expect((await readDevAutoRuns([workspace(child)], [], [])).runs[0]!.board.unavailable).toContain('both plans are present')
   })
   it('rejects external symlinks, oversized and binary files, while permitting an internal regular target', async () => {
     const root = fixture(), main = join(root, 'main'); repo(main)

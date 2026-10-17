@@ -8,6 +8,11 @@ BMN shows owning checkouts, copies, unknown ownership and unavailable sources se
 It never changes handoffs, boards, decisions or agent requests. Open request titles navigate
 to the corresponding live session.
 
+The board rows come through the same resolver and streamed reader as `bmn plan` (Epic 77,
+[planning.md](planning.md)): BMN's own `plan/status.yaml` or a BMAD `sprint-status.yaml`, of any
+size, read in the checkout the plan's tracking names. Both plans present, an unknown schema or a
+malformed own board shows as "Board unavailable" with the reason.
+
 A handoff's `- Run id:` (written once when the run starts) and each Decided-for-you line's leading
 entry id (`[d3]`, never renumbered) make a decision the same decision through text edits, compaction
 and a new lead; a line ending in `(bmn: SESSION/KEY)` names the BMN decision record the lead made for

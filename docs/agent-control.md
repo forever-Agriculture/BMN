@@ -131,6 +131,9 @@ Commands:
   judge ask --state-file <path>|- --questions-file <path> --data public|private
                                             Ask the team's judge typed questions about one text; it answers
                                             with numbers, and BMN reads them (bmn judge --help)
+  plan status|check|set                     The project's planning board, in BMN's format or BMAD's: print
+                                            rows, check the plan's structure, change one row safely; not the
+                                            subscription's Plan use (bmn plan --help)
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
@@ -2944,6 +2947,10 @@ change without opening it, so a project ask's prompt now ends by saying to read 
 the code it judges (`git log -p` or `git blame`, then `git show`). The record, with every answer and
 a hand audit of each scoring miss, is in `_bmad-output/planning-artifacts/reference-72-team-ask/records/gate/`.
 72.9 reruns the gate with its forms into `records/gate-v8/`.
+
+## The project's plan: `bmn plan`
+
+`bmn plan status|check|set` reads, checks and changes the project's planning board, in BMN's own format (`plan/`) or BMAD's (`sprint-status.yaml`), with BMN closed: it opens no socket and needs no token. `status --json` is how dev-auto and other agents learn the plan's format and paths and each row's token; `set` changes one row only, under a lock, refusing when the row changed since its token was read. The format, the resolution rule, the guarantees of `set` and the parity map with BMAD are in [planning.md](planning.md). The name is the project's planning, not the subscription's Plan use (above).
 
 ## A brief for agents
 

@@ -1,0 +1,152 @@
+# Planning
+
+How a project is planned with BMN (Epic 77): one small format in the project, one board the owner reads and edits, one command that reads, checks and changes it (`bmn plan`), and one planning skill (`plan`) that BMN installs into every agent app. BMAD projects keep working: every reader takes BMAD's board too.
+
+## The plan folder
+
+A project's plan lives in `plan/` at the root of its product repository:
+
+| Path | What it is |
+| --- | --- |
+| `plan/PLAN.md` | The frame: purpose, users, goals, non-goals, success signals, standing constraints, the decisions in force (or where they live) and the index of the project's truth documents. At most 20 KiB. |
+| `plan/status.yaml` | The board (below). |
+| `plan/epics/NNN-slug.md` | One file per epic, numbered with at least three digits (`077-our-own-planning.md`). An active epic file is at most 60 KiB. |
+| `plan/references/<epic>/` | Large evidence: consultations, reviews, screenshots, measurements. Read on demand. |
+| `plan/shared/`, `plan/history.md` | Migration only: text shared by several legacy epics, and the old board's header history. |
+
+The templates are in `skills/plan/templates/` (`PLAN.md`, `epic.md`, `status.yaml`).
+
+**Truth and change.** Epics are change proposals. What is true about the product now lives in its truth documents (BMN's are `docs/`), indexed by `PLAN.md`. Every epic says which truth documents it changes (Truth impact), and its close-out checks them against what was delivered.
+
+### PLAN.md
+
+Required `##` sections, in this order: Purpose, Users, Goals, Non-goals, Success signals, Standing constraints, Decisions, Truth documents. A larger product links its architecture and design documents from Decisions or Truth documents instead of copying them.
+
+### An epic file
+
+The first heading is `# Epic N: Title`, followed by the suggested lead (and designer or reviewer) line. Required `##` sections: **Outcome**, **Why** (the owner's words with their dates), **Boundary and dependencies**, **Truth impact** (the documents and contracts it adds, changes or removes, or `none` with a reason), **Stories**. Optional: What exists today, Requirements, Decisions, Reviews, Log (one concise line per event, with its evidence path).
+
+Each story is `### Story N.M: Title` under Stories, with its user story, coverage and starting points, then `**Acceptance criteria:**` followed by a numbered list of Given/When/Then criteria, then `**Verification:**` naming the check.
+
+### Identifiers
+
+Epic numbers, story numbers (`77.1`) and criterion numbers (`77.1 AC2`) are unique and never renumbered. A dropped story keeps its number. The board's keys follow BMAD's: `epic-77` for the epic, `77-1-slug` for story 77.1.
+
+### Legacy epics
+
+An epic migrated from BMAD keeps its text verbatim beneath one marker line, the file's first non-empty line:
+
+```
+<!-- bmn-plan: bmad-legacy; contracts: docs/epic-53-windows-support.md -->
+```
+
+`bmn plan check` checks a legacy epic for its `Epic N` heading, its identifiers and its rows only; its sections and size stay as they were.
+
+## The board: `plan/status.yaml`
+
+```yaml
+format: bmn-plan
+schema_version: 1
+queue:
+  - 78
+  - 79
+development_status:
+  epic-77: done # accepted on dev-auto/epic-77; delivered main f00ba12
+  77-1-the-plan-format: done
+  epic-78: ready # go 2026-10-17
+  78-1-measure: backlog
+```
+
+- `format` and `schema_version` come first. A reader that finds another schema version stops with an error, never guesses.
+- `queue` is the one order of unfinished epics: every `ready` epic is in it; nothing `done` or `dropped` is. `project`-scope work takes the queue first, then any unqueued unfinished epics by number.
+- `development_status` holds one line per epic and story in BMAD's row grammar: two spaces, key, colon, status, optionally `# note`. A note is one line of at most 160 characters; the run log belongs in the epic's Log and the run's evidence.
+- The owner edits this file by hand whenever he likes. Agents change it one row at a time with `bmn plan set`.
+
+| Status | Meaning |
+| --- | --- |
+| `backlog` | Planned; no go yet. |
+| `ready` | His go recorded at planning. The authority to implement stays the invocation that selects the work (a `/dev-auto` run); it never covers push, merge or deploy. |
+| `in-progress` | Being built. |
+| `review` | Implemented and being checked. |
+| `blocked` | Waiting on a named gate; the note names it. |
+| `paused` | Stopped or parked by the owner; the note says so. |
+| `done` | Verified acceptance; the note names the branch and, once delivered, the default-branch commit (dev-auto's board convention). |
+| `dropped` | Not to be done; the note names the decision. |
+
+A BMAD board (`sprint-status.yaml`) keeps BMAD's statuses (`backlog`, `ready-for-dev`, `in-progress`, `review`, `done`, `optional`) and its comments as they are.
+
+## Where a plan is found
+
+Every reader (`bmn plan`, the app's dev-auto runs view, dev-auto through `bmn plan status --json`) resolves the same way:
+
+1. The product repository: Git's top level for the directory, and from inside `plan/` with its own `.git` the repository that encloses it.
+2. The plan: BMN's (`plan/status.yaml` with `format: bmn-plan`), or BMAD's (`implementation_artifacts` in `_bmad/bmm/config.yaml`, else `_bmad-output/implementation-artifacts/sprint-status.yaml`). Both present, an unknown schema version or an own board without `format: bmn-plan` is an error, never a fall back to BMAD.
+3. The checkout: a board the product repository tracks is read in the checkout at hand; an untracked or ignored one exists only in the default checkout and is read there, from any linked worktree.
+
+`bmn plan status --json` reports `product_root`, `default_checkout`, `run_checkout`, `plan_root`, `board`, `board_checkout`, `format`, `tracked` and `history`.
+
+## History
+
+A plan the product repository ignores keeps its history in its own local Git repository inside `plan/`, with no remote (`history: plan-repository`). That is history, not a backup. The planning skill commits the plan files it changed at each planning checkpoint, after first committing separately whatever was uncommitted there (the owner's and dev-auto's board edits); it never stages other files. dev-auto commits nothing in `plan/.git`.
+
+A plan the product repository tracks follows the product repository and dev-auto's two-checkout rule (`history: product-repository`). Only an ignored plan has its own repository.
+
+BMN's own plan is ignored by BMN's public repository (`/plan/` in `.gitignore`).
+
+## `bmn plan`
+
+Works with BMN closed, on either format. Exit 0 done or clean, 1 findings or a refused change, 2 usage error or a plan that cannot be resolved or read.
+
+- `bmn plan status [--json] [--project P] [--epic N]...` prints the resolved paths and the rows, read as a stream with no size limit. A note too long for the terminal is clipped for display and marked with `…`; no row is ever left out, and `--json` gives every selected row whole with its line and row token.
+- `bmn plan check [--json] [--project P]` is structural validation, one finding per line: duplicate keys, malformed rows, unknown statuses, notes over 160 characters, story headings without rows and rows without headings, duplicate epic, story or criterion identifiers, missing required sections of the frame or an epic, stories without criteria or Verification, a queue naming an unknown, duplicate or finished epic or missing a `ready` one, a `done` epic with a story neither `done` nor `dropped`, a `blocked`, `paused` or `dropped` row without a reason, a non-legacy file over its ceiling. On a BMAD board it checks duplicate keys and row grammar only. Whether the plan says the right thing is for the readiness method and review.
+- `bmn plan set <row> <status> --expect TOKEN [--expect-default TOKEN] [--note TEXT] [--project P]` changes one row (below).
+
+### Changing one row safely
+
+`TOKEN` is the row token from `bmn plan status --json`; it covers the row's status and note. `set`:
+
+1. takes the board's sibling lock, `.status.yaml.lock` (present only while a writer works; a dead writer's lock is cleared);
+2. rereads the file and refuses with exit 1 (`CONFLICT`, showing the row now and its token) when the row no longer matches `TOKEN`;
+3. replaces that one line (the note is kept unless `--note` is given) and leaves every other byte as it was, line endings included;
+4. keeps the version before in `~/.local/state/bmn/plan-versions/<board hash>/` (the last 20, with `board-path.txt` naming the board);
+5. writes a temporary file with the board's mode, checks that the board is still what it read, and renames it into place. When another row changed in the meantime it reads again and retries, at most 5 times.
+
+A missing `--expect`, an unknown row or status, or a note it would write over 160 characters (1,000 on a BMAD board) is refused with exit 2. A board tracked by the product repository and read from a linked worktree is changed in both copies, the default checkout's too; every copy is checked before any is written, and when the default checkout's row differs, `--expect-default` gives its token.
+
+**What it guarantees, and what not.** Cooperating writers (`bmn plan set`) on different rows both land; the same row is refused as a conflict; the owner's save before the read, or between the read and the final check, is kept (a change to his row is a conflict, a change elsewhere is reread). An editor's save in the instant between the final check and the rename, or a stale editor buffer saved later, is outside the guarantee: the later save wins. Recover from the kept versions: `ls ~/.local/state/bmn/plan-versions/*/board-path.txt` finds the board's folder, and each `.yaml` there is a whole earlier board to compare or copy back.
+
+## Not worse than BMAD: the parity map
+
+Every row names what runs after BMAD is gone.
+
+| BMAD | Ours |
+| --- | --- |
+| Product brief, PRFAQ, PRD (`bmad-product-brief`, `-prfaq`, `-prd`) | `plan`'s frame method writing `PLAN.md`, scaled to need, with a working-backwards method; a larger product gets linked truth documents |
+| Architecture (`bmad-architecture`), UX (`bmad-ux`: DESIGN.md, EXPERIENCE.md) | The frame method's Decisions section or the truth documents it indexes; the team's designer designs screens first and the result becomes truth documents |
+| Spec (`bmad-spec`), epics and stories (`bmad-create-epics-and-stories`) | Epic files with the same story artifact (criteria, starting points, verification), requirements traced to stories, no interactive halts beyond one card per real decision |
+| Readiness (`bmad-sprint-planning`'s gate) | `plan`'s readiness method before asking for the go (requirement-to-story traceability both ways, missing decisions, conflicts with truth documents and other epics) plus `bmn plan check` for structure |
+| Sprint status | `status.yaml`, same grammar, explicit go, blocked, paused and dropped, notes bounded |
+| Correct course (`bmad-correct-course`) | `plan`'s change-impact method: affected stories, criteria and truth documents; a dated decision with its source; the operative criteria updated, the earlier revision kept in the plan's history |
+| Retrospective | dev-auto's epic review and close-out with truth impact reviewed |
+| Brainstorming, forge idea, advanced elicitation, party mode, deep recon | `plan`'s methods, loaded on demand: brainstorm, question an idea, critique (pre-mortem, red team, first principles), roundtable (several teammates through `bmn team ask`), research (`bmn research ask`, a research brief, choosing between candidates) |
+| Project context (`bmad-project-context`) | The project's `AGENTS.md`, unchanged |
+
+Better on: what an agent reads for one epic (the frame, one epic file and its rows instead of one growing file); owner interruptions (cards for real decisions only); drift (truth impact required, reviewed at close against delivered behavior); board hygiene and safety (bounded notes, single-row guarded updates, explicit go, blocked, paused and dropped); one skill in every app with no runtime to install or break.
+
+### The parity checklist
+
+Fixed pass/fail items, marked for each run by a reviewer of the team who wrote neither run (Story 77.3 AC4). Two synthetic fixtures: a new project, and a change to an existing project with docs. BMAD 6.12.0 as installed and `plan` each run both fixtures with the same model and effort; BMAD's halts are answered from the fixture's written owner brief. Mandatory items (ours must pass every one):
+
+1. **Frame.** A new project's frame states product, users, goals and non-goals, and records architecture and design decisions (or links the documents that do).
+2. **Traceability forward.** Every requirement is covered by at least one story.
+3. **Traceability back.** Every story names the requirements it covers; none covers nothing.
+4. **Story artifact.** Each story has numbered testable criteria and a named verification.
+5. **Starting points.** Each story of the existing-project fixture names starting points that exist in its code (path and line checked).
+6. **Readiness: missing decision.** The readiness method finds the decision the fixture's brief leaves open on purpose and asks for it (one card) instead of guessing.
+7. **Readiness: conflict.** The readiness method finds the planted conflict between the brief and a truth document or another epic.
+8. **Change impact.** Given the planted mid-flight change, it names the affected stories, criteria and truth documents, records a dated decision with its source, updates the operative criteria and keeps the earlier revision recoverable.
+9. **Truth close-out.** The epic's Truth impact names the truth documents the change touches (or `none` with a reason).
+10. **Board.** The board uses the format's statuses correctly (go as `ready`, nothing `done` before acceptance) and `bmn plan check` (or BMAD's own validation for the BMAD run) passes.
+11. **No BMAD.** Every method used runs in a home where BMAD is absent (ours only).
+
+Recorded per run, not pass/fail: the checked revision, what the run read (files and bytes), how often it stopped for the owner, and its failures. A failure is fixed and the checklist run once more; a second failure goes to the owner before BMN's move (Story 77.6).

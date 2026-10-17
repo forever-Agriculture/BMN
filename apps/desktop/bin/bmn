@@ -161,6 +161,9 @@ Commands:
   judge ask --state-file <path>|- --questions-file <path> --data public|private
                                             Ask the team's judge typed questions about one text; it answers
                                             with numbers, and BMN reads them (bmn judge --help)
+  plan status|check|set                     The project's planning board, in BMN's format or BMAD's: print
+                                            rows, check the plan's structure, change one row safely; not the
+                                            subscription's Plan use (bmn plan --help)
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
@@ -3514,6 +3517,8 @@ async function main(argv) {
   if (argv[0] === 'hook') return runHook(argv.slice(1)).catch(() => 0)
   // hooks reads and writes the owner's own hook files; it never opens the control socket.
   if (argv[0] === 'hooks') return runHooks(argv.slice(1))
+  // Epic 77: the project's plan and board are files in the project; no socket, and it works with BMN closed.
+  if (argv[0] === 'plan') return (await import('./plan-cli.mjs')).runPlanCommand(argv.slice(1))
   // Epic 60: the roster, its check and the rules master are owner files; no socket, no token.
   if (argv[0] === 'team' || argv[0] === 'roster' || argv[0] === 'rules' || argv[0] === 'context' || argv[0] === 'skills' || argv[0] === 'tools' || argv[0] === 'research' || argv[0] === 'judge') {
     const agents = await import('./agents-cli.mjs')

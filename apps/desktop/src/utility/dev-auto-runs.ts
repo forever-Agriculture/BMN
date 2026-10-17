@@ -1,7 +1,8 @@
 import { realpath } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { isAbsolute, join, relative, sep } from 'node:path'
 import type { AttentionRecord, DevAutoRun, DevAutoRunsResult, SessionRecord, WorkspaceRecord } from '@bmn/protocol'
 import { readFileReference } from './file-reference-reader'
+import { PlanError, readBoard, resolvePlan } from '../../bin/plan-board.mjs'
 import { inspectRepositoryIdentity } from './repository-identity'
 import { repositoryGit, repositoryGitError } from './repository-git'
 
@@ -130,37 +131,15 @@ export function selectedEpics(project: string | null): number[] {
   return [...result].slice(0, 100)
 }
 
-export function parseBoard(text: string, epics: number[]): DevAutoRun['board']['rows'] {
-  const rows: DevAutoRun['board']['rows'] = []
-  let inSection = false
-  for (const line of text.split(/\r?\n/u)) {
-    if (/^development_status:\s*(?:#.*)?$/u.test(line)) { inSection = true; continue }
-    if (inSection && /^\S/u.test(line) && !line.startsWith('#')) break
-    if (!inSection) continue
-    const match = /^\s{2}([\w.-]+):\s*([\w-]+)\s*(?:#\s*(.*))?$/u.exec(line)
-    if (!match) continue
-    const number = Number(/^(?:epic-)?(\d+)(?:-|\.|$)/u.exec(match[1]!)?.[1])
-    if (epics.includes(number)) rows.push({ key: clip(match[1]!), status: clip(match[2]!), comment: clip(match[3] ?? '') })
+/** The board through the same resolver and streamed reader as `bmn plan` (Epic 77): either format, any size. */
+async function boardFor(root: string, epics: number[]): Promise<DevAutoRun['board']> {
+  try {
+    const plan = await resolvePlan(root)
+    const board = await readBoard(plan.boardPath, { epics })
+    return { checkout: plan.boardCheckout, rows: board.rows.map((row) => ({ key: clip(row.key), status: clip(row.status), comment: clip(row.note) })), unavailable: null }
+  } catch (error) {
+    return { checkout: null, rows: [], unavailable: `Board unavailable: ${error instanceof PlanError ? error.message : 'the board could not be read'}` }
   }
-  return rows
-}
-
-async function boardFor(root: string, defaultRoot: string, epics: number[]): Promise<DevAutoRun['board']> {
-  let config = await worktreeText(root, join(root, '_bmad/bmm/config.yaml'), 64 * 1024)
-  if (config.unavailable === 'File absent' && root !== defaultRoot) config = await worktreeText(defaultRoot, join(defaultRoot, '_bmad/bmm/config.yaml'), 64 * 1024)
-  if (config.text === null && config.unavailable !== 'File absent') return { checkout: null, rows: [], unavailable: `Board unavailable: ${config.unavailable}` }
-  let path = /^implementation_artifacts:\s*(.+?)\s*$/m.exec(config.text ?? '')?.[1] ?? '_bmad-output/implementation-artifacts'
-  path = path.replace(/^(['"])(.*)\1$/u, '$2').replaceAll('{project-root}', root)
-  const boardPath = resolve(root, path, 'sprint-status.yaml')
-  if (!insideDirectory(root, boardPath)) return { checkout: null, rows: [], unavailable: 'Board unavailable: configured path is outside the checkout' }
-  const localPath = relative(root, boardPath)
-  let tracked: boolean
-  try { tracked = (await repositoryGit(root, ['ls-files', '-z', '--', localPath])).split('\0').includes(localPath.replaceAll(sep, '/')) } catch {
-    return { checkout: null, rows: [], unavailable: 'Board unavailable: tracking could not be read' }
-  }
-  const checkout = tracked ? root : defaultRoot
-  const board = await worktreeText(checkout, join(checkout, localPath), 256 * 1024)
-  return { checkout, rows: board.text === null ? [] : parseBoard(board.text, epics), unavailable: board.text === null ? `Board unavailable: ${board.unavailable}` : null }
 }
 
 async function limitedMap<T, R>(items: T[], job: (item: T) => Promise<R>): Promise<R[]> {
@@ -220,17 +199,17 @@ export async function readDevAutoRuns(workspaces: readonly WorkspaceRecord[], se
     if (identity.state === 'repository') sessionRoots.set(cwd, identity.root)
     else if (identity.state === 'unavailable') addIssue(`${cwd}: owner-item checkout unavailable`)
   })
-  const tasks: Array<{ location: WorktreeLocation; defaultRoot: string; ids: string[] }> = []
+  const tasks: Array<{ location: WorktreeLocation; ids: string[] }> = []
   for (const values of roots.values()) {
     const { root } = values
     const ids = [...values.ids]
     try {
       const locations = parseWorktrees(await repositoryGit(root!, ['worktree', 'list', '--porcelain', '-z']))
       for (const location of locations.slice(64)) addIssue(`Worktree bound: ${location.checkout}`)
-      for (const location of locations.slice(0, 64)) tasks.push({ location, defaultRoot: locations[0]?.checkout ?? root!, ids })
+      for (const location of locations.slice(0, 64)) tasks.push({ location, ids })
     } catch (error) { addIssue(`${root}: ${repositoryGitError(error)}`) }
   }
-  const rows = await limitedMap(tasks, async ({ location, defaultRoot, ids }): Promise<DevAutoRun | null> => {
+  const rows = await limitedMap(tasks, async ({ location, ids }): Promise<DevAutoRun | null> => {
     const file = await worktreeText(location.checkout, join(location.checkout, '.dev-auto/handoff.md'), 64 * 1024)
     if (file.unavailable === 'File absent') {
       if (format) addIssue(`${location.checkout}: handoff absent`)
@@ -263,7 +242,7 @@ export async function readDevAutoRuns(workspaces: readonly WorkspaceRecord[], se
       result.skipped += fields.omittedDecisions
       if (result.issues.length < 100) result.issues.push(clip(`${location.checkout}: ${fields.omittedDecisions} decisions beyond the 20-entry bound`))
     }
-    const board = await boardFor(location.checkout, defaultRoot, selectedEpics(format ? parseHandoff(file.text ?? '').project : fields.project))
+    const board = await boardFor(location.checkout, selectedEpics(format ? parseHandoff(file.text ?? '').project : fields.project))
     if (board.unavailable) addIssue(`${location.checkout}: ${board.unavailable}`)
     return {
       ...fields, workspaceIds: ids, ...location, ownership, unavailable: file.unavailable,

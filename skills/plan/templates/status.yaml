@@ -1,0 +1,11 @@
+# The project's board: one line per epic and story. Edit it by hand whenever you like; agents change one row
+# at a time with `bmn plan set`. Statuses: backlog, ready (go recorded), in-progress, review, blocked, paused,
+# done, dropped. A note is at most 160 characters; blocked, paused and dropped need one (the reason).
+format: bmn-plan
+schema_version: 1
+# The order of unfinished epics: every ready epic is here, nothing done or dropped.
+queue:
+  - <N>
+development_status:
+  epic-<N>: backlog # <short note>
+  <N>-1-<slug>: backlog
