@@ -695,7 +695,7 @@ describe('bmn help agents', () => {
     expect(decision.stdout).toContain('decision outcome --key K')
     expect(decision.stdout).not.toContain('publish <file>')
     const back = await runCli(['back', '--help'])
-    expect(back.stdout).toContain('The owner is away, or back.')
+    expect(back.stdout).toContain('The owner is away (unreachable, even by phone or Remote')
     expect(back.stdout).toContain('away --status')
     // A command the usage does not list still gets the whole list.
     expect((await runCli(['nosuch', '--help'])).stdout).toContain('Usage: bmn <command> [arguments] [options]')

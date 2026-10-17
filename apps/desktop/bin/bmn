@@ -95,8 +95,9 @@ Commands:
                                             ${ATTENTION_KINDS.join('|')} (default question)
   withdraw <request-key>                    Withdraw an attention request
   away [--note TEXT] [--revision R] [--key K]
-  back [--revision R] [--key K]             The owner is away, or back. From an agent only on the
-                                            owner's own words, naming the revision bmn away --status showed.
+  back [--revision R] [--key K]             The owner is away (unreachable, even by phone or Remote
+                                            Control), or back. From an agent only on the owner's own words,
+                                            naming the revision bmn away --status showed.
                                             A repeated away keeps the period's time and note unless --note is
                                             given; a repeated back changes nothing. Only the owner sets a note
                                             (at most 200 characters), and only he sees it
