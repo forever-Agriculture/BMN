@@ -725,7 +725,8 @@ export class TelegramConnector {
 
   private async request(url: string, init: RequestInit, label: string): Promise<Response> {
     try {
-      return await this.options.fetch(url, init)
+      // A test run's own origin follows no redirect, so the token goes nowhere but that loopback origin (Story 76.8 review).
+      return await this.options.fetch(url, this.apiOrigin === API_ORIGIN ? init : { ...init, redirect: 'error' })
     } catch (error) {
       throw new TelegramConnectorError('network', this.redact(`Telegram ${label} request failed: ${errorMessage(error)}`))
     }

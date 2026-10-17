@@ -321,6 +321,25 @@ Inside tmux or Zellij, Codex follows the multiplexer's own image support.`
 
 class UsageError extends Error {}
 
+/**
+ * One command's entries of the usage, for `bmn <command> --help` (Story 76.8: agents read help through `| head`, and
+ * `decision` sat a hundred lines down the whole list, so a decision was never recorded); null for a command it does not list.
+ */
+function commandUsage(command) {
+  // away and back share one description.
+  const names = ['away', 'back'].includes(command) ? ['away', 'back'] : [command]
+  const lines = USAGE.split('\n')
+  const kept = []
+  let inside = false
+  for (const line of lines) {
+    const entry = /^  (\S+)/.exec(line)
+    if (entry) inside = names.includes(entry[1])
+    else if (!/^\s{4,}\S/.test(line)) inside = false
+    if (inside) kept.push(line)
+  }
+  return kept.length === 0 ? null : `Usage: bmn ${command} …\n\n${kept.join('\n')}\n\nAll commands: bmn help`
+}
+
 /** A refusal with a stable code; the shared config writer throws the same class. */
 const CliError = ConfigWriteError
 
@@ -3319,7 +3338,8 @@ async function main(argv) {
     if (parsed.options.yes) throw new UsageError('--yes is only for hooks install')
     if (command === 'help' || parsed.options.help) {
       const page = command === 'help' && positionals[0] === 'agents' ? AGENT_BRIEF
-        : command === 'help' && positionals[0] === 'terminal' ? TERMINAL_BRIEF : USAGE
+        : command === 'help' && positionals[0] === 'terminal' ? TERMINAL_BRIEF
+          : command !== undefined && command !== 'help' ? commandUsage(command) ?? USAGE : USAGE
       process.stdout.write(`${page}\n`)
       return 0
     }

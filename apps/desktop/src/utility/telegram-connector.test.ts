@@ -200,6 +200,18 @@ describe('a test run\'s Bot API origin (Story 76.8)', () => {
       expect(testTelegramOrigin(['--bmn-test-host'], { BMN_TEST_TELEGRAM_ORIGIN: other })).toBeNull()
     }
   })
+
+  it('follows no redirect from a test origin, so the token cannot leave it; the real API is unchanged', async () => {
+    for (const [apiOrigin, expected] of [['http://127.0.0.1:43123', 'error'], [undefined, undefined]] as const) {
+      const api = new FakeBotApi()
+      const seen: Array<RequestInit['redirect']> = []
+      const h = await harness({ api, ...(apiOrigin ? { apiOrigin } : {}), fetch: async (input, init) => { seen.push(init?.redirect); return api.fetch(input, init) } })
+      await h.connector.start()
+      await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0))
+      expect(new Set(seen)).toEqual(new Set([expected]))
+      await h.connector.stop()
+    }
+  })
 })
 
 describe('telegram connector polling', () => {

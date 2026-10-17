@@ -683,6 +683,19 @@ describe('bmn help agents', () => {
     expect(usage.stdout).toContain('help [agents|terminal]')
     expect(usage.stdout).toContain('Usage: bmn <command> [arguments] [options]')
   })
+
+  it('prints one command\'s own usage for its --help, near the top where | head keeps it (Story 76.8)', async () => {
+    const decision = await runCli(['decision', 'record', '--help'])
+    expect(decision.code).toBe(0)
+    expect(decision.stdout.split('\n').slice(0, 4).join('\n')).toContain('decision record --key K --revision R --choice T')
+    expect(decision.stdout).toContain('decision outcome --key K')
+    expect(decision.stdout).not.toContain('publish <file>')
+    const back = await runCli(['back', '--help'])
+    expect(back.stdout).toContain('The owner is away, or back.')
+    expect(back.stdout).toContain('away --status')
+    // A command the usage does not list still gets the whole list.
+    expect((await runCli(['nosuch', '--help'])).stdout).toContain('Usage: bmn <command> [arguments] [options]')
+  })
 })
 
 it('explains the graphics-shell terminfo boundary without connecting to BMN', async () => {
