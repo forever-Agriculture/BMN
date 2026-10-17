@@ -19,8 +19,8 @@ payloads and screen text are the test fixtures in
 | One question, one choice | **VERIFIED** keys | **VERIFIED** keys (Plan mode only) | **VERIFIED** API |
 | Several questions in one dialog | **VERIFIED** keys | **VERIFIED** keys | **VERIFIED** API (same call) |
 | Default async question | — | Choices/Other submit ordinary session messages; native consumption remains **UNVERIFIED** | — |
-| Permission, allow once | **VERIFIED** keys (`Bash` only; other tools not driven) | out of scope (Auto Review) | **VERIFIED** API |
-| Permission, deny | **VERIFIED** keys (`Bash` only), never confirmed | out of scope | **VERIFIED** API, only when it is the session's single pending permission |
+| Permission, allow once | **VERIFIED** hook on 2.1.302 (`Bash`; Epic 78), keys as fallback (`Bash` only) | out of scope (Auto Review) | **VERIFIED** API |
+| Permission, deny | **VERIFIED** hook on 2.1.302 (`Bash`; Epic 78), keys as fallback; never confirmed | out of scope | **VERIFIED** API, only when it is the session's single pending permission |
 | Sandbox network prompt | **UNSUPPORTED**: not driven (sandbox off on this machine); prompt-less, so no buttons | — | — |
 | Multi-select | **VERIFIED** keys (Epic 31) | **UNSUPPORTED**: the tool has no multi-select field | **VERIFIED** API (Epic 31) |
 | Typed ("Other…") answer | **VERIFIED** keys, single- and multi-select (Epic 31) | **VERIFIED** keys, as "None of the above" plus a note (Epic 31) | **VERIFIED** API, unless the question sets `custom: false` (Epic 31) |
@@ -87,6 +87,46 @@ Screens: `.dev-auto/evidence/epic-31/spike-31-4/screens/claude-*` (80 and 200 co
 - **Back:** **Left** returns to the previous question with its earlier choice marked `✔`; the tab row
   is `←  ☒ H1  ☐ H2  ☐ H3  ✔ Submit  →`. BMN never needs it: a card sends nothing until its last
   answer, so a card's Back only changes the card.
+
+## Claude Code 2.1.302: permissions answered by the hook (Epic 78)
+
+Measured 2026-10-17 (Story 78.1) on Claude Code 2.1.302 in an isolated profile, 115 recorded runs: a
+`PermissionRequest` command hook that waits for an outside answer, driven in tmux, the screen sampled every
+~150 ms. Records and the per-case table: `_bmad-output/planning-artifacts/reference-78-phone-permissions/measure/`
+(`RESULT.md`), kept with the plan, not committed.
+
+- **The dialog is not delayed or hidden.** It appears within −21…+166 ms of the hook starting and stays drawn and
+  answerable through waits of 3–20 s, for Bash (default and auto mode, including "This shell -c script runs rm and
+  could not be checked"), Write and Edit.
+- **The desk wins.** Yes, No or Esc at the desk decides the prompt (15/15); a hook answer after that, after the
+  hook's timeout, after the hook was killed or after a countdown expiry changes nothing (15/15, 5/5, 5/5, 2/2). No
+  and Esc end the hook (SIGTERM); Yes and an expiry do not signal it, so BMN ends the wait itself when the request
+  closes (`PostToolUse` resolves it) or at its own bound.
+- **Sessions stay independent** (5/5). A hook that fails, exits 1 or 2, decides nothing or is killed leaves the
+  dialog as it was (25/25). An 8,685-character command reached the hook whole.
+- **Precedence.** A matching deny rule never reaches the hook (3/3). Of two hooks that decide, the first decision
+  written wins (10/10), so a second deciding `PermissionRequest` hook can preempt BMN either way.
+- **The countdown** (auto mode, critical-path removals and unchecked scripts) is 120.05–120.20 s, keeps running
+  while the hook waits, and stops on one key press; after three expiries the next removal is denied with no
+  `PermissionRequest` at all. A hook allow does approve a critical-path removal (3/3). BMN keeps the countdown on
+  and never presses a key to extend it (owner, 2026-10-17).
+- The hook input carries `session_id`, `cwd`, `permission_mode`, `tool_name`, `tool_input` and
+  `permission_suggestions`, and no `tool_use_id`.
+
+**The route (owner card 2026-10-17: the hook only if proven; proven above).** For a Bash permission in the typed
+agent's main conversation whose input holds only `command`, `description`, `timeout` and `run_in_background`, and
+whose command is at most 4,000 characters and needs no cleaning to be shown (no carriage return, control
+character or surrounding blank), `bmn hook claude` gives the request a random single-use ref and then asks BMN for
+the answer (`answer.take` with that ref, 25 s at a time, up to 590 s; the entry's timeout is 600 s). It prints
+exactly `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}` for Allow once
+and `behavior: "deny"` with a short message for Deny; never `updatedInput`, `updatedPermissions`, a mode or a rule.
+It stops with no decision as soon as BMN says the request is over (closed, replaced by another prompt in the slot,
+or another process), Telegram is off or permission answers are off, or BMN cannot be reached. The card's buttons
+then use the keys route below, as before. Every other input (another field such as `dangerouslyDisableSandbox`, a
+subagent, another tool) keeps the keys route or none.
+
+**Tool families with buttons:** `Bash`. Measured but without buttons yet: `Write`, `Edit` (Story 78.3). Not
+measured, so no buttons: MCP tools, `WebFetch`, `NotebookEdit` and every other tool.
 
 ## Codex 0.157.1
 
@@ -239,7 +279,8 @@ reaches it (a unit test reads the sources to keep it that way).
 
 - **Routes.** Claude questions of shape `choice` or `multi-select` and Codex questions of shape
   `choice` (at most 8 options each), and Claude `Bash` permissions with an exact command, are answered
-  by keys. OpenCode questions and permissions are answered through the plugin. A shape must agree with
+  by keys; a Claude `Bash` permission whose own hook is waiting (its prompt carries the hook's request
+  ref, Epic 78) is answered through that hook instead, which collects the answer by its ref alone. OpenCode questions and permissions are answered through the plugin. A shape must agree with
   its questions (`multi-select` exactly when one is). Every other shape is refused as `unsupported`, so
   its card never shows buttons.
 - **Answer forms (Epic 31).** Per question: an option index; for a multi-select question the set of

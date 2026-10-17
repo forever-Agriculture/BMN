@@ -456,7 +456,7 @@ agent, with one exception: the answer that stops a prompt the [prompt guard](#th
 | Event | Effect |
 | --- | --- |
 | Claude `PreToolUse` for `AskUserQuestion`, or its `PermissionRequest` for that tool | Opens a `question` request carrying the questions, options and descriptions ([remote-answers.md](remote-answers.md)); both events describe one dialog and merge into one request |
-| Claude `PermissionRequest` for any other tool | Opens a `permission` request carrying the tool, the exact command or path, and the working directory |
+| Claude `PermissionRequest` for any other tool | Opens a `permission` request carrying the tool, the exact command or path, and the working directory; for a Bash call whose whole input the card shows exactly, the hook then waits for the phone's answer and returns only `allow` or `deny` (Epic 78) |
 | Claude `Notification` (permission prompt) | Opens a `permission` request, unless a question or permission of that session already carries its dialog: Claude sends this notice about 6 s into any unanswered prompt, questions included |
 | Claude `Notification` (question dialog) | Opens a `question` request |
 | Codex `PreToolUse` for `request_user_input` or `request_user_input_async` | Opens a `question` request with the question text and choices (blocking and async are different shapes) |
@@ -896,6 +896,11 @@ and `SessionEnd`, next to any hooks already there:
 { "hooks": [{ "type": "command", "timeout": 5,
   "command": "[ -n \"$BMN_CONTROL_SOCKET\" ] && command -v bmn >/dev/null && bmn hook claude; exit 0" }] }
 ```
+
+`PermissionRequest` carries `"timeout": 600` instead (Epic 78): its hook waits up to 590 s for an Allow once or
+Deny from a Telegram card, while Claude's dialog stays open and answerable at the desk
+([remote-answers.md](remote-answers.md#claude-code-21302-permissions-answered-by-the-hook-epic-78)). `install` and
+BMN's start raise BMN's own recognised entry from a shorter timeout to 600 and touch no other entry.
 
 `PreToolUse` runs before every tool and holds it until the hook returns, so BMN gates its entry to the one
 tool it needs with `"matcher": "AskUserQuestion"`; `check` reads that matcher as wired, and an ungated entry

@@ -67,6 +67,8 @@ function runCli(
   })
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
 async function cliFixture() {
   // The temporary folder may be reached through a symlink, and the CLI child reports the real path.
   const root = await realpath(await mkdtemp(join(tmpdir(), 'aitcli-')))
@@ -3415,9 +3417,11 @@ describe('bmn hooks install', () => {
     expect(after.hooks.PostToolUse[0]).toEqual(before.hooks.PostToolUse[0])
     expect(after.hooks.Stop).toEqual(before.hooks.Stop)
     expect(after.hooks.PostToolUse[1]).toEqual({ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] })
-    for (const event of ['Notification', 'PermissionRequest', 'UserPromptSubmit', 'SessionStart', 'SessionEnd']) {
+    for (const event of ['Notification', 'UserPromptSubmit', 'SessionStart', 'SessionEnd']) {
       expect(after.hooks[event]).toEqual([{ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }])
     }
+    // Epic 78: the permission hook waits for the phone, so Claude must let it run that long.
+    expect(after.hooks.PermissionRequest).toEqual([{ hooks: [{ type: 'command', timeout: 600, command: DOCUMENTED_CLAUDE }] }])
     // PreToolUse blocks every tool until it returns, so BMN's entry is gated to the one tool it needs.
     expect(after.hooks.PreToolUse).toEqual([
       { matcher: 'AskUserQuestion', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }
@@ -3704,9 +3708,27 @@ describe('bmn hooks install', () => {
     expect(await backupsOf(path)).toEqual([])
   })
 
+  it('raises the timeout of BMN\'s own permission entry from 5 s, in install and at start, and leaves the owner\'s entries alone (Epic 78)', async () => {
+    const own = { ...Object.fromEntries(CLAUDE_EVENTS.map((event) => [event, [entryGroup(DOCUMENTED_CLAUDE)]])) }
+    const foreign = entryGroup('echo mine', 5)
+    own.PermissionRequest = [entryGroup(DOCUMENTED_CLAUDE), foreign]
+    for (const args of [['install', '--yes', 'claude'], ['install', '--absent', '--yes', '--json', 'claude']]) {
+      const path = await hookFileFixture({ hooks: own })
+      const result = await runHooks([...args, '--file', path])
+      expect(result.code).toBe(0)
+      const after = JSON.parse(await readFile(path, 'utf8'))
+      expect(after.hooks.PermissionRequest).toEqual([{ hooks: [{ type: 'command', command: DOCUMENTED_CLAUDE, timeout: 600 }] }, foreign])
+      for (const event of CLAUDE_EVENTS.filter((name) => name !== 'PermissionRequest')) expect(after.hooks[event]).toEqual(own[event])
+      expect(await backupsOf(path)).toHaveLength(1)
+      const again = await runHooks([...args, '--file', path])
+      expect(again.code).toBe(0)
+      expect(await backupsOf(path)).toHaveLength(1)
+    }
+  })
+
   it('installs nothing when nothing is missing and says so', async () => {
     const path = await hookFileFixture({
-      hooks: Object.fromEntries(CLAUDE_EVENTS.map((event) => [event, [entryGroup(DOCUMENTED_CLAUDE)]]))
+      hooks: Object.fromEntries(CLAUDE_EVENTS.map((event) => [event, [entryGroup(DOCUMENTED_CLAUDE, event === 'PermissionRequest' ? 600 : 5)]]))
     })
     const before = await readFile(path, 'utf8')
 
@@ -4624,8 +4646,86 @@ describe('structured prompts from the recorded hooks (Epic 30)', () => {
       requestKey: 'claude:permission',
       kind: 'permission',
       prompt: {
-        type: 'permission', harness: 'claude', shape: 'permission', requestRef: null, toolUseId: null,
+        type: 'permission', harness: 'claude', shape: 'permission', requestRef: expect.stringMatching(UUID), toolUseId: null,
         tool: 'Bash', command: 'touch spike-allow.txt', cwd: '/work/project', description: 'Create spike-allow.txt file'
+      }
+    })
+  })
+
+  describe('Claude permission answered by its own waiting hook (Epic 78)', () => {
+    const permission = async (): Promise<Record<string, unknown>> => recorded('claude/bash.permission-request.json') as Promise<Record<string, unknown>>
+    const refOf = (fixture: Awaited<ReturnType<typeof cliFixture>>): string =>
+      (lastOpen(fixture).prompt as { requestRef: string }).requestRef
+
+    it('waits for the phone and answers that one request with allow and nothing else', async () => {
+      const fixture = await cliFixture()
+      let asks = 0
+      fixture.handlers.takeAnswers.mockImplementation(async (p) => {
+        asks += 1
+        return asks === 1
+          ? { answers: [], waiting: true }
+          : { answers: [{ requestRef: p.requestRef!, kind: 'permission', reply: 'once' }] }
+      })
+      const result = await runHook(fixture, 'claude', await permission())
+      expect(result.code).toBe(0)
+      expect(JSON.parse(result.stdout)).toEqual({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } })
+      const calls = fixture.handlers.takeAnswers.mock.calls.map(([p]) => p)
+      expect(calls).toHaveLength(2)
+      for (const call of calls) expect(call).toMatchObject({ sessionId: 'session-1', incarnationId: 'incarnation-1', requestRef: refOf(fixture), waitMs: 25_000 })
+    })
+
+    it('answers a deny as a deny for that invocation only', async () => {
+      const fixture = await cliFixture()
+      fixture.handlers.takeAnswers.mockImplementation(async (p) => ({ answers: [{ requestRef: p.requestRef!, kind: 'permission', reply: 'reject' }] }))
+      const result = await runHook(fixture, 'claude', await permission())
+      expect(JSON.parse(result.stdout)).toEqual({
+        hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: 'Denied from the phone (BMN).' } }
+      })
+    })
+
+    it('stops at once with no decision when BMN no longer waits for it, or hands it an answer for another request', async () => {
+      const fixture = await cliFixture()
+      fixture.handlers.takeAnswers.mockImplementation(async () => ({ answers: [{ requestRef: 'another-request', kind: 'permission', reply: 'once' }], waiting: false }))
+      const result = await runHook(fixture, 'claude', await permission())
+      expect(result.code).toBe(0)
+      expect(result.stdout).toBe('')
+      expect(fixture.handlers.takeAnswers).toHaveBeenCalledTimes(1)
+    })
+
+    it('stops with no decision when BMN cannot be asked', async () => {
+      const fixture = await cliFixture()
+      fixture.handlers.takeAnswers.mockImplementation(async () => { throw new Error('closed') })
+      const result = await runHook(fixture, 'claude', await permission())
+      expect(result.code).toBe(0)
+      expect(result.stdout).toBe('')
+    })
+
+    it('a second identical prompt gets a new ref', async () => {
+      const fixture = await cliFixture()
+      await runHook(fixture, 'claude', await permission())
+      const first = refOf(fixture)
+      await runHook(fixture, 'claude', await permission())
+      expect(refOf(fixture)).not.toBe(first)
+    })
+
+    it('never waits for an input the card could not show whole, a subagent, a question or another tool', async () => {
+      const event = await permission()
+      const input = event.tool_input as Record<string, unknown>
+      const cases: Record<string, unknown>[] = [
+        { ...event, tool_input: { ...input, dangerouslyDisableSandbox: true } },
+        { ...event, tool_input: { ...input, command: 'echo one\r\necho two' } },
+        { ...event, tool_input: { ...input, command: ' touch spike-allow.txt' } },
+        { ...event, tool_input: { ...input, command: 'x'.repeat(4001) } },
+        { ...event, agent_id: 'agent-1' },
+        { ...event, tool_name: 'Edit', tool_input: { file_path: '/work/project/a', old_string: 'a', new_string: 'b' } }
+      ]
+      for (const each of cases) {
+        const fixture = await cliFixture()
+        const result = await runHook(fixture, 'claude', each)
+        expect(result.stdout).toBe('')
+        expect(fixture.handlers.takeAnswers).not.toHaveBeenCalled()
+        const prompt = lastOpen(fixture)?.prompt as { requestRef: string | null } | undefined
+        if (prompt) expect(prompt.requestRef).toBeNull()
       }
     })
   })

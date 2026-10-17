@@ -429,6 +429,100 @@ describe('reports that speak for another dialog (Astra A5)', () => {
   })
 })
 
+describe('answering a Claude permission through its own waiting hook (Epic 78)', () => {
+  const HOOKED: AttentionPrompt = { ...CLAUDE_BASH, requestRef: 'ref-1' }
+  /** The hook's ask, as `bmn hook claude` makes it: in flight until an answer or the wait ends. */
+  const hookAsks = (h: Harness, ref = 'ref-1', waitMs = 500) => h.engine.take('s1', 'inc-1', waitMs, undefined, ref)
+
+  it('has its own route only while a hook asked for the request', () => {
+    expect(answerRoute(HOOKED)).toBe('claude-hook')
+    expect(answerRoute({ ...HOOKED, tool: 'Edit' })).toBeNull()
+    expect(answerRoute({ ...HOOKED, command: null })).toBeNull()
+  })
+
+  it('hands allow to that hook only, writes no key, and confirms from the tool that ran', async () => {
+    const h = harness({ record: record(HOOKED), lines: BLANK })
+    const waiting = hookAsks(h)
+    await settle()
+    const pending = ask(h, allow)
+    // Neither the OpenCode route, another ref, another session nor another process collects it.
+    await expect(h.engine.take('s1', 'inc-1', 0)).resolves.toEqual([])
+    await expect(h.engine.take('s1', 'inc-1', 0, undefined, 'ref-2')).resolves.toEqual([])
+    await expect(h.engine.take('s2', 'inc-2', 0, undefined, 'ref-1')).resolves.toEqual([])
+    await expect(waiting).resolves.toEqual([{ requestRef: 'ref-1', kind: 'permission', reply: 'once' }])
+    h.engine.evidence('s1', 'claude:permission', evidence({ permission: 'allowed', tool: 'Bash', command: 'touch spike-allow.txt' }))
+    await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['Allow once'] })
+    expect(h.writes).toEqual([])
+  })
+
+  it('hands deny as reject, which Claude never confirms', async () => {
+    const h = harness({ record: record(HOOKED), lines: BLANK })
+    const waiting = hookAsks(h)
+    await settle()
+    const pending = ask(h, deny)
+    await expect(waiting).resolves.toEqual([{ requestRef: 'ref-1', kind: 'permission', reply: 'reject' }])
+    await expect(pending).resolves.toEqual({ state: 'sent-unconfirmed', sent: ['Deny'] })
+  })
+
+  it('a second tap loses, and a tap after the hook took the answer finds it claimed', async () => {
+    const h = harness({ record: record(HOOKED), lines: BLANK })
+    const waiting = hookAsks(h)
+    await settle()
+    const first = ask(h, allow)
+    await expect(ask(h, deny)).resolves.toEqual({ state: 'refused', reason: 'claimed' })
+    await waiting
+    await expect(ask(h, deny)).resolves.toEqual({ state: 'refused', reason: 'claimed' })
+    await first
+  })
+
+  it('with no hook waiting, goes by keys on the recognised dialog as before', async () => {
+    const h = harness({ record: record(HOOKED), lines: BLANK })
+    await expect(ask(h, allow)).resolves.toEqual({ state: 'refused', reason: 'not-on-screen' })
+    expect(h.writes).toEqual([])
+  })
+
+  it('tells a hook at once when its request is not one BMN follows, and ends its wait when the request closes', async () => {
+    const h = harness({ record: record(HOOKED), lines: BLANK })
+    const started = Date.now()
+    await expect(hookAsks(h, 'ref-unknown', 5_000)).resolves.toEqual([])
+    expect(Date.now() - started).toBeLessThan(1_000)
+    expect(h.engine.hookWanted('s1', 'inc-1', 'ref-unknown')).toBe(false)
+    expect(h.engine.hookWanted('s1', 'inc-1', 'ref-1')).toBe(true)
+    expect(h.engine.hookWanted('s1', 'inc-old', 'ref-1')).toBe(false)
+    const waiting = hookAsks(h, 'ref-1', 5_000)
+    await settle()
+    h.engine.closed({ ...record(HOOKED), state: 'answered' })
+    await expect(waiting).resolves.toEqual([])
+    expect(Date.now() - started).toBeLessThan(2_000)
+    expect(h.engine.hookWanted('s1', 'inc-1', 'ref-1')).toBe(false)
+  })
+
+  it('a new prompt in the slot ends the earlier hook\'s wait, and a card for the earlier one cannot answer it', async () => {
+    const h = harness({ record: record(HOOKED), lines: BLANK })
+    const epoch = h.engine.epochOf('request-1')!
+    const waiting = hookAsks(h, 'ref-1', 5_000)
+    await settle()
+    open(h, record({ ...HOOKED, requestRef: 'ref-2' }, { revision: 2 }))
+    await expect(waiting).resolves.toEqual([])
+    expect(h.engine.hookWanted('s1', 'inc-1', 'ref-1')).toBe(false)
+    const next = hookAsks(h, 'ref-2')
+    await settle()
+    await expect(ask(h, allow, { epoch })).resolves.toEqual({ state: 'refused', reason: 'changed' })
+    const pending = ask(h, allow, { revision: 2 })
+    await expect(next).resolves.toEqual([{ requestRef: 'ref-2', kind: 'permission', reply: 'once' }])
+    await pending
+  })
+
+  it('keeps permissions off when the owner has not allowed them', async () => {
+    const h = harness({ record: record(HOOKED), lines: BLANK })
+    h.permissions.on = false
+    const waiting = hookAsks(h, 'ref-1', 100)
+    await settle()
+    await expect(ask(h, allow)).resolves.toEqual({ state: 'refused', reason: 'permissions-off' })
+    await expect(waiting).resolves.toEqual([])
+  })
+})
+
 describe('answering OpenCode through its plugin', () => {
   it('hands the plugin the answer by request id, writes no keys, and confirms from the replied event', async () => {
     const h = harness({ record: record(OPENCODE_QUESTION) })

@@ -3119,7 +3119,8 @@ describe('answers from the phone go only into the dialog that asked (Epic 30.2)'
     // The engine's answer is called from answerAttention alone; the owner route and socket handlers never name it.
     expect([...service.matchAll(/this\.answers\.answer\(/g)]).toHaveLength(1)
     const cli = readFileSync(join(__dirname, '..', '..', 'bin', 'bmn'), 'utf8')
-    expect([...cli.matchAll(/method: '(answer\.[^']*)'/g)].map((match) => match[1])).toEqual(['answer.take'])
+    // The OpenCode plugin's `answer take` and Claude's waiting permission hook (Epic 78) both only collect.
+    expect([...new Set([...cli.matchAll(/method: '(answer\.[^']*)'/g)].map((match) => match[1]))]).toEqual(['answer.take'])
   })
 })
 

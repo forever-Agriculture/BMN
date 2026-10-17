@@ -1389,8 +1389,36 @@ function hookEventName(eventName) {
   return typeof eventName === 'string' && /^[^\x00-\x1f\x7f]{1,64}$/.test(eventName) ? eventName : undefined
 }
 
+/**
+ * Epic 78: how long Claude's `PermissionRequest` hook waits for an answer from the phone, and the timeout its
+ * entry carries so Claude lets it (Claude's own default for a command hook is 600 s). Measured on 2.1.302
+ * (docs/remote-answers.md): the dialog shows and stays answerable at the desk while the hook waits, the first
+ * answer wins, and a hook that stops without a decision leaves the dialog as it was.
+ */
+const PERMISSION_WAIT_MS = 590_000
+const PERMISSION_HOOK_TIMEOUT = 600
+/** The fields of a Bash call that may go to the phone: what runs, its description and how long it may run. */
+const PHONE_BASH_FIELDS = new Set(['command', 'description', 'timeout', 'run_in_background'])
+
+/**
+ * Whether this Claude permission request may be answered by its own hook from the phone: the typed agent's main
+ * conversation, a tool family measured for it, and an input whose every approval-relevant field the card shows
+ * exactly as Claude will run it (Epic 78, R78-NFR1). Anything else keeps today's route.
+ */
+function phoneAnswerable(agent, event) {
+  if (agent !== 'claude' || event.hook_event_name !== 'PermissionRequest') return false
+  if (event.agent_id !== undefined && event.agent_id !== null) return false
+  const input = event.tool_input
+  if (event.tool_name !== 'Bash' || !isObject(input)) return false
+  if (Object.keys(input).some((key) => !PHONE_BASH_FIELDS.has(key))) return false
+  const command = input.command
+  return typeof command === 'string' && command.length <= PROMPT_LIMITS.command &&
+    promptText(command, PROMPT_LIMITS.command) === command &&
+    (input.description === undefined || typeof input.description === 'string')
+}
+
 /** Maps one Claude Code or Codex hook event to the attention calls that keep Needs you truthful. */
-function hookRequests(agent, event) {
+function hookRequests(agent, event, permissionRef = null) {
   const name = HOOK_AGENTS[agent]
   const requestKey = (slot) => `${agent}:${slot}`
   // Every call this event makes carries the event that made it, so Needs you can say where a row came from.
@@ -1511,7 +1539,7 @@ function hookRequests(agent, event) {
         bodyText(toolSummary(event.tool_input)),
         // Codex permissions stay plain: its PermissionRequest fires before Auto Review decides.
         agent === 'claude'
-          ? permissionPrompt('claude', 'permission', event.tool_name, claudeCommand(event.tool_input), { toolUseId: event.tool_use_id },
+          ? permissionPrompt('claude', 'permission', event.tool_name, claudeCommand(event.tool_input), { toolUseId: event.tool_use_id, requestRef: permissionRef },
             event.cwd, isObject(event.tool_input) ? event.tool_input.description ?? null : null)
           : undefined
       )
@@ -1635,8 +1663,46 @@ function hookEntryCommand(agent) {
   return `[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook ${agent}; exit 0`
 }
 
-function hookEntry(agent) {
-  return { type: 'command', timeout: HOOK_ENTRY_TIMEOUT, command: hookEntryCommand(agent) }
+function hookEntry(agent, event) {
+  return { type: 'command', timeout: hookEntryTimeout(agent, event), command: hookEntryCommand(agent) }
+}
+
+/**
+ * The events whose entry BMN wrote (or would recognise as its own) carries a timeout below the one BMN writes now:
+ * Epic 78 raised Claude's permission entry from 5 s, and an entry left at 5 s would cut the phone's wait short.
+ * Only BMN's own recognised command in an ungated group counts; the owner's entries are never touched.
+ */
+function shortTimeouts(agent, data) {
+  if (!isObject(data) || !isObject(data.hooks)) return []
+  const short = []
+  for (const event of HOOK_FILES[agent]?.events ?? []) {
+    const wanted = hookEntryTimeout(agent, event)
+    if (wanted === HOOK_ENTRY_TIMEOUT || !Array.isArray(data.hooks[event])) continue
+    const ours = data.hooks[event].flatMap((group) => isObject(group) && !gatesEvent(group.matcher, agent, event) && Array.isArray(group.hooks) ? group.hooks : [])
+      .filter((entry) => isObject(entry) && entry.type === 'command' && ['wired', 'older'].includes(hookEntryState(entry.command, agent)))
+    if (ours.some((entry) => typeof entry.timeout === 'number' && entry.timeout > 0 && entry.timeout < wanted)) short.push(event)
+  }
+  return short
+}
+
+/** `data` with BMN's own entries for `events` given the timeout BMN writes now; every other byte of meaning kept. */
+function raiseTimeouts(agent, data, events) {
+  if (events.length === 0) return data
+  const hooks = { ...data.hooks }
+  for (const event of events) {
+    const wanted = hookEntryTimeout(agent, event)
+    hooks[event] = hooks[event].map((group) => !isObject(group) || gatesEvent(group.matcher, agent, event) || !Array.isArray(group.hooks) ? group : {
+      ...group,
+      hooks: group.hooks.map((entry) => isObject(entry) && entry.type === 'command' && ['wired', 'older'].includes(hookEntryState(entry.command, agent)) &&
+        typeof entry.timeout === 'number' && entry.timeout > 0 && entry.timeout < wanted ? { ...entry, timeout: wanted } : entry)
+    })
+  }
+  return { ...data, hooks }
+}
+
+/** The timeout BMN writes for one event's entry: Claude's permission hook waits for the phone (Epic 78). */
+function hookEntryTimeout(agent, event) {
+  return agent === 'claude' && event === 'PermissionRequest' ? PERMISSION_HOOK_TIMEOUT : HOOK_ENTRY_TIMEOUT
 }
 
 /**
@@ -1860,7 +1926,7 @@ function installHooks(agent, data, missing) {
     const groups = Array.isArray(next.hooks[event]) ? [...next.hooks[event]] : []
     // Appended as its own group: an existing group carries a matcher this entry must not inherit.
     const matcher = HOOK_FILES[agent].matchers?.[event]
-    groups.push({ ...(matcher === undefined ? {} : { matcher }), hooks: [hookEntry(agent)] })
+    groups.push({ ...(matcher === undefined ? {} : { matcher }), hooks: [hookEntry(agent, event)] })
     next.hooks[event] = groups
   }
   return next
@@ -2190,7 +2256,8 @@ async function installHooksCommand(agent, path, asJson, yes) {
     return 1
   }
   const report = checkHooks(agent, path, file)
-  if (report.missing.length === 0) {
+  const raised = file.state === 'read' ? shortTimeouts(agent, file.data) : []
+  if (report.missing.length === 0 && raised.length === 0) {
     const message = `Nothing to do: every hook BMN expects is already in ${path}.`
     process.stdout.write(`${asJson ? JSON.stringify({ installed: [], backup: null, file: path }, null, 2) : message}\n`)
     return 0
@@ -2206,14 +2273,15 @@ async function installHooksCommand(agent, path, asJson, yes) {
     return 1
   }
   const indent = jsonIndent(file.text)
-  const nextText = `${JSON.stringify(installHooks(agent, file.data, report.missing), null, indent)}\n`
+  const nextText = `${JSON.stringify(installHooks(agent, raiseTimeouts(agent, file.data, raised), report.missing), null, indent)}\n`
   let target
   try { target = linkTarget(path) } catch (error) {
     process.stderr.write(`bmn: ${error.message}\n`)
     return 1
   }
   const diff = unifiedDiff(file.text, nextText, path)
-  if (!await confirmHookWrite(path, target, report.missing, diff, yes, asJson)) return confirmationResult(path, asJson)
+  const changes = [...report.missing, ...raised.map((event) => `${event} timeout ${hookEntryTimeout(agent, event)} s`)]
+  if (!await confirmHookWrite(path, target, changes, diff, yes, asJson)) return confirmationResult(path, asJson)
   const unchanged = () => {
     holdAtTestGate()
     if (linkTarget(path) !== target) {
@@ -2247,10 +2315,11 @@ async function installHooksCommand(agent, path, asJson, yes) {
     ? 'Codex must trust the hooks once: run /hooks in Codex. `bmn hooks check` reports configuration, not that a hook fired.'
     : '`bmn hooks check` reports configuration, not that a hook fired.'
   if (asJson) {
-    process.stdout.write(`${JSON.stringify({ installed: report.missing, backup, file: path, diff, note: trust }, null, 2)}\n`)
+    process.stdout.write(`${JSON.stringify({ installed: report.missing, ...(raised.length === 0 ? {} : { raised }), backup, file: path, diff, note: trust }, null, 2)}\n`)
     return 0
   }
-  const lines = [`Added ${report.missing.length} hook ${report.missing.length === 1 ? 'entry' : 'entries'} to ${path}: ${report.missing.join(', ')}`]
+  const lines = report.missing.length === 0 ? [] : [`Added ${report.missing.length} hook ${report.missing.length === 1 ? 'entry' : 'entries'} to ${path}: ${report.missing.join(', ')}`]
+  if (raised.length > 0) lines.push(`Raised BMN's own entry timeout in ${path}: ${raised.map((event) => `${event} to ${hookEntryTimeout(agent, event)} s`).join(', ')}`)
   if (backup !== null) lines.push(`Backup: ${backup}`)
   lines.push('', diff, '', trust)
   process.stdout.write(`${lines.join('\n')}\n`)
@@ -2327,13 +2396,18 @@ function absentClaudeOrCodex(agent, path) {
   if (file.state !== 'read' && file.state !== 'missing') return { state: 'left', placed: [], older: [], installed: [], left: [], ...unusableFile(file, path) }
   const verdicts = absentVerdicts(agent, checkHooks(agent, path, file))
   const done = { placed: verdicts.placed, older: verdicts.older, left: verdicts.left }
-  if (verdicts.absent.length === 0) return { state: 'checked', ...done, installed: [] }
+  // Epic 78: BMN's own entry with a timeout too short for what it now does is BMN's to raise.
+  const raised = file.state === 'read' ? shortTimeouts(agent, file.data) : []
+  if (verdicts.absent.length === 0 && raised.length === 0) return { state: 'checked', ...done, installed: [] }
   if (rewrittenNumbers(file.text).length > 0) {
     return { state: 'left', ...done, installed: [], why: 'numbers', detail: `${path} holds a number BMN cannot write back unchanged` }
   }
-  const nextText = `${JSON.stringify(installHooks(agent, file.data, verdicts.absent), null, jsonIndent(file.text))}\n`
+  const nextText = `${JSON.stringify(installHooks(agent, raiseTimeouts(agent, file.data, raised), verdicts.absent), null, jsonIndent(file.text))}\n`
   const backup = writeHookFile(path, file.state === 'missing' ? null : file.text, linkTarget(path), nextText)
-  return { state: 'installed', ...done, placed: [...verdicts.placed, ...verdicts.absent], installed: verdicts.absent, ...(backup === null ? {} : { backups: [backup] }) }
+  return {
+    state: 'installed', ...done, placed: [...verdicts.placed, ...verdicts.absent], installed: verdicts.absent,
+    ...(raised.length === 0 ? {} : { raised }), ...(backup === null ? {} : { backups: [backup] })
+  }
 }
 
 /**
@@ -2408,6 +2482,7 @@ async function installAbsentCommand(agents, pathFor, asJson) {
     const head = `${name}  ${result.file}`
     const body = [
       ...(result.installed.length > 0 ? [`  added: ${result.installed.join(', ')}`] : []),
+      ...((result.raised ?? []).length > 0 ? [`  timeout raised: ${result.raised.join(', ')}`] : []),
       `  in place: ${result.placed.length}${result.older.length > 0 ? ` (${result.older.join(', ')} in an older wording)` : ''}`,
       ...result.left.map((row) => `  ${row.event}: ${LEFT_WHY[row.why] ?? row.why}, left as it is${row.detail ? ` (${row.detail})` : ''}`),
       ...(result.detail ? [`  ${result.detail}; left as it is`] : []),
@@ -2819,7 +2894,9 @@ async function runHook(args) {
   if (mark?.edge === 'start') await markTurnStart(marks, mark, socketPath, token)
   // The end goes first among this event's calls: BMN answers "queued" at once and scans after the hook has gone.
   const ended = mark?.edge === 'end' ? [{ method: 'turn.mark', params: { requestId: randomUUID(), ...mark } }] : []
-  const requests = [...ended, ...report, ...hookRequests(agent, event)]
+  // Epic 78: a permission the phone may answer gets its own single-use ref, and this hook waits for that answer.
+  const permissionRef = phoneAnswerable(agent, event) ? randomUUID() : null
+  const requests = [...ended, ...report, ...hookRequests(agent, event, permissionRef)]
   const opens = requests.filter((request) => request.method === 'attention.open')
   // Story 76.4 AC3: the typed agent's own blocking question, in its main conversation, can still be refused here, before its
   // native request opens; BMN says whether it is (only while the owner said away).
@@ -2879,7 +2956,38 @@ async function runHook(args) {
     await callEach(socketPath, token, [{ method: 'away.printed', params: { agent, conversation: awayFacts.conversation, revision: answer.awayRevision, claimId: answer.awayClaim } }], HOOK_TIMEOUT_MS)
       .catch(() => undefined)
   }
+  const opened = permissionRef === null ? undefined : requests.findIndex((request) => request.params?.prompt?.requestRef === permissionRef)
+  if (!said.printed && opened !== undefined && opened >= 0 && outcomes[opened]?.result !== undefined) {
+    const decision = await phoneDecision(socketPath, token, permissionRef)
+    if (decision !== null) writeSync(1, permissionAnswer(decision))
+  }
   return 0
+}
+
+/**
+ * Epic 78: waits for the phone's answer to this one permission request, asking BMN again every 25 s. Ends with
+ * no decision the moment BMN says the request is over (answered at the desk, replaced, its process gone), the
+ * phone cannot answer it, BMN cannot be reached, or the wait is spent; Claude's dialog then stays as it was.
+ */
+async function phoneDecision(socketPath, token, requestRef) {
+  const until = Date.now() + PERMISSION_WAIT_MS
+  while (Date.now() < until) {
+    const wait = Math.max(0, Math.min(25, Math.floor((until - Date.now()) / 1000)))
+    const call = { method: 'answer.take', params: { wait, requestRef } }
+    const outcome = (await callEach(socketPath, token, [call], TIMEOUT_MS + wait * 1000).catch(() => []))[0]
+    const result = outcome?.result
+    if (!isObject(result) || !Array.isArray(result.answers)) return null
+    const mine = result.answers.find((answer) => isObject(answer) && answer.requestRef === requestRef && answer.kind === 'permission')
+    if (mine !== undefined) return mine.reply === 'once' ? 'allow' : mine.reply === 'reject' ? 'deny' : null
+    if (result.waiting !== true) return null
+  }
+  return null
+}
+
+/** The hook's decision, and nothing more: never updated input, permissions or a mode (R78-NFR1). */
+function permissionAnswer(decision) {
+  const verdict = decision === 'allow' ? { behavior: 'allow' } : { behavior: 'deny', message: 'Denied from the phone (BMN).' }
+  return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: verdict } })
 }
 
 /**

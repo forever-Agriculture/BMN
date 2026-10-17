@@ -806,9 +806,13 @@ export class CompanionService {
         resolveAttention: (p) => this.controlCall(
           () => this.closeAttentionByKey(p.sessionId, p.requestKey, 'answered', p.resolution, p.origin ?? null, p.evidence, p.producer).then(record => this.publicAttention(record))
         ),
-        takeAnswers: (p) => this.controlCall(
-          async (): Promise<{ answers: PluginAnswer[] }> => ({ answers: await this.answers.take(p.sessionId, p.incarnationId, p.waitMs, p.report ?? undefined) })
-        ),
+        takeAnswers: (p) => this.controlCall(async (): Promise<{ answers: PluginAnswer[]; waiting?: boolean }> => {
+          if (p.requestRef === undefined) return { answers: await this.answers.take(p.sessionId, p.incarnationId, p.waitMs, p.report ?? undefined) }
+          // Claude's hook waits only while its request is open here and a phone could answer it (Epic 78).
+          const answers = await this.answers.take(p.sessionId, p.incarnationId, await this.phoneMayAnswer() ? p.waitMs : 0, undefined, p.requestRef)
+          const waiting = answers.length === 0 && this.answers.hookWanted(p.sessionId, p.incarnationId, p.requestRef) && await this.phoneMayAnswer()
+          return { answers, waiting }
+        }),
         observeHookEvent: (p) => this.controlCall(async () => {
           const recorded = await this.observeHookEvent(p)
           // Epic 69: a tool that ran, a conversation that started or ended; it moves a turn's record and answers nothing.
@@ -2000,6 +2004,12 @@ export class CompanionService {
     return record.prompt?.harness === 'opencode'
       ? record.incarnationId !== null && this.options.manager.liveIncarnationId(record.sessionId) === record.incarnationId
       : this.producers.current(record)
+  }
+
+  /** Whether a permission could be answered from Telegram at all: Telegram on and permission answers allowed. */
+  private async phoneMayAnswer(): Promise<boolean> {
+    const settings = await this.options.database.companion('getSettings').catch(() => null)
+    return settings !== null && settings.telegram.enabled && settings.telegram.answerPermissions
   }
 
   /** Whether a tap could answer this request now, and whether it may offer Deny. */
