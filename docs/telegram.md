@@ -55,8 +55,10 @@ session. It uses a bot you create and own. It is off by default.
   script on a timer), switch one of them off, or both will message you. Linux only.
 - When an agent asks for your attention (`bmn ask`, or a Claude Code, Codex or OpenCode hook), the bot
   sends you the request while you are away from the desk and the request is still unanswered. If
-  BMN cannot read idle time, it treats you as away. Claude sessions connected to Remote Control
-  are left to the Claude app. Optionally it also tells you when a session's process exits while you
+  BMN cannot read idle time, it treats you as away. Once you have said you are away (`/away`, or
+  `bmn away` on your word), a permission goes out at once instead of after BMN's usual 15 s wait.
+  A question from a Claude session connected to Remote Control is left to the Claude app; a permission
+  is sent anyway (Epic 78), and whichever answer comes first, the app's, the card's or the desk's, wins. Optionally it also tells you when a session's process exits while you
   are away. See
   [agent-control.md](agent-control.md#agent-hooks-needs-you-for-claude-code-codex-and-opencode).
 - Reply to that message in Telegram. By default the reply is saved as a **draft** for that exact
@@ -148,8 +150,15 @@ What can be tapped (see [remote-answers.md](remote-answers.md) for how each is v
 | Subagent and sandbox prompts | answer at the laptop | answer at the laptop | answer at the laptop |
 
 Permission buttons appear only after you tick **Answer permission prompts from Telegram** in
-Preferences → Notifications → Telegram (off by default). They answer the exact prompt on screen, once; there is no
-"always allow". A command too long to show whole (over 3,000 characters) gets no buttons: the card
+Preferences → Notifications → Telegram (off by default). They answer the exact prompt, once; there is no
+"always allow". For a Claude `Bash` prompt the answer goes to that prompt's own waiting hook (up to about ten
+minutes), so the dialog's extra lines in auto mode do not matter; the desk can still answer it meanwhile
+([remote-answers.md](remote-answers.md#claude-code-21302-permissions-answered-by-the-hook-epic-78)). A Claude permission
+card also says when Claude denies it by itself: **Claude denies this by itself at 14:32 unless answered**, read off
+the countdown Claude draws (auto mode), **No auto-deny countdown shown at the laptop**, or **Auto-deny deadline
+unknown** when BMN cannot see the dialog. A card says **Answered at the laptop** only when the tool ran with exactly
+that input; a prompt that closed any other way (denied at the desk, expired, the turn moved on) says **No longer
+open**. A command too long to show whole (over 3,000 characters) gets no buttons: the card
 says **The command is too long to show here. Answer at the laptop.** With the setting off, a permission card ends **Answer this at the laptop.**
 
 Cards without buttons are drawn the same way and end **No buttons for this kind yet. Answer at the

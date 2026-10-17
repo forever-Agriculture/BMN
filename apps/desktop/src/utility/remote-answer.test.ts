@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseAttentionPrompt, type AttentionEvidence, type AttentionPrompt, type AttentionRecord } from '@bmn/protocol'
-import { RemoteAnswers, answerRoute, cleanTypedAnswer, evidenceConfirms, type AnswerOutcome, type QuestionChoice, type RemoteAnswer, type ScreenLike } from './remote-answer'
+import { RemoteAnswers, claudeCountdownMs, answerRoute, cleanTypedAnswer, evidenceConfirms, type AnswerOutcome, type QuestionChoice, type RemoteAnswer, type ScreenLike } from './remote-answer'
 
 const SCREENS = join(__dirname, 'test-fixtures', 'remote-answers', 'screens')
 const screen = (name: string): string[] => readFileSync(join(SCREENS, name), 'utf8').split('\n')
@@ -520,6 +520,29 @@ describe('answering a Claude permission through its own waiting hook (Epic 78)',
     await settle()
     await expect(ask(h, allow)).resolves.toEqual({ state: 'refused', reason: 'permissions-off' })
     await expect(waiting).resolves.toEqual([])
+  })
+})
+
+describe('Claude\'s own countdown on a permission (Story 78.5)', () => {
+  const COUNTDOWN = ' ⚠ Claude Code will automatically deny this request in 1:59, to avoid blocking progress on an unattended session'
+
+  it('reads the time left from the line Claude draws, and nothing from any other line', () => {
+    expect(claudeCountdownMs([COUNTDOWN])).toBe(119_000)
+    expect(claudeCountdownMs([' ⚠ Claude Code will automatically deny this request in 0:05, to avoid'])).toBe(5_000)
+    expect(claudeCountdownMs(['Do you want to proceed?', 'deny in 1:59'])).toBeNull()
+  })
+
+  it('keeps the first reading, says none for a dialog drawn without one, unknown without a screen', () => {
+    const h = harness({ record: record(CLAUDE_BASH), lines: ['Bash command', '  touch spike-allow.txt', COUNTDOWN, 'Do you want to proceed?'] })
+    expect(h.engine.deadline(record(CLAUDE_BASH), 1_000)).toEqual({ state: 'at', at: 120_000 })
+    h.screens.get('s1')!.show(['Do you want to proceed?'])
+    expect(h.engine.deadline(record(CLAUDE_BASH), 50_000)).toEqual({ state: 'at', at: 120_000 })
+    expect(h.engine.deadline(record(CLAUDE_BASH, { revision: 2 }), 50_000)).toEqual({ state: 'none' })
+    h.screens.get('s1')!.show(['❯ '])
+    expect(h.engine.deadline(record(CLAUDE_BASH, { revision: 3 }), 50_000)).toEqual({ state: 'unknown' })
+    h.live.delete('s1')
+    expect(h.engine.deadline(record(CLAUDE_BASH, { revision: 4 }), 50_000)).toEqual({ state: 'unknown' })
+    expect(h.engine.deadline(record(OPENCODE_PERMISSION), 50_000)).toEqual({ state: 'unknown' })
   })
 })
 

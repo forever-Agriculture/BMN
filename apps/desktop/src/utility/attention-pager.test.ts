@@ -26,7 +26,7 @@ function record(change: Partial<AttentionRecord> = {}): AttentionRecord {
   }
 }
 
-function pagerFixture(holdQuiet?: (record: AttentionRecord) => Promise<boolean>): {
+function pagerFixture(holdQuiet?: (record: AttentionRecord) => Promise<boolean>, said?: { away: boolean }): {
   pager: ReturnType<typeof createAttentionPager>
   stored: Map<string, AttentionRecord>
   sent: AttentionRecord[]
@@ -42,6 +42,7 @@ function pagerFixture(holdQuiet?: (record: AttentionRecord) => Promise<boolean>)
   let due: Array<() => void> = []
   const pager = createAttentionPager({
     ...(holdQuiet ? { holdQuiet } : {}),
+    ...(said ? { saidAway: () => said.away } : {}),
     ownerAway: () => presence.away,
     now: () => presence.now,
     current: async (requestId) => stored.get(requestId) ?? null,
@@ -291,5 +292,35 @@ describe('definitely unsent attention', () => {
     h.stored.set(opened.requestId, opened); h.pager.opened(opened); await h.elapse()
     h.state.available = true; h.pager.retryUnsent(); h.state.hold = null; release()
     await h.settle(); expect(h.sent).toEqual([opened]); expect(h.state.attempts).toBe(2)
+  })
+})
+
+describe('a permission once he said he is away (Story 78.5)', () => {
+  it('goes out with no wait of BMN\'s own, while questions keep theirs', async () => {
+    const said = { away: true }
+    const fixture = pagerFixture(undefined, said)
+    const permission = record()
+    const question = record({ requestId: 'request-2', requestKey: 'claude:question', kind: 'question' })
+    fixture.stored.set(permission.requestId, permission)
+    fixture.stored.set(question.requestId, question)
+    fixture.pager.opened(permission)
+    fixture.pager.opened(question)
+    expect(fixture.waits).toEqual([0, 15_000])
+  })
+
+  it('keeps the usual wait when he has not said so, even with the desk idle', async () => {
+    const fixture = pagerFixture(undefined, { away: false })
+    fixture.stored.set('request-1', record())
+    fixture.pager.opened(record())
+    expect(fixture.waits).toEqual([15_000])
+  })
+
+  it('still holds a permission for quiet hours', async () => {
+    const fixture = pagerFixture(async () => true, { away: true })
+    fixture.stored.set('request-1', record())
+    fixture.pager.opened(record())
+    expect(fixture.waits).toEqual([0])
+    await fixture.elapse()
+    expect(fixture.sent).toEqual([])
   })
 })

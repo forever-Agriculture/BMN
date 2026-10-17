@@ -36,7 +36,7 @@ import {
   type UsageWindow
 } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CompanionService } from './companion-service'
+import { deadlineLine, CompanionService } from './companion-service'
 import type { DatabaseWorkerClient } from './database-client'
 import { scrubBackupProducerBindings, COMPANION_OPERATIONS, insertArtifact, listReadyArtifacts, type CompanionOperationName } from './database-companion-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
@@ -3029,6 +3029,24 @@ describe('answers from the phone go only into the dialog that asked (Epic 30.2)'
     expect(closed).toMatchObject({ resolvedBy: 'hook:claude:PostToolUse', resolution: 'answered in the terminal' })
   })
 
+  it('calls a Claude permission answered only when the tool ran with exactly its input (R78-FR4)', async () => {
+    await service['openAttention'](bash)
+    // A turn that stopped, a new prompt, or another tool: it may have been denied or expired; it is only no longer open.
+    for (const [origin, evidence] of [
+      ['hook:claude:Stop', undefined],
+      ['hook:claude:UserPromptSubmit', undefined],
+      ['hook:claude:PostToolUse', { toolUseId: 'toolu_y', requestRef: null, answers: null, permission: 'allowed' as const, tool: 'Bash', command: 'ls' }]
+    ] as const) {
+      const closed = await service['closeAttentionByKey']('s1', 'claude:permission', 'answered', 'answered in the terminal', origin, evidence)
+      expect(closed).toMatchObject({ state: 'withdrawn' })
+      await service['openAttention'](bash)
+    }
+    const ran = await service['closeAttentionByKey']('s1', 'claude:permission', 'answered', 'answered in the terminal', 'hook:claude:PostToolUse', {
+      toolUseId: 'toolu_x', requestRef: null, answers: null, permission: 'allowed', tool: 'Bash', command: 'touch spike-allow.txt'
+    })
+    expect(ran).toMatchObject({ state: 'answered', resolution: 'answered in the terminal' })
+  })
+
   it('closes a Claude deny it could not confirm, saying so, because no hook will', async () => {
     await allowPermissions()
     screens.set('s1', new FakeScreen(screenOf('claude-bash-permission.txt')))
@@ -4186,5 +4204,14 @@ describe('Away (Story 76.3)', () => {
     await service['handleTelegramReply'](reply(21, '/away@other_bot'))
     expect(service.awayForOwner().state).toBe('none')
     expect(sent.every(message => message.startsWith('Reply to a notification'))).toBe(true)
+  })
+})
+
+describe('the deadline line on a Claude permission card (Story 78.5)', () => {
+  it('says the time read off Claude\'s countdown, that none is shown, or that it is unknown; never a guessed length', () => {
+    const at = new Date(2026, 9, 17, 14, 32, 10).getTime()
+    expect(deadlineLine({ state: 'at', at })).toBe('Claude denies this by itself at 14:32 unless answered')
+    expect(deadlineLine({ state: 'none' })).toBe('No auto-deny countdown shown at the laptop')
+    expect(deadlineLine({ state: 'unknown' })).toBe('Auto-deny deadline unknown')
   })
 })

@@ -168,6 +168,14 @@ in <code>~/code/api</code>`)
     expect(card.keyboard).toEqual([[{ text: 'Allow once', callback_data: 'al' }, { text: 'Deny', callback_data: 'de' }]])
   })
 
+  it('3. says when Claude denies it by itself, under where it runs (Story 78.5)', () => {
+    const card = permissionCard({
+      header: CLAUDE, prompt: BASH, tokens: { allow: 'al', deny: 'de' }, closedBecause: null, home: '/home/owner',
+      deadline: 'Claude denies this by itself at 14:32 unless answered'
+    })
+    expect(card.text.endsWith('in <code>~/code/api</code>\n⏱ Claude denies this by itself at 14:32 unless answered')).toBe(true)
+  })
+
   it('3. offers no Deny when a deny would answer more than this request', () => {
     const card = permissionCard({ header: CLAUDE, prompt: BASH, tokens: { allow: 'al', deny: null }, closedBecause: null, home: null })
     expect(card.keyboard).toEqual([[{ text: 'Allow once', callback_data: 'al' }]])

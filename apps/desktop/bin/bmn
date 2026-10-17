@@ -2902,8 +2902,10 @@ async function runHook(args) {
   // native request opens; BMN says whether it is (only while the owner said away).
   const refusable = awayRefusableQuestion(agent, event) ? opens.find((request) => request.params.kind === 'question') : undefined
   if (refusable !== undefined) refusable.params.awayRefusable = true
-  if (agent === 'claude' && opens.length > 0 && claudeRemoteControlled(agentPid, event.session_id)) {
-    for (const request of opens) request.params.phoneNotified = true
+  // Remote Control shows the Claude app's own notice, so BMN does not page a question too; a permission it still pages,
+  // since the phone answers it from the card (owner card 2026-10-17: "Always send"; Story 78.5).
+  if (agent === 'claude' && opens.some((request) => request.params.kind !== 'permission') && claudeRemoteControlled(agentPid, event.session_id)) {
+    for (const request of opens) if (request.params.kind !== 'permission') request.params.phoneNotified = true
   }
   // One observation per event, whether or not it changed anything: an event that opened nothing is
   // exactly what the owner needs to see when a request they expected never arrived. It goes last, on the

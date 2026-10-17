@@ -157,6 +157,21 @@ export function answerRoute(prompt: AttentionPrompt | null): AnswerRoute | null 
   return prompt.requestRef !== null ? 'claude-hook' : 'claude-keys'
 }
 
+/**
+ * Claude's own countdown on a prompt it denies by itself when nobody answers (auto mode; 120.05-120.20 s measured on
+ * 2.1.302, Story 78.1), read from the line it draws: "Claude Code will automatically deny this request in 1:59".
+ */
+export function claudeCountdownMs(lines: readonly string[]): number | null {
+  for (const line of lines) {
+    const match = /automatically deny this request in (\d{1,2}):(\d\d)\b/.exec(line)
+    if (match) return (Number(match[1]) * 60 + Number(match[2])) * 1000
+  }
+  return null
+}
+
+/** When Claude denies a prompt by itself: a time read off its own countdown, none drawn, or not known (no screen). */
+export type PromptDeadline = { state: 'at'; at: number } | { state: 'none' } | { state: 'unknown' }
+
 /** Whether a report names this prompt's own harness id, which no successor dialog shares. */
 function namesItself(prompt: AttentionPrompt, evidence: AttentionEvidence): boolean {
   return (prompt.requestRef !== null && evidence.requestRef === prompt.requestRef) ||
@@ -353,6 +368,8 @@ export class RemoteAnswers {
   /** OpenCode permission requests still waiting, per session: its `reject` answers all of them at once. */
   private readonly openCodePermissions = new Map<string, Set<string>>()
   private readonly lateListeners = new Set<(requestId: string, outcome: AnswerOutcome) => void>()
+  /** The countdown first read for a request revision: it only runs down, so the first reading stands. */
+  private readonly deadlines = new Map<string, number>()
   /** Per answer being typed, the listener that notes screen changes since its last key. */
   private readonly stopScreenTracking = new Map<string, () => void>()
 
@@ -408,6 +425,28 @@ export class RemoteAnswers {
     }
   }
 
+  /**
+   * When Claude will deny this permission by itself if nobody answers (Story 78.5): read from the session's screen
+   * while the dialog is drawn, never assumed. Other harnesses and questions: unknown.
+   */
+  deadline(record: AttentionRecord, now: number): PromptDeadline {
+    const prompt = record.prompt
+    if (!prompt || prompt.type !== 'permission' || prompt.harness !== 'claude' || record.incarnationId === null) return { state: 'unknown' }
+    const key = `${record.requestId}:${record.revision}`
+    const known = this.deadlines.get(key)
+    if (known !== undefined) return { state: 'at', at: known }
+    const screen = this.deps.screen(record.sessionId, record.incarnationId)
+    if (!screen) return { state: 'unknown' }
+    const lines = screen.lines()
+    const left = claudeCountdownMs(lines)
+    if (left !== null) {
+      this.deadlines.set(key, now + left)
+      return { state: 'at', at: now + left }
+    }
+    // A permission dialog drawn with no countdown line has none; with no dialog drawn, nothing is known.
+    return lines.some((line) => /Do you want to proceed\?/.test(line)) ? { state: 'none' } : { state: 'unknown' }
+  }
+
   /** The dialog epoch a card is sent for; null when the request is not followed. */
   epochOf(requestId: string): number | null {
     return this.tracked.get(requestId)?.epoch ?? null
@@ -448,6 +487,7 @@ export class RemoteAnswers {
 
   /** Called once a request is no longer open, by whatever closed it. */
   closed(record: AttentionRecord): void {
+    for (const key of [...this.deadlines.keys()]) if (key.startsWith(`${record.requestId}:`)) this.deadlines.delete(key)
     const pending = this.pending.get(record.requestId)
     if (pending) pending.closed = true
     this.tracked.delete(record.requestId)

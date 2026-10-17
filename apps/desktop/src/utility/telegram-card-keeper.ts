@@ -55,6 +55,8 @@ export interface CardKeeperDependencies {
   getAttention(requestId: string): Promise<AttentionRecord | null>
   header(sessionId: string, record: AttentionRecord | null): CardHeader
   answerability(record: AttentionRecord): Promise<Answerability>
+  /** Story 78.5: the line saying when the agent denies a permission by itself; null where nothing is said. */
+  deadline?(record: AttentionRecord): string | null
   answerEpoch(requestId: string): number | null
   liveIncarnationId(sessionId: string): string | undefined
   answer(request: AnswerRequest): Promise<AnswerOutcome>
@@ -657,10 +659,11 @@ export class TelegramCardKeeper {
       (record.incarnationId ?? this.deps.liveIncarnationId(record.sessionId)) !== undefined
     const answerable = answerability.answerable && bound
     if (prompt.type === 'permission') {
+      const deadline = this.deps.deadline?.(record) ?? null
       // A command the card must clip is answered at the laptop, never approved unseen.
       if (!answerable || !commandShownWhole(prompt)) {
         const closedBecause = answerability.answerable ? 'unsupported' : answerability.reason
-        return { ...none, rendered: permissionCard({ header, prompt, tokens: null, closedBecause, home: this.deps.home, note }) }
+        return { ...none, rendered: permissionCard({ header, prompt, tokens: null, closedBecause, home: this.deps.home, note, deadline }) }
       }
       const deny = answerability.answerable && answerability.deny
       const tokens = { allow: this.newToken(), deny: deny ? this.newToken() : null }
@@ -670,7 +673,7 @@ export class TelegramCardKeeper {
         state: 'buttons',
         actions,
         offersOther: false,
-        rendered: permissionCard({ header, prompt, tokens, closedBecause: null, home: this.deps.home, note })
+        rendered: permissionCard({ header, prompt, tokens, closedBecause: null, home: this.deps.home, note, deadline })
       }
     }
     if (!answerable) {

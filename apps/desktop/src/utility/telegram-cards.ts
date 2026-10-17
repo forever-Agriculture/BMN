@@ -347,6 +347,8 @@ export interface PermissionCardInput {
   closedBecause: 'permissions-off' | 'unsupported' | null
   home: string | null
   note?: string | null
+  /** Story 78.5: when the agent denies the prompt by itself, already worded ("Denied by itself at 14:32 unless answered"). */
+  deadline?: string | null
 }
 
 export function permissionCard(input: PermissionCardInput): RenderedCard {
@@ -357,7 +359,8 @@ export function permissionCard(input: PermissionCardInput): RenderedCard {
     `<i>${escapeHtml(permissionWants(prompt))}</i>`,
     '',
     `<pre>${escapeHtml(command)}</pre>`,
-    ...(prompt.cwd ? [`in <code>${escapeHtml(clip(homeRelative(said(prompt.cwd), input.home), 300))}</code>`] : [])
+    ...(prompt.cwd ? [`in <code>${escapeHtml(clip(homeRelative(said(prompt.cwd), input.home), 300))}</code>`] : []),
+    ...(input.deadline ? [`⏱ ${escapeHtml(input.deadline)}`] : [])
   ].join('\n')
   const tokens = prompt.command !== null && !commandShownWhole(prompt) ? null : input.tokens
   const trailer = tokens !== null

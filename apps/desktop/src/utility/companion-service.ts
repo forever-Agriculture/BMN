@@ -107,7 +107,7 @@ import { readCodexUsage } from './codex-usage'
 import { searchFileReferences } from './file-reference-search'
 import { PAGE_AFTER_MS, createAttentionPager } from './attention-pager'
 import { observeTelegramDelivery, type TelegramDeliveryEvent } from './telegram-delivery'
-import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer } from './remote-answer'
+import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer, type PromptDeadline } from './remote-answer'
 import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramCardKeeper } from './telegram-card-keeper'
 import { QUIET_LEDGER_KEY, QuietHoursDelivery, phoneField } from './quiet-hours-delivery'
@@ -577,6 +577,8 @@ export class CompanionService {
         return () => clearTimeout(timer)
       },
       ownerAway: () => this.ownerAway(),
+      // Story 78.5: once he said he is away, a permission goes out with no wait of BMN's own.
+      saidAway: () => this.awayRecord.state === 'away',
       now: () => this.now().getTime(),
       observeDelivery: (event) => this.logTelegramDelivery(event),
       ...(options.pageAfterMs !== undefined
@@ -652,6 +654,8 @@ export class CompanionService {
         }
       },
       answerability: (record) => this.answerability(record),
+      deadline: (record) => record.state === 'open' && record.prompt?.type === 'permission' && record.prompt.harness === 'claude'
+        ? deadlineLine(this.answers.deadline(record, this.now().getTime())) : null,
       answerEpoch: (requestId) => this.answerEpoch(requestId),
       liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
       answer: (request) => this.answerAttention(request),
@@ -1837,6 +1841,11 @@ export class CompanionService {
     // The harness reporting exactly the answer sent from the phone closes the request as the phone's.
     const remoteRequestId = evidence ? this.answers.evidence(sessionId, requestKey, evidence) : null
     const answeredRemotely = remoteRequestId !== null
+    // R78-FR4: a Claude permission is "answered" only on the tool running with exactly its input; a turn that ended,
+    // a new prompt or another tool may follow a deny, an expiry or Claude's own denial, so it is only no longer open.
+    const heldPermission = held?.prompt?.type === 'permission' && held.prompt.harness === 'claude' ? held.prompt : null
+    if (state === 'answered' && !answeredRemotely && heldPermission !== null && !(evidence?.permission === 'allowed' &&
+      evidence.tool === heldPermission.tool && evidence.command === heldPermission.command)) state = 'withdrawn'
     const record = await this.options.database.companion(
       'closeAttention',
       // A report about another request of the same slot (OpenCode's queued permissions) leaves this one open.
@@ -3363,4 +3372,12 @@ export class CompanionService {
       replyToMessageId: reply.messageId
     }).catch(() => undefined)
   }
+}
+
+/** Story 78.5: what a Claude permission card says about Claude denying it by itself; never a guessed length. */
+export function deadlineLine(deadline: PromptDeadline): string {
+  if (deadline.state === 'none') return 'No auto-deny countdown shown at the laptop'
+  if (deadline.state === 'unknown') return 'Auto-deny deadline unknown'
+  const at = new Date(deadline.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+  return `Claude denies this by itself at ${at} unless answered`
 }

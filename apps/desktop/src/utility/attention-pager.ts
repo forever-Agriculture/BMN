@@ -22,6 +22,8 @@ export interface AttentionPagerOptions {
   schedule(callback: () => void, ms: number): () => void
   /** False while the owner is at the desk, where the app already notified them; null when presence cannot be read. */
   ownerAway(): boolean | null
+  /** Story 78.5: whether he said he is away (not just left the desk); a permission is then sent with no wait. */
+  saidAway?(): boolean
   now(): number
   pageAfterMs?: Readonly<Record<AttentionKind, number>>
   leftWithinMs?: number
@@ -124,8 +126,9 @@ export function createAttentionPager(options: AttentionPagerOptions): {
         return
       }
       const openedAt = options.now()
+      const delayMs = record.kind === 'permission' && options.saidAway?.() === true ? 0 : pageAfterMs[record.kind]
       observeTelegramDelivery(options.observeDelivery, record, 'scheduled', {
-        away: options.ownerAway(), delayMs: pageAfterMs[record.kind]
+        away: options.ownerAway(), delayMs
       })
       pending.set(key, options.schedule(() => {
         pending.delete(key)
@@ -137,7 +140,7 @@ export function createAttentionPager(options: AttentionPagerOptions): {
           atDesk.set(key, { record, openedAt })
         }
         else void page(key, record, openedAt)
-      }, pageAfterMs[record.kind]))
+      }, delayMs))
     },
     ownerLeft: () => {
       if (closed) return

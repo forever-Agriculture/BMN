@@ -944,14 +944,19 @@ describe('bmn hook', () => {
     expect(fixture.handlers.openAttention.mock.calls[0]?.[0]).toMatchObject({ requestKey: 'claude:turn', kind: 'notice' })
   })
 
-  it('marks requests from a Claude session under Remote Control as already sent to the phone', async () => {
+  it('marks questions from a Claude session under Remote Control as already sent to the phone, never permissions (Story 78.5)', async () => {
     const fixture = await cliFixture()
     const sessions = join(fixture.root, 'claude', 'sessions')
     await mkdir(sessions, { recursive: true })
-    const prompt = { hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Allow Bash?' }
+    const prompt = { hook_event_name: 'Notification', notification_type: 'elicitation_dialog', message: 'Claude has a question' }
     const bridged = { pid: 7001, sessionId: 'claude-1', status: 'waiting', bridgeSessionId: 'session_01abc' }
 
     await writeFile(join(sessions, '7001.json'), JSON.stringify(bridged))
+    // The owner's card of 2026-10-17 ("Always send"): a permission goes to the phone even under Remote Control.
+    await runHook(fixture, 'claude', { hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Allow Bash?', session_id: 'claude-1' })
+    expect(fixture.handlers.openAttention.mock.calls.at(-1)?.[0]).toMatchObject({ kind: 'permission' })
+    expect(fixture.handlers.openAttention.mock.calls.at(-1)?.[0].phoneNotified).toBeUndefined()
+    fixture.handlers.openAttention.mockClear()
     await runHook(fixture, 'claude', { ...prompt, session_id: 'claude-1' })
     await runHook(fixture, 'claude', { ...prompt, session_id: 'claude-2' })
     await runHook(fixture, 'codex', { hook_event_name: 'Stop', session_id: 'claude-1' })
