@@ -125,8 +125,12 @@ or another process), Telegram is off or permission answers are off, or BMN canno
 then use the keys route below, as before. Every other input (another field such as `dangerouslyDisableSandbox`, a
 subagent, another tool) keeps the keys route or none.
 
-**Tool families with buttons:** `Bash`. Measured but without buttons yet: `Write`, `Edit` (Story 78.3). Not
-measured, so no buttons: MCP tools, `WebFetch`, `NotebookEdit` and every other tool.
+**Tool families with buttons:** `Bash`; `Write` and `Edit` through the hook only (Story 78.3), when their input
+holds only `file_path` and `content`, or `file_path`, `old_string`, `new_string` and `replace_all`. The card shows the
+whole change as one text, each part after its length in characters so no content can pass for another part:
+`Write <path>, the whole file (N characters):` then the content; `Edit <path>, replacing one occurrence|every
+occurrence of (N characters):` then the old text, `with (M characters):` then the new. A change longer than the card
+goes as a file (Story 78.4). Not measured, so no buttons: MCP tools, `WebFetch`, `NotebookEdit` and every other tool.
 
 ## Codex 0.157.1
 

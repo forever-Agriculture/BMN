@@ -4714,6 +4714,25 @@ describe('structured prompts from the recorded hooks (Epic 30)', () => {
       expect(lastOpen(fixture).prompt).toMatchObject({ command, requestRef: expect.stringMatching(UUID) })
     })
 
+    it('shows a Write or an Edit whole, each text after its length, and reports the same text when it ran (Story 78.3)', async () => {
+      const fixture = await cliFixture()
+      const event = await permission()
+      await runHook(fixture, 'claude', { ...event, tool_name: 'Write', tool_input: { file_path: '/work/project/notes.md', content: '# Notes\nwith (2 characters):\nx' } })
+      expect(lastOpen(fixture).prompt).toMatchObject({
+        tool: 'Write', requestRef: expect.stringMatching(UUID),
+        command: 'Write /work/project/notes.md, the whole file (30 characters):\n# Notes\nwith (2 characters):\nx'
+      })
+      const edit = { file_path: '/work/project/a.ts', old_string: 'const é = 1', new_string: 'const é = 2', replace_all: true }
+      await runHook(fixture, 'claude', { ...event, tool_name: 'Edit', tool_input: edit })
+      const shown = 'Edit /work/project/a.ts, replacing every occurrence of (11 characters):\nconst é = 1\nwith (11 characters):\nconst é = 2'
+      expect(lastOpen(fixture).prompt).toMatchObject({ tool: 'Edit', requestRef: expect.stringMatching(UUID), command: shown })
+      await runHook(fixture, 'claude', { ...event, tool_name: 'Edit', tool_input: { ...edit, replace_all: undefined } })
+      expect((lastOpen(fixture).prompt as { command: string }).command).toContain('replacing one occurrence of')
+      await runHook(fixture, 'claude', { ...event, hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: edit, tool_use_id: 'toolu_e', tool_response: {} })
+      const resolved = fixture.handlers.resolveAttention.mock.calls.map(([params]) => params).find((params) => params.requestKey === 'claude:permission')
+      expect(resolved?.evidence).toMatchObject({ permission: 'allowed', tool: 'Edit', command: shown })
+    })
+
     it('a second identical prompt gets a new ref', async () => {
       const fixture = await cliFixture()
       await runHook(fixture, 'claude', await permission())
@@ -4731,7 +4750,9 @@ describe('structured prompts from the recorded hooks (Epic 30)', () => {
         { ...event, tool_input: { ...input, command: ' touch spike-allow.txt' } },
         { ...event, tool_input: { ...input, command: 'x'.repeat(100_001) } },
         { ...event, agent_id: 'agent-1' },
-        { ...event, tool_name: 'Edit', tool_input: { file_path: '/work/project/a', old_string: 'a', new_string: 'b' } }
+        { ...event, tool_name: 'WebFetch', tool_input: { url: 'https://example.invalid', prompt: 'read it' } },
+        { ...event, tool_name: 'Edit', tool_input: { file_path: '/work/project/a', old_string: 'a', new_string: 'b', extra: 1 } },
+        { ...event, tool_name: 'Write', tool_input: { file_path: '/work/project/a', content: 'a\rb' } }
       ]
       for (const each of cases) {
         const fixture = await cliFixture()

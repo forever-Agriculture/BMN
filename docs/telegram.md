@@ -149,7 +149,7 @@ What can be tapped (see [remote-answers.md](remote-answers.md) for how each is v
 | --- | --- | --- | --- |
 | One question, one choice | buttons | buttons (Plan mode) | buttons |
 | Several questions | buttons | buttons | buttons |
-| Permission | **Allow once** / **Deny** for `Bash` | answer at the laptop | **Allow once** / **Deny** (Deny only when it is the only permission waiting) |
+| Permission | **Allow once** / **Deny** for `Bash`, `Write` and `Edit` (Epic 78) | answer at the laptop | **Allow once** / **Deny** (Deny only when it is the only permission waiting) |
 | Multi-select | toggles | — (Codex has none) | toggles |
 | Other… (your own words) | on every question | on every question, sent as "None of the above" with your text as its note | unless the question turned it off |
 | Back | buttons | buttons | buttons |

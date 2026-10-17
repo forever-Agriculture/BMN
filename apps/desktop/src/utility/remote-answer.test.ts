@@ -436,7 +436,11 @@ describe('answering a Claude permission through its own waiting hook (Epic 78)',
 
   it('has its own route only while a hook asked for the request', () => {
     expect(answerRoute(HOOKED)).toBe('claude-hook')
-    expect(answerRoute({ ...HOOKED, tool: 'Edit' })).toBeNull()
+    // Story 78.3: Write and Edit only through their hook, never by keys; any other tool not at all.
+    expect(answerRoute({ ...HOOKED, tool: 'Edit' })).toBe('claude-hook')
+    expect(answerRoute({ ...HOOKED, tool: 'Write' })).toBe('claude-hook')
+    expect(answerRoute({ ...HOOKED, tool: 'Edit', requestRef: null })).toBeNull()
+    expect(answerRoute({ ...HOOKED, tool: 'WebFetch' })).toBeNull()
     expect(answerRoute({ ...HOOKED, command: null })).toBeNull()
   })
 
@@ -473,6 +477,19 @@ describe('answering a Claude permission through its own waiting hook (Epic 78)',
     await waiting
     await expect(ask(h, deny)).resolves.toEqual({ state: 'refused', reason: 'claimed' })
     await first
+  })
+
+  it('answers an Edit only through its waiting hook, never by keys (Story 78.3)', async () => {
+    const EDIT: AttentionPrompt = { ...HOOKED, tool: 'Edit', command: 'Edit /a, replacing one occurrence of (1 characters):\na\nwith (1 characters):\nb' }
+    const h = harness({ record: record(EDIT), lines: BLANK })
+    await expect(ask(h, allow)).resolves.toEqual({ state: 'refused', reason: 'unsupported' })
+    const waiting = hookAsks(h)
+    await settle()
+    const pending = ask(h, allow)
+    await expect(waiting).resolves.toEqual([{ requestRef: 'ref-1', kind: 'permission', reply: 'once' }])
+    h.engine.evidence('s1', 'claude:permission', evidence({ permission: 'allowed', tool: 'Edit', command: EDIT.type === 'permission' ? EDIT.command : null }))
+    await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['Allow once'] })
+    expect(h.writes).toEqual([])
   })
 
   it('with no hook waiting, goes by keys on the recognised dialog as before', async () => {

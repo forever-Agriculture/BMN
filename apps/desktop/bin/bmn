@@ -1259,6 +1259,35 @@ function permissionPrompt(harness, shape, tool, command, ids, cwd, description) 
   }
 }
 
+/**
+ * Story 78.3: what a Claude file tool would do, every approval-relevant field in one text the card shows and the
+ * phone approves: the path, and the whole content, or the text replaced, its replacement and how often. Each text
+ * is preceded by its length in characters, so no content can pass for another field. Null for an input with any
+ * other field, or one not of this shape.
+ */
+function claudeFileChange(tool, input) {
+  if (!isObject(input) || typeof input.file_path !== 'string' || input.file_path === '') return null
+  const length = (text) => [...text].length.toLocaleString('en-US')
+  if (tool === 'Write') {
+    if (Object.keys(input).some((key) => !['file_path', 'content'].includes(key)) || typeof input.content !== 'string') return null
+    return `Write ${input.file_path}, the whole file (${length(input.content)} characters):\n${input.content}`
+  }
+  if (tool === 'Edit') {
+    if (Object.keys(input).some((key) => !['file_path', 'old_string', 'new_string', 'replace_all'].includes(key))) return null
+    if (typeof input.old_string !== 'string' || typeof input.new_string !== 'string') return null
+    if (input.replace_all !== undefined && typeof input.replace_all !== 'boolean') return null
+    const how = input.replace_all === true ? 'every occurrence' : 'one occurrence'
+    return `Edit ${input.file_path}, replacing ${how} of (${length(input.old_string)} characters):\n${input.old_string}\n` +
+      `with (${length(input.new_string)} characters):\n${input.new_string}`
+  }
+  return null
+}
+
+/** What a Claude tool's permission shows: a file tool's whole change (Story 78.3), else the one field it acts on. */
+function claudeApproval(tool, input) {
+  return tool === 'Write' || tool === 'Edit' ? claudeFileChange(tool, input) : claudeCommand(input)
+}
+
 /** The exact thing a Claude tool would act on, when it names one; otherwise null, never a JSON dump. */
 function claudeCommand(input) {
   if (!isObject(input)) return null
@@ -1304,7 +1333,7 @@ function claudeEvidence(event) {
       (question) => typeof question.question === 'string' && Object.hasOwn(chosen, question.question) ? chosen[question.question] : undefined) : null
     return evidenceOf({ toolUseId, answers })
   }
-  const command = claudeCommand(event.tool_input)
+  const command = claudeApproval(event.tool_name, event.tool_input)
   return evidenceOf({
     toolUseId,
     permission: 'allowed',
@@ -1409,6 +1438,11 @@ function phoneAnswerable(agent, event) {
   if (agent !== 'claude' || event.hook_event_name !== 'PermissionRequest') return false
   if (event.agent_id !== undefined && event.agent_id !== null) return false
   const input = event.tool_input
+  // Story 78.3: Write and Edit (measured on 2.1.302) when their whole change is one exact text.
+  if (event.tool_name === 'Write' || event.tool_name === 'Edit') {
+    const change = claudeFileChange(event.tool_name, input)
+    return change !== null && change.length <= PROMPT_LIMITS.command && promptText(change, PROMPT_LIMITS.command) === change
+  }
   if (event.tool_name !== 'Bash' || !isObject(input)) return false
   if (Object.keys(input).some((key) => !PHONE_BASH_FIELDS.has(key))) return false
   const command = input.command
@@ -1539,7 +1573,7 @@ function hookRequests(agent, event, permissionRef = null) {
         bodyText(toolSummary(event.tool_input)),
         // Codex permissions stay plain: its PermissionRequest fires before Auto Review decides.
         agent === 'claude'
-          ? permissionPrompt('claude', 'permission', event.tool_name, claudeCommand(event.tool_input), { toolUseId: event.tool_use_id, requestRef: permissionRef },
+          ? permissionPrompt('claude', 'permission', event.tool_name, claudeApproval(event.tool_name, event.tool_input), { toolUseId: event.tool_use_id, requestRef: permissionRef },
             event.cwd, isObject(event.tool_input) ? event.tool_input.description ?? null : null)
           : undefined
       )

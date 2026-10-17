@@ -151,10 +151,12 @@ export function answerRoute(prompt: AttentionPrompt | null): AnswerRoute | null 
   // An allow needs the exact thing that would run; Codex permissions stay with Auto Review.
   if (prompt.shape !== 'permission' || prompt.command === null) return null
   if (prompt.harness === 'opencode') return 'opencode-api'
-  if (prompt.harness !== 'claude' || prompt.tool !== 'Bash') return null
+  if (prompt.harness !== 'claude') return null
   // A request ref is set only by a `PermissionRequest` hook that waits for this answer with the input whole
-  // (Epic 78); while it waits it answers instead of keys, which stay the way once it has stopped.
-  return prompt.requestRef !== null ? 'claude-hook' : 'claude-keys'
+  // (Epic 78); while it waits it answers instead of keys, which stay the way once it has stopped. Write and Edit
+  // (Story 78.3) have only the hook: their dialogs were never driven by keys.
+  if (prompt.tool === 'Bash') return prompt.requestRef !== null ? 'claude-hook' : 'claude-keys'
+  return (prompt.tool === 'Write' || prompt.tool === 'Edit') && prompt.requestRef !== null ? 'claude-hook' : null
 }
 
 /**
@@ -708,6 +710,8 @@ export class RemoteAnswers {
     if (route === 'claude-hook' && prompt.requestRef !== null && this.hookWaiting(record, prompt.requestRef)) {
       return this.deliverToPlugin(record, prompt, request, current, markWritten, prompt.requestRef)
     }
+    // Write and Edit have no key route: once their hook has stopped waiting, the laptop answers them.
+    if (prompt.type === 'permission' && prompt.tool !== 'Bash') return refused('unsupported')
     // While BMN types, its own keys walk the dialog through its steps, and each step is verified on its own.
     // One answer types into a session at a time; only the one typing may end that.
     const sessionId = record.sessionId
