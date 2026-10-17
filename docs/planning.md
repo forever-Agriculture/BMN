@@ -110,7 +110,7 @@ Works with BMN closed, on either format. Exit 0 done or clean, 1 findings or a r
 
 `TOKEN` is the row token from `bmn plan status --json`; it covers the row's status and note. `set`:
 
-1. takes the board's sibling lock, `.status.yaml.lock`, present only while a writer works and naming its process and a nonce. A dead writer's lock is cleared by one reclaimer at a time (it holds `.status.yaml.lock.reclaim`) and only while it still holds that writer's text; a writer removes only the lock with its own nonce;
+1. takes the board's sibling lock, `.status.yaml.lock`, present only while a writer works and naming its process and a nonce. A dead writer's lock is cleared by one reclaimer at a time (it holds `.status.yaml.lock.reclaim`) and only while it still holds that writer's text; a writer removes only the lock with its own nonce. A reclaimer that dies leaves its guard, and no writer removes a guard it did not create: a guard alone never blocks a writer, but a dead writer's lock behind a dead reclaimer's guard stays, and `bmn plan set` refuses with `LOCKED`, naming both files, until someone stops every `bmn plan set` and removes both by hand;
 2. rereads the file and refuses with exit 1 (`CONFLICT`, showing the row now and its token) when the row no longer matches `TOKEN`;
 3. replaces that one line (the note is kept unless `--note` is given) and leaves every other byte as it was, line endings included;
 4. keeps the version before in `~/.local/state/bmn/plan-versions/<board hash>/` (the last 20, with `board-path.txt` naming the board);

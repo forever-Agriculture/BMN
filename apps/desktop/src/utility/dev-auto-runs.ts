@@ -2,7 +2,7 @@ import { realpath } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import type { AttentionRecord, DevAutoRun, DevAutoRunsResult, SessionRecord, WorkspaceRecord } from '@bmn/protocol'
 import { readFileReference } from './file-reference-reader'
-import { PlanError, readBoard, resolvePlan } from '../../bin/plan-board.mjs'
+import { FORMAT, PlanError, boardProblems, readBoard, resolvePlan } from '../../bin/plan-board.mjs'
 import { inspectRepositoryIdentity } from './repository-identity'
 import { repositoryGit, repositoryGitError } from './repository-git'
 
@@ -136,6 +136,10 @@ async function boardFor(root: string, epics: number[]): Promise<DevAutoRun['boar
   try {
     const plan = await resolvePlan(root)
     const board = await readBoard(plan.boardPath, { epics })
+    if (plan.format === FORMAT) {
+      const problems = boardProblems(board, relative(plan.boardCheckout, plan.boardPath) || plan.boardPath)
+      if (problems.length > 0) return { checkout: plan.boardCheckout, rows: [], unavailable: clip(`Board unavailable: the board cannot be read unambiguously: ${problems.map((problem) => `${problem.where}: ${problem.reason}`).join('; ')}`) }
+    }
     return { checkout: plan.boardCheckout, rows: board.rows.map((row) => ({ key: clip(row.key), status: clip(row.status), comment: clip(row.note) })), unavailable: null }
   } catch (error) {
     return { checkout: null, rows: [], unavailable: `Board unavailable: ${error instanceof PlanError ? error.message : 'the board could not be read'}` }

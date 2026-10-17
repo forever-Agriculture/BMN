@@ -140,6 +140,21 @@ describe('read-only dev-auto runs', () => {
     file(main, 'plan/status.yaml', 'format: bmn-plan\nschema_version: 1\ndevelopment_status:\n')
     expect((await readDevAutoRuns([workspace(child)], [], [])).runs[0]!.board.unavailable).toContain('both plans are present')
   })
+  it('refuses BMN\'s own board that is ambiguous anywhere, even outside the run\'s epics, as bmn plan status does (Sol review F7)', async () => {
+    const root = fixture(), main = join(root, 'main'); repo(main)
+    file(main, '.gitignore', '/plan/\n'); git(main, 'add', '.gitignore'); git(main, '-c', 'user.name=Fixture', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'ignore')
+    const child = join(root, 'child'); git(main, 'worktree', 'add', '-qb', 'child', child)
+    file(child, '.dev-auto/handoff.md', handoff(child, 'child'))
+    const board = (rest: string): string => `format: bmn-plan\nschema_version: 1\ndevelopment_status:\n  epic-57: in-progress\n  57-1-a: review\n  epic-60: in-progress\n${rest}`
+    const read = async (): Promise<string | null> => (await readDevAutoRuns([workspace(child)], [], [])).runs[0]!.board.unavailable
+    file(main, 'plan/status.yaml', board('  60-1-first: backlog\n'))
+    expect(await read()).toBeNull()
+    file(main, 'plan/status.yaml', board('  60-1-first: backlog\n  60-1-again: done\n'))
+    expect(await read()).toMatch(/^Board unavailable: .*plan\/status\.yaml:8: 60-1-again is story 60\.1 again/u)
+    file(main, 'plan/status.yaml', `${board('  60-1-first: backlog\n')}format: bmn-plan\n`)
+    expect(await read()).toMatch(/Board unavailable: .*format/u)
+    expect((await readDevAutoRuns([workspace(child)], [], [])).runs[0]!.board.rows).toEqual([])
+  })
   it('rejects external symlinks, oversized and binary files, while permitting an internal regular target', async () => {
     const root = fixture(), main = join(root, 'main'); repo(main)
     const external = join(root, 'secret'); writeFileSync(external, 'private')

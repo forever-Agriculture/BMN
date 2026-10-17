@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -367,6 +367,38 @@ release()
       expect(lines[index]![0]).toBe('enter')
       expect(lines[index + 1]).toEqual(['exit', lines[index]![1], expect.any(String)])
     }
+  })
+
+  it('a dead reclaimer\'s guard is never cleared by itself: both contenders refuse, naming both files (Sol recheck F2, consultant method A)', async () => {
+    const main = ownProject(fixture())
+    const path = join(main, 'plan/status.yaml')
+    const lock = join(main, 'plan/.status.yaml.lock')
+    const guard = `${lock}.reclaim`
+    writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 777 }))
+    writeFileSync(guard, JSON.stringify({ pid: 2 ** 22 + 778, at: '2026-10-17T00:00:00.000Z' }))
+    const old = new Date(Date.now() - 60_000); utimesSync(guard, old, old)
+    const before = [readFileSync(path, 'utf8'), readFileSync(lock, 'utf8'), readFileSync(guard, 'utf8')]
+    const results = await Promise.allSettled([lockBoard(path, { waitMs: 300 }), lockBoard(path, { waitMs: 300 })])
+    for (const result of results) {
+      expect(result.status).toBe('rejected')
+      const error = (result as PromiseRejectedResult).reason as { code: string; message: string }
+      expect(error.code).toBe('LOCKED')
+      expect(error.message).toContain(lock)
+      expect(error.message).toContain(guard)
+      expect(error.message).toContain('stop every bmn plan set')
+    }
+    expect([readFileSync(path, 'utf8'), readFileSync(lock, 'utf8'), readFileSync(guard, 'utf8')]).toEqual(before)
+    // Once both are removed by hand, the board is free again.
+    rmSync(guard); rmSync(lock)
+    const release = await lockBoard(path, { waitMs: 300 })
+    release()
+  })
+
+  it('two writers of the same row with the same token: one changes it, the other is a conflict', async () => {
+    const main = ownProject(fixture())
+    const path = join(main, 'plan/status.yaml')
+    const results = await Promise.all(['in-progress', 'blocked'].map((status) => setRow(path, { key: '2-1-second', status, ...(status === 'blocked' ? { note: 'waits' } : {}), expect: token(BOARD, '2-1-second'), environment: { HOME: fixture() } })))
+    expect(results.map((result) => result.outcome).sort()).toEqual(['changed', 'conflict'])
   })
 
   it('a tracked board\'s two copies are locked before either is checked: a change in the default copy refuses both (Sol review F3)', async () => {

@@ -206,8 +206,6 @@ function processAlive(pid) {
   try { process.kill(pid, 0); return true } catch (error) { return error.code === 'EPERM' }
 }
 
-const RECLAIM_STALE_MS = 10_000
-
 /** Create `path` holding `data` in one step (a link of a written temporary file), or false when it exists. */
 function createLock(path, data) {
   const temporary = `${path}.${process.pid}-${randomBytes(3).toString('hex')}.tmp`
@@ -222,20 +220,15 @@ function readHolder(path) {
 }
 
 /**
- * Clear a dead holder's lock whose text is `observed`. One reclaimer at a time holds `<lock>.reclaim` and
- * removes the lock only if it still holds that text: no writer can replace an existing lock, and only the
- * reclaimer removes one that is not its own, so a lock taken meanwhile is never removed. A reclaimer that died
- * mid-way leaves its guard; one older than RECLAIM_STALE_MS whose process is gone is cleared.
+ * Clear a dead holder's lock whose text is `observed`. One reclaimer at a time holds `<lock>.reclaim`, made
+ * exclusively, and removes the lock only if it still holds that text: no writer can replace an existing lock and
+ * no other reclaimer can act meanwhile, so a lock taken since is never removed. Only the guard's maker removes the
+ * guard. One left by a reclaimer that died is never cleared automatically (that check-then-remove would race);
+ * it only stops further clearing, and `set` says which files to remove once no writer runs.
  */
 function reclaim(path, observed) {
   const guard = `${path}.reclaim`
-  if (!createLock(guard, { pid: process.pid, at: new Date().toISOString() })) {
-    const other = readHolder(guard)
-    let age
-    try { age = Date.now() - statSync(guard).mtimeMs } catch { return false }
-    if (other?.data && Number.isSafeInteger(other.data.pid) && !processAlive(other.data.pid) && age > RECLAIM_STALE_MS && readHolder(guard)?.text === other.text) rmSync(guard, { force: true })
-    return false
-  }
+  if (!createLock(guard, { pid: process.pid, at: new Date().toISOString() })) return false
   try {
     if (readHolder(path)?.text === observed) rmSync(path, { force: true })
     return true
@@ -255,8 +248,16 @@ export async function lockBoard(boardPath, { waitMs = LOCK_WAIT_MS } = {}) {
       return () => { if (readHolder(path)?.data?.nonce === nonce) rmSync(path, { force: true }) }
     }
     const holder = readHolder(path)
-    if (holder?.data && Number.isSafeInteger(holder.data.pid) && !processAlive(holder.data.pid) && reclaim(path, holder.text)) continue
-    if (Date.now() >= until) throw new PlanError('LOCKED', `${path} is held${holder?.data?.pid ? ` by process ${holder.data.pid}` : ''}; try again`)
+    const dead = holder?.data && Number.isSafeInteger(holder.data.pid) && !processAlive(holder.data.pid)
+    if (dead && reclaim(path, holder.text)) continue
+    if (Date.now() >= until) {
+      const guard = `${path}.reclaim`
+      const stuck = readHolder(guard)?.data
+      if (dead && stuck && Number.isSafeInteger(stuck.pid) && !processAlive(stuck.pid)) {
+        throw new PlanError('LOCKED', `${path} is held by process ${holder.data.pid}, which is gone, and ${guard}, left by process ${stuck.pid}, which is gone too, stops clearing it: stop every bmn plan set and let none start, then remove ${guard} and ${path} and try again`)
+      }
+      throw new PlanError('LOCKED', `${path} is held${holder?.data?.pid ? ` by process ${holder.data.pid}` : ''}; try again`)
+    }
     await new Promise((done) => setTimeout(done, 50))
   }
 }

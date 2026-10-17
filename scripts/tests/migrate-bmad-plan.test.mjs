@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { archive, checkSpans, rehearseRollback, reverseRewrites, rewriteLinks, segmentEpics, stagePlan, verifyTree } from '../plan/migrate-bmad-plan.mjs'
+import { archive, checkLinks, checkSpans, rehearseRollback, reverseRewrites, rewriteLinks, segmentEpics, stagePlan, verifyTree } from '../plan/migrate-bmad-plan.mjs'
 
 const BMN = resolve(import.meta.dirname, '../../apps/desktop/bin/bmn')
 const roots = []
@@ -157,7 +157,8 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     const epics = join(repo, '_bmad-output/planning-artifacts/epics.md')
     writeFileSync(epics, readFileSync(epics, 'utf8')
       .replace('Shared by epics 2 and 3; see [epic 1](epics.md#epic-1-first-thing).', 'Shared by epics 2 and 3; see [epic 1](epics.md#epic-1-first-thing), [its story](epics.md#story-11-do-it), [no such](epics.md#no-such-heading) and [below](#story-21-a).')
-      .replace('Delegated: the canonical contract is \\`docs/epic-4-plan.md\\`.', '**Canonical requirements:** [the contract](../../docs/epic-4-plan.md).'))
+      .replace('Delegated: the canonical contract is \\`docs/epic-4-plan.md\\`.', '**Canonical requirements:** [the contract](../../docs/epic-4-plan.md).')
+      .replace('### Story 1.1: Do It', `Absolute: [context](${repo}/_bmad-output/planning-artifacts/reference-context.md#part), [help](../../.claude/skills/bmad-help/SKILL.md), [config](${repo}/_bmad/bmm/config.yaml).\n\n### Story 1.1: Do It`))
     const board = join(repo, '_bmad-output/implementation-artifacts/sprint-status.yaml')
     writeFileSync(board, readFileSync(board, 'utf8').replace('  3-1-b: done\n', '  3-1-b: done\n  3-3-e: backlog # waits for the phone check\n'))
     const second = readFileSync(epics, 'utf8').split('\n').indexOf('## Epic 2: Second') + 2
@@ -167,8 +168,23 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     const approved = join(root, 'approved-vision.md')
     writeFileSync(approved, '# x: vision\n\n## Vision\n\nOne workspace where the owner gives commands.\n\n## Principles\n\n1. **One.** (owner, 2026-10-17)\n')
     const stage = join(root, 'out', 'plan')
-    const manifest = stagePlan({ repo, stage, date: '2026-10-17', docs: ['docs/architecture.md'], vision: approved })
+    const kept = join(root, 'kept')
+    const manifest = stagePlan({ repo, stage, date: '2026-10-17', docs: ['docs/architecture.md'], vision: approved, archive: kept })
     expect(checkSpans({ repo, stage, manifest })).toEqual([])
+    const first = readFileSync(join(stage, 'epics/001-first-thing.md'), 'utf8')
+    expect(first).toContain(`[context](${repo}/plan/references/reference-context.md#part)`)
+    expect(first).toContain(`[help](${kept}/files/.claude/skills/bmad-help/SKILL.md)`)
+    expect(first).toContain(`[config](${kept}/files/_bmad/bmm/config.yaml)`)
+    expect(archive({ repo, manifest, folder: kept })).toEqual([])
+    expect(checkLinks({ repo, stage, manifest })).toEqual([])
+    // A link left pointing into a retired root fails, though the original is still there.
+    const epicOne = join(stage, 'epics/001-first-thing.md')
+    writeFileSync(epicOne, `${first}\n[left](${repo}/_bmad-output/planning-artifacts/epics.md) and [also](../../_bmad/bmm/config.yaml)\n`)
+    expect(checkLinks({ repo, stage, manifest })).toEqual([
+      `plan/epics/001-first-thing.md: link ${repo}/_bmad-output/planning-artifacts/epics.md points into _bmad-output, which leaves at the switch`,
+      'plan/epics/001-first-thing.md: link ../../_bmad/bmm/config.yaml points into _bmad, which leaves at the switch'
+    ])
+    writeFileSync(epicOne, first)
     const shared = readFileSync(join(stage, 'shared/two-together-2-3-2026-10-01.md'), 'utf8')
     expect(shared).toContain('[its story](../epics/001-first-thing.md#story-11-do-it)')
     expect(shared).toContain('[no such](front-matter.md)')

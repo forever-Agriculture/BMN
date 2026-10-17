@@ -3,6 +3,7 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, dirname, join, posix, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -123,19 +124,21 @@ export function linksIn(text) {
  * by `mapPath` (an old repository-relative path to its new one, or null when it does not move). Returns the text
  * and each rewrite as { offset in the new text, original, rewritten }; links that resolve nowhere are listed.
  */
-export function rewriteLinks(text, from, to, mapPath, exists, gone = null) {
+export function rewriteLinks(text, from, to, mapPath, exists, gone = null, repo = null) {
   const rewrites = []
   const unresolved = []
   let out = ''
   let last = 0
   for (const link of linksIn(text)) {
     const dest = link.dest
-    if (/^[a-z][a-z0-9+.-]*:/iu.test(dest) || dest.startsWith('/') || dest.startsWith('<')) continue
+    // An absolute destination inside the repository is read like a relative one and keeps its absolute form.
+    const inRepo = repo !== null && dest.startsWith(`${repo}/`)
+    if (/^[a-z][a-z0-9+.-]*:/iu.test(dest) || (dest.startsWith('/') && !inRepo) || dest.startsWith('<')) continue
     const [pathPart, anchor] = dest.split('#', 2)
     let decoded
     try { decoded = decodeURI(pathPart) } catch { decoded = pathPart }
     // `#anchor` alone points into the text's own source file, which may now be split over several files.
-    const target = pathPart === '' ? from : posix.normalize(posix.join(posix.dirname(from), decoded))
+    const target = pathPart === '' ? from : inRepo ? posix.normalize(decoded.slice(repo.length + 1)) : posix.normalize(posix.join(posix.dirname(from), decoded))
     let finalTarget = mapPath(target, anchor ?? null)
     if (finalTarget === null) {
       const present = exists(target) || exists(target.replace(/:\d+(?::\d+)?$/u, ''))
@@ -146,8 +149,13 @@ export function rewriteLinks(text, from, to, mapPath, exists, gone = null) {
     finalTarget ??= target
     const targetPath = typeof finalTarget === 'string' ? finalTarget : finalTarget.path
     const anchorOut = typeof finalTarget === 'string' ? anchor : finalTarget.anchor
-    let next = targetPath === to && anchorOut ? '' : posix.relative(posix.dirname(to), targetPath)
-    if (next === '' && !(targetPath === to && anchorOut)) next = posix.basename(targetPath)
+    let next
+    if (typeof finalTarget !== 'string' && finalTarget.absolute) next = targetPath
+    else if (inRepo) next = `${repo}/${targetPath}`
+    else {
+      next = targetPath === to && anchorOut ? '' : posix.relative(posix.dirname(to), targetPath)
+      if (next === '' && !(targetPath === to && anchorOut)) next = posix.basename(targetPath)
+    }
     const rewritten = `${encodeURI(next)}${anchorOut ? `#${anchorOut}` : ''}`
     if (rewritten === dest) continue
     out += text.slice(last, link.offset)
@@ -191,7 +199,7 @@ export function parseBoard(text) {
  * Build the staged plan. `repo` is the product checkout holding `_bmad-output/`; `stage` an empty folder that
  * becomes `plan/`. Returns the manifest (also written to `<stage>/../migration-manifest.json`).
  */
-export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0, 10), docs = null, vision = null }) {
+export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0, 10), docs = null, vision = null, archive: archiveFolder = join(homedir(), 'projects', `bmn-archive-${date}`) }) {
   if (existsSync(stage) && readdirSync(stage).length > 0) throw new Error(`${stage} is not empty: refusing to stage over it`)
   const planning = '_bmad-output/planning-artifacts'
   const implementation = '_bmad-output/implementation-artifacts'
@@ -224,7 +232,8 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
   }
   const planRoot = 'plan'
   const exists = (target) => existsSync(join(repo, target))
-  const manifest = { version: 1, date, repo, stage, files: [], spans: [], rewrites: {}, unresolved: [], gone: [], board: { rows: [], header: [] }, written: {} }
+  const manifest = { version: 1, date, repo, stage, archive: archiveFolder, retired: inventory.roots, files: [], spans: [], rewrites: {}, unresolved: [], gone: [], board: { rows: [], header: [] }, written: {} }
+  const retired = (target) => inventory.roots.some((root) => target === root || target.startsWith(`${root}/`))
 
   // Where each heading of epics.md lands: its anchor in epics.md, and the file and anchor it has after the move.
   const fileOfSegment = (segment) => segment.kind === 'epic' ? epicFile.get(segment.number) : segment.kind === 'extension' && segment.covers.length === 1 ? epicFile.get(segment.covers[0]) : segment.file
@@ -264,6 +273,8 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
       if (number && epicFile.has(Number(number))) return { path: `${planRoot}/${epicFile.get(Number(number))}`, anchor: '' }
       return anchor ? dead(`${planRoot}/shared/front-matter.md`) : { path: `${planRoot}/shared/front-matter.md`, anchor: '' }
     }
+    // A file that leaves with the retired folders (_bmad/, the apps' bmad-* skills) is linked at its archived copy.
+    if (exists(target) && placeOf(target) === null && retired(target)) return { path: `${archiveFolder}/files/${target}${line}`, anchor: anchor ?? '', absolute: true }
     // Only what exists moves; a path under _bmad-output that names nothing is a gone target.
     let place = exists(target) ? placeOf(target) : null
     // A folder link (a reference-* folder) moves with its folder.
@@ -290,7 +301,7 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
     manifest.written[path] = sha256(text)
   }
   const moveText = (text, fromRepoPath, toPlanPath) => {
-    const result = rewriteLinks(text, fromRepoPath, `${planRoot}/${toPlanPath}`, (target, anchor) => mapPath(target, anchor, fromRepoPath), exists, gone)
+    const result = rewriteLinks(text, fromRepoPath, `${planRoot}/${toPlanPath}`, (target, anchor) => mapPath(target, anchor, fromRepoPath), exists, gone, repo)
     manifest.unresolved.push(...result.unresolved.map((entry) => ({ ...entry, source: fromRepoPath })))
     return result
   }
@@ -617,6 +628,10 @@ export function checkSpans({ repo, stage, manifest }) {
 export function checkLinks({ repo, stage, manifest }) {
   const failures = []
   const anchorCache = new Map()
+  const archived = `${manifest.archive ?? join(homedir(), 'projects', `bmn-archive-${manifest.date}`)}/files/`
+  const roots = manifest.retired ?? ['_bmad-output', '_bmad']
+  const listed = new Set(manifest.files.map((file) => file.path))
+  // The layout after the switch: plan/ is the stage, and every retired root is gone even while it still exists.
   const resolveFile = (target) => {
     if (target === 'plan' || target.startsWith('plan/')) return join(stage, target.slice(5))
     return join(repo, target)
@@ -626,11 +641,23 @@ export function checkLinks({ repo, stage, manifest }) {
     const text = readFileSync(join(stage, path), 'utf8')
     for (const link of linksIn(text)) {
       const dest = link.dest
-      if (/^[a-z][a-z0-9+.-]*:/iu.test(dest) || dest.startsWith('/') || dest.startsWith('<')) continue
+      const inRepo = dest.startsWith(`${repo}/`)
+      if (dest.startsWith(archived)) {
+        // An archived copy: in the verified archive once it exists, else a file the manifest archives.
+        let inner = dest.slice(archived.length).split('#')[0]
+        try { inner = decodeURI(inner) } catch { /* as written */ }
+        inner = inner.replace(/:\d+(?::\d+)?$/u, '')
+        const there = existsSync(archived) ? existsSync(join(archived, inner)) : listed.has(inner) || [...listed].some((file) => file.startsWith(`${inner}/`))
+        if (!there) failures.push(`${at}: link ${dest} names nothing in the archive`)
+        continue
+      }
+      if (/^[a-z][a-z0-9+.-]*:/iu.test(dest) || (dest.startsWith('/') && !inRepo) || dest.startsWith('<')) continue
       const [pathPart, anchor] = dest.split('#', 2)
       let decoded
       try { decoded = decodeURI(pathPart) } catch { decoded = pathPart }
-      const target = pathPart === '' ? at : posix.normalize(posix.join(posix.dirname(at), decoded))
+      const target = pathPart === '' ? at : inRepo ? posix.normalize(decoded.slice(repo.length + 1)) : posix.normalize(posix.join(posix.dirname(at), decoded))
+      const gone = roots.find((root) => target === root || target.startsWith(`${root}/`))
+      if (gone !== undefined) { failures.push(`${at}: link ${dest} points into ${gone}, which leaves at the switch`); continue }
       let full = resolveFile(target)
       if (!existsSync(full)) full = resolveFile(target.replace(/:\d+(?::\d+)?$/u, ''))
       if (!existsSync(full)) { failures.push(`${at}: link ${dest} leads nowhere`); continue }
@@ -700,7 +727,7 @@ async function main(argv) {
   const repo = resolve(flag(argv, '--repo') ?? process.cwd())
   if (action === 'stage') {
     const stage = resolve(flag(argv, '--stage'))
-    const manifest = stagePlan({ repo, stage, date: flag(argv, '--date') ?? undefined, vision: flag(argv, '--vision') })
+    const manifest = stagePlan({ repo, stage, date: flag(argv, '--date') ?? undefined, vision: flag(argv, '--vision'), ...(flag(argv, '--archive') ? { archive: resolve(flag(argv, '--archive')) } : {}) })
     const failures = checkSpans({ repo, stage, manifest })
     process.stdout.write(`${JSON.stringify({ files: manifest.files.length, archive_only: manifest.files.filter((file) => file.to === 'archive-only').length, spans: manifest.spans.length, board_rows: manifest.board.rows.length, rewrites: Object.values(manifest.rewrites).flat().length, unresolved: manifest.unresolved.length, span_failures: failures }, null, 1)}\n`)
     return failures.length === 0 ? 0 : 1
