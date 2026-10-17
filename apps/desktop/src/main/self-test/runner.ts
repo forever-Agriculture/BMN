@@ -1270,7 +1270,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error('the Files panel still offers a handoff section or form (Story 75.5)')
     }
     const quickLookFlow = preloadProbe.quickLookFlow
-    if (!quickLookFlow.opened || !quickLookFlow.focusInTree || !quickLookFlow.rows.includes('refs') ||
+    if (!quickLookFlow.opened || !quickLookFlow.focusInTree || !quickLookFlow.rows.includes('refs/src') ||
       !quickLookFlow.pathRow.includes('refs/src/quick-look.ts') || !quickLookFlow.pathRow.includes('TypeScript · 5 lines') ||
       quickLookFlow.highlighted.keyword < 1 || quickLookFlow.highlighted.comment < 1 || quickLookFlow.highlighted.def < 1 ||
       quickLookFlow.highlighted.lineNumbers < 5 || !quickLookFlow.focusInFile || !quickLookFlow.closed ||

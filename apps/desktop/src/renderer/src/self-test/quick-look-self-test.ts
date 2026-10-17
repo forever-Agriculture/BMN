@@ -26,11 +26,10 @@ export async function runQuickLookIntegration(options: { refitCount(): number })
   const focusInTree = document.activeElement?.classList.contains('ql-tree') === true
   const rows = [...dialog.querySelectorAll('.ql-tr .ql-nm')].map((item) => item.textContent ?? '')
   const rootShown = dialog.querySelector('.ql-head')?.textContent ?? ''
-  for (const name of ['refs', 'src']) {
-    const folder = await waitFor(`the ${name} folder`, () => row(name))
-    if (folder.getAttribute('aria-expanded') !== 'true') folder.click()
-    await waitFor(`${name} open`, () => (row(name)?.getAttribute('aria-expanded') === 'true' ? true : undefined))
-  }
+  // `refs` holds only `src`, so the tree shows the two joined as one row.
+  const folder = await waitFor('the refs/src folder', () => row('refs/src'))
+  if (folder.getAttribute('aria-expanded') !== 'true') folder.click()
+  await waitFor('refs/src open', () => (row('refs/src')?.getAttribute('aria-expanded') === 'true' ? true : undefined))
   ;(await waitFor('quick-look.ts', () => row('quick-look.ts'))).click()
   await waitFor('the coloured file', () => dialog.querySelector('.ql-code .ql-syn-keyword'))
   const highlighted = {
