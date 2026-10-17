@@ -17,13 +17,16 @@ export const FORMAT = 'bmn-plan'
 export const SCHEMA_VERSION = 1
 export const NOTE_LIMIT = 160
 export const PLAN_LIMIT = 20 * 1024
+export const VISION_LIMIT = 8 * 1024
 export const EPIC_LIMIT = 60 * 1024
 export const STATUSES = ['backlog', 'ready', 'in-progress', 'review', 'blocked', 'paused', 'done', 'dropped']
 export const REASON_STATUSES = ['blocked', 'paused', 'dropped']
 export const FINISHED = ['done', 'dropped']
 export const BMAD_STATUSES = ['backlog', 'ready-for-dev', 'in-progress', 'review', 'done', 'optional', 'contexted', 'drafted']
 export const LEGACY_MARKER = /^<!--\s*bmn-plan:\s*bmad-legacy\b([^>]*)-->\s*$/u
-export const PLAN_SECTIONS = ['Purpose', 'Users', 'Goals', 'Non-goals', 'Success signals', 'Standing constraints', 'Decisions', 'Truth documents']
+export const PLAN_SECTIONS = ['Purpose', 'Users', 'Goals', 'Non-goals', 'Success signals', 'Standing constraints', 'Architecture', 'Decisions', 'Truth documents']
+/** The foundation every plan builds on (owner, 2026-10-17): what the project is for and its numbered principles. */
+export const VISION_SECTIONS = ['Vision', 'Principles']
 export const EPIC_SECTIONS = ['Outcome', 'Why', 'Boundary and dependencies', 'Truth impact', 'Stories']
 export const BMAD_DEFAULT = '_bmad-output/implementation-artifacts'
 export const EXIT = { ok: 0, findings: 1, unable: 2 }
@@ -272,6 +275,28 @@ export async function checkPlan(resolved) {
   for (const row of epicRows.values()) {
     if (row.status !== 'done') continue
     for (const story of board.rows) if (story.story !== null && story.epic === row.epic && !FINISHED.includes(story.status)) add(`${boardName}:${story.line}`, `epic ${row.epic} is done but ${story.key} is ${story.status}`)
+  }
+
+  const visionFile = join(resolved.planRoot, 'VISION.md')
+  if (!existsSync(visionFile)) add('plan/VISION.md', 'missing')
+  else {
+    const text = readFileSync(visionFile, 'utf8')
+    const headings = [...text.matchAll(/^## (.+?)\s*$/gmu)].map((match) => match[1])
+    for (const section of VISION_SECTIONS) if (!headings.includes(section)) add('plan/VISION.md', `missing section ## ${section}`)
+    if (Buffer.byteLength(text) > VISION_LIMIT) add('plan/VISION.md', `${Buffer.byteLength(text)} bytes, over the ${VISION_LIMIT}-byte ceiling`)
+    // Principles are cited by number (P3), so each number appears once and the list is not empty.
+    const lines = text.split(/\r?\n/u)
+    const start = lines.findIndex((line) => /^## Principles\s*$/u.test(line))
+    if (start >= 0) {
+      const seen = new Set()
+      for (let index = start + 1; index < lines.length && !/^## /u.test(lines[index]); index += 1) {
+        const number = /^(\d+)\. /u.exec(lines[index])?.[1]
+        if (number === undefined) continue
+        if (seen.has(number)) add(`plan/VISION.md:${index + 1}`, `duplicate principle ${number}`)
+        seen.add(number)
+      }
+      if (seen.size === 0) add(`plan/VISION.md:${start + 1}`, 'no numbered principles under ## Principles')
+    }
   }
 
   const planFile = join(resolved.planRoot, 'PLAN.md')

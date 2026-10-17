@@ -159,7 +159,7 @@ export function parseBoard(text) {
  * Build the staged plan. `repo` is the product checkout holding `_bmad-output/`; `stage` an empty folder that
  * becomes `plan/`. Returns the manifest (also written to `<stage>/../migration-manifest.json`).
  */
-export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0, 10), docs = null }) {
+export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0, 10), docs = null, vision = null }) {
   if (existsSync(stage) && readdirSync(stage).length > 0) throw new Error(`${stage} is not empty: refusing to stage over it`)
   const planning = '_bmad-output/planning-artifacts'
   const implementation = '_bmad-output/implementation-artifacts'
@@ -344,6 +344,9 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
   }
 
   write('PLAN.md', planText({ repo, segments, date, docs }))
+  // The foundation every plan builds on (owner 2026-10-17): the owner-approved vision when given, else a draft he approves
+  // before the switch (Story 77.7), every principle marked provisional.
+  write('VISION.md', vision === null ? visionDraft({ repo, segments, date }) : readFileSync(vision, 'utf8'))
   writeFileSync(join(dirname(stage), 'migration-manifest.json'), `${JSON.stringify(manifest, null, 1)}\n`)
   return manifest
 }
@@ -393,14 +396,44 @@ ${clip(shared || 'See shared/front-matter.md.', 5000)}
 
 - The repository's \`AGENTS.md\` binds every agent; BMN's \`main\` is public, so this plan stays out of it (\`/plan/\` ignored) and keeps its history in its own local Git repository with no remote.
 
+## Architecture
+
+${existsSync(join(repo, 'docs', 'architecture.md'))
+    ? 'The architecture as built: [docs/architecture.md](../docs/architecture.md) (processes and what each owns, the stores, the control socket and the phone connector; its UNVERIFIED labels stand). A proposed change stays in its epic until delivered, and that epic\'s Truth impact names the document.'
+    : 'None recorded at the move: write it with the plan skill\'s architecture method before the next epic.'}
+
 ## Decisions
 
-- The architecture and its decisions in force: [docs/architecture.md](../docs/architecture.md).
+- The architecture's decisions in force are recorded with it (Architecture above).
 - Epic-level decisions are in each epic's Decisions or Extension text; the owner's cards and consultations are in \`references/\`.
 
 ## Truth documents
 
 ${docList.map((doc) => `- [${doc}](../${doc})`).join('\n')}
+`
+}
+
+/** VISION.md as the move drafts it when no approved vision is given: the overview as the vision, and the goals the plan already holds as provisional principles. */
+export function visionDraft({ repo, segments, date }) {
+  const front = segments.find((segment) => segment.kind === 'front')?.text ?? ''
+  const overview = new RegExp('^## Overview\\s*\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))', 'mu').exec(front)?.[1].trim() ?? ''
+  const first = overview.split(/\n\s*\n/u)[0]?.replace(/\s+/gu, ' ').trim() ?? ''
+  return `# ${basename(repo)}: vision
+
+*Draft written by the move on ${date} (Story 77.6). The owner approves it, or replaces it, before the switch (Story 77.7); until then every principle is provisional.*
+
+## Vision
+
+${first || 'See PLAN.md Purpose.'}
+
+## Principles
+
+1. **Agents do the work; the owner sees, sets and presses less.** *provisional* (Epic 75's test, kept by every epic since)
+2. **Verified on the build he uses.** Nothing is done until it works on the running, installed build. *provisional* (PLAN.md Goals)
+
+## Log
+
+- ${date}: drafted by the move; waiting for the owner's approval.
 `
 }
 
@@ -505,7 +538,7 @@ async function main(argv) {
   const repo = resolve(flag(argv, '--repo') ?? process.cwd())
   if (action === 'stage') {
     const stage = resolve(flag(argv, '--stage'))
-    const manifest = stagePlan({ repo, stage, date: flag(argv, '--date') ?? undefined })
+    const manifest = stagePlan({ repo, stage, date: flag(argv, '--date') ?? undefined, vision: flag(argv, '--vision') })
     const failures = checkSpans({ repo, stage, manifest })
     process.stdout.write(`${JSON.stringify({ files: manifest.files.length, archive_only: manifest.files.filter((file) => file.to === 'archive-only').length, spans: manifest.spans.length, board_rows: manifest.board.rows.length, rewrites: Object.values(manifest.rewrites).flat().length, unresolved: manifest.unresolved.length, span_failures: failures }, null, 1)}\n`)
     return failures.length === 0 ? 0 : 1
@@ -532,7 +565,7 @@ async function main(argv) {
     process.stdout.write(failures.length === 0 ? `PASS: ${action === 'rehearse' ? 'restored copy' : repo} matches the archive's hashes\n` : `${failures.join('\n')}\n`)
     return failures.length === 0 ? 0 : 1
   }
-  process.stderr.write('usage: migrate-bmad-plan.mjs stage|check|archive|verify-archive|rehearse --repo R [--stage S] [--archive A] [--scratch C] [--date D]\n')
+  process.stderr.write('usage: migrate-bmad-plan.mjs stage|check|archive|verify-archive|rehearse --repo R [--stage S] [--archive A] [--scratch C] [--date D] [--vision V]\n')
   return 2
 }
 

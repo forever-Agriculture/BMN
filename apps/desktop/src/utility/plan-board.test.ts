@@ -45,10 +45,14 @@ function epicText(number: number, stories: number[], extra = ''): string {
 function planText(): string {
   return readFileSync(join(TEMPLATES, 'PLAN.md'), 'utf8')
 }
+function visionText(): string {
+  return readFileSync(join(TEMPLATES, 'VISION.md'), 'utf8')
+}
 /** A product repository whose plan is ignored and keeps its own history, as BMN's does. */
 function ownProject(root: string): string {
   const main = repo(join(root, 'main'))
   file(main, '.gitignore', '/plan/\n'); git(main, 'add', '.gitignore'); git(main, 'commit', '-qm', 'ignore plan')
+  file(main, 'plan/VISION.md', visionText())
   file(main, 'plan/PLAN.md', planText())
   file(main, 'plan/status.yaml', BOARD)
   file(main, 'plan/epics/001-first.md', epicText(1, [1]))
@@ -121,6 +125,7 @@ describe('the plan format, its reader and its check (Story 77.1)', () => {
   it('passes a project made from the templates', async () => {
     const main = repo(join(fixture(), 'main'))
     const fill = (text: string): string => text.replaceAll('<N>', '1').replaceAll('<slug>', 'first')
+    file(main, 'plan/VISION.md', visionText())
     file(main, 'plan/PLAN.md', planText())
     file(main, 'plan/status.yaml', fill(readFileSync(join(TEMPLATES, 'status.yaml'), 'utf8')))
     file(main, 'plan/epics/001-first.md', fill(readFileSync(join(TEMPLATES, 'epic.md'), 'utf8')))
@@ -129,9 +134,21 @@ describe('the plan format, its reader and its check (Story 77.1)', () => {
     expect(result.code).toBe(0)
   })
 
+  it('wants the vision every plan builds on: the file, numbered principles, within its ceiling (owner 2026-10-17)', async () => {
+    const main = ownProject(fixture())
+    rmSync(join(main, 'plan/VISION.md'))
+    const reasons = async (): Promise<string[]> => (await checkPlan(await resolvePlan(main))).findings.map((finding) => `${finding.where.replace(/:\d+$/u, '')}: ${finding.reason}`)
+    expect(await reasons()).toEqual(['plan/VISION.md: missing'])
+    file(main, 'plan/VISION.md', visionText().replace(/^1\. .*$/mu, 'No list yet.'))
+    expect(await reasons()).toEqual(['plan/VISION.md: no numbered principles under ## Principles'])
+    file(main, 'plan/VISION.md', `${visionText()}\n${'v'.repeat(8 * 1024)}`)
+    expect((await reasons())[0]).toMatch(/^plan\/VISION\.md: \d+ bytes, over the 8192-byte ceiling$/u)
+  })
+
   it('reports each structural finding on its own line', async () => {
     const main = ownProject(fixture())
-    file(main, 'plan/PLAN.md', planText().replace('## Non-goals', '## Not goals'))
+    file(main, 'plan/PLAN.md', planText().replace('## Non-goals', '## Not goals').replace('## Architecture', '## Structure'))
+    file(main, 'plan/VISION.md', visionText().replace('## Vision', '## Dream').replace('1. **<Principle.>**', '1. **One.**\n2. **Two.**\n2. **Again.**'))
     file(main, 'plan/status.yaml', `format: bmn-plan
 schema_version: 1
 queue:
@@ -171,7 +188,10 @@ development_status:
       'plan/status.yaml: queue names epic 9, which has no epic-9 row',
       'plan/status.yaml: epic 2 is ready but not in queue',
       'plan/status.yaml: epic 1 is done but 1-1-first is in-progress',
+      'plan/VISION.md: missing section ## Vision',
+      'plan/VISION.md: duplicate principle 2',
       'plan/PLAN.md: missing section ## Non-goals',
+      'plan/PLAN.md: missing section ## Architecture',
       'plan/epics/002-second.md: missing section ## Why',
       'plan/epics/002-second.md: duplicate criterion 2.1 AC1',
       'plan/epics/002-second.md: duplicate story 2.1',

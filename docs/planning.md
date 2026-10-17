@@ -8,23 +8,28 @@ A project's plan lives in `plan/` at the root of its product repository:
 
 | Path | What it is |
 | --- | --- |
-| `plan/PLAN.md` | The frame: purpose, users, goals, non-goals, success signals, standing constraints, the decisions in force (or where they live) and the index of the project's truth documents. At most 20 KiB. |
+| `plan/VISION.md` | The foundation (owner, 2026-10-17: "We should build our project on top of that"): what the project is for, its numbered principles with their sources, what it refuses, and a log of the owner's changes. At most 8 KiB. |
+| `plan/PLAN.md` | The frame: purpose, users, goals, non-goals, success signals, standing constraints, the architecture, the decisions in force (or where they live) and the index of the project's truth documents. At most 20 KiB. |
 | `plan/status.yaml` | The board (below). |
 | `plan/epics/NNN-slug.md` | One file per epic, numbered with at least three digits (`077-our-own-planning.md`). An active epic file is at most 60 KiB. |
 | `plan/references/<epic>/` | Large evidence: consultations, reviews, screenshots, measurements. Read on demand. |
 | `plan/shared/`, `plan/history.md` | Migration only: text shared by several legacy epics, and the old board's header history. |
 
-The templates are in `skills/plan/templates/` (`PLAN.md`, `epic.md`, `status.yaml`).
+The templates are in `skills/plan/templates/` (`VISION.md`, `PLAN.md`, `epic.md`, `status.yaml`).
 
 **Truth and change.** Epics are change proposals. What is true about the product now lives in its truth documents (BMN's are `docs/`), indexed by `PLAN.md`. Every epic says which truth documents it changes (Truth impact), and its close-out checks them against what was delivered.
 
+### VISION.md
+
+Required `##` sections: **Vision** (one paragraph) and **Principles** (a numbered list, never renumbered, so epics cite `P3`; each principle names its source: the owner's words with their date, or a sourced synthesis; an unconfirmed one is *provisional*). Optional: **We refuse**, **Log** (each change with the owner's decision). Only the owner changes its substance (`skills/plan/methods/vision.md`).
+
 ### PLAN.md
 
-Required `##` sections, in this order: Purpose, Users, Goals, Non-goals, Success signals, Standing constraints, Decisions, Truth documents. A larger product links its architecture and design documents from Decisions or Truth documents instead of copying them.
+Required `##` sections, in this order: Purpose, Users, Goals, Non-goals, Success signals, Standing constraints, Architecture, Decisions, Truth documents. **Architecture** links the architecture truth document with a two-line summary, or holds the contract inline (parts and owners, invariants `A1…`, shared data and interfaces, quality targets, technology choices; and when they apply, glossary, privacy and providers, assumptions and open decisions), or says `None needed: <reason>` (`skills/plan/methods/architecture.md`). A larger product links its architecture and design documents instead of copying them.
 
 ### An epic file
 
-The first heading is `# Epic N: Title`, followed by the suggested lead (and designer or reviewer) line. Required `##` sections: **Outcome**, **Why** (the owner's words with their dates), **Boundary and dependencies**, **Truth impact** (the documents and contracts it adds, changes or removes, or `none` with a reason), **Stories**. Optional: What exists today, Requirements, Decisions, Reviews, Log (one concise line per event, with its evidence path).
+The first heading is `# Epic N: Title`, followed by the suggested lead (and designer or reviewer) line. Required `##` sections: **Outcome**, **Why** (the owner's words with their dates, and the `VISION.md` principles it serves), **Boundary and dependencies**, **Truth impact** (the documents and contracts it adds, changes or removes, or `none` with a reason), **Stories**. Optional: What exists today, Requirements, Decisions, Assumptions (material uncertainty: what settles it, who, what stops), Rollout (stored data, compatibility or the installed release: cutover, recovery, the installed check), Reviews, Log (one concise line per event, with its evidence path).
 
 Each story is `### Story N.M: Title` under Stories, with its user story, coverage and starting points, then `**Acceptance criteria:**` followed by a numbered list of Given/When/Then criteria, then `**Verification:**` naming the check.
 
@@ -122,7 +127,8 @@ Every row names what runs after BMAD is gone.
 | BMAD | Ours |
 | --- | --- |
 | Product brief, PRFAQ, PRD (`bmad-product-brief`, `-prfaq`, `-prd`) | `plan`'s frame method writing `PLAN.md`, scaled to need, with a working-backwards method; a larger product gets linked truth documents |
-| Architecture (`bmad-architecture`), UX (`bmad-ux`: DESIGN.md, EXPERIENCE.md) | The frame method's Decisions section or the truth documents it indexes; the team's designer designs screens first and the result becomes truth documents |
+| Architecture (`bmad-architecture`), UX (`bmad-ux`: DESIGN.md, EXPERIENCE.md) | `PLAN.md`'s required Architecture section and `plan`'s architecture method (invariants, contracts, quality targets, providers), reconciled in readiness; the design method (flows, states, sizes, interaction) with the team's designer designing screens first, the result becoming truth documents |
+| Product vision and principles (BMAD's brief and PRD hold them per document) | `plan/VISION.md`, the foundation every plan builds on, and `plan`'s vision method; each epic names the principles it serves |
 | Spec (`bmad-spec`), epics and stories (`bmad-create-epics-and-stories`) | Epic files with the same story artifact (criteria, starting points, verification), requirements traced to stories, no interactive halts beyond one card per real decision |
 | Readiness (`bmad-sprint-planning`'s gate) | `plan`'s readiness method before asking for the go (requirement-to-story traceability both ways, missing decisions, conflicts with truth documents and other epics) plus `bmn plan check` for structure |
 | Sprint status | `status.yaml`, same grammar, explicit go, blocked, paused and dropped, notes bounded |
@@ -137,7 +143,7 @@ Better on: what an agent reads for one epic (the frame, one epic file and its ro
 
 Fixed pass/fail items, marked for each run by a reviewer of the team who wrote neither run (Story 77.3 AC4). Two synthetic fixtures: a new project, and a change to an existing project with docs. BMAD 6.12.0 as installed and `plan` each run both fixtures with the same model and effort; BMAD's halts are answered from the fixture's written owner brief. Mandatory items (ours must pass every one):
 
-1. **Frame.** A new project's frame states product, users, goals and non-goals, and records architecture and design decisions (or links the documents that do).
+1. **Frame.** A new project's frame has a `VISION.md` with sourced principles, states product, users, goals and non-goals, and has an Architecture section (or links the document that does) and its design decisions.
 2. **Traceability forward.** Every requirement is covered by at least one story.
 3. **Traceability back.** Every story names the requirements it covers; none covers nothing.
 4. **Story artifact.** Each story has numbered testable criteria and a named verification.
@@ -148,5 +154,8 @@ Fixed pass/fail items, marked for each run by a reviewer of the team who wrote n
 9. **Truth close-out.** The epic's Truth impact names the truth documents the change touches (or `none` with a reason).
 10. **Board.** The board uses the format's statuses correctly (go as `ready`, nothing `done` before acceptance) and `bmn plan check` (or BMAD's own validation for the BMAD run) passes.
 11. **No BMAD.** Every method used runs in a home where BMAD is absent (ours only).
+12. **Readiness: vision conflict.** The readiness method finds the planted epic that works against a stated principle and puts it to the owner instead of planning it.
+13. **Readiness: invariant.** The readiness method finds the planted story that would break a stated architecture invariant or contract.
+14. **Readiness: proof.** The readiness method finds the planted criterion whose named Verification cannot observe it on the owner's path (a unit test for a packaged-only behavior, or a capability the real system does not expose).
 
 Recorded per run, not pass/fail: the checked revision, what the run read (files and bytes), how often it stopped for the owner, and its failures. A failure is fixed and the checklist run once more; a second failure goes to the owner before BMN's move (Story 77.6).

@@ -8,7 +8,7 @@
 
 ## Why
 
-The owner, <YYYY-MM-DD>: "<his words>".
+The owner, <YYYY-MM-DD>: "<his words>". **Serves:** <the VISION.md principles it advances, P1, P4>.
 
 ## Boundary and dependencies
 
@@ -28,7 +28,15 @@ The owner, <YYYY-MM-DD>: "<his words>".
 
 ## Decisions
 
-<Optional: decisions taken while planning, each with its date and source (a card, a consult).>
+<Optional: decisions taken while planning, each with its date and source (a card, a consult); why it comes before or after a competing epic, when that is a real choice.>
+
+## Assumptions
+
+<Optional, when uncertainty is material: the assumption; the evidence that would settle it; who settles it; what stops if it is wrong.>
+
+## Rollout
+
+<When persisted data, compatibility or the installed release change: old and new side by side, the cutover, how to recover, and the check on the installed build. Release authority stays the owner's.>
 
 ## Stories
 
@@ -41,7 +49,7 @@ As <the owner / a user>, I want <capability>, so that <benefit>.
 **Acceptance criteria:**
 1. **Given** <state>, **when** <action>, **then** <observable result>.
 
-**Verification:** <the named check: unit tests, a scripted run, a live check>.
+**Verification:** <the named check, where it runs (unit, isolated live run, packaged build, the owner's phone), the result it observes, and who runs it>.
 
 ## Reviews
 
