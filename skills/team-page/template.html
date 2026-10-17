@@ -1,6 +1,6 @@
 <!-- MODULE: template.html - the team page: header, why, what changes, safety, money, checks, limits, decided, next, opinion, footer -->
 <title>Two To Four Words</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -78,6 +78,13 @@ td.num, th.num { text-align: right; white-space: nowrap; }
   .rules { grid-template-columns: minmax(0, 1fr); }
   table { font-size: 13px; }
   td:first-child { width: 52%; }
+  /* the Check | Result table stacks: each check over its result, one rule per row */
+  table.stack, table.stack tbody, table.stack tr, table.stack td { display: block; width: auto; }
+  table.stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  table.stack td { border-bottom: 0; padding: 0; }
+  table.stack td + td { padding: 2px 0 0; color: var(--muted); }
+  table.stack tr { padding: 10px 0; border-bottom: 1px solid var(--rule); }
+  table.stack tr:last-child { border-bottom: 0; }
 }
 .opinion { border-left: 3px solid var(--accent); padding-left: 16px; display: flex; flex-direction: column; gap: 12px; }
 footer { font-size: 13px; line-height: 1.5; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 20px; }
@@ -138,7 +145,7 @@ footer { font-size: 13px; line-height: 1.5; color: var(--muted); border-top: 1px
   <section data-part="checks">
     <h2>How we checked it</h2>
     <div class="table-wrap">
-      <table>
+      <table class="stack">
         <thead><tr><th>Check</th><th>Result</th></tr></thead>
         <tbody>
           <tr><td>What ran, and its scope</td><td>What it showed, with the number</td></tr>

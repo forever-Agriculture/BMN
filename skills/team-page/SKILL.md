@@ -66,7 +66,7 @@ Leave an optional part out entirely rather than writing "not applicable".
 The template holds the whole look; do not restyle it. One ~720px reading column on a calm paper
 background, Source Serif 4 for headings, Public Sans for text, JetBrains Mono for code, one accent
 colour and one warning colour, light and dark themes from the same tokens. Tables sit in
-`.table-wrap` so a phone scrolls them sideways and never the page. No scripts, no images unless
+`.table-wrap` so a phone scrolls them sideways and never the page; the Check | Result table keeps `class="stack"`, which stacks each check over its result on a phone. `class="num"` (right-aligned, no wrap) is for bare figures only, never prose. No scripts, no images unless
 the example needs one, no icons, no extra boxes: shape and spacing carry the structure.
 
 ## Check it
