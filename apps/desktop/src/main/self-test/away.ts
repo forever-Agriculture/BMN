@@ -18,8 +18,9 @@ export async function runAwaySelfTest(host: SelfTestHost, client: PtyHostClient,
   }
   const original = (await client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})).telegram
   const control = await client.request<ControlInfo>(METHOD_REGISTRY.controlInfo, {})
+  // The CLI runs as the executable it is: a Node script in a checkout, a shell launcher in a packaged build.
   const cli = (...args: string[]): string =>
-    execFileSync(process.env.BMN_SELF_TEST_NODE!, [control.cliPath, '--owner', '--socket', control.socketPath, ...args], { encoding: 'utf8' })
+    execFileSync(control.cliPath, ['--owner', '--socket', control.socketPath, ...args], { encoding: 'utf8' })
   const shown = (): Promise<OwnerAwayView> => renderer<OwnerAwayView>('window.aiTerminal.getAway()')
   const bot = await taps.telegram()
   const sent = (from: number): string[] => bot.calls.slice(from).filter(call => call.method === 'sendMessage').map(call => String(call.body.text))
