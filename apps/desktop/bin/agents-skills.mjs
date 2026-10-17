@@ -342,10 +342,11 @@ function installedState(app, skill, records, wanted) {
 export function checkSkills({ environment = process.env, tests = skillsTests(), versions, generation = approvedIfAny(), descriptions = false } = {}) {
   const data = generation?.data ?? null
   const marks = marksOf(data)
-  // BMN's own skills (Story 77.4) are public, as BMN's repository is, unless the team file marks them otherwise.
-  const own = new Set(ownSkillNames(environment))
-  const markOf = (name) => marks.get(name) ?? (own.has(name) ? { id: name, public: true } : undefined)
   const source = sourceSkills(skillsSource(data, environment))
+  // BMN's own entries (Story 77.4) are public, as BMN's repository is, unless the team file marks them otherwise;
+  // a foreign entry of a shipped name is not BMN's and gets no mark.
+  const own = new Set(ownSkillNames(source.path, environment))
+  const markOf = (name) => marks.get(name) ?? (own.has(name) ? { id: name, public: true } : undefined)
   const records = written()
   const known = new Set(source.skills.map((skill) => skill.name))
   const apps = HARNESSES.map((harness) => {

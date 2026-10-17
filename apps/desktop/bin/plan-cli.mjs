@@ -1,10 +1,10 @@
 // MODULE: plan-cli.mjs - Epic 77: `bmn plan status|check|set`, the project's planning board from the shell; works with BMN closed
 import { randomBytes, createHash } from 'node:crypto'
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { chmodSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, relative } from 'node:path'
 import {
-  BMAD_STATUSES, EXIT, FORMAT, NOTE_LIMIT, PlanError, ROW, STATUSES, boardBytes, checkPlan, readBoard, resolvePlan, rowToken
+  BMAD_STATUSES, EXIT, FORMAT, NOTE_LIMIT, PlanError, ROW, STATUSES, boardBytes, boardProblems, checkPlan, readBoard, resolvePlan, rowToken
 } from './plan-board.mjs'
 
 export const PLAN_USAGE = `Usage: bmn plan status [--json] [--project P] [--epic N]...
@@ -80,11 +80,11 @@ function parse(argv, { flags, values, repeated = [] }) {
   return { positionals, options }
 }
 
-function failure(error, json) {
+function failure(error, json, written = []) {
   const code = error instanceof PlanError ? error.code : 'UNREADABLE'
   const message = error instanceof PlanError ? error.message : `the plan could not be read: ${error.message}`
-  if (json) out(JSON.stringify({ ok: false, error: { code, message } }, null, 2))
-  else err(`bmn: ${code}: ${message}`)
+  if (json) out(JSON.stringify({ ok: false, error: { code, message }, ...(written.length ? { written } : {}) }, null, 2))
+  else err(`bmn: ${code}: ${message}${writtenNote(written)}`)
   return EXIT.unable
 }
 
@@ -137,6 +137,10 @@ async function status(argv) {
     plan = await resolvePlan(options.project ?? process.cwd())
     board = await readBoard(plan.boardPath, { epics })
   } catch (error) { return failure(error, json) }
+  if (plan.format === FORMAT) {
+    const problems = boardProblems(board, relative(plan.productRoot, plan.boardPath) || plan.boardPath)
+    if (problems.length > 0) return failure(new PlanError('MALFORMED', `the board cannot be read unambiguously: ${problems.map((problem) => `${problem.where}: ${problem.reason}`).join('; ')} (bmn plan check lists every finding)`), json)
+  }
   const missing = epics.filter((epic) => !board.rows.some((row) => row.epic === epic))
   if (json) {
     out(JSON.stringify({
@@ -202,23 +206,57 @@ function processAlive(pid) {
   try { process.kill(pid, 0); return true } catch (error) { return error.code === 'EPERM' }
 }
 
-/** A stable sibling lock, `.<board>.lock`, present only while a writer changes the board; a dead holder's lock is cleared. */
+const RECLAIM_STALE_MS = 10_000
+
+/** Create `path` holding `data` in one step (a link of a written temporary file), or false when it exists. */
+function createLock(path, data) {
+  const temporary = `${path}.${process.pid}-${randomBytes(3).toString('hex')}.tmp`
+  writeFileSync(temporary, `${JSON.stringify(data)}\n`, { mode: 0o600 })
+  try { linkSync(temporary, path); return true } catch (error) { if (error.code === 'EEXIST') return false; throw error } finally { rmSync(temporary, { force: true }) }
+}
+
+function readHolder(path) {
+  let text
+  try { text = readFileSync(path, 'utf8') } catch { return null }
+  try { return { text, data: JSON.parse(text) } } catch { return { text, data: null } }
+}
+
+/**
+ * Clear a dead holder's lock whose text is `observed`. One reclaimer at a time holds `<lock>.reclaim` and
+ * removes the lock only if it still holds that text: no writer can replace an existing lock, and only the
+ * reclaimer removes one that is not its own, so a lock taken meanwhile is never removed. A reclaimer that died
+ * mid-way leaves its guard; one older than RECLAIM_STALE_MS whose process is gone is cleared.
+ */
+function reclaim(path, observed) {
+  const guard = `${path}.reclaim`
+  if (!createLock(guard, { pid: process.pid, at: new Date().toISOString() })) {
+    const other = readHolder(guard)
+    let age
+    try { age = Date.now() - statSync(guard).mtimeMs } catch { return false }
+    if (other?.data && Number.isSafeInteger(other.data.pid) && !processAlive(other.data.pid) && age > RECLAIM_STALE_MS && readHolder(guard)?.text === other.text) rmSync(guard, { force: true })
+    return false
+  }
+  try {
+    if (readHolder(path)?.text === observed) rmSync(path, { force: true })
+    return true
+  } finally { rmSync(guard, { force: true }) }
+}
+
+/**
+ * A stable sibling lock, `.<board>.lock`, present only while a writer changes the board. It names its writer's
+ * process and a nonce: a dead holder's lock is reclaimed, and a writer releases only the lock with its own nonce.
+ */
 export async function lockBoard(boardPath, { waitMs = LOCK_WAIT_MS } = {}) {
   const path = join(dirname(boardPath), `.${basename(boardPath)}.lock`)
+  const nonce = randomBytes(8).toString('hex')
   const until = Date.now() + waitMs
   for (;;) {
-    try {
-      const descriptor = openSync(path, 'wx', 0o600)
-      writeSync(descriptor, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`)
-      closeSync(descriptor)
-      return () => { try { unlinkSync(path) } catch { /* already gone */ } }
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error
+    if (createLock(path, { pid: process.pid, at: new Date().toISOString(), nonce })) {
+      return () => { if (readHolder(path)?.data?.nonce === nonce) rmSync(path, { force: true }) }
     }
-    let holder = null
-    try { holder = JSON.parse(readFileSync(path, 'utf8')) } catch { /* being written, or not ours */ }
-    if (holder && Number.isSafeInteger(holder.pid) && !processAlive(holder.pid)) { rmSync(path, { force: true }); continue }
-    if (Date.now() >= until) throw new PlanError('LOCKED', `${path} is held${holder?.pid ? ` by process ${holder.pid}` : ''}; try again`)
+    const holder = readHolder(path)
+    if (holder?.data && Number.isSafeInteger(holder.data.pid) && !processAlive(holder.data.pid) && reclaim(path, holder.text)) continue
+    if (Date.now() >= until) throw new PlanError('LOCKED', `${path} is held${holder?.data?.pid ? ` by process ${holder.data.pid}` : ''}; try again`)
     await new Promise((done) => setTimeout(done, 50))
   }
 }
@@ -265,8 +303,8 @@ function commit(path, expected, text) {
  * before, write atomically. A change elsewhere in the file between the read and the write makes it read
  * again, up to SET_RETRIES times; a change of this row is a conflict.
  */
-export async function setRow(boardPath, { key, status, note, expect, environment = process.env, seam = () => {} }) {
-  const release = await lockBoard(boardPath)
+export async function setRow(boardPath, { key, status, note, expect, environment = process.env, seam = () => {}, locked = false }) {
+  const release = locked ? () => {} : await lockBoard(boardPath)
   try {
     for (let attempt = 0; attempt <= SET_RETRIES; attempt++) {
       const before = readFileSync(boardPath, 'utf8')
@@ -300,40 +338,52 @@ async function set(argv) {
     const other = join(plan.defaultCheckout, plan.boardPath.slice(plan.runCheckout.length + 1))
     copies.push({ path: other, expect: options['expect-default'] ?? options.expect, name: 'default checkout' })
   }
-  // Every copy is checked before any is written, so a refusal changes nothing.
-  for (const copy of copies) {
-    let text
-    try { text = readFileSync(copy.path, 'utf8') } catch { return failure(new PlanError('UNREADABLE', `${copy.path} cannot be read`), json) }
-    let found
-    try { found = replaceRow(text, key, status, options.note) } catch (error) { return failure(error, json) }
-    if (found === null) {
-      if (json) out(JSON.stringify({ ok: false, error: { code: 'UNKNOWN_ROW', message: `no row ${key} in the ${copy.name}'s board ${copy.path}` } }, null, 2))
-      else err(`bmn: UNKNOWN_ROW: no row ${key} in the ${copy.name}'s board ${copy.path}`)
-      return EXIT.unable
+  // Both copies are locked (in one order, so two writers never wait on each other) and checked before either is
+  // written, so a cooperating writer's change refuses the whole set and changes nothing.
+  const releases = []
+  try {
+    for (const copy of [...copies].sort((one, two) => one.path.localeCompare(two.path))) releases.push(await lockBoard(copy.path))
+  } catch (error) { releases.forEach((release) => release()); return failure(error, json) }
+  try {
+    for (const copy of copies) {
+      let text
+      try { text = readFileSync(copy.path, 'utf8') } catch { return failure(new PlanError('UNREADABLE', `${copy.path} cannot be read`), json) }
+      let found
+      try { found = replaceRow(text, key, status, options.note) } catch (error) { return failure(error, json) }
+      if (found === null) {
+        if (json) out(JSON.stringify({ ok: false, error: { code: 'UNKNOWN_ROW', message: `no row ${key} in the ${copy.name}'s board ${copy.path}` } }, null, 2))
+        else err(`bmn: UNKNOWN_ROW: no row ${key} in the ${copy.name}'s board ${copy.path}`)
+        return EXIT.unable
+      }
+      if (found.token !== copy.expect) return conflict(json, copy, key, found, [])
     }
-    if (found.token !== copy.expect) return conflict(json, copy, key, found)
-  }
-  const results = []
-  for (const copy of copies) {
-    let result
-    try { result = await setRow(copy.path, { key, status, note: options.note, expect: copy.expect }) } catch (error) { return failure(error, json) }
-    if (result.outcome === 'conflict') return conflict(json, copy, key, { before: result.current, token: result.current.token })
-    if (result.outcome === 'busy') {
-      if (json) out(JSON.stringify({ ok: false, error: { code: 'BUSY', message: `${copy.path} kept changing; nothing written there` }, written: results }, null, 2))
-      else err(`bmn: BUSY: ${copy.path} kept changing while it was written; nothing written there${results.length ? ` (written: ${results.map((one) => one.board).join(', ')})` : ''}`)
-      return EXIT.findings
+    // Only a writer that ignores the lock can still change a copy now; whatever was written before is reported.
+    const results = []
+    for (const copy of copies) {
+      let result
+      try { result = await setRow(copy.path, { key, status, note: options.note, expect: copy.expect, locked: true }) } catch (error) { return failure(error, json, results) }
+      if (result.outcome === 'conflict') return conflict(json, copy, key, { before: result.current, token: result.current.token }, results)
+      if (result.outcome === 'busy') {
+        if (json) out(JSON.stringify({ ok: false, error: { code: 'BUSY', message: `${copy.path} kept changing; nothing written there` }, written: results }, null, 2))
+        else err(`bmn: BUSY: ${copy.path} kept changing while it was written; nothing written there${writtenNote(results)}`)
+        return EXIT.findings
+      }
+      results.push({ board: copy.path, outcome: result.outcome, token: result.token, kept: result.kept ?? null })
     }
-    results.push({ board: copy.path, outcome: result.outcome, token: result.token, kept: result.kept ?? null })
-  }
-  if (json) out(JSON.stringify({ ok: true, key, status, written: results }, null, 2))
-  else out(results.map((one) => `${one.outcome === 'unchanged' ? 'unchanged' : 'set'} ${key}: ${status} in ${one.board} (token ${one.token})`).join('\n'))
-  return EXIT.ok
+    if (json) out(JSON.stringify({ ok: true, key, status, written: results }, null, 2))
+    else out(results.map((one) => `${one.outcome === 'unchanged' ? 'unchanged' : 'set'} ${key}: ${status} in ${one.board} (token ${one.token})`).join('\n'))
+    return EXIT.ok
+  } finally { releases.forEach((release) => release()) }
 }
 
-function conflict(json, copy, key, found) {
+function writtenNote(results) {
+  return results.length ? ` (already written: ${results.map((one) => `${one.board}, token ${one.token}`).join('; ')})` : ''
+}
+
+function conflict(json, copy, key, found, written) {
   const current = { key, status: found.before.status, note: found.before.note, token: found.token }
-  if (json) out(JSON.stringify({ ok: false, error: { code: 'CONFLICT', message: `${key} changed in the ${copy.name}'s board since its token was read`, board: copy.path, current } }, null, 2))
-  else err(`bmn: CONFLICT: ${key} in the ${copy.name}'s board ${copy.path} is now "${current.status}${current.note ? ` # ${current.note}` : ''}" (token ${current.token}); read it again before changing it`)
+  if (json) out(JSON.stringify({ ok: false, error: { code: 'CONFLICT', message: `${key} changed in the ${copy.name}'s board since its token was read`, board: copy.path, current }, written }, null, 2))
+  else err(`bmn: CONFLICT: ${key} in the ${copy.name}'s board ${copy.path} is now "${current.status}${current.note ? ` # ${current.note}` : ''}" (token ${current.token}); read it again before changing it${writtenNote(written)}`)
   return EXIT.findings
 }
 

@@ -41,6 +41,8 @@ export interface Board {
   rows: BoardRow[]
   malformed: Array<{ line: number; text: string; where: 'queue' | 'development_status' }>
   duplicates: Array<{ key: string; line: number; first: number }>
+  headerDuplicates: Array<{ key: string; line: number; first: number }>
+  logicalDuplicates: Array<{ id: string; key: string; line: number; first: { key: string; line: number } }>
   totalRows: number
 }
 export interface EpicFile {
@@ -61,5 +63,6 @@ export declare function resolvePlan(start: string): Promise<ResolvedPlan>
 export declare function readBoard(path: string, options?: { epics?: number[] }): Promise<Board>
 export declare function readEpicFile(path: string): EpicFile
 export declare function epicFiles(planRoot: string): Array<{ name: string; number: number; path: string }>
+export declare function boardProblems(board: Board, boardName: string): Array<{ where: string; reason: string }>
 export declare function checkPlan(resolved: ResolvedPlan): Promise<{ findings: Array<{ where: string; reason: string }>; board: Board }>
 export declare function boardBytes(path: string): number | null

@@ -72,6 +72,16 @@ describe('BMN\'s skills install themselves (Story 77.4)', () => {
     expect(installOwnSkills({ source, environment, apply: false }).rows.map((row) => row.state)).toEqual(['current', 'current'])
   })
 
+  it('gives a foreign folder or link of a shipped name no public mark (Sol review F1)', () => {
+    skill(source, 'plan', 'a folder of mine')
+    symlinkSync(skill(join(root, 'mine'), 'team-page', 'my own'), join(source, 'team-page'))
+    expect(states()).toEqual({ plan: 'foreign', 'team-page': 'foreign' })
+    const view = checkSkills({ environment, versions: {}, generation: null })
+    for (const name of ['plan', 'team-page']) expect(view.skills.find((row) => row.name === name)).toMatchObject({ own: false, public: false })
+    rmSync(join(source, 'plan'), { recursive: true }); states()
+    expect(checkSkills({ environment, versions: {}, generation: null }).skills.find((row) => row.name === 'plan')).toMatchObject({ own: true, public: true })
+  })
+
   it('writes nothing when asked only what it would do', () => {
     expect(installOwnSkills({ source, environment, apply: false }).rows.map((row) => row.state)).toEqual(['installed', 'installed'])
     expect(existsSync(join(source, 'plan'))).toBe(false)

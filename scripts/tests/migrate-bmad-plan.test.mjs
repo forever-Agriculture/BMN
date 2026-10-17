@@ -63,7 +63,7 @@ Delegated: the canonical contract is \`docs/epic-4-plan.md\`.
 
 ### Story 4.1: D
 `)
-  file('_bmad-output/planning-artifacts/reference-context.md', '# Context\n\nBack to [the plan](epics.md) and [docs](../../docs/architecture.md).\n')
+  file('_bmad-output/planning-artifacts/reference-context.md', '# Context\n\nBack to [the plan](epics.md) and [docs](../../docs/architecture.md).\n\n## Part\n\nThe part an epic links to.\n')
   file('_bmad-output/planning-artifacts/reference-1/shot.png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]))
   file('_bmad-output/implementation-artifacts/1-1-story.md', '# Story file\n')
   file('_bmad-output/implementation-artifacts/sprint-status.yaml', `# Scope: fixture
@@ -113,7 +113,7 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     expect(one.split('\n')[0]).toBe('<!-- bmn-plan: bmad-legacy -->')
     expect(one).toContain('[sibling](../references/reference-context.md#part)')
     expect(one).toContain('[code](../../apps/x.ts)')
-    expect(readFileSync(join(stage, 'shared/two-together-2-3-2026-10-01.md'), 'utf8')).toContain('[epic 1](../epics/001-first-thing.md)')
+    expect(readFileSync(join(stage, 'shared/two-together-2-3-2026-10-01.md'), 'utf8')).toContain('[epic 1](../epics/001-first-thing.md#epic-1-first-thing)')
     expect(readFileSync(join(stage, 'epics/002-second.md'), 'utf8')).toContain('[two-together-2-3-2026-10-01](../shared/two-together-2-3-2026-10-01.md)')
     const four = readFileSync(join(stage, 'epics/004-fourth.md'), 'utf8')
     expect(four.split('\n')[0]).toBe('<!-- bmn-plan: bmad-legacy; contracts: docs/epic-4-plan.md -->')
@@ -150,6 +150,53 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     expect(check.stdout).toContain('PASS')
     const after = execFileSync('sh', ['-c', `cd ${repo} && find . -type f -o -type l | sort | xargs sha256sum 2>/dev/null; find . -type l -exec readlink {} \\;`], { encoding: 'utf8' })
     expect(after).toBe(before)
+  })
+
+  it('lands every link on its heading, sends gone targets to one note, keeps short notes, and checks every source (Sol review F4, F5, F6, F9)', () => {
+    const { root, repo } = fixture()
+    const epics = join(repo, '_bmad-output/planning-artifacts/epics.md')
+    writeFileSync(epics, readFileSync(epics, 'utf8')
+      .replace('Shared by epics 2 and 3; see [epic 1](epics.md#epic-1-first-thing).', 'Shared by epics 2 and 3; see [epic 1](epics.md#epic-1-first-thing), [its story](epics.md#story-11-do-it), [no such](epics.md#no-such-heading) and [below](#story-21-a).')
+      .replace('Delegated: the canonical contract is \\`docs/epic-4-plan.md\\`.', '**Canonical requirements:** [the contract](../../docs/epic-4-plan.md).'))
+    const board = join(repo, '_bmad-output/implementation-artifacts/sprint-status.yaml')
+    writeFileSync(board, readFileSync(board, 'utf8').replace('  3-1-b: done\n', '  3-1-b: done\n  3-3-e: backlog # waits for the phone check\n'))
+    const second = readFileSync(epics, 'utf8').split('\n').indexOf('## Epic 2: Second') + 2
+    mkdirSync(join(repo, '_bmad-output/planning-artifacts/reviews'))
+    writeFileSync(join(repo, '_bmad-output/planning-artifacts/reviews/r.md'), `# Review\n\nSee [the line](../epics.md:${second}).\n`)
+    writeFileSync(join(repo, '_bmad-output/implementation-artifacts/audit.md'), '# Audit\n\nIn [x](../apps/x.ts).\n')
+    const approved = join(root, 'approved-vision.md')
+    writeFileSync(approved, '# x: vision\n\n## Vision\n\nOne workspace where the owner gives commands.\n\n## Principles\n\n1. **One.** (owner, 2026-10-17)\n')
+    const stage = join(root, 'out', 'plan')
+    const manifest = stagePlan({ repo, stage, date: '2026-10-17', docs: ['docs/architecture.md'], vision: approved })
+    expect(checkSpans({ repo, stage, manifest })).toEqual([])
+    const shared = readFileSync(join(stage, 'shared/two-together-2-3-2026-10-01.md'), 'utf8')
+    expect(shared).toContain('[its story](../epics/001-first-thing.md#story-11-do-it)')
+    expect(shared).toContain('[no such](front-matter.md)')
+    expect(shared).toContain('[below](../epics/002-second.md#story-21-a)')
+    expect(readFileSync(join(stage, 'epics/001-first-thing.md'), 'utf8')).toContain('[gone](../references/gone-link-targets.md#appsdeletedts12)')
+    const goneNote = readFileSync(join(stage, 'references/gone-link-targets.md'), 'utf8')
+    expect(goneNote).toContain('## apps/deleted.ts:12')
+    expect(goneNote).toContain('`_bmad-output/planning-artifacts/epics.md#no-such-heading`')
+    expect(readFileSync(join(stage, 'references/reviews/r.md'), 'utf8')).toContain('[the line](../../epics/002-second.md)')
+    expect(goneNote).toContain('## _bmad-output/apps/x.ts\n\nNot found in this repository\'s history. The repository has `apps/x.ts`; the link was likely meant for it.')
+    expect(manifest.unresolved).toEqual([])
+    expect(readFileSync(join(stage, 'epics/004-fourth.md'), 'utf8').split('\n')[0]).toBe('<!-- bmn-plan: bmad-legacy; contracts: docs/epic-4-plan.md -->')
+    const plan = readFileSync(join(stage, 'PLAN.md'), 'utf8')
+    expect(plan).toMatch(/^## Purpose\n\nOne workspace where the owner gives commands\.\n\nThe principles every epic serves are in \[VISION\.md\]\(VISION\.md\)\. The plan holds epics 1–4: 2 finished/mu)
+    expect(plan).not.toContain('A synthetic product for the move')
+    expect(plan).not.toContain('_bmad-output')
+    expect(readFileSync(join(stage, 'status.yaml'), 'utf8')).toContain('  3-3-e: dropped # deferred when epic 3 was accepted; waits for the phone check\n')
+    // The span check fails on a dropped short note and on a source the manifest does not list.
+    const status = join(stage, 'status.yaml')
+    const staged = readFileSync(status, 'utf8')
+    writeFileSync(status, staged.replace(' # deferred when epic 3 was accepted; waits for the phone check', ''))
+    expect(checkSpans({ repo, stage, manifest })).toEqual(expect.arrayContaining([
+      '3-3-e\'s note in status.yaml is not the one the move wrote',
+      expect.stringMatching(/comment of 3-3-e is in neither its note nor status\.yaml$/u)
+    ]))
+    writeFileSync(status, staged)
+    writeFileSync(join(repo, '_bmad-output/planning-artifacts/late-note.md'), '# Written after staging\n')
+    expect(checkSpans({ repo, stage, manifest })).toEqual(['_bmad-output/planning-artifacts/late-note.md is not in the manifest (new since staging): stage again'])
   })
 
   it('archives byte-identical originals, verifies them and rehearses the rollback on a copy', () => {

@@ -170,9 +170,23 @@ export function installOwnSkills({ source, environment = process.env, apply = tr
   return { ok: true, code: 'OK', source, shipped: root, copies, rows }
 }
 
-/** The names BMN ships, for eligibility: its own skills are public, as its repository is. */
-export function ownSkillNames(environment = process.env) {
+/**
+ * The shipped names whose entry in the skills folder `source` is BMN's own, for eligibility: its own skills are
+ * public, as its repository is. Only a link to BMN's copy counts; a foreign folder or link of a shipped name is
+ * the owner's and gets no mark from BMN.
+ */
+export function ownSkillNames(source, environment = process.env) {
   const root = shippedSkillsRoot(environment)
-  if (root === null) return []
-  try { return shippedNames(root) } catch { return [] }
+  if (root === null || !source) return []
+  let names
+  try { names = shippedNames(root) } catch { return [] }
+  const copies = ownCopiesRoot(environment)
+  return names.filter((name) => {
+    let entry
+    try { entry = entryOf(join(source, name)) } catch { return false }
+    if (entry.kind !== 'link') return false
+    const target = resolve(source, entry.target)
+    const copy = join(copies, name)
+    return target === copy || (realOrNull(target) !== null && realOrNull(target) === realOrNull(copy))
+  })
 }

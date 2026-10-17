@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -210,6 +210,23 @@ development_status:
     expect(result.out.trim().split('\n')).toHaveLength(findings.length)
   })
 
+  it('finds two keys for one story, an orphan story and a repeated header, and status refuses that board (Sol review F7)', async () => {
+    const main = ownProject(fixture())
+    file(main, 'plan/status.yaml', `${BOARD}  2-1-again: backlog\n  9-1-orphan: backlog\nschema_version: 999\n`)
+    const { findings } = await checkPlan(await resolvePlan(main))
+    const reasons = findings.map((finding) => finding.reason)
+    expect(reasons).toContain('2-1-again is story 2.1 again (first 2-1-second at line 9)')
+    expect(reasons).toContain('9-1-orphan belongs to epic 9, which has neither an epic-9 row nor an epic file')
+    expect(reasons).toContain('schema_version appears twice (first at line 2)')
+    expect(reasons).toContain('schema_version 999; this BMN reads 1')
+    const status = bmn(main, fixture(), 'status', '--json')
+    expect(status.code).toBe(2)
+    expect(JSON.parse(status.out)).toMatchObject({ ok: false, error: { code: 'MALFORMED' } })
+    expect(JSON.parse(status.out).error.message).toContain('2-1-again is story 2.1 again')
+    file(main, 'plan/status.yaml', BOARD)
+    expect(bmn(main, fixture(), 'status', '--json').code).toBe(0)
+  })
+
   it('checks a legacy epic for its heading, identifiers and rows only', async () => {
     const main = ownProject(fixture())
     file(main, 'plan/status.yaml', `${BOARD}  epic-53: paused # parked 2026-10-16\n  53-1-old: done\n`)
@@ -321,6 +338,62 @@ describe('agents change one row of the board (Story 77.2)', () => {
     await expect(lockBoard(path, { waitMs: 100 })).rejects.toMatchObject({ code: 'LOCKED' })
     release()
     expect(existsSync(join(main, 'plan/.status.yaml.lock'))).toBe(false)
+  })
+
+  it('separate processes reclaiming one dead writer\'s lock never hold it together (Sol review F2)', async () => {
+    const main = ownProject(fixture())
+    const path = join(main, 'plan/status.yaml')
+    const lock = join(main, 'plan/.status.yaml.lock')
+    const log = join(main, 'holders.log')
+    const worker = file(main, 'worker.mjs', `import { appendFileSync } from 'node:fs'
+import { lockBoard } from ${JSON.stringify(resolve(__dirname, '../../bin/plan-cli.mjs'))}
+const release = await lockBoard(${JSON.stringify(path)}, { waitMs: 20000 })
+appendFileSync(${JSON.stringify(log)}, \`enter \${process.pid} \${process.hrtime.bigint()}\\n\`)
+await new Promise((done) => setTimeout(done, 40))
+appendFileSync(${JSON.stringify(log)}, \`exit \${process.pid} \${process.hrtime.bigint()}\\n\`)
+release()
+`)
+    for (let round = 0; round < 3; round++) {
+      writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 12345 + round }))
+      const codes = await Promise.all(Array.from({ length: 8 }, () => new Promise<number>((done) => spawn(process.execPath, [worker], { stdio: 'ignore' }).on('exit', (code) => done(code ?? -1)))))
+      expect(codes).toEqual(Array(8).fill(0))
+      expect(existsSync(lock)).toBe(false)
+      expect(existsSync(`${lock}.reclaim`)).toBe(false)
+    }
+    // Entries are appended in order; with one holder at a time every enter is followed by its own exit.
+    const lines = readFileSync(log, 'utf8').trim().split('\n').map((line) => line.split(' '))
+    expect(lines).toHaveLength(48)
+    for (let index = 0; index < lines.length; index += 2) {
+      expect(lines[index]![0]).toBe('enter')
+      expect(lines[index + 1]).toEqual(['exit', lines[index]![1], expect.any(String)])
+    }
+  })
+
+  it('a tracked board\'s two copies are locked before either is checked: a change in the default copy refuses both (Sol review F3)', async () => {
+    const root = fixture()
+    const tracked = repo(join(root, 'tracked'))
+    const board = 'development_status:\n  epic-4: in-progress\n  4-1-a: in-progress\n'
+    file(tracked, '_bmad-output/implementation-artifacts/sprint-status.yaml', board)
+    git(tracked, 'add', '_bmad-output'); git(tracked, 'commit', '-qm', 'board')
+    const run = join(root, 'run'); git(tracked, 'worktree', 'add', '-qb', 'run', run)
+    const mainBoard = join(tracked, '_bmad-output/implementation-artifacts/sprint-status.yaml')
+    const runBoard = join(run, '_bmad-output/implementation-artifacts/sprint-status.yaml')
+    const home = fixture()
+    // Another writer holds the default copy's lock while the set starts, then changes the same row.
+    const release = await lockBoard(mainBoard)
+    const child = spawn(process.execPath, [BMN, 'plan', 'set', '4-1-a', 'review', '--expect', token(board, '4-1-a'), '--json'], {
+      cwd: run, env: { PATH: process.env.PATH, HOME: home, XDG_STATE_HOME: join(home, 'state'), LC_ALL: 'C' }
+    })
+    let out = ''
+    child.stdout.on('data', (chunk) => { out += chunk })
+    const code = new Promise<number>((done) => child.on('exit', (exit) => done(exit ?? -1)))
+    await new Promise((done) => setTimeout(done, 400))
+    writeFileSync(mainBoard, board.replace('4-1-a: in-progress', '4-1-a: blocked # owner'))
+    release()
+    expect(await code).toBe(1)
+    expect(JSON.parse(out)).toMatchObject({ ok: false, error: { code: 'CONFLICT' }, written: [] })
+    expect(readFileSync(runBoard, 'utf8')).toBe(board)
+    expect(readFileSync(mainBoard, 'utf8')).toContain('4-1-a: blocked # owner')
   })
 
   it('changes a BMAD board with BMAD\'s statuses', async () => {

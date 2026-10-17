@@ -166,8 +166,10 @@ async function locate(root, defaultCheckout, localPath) {
  * malformed for the check.
  */
 export async function readBoard(path, { epics = [] } = {}) {
-  const result = { format: null, schemaVersion: null, queue: [], queueLines: [], rows: [], malformed: [], duplicates: [], totalRows: 0 }
+  const result = { format: null, schemaVersion: null, queue: [], queueLines: [], rows: [], malformed: [], duplicates: [], headerDuplicates: [], logicalDuplicates: [], totalRows: 0 }
   const seen = new Map()
+  const headers = new Map()
+  const logical = new Map()
   let section = null
   let lineNumber = 0
   const lines = createInterface({ input: createReadStream(path, { encoding: 'utf8' }), crlfDelay: Infinity })
@@ -180,6 +182,8 @@ export async function readBoard(path, { epics = [] } = {}) {
       const top = /^([\w-]+):[ \t]*(.*?)[ \t]*$/u.exec(line)
       if (!top) continue
       const value = top[2].replace(/[ \t]*#.*$/u, '').replace(/^(['"])(.*)\1$/u, '$2')
+      if (headers.has(top[1])) result.headerDuplicates.push({ key: top[1], line: lineNumber, first: headers.get(top[1]) })
+      else headers.set(top[1], lineNumber)
       if (top[1] === 'format') result.format = value
       else if (top[1] === 'schema_version') result.schemaVersion = value
       else if (top[1] === 'queue' || top[1] === 'development_status') section = top[1]
@@ -198,10 +202,31 @@ export async function readBoard(path, { epics = [] } = {}) {
     if (seen.has(key)) result.duplicates.push({ key, line: lineNumber, first: seen.get(key) })
     else seen.set(key, lineNumber)
     const epic = rowEpic(key)
+    // Two keys for one epic or story (epic-1 and epic-01, 1-1-a and 1-1-b) make the board ambiguous.
+    const id = /^epic-\d+$/u.test(key) ? `epic ${epic}` : rowStory(key) !== null ? `story ${rowStory(key)}` : null
+    if (id !== null && logical.has(id) && logical.get(id).key !== key) result.logicalDuplicates.push({ id, key, line: lineNumber, first: logical.get(id) })
+    else if (id !== null && !logical.has(id)) logical.set(id, { key, line: lineNumber })
     if (epics.length > 0 && !epics.includes(epic)) continue
     result.rows.push({ key, status, note, line: lineNumber, epic, story: rowStory(key), token: rowToken(key, status, note) })
   }
   return result
+}
+
+/**
+ * What makes a board in BMN's format ambiguous to read, one problem per line: a repeated key, header or
+ * logical identifier, a malformed line, or a format or schema version this BMN does not read. `bmn plan check`
+ * reports them and `bmn plan status` refuses such a board, so dev-auto stops on it (77.1 AC5, 77.5 AC5).
+ */
+export function boardProblems(board, boardName) {
+  const problems = []
+  const add = (line, reason) => problems.push({ where: `${boardName}:${line}`, reason })
+  for (const duplicate of board.duplicates) add(duplicate.line, `duplicate key ${duplicate.key} (first at line ${duplicate.first})`)
+  for (const bad of board.malformed) add(bad.line, bad.where === 'queue' ? `queue item is not an epic number: ${bad.text.trim()}` : `malformed row: ${bad.text.trim()}`)
+  for (const header of board.headerDuplicates) add(header.line, `${header.key} appears twice (first at line ${header.first})`)
+  for (const twin of board.logicalDuplicates) add(twin.line, `${twin.key} is ${twin.id} again (first ${twin.first.key} at line ${twin.first.line})`)
+  if (board.format !== null && board.format !== FORMAT) add(1, `format is ${board.format}, not ${FORMAT}`)
+  if (board.format === FORMAT && board.schemaVersion !== String(SCHEMA_VERSION)) add(1, `schema_version ${board.schemaVersion ?? '(none)'}; this BMN reads ${SCHEMA_VERSION}`)
+  return problems
 }
 
 /** Epic files: `epics/NNN-slug.md`, read with their headings, stories and criteria. */
@@ -248,9 +273,12 @@ export async function checkPlan(resolved) {
   const add = (where, reason) => findings.push({ where, reason })
   const board = await readBoard(resolved.boardPath)
   const boardName = relative(resolved.productRoot, resolved.boardPath) || resolved.boardPath
-  for (const duplicate of board.duplicates) add(`${boardName}:${duplicate.line}`, `duplicate key ${duplicate.key} (first at line ${duplicate.first})`)
-  for (const bad of board.malformed) add(`${boardName}:${bad.line}`, bad.where === 'queue' ? `queue item is not an epic number: ${bad.text.trim()}` : `malformed row: ${bad.text.trim()}`)
-  if (resolved.format === 'bmad') return { findings, board }
+  if (resolved.format === 'bmad') {
+    for (const duplicate of board.duplicates) add(`${boardName}:${duplicate.line}`, `duplicate key ${duplicate.key} (first at line ${duplicate.first})`)
+    for (const bad of board.malformed) add(`${boardName}:${bad.line}`, bad.where === 'queue' ? `queue item is not an epic number: ${bad.text.trim()}` : `malformed row: ${bad.text.trim()}`)
+    return { findings, board }
+  }
+  findings.push(...boardProblems(board, boardName))
 
   for (const row of board.rows) {
     const at = `${boardName}:${row.line}`
@@ -342,7 +370,10 @@ export async function checkPlan(resolved) {
     }
   }
   for (const row of epicRows.values()) if (!epicsSeen.has(row.epic)) add(`${boardName}:${row.line}`, `epic-${row.epic} has no epic file under plan/epics/`)
-  for (const row of storyRows.values()) if (epicsSeen.has(row.epic) && !headingStories.has(row.story)) add(`${boardName}:${row.line}`, `${row.key} has no "### Story ${row.story}" heading`)
+  for (const row of storyRows.values()) {
+    if (epicsSeen.has(row.epic)) { if (!headingStories.has(row.story)) add(`${boardName}:${row.line}`, `${row.key} has no "### Story ${row.story}" heading`) }
+    else if (!epicRows.has(row.epic)) add(`${boardName}:${row.line}`, `${row.key} belongs to epic ${row.epic}, which has neither an epic-${row.epic} row nor an epic file`)
+  }
   return { findings, board }
 }
 

@@ -2,7 +2,7 @@
 name: plan
 description: Plan a project's work with the owner: frame a project, plan or revise epics and stories with testable criteria, check readiness before his go, and keep the board he reads (plan/status.yaml, or a BMAD project's own files). Use for any planning, epic or story writing, readiness check, change of course, brainstorm, idea critique or planning research in any project; not for implementation.
 ---
-# MODULE: SKILL.md - Story 77.3 (revision 4: vision and architecture as the foundation, owner 2026-10-17): the plan skill: how any agent plans a project in BMN's own format (or a BMAD project's existing files) to at least BMAD's standard, with methods loaded on demand
+# MODULE: SKILL.md - Story 77.3 (revision 5: a BMAD project read through one table, Sol review F8; revision 4: vision and architecture as the foundation, owner 2026-10-17): the plan skill: how any agent plans a project in BMN's own format (or a BMAD project's existing files) to at least BMAD's standard, with methods loaded on demand
 
 # Plan
 
@@ -13,11 +13,27 @@ Planning turns the owner's intent into epics an implementing agent can deliver w
 Run `bmn plan status --json` in the project (no BMN needed). It names the product root, the plan root, the board, the format (`bmn-plan` or `bmad`) and the history mode.
 
 - **`bmn-plan`**: write `plan/VISION.md`, `plan/PLAN.md`, `plan/epics/NNN-slug.md` and rows in `plan/status.yaml`.
-- **`bmad`**: write the project's existing BMAD files in their existing shape (its epics file or epic files, its `sprint-status.yaml`), with the same rules below. Never create `plan/` in a BMAD project and never reformat or migrate its files.
+- **`bmad`**: write the project's existing BMAD files in their existing shape (its epics file or epic files, its `sprint-status.yaml`), with the same rules below read through [In a BMAD project](#in-a-bmad-project). Never create `plan/` or any of its files in a BMAD project and never reformat or migrate its files.
 - **No plan yet** (`NO_PLAN`): create `plan/` from the templates, and add `/plan/` to `.gitignore` only when the owner says the plan stays out of the product repository (then `git init` inside `plan/`, no remote).
 - **An error** (`BOTH_PLANS`, `UNKNOWN_SCHEMA`, `MALFORMED`): stop and tell the owner; never pick one plan yourself.
 
-Read `VISION.md` (what the project is for and its principles) and `PLAN.md` (the frame and its Architecture), then only the epic files and rows your task needs; open references and logs on demand. A project without `VISION.md` gets one first ([methods/vision.md](methods/vision.md)).
+Read `VISION.md` (what the project is for and its principles) and `PLAN.md` (the frame and its Architecture), then only the epic files and rows your task needs; open references and logs on demand. A `bmn-plan` project without `VISION.md` gets one first ([methods/vision.md](methods/vision.md)).
+
+### In a BMAD project
+
+This skill and its methods name BMN's files and statuses. In a `bmad` project read each name through this table, keep BMAD's shape and vocabulary, and never write anything the table does not name:
+
+| The skill says | In a BMAD project |
+| --- | --- |
+| `VISION.md`, its principles | the project's existing vision: its product brief or PRD, else a `## Vision` section in the epics file's front matter, added only with the owner's yes (a card) |
+| `PLAN.md`, its Architecture | the existing PRD, architecture and UX documents and the epics file's front matter |
+| `plan/epics/NNN-slug.md` | the project's epics file (or its epic files), in its existing heading shape |
+| `plan/references/<x>/` | the folder beside its planning files (`_bmad-output/planning-artifacts/<x>/` unless its config names another) |
+| status `ready` and the `queue` | a story `ready-for-dev`; an epic's go is a dated `go YYYY-MM-DD` comment on its row; the order is the epics file's |
+| `blocked`, `paused`, `dropped` | the row keeps its BMAD status, with a dated comment naming the state and its reason |
+| `bmn plan set` | the same command; it takes BMAD's statuses (`backlog`, `ready-for-dev`, `in-progress`, `review`, `done`) |
+
+Every other rule holds as written.
 
 ## The rules every plan keeps
 
@@ -32,10 +48,12 @@ Read `VISION.md` (what the project is for and its principles) and `PLAN.md` (the
 8. **Designer first for screens.** An epic that adds or changes screens starts with a design story by the team's designer ([methods/design.md](methods/design.md): flows, states, sizes, interaction); the owner approves the design before any screen story starts, and the approved design becomes a truth document.
 9. **Consult when it pays.** When the owner asks, or a named risk calls for it (security, privacy, data loss, a migration, a contract other teams depend on), ask a teammate with `bmn team ask --role consultant|epic-reviewer` (read-only, a stable `--key`), apply what holds, and record each finding's disposition in the epic's Reviews or a `references/` file. Advice is not a decision.
 10. **Truth impact.** Every epic names the truth documents and contracts it adds, changes or removes (or `none` with a reason). Truth lives in the project's docs; the epic proposes the change.
-11. **Readiness before the go.** Run [methods/readiness.md](methods/readiness.md) before asking for his go. His go is recorded as the epic row's status `ready` with the date in its note, and the epic joins `queue`. The go never covers push, merge or deploy; implementing stays with the invocation that selects the work.
+11. **Readiness before the go.** Run [methods/readiness.md](methods/readiness.md) before asking for his go. His go is recorded as the epic row's status `ready` with the date in its note, and the epic joins `queue` (a BMAD project: the table above). The go never covers push, merge or deploy; implementing stays with the invocation that selects the work.
 12. **Check before handing back.** `bmn plan check` passes (it is structural only; your readiness pass is the content check).
 
 ## Writing an epic
+
+In a BMAD project, write the epic in its epics file in the shape its other epics have, with this section's content; the paths and statuses below are BMN's format's.
 
 Copy `templates/epic.md` to `plan/epics/NNN-slug.md` (three digits at least). Fill Outcome, Why (with the principles it serves), Boundary and dependencies (order of stories, what is out of scope), Truth impact and Stories; add What exists today, Requirements, Decisions, Assumptions and Rollout when they carry weight. Keep an active epic under 60 KiB: measurements and long evidence go to `plan/references/<epic>/` and are linked.
 

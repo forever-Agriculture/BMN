@@ -10,4 +10,4 @@ export declare function ownCopiesRoot(environment?: Environment): string
 export declare function shippedNames(root: string): string[]
 export declare function pointsIntoBmn(target: string, name: string): boolean
 export declare function installOwnSkills(options?: { source?: string; environment?: Environment; apply?: boolean; now?: Date }): OwnSkillsResult
-export declare function ownSkillNames(environment?: Environment): string[]
+export declare function ownSkillNames(source: string | null | undefined, environment?: Environment): string[]

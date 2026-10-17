@@ -83,6 +83,33 @@ export function segmentEpics(text) {
   return { lines, segments }
 }
 
+/** The headings of a Markdown text outside code fences, in order. */
+export function headingsOf(text) {
+  const out = []
+  let fence = false
+  for (const line of text.split('\n')) {
+    if (/^\s*```/u.test(line)) { fence = !fence; continue }
+    if (fence) continue
+    const heading = /^#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/u.exec(line)
+    if (heading) out.push(heading[1])
+  }
+  return out
+}
+
+/** The anchor GitHub gives a heading, numbered after an earlier heading of the same text (`counter` per file). */
+export function headingAnchor(heading, counter) {
+  const base = heading.trim().toLowerCase().replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, '').replace(/ /gu, '-')
+  const seen = counter.get(base) ?? 0
+  counter.set(base, seen + 1)
+  return seen === 0 ? base : `${base}-${seen}`
+}
+
+/** Every anchor a Markdown text's headings give. */
+export function anchorsOf(text) {
+  const counter = new Map()
+  return new Set(headingsOf(text).map((heading) => headingAnchor(heading, counter)))
+}
+
 /** Markdown link destinations in a text: `](dest)` and `](dest "title")`, with their offsets. */
 export function linksIn(text) {
   const links = []
@@ -96,26 +123,31 @@ export function linksIn(text) {
  * by `mapPath` (an old repository-relative path to its new one, or null when it does not move). Returns the text
  * and each rewrite as { offset in the new text, original, rewritten }; links that resolve nowhere are listed.
  */
-export function rewriteLinks(text, from, to, mapPath, exists) {
+export function rewriteLinks(text, from, to, mapPath, exists, gone = null) {
   const rewrites = []
   const unresolved = []
   let out = ''
   let last = 0
   for (const link of linksIn(text)) {
     const dest = link.dest
-    if (/^[a-z][a-z0-9+.-]*:/iu.test(dest) || dest.startsWith('#') || dest.startsWith('/') || dest.startsWith('<')) continue
+    if (/^[a-z][a-z0-9+.-]*:/iu.test(dest) || dest.startsWith('/') || dest.startsWith('<')) continue
     const [pathPart, anchor] = dest.split('#', 2)
     let decoded
     try { decoded = decodeURI(pathPart) } catch { decoded = pathPart }
-    const target = posix.normalize(posix.join(posix.dirname(from), decoded))
-    const mapped = mapPath(target, anchor ?? null)
-    const finalTarget = mapped ?? target
-    // A link that resolves nowhere in the source either (a deleted file, a `file.ts:71` line suffix) is kept pointing at the same place.
-    if (mapped === null && !exists(target) && !exists(target.replace(/:\d+(?::\d+)?$/u, ''))) unresolved.push({ file: to, dest, broken_in_source: true })
+    // `#anchor` alone points into the text's own source file, which may now be split over several files.
+    const target = pathPart === '' ? from : posix.normalize(posix.join(posix.dirname(from), decoded))
+    let finalTarget = mapPath(target, anchor ?? null)
+    if (finalTarget === null) {
+      const present = exists(target) || exists(target.replace(/:\d+(?::\d+)?$/u, ''))
+      // A link that resolves nowhere in the source either (a deleted file) goes to the note on targets that are gone, when one is kept.
+      if (!present && gone !== null) finalTarget = gone(target, anchor ?? null, from)
+      else if (!present) unresolved.push({ file: to, dest, broken_in_source: true })
+    }
+    finalTarget ??= target
     const targetPath = typeof finalTarget === 'string' ? finalTarget : finalTarget.path
-    let next = posix.relative(posix.dirname(to), targetPath)
-    if (next === '') next = posix.basename(targetPath)
     const anchorOut = typeof finalTarget === 'string' ? anchor : finalTarget.anchor
+    let next = targetPath === to && anchorOut ? '' : posix.relative(posix.dirname(to), targetPath)
+    if (next === '' && !(targetPath === to && anchorOut)) next = posix.basename(targetPath)
     const rewritten = `${encodeURI(next)}${anchorOut ? `#${anchorOut}` : ''}`
     if (rewritten === dest) continue
     out += text.slice(last, link.offset)
@@ -192,21 +224,64 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
   }
   const planRoot = 'plan'
   const exists = (target) => existsSync(join(repo, target))
-  // A link to epics.md#epic-N… goes to that epic's file; any other link into epics.md to the front matter.
-  const mapPath = (target, anchor) => {
+  const manifest = { version: 1, date, repo, stage, files: [], spans: [], rewrites: {}, unresolved: [], gone: [], board: { rows: [], header: [] }, written: {} }
+
+  // Where each heading of epics.md lands: its anchor in epics.md, and the file and anchor it has after the move.
+  const fileOfSegment = (segment) => segment.kind === 'epic' ? epicFile.get(segment.number) : segment.kind === 'extension' && segment.covers.length === 1 ? epicFile.get(segment.covers[0]) : segment.file
+  const anchors = new Map()
+  const documentCounter = new Map()
+  const fileCounters = new Map()
+  for (const segment of segments) {
+    const file = fileOfSegment(segment)
+    if (!fileCounters.has(file)) fileCounters.set(file, new Map())
+    for (const heading of headingsOf(segment.text)) {
+      const old = headingAnchor(heading, documentCounter)
+      const placed = headingAnchor(heading, fileCounters.get(file))
+      if (!anchors.has(old)) anchors.set(old, { file, anchor: placed })
+    }
+  }
+  const sourceAnchors = new Map()
+  const anchorExists = (target, anchor) => {
+    if (!target.endsWith('.md') || !exists(target)) return true
+    if (!sourceAnchors.has(target)) sourceAnchors.set(target, anchorsOf(readFileSync(join(repo, target), 'utf8')))
+    return sourceAnchors.get(target).has(anchor)
+  }
+  // A link into epics.md goes to the file its heading moved to; any other moved file keeps its path under plan/.
+  // An anchor that led nowhere before the move either is left out (the link goes to the file) and recorded.
+  const mapPath = (named, anchor, from = null) => {
+    // `file:120` names a line: the file is what moves; a line of epics.md goes to the file that holds it now.
+    const [, target, line = ''] = /^(.*?)(:\d+(?::\d+)?)?$/u.exec(named)
+    const dead = (path) => { manifest.gone.push({ kind: 'anchor', target, anchor, from }); return { path, anchor: '' } }
+    if (target === epicsPath && line !== '') {
+      const number = Number(line.slice(1).split(':')[0])
+      const holder = segments.find((segment) => number > segment.start && number <= segment.end)
+      return { path: `${planRoot}/${holder ? fileOfSegment(holder) : 'shared/front-matter.md'}`, anchor: anchor ?? '' }
+    }
     if (target === epicsPath) {
+      const placed = anchor ? anchors.get(anchor) : undefined
+      if (placed) return { path: `${planRoot}/${placed.file}`, anchor: placed.anchor }
       const number = /^epic-(\d+)\b/u.exec(anchor ?? '')?.[1]
       if (number && epicFile.has(Number(number))) return { path: `${planRoot}/${epicFile.get(Number(number))}`, anchor: '' }
-      return { path: `${planRoot}/shared/front-matter.md`, anchor: anchor ?? '' }
+      return anchor ? dead(`${planRoot}/shared/front-matter.md`) : { path: `${planRoot}/shared/front-matter.md`, anchor: '' }
     }
-    const place = placeOf(target)
-    if (place !== null) return `${planRoot}/${place}`
+    // Only what exists moves; a path under _bmad-output that names nothing is a gone target.
+    let place = exists(target) ? placeOf(target) : null
     // A folder link (a reference-* folder) moves with its folder.
-    if (target.startsWith(`${planning}/`) && exists(target)) return `${planRoot}/references/${target.slice(planning.length + 1)}`
-    return null
+    if (place === null && target.startsWith(`${planning}/`) && exists(target)) place = `references/${target.slice(planning.length + 1)}`
+    const path = place === null ? target : `${planRoot}/${place}`
+    if (anchor && !anchorExists(target, anchor)) return dead(`${path}${line}`)
+    return place === null ? null : `${path}${line}`
+  }
+  // Targets that were gone before the move (a deleted file, a document on another branch) are described in one note.
+  const goneTargets = new Map()
+  const goneNote = 'references/gone-link-targets.md'
+  const gone = (target, anchor, from) => {
+    if (!goneTargets.has(target)) goneTargets.set(target, { anchor: headingAnchor(target, new Map()), from: new Set() })
+    goneTargets.get(target).from.add(from)
+    manifest.gone.push({ kind: 'file', target, anchor, from })
+    return { path: `${planRoot}/${goneNote}`, anchor: goneTargets.get(target).anchor }
   }
 
-  const manifest = { version: 1, date, repo, stage, files: [], spans: [], rewrites: {}, unresolved: [], board: { rows: [], header: [] }, written: {} }
   const write = (path, text, rewrites = []) => {
     const full = join(stage, path)
     mkdirSync(dirname(full), { recursive: true })
@@ -215,7 +290,7 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
     manifest.written[path] = sha256(text)
   }
   const moveText = (text, fromRepoPath, toPlanPath) => {
-    const result = rewriteLinks(text, fromRepoPath, `${planRoot}/${toPlanPath}`, mapPath, exists)
+    const result = rewriteLinks(text, fromRepoPath, `${planRoot}/${toPlanPath}`, (target, anchor) => mapPath(target, anchor, fromRepoPath), exists, gone)
     manifest.unresolved.push(...result.unresolved.map((entry) => ({ ...entry, source: fromRepoPath })))
     return result
   }
@@ -237,7 +312,7 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
       note = `${status === 'paused' ? 'parked; ' : ''}board comment moved to the epic's Log ${date}`
     } else if (status === 'paused' && note === '') note = 'parked'
     rows.push({ key: row.key, status, note })
-    manifest.board.rows.push({ ...span, key: row.key, to: 'status.yaml', from_status: row.status, status, comment_to: [...row.comment].length > NOTE_LIMIT ? epicFile.get(epicNumber) : 'status.yaml' })
+    manifest.board.rows.push({ ...span, key: row.key, to: 'status.yaml', from_status: row.status, status, comment: row.comment, comment_to: [...row.comment].length > NOTE_LIMIT ? epicFile.get(epicNumber) : 'status.yaml' })
   }
   // Reconcile what BMAD's board allowed and the format does not, each change recorded (Story 77.6, decided by the lead):
   // a deferred story of a done epic is dropped (its words stay in its note or the epic's Log); a story heading with no
@@ -249,9 +324,21 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
     if (!Number.isFinite(number) || epicStatus.get(number) !== 'done' || row.status === 'done' || row.status === 'dropped') continue
     const before = row.status
     row.status = 'dropped'
-    if (row.note === '' || !/defer/iu.test(row.note)) row.note = `deferred when epic ${number} was accepted; not planned`.slice(0, NOTE_LIMIT)
-    manifest.reconciled.push({ key: row.key, change: `${before} -> dropped`, reason: 'a story of a done epic that was deferred' })
     const span = manifest.board.rows.find((entry) => entry.key === row.key)
+    // The owner's words stay: in the note when they fit beside the reason, else whole in the epic's Log.
+    const reason = `deferred when epic ${number} was accepted`
+    if (row.note === '') row.note = `${reason}; not planned`
+    else if (!/defer/iu.test(row.note)) {
+      if ([...`${reason}; ${row.note}`].length <= NOTE_LIMIT) row.note = `${reason}; ${row.note}`
+      else {
+        if (span?.comment_to === 'status.yaml') {
+          logs.set(number, [...(logs.get(number) ?? []), `- ${row.key} (board comment until ${date}): ${span.comment}`])
+          span.comment_to = epicFile.get(number)
+        }
+        row.note = `${reason}; board comment moved to the epic's Log ${date}`
+      }
+    }
+    manifest.reconciled.push({ key: row.key, change: `${before} -> dropped`, reason: 'a story of a done epic that was deferred' })
     if (span) span.status = 'dropped'
   }
   const stubs = new Map()
@@ -275,6 +362,9 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
       manifest.reconciled.push({ key: row.key, change: 'heading stub appended to the epic file', reason: 'a board row with no story heading' })
     }
   }
+  // The note each row ends with, which the span check holds status.yaml to.
+  const finalNotes = new Map(rows.map((row) => [row.key, row.note]))
+  for (const entry of manifest.board.rows) if (entry.to === 'status.yaml') entry.note = finalNotes.get(entry.key) ?? ''
   for (const other of board.other) if (other.text.trim() !== '') manifest.board.rows.push({ source: boardPath, lines: [other.line, other.line], sha256: sha256(other.text), to: 'history.md' })
 
   // Epic files: marker, links to shared text, the epic's own extension, the epic, then the moved board comments.
@@ -288,7 +378,8 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
   for (const epic of epics) {
     const path = epicFile.get(epic.number)
     const contracts = []
-    const delegated = /`(docs\/epic-\d+-[\w.-]+\.md)`/u.exec(epic.text)
+    // Cited as `docs/…` or as a Markdown link to it (Epic 53's form).
+    const delegated = /(?:`|\]\((?:\.\.\/)*)(docs\/epic-\d+-[\w.-]+\.md)/u.exec(epic.text)
     if (delegated && /canonical|contract|delegat/iu.test(epic.text)) contracts.push(delegated[1])
     const shared = ['shared/front-matter.md']
     if (epic.extension && epic.extension.covers.length !== 1) shared.push(epic.extension.file)
@@ -343,32 +434,58 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
     } else cpSync(join(repo, file.path), target)
   }
 
-  write('PLAN.md', planText({ repo, segments, date, docs }))
+  if (goneTargets.size > 0 || manifest.gone.length > 0) write(goneNote, goneLinkTargets({ repo, date, targets: goneTargets, anchors: manifest.gone.filter((entry) => entry.kind === 'anchor') }))
   // The foundation every plan builds on (owner 2026-10-17): the owner-approved vision when given, else a draft he approves
   // before the switch (Story 77.7), every principle marked provisional.
-  write('VISION.md', vision === null ? visionDraft({ repo, segments, date }) : readFileSync(vision, 'utf8'))
+  const visionText = vision === null ? visionDraft({ repo, segments, date }) : readFileSync(vision, 'utf8')
+  write('VISION.md', visionText)
+  write('PLAN.md', planText({ repo, date, docs, vision: visionText, provisional: vision === null, rows }))
   writeFileSync(join(dirname(stage), 'migration-manifest.json'), `${JSON.stringify(manifest, null, 1)}\n`)
   return manifest
 }
 
-/** PLAN.md, written from the front matter's overview, the standing rules and the index of docs/. */
-export function planText({ repo, segments, date, docs }) {
-  const front = segments.find((segment) => segment.kind === 'front').text
-  const section = (name) => {
-    const match = new RegExp(`^## ${name}\\s*\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'mu').exec(front)
-    return match ? match[1].trim() : ''
+/** The note the links whose targets were gone before the move point to: each path, where it last was, who linked it. */
+export function goneLinkTargets({ repo, date, targets, anchors }) {
+  const lastSeen = (named) => {
+    const path = named.replace(/:\d+(?::\d+)?$/u, '')
+    try {
+      const commit = execFileSync('git', ['-C', repo, 'log', '--all', '-1', '--format=%h', '--', path], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+      if (commit === '') return null
+      for (const candidate of [commit, `${commit}^`]) {
+        try { execFileSync('git', ['-C', repo, 'cat-file', '-e', `${candidate}:${path}`], { stdio: 'ignore' }); return candidate } catch { /* not there */ }
+      }
+    } catch { /* no history */ }
+    return null
   }
-  const overview = section('Overview')
-  const shared = section('Shared Context and Completion Rules')
+  const sections = [...targets.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([path, entry]) => {
+    const commit = lastSeen(path)
+    const meant = path.startsWith('_bmad-output/') && existsSync(join(repo, path.slice('_bmad-output/'.length).replace(/:\d+(?::\d+)?$/u, ''))) ? ` The repository has \`${path.slice('_bmad-output/'.length)}\`; the link was likely meant for it.` : ''
+    return `## ${path}\n\n${commit === null ? 'Not found in this repository\'s history.' : `Last in this repository's history at commit ${commit}: \`git show ${commit}:${path}\`.`}${meant}\n\nLinked from: ${[...entry.from].sort().map((from) => `\`${from}\``).join(', ')}.\n`
+  })
+  const anchorLines = anchors.map((entry) => `- \`${entry.target}#${entry.anchor}\`, linked from \`${entry.from}\`: no such heading there before the move; the link now opens the file.`)
+  return `# Link targets that were gone before the move
+
+The planning text linked these paths, but they already led nowhere before BMN's move to its own plan on ${date}: the file had been removed, or it lives on another branch. Each such link now points here; the text around it is unchanged, and the migration manifest records every rewrite so its span check reverses them.
+
+${sections.join('\n')}${anchorLines.length ? `\n## Anchors that were gone\n\n${[...new Set(anchorLines)].join('\n')}\n` : ''}`
+}
+
+/** PLAN.md: today's purpose and scope from the vision and the board, the standing rules, and the index of docs/; the old front matter stays history in shared/. */
+export function planText({ repo, date, docs, vision = '', provisional = false, rows = [] }) {
+  const visionLead = /^## Vision\s*\n+([\s\S]*?)(?:\n\s*\n|\n## |$(?![\s\S]))/mu.exec(vision)?.[1]?.replace(/\s+/gu, ' ').trim() ?? ''
+  const epics = rows.filter((row) => /^epic-\d+$/u.test(row.key)).map((row) => ({ number: Number(row.key.slice(5)), status: row.status }))
+  const numbers = epics.map((epic) => epic.number)
+  const done = epics.filter((epic) => epic.status === 'done' || epic.status === 'dropped').length
   const docList = docs ?? (existsSync(join(repo, 'docs')) ? readdirSync(join(repo, 'docs')).filter((name) => name.endsWith('.md')).sort().map((name) => `docs/${name}`) : [])
-  const clip = (text, limit) => (text.length > limit ? `${text.slice(0, limit).replace(/\s+\S*$/u, '')} … (whole text in shared/front-matter.md)` : text)
   return `# ${basename(repo)}: the plan
 
-Moved from BMAD on ${date} (Story 77.6). The old front matter is kept whole in [shared/front-matter.md](shared/front-matter.md); every epic before ${date} is a legacy epic in \`epics/\`, its text verbatim. New epics use the format in \`docs/planning.md\`.
+Moved from BMAD on ${date} (Story 77.6). Every epic before ${date} is a legacy epic in \`epics/\`, its text verbatim; new epics use the format in \`docs/planning.md\`. The old planning's front matter, written for its first epics, is kept whole as history in [shared/front-matter.md](shared/front-matter.md).
 
 ## Purpose
 
-${clip(overview || 'See shared/front-matter.md.', 3000)}
+${visionLead || 'See VISION.md.'}${provisional ? ' (The vision is a draft until the owner approves it.)' : ''}
+
+The principles every epic serves are in [VISION.md](VISION.md). The plan holds ${numbers.length ? `epics ${Math.min(...numbers)}–${Math.max(...numbers)}` : 'no epics yet'}: ${done} finished (done or dropped) and ${epics.length - done} not, each with its row in [status.yaml](status.yaml); the queue says what comes next.
 
 ## Users
 
@@ -392,9 +509,11 @@ ${clip(overview || 'See shared/front-matter.md.', 3000)}
 
 ## Standing constraints
 
-${clip(shared || 'See shared/front-matter.md.', 5000)}
-
-- The repository's \`AGENTS.md\` binds every agent; BMN's \`main\` is public, so this plan stays out of it (\`/plan/\` ignored) and keeps its history in its own local Git repository with no remote.
+- The repository's ${existsSync(join(repo, 'AGENTS.md')) ? '[AGENTS.md](../AGENTS.md)' : '`AGENTS.md`'} binds every agent: delivery to \`main\`, then \`pnpm run update:desktop\`; never \`pnpm run package\` while BMN is open.
+- Planning uses the \`plan\` skill and this format: \`bmn plan check\` passes before work starts, and agents change one board row with \`bmn plan set\`.
+- Runtime behavior counts as verified only after the affected flow ran on the running build; tests, fixtures and screenshots use synthetic data, never private session content.
+- BMN's \`main\` is public, so this plan stays out of it (\`/plan/\` ignored) and keeps its history in its own local Git repository with no remote.
+- The rules the legacy epics were written under stay with them, in [shared/front-matter.md](shared/front-matter.md).
 
 ## Architecture
 
@@ -440,6 +559,14 @@ ${first || 'See PLAN.md Purpose.'}
 /** Check every span and file of the manifest against the staged plan, reversing the recorded link rewrites. */
 export function checkSpans({ repo, stage, manifest }) {
   const failures = []
+  let rows = null
+  const stagedRows = () => {
+    rows ??= new Map(parseBoard(readFileSync(join(stage, 'status.yaml'), 'utf8')).rows.map((row) => [row.key, { status: row.status, note: row.comment }]))
+    return rows
+  }
+  // A source the manifest does not list would be lost at the switch: staging again is the only way on.
+  const listed = new Set(manifest.files.map((file) => file.path))
+  for (const file of sources(repo).files) if (!listed.has(file.path)) failures.push(`${file.path} is not in the manifest (new since staging): stage again`)
   const textOf = new Map()
   const unrewritten = (path) => {
     if (!textOf.has(path)) {
@@ -458,11 +585,14 @@ export function checkSpans({ repo, stage, manifest }) {
     if (sha256(text) !== span.sha256) { failures.push(`${span.source}:${span.lines.join('-')} changed since the manifest`); continue }
     if (span.to === 'archive-only') continue
     if (span.to === 'status.yaml') {
-      const target = span.comment_to
-      const comment = /#[ \t]?(.*?)[ \t]*$/u.exec(text)?.[1] ?? ''
-      if (target !== 'status.yaml' && !unrewritten(target)?.includes(comment)) failures.push(`${span.source}:${span.lines[0]} comment not found in ${target}`)
-      const status = readFileSync(join(stage, 'status.yaml'), 'utf8')
-      if (!status.includes(`  ${span.key}: ${span.status}`)) failures.push(`${span.key} not in status.yaml as ${span.status}`)
+      const comment = /^ {2}[\w.-]+:[ \t]*[\w-]+[ \t]*(?:#[ \t]?(.*?))?[ \t]*$/u.exec(text)?.[1] ?? ''
+      const row = stagedRows().get(span.key)
+      if (row === undefined) { failures.push(`${span.key} is not in status.yaml`); continue }
+      if (row.status !== span.status) failures.push(`${span.key} is ${row.status} in status.yaml, not ${span.status}`)
+      if (span.note !== undefined && row.note !== span.note) failures.push(`${span.key}'s note in status.yaml is not the one the move wrote`)
+      // The owner's comment survives whole: in the row's note, or in the file it moved to.
+      const holder = span.comment_to !== 'status.yaml' ? unrewritten(span.comment_to) : null
+      if (comment !== '' && !row.note.includes(comment) && !holder?.includes(comment)) failures.push(`${span.source}:${span.lines[0]} comment of ${span.key} is in neither its note nor ${span.comment_to}`)
       continue
     }
     const holder = unrewritten(span.to)
@@ -478,6 +608,38 @@ export function checkSpans({ repo, stage, manifest }) {
     if (file.link !== null) { if (!lstatSync(full, { throwIfNoEntry: false })?.isSymbolicLink()) failures.push(`${file.to} is not the link it was`); continue }
     const now = file.path.endsWith('.md') ? sha256(unrewritten(file.to) ?? '') : existsSync(full) ? sha256(readFileSync(full)) : null
     if (now !== file.sha256) failures.push(`${file.path} differs at ${file.to}`)
+  }
+  failures.push(...checkLinks({ repo, stage, manifest }))
+  return failures
+}
+
+/** Every relative link of every Markdown file the move wrote resolves: its file, and its anchor among that file's headings. */
+export function checkLinks({ repo, stage, manifest }) {
+  const failures = []
+  const anchorCache = new Map()
+  const resolveFile = (target) => {
+    if (target === 'plan' || target.startsWith('plan/')) return join(stage, target.slice(5))
+    return join(repo, target)
+  }
+  for (const path of Object.keys(manifest.written).filter((name) => name.endsWith('.md'))) {
+    const at = `plan/${path}`
+    const text = readFileSync(join(stage, path), 'utf8')
+    for (const link of linksIn(text)) {
+      const dest = link.dest
+      if (/^[a-z][a-z0-9+.-]*:/iu.test(dest) || dest.startsWith('/') || dest.startsWith('<')) continue
+      const [pathPart, anchor] = dest.split('#', 2)
+      let decoded
+      try { decoded = decodeURI(pathPart) } catch { decoded = pathPart }
+      const target = pathPart === '' ? at : posix.normalize(posix.join(posix.dirname(at), decoded))
+      let full = resolveFile(target)
+      if (!existsSync(full)) full = resolveFile(target.replace(/:\d+(?::\d+)?$/u, ''))
+      if (!existsSync(full)) { failures.push(`${at}: link ${dest} leads nowhere`); continue }
+      if (!anchor || !full.endsWith('.md')) continue
+      if (!anchorCache.has(full)) anchorCache.set(full, anchorsOf(readFileSync(full, 'utf8')))
+      let plain = anchor
+      try { plain = decodeURIComponent(anchor) } catch { /* as written */ }
+      if (!anchorCache.get(full).has(anchor) && !anchorCache.get(full).has(plain)) failures.push(`${at}: link ${dest} names no heading of ${target}`)
+    }
   }
   return failures
 }
