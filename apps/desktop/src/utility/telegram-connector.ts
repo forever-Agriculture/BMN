@@ -453,6 +453,22 @@ export class TelegramConnector {
     if (isRecord(result) && typeof result.username === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(result.username)) this.username = result.username
   }
 
+  /**
+   * Story 78.4: a text file holding exactly `text` as UTF-8, nothing added, with a short caption. Resolves only when
+   * Telegram answered with the message it made.
+   */
+  async sendDocument(fileName: string, text: string, caption: string): Promise<{ messageId: number }> {
+    const form = new FormData()
+    form.set('chat_id', String(this.options.allowedChatId))
+    form.set('caption', caption)
+    form.set('document', new Blob([new TextEncoder().encode(text)], { type: 'text/plain; charset=utf-8' }), fileName)
+    const result = await this.post('sendDocument', { body: form }, AbortSignal.timeout(REQUEST_TIMEOUT_MS))
+    if (!isRecord(result) || !isInteger(result.message_id)) {
+      throw new TelegramConnectorError('protocol', 'Telegram sendDocument returned a malformed result')
+    }
+    return { messageId: result.message_id }
+  }
+
   async sendMessage(text: string, options: CardMessageOptions = {}): Promise<{ messageId: number }> {
     if (typeof text !== 'string' || text.length === 0) {
       throw new TelegramConnectorError('invalid-argument', 'Telegram message text must not be empty')
@@ -739,12 +755,11 @@ export class TelegramConnector {
   }
 
   private async call(method: string, params: Record<string, unknown>, signal: AbortSignal): Promise<unknown> {
-    const response = await this.request(`${this.apiOrigin}/bot${this.options.token}/${method}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(params),
-      signal
-    }, method)
+    return this.post(method, { headers: { 'content-type': 'application/json' }, body: JSON.stringify(params) }, signal)
+  }
+
+  private async post(method: string, init: Pick<RequestInit, 'headers' | 'body'>, signal: AbortSignal): Promise<unknown> {
+    const response = await this.request(`${this.apiOrigin}/bot${this.options.token}/${method}`, { method: 'POST', ...init, signal }, method)
     const payload: unknown = await response.json().catch(() => null)
     if (response.ok && isRecord(payload) && payload.ok === true) return payload.result
     const status = !response.ok

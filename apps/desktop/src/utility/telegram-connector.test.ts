@@ -379,6 +379,38 @@ describe('telegram connector polling', () => {
   })
 })
 
+describe('a file to the owner (Story 78.4)', () => {
+  it('uploads the text exactly, as UTF-8, with its caption, to the allowed chat only', async () => {
+    const api = new FakeBotApi()
+    const seen: { url: string; type: string | null; form: FormData | null } = { url: '', type: null, form: null }
+    const h = await harness({ api, fetch: async (input, init) => {
+      if (String(input).endsWith('/sendDocument')) {
+        seen.url = String(input)
+        seen.form = init?.body as FormData
+        return ok({ message_id: 77 })
+      }
+      return api.fetch(input, init)
+    } })
+    const command = `cat <<'EOF'\n${'é∑ line\n'.repeat(1_300)}EOF`
+    expect(command.length).toBeGreaterThan(10_000)
+    await expect(h.connector.sendDocument('command-r1.txt', command, 'api: the whole command')).resolves.toEqual({ messageId: 77 })
+    expect(seen.url).toBe(`https://api.telegram.org/bot${TOKEN}/sendDocument`)
+    expect(seen.form?.get('chat_id')).toBe(String(CHAT_ID))
+    expect(seen.form?.get('caption')).toBe('api: the whole command')
+    const file = seen.form?.get('document') as File
+    expect(file.name).toBe('command-r1.txt')
+    expect(file.type).toBe('text/plain; charset=utf-8')
+    expect(await file.text()).toBe(command)
+  })
+
+  it('rejects an answer without the message it made, so nothing counts as delivered', async () => {
+    const api = new FakeBotApi()
+    api.handlers.set('sendDocument', () => ok(true))
+    const h = await harness({ api })
+    await expect(h.connector.sendDocument('x.txt', 'x', 'x')).rejects.toThrow(/malformed/)
+  })
+})
+
 describe('the bot menu BMN keeps (Story 78.6)', () => {
   it('sets /away, /back and /help when the menu differs, and says so in health', async () => {
     const h = await harness()

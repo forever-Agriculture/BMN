@@ -1167,7 +1167,7 @@ function userInputSummary(name, input) {
  */
 const PROMPT_LIMITS = Object.freeze({
   questions: 10, options: 20, text: 2000, header: 100, label: 200, description: 500, identifier: 128, tool: 100,
-  command: 4000, cwd: 4096, answer: 4000
+  command: 100000, cwd: 4096, answer: 4000
 })
 
 /** One line of prompt text, controls folded to spaces and clipped like a title; null when nothing is left. */

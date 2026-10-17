@@ -13,7 +13,7 @@ export type TelegramDeliveryPhase =
   | 'quiet-backlog' | 'quiet-capacity' | 'quiet-restarting'
   | 'request-unavailable' | 'request-read-failed' | 'request-closed' | 'request-seen' | 'request-revised'
   | 'already-notified-elsewhere'
-  | 'connector-unavailable' | 'page-error' | 'send-started' | 'send-confirmed'
+  | 'connector-unavailable' | 'page-error' | 'send-started' | 'send-confirmed' | 'attachment-confirmed' | 'attachment-failed'
   | 'send-uncertain' | 'format-fallback' | 'fallback-failed' | 'mapping-write-failed'
 
 /** Identity and fixed categories only: never include card text, callback data, errors or credentials. */

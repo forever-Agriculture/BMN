@@ -335,6 +335,15 @@ export function commandShownWhole(prompt: AttentionPermissionPrompt): boolean {
     !permissionCleaned(prompt)
 }
 
+/**
+ * Story 78.4: a command too long for the card that is otherwise shown exactly as it runs, so it can reach the phone
+ * whole as a file; masked or cleaned commands never qualify.
+ */
+export function commandNeedsFile(prompt: AttentionPermissionPrompt): boolean {
+  return prompt.command !== null && clip(prompt.command, COMMAND_CHARS) !== prompt.command && !commandMasked(prompt) &&
+    !permissionCleaned(prompt)
+}
+
 export interface PermissionCardInput {
   header: CardHeader
   prompt: AttentionPermissionPrompt
@@ -349,6 +358,8 @@ export interface PermissionCardInput {
   note?: string | null
   /** Story 78.5: when the agent denies the prompt by itself, already worded ("Denied by itself at 14:32 unless answered"). */
   deadline?: string | null
+  /** Story 78.4: the whole command went as a file just before this card, with this label naming the request in both. */
+  attached?: { label: string } | null
 }
 
 export function permissionCard(input: PermissionCardInput): RenderedCard {
@@ -360,9 +371,13 @@ export function permissionCard(input: PermissionCardInput): RenderedCard {
     '',
     `<pre>${escapeHtml(command)}</pre>`,
     ...(prompt.cwd ? [`in <code>${escapeHtml(clip(homeRelative(said(prompt.cwd), input.home), 300))}</code>`] : []),
-    ...(input.deadline ? [`⏱ ${escapeHtml(input.deadline)}`] : [])
+    ...(input.deadline ? [`⏱ ${escapeHtml(input.deadline)}`] : []),
+    ...(input.attached && commandNeedsFile(prompt)
+      ? [`📎 <i>${escapeHtml(`The whole command (${[...prompt.command!].length.toLocaleString('en-US')} characters) is in the file above · request ${input.attached.label}`)}</i>`]
+      : [])
   ].join('\n')
-  const tokens = prompt.command !== null && !commandShownWhole(prompt) ? null : input.tokens
+  const whole = commandShownWhole(prompt) || (!!input.attached && commandNeedsFile(prompt))
+  const tokens = prompt.command !== null && !whole ? null : input.tokens
   const trailer = tokens !== null
     ? input.note ? `⚠ <i>${escapeHtml(input.note)}</i>` : null
     : prompt.command !== null && commandMasked(prompt)

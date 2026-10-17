@@ -4705,6 +4705,15 @@ describe('structured prompts from the recorded hooks (Epic 30)', () => {
       expect(result.stdout).toBe('')
     })
 
+    it('carries a 10,000-character heredoc whole, so the phone can be sent all of it (Story 78.4)', async () => {
+      const fixture = await cliFixture()
+      const event = await permission()
+      const command = `cat > notes.txt <<'EOF'\n${'x'.repeat(9_990)}\nEOF`
+      await runHook(fixture, 'claude', { ...event, tool_input: { ...(event.tool_input as object), command } })
+      expect(command.length).toBeGreaterThanOrEqual(10_000)
+      expect(lastOpen(fixture).prompt).toMatchObject({ command, requestRef: expect.stringMatching(UUID) })
+    })
+
     it('a second identical prompt gets a new ref', async () => {
       const fixture = await cliFixture()
       await runHook(fixture, 'claude', await permission())
@@ -4720,7 +4729,7 @@ describe('structured prompts from the recorded hooks (Epic 30)', () => {
         { ...event, tool_input: { ...input, dangerouslyDisableSandbox: true } },
         { ...event, tool_input: { ...input, command: 'echo one\r\necho two' } },
         { ...event, tool_input: { ...input, command: ' touch spike-allow.txt' } },
-        { ...event, tool_input: { ...input, command: 'x'.repeat(4001) } },
+        { ...event, tool_input: { ...input, command: 'x'.repeat(100_001) } },
         { ...event, agent_id: 'agent-1' },
         { ...event, tool_name: 'Edit', tool_input: { file_path: '/work/project/a', old_string: 'a', new_string: 'b' } }
       ]

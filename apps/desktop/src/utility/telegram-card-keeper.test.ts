@@ -251,6 +251,64 @@ describe('sending a card', () => {
     expect(off.connector.sends[0]?.options.keyboard).toBeNull()
   })
 
+  describe('a command too long for the card reaches the phone whole as a file (Story 78.4)', () => {
+    const HEREDOC = `cat > notes.txt <<'EOF'\n${Array.from({ length: 150 }, (_, line) => `line ${line} ${'é∑ '.repeat(15)}`).join('\n')}\nEOF\n`.padEnd(10_000, '#')
+    const LONG = { ...BASH, command: HEREDOC, requestRef: 'ref-1' } as AttentionPrompt
+    const withFiles = (h: ReturnType<typeof setup>, fail: Error | null = null): Array<{ name: string; text: string; caption: string; before: number }> => {
+      const files: Array<{ name: string; text: string; caption: string; before: number }> = []
+      ;(h.connector as unknown as CardConnector).sendDocument = async (name, text, caption) => {
+        if (fail) throw fail
+        files.push({ name, text, caption, before: h.connector.sends.length })
+        return { messageId: 900 }
+      }
+      return files
+    }
+
+    it('sends the exact command first, then a card with its start, the request and buttons', async () => {
+      expect(HEREDOC.length).toBe(10_000)
+      const h = setup({ record: record(LONG) })
+      const files = withFiles(h)
+      await h.keeper.page(h.state.record!)
+      expect(files).toHaveLength(1)
+      expect(files[0]!.text).toBe(HEREDOC)
+      expect(files[0]!.before).toBe(0)
+      expect(files[0]!.name).toBe('command-r1.txt')
+      expect(files[0]!.caption).toBe('api: the whole command for request r1, card below')
+      const card = h.connector.sends[0]!
+      expect(card.text).toContain('cat &gt; notes.txt')
+      expect(card.text).toContain('The whole command (10,000 characters) is in the file above · request r1')
+      expect(h.connector.buttons()).toHaveLength(2)
+    })
+
+    it('enables nothing when the file is not known to have arrived', async () => {
+      const h = setup({ record: record(LONG) })
+      withFiles(h, new TelegramConnectorError('network', 'socket hang up'))
+      await h.keeper.page(h.state.record!)
+      expect(h.connector.sends[0]?.options.keyboard).toBeNull()
+      expect(h.connector.sends[0]?.text).toContain('The command is too long to show here. Answer at the laptop.')
+    })
+
+    it('uploads nothing for a command with a hidden secret or invisible characters', async () => {
+      for (const command of [`${HEREDOC.slice(0, 5000)}\u202e${HEREDOC.slice(5000)}`, `export TOKEN=ghp_${'a'.repeat(36)}\n${HEREDOC}`]) {
+        const h = setup({ record: record({ ...LONG, command } as AttentionPrompt) })
+        const files = withFiles(h)
+        await h.keeper.page(h.state.record!)
+        expect(files).toEqual([])
+        expect(h.connector.sends[0]?.options.keyboard).toBeNull()
+      }
+    })
+
+    it('drops the buttons when the request now holds another command', async () => {
+      const h = setup({ record: record(LONG) })
+      withFiles(h)
+      await h.keeper.page(h.state.record!)
+      h.state.record = record({ ...LONG, command: `${HEREDOC.slice(0, 9_000)}rm -rf build` } as AttentionPrompt, { revision: 2 })
+      h.keeper.changed('s1')
+      await settle()
+      expect(h.connector.editButtons()).toEqual([])
+    })
+  })
+
   it('mints no tokens for a permission whose command the card would clip', async () => {
     const long = { ...BASH, command: `${'x'.repeat(3100)}; touch unseen.txt` } as AttentionPrompt
     const h = setup({ record: record(long) })

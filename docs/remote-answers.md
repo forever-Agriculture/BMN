@@ -115,7 +115,7 @@ Measured 2026-10-17 (Story 78.1) on Claude Code 2.1.302 in an isolated profile, 
 
 **The route (owner card 2026-10-17: the hook only if proven; proven above).** For a Bash permission in the typed
 agent's main conversation whose input holds only `command`, `description`, `timeout` and `run_in_background`, and
-whose command is at most 4,000 characters and needs no cleaning to be shown (no carriage return, control
+whose command is at most 100,000 characters (Story 78.4) and needs no cleaning to be shown (no carriage return, control
 character or surrounding blank), `bmn hook claude` gives the request a random single-use ref and then asks BMN for
 the answer (`answer.take` with that ref, 25 s at a time, up to 590 s; the entry's timeout is 600 s). It prints
 exactly `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}` for Allow once

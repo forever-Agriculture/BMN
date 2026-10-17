@@ -164,8 +164,12 @@ card also says when Claude denies it by itself: **Claude denies this by itself a
 the countdown Claude draws (auto mode), **No auto-deny countdown shown at the laptop**, or **Auto-deny deadline
 unknown** when BMN cannot see the dialog. A card says **Answered at the laptop** only when the tool ran with exactly
 that input; a prompt that closed any other way (denied at the desk, expired, the turn moved on) says **No longer
-open**. A command too long to show whole (over 3,000 characters) gets no buttons: the card
-says **The command is too long to show here. Answer at the laptop.** With the setting off, a permission card ends **Answer this at the laptop.**
+open**. A command too long to show whole (over 3,000 characters) first arrives whole as a text file,
+`command-<request>.txt`, exactly the bytes Claude will run (Story 78.4; up to 100,000 characters). The card then
+shows its start, the folder, the session and **The whole command (N characters) is in the file above · request
+<request>**, and only then gets buttons. A file that is not known to have arrived, a command with part hidden or
+invisible characters (nothing is uploaded then), or an app that cannot send files leaves the card without buttons:
+**The command is too long to show here. Answer at the laptop.** With the setting off, a permission card ends **Answer this at the laptop.**
 
 Cards without buttons are drawn the same way and end **No buttons for this kind yet. Answer at the
 laptop.** A text reply to a dialog without Other… stays a draft even with direct typing on, because a

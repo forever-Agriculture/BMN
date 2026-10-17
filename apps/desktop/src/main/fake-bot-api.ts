@@ -45,7 +45,17 @@ function keyboardOf(body: Record<string, unknown>): Keyboard {
 async function readBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []
   for await (const chunk of request) chunks.push(chunk as Buffer)
-  const text = Buffer.concat(chunks).toString('utf8')
+  const raw = Buffer.concat(chunks)
+  // Story 78.4: a file upload is multipart; the self-test keeps its size and the file's own bytes.
+  if (/^multipart\/form-data/.test(request.headers['content-type'] ?? '')) {
+    const form = await new Response(raw, { headers: { 'content-type': request.headers['content-type']! } }).formData()
+    const document = form.get('document')
+    return {
+      caption: form.get('caption'),
+      ...(document instanceof Blob ? { document: { name: (document as File).name, text: await document.text() } } : {})
+    }
+  }
+  const text = raw.toString('utf8')
   return text ? (JSON.parse(text) as Record<string, unknown>) : {}
 }
 
@@ -127,7 +137,11 @@ export async function startFakeBotApi(chatId: number, userId: number): Promise<F
         tapLater(messageId, keyboardOf(body))
         return reply(response, { message_id: messageId, date: 1_789_000_000, chat: { id: chatId, type: 'private' } })
       }
-      if (method === 'editMessageText') {
+      if (method === 'sendDocument') {
+        call.messageId = nextMessage++
+        return reply(response, { message_id: call.messageId, date: 1_789_000_000, chat: { id: chatId, type: 'private' } })
+      }
+            if (method === 'editMessageText') {
         tapLater(Number(body.message_id), keyboardOf(body))
         return reply(response, true)
       }

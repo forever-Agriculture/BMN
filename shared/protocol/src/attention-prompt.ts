@@ -79,7 +79,8 @@ export const ATTENTION_PROMPT_LIMITS = Object.freeze({
   description: 500,
   identifier: 128,
   tool: 100,
-  command: 4_000,
+  /** Story 78.4: a command too long for a card still travels whole, to reach the phone as a file (10,000+ measured). */
+  command: 100_000,
   cwd: 4_096,
   /** One reported answer: a typed text, or Claude's chosen labels joined into one string. */
   answer: 4_000

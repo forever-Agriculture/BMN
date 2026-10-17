@@ -16,7 +16,7 @@ import {
   type QuestionChoice,
   type RemoteAnswer
 } from './remote-answer'
-import {
+import { commandNeedsFile,
   endedCard,
   endingReply,
   exitCard,
@@ -41,6 +41,8 @@ import type { NewDeliveryDecision } from './quiet-hours-delivery'
 
 export interface CardConnector {
   sendMessage(text: string, options?: CardMessageOptions): Promise<{ messageId: number }>
+  /** Story 78.4: a UTF-8 text file holding exactly the text; absent where files cannot be sent. */
+  sendDocument?(fileName: string, text: string, caption: string): Promise<{ messageId: number }>
   editMessageText(messageId: number, text: string, options?: Omit<CardMessageOptions, 'replyToMessageId'>): Promise<void>
   answerCallbackQuery(callbackId: string, text: string): Promise<void>
 }
@@ -137,6 +139,13 @@ interface LiveCard {
   unwritten: { ending: CardEnding; timer: NodeJS.Timeout | null } | null
   /** Edits of one card run one after another, in the order they were decided. */
   queue: Promise<void>
+  /** Story 78.4: the command sent whole as a file just before this card; buttons stand only for that exact command. */
+  attached?: Attached | null
+}
+
+interface Attached {
+  command: string
+  label: string
 }
 
 interface Composed {
@@ -220,7 +229,7 @@ export class TelegramCardKeeper {
       epoch: this.deps.answerEpoch(record.requestId),
       incarnationId: record.incarnationId ?? incarnationId
     }
-    const composed = await this.compose(record, START, null, binding.epoch)
+    let composed = await this.compose(record, START, null, binding.epoch)
     let claim: string | null | undefined
     if (this.deps.beforeNewDelivery) {
       let decision: NewDeliveryDecision
@@ -238,6 +247,23 @@ export class TelegramCardKeeper {
         final.seenAt === null && final.revision === record.revision && (this.deps.maySend?.(final, !!claim) ?? true)
     }
     if (!await canDispatch()) { await settle('unsent'); return false }
+    // Story 78.4: a command too long for the card goes first, whole, as a file; the card's buttons need its confirmed delivery.
+    let attached: Attached | null = null
+    const prompt = record.prompt
+    if (prompt?.type === 'permission' && commandNeedsFile(prompt) && connector.sendDocument && (await this.deps.answerability(record)).answerable) {
+      const label = record.requestId.replace(/[^0-9a-z]/gi, '').slice(0, 8)
+      const header = this.deps.header(record.sessionId, record)
+      try {
+        await connector.sendDocument(`command-${label}.txt`, prompt.command!, `${header.session}: the whole command for request ${label}, card below`)
+        observeTelegramDelivery(this.deps.observeDelivery, record, 'attachment-confirmed')
+        attached = { command: prompt.command!, label }
+      } catch {
+        // Not known to have arrived: the card goes without buttons, answered at the laptop.
+        observeTelegramDelivery(this.deps.observeDelivery, record, 'attachment-failed')
+      }
+      composed = await this.compose(record, START, null, binding.epoch, attached)
+      if (!await canDispatch()) { await settle('unsent'); return false }
+    }
     let format: TelegramCardData['format'] = 'html'
     let messageId: number
     observeTelegramDelivery(this.deps.observeDelivery, record, 'send-started')
@@ -288,7 +314,8 @@ export class TelegramCardKeeper {
       tokens: [],
       upgradable: false,
       unwritten: null,
-      queue: Promise.resolve()
+      queue: Promise.resolve(),
+      attached
     }
     this.cards.set(messageId, card)
     this.byRequest.set(record.requestId, messageId)
@@ -512,7 +539,7 @@ export class TelegramCardKeeper {
 
   private async redraw(card: LiveCard, record: AttentionRecord, binding: Binding): Promise<void> {
     await this.enqueue(card, async () => {
-      const composed = await this.compose(record, card.progress, null, binding.epoch)
+      const composed = await this.compose(record, card.progress, null, binding.epoch, card.attached ?? null)
       await this.show(card, composed, binding)
     })
   }
@@ -631,7 +658,8 @@ export class TelegramCardKeeper {
     record: AttentionRecord,
     progress: Readonly<Progress>,
     note: string | null,
-    epoch: number | null
+    epoch: number | null,
+    attached: Attached | null = null
   ): Promise<Composed> {
     const header = this.deps.header(record.sessionId, record)
     const prompt = record.prompt
@@ -660,10 +688,12 @@ export class TelegramCardKeeper {
     const answerable = answerability.answerable && bound
     if (prompt.type === 'permission') {
       const deadline = this.deps.deadline?.(record) ?? null
-      // A command the card must clip is answered at the laptop, never approved unseen.
-      if (!answerable || !commandShownWhole(prompt)) {
+      // Story 78.4: a file counts only for the very command it holds.
+      const file = attached !== null && attached.command === prompt.command && commandNeedsFile(prompt) ? { label: attached.label } : null
+      // A command the card must clip is answered at the laptop, never approved unseen, unless it reached the phone whole.
+      if (!answerable || (!commandShownWhole(prompt) && file === null)) {
         const closedBecause = answerability.answerable ? 'unsupported' : answerability.reason
-        return { ...none, rendered: permissionCard({ header, prompt, tokens: null, closedBecause, home: this.deps.home, note, deadline }) }
+        return { ...none, rendered: permissionCard({ header, prompt, tokens: null, closedBecause, home: this.deps.home, note, deadline, attached: file }) }
       }
       const deny = answerability.answerable && answerability.deny
       const tokens = { allow: this.newToken(), deny: deny ? this.newToken() : null }
@@ -673,7 +703,7 @@ export class TelegramCardKeeper {
         state: 'buttons',
         actions,
         offersOther: false,
-        rendered: permissionCard({ header, prompt, tokens, closedBecause: null, home: this.deps.home, note, deadline })
+        rendered: permissionCard({ header, prompt, tokens, closedBecause: null, home: this.deps.home, note, deadline, attached: file })
       }
     }
     if (!answerable) {
@@ -841,7 +871,7 @@ export class TelegramCardKeeper {
     this.revoke(card)
     card.progress = { ...START }
     const binding = this.bindingFor(card, record)
-    await this.show(card, await this.compose(record, START, note, binding.epoch), binding)
+    await this.show(card, await this.compose(record, START, note, binding.epoch, card.attached ?? null), binding)
   }
 
   private bindingFor(card: LiveCard, record: AttentionRecord): Binding {
@@ -869,7 +899,7 @@ export class TelegramCardKeeper {
         card.progress = { ...START }
         card.state = 'open'
         const binding = this.bindingFor(card, record)
-        await this.show(card, await this.compose(record, START, REFUSAL_WORDS[outcome.reason], binding.epoch), binding)
+        await this.show(card, await this.compose(record, START, REFUSAL_WORDS[outcome.reason], binding.epoch, card.attached ?? null), binding)
       } else {
         await this.finish(card, { type: 'outcome', outcome, permission: card.permission })
       }
