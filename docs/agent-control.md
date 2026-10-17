@@ -234,6 +234,14 @@ bmn send --owner --session <session-id> --submit -- "git status"
 `--key` makes a publish, send, handoff or tell idempotent: repeating the same call with the same key does
 not repeat the effect. A handoff requires the key.
 
+**The page for finished work.** The repository holds a skill, `skills/team-page/`: when a piece of work is
+complete (dev-auto ends every completed epic with one), the agent writes one HTML page in the owner's
+fixed structure (why, what changes with one example, optional safety and money, how it was checked, known
+limits, what was decided for him, what waits on him, an honest opinion) from its `template.html`, checks
+it with `check.py` (PASS/FAIL per rule) and publishes it privately: Claude Code as an Artifact, any other
+app with `bmn publish`, a new key per revision. Link it into your skills folder like the others
+(`ln -s <repository>/skills/team-page ~/.claude/skills/team-page`).
+
 ## Handoffs
 
 A handoff is a longer text, with files, that an agent hands to the agent of another session. BMN
