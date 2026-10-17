@@ -92,7 +92,7 @@ Screens: `.dev-auto/evidence/epic-31/spike-31-4/screens/claude-*` (80 and 200 co
 
 Measured 2026-10-17 (Story 78.1) on Claude Code 2.1.302 in an isolated profile, 115 recorded runs: a
 `PermissionRequest` command hook that waits for an outside answer, driven in tmux, the screen sampled every
-~150 ms. Records and the per-case table: `_bmad-output/planning-artifacts/reference-78-phone-permissions/measure/`
+~150 ms. Records and the per-case table: `plan/references/reference-78-phone-permissions/measure/`
 (`RESULT.md`), kept with the plan, not committed.
 
 - **The dialog is not delayed or hidden.** It appears within −21…+166 ms of the hook starting and stays drawn and
