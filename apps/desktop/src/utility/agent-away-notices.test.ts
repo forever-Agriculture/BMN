@@ -200,6 +200,28 @@ describe('AwayNotices (Story 76.4 AC1-AC2)', () => {
     } finally { vi.useRealTimers() }
   })
 
+  it('counts the limit from the ask: a store hanging before its turn keeps no other conversation waiting (the away recheck\'s 3,204 ms probe)', async () => {
+    vi.useFakeTimers()
+    try {
+      let release: () => void = () => undefined
+      let slow = true
+      const { tracker, ask } = notices({ s1: 'i1' }, (entries) => slow ? new Promise<void>((done) => { release = done; void entries }) : Promise.resolve())
+      const first = ask(tool(), away())
+      await vi.advanceTimersByTimeAsync(AWAY_CLAIM_SAVE_LIMIT_MS)
+      expect(await first).toBeNull()
+      let second: AwayNoticeAnswer | null | 'waiting' = 'waiting'
+      void ask(tool({ turn: { conversation: 'c2', nested: false } }), away()).then((answer) => { second = answer })
+      await vi.advanceTimersByTimeAsync(AWAY_CLAIM_SAVE_LIMIT_MS)
+      expect(second).toBeNull()
+      // When the hung store lands, the expired ask claims nothing: its conversation is handed the state at its next tool call.
+      slow = false
+      release()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(tracker.toldTo('s1', 'claude', 'c2')).toBeUndefined()
+      expect(revisionOf(await ask(tool({ turn: { conversation: 'c2', nested: false } }), away()))).toBe(1)
+    } finally { vi.useRealTimers() }
+  })
+
   it('hands nothing to a sub-agent, a process no longer live, an app it was not measured in or an event without a conversation', async () => {
     const { ask } = notices()
     expect(await ask(tool({ turn: { conversation: 'c1', nested: true } }), away())).toBeNull()

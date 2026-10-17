@@ -15,9 +15,10 @@ import type { AgentBriefEvent } from './agent-briefs'
  */
 export const AWAY_NOTICES_REMEMBERED = 2_000
 /**
- * The longest an answer waits for its claim to be stored (the final recheck): the brief and a waiting message ride in the same
- * answer within the hook's limits (Epic 66's 300 ms, 75's brief). A slower store hands nothing now; if it lands later the claim
- * stands as uncertain and the next lock holder is handed the current state.
+ * The longest an answer waits, counted from the ask, its wait behind other claims included (the away recheck): the brief and a
+ * waiting message ride in the same answer within the hook's limits (Epic 66's 300 ms, 75's brief). An answer whose turn comes
+ * after the limit claims nothing; a slower store hands nothing now, and if it lands later the claim stands as uncertain and the
+ * next lock holder is handed the current state.
  */
 export const AWAY_CLAIM_SAVE_LIMIT_MS = 150
 /** Retries of a save that failed, so what was handed survives a restart without waiting for the next change. */
@@ -88,31 +89,35 @@ export class AwayNotices {
     if (p.turn === undefined || p.turn.nested || p.incarnationId === null) return Promise.resolve(null)
     const incarnationId = p.incarnationId
     const key = AwayNotices.key(p.sessionId, p.agent, p.turn.conversation)
-    return new Promise((resolve) => { void this.serial(async () => {
-      if (this.options.liveIncarnationId(p.sessionId) !== incarnationId) return resolve(null)
-      const record = current()
-      const known = this.told.get(key)
-      if (record.state === 'none' || (known !== undefined && known.revision > record.revision)) return resolve(null)
-      const lost = start && LOST_SOURCES.includes(p.source ?? '')
-      // A claim never reported printed may or may not have reached the agent; its hook has ended, since this one holds the
-      // lock, so the current state is handed again (76.4 AC2), also after a restart and in a resumed process.
-      const uncertain = known?.status === 'claimed'
-      const due = record.state === 'away'
-        ? known === undefined || known.revision !== record.revision || known.state !== 'away' || lost || uncertain
-        : known !== undefined && (known.state === 'away' || lost || uncertain) && (known.revision !== record.revision || lost || uncertain)
-      if (!due) return resolve(null)
-      const now = this.options.now()
-      const text = awayNotice(record, now)
-      if (text === null) return resolve(null)
-      const claim: AwayTold = { revision: record.revision, state: record.state, status: 'claimed', incarnationId, claimedAt: now.toISOString(), claimId: randomUUID() }
-      const next = this.with(key, claim)
-      // The answer waits at most the limit; the next claim waits for this store either way, so claims stay one at a time.
-      const late = setTimeout(() => resolve(null), AWAY_CLAIM_SAVE_LIMIT_MS)
-      try { await this.options.save([...next.entries()]) } catch { clearTimeout(late); return resolve(null) }
-      clearTimeout(late)
-      this.told = next
-      resolve({ text, revision: record.revision, claimId: claim.claimId! })
-    }) })
+    return new Promise((resolve) => {
+      // The limit runs from the ask, so a store that hangs before this claim's turn delays no other conversation's answer.
+      let expired = false
+      const late = setTimeout(() => { expired = true; resolve(null) }, AWAY_CLAIM_SAVE_LIMIT_MS)
+      const done = (answer: AwayNoticeAnswer | null): void => { clearTimeout(late); resolve(answer) }
+      void this.serial(async () => {
+        if (expired || this.options.liveIncarnationId(p.sessionId) !== incarnationId) return done(null)
+        const record = current()
+        const known = this.told.get(key)
+        if (record.state === 'none' || (known !== undefined && known.revision > record.revision)) return done(null)
+        const lost = start && LOST_SOURCES.includes(p.source ?? '')
+        // A claim never reported printed may or may not have reached the agent; its hook has ended, since this one holds the
+        // lock, so the current state is handed again (76.4 AC2), also after a restart and in a resumed process.
+        const uncertain = known?.status === 'claimed'
+        const due = record.state === 'away'
+          ? known === undefined || known.revision !== record.revision || known.state !== 'away' || lost || uncertain
+          : known !== undefined && (known.state === 'away' || lost || uncertain) && (known.revision !== record.revision || lost || uncertain)
+        if (!due) return done(null)
+        const now = this.options.now()
+        const text = awayNotice(record, now)
+        if (text === null) return done(null)
+        const claim: AwayTold = { revision: record.revision, state: record.state, status: 'claimed', incarnationId, claimedAt: now.toISOString(), claimId: randomUUID() }
+        const next = this.with(key, claim)
+        // The next claim waits for this store either way, so claims stay one at a time; a store that lands late still stands.
+        try { await this.options.save([...next.entries()]) } catch { return done(null) }
+        this.told = next
+        done({ text, revision: record.revision, claimId: claim.claimId! })
+      })
+    })
   }
 
   /** The hook printed the claim it names: still never read. A report of another claim confirms nothing. */
