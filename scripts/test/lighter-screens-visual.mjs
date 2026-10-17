@@ -17,7 +17,7 @@
 // Main-window screens and Preferences are taken at the window's default 1000x700; a region taller than the window is
 // taken in parts, top to bottom.
 // Usage: node scripts/test/lighter-screens-visual.mjs [output folder]
-//   default folder: <main checkout>/_bmad-output/planning-artifacts/reference-75-lighter/before (or BMN_LIGHTER_SHOTS)
+//   default folder: <main checkout>/plan/references/reference-75-lighter/before (or BMN_LIGHTER_SHOTS)
 //   BMN_LIGHTER_SCREENS=preferences-team,palette  only screens whose name starts with one of these;
 //   BMN_LIGHTER_MODES=black  fewer modes (default black,steel). A narrowed run writes its own shots.json, so give it a folder of its own.
 //   BMN_LIGHTER_BINARY=<packaged bmn>  the screens of a packaged build, as electron-normal-start --binary.
@@ -40,7 +40,7 @@ const git = (...args) => { try { return execFileSync('git', ['-C', repoRoot, ...
 // The planning folder is ignored by git and lives in the main checkout only, not in a worktree.
 const mainCheckout = dirname(git('rev-parse', '--path-format=absolute', '--git-common-dir') ?? join(repoRoot, '.git'))
 const outDirectory = resolve(process.argv[2] ?? process.env.BMN_LIGHTER_SHOTS ??
-  join(mainCheckout, '_bmad-output/planning-artifacts/reference-75-lighter/before'))
+  join(mainCheckout, 'plan/references/reference-75-lighter/before'))
 const COLOR_MODES = (process.env.BMN_LIGHTER_MODES?.split(',') ?? ['black', 'steel']).filter(Boolean)
 const ONLY = process.env.BMN_LIGHTER_SCREENS?.split(',').filter(Boolean) ?? null
 const SIZE = [1000, 700]

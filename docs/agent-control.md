@@ -1871,7 +1871,7 @@ Codex agent is yours to start.
 Before BMN checks an `opencode run` a lead starts, the run was measured on OpenCode 2.0.29 against
 a stand-in model on this computer, in throwaway profiles holding 26 markers where OpenCode could
 pick something up (Story 70.1; scripts, records and details in
-`_bmad-output/planning-artifacts/reference-70-opencode-helpers/RESULT.md`). The form measured:
+`plan/references/reference-70-opencode-helpers/RESULT.md`). The form measured:
 `env -i` with a home, configuration, data, state and cache folder of the run's own,
 `OPENCODE_DISABLE_PROJECT_CONFIG=1`, then `opencode run --standalone --format json --agent
 bmn-helper -m <model#variant> --title <title>` with the prompt on standard input. BMN's agent
@@ -2425,7 +2425,7 @@ the owner's own home and sign-in; BMN only coordinates. It picks the teammate, c
 launches it, supervises it in a systemd user scope of its own and keeps its record. It builds no
 container, frozen copy, run home or sign-in of its own. Measured on this computer (Codex 0.162.1, Claude
 Code 2.1.300, OpenCode 2.0.29, Linux 7.0, the owner's systemd user manager). The scripts and raw
-records are in `_bmad-output/planning-artifacts/reference-72-team-ask/`: `RESULT-v8.md` holds 72.9's
+records are in `plan/references/reference-72-team-ask/`: `RESULT-v8.md` holds 72.9's
 measurements, and `RESULT.md` holds 72.1's measurements of the container engine it replaced.
 
 ### Commands
@@ -2965,7 +2965,7 @@ found by team ask too, and team ask's totals no worse.
 The repair: in the failing runs the reviewer listed the log, saw the revert's subject and judged the
 change without opening it, so a project ask's prompt now ends by saying to read the commits behind
 the code it judges (`git log -p` or `git blame`, then `git show`). The record, with every answer and
-a hand audit of each scoring miss, is in `_bmad-output/planning-artifacts/reference-72-team-ask/records/gate/`.
+a hand audit of each scoring miss, is in `plan/references/reference-72-team-ask/records/gate/`.
 72.9 reruns the gate with its forms into `records/gate-v8/`.
 
 ## The project's plan: `bmn plan`

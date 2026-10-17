@@ -8,7 +8,7 @@ to arrive once and whole. BMN hands a message over by itself only where the tabl
 
 Measured 2026-10-13 (Story 66.1) with the installed apps, each in an isolated profile inside an
 isolated BMN built from `51959e8`, in a made-up conversation with made-up text. The scripts and
-raw records are kept under `_bmad-output/planning-artifacts/reference-66-session-messages/`
+raw records are kept under `plan/references/reference-66-session-messages/`
 (not committed).
 
 ## Result
@@ -170,7 +170,7 @@ Can BMN hand an agent a short brief once, when its conversation starts? Measured
 same way: the installed apps in isolated profiles inside an isolated BMN built from `4e2c44f`, a
 made-up 1,500-character brief holding three marked words, a probe hook answering in place of
 BMN's. The scripts and raw records are kept under
-`_bmad-output/planning-artifacts/reference-75-lighter/brief/` (not committed; one row per run in
+`plan/references/reference-75-lighter/brief/` (not committed; one row per run in
 its `RESULT-runs.md`).
 
 | Case | Codex 0.162.1 | Claude Code 2.1.301 |
@@ -204,7 +204,7 @@ installed apps and isolated profiles (Codex 0.162.1 on its cheapest model, low e
 workspace, both running the app, and gives the first a made-up task that never names a `bmn`
 command; the second is the peer the task mentions. A run is a hit when the app's own record of the
 first conversation shows the fitting command among the agent's tool calls. Records and the judge
-(`seeded-judge.py`) are kept under `_bmad-output/planning-artifacts/reference-75-lighter/brief/`.
+(`seeded-judge.py`) are kept under `plan/references/reference-75-lighter/brief/`.
 
 | Task (fitting command) | Codex, first brief | Codex, final brief | Claude Code, first brief | Claude Code, final brief |
 | --- | --- | --- | --- | --- |
@@ -231,7 +231,7 @@ Measured 2026-10-16/17 with the installed apps, each in an isolated profile insi
 built from `a9bdc89`, on made-up projects with made-up text, through BMN's own hook path with the
 away text of Story 76.4 AC4 as the plan words it. The scripts (`measure.mjs`, `probe-hook.mjs`,
 `boundary.mjs`, `summarize.py`) and every raw record (`records/<app>-<version>/<case>-<serial>-<time>/`)
-are kept under `_bmad-output/planning-artifacts/reference-76-away/measure/` (not committed). A
+are kept under `plan/references/reference-76-away/measure/` (not committed). A
 record whose app never reached its prompt is a harness failure and not counted.
 
 ### Result

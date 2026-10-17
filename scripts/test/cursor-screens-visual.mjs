@@ -13,7 +13,7 @@
 // 540x700, 1000x700 and 1280x900, the rest at the window's default 1000x700; a page taller than the window is taken in
 // parts, top to bottom. A screen that no longer exists is listed with the reason it could not be opened.
 // Usage: node scripts/test/cursor-screens-visual.mjs [output folder]
-//   default folder: <main checkout>/_bmad-output/planning-artifacts/reference-71-retire-cursor/after (or BMN_CURSOR_SHOTS)
+//   default folder: <main checkout>/plan/references/reference-71-retire-cursor/after (or BMN_CURSOR_SHOTS)
 //   BMN_CURSOR_SCREENS=guard-card,preferences-health  only screens whose name starts with one of these;
 //   BMN_CURSOR_MODES=black  fewer modes. A narrowed run writes its own shots.json, so give it a folder of its own.
 //   BMN_CURSOR_BINARY=<packaged bmn>  the screens of a packaged build (Story 71.3 AC3), as electron-normal-start --binary.
@@ -36,7 +36,7 @@ const git = (...args) => { try { return execFileSync('git', ['-C', repoRoot, ...
 // The planning folder is ignored by git and lives in the main checkout only, not in a worktree.
 const mainCheckout = dirname(git('rev-parse', '--path-format=absolute', '--git-common-dir') ?? join(repoRoot, '.git'))
 const outDirectory = resolve(process.argv[2] ?? process.env.BMN_CURSOR_SHOTS ??
-  join(mainCheckout, '_bmad-output/planning-artifacts/reference-71-retire-cursor/after'))
+  join(mainCheckout, 'plan/references/reference-71-retire-cursor/after'))
 const COLOR_MODES = (process.env.BMN_CURSOR_MODES?.split(',') ?? ['steel', 'brown', 'dark', 'black']).filter(Boolean)
 const ONLY = process.env.BMN_CURSOR_SCREENS?.split(',').filter(Boolean) ?? null
 const DEFAULT_SIZE = [1000, 700]

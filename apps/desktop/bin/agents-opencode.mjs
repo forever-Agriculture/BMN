@@ -8,7 +8,7 @@ import { stateDirectory } from './agents-state.mjs'
 
 /**
  * An OpenCode helper run is checked only in the form Story 70.1 measured on OpenCode 2.0.29
- * (`_bmad-output/planning-artifacts/reference-70-opencode-helpers/RESULT.md`): `env -i` with a home,
+ * (`plan/references/reference-70-opencode-helpers/RESULT.md`): `env -i` with a home,
  * configuration, data, state and cache folder of BMN's own, the project's own OpenCode configuration
  * switched off, and `opencode run --standalone --format json --agent bmn-helper -m <model#effort>
  * --title <title>` reading its prompt from standard input. BMN's configuration folder holds its own

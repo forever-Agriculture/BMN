@@ -12,7 +12,7 @@ Measured 2026-10-13 on Linux (Ryzen 5 4600H, 12 threads, ext4, Git 2.53.0, Node 
 the installed apps, each in a throwaway profile inside an isolated BMN built from `cff5032`, in
 made-up Git folders with made-up text. The model was a stand-in on this computer: no provider
 was called and no sign-in file was read, linked or copied. The scripts and raw records are kept
-under `_bmad-output/planning-artifacts/reference-69-turn-changes/` (not committed).
+under `plan/references/reference-69-turn-changes/` (not committed).
 
 ## Result
 

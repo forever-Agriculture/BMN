@@ -63,7 +63,7 @@ export const ALLOWED = {
 }
 
 /** Folders whose files are other projects' or generated, never this repository's own text. */
-const SKIPPED = /^(_bmad-output|\.dev-auto|node_modules)\/|\.(png|jpe?g|ico|icns|woff2?|ttf)$/
+const SKIPPED = /^(plan|\.dev-auto|node_modules)\/|\.(png|jpe?g|ico|icns|woff2?|ttf)$/
 
 /** Each line naming the retired app, in every file git tracks under `root`. */
 export function findReferences(root) {

@@ -15,9 +15,8 @@ __pycache__/
 # Local reference projects used for investigation.
 /examples/
 
-# Local BMAD workflows, planning, sprint tracking and review evidence.
-/_bmad/
-/_bmad-output/
+# BMN's plan: its own Git repository (plan/.git), never pushed (docs/planning.md).
+/plan/
 
 # Local design studies, supplied reference captures and source archives.
 /design/
