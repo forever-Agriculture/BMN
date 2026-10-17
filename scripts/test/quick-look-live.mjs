@@ -1,4 +1,4 @@
-/* global window, document, getComputedStyle, HTMLDialogElement, DataTransfer, ClipboardEvent */
+/* global window, document, location, getComputedStyle, HTMLDialogElement, DataTransfer, ClipboardEvent */
 // MODULE: quick-look-live.mjs - Epic 67's isolated Electron run of Quick look on a made-up project: the three ways in, a highlighted file under the unchanged page policy with no worker, the file states, the tree, find, go to line, changed on disk, the trail, the peek, the remembered place, and no terminal resized or typed into
 // The app runs in test mode with temporary HOME and XDG folders (removed at the end); the project, its files and the
 // terminal program are made up here. Nothing leaves the machine and no file of the owner's is read. Prints PASS or
@@ -26,6 +26,7 @@ const SIZES = [[1653, 1300], [1380, 1300], [1280, 900], [1000, 700], [800, 500]]
 const CANARY = 'canary-QL67-7f3kZq9-made-up'
 const CANARY_TWO = 'canary-QL67-second-made-up'
 const CANARY_JSON = 'canary-QL67-json-made-up'
+const PAGE_KEY = 'sk-madeupQL67pagekey0123456789abcdef'
 
 /** A small made-up project: a joined folder chain, generated folders, and each kind of file the sheet tells apart. */
 function writeProject(project) {
@@ -56,6 +57,19 @@ function writeProject(project) {
   file('dist/bundle.js', 'console.log(1)\n')
   file('README.md', '# Made-up project\n')
   file('.env', `# made-up values\nMADEUP_API_KEY=${CANARY}\nMADEUP_PORT=made-up-port\nMADEUP_TOKEN=${CANARY_TWO}\n`)
+  file('docs/plan.md', [
+    '---', 'title: Made-up plan', '---', '# Made-up plan', '',
+    'Text with *emphasis*, **strong**, ~~struck~~ and `inline code`. See [the site](https://example.invalid/page),',
+    '[the parser](../apps/desktop/src/parser.ts:42) and [later](#later-section).', '',
+    '> A made-up quote.', '', '- one', '- [x] done', '- [ ] open', '', '1. first', '2. second', '',
+    `| Name | Note |`, '|:--|--:|', `| wide | ${'a very long made-up cell '.repeat(12)}|`, '', '---', '',
+    '```ts', 'const answer: number = 42', '```', '',
+    '<script>alert(1)</script>', '', '<img src="https://example.invalid/tracker.png">', '',
+    '![A made-up diagram](images/diagram.png) and ![remote](https://example.invalid/remote.png)', '',
+    `Key: ${PAGE_KEY} and made-up words.`, '', '```sh', `export TOKEN=${PAGE_KEY}`, '```', '',
+    ...Array.from({ length: 40 }, (_, index) => `Filler paragraph ${index}, made-up.\n`), '## Later section', '', ...Array.from({ length: 40 }, (_, index) => `After the heading ${index}.\n`), 'The end.', ''
+  ].join('\n'))
+  file('docs/big.md', `# Big\n\n${'A made-up line of a big Markdown file.\n'.repeat(14000)}`)
   file('docs/opencode.jsonc', `{\n  // made-up config\n  "model": "made-up/model",\n  "provider": { "options": { "apiKey": "${CANARY_JSON}" } }\n}\n`)
   file('empty.txt', '')
   writeFileSync(join(project, 'archive.zip'), Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x14, 0x00]))
@@ -492,6 +506,105 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     check('a JSONC file masks a value whose name says so and shows the rest', !jsonc.includes(CANARY_JSON) && jsonc.includes('"apiKey"') && jsonc.includes('made-up/model') &&
       await sheet.locator('.ql-code .ql-secret').count() === 1, { plates: await sheet.locator('.ql-code .ql-secret').count() })
     await page.screenshot({ path: join(evidence, 'masked.png') })
+
+    // ---- Story 67.4: Markdown reads as a page ----
+    // The app's clipboard writes go to a recorder for this run, so the owner's clipboard is never touched.
+    await app.evaluate(({ clipboard }) => {
+      globalThis.__qlClipboard = []
+      clipboard.writeText = (text) => { globalThis.__qlClipboard.push(text) }
+    })
+    const requests = []
+    page.on('request', (request) => { if (!/^(?:file|devtools|data|blob|chrome-extension):/u.test(request.url())) requests.push(request.url()) })
+    await sheet.locator('.ql-tr', { hasText: 'plan.md' }).first().click()
+    await sheet.locator('.ql-page .ql-md h1').waitFor()
+    const pageState = await sheet.evaluate((element) => {
+      const md = element.querySelector('.ql-md')
+      return {
+        h1: md.querySelector('h1')?.textContent, h2: md.querySelectorAll('h2').length, strong: md.querySelectorAll('strong').length, em: md.querySelectorAll('em').length,
+        strike: md.querySelectorAll('s').length, inline: md.querySelectorAll('.ql-md-code').length, pre: [...md.querySelectorAll('.ql-md-pre')].map((pre) => pre.querySelector('.ql-md-label')?.textContent ?? ''),
+        coloured: md.querySelectorAll('.ql-md-pre .ql-syn-keyword').length, quote: md.querySelectorAll('blockquote').length, ol: md.querySelectorAll('ol').length,
+        ul: md.querySelectorAll('ul').length, boxes: [...md.querySelectorAll('.ql-md-box')].map((box) => box.getAttribute('aria-label')), table: md.querySelectorAll('.ql-md-table table').length,
+        rule: md.querySelectorAll('hr').length, links: md.querySelectorAll('.ql-md-a').length, hrefs: md.querySelectorAll('[href], img, iframe, script').length,
+        images: [...md.querySelectorAll('.ql-md-img')].map((image) => image.textContent), raw: [...md.querySelectorAll('.ql-md-raw')].map((raw) => raw.textContent),
+        width: Math.round(md.getBoundingClientRect().width), front: md.querySelector('.ql-md-pre')?.textContent ?? ''
+      }
+    })
+    check('a Markdown file opens as a page: headings, emphasis, strong, strike-through, inline code, coloured code blocks, a quote, lists, task boxes, a table, a rule and links',
+      pageState.h1 === 'Made-up plan' && pageState.h2 >= 1 && pageState.strong >= 1 && pageState.em >= 1 && pageState.strike === 1 && pageState.inline >= 1 &&
+      pageState.pre.includes('ts') && pageState.coloured > 0 && pageState.quote === 1 && pageState.ol === 1 && pageState.ul >= 1 &&
+      pageState.boxes.join('|') === 'done|not done' && pageState.table === 1 && pageState.rule === 1 && pageState.links >= 3, pageState)
+    check('the page is a column of about 80 characters', pageState.width <= 660 && pageState.width >= 480, { width: pageState.width })
+    check('a front-matter block shows as code', pageState.pre[0] === 'front matter' && pageState.front.includes('title: Made-up plan'), { front: pageState.front.slice(0, 60) })
+    check('raw HTML and a script tag show as text; nothing on the page has an address, an image, a frame or a script', pageState.hrefs === 0 &&
+      pageState.raw.some((raw) => raw.includes('<script>')) && pageState.raw.some((raw) => raw.includes('<img')), { raw: pageState.raw, hrefs: pageState.hrefs })
+    check('an image is one line: "Image", its words and its path; no image is loaded', pageState.images.length === 2 && pageState.images[0].includes('Image') &&
+      pageState.images[0].includes('A made-up diagram') && pageState.images[1].includes('https://example.invalid/remote.png'), { images: pageState.images })
+    const tableWrap = await sheet.locator('.ql-md-table').evaluate((element) => ({ scroll: element.scrollWidth, client: element.clientWidth, overflow: getComputedStyle(element).overflowX }))
+    check('a wide table scrolls sideways inside its own box', tableWrap.scroll > tableWrap.client && tableWrap.overflow === 'auto', tableWrap)
+    await page.screenshot({ path: join(evidence, 'markdown.png') })
+
+    // An outside link shows its address; Enter copies it. Nothing opens a browser.
+    const outside = sheet.locator('.ql-md-a[data-target="outside"]').first()
+    await outside.focus()
+    const status = await sheet.locator('.ql-page-status').textContent()
+    await page.keyboard.press('Enter')
+    await sheet.locator('.ql-feedback', { hasText: 'Address copied' }).waitFor()
+    const clipboard = await app.evaluate(() => globalThis.__qlClipboard)
+    const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)
+    check('an outside link shows its address and Enter copies it with "Address copied"; no window or browser opens',
+      status.includes('https://example.invalid/page') && clipboard.at(-1) === 'https://example.invalid/page' && windows === 1 && await page.evaluate(() => location.protocol) === 'file:',
+      { status, clipboard, windows })
+    // A link to a heading of the same file scrolls there.
+    await sheet.locator('.ql-md-a[data-target="heading"]').first().click()
+    await page.waitForTimeout(200)
+    const headingTop = await sheet.evaluate((element) => {
+      const box = element.querySelector('.ql-page').getBoundingClientRect()
+      return Math.round(element.querySelector('[data-slug="later-section"]').getBoundingClientRect().top - box.top)
+    })
+    check('a link to a heading of the same file scrolls there', Math.abs(headingTop) <= 4, { headingTop })
+
+    // M switches to source and back; the choice stays with the file.
+    await sheet.locator('.ql-page').focus()
+    await page.keyboard.press('m')
+    await sheet.locator('.ql-code .cm-content').waitFor()
+    const sourceFooter = await footerText()
+    await openRow('README.md')
+    await openRow('plan.md')
+    await sheet.locator('.ql-code .cm-content').waitFor()
+    const keptSource = await sheet.locator('.ql-page').count() === 0
+    await sheet.locator('.ql-code .cm-content').focus()
+    await page.keyboard.press('m')
+    await sheet.locator('.ql-page .ql-md h1').waitFor()
+    check('M switches between Rendered and Source, the footer says so, and the choice is kept for the file', keptSource && /Rendered \/ source/u.test(sourceFooter) &&
+      await sheet.locator('.ql-mode button.on').textContent() === 'Rendered', { keptSource })
+
+    // Masking and find work on the page as in source.
+    const renderedText = await sheet.locator('.ql-page').innerText()
+    check('a secret-shaped value is masked on the page, in text and in a code block', !renderedText.includes(PAGE_KEY) && await sheet.locator('.ql-page .ql-secret').count() === 2,
+      { plates: await sheet.locator('.ql-page .ql-secret').count() })
+    await page.keyboard.press('Control+f')
+    await sheet.locator('.ql-find input').fill('made-up')
+    await page.waitForFunction(() => / of \d+$/u.test(document.querySelector('dialog.quick-look .ql-find .ql-count')?.textContent ?? ''))
+    const pageFind = { count: await sheet.locator('.ql-find .ql-count').textContent(), marks: await sheet.locator('.ql-page mark.ql-match').count(), current: await sheet.locator('.ql-page mark.ql-match-current').count() }
+    await page.keyboard.press('Escape')
+    check('find in the file works on the page: a count, marks and a current match', /^1 of \d+$/u.test(pageFind.count) && pageFind.marks >= 2 && pageFind.current === 1, pageFind)
+
+    // A relative link opens its file in Quick look at its line, marked.
+    await sheet.locator('.ql-md-a[data-target="file"]').first().click()
+    await sheet.locator('.ql-path').filter({ hasText: 'parser.ts' }).waitFor()
+    await sheet.locator('.ql-code .cm-line.ql-target').waitFor()
+    const target = await sheet.locator('.ql-code .cm-line.ql-target').textContent()
+    check('a relative link with a line opens that file in Quick look at the line, marked', target.startsWith('export const value33 '), { target })
+    await page.keyboard.press('Alt+ArrowLeft')
+    await sheet.locator('.ql-page .ql-md h1').waitFor()
+    // A Markdown file over 512 KiB opens as source with one line saying why.
+    await openRow('big.md')
+    await sheet.locator('.ql-code .cm-content').waitFor()
+    check('a Markdown file over 512 KB opens as source with one line saying why', (await sheet.locator('.ql-note').allTextContents()).includes('Over 512 KB, so shown as source.') &&
+      await sheet.locator('.ql-mode').count() === 0)
+    const pagePolicyViolations = await page.evaluate(() => window.__qlViolations ?? [])
+    check('no network request and no policy violation while a document with remote images and links is open', requests.length === 0 && violations.length === 0 && pagePolicyViolations.length === 0,
+      { requests, violations, pagePolicyViolations })
     await page.keyboard.press('Escape')
     await sheet.waitFor({ state: 'detached' })
 

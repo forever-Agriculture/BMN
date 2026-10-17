@@ -15,6 +15,8 @@ export interface QuickLookFooterState {
   /** What Esc does now, innermost first. */
   escape: EscapeStep
   folded: boolean
+  /** A Markdown file's view, which M switches; null for any other file. */
+  markdown?: 'rendered' | 'source' | null
   /** The shown file hides values, which Ctrl+R shows one at a time. */
   secrets?: boolean
   /** True when Alt+← has a file to return to. */
@@ -42,9 +44,10 @@ export function quickLookFooter(state: QuickLookFooterState): QuickLookHint[] {
         escape
       ]
     case 'file':
-      // The board's order for a source file: move, tree, go to line, find, back, Esc.
-      return [hint('Move', '↑ ↓'), tree, hint('Go to line', 'Ctrl G'), hint('Find in file', 'Ctrl F'),
-        ...(state.secrets ? [hint('Reveal 10 s', 'Ctrl R')] : []), ...trail, escape]
+      // The board's order for a source file: move, tree, go to line, find, back, Esc; a Markdown page scrolls and
+      // M switches it to source and back.
+      return [hint(state.markdown === 'rendered' ? 'Scroll' : 'Move', '↑ ↓'), ...(state.markdown ? [hint('Rendered / source', 'M')] : []), tree,
+        hint('Go to line', 'Ctrl G'), hint('Find in file', 'Ctrl F'), ...(state.secrets ? [hint('Reveal 10 s', 'Ctrl R')] : []), ...trail, escape]
     case 'find':
       return [hint('Next', 'Enter'), hint('Previous', 'Shift Enter'), hint('Case', 'Alt C'), escape]
     case 'goto':

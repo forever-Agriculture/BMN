@@ -111,6 +111,31 @@
   background: var(--ql-plate-2);
 }
 
+/* Rendered / Source in the path row of a Markdown file. */
+.ql-path-actions {
+  display: inline-flex;
+  flex: none;
+  margin-left: auto;
+}
+
+.quick-look .ql-mode > button {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.quick-look .ql-mode > button.on {
+  color: var(--text);
+  background: var(--ql-plate-2);
+}
+
 .ql-body {
   display: flex;
   flex: 1;
@@ -470,19 +495,19 @@
 }
 
 /* Find's matches sit on plates, the current one on a stronger plate; the text keeps its own grey (Story 67.2 AC1). */
-.ql-code .ql-match {
+.quick-look .ql-match {
   border-radius: 2px;
   background: var(--ql-match);
 }
 
-.ql-code .ql-match-current {
+.quick-look .ql-match-current {
   background: var(--ql-match-active);
   box-shadow: 0 0 0 1px var(--identity);
 }
 
 /* A hidden value: one plate of dots of one width in every kind of file; its length and an eye sit at the right
    edge of its line, in a layer that does not scroll sideways (Story 67.3). */
-.ql-code .ql-secret {
+.quick-look .ql-secret {
   display: inline-block;
   padding: 0 6px;
   border-radius: 4px;
@@ -493,7 +518,7 @@
   vertical-align: 1px;
 }
 
-.ql-code .ql-secret-shown {
+.quick-look .ql-secret-shown {
   border-radius: 2px;
   box-shadow: 0 0 0 1px var(--ql-plate-2);
 }
@@ -539,6 +564,251 @@
 .quick-look .ql-eye[aria-pressed='true'] {
   color: var(--text);
   background: var(--ql-plate-2);
+}
+
+/* A Markdown file as a page: one column of about 80 characters, built from elements; nothing is loaded. */
+.ql-page-wrap {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ql-page {
+  flex: 1;
+  min-height: 0;
+  padding: 22px 40px 48px;
+  overflow: auto;
+  outline: none;
+  background: var(--ground);
+}
+
+.ql-md {
+  max-width: 640px;
+  color: var(--ql-text);
+  font: 14px/1.62 var(--font-chrome);
+  overflow-wrap: break-word;
+}
+
+.ql-md > :first-child {
+  margin-top: 0;
+}
+
+.ql-md :is(h1, h2, h3, h4, h5, h6) {
+  margin: 22px 0 10px;
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.ql-md h1 {
+  font-size: 24px;
+}
+
+.ql-md h2 {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 17px;
+}
+
+.ql-md h3 {
+  font-size: 15px;
+}
+
+.ql-md :is(h4, h5, h6) {
+  font-size: 14px;
+}
+
+.ql-md p {
+  margin: 0 0 12px;
+}
+
+.ql-md strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.ql-md :is(ul, ol) {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+
+.ql-md li {
+  margin: 4px 0;
+}
+
+.ql-md li > p {
+  margin: 0;
+}
+
+.ql-md li.ql-md-task {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  list-style: none;
+  margin-left: -20px;
+}
+
+.ql-md-box {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  border: 1px solid color-mix(in srgb, var(--text) 40%, transparent);
+  border-radius: 3px;
+  color: var(--text);
+  transform: translateY(2px);
+}
+
+.ql-md-box.on {
+  background: var(--ql-plate-2);
+}
+
+.ql-md blockquote {
+  margin: 0 0 12px;
+  padding: 2px 0 2px 14px;
+  border-left: 2px solid var(--ql-plate-2);
+  color: color-mix(in srgb, var(--text) 80%, var(--ground));
+}
+
+.ql-md hr {
+  margin: 20px 0;
+  border: 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.ql-md-code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--ql-plate);
+  font: 12.5px var(--font-mono);
+}
+
+.ql-md-pre {
+  position: relative;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  overflow-x: auto;
+  border-radius: 7px;
+  background: var(--ql-plate);
+  font: 12.5px/20px var(--font-mono);
+  white-space: pre;
+}
+
+.ql-md-pre > code {
+  font: inherit;
+}
+
+.ql-md-label {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  color: var(--muted);
+  font: 11px var(--font-chrome);
+}
+
+.ql-md-raw {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.ql-md-a {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--text) 45%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.ql-md-a:focus-visible,
+.ql-md-img:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.ql-md-img {
+  display: inline-flex;
+  gap: 8px;
+  align-items: baseline;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 5px;
+  background: var(--ql-plate);
+  cursor: pointer;
+}
+
+.ql-md-img .ql-eyebrow {
+  margin-right: 0;
+}
+
+.ql-md-src {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font: 12px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ql-md-table {
+  margin: 0 0 14px;
+  overflow-x: auto;
+}
+
+.ql-md table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.ql-md :is(th, td) {
+  padding: 5px 12px 5px 0;
+  border-bottom: 1px solid var(--hairline);
+  white-space: nowrap;
+}
+
+.ql-md th {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.ql-md .ql-target {
+  margin-left: -12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--identity);
+  background: var(--selected);
+}
+
+.ql-md .ql-secret-wrap {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.ql-page-status {
+  position: absolute;
+  bottom: 10px;
+  left: 14px;
+  max-width: calc(100% - 28px);
+  margin: 0;
+  padding: 3px 9px;
+  overflow: hidden;
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--raised);
+  font: 11.5px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ql-copy-holder {
+  position: fixed;
+  top: 0;
+  left: -10000px;
+  white-space: pre-wrap;
 }
 
 /* The find and go-to-line rows and the quiet "Changed on disk" row sit under the path row, inside the file. */
@@ -699,23 +969,23 @@
 }
 
 /* Thin scrollbars as the board draws them: a plate thumb, no arrows. */
-.quick-look :is(.cm-scroller, .ql-tree)::-webkit-scrollbar {
+.quick-look :is(.cm-scroller, .ql-tree, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
-.quick-look :is(.cm-scroller, .ql-tree)::-webkit-scrollbar-track,
-.quick-look :is(.cm-scroller, .ql-tree)::-webkit-scrollbar-corner {
+.quick-look :is(.cm-scroller, .ql-tree, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar-track,
+.quick-look :is(.cm-scroller, .ql-tree, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-.quick-look :is(.cm-scroller, .ql-tree)::-webkit-scrollbar-thumb {
+.quick-look :is(.cm-scroller, .ql-tree, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 999px;
   background: var(--ql-plate-2);
   background-clip: padding-box;
 }
 
-.quick-look :is(.cm-scroller, .ql-tree)::-webkit-scrollbar-button {
+.quick-look :is(.cm-scroller, .ql-tree, .ql-page, .ql-md-table, .ql-md-pre)::-webkit-scrollbar-button {
   display: none;
 }

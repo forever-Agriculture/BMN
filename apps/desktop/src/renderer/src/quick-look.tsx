@@ -1,5 +1,5 @@
 // MODULE: quick-look.tsx - Quick look: one sheet over the window to walk the project and read a file (Epic 67)
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { EditorView } from '@codemirror/view'
 import {
   quickLookCount,
@@ -15,6 +15,8 @@ import {
 } from '@bmn/protocol'
 import { createCodeView, goToPosition, showFindMatches, showSecrets, topVisibleLine, type SecretView } from './quick-look-code'
 import { findCountLabel, findMatches, matchAt, stepMatch, type FindMatch } from './quick-look-find'
+import { MARKDOWN_PAGE_MAX_BYTES, markdownPage, matchesOnPage, pageRuns } from './quick-look-markdown'
+import { MarkdownPageView, type MarkdownPageHandle } from './quick-look-page'
 import {
   EMPTY_TRAIL,
   canGoBack,
@@ -46,6 +48,9 @@ export const QUICK_LOOK_TREE_FOLD_WIDTH = 940
 /** How often a shown file's identity is asked for while the window has focus (Story 67.2 AC2). */
 export const QUICK_LOOK_IDENTITY_MS = 2000
 
+/** Rendered or source, per Markdown file, kept in this window's memory until BMN quits (Story 67.4 AC1). */
+const markdownModes = new Map<string, 'rendered' | 'source'>()
+
 export interface QuickLookRequest {
   source: QuickLookSource
   /** A file to show at once, at its place. */
@@ -58,6 +63,8 @@ interface OpenFile {
   column: number | null
   /** The line kept at the top after a reload or from the remembered place. */
   topLine: number | null
+  /** A heading a Markdown link named, shown at the top. */
+  heading: string | null
   result: QuickLookReadResult | null
 }
 
@@ -102,7 +109,7 @@ function SearchGlyph(): React.JSX.Element {
 }
 
 /** The path row: folders cut first, the name and the line he came for always shown, then the file's facts. */
-function PathRow(props: { path: string; root: string | null; line: number | null; facts: string | null; eyebrow?: string | undefined }): React.JSX.Element {
+function PathRow(props: { path: string; root: string | null; line: number | null; facts: string | null; eyebrow?: string | undefined; actions?: ReactNode }): React.JSX.Element {
   const parts = quickLookPathParts(props.path, props.root)
   return (
     <div className="ql-path">
@@ -115,6 +122,7 @@ function PathRow(props: { path: string; root: string | null; line: number | null
       </span>
       {parts.outside && props.root ? <span className="ql-facts">Outside {props.root}</span> : null}
       {props.facts ? <span className="ql-facts">{props.facts}</span> : null}
+      {props.actions ? <span className="ql-path-actions">{props.actions}</span> : null}
     </div>
   )
 }
@@ -242,6 +250,9 @@ export function QuickLook(props: {
   const [peeking, setPeeking] = useState(false)
   const [goneNote, setGoneNote] = useState<string | null>(null)
   const [shownSecret, setShownSecret] = useState<Reveal | null>(null)
+  const [, setModeTick] = useState(0)
+  const [pageStatus, setPageStatus] = useState('')
+  const pageView = useRef<MarkdownPageHandle | null>(null)
   const [now, setNow] = useState(() => Date.now())
   const source = props.request.source
   const onClose = useRef(props.onClose)
@@ -263,8 +274,18 @@ export function QuickLook(props: {
   const revealed = shownSecret && shownSecret.index < secretRanges.length ? shownSecret.index : null
   const secondsLeft = revealSecondsLeft(shownSecret, now)
   const secrets = useMemo<SecretView>(() => ({ ranges: secretRanges, revealed, secondsLeft }), [secretRanges, revealed, secondsLeft])
-  const matches = useMemo(() => (ready && find.query ? outsideSecrets(findMatches(text, find.query, find.matchCase), secretRanges, revealed) : []),
-    [ready, text, find.query, find.matchCase, secretRanges, revealed])
+  // A Markdown file of at most 512 KiB reads as a page unless he chose source for it (Story 67.4).
+  const markdown = !!ready && quickLookFileType(ready.path).language === 'markdown'
+  const pageTooLarge = markdown && ready.byteLength > MARKDOWN_PAGE_MAX_BYTES
+  const page = useMemo(() => (markdown && !pageTooLarge ? markdownPage(text) : null), [markdown, pageTooLarge, text])
+  const rendered = !!page && !!ready && markdownModes.get(ready.path) !== 'source'
+  const runs = useMemo(() => (page ? pageRuns(page) : []), [page])
+  const matches = useMemo(() => {
+    if (!ready || !find.query) return []
+    const found = outsideSecrets(findMatches(text, find.query, find.matchCase), secretRanges, revealed)
+    return rendered ? matchesOnPage(found, runs) : found
+  }, [ready, text, find.query, find.matchCase, secretRanges, revealed, rendered, runs])
+  const headingLine = file?.heading && page ? page.headings.find((each) => each.slug === file.heading)?.line ?? null : null
   const currentMatch = find.of === matches ? find.current : matchAt(matches, findAnchor.current)
   const findRef = useRef({ matches, current: currentMatch, open: find.open })
   findRef.current = { matches, current: currentMatch, open: find.open }
@@ -289,14 +310,15 @@ export function QuickLook(props: {
   const currentTop = useCallback((): number | null => (shownTop.current && shownTop.current.path === shownPath.current ? shownTop.current.line : null), [])
 
   const open = useCallback((path: string, line: number | null = null, column: number | null = null,
-    options: { way?: OpenWay; topLine?: number | null; focus?: boolean } = {}): void => {
+    options: { way?: OpenWay; topLine?: number | null; focus?: boolean; heading?: string | null } = {}): void => {
     const way = options.way ?? 'visit'
     if (way !== 'trail') {
       const here = currentTop()
       setTrail((current) => trailVisit(current, { path, line, column }, here))
     }
-    setFile({ path, line, column, topLine: options.topLine ?? null, result: null })
+    setFile({ path, line, column, topLine: options.topLine ?? null, heading: options.heading ?? null, result: null })
     setShownSecret(null)
+    setPageStatus('')
     setFeedback('')
     setChanged(false)
     setGoneNote(null)
@@ -332,6 +354,24 @@ export function QuickLook(props: {
     if (!next) return
     setTrail(next.trail)
     open(next.entry.path, next.entry.line, next.entry.column, { way: 'trail', topLine: next.entry.topLine ?? null })
+  }
+
+  /** Rendered or source for this Markdown file, kept until BMN quits; the line at the top stays (Story 67.4 AC1). */
+  const switchMarkdown = (mode: 'rendered' | 'source'): void => {
+    if (!ready) return
+    const topLine = currentTop()
+    markdownModes.set(ready.path, mode)
+    setFile((current) => (current ? { ...current, topLine } : current))
+    setModeTick((tick) => tick + 1)
+    setFocusArea('file')
+  }
+
+  /** An outside address is never opened: it is shown, and Enter copies it. */
+  const copyAddress = (address: string): void => {
+    setPageStatus(address)
+    void window.aiTerminal.writeClipboardText(address)
+      .then(() => setFeedback('Address copied'))
+      .catch((error: unknown) => setFeedback(failureText(error, 'Copy failed.')))
   }
 
   /** Shows one hidden value for ten seconds, or hides it again; any other shown value hides first (Story 67.3). */
@@ -500,7 +540,7 @@ export function QuickLook(props: {
   useEffect(() => {
     if (peeking) return
     if (focusArea === 'tree' && !folded) tree.current?.focus()
-    else if (focusArea === 'file') codeView.current?.focus()
+    else if (focusArea === 'file') (codeView.current ?? pageView.current)?.focus()
     else if (focusArea === 'find') {
       findField.current?.focus()
       findField.current?.select()
@@ -527,22 +567,23 @@ export function QuickLook(props: {
     const view = codeView.current
     const reveal = !keepTop.current
     keepTop.current = false
-    if (!view || !find.open) return
+    if (!find.open || (!view && !rendered)) return
     const current = matchAt(matches, findAnchor.current)
     setFind((state) => ({ ...state, current, of: matches }))
-    showFindMatches(view, matches, current, reveal)
+    // The page scrolls to its current match itself.
+    if (view) showFindMatches(view, matches, current, reveal)
   }, [matches, find.open])
 
   const findStep = (direction: 1 | -1): void => {
     const view = codeView.current
-    if (!view) return
+    if (!view && !rendered) return
     const current = stepMatch(matches, currentMatch, direction)
     setFind((state) => ({ ...state, current, of: matches }))
-    showFindMatches(view, matches, current, true)
+    if (view) showFindMatches(view, matches, current, true)
   }
 
   const openFind = (): void => {
-    if (codeView.current) findAnchor.current = codeView.current.state.selection.main.from
+    findAnchor.current = codeView.current ? codeView.current.state.selection.main.from : 0
     setGoTo({ open: false, text: '', invalid: false })
     setFind((state) => ({ ...state, open: true }))
     setFocusArea('find')
@@ -557,13 +598,14 @@ export function QuickLook(props: {
 
   const submitGoTo = (): void => {
     const view = codeView.current
-    if (!view) return
-    const target = parseGoToLine(goTo.text, view.state.doc.lines)
+    if (!view && !rendered) return
+    const target = parseGoToLine(goTo.text, view ? view.state.doc.lines : ready?.lineCount ?? 1)
     if (!target) {
       setGoTo((state) => ({ ...state, invalid: true }))
       return
     }
-    goToPosition(view, target.line, target.column)
+    if (view) goToPosition(view, target.line, target.column)
+    else pageView.current?.goToLine(target.line)
     setGoTo({ open: false, text: '', invalid: false })
     setFocusArea('file')
   }
@@ -654,11 +696,23 @@ export function QuickLook(props: {
     if (ctrl && !event.shiftKey && event.code === 'KeyR') {
       take()
       const view = codeView.current
-      if (!view || secretRanges.length === 0) return
+      if (secretRanges.length === 0) return
+      if (!view) {
+        // On a page there is no caret: the first hidden value in view.
+        const index = rendered ? pageView.current?.hiddenInView() ?? null : null
+        if (index === null) setFeedback('No hidden value in view.')
+        else toggleSecret(index)
+        return
+      }
       const line = view.state.doc.lineAt(view.state.selection.main.head)
       const index = secretOnLine(secretRanges, line.from, line.to)
       if (index === null) setFeedback('No hidden value on this line.')
       else toggleSecret(index)
+      return
+    }
+    if (plain && !event.shiftKey && event.key.toLowerCase() === 'm' && focusArea === 'file' && page && ready) {
+      take()
+      switchMarkdown(rendered ? 'source' : 'rendered')
       return
     }
     if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
@@ -694,7 +748,8 @@ export function QuickLook(props: {
   const home = rootInfo?.home ?? null
   const unavailable = file?.result?.status === 'unavailable' ? file.result : null
   const type = file ? quickLookFileType(file.path) : null
-  const footer = quickLookFooter({ focus: focusArea, fileOpen: !!ready, escape, folded, secrets: secretRanges.length > 0, back: canGoBack(trail), forward: canGoForward(trail) })
+  const footer = quickLookFooter({ focus: focusArea, fileOpen: !!ready, escape, folded, secrets: secretRanges.length > 0, back: canGoBack(trail), forward: canGoForward(trail),
+    markdown: page ? (rendered ? 'rendered' : 'source') : null })
 
   return (
     <dialog ref={dialog} className={`app-dialog quick-look${peeking ? ' peeking' : ''}`} aria-label="Quick look" onKeyDownCapture={onSheetKey}>
@@ -745,7 +800,14 @@ export function QuickLook(props: {
             ready ? (
               <>
                 <PathRow path={file.path} root={root} line={file.line}
-                  facts={[type?.label, `${quickLookCount(ready.lineCount)} ${ready.lineCount === 1 ? 'line' : 'lines'}`, quickLookSize(ready.byteLength)].join(' · ')} />
+                  facts={[type?.label, `${quickLookCount(ready.lineCount)} ${ready.lineCount === 1 ? 'line' : 'lines'}`, quickLookSize(ready.byteLength)].join(' · ')}
+                  actions={page ? (
+                    <span className="ql-seg ql-mode" role="group" aria-label="Markdown view">
+                      <button type="button" className={rendered ? 'on' : ''} aria-pressed={rendered} onClick={() => switchMarkdown('rendered')}>Rendered</button>
+                      <button type="button" className={rendered ? '' : 'on'} aria-pressed={!rendered} onClick={() => switchMarkdown('source')}>Source</button>
+                    </span>
+                  ) : null} />
+                {pageTooLarge ? <p className="ql-note">Over 512 KB, so shown as source.</p> : null}
                 {ready.canonicalPath !== ready.path ? <p className="ql-note">Through symlink · {ready.canonicalPath}</p> : null}
                 {changed ? (
                   <div className="ql-changed" role="status">
@@ -772,8 +834,15 @@ export function QuickLook(props: {
                     <span className="ql-count">{goTo.invalid ? 'Type a line, or a line and a column: 44 or 44:7' : `1–${quickLookCount(ready.lineCount)}`}</span>
                   </div>
                 ) : null}
-                {ready.byteLength === 0 ? <p className="ql-message">Empty file. Nothing to show.</p> : (
-                  <CodeView result={ready} text={text} secrets={secrets} onRevealSecret={toggleSecret} line={file.line} column={file.column} topLine={file.topLine} focus={focusArea === 'file'}
+                {ready.byteLength === 0 ? <p className="ql-message">Empty file. Nothing to show.</p> : rendered && page ? (
+                  <MarkdownPageView ref={pageView} page={page} path={ready.path} ranges={secretRanges} revealed={revealed} secondsLeft={secondsLeft}
+                    matches={matches} current={currentMatch} line={file.line} heading={file.heading} topLine={file.topLine} focus={focusArea === 'file'}
+                    status={pageStatus} onStatus={setPageStatus} onReveal={toggleSecret}
+                    onTop={(line) => { shownTop.current = { path: ready.path, line } }}
+                    onOpenFile={(path, line, column, heading) => open(path, line, column, { heading })}
+                    onAddress={copyAddress} onFocus={() => setFocusArea('file')} />
+                ) : (
+                  <CodeView result={ready} text={text} secrets={secrets} onRevealSecret={toggleSecret} line={file.line ?? headingLine} column={file.column} topLine={file.topLine} focus={focusArea === 'file'}
                     onTop={(path, line) => { shownTop.current = { path, line } }}
                     onView={(view) => {
                       codeView.current = view

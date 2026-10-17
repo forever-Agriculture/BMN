@@ -424,6 +424,15 @@ sheet and on a peek. A copied selection holds `[secret hidden]` in place of a hi
 the file does not look inside one. Masking hides values that look like secrets; it does not find every
 secret.
 
+A Markdown file of at most 512 KB opens as a page in a column of about 80 characters: headings, emphasis,
+lists and task boxes, quotes, tables that scroll sideways in their own box, rules, and code blocks
+coloured by their label; a front-matter block shows as code. `M` switches between **Rendered** and
+**Source** for that file until BMN quits; a larger file opens as source. The page is built from the
+file's parsed text, so raw HTML shows as text and no image is loaded: an image is one line with its
+words and path. A link to a file opens it in Quick look (at its line or heading), a link to a heading
+scrolls there, and an outside link only shows its address; `Enter` copies it. Nothing opens a browser.
+Masks, find, "Changed on disk" and the remembered place work on the page as in source.
+
 **File references.** `Ctrl+click` a path an agent printed, such as `src/parser.ts:42:7`, or use
 **Open file reference…** in the palette, to see a read-only snapshot of that file at the line and
 column, with **Copy reference** and **Show in Folder**. Relative paths resolve from the session's

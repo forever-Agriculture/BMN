@@ -10,7 +10,7 @@ import { python } from '@codemirror/lang-python'
 import { rust } from '@codemirror/lang-rust'
 import { sql } from '@codemirror/lang-sql'
 import { yaml } from '@codemirror/lang-yaml'
-import { StreamLanguage, syntaxHighlighting } from '@codemirror/language'
+import { type Language, StreamLanguage, syntaxHighlighting } from '@codemirror/language'
 import { diff } from '@codemirror/legacy-modes/mode/diff'
 import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile'
 import { shell } from '@codemirror/legacy-modes/mode/shell'
@@ -28,7 +28,7 @@ import {
   keymap,
   lineNumbers
 } from '@codemirror/view'
-import { tagHighlighter, tags } from '@lezer/highlight'
+import { highlightTree, tagHighlighter, tags } from '@lezer/highlight'
 import type { QuickLookLanguage, SecretRange } from '@bmn/protocol'
 import type { FindMatch } from './quick-look-find'
 import { maskedSlice } from './quick-look-secrets'
@@ -38,7 +38,7 @@ import { maskedSlice } from './quick-look-secrets'
  * text and ground (Story 67.1 AC7). A definition and a literal are full text; a name, a keyword, punctuation and a
  * comment each a step down.
  */
-const greys = tagHighlighter([
+export const greys = tagHighlighter([
   { tag: [tags.definition(tags.variableName), tags.function(tags.definition(tags.variableName)), tags.definition(tags.propertyName),
     tags.definition(tags.typeName), tags.className, tags.heading, tags.macroName], class: 'ql-syn-def' },
   { tag: [tags.string, tags.special(tags.string), tags.number, tags.bool, tags.null, tags.regexp, tags.atom, tags.escape,
@@ -74,6 +74,22 @@ export function languageExtension(language: QuickLookLanguage | null): Extension
     case 'diff': return StreamLanguage.define(diff)
     default: return []
   }
+}
+
+/** The parser of a language Quick look colours, for a Markdown page's code blocks; null for plain text. */
+function languageOf(language: QuickLookLanguage | null): Language | null {
+  const support = languageExtension(language)
+  return support && typeof support === 'object' && 'language' in support ? (support as { language: Language }).language
+    : support instanceof StreamLanguage ? support : null
+}
+
+/** A code block's coloured stretches, as places in the file (its text begins at `from`), with the same grey classes. */
+export function codeTokens(text: string, language: QuickLookLanguage | null, from: number): { from: number; to: number; className: string }[] {
+  const parser = languageOf(language)?.parser
+  if (!parser || !text) return []
+  const tokens: { from: number; to: number; className: string }[] = []
+  highlightTree(parser.parse(text), greys, (start, end, className) => tokens.push({ from: from + start, to: from + end, className }))
+  return tokens
 }
 
 export interface CodeViewInput {
