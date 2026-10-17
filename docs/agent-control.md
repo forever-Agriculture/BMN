@@ -243,8 +243,8 @@ complete (dev-auto ends every completed epic with one), the agent writes one HTM
 fixed structure (why, what changes with one example, optional safety and money, how it was checked, known
 limits, what was decided for him, what waits on him, an honest opinion) from its `template.html`, checks
 it with `check.py` (PASS/FAIL per rule) and publishes it privately: Claude Code as an Artifact, any other
-app with `bmn publish`, a new key per revision. Link it into your skills folder like the others
-(`ln -s <repository>/skills/team-page ~/.claude/skills/team-page`).
+app with `bmn publish`, a new key per revision. BMN puts it into your skills folder by itself
+(BMN's own skills, below).
 
 ## Handoffs
 
@@ -1481,6 +1481,28 @@ When the approved team cannot be read (a damaged or missing approval, once a tea
 the check, the install and the Skills page report that and change nothing; they never fall back
 to "no team".
 
+#### BMN's own skills (Story 77.4)
+
+BMN ships five skills of its own in the repository's `skills/` (listed in `skills/manifest.json`, packaged
+under `resources/skills`): `plan` (the project's planning, [planning.md](planning.md)), `team-ask`,
+`team-page`, `web-question` and `jev-judge`. At every start, before the skills install, BMN runs
+`bmn skills own`: each one the skills folder lacks becomes a link to BMN's own copy under
+`~/.local/share/bmn/skills/<name>`, which stays readable with BMN closed and is refreshed when an
+update brings a new version (the link stays, the copy changes). The skills install then carries them
+into Codex and OpenCode with the same ownership, route and eligibility checks as any other skill; they
+count as public, as BMN's repository is, unless the team file marks them otherwise.
+
+- A link of the same name into a BMN checkout or install (how `web-question` and `jev-judge` were
+  linked by hand) is taken over: it becomes a link to BMN's copy.
+- Anything else of that name (your own folder, a link elsewhere) is yours and is left as it is;
+  Integrations › Skills says so.
+- An entry BMN made that you remove stays removed: BMN records it in
+  `~/.config/bmn/agents/state/own-skills.json` and never adds it back. A copy BMN cannot read is put
+  back, never taken for your removal.
+
+`bmn skills own --plan --json` says what it would do without writing; `bmn skills check --json` lists
+the same rows under `own`.
+
 ### Tools (MCP)
 
 You keep one list of MCP tools in the team file's `## tools` section, and BMN sets each one up in
@@ -2110,10 +2132,9 @@ A lone `-` (`… | bmn research ask -`) says "standard input" out loud and chang
 - **The skill.** The repository holds a skill, `skills/web-question/`: when a web question is the
   right tool, what never goes into one (code, file contents, anything from a private repository
   beyond public names, names of people or customers, credentials), how to read the three marks,
-  and that a claim marked "not found" is not evidence. BMN never puts it into your skills folder.
-  To offer it to your agents, link it there yourself (`ln -s <repository>/skills/web-question
-  ~/.claude/skills/web-question`); it then shows on Integrations › Skills like every other skill and
-  reaches an app only through your Install. A pointer in your global rules is your own edit.
+  and that a claim marked "not found" is not evidence. BMN puts it into your skills folder by itself
+  (BMN's own skills, under Skills); it shows on Integrations › Skills like every other skill. A
+  pointer in your global rules is your own edit.
 - **Switched off.** With "Agents may ask the web" off (Agents › Models), an agent's question is
   refused with `ASKING_OFF`, told so and told to ask you; your own Ask still works.
 - **On Models.** Agents › Models ends with "Web questions". The switch "Agents may ask the web" is
@@ -2243,8 +2264,8 @@ printf '%s\n' 'All 12 tests passed.' | bmn judge ask --state-file - --questions-
 - **Advice only.** Nothing in BMN grants, accepts, stops, spends or hides anything because of
   an answer, and nothing in BMN but the command and the judge's page asks or reads one. The
   skill `skills/jev-judge/` in the repository says what Jev proved good at and what it must
-  never decide; link it into your skills folder yourself (`ln -s <repository>/skills/jev-judge
-  ~/.claude/skills/jev-judge`) and it shows on Integrations › Skills like every other skill. A new use
+  never decide; BMN puts it into your skills folder by itself (BMN's own skills, under Skills) and
+  it shows on Integrations › Skills like every other skill. A new use
   is measured in `~/code/jev-eval`, on labelled cases, before anything acts on it.
 
 ### The prompt guard
@@ -2869,10 +2890,9 @@ after they end.
   files, that the answer is advice and that a refusal is reported, never worked around, with `--key`.
 - **The skill.** The repository holds a skill, `skills/team-ask/`: when an ask is the right tool and
   when the owner decides instead, what each app's mode reads, pictures, the key, the exits, reading the
-  answer as advice, and that a refusal is reported, never worked around. BMN never puts it into your
-  skills folder: link it yourself (`ln -s <repository>/skills/team-ask ~/.claude/skills/team-ask`), and
-  it shows on Integrations › Skills like every other skill; `bmn skills install` then gives it to the apps that
-  need a copy.
+  answer as advice, and that a refusal is reported, never worked around. BMN puts it into your
+  skills folder by itself (BMN's own skills, under Skills), and it shows on Integrations › Skills like
+  every other skill; the skills install then gives it to the apps that need a copy.
 - **Auto mode.** Claude Code's auto mode, as the owner runs it, let `bmn team ask` command lines run
   when 72.1 measured them (2026-10-15), so BMN offers no permission rule for it. Should a later
   Claude Code refuse it, the narrowest rule is `Bash(bmn team ask:*)`, installed only by the owner.
@@ -2970,6 +2990,8 @@ What to send, and when
   resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.
   research ask            one public question to the web (--question-file <path> or -).
   judge ask               typed questions about one text to the team's judge; advice only.
+  plan status|check|set   the project's plan and board (BMN's plan/ or BMAD's); set changes one row
+                          with the token status --json gives. Not the subscription's Plan use.
   team ask --role R --key K  a review, a design look or a second opinion from a teammate, read-only;
                           it works in your repository (--project names another), --file adds files.
                           Its answer is advice to weigh. Report a refusal; never work around it.

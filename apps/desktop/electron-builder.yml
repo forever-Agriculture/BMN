@@ -109,6 +109,14 @@ extraResources:
     to: bin/plan-cli.mjs
   - from: bin/plan-board.mjs
     to: bin/plan-board.mjs
+  # Story 77.4: BMN's own skills and the module that installs them into the skills folder at start.
+  - from: bin/agents-own-skills.mjs
+    to: bin/agents-own-skills.mjs
+  - from: ../../skills
+    to: skills
+    filter:
+      - '**/*'
+      - '!**/__pycache__/**'
   # The --self-test stand-in agents draw these recorded dialogs; the packaged smoke runs that phase too.
   - from: src/utility/test-fixtures/remote-answers
     to: self-test/remote-answers

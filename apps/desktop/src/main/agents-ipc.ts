@@ -157,7 +157,7 @@ export interface AgentsIpcHandle {
 }
 
 /** Variables the rules CLI reads to find each app's file and its destination; nothing else of this process's environment. */
-const RULES_ENV = ['HOME', 'PATH', 'XDG_CONFIG_HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG',
+const RULES_ENV = ['HOME', 'PATH', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'BMN_SHIPPED_SKILLS', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG',
   'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'] as const
 /** Variables the rules CLI only needs to know are set; their value may hold a key, so a mark is passed on instead. */
 const RULES_ENV_MARKS = ['OPENCODE_CONFIG_CONTENT'] as const
@@ -578,6 +578,7 @@ function skillsView(apps: AgentAppView[], team: ReturnType<typeof approvedForPag
     return {
       source: check.source,
       markedMissing: check.marked_missing,
+      ownLeft: check.own.flatMap((row) => row.state === 'foreign' || row.state === 'removed' || row.state === 'unavailable' ? [{ name: row.name, state: row.state, detail: row.detail ?? '' }] : []),
       ...pendingCounts(check),
       skills: check.skills.map((skill) => ({
         name: skill.name, description: skill.description ?? '', readable: skill.readable, ...(skill.detail === undefined ? {} : { detail: skill.detail }),
@@ -599,7 +600,7 @@ function skillsView(apps: AgentAppView[], team: ReturnType<typeof approvedForPag
     }
   } catch (error) {
     // The approved team, or BMN's own record of what it wrote, cannot be read: say so on the page rather than fail every Rules page.
-    return { source: { path: '', readable: false, detail: error instanceof Error ? error.message : String(error) }, skills: [], markedMissing: [], apps: [], pending: 0, exposed: 0 }
+    return { source: { path: '', readable: false, detail: error instanceof Error ? error.message : String(error) }, skills: [], markedMissing: [], ownLeft: [], apps: [], pending: 0, exposed: 0 }
   }
 }
 
@@ -1030,6 +1031,14 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       const name = kind === 'skills' ? 'Skills' : 'Tools'
       try {
         const ctx = context()
+        // Story 77.4: BMN's own skills go into the skills folder first, so the install below carries them into every app.
+        if (kind === 'skills') {
+          const own = parseJson((await runCli(ctx.script, ['skills', 'own', '--json'], ctx.env)).stdout)
+          const rows = Array.isArray(own?.rows) ? own.rows as Array<{ state?: unknown }> : []
+          const added = rows.filter((row) => row.state === 'installed' || row.state === 'taken-over' || row.state === 'updated' || row.state === 'repaired').length
+          if (own?.ok !== true) said.push(`BMN's skills not installed: ${String(own?.message ?? 'the install did not run')}`)
+          else if (added > 0) said.push(`BMN's skills installed: ${added} entr${added === 1 ? 'y' : 'ies'} changed`)
+        }
         const planned = await runCli(ctx.script, [kind, 'install', '--plan', '--absent', '--json'], ctx.env)
         const plan = kind === 'skills' ? skillsPlanFrom(planned) : toolsPlanFrom(planned, false)
         if (!plan.ok || plan.planHash === null || plan.targets.length === 0) continue

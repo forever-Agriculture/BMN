@@ -598,7 +598,7 @@ const RULES: RulesSnapshot = {
   autoTests: { running: null, stopped: [] },
   readOnlyRoles: { held: ['epic-reviewer'], proposed: [] },
   skills: {
-    source: { path: '/home/synthetic/.claude/skills', readable: true }, markedMissing: [], pending: 1, exposed: 1,
+    source: { path: '/home/synthetic/.claude/skills', readable: true }, markedMissing: [], ownLeft: [], pending: 1, exposed: 1,
     skills: [
       { name: 'alpha', description: 'First synthetic skill.', readable: true, states: { claude: 'read-directly', codex: 'current', opencode: 'exposed' } },
       { name: 'beta', description: 'Second synthetic skill.', readable: true, states: { claude: 'read-directly', codex: 'missing', opencode: 'read-directly' } },

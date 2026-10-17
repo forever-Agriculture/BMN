@@ -1274,6 +1274,11 @@ function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
       </div>
       {count === 0 && view.source.readable ? <p className="preferences-help">No skills in this folder yet.</p> : null}
       {view.markedMissing.length > 0 ? <p className="preferences-help">The team marks {named(view.markedMissing)}, which the folder does not hold.</p> : null}
+      {view.ownLeft.map((left) => (
+        <p key={left.name} className="preferences-help">
+          BMN&apos;s own skill <b>{left.name}</b> is not BMN&apos;s here: {left.state === 'removed' ? 'you removed it, so BMN does not add it back' : left.state === 'foreign' ? `${left.detail}; remove it and BMN adds its own at the next start` : left.detail}.
+        </p>
+      ))}
       <p className="preferences-help">A skill reaches every app unless you keep it to some. An app that gets public work only receives just the skills you mark Public. A change here takes effect once you approve it, and BMN then installs it in each app; it also installs at every start what an app lacks.</p>
 
       <details className="advanced">

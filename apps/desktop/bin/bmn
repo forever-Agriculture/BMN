@@ -246,6 +246,8 @@ What to send, and when
   resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.
   research ask            one public question to the web (--question-file <path> or -).
   judge ask               typed questions about one text to the team's judge; advice only.
+  plan status|check|set   the project's plan and board (BMN's plan/ or BMAD's); set changes one row
+                          with the token status --json gives. Not the subscription's Plan use.
   team ask --role R --key K  a review, a design look or a second opinion from a teammate, read-only;
                           it works in your repository (--project names another), --file adds files.
                           Its answer is advice to weigh. Report a refusal; never work around it.

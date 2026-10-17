@@ -427,6 +427,8 @@ export interface SkillsView {
   skills: SkillView[]
   /** Skills the approved team marks that the folder does not hold. */
   markedMissing: string[]
+  /** BMN's own skills that are not BMN's entries in the folder (Story 77.4): the owner's entry of that name, one he removed, or one BMN cannot read. */
+  ownLeft: Array<{ name: string; state: 'foreign' | 'removed' | 'unavailable'; detail: string }>
   apps: SkillsAppView[]
   /** Entries an install would add, replace or remove. */
   pending: number

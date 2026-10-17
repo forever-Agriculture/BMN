@@ -71,6 +71,8 @@ export interface SkillsCheck {
   skills: { name: string; readable: boolean; hash?: string; detail?: string; description?: string; public: boolean; only: SkillsHarness[] | null }[]
   /** Skills the team file marks that the folder does not hold. */
   marked_missing: string[]
+  /** BMN's own skills as they stand in the folder, nothing written (Story 77.4). */
+  own: import('./agents-own-skills.mjs').OwnSkillRow[]
   apps: (AppSkills & { kind: 'full' | 'public'; kind_reason: string; skills: SkillRow[] })[]
 }
 export type SkillsVersions = Partial<Record<SkillsHarness, string | null>>

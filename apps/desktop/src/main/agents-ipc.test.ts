@@ -47,7 +47,7 @@ let notices: { title: string; body: string }[]
 let openedInBrowser: string[]
 /** The folder the owner picks for an ask's export; null as when he cancels. */
 let askExportInto: string | null
-const saved = { HOME: process.env.HOME, PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
+const saved = { HOME: process.env.HOME, PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, BMN_SHIPPED_SKILLS: process.env.BMN_SHIPPED_SKILLS }
 
 function stub(name: string, body: string): void {
   writeFileSync(join(stubs, name), `#!/bin/sh\n${body}\n`)
@@ -64,6 +64,10 @@ beforeEach(() => {
   process.env.HOME = home
   process.env.PATH = `${stubs}:/usr/bin:/bin`
   delete process.env.XDG_CONFIG_HOME
+  // BMN's own skills (Story 77.4) come from a synthetic shipped folder, empty unless a test fills it.
+  mkdirSync(join(home, 'shipped'))
+  writeFileSync(join(home, 'shipped/manifest.json'), JSON.stringify({ skills: [] }))
+  process.env.BMN_SHIPPED_SKILLS = join(home, 'shipped')
   handlers = new Map()
   appEnv = {}
   researchPages = null
@@ -78,7 +82,7 @@ beforeEach(() => {
   openCodeGo = { listed: false, signedIn: true, copy: { ok: true, copied: false, message: 'BMN\'s OpenCode folder already holds your OpenCode Go sign-in' }, calls: [] }
   autoKinds.length = 0
   ipc = installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
-    senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...appEnv }),
+    senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin`, BMN_SHIPPED_SKILLS: join(home, 'shipped'), ...appEnv }),
     openPath: async (path) => (existsSync(path) ? '' : 'no such file'), openExternal: async (address) => { openedInBrowser.push(address) }, resolvesPublic: async (host) => !host.startsWith('intranet.') && !host.startsWith('unknown.'), researchPages: () => researchPages,
     researchFetch: (address, limits) => (researchFetch ?? fetchPublicPage)(address, limits), researchLimitMs: () => researchLimitMs, judgeTestPort: () => judgeTestPort,
     fenceTest: async (options) => {
@@ -887,6 +891,22 @@ describe('skills on Integrations › Skills and Health (60.11 AC1-AC5)', () => {
     writeFileSync(join(home, '.claude/skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: Synthetic skill ${name}.\n---\n\nSYNTHETIC-BODY ${name}\n`)
   }
   const rulesSnapshot = (): Promise<RulesSnapshot> => call('rules:snapshot')
+
+  it('puts BMN\'s own skills into the skills folder at start, leaves the owner\'s entry of that name and says so (Story 77.4)', async () => {
+    await approvedAndInstalled()
+    for (const name of ['plan', 'team-page']) {
+      mkdirSync(join(home, 'shipped', name))
+      writeFileSync(join(home, 'shipped', name, 'SKILL.md'), `---\nname: ${name}\ndescription: Shipped ${name}.\n---\n`)
+    }
+    writeFileSync(join(home, 'shipped/manifest.json'), JSON.stringify({ skills: ['plan', 'team-page'] }))
+    skill('team-page')
+    await ipc.installsAtStart()
+    expect(readlinkSync(join(home, '.claude/skills/plan'))).toBe(join(home, '.local/share/bmn/skills/plan'))
+    expect(readFileSync(join(home, '.claude/skills/team-page/SKILL.md'), 'utf8')).toContain('Synthetic skill team-page')
+    const view = (await rulesSnapshot()).skills
+    expect(view.skills.map((entry) => entry.name)).toEqual(['plan', 'team-page'])
+    expect(view.ownLeft).toEqual([{ name: 'team-page', state: 'foreign', detail: 'a folder BMN did not make; left as it is' }])
+  })
 
   it('writes nothing before the owner\'s test, then installs as one transaction that Undo puts back', async () => {
     await approvedAndInstalled()

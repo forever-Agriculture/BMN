@@ -10,6 +10,7 @@ import { basename, dirname } from 'node:path'
 import { APP_NAMES, HARNESSES, RosterError, SKILL_PATTERN, agentsDirectory, appRefusal, canonicalJson, harnessPrivateWork, sha256 } from './agents-roster.mjs'
 import { approvedIfAny } from './agents-state.mjs'
 import { linkTarget } from './safe-config-write.mjs'
+import { installOwnSkills, ownSkillNames } from './agents-own-skills.mjs'
 
 /**
  * The owner keeps his skills in one folder (`~/.claude/skills/` unless the approved team file names
@@ -341,6 +342,9 @@ function installedState(app, skill, records, wanted) {
 export function checkSkills({ environment = process.env, tests = skillsTests(), versions, generation = approvedIfAny(), descriptions = false } = {}) {
   const data = generation?.data ?? null
   const marks = marksOf(data)
+  // BMN's own skills (Story 77.4) are public, as BMN's repository is, unless the team file marks them otherwise.
+  const own = new Set(ownSkillNames(environment))
+  const markOf = (name) => marks.get(name) ?? (own.has(name) ? { id: name, public: true } : undefined)
   const source = sourceSkills(skillsSource(data, environment))
   const records = written()
   const known = new Set(source.skills.map((skill) => skill.name))
@@ -351,7 +355,7 @@ export function checkSkills({ environment = process.env, tests = skillsTests(), 
     if (!app.supported || !source.readable) return { ...app, skills: [] }
     const rows = source.skills.map((skill) => {
       if (!skill.readable) return { name: skill.name, state: 'unreadable', detail: skill.detail }
-      const wanted = eligible(marks.get(skill.name), harness, kind)
+      const wanted = eligible(markOf(skill.name), harness, kind)
       if (app.reads_source) return { name: skill.name, state: wanted ? 'read-directly' : 'exposed', path: skill.path, direct: true }
       // What the path holds is the plan's business; the row carries the state and where.
       return { name: skill.name, ...Object.fromEntries(Object.entries(installedState(app, skill, records, wanted)).filter(([key]) => key !== 'entry')) }
@@ -373,8 +377,9 @@ export function checkSkills({ environment = process.env, tests = skillsTests(), 
     source: { path: source.path, readable: source.readable, ...(source.detail ? { detail: source.detail } : {}) },
     skills: source.skills.map((skill) => ({ name: skill.name, readable: skill.readable, ...(skill.readable ? { hash: skill.hash } : { detail: skill.detail }),
       ...(descriptions ? { description: skill.description ?? '' } : {}),
-      public: marks.get(skill.name)?.public === true, only: marks.get(skill.name)?.only ?? null })),
+      public: markOf(skill.name)?.public === true, only: marks.get(skill.name)?.only ?? null, own: own.has(skill.name) })),
     marked_missing: [...marks.keys()].filter((name) => !known.has(name)),
+    own: installOwnSkills({ source: skillsSource(data, environment), environment, apply: false }).rows,
     apps
   }
 }
@@ -1237,6 +1242,8 @@ export function skillsLoadingAutoPlan({ versions, tests = skillsTests(), environ
 export const SKILLS_USAGE = `Usage: bmn skills check [--json]                    One state per app and per skill; exit 0 only when every supported app has its skills
        bmn skills install [app…] [--plan] [--yes]   Link or copy each app's skills, and remove what an app may no longer have, as one transaction
        bmn skills install --absent [--plan] [--yes] The same, leaving an entry BMN did not write or one changed outside it: what BMN runs by itself
+       bmn skills own [--plan] [--json]             BMN's own skills (plan, team-ask, team-page, web-question, jev-judge) into the skills folder,
+                                                    as links to BMN's copy; what BMN runs by itself at start (Story 77.4)
        bmn skills test <app> [--json]               Owner-run: find where the app reads skills, then whether it lists a skill placed there (no prompt)
        bmn skills test <app> --prompt [--json]      Owner-run: one prompt to that app's provider, to see whether the app hands a test skill to its model
        bmn skills test <app> --auto [--json]        BMN's own run of the first: a new app version needs no press (marked as BMN's)
@@ -1311,6 +1318,16 @@ export async function runSkillsCommand(argv) {
       // An install never reports success while a skill is exposed.
       return result.exposed.length > 0 ? 1 : 0
     }
+    if (action === 'own') {
+      const { options, positionals } = readOptions(rest, { flags: ['json', 'plan'] })
+      asJson = options.json === true
+      if (positionals.length > 0) return usage('skills own takes no arguments')
+      const result = installOwnSkills({ source: skillsSource(approvedIfAny()?.data ?? null), apply: options.plan !== true })
+      if (asJson) out(JSON.stringify(result, null, 2))
+      else if (!result.ok) process.stderr.write(`bmn: ${result.code}: ${result.message}\n`)
+      else out(result.rows.map((row) => `${row.name}: ${row.state}${row.detail ? ` - ${row.detail}` : ''}`).join('\n'))
+      return result.ok ? 0 : 1
+    }
     if (action === 'test') {
       const { options, positionals } = readOptions(rest, { flags: ['json', 'prompt', 'auto'] })
       asJson = options.json === true
@@ -1320,7 +1337,7 @@ export async function runSkillsCommand(argv) {
       out(asJson ? JSON.stringify(result, null, 2) : `${result.harness}: ${result.outcome} - ${result.detail}${result.version ? ` (${result.version})` : ''}`)
       return result.outcome === 'pass' ? 0 : 1
     }
-    return usage(`skills expects check, install or test, not ${action}`)
+    return usage(`skills expects check, install, own or test, not ${action}`)
   } catch (error) {
     if (error instanceof AgentsUsageError) return usage(error.message)
     if (error instanceof SkillsError) {
