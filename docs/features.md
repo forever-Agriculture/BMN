@@ -111,6 +111,9 @@ that multiplexer and may reject pets. Saved output is text only; pet pixels are 
   the terminal, so opening, using and closing it never resizes the terminal or makes the program
   redraw. Use **Bottom**/**Top** to move Find away from a hidden match. Its query,
   selected match and position stay with this mounted session view.
+- **Quick look** (`Ctrl+Shift+E`, the **Project** plate in the pane header, or **Project files…** in
+  the palette) opens the project over the window; the same key or `Escape` closes it and typing goes
+  back to the pane. See [Files and file references](#files-and-file-references).
 - **Copy and paste.** Selecting with the mouse copies. `Ctrl+Shift+C` copies the selection; paste
   with `Ctrl+V`, `Ctrl+Shift+V`, `Shift+Insert` or right-click. Dragging across text also copies when
   a program enables mouse reporting, as Codex does. `Ctrl+Shift+A` selects all.
@@ -391,6 +394,19 @@ session without pressing Enter. Imports are bounded: 250 MiB per file, 10 GiB in
 
 Agents can publish only regular files under their session's working directory or the system
 temporary folder; a symlink that escapes those is refused.
+
+**Quick look** is for the project. `Ctrl+Shift+E`, the **Project** plate beside **Files** in the pane
+header, or **Project files…** in the palette opens one sheet over the window; the window dims behind
+it and no terminal is resized or typed into. The tree starts at the folder the selected session's
+process started in (its stored folder once it stopped, the workspace's folder with no session); when
+that folder lies below a Git work tree's root, **Git root** moves the tree up and **Session folder**
+moves it back. One folder is read when you open it: folders first, then by name, at most 2,000
+entries and a line counting the rest; hidden files are listed, links are marked and not entered, and
+`.git`, `node_modules` and the six generated names are dimmed. ↑ ↓ move, → opens a folder, ← closes it
+or goes to its parent, `Enter` opens a file, typed letters jump to a name (`Escape` clears them),
+`Ctrl+B` folds the tree and `Tab` moves between the tree and the file. A UTF-8 text file of at most
+2 MiB shows with line numbers and grey syntax colour for the common languages; long lines scroll
+sideways. An empty, binary or larger file says what it is, with **Show in Folder** and **Copy path**.
 
 **File references.** `Ctrl+click` a path an agent printed, such as `src/parser.ts:42:7`, or use
 **Open file reference…** in the palette, to see a read-only snapshot of that file at the line and

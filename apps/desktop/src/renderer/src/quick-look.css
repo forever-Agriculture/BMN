@@ -1,0 +1,548 @@
+/* MODULE: quick-look.css - Quick look, direction C of the viewer board: one calm sheet over the window, greys only, gold for the place he came for */
+/* Every grey is derived from the colour mode's own text and ground, so Steel stays cool and Brown warm and all four
+   modes hold: comments keep 4.5:1 and line numbers 4:1 on the code ground (Story 67.1 AC7). */
+.quick-look {
+  --ql-plate: color-mix(in srgb, var(--text) 8%, transparent);
+  --ql-plate-2: color-mix(in srgb, var(--text) 15%, transparent);
+  --ql-text: color-mix(in srgb, var(--text) 92%, var(--ground));
+  --ql-def: var(--text);
+  --ql-literal: var(--text);
+  --ql-name: color-mix(in srgb, var(--text) 92%, var(--ground));
+  --ql-keyword: color-mix(in srgb, var(--text) 76%, var(--ground));
+  --ql-punct: color-mix(in srgb, var(--text) 66%, var(--ground));
+  --ql-comment: color-mix(in srgb, var(--text) 56%, var(--ground));
+  --ql-gutter: color-mix(in srgb, var(--text) 50%, var(--ground));
+  --ql-match: color-mix(in srgb, var(--identity) 30%, transparent);
+  --ql-match-active: color-mix(in srgb, var(--identity) 58%, transparent);
+  width: min(1160px, calc(100vw - 32px));
+  height: min(772px, calc(100dvh - 32px));
+  max-width: none;
+  max-height: none;
+  outline-color: color-mix(in srgb, var(--text) 10%, transparent);
+  background: var(--surface);
+}
+
+.quick-look[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.quick-look kbd {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--ql-plate);
+  color: color-mix(in srgb, var(--text) 80%, transparent);
+  font: 11px/17px var(--font-mono);
+  white-space: nowrap;
+}
+
+/* The top row is the palette's input at find-field size; its switch lights only while the field has focus. */
+.ql-top {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--raised);
+}
+
+.ql-in {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 4px 0 10px;
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--ground);
+}
+
+.ql-in.focus {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 14%, transparent);
+}
+
+.quick-look .ql-in input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  outline: none;
+  color: var(--text);
+  background: transparent;
+  box-shadow: none;
+  font: 13px var(--font-mono);
+}
+
+.quick-look .ql-in input::placeholder {
+  color: var(--faint);
+  font-family: var(--font-chrome);
+}
+
+.ql-seg {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--ql-plate);
+}
+
+.ql-seg > span {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.ql-seg > span.on {
+  color: var(--text);
+  background: var(--ql-plate-2);
+}
+
+.ql-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.ql-left {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: 264px;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.ql-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--hairline);
+  white-space: nowrap;
+}
+
+.ql-root-name {
+  flex: none;
+  color: var(--text);
+  font: 600 11.5px var(--font-mono);
+  letter-spacing: 0.04em;
+}
+
+.ql-root {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font: 11.5px var(--font-mono);
+  text-overflow: ellipsis;
+}
+
+.quick-look .ql-plate {
+  flex: none;
+  height: 22px;
+  margin-left: auto;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--ql-plate);
+  font-size: 11.5px;
+}
+
+.quick-look .ql-plate:hover {
+  background: var(--ql-plate-2);
+}
+
+.ql-typed {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 20px;
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 4px;
+  color: var(--text);
+  background: var(--ql-plate);
+  font: 12px var(--font-mono);
+}
+
+.ql-caret {
+  display: inline-block;
+  width: 1px;
+  height: 13px;
+  margin-left: 1px;
+  background: var(--text);
+}
+
+.ql-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 0;
+  outline: none;
+}
+
+.ql-tree:focus-visible .ql-tr.sel {
+  outline: 1px solid color-mix(in srgb, var(--focus) 30%, transparent);
+  outline-offset: -1px;
+}
+
+/* Folders are a chevron and a heavier name; files are a name. No icons, no colour. */
+.ql-tr {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding-right: 8px;
+  border-left: 2px solid transparent;
+  cursor: default;
+  font: 12px var(--font-mono);
+  white-space: nowrap;
+}
+
+.ql-tr:hover {
+  background: var(--hover);
+}
+
+.ql-tr-chev {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  color: var(--faint);
+}
+
+.ql-nm {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ql-text);
+  text-overflow: ellipsis;
+}
+
+.ql-tr.fold .ql-nm {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.ql-nm i {
+  color: var(--muted);
+  font-style: normal;
+  font-weight: 400;
+}
+
+.ql-link {
+  color: var(--ql-gutter);
+}
+
+.ql-tr.dim .ql-nm,
+.ql-tr.dim .ql-tr-chev {
+  color: var(--ql-gutter);
+}
+
+.ql-tr.sel {
+  border-left-color: var(--identity);
+  background: var(--selected);
+}
+
+.ql-tr.sel .ql-nm {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.ql-tr-more,
+.ql-tr-note {
+  color: var(--ql-gutter);
+  font-family: var(--font-chrome);
+  font-size: 11.5px;
+}
+
+.ql-unavailable,
+.ql-empty,
+.ql-message {
+  padding: 16px 14px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.ql-main {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--ground);
+}
+
+.ql-path {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+  white-space: nowrap;
+}
+
+.ql-eyebrow {
+  flex: none;
+  margin-right: 14px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* The folders are cut from the left so the name always stays. */
+.ql-pth {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  font: 12px var(--font-mono);
+  text-align: left;
+  text-overflow: ellipsis;
+}
+
+.ql-pth bdi {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.ql-pd {
+  color: var(--muted);
+}
+
+.ql-pn {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.ql-pp {
+  color: var(--identity);
+}
+
+.ql-facts {
+  flex: none;
+  padding-left: 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ql-note {
+  flex: none;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--muted);
+  font: 11.5px var(--font-mono);
+}
+
+.ql-facts-block {
+  padding: 16px 14px;
+}
+
+.ql-dl {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 6px 0;
+  margin: 0;
+  font-size: 12px;
+}
+
+.ql-dl dt {
+  color: var(--muted);
+}
+
+.ql-dl dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.ql-mono {
+  font-family: var(--font-mono);
+}
+
+.ql-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.quick-look .ql-button {
+  height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--ql-plate-2);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ql-feedback {
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+/* The file: CodeMirror read-only, its own scroll; long lines scroll sideways, nothing wraps or fades. */
+.ql-code {
+  flex: 1;
+  min-height: 0;
+}
+
+.ql-code .cm-editor {
+  height: 100%;
+  color: var(--ql-text);
+  background: var(--ground);
+  font: 12.5px/20px var(--font-mono);
+  font-variant-ligatures: none;
+}
+
+.ql-code .cm-editor.cm-focused {
+  outline: none;
+}
+
+.ql-code .cm-scroller {
+  padding: 8px 0;
+  font: inherit;
+  line-height: 20px;
+}
+
+.ql-code .cm-content {
+  padding: 0 16px 0 0;
+  caret-color: var(--text);
+}
+
+.ql-code .cm-line {
+  padding: 0 0 0 8px;
+  border-left: 2px solid transparent;
+}
+
+.ql-code .cm-gutters {
+  border: 0;
+  color: var(--ql-gutter);
+  background: var(--ground);
+}
+
+.ql-code .cm-lineNumbers .cm-gutterElement {
+  min-width: 52px;
+  padding: 0 6px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ql-code .cm-cursor {
+  border-left-color: var(--text);
+}
+
+.ql-code .cm-selectionBackground,
+.ql-code .cm-editor.cm-focused .cm-selectionBackground {
+  background: var(--selection);
+}
+
+/* The line he came for: a gold edge on the selected ground, its number at full text. */
+.ql-code .cm-line.ql-target {
+  border-left-color: var(--identity);
+  background: var(--selected);
+}
+
+.ql-syn-def {
+  color: var(--ql-def);
+  font-weight: 600;
+}
+
+.ql-syn-literal {
+  color: var(--ql-literal);
+}
+
+.ql-syn-keyword {
+  color: var(--ql-keyword);
+}
+
+.ql-syn-punct {
+  color: var(--ql-punct);
+}
+
+.ql-syn-comment {
+  color: var(--ql-comment);
+  font-style: italic;
+}
+
+.ql-syn-strong {
+  font-weight: 600;
+}
+
+.ql-syn-emphasis {
+  font-style: italic;
+}
+
+.ql-hints {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 16px;
+  height: 32px;
+  padding: 0 12px;
+  overflow: hidden;
+  border-top: 1px solid var(--hairline);
+  color: var(--muted);
+  background: var(--raised);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.ql-hints > span {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.ql-hints > .ql-hint-right {
+  margin-left: auto;
+}
+
+/* Thin scrollbars as the board draws them: a plate thumb, no arrows. */
+.quick-look :is(.cm-scroller, .ql-tree)::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.quick-look :is(.cm-scroller, .ql-tree)::-webkit-scrollbar-track,
+.quick-look :is(.cm-scroller, .ql-tree)::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.quick-look :is(.cm-scroller, .ql-tree)::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--ql-plate-2);
+  background-clip: padding-box;
+}
+
+.quick-look :is(.cm-scroller, .ql-tree)::-webkit-scrollbar-button {
+  display: none;
+}

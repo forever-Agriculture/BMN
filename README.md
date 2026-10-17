@@ -85,6 +85,7 @@ feature stops. This page sums up the product and how to install it.
 | --- | --- |
 | `Ctrl+Shift+P` | Command palette |
 | `Ctrl+Shift+F` | Search in the terminal output |
+| `Ctrl+Shift+E` | Quick look: open the project over the window, or close it |
 | `Ctrl+Shift+Enter` | Split the view (asks which session opens beside) or close the split |
 | `Ctrl+Tab` | Switch to the other pane |
 | `Ctrl+Shift+Z` | Focus mode |

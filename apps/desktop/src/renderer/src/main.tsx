@@ -51,6 +51,7 @@ import { WorkspacePinsDialog } from './workspace-pins-dialog'
 import { restoreArchive, type ArchiveUndoTarget } from './archive-undo'
 import { conversationBindingPresentation, reportedResumeLine, resumeAvailable } from './conversation-resume'
 import { FileReferenceDialog, type FileReferenceRequest, type FileReferenceSendTarget } from './file-reference-dialog'
+import { QuickLook, type QuickLookRequest } from './quick-look'
 import { FilesPanel } from './files-panel'
 import { HookEventsDialog } from './hook-events-dialog'
 import { ProgressEvidenceDialog } from './progress-evidence-dialog'
@@ -190,6 +191,8 @@ type ShellDialog =
   /** Shows the exact command before Resume starts anything. */
   | { kind: 'resume'; session: SessionRecord; preview: SessionResumePreview }
   | { kind: 'file-reference'; request: FileReferenceRequest }
+  /** Quick look (Epic 67); focus goes back to `returnTo`'s terminal when it closes. */
+  | { kind: 'quick-look'; request: QuickLookRequest; returnTo: string | null; openedFromWorkspaceId: string | null }
   /** The one offer to resume what an update or a quit stopped; every row shows its command. */
   | { kind: 'resume-interrupted'; cohort: InterruptedSessionCohort }
   /** Read-only: what this session's harness reported, for a request that did or did not arrive. */
@@ -359,6 +362,9 @@ function App(): React.JSX.Element {
     if (dialog?.kind === 'workspace-messages' && dialog.openedFromWorkspaceId !== activeWorkspaceId) setDialog(null)
     if (dialog?.kind === 'workspace-pins' && (dialog.openedFromWorkspaceId !== activeWorkspaceId ||
       !workspaces.some(workspace => workspace.workspaceId === dialog.workspaceId && workspace.archivedAt === null))) setDialog(null)
+    if (dialog?.kind === 'quick-look' && dialog.request.source.workspaceId &&
+      (dialog.openedFromWorkspaceId !== activeWorkspaceId ||
+        !workspaces.some(workspace => workspace.workspaceId === dialog.request.source.workspaceId && workspace.archivedAt === null))) setDialog(null)
     if (dialog?.kind === 'file-reference' && dialog.request.workspaceId &&
       (dialog.request.openedFromWorkspaceId !== activeWorkspaceId ||
         !workspaces.some(workspace => workspace.workspaceId === dialog.request.workspaceId && workspace.archivedAt === null))) setDialog(null)
@@ -1234,6 +1240,33 @@ function App(): React.JSX.Element {
     voiceRecording.current?.cancel()
   }, [])
 
+  /**
+   * Opens Quick look over the window (Story 67.1): rooted at the selected session's launch folder, or at the active
+   * workspace's folder when no session is selected. The pane that had focus gets it back when the sheet closes.
+   */
+  const openQuickLook = (open: QuickLookRequest['open'] = null, sessionId: string | null = selectedSessionId): void => {
+    const focused = document.activeElement instanceof HTMLElement
+      ? document.activeElement.closest<HTMLElement>('[data-session-id]')?.dataset.sessionId ?? null : null
+    const record = sessionsRef.current.find((session) => session.sessionId === sessionId && session.archivedAt === null)
+    const workspace = activeWorkspaceId ? workspacesRef.current.find((item) => item.workspaceId === activeWorkspaceId && item.archivedAt === null) : undefined
+    if (!record && !workspace) {
+      brief('Open a workspace to look at its files.')
+      return
+    }
+    setDialog({
+      kind: 'quick-look',
+      request: { source: record ? { sessionId: record.sessionId } : { workspaceId: workspace!.workspaceId }, open },
+      returnTo: focused ?? record?.sessionId ?? null,
+      openedFromWorkspaceId: activeWorkspaceId
+    })
+  }
+
+  const closeQuickLook = (returnTo: string | null): void => {
+    setDialog(null)
+    if (!returnTo) return
+    requestAnimationFrame(() => controllers.current.get(returnTo)?.focus())
+  }
+
   /** Opens the read-only file overlay for this exact session; the reference resolves from its launch directory. */
   const openFileReference = (sessionId: string | null, reference: string, openNow: boolean): void => {
     const record = sessionsRef.current.find((session) => session.sessionId === sessionId)
@@ -1454,6 +1487,7 @@ function App(): React.JSX.Element {
       }
       case 'attention-next': return nextNeedingYou()
       case 'palette': return setDialog({ kind: 'palette' })
+      case 'quick-look': return openQuickLook()
       case 'recent-sessions': return setDialog({ kind: 'recent-sessions', sessionIds: [...recentSessions.current] })
       case 'copy': return copySelection(selectedSessionId)
       case 'paste': return pasteClipboard(selectedSessionId)
@@ -1619,6 +1653,7 @@ function App(): React.JSX.Element {
       command('focus', focusMode ? 'Leave focus mode' : 'Focus mode', () => setFocusMode((value) => !value), { shortcut: SHORTCUT_LABELS['focus-toggle'] }),
       command('search', 'Search terminal output', () => runCommand('search'), { shortcut: SHORTCUT_LABELS.search, disabled: !selectedSessionId || !live[selectedSessionId] }),
       command('files', panel === 'files' ? 'Close files' : 'Show files', () => setPanel(panel === 'files' ? null : 'files')),
+      command('quick-look', 'Project files…', () => openQuickLook(), { shortcut: SHORTCUT_LABELS['quick-look'], context: selectedRecord?.name ?? activeWorkspace?.name, disabled: !selectedRecord && !activeWorkspace }),
       command('details', 'Session details', () => setPanel('details'), { disabled: !selectedRecord }),
       command(`edit-launch-${selectedRecord?.sessionId ?? 'none'}`, 'Edit launch settings', () => {
         const current = sessionsRef.current.find(session => session.sessionId === selectedRecord?.sessionId &&
@@ -2035,6 +2070,7 @@ function App(): React.JSX.Element {
                 onSplit={() => toggleSplit(terminalStartup.sessionId)}
                 onFocusMode={() => setFocusMode((value) => !value)}
                 onFiles={() => setPanel((value) => value === 'files' ? null : 'files')}
+                onProject={() => openQuickLook(null, terminalStartup.sessionId)}
                 onMore={(anchor) => record && openMenu(anchor, `${record.name} actions`, paneMenuEntries(record))}
                 onOpenProgress={() => openProgressDetail(
                   record,
@@ -2579,6 +2615,9 @@ function App(): React.JSX.Element {
           } }] : []
         })}
         onClose={() => setDialog(null)} /> : null}
+      {dialog?.kind === 'quick-look' ? (
+        <QuickLook key={JSON.stringify(dialog.request)} request={dialog.request} onClose={() => closeQuickLook(dialog.returnTo)} />
+      ) : null}
       {dialog?.kind === 'file-reference' ? (
         <FileReferenceDialog
           request={dialog.request}

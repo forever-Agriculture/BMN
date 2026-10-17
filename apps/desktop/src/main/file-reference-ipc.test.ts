@@ -1,6 +1,9 @@
 // MODULE: file-reference-ipc.test.ts - sender checks and argument bounds on the file-reference renderer channels
 import { METHOD_REGISTRY } from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { installFileReferenceIpcHandlers, type FileReferenceIpcActions } from './file-reference-ipc'
 
@@ -144,4 +147,38 @@ it('addresses workspace previews exclusively through the owner window and retain
   expect((await failure(() => read(stranger, { workspaceId: 'w', reference: '/x' }))).code).toBe('UNAUTHORIZED')
   await handlers.get('aiterm:file-reference:show')!(allowed, { path: '/home/me/project/src/a.ts' })
   expect(shown).toEqual(['/home/me/project/src/a.ts'])
+
+})
+
+describe('Quick look IPC', () => {
+  it('forwards Quick look\'s source and path only, refuses another sender, and lets a shown file be revealed (Story 67.1)', async () => {
+    const { handlers, requests, shown } = install()
+    await handlers.get('aiterm:quick-look:root')!(allowed, { sessionId: 'session-1', extra: 'ignored' })
+    await handlers.get('aiterm:quick-look:list')!(allowed, { workspaceId: 'workspace-1', folder: '/home/me/project/src' })
+    await handlers.get('aiterm:quick-look:read')!(allowed, { sessionId: 'session-1', path: '/home/me/project/src/a.ts', line: 4 })
+    expect(requests).toEqual([
+      { method: METHOD_REGISTRY.quickLookRoot, params: { sessionId: 'session-1' } },
+      { method: METHOD_REGISTRY.quickLookList, params: { workspaceId: 'workspace-1', folder: '/home/me/project/src' } },
+      { method: METHOD_REGISTRY.quickLookRead, params: { sessionId: 'session-1', path: '/home/me/project/src/a.ts' } }
+    ])
+    await handlers.get('aiterm:file-reference:show')!(allowed, { path: '/home/me/project/src/a.ts' })
+    expect(shown).toEqual(['/home/me/project/src/a.ts'])
+    for (const channel of ['aiterm:quick-look:root', 'aiterm:quick-look:list', 'aiterm:quick-look:read']) {
+      expect(await failure(() => handlers.get(channel)!(stranger, { sessionId: 'session-1', folder: '/a', path: '/a' }))).toMatchObject({ code: 'UNAUTHORIZED' })
+    }
+    expect(await failure(() => handlers.get('aiterm:quick-look:read')!(allowed, { sessionId: 's', workspaceId: 'w', path: '/a' }))).toMatchObject({ code: 'INVALID_ARGUMENT' })
+    expect(await failure(() => handlers.get('aiterm:quick-look:list')!(allowed, { sessionId: 's', folder: 'relative/src' }))).toMatchObject({ code: 'INVALID_ARGUMENT' })
+    expect(await failure(() => handlers.get('aiterm:quick-look:read')!(allowed, { sessionId: 's', path: '/a/../etc/passwd' }))).toMatchObject({ code: 'INVALID_ARGUMENT' })
+  })
+
+  it('has no control-socket method and no bmn command that reaches Quick look (Story 67.1)', () => {
+    const here = dirname(fileURLToPath(import.meta.url))
+    const server = readFileSync(join(here, '..', 'utility', 'control-server.ts'), 'utf8')
+    const cli = readFileSync(join(here, '..', '..', 'bin', 'bmn'), 'utf8')
+    for (const text of [server, cli]) {
+      expect(text).not.toMatch(/quick\.look|quickLook/u)
+    }
+    const methods = Object.entries(METHOD_REGISTRY).filter(([, method]) => method.startsWith('quick.look.')).map(([name]) => name)
+    expect(methods).toEqual(['quickLookRoot', 'quickLookList', 'quickLookRead'])
+  })
 })

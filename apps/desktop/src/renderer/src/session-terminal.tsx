@@ -126,6 +126,8 @@ export function SessionTerminal(props: {
   onSplit(): void
   onFocusMode(): void
   onFiles(): void
+  /** Quick look rooted at this pane's session (Story 67.1). */
+  onProject(): void
   onMore(anchor: HTMLElement): void
   /** The strip's state word: opens the progress detail for this pane's own observation. */
   onOpenProgress(anchor: HTMLElement): void
@@ -637,6 +639,9 @@ export function SessionTerminal(props: {
           <button type="button" aria-pressed={props.focusMode} title={[`Focus (${SHORTCUT_LABELS['focus-toggle']})`, props.focusCue].filter(Boolean).join(' · ')} onClick={props.onFocusMode}>
             <Icon name="focus" /><span className="button-label">Focus</span>
             {props.focusCue ? <span className="status-dot needs-you" aria-hidden="true" /> : null}
+          </button>
+          <button type="button" aria-label="Project" title={`Project files (${SHORTCUT_LABELS['quick-look']})`} onClick={props.onProject}>
+            <Icon name="project" /><span className="button-label">Project</span>
           </button>
           <button type="button" aria-label="Files" aria-pressed={props.filesOpen} onClick={props.onFiles}>
             <Icon name="files" /><span className="button-label">Files</span>

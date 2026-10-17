@@ -210,6 +210,10 @@ describe('renderer acceptance hook', () => {
           modelRestored: true
         }
       },
+      quickLookFlow: {
+        opened: true, focusInTree: true, rootShown: 'work', rows: ['refs'], pathRow: 'refs/src/quick-look.ts',
+        highlighted: { keyword: 1, comment: 1, def: 1, lineNumbers: 5 }, focusInFile: true, closed: true, refitsBefore: 0, refitsAfter: 0
+      },
       fileReferenceFlow: {
         launchDirectory: '/work',
         palette: {

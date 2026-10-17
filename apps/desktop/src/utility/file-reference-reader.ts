@@ -110,9 +110,46 @@ export async function readFileReference(
       return unavailable('missing', `${base.kind === 'launch-directory' ? 'The launch directory' : 'The chosen folder'} no longer exists.`)
     }
   }
+  const read = await readLocalTextFile(target.resolvedPath, options)
+  if (read.status === 'unavailable') return unavailable(read.reason, read.message, read.canonicalPath)
+  return {
+    ...target,
+    status: 'ready',
+    canonicalPath: read.canonicalPath,
+    content: read.content,
+    byteLength: read.byteLength,
+    lineCount: read.lineCount,
+    modifiedAt: read.modifiedAt,
+    readAt: read.readAt
+  }
+}
+
+export type LocalTextFileRead =
+  | { status: 'ready'; canonicalPath: string; content: string; byteLength: number; lineCount: number; modifiedAt: string; readAt: string }
+  | {
+      status: 'unavailable'
+      reason: FileReferenceUnavailableReason
+      message: string
+      canonicalPath: string | null
+      /** Known when the file was opened and is a regular file: what Quick look shows for a binary or too large file. */
+      facts: { byteLength: number; modifiedAt: string } | null
+    }
+
+/**
+ * Reads the file at an absolute path the way a reference is read: symlinks resolved first, opened without following
+ * a final symlink and without blocking, checked on the open handle, refused over `maxBytes`, with a NUL byte or
+ * invalid UTF-8, and refused when the canonical path no longer names the file that was read.
+ */
+export async function readLocalTextFile(resolvedPath: string, options: FileReferenceReaderOptions = {}): Promise<LocalTextFileRead> {
+  let facts: { byteLength: number; modifiedAt: string } | null = null
+  const unavailable = (
+    reason: FileReferenceUnavailableReason,
+    message: string,
+    canonicalPath: string | null = null
+  ): LocalTextFileRead => ({ status: 'unavailable', reason, message, canonicalPath, facts })
   let canonicalPath: string
   try {
-    canonicalPath = await realpath(target.resolvedPath)
+    canonicalPath = await realpath(resolvedPath)
   } catch (error) {
     const code = errorCode(error)
     if (code === 'EACCES' || code === 'EPERM') return unavailable('unreadable', 'Permission to reach this file was denied.')
@@ -134,6 +171,7 @@ export async function readFileReference(
   try {
     const stats = await handle.stat()
     if (!stats.isFile()) return unavailable('not-a-file', `This path is ${kindOf(stats)}; only regular files are shown.`, canonicalPath)
+    facts = { byteLength: stats.size, modifiedAt: stats.mtime.toISOString() }
     if (stats.size > maxBytes) {
       return unavailable('too-large', `The file is larger than ${sizeLabel(maxBytes)}; open it in an editor.`, canonicalPath)
     }
@@ -162,7 +200,6 @@ export async function readFileReference(
       return unavailable('binary', 'This file is not UTF-8 text; only text files are shown.', canonicalPath)
     }
     return {
-      ...target,
       status: 'ready',
       canonicalPath,
       content,

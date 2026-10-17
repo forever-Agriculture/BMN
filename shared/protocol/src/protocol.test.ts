@@ -104,6 +104,9 @@ describe('protocol surface', () => {
         'file.reference.paste',
         'file.reference.search',
         'file.reference.search.cancel',
+        'quick.look.root',
+        'quick.look.list',
+        'quick.look.read',
         'attention.list',
         'attention.seen',
         'attention.resolve',
@@ -148,8 +151,9 @@ describe('protocol surface', () => {
     // owner's Paste, Pause and pair Resume of messages and the Resume of turn recording (83 before); Story 75.5 the
     // owner's review and save of a handoff (79 before); Story 75.7 the separate check of a backup, which an export now
     // runs on its own copy (77 before); Story 75.9 the owner's hooks check, which BMN's start now does with an install
-    // (76 before). Story 76.3 adds the owner's away state: read, change, and its summary shown (75 before).
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(79)
+    // (76 before). Story 76.3 adds the owner's away state: read, change, and its summary shown (75 before). Story 67.1
+    // adds Quick look's root, folder listing and file read (79 before).
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(82)
   })
 
   it('exports the initial stable error codes', () => {

@@ -37,6 +37,7 @@ import { CompanionService, UNROUTED } from './companion-service'
 import type { AnswerRequest } from './remote-answer'
 import { DatabaseClientError, DatabaseWorkerClient } from './database-client'
 import { readFileReference } from './file-reference-reader'
+import { listQuickLookFolder, quickLookRoot, quickLookSourceFolder, readQuickLookFile } from './quick-look'
 import { inspectRepositoryIdentity } from './repository-identity'
 import { readDevAutoRuns } from './dev-auto-runs'
 import { isDevAutoRunsParams } from '@bmn/protocol'
@@ -547,6 +548,26 @@ async function start(): Promise<void> {
     })()
   }
 
+  /**
+   * Quick look's source (Story 67.1): a session's launch folder, its stored folder once stopped, or a live workspace's
+   * folder. Every Quick look call names one, so a closed session or an archived workspace reads nothing more.
+   */
+  async function quickLookFolderFor(params: Record<string, unknown>): Promise<string | null> {
+    if ((params.sessionId !== undefined) === (params.workspaceId !== undefined)) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'Choose exactly one source session or workspace')
+    }
+    if (params.workspaceId !== undefined) {
+      const workspaceId = stringValue(params, 'workspaceId')
+      const workspace = (await database.listWorkspaces(true)).find(record => record.workspaceId === workspaceId && record.archivedAt === null)
+      if (!workspace) throw new HostControlError(ERROR_CODES.notFound, 'The source workspace is unavailable')
+      return quickLookSourceFolder({ kind: 'workspace', folder: workspace.defaultCwd ?? null })
+    }
+    const sessionId = stringValue(params, 'sessionId')
+    const session = await findStoredSession(database, sessionId)
+    if (!session) throw new HostControlError(ERROR_CODES.notFound, 'The source session no longer exists')
+    return quickLookSourceFolder({ kind: 'session', liveLaunchDirectory: manager.liveLaunchDirectory(sessionId) ?? null, storedCwd: session.cwd })
+  }
+
   async function route(request: RpcRequest): Promise<unknown> {
     if (!handshaken && request.method !== METHOD_REGISTRY.hello) {
       throw new HostControlError(
@@ -838,6 +859,14 @@ async function start(): Promise<void> {
           },
           typeof params.viewEpoch === 'string' ? params.viewEpoch : undefined
         )
+      case METHOD_REGISTRY.quickLookRoot:
+        return quickLookRoot(await quickLookFolderFor(params))
+      case METHOD_REGISTRY.quickLookList:
+        await quickLookFolderFor(params)
+        return listQuickLookFolder(stringValue(params, 'folder'))
+      case METHOD_REGISTRY.quickLookRead:
+        await quickLookFolderFor(params)
+        return readQuickLookFile(stringValue(params, 'path'))
       case METHOD_REGISTRY.fileReferenceRead: {
         if ((params.sessionId !== undefined) === (params.workspaceId !== undefined)) {
           throw new HostControlError(ERROR_CODES.invalidArgument, 'Choose exactly one source session or workspace')

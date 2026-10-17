@@ -26,7 +26,7 @@ const requiredPhases = [
   'repositoryLaunch', 'checkoutPeers', 'graceful', 'quietSidebarAcceptance', 'interruptedSidebarAcceptance',
   'subagentAcceptance', 'repeatAcceptance', 'agentHandoff', 'openCodeAcceptance',
   'hiddenPaneSize', 'inactiveFollowingOutputLayoutPuts', 'inactiveFollowingOutputCaptured',
-  'stoppedStaleProgress', 'attentionTriage', 'filesWithoutHandoffs', 'fileReferenceFlow', 'fileReferenceWire',
+  'stoppedStaleProgress', 'attentionTriage', 'filesWithoutHandoffs', 'fileReferenceFlow', 'quickLookFlow', 'fileReferenceWire',
   'voiceFlow', 'launchBackgroundChoiceRecorded', 'registeredInvokeChannels', 'formCreatedSession',
   'treeSelectionLayoutPut', 'rendererLaunchUnavailable',
   'rendererStoppedPanelLabel', 'rendererLiveExitLabel', 'rendererLiveExitSidebarWord', 'closePrompt',

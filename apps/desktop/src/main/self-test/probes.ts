@@ -1,4 +1,5 @@
 // MODULE: probes.ts - DOM probes the main-process self-test runs in the application window
+import type { QuickLookFlowProbe } from '../../renderer/src/quick-look-probe'
 import type {
   BrowserWindow
 } from 'electron'
@@ -110,6 +111,8 @@ export interface RendererIntegrationProbe {
   /** Story 75.5: a handoff delivers itself, so the Files panel holds no handoff section or form. */
   filesWithoutHandoffs: boolean
   fileReferenceFlow: FileReferenceFlowProbe
+  /** Story 67.1: Quick look opened by key, the tree walked, a file coloured, closed with no refit. */
+  quickLookFlow: QuickLookFlowProbe
   voiceFlow: VoiceFlowProbe
 }
 

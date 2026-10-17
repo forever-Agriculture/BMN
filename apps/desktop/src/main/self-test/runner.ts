@@ -891,6 +891,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       Array.from({ length: 60 }, (_, index) => index === 41 ? 'FILE-REFERENCE-TARGET line 42' : `line ${index + 1}`)
         .join('\n') + '\n'
     )
+    // Story 67.1: Quick look opens this TypeScript file from its tree and colours it.
+    writeFileSync(join(fileReferenceRoot, 'src', 'quick-look.ts'),
+      "// Quick look self-test fixture\nexport interface Token {\n  kind: string\n}\nexport const answer: number = 42\n")
     const searchRoot = join(isolatedCwd, 'file-search-fixture')
     mkdirSync(searchRoot, { recursive: true })
     for (let index = 0; index < 120; index += 1) {
@@ -1265,6 +1268,14 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     }
     if (preloadProbe.filesWithoutHandoffs !== true) {
       throw new Error('the Files panel still offers a handoff section or form (Story 75.5)')
+    }
+    const quickLookFlow = preloadProbe.quickLookFlow
+    if (!quickLookFlow.opened || !quickLookFlow.focusInTree || !quickLookFlow.rows.includes('refs') ||
+      !quickLookFlow.pathRow.includes('refs/src/quick-look.ts') || !quickLookFlow.pathRow.includes('TypeScript · 5 lines') ||
+      quickLookFlow.highlighted.keyword < 1 || quickLookFlow.highlighted.comment < 1 || quickLookFlow.highlighted.def < 1 ||
+      quickLookFlow.highlighted.lineNumbers < 5 || !quickLookFlow.focusInFile || !quickLookFlow.closed ||
+      quickLookFlow.refitsAfter !== quickLookFlow.refitsBefore) {
+      throw new Error(`Quick look did not open, colour a file and close without a refit: ${JSON.stringify(quickLookFlow)}`)
     }
     const fileReferenceFlow = preloadProbe.fileReferenceFlow
     const referencedFile = realpathSync(join(fileReferenceRoot, 'src', 'parser.ts'))
@@ -5266,6 +5277,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         transcriptions: taps.voiceTranscriptions,
         persistedAfterRestart: voicePersistedAfterRestart
       },
+      quickLookFlow: { rows: preloadProbe.quickLookFlow.rows.length, highlighted: preloadProbe.quickLookFlow.highlighted, refits: preloadProbe.quickLookFlow.refitsAfter - preloadProbe.quickLookFlow.refitsBefore },
       fileReferenceFlow: {
         ...preloadProbe.fileReferenceFlow,
         shownPaths: [...taps.shownFileReferences],

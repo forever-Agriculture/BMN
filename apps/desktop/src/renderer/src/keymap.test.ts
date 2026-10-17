@@ -1,6 +1,6 @@
 // MODULE: keymap.test.ts - app shortcut resolution and terminal key passthrough
 import { describe, expect, it } from 'vitest'
-import { isModifierOnly, resolveShortcut, type ShortcutEvent } from './keymap'
+import { SHORTCUT_LABELS, isModifierOnly, resolveShortcut, type ShortcutEvent } from './keymap'
 
 const key = (partial: Partial<ShortcutEvent>): ShortcutEvent => ({
   key: '',
@@ -26,6 +26,9 @@ describe('app keymap', () => {
     expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyZ', key: 'Z' }))).toBe('focus-toggle')
     expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'Backslash', key: '|' }))).toBe('send-next-key')
     expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'Space', key: ' ' }))).toBe('voice-toggle')
+    // Story 67.1: Quick look opens and closes on Ctrl+Shift+E, which no longer reaches the terminal program.
+    expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyE', key: 'E' }))).toBe('quick-look')
+    expect(SHORTCUT_LABELS['quick-look']).toBe('Ctrl Shift E')
   })
 
   it('works on a Cyrillic layout because chords use the physical key', () => {

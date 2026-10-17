@@ -44,6 +44,12 @@ import type {
   AwaySummaryPayload,
   DraftSendExpectation,
   FileReferenceReadParams,
+  QuickLookListParams,
+  QuickLookListResult,
+  QuickLookReadParams,
+  QuickLookReadResult,
+  QuickLookRootResult,
+  QuickLookSource,
   FileReferenceReadResult,
   FileReferencePasteParams,
   FileReferencePasteReceipt,
@@ -249,6 +255,10 @@ export interface AiTerminalBridge {
   chooseFileReferenceBase(): Promise<string | null>
   /** Reveals the displayed file in the system file manager without opening it. */
   showFileReference(path: string): Promise<{ shown: true }>
+  /** Quick look (Story 67.1): the root for a session or workspace, one folder's entries, and one file's text or facts. */
+  quickLookRoot(source: QuickLookSource): Promise<QuickLookRootResult>
+  listQuickLookFolder(params: QuickLookListParams): Promise<QuickLookListResult>
+  readQuickLookFile(params: QuickLookReadParams): Promise<QuickLookReadResult>
   listAttention(): Promise<AttentionRecord[]>
   markAttentionSeen(requestId: string): Promise<AttentionRecord>
   resolveAttention(

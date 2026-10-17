@@ -62,6 +62,12 @@ import {
   type AwaySummaryPayload,
   type DraftSendExpectation,
   type FileReferenceReadParams,
+  type QuickLookListParams,
+  type QuickLookListResult,
+  type QuickLookReadParams,
+  type QuickLookReadResult,
+  type QuickLookRootResult,
+  type QuickLookSource,
   type FileReferenceReadResult,
   type FileReferencePasteParams,
   type FileReferencePasteReceipt,
@@ -577,6 +583,15 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   showFileReference(path: string): Promise<{ shown: true }> {
     return invokeBridge('aiterm:file-reference:show', { path })
+  },
+  quickLookRoot(source: QuickLookSource): Promise<QuickLookRootResult> {
+    return invokeBridge('aiterm:quick-look:root', source)
+  },
+  listQuickLookFolder(params: QuickLookListParams): Promise<QuickLookListResult> {
+    return invokeBridge('aiterm:quick-look:list', params)
+  },
+  readQuickLookFile(params: QuickLookReadParams): Promise<QuickLookReadResult> {
+    return invokeBridge('aiterm:quick-look:read', params)
   },
   listAttention(): Promise<AttentionRecord[]> {
     return invokeBridge('aiterm:attention:list', {})

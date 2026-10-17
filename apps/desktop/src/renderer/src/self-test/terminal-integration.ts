@@ -4,6 +4,7 @@ import { isBridgeError } from '../bridge-error'
 import { splitArgv } from '../launch-template'
 import type { TerminalIntegrationProbe, TerminalTestHandle } from '../test-hook'
 import { openReferenceFromPane, runEpic27FileReferenceIntegration, runFileReferenceIntegration } from './file-reference-self-test'
+import { runQuickLookIntegration } from './quick-look-self-test'
 import { runProgressEvidenceIntegration } from './progress-evidence-self-test'
 import { runVoiceIntegration } from './voice-self-test'
 
@@ -164,6 +165,9 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
     refitCount: () => handle.refitCount()
   })
   console.warn('[BMN] renderer behavioural integration: file references complete')
+  console.warn('[BMN] renderer behavioural integration: Quick look started')
+  const quickLookFlow = await runQuickLookIntegration({ refitCount: () => handle.refitCount() })
+  console.warn('[BMN] renderer behavioural integration: Quick look complete')
   // The inspector lives in the details panel, opened the way the owner opens it.
   const moreButton = handle.section.current?.querySelector<HTMLButtonElement>('button[data-action="more"]')
   if (!moreButton) throw new Error('the pane More button was not rendered')
@@ -464,6 +468,7 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
     hiddenPaneSize: { shown: shownSize, hidden: hiddenSize },
     filesWithoutHandoffs,
     fileReferenceFlow,
+    quickLookFlow,
     voiceFlow,
     attentionTriage: {
       responseTitles,

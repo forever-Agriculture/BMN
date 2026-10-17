@@ -1,4 +1,4 @@
-// MODULE: file-reference-ipc.ts - renderer channels to read a referenced file, choose a base folder and show the file
+// MODULE: file-reference-ipc.ts - renderer channels to read a referenced file, choose a base folder, show the file, and Quick look's reads
 import { isAbsolute, normalize } from 'node:path'
 import {
   ERROR_CODES,
@@ -10,7 +10,11 @@ import {
   type FileReferenceSearchParams,
   type FileReferenceSearchResult,
   type FileReferenceReadResult,
-  type ProtocolMethod
+  type ProtocolMethod,
+  type QuickLookListResult,
+  type QuickLookReadResult,
+  type QuickLookRootResult,
+  type QuickLookSource
 } from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
 import { MainIpcError } from './workspace-ipc'
@@ -93,6 +97,36 @@ export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, 
   })
 
   handle('aiterm:file-reference:choose-base', (event) => actions.chooseFolder(event))
+
+  // Quick look (Story 67.1) reaches the utility only through these window channels: no control-socket method and no
+  // `bmn` command names them. Each names its source, which the utility checks is still there.
+  const quickLookSource = (input: Record<string, unknown>): QuickLookSource => {
+    if ((input.sessionId !== undefined) === (input.workspaceId !== undefined)) invalid('Choose exactly one source session or workspace')
+    return input.workspaceId === undefined ? { sessionId: boundedText(input.sessionId, 'The source session') }
+      : { workspaceId: boundedText(input.workspaceId, 'The source workspace') }
+  }
+
+  handle('aiterm:quick-look:root', (_event, params) =>
+    actions.client().request<QuickLookRootResult>(METHOD_REGISTRY.quickLookRoot, quickLookSource(objectParams(params))))
+
+  handle('aiterm:quick-look:list', (_event, params) => {
+    const input = objectParams(params)
+    return actions.client().request<QuickLookListResult>(METHOD_REGISTRY.quickLookList, {
+      ...quickLookSource(input), folder: displayedFilePath(input.folder)
+    })
+  })
+
+  handle('aiterm:quick-look:read', (event, params) => {
+    const input = objectParams(params)
+    return actions.client().request<QuickLookReadResult>(METHOD_REGISTRY.quickLookRead, {
+      ...quickLookSource(input), path: displayedFilePath(input.path)
+    }).then((result) => {
+      // A file shown as text, or by its facts, may be revealed in its folder, as the preview's may.
+      if (result.status === 'ready' || result.facts) remember(event.sender.id, result.canonicalPath ?? result.path)
+      return result
+    })
+  })
+
 
   handle('aiterm:file-reference:show', (event, params) => {
     const path = displayedFilePath(objectParams(params).path)
