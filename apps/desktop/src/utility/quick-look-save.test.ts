@@ -124,6 +124,47 @@ describe('Save', () => {
     }
   })
 
+  it('refuses when the file\'s mode or group changes between the read and the rename, and keeps the new mode', async () => {
+    const root = project({ 'c.json': '{}' })
+    const path = join(root, 'c.json')
+    chmodSync(path, 0o644)
+    const result = await save(root, path, `{"k": "${CANARY}"}`, { beforeRename: () => chmodSync(path, 0o600) })
+    expect(result).toEqual({ status: 'changed' })
+    expect(statSync(path).mode & 0o7777).toBe(0o600)
+    expect(readFileSync(path, 'utf8')).toBe('{}')
+    expect(extra(root, 'c.json')).toEqual([])
+  })
+
+  it('leaves no file holding the new text when the folder is moved or locked before the rename', async () => {
+    const holds = (folder: string): string[] => readdirSync(folder).filter((name) => readFileSync(join(folder, name), 'utf8').includes(CANARY))
+    const outer = project()
+    mkdirSync(join(outer, 'app'))
+    writeFileSync(join(outer, 'app', '.env'), 'A=1\n', { mode: 0o600 })
+    const moved = await save(outer, join(outer, 'app', '.env'), `A=${CANARY}\n`, { beforeRename: () => renameSync(join(outer, 'app'), join(outer, 'moved')) })
+    expect(moved.status).not.toBe('saved')
+    expect(holds(join(outer, 'moved'))).toEqual([])
+    // The emptied file the moved folder still holds is named, never left unsaid.
+    expect(moved).toMatchObject({ status: 'failed', message: expect.stringMatching(/an emptied staging file \.\.env\.bmn-save-[0-9a-f-]+\.tmp could not be removed$/u) })
+    expect(JSON.stringify(moved)).not.toContain(CANARY)
+
+    const root = project({ '.env': 'A=1\n' })
+    const path = join(root, '.env')
+    const locked = await save(root, path, `A=${CANARY}\n`, { beforeRename: () => chmodSync(root, 0o500) })
+    chmodSync(root, 0o700)
+    expect(locked.status).toBe('failed')
+    expect(holds(root)).toEqual([])
+    expect(readFileSync(path, 'utf8')).toBe('A=1\n')
+  })
+
+  it('refuses a file whose bytes on disk are not UTF-8, even with their digest', async () => {
+    const root = project()
+    const path = join(root, 'a.json')
+    writeFileSync(path, Buffer.from([0x7b, 0x22, 0x61, 0x22, 0x3a, 0x22, 0xff, 0x22, 0x7d]))
+    expect(await save(root, path, '{"a": "b"}')).toEqual({ status: 'failed', message: 'Could not save · the file is not valid UTF-8 text' })
+    expect(readFileSync(path)).toEqual(Buffer.from([0x7b, 0x22, 0x61, 0x22, 0x3a, 0x22, 0xff, 0x22, 0x7d]))
+    expect(extra(root, 'a.json')).toEqual([])
+  })
+
   it('names each refusal in words, keeps no file beside it and never holds the text', async () => {
     const root = project({ '.env': 'A=1\n', 'notes.md': 'x\n' })
     const path = join(root, '.env')

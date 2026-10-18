@@ -3,8 +3,8 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { Text, type ChangeSet } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { quickLookFileType, quickLookName } from '@bmn/protocol'
-import { draftChanges, lineSummary, maskField, rebaseConfigDraft } from './quick-look-config-edit'
-import { createConfigEditor, draftDirty, draftMarks, maskOnCaretLine, maskedDraft, showConfigValue } from './quick-look-config-view'
+import { draftChanges, lineSummary, maskField, rebaseConfigDraft, type Mask } from './quick-look-config-edit'
+import { createConfigEditor, draftDirty, draftMarks, freezeConfig, maskOnCaretLine, maskedDraft, showConfigValue } from './quick-look-config-view'
 import { REVEAL_SECONDS, quickLookSecretRanges } from './quick-look-secrets'
 import { checkSyntax, syntaxWords, type ConfigFormat, type SyntaxVerdict } from './quick-look-syntax'
 
@@ -41,6 +41,8 @@ export const ConfigEditor = forwardRef<ConfigEditorHandle, {
   format: ConfigFormat
   lineEnding: '\n' | '\r\n'
   focus: boolean
+  /** A Save of the draft is under way: it takes no edits until the answer. */
+  frozen: boolean
   onDraft(state: ConfigDraftState): void
   onNote(words: string): void
   /** A value is shown for its ten seconds, or no longer. */
@@ -91,18 +93,16 @@ export const ConfigEditor = forwardRef<ConfigEditorHandle, {
   }
 
   /** Builds the view on a text, with a carried draft's history of edits when there is one. */
-  const mount = (content: string, carried?: { original: Text; changes: ChangeSet; masks: ReadonlyArray<readonly [number, number]> }): EditorView | null => {
+  const mount = (content: string, carried?: { original: Text; changes: ChangeSet; masks: readonly Mask[] }): EditorView | null => {
     if (!host.current) return null
     view.current?.destroy()
     const type = quickLookFileType(props.path)
     // A carried draft keeps its masks, and whatever the other program wrote is masked as any value is.
-    const found = quickLookSecretRanges(props.path, props.canonicalPath, content)
-    const ranges = carried
-      ? [...carried.masks, ...found.filter(([from, to]) => !carried.masks.some(([maskFrom, maskTo]) => from < maskTo && to > maskFrom))].sort((a, b) => a[0] - b[0])
-      : found
+    const ranges = quickLookSecretRanges(props.path, props.canonicalPath, content)
     const created = createConfigEditor(host.current, {
       content, format: props.format, language: type.language, ranges, label: `${quickLookName(props.path)}, editing`,
-      ...(carried ? { carried: { original: carried.original, changes: carried.changes } } : {}),
+      find: (text) => quickLookSecretRanges(props.path, props.canonicalPath, text),
+      ...(carried ? { carried } : {}),
       onUpdate: (update) => {
         if (!update.docChanged) return
         if (update.transactions.some((tr) => tr.isUserEvent('input.paste'))) callbacks.current.onNote('Paste, masked')
@@ -135,6 +135,10 @@ export const ConfigEditor = forwardRef<ConfigEditorHandle, {
     if (props.focus) view.current?.focus()
   }, [props.focus])
 
+  useEffect(() => {
+    if (view.current) freezeConfig(view.current, props.frozen)
+  }, [props.frozen])
+
   useImperativeHandle(ref, () => ({
     // The editor splits a paste at any line break; the saved text ends every line as the file does.
     text: () => view.current?.state.doc.sliceString(0, undefined, props.lineEnding) ?? '',
@@ -156,7 +160,7 @@ export const ConfigEditor = forwardRef<ConfigEditorHandle, {
       if (!carried) return false
       hide()
       const next = mount(carried.text.toString(), {
-        original: Text.of(latest.split('\n')), changes: carried.changes, masks: carried.masks.map((mask) => [mask.from, mask.to] as const)
+        original: Text.of(latest.split('\n')), changes: carried.changes, masks: carried.masks
       })
       next?.focus()
       return true

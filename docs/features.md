@@ -484,14 +484,16 @@ it holds only letters, digits and `_ - . / : = + @ %`, in single quotes when it 
 and is refused otherwise ("edit it in the terminal"). Nothing is written before **Save** (`Ctrl+S`);
 the bar names the full path and what changed, and the tree marks the file with a dot. Save checks every
 rule above again and that the file still holds the bytes it read; then it writes a private file in the
-same folder with the file's owner, group and mode, flushes it, checks once more and renames it over
-the file, flushes the folder and reads the result back. Only the changed values and added lines
+same folder with the file's owner, group and mode, flushes it, checks once more (a mode or group changed
+meanwhile blocks it too) and renames it over the file, flushes the folder and reads the result back. A Save
+that stops before the rename empties that private file and removes it; one it cannot remove is named. While
+a Save is under way the draft takes no edits. Only the changed values and added lines
 differ: comments, order, blank lines, line endings and the final newline stay as they were. A file
 another program changed gives "Changed on disk · Save blocked" with **Review latest** (the file as it is
 now, your edits kept on it) and **Keep editing**; any other refusal names its reason and keeps your
 edits. No backup is kept. A write by another program in the instant between that last check and the
 rename is lost. With unsaved edits, `Escape`, `Ctrl+Shift+E`, opening another file, changing the root,
-closing the window and Quit each ask first: **Save**, **Discard**, **Keep editing**, with Keep editing in
+**Send to session…**, closing the window and Quit each ask first: **Save**, **Discard**, **Keep editing**, with Keep editing in
 focus. Your edits stay in memory and are dropped when the file is closed; no value is logged or kept
 anywhere but the file.
 
@@ -505,7 +507,10 @@ counts changed, added and removed lines. A hidden value stays a plate of dots ov
 one piece: the caret steps over it, typing or pasting on it replaces the whole value as a double-quoted string
 with the format's escapes, Backspace or Delete leaves an empty string, and a multi-line value is not replaced
 ("edit it in the terminal"). A pasted single line of 8 or more characters with no space lands masked and reads
-"Pasted" with its length; the footer says "Paste, masked". 300 ms after typing stops, the format's own parser
+"Pasted" with its length; the footer says "Paste, masked". Values a paste brings in that the file's own rule
+would hide are hidden too, and a pasted line replaced later is replaced where it stands. A copy or cut carries
+"[secret hidden]" in place of a hidden value (with nothing selected, the caret's whole line), and a selection
+holding one is not dragged. 300 ms after typing stops, the format's own parser
 reads the draft (JSON, and JSONC with its comments blanked, by the platform; YAML by the editor's own parser;
 TOML by smol-toml) and a line says
 "Syntax valid" or, for example, "Invalid JSONC · line 14: unexpected comma"; it says nothing about whether the

@@ -18,6 +18,7 @@ import {
   refusedEdit,
   valueSpan
 } from './quick-look-config-edit'
+import { maskedDraft } from './quick-look-config-view'
 import { checkSyntax, type ConfigFormat } from './quick-look-syntax'
 
 const CANARY = 'madeupQL68canary0123456789'
@@ -127,6 +128,60 @@ describe('a hidden value in a config draft', () => {
     const redone = command(undone, redo)
     expect(redone.doc.toString()).toBe(`{"apiKey": "${CANARY}"}`)
     expect(masked(redone)).toEqual([CANARY])
+  })
+})
+
+describe('a paste or a selection that meets more than one value', () => {
+  const finder = (path: string) => (text: string) => secretRanges(path, text)
+  const withFinder = (format: ConfigFormat, path: string, text: string): EditorState =>
+    EditorState.create({ doc: text, extensions: [history(), configMasks(format, secretRanges(path, text), finder(path)), draftChanges] })
+
+  it('masks what a select-all paste brings in, by the file\'s rule and the paste rule, through undo and redo', () => {
+    const json = '{\n  "apiKey": "madeupOldValue123",\n  "token": "madeupOldToken456"\n}\n'
+    const state = withFinder('json', '/p/a.json', json)
+    const one = act(state, { changes: { from: 0, to: json.length, insert: `{"token":"${CANARY}"}` }, userEvent: 'input.paste' }).state
+    expect(one.doc.toString()).toBe(`{"token":"${CANARY}"}`)
+    expect(maskedDraft(one)).not.toContain(CANARY)
+    const page = `{\n  "model": "made-up",\n  "password": "${CANARY}"\n}\n`
+    const many = act(state, { changes: { from: 0, to: json.length, insert: page }, userEvent: 'input.paste' }).state
+    expect(many.doc.toString()).toBe(page)
+    expect(masked(many)).toEqual([CANARY])
+    const undone = command(many, undo)
+    expect(undone.doc.toString()).toBe(json)
+    expect(masked(undone)).toEqual(masked(state))
+    expect(masked(command(undone, redo))).toEqual([CANARY])
+  })
+
+  it('replaces a pasted piece as it is and leaves the text around it', () => {
+    const state = draft('json', '/p/a.json', '{"model":"prefixSUFFIX"}')
+    const at = '{"model":"prefix'.length
+    const pasted = act(state, { changes: { from: at, insert: CANARY }, userEvent: 'input.paste' }).state
+    expect(masked(pasted)).toEqual([CANARY])
+    const piece = first(pasted)
+    const replaced = act(pasted, { changes: { from: piece.from, to: piece.to, insert: 'NEW' }, userEvent: 'input.type' }).state
+    expect(replaced.doc.toString()).toBe('{"model":"prefixNEWSUFFIX"}')
+    expect(JSON.parse(replaced.doc.toString()).model).toBe('prefixNEWSUFFIX')
+    expect(masked(replaced)).toEqual(['NEW'])
+    // Typing on at its end goes on adding to the piece, hidden.
+    const more = act(replaced, { changes: { from: replaced.selection.main.head, insert: 'X' }, userEvent: 'input.type' }).state
+    expect(more.doc.toString()).toBe('{"model":"prefixNEWXSUFFIX"}')
+    expect(masked(more)).toEqual(['NEWX'])
+  })
+
+  it('takes every value a selection meets whole, and refuses one that meets a multi-line value anywhere', () => {
+    const json = '{"a": "madeupFirstSecret1", "token": "madeupSecondSecret2", "b": 1}'
+    const state = draft('json', '/p/x.json', json.replace('"a"', '"apiKey"'))
+    const text = state.doc.toString()
+    const [one, two] = state.field(maskField).masks
+    const partial = act(state, { changes: { from: one!.from + 2, to: two!.from + 3, insert: '' }, userEvent: 'delete.selection' }).state
+    expect(partial.doc.toString()).toBe(`{"apiKey": , "b": 1}`)
+    expect(partial.doc.toString()).not.toContain('madeup')
+    expect(text).toContain('madeupSecondSecret2')
+    const yaml = 'token: madeupYamlToken42\nkey: |\n  madeup line one\n  madeup line two\nother: 1\n'
+    const block = draft('yaml', '/p/a.yaml', yaml)
+    const typed = act(block, { changes: { from: 0, to: yaml.length, insert: 'x' }, userEvent: 'input.type' })
+    expect(typed.refused).toEqual([MULTI_LINE_REFUSED])
+    expect(typed.state.doc.toString()).toBe(yaml)
   })
 })
 

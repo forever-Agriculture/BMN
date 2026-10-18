@@ -12,6 +12,11 @@ export interface Mask {
   pasted: boolean
   /** Typed in place of a value just now: the next characters typed at its end go on adding to it. */
   typing: boolean
+  /**
+   * A value stands for a whole value of the file, replaced as a quoted string; a piece is pasted text that met the
+   * paste rule wherever it landed, replaced as it is, so the text around it stays.
+   */
+  kind: 'value' | 'piece'
 }
 
 export const MULTI_LINE_REFUSED = 'Multi-line value; edit it in the terminal'
@@ -95,10 +100,14 @@ export function lineEndingOf(text: string): '\n' | '\r\n' | 'mixed' {
   return crlf === cr && crlf === lf ? '\r\n' : 'mixed'
 }
 
+/** The file's own rule for what looks like a secret, run on a draft's text. */
+export type SecretFinder = (text: string) => ReadonlyArray<readonly [number, number]>
+
 interface MaskState {
   masks: readonly Mask[]
   format: ConfigFormat
   nextId: number
+  find: SecretFinder
 }
 
 const addMasks = StateEffect.define<readonly Mask[]>({
@@ -113,8 +122,8 @@ const dropMask = StateEffect.define<number>()
 export const shownMask = StateEffect.define<number>()
 /** What a rewrite refused, for the footer to say. */
 export const refusedEdit = StateEffect.define<string>()
-/** A value rewritten whole: where its new quoted text starts, in the new text, and how long it is. */
-const rewritten = Annotation.define<ReadonlyArray<{ at: number; length: number; pasted: boolean; typing: boolean }>>()
+/** A value rewritten whole: where its new text starts, in the new text, how long it is, and whether it is quoted. */
+const rewritten = Annotation.define<ReadonlyArray<{ at: number; length: number; pasted: boolean; typing: boolean; kind: Mask['kind'] }>>()
 /** Masks whose value his typing at their end added to. */
 const extended = Annotation.define<readonly number[]>()
 
@@ -137,25 +146,42 @@ function mapMasks(masks: readonly Mask[], tr: Transaction): Mask[] {
   })
 }
 
+/** The masks a read file's hidden values get: each covers the value inside its quotes, so its comma, bracket or comment stays in sight. */
+function valueMasks(format: ConfigFormat, text: string, ranges: ReadonlyArray<readonly [number, number]>): Array<{ from: number; to: number }> {
+  return ranges.flatMap(([from, to]) => {
+    const span = valueSpan(format, text, from, to)
+    const [maskFrom, maskTo] = span.multiLine ? [from, to] : [span.innerFrom, span.innerTo]
+    return maskTo > maskFrom ? [{ from: maskFrom, to: maskTo }] : []
+  })
+}
+
 export const maskField = StateField.define<MaskState>({
-  create: () => ({ masks: [], format: 'json', nextId: 1 }),
+  create: () => ({ masks: [], format: 'json', nextId: 1, find: () => [] }),
   update(value, tr) {
     let masks = mapMasks(value.masks, tr)
     let nextId = value.nextId
     const add = (mask: Omit<Mask, 'id'>): void => {
-      if (mask.to <= mask.from) return
+      if (mask.to <= mask.from || masks.some((other) => mask.from < other.to && mask.to > other.from)) return
       masks.push({ ...mask, id: nextId })
       nextId += 1
     }
-    for (const each of tr.annotation(rewritten) ?? []) add({ from: each.at + 1, to: each.at + each.length - 1, pasted: each.pasted, typing: each.typing })
-    // A pasted line that meets the rule, pasted anywhere but on a hidden value, lands masked.
-    if (tr.isUserEvent('input.paste') && !tr.annotation(rewritten)) {
-      tr.changes.iterChanges((_fromA, _toA, fromB, toB, inserted) => {
-        if (pasteLandsMasked(inserted.toString())) add({ from: fromB, to: toB, pasted: true, typing: false })
-      })
+    for (const each of tr.annotation(rewritten) ?? []) {
+      const [from, to] = each.kind === 'value' ? [each.at + 1, each.at + each.length - 1] : [each.at, each.at + each.length]
+      add({ from, to, pasted: each.pasted, typing: each.typing, kind: each.kind })
+    }
+    // Pasted text is masked as a read file is: values the file's rule finds in it, then a line that meets the paste
+    // rule, wherever it landed and whatever it replaced.
+    if (tr.isUserEvent('input.paste')) {
+      const inserted: Array<{ from: number; to: number; text: string }> = []
+      tr.changes.iterChanges((_fromA, _toA, fromB, toB, text) => { if (toB > fromB) inserted.push({ from: fromB, to: toB, text: text.toString() }) })
+      const text = tr.state.doc.toString()
+      for (const found of valueMasks(value.format, text, value.find(text))) {
+        if (inserted.some((each) => found.from < each.to && found.to > each.from)) add({ ...found, pasted: true, typing: false, kind: 'value' })
+      }
+      for (const each of inserted) if (pasteLandsMasked(each.text)) add({ from: each.from, to: each.to, pasted: true, typing: false, kind: 'piece' })
     }
     for (const effect of tr.effects) {
-      if (effect.is(addMasks)) for (const mask of effect.value) add({ from: mask.from, to: mask.to, pasted: mask.pasted, typing: false })
+      if (effect.is(addMasks)) for (const mask of effect.value) add({ from: mask.from, to: mask.to, pasted: mask.pasted, typing: false, kind: mask.kind })
       else if (effect.is(dropMask)) masks = masks.filter((mask) => mask.id !== effect.value)
       else if (effect.is(shownMask)) masks = masks.map((mask) => (mask.id === effect.value ? { ...mask, pasted: false } : mask))
     }
@@ -165,15 +191,15 @@ export const maskField = StateField.define<MaskState>({
       masks = masks.map((mask) => (mask.typing && !(head.empty && head.head === mask.to) ? { ...mask, typing: false } : mask))
     }
     masks.sort((a, b) => a.from - b.from)
-    return { masks, format: value.format, nextId }
+    return { masks, format: value.format, nextId, find: value.find }
   }
 })
 
 /**
  * Every edit his keys make inside a hidden value's token replaces the whole value: typing or a paste writes it
  * double-quoted with the format's escapes, Backspace or Delete leaves an empty string, an edit that crosses its edge
- * takes all of it, and a multi-line value is not replaced at all (AC3). Characters typed at the end of a value he
- * has just typed in place go on adding to it.
+ * takes all of every value it meets, and a multi-line value is not replaced at all (AC3). A pasted piece is replaced
+ * as it is, leaving the text around it. Characters typed at the end of a value he has just typed go on adding to it.
  */
 const wholeValues = EditorState.transactionFilter.of((tr): TransactionSpec | readonly TransactionSpec[] => {
   if (!tr.docChanged || !(tr.isUserEvent('input') || tr.isUserEvent('delete') || tr.isUserEvent('move'))) return tr
@@ -181,63 +207,74 @@ const wholeValues = EditorState.transactionFilter.of((tr): TransactionSpec | rea
   if (masks.length === 0) return tr
   const text = tr.startState.doc.toString()
   const spans = masks.map((mask) => {
-    const span = valueSpan(format, text, mask.from, mask.to)
+    const span: ValueSpan = mask.kind === 'piece'
+      ? { from: mask.from, to: mask.to, innerFrom: mask.from, innerTo: mask.to, multiLine: false }
+      : valueSpan(format, text, mask.from, mask.to)
     return { mask, span, from: Math.min(span.from, mask.from), to: Math.max(span.to, mask.to) }
   })
   const pasted = tr.isUserEvent('input.paste')
   const changes: ChangeSpec[] = []
-  const done: Array<{ at: number; length: number; pasted: boolean; typing: boolean; caret: 'inside' | 'end' }> = []
+  const done: Array<{ at: number; length: number; pasted: boolean; typing: boolean; kind: Mask['kind']; caret: 'inside' | 'end' }> = []
   const grown: number[] = []
   let touched = false
   let refusal: string | null = null
   tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
     const insert = inserted.toString()
-    // Inside a token: strictly within its quotes for an insertion, anywhere in it for a replacement or a deletion.
-    const hit = spans.find((each) => (fromA === toA ? fromA > each.from && fromA < each.to : fromA < each.to && toA > each.from))
-    if (!hit) {
+    const growing = fromA === toA && !/[\r\n]/u.test(insert) ? spans.find((each) => each.mask.typing && fromA === each.mask.to) : undefined
+    if (growing) {
+      touched = true
+      changes.push({ from: fromA, insert: growing.mask.kind === 'value' ? quotedValue(format, insert).slice(1, -1) : insert })
+      grown.push(growing.mask.id)
+      return
+    }
+    // Every token the change meets: strictly within its quotes for an insertion, anywhere in it for a replacement or a deletion.
+    const hits = spans.filter((each) => (fromA === toA ? fromA > each.from && fromA < each.to : fromA < each.to && toA > each.from))
+    if (hits.length === 0) {
       changes.push({ from: fromA, to: toA, insert })
       return
     }
     touched = true
-    const { mask, span } = hit
-    if (mask.typing && fromA === toA && fromA === mask.to && !/[\r\n]/u.test(insert)) {
-      const escaped = quotedValue(format, insert).slice(1, -1)
-      changes.push({ from: fromA, insert: escaped })
-      grown.push(mask.id)
+    if (hits.some((each) => each.span.multiLine)) {
+      refusal = MULTI_LINE_REFUSED
       return
     }
-    if (span.multiLine) {
-      refusal = MULTI_LINE_REFUSED
+    const hit = hits.length === 1 && fromA >= hits[0]!.from && toA <= hits[0]!.to ? hits[0]! : null
+    if (!hit) {
+      // An edit that crosses a token's edge takes every token it meets whole and keeps its own text around them.
+      changes.push({ from: Math.min(fromA, ...hits.map((each) => each.span.from)), to: Math.max(toA, ...hits.map((each) => each.span.to)), insert })
       return
     }
     if (/[\r\n]/u.test(insert)) {
       refusal = LINE_BREAK_REFUSED
       return
     }
-    // An edit that crosses the token's edge takes the whole token with it and keeps its own text around it.
-    if (fromA < hit.from || toA > hit.to) {
-      changes.push({ from: Math.min(fromA, span.from), to: Math.max(toA, span.to), insert })
+    const caret = insert.length > 0 ? 'end' : 'inside'
+    const typing = !pasted && insert.length > 0
+    if (hit.mask.kind === 'piece') {
+      changes.push({ from: hit.span.from, to: hit.span.to, insert })
+      done.push({ at: hit.span.from, length: insert.length, pasted, typing, kind: 'piece', caret })
       return
     }
     const quoted = quotedValue(format, insert)
-    changes.push({ from: span.from, to: span.to, insert: quoted })
-    done.push({ at: span.from, length: quoted.length, pasted, typing: !pasted && insert.length > 0, caret: insert.length > 0 ? 'end' : 'inside' })
+    changes.push({ from: hit.span.from, to: hit.span.to, insert: quoted })
+    done.push({ at: hit.span.from, length: quoted.length, pasted, typing, kind: 'value', caret })
   })
   if (!touched) return tr
   if (refusal) return { effects: refusedEdit.of(refusal) }
   const set = ChangeSet.of(changes, tr.startState.doc.length)
   const placed = done.map((each) => ({ ...each, at: set.mapPos(each.at, -1) }))
   const last = placed.at(-1)
+  const quote = last?.kind === 'value' ? 1 : 0
   return {
     changes: set,
     annotations: [
-      rewritten.of(placed.map(({ at, length, pasted: wasPasted, typing }) => ({ at, length, pasted: wasPasted, typing }))),
+      rewritten.of(placed.map(({ at, length, pasted: wasPasted, typing, kind }) => ({ at, length, pasted: wasPasted, typing, kind }))),
       extended.of(grown),
       ...(tr.annotation(Transaction.userEvent) ? [Transaction.userEvent.of(tr.annotation(Transaction.userEvent)!)] : [])
     ],
     // The caret goes to the end of the new value, inside its quotes; an emptied value keeps it between them; typing
     // at a value's end keeps it there.
-    ...(last ? { selection: { anchor: last.caret === 'end' ? last.at + last.length - 1 : last.at + 1 } }
+    ...(last ? { selection: { anchor: last.caret === 'end' ? last.at + last.length - quote : last.at + quote } }
       : grown.length > 0 ? { selection: { anchor: set.mapPos(tr.startState.selection.main.head, 1) } } : {}),
     scrollIntoView: true
   }
@@ -253,17 +290,20 @@ const masksInHistory = invertedEffects.of((tr) => {
 })
 
 /** The draft's masks, starting from the file's hidden values, and the rules that keep each one whole. */
-export function configMasks(format: ConfigFormat, ranges: ReadonlyArray<readonly [number, number]>): Extension {
+export function configMasks(
+  format: ConfigFormat,
+  ranges: ReadonlyArray<readonly [number, number]>,
+  find: SecretFinder = () => [],
+  /** A carried draft's masks, kept as they were. */
+  kept: ReadonlyArray<Pick<Mask, 'from' | 'to' | 'pasted' | 'kind'>> = []
+): Extension {
   return [
     maskField.init((state) => {
-      const text = state.doc.toString()
-      // Each mask covers the value inside its quotes, so its comma, bracket or comment stays in sight while he edits.
-      const masks = ranges.flatMap(([from, to], index) => {
-        const span = valueSpan(format, text, from, to)
-        const [maskFrom, maskTo] = span.multiLine ? [from, to] : [span.innerFrom, span.innerTo]
-        return maskTo > maskFrom ? [{ id: index + 1, from: maskFrom, to: maskTo, pasted: false, typing: false }] : []
-      })
-      return { masks, format, nextId: ranges.length + 1 }
+      const fresh = valueMasks(format, state.doc.toString(), ranges).filter((mask) => !kept.some((other) => mask.from < other.to && mask.to > other.from))
+      const masks = [...kept.map(({ from, to, pasted, kind }) => ({ from, to, pasted, kind })), ...fresh.map((mask) => ({ ...mask, pasted: false, kind: 'value' as const }))]
+        .sort((a, b) => a.from - b.from)
+        .map((mask, index): Mask => ({ ...mask, id: index + 1, typing: false }))
+      return { masks, format, nextId: masks.length + 1, find }
     }),
     wholeValues,
     masksInHistory

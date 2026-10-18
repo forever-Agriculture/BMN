@@ -1,7 +1,7 @@
 // MODULE: quick-look-config-view.ts - a config file in CodeMirror's editable mode: hidden values drawn as the plates of 67.3 over the real draft, their notes at the line's edge, a bar or a plus for changed and added lines, history in memory, and copies that carry "[secret hidden]" (Story 68.2)
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { syntaxHighlighting } from '@codemirror/language'
-import { EditorState, RangeSet, StateEffect, StateField, type ChangeSet, type Extension, type Text } from '@codemirror/state'
+import { Compartment, EditorState, RangeSet, StateEffect, StateField, type ChangeSet, type Extension, type Text } from '@codemirror/state'
 import {
   Decoration,
   type DecorationSet,
@@ -19,7 +19,7 @@ import {
 } from '@codemirror/view'
 import type { QuickLookLanguage } from '@bmn/protocol'
 import { greys, languageExtension } from './quick-look-code'
-import { configMasks, draftChanges, lineMarks, maskField, refusedEdit, shownMask, type LineMarks, type Mask } from './quick-look-config-edit'
+import { configMasks, draftChanges, lineMarks, maskField, refusedEdit, shownMask, type LineMarks, type Mask, type SecretFinder } from './quick-look-config-edit'
 import { maskedSlice } from './quick-look-secrets'
 import type { ConfigFormat } from './quick-look-syntax'
 
@@ -213,11 +213,18 @@ const maskedCopy = EditorView.domEventHandlers({
 })
 
 function copyMasked(event: ClipboardEvent, view: EditorView, cut: boolean): boolean {
-  const chosen = view.state.selection.ranges.filter((range) => !range.empty)
-  if (!event.clipboardData || chosen.length === 0 || view.state.field(maskField).masks.length === 0) return false
-  event.clipboardData.setData('text/plain', chosen.map((range) => maskedDraft(view.state, range.from, range.to)).join('\n'))
+  if (!event.clipboardData || view.state.field(maskField).masks.length === 0) return false
+  const { state } = view
+  const chosen = state.selection.ranges.filter((range) => !range.empty)
+  // With nothing selected the editor copies each caret's whole line, and a cut takes it with its line break.
+  const lines = chosen.length > 0 ? [] : [...new Set(state.selection.ranges.map((range) => state.doc.lineAt(range.head).number))].sort((a, b) => a - b).map((number) => state.doc.line(number))
+  const copied = chosen.length > 0 ? chosen.map((range) => maskedDraft(state, range.from, range.to)) : lines.map((line) => maskedDraft(state, line.from, line.to))
+  event.clipboardData.setData('text/plain', copied.join('\n'))
   event.preventDefault()
-  if (cut) view.dispatch({ changes: chosen.map((range) => ({ from: range.from, to: range.to })), userEvent: 'delete.cut' })
+  if (cut && !state.readOnly) {
+    const changes = chosen.length > 0 ? chosen.map((range) => ({ from: range.from, to: range.to })) : lines.map((line) => ({ from: line.from, to: Math.min(state.doc.length, line.to + 1) }))
+    view.dispatch({ changes, userEvent: 'delete.cut' })
+  }
   return true
 }
 
@@ -233,9 +240,11 @@ export interface ConfigEditorInput {
   format: ConfigFormat
   language: QuickLookLanguage | null
   ranges: ReadonlyArray<readonly [number, number]>
+  /** The file's rule for what looks like a secret, for text pasted into the draft. */
+  find: SecretFinder
   label: string
-  /** A draft carried onto the file as it is now: that file's text and his edits since it. */
-  carried?: { original: Text; changes: ChangeSet }
+  /** A draft carried onto the file as it is now: that file's text, his edits since it and its masks. */
+  carried?: { original: Text; changes: ChangeSet; masks: readonly Mask[] }
   onUpdate(update: ViewUpdate): void
   onRefused(words: string): void
   onReveal(id: number): void
@@ -244,8 +253,9 @@ export interface ConfigEditorInput {
 /** The file as an editable draft; nothing it does reaches the disk. */
 export function createConfigEditor(parent: HTMLElement, input: ConfigEditorInput): EditorView {
   const extensions: Extension[] = [
-    configMasks(input.format, input.ranges),
-    input.carried ? draftChanges.init(() => input.carried!) : draftChanges,
+    configMasks(input.format, input.ranges, input.find, input.carried?.masks ?? []),
+    frozen.of(EditorState.readOnly.of(false)),
+    input.carried ? draftChanges.init(() => ({ original: input.carried!.original, changes: input.carried!.changes })) : draftChanges,
     lineNumbers(),
     changeGutter,
     highlightSpecialChars(),
@@ -269,6 +279,13 @@ export function createConfigEditor(parent: HTMLElement, input: ConfigEditorInput
 }
 
 /** Shows one value for ten seconds, or none; a shown value loses its "Pasted" mark. */
+/** The draft takes no edits while a Save of it is under way. */
+const frozen = new Compartment()
+
+export function freezeConfig(view: EditorView, on: boolean): void {
+  view.dispatch({ effects: frozen.reconfigure(EditorState.readOnly.of(on)) })
+}
+
 export function showConfigValue(view: EditorView, shown: { id: number; secondsLeft: number } | null): void {
   view.dispatch({ effects: [setShown.of(shown), ...(shown ? [shownMask.of(shown.id)] : [])] })
 }

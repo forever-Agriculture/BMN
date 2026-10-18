@@ -648,6 +648,19 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     ]
     check('Esc, Ctrl+Shift+E, another file and changing the root each ask "Unsaved edits": Save, Discard, Keep editing, Keep editing in focus; Esc keeps editing',
       ways.every((way) => way.text.includes('Unsaved edits') && /Save/u.test(way.text) && /Discard/u.test(way.text) && way.focus === 'Keep editing' && way.kept), { ways })
+    // The file being edited, chosen again in the tree, keeps its draft; Send to session… closes the sheet, so it asks.
+    await sheet.locator('.ql-tr', { hasText: 'app.env' }).first().click()
+    await page.waitForTimeout(300)
+    const sameRow = { asked: await sheet.locator('.ql-save-ask').count(), bar: await envBar(), rows: await sheet.locator('.ql-env-row').count() }
+    check('choosing the file being edited again in the tree keeps its draft, unasked', sameRow.asked === 0 && sameRow.rows === 3 && sameRow.bar.includes('1 of 3 values changed'), sameRow)
+    await sheet.getByRole('button', { name: 'More actions', exact: true }).click()
+    await sheet.getByRole('menuitem', { name: 'Send to session…', exact: true }).click()
+    await sheet.locator('.ql-save-ask').waitFor({ timeout: 3000 })
+    const sendAsked = await sheet.locator('.ql-save-ask').innerText()
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(150)
+    check('Send to session… asks "Unsaved edits" first, and Esc keeps the sheet and the draft', sendAsked.includes('Unsaved edits') && await sheet.count() === 1 &&
+      (await envBar()).includes('1 of 3 values changed') && await page.locator('dialog.file-reference-dialog[open]').count() === 0, { sendAsked })
     // The window's close asks through the close prompt; Keep editing keeps the window.
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].close() })
     await sheet.locator('.ql-save-ask').waitFor({ timeout: 5000 })
@@ -656,9 +669,41 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await page.waitForTimeout(300)
     check('closing the window asks the same row first, and Keep editing keeps the window and the draft', closeAsked === 'Keep editing' &&
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length) === 1 && (await envBar()).includes('1 of 3 values changed'))
+    // A close whose question another way out replaces is answered Keep editing, so a later close asks again.
+    await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].close() })
+    await sheet.locator('.ql-save-ask').waitFor({ timeout: 5000 })
+    await page.keyboard.press('Control+Shift+E')
+    await page.waitForTimeout(150)
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(300)
+    await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].close() })
+    const askedAgain = await sheet.locator('.ql-save-ask').waitFor({ timeout: 5000 }).then(() => true, () => false)
+    await sheet.getByRole('button', { name: 'Keep editing', exact: true }).click().catch(() => undefined)
+    await page.waitForTimeout(300)
+    check('a close whose question Ctrl+Shift+E replaced is not left waiting: closing again asks again, and Keep editing keeps the window', askedAgain &&
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length) === 1 && (await envBar()).includes('1 of 3 values changed'))
 
+    // The host's answer is held back 1.5 s for this one Save: meanwhile the draft takes no edits and no way out leaves it.
+    const delayed = await app.evaluate(({ ipcMain }) => {
+      const handlers = ipcMain._invokeHandlers
+      const original = handlers?.get('aiterm:quick-look:save')
+      if (!original) return false
+      globalThis.__qlSaveOriginal = original
+      handlers.set('aiterm:quick-look:save', async (...args) => { await new Promise((resolve) => setTimeout(resolve, 1500)); return original(...args) })
+      return true
+    })
     await page.keyboard.press('Control+s')
+    await sheet.locator('.ql-save-what', { hasText: 'Saving…' }).waitFor()
+    await sheet.locator('.ql-env-rows').focus()
+    await page.keyboard.press('Enter')
+    await pasteInto('madeupQL68duringSave1')
+    const duringSave = JSON.stringify(await hook())
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Control+Shift+E')
     await page.waitForFunction(() => /Saved \d/u.test([...document.querySelectorAll('dialog.quick-look .ql-path .ql-facts')].at(-1)?.textContent ?? ''))
+    await app.evaluate(({ ipcMain }) => { if (globalThis.__qlSaveOriginal) ipcMain._invokeHandlers.set('aiterm:quick-look:save', globalThis.__qlSaveOriginal) })
+    check('while a Save is under way the draft takes no edits and the sheet stays; the Save then leaves no draft behind', delayed && !duringSave.includes('madeupQL68duringSave1') &&
+      await sheet.count() === 1 && await sheet.locator('.ql-save-ask').count() === 0 && !readFileSync(envPath, 'utf8').includes('madeupQL68duringSave1'), { delayed })
     const savedBytes = readFileSync(envPath, 'utf8')
     check('Ctrl+S writes only the changed value, in its old quoting; comment, order, blank line and final newline are the same',
       savedBytes === EDITED_ENV.replace('"madeupQL68oldValue"', `"${PASTED}"`), { same: savedBytes === EDITED_ENV.replace('"madeupQL68oldValue"', `"${PASTED}"`) })
@@ -773,6 +818,26 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
       return { started, carried: data.getData('text/plain') }
     })
     check('a selection that holds a hidden value is not dragged in edit mode', !draftDrag.started && draftDrag.carried === "", draftDrag)
+    // With no selection Ctrl+C and Ctrl+X take the caret's line: masked, the shown value too.
+    const lineClip = (kind) => sheet.locator('.ql-code .cm-content').evaluate((content, type) => {
+      const data = new DataTransfer()
+      content.dispatchEvent(new ClipboardEvent(type, { clipboardData: data, bubbles: true, cancelable: true }))
+      return data.getData('text/plain')
+    }, kind)
+    await toLine(4)
+    const lineCopy = await lineClip('copy')
+    await page.keyboard.press('Control+r')
+    await page.waitForTimeout(100)
+    const shownCopy = await lineClip('copy')
+    await page.keyboard.press('Control+r')
+    const lineCut = await lineClip('cut')
+    const afterCut = (await hook())?.edit?.draft ?? ''
+    await page.keyboard.press('Control+z')
+    await page.waitForTimeout(100)
+    const afterUndo = (await hook())?.edit?.draft ?? ''
+    check('Ctrl+C and Ctrl+X with no selection carry the caret\'s line with "[secret hidden]", shown or not; Ctrl+Z brings the line back masked',
+      [lineCopy, shownCopy, lineCut].every((clip) => clip === '  "apiKey": "[secret hidden]",') && !afterCut.includes('apiKey') &&
+      afterUndo.includes('"apiKey": "[secret hidden]"') && !JSON.stringify(await hook()).includes(PASTED_JSONC), { lineCopy, shownCopy, lineCut })
     await toLine(5)
     await page.keyboard.press('Backspace')
     await page.keyboard.type('3')

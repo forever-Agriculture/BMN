@@ -158,44 +158,65 @@ export async function saveQuickLookFile(params: Pick<QuickLookSaveParams, 'path'
   const before = await readTarget(check.target)
   if (!before || before.device !== check.device || before.inode !== check.inode) return { status: 'changed' }
   if (!before.bytes || quickLookDigest(before.bytes) !== params.digest) return { status: 'changed' }
+  // The digest comes from the renderer; the bytes on disk are held to UTF-8 here, as the read held them.
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(before.bytes)
+  } catch {
+    return refused('the file is not valid UTF-8 text')
+  }
   // A file that began with a byte order mark keeps it; the text read never shows one.
   const keepMark = before.bytes.subarray(0, 3).equals(BOM) && !params.text.startsWith('﻿')
   const bytes = keepMark ? Buffer.concat([BOM, Buffer.from(params.text, 'utf8')]) : Buffer.from(params.text, 'utf8')
   if (bytes.length > QUICK_LOOK_EDIT_MAX_BYTES) return refused('the new text is over 256 KB')
   const staged = join(check.folder, `.${basename(check.target)}.bmn-save-${randomUUID()}.tmp`)
+  // The staged file stays open until it is renamed or removed, so it can be emptied wherever its folder went.
+  let handle: FileHandle | null = null
   let renamed = false
+  let outcome: QuickLookSaveResult | null = null
   try {
-    const handle = await open(staged, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+    handle = await open(staged, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+    await handle.writeFile(bytes)
+    // The group first, while the file is still private: a group the file cannot keep must not see it.
     try {
-      await handle.writeFile(bytes)
-      // The group first, while the file is still private: a group the file cannot keep must not see it.
-      try {
-        await handle.chown(uid, check.gid)
-      } catch {
-        if ((check.mode & 0o070) !== 0) throw Object.assign(new Error('group'), { code: 'BMN_GROUP' })
-      }
-      await handle.chmod(check.mode)
-      await handle.sync()
-    } finally {
-      await handle.close()
+      await handle.chown(uid, check.gid)
+    } catch {
+      if ((check.mode & 0o070) !== 0) throw Object.assign(new Error('group'), { code: 'BMN_GROUP' })
     }
+    await handle.chmod(check.mode)
+    await handle.sync()
     await seams.beforeRename?.()
     const again = await editCheck(params.path, params.root, uid)
     if (again.status !== 'editable' || again.target !== check.target) {
-      return again.status === 'read-only' ? refused(again.message.replace(/^Read-only · /, '')) : { status: 'changed' }
+      outcome = again.status === 'read-only' ? refused(again.message.replace(/^Read-only · /, '')) : { status: 'changed' }
+    } else if (again.mode !== check.mode || again.gid !== check.gid) {
+      // A mode or group changed meanwhile is not put back to the one the staged file carries.
+      outcome = { status: 'changed' }
+    } else {
+      const now = await readTarget(check.target)
+      if (!now?.bytes || now.device !== check.device || now.inode !== check.inode || now.nlink > 1 || !now.bytes.equals(before.bytes)) {
+        outcome = { status: 'changed' }
+      } else {
+        await rename(staged, check.target)
+        renamed = true
+        await syncFolder(check.folder)
+      }
     }
-    const now = await readTarget(check.target)
-    if (!now?.bytes || now.device !== check.device || now.inode !== check.inode || now.nlink > 1 || !now.bytes.equals(before.bytes)) {
-      return { status: 'changed' }
-    }
-    await rename(staged, check.target)
-    renamed = true
-    await syncFolder(check.folder)
   } catch (error) {
-    return refused(failureWords(error))
+    outcome = refused(failureWords(error))
   } finally {
-    if (!renamed) await rm(staged, { force: true }).catch(() => undefined)
+    if (handle && !renamed) {
+      // Emptied through its own handle first: a folder moved or locked meanwhile cannot keep the new text.
+      await handle.truncate(0).then(() => handle?.sync()).catch(() => undefined)
+      await rm(staged, { force: true }).catch(() => undefined)
+      const left = await handle.stat().then((stats) => stats.nlink > 0, () => true)
+      if (left) {
+        const reason = outcome?.status === 'failed' ? outcome.message : 'Could not save · the file changed on disk'
+        outcome = { status: 'failed', message: `${reason} · an emptied staging file ${basename(staged)} could not be removed` }
+      }
+    }
+    await handle?.close().catch(() => undefined)
   }
+  if (outcome) return outcome
   const after = await readTarget(check.target)
   if (!after?.bytes || !after.bytes.equals(bytes)) return refused('the file does not hold what BMN wrote; check it')
   const stats = await lstat(check.target, { bigint: true })

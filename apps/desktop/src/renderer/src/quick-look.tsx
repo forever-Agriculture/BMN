@@ -383,6 +383,11 @@ export function QuickLook(props: {
   // Editing (Story 68.1): his draft, in memory only, the row in the Save bar's place, the value shown, the last save.
   const [envDraft, setEnvDraft] = useState<EnvDraft>(EMPTY_ENV_DRAFT)
   const [saveRow, setSaveRow] = useState<SaveRow | null>(null)
+  const saveRowRef = useRef(saveRow)
+  saveRowRef.current = saveRow
+  /** A Save under way: the draft takes no edits and nothing leaves the file until its answer (R68-FR4). */
+  const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
   const [envShown, setEnvShown] = useState<{ row: number; until: number } | null>(null)
   const [savedAt, setSavedAt] = useState<{ path: string; at: string } | null>(null)
   const [envField, setEnvField] = useState(false)
@@ -500,9 +505,15 @@ export function QuickLook(props: {
     options: { way?: OpenWay; topLine?: number | null; focus?: boolean; heading?: string | null; match?: number | null; fromResults?: boolean
       reference?: { text: string; base: FileReferenceBase | null } | null } = {}): void => {
     const way = options.way ?? 'visit'
-    // Unsaved edits are never dropped without a question: opening another file asks first (Story 68.1 AC8).
-    if (dirtyRef.current && path !== shownPath.current) {
-      setSaveRow({ kind: 'guard', then: () => openRef.current(path, line, column, options) })
+    // Unsaved edits are never dropped without a question: opening another file asks first (Story 68.1 AC8), and
+    // the file being edited is not read again under its draft.
+    if (savingRef.current) return
+    if (dirtyRef.current && path === shownPath.current) {
+      if (options.focus !== false) setFocusArea('file')
+      return
+    }
+    if (dirtyRef.current) {
+      askGuard({ kind: 'guard', then: () => openRef.current(path, line, column, options) })
       return
     }
     setMenuOpen(false)
@@ -629,8 +640,12 @@ export function QuickLook(props: {
     }
     setSaveRow({ kind: 'saving' })
     const digest = configEditing ? editDigest.current ?? base.digest : base.digest
+    savingRef.current = true
+    setSaving(true)
     const result: QuickLookSaveResult = await window.aiTerminal.saveQuickLookFile({ ...source, root: rootRef.current, path: base.path, digest, text: out.text })
       .catch(() => ({ status: 'failed', message: 'Could not save · BMN could not reach the file' }))
+    savingRef.current = false
+    setSaving(false)
     if (result.status === 'changed') {
       setSaveRow({ kind: 'conflict' })
       return false
@@ -647,9 +662,21 @@ export function QuickLook(props: {
     return true
   }
 
-  /** Every way out with unsaved edits asks first: Save, Discard, Keep editing (Story 68.1 AC8). */
+  /**
+   * Puts a question about the draft in the Save bar's place. A question it replaces that a close of the window is
+   * waiting on is answered Keep editing first, so the close is never left waiting (Story 68.1 AC8).
+   */
+  function askGuard(row: Extract<SaveRow, { kind: 'guard' }>): void {
+    const before = saveRowRef.current
+    if (before?.kind === 'guard' && before !== row) before.keep?.()
+    saveRowRef.current = row
+    setSaveRow(row)
+  }
+
+  /** Every way out with unsaved edits asks first: Save, Discard, Keep editing (Story 68.1 AC8); none while a Save is under way. */
   const guarded = (then: () => void, keep?: () => void): void => {
-    if (dirtyRef.current) setSaveRow({ kind: 'guard', then, ...(keep ? { keep } : {}) })
+    if (savingRef.current) keep?.()
+    else if (dirtyRef.current) askGuard({ kind: 'guard', then, ...(keep ? { keep } : {}) })
     else then()
   }
 
@@ -801,7 +828,8 @@ export function QuickLook(props: {
       ask.answer(proceed)
     }
     pendingClose.current = answer
-    setSaveRow({ kind: 'guard', then: () => answer(true), keep: () => answer(false) })
+    if (savingRef.current) answer(false)
+    else askGuard({ kind: 'guard', then: () => answer(true), keep: () => answer(false) })
   }, [props.closeAsk?.id])
 
   // Test mode only: what the sheet shows of the file, with every hidden value masked, never the value itself.
@@ -1094,7 +1122,9 @@ export function QuickLook(props: {
         .catch((error: unknown) => setFeedback(failureText(error, 'Show in Folder failed.')))
     } else {
       const reference = exactAbsoluteFileReference(menuPath, file.line, file.column)
-      if (reference && props.onSendReference) props.onSendReference(reference)
+      const send = props.onSendReference
+      // Sending closes the sheet, so unsaved edits ask first.
+      if (reference && send) guarded(() => send(reference))
       else setFeedback('This path cannot be written as a file reference.')
     }
   }
@@ -1574,12 +1604,12 @@ export function QuickLook(props: {
                 {configEditing && configFormat ? (
                   <>
                     <ConfigEditor key={ready.path} ref={configEditor} path={ready.path} canonicalPath={ready.canonicalPath} content={text} format={configFormat}
-                      lineEnding={configEnding === '\r\n' ? '\r\n' : '\n'} focus={focusArea === 'file' && !asksQuestion(saveRow)}
+                      lineEnding={configEnding === '\r\n' ? '\r\n' : '\n'} focus={focusArea === 'file' && !asksQuestion(saveRow)} frozen={saving}
                       onDraft={setConfigDraft} onNote={setFooterNote} onShown={setConfigShown} onFocus={() => setFocusArea('file')} />
                     {configDraft?.syntax ? <p className={`ql-syntax${configDraft.valid === false ? ' ql-refused' : ''}`} role="status">{configDraft.syntax}</p> : null}
                   </>
                 ) : envRows ? (
-                  <EnvView ref={envView} model={envRows} draft={envDraft} onDraft={setEnvDraft}
+                  <EnvView ref={envView} model={envRows} draft={envDraft} onDraft={(next) => { if (!savingRef.current) setEnvDraft(next) }}
                     shown={envShown ? { row: envShown.row, secondsLeft: Math.min(REVEAL_SECONDS, Math.max(1, Math.ceil((envShown.until - now) / 1000))) } : null}
                     onReveal={toggleEnvValue} onStatus={setFeedback} focus={focusArea === 'file' && !asksQuestion(saveRow)}
                     onFocus={() => setFocusArea('file')} onEditing={setEnvField} />
