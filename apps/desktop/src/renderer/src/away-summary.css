@@ -1,18 +1,19 @@
-/* MODULE: away-summary.css - "While you were away": the Messages shape with a head line, session where-lines and word lines; no hue (Story 76.6) */
+/* MODULE: away-summary.css - "While you were away": the Messages row shape for every list, one head line; gold only on a count that needs him (Story 76.6, Fable's redesign 2026-10-18) */
 .away-summary-dialog h3 { display: flex; justify-content: space-between; gap: 12px; }
 .away-summary-dialog .away-count { color: var(--muted); font-weight: 400; font-size: 12px; letter-spacing: normal; text-transform: none; }
 /* Each list stands whole within its bound: only the dialog scrolls (Fable's after check). */
 .away-summary-dialog .message-list { max-height: none; overflow: visible; }
+.away-summary-dialog .away-count-on { color: var(--identity); font-weight: 600; }
 .app-dialog .message-row.away-decision-row { grid-template-columns: 64px minmax(96px, 190px) minmax(0, 1fr); }
+.app-dialog .message-row.away-run-row { grid-template-columns: minmax(140px, 260px) 64px minmax(0, 1fr); }
+.app-dialog .message-row.away-activity-row { grid-template-columns: minmax(96px, 190px) minmax(0, 1fr); }
+.away-run-row .route { font-weight: 600; }
 .away-head-line { margin: 0; font-size: 13px; }
 .away-note { margin: 4px 0 0; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
 .away-gaps { display: block; margin-top: 6px; color: var(--muted); font-size: 11.5px; }
-.away-group { display: grid; gap: 4px; margin-bottom: 10px; }
-.away-where { margin: 0; color: var(--muted); font-size: 12px; }
 .message-row .away-command { font-family: var(--font-mono); }
 .away-decision { padding: 8px 8px 12px; }
 .away-decision .away-kv-row { display: contents; }
-.away-decision dd { overflow: visible; white-space: normal; text-overflow: clip; overflow-wrap: anywhere; }
+.away-decision dd { overflow: visible; white-space: pre-line; text-overflow: clip; overflow-wrap: anywhere; }
 .app-dialog .away-link { min-height: 0; padding: 0; border: 0; border-radius: 0; background: none; color: var(--muted); font: inherit; text-decoration: underline; }
-.away-lines { display: grid; gap: 2px; margin: 0; padding: 0 0 0 8px; list-style: none; font-size: 12px; }
 .away-more { display: block; margin-top: 4px; color: var(--muted); font-size: 11.5px; }

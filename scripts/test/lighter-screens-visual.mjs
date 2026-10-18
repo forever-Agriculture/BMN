@@ -22,7 +22,7 @@
 //   BMN_LIGHTER_MODES=black  fewer modes (default black,steel). A narrowed run writes its own shots.json, so give it a folder of its own.
 //   BMN_LIGHTER_BINARY=<packaged bmn>  the screens of a packaged build, as electron-normal-start --binary.
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -371,6 +371,21 @@ echo seeded
       }, { region: 'dialog[open]', close: async () => { await page.keyboard.press('Enter') } })
       const awayNow = await page.evaluate(() => window.aiTerminal.getAway())
       if (awayNow.state !== 'away') await setAway('away', 'back by 8, don\'t merge 76')
+      // Three synthetic dev-auto runs in worktrees of the work folder: one blocked, one finished during this period, one
+      // finished days before it (its handoff dated back), so the summary shows Stuck and Finished and leaves the old one out.
+      const runGit = (...args) => execFileSync('git', ['-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', '-C', work, ...args], { stdio: 'ignore' })
+      if (!existsSync(join(work, '.git'))) { runGit('init', '-q', '-b', 'main'); runGit('commit', '-q', '--allow-empty', '-m', 'synthetic') }
+      for (const [folder, branch, project, status, decided, old] of [
+        ['wt-blocked', 'feat/epic-9-recognise-and-hold', 'made-up-repo / Epic 9 (group companies). This run builds deploy group 1 only, shipped behind a switch that stays off.', 'BLOCKED — draft PR #110 open, CI red only on the scorecard check; waits on the owner\'s live check and merge', '[d1] park half of 9.5 until the owner reads it', false],
+        ['wt-done', 'dev-auto/epic-76', 'Epic 76 Away mode and the summary (76.1–76.7). Synthetic brief text that the summary must not print as a title.', 'COMPLETE', '[d1] keep the summary read-only\n[d2] one row per run', false],
+        ['wt-old', 'feat/epic-13-authoring-safety', 'Epic 13 (authoring safety). An old run that finished before he left.', 'COMPLETE', '', true]
+      ]) {
+        const checkout = join(work, folder)
+        if (!existsSync(checkout)) runGit('worktree', 'add', '-q', '-b', branch, checkout)
+        mkdirSync(join(checkout, '.dev-auto'), { recursive: true })
+        writeFileSync(join(checkout, '.dev-auto/handoff.md'), `# Dev Auto handoff\n\n- Project / selected epics: ${project}\n- Owning checkout and branch: ${checkout} / ${branch}\n- Run id: synthetic-${folder}\n- Explicit user stop: none\n\n## Decisions and findings\n\n- Decided for you:${decided ? `\n${decided.split('\n').map((line) => `  - ${line}`).join('\n')}` : ''}\n\n## Resume\n\n- Next safe action: ${status.startsWith('BLOCKED') ? 'merge PR #110 after the owner\'s check' : 'none'}\n- Status: ${status}\n`)
+        if (old) { const then = new Date(Date.now() - 3 * 86_400_000); utimesSync(join(checkout, '.dev-auto/handoff.md'), then, then) }
+      }
       // A session that does what an agent does while he is away, under a node parent as an agent's own commands run
       // (BMN binds a hook's conversation only to a foreground process that is not a shell): its hook names its conversation, it publishes a file,
       // records two decisions (one with references BMN checks, one depending on it and on one not in the list),
@@ -401,12 +416,14 @@ echo night-seeded
         await page.locator('.away-check button.away-words').click()
         await summaryDialog.waitFor()
       }, { region: 'dialog.away-summary-dialog', scroll: 'dialog.away-summary-dialog', close: escape })
-      await screen('away-summary', 'Palette › I\'m back: the summary opened by itself, a decision opened in place', async () => {
+      await screen('away-summary', 'Palette › I\'m back: the summary opened by itself, the stuck run opened in place', async () => {
         await palette('back')
         await page.locator('#palette-away').click()
         await summaryDialog.waitFor()
-        await summaryDialog.locator('section[aria-label="Decided for you, recorded by agents"] .message-row').first().click()
+        await summaryDialog.locator('section[aria-label="Stuck"] .message-row').first().click()
       }, { region: 'dialog.away-summary-dialog', scroll: 'dialog.away-summary-dialog', close: escape })
+      const runsRead = await page.evaluate(() => window.aiTerminal.readDevAutoRuns()).catch((error) => ({ failed: String(error) }))
+      note(`dev-auto runs read: ${runsRead.failed ?? `${runsRead.runs.length} runs (${runsRead.runs.map((run) => `${run.branch}: ${run.finished ? 'finished' : run.status}`).join(', ')}), ${runsRead.skipped} skipped: ${runsRead.issues.join(' | ')}`}`)
       await screen('palette-while-away', 'Palette, "while" typed after back: While you were away… with the period', async () => { await palette('while') }, { region: 'dialog[open]', close: escape })
       // A long night: more decisions and requests than the summary lists, so each list says what it cut.
       const long = join(root, 'long.sh')

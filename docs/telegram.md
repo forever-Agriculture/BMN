@@ -78,7 +78,10 @@ session. It uses a bot you create and own. It is off by default.
   answer, because its agent went on, withdrew it, replaced it with its next prompt in the same place (a Claude
   permission its countdown denied, then the next one) or it expired, as "Session: subject (how it closed)", ten at
   most with the rest counted. The laptop lists up to 500 and counts any beyond exactly. A card answered from Telegram, in BMN or at the desk is not listed. The laptop's away summary
-  shows the same list under its own heading, whichever way you said you were back.
+  shows the same list as **Closed without you**, whichever way you said you were back, after **Needs you**, **Stuck**
+  (each dev-auto run blocked now, one row titled by its epics and a short name) and **Finished** (runs whose handoff
+  changed to COMPLETE during the period; older finished runs are left out); a run's row opens its brief, status, next
+  step and decisions in place.
 - It cannot manage sessions remotely. A handoff delivers itself to its agent (Story 75.5), so no
   handoff reaches Telegram; a reply to a handoff card sent before then goes to its source session.
 

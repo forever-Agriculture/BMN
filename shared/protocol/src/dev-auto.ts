@@ -19,6 +19,8 @@ export interface DevAutoRun {
   /** Outbound reader reports fields clipped after masking; local view remains unchanged. */
   truncatedFields?: number
   finished: boolean
+  /** When the handoff file last changed (its mtime), so a summary can tell a run of this period from an older one; null when unknown. */
+  updatedAt?: string | null
   ownership: 'own' | 'unknown' | 'copy'
   ownerCheckout: string | null
   ownerBranch: string | null

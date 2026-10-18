@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AttentionRecord, OwnerAwayView, TeamAskLine, WorkspaceRecord } from '@bmn/protocol'
 import { awayTooltip } from './away-check'
-import { awaySummaryReadKey, awaySummaryView, presentedClosedPeriod, type AwaySummarySources } from './away-summary-dialog'
+import { awaySummaryReadKey, awaySummaryView, presentedClosedPeriod, sessionWords, type AwaySummarySources } from './away-summary-dialog'
 
 const at = (day: number, hours: number, minutes: number): string => new Date(2026, 9, day, hours, minutes).toISOString()
 const away: OwnerAwayView = {
@@ -24,7 +24,7 @@ describe('awaySummaryView (Story 76.6 AC1, AC3)', () => {
   it('adds the completed asks to what happened and reads Waiting on you from the requests the app holds now', () => {
     const request = { requestId: 'r', sessionId: 's1', state: 'open', openedAt: at(15, 2, 0), kind: 'question', title: 'Which storage?', prompt: null } as unknown as AttentionRecord
     const view = awaySummaryView(sources(), [request], workspaces, new Date(2026, 9, 15, 7, 41))
-    expect(view.happened.blocks).toEqual([{ sessionId: 's1', head: 'Personal › Builder', lines: ['1 teammate ask completed · reviewer'] }])
+    expect(view.activity.rows).toEqual([{ sessionId: 's1', where: 'Personal › Builder', text: '1 ask answered (reviewer)', lines: ['1 ask answered (reviewer)'] }])
     expect(view.waiting.groups[0]!.rows[0]!.title).toBe('Which storage?')
     const answered = awaySummaryView(sources(), [{ ...request, state: 'answered' }], workspaces, new Date(2026, 9, 15, 7, 41))
     expect(answered.waiting.empty).toBe('Nothing waits on you.')
@@ -32,8 +32,17 @@ describe('awaySummaryView (Story 76.6 AC1, AC3)', () => {
 
   it('names asks and dev-auto runs that could not be read instead of saying nothing happened', () => {
     const view = awaySummaryView(sources({ asks: null, devAuto: null }), [], workspaces, new Date(2026, 9, 15, 7, 41))
-    expect(view.couldNotRead).toBe('Could not read in full: teammate asks (unreadable), dev-auto runs (unreadable).')
-    expect(view.happened.empty).toBe('No retained activity found for this period; some sources could not be read.')
+    expect(view.couldNotRead).toBe('Not fully read: teammate asks, dev-auto runs · counts there may be low.')
+    expect(view.activity.empty).toBe('No session activity recorded.')
+    expect(view.stuck.empty).toBe('Dev-auto runs could not be read.')
+  })
+})
+
+describe('sessionWords (Fable\'s redesign 2026-10-18)', () => {
+  it('shows a session by its own name and app, without the workspace path or archive stamp', () => {
+    expect(sessionWords('PICHE › Q-Automations · Claude Code')).toBe('Q-Automations · Claude Code')
+    expect(sessionWords('Personal › Reviewer (archived Thu 05:00)')).toBe('Reviewer')
+    expect(sessionWords('A session BMN no longer holds')).toBe('A session BMN no longer holds')
   })
 })
 

@@ -1,4 +1,4 @@
-import { realpath } from 'node:fs/promises'
+import { realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import type { AttentionRecord, DevAutoRun, DevAutoRunsResult, SessionRecord, WorkspaceRecord } from '@bmn/protocol'
 import { readFileReference } from './file-reference-reader'
@@ -220,6 +220,7 @@ export async function readDevAutoRuns(workspaces: readonly WorkspaceRecord[], se
       return null
     }
     const fields = parseHandoff(file.text ?? '', format)
+    const updatedAt = file.text === null ? null : await stat(join(location.checkout, '.dev-auto/handoff.md')).then((info) => info.mtime.toISOString(), () => null)
     let ownership: DevAutoRun['ownership'] = 'unknown'
     if (fields.ownerCheckout && fields.ownerBranch && isAbsolute(fields.ownerCheckout)) {
       const [owner, checkout] = await Promise.all([realpath(fields.ownerCheckout).catch(() => null), realpath(location.checkout).catch(() => null)])
@@ -249,7 +250,7 @@ export async function readDevAutoRuns(workspaces: readonly WorkspaceRecord[], se
     const board = await boardFor(location.checkout, selectedEpics(format ? parseHandoff(file.text ?? '').project : fields.project))
     if (board.unavailable) addIssue(`${location.checkout}: ${board.unavailable}`)
     return {
-      ...fields, workspaceIds: ids, ...location, ownership, unavailable: file.unavailable,
+      ...fields, workspaceIds: ids, ...location, updatedAt, ownership, unavailable: file.unavailable,
       ...(ownership === 'copy' ? { status: null, nextAction: null, finished: false, ownerItems: [] } : { ownerItems }),
       board
     }

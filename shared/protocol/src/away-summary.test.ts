@@ -8,6 +8,7 @@ import {
   awayTelegramWentOn,
   awayWentOnWords,
   buildAwaySummary,
+  devAutoTitle,
   withCompletedAsks,
   type AwaySessionActivity,
   type AwaySummaryInput
@@ -63,8 +64,9 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
     expect(view.waiting.empty).toBe('Nothing waits on you.')
     expect(view.decided.empty).toBe('No BMN decision records for this period.')
     expect(view.decided.tail).toBe('Decisions kept only in a workflow\'s own log, and any an agent did not report, are outside this list.')
-    expect(view.happened.empty).toBe('No retained activity found for this period.')
-    expect(view.now.lines).toEqual([])
+    expect(view.activity.empty).toBe('No session activity recorded.')
+    expect(view.stuck).toEqual({ rows: [], more: null, empty: 'No run is stuck.' })
+    expect(view.finished).toEqual({ rows: [], more: null, empty: 'No run finished while you were away.' })
   })
 
   it('says "so far" and since while he is away, and names the agent that set it on his words', () => {
@@ -125,14 +127,15 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
     expect(cut.decided.groups[0]!.records).toHaveLength(30)
     expect(cut.decided.more).toBe('3 more recorded; the list is cut at 30.')
     expect(cut.decided.incomplete).toBe(true)
-    expect(cut.couldNotRead).toBe('Could not read in full: decision records (cut at 33 listings).')
+    expect(cut.couldNotRead).toBe('Not fully read: decision records · counts there may be low.')
+    expect(cut.couldNotReadWhy).toBe('decision records: cut at 33 listings')
     const unread = buildAwaySummary(input({ decisions: null, attention: null }))
     expect(unread.decided.empty).toBeNull()
     expect(unread.waiting.empty).toBeNull()
-    expect(unread.couldNotRead).toBe('Could not read in full: requests (unreadable), decision records (unreadable).')
+    expect(unread.couldNotRead).toBe('Not fully read: requests, decision records · counts there may be low.')
   })
 
-  it('words what happened per session in sidebar order, at most eight lines, counts never summed past a gap', () => {
+  it('gives each session one activity line in sidebar order, at most eight parts, a count past a gap marked ≥', () => {
     const view = buildAwaySummary(input({
       activity: {
         gaps: { turns: { kind: 'truncated', at: 500 } },
@@ -146,30 +149,51 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
         ]
       }
     }))
-    expect(view.happened.blocks).toEqual([
-      { sessionId: 's1', head: 'Personal › Builder · Claude Code', lines: [
-        'at least 14 turns ended, at least 9 with changed files', 'Published report.md, plan.md, a.txt +2', '2 teammate asks completed · reviewer',
-        'Messages: 3 printed, 1 queued, 1 uncertain · Handoff to Reviewer printed'
-      ] },
-      { sessionId: 's2', head: 'Personal › Reviewer (archived 05:00) · Codex', lines: ['Exited 03:12 (exit 1)'] }
+    expect(view.activity.rows.map((row) => [row.sessionId, row.where, row.text])).toEqual([
+      ['s1', 'Personal › Builder · Claude Code', '≥14 turns, ≥9 changed files · published report.md, plan.md, a.txt +2 · 2 asks answered (reviewer) · messages 3 printed, 1 queued, 1 uncertain · handoff to Reviewer printed'],
+      ['s2', 'Personal › Reviewer (archived 05:00) · Codex', 'exited 03:12 (code 1)']
     ])
-    expect(view.happened.incomplete).toBe(true)
     const long = buildAwaySummary(input({ activity: { gaps: {}, sessions: [activity('s1', { exits: Array.from({ length: 10 }, (_, index) => ({ at: at(15, 1, index), code: 0, signal: null })) })] } }))
-    expect(long.happened.blocks[0]!.lines).toHaveLength(8)
-    expect(long.happened.blocks[0]!.lines[7]).toBe('3 more · open its Turn changes, Hook events and Messages')
+    expect(long.activity.rows[0]!.lines).toHaveLength(10)
+    expect(long.activity.rows[0]!.text.split(' · ')).toHaveLength(8)
+    expect(long.activity.rows[0]!.text.endsWith('3 more')).toBe(true)
     const gapped = buildAwaySummary(input({ activity: null }))
-    expect(gapped.happened.empty).toBe('No retained activity found for this period; some sources could not be read.')
+    expect(gapped.activity.empty).toBe('No session activity recorded.')
+    expect(gapped.couldNotRead).toBe('Not fully read: turn endings, published files, messages, session exits · counts there may be low.')
   })
 
-  it('shows dev-auto as Now, undated; an entry joined to its BMN record by session and key shows once, above; legacy entries are said', () => {
+  it('titles a run by its epics and a short name, never its brief', () => {
+    const title = (branch: string | null, project: string | null) => devAutoTitle({ branch, project, checkout: '/code/x/.claude/worktrees/wt' })
+    expect(title('feat/epic-9-recognise-and-hold', 'erp.piche.ai-invoices-ops / Epic 9 (group companies). This run builds DEPLOY GROUP 1 only (Epic 12 later)')).toBe('Epic 9 · recognise and hold')
+    expect(title('fix/qa-e13-followups', 'Q-Automations follow-ups selected by the owner 2026-10-17: Epic 13 E13 follow-ups')).toBe('Epic 13 · followups')
+    expect(title('docs/qa-board-2026-10-16', 'Q-Automations Epic 13 (authoring safety): owner-requested Opus double-check')).toBe('Epic 13 · qa board')
+    expect(title('dev-auto/epic-67', '/home/o/code/BMN; Epic 67 Quick Look, Read and Search (67.1–67.6) then Epic 68 Paste a Key (68.1–68.2); plan/epics/067-*.md')).toBe('Epics 67, 68 · Quick Look')
+    expect(title('dev-auto/epic-76', 'Epic 76')).toBe('Epic 76')
+    expect(title(null, null)).toBe('wt')
+  })
+
+  it('lists each run once: blocked now whenever it stopped, finished only when it finished in the period; its decisions open with it', () => {
+    const inside = at(15, 2, 0), before = at(13, 9, 0)
     const devAuto = {
-      result: { runs: [run({ finished: true, decisions: ['[d1] SQLite (bmn: s1/dev-auto:r1:d1)', 'old line'], decisionEntries: [{ entry: 'd1', bmnKey: 'dev-auto:r1:d1', bmnSession: 's1' }, { entry: null, bmnKey: null, bmnSession: null }] }), run({ ownership: 'copy', finished: true })], skipped: 0, issues: [], observedAt: ENDED },
+      result: { runs: [
+        run({ runId: 'r1', finished: true, status: 'COMPLETE', updatedAt: inside, decisions: ['[d1] SQLite (bmn: s1/dev-auto:r1:d1)', 'old line'], decisionEntries: [{ entry: 'd1', bmnKey: 'dev-auto:r1:d1', bmnSession: 's1' }, { entry: null, bmnKey: null, bmnSession: null }] }),
+        run({ runId: 'r2', branch: 'feat/epic-9-transport', project: 'Epic 9 (group companies)', finished: true, status: 'COMPLETE', updatedAt: before }),
+        run({ runId: 'r3', branch: 'fix/qa-e13-followups', project: 'Epic 13', status: 'BLOCKED — CI is green on PR #4; waits for the owner\'s merge', updatedAt: before, nextAction: 'merge PR #4' }),
+        run({ runId: 'r4', ownership: 'copy', finished: true, updatedAt: inside }),
+        run({ runId: 'r5', status: 'ACTIVE', updatedAt: inside })
+      ], skipped: 0, issues: [], observedAt: ENDED },
       workspaceNames: { w: 'Personal' }
     }
     const view = buildAwaySummary(input({ devAuto, decisions: { decisions: [decision('dev-auto:r1:d1', 's1')], complete: true } }))
-    expect(view.now.lines).toEqual(['Personal · dev-auto/epic-76 · Epic 76: Finished', 'Personal · dev-auto/epic-76 · Epic 76: old line'])
-    expect(view.now.legacy).toBe('Entries without an identity may repeat a record above.')
+    expect(view.finished.rows.map((row) => [row.title, row.state, row.text])).toEqual([['Epic 76', 'finished', '2 decisions recorded']])
+    expect(view.finished.rows[0]!.rows.find((row) => row.label === 'Decided')!.text).toBe('[d1] SQLite (bmn: s1/dev-auto:r1:d1)\nold line')
+    expect(view.stuck.rows.map((row) => [row.title, row.state, row.text])).toEqual([['Epic 13 · followups', 'blocked', 'CI is green on PR #4; waits for the owner\'s merge']])
+    expect(view.stuck.rows[0]!.rows.map((row) => row.label)).toEqual(['Run', 'Status', 'Next', 'Where'])
+    expect(view.stuck.rows[0]!.rows.at(-1)!.links).toEqual([{ kind: 'workflow', id: 'r3', text: 'Open in dev-auto runs' }])
     expect(view.decided.groups[0]!.records[0]!.rows.at(-1)!.text).toBe('Wed 23:41 by Builder (Claude Code) · also in dev-auto\'s handoff')
+    // Runs of two workspaces carry the workspace in their title.
+    const two = buildAwaySummary(input({ devAuto: { ...devAuto, result: { ...devAuto.result, runs: [devAuto.result.runs[2]!, run({ workspaceIds: ['v'], status: 'BLOCKED' })] }, workspaceNames: { w: 'Personal', v: 'Work' } } }))
+    expect(two.stuck.rows.map((row) => row.title)).toEqual(['Personal · Epic 13 · followups', 'Work · Epic 76'])
   })
 
   it('qualifies every count whose source was not read whole: changes partly captured, messages, files and asks cut or past retention', () => {
@@ -177,9 +201,9 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
       sessions: [activity('s1', { turnsEnded: 1, changesAtLeast: true, messages: { printed: 500, queued: 0, uncertain: 0, expired: 0 }, published: ['a.md'], publishedCount: 1, asksCompleted: ['reviewer'] })],
       gaps: { changes: { kind: 'partial', read: 0, skipped: 1 }, messages: { kind: 'truncated', at: 500 }, files: { kind: 'truncated', at: 200 } }
     } }))
-    expect(view.happened.blocks[0]!.lines).toEqual(['1 turn ended, changed files not all recorded', 'Published a.md and perhaps more', '1 teammate ask completed · reviewer', 'Messages: at least 500 printed'])
-    expect(view.couldNotRead).toBe('Could not read in full: turn changes (partial: 0 read, 1 skipped), published files (cut at 200 listings), messages (cut at 500 listings).')
-    expect(view.happened.incomplete).toBe(true)
+    expect(view.activity.rows[0]!.text).toBe('1 turn · published a.md · 1 ask answered (reviewer) · ≥messages 500 printed')
+    expect(view.couldNotRead).toBe('Not fully read: turn changes, published files, messages · counts there may be low.')
+    expect(view.couldNotReadWhy).toBe('turn changes: partial: 0 read, 1 skipped\npublished files: cut at 200 listings\nmessages: cut at 500 listings')
     const old = withCompletedAsks({ sessions: [], gaps: {} }, [], SINCE, ENDED, { keptDays: 30, now: new Date(Date.parse(SINCE) + 31 * 86_400_000) })
     expect(old.gaps.asks).toEqual({ kind: 'expired' })
     expect(withCompletedAsks({ sessions: [], gaps: {} }, [], SINCE, ENDED, { keptDays: 30, now: new Date(ENDED) }).gaps.asks).toBeUndefined()
@@ -191,7 +215,8 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
       const devAuto = { result: { runs: [run({ decisions: [line], decisionEntries: [{ entry: 'd1', ...entry }], ...over })], skipped: 0, issues: [], observedAt: ENDED }, workspaceNames: { w: 'Personal' } }
       return buildAwaySummary(input({ devAuto, decisions: { decisions, complete: true } }))
     }
-    const joined = (summary: ReturnType<typeof buildAwaySummary>) => summary.now.lines.length === 0
+    const joined = (summary: ReturnType<typeof buildAwaySummary>) => summary.decided.groups.flatMap((group) => group.records)
+      .some((record) => record.key === 'dev-auto:r1:d1' && record.rows.at(-1)!.text.includes('also in dev-auto'))
     // Its own record, shown: one line, above.
     expect(joined(view({ bmnKey: 'dev-auto:r1:d1', bmnSession: 's1' }, [decision('dev-auto:r1:d1', 's1')]))).toBe(true)
     // Another run's entry borrowing that key, a record of another session with the key, a record naming another workflow entry,
@@ -201,7 +226,6 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
     expect(joined(view({ bmnKey: 'dev-auto:r1:d1', bmnSession: 's1' }, [decision('dev-auto:r1:d1', 's1', { references: [{ kind: 'workflow', id: 'dev-auto:other:d1', valid: false }] })]))).toBe(false)
     const keyOnly = view({ bmnKey: 'dev-auto:r1:d1', bmnSession: null }, [decision('dev-auto:r1:d1', 's1')])
     expect(joined(keyOnly)).toBe(false)
-    expect(keyOnly.now.legacy).toBe('Entries without an identity may repeat a record above.')
     expect(keyOnly.decided.groups[0]!.records[0]!.rows.at(-1)!.text).not.toContain('also in dev-auto')
     // A record cut from the list does not hide its entry.
     const many = Array.from({ length: 31 }, (_, index) => decision(`k${String(index).padStart(2, '0')}`, 's1'))
@@ -212,17 +236,18 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
     const devAuto = { result: { runs: [run({ decisionEntries: [{ entry: 'd3', bmnKey: null, bmnSession: null }] })], skipped: 0, issues: [], observedAt: ENDED }, workspaceNames: { w: 'Personal' } }
     const record = decision('k', 's1', { affects: 'src/a.ts', references: [{ kind: 'workflow', id: 'dev-auto:r1:d3', valid: false }, { kind: 'workflow', id: 'dev-auto:r9:d3', valid: false }] })
     const affects = buildAwaySummary(input({ devAuto, decisions: { decisions: [record], complete: true } })).decided.groups[0]!.records[0]!.rows.find((row) => row.label === 'Affects')
-    expect(affects).toEqual({ label: 'Affects', text: 'src/a.ts · dev-auto:r9:d3', links: [{ kind: 'workflow', id: 'dev-auto:r1:d3', text: 'Personal · dev-auto/epic-76 · Epic 76 [d3]' }] })
+    expect(affects).toEqual({ label: 'Affects', text: 'src/a.ts · dev-auto:r9:d3', links: [{ kind: 'workflow', id: 'dev-auto:r1:d3', text: 'Epic 76 [d3]' }] })
   })
 
-  it('a folder that is not a repository is no gap in dev-auto; a real skip is named with its count and an empty Now says so', () => {
+  it('a folder that is not a repository is no gap in dev-auto; a real skip is named with its count in the tooltip', () => {
     const devAuto = (issues: string[]) => ({ result: { runs: [], skipped: issues.length, issues, observedAt: ENDED }, workspaceNames: { w: 'Personal' } })
-    const plain = buildAwaySummary(input({ devAuto: devAuto(['/home/me/notes: Not a repository']) }))
+    const plain = buildAwaySummary(input({ devAuto: devAuto(['/home/me/notes: Not a repository', '/repo/wt: Board unavailable: no plan found']) }))
     expect(plain.couldNotRead).toBeNull()
-    expect(plain.now.incomplete).toBe(false)
     const skipped = buildAwaySummary(input({ devAuto: devAuto(['/home/me/notes: Not a repository', '/repo: Worktree bound: /repo/wt']) }))
-    expect(skipped.couldNotRead).toBe('Could not read in full: dev-auto runs (partial: 0 read, 1 skipped).')
-    expect(skipped.now).toMatchObject({ incomplete: true, lines: [], empty: 'No dev-auto run that BMN could read reports anything now.' })
+    expect(skipped.couldNotRead).toBe('Not fully read: dev-auto runs · counts there may be low.')
+    expect(skipped.couldNotReadWhy).toBe('dev-auto runs: partial: 0 read, 1 skipped')
+    expect(skipped.stuck.empty).toBe('No run is stuck.')
+    expect(buildAwaySummary(input({ devAuto: null })).stuck.empty).toBe('Dev-auto runs could not be read.')
   })
 })
 
@@ -291,14 +316,14 @@ describe('Went on without you (Epic 78, owner 2026-10-17)', () => {
     const unread = buildAwaySummary(input({ wentOn: null }))
     expect(unread.wentOn.incomplete).toBe(true)
     expect(unread.wentOn.empty).toBeNull()
-    expect(unread.couldNotRead).toBe('Could not read in full: requests closed without you (unreadable).')
+    expect(unread.couldNotRead).toBe('Not fully read: requests closed without you · counts there may be low.')
     // Everything the host read is shown; what it could not hold is counted exactly.
     const records = Array.from({ length: AWAY_SUMMARY_LIMITS.wentOn }, (_, index) => closed(`c${index}`, 's1', at(15, 1, index % 60)))
     const cut = buildAwaySummary(input({ wentOn: { records, complete: false, total: AWAY_SUMMARY_LIMITS.wentOn + 61 } }))
     expect(cut.wentOn.groups[0]!.rows).toHaveLength(AWAY_SUMMARY_LIMITS.wentOn)
     expect(cut.wentOn.count).toBe(AWAY_SUMMARY_LIMITS.wentOn + 61)
     expect(cut.wentOn.more).toBe(`61 more closed than this list holds; the oldest ${AWAY_SUMMARY_LIMITS.wentOn} are shown.`)
-    expect(cut.couldNotRead).toBe(`Could not read in full: requests closed without you (cut at ${AWAY_SUMMARY_LIMITS.wentOn} listings).`)
+    expect(cut.couldNotReadWhy).toBe(`requests closed without you: cut at ${AWAY_SUMMARY_LIMITS.wentOn} listings`)
   })
 
   it('gives the /back reply up to ten "Session: subject (how)" lines and counts the rest', () => {

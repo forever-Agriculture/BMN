@@ -6,7 +6,7 @@ import type { DevAutoRunsResult } from './dev-auto'
 
 /** Fable's bounds (Story 76.1 §4–5). */
 export const AWAY_SUMMARY_LIMITS = Object.freeze({
-  waiting: 40, wentOn: 500, decisions: 30, sessions: 20, lines: 8, published: 3, now: 20, telegramWaiting: 10, telegramWentOn: 10,
+  waiting: 40, wentOn: 500, decisions: 30, sessions: 20, lines: 8, published: 3, runs: 20, telegramWaiting: 10, telegramWentOn: 10,
   telegramSession: 120, telegramTitle: 220
 })
 
@@ -146,17 +146,26 @@ export interface AwayWentOnRow {
 /** A link opens a session, a published file or a dev-auto run BMN validated; anything else stays words. */
 export interface AwayDecisionRow { label: string; text: string; muted?: boolean; links?: Array<{ kind: 'session' | 'artifact' | 'workflow'; id: string; text: string }> }
 export interface AwayDecisionView { key: string; sessionId: string; time: string; choice: string; rows: AwayDecisionRow[] }
+/** One dev-auto run, once: a short title, its state and one line; the rest opens in place (Fable's redesign 2026-10-18). */
+export interface AwayRunRow { key: string; title: string; state: 'blocked' | 'finished'; text: string; full: string; rows: AwayDecisionRow[] }
+/** One session's activity as one line; every count it holds is in `lines`. */
+export interface AwayActivityRow { sessionId: string; where: string; text: string; lines: string[] }
 
 export interface AwaySummaryView {
   label: 'While you were away' | 'While you are away'
   head: string
   note: string | null
   couldNotRead: string | null
+  /** Each unread source with its reason, for the tooltip. */
+  couldNotReadWhy: string | null
   waiting: { open: number; groups: Array<{ sessionId: string; where: string; rows: AwayWaitingRow[] }>; more: string | null; empty: string | null }
   wentOn: { count: number; incomplete: boolean; groups: Array<{ sessionId: string; where: string; rows: AwayWentOnRow[] }>; more: string | null; empty: string | null }
   decided: { incomplete: boolean; groups: Array<{ sessionId: string; where: string; records: AwayDecisionView[] }>; more: string | null; empty: string | null; tail: string }
-  happened: { incomplete: boolean; blocks: Array<{ sessionId: string; head: string; lines: string[] }>; more: string | null; empty: string | null }
-  now: { lines: string[]; legacy: string | null; more: string | null; empty: string | null; incomplete: boolean }
+  /** Runs blocked now, whenever they stopped: each waits on someone. */
+  stuck: { rows: AwayRunRow[]; more: string | null; empty: string | null }
+  /** Runs that finished in this period; older finished runs are not news. */
+  finished: { rows: AwayRunRow[]; more: string | null; empty: string | null }
+  activity: { rows: AwayActivityRow[]; more: string | null; empty: string | null }
 }
 
 /** The request card's own kind words (session-request-card.tsx). */
@@ -259,11 +268,24 @@ function bySession<T extends { sessionId: string }>(items: readonly T[], order: 
   return [...groups.entries()].sort(([a], [b]) => (rank.get(a) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b) ?? Number.MAX_SAFE_INTEGER))
 }
 
-/** The dev-auto line label, as the morning digest reads a run. */
-function devAutoLabel(run: DevAutoRunsResult['runs'][number], workspaceNames: Record<string, string>): string {
-  const workspace = run.workspaceIds.map((id) => workspaceNames[id] ?? 'Workspace unavailable').join(', ')
-  const folder = run.checkout.split('/').filter(Boolean).pop() ?? run.checkout
-  return `${workspace} · ${run.branch ?? folder} · ${run.project ?? 'Epics not recorded'}`
+/**
+ * A run's short title: its epics and a name, "Epic 9 · recognise and hold", never the run brief. The name is the branch's
+ * last part without its epic number or date, else the words after the first epic in the brief, else the checkout folder.
+ */
+export function devAutoTitle(run: Pick<DevAutoRunsResult['runs'][number], 'project' | 'branch' | 'checkout'>): string {
+  const brief = (run.project ?? '').split(/\.\s/u)[0] ?? ''
+  const epics = [...new Set([...brief.matchAll(/\bEpics?\s+(\d+(?:\s*[-–]\s*\d+)?)/giu)].map((match) => match[1]!.replace(/\s+/gu, '')))].slice(0, 4)
+  const tail = (run.branch ?? '').split('/').pop() ?? ''
+  let name = tail.replace(/(?:^|-)\d{4}-\d{2}-\d{2}$/u, '')
+  for (let previous = ''; previous !== name;) { previous = name; name = name.replace(/^(?:qa-)?(?:epic-?|e)?\d+(?:-|$)/iu, '').replace(/^epic$/iu, '') }
+  name = name.replace(/[-_]+/gu, ' ').trim()
+  if (name === '') {
+    const words = /\bEpic\s+\d+(?!\d)\s*(?:\(([^)]{1,48})\)|([^();,.\n\d][^();,.\n]{0,47}))/iu.exec(brief)
+    name = (words?.[1] ?? words?.[2] ?? '').trim().replace(/\s+(?:then|and|then\s+Epic)$/iu, '')
+  }
+  const head = epics.length === 0 ? '' : `${epics.length === 1 ? 'Epic' : 'Epics'} ${epics.join(', ')}`
+  const title = [head, name].filter(Boolean).join(' · ')
+  return oneLine(title || (run.checkout.split('/').filter(Boolean).pop() ?? run.checkout), 80)
 }
 
 /**
@@ -286,13 +308,16 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   if (input.activity === null) for (const source of ['turns', 'files', 'messages', 'exits'] as const) gaps[source] = { kind: 'unreadable' }
   if (input.devAuto === null) gaps['dev-auto'] = { kind: 'unreadable' }
   else {
-    // A folder that is not a Git repository holds no run, so it is not a gap in this list.
-    const skipped = input.devAuto.result.skipped - input.devAuto.result.issues.filter((issue) => issue.endsWith(': Not a repository')).length
+    // A folder that is not a Git repository holds no run, and a run whose board cannot be read is still read whole (the
+    // summary shows no board), so neither is a gap in this list.
+    const skipped = input.devAuto.result.skipped - input.devAuto.result.issues.filter((issue) => issue.endsWith(': Not a repository') || issue.includes(': Board unavailable')).length
     if (skipped > 0) gaps['dev-auto'] = { kind: 'partial', read: input.devAuto.result.runs.length, skipped }
   }
   const gapList = SOURCE_ORDER.filter((source) => gaps[source] !== undefined)
+  // One plain line; each source's reason stays in the tooltip.
   const couldNotRead = gapList.length === 0 ? null
-    : `Could not read in full: ${gapList.map((source) => `${SOURCE_WORDS[source]} (${awayGapWords(gaps[source]!)})`).join(', ')}.`
+    : `Not fully read: ${gapList.map((source) => SOURCE_WORDS[source]).join(', ')} · counts there may be low.`
+  const couldNotReadWhy = gapList.length === 0 ? null : gapList.map((source) => `${SOURCE_WORDS[source]}: ${awayGapWords(gaps[source]!)}`).join('\n')
 
   // Waiting on you: every unresolved request now, those opened before he left marked so.
   const open = input.attention === null ? [] : input.attention.filter((record) => record.state === 'open').toSorted((a, b) => a.openedAt.localeCompare(b.openedAt))
@@ -358,7 +383,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     if (tool !== 'dev-auto' || !runId || !entry || id.split(':').length !== 3) return null
     const run = input.devAuto?.result.runs.find((item) => item.runId === runId && item.ownership !== 'copy' && !item.unavailable &&
       (item.decisionEntries ?? []).some((candidate) => candidate.entry === entry))
-    return run === undefined ? null : `${devAutoLabel(run, input.devAuto!.workspaceNames)} [${entry}]`
+    return run === undefined ? null : `${devAutoTitle(run)} [${entry}]`
   }
   const decisionView = (record: DecisionRecord): AwayDecisionView => {
     const linked = (reference: DecisionRecord['references'][number]): boolean => reference.kind === 'workflow' ? workflowEntry(reference.id) !== null
@@ -390,67 +415,73 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     tail: 'Decisions kept only in a workflow\'s own log, and any an agent did not report, are outside this list.'
   }
 
-  // What happened: counts per session, at most eight word lines.
-  const atLeast = (source: AwaySourceName): string => gaps[source] !== undefined ? 'at least ' : ''
-  const activityBlocks = (input.activity?.sessions ?? []).map((activity) => {
+  // Activity: one line per session, counts only; a count past a gap is "≥".
+  const atLeast = (source: AwaySourceName): string => gaps[source] !== undefined ? '≥' : ''
+  const activityRows = (input.activity?.sessions ?? []).map((activity): AwayActivityRow => {
     const lines: string[] = []
     if (activity.turnsEnded > 0) {
-      const changed = activity.turnsWithChanges > 0 ? `, ${activity.changesAtLeast ? 'at least ' : ''}${activity.turnsWithChanges} with changed files`
-        : activity.changesAtLeast ? ', changed files not all recorded' : ''
-      lines.push(`${atLeast('turns')}${plural(activity.turnsEnded, 'turn')} ended${changed}`)
+      const changed = activity.turnsWithChanges > 0 ? `, ${activity.changesAtLeast ? '≥' : ''}${activity.turnsWithChanges} changed files` : ''
+      lines.push(`${atLeast('turns')}${plural(activity.turnsEnded, 'turn')}${changed}`)
     }
     if (activity.publishedCount > 0) {
       const names = activity.published.slice(0, AWAY_SUMMARY_LIMITS.published)
-      lines.push(`Published ${names.join(', ')}${activity.publishedCount > names.length ? ` +${atLeast('files')}${activity.publishedCount - names.length}` : gaps.files !== undefined ? ' and perhaps more' : ''}`)
+      lines.push(`published ${names.join(', ')}${activity.publishedCount > names.length ? ` +${atLeast('files')}${activity.publishedCount - names.length}` : ''}`)
     }
     if (activity.asksCompleted.length > 0) {
       const roles = [...new Set(activity.asksCompleted)].slice(0, 3)
-      lines.push(`${atLeast('asks')}${plural(activity.asksCompleted.length, 'teammate ask')} completed · ${roles.join(', ')}`)
+      lines.push(`${atLeast('asks')}${plural(activity.asksCompleted.length, 'ask')} answered (${roles.join(', ')})`)
     }
     const counts = (['printed', 'queued', 'uncertain', 'expired'] as const).filter((state) => activity.messages[state] > 0).map((state) => `${activity.messages[state]} ${state}`)
-    const handoffs = activity.handoffs.map((handoff) => `Handoff to ${handoff.receiver} ${handoff.state}`)
-    if (counts.length > 0 || handoffs.length > 0) lines.push([...(counts.length > 0 ? [`Messages: ${atLeast('messages')}${counts.join(', ')}`] : []), ...handoffs].join(' · '))
+    if (counts.length > 0) lines.push(`${atLeast('messages')}messages ${counts.join(', ')}`)
+    for (const handoff of activity.handoffs) lines.push(`handoff to ${handoff.receiver} ${handoff.state}`)
     for (const exit of activity.exits) {
-      lines.push(`Exited ${clockWords(exit.at)}${exit.code !== null ? ` (exit ${exit.code})` : exit.signal !== null ? ` (signal ${exit.signal})` : ''}`)
+      lines.push(`exited ${clockWords(exit.at)}${exit.code !== null ? ` (code ${exit.code})` : exit.signal !== null ? ` (signal ${exit.signal})` : ''}`)
     }
-    const cut = lines.length > AWAY_SUMMARY_LIMITS.lines
-      ? [...lines.slice(0, AWAY_SUMMARY_LIMITS.lines - 1), `${lines.length - AWAY_SUMMARY_LIMITS.lines + 1} more · open its Turn changes, Hook events and Messages`]
-      : lines
     const app = awayAppName(activity.app)
-    return { sessionId: activity.sessionId, head: `${where(activity.sessionId)}${app ? ` · ${app}` : ''}`, lines: cut }
-  }).filter((block) => block.lines.length > 0)
+    const shown = lines.length > AWAY_SUMMARY_LIMITS.lines ? [...lines.slice(0, AWAY_SUMMARY_LIMITS.lines - 1), `${lines.length - AWAY_SUMMARY_LIMITS.lines + 1} more`] : lines
+    return { sessionId: activity.sessionId, where: `${where(activity.sessionId)}${app ? ` · ${app}` : ''}`, text: shown.join(' · '), lines }
+  }).filter((row) => row.lines.length > 0)
   const rank = new Map(input.order.map((id, index) => [id, index]))
-  activityBlocks.sort((a, b) => (rank.get(a.sessionId) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.sessionId) ?? Number.MAX_SAFE_INTEGER))
-  const activityGaps = (['turns', 'changes', 'files', 'messages', 'asks', 'exits'] as const).some((source) => gaps[source] !== undefined)
-  const happened: AwaySummaryView['happened'] = {
-    incomplete: activityGaps,
-    blocks: activityBlocks.slice(0, AWAY_SUMMARY_LIMITS.sessions),
-    more: activityBlocks.length > AWAY_SUMMARY_LIMITS.sessions ? `${activityBlocks.length - AWAY_SUMMARY_LIMITS.sessions} more sessions · not shown` : null,
-    empty: activityBlocks.length > 0 ? null
-      : activityGaps ? 'No retained activity found for this period; some sources could not be read.' : 'No retained activity found for this period.'
+  activityRows.sort((a, b) => (rank.get(a.sessionId) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.sessionId) ?? Number.MAX_SAFE_INTEGER))
+  const activityView: AwaySummaryView['activity'] = {
+    rows: activityRows.slice(0, AWAY_SUMMARY_LIMITS.sessions),
+    more: activityRows.length > AWAY_SUMMARY_LIMITS.sessions ? `${activityRows.length - AWAY_SUMMARY_LIMITS.sessions} more sessions` : null,
+    empty: activityRows.length > 0 ? null : 'No session activity recorded.'
   }
 
-  // Now: dev-auto's current Finished, Blocked and Decided for you, undated; joined entries show above, not here.
-  const nowLines: string[] = []
-  let legacy = false
-  for (const run of input.devAuto?.result.runs ?? []) {
-    if (run.ownership === 'copy' || run.unavailable) continue
-    const label = devAutoLabel(run, input.devAuto!.workspaceNames)
-    if (run.finished) nowLines.push(`${label}: Finished`)
-    if (/^BLOCKED\b/i.test(run.status ?? '')) nowLines.push(`${label}: ${oneLine(run.status ?? '', 220)}`)
-    run.decisions.forEach((decision, index) => {
-      const entry = run.decisionEntries?.[index]
-      if (entry !== undefined && identity(run, entry) !== null) return
-      if (!entry || entry.entry === null || (entry.bmnKey !== null && entry.bmnSession === null)) legacy = true
-      nowLines.push(`${label}: ${oneLine(decision, 220)}`)
-    })
+  // Dev-auto runs, one row each: blocked now, or finished in this period. Their own decisions open with the row.
+  const periodStart = away.since ?? now.toISOString()
+  const periodEnd = away.state === 'away' || away.endedAt === null ? now.toISOString() : away.endedAt
+  const runs = (input.devAuto?.result.runs ?? []).filter((run) => run.ownership !== 'copy' && !run.unavailable)
+  const spansWorkspaces = new Set(runs.flatMap((run) => run.workspaceIds)).size > 1
+  const runRow = (run: DevAutoRunsResult['runs'][number], state: AwayRunRow['state']): AwayRunRow => {
+    const workspace = run.workspaceIds.map((id) => input.devAuto!.workspaceNames[id] ?? 'Workspace unavailable').join(', ')
+    const title = `${spansWorkspaces ? `${workspace} · ` : ''}${devAutoTitle(run)}`
+    const note = (run.status ?? '').replace(/^(?:BLOCKED|COMPLETE)\b\s*[—–:;.,-]*\s*/iu, '')
+    const text = note !== '' ? oneLine(note, 200) : run.decisions.length > 0 ? plural(run.decisions.length, 'decision') + ' recorded' : ''
+    const rows: AwayDecisionRow[] = [
+      { label: 'Run', text: run.project ?? 'Epics not recorded' },
+      { label: 'Status', text: run.status ?? 'Not recorded' },
+      ...(run.nextAction !== null && state === 'blocked' ? [{ label: 'Next', text: run.nextAction }] : []),
+      ...(run.decisions.length > 0 ? [{ label: 'Decided', text: run.decisions.join('\n') }] : []),
+      { label: 'Where', text: `${run.branch ?? 'no branch'} · ${run.checkout}${run.updatedAt ? ` · changed ${awayMomentWords(run.updatedAt, now)}` : ''}`, muted: true,
+        links: [{ kind: 'workflow', id: run.runId ?? run.checkout, text: 'Open in dev-auto runs' }] }
+    ]
+    return { key: `${run.runId ?? ''}\u0000${run.checkout}`, title, state, text, full: run.project ?? title, rows }
   }
-  const nowView: AwaySummaryView['now'] = {
-    lines: nowLines.slice(0, AWAY_SUMMARY_LIMITS.now),
-    legacy: legacy ? 'Entries without an identity may repeat a record above.' : null,
-    more: nowLines.length > AWAY_SUMMARY_LIMITS.now ? `${nowLines.length - AWAY_SUMMARY_LIMITS.now} more · dev-auto runs…` : null,
-    empty: nowLines.length === 0 ? 'No dev-auto run that BMN could read reports anything now.' : null,
-    incomplete: gaps['dev-auto'] !== undefined
+  const inPeriod = (run: DevAutoRunsResult['runs'][number]): boolean => typeof run.updatedAt === 'string' && run.updatedAt >= periodStart && run.updatedAt <= periodEnd
+  const stuckRows = runs.filter((run) => !run.finished && /^BLOCKED\b/iu.test(run.status ?? '')).map((run) => runRow(run, 'blocked'))
+  const finishedRows = runs.filter((run) => run.finished && inPeriod(run)).map((run) => runRow(run, 'finished'))
+  const runsUnread = input.devAuto === null
+  const stuck: AwaySummaryView['stuck'] = {
+    rows: stuckRows.slice(0, AWAY_SUMMARY_LIMITS.runs),
+    more: stuckRows.length > AWAY_SUMMARY_LIMITS.runs ? `${stuckRows.length - AWAY_SUMMARY_LIMITS.runs} more · dev-auto runs…` : null,
+    empty: stuckRows.length > 0 ? null : runsUnread ? 'Dev-auto runs could not be read.' : 'No run is stuck.'
+  }
+  const finished: AwaySummaryView['finished'] = {
+    rows: finishedRows.slice(0, AWAY_SUMMARY_LIMITS.runs),
+    more: finishedRows.length > AWAY_SUMMARY_LIMITS.runs ? `${finishedRows.length - AWAY_SUMMARY_LIMITS.runs} more · dev-auto runs…` : null,
+    empty: finishedRows.length > 0 ? null : runsUnread ? 'Dev-auto runs could not be read.' : 'No run finished while you were away.'
   }
 
   return {
@@ -458,11 +489,13 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     head: awayHeadWords(away, now, name),
     note: away.note,
     couldNotRead,
+    couldNotReadWhy,
     waiting,
+    stuck,
+    finished,
     wentOn,
     decided,
-    happened,
-    now: nowView
+    activity: activityView
   }
 }
 
