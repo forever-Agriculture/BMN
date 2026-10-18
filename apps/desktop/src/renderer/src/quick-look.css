@@ -10,7 +10,7 @@
   --ql-literal: color-mix(in oklch, var(--identity) 40%, var(--text));
   --ql-name: color-mix(in srgb, var(--text) 92%, var(--ground));
   --ql-keyword: color-mix(in srgb, var(--text) 70%, var(--ground));
-  --ql-punct: color-mix(in srgb, var(--text) 56%, var(--ground));
+  --ql-punct: color-mix(in srgb, var(--text) 62%, var(--ground));
   --ql-comment: color-mix(in srgb, var(--text) 56%, var(--ground));
   --ql-gutter: color-mix(in srgb, var(--text) 50%, var(--ground));
   --ql-match: color-mix(in srgb, var(--identity) 30%, transparent);
@@ -127,6 +127,12 @@
   align-items: center;
   gap: 6px;
   margin-left: 0;
+  color: var(--muted);
+}
+
+/* As the Files/Contents switch: Editing is the brighter word on the deeper plate, whatever the pointer does (Fable). */
+.quick-look .ql-edit-plate:hover {
+  background: color-mix(in srgb, var(--text) 11%, transparent);
 }
 
 .quick-look .ql-edit-plate kbd {
@@ -136,6 +142,7 @@
 }
 
 .quick-look .ql-edit-plate[aria-pressed='true'] {
+  color: var(--text);
   background: var(--ql-plate-2);
 }
 
