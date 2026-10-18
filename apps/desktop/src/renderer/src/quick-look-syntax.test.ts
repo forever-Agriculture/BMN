@@ -25,6 +25,11 @@ describe('the syntax line', () => {
     const toml = checkSyntax('toml', 'a = "ok"\nb = = "madeupsecret"\n')
     expect(toml).toMatchObject({ status: 'invalid', line: 2 })
     expect(JSON.stringify(toml)).not.toContain('madeupsecret')
+    // A date the parser cannot read relays its own message, which may quote the value: only a fixed kind is shown.
+    const date = checkSyntax('toml', 'a = 1\nwhen = 1979-05-27T07:32:00madeupsecret\n')
+    expect(date).toMatchObject({ status: 'invalid', line: 2 })
+    expect(JSON.stringify(date)).not.toContain('madeupsecret')
+    expect(checkSyntax('toml', 'a = "unfinished\n')).toMatchObject({ status: 'invalid', line: 1, message: 'control characters are not allowed in strings' })
     expect(syntaxWords('json', { status: 'valid' })).toBe('Syntax valid')
     expect(checkSyntax('json', `${String.fromCharCode(0xfeff)}{"a": 1}`)).toEqual({ status: 'valid' })
   })

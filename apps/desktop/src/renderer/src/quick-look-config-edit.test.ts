@@ -181,6 +181,23 @@ describe('a blocked save', () => {
     const clash = Text.of('{\n  "model": "made-up",\n  "apiKey": "other",\n  "n": 1\n}\n'.split('\n'))
     expect(rebaseConfigDraft(original, changes, state.field(maskField).masks, clash)).toBeNull()
   })
+
+  it('carries his line between two changes another program made above and below it, and onto added and removed lines elsewhere', () => {
+    const json = '{\n  "model": "made-up",\n  "n": 1,\n  "apiKey": "madeupOldValue123",\n  "m": 2,\n  "last": true\n}\n'
+    let state = draft('json', '/p/a.json', json)
+    state = act(state, { changes: { from: first(state).from, to: first(state).to, insert: CANARY }, userEvent: 'input.paste' }).state
+    const { original, changes } = state.field(draftChanges)
+    const masks = state.field(maskField).masks
+    const both = Text.of('{\n  "model": "agent-changed",\n  "n": 1,\n  "apiKey": "madeupOldValue123",\n  "m": 2,\n  "last": false\n}\n'.split('\n'))
+    const carried = rebaseConfigDraft(original, changes, masks, both)
+    expect(carried?.text.toString()).toBe(`{\n  "model": "agent-changed",\n  "n": 1,\n  "apiKey": "${CANARY}",\n  "m": 2,\n  "last": false\n}\n`)
+    expect(carried!.masks.map((mask) => carried!.text.sliceString(mask.from, mask.to))).toEqual([CANARY])
+    const moved = Text.of('{\n  "added": 0,\n  "model": "made-up",\n  "apiKey": "madeupOldValue123",\n  "m": 2,\n  "last": true,\n  "tail": 3\n}\n'.split('\n'))
+    expect(rebaseConfigDraft(original, changes, masks, moved)?.text.toString())
+      .toBe(`{\n  "added": 0,\n  "model": "made-up",\n  "apiKey": "${CANARY}",\n  "m": 2,\n  "last": true,\n  "tail": 3\n}\n`)
+    // Removing his line is still both changing it.
+    expect(rebaseConfigDraft(original, changes, masks, Text.of('{\n  "model": "made-up",\n  "n": 1,\n  "m": 2,\n  "last": true\n}\n'.split('\n')))).toBeNull()
+  })
 })
 
 describe('a file with Windows line endings', () => {

@@ -691,10 +691,19 @@ export function QuickLook(props: {
   const reviewLatest = (): void => {
     if (!ready || (!envRows && !configEditing)) return
     const path = ready.path
+    // The file as it is now is installed only when it can still be edited; otherwise the draft stays as it is.
+    const readOnlyNow = (next: Extract<QuickLookReadResult, { status: 'ready' }>): string | null =>
+      next.edit?.status !== 'editable' ? (next.edit?.status === 'read-only' ? next.edit.message : 'Read-only')
+        : configEditing && lineEndingOf(next.content) === 'mixed' ? 'Read-only · mixed line endings' : null
     if (configEditing) {
       void read(path).then((next) => {
         if (next.status !== 'ready' || shownPath.current !== path) {
           setSaveRow({ kind: 'failed', message: 'Could not save · the file can no longer be read' })
+          return
+        }
+        const refused = readOnlyNow(next)
+        if (refused) {
+          setSaveRow({ kind: 'failed', message: `Could not save · now ${refused.replace(/^Read-only/u, 'read-only')}` })
           return
         }
         if (!configEditor.current?.carry(viewText(next.content))) {
@@ -717,6 +726,11 @@ export function QuickLook(props: {
         return
       }
       const model = readEnvFile(next.content)
+      const refused = readOnlyNow(next) ?? (model.status === 'read-only' ? model.reason : null)
+      if (refused) {
+        setSaveRow({ kind: 'failed', message: `Could not save · now ${refused.replace(/^Read-only/u, 'read-only')}` })
+        return
+      }
       const carried = model.status === 'rows' ? rebaseEnvDraft(from, model, envDraft) : null
       if (!carried) {
         setSaveRow({ kind: 'failed', message: 'Could not save · a key you changed is no longer in the file' })

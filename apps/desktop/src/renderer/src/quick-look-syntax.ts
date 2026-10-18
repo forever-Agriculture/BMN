@@ -189,16 +189,29 @@ function yamlFault(text: string): SyntaxVerdict {
   return fault === -1 ? { status: 'valid' } : { status: 'invalid', line: lineAt(text, fault), message: 'the YAML parser cannot read this' }
 }
 
+/**
+ * The kinds of fault smol-toml names in fixed words. Its message also carries a code frame of the text, and a date it
+ * cannot read relays the date parser's own message, which can quote the value; only a kind on this list is shown.
+ */
+const TOML_KINDS = new Set([
+  'illegal character in numeric literal', 'control characters are not allowed in comments', 'control characters are not allowed in strings',
+  'document contains excessively nested structures. aborting.', 'each key-value declaration must be followed by an end-of-line',
+  'expected comma or end of structure', 'expected end of table array declaration', 'illegal character in key', 'illegal empty bare key',
+  'illegal leading zero', 'illegal quoted key: multiline strings are not allowed', 'illegal underscore', 'incomplete key-value: cannot find end of key',
+  'integer value cannot be represented losslessly', 'invalid date', 'invalid date-time: date part is malformed', 'invalid date-time: time part is malformed',
+  'invalid escape: only line-ending whitespace may be escaped', 'invalid non-hex character in unicode escape', 'invalid unicode escape', 'invalid value',
+  'trying to redefine an already defined value', 'trying to redefine an already defined table or value', 'unexpected end of key', 'unfinished array',
+  'unfinished numeric value', 'unfinished string', 'unfinished table', 'unrecognised escape sequence'
+])
+
 function tomlFault(text: string): SyntaxVerdict {
   try {
     parseToml(text)
     return { status: 'valid' }
   } catch (error) {
     const line = typeof error === 'object' && error !== null && 'line' in error && typeof error.line === 'number' ? error.line : 1
-    // The parser's message can quote the text it stopped at; only its kind is kept.
-    const raw = error instanceof Error ? error.message.split('\n')[0] ?? '' : ''
-    const kind = /^[A-Za-z ,'-]{3,80}/.exec(raw.replace(/^Invalid TOML document: /, ''))?.[0]?.trim().toLowerCase()
-    return { status: 'invalid', line, message: kind && kind.length > 0 ? kind : 'the TOML parser cannot read this' }
+    const head = error instanceof Error ? (error.message.split('\n')[0] ?? '').replace(/^Invalid TOML document: /u, '') : ''
+    return { status: 'invalid', line, message: TOML_KINDS.has(head) ? head.replace(/\. aborting\.$/u, '') : 'the TOML parser cannot read this' }
   }
 }
 

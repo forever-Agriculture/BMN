@@ -201,12 +201,13 @@ const changeGutter: Extension = [
 const maskedCopy = EditorView.domEventHandlers({
   copy: (event, view) => copyMasked(event, view, false),
   cut: (event, view) => copyMasked(event, view, true),
+  // A selection that holds a hidden value is not dragged: dropped back in the draft it would move the words
+  // "[secret hidden]" in and the value out.
   dragstart: (event, view) => {
     const chosen = view.state.selection.ranges.filter((range) => !range.empty)
-    if (!event.dataTransfer || chosen.length === 0 || view.state.field(maskField).masks.length === 0) return false
-    event.dataTransfer.clearData()
-    event.dataTransfer.setData('text/plain', chosen.map((range) => maskedDraft(view.state, range.from, range.to)).join('\n'))
-    event.dataTransfer.effectAllowed = 'copy'
+    const masks = view.state.field(maskField).masks
+    if (!chosen.some((range) => masks.some((mask) => range.from < mask.to && range.to > mask.from))) return false
+    event.preventDefault()
     return true
   }
 })

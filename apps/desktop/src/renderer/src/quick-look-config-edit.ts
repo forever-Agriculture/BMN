@@ -327,19 +327,67 @@ export function lineSummary(marks: LineMarks): string {
   return parts.length > 0 ? parts.join(' · ') : 'No lines changed'
 }
 
-/** The lines another program changed, as one change from the text as read to the text on disk now. */
-function changedBlock(original: Text, latest: Text): ChangeSet {
-  let top = 1
-  while (top <= original.lines && top <= latest.lines && original.line(top).text === latest.line(top).text) top += 1
-  if (top > original.lines && top > latest.lines) return ChangeSet.empty(original.length)
+/** Above this many line pairs in the stretch both texts differ in, the stretch is one change: a clash is then only more likely. */
+const LINE_DIFF_LIMIT = 4_000_000
+
+/**
+ * The lines another program changed, from the text as read to the text on disk now: each run of changed lines is its
+ * own change, found by the longest run of lines the two texts share, so edits above and below his line stay apart.
+ */
+function changedLines(original: Text, latest: Text): { changes: ChangeSet; runs: ReadonlyArray<readonly [number, number, number, number]> } {
+  const old = Array.from({ length: original.lines }, (_, index) => original.line(index + 1).text)
+  const now = Array.from({ length: latest.lines }, (_, index) => latest.line(index + 1).text)
+  let top = 0
+  while (top < old.length && top < now.length && old[top] === now[top]) top += 1
   let bottom = 0
-  while (bottom < original.lines - top + 1 && bottom < latest.lines - top + 1 &&
-    original.line(original.lines - bottom).text === latest.line(latest.lines - bottom).text) bottom += 1
-  const from = top <= original.lines ? original.line(top).from : original.length
-  const to = original.lines - bottom >= top ? original.line(original.lines - bottom).to : from
-  const insertFrom = top <= latest.lines ? latest.line(top).from : latest.length
-  const insertTo = latest.lines - bottom >= top ? latest.line(latest.lines - bottom).to : insertFrom
-  return ChangeSet.of({ from, to, insert: latest.sliceString(insertFrom, insertTo) }, original.length)
+  while (bottom < old.length - top && bottom < now.length - top && old[old.length - 1 - bottom] === now[now.length - 1 - bottom]) bottom += 1
+  const n = old.length - top - bottom
+  const m = now.length - top - bottom
+  // Runs of [old from, old to, new from, new to) lines, 0-based.
+  const runs: Array<[number, number, number, number]> = []
+  if (n === 0 && m === 0) return { changes: ChangeSet.empty(original.length), runs }
+  if (n === 0 || m === 0 || n * m > LINE_DIFF_LIMIT) runs.push([top, top + n, top, top + m])
+  else {
+    // shared[i][j]: lines shared by old[top+i..] and now[top+j..].
+    const shared = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1))
+    for (let i = n - 1; i >= 0; i -= 1) {
+      for (let j = m - 1; j >= 0; j -= 1) {
+        shared[i]![j] = old[top + i] === now[top + j] ? shared[i + 1]![j + 1]! + 1 : Math.max(shared[i + 1]![j]!, shared[i]![j + 1]!)
+      }
+    }
+    let i = 0
+    let j = 0
+    let run: [number, number, number, number] | null = null
+    while (i < n || j < m) {
+      if (i < n && j < m && old[top + i] === now[top + j]) {
+        if (run) runs.push(run)
+        run = null
+        i += 1
+        j += 1
+        continue
+      }
+      run ??= [top + i, top + i, top + j, top + j]
+      if (j < m && (i === n || shared[i]![j + 1]! >= shared[i + 1]![j]!)) run[3] = top + ++j
+      else run[1] = top + ++i
+    }
+    if (run) runs.push(run)
+  }
+  const joined = (from: number, to: number): string => now.slice(from, to).join('\n')
+  const changes = ChangeSet.of(runs.map(([oldFrom, oldTo, newFrom, newTo]) => {
+    if (oldFrom === oldTo) {
+      // New lines only: before the line they precede, or after the last line.
+      return oldFrom < old.length
+        ? { from: original.line(oldFrom + 1).from, insert: `${joined(newFrom, newTo)}\n` }
+        : { from: original.length, insert: `\n${joined(newFrom, newTo)}` }
+    }
+    if (newFrom === newTo) {
+      // Lines removed, with one line break.
+      if (oldTo < old.length) return { from: original.line(oldFrom + 1).from, to: original.line(oldTo + 1).from }
+      return { from: oldFrom > 0 ? original.line(oldFrom).to : 0, to: original.length }
+    }
+    return { from: original.line(oldFrom + 1).from, to: original.line(oldTo).to, insert: joined(newFrom, newTo) }
+  }), original.length)
+  return { changes, runs }
 }
 
 /**
@@ -347,15 +395,15 @@ function changedBlock(original: Text, latest: Text): ChangeSet {
  * when the other program changed other lines; when both changed the same lines, nothing is carried (null).
  */
 export function rebaseConfigDraft(original: Text, changes: ChangeSet, masks: readonly Mask[], latest: Text): { text: Text; changes: ChangeSet; masks: Mask[] } | null {
-  const theirs = changedBlock(original, latest)
+  const { changes: theirs, runs } = changedLines(original, latest)
   let clash = false
-  theirs.iterChangedRanges((fromA, toA) => {
-    changes.iterChangedRanges((ownFrom, ownTo) => {
-      // Lines both touched, taken whole: an edit at the end of the line before theirs still clashes.
-      const lineFrom = original.lineAt(fromA).from
-      const lineTo = original.lineAt(toA).to
-      if (ownFrom <= lineTo && ownTo >= lineFrom) clash = true
-    })
+  changes.iterChangedRanges((ownFrom, ownTo) => {
+    // The lines he touched, taken whole and 0-based; theirs clash when they change one of them, or add lines beside one.
+    const ownTop = original.lineAt(ownFrom).number - 1
+    const ownBottom = original.lineAt(ownTo).number - 1
+    for (const [oldFrom, oldTo] of runs) {
+      if (oldFrom === oldTo ? ownTop <= oldFrom && ownBottom >= oldFrom - 1 : ownTop < oldTo && ownBottom >= oldFrom) clash = true
+    }
   })
   if (clash) return null
   const mine = changes.map(theirs)

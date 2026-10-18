@@ -597,6 +597,11 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     check('the test hook holds names, dots and lengths only', JSON.stringify(rowsState.hook?.edit?.rows) === JSON.stringify(['MADEUP_HOST=•••• 15', 'MADEUP_SECRET=•••• 18', 'MADEUP_MODE=•••• 3']),
       { rows: rowsState.hook?.edit?.rows })
     await sheet.locator('.ql-env-rows').focus()
+    // A paste with a row chosen but no value field in focus does nothing (R68-NFR5).
+    await pasteInto('madeupQL68noField0001')
+    await page.waitForTimeout(100)
+    check('a paste with no value field in focus changes nothing', await sheet.locator('.ql-save').count() === 0 && await sheet.locator('.ql-env-field').count() === 0 &&
+      !JSON.stringify(await hook()).includes('madeupQL68noField0001') && !(await pageText()).includes('madeupQL68noField0001'))
     await page.keyboard.press('ArrowDown')
     await page.keyboard.press('Enter')
     const inField = await active()
@@ -683,6 +688,24 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-save') === null)
     check('Save then writes his value over the other program\'s file, keeping its change', readFileSync(envPath, 'utf8') === agentBytes.replace(`"${PASTED}"`, `"${PASTED_TWO}"`))
 
+    // A file that another program changed and made read-only meanwhile: Review latest says so and keeps the draft, unsaved.
+    await sheet.locator('.ql-env-rows').focus()
+    await page.keyboard.press('Enter')
+    await pasteInto('madeupQL68readOnly01')
+    await page.keyboard.press('Escape')
+    const lockedBytes = readFileSync(envPath, 'utf8').replace('MADEUP_MODE=agent', 'MADEUP_MODE=locked')
+    writeFileSync(envPath, lockedBytes)
+    await page.keyboard.press('Control+s')
+    await sheet.getByRole('button', { name: 'Review latest', exact: true }).waitFor()
+    chmodSync(envPath, 0o440)
+    await sheet.getByRole('button', { name: 'Review latest', exact: true }).click()
+    await page.waitForFunction(() => /now read-only/u.test(document.querySelector('dialog.quick-look .ql-save-what')?.textContent ?? ''))
+    const lockedState = { what: await sheet.locator('.ql-save-what').textContent(), rows: await sheet.locator('.ql-env-row').count(), row: await sheet.locator('.ql-env-row.sel').innerText(),
+      disk: readFileSync(envPath, 'utf8') === lockedBytes }
+    check('Review latest on a file that is now read-only says so and keeps the draft, unsaved; nothing is written', lockedState.what === 'Could not save · now read-only · not writable' &&
+      lockedState.rows === 3 && lockedState.row.includes('Unsaved') && lockedState.disk, { what: lockedState.what, rows: lockedState.rows })
+    chmodSync(envPath, 0o640)
+
     // Discard drops the draft and goes the way he asked.
     await sheet.locator('.ql-env-rows').focus()
     await page.keyboard.press('Enter')
@@ -744,6 +767,12 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
       return data.getData('text/plain')
     })
     check('copying the draft carries "[secret hidden]" in place of the pasted value', draftCopy.includes('"apiKey": "[secret hidden]"') && !draftCopy.includes(PASTED_JSONC))
+    const draftDrag = await sheet.locator('.ql-code .cm-content').evaluate((content) => {
+      const data = new DataTransfer()
+      const started = content.dispatchEvent(new DragEvent('dragstart', { dataTransfer: data, bubbles: true, cancelable: true }))
+      return { started, carried: data.getData('text/plain') }
+    })
+    check('a selection that holds a hidden value is not dragged in edit mode', !draftDrag.started && draftDrag.carried === "", draftDrag)
     await toLine(5)
     await page.keyboard.press('Backspace')
     await page.keyboard.type('3')
