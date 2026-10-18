@@ -574,3 +574,47 @@ describe('bounded work', () => {
     }
   }, 60_000)
 })
+
+describe('one long line, read once', () => {
+  /** A seeded line of pieces that begin, end, overlap and nearly make the shapes. */
+  const PIECES = ['password', 'PASSWORD', 'token', 'apikey', 'api_key', 'secret', 'passwd', '=', ':', ':=', ' ', '  ', '\t', '"', "'", 'madeupab', 'xy', '-', '--', '_', 'sk-',
+    'aaaaaaaaaaaaaaaaaaaaaaaa', 'ghp_', 'gho_', 'github_pat_', 'xoxb-', 'xoxp-', 'eyJ', 'eyJaa', '.', '.aa', '.bb', 'Bearer ', 's1.', '0123456789abcdef', 'AKIA',
+    'AIza', 'ABCDEFGHIJKLMNOP', '#', '{', '}', ',', 'é', 'x']
+  function seeded(seed: number): () => number {
+    let state = seed
+    return () => {
+      state = (state * 1103515245 + 12345) & 0x7fffffff
+      return state
+    }
+  }
+
+  it('hides what a search one character on from each match of each shape hides (the shapes of a Telegram card)', () => {
+    const next = seeded(67)
+    for (let index = 0; index < 4_000; index += 1) {
+      let line = ''
+      for (let length = 1 + (next() % 30); length > 0; length -= 1) line += PIECES[next() % PIECES.length]
+      expect(secretRanges('/p/notes.md', line), JSON.stringify(line)).toEqual(secretShapeRanges(line))
+    }
+  })
+
+  it('finds a value an embedded name leads to over a blank, and a token whose later header reaches past the first', () => {
+    const embedded = 'token=madeupabpassword = madeupvalue2'
+    expect(hidden('/p/notes.md', embedded)).toEqual(['madeupabpassword', 'madeupvalue2'])
+    const reaching = 'eyJaa.bb.cceyJdd.ee.ff'
+    expect(secretRanges('/p/notes.md', reaching)).toEqual(secretShapeRanges(reaching))
+    expect(hidden('/p/notes.md', reaching)).toEqual([reaching])
+  })
+
+  it('takes tens of milliseconds, not minutes, for a line of a megabyte made of one shape again and again', () => {
+    const megabyte = (unit: string): string => unit.repeat(Math.floor(1_048_576 / unit.length))
+    for (const unit of ['"password":"x",', 'token=', `sk-${'a'.repeat(24)}`, `ghp_${'a'.repeat(36)}`, `xoxb-${'a'.repeat(10)}`, 'eyJaa', 'eyJaa.aa.bb']) {
+      const text = megabyte(unit)
+      for (const path of ['/p/notes.md', '/p/settings.json']) {
+        const started = performance.now()
+        secretRanges(path, text)
+        // Read a character at a time once more per name, as before, this took from seconds to minutes.
+        expect(performance.now() - started, `${unit} in ${path}`).toBeLessThan(1_500)
+      }
+    }
+  })
+})

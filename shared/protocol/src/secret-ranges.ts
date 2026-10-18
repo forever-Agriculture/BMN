@@ -13,13 +13,27 @@ export const SECRET_MASK = '[secret hidden]'
 /** One stretch of a text, from `start` up to and not including `end`. */
 export type SecretRange = [start: number, end: number]
 
-interface Shape { pattern: RegExp; keepsName?: true }
+/**
+ * `runs`: a fixed beginning and one greedy run of its characters, so a later match that begins inside a match lies
+ * in the same run and ends where it ends: the search of a line goes on after the match, not one character in.
+ */
+interface Shape { pattern: RegExp; keepsName?: true; runs?: true }
 
 /** A PEM private key, through its END line, or to the end of the text when the text was cut short. */
 const KEY_BLOCK: Shape = { pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g }
 
 /** The words that make a name a secret's in running text (Story 34.2). */
 const NAME_WORDS = 'api_key|apikey|token|secret|password|passwd'
+const JWT = /eyJ[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}/g
+const ASSIGNMENT = new RegExp(`\\b([A-Za-z0-9_-]*(?:${NAME_WORDS})["']?\\s*[:=]\\s*)[^\\s]{8,}`, 'gi')
+/**
+ * The part of `ASSIGNMENT` that decides it: a name word with its sign. The `\\b` before the name's optional
+ * characters holds somewhere between where their run begins and the word, so it never decides, and the value is
+ * the whole run of non-blank characters after the sign: each sign is found once and its value's end by a cursor
+ * that only moves forward, where a search one character on from each match would read a long line again per name.
+ */
+const ASSIGNMENT_SIGN = new RegExp(`(?:${NAME_WORDS})["']?\\s*[:=]\\s*`, 'gi')
+const ASSIGNED_LEAST = 8
 
 /**
  * Secret shapes of one line, as Story 34.2 names them. A key is found wherever its shape appears, even run
@@ -29,24 +43,24 @@ const NAME_WORDS = 'api_key|apikey|token|secret|password|passwd'
  */
 const LINE_SHAPES: readonly Shape[] = [
   // A JWT: three base64url segments, the header starting `eyJ` (`{"`).
-  { pattern: /eyJ[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}/g },
+  { pattern: JWT },
   // BMN's own session token: `s1.<session>.<incarnation>.<hex mac>` (control-auth.ts).
   { pattern: /s1\.[A-Za-z0-9_:-]+\.[A-Za-z0-9_:-]+\.[0-9a-fA-F]{16,}/g },
   // OpenAI and Anthropic keys, `sk-proj-` and `sk-ant-` included.
-  { pattern: /sk-[A-Za-z0-9_-]{20,}/g },
+  { pattern: /sk-[A-Za-z0-9_-]{20,}/g, runs: true },
   // An AWS access key id.
   { pattern: /AKIA[0-9A-Z]{16}/g },
   // GitHub tokens: classic `ghp_` and its siblings, and fine-grained `github_pat_`.
-  { pattern: /gh[pousr]_[A-Za-z0-9_]{36,}/g },
-  { pattern: /github_pat_[A-Za-z0-9_]{20,}/g },
+  { pattern: /gh[pousr]_[A-Za-z0-9_]{36,}/g, runs: true },
+  { pattern: /github_pat_[A-Za-z0-9_]{20,}/g, runs: true },
   // Slack tokens.
-  { pattern: /xox[abprs]-[A-Za-z0-9-]{10,}/g },
+  { pattern: /xox[abprs]-[A-Za-z0-9-]{10,}/g, runs: true },
   // A Google API key.
   { pattern: /AIza[0-9A-Za-z_-]{35}/g },
   // `Bearer <token>`: the word stays, the token of 16 or more characters goes.
   { pattern: /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{16,}/gi, keepsName: true },
   // `password=…`, `API_KEY: …`, `"token": "…"`: the name stays, a value of 8 or more characters goes.
-  { pattern: new RegExp(`\\b([A-Za-z0-9_-]*(?:${NAME_WORDS})["']?\\s*[:=]\\s*)[^\\s]{8,}`, 'gi'), keepsName: true }
+  { pattern: ASSIGNMENT, keepsName: true }
 ]
 
 const SHAPES: readonly Shape[] = [KEY_BLOCK, ...LINE_SHAPES]
@@ -124,9 +138,11 @@ const WINDOW = 256 * 1024
 /** The characters a token is made of. Where a line is cut inside a run of 32 or more of them, the run is hidden. */
 const TOKEN_CHARACTER = /[A-Za-z0-9_.+/=~:-]/
 const CUT_RUN = 32
+const BLANK = /\s/
 const BEGIN_KEY = /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----/y
 const END_KEY = /-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----/y
-const LINE_SEARCHES = LINE_SHAPES.map(({ pattern, keepsName }) => ({ search: new RegExp(pattern.source, pattern.flags), keepsName: keepsName === true }))
+const LINE_SEARCHES = LINE_SHAPES.filter(({ pattern }) => pattern !== ASSIGNMENT && pattern !== JWT)
+  .map(({ pattern, keepsName, runs }) => ({ search: new RegExp(pattern.source, pattern.flags), keepsName: keepsName === true, runs: runs === true }))
 
 const TAB = 9
 const LINE_END = 10
@@ -223,6 +239,40 @@ function linesWithShapes(text: string, check: () => void): number[] {
   return starts
 }
 
+const JWT_LEAST = 2
+
+function base64url(code: number): boolean {
+  return (code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a) || (code >= 0x30 && code <= 0x39) || code === 0x5f || code === 0x2d
+}
+
+/**
+ * `JWT` in one line, as a search one character on from each match would find it, read once: a match from an `eyJ`
+ * takes the rest of its run of base64url characters, a dot, the whole next run, a dot and the whole run after, so
+ * every `eyJ` of one run ends at the same place and the first of them, whose first part is the longest, is the only
+ * one asked about. An `eyJ` in a later run is asked about too: it can reach further. A run is read at most three
+ * times, as a match's first, second and third part.
+ */
+function jwts(piece: string, start: number, mine: SecretRange[], check: () => void): void {
+  const runEnd = (from: number): number => {
+    let at = from
+    while (at < piece.length && base64url(piece.charCodeAt(at))) at += 1
+    return at
+  }
+  let runTo = -1
+  for (let at = piece.indexOf('eyJ'); at !== -1; at = piece.indexOf('eyJ', at + 1)) {
+    check()
+    // A later `eyJ` of the run already asked about ends where that one does, with a shorter first part.
+    if (at < runTo) continue
+    runTo = runEnd(at)
+    if (runTo - (at + 3) < JWT_LEAST || piece[runTo] !== '.') continue
+    const second = runEnd(runTo + 1)
+    if (second - (runTo + 1) < JWT_LEAST || piece[second] !== '.') continue
+    const third = runEnd(second + 1)
+    if (third - (second + 1) < JWT_LEAST) continue
+    mine.push([start + at, start + third])
+  }
+}
+
 /** The shapes of one line, searched as far as `reach` characters, in order. Returns where the line ends. */
 function lineShapes(text: string, start: number, reach: number, found: SecretRange[], check: () => void): number {
   const stop = text.indexOf('\n', start)
@@ -230,13 +280,23 @@ function lineShapes(text: string, start: number, reach: number, found: SecretRan
   const cut = end - start > reach
   const piece = text.slice(start, cut ? start + reach : end)
   const mine: SecretRange[] = []
-  for (const { search, keepsName } of LINE_SEARCHES) {
+  for (const { search, keepsName, runs } of LINE_SEARCHES) {
     search.lastIndex = 0
     for (let match = search.exec(piece); match !== null; match = search.exec(piece)) {
       check()
       mine.push([start + match.index + (keepsName ? match[1]!.length : 0), start + match.index + match[0].length])
-      search.lastIndex = match.index + 1
+      search.lastIndex = runs ? match.index + match[0].length : match.index + 1
     }
+  }
+  jwts(piece, start, mine, check)
+  ASSIGNMENT_SIGN.lastIndex = 0
+  let blank = 0
+  for (let sign = ASSIGNMENT_SIGN.exec(piece); sign !== null; sign = ASSIGNMENT_SIGN.exec(piece)) {
+    check()
+    const value = sign.index + sign[0].length
+    if (blank < value) blank = value
+    while (blank < piece.length && !BLANK.test(piece[blank] as string)) blank += 1
+    if (blank - value >= ASSIGNED_LEAST) mine.push([start + value, start + blank])
   }
   if (cut) {
     // The search stopped inside this line. A token it stopped in is hidden from where it began.

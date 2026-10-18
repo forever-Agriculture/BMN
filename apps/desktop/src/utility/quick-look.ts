@@ -16,7 +16,7 @@ import {
   type QuickLookRootResult
 } from '@bmn/protocol'
 import { readLocalTextFile, type FileReferenceReaderOptions } from './file-reference-reader'
-import { repositoryGit } from './repository-git'
+import { gitTopLevel } from './repository-git'
 
 const DIMMED = new Set(QUICK_LOOK_DIMMED_NAMES)
 /** At most this many names are held while a folder is read; past it they are cut to the first rows in the tree's order. */
@@ -32,14 +32,6 @@ export interface QuickLookOptions {
 
 const pause = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 
-export async function gitTopLevel(folder: string): Promise<string | null> {
-  try {
-    const output = (await repositoryGit(folder, ['rev-parse', '--show-toplevel'], 16 * 1024)).trim()
-    return output && isAbsolute(output) ? output : null
-  } catch {
-    return null
-  }
-}
 
 /** Where Quick look starts for a source: a running session's launch folder, a stopped one's stored folder, or a workspace's folder. */
 export function quickLookSourceFolder(source: { kind: 'session'; liveLaunchDirectory: string | null; storedCwd: string } | { kind: 'workspace'; folder: string | null }): string | null {

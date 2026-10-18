@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
 import { maskSecrets } from './secret-mask'
 
@@ -16,6 +17,16 @@ export async function repositoryGit(directory: string, argv: string[], maxBuffer
     }
   })
   return result.stdout
+}
+
+/** The work tree's root above `folder`, as Git names it; null outside Git or when Git cannot tell. */
+export async function gitTopLevel(folder: string): Promise<string | null> {
+  try {
+    const output = (await repositoryGit(folder, ['rev-parse', '--show-toplevel'], 16 * 1024)).trim()
+    return output && isAbsolute(output) ? output : null
+  } catch {
+    return null
+  }
 }
 
 export function repositoryGitError(error: unknown): string {

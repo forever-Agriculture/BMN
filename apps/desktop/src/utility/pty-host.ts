@@ -39,7 +39,8 @@ import type { AnswerRequest } from './remote-answer'
 import { DatabaseClientError, DatabaseWorkerClient } from './database-client'
 import { readFileReference } from './file-reference-reader'
 import { listQuickLookFolder, quickLookIdentity, quickLookRoot, quickLookSourceFolder, readQuickLookFile } from './quick-look'
-import { QuickLookSearches, searchQuickLookContents } from './quick-look-search'
+import { QuickLookSearches } from './quick-look-search'
+import { QuickLookSearchClient } from './quick-look-search-client'
 import { searchFileReferences } from './file-reference-search'
 import { inspectRepositoryIdentity } from './repository-identity'
 import { readDevAutoRuns } from './dev-auto-runs'
@@ -572,6 +573,8 @@ async function start(): Promise<void> {
   }
 
   const quickLookSearches = new QuickLookSearches()
+  // A file's masking and matching can take longer than a terminal may wait, so the contents search runs in its own thread.
+  const quickLookContents = new QuickLookSearchClient(join(__dirname, 'quick-look-search-worker.js'))
 
   /**
    * Quick look's top field (Story 67.5): "Go to file" through the name search, or "Contents". The root must be the
@@ -591,7 +594,7 @@ async function start(): Promise<void> {
       }
     }, async (signal) => mode === 'files'
       ? { mode: 'files' as const, ...(await searchFileReferences(root, query, signal)) }
-      : searchQuickLookContents(root, { query, matchCase: params.matchCase === true, wholeWord: params.wholeWord === true }, signal))
+      : quickLookContents.contents(root, { query, matchCase: params.matchCase === true, wholeWord: params.wholeWord === true }, signal))
   }
 
   async function route(request: RpcRequest): Promise<unknown> {

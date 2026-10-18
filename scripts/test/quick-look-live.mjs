@@ -76,6 +76,18 @@ function writeProject(project) {
     `![drawn ${PAGE_KEY}](images/d.png) and [keyed](https://example.invalid/?k=${PAGE_KEY})`, ''
   ].join('\n'))
   file('docs/big.md', `# Big\n\n${'A made-up line of a big Markdown file.\n'.repeat(14000)}`)
+  // Files at the caps, dense with made-up values: a source file just under 2 MiB and a Markdown page just under 512 KiB.
+  const denseLine = (index) => `const k${index} = "sk-madeupDENSE${String(index).padStart(6, '0')}abcdefghij" // token=madeupDENSEvalue${index} eyJaa.bb.cc${index}\n`
+  let dense = ''
+  for (let index = 0; dense.length + 120 < 2 * 1024 * 1024; index += 1) dense += denseLine(index)
+  file('dense.ts', dense)
+  let densePage = '# Dense made-up page\n\n'
+  for (let index = 0; densePage.length + 400 < 512 * 1024; index += 1) {
+    densePage += index % 20 === 0
+      ? `\`\`\`ts\nconst t${index} = "sk-madeupDENSE${index}abcdefghijklmnop" // password: madeupDENSEpw${index}\n\`\`\`\n\n`
+      : `Paragraph ${index} with sk-madeupDENSE${index}abcdefghijklmnop and token=madeupDENSEvalue${index} and [a link](https://example.invalid/?k=sk-madeupDENSE${index}abcdefghijklmnop).\n\n`
+  }
+  file('docs/dense.md', densePage)
   file('docs/opencode.jsonc', `{\n  // made-up config\n  "model": "made-up/model",\n  "provider": { "options": { "apiKey": "${CANARY_JSON}" } }\n}\n`)
   file('empty.txt', '')
   writeFileSync(join(project, 'archive.zip'), Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x14, 0x00]))
@@ -664,6 +676,37 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await sheet.locator('.ql-code .cm-content').waitFor()
     check('a Markdown file over 512 KB opens as source with one line saying why', (await sheet.locator('.ql-note').allTextContents()).includes('Over 512 KB, so shown as source.') &&
       await sheet.locator('.ql-mode').count() === 0)
+    // At the caps, dense with values: the source file and the page open, hide every value, find and switch.
+    await sheet.locator('.ql-tr', { hasText: 'dense.ts' }).first().click()
+    const denseAt = Date.now()
+    await sheet.locator('.ql-path').filter({ hasText: 'dense.ts' }).waitFor()
+    await sheet.locator('.ql-code .cm-content').waitFor()
+    const denseMs = Date.now() - denseAt
+    const denseShown = await page.evaluate(() => window.__aitermQuickLook?.snapshot())
+    const denseDom = await sheet.locator('.ql-main').textContent()
+    check('a source file just under 2 MiB, dense with values, opens with every value hidden', !denseDom.includes('madeupDENSE') && denseShown.hidden > 20_000 &&
+      !JSON.stringify(denseShown).includes('madeupDENSE') && denseMs < 4_000, { denseMs, hidden: denseShown.hidden })
+    await sheet.locator('.ql-code .cm-content').click()
+    await page.keyboard.press('Control+f')
+    await page.keyboard.type('const k1')
+    await page.waitForTimeout(400)
+    const denseFind = await sheet.locator('.ql-find').textContent()
+    check('find works in it', /of [\d,]+/u.test(denseFind), { denseFind: denseFind.slice(0, 120) })
+    await page.keyboard.press('Escape')
+    await sheet.locator('.ql-tr', { hasText: 'dense.md' }).first().click()
+    const pageAt = Date.now()
+    await sheet.locator('.ql-path').filter({ hasText: 'dense.md' }).waitFor()
+    await sheet.locator('.ql-page .ql-md h1').waitFor()
+    const pageMs = Date.now() - pageAt
+    const pageDom = await sheet.locator('.ql-main').innerHTML()
+    check('a Markdown page just under 512 KiB, dense with values, links and highlighted code, draws with every value hidden', !pageDom.includes('madeupDENSE') && pageMs < 6_000, { pageMs })
+    await sheet.locator('.ql-page').focus()
+    await page.keyboard.press('m')
+    await sheet.locator('.ql-code .cm-content').waitFor()
+    const pageSource = await sheet.locator('.ql-main').textContent()
+    await page.keyboard.press('m')
+    await sheet.locator('.ql-page .ql-md h1').waitFor()
+    check('it switches to source and back with every value still hidden', !pageSource.includes('madeupDENSE') && !(await sheet.locator('.ql-main').innerHTML()).includes('madeupDENSE'))
     const pagePolicyViolations = await page.evaluate(() => window.__qlViolations ?? [])
     check('no network request and no policy violation while a document with remote images and links is open', requests.length === 0 && violations.length === 0 && pagePolicyViolations.length === 0,
       { requests, violations, pagePolicyViolations })
@@ -823,6 +866,50 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await waitSearch(() => { const state = window.__aitermQuickLook?.snapshot().search; return state?.query === 'zebra-stopped' && state.fresh && !state.searching && !!state.header })
     const stopped = await quick()
     check('Esc stops a running search and the results say they are partial', stopped.search.header.notes.includes('Partial results · search stopped'), { header: stopped.search.header })
+
+    // Crafted files of a megabyte each, full of hidden values, that hold a thread 100 ms or more while they are masked:
+    // the search masks them in its own thread, so the terminal's counter keeps arriving; a newer query replaces the
+    // search under way and Esc stops it, and nothing of the older search is shown afterwards.
+    const crafted = join(bulk, 'crafted')
+    mkdirSync(crafted, { recursive: true })
+    const megabyte = (head, unit) => head + unit.repeat(Math.floor((1_048_000 - head.length) / unit.length))
+    writeFileSync(join(crafted, 'a.json'), megabyte('madeupneedle\n', 'API_KEY=x\n'))
+    writeFileSync(join(crafted, 'b.json'), megabyte('"madeupneedle":1,', '"password":"x",'))
+    writeFileSync(join(crafted, 'c.md'), megabyte('madeupneedle ', 'eyJaa.aa.bb '))
+    writeFileSync(join(crafted, 'd.env'), megabyte('madeupneedle=1\n', 'NAME=madeup\n'))
+    writeFileSync(join(crafted, 'e.md'), megabyte('madeupneedle ', `sk-${'a'.repeat(24)} api `))
+    writeFileSync(join(crafted, 'f.json'), megabyte('{"madeupneedle":1}\n', '{"token":"abcdefabcdefabcdefabcdefabcdefabcd"},\n'))
+    await page.keyboard.press('Control+a')
+    await watchTicks()
+    const craftedAt = Date.now()
+    await page.keyboard.type('madeupneedle')
+    await waitSearch(() => { const state = window.__aitermQuickLook?.snapshot().search; return state?.query === 'madeupneedle' && state.fresh && !state.searching && !!state.header }, undefined, 60_000)
+    const craftedTicks = await stopTicks()
+    const craftedResult = await quick()
+    check('with crafted megabyte files of hidden values among 20,000 files the counter shows no gap over 100 ms, and their lines come back masked',
+      craftedTicks.changes > 20 && craftedTicks.longest <= 100 && /in 6 files/u.test(craftedResult.search.header.count) && !JSON.stringify(craftedResult).includes('abcdefabcdefabcdefabcdefabcdefabcd'),
+      { craftedTicks, searchMs: Date.now() - craftedAt, header: craftedResult.search.header })
+    await page.keyboard.press('Control+a')
+    await page.keyboard.type('madeupneedle')
+    await waitSearch(() => window.__aitermQuickLook?.snapshot().search?.searching === true)
+    await page.waitForTimeout(40)
+    await page.keyboard.press('Control+a')
+    await page.keyboard.type('zebra-replaced')
+    await waitSearch(() => { const state = window.__aitermQuickLook?.snapshot().search; return state?.query === 'zebra-replaced' && state.fresh && !state.searching && !!state.header }, undefined, 60_000)
+    await page.waitForTimeout(1500)
+    const replaced = await quick()
+    check('a newer query replaces a search of the crafted files under way, and no result of the older one shows afterwards',
+      replaced.search.query === 'zebra-replaced' && replaced.search.fresh && replaced.search.header.count === 'No matches' && replaced.search.rows.length === 0, { search: replaced.search })
+    await page.keyboard.press('Control+a')
+    await page.keyboard.type('madeupneedle')
+    await waitSearch(() => window.__aitermQuickLook?.snapshot().search?.searching === true)
+    await page.waitForTimeout(40)
+    const stopAt = Date.now()
+    await page.keyboard.press('Escape')
+    await waitSearch(() => { const state = window.__aitermQuickLook?.snapshot().search; return state?.query === 'madeupneedle' && state.fresh && !state.searching && !!state.header })
+    const craftedStopped = await quick()
+    check('Esc stops a search inside the crafted files at once and says it is partial', craftedStopped.search.header.notes.includes('Partial results · search stopped') && Date.now() - stopAt < 1_000,
+      { stopMs: Date.now() - stopAt, header: craftedStopped.search.header })
     await page.keyboard.press('Escape')
     await page.keyboard.press('Escape')
     await sheet.waitFor({ state: 'detached' })

@@ -479,28 +479,60 @@ export function runPieces(
   const start = run.from
   const end = run.from + run.text.length
   const cuts = new Set<number>([start, end])
+  // Ranges, tokens and matches are each in order and apart, so the part of each that meets this run is found by
+  // halving and walked once: a page of many runs and many hidden values costs each of them once per run it meets.
   const hidden: { from: number; to: number; index: number }[] = []
-  ranges.forEach(([from, to], index) => {
-    if (index === revealed || to <= start || from >= end) return
-    hidden.push({ from: Math.max(from, start), to: Math.min(to, end), index })
-  })
-  for (const token of tokens) { cuts.add(Math.max(start, token.from)); cuts.add(Math.min(end, token.to)) }
-  matches.forEach((match) => { if (match.to > start && match.from < end) { cuts.add(Math.max(start, match.from)); cuts.add(Math.min(end, match.to)) } })
+  for (let index = firstEndingAfter(ranges, start, (range) => range[1]); index < ranges.length && ranges[index]![0] < end; index += 1) {
+    const [from, to] = ranges[index]!
+    if (index !== revealed && to > from) hidden.push({ from: Math.max(from, start), to: Math.min(to, end), index })
+  }
+  const shownTokens: { from: number; to: number; className: string }[] = []
+  for (let index = firstEndingAfter(tokens, start, (token) => token.to); index < tokens.length && tokens[index]!.from < end; index += 1) shownTokens.push(tokens[index]!)
+  const shownMatches: { from: number; to: number; index: number }[] = []
+  for (let index = firstEndingAfter(matches, start, (match) => match.to); index < matches.length && matches[index]!.from < end; index += 1) {
+    shownMatches.push({ from: matches[index]!.from, to: matches[index]!.to, index })
+  }
+  for (const token of shownTokens) { cuts.add(Math.max(start, token.from)); cuts.add(Math.min(end, token.to)) }
+  for (const match of shownMatches) { cuts.add(Math.max(start, match.from)); cuts.add(Math.min(end, match.to)) }
   for (const each of hidden) { cuts.add(each.from); cuts.add(each.to) }
   const points = [...cuts].filter((at) => at >= start && at <= end).sort((a, b) => a - b)
   const pieces: RunPiece[] = []
+  // One cursor per list, moving forward with the pieces.
+  let secretAt = 0
+  let tokenAt = 0
+  let matchAt = 0
   for (let index = 0; index < points.length - 1; index += 1) {
     const from = points[index]!
     const to = points[index + 1]!
     if (to <= from) continue
-    const secret = hidden.find((each) => each.from <= from && to <= each.to)
-    if (secret) {
+    while (secretAt < hidden.length && hidden[secretAt]!.to <= from) secretAt += 1
+    const secret = hidden[secretAt]
+    if (secret && secret.from <= from && to <= secret.to) {
       if (pieces[pieces.length - 1]?.secret !== secret.index) pieces.push({ text: '', from: secret.from, className: null, secret: secret.index, match: null })
       continue
     }
-    const token = tokens.find((each) => each.from <= from && to <= each.to)
-    const match = matches.findIndex((each) => each.from <= from && to <= each.to)
-    pieces.push({ text: run.text.slice(from - start, to - start), from, className: token?.className ?? null, secret: null, match: match === -1 ? null : match })
+    while (tokenAt < shownTokens.length && shownTokens[tokenAt]!.to <= from) tokenAt += 1
+    while (matchAt < shownMatches.length && shownMatches[matchAt]!.to <= from) matchAt += 1
+    const token = shownTokens[tokenAt]
+    const match = shownMatches[matchAt]
+    pieces.push({
+      text: run.text.slice(from - start, to - start), from,
+      className: token && token.from <= from && to <= token.to ? token.className : null,
+      secret: null,
+      match: match && match.from <= from && to <= match.to ? match.index : null
+    })
   }
   return pieces
+}
+
+/** The first item of an ordered list of stretches that apart ends after `at`, found by halving. */
+export function firstEndingAfter<T>(items: readonly T[], at: number, endOf: (item: T) => number): number {
+  let low = 0
+  let high = items.length
+  while (low < high) {
+    const middle = (low + high) >> 1
+    if (endOf(items[middle]!) <= at) low = middle + 1
+    else high = middle
+  }
+  return low
 }

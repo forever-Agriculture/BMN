@@ -26,6 +26,7 @@ flowchart LR
 | Preload | The only bridge from the renderer to the main process, as a typed, validated API | `apps/desktop/src/preload` |
 | Utility | node-pty terminals, the control socket, stored files, backups, Telegram | `apps/desktop/src/utility` |
 | Database worker | The single SQLite connection; every write is one transaction | `apps/desktop/src/utility/database-worker.ts` |
+| Quick look search worker | A contents search's reads, masking and matching, apart from the thread that keeps terminals flowing; a stop is read inside each file | `apps/desktop/src/utility/quick-look-search-worker.ts` |
 
 Messages between processes are defined once in `shared/protocol` (`@bmn/protocol`) and
 validated on arrival.

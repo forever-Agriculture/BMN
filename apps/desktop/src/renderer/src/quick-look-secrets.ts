@@ -28,11 +28,20 @@ export function quickLookSecretRanges(path: string, canonicalPath: string, text:
 export function maskedSlice(text: string, ranges: readonly SecretRange[], from: number, to: number, revealed: number | null = null): string {
   let out = ''
   let at = from
-  ranges.forEach(([start, end], index) => {
-    if (index === revealed || end <= from || start >= to) return
+  // Only the ranges that meet `[from, to)`, found by halving: copying many selections of a file of many values stays quick.
+  let low = 0
+  let high = ranges.length
+  while (low < high) {
+    const middle = (low + high) >> 1
+    if (ranges[middle]![1] <= from) low = middle + 1
+    else high = middle
+  }
+  for (let index = low; index < ranges.length && ranges[index]![0] < to; index += 1) {
+    const [start, end] = ranges[index]!
+    if (index === revealed) continue
     out += `${text.slice(at, Math.max(at, start))}${SECRET_MASK}`
     at = Math.max(at, Math.min(end, to))
-  })
+  }
   return `${out}${text.slice(at, to)}`
 }
 

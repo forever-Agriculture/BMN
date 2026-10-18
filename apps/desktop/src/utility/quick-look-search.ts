@@ -17,8 +17,7 @@ import {
   type SecretRange
 } from '@bmn/protocol'
 import { FILE_SEARCH_MAX_DEPTH, GENERATED_DIRECTORIES } from './file-reference-search'
-import { gitTopLevel } from './quick-look'
-import { repositoryGit, repositoryGitError } from './repository-git'
+import { gitTopLevel, repositoryGit, repositoryGitError } from './repository-git'
 
 export interface ContentsSearchLimits {
   maxFiles?: number
@@ -32,7 +31,15 @@ export interface ContentsSearchOptions extends ContentsSearchLimits {
   wholeWord: boolean
   /** Test seam for the work tree's root; Git otherwise. */
   gitRoot?: (folder: string) => Promise<string | null>
+  /**
+   * Asked inside the masking and matching of a file as well as between files: true stops the search at once. The
+   * worker passes one that reads the window's stop flag, so a cancel lands in the middle of a large file.
+   */
+  stopped?: () => boolean
 }
+
+/** Thrown inside a file's masking or matching when the search was stopped; nothing of the file is kept. */
+const STOPPED = Symbol('search stopped')
 
 /** Files read at once; each reads asynchronously and every file ends with a turn for the terminals. */
 const READERS = 4
@@ -97,10 +104,13 @@ const whole = (text: string, index: number): number => {
  * The matching lines of one file's text: the first match on each line that no hidden value touches, the line
  * masked by the rule of Story 67.3 for this path and cut to 240 characters around its match.
  */
-export function matchingLines(path: string, text: string, pattern: RegExp, maxLines: number): QuickLookContentsLine[] {
+export function matchingLines(path: string, text: string, pattern: RegExp, maxLines: number, stopped: () => boolean = () => false): QuickLookContentsLine[] {
+  const check = (): void => {
+    if (stopped()) throw STOPPED
+  }
   pattern.lastIndex = 0
   if (!pattern.test(text)) return []
-  const ranges = [...secretRanges(path, text)].sort((left, right) => left[0] - right[0] || left[1] - right[1])
+  const ranges = [...secretRanges(path, text, { check })].sort((left, right) => left[0] - right[0] || left[1] - right[1])
   // Two cursors, both only moving forward as matches do: `first` to mask a whole line from its start, `stretch` to
   // tell whether a match touches a hidden value, so a line of many hidden values costs each of them once.
   let first = 0
@@ -123,6 +133,7 @@ export function matchingLines(path: string, text: string, pattern: RegExp, maxLi
   }
   pattern.lastIndex = 0
   for (let match = pattern.exec(text); match && found.length < maxLines; match = pattern.exec(text)) {
+    check()
     const start = match.index
     const end = start + match[0].length
     if (end === start) {
@@ -224,7 +235,7 @@ type FileOutcome = { kind: 'read'; lines: QuickLookContentsLine[] } | { kind: 's
  * listing and the read is never followed or read whole; a file with matches is shown only if the handle lies under
  * the root's real folder, so a folder on the path swapped for a link cannot bring in another folder's lines.
  */
-async function searchFile(path: string, pattern: RegExp, maxBytes: number, maxLines: number, realRoot: string): Promise<FileOutcome> {
+async function searchFile(path: string, pattern: RegExp, maxBytes: number, maxLines: number, realRoot: string, stopped: () => boolean): Promise<FileOutcome> {
   let handle
   try {
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
@@ -251,11 +262,11 @@ async function searchFile(path: string, pattern: RegExp, maxBytes: number, maxLi
     } catch {
       return { kind: 'skipped' }
     }
-    const lines = matchingLines(path, text, new RegExp(pattern.source, pattern.flags), maxLines)
+    const lines = matchingLines(path, text, new RegExp(pattern.source, pattern.flags), maxLines, stopped)
     if (lines.length > 0 && !(await realpath(`/proc/self/fd/${handle.fd}`).catch(() => '')).startsWith(realRoot === '/' ? '/' : `${realRoot}/`)) return { kind: 'skipped' }
     return { kind: 'read', lines }
-  } catch {
-    return { kind: 'unreadable' }
+  } catch (error) {
+    return error === STOPPED ? { kind: 'skipped' } : { kind: 'unreadable' }
   } finally {
     await handle.close().catch(() => undefined)
   }
@@ -273,7 +284,8 @@ export async function searchQuickLookContents(rootPath: string, options: Content
   const result: QuickLookContentsResult = {
     mode: 'contents', root, scope: 'walk', files: [], matchCount: 0, filesRead: 0, unreadable: 0, limit: null, cancelled: false, unavailable: null, elapsedMs: 0
   }
-  const done = (): QuickLookContentsResult => ({ ...result, cancelled: signal.aborted, elapsedMs: Math.round(performance.now() - started) })
+  const stopped = (): boolean => signal.aborted || options.stopped?.() === true
+  const done = (): QuickLookContentsResult => ({ ...result, cancelled: stopped(), elapsedMs: Math.round(performance.now() - started) })
   const problem = contentsQueryProblem(options.query)
   if (problem) return { ...done(), unavailable: problem }
   // The root may be reached through a link, as listing allows (a session started in one); below it no link is followed.
@@ -287,17 +299,17 @@ export async function searchQuickLookContents(rootPath: string, options: Content
   const listing = inGit ? await gitFiles(root, maxFiles, signal) : await walkFiles(root, maxFiles, signal)
   if ('unavailable' in listing) return { ...done(), scope: inGit ? 'git' : 'walk', unavailable: listing.unavailable }
   result.scope = listing.scope
-  if (signal.aborted) return done()
+  if (stopped()) return done()
   const pattern = contentsPattern(options.query, options.matchCase, options.wholeWord)
   const outcomes: Array<FileOutcome | undefined> = new Array(listing.paths.length)
   let next = 0
   let lines = 0
   let full = false
   await Promise.all(Array.from({ length: Math.min(READERS, listing.paths.length) }, async () => {
-    while (!full && !signal.aborted && next < listing.paths.length) {
+    while (!full && !stopped() && next < listing.paths.length) {
       const index = next++
       // One line past the limit tells a search that reached it from one that ended exactly at it.
-      const outcome = await searchFile(listing.paths[index]!, pattern, maxBytes, maxLines + 1, realRoot).catch((): FileOutcome => ({ kind: 'unreadable' }))
+      const outcome = await searchFile(listing.paths[index]!, pattern, maxBytes, maxLines + 1, realRoot, stopped).catch((): FileOutcome => ({ kind: 'unreadable' }))
       outcomes[index] = outcome
       if (outcome.kind === 'read') {
         lines += outcome.lines.length

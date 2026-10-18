@@ -475,7 +475,8 @@ ten seconds, `M` switches a Markdown file between page and source, `Alt+←`/`Al
 you opened, `F5` reloads a changed file, holding `F8` shows the terminals, `Ctrl+B` folds the tree and
 `Escape` closes the innermost thing first. It shows text files of at most 2 MiB, Markdown pages of at
 most 512 KB and folders of at most 2,000 entries; search contents reads at most 20,000 files of at most
-1 MiB and returns at most 2,000 lines. Masking hides values that look like secrets; it does not find
+1 MiB and returns at most 2,000 lines, in a thread of its own, so terminals keep flowing while it masks a large
+file and a new query or `Escape` stops it at once. Masking hides values that look like secrets; it does not find
 every secret. Nothing is indexed, watched or stored: each folder, file and search is read when you ask.
 
 **The reference dialog.** **Open file reference…** in the palette opens a dialog where you type or

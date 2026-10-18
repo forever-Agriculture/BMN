@@ -5,6 +5,7 @@ import { codeTokens } from './quick-look-code'
 import type { FindMatch } from './quick-look-find'
 import {
   resolveLinkPath,
+  firstEndingAfter,
   runPieces,
   type MarkdownBlock,
   type MarkdownInline,
@@ -61,13 +62,16 @@ interface Draw {
  */
 export function maskedSource(text: string, from: number, ranges: readonly SecretRange[], revealed: number | null = null): string {
   if (from < 0) return text
-  let out = text
-  for (let index = ranges.length - 1; index >= 0; index -= 1) {
+  // Only the ranges that meet this text are visited, found by halving: a page of many links and many values stays quick.
+  let out = ''
+  let at = 0
+  for (let index = firstEndingAfter(ranges, from, (range) => range[1]); index < ranges.length && ranges[index]![0] < from + text.length; index += 1) {
     const [start, end] = ranges[index]!
-    if (index === revealed || end <= from || start >= from + text.length) continue
-    out = `${out.slice(0, Math.max(0, start - from))}${SECRET_MASK}${out.slice(Math.min(text.length, end - from))}`
+    if (index === revealed || end <= start) continue
+    out += `${text.slice(at, Math.max(at, start - from))}${SECRET_MASK}`
+    at = Math.max(at, Math.min(text.length, end - from))
   }
-  return out
+  return out + text.slice(at)
 }
 
 const DOTS = '\u2022'.repeat(12)
