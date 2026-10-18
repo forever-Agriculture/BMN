@@ -615,6 +615,15 @@ export function QuickLook(props: {
   /** A row of the edited .env file shown for ten seconds, or hidden again; one at a time (Story 68.1 AC2). */
   const toggleEnvValue = (row: number): void => setEnvShown((current) => (current?.row === row ? null : { row, until: Date.now() + REVEAL_SECONDS * 1000 }))
 
+  /** Edit mode on the file shown, from E or the header's Edit plate (Story 68.2 AC1; Fable's plate 2026-10-18). */
+  const beginEdit = (): void => {
+    if (!ready) return
+    editDigest.current = ready.digest
+    setEditing(true)
+    setFind((state) => (state.open ? { ...state, open: false } : state))
+    setGoTo({ open: false, text: '', invalid: false })
+  }
+
   /** Drops his draft and every question about it; the file stays as it was read. */
   const dropDraft = (): void => {
     dirtyRef.current = false
@@ -1321,12 +1330,8 @@ export function QuickLook(props: {
     // E enters edit mode on a config file that may be edited, and says why not on any other (Story 68.2 AC1).
     if (plain && !event.shiftKey && event.key.toLowerCase() === 'e' && focusArea === 'file' && ready && !configEditing && !envRows && !event.nativeEvent.isComposing) {
       take()
-      if (configEditable) {
-        editDigest.current = ready.digest
-        setEditing(true)
-        setFind((state) => (state.open ? { ...state, open: false } : state))
-        setGoTo({ open: false, text: '', invalid: false })
-      } else setFooterNote(configReadOnly ?? readOnlyWords ?? 'Read-only · source file')
+      if (configEditable) beginEdit()
+      else setFooterNote(configReadOnly ?? readOnlyWords ?? 'Read-only · source file')
       return
     }
     if (ctrl && !event.shiftKey && event.code === 'KeyR' && envRows) {
@@ -1553,7 +1558,14 @@ export function QuickLook(props: {
                         ...(savedAt?.path === ready.path && !dirty ? [`Saved ${savedAt.at}`] : [])].join(' · ')}
                   actions={(
                     <>
-                      {configEditing ? <span className="ql-editing-plate">EDITING</span> : null}
+                      {/* One plate says the file can be edited and how: Edit (E), pressed as Editing while a draft is open (owner 2026-10-18: "how can I add comments or TODOs ... in status.yaml?"). */}
+                      {configEditable ? (
+                        <button type="button" className={`ql-plate ql-edit-plate${configEditing ? ' ql-editing-plate' : ''}`} aria-pressed={configEditing}
+                          title={configEditing ? 'Leave edit mode; Save or Discard asks first when there are edits' : 'Edit this file (E)'}
+                          onClick={() => { if (configEditing) guarded(dropDraft); else beginEdit() }}>
+                          {configEditing ? 'Editing' : <>Edit<kbd>E</kbd></>}
+                        </button>
+                      ) : configReadOnly ? <span className="ql-facts ql-readonly-word" title={configReadOnly}>Read-only</span> : null}
                       {openedSearch ? (
                         <span className="ql-match-nav" role="group" aria-label="Matches">
                           <button type="button" className="ql-icon-button" aria-label="Previous match" title="Previous match" onClick={() => stepResult(-1)}>
@@ -1662,7 +1674,8 @@ export function QuickLook(props: {
 
 function TreeRowView(props: { row: TreeRow; index: number; selected: boolean; open: boolean; dirty?: boolean; onClick(): void }): React.JSX.Element {
   const row = props.row
-  const indent = { paddingLeft: `${6 + row.depth * 12}px` }
+  // Each level steps 14 px; a hairline guide runs under every open folder above the row (Fable, 2026-10-18).
+  const indent = { paddingLeft: `${6 + row.depth * 14}px`, '--d': row.depth } as React.CSSProperties
   if (row.kind === 'more' || row.kind === 'note') {
     return <div id={`ql-row-${props.index}`} className={`ql-tr ql-tr-${row.kind}${props.selected ? ' sel' : ''}`} style={indent} data-path={row.path}
       role="treeitem" aria-selected={props.selected}>{row.label}</div>

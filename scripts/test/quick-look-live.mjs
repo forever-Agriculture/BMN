@@ -37,6 +37,13 @@ const PASTED_JSONC = 'madeupQL68jsoncPasted012'
 const PASTED_YAML = 'madeupQL68yamlPasted0123'
 const PASTED_TOML = 'madeupQL68tomlPasted0123'
 const SETTINGS_JSONC = ['{', '  // made-up settings', '  "model": "made-up/model",', '  "apiKey": "madeupQL68jsoncOld000",', '  "retries": 2', '}', ''].join('\r\n')
+// A made-up planning board in BMN's form; line 4 is the story a TODO is added to.
+const BOARD = [
+  '# made-up board', 'development_status:', '  epic-1: in-progress # a made-up note',
+  '  1-2-browse-waiting-requests-with-arrow-keys: review',
+  '  1-1-hide-secret-shaped-text-sent-to-telegram: done # keys and tokens named in a note',
+  '  1-3-a-made-up-story-with-a-very-long-name-for-the-board: backlog', ''
+].join('\n')
 const EDITED_ENV = '# made-up config\nexport MADEUP_HOST=made-up.example\nMADEUP_SECRET="madeupQL68oldValue"\n\nMADEUP_MODE=dev\n'
 // A word only one made-up file holds, so a search's traces can be looked for in the app's folders afterwards.
 const PROBE = 'QL67searchprobe'
@@ -81,6 +88,8 @@ function writeProject(project) {
   file('config/app.yaml', 'name: made-up\ntoken: madeupQL68yamlOld0000\n')
   file('config/app.toml', 'title = "made-up"\napi_key = \'madeupQL68tomlOld0000\'\n')
   file('config/locked.json', '{"a": 1}\n')
+  // A planning board as BMN keeps one (plan/status.yaml): long story names, some with secret-sounding words, all readable.
+  file('docs/plan/status.yaml', BOARD)
   chmodSync(join(project, 'config/locked.json'), 0o444)
   file('docs/plan.md', [
     '---', 'title: Made-up plan', '---', '# Made-up plan', '',
@@ -787,9 +796,23 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     check('E on an ordinary file says "Read-only · source file" where the hint would be', /Read-only · source file/u.test(await footerText()) && await sheet.locator('.ql-editing-plate').count() === 0)
     await openRow('locked.json')
     check('a config file that may not be edited says why there, and carries no Edit hint', /Read-only · not writable/u.test(await footerText()) && !/EEdit/u.test(await footerText()), { footer: await footerText() })
+    check('its header says Read-only with the reason, and shows no Edit plate', await sheet.locator('.ql-path .ql-readonly-word').count() === 1 &&
+      await sheet.locator('.ql-edit-plate').count() === 0, { title: await sheet.locator('.ql-path .ql-readonly-word').getAttribute('title').catch(() => null) })
     await openRow('settings.jsonc')
     await sheet.locator('.ql-code .cm-content').click()
     check('an editable config file\'s footer shows "E Edit"', /EEdit/u.test(await footerText()), { footer: await footerText() })
+    // The header's plate (Fable, 2026-10-18): Edit E enters edit mode, pressed as Editing; pressed again with no edits it leaves.
+    const editPlate = sheet.locator('.ql-path button.ql-edit-plate')
+    const plateBefore = (await editPlate.textContent())?.trim()
+    await editPlate.click()
+    await sheet.locator('.ql-editing-plate').waitFor()
+    const pressed = await editPlate.getAttribute('aria-pressed')
+    const plateEditing = (await editPlate.textContent())?.trim()
+    await editPlate.click()
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-editing-plate') === null)
+    check('the header\'s Edit plate enters edit mode, reads Editing while pressed, and leaves it again with no edits', plateBefore === 'EditE' &&
+      pressed === 'true' && plateEditing === 'Editing' && await sheet.locator('.ql-code.ql-editing').count() === 0, { plateBefore, pressed, plateEditing })
+    await sheet.locator('.ql-code .cm-content').click()
     await page.keyboard.press('e')
     await sheet.locator('.ql-editing-plate').waitFor()
     check('E enters edit mode: an EDITING plate and the focus ring around the file', await sheet.locator('.ql-code.ql-editing').count() === 1 &&
@@ -910,6 +933,28 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     check('a YAML and a TOML file with a replaced value read back by a parser as that value', yamlBack.token === PASTED_YAML && yamlBack.name === 'made-up' &&
       tomlBack.api_key === PASTED_TOML && tomlBack.title === 'made-up', { yaml: readFileSync(join(project, 'config/app.yaml'), 'utf8').replace(PASTED_YAML, '…'), toml: readFileSync(join(project, 'config/app.toml'), 'utf8').replace(PASTED_TOML, '…') })
     check('no second file is left beside the saved configs', JSON.stringify(readdirSync(join(project, 'config')).sort()) === configFiles)
+    // His board (owner 2026-10-18): story names stay readable, and a TODO comment goes in through the Edit plate and Save.
+    if (await sheet.locator('.ql-tr', { hasText: 'status.yaml' }).count() === 0) {
+      if (await sheet.locator('.ql-tr.fold', { hasText: /^plan$/u }).count() === 0) await sheet.locator('.ql-tr', { hasText: 'docs' }).first().click()
+      await sheet.locator('.ql-tr.fold', { hasText: /^plan$/u }).click()
+    }
+    await openRow('status.yaml')
+    const boardText = await pageText()
+    check('a planning board hides no story name, even one with "secret" or "keys" in it', await sheet.locator('.ql-secret').count() === 0 &&
+      boardText.includes('1-1-hide-secret-shaped-text-sent-to-telegram') && boardText.includes('1-3-a-made-up-story-with-a-very-long-name-for-the-board'))
+    await sheet.locator('.ql-path button.ql-edit-plate').click()
+    await sheet.locator('.ql-editing-plate').waitFor()
+    await toLine(4)
+    await page.keyboard.type(' # TODO made-up follow-up')
+    await page.waitForTimeout(300)
+    await page.screenshot({ path: join(evidence, 'board-edit.png') })
+    await page.keyboard.press('Control+s')
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-editing-plate') === null)
+    const boardBack = readFileSync(join(project, 'docs/plan/status.yaml'), 'utf8')
+    check('a TODO comment typed after a story\'s status saves into the board, the rest byte for byte', boardBack === BOARD.replace('review\n', 'review # TODO made-up follow-up\n'),
+      { line: boardBack.split('\n')[3] })
+    await page.waitForTimeout(300)
+    await page.screenshot({ path: join(evidence, 'board.png') })
     await page.keyboard.press('e')
     await sheet.locator('.ql-editing-plate').waitFor()
     await toLine(1)

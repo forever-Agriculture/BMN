@@ -1,6 +1,5 @@
 // MODULE: quick-look-config-view.ts - a config file in CodeMirror's editable mode: hidden values drawn as the plates of 67.3 over the real draft, their notes at the line's edge, a bar or a plus for changed and added lines, history in memory, and copies that carry "[secret hidden]" (Story 68.2)
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
-import { syntaxHighlighting } from '@codemirror/language'
 import { Compartment, EditorState, RangeSet, StateEffect, StateField, type ChangeSet, type Extension, type Text } from '@codemirror/state'
 import {
   Decoration,
@@ -13,12 +12,14 @@ import {
   drawSelection,
   gutter,
   gutterLineClass,
+  highlightActiveLine,
+  highlightActiveLineGutter,
   highlightSpecialChars,
   keymap,
   lineNumbers
 } from '@codemirror/view'
 import type { QuickLookLanguage } from '@bmn/protocol'
-import { greys, languageExtension } from './quick-look-code'
+import { languageExtension, syntaxClasses } from './quick-look-code'
 import { configMasks, draftChanges, lineMarks, maskField, refusedEdit, shownMask, type LineMarks, type Mask, type SecretFinder } from './quick-look-config-edit'
 import { maskedSlice } from './quick-look-secrets'
 import type { ConfigFormat } from './quick-look-syntax'
@@ -257,14 +258,16 @@ export function createConfigEditor(parent: HTMLElement, input: ConfigEditorInput
     frozen.of(EditorState.readOnly.of(false)),
     input.carried ? draftChanges.init(() => ({ original: input.carried!.original, changes: input.carried!.changes })) : draftChanges,
     lineNumbers(),
+    highlightActiveLineGutter(),
     changeGutter,
     highlightSpecialChars(),
     drawSelection(),
+    highlightActiveLine(),
     history(),
     EditorState.tabSize.of(4),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     languageExtension(input.language),
-    syntaxHighlighting(greys),
+    syntaxClasses(input.language),
     shownField,
     plateField,
     notes((id) => input.onReveal(id)),

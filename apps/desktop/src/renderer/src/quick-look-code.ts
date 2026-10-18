@@ -24,6 +24,8 @@ import {
   type ViewUpdate,
   WidgetType,
   drawSelection,
+  highlightActiveLine,
+  highlightActiveLineGutter,
   highlightSpecialChars,
   keymap,
   lineNumbers
@@ -34,9 +36,9 @@ import type { FindMatch } from './quick-look-find'
 import { maskedSlice } from './quick-look-secrets'
 
 /**
- * Syntax as classes, never colours: quick-look.css draws each class in a grey derived from the colour mode's own
- * text and ground (Story 67.1 AC7). A definition and a literal are full text; a name, a keyword, punctuation and a
- * comment each a step down.
+ * Syntax as classes, never colours: quick-look.css draws each class from the colour mode's own text and ground (Story
+ * 67.1 AC7). A definition is full text, a literal the one straw tint (owner 2026-10-18, Fable's "ink and one tint"),
+ * a name, a keyword, punctuation and a comment each a grey step down; no weight or slant in code.
  */
 export const greys = tagHighlighter([
   { tag: [tags.definition(tags.variableName), tags.function(tags.definition(tags.variableName)), tags.definition(tags.propertyName),
@@ -50,6 +52,14 @@ export const greys = tagHighlighter([
   { tag: [tags.strong], class: 'ql-syn-strong' },
   { tag: [tags.emphasis], class: 'ql-syn-emphasis' }
 ])
+
+/** YAML's plain values (`done`, `in-progress`) are its literals; Markdown's body text, the same tag, stays plain. */
+const yamlValues = tagHighlighter([{ tag: tags.content, class: 'ql-syn-literal' }])
+
+/** Syntax classes for a language: every language's, and YAML's plain values as literals. */
+export function syntaxClasses(language: QuickLookLanguage | null): Extension {
+  return language === 'yaml' ? [syntaxHighlighting(greys), syntaxHighlighting(yamlValues)] : syntaxHighlighting(greys)
+}
 
 /** The colour set for each language Quick look colours; any other text is plain. */
 export function languageExtension(language: QuickLookLanguage | null): Extension {
@@ -344,13 +354,15 @@ export function positionOf(state: EditorState, line: number, column: number | nu
 export function createCodeView(parent: HTMLElement, input: CodeViewInput, extra: Extension = []): EditorView {
   const extensions: Extension[] = [
     lineNumbers(),
+    highlightActiveLineGutter(),
     highlightSpecialChars(),
     drawSelection(),
+    highlightActiveLine(),
     EditorState.readOnly.of(true),
     EditorState.tabSize.of(4),
     keymap.of(standardKeymap),
     languageExtension(input.language),
-    syntaxHighlighting(greys),
+    syntaxClasses(input.language),
     findMarks,
     secretState.init(() => {
       const secrets = input.secrets ?? NO_SECRETS

@@ -409,7 +409,7 @@ entries and a line counting the rest; hidden files are listed, links are marked 
 `.git`, `node_modules` and the six generated names are dimmed. ↑ ↓ move, → opens a folder, ← closes it
 or goes to its parent, `Enter` opens a file, typed letters jump to a name (`Escape` clears them),
 `Ctrl+B` folds the tree and `Tab` moves between the tree and the file. A UTF-8 text file of at most
-2 MiB shows with line numbers and grey syntax colour for the common languages; long lines scroll
+2 MiB shows with line numbers, the caret's line faintly marked, and quiet syntax colour for the common languages (greys, values in one straw tint mixed from the app's gold); long lines scroll
 sideways. An empty, binary or larger file says what it is, with **Show in Folder** and **Copy path**.
 In a file, `Ctrl+F` finds literal text (**Aa** or `Alt+C` matches case, `Enter` and `Shift+Enter` step
 through "3 of 12"), `Ctrl+G` goes to a line or `line:column`, and `Alt+←`/`Alt+→` go back and forward
@@ -500,7 +500,7 @@ anywhere but the file.
 
 **Fixing a line in a config file.** A `*.json`, `*.jsonc`, `*.yaml`, `*.yml` or `*.toml` file that Quick
 look may write (the same rules as a `.env` file, and line endings all of one kind) shows **E Edit** in the
-footer; `E` puts it in edit mode, with an **EDITING** plate and the focus ring around the file. One that may
+footer and an **Edit E** plate in its header; the plate or `E` puts it in edit mode, the plate pressed as **Editing** and the focus ring around the file (pressed again with no edits, it leaves edit mode). One that may
 not be edited says why where the hint would be ("Read-only · over 256 KB"), and `E` on any other file says
 "Read-only · source file". In edit mode typing, selection, undo and redo work as in a plain editor, with the
 history in memory; a changed line carries a bar and a heavier number, an added line a plus, and the Save bar
