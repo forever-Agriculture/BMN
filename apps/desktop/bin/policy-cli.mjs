@@ -62,7 +62,7 @@ async function githubFacts(repository) {
 function mayWords(level, branch) {
   const words = [`push branches other than ${branch}, never forced and never deleting a branch or tag`, 'create, edit, mark ready and comment on pull requests']
   if (level !== 'prs-only') words.push('merge a pull request whose current head has every required check green (at least one), with no --admin, --auto or --delete-branch')
-  if (level === 'merge-and-push-main') words.push(`push ${branch}, never forced`)
+  if (level === 'merge-and-push-main') words.push(`push ${branch}, never forced, once the work passed its acceptance`)
   return words
 }
 

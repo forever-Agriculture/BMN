@@ -930,10 +930,11 @@ from the folder's `origin`. The repository's owner and default branch come from 
   mark ready and comment on pull requests.
 - **Merge when green**: also merge a pull request whose current head has every required check green, at least
   one, with no `--admin`, `--auto` or `--delete-branch`.
-- **Merge and push main**: also push the default branch, never forced.
+- **Merge and push main**: also push the default branch, never forced, once the work passed its acceptance.
 - **Still asks**, at every level: the list `bmn policy` prints (deploys, releases and tags, CI changes, repository
-  settings, force pushes and deletions, publishing, secrets, a merge without green required checks, anything in a
-  repository of a denied or unknown owner, and more).
+  settings, force pushes and deletions, publishing, secrets, a merge without green required checks, a merge or a
+  push of the default branch before the work passed its acceptance, anything in a repository of a denied or
+  unknown owner, and more). The policy removes the ask; it never makes work ready.
 
 The policy is the agents' own rule: nothing in BMN allows a command because of it. The hard limits are GitHub's
 repository rules where a repository can carry them (`non_fast_forward` and `deletion` on the default branch, and

@@ -25,6 +25,7 @@ export const PUSH_POLICY_STILL_ASKS: readonly string[] = Object.freeze([
   'publishing packages',
   'a push that might carry a secret',
   'a merge without green required checks (any check skipped, neutral, pending, missing or unreadable), an admin bypass, auto-merge, a merge queue or --delete-branch',
+  'a merge or a push of the default branch before the work passed its acceptance (its tests and reviews): the policy removes the ask, it never makes work ready',
   'credentials, private-data transfers, production or database changes, spending and destructive actions',
   'anything in a repository of a denied or unknown owner'
 ])

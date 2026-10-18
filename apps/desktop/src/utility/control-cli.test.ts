@@ -13,7 +13,7 @@ import { spawn as spawnPty } from 'node-pty'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth, writeOwnerToken } from './control-auth'
 import { AWAY_AGENT_TEXT, ERROR_CODES, HANDOFF_OUTLINE, pushPolicyStatus, readPushPolicy } from '@bmn/protocol'
-import type { PushLevel, PushPolicyStatus } from '@bmn/protocol'
+import { PUSH_POLICY_STILL_ASKS, type PushLevel, type PushPolicyStatus } from '@bmn/protocol'
 import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
 import { readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
@@ -4951,6 +4951,14 @@ describe('bmn policy (Story 83.3)', () => {
     expect(result.stdout).not.toContain('- push trunk, never forced')
     const json = JSON.parse((await runCli(['policy', '--repo', 'octo/widgets', '--json'], { env: { ...fixture.sessionEnv, PATH: await fakeGh(fixture.root, widgets) } })).stdout)
     expect(json.repository).toEqual({ repository: 'octo/widgets', owner: 'octo', defaultBranch: 'trunk', level: 'merge-when-green', authorizes: true, why: null })
+  })
+
+  it('lets the default branch be pushed only once the work passed its acceptance, and says so at every level (R83-NFR4)', async () => {
+    const fixture = await cliFixture()
+    fixture.handlers.policyStatus.mockImplementation(async () => ({ ...inForce([{ repository: 'octo/widgets', level: 'merge-and-push-main' }]), stillAsks: [...PUSH_POLICY_STILL_ASKS] }))
+    const result = await runCli(['policy', '--repo', 'octo/widgets'], { env: { ...fixture.sessionEnv, PATH: await fakeGh(fixture.root, widgets) } })
+    expect(result.stdout).toContain('- push trunk, never forced, once the work passed its acceptance')
+    expect(result.stdout).toContain('- a merge or a push of the default branch before the work passed its acceptance (its tests and reviews): the policy removes the ask, it never makes work ready')
   })
 
   it('counts an unlisted repository of an allowed owner as PRs only, and a denied, moved or unreadable one as nothing', async () => {

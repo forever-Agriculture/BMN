@@ -383,8 +383,8 @@ Rules → **Health** › **Pushes and merges** says what your sessions may push 
 repository owner: each account or organisation your sessions work in, or that `gh` is signed in as, starts denied
 and gets a switch; under an allowed owner each repository has three steps, **PRs only** (push other branches and
 write pull requests), **Merge when green** (also merge a pull request whose required checks are all green) and
-**Merge and push main** (also push the default branch, never forced). Agents read it with `bmn policy --repo`
-before each push, merge or pull-request write, as your rules master tells them; it is in force only while that
+**Merge and push main** (also push the default branch, never forced, once the work passed its acceptance).
+Agents read it with `bmn policy --repo` before each push, merge or pull-request write, as your rules master tells them; it is in force only while that
 master carries the pointer, so Rules › Undo of that save turns it off, and so does denying every owner. Deploys,
 releases, CI changes, secrets, force pushes and deletions always ask you, and BMN's hook holds the clearly
 critical commands itself ([agent-control.md](agent-control.md#the-push-policy)).
