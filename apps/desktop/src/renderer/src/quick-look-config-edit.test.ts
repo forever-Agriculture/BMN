@@ -152,6 +152,33 @@ describe('a paste or a selection that meets more than one value', () => {
     expect(masked(command(undone, redo))).toEqual([CANARY])
   })
 
+  it('masks the whole of a paste that meets the paste rule, a value the file\'s rule finds in it included', () => {
+    const state = withFinder('json', '/p/a.json', '{"apiKey": "madeupOldValue123"}')
+    const doc = state.doc.toString()
+    const mixed = `{"token":"hidden123","model":"${CANARY}"}`
+    const pasted = act(state, { changes: { from: 0, to: doc.length, insert: mixed }, userEvent: 'input.paste' }).state
+    expect(pasted.doc.toString()).toBe(mixed)
+    expect(maskedDraft(pasted)).not.toContain(CANARY)
+    expect(maskedDraft(pasted)).not.toContain('hidden123')
+    expect(maskedDraft(command(command(pasted, undo), redo))).not.toContain(CANARY)
+  })
+
+  it('keeps a value the file\'s rule finds whole when a paste reaches into it, and masks the rest of the paste around it', () => {
+    const state = withFinder('json', '/p/a.json', '{"note": "abcdefghijklmnopqrstuvwx"}')
+    expect(state.field(maskField).masks).toEqual([])
+    const at = '{"note": "abcdefghijkl'.length
+    // Eight pasted letters make the value a 32-letter run of the shape the file's rule hides.
+    const pasted = act(state, { changes: { from: at, insert: 'QRSTUVWX' }, userEvent: 'input.paste' }).state
+    const value = 'abcdefghijklQRSTUVWXmnopqrstuvwx'
+    expect(pasted.doc.toString()).toBe(`{"note": "${value}"}`)
+    expect(masked(pasted)).toEqual([value])
+    expect(maskedDraft(command(command(pasted, undo), redo))).not.toContain('abcdefghijkl')
+    const mixed = `{"token":"hidden123","model":"${CANARY}"}`
+    const both = withFinder('json', '/p/b.json', `{"model": "x"}`)
+    const into = act(both, { changes: { from: 0, to: both.doc.length, insert: `[${mixed}]` }, userEvent: 'input.paste' }).state
+    expect(maskedDraft(into)).not.toMatch(/hidden123|madeup/u)
+  })
+
   it('replaces a pasted piece as it is and leaves the text around it', () => {
     const state = draft('json', '/p/a.json', '{"model":"prefixSUFFIX"}')
     const at = '{"model":"prefix'.length

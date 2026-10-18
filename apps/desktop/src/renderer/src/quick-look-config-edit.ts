@@ -169,16 +169,28 @@ export const maskField = StateField.define<MaskState>({
       const [from, to] = each.kind === 'value' ? [each.at + 1, each.at + each.length - 1] : [each.at, each.at + each.length]
       add({ from, to, pasted: each.pasted, typing: each.typing, kind: each.kind })
     }
-    // Pasted text is masked as a read file is: values the file's rule finds in it, then a line that meets the paste
-    // rule, wherever it landed and whatever it replaced.
+    // Pasted text is masked as a read file is, wherever it landed and whatever it replaced: a pasted line that meets
+    // the paste rule is one piece over all it holds; a value the file's rule finds that reaches past such a line is
+    // kept whole, and the rest of the line is masked as pieces around it; any other value the rule finds is masked.
     if (tr.isUserEvent('input.paste')) {
+      const overlaps = (a: { from: number; to: number }, b: { from: number; to: number }): boolean => a.from < b.to && a.to > b.from
       const inserted: Array<{ from: number; to: number; text: string }> = []
       tr.changes.iterChanges((_fromA, _toA, fromB, toB, text) => { if (toB > fromB) inserted.push({ from: fromB, to: toB, text: text.toString() }) })
+      // A value replaced whole is already masked inside its quotes: its masks are the ones this transaction added so far.
+      const replaced = masks.filter((mask) => mask.id >= value.nextId)
+      const lines = inserted.filter((each) => pasteLandsMasked(each.text) && !replaced.some((mask) => overlaps(mask, each)))
       const text = tr.state.doc.toString()
-      for (const found of valueMasks(value.format, text, value.find(text))) {
-        if (inserted.some((each) => found.from < each.to && found.to > each.from)) add({ ...found, pasted: true, typing: false, kind: 'value' })
+      const found = valueMasks(value.format, text, value.find(text)).filter((each) => inserted.some((run) => overlaps(each, run)))
+      const kept = found.filter((each) => !lines.some((line) => each.from >= line.from && each.to <= line.to))
+      for (const each of kept) add({ ...each, pasted: true, typing: false, kind: 'value' })
+      for (const line of lines) {
+        let at = line.from
+        for (const each of kept.filter((mask) => overlaps(mask, line))) {
+          if (each.from > at) add({ from: at, to: each.from, pasted: true, typing: false, kind: 'piece' })
+          at = Math.max(at, each.to)
+        }
+        if (line.to > at) add({ from: at, to: line.to, pasted: true, typing: false, kind: 'piece' })
       }
-      for (const each of inserted) if (pasteLandsMasked(each.text)) add({ from: each.from, to: each.to, pasted: true, typing: false, kind: 'piece' })
     }
     for (const effect of tr.effects) {
       if (effect.is(addMasks)) for (const mask of effect.value) add({ from: mask.from, to: mask.to, pasted: mask.pasted, typing: false, kind: mask.kind })

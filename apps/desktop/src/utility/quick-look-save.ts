@@ -19,6 +19,8 @@ export interface QuickLookSaveSeams {
   beforeRename?: () => Promise<void> | void
   /** The user the file must belong to; the process's own otherwise. */
   uid?: number
+  /** Steps of a stopped Save's cleanup that fail, for tests. */
+  cleanupFaults?: ReadonlyArray<'truncate' | 'sync' | 'unlink'>
 }
 
 export function quickLookDigest(bytes: Uint8Array): string {
@@ -205,13 +207,28 @@ export async function saveQuickLookFile(params: Pick<QuickLookSaveParams, 'path'
     outcome = refused(failureWords(error))
   } finally {
     if (handle && !renamed) {
+      const staging = handle
+      const fault = (step: 'truncate' | 'sync' | 'unlink'): void => {
+        if (seams.cleanupFaults?.includes(step)) throw Object.assign(new Error(step), { code: 'EIO' })
+      }
       // Emptied through its own handle first: a folder moved or locked meanwhile cannot keep the new text.
-      await handle.truncate(0).then(() => handle?.sync()).catch(() => undefined)
-      await rm(staged, { force: true }).catch(() => undefined)
-      const left = await handle.stat().then((stats) => stats.nlink > 0, () => true)
+      const emptied = await (async () => {
+        fault('truncate')
+        await staging.truncate(0)
+        fault('sync')
+        await staging.sync()
+      })().then(() => true, () => false)
+      await (async () => {
+        fault('unlink')
+        await rm(staged, { force: true })
+      })().catch(() => undefined)
+      const left = await staging.stat().then((stats) => stats.nlink > 0, () => true)
       if (left) {
         const reason = outcome?.status === 'failed' ? outcome.message : 'Could not save · the file changed on disk'
-        outcome = { status: 'failed', message: `${reason} · an emptied staging file ${basename(staged)} could not be removed` }
+        // Emptied is said only when it is known; otherwise the file may still hold the new text.
+        const what = emptied ? `an emptied staging file ${basename(staged)} could not be removed`
+          : `a staging file ${basename(staged)} that may hold the new text could not be removed; delete it`
+        outcome = { status: 'failed', message: `${reason} · ${what}` }
       }
     }
     await handle?.close().catch(() => undefined)

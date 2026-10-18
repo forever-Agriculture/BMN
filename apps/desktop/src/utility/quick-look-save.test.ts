@@ -156,6 +156,29 @@ describe('Save', () => {
     expect(readFileSync(path, 'utf8')).toBe('A=1\n')
   })
 
+  it('says a staging file it could not empty and could not remove may hold the new text, and says emptied only when it is', async () => {
+    const stopped = async (faults: ReadonlyArray<'truncate' | 'sync' | 'unlink'>) => {
+      const root = project({ 'c.yaml': 'a: 1\n' })
+      const path = join(root, 'c.yaml')
+      const result = await save(root, path, `a: ${CANARY}\n`, { cleanupFaults: faults, beforeRename: () => writeFileSync(path, 'a: agent\n') })
+      const left = extra(root, 'c.yaml')
+      return { result, left, holds: left.some((name) => readFileSync(join(root, name), 'utf8').includes(CANARY)) }
+    }
+    const truncate = await stopped(['truncate', 'unlink'])
+    const sync = await stopped(['sync', 'unlink'])
+    const unlink = await stopped(['unlink'])
+    for (const each of [truncate, sync]) {
+      expect(each.result).toMatchObject({ status: 'failed', message: expect.stringMatching(/^Could not save · the file changed on disk · a staging file \.c\.yaml\.bmn-save-[0-9a-f-]+\.tmp that may hold the new text could not be removed; delete it$/u) })
+      expect(each.left).toHaveLength(1)
+    }
+    expect(truncate.holds).toBe(true)
+    expect(unlink.result).toMatchObject({ status: 'failed', message: expect.stringMatching(/ · an emptied staging file \.c\.yaml\.bmn-save-[0-9a-f-]+\.tmp could not be removed$/u) })
+    expect(unlink.holds).toBe(false)
+    expect(JSON.stringify([truncate, sync, unlink].map((each) => each.result))).not.toContain(CANARY)
+    // A truncate or sync that fails alone still leaves nothing once the file is removed.
+    expect((await stopped(['truncate'])).left).toEqual([])
+  })
+
   it('refuses a file whose bytes on disk are not UTF-8, even with their digest', async () => {
     const root = project()
     const path = join(root, 'a.json')
