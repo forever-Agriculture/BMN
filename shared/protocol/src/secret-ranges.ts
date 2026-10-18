@@ -106,8 +106,19 @@ export type SecretFileKind = 'env' | 'config' | 'lock' | 'text'
 /** The file's own name, in small letters. */
 const nameOf = (path: string): string => path.slice(path.lastIndexOf('/') + 1).toLowerCase()
 
+/**
+ * A planning board: BMN's `plan/status.yaml` or BMAD's `sprint-status.yaml`. Its names are story slugs and its values
+ * statuses and notes, so it is read as text, known shapes only: a story called "hide-secret-shaped-text" or a slug of
+ * 40 letters is no secret (owner 2026-10-18, on his board's rows shown as dots: "It's some BS").
+ */
+const planningBoard = (path: string): boolean => {
+  const whole = path.replace(/\\/gu, '/').toLowerCase()
+  return whole === 'plan/status.yaml' || whole.endsWith('/plan/status.yaml') || nameOf(whole) === 'sprint-status.yaml'
+}
+
 export function secretFileKind(path: string): SecretFileKind {
   const name = nameOf(path)
+  if (planningBoard(path)) return 'text'
   if (name === '.env' || name.startsWith('.env.') || name.endsWith('.env')) return 'env'
   if (name.endsWith('.lock') || name === 'npm-shrinkwrap.json' || /[-_.]lock\.(?:json|jsonc|ya?ml|toml)$/.test(name)) return 'lock'
   if (/\.(?:json|jsonc|ya?ml|toml)$/.test(name)) return 'config'
@@ -1105,7 +1116,26 @@ class Reading {
 const RUN_CHARACTER = new Uint8Array(128)
 for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_+=') RUN_CHARACTER[character.charCodeAt(0)] = 1
 
-/** Every unbroken run of `LONG_RUN` or more of those characters. */
+/**
+ * Whether a run that ends at `at` is a name, not a value: a closing quote may follow, then spaces, then `:` that ends
+ * the line or has a space after it (`name:`, `"name":`), or ` =` (TOML's `name = value`). R67-NFR7 hides a long
+ * *value*; a long name is what a file calls a thing.
+ */
+function nameEndsAt(text: string, at: number): boolean {
+  let next = at
+  const quote = text.charCodeAt(next)
+  if (quote === 34 || quote === 39) next += 1
+  let spaced = false
+  while (text.charCodeAt(next) === SPACE || text.charCodeAt(next) === TAB) { next += 1; spaced = true }
+  const code = text.charCodeAt(next)
+  if (code === 58) {
+    const after = text.charCodeAt(next + 1)
+    return Number.isNaN(after) || after === SPACE || after === TAB || after === LINE_END || after === RETURN
+  }
+  return code === 61 && spaced
+}
+
+/** Every unbroken run of `LONG_RUN` or more of those characters that stands as a value. */
 function longRuns(text: string, check: () => void): SecretRange[] {
   const found: SecretRange[] = []
   let from = -1
@@ -1115,7 +1145,7 @@ function longRuns(text: string, check: () => void): SecretRange[] {
     if (code < 128 && RUN_CHARACTER[code] === 1) {
       if (from < 0) from = at
     } else if (from >= 0) {
-      if (at - from >= LONG_RUN) found.push([from, at])
+      if (at - from >= LONG_RUN && !nameEndsAt(text, at)) found.push([from, at])
       from = -1
     }
   }
@@ -1188,7 +1218,8 @@ function mergedLists(lists: SecretRange[][], check: () => void): SecretRange[] {
 /**
  * Where the secret values of a file's text are, by the file's name (R67-NFR7): in a `.env` file every value;
  * in a config file a value whose name says so, one with a known shape, and one unbroken run of 32 or more
- * letters, digits, `-`, `_`, `+` or `=` (a lock file is spared that last part, or every checksum would go);
+ * letters, digits, `-`, `_`, `+` or `=` standing as a value, never a name (a lock file is spared that last part,
+ * or every checksum would go; a planning board is read as text, see `planningBoard`);
  * in any other text the known shapes. Under a name that says so a value is hidden whole, wherever it
  * stands and however far it goes, and where the file leaves it unsure the reading hides more: see
  * `Reading`. The work is bounded: see `SecretSearchOptions`.

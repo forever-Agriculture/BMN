@@ -23,7 +23,9 @@ describe('the kind of a file', () => {
     ['.env', 'env'], ['.env.local', 'env'], ['deploy/prod.env', 'env'],
     ['package.json', 'config'], ['tsconfig.jsonc', 'config'], ['ci/build.yaml', 'config'], ['a.yml', 'config'], ['Cargo.toml', 'config'],
     ['package-lock.json', 'lock'], ['pnpm-lock.yaml', 'lock'], ['yarn.lock', 'lock'], ['Cargo.lock', 'lock'], ['npm-shrinkwrap.json', 'lock'],
-    ['README.md', 'text'], ['src/app.ts', 'text'], ['env', 'text']
+    ['README.md', 'text'], ['src/app.ts', 'text'], ['env', 'text'],
+    ['plan/status.yaml', 'text'], ['/home/o/code/BMN/plan/status.yaml', 'text'], ['_bmad-output/implementation-artifacts/sprint-status.yaml', 'text'],
+    ['other/status.yaml', 'config']
   ] as const)('%s is %s', (path, kind) => {
     expect(secretFileKind(path)).toBe(kind)
   })
@@ -323,6 +325,21 @@ describe('a config file', () => {
   it('hides one unbroken run of 32 or more letters, digits, -, _, + or =, and a shorter one not', () => {
     expect(hidden('config.yaml', `checksum: ${RUN}\nshort: ${RUN.slice(0, 31)}\npath: a/b/${RUN.slice(0, 20)}/c\n`)).toEqual([RUN])
     expect(hidden('config.yaml', `${RUN}\n${RUN}.${RUN.slice(0, 32)} ${RUN.slice(0, 31)}`)).toEqual([RUN, RUN, RUN.slice(0, 32)])
+  })
+
+  it('never hides a long name, only a long value (owner 2026-10-18: story names shown as dots)', () => {
+    const slug = '77-4-drafts-for-installed-skills-and-agents'
+    expect(hidden('board.yaml', `development_status:\n  ${slug}: done # note\n  ${slug}:\n    nested: ${RUN}\n`)).toEqual([RUN])
+    expect(hidden('a.json', `{"${slug}": "done", "x": "${RUN}"}`)).toEqual([RUN])
+    expect(hidden('a.toml', `${slug} = "done"\nvalue = "${RUN}"\n`)).toEqual([RUN])
+    // A value followed by a colon that does not end it as a name stays hidden.
+    expect(hidden('a.yaml', `host: ${RUN}:8080\n`)).toEqual([RUN])
+  })
+
+  it('reads a planning board as text: story names and their notes stay readable, known shapes still hide', () => {
+    const board = `development_status:\n  34-2-hide-secret-shaped-text-sent-to-telegram: done\n  55-3-browse-waiting-requests-with-arrow-keys: done # keys\n  x: ${RUN}\n  y: ${OPENAI}\n`
+    expect(hidden('plan/status.yaml', board)).toEqual([OPENAI])
+    expect(hidden('elsewhere/status.yaml', board)).not.toEqual([OPENAI])
   })
 
   it('still hides a known shape under any name', () => {
