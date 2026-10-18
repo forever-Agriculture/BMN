@@ -38,6 +38,7 @@ import { applyTerminalExit } from './terminal-exit'
 import { createFocusReports } from './terminal-focus-reports'
 import { trackTerminalView } from './terminal-view-tracking'
 import { SIXEL_SMOKE_FRAME, checkSixelRenderer, createTerminalImageAddon, registerTerminalImages } from './terminal-images'
+import { folderName } from './quick-look-open'
 import { searchStatusText } from './terminal-view'
 import { TERMINAL_THEMES } from './theme'
 import { TurnPlate } from './turn-changes-plate'
@@ -92,6 +93,8 @@ export function SessionTerminal(props: {
   split: boolean
   focusMode: boolean
   filesOpen: boolean
+  /** Quick look is open for this pane's session: its project plate shows pressed. */
+  projectOpen?: boolean
   attention: SessionAttention
   /** The observed working/idle word for this pane, or null before the first derivation. Display only. */
   activity: SessionActivity | null
@@ -633,6 +636,11 @@ export function SessionTerminal(props: {
         {/* The state word always wins: while the session waits for the owner there is no plate. */}
         {props.attention && !exitStatus ? null : <TurnPlate view={props.turns} now={props.now} onOpen={props.onOpenTurns} />}
         <div className="pane-actions">
+          {/* The one filled plate: the project's own folder name opens its files (Fable, 2026-10-18); the toggles stay borderless. */}
+          <button type="button" className="project-plate" aria-label="Project" aria-pressed={props.projectOpen ?? false}
+            title={`Project files · ${props.startup.cwd} (${SHORTCUT_LABELS['quick-look']})`} onClick={props.onProject}>
+            <Icon name="project" /><span className="button-label">{folderName(props.startup.cwd)}</span>
+          </button>
           <button type="button" aria-pressed={props.split} title={`Split (${SHORTCUT_LABELS['split-toggle']})`} onClick={props.onSplit}>
             <Icon name="split" /><span className="button-label">{props.split ? 'Unsplit' : 'Split'}</span>
           </button>
@@ -640,10 +648,7 @@ export function SessionTerminal(props: {
             <Icon name="focus" /><span className="button-label">Focus</span>
             {props.focusCue ? <span className="status-dot needs-you" aria-hidden="true" /> : null}
           </button>
-          <button type="button" aria-label="Project" title={`Project files (${SHORTCUT_LABELS['quick-look']})`} onClick={props.onProject}>
-            <Icon name="project" /><span className="button-label">Project</span>
-          </button>
-          <button type="button" aria-label="Files" aria-pressed={props.filesOpen} onClick={props.onFiles}>
+          <button type="button" aria-label="Files" aria-pressed={props.filesOpen} title="Session files: published, attached, pasted" onClick={props.onFiles}>
             <Icon name="files" /><span className="button-label">Files</span>
           </button>
           <button type="button" className="icon-button" data-action="more" aria-haspopup="menu" aria-label={`More actions for ${name}`}

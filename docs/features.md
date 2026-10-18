@@ -111,8 +111,8 @@ that multiplexer and may reject pets. Saved output is text only; pet pixels are 
   the terminal, so opening, using and closing it never resizes the terminal or makes the program
   redraw. Use **Bottom**/**Top** to move Find away from a hidden match. Its query,
   selected match and position stay with this mounted session view.
-- **Quick look** (`Ctrl+Shift+E`, the **Project** plate in the pane header, or **Project files…** in
-  the palette) opens the project over the window; the same key or `Escape` closes it and typing goes
+- **Quick look** (`Ctrl+Shift+E`, the project plate first in the pane header, named by the session's
+  folder, or **Project files…** in the palette) opens the project over the window; the same key or `Escape` closes it and typing goes
   back to the pane. See [Files and file references](#files-and-file-references).
 - **Copy and paste.** Selecting with the mouse copies. `Ctrl+Shift+C` copies the selection; paste
   with `Ctrl+V`, `Ctrl+Shift+V`, `Shift+Insert` or right-click. Dragging across text also copies when
@@ -398,8 +398,9 @@ temporary folder; a symlink that escapes those is refused.
 Two surfaces show files: **Files** for what moved through a session, and **Quick look** for the
 project the session works in.
 
-**Quick look** is for the project. `Ctrl+Shift+E`, the **Project** plate beside **Files** in the pane
-header, or **Project files…** in the palette opens one sheet over the window; the window dims behind
+**Quick look** is for the project. `Ctrl+Shift+E`, the project plate (the one filled button in the pane
+header, named by the session's folder, such as `BMN`; on an empty workspace beside **New session**), or
+**Project files…** in the palette opens one sheet over the window; the window dims behind
 it and no terminal is resized or typed into. The tree starts at the folder the selected session's
 process started in (its stored folder once it stopped, the workspace's folder with no session); when
 that folder lies below a Git work tree's root, **Git root** moves the tree up and **Session folder**

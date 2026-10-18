@@ -1,6 +1,16 @@
 // MODULE: quick-look-open.test.ts - the ways into Quick look on made-up data: session or workspace, the menu's reference, a missing file's words, printed paths from a scrollback and a selected reference (Story 67.6)
 import { describe, expect, it } from 'vitest'
-import { RECENT_PATHS_MAX, copiedReference, missingWords, printedReferences, quickLookSourceFor, selectedReference } from './quick-look-open'
+import { RECENT_PATHS_MAX, copiedReference, folderName, missingWords, printedReferences, quickLookSourceFor, selectedReference } from './quick-look-open'
+
+describe('the project plate\'s name (Fable, 2026-10-18)', () => {
+  it('is the folder\'s own name, a trailing slash or a Windows path alike; the root stays "/"', () => {
+    expect(folderName('/home/o/code/BMN')).toBe('BMN')
+    expect(folderName('/home/o/code/BMN/.claude/worktrees/epic-67/')).toBe('epic-67')
+    expect(folderName('C:\\work\\site')).toBe('site')
+    expect(folderName('/')).toBe('/')
+    expect(folderName('')).toBe('/')
+  })
+})
 
 describe('whose folder an opening shows', () => {
   it('opens for the session named, else the active workspace, else nothing', () => {

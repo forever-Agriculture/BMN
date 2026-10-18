@@ -1,5 +1,5 @@
 /* global window, document, getComputedStyle */
-// MODULE: lighter-screens-visual.mjs - Epic 75.1/75.10/76.1: the window head (focus mode, 540 px), every Preferences page, the three ⋯ menus, the Files panel, Review results and the palette, captured on synthetic data
+// MODULE: lighter-screens-visual.mjs - Epic 75.1/75.10/76.1: the window head (focus mode, 540 px), the project plate, every Preferences page, the three ⋯ menus, the Files panel, Review results and the palette, captured on synthetic data
 // The app runs in test mode with a temporary HOME and XDG folders (removed at the end). The temporary home holds the
 // unit-test roster, a synthetic rules master and two synthetic skills; stand-ins for claude and codex sit on the PATH
 // the home's shell settings add. One workspace carries what the owner-facing controls act on (the before set of
@@ -307,6 +307,27 @@ echo seeded
       await builderRow.click()
       await resize([540, 700])
     }, { region: '.app-header', close: async () => { await resize(SIZE) } })
+    // The project plate (Fable, 2026-10-18): the pane's one filled button, named by its folder, opens Quick look.
+    const builderHeading = `.session-terminal[data-session-id="${builderId}"] .pane-heading`
+    await screen('pane-plate', 'Pane header of Builder: the project plate named by its folder, then the borderless toggles', async () => { await builderRow.click() },
+      { region: builderHeading })
+    await screen('pane-plate-narrow', 'Pane header at 540 px wide: the plate keeps its fill without its word', async () => {
+      await builderRow.click()
+      await resize([540, 700])
+    }, { region: builderHeading, close: async () => { await resize(SIZE) } })
+    await screen('pane-plate-split', 'Split (Ctrl Shift Enter): each pane names its own folder', async () => {
+      await builderRow.click()
+      await page.keyboard.press('Control+Shift+Enter')
+      await page.locator('dialog[open] input').waitFor()
+      await page.keyboard.type('Reviewer')
+      await page.keyboard.press('Enter')
+      await page.locator('.session-terminal').nth(1).waitFor()
+    }, { close: async () => { await builderRow.click(); await page.keyboard.press('Control+Shift+Enter'); await sleep(400) } })
+    await screen('pane-plate-open', 'The plate pressed: Quick look open for Builder\'s folder', async () => {
+      await builderRow.click()
+      await page.locator(`${builderHeading} button.project-plate`).click()
+      await page.locator('dialog.quick-look[open]').waitFor()
+    }, { close: escape })
     await screen('workspace-menu', 'Workspace ⋯ (sidebar): every entry, the Marker group', openWorkspaceMenu,
       { region: '[role="menu"]', scroll: '[role="menu"]' })
     await screen('session-menu', 'Session ⋯ (sidebar row of Builder): every entry', async () => {
@@ -489,6 +510,12 @@ echo long-seeded
       await go('Agents', 'Team')
     }, { region: '.preferences-dialog', close: async () => { await escape(); await resize(SIZE); await sleep(400) } })
     await escape()
+    // Last, since it adds a workspace: a workspace with no session shows the same plate beside New session.
+    if (wanted('empty-plate')) await page.evaluate((cwd) => window.aiTerminal.createWorkspace({ name: 'Empty project', defaultCwd: cwd }), work)
+    await screen('empty-plate', 'A workspace with no session: New session and the project plate', async () => {
+      await page.locator('section.workspace-group[aria-label="Empty project"] .workspace-row button').first().click()
+      await page.locator('.empty-state button.project-plate').waitFor()
+    }, { region: '.empty-state' })
   } catch (error) {
     manifest.error = String(error?.stack ?? error)
     phase(`stopped: ${manifest.error}`)

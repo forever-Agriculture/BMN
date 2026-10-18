@@ -51,7 +51,7 @@ import { restoreArchive, type ArchiveUndoTarget } from './archive-undo'
 import { conversationBindingPresentation, reportedResumeLine, resumeAvailable } from './conversation-resume'
 import { FileReferenceDialog, type FileReferenceRequest, type FileReferenceSendTarget } from './file-reference-dialog'
 import { QuickLook, type QuickLookRequest } from './quick-look'
-import { RECENT_SCROLLBACK_BYTES, RECENT_SCROLLBACK_ROWS, printedReferences, quickLookSourceFor, selectedReference } from './quick-look-open'
+import { RECENT_SCROLLBACK_BYTES, RECENT_SCROLLBACK_ROWS, folderName, printedReferences, quickLookSourceFor, selectedReference } from './quick-look-open'
 import { FilesPanel } from './files-panel'
 import { HookEventsDialog } from './hook-events-dialog'
 import { ProgressEvidenceDialog } from './progress-evidence-dialog'
@@ -2083,6 +2083,7 @@ function App(): React.JSX.Element {
                 split={panes.length > 1}
                 focusMode={focusMode}
                 filesOpen={panel === 'files'}
+                projectOpen={dialog?.kind === 'quick-look' && dialog.request.source.sessionId === terminalStartup.sessionId}
                 attention={sessionAttention(unresolved, terminalStartup.sessionId)}
                 requestControl={paneControls(terminalStartup.sessionId)}
                 focusCue={focusCue}
@@ -2272,7 +2273,15 @@ function App(): React.JSX.Element {
                 <>
                   <h1>Add a session.</h1>
                   <p>Start an agent or shell in {activeWorkspace.name} with an installed command and a working directory.</p>
-                  <div className="actions"><button type="button" className="primary" disabled={activeWorkspace.archivedAt !== null} onClick={() => beginNewSession(activeWorkspace)}>New session</button></div>
+                  <div className="actions">
+                    <button type="button" className="primary" disabled={activeWorkspace.archivedAt !== null} onClick={() => beginNewSession(activeWorkspace)}>New session</button>
+                    {activeWorkspace.defaultCwd && activeWorkspace.archivedAt === null ? (
+                      <button type="button" className="project-plate" aria-label="Project" title={`Project files · ${activeWorkspace.defaultCwd} (${SHORTCUT_LABELS['quick-look']})`}
+                        onClick={() => openQuickLook(null, null, null, activeWorkspace.workspaceId)}>
+                        <Icon name="project" /><span className="button-label">{folderName(activeWorkspace.defaultCwd)}</span>
+                      </button>
+                    ) : null}
+                  </div>
                 </>
               ) : (
                 <>

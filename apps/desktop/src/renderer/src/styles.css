@@ -1086,6 +1086,35 @@ input[type='radio'] {
   color: var(--faint);
 }
 
+/* The project plate: the one filled button in the row, named by the project's folder (Fable, 2026-10-18). Filled means a
+   thing of this session that opens; the borderless toggles beside it are views. Narrow panes hide its word, not its fill. */
+.pane-actions button.project-plate,
+.empty-state button.project-plate {
+  border-color: transparent;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.pane-actions button.project-plate:hover,
+.empty-state button.project-plate:hover {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+.pane-actions button.project-plate[aria-pressed='true'] {
+  border-color: var(--border);
+  background: var(--selected);
+}
+
+.project-plate .button-label {
+  display: inline-block;
+  max-width: 14ch;
+  overflow: hidden;
+  font: 12px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
 .progress-strip {
   display: flex;
   align-items: center;
@@ -1572,8 +1601,10 @@ input[type='radio'] {
   color: var(--muted);
 }
 
-.stopped-session .actions {
+.stopped-session .actions,
+.empty-state .actions {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 8px;
 }

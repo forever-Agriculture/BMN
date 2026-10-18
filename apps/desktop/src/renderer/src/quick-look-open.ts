@@ -1,5 +1,10 @@
-// MODULE: quick-look-open.ts - the ways into Quick look as data: whose folder it opens, a reference or a path, the paths a session's terminal printed, a selection that reads as one reference, and the words for a missing file (Story 67.6)
+// MODULE: quick-look-open.ts - the ways into Quick look as data: the plate's folder name, whose folder it opens, a reference or a path, the paths a session's terminal printed, a selection that reads as one reference, and the words for a missing file (Story 67.6)
 import { findFileReferences, formatFileReference, type FileReferenceBase, type QuickLookSource } from '@bmn/protocol'
+
+/** A folder's own name, as the project plate shows it (Fable, 2026-10-18): "/home/o/code/BMN/" reads "BMN"; the root stays "/". */
+export function folderName(path: string): string {
+  return path.split(/[\\/]/u).filter(Boolean).pop() ?? (path || '/')
+}
 
 /** What an opening asks to show: a path the app already knows, or a reference resolved as a Ctrl+click is. */
 export type QuickLookAsk = { path: string; line: number | null; column: number | null } | { reference: string }
