@@ -7,6 +7,7 @@ import { basename, dirname, extname, isAbsolute, join, relative } from 'node:pat
 import {
   ERROR_CODES,
   pushPolicyStatus,
+  agentStartBrief,
   type PushLevel,
   type PushPolicyChange,
   type PushPolicyView,
@@ -846,7 +847,9 @@ export class CompanionService {
           // Epic 66.4: the hook asks for a message only when told one waits, so an ordinary tool call adds nothing.
           const waiting = await this.messages.waiting(p)
           // Story 75.6: BMN's start brief rides in this answer once per conversation and once after a compaction.
-          const brief = this.briefs.answer(p)
+          const due = this.briefs.answer(p)
+          // Story 83.5: with the push policy's line only while Health allows at least one owner.
+          const brief = due === null ? null : agentStartBrief(await this.anyOwnerAllowed())
           return {
             ...recorded, ...(waiting ? { messageWaiting: true } : {}), ...(brief === null ? {} : { brief }),
             ...(notice === null ? {} : { awayNotice: notice.text, awayRevision: notice.revision, awayClaim: notice.claimId })
@@ -1364,6 +1367,15 @@ export class CompanionService {
 
   /** What the owner's surfaces see. */
   /** Story 83.3: Health's view of the push policy, over the folders BMN's sessions work in. */
+  private async anyOwnerAllowed(): Promise<boolean> {
+    try {
+      const read = await this.options.database.companion('getPushPolicy')
+      return read.state === 'read' && read.record.owners.some((owner) => owner.allowed)
+    } catch {
+      return false
+    }
+  }
+
   private async pushPolicyForOwner(): Promise<PushPolicyView> {
     const workspaces = (await this.options.database.listWorkspaces()).filter((workspace) => workspace.archivedAt === null)
     const sessions = (await Promise.all(workspaces.map((workspace) => this.options.database.listSessions(workspace.workspaceId)))).flat()

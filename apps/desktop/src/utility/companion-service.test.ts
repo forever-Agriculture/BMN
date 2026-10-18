@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import {
   AGENT_ATTENTION_ORIGINS,
   AGENT_START_BRIEF,
+  agentStartBrief,
   AWAY_AGENT_TEXT,
   AWAY_BACK_AGENT_TEXT,
   AWAY_QUESTION_REFUSAL,
@@ -3290,6 +3291,18 @@ describe('messages between sessions, through the service (Epic 66, Story 75.4)',
     expect(await report('compact')).toEqual({ recorded: true, brief: AGENT_START_BRIEF })
     expect(await report('compact')).toEqual({ recorded: true })
     expect(writes).toEqual([])
+  })
+
+  it('puts the push policy\'s line in the brief only while Health allows an owner (Story 83.5)', async () => {
+    const start = (conversation: string) => handlers().observeHookEvent({
+      sessionId: 's2', incarnationId: 'incarnation-2', agent: 'claude', event: 'SessionStart', source: 'startup', toolName: null, effects: [],
+      turn: { conversation, turn: null, nested: false }
+    })
+    expect(await start('1a1a1a1a-1b1b-2c2c-3d3d-4e4e4e4e4e4e')).toEqual({ recorded: true, brief: AGENT_START_BRIEF })
+    COMPANION_OPERATIONS.changePushPolicy(database, { kind: 'owner', login: 'octo-probe', allowed: true, expectedRevision: 0 }, now)
+    expect(await start('2a2a2a2a-1b1b-2c2c-3d3d-4e4e4e4e4e4e')).toEqual({ recorded: true, brief: agentStartBrief(true) })
+    COMPANION_OPERATIONS.changePushPolicy(database, { kind: 'owner', login: 'octo-probe', allowed: false, expectedRevision: 1 }, now)
+    expect(await start('3a3a3a3a-1b1b-2c2c-3d3d-4e4e4e4e4e4e')).toEqual({ recorded: true, brief: AGENT_START_BRIEF })
   })
 
   it('tells a hook\'s report of a tool call that a message waits, hands it over once on its take and accepts its report', async () => {

@@ -134,6 +134,17 @@ checks from one bounded PTY write. The write has no handoff stamp and does not p
 possibly completed write is never silently retried; its receipt says pasted, not submitted. This
 adds no agent-control socket method.
 
+**The push policy is the owner's; agents only read it (Epic 83).** Health › Pushes and merges changes one
+`app_setting` row, `push-policy-v1`, through preload, main and the utility, one owner or one repository at a time
+against the revision it showed; a stale change is refused and reread. A missing row reads as no owner allowed; a row
+that cannot be read is *unknown*, counts as denied and is never written over. The policy authorizes anything only
+while the rules master carries its pointer (`bmn policy --repo`): the utility asks main, the one process that reads
+the master (R60-NFR3), with a `policy-pointer` question, and a master it cannot read counts as no pointer. Agents read
+it with `bmn policy` over the socket (`policy.status`, a read any session token may make; `policy.set` refuses every
+caller), and the repository's owner and default branch with their own `gh`. Health's listing of owners and
+repositories comes from the session folders' `origin` remotes and `gh repo view`, cached ten minutes. Nothing here
+enforces the policy: GitHub's repository rules and the hook's deny-only command guard are the hard limits.
+
 **Palette file search is an on-demand directory read.** It uses the selected session's live launch
 directory (or stored directory after exit), or the workspace's default directory when no session
 is selected. The utility caps traversal at six directory levels, 20,000 entries and 50 results,

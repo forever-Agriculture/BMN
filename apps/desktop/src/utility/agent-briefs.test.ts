@@ -1,7 +1,7 @@
 // MODULE: agent-briefs.test.ts - BMN's start brief is handed once per conversation and once after each compaction (Story 75.6)
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { AGENT_START_BRIEF } from '@bmn/protocol'
+import { AGENT_BRIEF_POLICY_LINE, AGENT_START_BRIEF } from '@bmn/protocol'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { AGENT_BRIEF_COMPACT_SAME_MS, AGENT_BRIEF_REMEMBERED, AgentBriefs, type AgentBriefEvent } from './agent-briefs'
 
@@ -121,4 +121,6 @@ it('holds the documented brief and the one BMN hands over to one text', async ()
   const documentation = await readFile(fileURLToPath(new URL('../../../../docs/agent-control.md', import.meta.url)), 'utf8')
   const fenced = /## BMN's start brief[\s\S]*?```text\n([\s\S]*?)```/.exec(documentation)
   expect(fenced?.[1]).toBe(`${AGENT_START_BRIEF}\n`)
+  const line = /## BMN's start brief[\s\S]*?```text\n[\s\S]*?```[\s\S]*?```text\n([\s\S]*?)```/.exec(documentation)
+  expect(line?.[1]).toBe(`${AGENT_BRIEF_POLICY_LINE}\n`)
 })

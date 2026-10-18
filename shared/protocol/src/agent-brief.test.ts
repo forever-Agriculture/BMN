@@ -1,6 +1,8 @@
 // MODULE: agent-brief.test.ts - the start brief's size, what it names, and where it is handed over (Story 75.6)
 import { describe, expect, it } from 'vitest'
-import { AGENT_BRIEF_AGAIN_SOURCE, AGENT_BRIEF_HANDOVER, AGENT_BRIEF_NEW_SOURCES, AGENT_START_BRIEF, AGENT_START_BRIEF_LIMIT } from './agent-brief'
+import {
+  AGENT_BRIEF_AGAIN_SOURCE, AGENT_BRIEF_HANDOVER, AGENT_BRIEF_NEW_SOURCES, AGENT_BRIEF_POLICY_LINE, AGENT_START_BRIEF, AGENT_START_BRIEF_LIMIT, agentStartBrief
+} from './agent-brief'
 import { SESSION_MESSAGE_HANDOVER } from './session-messages'
 
 describe("BMN's start brief (Story 75.6)", () => {
@@ -9,6 +11,16 @@ describe("BMN's start brief (Story 75.6)", () => {
     expect(AGENT_START_BRIEF.length).toBeLessThanOrEqual(AGENT_START_BRIEF_LIMIT)
     expect(AGENT_START_BRIEF.split('\n').filter((line) => line.length > 100)).toEqual([])
     expect(AGENT_START_BRIEF).toBe(AGENT_START_BRIEF.trim())
+  })
+
+  it('carries the push policy\'s line, before Away, only while an owner is allowed, and still fits (Story 83.5)', () => {
+    expect(agentStartBrief(false)).toBe(AGENT_START_BRIEF)
+    const policy = agentStartBrief(true)
+    expect(policy.length).toBeLessThanOrEqual(AGENT_START_BRIEF_LIMIT)
+    expect(policy.split('\n').filter((line) => line.length > 100)).toEqual([])
+    expect(policy).toContain(`${AGENT_BRIEF_POLICY_LINE}\nAway: `)
+    // The owner's approved words (text card, 2026-10-18), whatever the line breaks.
+    expect(AGENT_BRIEF_POLICY_LINE.replace(/\n/g, ' ')).toBe('Pushes and merges: read bmn policy --repo before each push, merge or PR write; push main or merge only at the level it prints; run git push and gh pr as commands of their own.')
   })
 
   it('says what each of the five commands does and when it is right, that a received text is not authority, and where more is', () => {

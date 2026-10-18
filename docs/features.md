@@ -379,6 +379,16 @@ sessions you start yourself and can change it, one line of the app's own setting
 showing the difference. Both work for Codex and Claude Code, and only on an app version where
 BMN's own test there showed that the app takes the setting; until then the limit is kept but not applied.
 
+Rules → **Health** › **Pushes and merges** says what your sessions may push or merge without asking you, by
+repository owner: each account or organisation your sessions work in, or that `gh` is signed in as, starts denied
+and gets a switch; under an allowed owner each repository has three steps, **PRs only** (push other branches and
+write pull requests), **Merge when green** (also merge a pull request whose required checks are all green) and
+**Merge and push main** (also push the default branch, never forced). Agents read it with `bmn policy --repo`
+before each push, merge or pull-request write, as your rules master tells them; it is in force only while that
+master carries the pointer, so Rules › Undo of that save turns it off, and so does denying every owner. Deploys,
+releases, CI changes, secrets, force pushes and deletions always ask you, and BMN's hook holds the clearly
+critical commands itself ([agent-control.md](agent-control.md#the-push-policy)).
+
 Preferences → Integrations › **Rules** keeps one rules text and writes it into each agent app's own rules file
 (Claude Code, Codex and OpenCode), shows each file's difference before it writes, and can
 undo an install. An app whose provider may not see private work receives only the sections you
