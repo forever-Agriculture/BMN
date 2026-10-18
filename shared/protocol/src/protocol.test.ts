@@ -148,7 +148,9 @@ describe('protocol surface', () => {
         'away.get',
         'away.set',
         'away.summaryShown',
-        'away.summary'
+        'away.summary',
+        'policy.get',
+        'policy.set'
       ])
     )
     // Story 75.3 removed the two methods of custom templates and the six of launch sets (91 before); Story 75.4 the
@@ -158,8 +160,8 @@ describe('protocol surface', () => {
     // (76 before). Story 76.3 adds the owner's away state: read, change, and its summary shown (75 before). Story 67.1
     // adds Quick look's root, folder listing and file read (79 before); Story 67.2 its check of a shown file's identity
     // (82 before); Story 67.5 its search of names and contents and that search's cancel (83 before); Story 68.1 its one
-    // writer, Save (85 before).
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(86)
+    // writer, Save (85 before). Story 83.3 adds the push policy's read and the owner's change in Health (86 before).
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(88)
   })
 
   it('exports the initial stable error codes', () => {
