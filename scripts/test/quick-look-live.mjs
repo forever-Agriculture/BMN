@@ -88,6 +88,10 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const input = join(root, 'input.txt')
   const outsideFile = join(root, 'outside.txt')
   writeFileSync(outsideFile, 'A made-up file outside the project.\nIts second line.\n')
+  // A made-up folder "Choose folder…" picks for a printed path that is missing from the launch folder.
+  const altFolder = join(root, 'alt')
+  mkdirSync(join(altFolder, 'docs'), { recursive: true })
+  writeFileSync(join(altFolder, 'docs', 'missing.md'), 'Alt line one.\nAlt line two.\nAlt line three, found.\n')
   writeProject(project)
   // The project lies inside a made-up Git work tree whose root is the temporary folder, so the tree shows no `.git`
   // row and the contents search reads what Git tracks plus untracked files it does not ignore.
@@ -895,7 +899,28 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
       choose: await sheet.getByRole('button', { name: 'Choose folder…', exact: true }).count() }
     check('a printed path that is gone opens as missing: "No file at this path", the folder it resolved from, and Choose folder…', missing.title === 'No file at this path' &&
       missing.from === `Resolved from ${project}, the session's launch folder.` && missing.choose === 1, missing)
-    await page.keyboard.press('Escape')
+    // With the tree folded, Tab reaches Choose folder… and Enter opens the path from the folder picked (a stand-in picker).
+    await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }) }, altFolder)
+    await page.keyboard.press('Control+b')
+    await sheet.locator('.ql-left').waitFor({ state: 'detached' })
+    const reachedChoose = []
+    for (let step = 0; step < 20; step += 1) {
+      await page.keyboard.press('Tab')
+      const label = await page.evaluate(() => document.activeElement?.textContent?.trim() ?? '')
+      reachedChoose.push(label.slice(0, 20))
+      if (label === 'Choose folder…') break
+    }
+    await page.keyboard.press('Enter')
+    // A Markdown file opens as a page, its line marked in the block that holds it.
+    await sheet.locator('.ql-page .ql-target').waitFor()
+    const chosenTarget = await sheet.locator('.ql-page .ql-target').textContent()
+    check('with the tree folded, Tab reaches Choose folder… and Enter opens the missing path from the folder picked, at its line',
+      reachedChoose.at(-1) === 'Choose folder…' && chosenTarget.includes('Alt line three, found.'), { reachedChoose, chosenTarget })
+    await page.keyboard.press('Control+b')
+    for (let step = 0; step < 8 && await sheet.count(); step += 1) {
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(150)
+    }
     await sheet.waitFor({ state: 'detached' })
     // A selection that reads as one reference: Ctrl+Shift+E opens that file at its line.
     const start = await cellOf('apps/desktop/src/parser.ts:42:7', 0)

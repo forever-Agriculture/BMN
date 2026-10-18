@@ -230,6 +230,21 @@ function CodeBlock(props: { block: Extract<MarkdownBlock, { kind: 'code' }>; dra
   )
 }
 
+/** The line of the block that holds `line`: the last block, at any depth, that starts at or before it. */
+export function holdingLine(blocks: readonly MarkdownBlock[], line: number): number | null {
+  let found: number | null = null
+  const walk = (items: readonly MarkdownBlock[]): void => {
+    for (const block of items) {
+      if (block.line > line) return
+      found = block.line
+      if (block.kind === 'quote') walk(block.blocks)
+      else if (block.kind === 'list') for (const item of block.items) walk(item.blocks)
+    }
+  }
+  walk(blocks)
+  return found
+}
+
 /** The block element that holds a line: the last one that starts at or before it. */
 function blockAt(container: HTMLElement, line: number): HTMLElement | null {
   let found: HTMLElement | null = null
@@ -253,6 +268,8 @@ export const MarkdownPageView = forwardRef<MarkdownPageHandle, MarkdownPageProps
   onTop.current = props.onTop
   const directory = props.path.slice(0, props.path.lastIndexOf('/')) || '/'
   const targetLine = props.line ?? (props.heading ? props.page.headings.find((each) => each.slug === props.heading)?.line ?? null : null)
+  // A line inside a paragraph, a list or a quote marks the block that holds it, not only a block that starts there.
+  const markedLine = useMemo(() => (targetLine === null ? null : holdingLine(props.page.blocks, targetLine)), [props.page, targetLine])
 
   useImperativeHandle(ref, () => ({
     goToLine(line) {
@@ -362,7 +379,7 @@ export const MarkdownPageView = forwardRef<MarkdownPageHandle, MarkdownPageProps
       <div ref={container} className="ql-page" tabIndex={0} role="document" aria-label={`${props.path.slice(props.path.lastIndexOf('/') + 1)}, rendered`}
         onFocus={props.onFocus} onCopy={onCopy}>
         <article className="ql-md">
-          <Blocks blocks={props.page.blocks} draw={draw} target={targetLine} />
+          <Blocks blocks={props.page.blocks} draw={draw} target={markedLine} />
         </article>
       </div>
       {shownNote || props.status ? <p className="ql-page-status" aria-live="polite">{shownNote || props.status}</p> : null}

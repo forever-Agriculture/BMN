@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { SECRET_MASK } from '@bmn/protocol'
 import { markdownPage } from './quick-look-markdown'
-import { MarkdownPageView, maskedSource } from './quick-look-page'
+import { MarkdownPageView, holdingLine, maskedSource } from './quick-look-page'
 import { quickLookSecretRanges } from './quick-look-secrets'
 
 const KEY = 'sk-madeupPAGEmadeup0123456789abcdef'
@@ -50,6 +50,19 @@ describe('the page hides every value the rule finds', () => {
     expect(maskedSource(address, from, ranges)).toBe(`https://example.invalid/?key=${SECRET_MASK}`)
     expect(maskedSource(address, from, ranges, 0)).toBe(address)
     expect(maskedSource(address, -1, ranges)).toBe(address)
+  })
+})
+
+describe('the line he came for', () => {
+  it('marks the block that holds it: a paragraph line, an item of a list, a line of a quote', () => {
+    const text = ['# Head', '', 'Line one.', 'Line two.', 'Line three.', '', '- item a', '- item b', '', '> quoted', '> more', ''].join('\n')
+    const page = markdownPage(text)
+    expect([5, 8, 11, 1, 2].map((line) => holdingLine(page.blocks, line))).toEqual([3, 8, 10, 1, 1])
+    const markup = renderToStaticMarkup(createElement(MarkdownPageView, {
+      page, path: '/p/plan.md', ranges: [], revealed: null, secondsLeft: 10, matches: [], current: -1, line: 5, heading: null, topLine: null, focus: false, status: '',
+      onStatus: () => undefined, onReveal: () => undefined, onTop: () => undefined, onOpenFile: () => undefined, onAddress: () => undefined, onFocus: () => undefined
+    }))
+    expect(markup).toContain(`<p data-line="3" class="ql-target"><span>Line one.`)
   })
 })
 

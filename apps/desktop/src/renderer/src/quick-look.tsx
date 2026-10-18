@@ -1085,8 +1085,8 @@ export function QuickLook(props: {
   }
 
   /**
-   * Where Tab goes, in order: the top field, the tree, the file, the page's links, the path row's buttons, the root's
-   * buttons, and round again. The tree and the code view are one stop each and keep their own keys; the tree and the
+   * Where Tab goes, in order: the top field, the tree, the file, the page's links, the path row's buttons, the file
+   * state's own actions (Choose folder…, Show in Folder, Copy path), the root's buttons, and round again. The tree and the code view are one stop each and keep their own keys; the tree and the
    * file stay next to each other, as the footer's "Tab" says. An eye is left out: Ctrl+R shows the value.
    */
   const tabStops = (): HTMLElement[] => {
@@ -1096,7 +1096,7 @@ export function QuickLook(props: {
     return [
       field.current, folded ? null : tree.current,
       element.querySelector<HTMLElement>('.ql-code .cm-content') ?? element.querySelector<HTMLElement>('.ql-page'),
-      ...all('.ql-find input'), ...all('.ql-page .ql-md-a, .ql-page .ql-md-img'), ...all('.ql-path button'), ...all('.ql-head button')
+      ...all('.ql-find input'), ...all('.ql-page .ql-md-a, .ql-page .ql-md-img'), ...all('.ql-path button'), ...all('.ql-actions button'), ...all('.ql-head button')
     ].filter((stop): stop is HTMLElement => !!stop && stop.getClientRects().length > 0 && !(stop as HTMLButtonElement).disabled)
   }
 

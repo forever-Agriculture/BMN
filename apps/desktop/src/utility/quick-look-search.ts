@@ -76,13 +76,15 @@ function maskedText(text: string, ranges: readonly SecretRange[], first: number,
   return `${out}${text.slice(at, to)}`
 }
 
-/** Where the hidden value that `[from, to)` touches ends, or -1 when it touches none. */
-function secretEnd(ranges: readonly SecretRange[], first: number, from: number, to: number): number {
-  let reach = -1
-  for (let index = first; index < ranges.length && ranges[index]![0] < to; index += 1) {
-    if (ranges[index]![1] > from) reach = Math.max(reach, ranges[index]![1])
+/** Overlapping hidden stretches joined, in order: what a match may not touch, each looked at once. */
+function hiddenStretches(ranges: readonly SecretRange[]): SecretRange[] {
+  const joined: SecretRange[] = []
+  for (const [start, end] of ranges) {
+    const last = joined.at(-1)
+    if (last && start < last[1]) last[1] = Math.max(last[1], end)
+    else joined.push([start, end])
   }
-  return reach
+  return joined
 }
 
 /** Moves an index off the second half of a surrogate pair, so a cut never splits a character. */
@@ -99,12 +101,14 @@ export function matchingLines(path: string, text: string, pattern: RegExp, maxLi
   pattern.lastIndex = 0
   if (!pattern.test(text)) return []
   const ranges = [...secretRanges(path, text)].sort((left, right) => left[0] - right[0] || left[1] - right[1])
-  // The cursor passes a range once it ends before the place being read; matches only move forward through the text,
-  // and a later range that ends sooner is passed over inside the loops.
+  // Two cursors, both only moving forward as matches do: `first` to mask a whole line from its start, `stretch` to
+  // tell whether a match touches a hidden value, so a line of many hidden values costs each of them once.
   let first = 0
   const advance = (to: number): void => {
     while (first < ranges.length && ranges[first]![1] <= to) first += 1
   }
+  const stretches = hiddenStretches(ranges)
+  let stretch = 0
   const found: QuickLookContentsLine[] = []
   // The line a match is on, found by walking forward once: each line break is looked for once, however long the line.
   let lineNumber = 1
@@ -125,14 +129,14 @@ export function matchingLines(path: string, text: string, pattern: RegExp, maxLi
       pattern.lastIndex = start + 1
       continue
     }
-    lineOf(start)
-    advance(lineStart)
     // A match inside a hidden value is never shown: the search goes on after the whole value.
-    const hidden = secretEnd(ranges, first, start, end)
-    if (hidden !== -1) {
-      pattern.lastIndex = Math.max(end, hidden)
+    while (stretch < stretches.length && stretches[stretch]![1] <= start) stretch += 1
+    if (stretch < stretches.length && stretches[stretch]![0] < end) {
+      pattern.lastIndex = Math.max(end, stretches[stretch]![1])
       continue
     }
+    lineOf(start)
+    advance(lineStart)
     const newline = nextBreak !== -1 && nextBreak >= end ? nextBreak : text.indexOf('\n', end)
     const lineBreak = newline === -1 ? text.length : newline
     const lineEnd = lineBreak > lineStart && text[lineBreak - 1] === '\r' ? lineBreak - 1 : lineBreak

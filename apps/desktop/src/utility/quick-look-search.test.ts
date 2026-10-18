@@ -200,7 +200,9 @@ describe('running searches', () => {
     const cases: Array<[string, string, string]> = [
       ['/p/.env', 'NAME=madeup\n'.repeat(60_000), 'NAME'],
       ['/p/.env', `KEY=${'Ab0+/'.repeat(200_000)}\n`, 'ab'],
-      ['/p/notes.md', 'ab\n'.repeat(300_000), 'ab']
+      ['/p/notes.md', 'ab\n'.repeat(300_000), 'ab'],
+      // One line of 30,000 separate hidden values: each is looked at once, not once per match (was 0.8 s).
+      ['/p/a.md', `${'sk-'}${'a'.repeat(24)} `.repeat(30_000), 'sk']
     ]
     for (const [path, text, query] of cases) {
       const started = performance.now()
@@ -208,6 +210,33 @@ describe('running searches', () => {
       expect(performance.now() - started).toBeLessThan(600)
     }
   })
+
+  it('leaves the terminals a turn every 100 ms and stops at once over big files full of hidden values', async () => {
+    const root = await folder({
+      'a.md': `${'sk-'}${'a'.repeat(24)} `.repeat(30_000),
+      '.env': 'NAME=madeup\n'.repeat(60_000),
+      'c.json': '{"token": "abcdefghijklmnopqrstuvwxyz0123456789"}\n'.repeat(20_000),
+      'b.md': `${'sk-'}${'b'.repeat(40)} ab `.repeat(20_000)
+    })
+    for (const query of ['sk', 'NAME', 'to', 'ab']) {
+      let last = performance.now()
+      let longest = 0
+      const ticker = setInterval(() => {
+        const now = performance.now()
+        longest = Math.max(longest, now - last)
+        last = now
+      }, 10)
+      await search(root, query)
+      clearInterval(ticker)
+      expect(longest).toBeLessThan(100)
+    }
+    const controller = new AbortController()
+    const started = performance.now()
+    const stopped = search(root, 'NAME', {}, controller.signal)
+    setTimeout(() => controller.abort(), 5)
+    expect((await stopped).cancelled).toBe(true)
+    expect(performance.now() - started).toBeLessThan(300)
+  }, 60_000)
 
   it('leaves the terminals\' process a turn at least every 100 ms while it searches 20,000 made-up files', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bmn-quick-look-timing-'))
