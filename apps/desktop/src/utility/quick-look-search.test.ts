@@ -69,6 +69,18 @@ describe('what is searched', () => {
     expect(result.unreadable).toBe(process.getuid?.() === 0 ? 0 : 1)
   })
 
+  it('never shows lines of a file reached through a folder swapped for a link after Git listed it', async () => {
+    const root = await folder({ 'sub/x.txt': 'needle inside\n', 'kept.txt': 'needle kept\n' })
+    const outside = await folder({ 'x.txt': 'needle OUTSIDE\n' })
+    git(root, 'init', '-q')
+    git(root, 'add', '-A')
+    await rm(join(root, 'sub'), { recursive: true })
+    await symlink(outside, join(root, 'sub'))
+    const result = await search(root, 'needle', { gitRoot: async () => root })
+    expect(names(result, root)).toEqual(['kept.txt'])
+    expect(JSON.stringify(result)).not.toContain('OUTSIDE')
+  })
+
   it('says why when a folder cannot be searched or the text is too short, too long or not one line', async () => {
     expect((await search('/no/such/folder', 'needle')).unavailable).toBe('This folder is unavailable')
     expect(contentsQueryProblem('n')).toBe('Type at least 2 characters')

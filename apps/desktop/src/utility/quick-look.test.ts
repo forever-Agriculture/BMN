@@ -102,6 +102,16 @@ describe('Quick look listing', () => {
     expect(exact).toMatchObject({ more: 0 })
   })
 
+  it('in a folder past the names it holds while reading, shows the first rows of the whole folder in the tree\'s order', async () => {
+    // 300 names, held at most 8 at a time: whatever order the folder is read in (tmpfs reads the newest first), the
+    // rows are f000 to f004.
+    for (let index = 0; index < 300; index += 1) file(`f${String(index).padStart(3, '0')}.txt`)
+    const result = await listQuickLookFolder(root, { maxEntries: 5, readLimit: 8 })
+    if (result.status !== 'ready') throw new Error('listing failed')
+    expect(result.entries.map((entry) => entry.name)).toEqual(['f000.txt', 'f001.txt', 'f002.txt', 'f003.txt', 'f004.txt'])
+    expect(result.more).toBe(295)
+  })
+
   it('says a folder that disappeared is unavailable', async () => {
     mkdirSync(join(root, 'gone'))
     rmSync(join(root, 'gone'), { recursive: true })

@@ -19,7 +19,7 @@ import { readLocalTextFile, type FileReferenceReaderOptions } from './file-refer
 import { repositoryGit } from './repository-git'
 
 const DIMMED = new Set(QUICK_LOOK_DIMMED_NAMES)
-/** A folder with more entries than this is not read whole: its listing says how many more it holds. */
+/** At most this many names are held while a folder is read; past it they are cut to the first rows in the tree's order. */
 const LIST_READ_LIMIT = 200_000
 /** The walk lets the terminals' process breathe this often. */
 const YIELD_EVERY = 256
@@ -105,13 +105,14 @@ async function onlyFolder(folder: string): Promise<string | null> {
  * Hidden entries are listed; links are marked and never entered; the generated names are dimmed, not hidden. A
  * folder whose only entry is a folder carries that chain, so the tree can show `apps/desktop` as one row.
  */
-export async function listQuickLookFolder(folder: string, limits: { maxEntries?: number } = {}): Promise<QuickLookListResult> {
+export async function listQuickLookFolder(folder: string, limits: { maxEntries?: number; readLimit?: number } = {}): Promise<QuickLookListResult> {
   if (!isAbsolute(folder)) return { status: 'unavailable', folder, message: 'This folder is unavailable' }
   const path = normalize(folder)
   // The root itself may be reached through a link (a session started in one); links below it are never entered.
   const stats = await stat(path).catch(() => null)
   if (!stats?.isDirectory()) return { status: 'unavailable', folder: path, message: 'This folder is unavailable' }
   const maxEntries = limits.maxEntries ?? QUICK_LOOK_LIST_MAX_ENTRIES
+  const readLimit = Math.max(limits.readLimit ?? LIST_READ_LIMIT, maxEntries + 1)
   const found: Array<{ name: string; kind: QuickLookEntryKind }> = []
   let total = 0
   let handle
@@ -123,7 +124,13 @@ export async function listQuickLookFolder(folder: string, limits: { maxEntries?:
   try {
     for await (const entry of handle) {
       total += 1
-      if (found.length < LIST_READ_LIMIT) found.push({ name: entry.name, kind: kindOf(entry) })
+      found.push({ name: entry.name, kind: kindOf(entry) })
+      // A huge folder keeps only the first names in the tree's order, so memory stays bounded and the rows shown are
+      // the first of the whole folder, not of the part read first.
+      if (found.length >= readLimit) {
+        found.sort(compareEntries)
+        found.length = maxEntries
+      }
       if (total % YIELD_EVERY === 0) await pause()
     }
   } catch {

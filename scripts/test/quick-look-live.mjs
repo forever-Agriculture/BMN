@@ -871,7 +871,7 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await sheet.waitFor({ state: 'detached' })
     await page.evaluate((id) => window.__aitermTest.snapshot(id), sessionId)
 
-    // ---- the sheet's states in Steel, Brown and Dark, for the eye (evidence only) ----
+    // ---- the sheet's states in the four colour modes: screenshots for the eye, and the contrast of 67.1 AC7 ----
     const appearance = await page.evaluate(async () => (await window.aiTerminal.getSettings()).appearance)
     const shown = (name) => page.waitForFunction((end) => document.querySelector('dialog.quick-look .ql-path .ql-pth')?.title.endsWith(end), name)
     const goTo = async (query, name) => {
@@ -885,7 +885,8 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     }
     const themeShots = []
     const shoot = async (name) => { const path = join(evidence, name); await page.screenshot({ path }); themeShots.push(name) }
-    for (const colorMode of ['steel', 'brown', 'dark']) {
+    const contrasts = {}
+    for (const colorMode of ['steel', 'brown', 'dark', 'black']) {
       await page.evaluate(async (next) => window.aiTerminal.putSettings('appearance', next), { ...appearance, colorMode })
       await page.waitForFunction((mode) => document.documentElement.dataset.colorMode === mode, colorMode)
       // The terminal redraws in the new colours; its links are found again once the pointer moves over it.
@@ -896,6 +897,36 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
       await sheet.getByRole('button', { name: 'More actions', exact: true }).click()
       await shoot(`theme-${colorMode}-code-menu.png`)
       await page.keyboard.press('Escape')
+      // 67.1 AC7: comments at least 4.5:1 and line numbers at least 4:1 on the code ground, measured as drawn.
+      contrasts[colorMode] = await sheet.evaluate((element) => {
+        const probe = document.createElement('canvas').getContext('2d')
+        const rgba = (css) => {
+          probe.clearRect(0, 0, 1, 1)
+          probe.fillStyle = '#000'
+          probe.fillStyle = css
+          probe.fillRect(0, 0, 1, 1)
+          return [...probe.getImageData(0, 0, 1, 1).data]
+        }
+        const ground = (node) => {
+          for (let at = node; at; at = at.parentElement) {
+            const colour = rgba(getComputedStyle(at).backgroundColor)
+            if (colour[3] === 255) return colour
+          }
+          return [0, 0, 0, 255]
+        }
+        const over = (front, back) => front.slice(0, 3).map((value, index) => (value * front[3] + back[index] * (255 - front[3])) / 255)
+        const luminance = (rgb) => {
+          const [r, g, b] = rgb.map((value) => { const c = value / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4 })
+          return 0.2126 * r + 0.7152 * g + 0.0722 * b
+        }
+        const ratio = (node) => {
+          const back = ground(node)
+          const front = over(rgba(getComputedStyle(node).color), back)
+          const [light, dark] = [luminance(front), luminance(back.slice(0, 3))].sort((a, b) => b - a)
+          return Math.round(((light + 0.05) / (dark + 0.05)) * 100) / 100
+        }
+        return { comment: ratio(element.querySelector('.ql-code .ql-syn-comment')), lineNumber: ratio(element.querySelector('.ql-code .cm-lineNumbers .cm-gutterElement:not(:first-child)')) }
+      })
       await goTo('.env', '.env')
       await shoot(`theme-${colorMode}-masked.png`)
       await goTo('plan.md', 'plan.md')
@@ -930,7 +961,9 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     }
     await page.evaluate(async (next) => window.aiTerminal.putSettings('appearance', next), appearance)
     await page.waitForFunction((mode) => document.documentElement.dataset.colorMode === mode, appearance.colorMode)
-    check('the sheet\'s states were drawn in Steel, Brown and Dark', themeShots.length === 21, { themeShots: themeShots.length })
+    check('the sheet\'s states were drawn in Steel, Brown, Dark and Black', themeShots.length === 28, { themeShots: themeShots.length })
+    check('comments keep at least 4.5:1 and line numbers at least 4:1 on the code ground in each colour mode',
+      Object.values(contrasts).length === 4 && Object.values(contrasts).every((each) => each.comment >= 4.5 && each.lineNumber >= 4), contrasts)
 
     // ---- the terminal is untouched: normal, focus and split views at five sizes, through a peek ----
     for (const layout of ['normal', 'focus', 'split']) {

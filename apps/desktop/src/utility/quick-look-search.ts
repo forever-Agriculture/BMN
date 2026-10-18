@@ -1,5 +1,6 @@
 // MODULE: quick-look-search.ts - Quick look's contents search: literal text in what Git tracks or the name walk finds, bounded, cancellable, masked, and yielding to the terminals between files; nothing indexed or stored (Story 67.5)
-import { lstat, opendir, readFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { lstat, open, opendir, realpath } from 'node:fs/promises'
 import { isAbsolute, join, normalize } from 'node:path'
 import {
   QUICK_LOOK_SEARCH_LINE_CHARS,
@@ -189,30 +190,47 @@ async function walkFiles(root: string, max: number, signal: AbortSignal): Promis
 
 type FileOutcome = { kind: 'read'; lines: QuickLookContentsLine[] } | { kind: 'skipped' } | { kind: 'unreadable' }
 
-/** One file: a regular file and no link, at most the size cap, holding valid UTF-8 text. */
-async function searchFile(path: string, pattern: RegExp, maxBytes: number, maxLines: number): Promise<FileOutcome> {
-  let stats
+/**
+ * One file: a regular file and no link, at most the size cap, holding valid UTF-8 text. It is checked on the open
+ * handle and read at most one byte past the cap, so a file swapped for a link, a pipe or a larger file between the
+ * listing and the read is never followed or read whole; a file with matches is shown only if the handle lies under
+ * the root's real folder, so a folder on the path swapped for a link cannot bring in another folder's lines.
+ */
+async function searchFile(path: string, pattern: RegExp, maxBytes: number, maxLines: number, realRoot: string): Promise<FileOutcome> {
+  let handle
   try {
-    stats = await lstat(path)
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   } catch (error) {
-    // A tracked file deleted from the work tree is not there to read.
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'skipped' } : { kind: 'unreadable' }
+    const code = (error as NodeJS.ErrnoException).code
+    // A tracked file deleted from the work tree is not there to read; a link or a pipe is not a file to search.
+    return code === 'ENOENT' || code === 'ELOOP' || code === 'ENXIO' || code === 'EISDIR' ? { kind: 'skipped' } : { kind: 'unreadable' }
   }
-  if (!stats.isFile() || stats.size > maxBytes) return { kind: 'skipped' }
-  let bytes: Buffer
   try {
-    bytes = await readFile(path, { flag: 'r' })
+    const stats = await handle.stat()
+    if (!stats.isFile() || stats.size > maxBytes) return { kind: 'skipped' }
+    const buffer = Buffer.alloc(Math.min(stats.size, maxBytes) + 1)
+    let length = 0
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length)
+      if (bytesRead === 0) break
+      length += bytesRead
+    }
+    const bytes = buffer.subarray(0, length)
+    if (length > maxBytes || bytes.includes(0)) return { kind: 'skipped' }
+    let text: string
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    } catch {
+      return { kind: 'skipped' }
+    }
+    const lines = matchingLines(path, text, new RegExp(pattern.source, pattern.flags), maxLines)
+    if (lines.length > 0 && !(await realpath(`/proc/self/fd/${handle.fd}`).catch(() => '')).startsWith(realRoot === '/' ? '/' : `${realRoot}/`)) return { kind: 'skipped' }
+    return { kind: 'read', lines }
   } catch {
     return { kind: 'unreadable' }
+  } finally {
+    await handle.close().catch(() => undefined)
   }
-  if (bytes.length > maxBytes || bytes.includes(0)) return { kind: 'skipped' }
-  let text: string
-  try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-  } catch {
-    return { kind: 'skipped' }
-  }
-  return { kind: 'read', lines: matchingLines(path, text, new RegExp(pattern.source, pattern.flags), maxLines) }
 }
 
 /**
@@ -231,7 +249,8 @@ export async function searchQuickLookContents(rootPath: string, options: Content
   const problem = contentsQueryProblem(options.query)
   if (problem) return { ...done(), unavailable: problem }
   const stats = isAbsolute(root) ? await lstat(root).catch(() => null) : null
-  if (!stats?.isDirectory()) return { ...done(), unavailable: 'This folder is unavailable' }
+  const realRoot = stats?.isDirectory() ? await realpath(root).catch(() => null) : null
+  if (!realRoot) return { ...done(), unavailable: 'This folder is unavailable' }
   const maxFiles = options.maxFiles ?? QUICK_LOOK_SEARCH_MAX_FILES
   const maxLines = options.maxLines ?? QUICK_LOOK_SEARCH_MAX_LINES
   const maxBytes = options.maxFileBytes ?? QUICK_LOOK_SEARCH_MAX_FILE_BYTES
@@ -249,7 +268,7 @@ export async function searchQuickLookContents(rootPath: string, options: Content
     while (!full && !signal.aborted && next < listing.paths.length) {
       const index = next++
       // One line past the limit tells a search that reached it from one that ended exactly at it.
-      const outcome = await searchFile(listing.paths[index]!, pattern, maxBytes, maxLines + 1).catch((): FileOutcome => ({ kind: 'unreadable' }))
+      const outcome = await searchFile(listing.paths[index]!, pattern, maxBytes, maxLines + 1, realRoot).catch((): FileOutcome => ({ kind: 'unreadable' }))
       outcomes[index] = outcome
       if (outcome.kind === 'read') {
         lines += outcome.lines.length
