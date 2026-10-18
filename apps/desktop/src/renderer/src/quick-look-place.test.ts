@@ -104,6 +104,13 @@ describe('Esc order', () => {
     expect(escapeStep({ focus: 'field', typed: false, goTo: false, find: false })).toBe('close-sheet')
   })
 
+  it('keeps editing while a question about unsaved edits is asked, and leaves a field before anything else closes (Story 68.1 AC2, AC8)', () => {
+    const open = { focus: 'file' as const, typed: true, goTo: true, find: true, revealed: true, menu: true, search: 'results' as const, fromResults: true }
+    expect(escapeStep({ ...open, question: true, editField: true })).toBe('keep-editing')
+    expect(escapeStep({ ...open, menu: false, editField: true })).toBe('leave-field')
+    expect(escapeStep({ focus: 'file', typed: false, goTo: false, find: false, question: false, editField: false })).toBe('close-sheet')
+  })
+
   it('stops a running search, then goes from a file opened from results back to them, then to the tree (Story 67.5)', () => {
     expect(escapeStep({ focus: 'field', typed: false, goTo: false, find: false, search: 'searching' })).toBe('stop-search')
     expect(escapeStep({ focus: 'field', typed: false, goTo: false, find: false, search: 'results' })).toBe('clear-search')

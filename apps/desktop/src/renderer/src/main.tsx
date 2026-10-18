@@ -281,6 +281,15 @@ function App(): React.JSX.Element {
   const [interrupted, setInterrupted] = useState<InterruptedSessionCohort | null>(null)
   /** Its own state, not a ShellDialog: a close question must not replace work the owner has open. */
   const [closePrompt, setClosePrompt] = useState<ClosePromptRequest | null>(null)
+  /** The close question Quick look has already let through: its unsaved edits were saved or discarded (Story 68.1 AC8). */
+  const [closeCleared, setCloseCleared] = useState<string | null>(null)
+  // A question asked only for unsaved edits that are gone by now (the sheet closed meanwhile) goes on at once.
+  useEffect(() => {
+    if (closePrompt && closePrompt.sessions.length === 0 && dialog?.kind !== 'quick-look') {
+      window.aiTerminal.answerClosePrompt(closePrompt.requestId, { kind: 'proceed', choices: {}, remember: false })
+      setClosePrompt(null)
+    }
+  }, [closePrompt, dialog?.kind])
   const [requestCard, setRequestCard] = useState<{ sessionId: string; anchor: HTMLElement | null } | null>(null)
   /** Story 60.8: what each session's prompt guard last stopped or warned about, and the one card that is open. */
   const [guardStops, setGuardStops] = useState<GuardStop[]>([])
@@ -2639,6 +2648,7 @@ function App(): React.JSX.Element {
         onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === 'quick-look' ? (
         <QuickLook key={JSON.stringify(dialog.request)} request={dialog.request} testMode={startup?.testMode === true} onClose={() => closeQuickLook(dialog.returnTo)}
+          closeAsk={closePrompt && closeCleared !== closePrompt.requestId ? { id: closePrompt.requestId, answer: (proceed) => clearClose(closePrompt, proceed) } : null}
           {...(dialog.request.source.sessionId ? { onSendReference: (reference: string) => sendFromQuickLook(dialog.request.source.sessionId!, reference) } : {})} />
       ) : null}
       {dialog?.kind === 'file-reference' ? (
@@ -2842,7 +2852,7 @@ function App(): React.JSX.Element {
           onClose={() => setDialog(null)}
         />
       ) : null}
-      {closePrompt ? (
+      {closePrompt && closePrompt.sessions.length > 0 && (dialog?.kind !== 'quick-look' || closeCleared === closePrompt.requestId) ? (
         <CloseSessionsDialog
           key={closePrompt.requestId}
           request={closePrompt}
@@ -2858,6 +2868,20 @@ function App(): React.JSX.Element {
       ) : null}
     </main>
   )
+
+  /**
+   * Quick look's answer to a close question about its unsaved edits: Keep editing cancels the close; Save or Discard
+   * lets it go on to the sessions, or ends it when none is running.
+   */
+  function clearClose(request: ClosePromptRequest, proceed: boolean): void {
+    if (!proceed) {
+      window.aiTerminal.answerClosePrompt(request.requestId, { kind: 'cancel' })
+      setClosePrompt(null)
+    } else if (request.sessions.length === 0) {
+      window.aiTerminal.answerClosePrompt(request.requestId, { kind: 'proceed', choices: {}, remember: false })
+      setClosePrompt(null)
+    } else setCloseCleared(request.requestId)
+  }
 
   /** Reads the exact command first: no conversation reopens on a command the owner has not seen. */
   function confirmResume(record: SessionRecord): void {

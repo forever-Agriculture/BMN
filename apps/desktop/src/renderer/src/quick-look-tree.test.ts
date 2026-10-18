@@ -63,6 +63,14 @@ describe('Quick look footer', () => {
     expect(quickLookFooter({ ...base, focus: 'goto', escape: 'close-goto' }).map((hint) => hint.label)).toEqual(['Go', 'Close go to line'])
   })
 
+  it('shows the .env frame\'s keys on its rows and in a field (Story 68.1)', () => {
+    expect(quickLookFooter({ ...base, focus: 'file', edit: 'env-rows' }).map((hint) => hint.label))
+      .toEqual(['Key', 'Edit', 'Paste', 'Reveal 10 s', 'Save', 'Tree', 'Close'])
+    expect(quickLookFooter({ ...base, focus: 'file', edit: 'env-field', escape: 'leave-field' }).map((hint) => hint.label))
+      .toEqual(['Paste', 'Reveal 10 s', 'Done', 'Save', 'Leave the field'])
+    expect(quickLookFooter({ ...base, focus: 'file', edit: 'env-rows', escape: 'keep-editing' }).at(-1)).toEqual({ keys: ['Esc'], label: 'Keep editing' })
+  })
+
   it('shows Back only when there is a file to return to (Story 67.2 AC7)', () => {
     expect(quickLookFooter({ ...base, focus: 'file' }).map((hint) => hint.label)).not.toContain('Back')
     expect(quickLookFooter({ ...base, focus: 'file', back: true }).find((hint) => hint.label === 'Back')).toEqual({ keys: ['Alt ←'], label: 'Back' })

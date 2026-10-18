@@ -61,6 +61,8 @@ interface PreventableEvent {
 
 interface ApplicationLifecycleActions {
   runningTargets(): readonly RunningSessionTarget[]
+  /** The window holds unsaved edits in Quick look; the window's own prompt asks about them first (Story 68.1 AC8). */
+  unsavedEdits?(): boolean
   saveBackgroundChoice(decisions: readonly BackgroundChoiceDecision[]): void | Promise<void>
   promptForClose(choice: CloseChoicePrompt): Promise<CloseDecision>
   promptForQuit(choice: QuitChoicePrompt): Promise<'quit' | 'cancel'>
@@ -185,7 +187,8 @@ export function createApplicationLifecycle(
       event.preventDefault()
       if (decisionInProgress) return
       decisionInProgress = true
-      if (targets.length === 0) {
+      const unsaved = actions.unsavedEdits?.() === true
+      if (targets.length === 0 && !unsaved) {
         void finishWithoutRunningTargets('close-last-window').catch(fail)
         return
       }
@@ -193,7 +196,7 @@ export function createApplicationLifecycle(
       const unsetTargets = targets.filter((target) => target.backgroundChoice === undefined)
       const decide = async (): Promise<void> => {
         let answered: Readonly<Record<string, BackgroundChoice>> = {}
-        if (unsetTargets.length > 0) {
+        if (unsetTargets.length > 0 || unsaved) {
           const decision = await actions.promptForClose({
             message: 'Close the last window?',
             detail: `Choose what to do with these running targets:\n\n${runningTargetDetails(unsetTargets)}`,
@@ -207,7 +210,7 @@ export function createApplicationLifecycle(
             return
           }
           answered = decision.choices
-          if (decision.remember) {
+          if (decision.remember && unsetTargets.length > 0) {
             await actions.saveBackgroundChoice(
               unsetTargets.map((target) => ({ target, choice: chosenFor(target, answered) }))
             )
@@ -220,6 +223,10 @@ export function createApplicationLifecycle(
           await captureThen(async () => {
             await actions.stopTargets(stopTargets, 'close-last-window')
           }, stopTargets)
+        }
+        if (targets.length === 0) {
+          await finishWithoutRunningTargets('close-last-window')
+          return
         }
         decisionInProgress = false
         if (keepTargets.length > 0) {
@@ -238,7 +245,7 @@ export function createApplicationLifecycle(
       event.preventDefault()
       if (decisionInProgress) return
       decisionInProgress = true
-      if (targets.length === 0) {
+      if (targets.length === 0 && actions.unsavedEdits?.() !== true) {
         void finishWithoutRunningTargets('application-quit').catch(fail)
         return
       }
@@ -256,7 +263,7 @@ export function createApplicationLifecycle(
             decisionInProgress = false
             return
           }
-          return stopThenQuit(targets)
+          return targets.length === 0 ? finishWithoutRunningTargets('application-quit') : stopThenQuit(targets)
         })
         .catch(fail)
     },

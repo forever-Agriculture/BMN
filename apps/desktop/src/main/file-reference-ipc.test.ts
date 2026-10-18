@@ -191,7 +191,21 @@ describe('Quick look IPC', () => {
     expect(await failure(() => handlers.get('aiterm:quick-look:search')!(allowed, { sessionId: 's', requestId: 'r', root: 'relative', mode: 'files', query: 'ab' }))).toMatchObject({ code: 'INVALID_ARGUMENT' })
   })
 
-  it('has no control-socket method and no bmn command that reaches Quick look (Story 67.1)', () => {
+  it('forwards Save\'s source, root, path, digest and text only, a read\'s root, and refuses another sender or an oversized text (Story 68.1)', async () => {
+    const { handlers, requests } = install()
+    const digest = 'a'.repeat(64)
+    await handlers.get('aiterm:quick-look:read')!(allowed, { sessionId: 'session-1', path: '/home/me/project/.env', root: '/home/me/project' })
+    await handlers.get('aiterm:quick-look:save')!(allowed, { sessionId: 'session-1', root: '/home/me/project', path: '/home/me/project/.env', digest, text: 'A=madeup\n', mode: 0o777 })
+    expect(requests).toEqual([
+      { method: METHOD_REGISTRY.quickLookRead, params: { sessionId: 'session-1', path: '/home/me/project/.env', root: '/home/me/project' } },
+      { method: METHOD_REGISTRY.quickLookSave, params: { sessionId: 'session-1', root: '/home/me/project', path: '/home/me/project/.env', digest, text: 'A=madeup\n' } }
+    ])
+    expect(await failure(() => handlers.get('aiterm:quick-look:save')!(stranger, { sessionId: 's', root: '/a', path: '/a/.env', digest, text: '' }))).toMatchObject({ code: 'UNAUTHORIZED' })
+    expect(await failure(() => handlers.get('aiterm:quick-look:save')!(allowed, { sessionId: 's', root: '/a', path: '/a/.env', digest, text: 'x'.repeat(256 * 1024 + 1) }))).toMatchObject({ code: 'INVALID_ARGUMENT' })
+    expect(await failure(() => handlers.get('aiterm:quick-look:save')!(allowed, { sessionId: 's', root: 'relative', path: '/a/.env', digest, text: '' }))).toMatchObject({ code: 'INVALID_ARGUMENT' })
+  })
+
+  it('has no control-socket method and no bmn command that reaches Quick look, Save included (Stories 67.1, 68.1)', () => {
     const here = dirname(fileURLToPath(import.meta.url))
     const server = readFileSync(join(here, '..', 'utility', 'control-server.ts'), 'utf8')
     const cli = readFileSync(join(here, '..', '..', 'bin', 'bmn'), 'utf8')
@@ -199,6 +213,6 @@ describe('Quick look IPC', () => {
       expect(text).not.toMatch(/quick\.look|quickLook/u)
     }
     const methods = Object.entries(METHOD_REGISTRY).filter(([, method]) => method.startsWith('quick.look.')).map(([name]) => name)
-    expect(methods).toEqual(['quickLookRoot', 'quickLookList', 'quickLookRead', 'quickLookIdentity', 'quickLookSearch', 'quickLookSearchCancel'])
+    expect(methods).toEqual(['quickLookRoot', 'quickLookList', 'quickLookRead', 'quickLookIdentity', 'quickLookSearch', 'quickLookSearchCancel', 'quickLookSave'])
   })
 })

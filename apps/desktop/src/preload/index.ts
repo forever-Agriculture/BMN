@@ -70,6 +70,8 @@ import {
   type QuickLookSearchParams,
   type QuickLookSearchResult,
   type QuickLookReadResult,
+  type QuickLookSaveParams,
+  type QuickLookSaveResult,
   type QuickLookRootResult,
   type QuickLookSource,
   type FileReferenceReadResult,
@@ -534,6 +536,10 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   answerClosePrompt(requestId: string, decision: ClosePromptDecision): void {
     ipcRenderer.send('aiterm:lifecycle:close-decision', requestId, decision)
   },
+  /** Whether Quick look holds unsaved edits, so the window's close and Quit ask first; never what they are. */
+  reportQuickLookUnsaved(unsaved: boolean): void {
+    ipcRenderer.send('aiterm:lifecycle:unsaved-edits', unsaved)
+  },
   onPresence(listener: (presence: { away: boolean }) => void): () => void {
     presenceListeners.add(listener)
     listener(presence)
@@ -605,6 +611,9 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   cancelQuickLookSearch(requestId: string): Promise<{ cancelled: true }> {
     return invokeBridge('aiterm:quick-look:search-cancel', { requestId })
+  },
+  saveQuickLookFile(params: QuickLookSaveParams): Promise<QuickLookSaveResult> {
+    return invokeBridge('aiterm:quick-look:save', params)
   },
   listAttention(): Promise<AttentionRecord[]> {
     return invokeBridge('aiterm:attention:list', {})

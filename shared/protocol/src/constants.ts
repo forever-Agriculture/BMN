@@ -52,6 +52,7 @@ export const METHOD_REGISTRY = Object.freeze({
   quickLookIdentity: 'quick.look.identity',
   quickLookSearch: 'quick.look.search',
   quickLookSearchCancel: 'quick.look.search.cancel',
+  quickLookSave: 'quick.look.save',
   attentionList: 'attention.list',
   attentionSeen: 'attention.seen',
   attentionResolve: 'attention.resolve',

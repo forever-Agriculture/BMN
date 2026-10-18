@@ -47,6 +47,8 @@ import type {
   QuickLookListParams,
   QuickLookListResult,
   QuickLookReadParams,
+  QuickLookSaveParams,
+  QuickLookSaveResult,
   QuickLookIdentityParams,
   QuickLookIdentityResult,
   QuickLookSearchParams,
@@ -234,6 +236,8 @@ export interface AiTerminalBridge {
   onAppEvent(listener: (message: AppEventMessage) => void): () => void
   onClosePrompt(listener: (request: ClosePromptRequest) => void): () => void
   answerClosePrompt(requestId: string, decision: ClosePromptDecision): void
+  /** Whether Quick look holds unsaved edits, so the window's close and Quit ask first (Story 68.1); never what they are. */
+  reportQuickLookUnsaved(unsaved: boolean): void
   onOpenSession(listener: (sessionId: string) => void): () => void
   /** Story 42.1: a program in one of the window's sessions put text on the clipboard with OSC 52. */
   onProgramCopy(listener: (notice: ProgramCopyNotice) => void): () => void
@@ -263,6 +267,8 @@ export interface AiTerminalBridge {
   quickLookRoot(source: QuickLookSource): Promise<QuickLookRootResult>
   listQuickLookFolder(params: QuickLookListParams): Promise<QuickLookListResult>
   readQuickLookFile(params: QuickLookReadParams): Promise<QuickLookReadResult>
+  /** Quick look's one writer (Story 68.1): writes the text over the bytes read, or says why not. */
+  saveQuickLookFile(params: QuickLookSaveParams): Promise<QuickLookSaveResult>
   /** The shown file's size, modified time and inode now, which the sheet compares every 2 s (Story 67.2). */
   quickLookIdentity(params: QuickLookIdentityParams): Promise<QuickLookIdentityResult>
   /** Go to file or Contents (Story 67.5): one search per window, a newer one cancelling the older. */

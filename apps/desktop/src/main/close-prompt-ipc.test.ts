@@ -6,7 +6,13 @@ type Receive = (event: IpcMainEvent, requestId: unknown, decision: unknown) => v
 
 function coordinator(senderId = 4) {
   let receive: Receive = () => undefined
-  const ipc = { on: (_channel: 'aiterm:lifecycle:close-decision', listener: Receive) => (receive = listener) }
+  let unsaved: (event: IpcMainEvent, value: unknown) => void = () => undefined
+  const ipc = {
+    on: (channel: string, listener: (...args: never[]) => void) => {
+      if (channel === 'aiterm:lifecycle:close-decision') receive = listener as unknown as Receive
+      else unsaved = listener as unknown as typeof unsaved
+    }
+  }
   const handlers = new Map<string, () => void>()
   const sender = {
     id: senderId,
@@ -21,6 +27,7 @@ function coordinator(senderId = 4) {
     sender,
     handlers,
     receive: (...args: Parameters<Receive>) => receive(...args),
+    unsaved: (value: unknown, from: WebContents = sender) => unsaved({ sender: from } as unknown as IpcMainEvent, value),
     requestId: () => sender.send.mock.calls[0]?.[1]?.requestId as string
   }
 }
@@ -97,6 +104,24 @@ describe('close prompt coordinator', () => {
 
     await expect(run.instance.request(undefined, 'close', SESSIONS)).resolves.toBeUndefined()
     await expect(run.instance.request(destroyed, 'close', SESSIONS)).resolves.toBeUndefined()
+  })
+
+  it('knows only whether the window holds unsaved edits, and forgets them with a reload', () => {
+    const run = coordinator()
+    const stranger = { id: 9, isDestroyed: () => false } as unknown as WebContents
+    expect(run.instance.hasUnsavedEdits(run.sender)).toBe(false)
+    run.unsaved(true)
+    expect(run.instance.hasUnsavedEdits(run.sender)).toBe(true)
+    run.unsaved(false)
+    expect(run.instance.hasUnsavedEdits(run.sender)).toBe(false)
+    run.unsaved('yes')
+    run.unsaved(true, stranger)
+    expect(run.instance.hasUnsavedEdits(run.sender)).toBe(false)
+    expect(run.instance.hasUnsavedEdits(stranger)).toBe(false)
+    run.unsaved(true)
+    run.handlers.get('did-start-loading')?.()
+    expect(run.instance.hasUnsavedEdits(run.sender)).toBe(false)
+    expect(run.instance.hasUnsavedEdits(undefined)).toBe(false)
   })
 
   it('names the agent, not its path', () => {

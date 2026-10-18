@@ -4,6 +4,7 @@ import {
   ERROR_CODES,
   FILE_REFERENCE_MAX_LENGTH,
   METHOD_REGISTRY,
+  QUICK_LOOK_EDIT_MAX_BYTES,
   QUICK_LOOK_SEARCH_MAX_CHARS,
   hasControlOrFormatCharacter,
   type FileReferencePasteParams,
@@ -15,6 +16,7 @@ import {
   type QuickLookListResult,
   type QuickLookIdentityResult,
   type QuickLookReadResult,
+  type QuickLookSaveResult,
   type QuickLookRootResult,
   type QuickLookSearchResult,
   type QuickLookSource
@@ -122,7 +124,8 @@ export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, 
   handle('aiterm:quick-look:read', (event, params) => {
     const input = objectParams(params)
     return actions.client().request<QuickLookReadResult>(METHOD_REGISTRY.quickLookRead, {
-      ...quickLookSource(input), path: displayedFilePath(input.path)
+      ...quickLookSource(input), path: displayedFilePath(input.path),
+      ...(input.root === undefined ? {} : { root: displayedFilePath(input.root) })
     }).then((result) => {
       // A file shown as text, or by its facts, may be revealed in its folder, as the preview's may.
       if (result.status === 'ready' || result.facts) remember(event.sender.id, result.canonicalPath ?? result.path)
@@ -137,6 +140,20 @@ export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, 
     })
   })
 
+
+  // Quick look's one writer (Story 68.1): the text crosses to the utility, which checks the file and the root again.
+  // Nothing here logs or keeps it.
+  handle('aiterm:quick-look:save', (_event, params) => {
+    const input = objectParams(params)
+    if (typeof input.text !== 'string' || input.text.length > QUICK_LOOK_EDIT_MAX_BYTES) invalid('The text to save')
+    return actions.client().request<QuickLookSaveResult>(METHOD_REGISTRY.quickLookSave, {
+      ...quickLookSource(input),
+      root: displayedFilePath(input.root),
+      path: displayedFilePath(input.path),
+      digest: boundedText(input.digest, 'The read to save over'),
+      text: input.text
+    })
+  })
 
   // One search per window: the window is the owner, so a newer search from it aborts the older (Story 67.5).
   handle('aiterm:quick-look:search', (event, params) => {

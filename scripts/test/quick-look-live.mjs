@@ -6,7 +6,7 @@
 // Usage: node scripts/test/quick-look-live.mjs [--binary <packaged bmn>]   (needs `pnpm run build` first without --binary)
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { _electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
@@ -28,6 +28,10 @@ const CANARY = 'canary-QL67-7f3kZq9-made-up'
 const CANARY_TWO = 'canary-QL67-second-made-up'
 const CANARY_JSON = 'canary-QL67-json-made-up'
 const PAGE_KEY = 'sk-madeupQL67pagekey0123456789abcdef'
+// Story 68.1: a made-up value pasted into an edited .env file, and one another program writes meanwhile.
+const PASTED = 'madeupQL68pastedValue0123456789'
+const PASTED_TWO = 'madeupQL68secondPaste9876543210'
+const EDITED_ENV = '# made-up config\nexport MADEUP_HOST=made-up.example\nMADEUP_SECRET="madeupQL68oldValue"\n\nMADEUP_MODE=dev\n'
 // A word only one made-up file holds, so a search's traces can be looked for in the app's folders afterwards.
 const PROBE = 'QL67searchprobe'
 
@@ -62,6 +66,11 @@ function writeProject(project) {
   file('.gitignore', '.env\n')
   file('notes/probe.txt', `A made-up note holding ${PROBE} once.\n`)
   file('.env', `# made-up values\nMADEUP_API_KEY=${CANARY}\nMADEUP_PORT=made-up-port\nMADEUP_TOKEN=${CANARY_TWO}\n`)
+  // Read-only, so it opens as masked text (Story 67.3); config/app.env is the one Quick look may edit (Story 68.1).
+  chmodSync(join(project, '.env'), 0o444)
+  file('config/app.env', EDITED_ENV)
+  chmodSync(join(project, 'config/app.env'), 0o640)
+  file('config/multi.env', 'MADEUP_OK=1\nMADEUP_BLOCK="made-up\nsecond line"\n')
   file('docs/plan.md', [
     '---', 'title: Made-up plan', '---', '# Made-up plan', '',
     'Text with *emphasis*, **strong**, ~~struck~~ and `inline code`. See [the site](https://example.invalid/page),',
@@ -219,7 +228,7 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     check('the root row names the session folder', rootRow.includes('project'), { rootRow })
     await sheet.locator('.ql-tr').first().waitFor()
     const names = await sheet.locator('.ql-tr .ql-nm').allTextContents()
-    check('folders first, then files by name, hidden and generated names listed', names.slice(0, 4).join('|') === 'apps/desktop|dist|docs|node_modules' && names.includes('empty.txt'), { names })
+    check('folders first, then files by name, hidden and generated names listed', names.slice(0, 5).join('|') === 'apps/desktop|config|dist|docs|node_modules' && names.includes('empty.txt'), { names })
     check('a folder holding only a folder is joined (apps/desktop)', names[0] === 'apps/desktop')
     const dimmed = await sheet.locator('.ql-tr.dim .ql-nm').allTextContents()
     check('node_modules and generated names are dimmed, not hidden', dimmed.includes('node_modules') && dimmed.includes('dist'), { dimmed })
@@ -476,6 +485,7 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
       { plates: envState.plates })
     check('a plate\'s accessible name is "hidden value" with its length, and its length shows at the edge of its line',
       envState.labels[0] === `hidden value, ${CANARY.length} characters` && envState.notes.includes(`${CANARY.length} chars`), { labels: envState.labels, notes: envState.notes })
+    check('a .env file Quick look may not write says why where Edit would be (Story 68.1 AC9)', (await sheet.locator('.ql-read-only').textContent()) === 'Read-only · not writable')
     check('the test hook returns the masked text', envState.hook?.text?.includes('[secret hidden]') && !envState.hook.text.includes(CANARY) && !JSON.stringify(envState.hook).includes(CANARY),
       { hidden: envState.hook?.hidden })
     await sheet.locator('.ql-code .cm-content').focus()
@@ -550,6 +560,134 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     check('a JSONC file masks a value whose name says so and shows the rest', !jsonc.includes(CANARY_JSON) && jsonc.includes('"apiKey"') && jsonc.includes('made-up/model') &&
       await sheet.locator('.ql-code .ql-secret').count() === 1, { plates: await sheet.locator('.ql-code .ql-secret').count() })
     await page.screenshot({ path: join(evidence, 'masked.png') })
+
+    // ---- Story 68.1: paste a made-up key into a .env file and save it ----
+    const envPath = join(project, 'config/app.env')
+    const envBar = () => sheet.locator('.ql-save').first().innerText().catch(() => '')
+    const pasteInto = (text) => page.evaluate((value) => {
+      const data = new DataTransfer()
+      data.setData('text/plain', value)
+      document.activeElement.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+    }, text)
+    const active = () => page.evaluate(() => ({ label: document.activeElement?.getAttribute('aria-label'), text: document.activeElement?.textContent, type: document.activeElement?.getAttribute('type') }))
+    const lastFacts = () => sheet.locator('.ql-path .ql-facts').last().textContent()
+    await sheet.locator('.ql-tr', { hasText: 'config' }).first().click()
+    await sheet.locator('.ql-tr', { hasText: 'multi.env' }).waitFor()
+    await openRow('multi.env')
+    check('a .env file with a multi-line value opens masked, with the reason where Edit would be', await sheet.locator('.ql-env-row').count() === 0 &&
+      (await sheet.locator('.ql-read-only').textContent()) === 'Read-only · this file has a multi-line value')
+    await openRow('app.env')
+    await sheet.locator('.ql-env-row').first().waitFor()
+    const rowsState = { text: await pageText(), rows: await sheet.locator('.ql-env-row').count(), comments: await sheet.locator('.ql-env-comment').count(),
+      facts: await lastFacts(), hook: await hook() }
+    check('an editable .env file opens as rows: names, masked values with their length, the comment kept, and "3 keys · owner and group"',
+      rowsState.rows === 3 && rowsState.comments === 1 && rowsState.facts === '3 keys · owner and group' && rowsState.text.includes('MADEUP_SECRET') &&
+      rowsState.text.includes(`${'madeupQL68oldValue'.length} chars`) && !rowsState.text.includes('madeupQL68oldValue') && !rowsState.text.includes('made-up.example'), rowsState.facts ? { facts: rowsState.facts } : {})
+    check('the test hook holds names, dots and lengths only', JSON.stringify(rowsState.hook?.edit?.rows) === JSON.stringify(['MADEUP_HOST=•••• 15', 'MADEUP_SECRET=•••• 18', 'MADEUP_MODE=•••• 3']),
+      { rows: rowsState.hook?.edit?.rows })
+    await sheet.locator('.ql-env-rows').focus()
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Enter')
+    const inField = await active()
+    await pasteInto(PASTED)
+    await page.waitForTimeout(100)
+    const pastedState = { text: await pageText(), bar: await envBar(), input: await sheet.locator('.ql-env-field').inputValue().then((value) => value.length), dot: await sheet.locator('.ql-tr .ql-dirty').count(),
+      footer: await footerText(), hook: JSON.stringify(await hook()) }
+    check('Enter puts the focus in the value\'s field, hidden; a paste replaces the whole value and stays masked', inField.label === 'New value, hidden' && inField.type === 'password' &&
+      pastedState.input === PASTED.length && !pastedState.text.includes(PASTED) && !pastedState.hook.includes(PASTED), { inField })
+    check('the Save bar reads "Save writes to", the full path and "1 of 3 values changed"; the tree marks the file with a dot', pastedState.bar.includes('Save writes to') &&
+      pastedState.bar.includes('1 of 3 values changed') && pastedState.bar.includes(envPath) && pastedState.dot === 1, { bar: pastedState.bar })
+    await pasteInto('made-up\nTWO_LINES')
+    await page.waitForTimeout(100)
+    check('a paste that holds a line break is refused and changes nothing', (await sheet.locator('.ql-feedback').textContent()) === 'A value is one line; nothing was pasted' &&
+      await sheet.locator('.ql-env-field').inputValue().then((value) => value.length) === PASTED.length)
+    check('in a field the footer says Paste, Reveal, Done, Save and that Esc leaves the field', /Leave the field/u.test(pastedState.footer) && /Save/u.test(pastedState.footer), { footer: pastedState.footer })
+    await page.keyboard.press('Escape')
+    const leftField = { field: await sheet.locator('.ql-env-field').count(), open: await sheet.count(), row: await sheet.locator('.ql-env-row.sel').innerText() }
+    check('Esc leaves the field and keeps the draft: the row reads "Unsaved" with its length', leftField.field === 0 && leftField.open === 1 &&
+      leftField.row.includes(`Unsaved · ${PASTED.length} chars`) && !leftField.row.includes(PASTED), leftField)
+    await page.keyboard.press('Control+r')
+    await sheet.locator('.ql-env-shown').waitFor()
+    const shownRow = await sheet.locator('.ql-env-row.sel').innerText()
+    check('Ctrl+R shows the new value for ten seconds', shownRow.includes(PASTED) && shownRow.includes('Shown · hides in 10 s') && !JSON.stringify(await hook()).includes(PASTED))
+    await page.keyboard.press('Escape')
+    check('Esc hides it again, and the sheet stays', await sheet.locator('.ql-env-shown').count() === 0 && await sheet.count() === 1)
+
+    // Every way out asks first, with Keep editing in focus; Esc means Keep editing.
+    const asks = async (name, act) => {
+      await act()
+      await sheet.locator('.ql-save-ask').waitFor({ timeout: 3000 })
+      const asked = { name, text: await sheet.locator('.ql-save-ask').innerText(), focus: (await active()).text }
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(100)
+      return { ...asked, kept: await sheet.locator('.ql-save-ask').count() === 0 && await sheet.count() === 1 && (await envBar()).includes('1 of 3 values changed') }
+    }
+    const ways = [
+      await asks('Esc', () => page.keyboard.press('Escape')),
+      await asks('Ctrl+Shift+E', () => page.keyboard.press('Control+Shift+E')),
+      await asks('another file', () => sheet.locator('.ql-tr', { hasText: 'README.md' }).first().click()),
+      await asks('the root', () => sheet.locator('.ql-head .ql-plate').click())
+    ]
+    check('Esc, Ctrl+Shift+E, another file and changing the root each ask "Unsaved edits": Save, Discard, Keep editing, Keep editing in focus; Esc keeps editing',
+      ways.every((way) => way.text.includes('Unsaved edits') && /Save/u.test(way.text) && /Discard/u.test(way.text) && way.focus === 'Keep editing' && way.kept), { ways })
+    // The window's close asks through the close prompt; Keep editing keeps the window.
+    await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].close() })
+    await sheet.locator('.ql-save-ask').waitFor({ timeout: 5000 })
+    const closeAsked = (await active()).text
+    await sheet.getByRole('button', { name: 'Keep editing', exact: true }).click()
+    await page.waitForTimeout(300)
+    check('closing the window asks the same row first, and Keep editing keeps the window and the draft', closeAsked === 'Keep editing' &&
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length) === 1 && (await envBar()).includes('1 of 3 values changed'))
+
+    await page.keyboard.press('Control+s')
+    await page.waitForFunction(() => /Saved \d/u.test([...document.querySelectorAll('dialog.quick-look .ql-path .ql-facts')].at(-1)?.textContent ?? ''))
+    const savedBytes = readFileSync(envPath, 'utf8')
+    check('Ctrl+S writes only the changed value, in its old quoting; comment, order, blank line and final newline are the same',
+      savedBytes === EDITED_ENV.replace('"madeupQL68oldValue"', `"${PASTED}"`), { same: savedBytes === EDITED_ENV.replace('"madeupQL68oldValue"', `"${PASTED}"`) })
+    check('the file keeps its mode and no second file is left beside it', (statSync(envPath).mode & 0o7777) === 0o640 &&
+      JSON.stringify(readdirSync(join(project, 'config')).sort()) === JSON.stringify(['app.env', 'multi.env']), { mode: (statSync(envPath).mode & 0o7777).toString(8) })
+    check('after the save the row reads "Saved" with the time, the bar and the dot are gone', await sheet.locator('.ql-save').count() === 0 && await sheet.locator('.ql-tr .ql-dirty').count() === 0 &&
+      /Saved \d/u.test(await lastFacts()))
+
+    // Another program writes the file meanwhile: Save is blocked, the draft kept, and Review latest carries it onto the new file.
+    await sheet.locator('.ql-env-rows').focus()
+    await page.keyboard.press('Enter')
+    await pasteInto(PASTED_TWO)
+    await page.keyboard.press('Escape')
+    const agentBytes = readFileSync(envPath, 'utf8').replace('MADEUP_MODE=dev', 'MADEUP_MODE=agent')
+    writeFileSync(envPath, agentBytes)
+    await page.keyboard.press('Control+s')
+    await sheet.locator('.ql-save-ask').waitFor()
+    const blocked = { text: await sheet.locator('.ql-save-ask').innerText(), focus: (await active()).text, disk: readFileSync(envPath, 'utf8') === agentBytes }
+    check('a file another program changed gives "Changed on disk · Save blocked" with Review latest and Keep editing; nothing is written',
+      blocked.text.includes('Changed on disk · Save blocked') && blocked.text.includes('Review latest') && blocked.focus === 'Keep editing' && blocked.disk, { text: blocked.text })
+    await sheet.getByRole('button', { name: 'Review latest', exact: true }).click()
+    await page.waitForFunction(() => /edits are kept/u.test(document.querySelector('dialog.quick-look .ql-feedback')?.textContent ?? ''))
+    check('Review latest reads the file as it is now, masked, and keeps the draft on it', (await envBar()).includes('1 of 3 values changed') &&
+      !(await pageText()).includes('agent') && !(await pageText()).includes(PASTED_TWO))
+    await page.keyboard.press('Control+s')
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-save') === null)
+    check('Save then writes his value over the other program\'s file, keeping its change', readFileSync(envPath, 'utf8') === agentBytes.replace(`"${PASTED}"`, `"${PASTED_TWO}"`))
+
+    // Discard drops the draft and goes the way he asked.
+    await sheet.locator('.ql-env-rows').focus()
+    await page.keyboard.press('Enter')
+    await pasteInto('madeupQL68discarded')
+    await page.keyboard.press('Escape')
+    const beforeDiscard = readFileSync(envPath, 'utf8')
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.getByRole('button', { name: 'Discard', exact: true }).click()
+    await sheet.waitFor({ state: 'detached' })
+    check('Discard on the way out drops the draft, writes nothing and closes the sheet', readFileSync(envPath, 'utf8') === beforeDiscard)
+    await terminal.focus()
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.waitFor()
+    await sheet.locator('.ql-env-row, .ql-tr').first().waitFor()
+    check('the sheet opens again with no draft', await sheet.locator('.ql-save').count() === 0)
+    await page.screenshot({ path: join(evidence, 'env-edit.png') })
+    // Markdown's checks below open docs/plan.md from the tree.
+    if (await sheet.locator('.ql-tr', { hasText: 'plan.md' }).count() === 0) await sheet.locator('.ql-tr', { hasText: 'docs' }).first().click()
+    await sheet.locator('.ql-tr', { hasText: 'plan.md' }).first().waitFor()
 
     // ---- Story 67.4: Markdown reads as a page ----
     // The app's clipboard writes go to a recorder for this run, so the owner's clipboard is never touched.
@@ -1239,7 +1377,7 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
         if (entry.isDirectory()) walk(path)
         else if (entry.isFile() && statSync(path).size < 64 * 1024 * 1024) {
           const bytes = readFileSync(path)
-          if ([CANARY, CANARY_TWO, CANARY_JSON].some((value) => bytes.includes(value))) leaks.push(path)
+          if ([CANARY, CANARY_TWO, CANARY_JSON, PASTED, PASTED_TWO].some((value) => bytes.includes(value))) leaks.push(path)
         }
       }
     }

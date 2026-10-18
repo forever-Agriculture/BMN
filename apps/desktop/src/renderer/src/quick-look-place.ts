@@ -87,7 +87,7 @@ export function forgetPlaces(): void {
   places.clear()
 }
 
-export type EscapeStep = 'close-menu' | 'clear-typed' | 'hide-secret' | 'close-goto' | 'close-find' | 'stop-search' | 'clear-search' | 'back-to-results' | 'close-sheet'
+export type EscapeStep = 'keep-editing' | 'leave-field' | 'close-menu' | 'clear-typed' | 'hide-secret' | 'close-goto' | 'close-find' | 'stop-search' | 'clear-search' | 'back-to-results' | 'close-sheet'
 
 export interface EscapeState {
   focus: 'field' | 'tree' | 'file'
@@ -102,6 +102,10 @@ export interface EscapeState {
   fromResults?: boolean
   /** The path row's "…" menu is open (Story 67.6). */
   menu?: boolean
+  /** A question about unsaved edits, a blocked save or an invalid file is on screen; Esc means Keep editing (Story 68.1 AC8). */
+  question?: boolean
+  /** A value or name field of the edited file has the focus; Esc leaves it and keeps the draft (Story 68.1 AC2). */
+  editField?: boolean
 }
 
 /**
@@ -110,7 +114,9 @@ export interface EscapeState {
  * (back to the tree) or a file opened from them (back to the results), then any letters left typed.
  */
 export function escapeStep(state: EscapeState): EscapeStep {
+  if (state.question) return 'keep-editing'
   if (state.menu) return 'close-menu'
+  if (state.editField) return 'leave-field'
   if (state.focus === 'tree' && state.typed) return 'clear-typed'
   if (state.revealed) return 'hide-secret'
   if (state.goTo) return 'close-goto'
@@ -123,6 +129,8 @@ export function escapeStep(state: EscapeState): EscapeStep {
 }
 
 export const ESCAPE_LABELS: Record<EscapeStep, string> = {
+  'keep-editing': 'Keep editing',
+  'leave-field': 'Leave the field',
   'close-menu': 'Close menu',
   'clear-typed': 'Clear typed',
   'hide-secret': 'Hide value',

@@ -1150,9 +1150,14 @@ const applicationLifecycle = createApplicationLifecycle({
       current.backgroundChoice = choice
     }
   },
+  unsavedEdits: () => closePromptCoordinator?.hasUnsavedEdits(
+    applicationWindow && !applicationWindow.isDestroyed() ? applicationWindow.webContents : undefined
+  ) === true,
   promptForClose: async (choice) => {
     const answered = await askTheWindow('close', choice.targets)
     if (answered) return answered
+    // Asked only for unsaved edits, by a window that can no longer answer: they went with it.
+    if (choice.targets.length === 0) return { kind: 'proceed', choices: {}, remember: false }
     // No window to ask: the native box is the honest fallback, and it answers for every session.
     const response = await nativeChoice('question', choice)
     if (response === 2) return { kind: 'cancel' }
@@ -1167,6 +1172,7 @@ const applicationLifecycle = createApplicationLifecycle({
   promptForQuit: async (choice) => {
     const answered = await askTheWindow('quit', choice.targets)
     if (answered) return answered.kind === 'cancel' ? 'cancel' : 'quit'
+    if (choice.targets.length === 0) return 'quit'
     return (await nativeChoice('warning', choice)) === 0 ? 'quit' : 'cancel'
   },
   flushSavedOutput: flushAllSavedOutput,

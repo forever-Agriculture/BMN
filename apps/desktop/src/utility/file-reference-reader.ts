@@ -1,4 +1,5 @@
 // MODULE: file-reference-reader.ts - reads one owner-addressed local text file as a bounded, read-only snapshot
+import { createHash } from 'node:crypto'
 import { constants, type BigIntStats } from 'node:fs'
 import { open, realpath, stat, type FileHandle } from 'node:fs/promises'
 import { isAbsolute, normalize, resolve } from 'node:path'
@@ -135,6 +136,8 @@ export type LocalTextFileRead =
       readAt: string
       /** The open handle's size, modified time and inode before the read, which Quick look compares later. */
       identity: { byteLength: number; modifiedNs: string; inode: string }
+      /** SHA-256 of the bytes read: Quick look's Save writes only over these bytes (Story 68.1). */
+      digest: string
     }
   | {
       status: 'unavailable'
@@ -218,7 +221,8 @@ export async function readLocalTextFile(resolvedPath: string, options: FileRefer
       lineCount: fileReferenceLines(content).length,
       modifiedAt: stats.mtime.toISOString(),
       readAt: (options.now?.() ?? new Date()).toISOString(),
-      identity: { byteLength: size, modifiedNs: stats.mtimeNs.toString(), inode: `${stats.dev}:${stats.ino}` }
+      identity: { byteLength: size, modifiedNs: stats.mtimeNs.toString(), inode: `${stats.dev}:${stats.ino}` },
+      digest: createHash('sha256').update(bytes).digest('hex')
     }
   } catch (error) {
     const code = errorCode(error)

@@ -469,15 +469,42 @@ reference** (the absolute path and the line, as the reference dialog copies it),
 reference dialog on that file at its send step. A file opened for a workspace rather than a session
 closes with the sheet when you leave or archive the workspace.
 
+**Saving a `.env` file.** A file named `.env`, `.env.*` or `*.env` opens as rows when Quick look may
+write it: comments as quiet lines, each `NAME=value` (also with `export`, and quoted) as its name and a
+masked value with its length, and the path row says how many keys there are and who may read the file
+("owner only"). Quick look may write a file of at most 256 KB inside the shown root, reached through no
+link, with one hard link, owned by you and writable by you; otherwise, and for a file with a multi-line
+value, a name given twice or a line that is neither, it opens as masked text and says why where Edit
+would be ("Read-only · outside the root"). ↑ ↓ move between names, `Enter` puts the keys in the value's
+field, and typing or `Ctrl+V` there replaces the whole value, which stays masked and reads "Unsaved"
+with its length (`Ctrl+R` shows it for ten seconds); a paste with a line break is refused. **Add key**
+adds a row at the end with a name field (letters, digits and underscore, not starting with a digit, not
+a name the file has). A new value keeps the old value's quoting when it fits, else is written bare when
+it holds only letters, digits and `_ - . / : = + @ %`, in single quotes when it holds no single quote,
+and is refused otherwise ("edit it in the terminal"). Nothing is written before **Save** (`Ctrl+S`);
+the bar names the full path and what changed, and the tree marks the file with a dot. Save checks every
+rule above again and that the file still holds the bytes it read; then it writes a private file in the
+same folder with the file's owner, group and mode, flushes it, checks once more and renames it over
+the file, flushes the folder and reads the result back. Only the changed values and added lines
+differ: comments, order, blank lines, line endings and the final newline stay as they were. A file
+another program changed gives "Changed on disk · Save blocked" with **Review latest** (the file as it is
+now, your edits kept on it) and **Keep editing**; any other refusal names its reason and keeps your
+edits. No backup is kept. A write by another program in the instant between that last check and the
+rename is lost. With unsaved edits, `Escape`, `Ctrl+Shift+E`, opening another file, changing the root,
+closing the window and Quit each ask first: **Save**, **Discard**, **Keep editing**, with Keep editing in
+focus. Your edits stay in memory and are dropped when the file is closed; no value is logged or kept
+anywhere but the file.
+
 Quick look's keys: `Ctrl+Shift+E` opens or closes it, `Ctrl+Shift+G` opens it on **Contents**, `Ctrl+P`
 goes to a file, `Ctrl+F` finds in the file, `Ctrl+G` goes to a line, `Ctrl+R` shows a hidden value for
-ten seconds, `M` switches a Markdown file between page and source, `Alt+←`/`Alt+→` step through the files
+ten seconds, `Ctrl+S` saves an edited `.env` file, `M` switches a Markdown file between page and source, `Alt+←`/`Alt+→` step through the files
 you opened, `F5` reloads a changed file, holding `F8` shows the terminals, `Ctrl+B` folds the tree and
 `Escape` closes the innermost thing first. It shows text files of at most 2 MiB, Markdown pages of at
 most 512 KB and folders of at most 2,000 entries; search contents reads at most 20,000 files of at most
 1 MiB and returns at most 2,000 lines, in a thread of its own, so terminals keep flowing while it masks a large
 file and a new query or `Escape` stops it at once. Masking hides values that look like secrets; it does not find
-every secret. Nothing is indexed, watched or stored: each folder, file and search is read when you ask.
+every secret. Nothing is indexed, watched or stored: each folder, file and search is read when you ask, and
+only Save writes, to the file you edited.
 
 **The reference dialog.** **Open file reference…** in the palette opens a dialog where you type or
 paste a reference, see a read-only snapshot of the file at the line and column, and use **Copy

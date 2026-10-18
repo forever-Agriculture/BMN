@@ -23,7 +23,9 @@ import {
   type ExplicitConversationBinding,
   type HelloParams,
   type ProtocolErrorCode,
+  type QuickLookSaveResult,
   type QuickLookSearchResult,
+  QUICK_LOOK_EDIT_MAX_BYTES,
   type RpcFailure,
   type RpcId,
   type RpcRequest,
@@ -41,6 +43,7 @@ import { readFileReference } from './file-reference-reader'
 import { listQuickLookFolder, quickLookIdentity, quickLookRoot, quickLookSourceFolder, readQuickLookFile } from './quick-look'
 import { QuickLookSearches } from './quick-look-search'
 import { QuickLookSearchClient } from './quick-look-search-client'
+import { saveQuickLookFile } from './quick-look-save'
 import { searchFileReferences } from './file-reference-search'
 import { inspectRepositoryIdentity } from './repository-identity'
 import { readDevAutoRuns } from './dev-auto-runs'
@@ -580,6 +583,25 @@ async function start(): Promise<void> {
    * Quick look's top field (Story 67.5): "Go to file" through the name search, or "Contents". The root must be the
    * source's folder or the Git root above it, the two roots the sheet offers.
    */
+  /** A root the sheet names must be one it offers: the source's folder or the Git root above it. */
+  async function offeredQuickLookRoot(params: Record<string, unknown>, root: string): Promise<void> {
+    const roots = await quickLookRoot(await quickLookFolderFor(params))
+    if (roots.status !== 'ready' || (root !== roots.sessionFolder && root !== roots.gitRoot)) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'Use only the folder Quick look shows')
+    }
+  }
+
+  /** Quick look's one writer (Story 68.1): the root is one the sheet offers; every condition of R68-NFR1 is checked again inside. */
+  async function quickLookSave(params: Record<string, unknown>): Promise<QuickLookSaveResult> {
+    const root = stringValue(params, 'root')
+    const digest = stringValue(params, 'digest')
+    const text = params.text
+    if (typeof text !== 'string' || text.length > QUICK_LOOK_EDIT_MAX_BYTES) throw new HostControlError(ERROR_CODES.invalidArgument, 'The text to save is invalid')
+    if (!/^[0-9a-f]{64}$/u.test(digest)) throw new HostControlError(ERROR_CODES.invalidArgument, 'The read to save over is invalid')
+    await offeredQuickLookRoot(params, root)
+    return saveQuickLookFile({ path: stringValue(params, 'path'), root, digest, text })
+  }
+
   async function quickLookSearch(params: Record<string, unknown>): Promise<QuickLookSearchResult> {
     const ownerId = stringValue(params, 'ownerId')
     const requestId = stringValue(params, 'requestId')
@@ -893,9 +915,15 @@ async function start(): Promise<void> {
       case METHOD_REGISTRY.quickLookList:
         await quickLookFolderFor(params)
         return listQuickLookFolder(stringValue(params, 'folder'))
-      case METHOD_REGISTRY.quickLookRead:
+      case METHOD_REGISTRY.quickLookRead: {
         await quickLookFolderFor(params)
-        return readQuickLookFile(stringValue(params, 'path'))
+        if (params.root === undefined) return readQuickLookFile(stringValue(params, 'path'))
+        const root = stringValue(params, 'root')
+        await offeredQuickLookRoot(params, root)
+        return readQuickLookFile(stringValue(params, 'path'), { root })
+      }
+      case METHOD_REGISTRY.quickLookSave:
+        return quickLookSave(params)
       case METHOD_REGISTRY.quickLookIdentity:
         await quickLookFolderFor(params)
         return quickLookIdentity(stringValue(params, 'path'))

@@ -10,8 +10,10 @@ import {
   quickLookSize,
   exactAbsoluteFileReference,
   sameQuickLookIdentity,
+  secretFileKind,
   type FileReferenceBase,
   type QuickLookReadResult,
+  type QuickLookSaveResult,
   type QuickLookRootResult,
   type QuickLookSearchResult,
   type QuickLookSource
@@ -33,6 +35,7 @@ import {
   type Trail
 } from './quick-look-place'
 import {
+  REVEAL_SECONDS,
   maskedSlice,
   outsideSecrets,
   quickLookSecretRanges,
@@ -43,6 +46,9 @@ import {
   type Reveal
 } from './quick-look-secrets'
 import { treeKey, treeRows, type TreeListing, type TreeRow } from './quick-look-tree'
+import { readEnvFile, readersOf } from './quick-look-env'
+import { EMPTY_ENV_DRAFT, EnvView, envDraftDirty, envDraftSummary, envDraftText, rebaseEnvDraft, type EnvDraft, type EnvViewHandle } from './quick-look-env-view'
+import { SaveBar, asksQuestion, type SaveRow } from './quick-look-save-bar'
 import { quickLookFooter, type QuickLookFocus } from './quick-look-keys'
 import { SearchResults } from './quick-look-results'
 import { copiedReference, missingWords, type PrintedReference, type QuickLookAsk } from './quick-look-open'
@@ -125,6 +131,8 @@ interface QuickLookTestSnapshot {
   text: string | null
   hidden: number
   revealed: number | null
+  /** An edited file: its rows with every value masked, what is unsaved and what the Save bar or its row says (Story 68.1). */
+  edit?: { rows: string[]; dirty: boolean; bar: string | null; row: string | null; saved: string | null; readOnly: string | null } | null
   search: {
     mode: QuickLookSearchMode
     query: string
@@ -334,6 +342,11 @@ export function QuickLook(props: {
   /** "Send to session…": today's file-reference dialog on this reference, at its send step; a session's sheet only. */
   onSendReference?(reference: string): void
   onClose(): void
+  /**
+   * The window is asked to close or BMN to quit while the sheet is open: unsaved edits ask first, and the answer says
+   * whether the close goes on (Story 68.1 AC8).
+   */
+  closeAsk?: { id: string; answer(proceed: boolean): void } | null
 }): React.JSX.Element {
   const dialog = useRef<HTMLDialogElement>(null)
   const tree = useRef<HTMLDivElement>(null)
@@ -364,6 +377,16 @@ export function QuickLook(props: {
   const [pageStatus, setPageStatus] = useState('')
   const pageView = useRef<MarkdownPageHandle | null>(null)
   const [now, setNow] = useState(() => Date.now())
+  // Editing (Story 68.1): his draft, in memory only, the row in the Save bar's place, the value shown, the last save.
+  const [envDraft, setEnvDraft] = useState<EnvDraft>(EMPTY_ENV_DRAFT)
+  const [saveRow, setSaveRow] = useState<SaveRow | null>(null)
+  const [envShown, setEnvShown] = useState<{ row: number; until: number } | null>(null)
+  const [savedAt, setSavedAt] = useState<{ path: string; at: string } | null>(null)
+  const [envField, setEnvField] = useState(false)
+  const envView = useRef<EnvViewHandle | null>(null)
+  const dirtyRef = useRef(false)
+  /** A close of the window or a Quit that waits for his answer to the unsaved edits. */
+  const pendingClose = useRef<((proceed: boolean) => void) | null>(null)
   // The top field: "Go to file" by name or "Contents", its switches, the search it runs and the result ↑ ↓ are on.
   const [searchMode, setSearchMode] = useState<QuickLookSearchMode>(props.request.search === 'contents' ? 'contents' : 'files')
   const [query, setQuery] = useState('')
@@ -392,10 +415,19 @@ export function QuickLook(props: {
   const keepTop = useRef(false)
 
   const root = rootInfo?.status === 'ready' ? (atGitRoot && rootInfo.gitRoot ? rootInfo.gitRoot : rootInfo.sessionFolder) : null
+  const rootRef = useRef(root)
+  rootRef.current = root
   const rows = useMemo(() => (root ? treeRows(root, listings, expanded) : []), [root, listings, expanded])
   const ready = file?.result?.status === 'ready' ? file.result : null
   const unavailable = file?.result?.status === 'unavailable' ? file.result : null
   const text = useMemo(() => (ready ? viewText(ready.content) : ''), [ready])
+  // A .env file the host says may be edited opens as rows, unless its form leaves something to guess (Story 68.1 AC1).
+  const envKind = !!ready && secretFileKind(ready.path) === 'env'
+  const envModel = useMemo(() => (ready && envKind && ready.edit?.status === 'editable' ? readEnvFile(ready.content) : null), [ready, envKind])
+  const envRows = envModel?.status === 'rows' ? envModel : null
+  const readOnlyWords = envKind && ready ? (ready.edit?.status === 'read-only' ? ready.edit.message : envModel?.status === 'read-only' ? envModel.reason : null) : null
+  const dirty = !!envRows && envDraftDirty(envDraft)
+  dirtyRef.current = dirty
   // Values that look like secrets are hidden as soon as the file is drawn; masking does not find every secret.
   const secretRanges = useMemo(() => (ready ? quickLookSecretRanges(ready.path, ready.canonicalPath, text) : []), [ready, text])
   const revealed = shownSecret && shownSecret.index < secretRanges.length ? shownSecret.index : null
@@ -437,7 +469,7 @@ export function QuickLook(props: {
       .catch((error: unknown) => setListings((current) => new Map(current).set(folder, { entries: [], more: 0, unavailable: failureText(error, 'This folder is unavailable') })))
   }, [source])
 
-  const read = useCallback((path: string): Promise<QuickLookReadResult> => window.aiTerminal.readQuickLookFile({ ...source, path })
+  const read = useCallback((path: string): Promise<QuickLookReadResult> => window.aiTerminal.readQuickLookFile({ ...source, path, ...(rootRef.current ? { root: rootRef.current } : {}) })
     .catch((error: unknown): QuickLookReadResult => ({
       status: 'unavailable', path, canonicalPath: null, reason: 'unreadable', message: failureText(error, 'The file could not be read.'), facts: null
     })), [source])
@@ -451,6 +483,11 @@ export function QuickLook(props: {
     options: { way?: OpenWay; topLine?: number | null; focus?: boolean; heading?: string | null; match?: number | null; fromResults?: boolean
       reference?: { text: string; base: FileReferenceBase | null } | null } = {}): void => {
     const way = options.way ?? 'visit'
+    // Unsaved edits are never dropped without a question: opening another file asks first (Story 68.1 AC8).
+    if (dirtyRef.current && path !== shownPath.current) {
+      setSaveRow({ kind: 'guard', then: () => openRef.current(path, line, column, options) })
+      return
+    }
     setMenuOpen(false)
     setOpenedMatch(options.match ?? null)
     setFromResults(options.fromResults === true)
@@ -479,6 +516,8 @@ export function QuickLook(props: {
       setFile((current) => (current?.path === path && current.line === line && current.column === column && !current.result ? { ...current, result } : current))
     })
   }, [read, currentTop])
+  const openRef = useRef(open)
+  openRef.current = open
 
   /**
    * Opens a reference as a Ctrl+click does: resolved by the session's launch folder (or a folder chosen for this
@@ -501,6 +540,10 @@ export function QuickLook(props: {
   /** Reads the shown file again and keeps the line at the top; nothing reloads by itself (Story 67.2 AC2). */
   const reload = (): void => {
     if (!file) return
+    if (dirtyRef.current) {
+      guarded(reload)
+      return
+    }
     const { path } = file
     const topLine = currentTop()
     keepTop.current = true
@@ -510,6 +553,10 @@ export function QuickLook(props: {
   }
 
   const step = (direction: -1 | 1): void => {
+    if (dirtyRef.current) {
+      guarded(() => step(direction))
+      return
+    }
     const next = trailStep(trail, direction, currentTop())
     if (!next) return
     setTrail(next.trail)
@@ -537,6 +584,99 @@ export function QuickLook(props: {
   /** Shows one hidden value for ten seconds, or hides it again; any other shown value hides first (Story 67.3). */
   const toggleSecret = (index: number): void => setShownSecret((current) => (current?.index === index ? null : reveal(index, Date.now())))
 
+  /** A row of the edited .env file shown for ten seconds, or hidden again; one at a time (Story 68.1 AC2). */
+  const toggleEnvValue = (row: number): void => setEnvShown((current) => (current?.row === row ? null : { row, until: Date.now() + REVEAL_SECONDS * 1000 }))
+
+  /** Drops his draft and every question about it; the file stays as it was read. */
+  const dropDraft = (): void => {
+    dirtyRef.current = false
+    setEnvDraft(EMPTY_ENV_DRAFT)
+    setEnvShown(null)
+    setSaveRow(null)
+  }
+
+  /**
+   * Writes the draft through the host's one save method (Story 68.1 AC6). True once the file on disk holds it; the
+   * draft is kept on any other outcome, and the row in the Save bar's place says why.
+   */
+  const saveDraft = async (): Promise<boolean> => {
+    const base = ready
+    if (!base || !envRows || !rootRef.current) return false
+    const out = envDraftText(base.content, envRows, envDraft)
+    if (out.status === 'refused') {
+      setSaveRow({ kind: 'failed', message: `Could not save · ${out.message}` })
+      return false
+    }
+    setSaveRow({ kind: 'saving' })
+    const result: QuickLookSaveResult = await window.aiTerminal.saveQuickLookFile({ ...source, root: rootRef.current, path: base.path, digest: base.digest, text: out.text })
+      .catch(() => ({ status: 'failed', message: 'Could not save · BMN could not reach the file' }))
+    if (result.status === 'changed') {
+      setSaveRow({ kind: 'conflict' })
+      return false
+    }
+    if (result.status === 'failed') {
+      setSaveRow({ kind: 'failed', message: result.message })
+      return false
+    }
+    const path = base.path
+    dropDraft()
+    setSavedAt({ path, at: new Date(result.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
+    setChanged(false)
+    void read(path).then((next) => setFile((current) => (current?.path === path ? { ...current, result: next } : current)))
+    return true
+  }
+
+  /** Every way out with unsaved edits asks first: Save, Discard, Keep editing (Story 68.1 AC8). */
+  const guarded = (then: () => void, keep?: () => void): void => {
+    if (dirtyRef.current) setSaveRow({ kind: 'guard', then, ...(keep ? { keep } : {}) })
+    else then()
+  }
+
+  const keepEditing = (): void => {
+    const row = saveRow
+    setSaveRow(row?.kind === 'failed' ? row : null)
+    if (row?.kind === 'guard') row.keep?.()
+    window.setTimeout(() => envView.current?.focus(), 0)
+  }
+
+  const onSaveBarSave = (): void => {
+    const row = saveRow
+    void saveDraft().then((saved) => {
+      if (row?.kind !== 'guard') return
+      if (saved) row.then()
+      else row.keep?.()
+    })
+  }
+
+  const onSaveBarDiscard = (): void => {
+    const row = saveRow
+    dropDraft()
+    if (row?.kind === 'guard') row.then()
+  }
+
+  /** The file as it is on disk now, masked, while his draft is kept and carried onto it (AC6). */
+  const reviewLatest = (): void => {
+    if (!ready || !envRows) return
+    const path = ready.path
+    void read(path).then((next) => {
+      if (next.status !== 'ready' || shownPath.current !== path) {
+        setSaveRow({ kind: 'failed', message: 'Could not save · the file can no longer be read' })
+        return
+      }
+      const model = readEnvFile(next.content)
+      const carried = model.status === 'rows' ? rebaseEnvDraft(envRows, model, envDraft) : null
+      if (!carried) {
+        setSaveRow({ kind: 'failed', message: 'Could not save · a key you changed is no longer in the file' })
+        return
+      }
+      setEnvDraft(carried)
+      setSaveRow(null)
+      setChanged(false)
+      setFile((current) => (current?.path === path ? { ...current, result: next } : current))
+      setFeedback('Latest from disk · your edits are kept on it')
+    })
+  }
+
   // The countdown of a shown value, and its end.
   useEffect(() => {
     if (!shownSecret) return
@@ -548,11 +688,62 @@ export function QuickLook(props: {
     }, 250)
     return () => window.clearInterval(timer)
   }, [shownSecret])
+  useEffect(() => {
+    if (!envShown) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => {
+      const at = Date.now()
+      setNow(at)
+      if (at >= envShown.until) setEnvShown(null)
+    }, 250)
+    return () => window.clearInterval(timer)
+  }, [envShown])
+
+  // A draft belongs to the file it was made on; another file starts clean, and so does a closed sheet (AC10).
+  useEffect(() => {
+    dropDraft()
+    setEnvField(false)
+  }, [ready?.path])
+
+  // The window's close and Quit learn only whether there are unsaved edits, never what they are.
+  useEffect(() => {
+    window.aiTerminal.reportQuickLookUnsaved(dirty)
+  }, [dirty])
+  useEffect(() => () => window.aiTerminal.reportQuickLookUnsaved(false), [])
+
+  // A close of the window or a Quit asks here first when there are unsaved edits; otherwise it goes on at once.
+  useEffect(() => {
+    const ask = props.closeAsk
+    if (!ask) return
+    if (!dirtyRef.current) {
+      ask.answer(true)
+      return
+    }
+    let answered = false
+    const answer = (proceed: boolean): void => {
+      if (answered) return
+      answered = true
+      pendingClose.current = null
+      ask.answer(proceed)
+    }
+    pendingClose.current = answer
+    setSaveRow({ kind: 'guard', then: () => answer(true), keep: () => answer(false) })
+  }, [props.closeAsk?.id])
 
   // Test mode only: what the sheet shows of the file, with every hidden value masked, never the value itself.
   const hookRef = useRef<() => QuickLookTestSnapshot>(() => ({ path: null, text: null, hidden: 0, revealed: null, search: null }))
   hookRef.current = () => ({
     path: ready?.path ?? null, text: ready ? maskedSlice(text, secretRanges, 0, text.length, revealed) : null, hidden: secretRanges.length, revealed,
+    // Never a value, shown or not: a name, the dots and a length (AC10).
+    edit: envRows ? {
+      rows: [
+        ...envRows.rows.flatMap((row) => (row.kind === 'key' ? [`${row.name}=•••• ${(envDraft.changed.get(row.line) ?? row.value).length}${envDraft.changed.has(row.line) ? ' unsaved' : ''}`] : [])),
+        ...envDraft.added.map((each) => `${each.name || '(unnamed)'}=•••• ${each.value.length} added`)
+      ],
+      dirty, bar: dirty ? envDraftSummary(envRows, envDraft) : null,
+      row: saveRow ? (saveRow.kind === 'failed' ? saveRow.message : saveRow.kind === 'invalid' ? saveRow.words : saveRow.kind) : null,
+      saved: savedAt && ready && savedAt.path === ready.path ? savedAt.at : null, readOnly: null
+    } : readOnlyWords ? { rows: [], dirty: false, bar: null, row: null, saved: null, readOnly: readOnlyWords } : null,
     search: showResults ? {
       mode: searchMode, query, matchCase, wholeWord, searching: search.searching, fresh, picked, failure: search.failure,
       header: search.result?.mode === 'contents' ? contentsHeader(search.result) : search.result?.mode === 'files' ? { count: filesHeader(search.result), read: '', notes: [] } : null,
@@ -608,6 +799,7 @@ export function QuickLook(props: {
           peekingRef.current = true
           setPeeking(true)
           setShownSecret(null)
+          setEnvShown(null)
         }
         return
       }
@@ -625,6 +817,7 @@ export function QuickLook(props: {
       peekingRef.current = false
       setPeeking(false)
       setShownSecret(null)
+      setEnvShown(null)
     }
     const other = (event: Event): void => { if (peekingRef.current) swallow(event as KeyboardEvent) }
     window.addEventListener('keydown', down, true)
@@ -934,18 +1127,24 @@ export function QuickLook(props: {
     return next
   })
 
-  const escape = escapeStep({ focus: focusArea === 'tree' ? 'tree' : focusArea === 'field' ? 'field' : 'file', typed: typed.length > 0, revealed: revealed !== null,
-    goTo: goTo.open, find: find.open, search: search.searching ? 'searching' : showResults ? 'results' : null, fromResults, menu: menuOpen })
+  const escape = escapeStep({ focus: focusArea === 'tree' ? 'tree' : focusArea === 'field' ? 'field' : 'file', typed: typed.length > 0, revealed: revealed !== null || envShown !== null,
+    goTo: goTo.open, find: find.open, search: search.searching ? 'searching' : showResults ? 'results' : null, fromResults, menu: menuOpen,
+    question: asksQuestion(saveRow), editField: !!envRows && envField && focusArea === 'file' })
   const cancelRef = useRef<() => void>(() => undefined)
   cancelRef.current = () => {
     switch (escape) {
+      case 'keep-editing': keepEditing(); return
+      case 'leave-field': envView.current?.leaveField(); return
       case 'close-menu':
         setMenuOpen(false)
         // As any menu: the focus goes back to the button that opened it.
         dialog.current?.querySelector<HTMLElement>('.ql-path button[aria-label="More actions"]')?.focus()
         return
       case 'clear-typed': setTyped(''); return
-      case 'hide-secret': setShownSecret(null); return
+      case 'hide-secret':
+        setShownSecret(null)
+        setEnvShown(null)
+        return
       case 'close-goto':
         setGoTo({ open: false, text: '', invalid: false })
         setFocusArea('file')
@@ -962,7 +1161,7 @@ export function QuickLook(props: {
         setFocusArea('field')
         field.current?.focus()
         return
-      case 'close-sheet': onClose.current()
+      case 'close-sheet': guarded(() => onClose.current())
     }
   }
 
@@ -994,7 +1193,19 @@ export function QuickLook(props: {
     }
     if (ctrl && event.shiftKey && event.code === 'KeyE') {
       take()
-      onClose.current()
+      guarded(() => onClose.current())
+      return
+    }
+    if (ctrl && !event.shiftKey && event.code === 'KeyS' && envRows) {
+      take()
+      if (dirty && saveRow?.kind !== 'saving' && !asksQuestion(saveRow)) onSaveBarSave()
+      return
+    }
+    if (ctrl && !event.shiftKey && event.code === 'KeyR' && envRows) {
+      take()
+      const row = envView.current?.selectedRow() ?? null
+      if (row === null) setFeedback('No value selected.')
+      else toggleEnvValue(row)
       return
     }
     if (ctrl && !event.shiftKey && event.code === 'KeyP') {
@@ -1095,7 +1306,8 @@ export function QuickLook(props: {
     const all = (selector: string): HTMLElement[] => [...element.querySelectorAll<HTMLElement>(selector)]
     return [
       field.current, folded ? null : tree.current,
-      element.querySelector<HTMLElement>('.ql-code .cm-content') ?? element.querySelector<HTMLElement>('.ql-page'),
+      element.querySelector<HTMLElement>('.ql-code .cm-content') ?? element.querySelector<HTMLElement>('.ql-page') ?? element.querySelector<HTMLElement>('.ql-env-rows'),
+      ...all('.ql-env-add button'), ...all('.ql-save button'),
       ...all('.ql-find input'), ...all('.ql-page .ql-md-a, .ql-page .ql-md-img'), ...all('.ql-path button'), ...all('.ql-actions button'), ...all('.ql-head button')
     ].filter((stop): stop is HTMLElement => !!stop && stop.getClientRects().length > 0 && !(stop as HTMLButtonElement).disabled)
   }
@@ -1114,7 +1326,8 @@ export function QuickLook(props: {
   const home = rootInfo?.home ?? null
   const type = file ? quickLookFileType(file.path) : null
   const footer = quickLookFooter({ focus: focusArea, fileOpen: !!ready, escape, folded, secrets: secretRanges.length > 0, back: canGoBack(trail), forward: canGoForward(trail),
-    markdown: page ? (rendered ? 'rendered' : 'source') : null, search: showResults ? searchMode : showRecent ? 'recent' : null })
+    markdown: page ? (rendered ? 'rendered' : 'source') : null, search: showResults ? searchMode : showRecent ? 'recent' : null,
+    edit: envRows ? (envField ? 'env-field' : 'env-rows') : null })
 
   return (
     <dialog ref={dialog} className={`app-dialog quick-look${peeking ? ' peeking' : ''}`} aria-label="Quick look" tabIndex={-1} onKeyDownCapture={onSheetKey}>
@@ -1176,7 +1389,7 @@ export function QuickLook(props: {
               {root ? <><b className="ql-root-name">{rootName}</b><span className="ql-root" title={root}>{quickLookHomePath(root, home)}</span></> : null}
               {typed ? <span className="ql-typed" aria-label={`Typed ${typed}`}>{typed}<span className="ql-caret" /></span> : null}
               {!typed && rootInfo?.status === 'ready' && rootInfo.gitRoot ? (
-                <button type="button" className="ql-plate" onClick={() => setAtGitRoot((value) => !value)}>
+                <button type="button" className="ql-plate" onClick={() => guarded(() => setAtGitRoot((value) => !value))}>
                   {atGitRoot ? 'Session folder' : 'Git root'}
                 </button>
               ) : null}
@@ -1188,7 +1401,7 @@ export function QuickLook(props: {
                 aria-activedescendant={selected ? `ql-row-${rows.findIndex((row) => row.path === selected)}` : undefined}
                 onKeyDown={onTreeKey} onFocus={() => setFocusArea('tree')}>
                 {rows.map((row, index) => <TreeRowView key={row.path} row={row} index={index} selected={row.path === selected}
-                  open={file?.path === row.path}
+                  open={file?.path === row.path} dirty={dirty && file?.path === row.path}
                   onClick={() => {
                     setSelected(row.path)
                     setTyped('')
@@ -1205,7 +1418,9 @@ export function QuickLook(props: {
               <>
                 <PathRow path={file.path} root={root} line={file.line}
                   facts={openedSearch ? matchLabel(openedMatch!, flat.length)
-                    : [type?.label, `${quickLookCount(ready.lineCount)} ${ready.lineCount === 1 ? 'line' : 'lines'}`, quickLookSize(ready.byteLength)].join(' · ')}
+                    : envRows && ready.edit?.status === 'editable'
+                      ? [`${envRows.keys} ${envRows.keys === 1 ? 'key' : 'keys'}`, readersOf(ready.edit.mode), ...(savedAt?.path === ready.path && !dirty ? [`Saved ${savedAt.at}`] : [])].join(' · ')
+                      : [type?.label, `${quickLookCount(ready.lineCount)} ${ready.lineCount === 1 ? 'line' : 'lines'}`, quickLookSize(ready.byteLength)].join(' · ')}
                   actions={(
                     <>
                       {openedSearch ? (
@@ -1228,6 +1443,7 @@ export function QuickLook(props: {
                     </>
                   )} />
                 {pageTooLarge ? <p className="ql-note">Over 512 KB, so shown as source.</p> : null}
+                {readOnlyWords ? <p className="ql-note ql-read-only">{readOnlyWords}</p> : null}
                 {ready.canonicalPath !== ready.path ? <p className="ql-note">Through symlink · {ready.canonicalPath}</p> : null}
                 {changed ? (
                   <div className="ql-changed" role="status">
@@ -1254,7 +1470,12 @@ export function QuickLook(props: {
                     <span className="ql-count">{goTo.invalid ? 'Type a line, or a line and a column: 44 or 44:7' : `1–${quickLookCount(ready.lineCount)}`}</span>
                   </div>
                 ) : null}
-                {ready.byteLength === 0 ? <p className="ql-message">Empty file. Nothing to show.</p> : rendered && page ? (
+                {envRows ? (
+                  <EnvView ref={envView} model={envRows} draft={envDraft} onDraft={setEnvDraft}
+                    shown={envShown ? { row: envShown.row, secondsLeft: Math.max(1, Math.ceil((envShown.until - now) / 1000)) } : null}
+                    onReveal={toggleEnvValue} onStatus={setFeedback} focus={focusArea === 'file' && !asksQuestion(saveRow)}
+                    onFocus={() => setFocusArea('file')} onEditing={setEnvField} />
+                ) : ready.byteLength === 0 ? <p className="ql-message">Empty file. Nothing to show.</p> : rendered && page ? (
                   <MarkdownPageView ref={pageView} page={page} path={ready.path} ranges={secretRanges} revealed={revealed} secondsLeft={secondsLeft}
                     matches={shownMatches} current={find.open ? currentMatch : 0} line={file.line} heading={file.heading} topLine={file.topLine} focus={focusArea === 'file'}
                     status={pageStatus} onStatus={setPageStatus} onReveal={toggleSecret}
@@ -1287,6 +1508,10 @@ export function QuickLook(props: {
             ) : <PathRow path={file.path} root={root} line={file.line} facts="Reading…" />
           ) : <p className="ql-empty">{goneNote ?? (root ? 'Choose a file in the tree.' : rootInfo ? '' : 'Reading the project…')}</p>}
           {feedback ? <p className="ql-feedback" aria-live="polite">{feedback}</p> : null}
+          {ready && envRows && (dirty || saveRow) ? (
+            <SaveBar path={ready.path} summary={envDraftSummary(envRows, envDraft)} row={saveRow}
+              onSave={onSaveBarSave} onSaveInvalid={onSaveBarSave} onDiscard={onSaveBarDiscard} onKeep={keepEditing} onReview={reviewLatest} />
+          ) : null}
         </section>
       </div>
       <footer className="ql-hints">
@@ -1297,7 +1522,7 @@ export function QuickLook(props: {
   )
 }
 
-function TreeRowView(props: { row: TreeRow; index: number; selected: boolean; open: boolean; onClick(): void }): React.JSX.Element {
+function TreeRowView(props: { row: TreeRow; index: number; selected: boolean; open: boolean; dirty?: boolean; onClick(): void }): React.JSX.Element {
   const row = props.row
   const indent = { paddingLeft: `${6 + row.depth * 12}px` }
   if (row.kind === 'more' || row.kind === 'note') {
@@ -1313,6 +1538,7 @@ function TreeRowView(props: { row: TreeRow; index: number; selected: boolean; op
       <span className="ql-nm">
         {row.joined.length > 0 ? <><i>{row.name}/</i>{row.joined.slice(0, -1).map((name) => <i key={name}>{name}/</i>)}{row.joined[row.joined.length - 1]}</> : row.name}
         {row.kind === 'link' ? <span className="ql-link"> → link</span> : null}
+        {props.dirty ? <span className="ql-dirty" role="img" aria-label="unsaved edits" /> : null}
       </span>
     </div>
   )

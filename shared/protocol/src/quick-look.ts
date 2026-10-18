@@ -40,7 +40,34 @@ export type QuickLookListResult =
   | { status: 'ready'; folder: string; entries: QuickLookEntry[]; more: number }
   | { status: 'unavailable'; folder: string; message: string }
 
-export type QuickLookReadParams = QuickLookSource & { path: string }
+/** `root`: the sheet's root, which the host checks is one it offers, so it can tell whether the file may be edited (Story 68.1). */
+export type QuickLookReadParams = QuickLookSource & { path: string; root?: string }
+
+/** The largest file Quick look edits, before and after (R68-NFR1). */
+export const QUICK_LOOK_EDIT_MAX_BYTES = 256 * 1024
+
+/** The names Quick look may edit (R68-NFR1): `.env`, `.env.*`, `*.env`, and JSON, JSONC, YAML and TOML files. */
+export function quickLookEditableName(name: string): boolean {
+  return name === '.env' || name.startsWith('.env.') || name.endsWith('.env') || /\.(?:json|jsonc|ya?ml|toml)$/iu.test(name)
+}
+
+/**
+ * Whether the shown file may be edited, checked by the host when it was read and again at Save: `editable` with the
+ * file's mode, or `read-only` with the reason in words where Edit would be ("Read-only · over 256 KB").
+ */
+export type QuickLookEditState = { status: 'editable'; mode: number } | { status: 'read-only'; message: string }
+
+/** One save: the text the sheet shows, for the file it read, whose bytes then had `digest` (Story 68.1 AC6). */
+export type QuickLookSaveParams = QuickLookSource & { root: string; path: string; digest: string; text: string }
+
+/**
+ * `saved` after the read back; `changed` when the bytes on disk are no longer the ones read, or the file was replaced;
+ * `failed` with the reason in words ("Could not save · permission denied"). No result carries any of the text.
+ */
+export type QuickLookSaveResult =
+  | { status: 'saved'; digest: string; savedAt: string; identity: QuickLookIdentity }
+  | { status: 'changed' }
+  | { status: 'failed'; message: string }
 
 /** What is known about a file that is not shown as text. */
 export interface QuickLookFileFacts {
@@ -69,6 +96,10 @@ export type QuickLookReadResult =
       lineCount: number
       modifiedAt: string
       identity: QuickLookIdentity
+      /** SHA-256 of the bytes read, which Save compares with the bytes on disk. */
+      digest: string
+      /** Null for a name Quick look never edits, or when no root was named. */
+      edit: QuickLookEditState | null
     }
   | {
       status: 'unavailable'

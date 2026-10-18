@@ -8,6 +8,7 @@ interface ClosePromptIpcRegistrar {
     channel: 'aiterm:lifecycle:close-decision',
     listener: (event: IpcMainEvent, requestId: unknown, decision: unknown) => void
   ): void
+  on(channel: 'aiterm:lifecycle:unsaved-edits', listener: (event: IpcMainEvent, unsaved: unknown) => void): void
 }
 
 interface PendingPrompt {
@@ -24,6 +25,8 @@ interface PendingPrompt {
  */
 export class ClosePromptCoordinator {
   private readonly pending = new Map<string, PendingPrompt>()
+  /** Windows whose Quick look holds unsaved edits; only that they exist, never what they are (Story 68.1 AC8). */
+  private readonly unsaved = new Set<number>()
 
   constructor(
     ipc: ClosePromptIpcRegistrar,
@@ -38,6 +41,29 @@ export class ClosePromptCoordinator {
       pending.release()
       pending.resolve(rawDecision)
     })
+    ipc.on('aiterm:lifecycle:unsaved-edits', (event, unsaved) => {
+      if (typeof unsaved !== 'boolean' || !this.senderIsAllowed(event.sender)) return
+      const sender = event.sender
+      if (!unsaved) {
+        this.unsaved.delete(sender.id)
+        return
+      }
+      if (this.unsaved.has(sender.id)) return
+      this.unsaved.add(sender.id)
+      // A reload or a destroyed window takes its draft with it.
+      const forget = (): void => {
+        this.unsaved.delete(sender.id)
+        sender.off('destroyed', forget)
+        sender.off('did-start-loading', forget)
+      }
+      sender.once('destroyed', forget)
+      sender.once('did-start-loading', forget)
+    })
+  }
+
+  /** The window holds unsaved edits, so a close or a Quit asks it first even with no session running. */
+  hasUnsavedEdits(sender: WebContents | undefined): boolean {
+    return !!sender && !sender.isDestroyed() && this.unsaved.has(sender.id)
   }
 
   request(

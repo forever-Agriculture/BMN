@@ -17,6 +17,7 @@ import {
 } from '@bmn/protocol'
 import { readLocalTextFile, type FileReferenceReaderOptions } from './file-reference-reader'
 import { gitTopLevel } from './repository-git'
+import { quickLookEditState } from './quick-look-save'
 
 const DIMMED = new Set(QUICK_LOOK_DIMMED_NAMES)
 /** At most this many names are held while a folder is read; past it they are cut to the first rows in the tree's order. */
@@ -153,7 +154,7 @@ export async function listQuickLookFolder(folder: string, limits: { maxEntries?:
  * Reads one file for the sheet with the reference reader's opens and checks at Quick look's cap. A file that is
  * not shown as text keeps its size and modified time, so the sheet can say what it is.
  */
-export async function readQuickLookFile(path: string, options: FileReferenceReaderOptions = {}): Promise<QuickLookReadResult> {
+export async function readQuickLookFile(path: string, options: FileReferenceReaderOptions & { root?: string | null; uid?: number } = {}): Promise<QuickLookReadResult> {
   if (!isAbsolute(path)) {
     return { status: 'unavailable', path, canonicalPath: null, reason: 'missing', message: 'No file exists at this path.', facts: null }
   }
@@ -170,7 +171,10 @@ export async function readQuickLookFile(path: string, options: FileReferenceRead
     byteLength: read.byteLength,
     lineCount: read.lineCount,
     modifiedAt: read.modifiedAt,
-    identity: read.identity
+    identity: read.identity,
+    digest: read.digest,
+    // Whether it may be edited is told with the read, and every part of it is checked again at Save (Story 68.1).
+    edit: options.root === undefined ? null : await quickLookEditState(requested, options.root, options.uid === undefined ? {} : { uid: options.uid })
   }
 }
 
