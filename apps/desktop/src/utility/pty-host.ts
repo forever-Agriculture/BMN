@@ -584,11 +584,12 @@ async function start(): Promise<void> {
     const query = textValue(params, 'query')
     const mode = params.mode
     if (mode !== 'files' && mode !== 'contents') throw new HostControlError(ERROR_CODES.invalidArgument, 'Control parameter mode is invalid')
-    const roots = await quickLookRoot(await quickLookFolderFor(params))
-    if (roots.status !== 'ready' || (root !== roots.sessionFolder && root !== roots.gitRoot)) {
-      throw new HostControlError(ERROR_CODES.invalidArgument, 'Search only the folder Quick look shows')
-    }
-    return quickLookSearches.run(ownerId, requestId, async (signal) => mode === 'files'
+    return quickLookSearches.checkedRun(ownerId, requestId, async () => {
+      const roots = await quickLookRoot(await quickLookFolderFor(params))
+      if (roots.status !== 'ready' || (root !== roots.sessionFolder && root !== roots.gitRoot)) {
+        throw new HostControlError(ERROR_CODES.invalidArgument, 'Search only the folder Quick look shows')
+      }
+    }, async (signal) => mode === 'files'
       ? { mode: 'files' as const, ...(await searchFileReferences(root, query, signal)) }
       : searchQuickLookContents(root, { query, matchCase: params.matchCase === true, wholeWord: params.wholeWord === true }, signal))
   }

@@ -119,10 +119,15 @@ describe('the Markdown page', () => {
 
   it('reads an image as words and a path, local or remote, never as a picture', () => {
     const images = (page.blocks[11] as Extract<MarkdownBlock, { kind: 'paragraph' }>).children.filter((inline) => inline.kind === 'image')
-    expect(images).toEqual([
+    expect(images).toMatchObject([
       { kind: 'image', alt: 'A made-up diagram', source: 'images/diagram.png', target: { kind: 'file', path: 'images/diagram.png', line: null, column: null, heading: null } },
       { kind: 'image', alt: 'remote', source: 'https://example.invalid/x.png', target: { kind: 'outside', address: 'https://example.invalid/x.png' } }
     ])
+    // Their words and source keep where they are in the file, so masks reach them.
+    for (const image of images as Extract<MarkdownInline, { kind: 'image' }>[]) {
+      expect(DOCUMENT.slice(image.altFrom, image.altFrom + image.alt.length)).toBe(image.alt)
+      expect(DOCUMENT.slice(image.sourceFrom, image.sourceFrom + image.source.length)).toBe(image.source)
+    }
   })
 
   it('keeps each run at its place in the file', () => {

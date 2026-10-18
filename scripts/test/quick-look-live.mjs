@@ -1,4 +1,4 @@
-/* global window, document, location, getComputedStyle, HTMLDialogElement, DataTransfer, ClipboardEvent */
+/* global window, document, location, getComputedStyle, HTMLDialogElement, DataTransfer, ClipboardEvent, DragEvent */
 // MODULE: quick-look-live.mjs - Epic 67's isolated Electron run of Quick look on a made-up project: the three ways in, a highlighted file under the unchanged page policy with no worker, the file states, the tree, find, go to line, changed on disk, the trail, the peek, the remembered place, go to file and contents search with the terminals' output timed, and no terminal resized or typed into
 // The app runs in test mode with temporary HOME and XDG folders (removed at the end); the project, its files and the
 // terminal program are made up here. Nothing leaves the machine and no file of the owner's is read. Prints PASS or
@@ -72,7 +72,8 @@ function writeProject(project) {
     '<script>alert(1)</script>', '', '<img src="https://example.invalid/tracker.png">', '',
     '![A made-up diagram](images/diagram.png) and ![remote](https://example.invalid/remote.png)', '',
     `Key: ${PAGE_KEY} and made-up words.`, '', '```sh', `export TOKEN=${PAGE_KEY}`, '```', '',
-    ...Array.from({ length: 40 }, (_, index) => `Filler paragraph ${index}, made-up.\n`), '## Later section', '', ...Array.from({ length: 40 }, (_, index) => `After the heading ${index}.\n`), 'The end.', ''
+    ...Array.from({ length: 40 }, (_, index) => `Filler paragraph ${index}, made-up.\n`), '## Later section', '', ...Array.from({ length: 40 }, (_, index) => `After the heading ${index}.\n`), 'The end.', '',
+    `![drawn ${PAGE_KEY}](images/d.png) and [keyed](https://example.invalid/?k=${PAGE_KEY})`, ''
   ].join('\n'))
   file('docs/big.md', `# Big\n\n${'A made-up line of a big Markdown file.\n'.repeat(14000)}`)
   file('docs/opencode.jsonc', `{\n  // made-up config\n  "model": "made-up/model",\n  "provider": { "options": { "apiKey": "${CANARY_JSON}" } }\n}\n`)
@@ -159,6 +160,9 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.setMinimumSize(0, 0); w.setContentSize(1408, 880); w.show() })
     const sheet = page.locator('dialog.quick-look[open]')
     const snapshot = () => page.evaluate((id) => window.__aitermTest.snapshot(id), sessionId)
+    /** Each terminal on screen, by session. */
+    const visibleSnapshots = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.session-terminal:not(.session-terminal-hidden)')]
+      .map((pane) => pane.getAttribute('data-session-id')).filter(Boolean).map((id) => [id, window.__aitermTest.snapshot(id)])))
     const terminal = page.locator(`.session-terminal[data-session-id="${sessionId}"] .xterm-helper-textarea`)
 
     // ---- three ways in: the key, the pane's Project plate, the palette ----
@@ -466,6 +470,12 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
       return data.getData('text/plain')
     })
     check('copying a selection that holds a masked value copies "[secret hidden]" in its place', copied.includes('MADEUP_API_KEY=[secret hidden]') && !copied.includes(CANARY), { copied })
+    const dragged = await sheet.locator('.ql-code .cm-content').evaluate((content) => {
+      const data = new DataTransfer()
+      content.dispatchEvent(new DragEvent('dragstart', { dataTransfer: data, bubbles: true, cancelable: true }))
+      return data.getData('text/plain')
+    })
+    check('dragging that selection out carries "[secret hidden]" too', dragged.includes('MADEUP_API_KEY=[secret hidden]') && !dragged.includes(CANARY), { dragged })
     await page.keyboard.press('Control+f')
     await sheet.locator('.ql-find input').fill('CANARY')
     await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-find .ql-count')?.textContent === 'No matches')
@@ -555,8 +565,9 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     check('a front-matter block shows as code', pageState.pre[0] === 'front matter' && pageState.front.includes('title: Made-up plan'), { front: pageState.front.slice(0, 60) })
     check('raw HTML and a script tag show as text; nothing on the page has an address, an image, a frame or a script', pageState.hrefs === 0 &&
       pageState.raw.some((raw) => raw.includes('<script>')) && pageState.raw.some((raw) => raw.includes('<img')), { raw: pageState.raw, hrefs: pageState.hrefs })
-    check('an image is one line: "Image", its words and its path; no image is loaded', pageState.images.length === 2 && pageState.images[0].includes('Image') &&
-      pageState.images[0].includes('A made-up diagram') && pageState.images[1].includes('https://example.invalid/remote.png'), { images: pageState.images })
+    check('an image is one line: "Image", its words and its path; no image is loaded', pageState.images.length === 3 && pageState.images[0].includes('Image') &&
+      pageState.images[0].includes('A made-up diagram') && pageState.images[1].includes('https://example.invalid/remote.png') &&
+      pageState.images[2].includes('images/d.png') && !pageState.images[2].includes(PAGE_KEY), { images: pageState.images })
     const tableWrap = await sheet.locator('.ql-md-table').evaluate((element) => ({ scroll: element.scrollWidth, client: element.clientWidth, overflow: getComputedStyle(element).overflowX }))
     check('a wide table scrolls sideways inside its own box', tableWrap.scroll > tableWrap.client && tableWrap.overflow === 'auto', tableWrap)
     await page.screenshot({ path: join(evidence, 'markdown.png') })
@@ -598,8 +609,37 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
 
     // Masking and find work on the page as in source.
     const renderedText = await sheet.locator('.ql-page').innerText()
-    check('a secret-shaped value is masked on the page, in text and in a code block', !renderedText.includes(PAGE_KEY) && await sheet.locator('.ql-page .ql-secret').count() === 2,
-      { plates: await sheet.locator('.ql-page .ql-secret').count() })
+    const renderedMarkup = await sheet.locator('.ql-page').innerHTML()
+    check('a secret-shaped value is masked on the page, in text, a code block and an image\'s words, and in none of its markup', !renderedText.includes(PAGE_KEY) && !renderedMarkup.includes(PAGE_KEY) &&
+      await sheet.locator('.ql-page .ql-secret').count() === 3, { plates: await sheet.locator('.ql-page .ql-secret').count() })
+    const keyed = sheet.locator('.ql-md-a[data-target="outside"]').filter({ hasText: 'keyed' })
+    await keyed.focus()
+    const keyedStatus = await sheet.locator('.ql-page-status').textContent()
+    await page.keyboard.press('Enter')
+    await sheet.locator('.ql-feedback', { hasText: 'Address copied' }).waitFor()
+    const keyedCopy = (await app.evaluate(() => globalThis.__qlClipboard)).at(-1)
+    check('a link whose address holds a hidden value shows and copies it masked', !keyedStatus.includes(PAGE_KEY) && keyedStatus.includes('[secret hidden]') &&
+      keyedCopy === 'https://example.invalid/?k=[secret hidden]', { keyedStatus, keyedCopy })
+    // Tab from the top field, with real keys: the tree, the page, its links, then the path row's … button.
+    await page.keyboard.press('Control+p')
+    const where = () => page.evaluate(() => {
+      const active = document.activeElement
+      return active?.classList.contains('ql-tree') ? 'tree' : active?.classList.contains('ql-page') ? 'page' : active?.classList.contains('ql-md-a') ? 'link'
+        : active?.getAttribute('aria-label') === 'More actions' ? 'menu' : active?.getAttribute('aria-label') === 'Go to file' ? 'field' : active?.tagName ?? 'none'
+    })
+    const walked = [await where()]
+    for (let step = 0; step < 80 && walked.at(-1) !== 'menu'; step += 1) {
+      await page.keyboard.press('Tab')
+      walked.push(await where())
+    }
+    await page.keyboard.press('Enter')
+    const menuShown = await sheet.getByRole('menuitem', { name: 'Copy reference', exact: true }).count()
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Shift+Tab')
+    const tabBack = await where()
+    check('Tab walks from the top field to the tree, the page, each link and the … button, which Enter opens; Esc returns to it and Shift+Tab goes one stop back',
+      walked.slice(0, 3).join(' ') === 'field tree page' && walked[3] === 'link' && walked.at(-1) === 'menu' && menuShown === 1 && tabBack === walked.at(-2),
+      { walked: walked.join(' '), menuShown, tabBack })
     await page.keyboard.press('Control+f')
     await sheet.locator('.ql-find input').fill('made-up')
     await page.waitForFunction(() => / of \d+$/u.test(document.querySelector('dialog.quick-look .ql-find .ql-count')?.textContent ?? ''))
@@ -871,9 +911,37 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await sheet.waitFor({ state: 'detached' })
     await page.evaluate((id) => window.__aitermTest.snapshot(id), sessionId)
 
+    // ---- results of an earlier text never open: Enter before the new answer comes does nothing. The terminal still
+    // holds the selected reference, so the sheet opens at it; read after he went to the top field, it takes none of its keys.
+    const shown = (name) => page.waitForFunction((end) => document.querySelector('dialog.quick-look .ql-path .ql-pth')?.title.endsWith(end), name)
+    await terminal.focus()
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.waitFor()
+    await page.keyboard.press('Control+p')
+    await page.keyboard.press('Control+a')
+    await page.keyboard.type('plan.md')
+    await page.waitForFunction(() => { const state = window.__aitermQuickLook.snapshot().search; return state?.fresh && state.rows.some((row) => row.includes('plan.md')) })
+    const shownBefore = await sheet.locator('.ql-path .ql-pth').getAttribute('title').catch(() => null)
+    await page.keyboard.press('Control+a')
+    await page.keyboard.type('guide.md')
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(80)
+    const shownStale = await sheet.locator('.ql-path .ql-pth').getAttribute('title').catch(() => null)
+    const staleDimmed = await sheet.locator('.ql-results.ql-stale').count()
+    const typed = await page.evaluate(() => window.__aitermQuickLook.snapshot().search?.query)
+    await page.waitForFunction(() => window.__aitermQuickLook.snapshot().search?.fresh)
+    await page.keyboard.press('Enter')
+    await shown('guide.md')
+    check('Enter while the results still answer the earlier text opens nothing; once the new answer comes it opens its file; the file the opening asked for took none of the field\'s keys',
+      typed === 'guide.md' && shownStale === shownBefore && !shownStale?.endsWith('plan.md') && staleDimmed === 1, { typed, shownBefore, shownStale, staleDimmed })
+    for (let step = 0; step < 8 && await sheet.count(); step += 1) {
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(150)
+    }
+    await sheet.waitFor({ state: 'detached' })
+
     // ---- the sheet's states in the four colour modes: screenshots for the eye, and the contrast of 67.1 AC7 ----
     const appearance = await page.evaluate(async () => (await window.aiTerminal.getSettings()).appearance)
-    const shown = (name) => page.waitForFunction((end) => document.querySelector('dialog.quick-look .ql-path .ql-pth')?.title.endsWith(end), name)
     const goTo = async (query, name) => {
       await page.keyboard.press('Control+p')
       await page.keyboard.press('Control+a')
@@ -979,6 +1047,7 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
         await page.waitForTimeout(400)
         await terminal.focus()
         const before = await snapshot()
+        const othersBefore = await visibleSnapshots()
         await page.keyboard.press('Control+Shift+E')
         await sheet.waitFor()
         // Below 940 px of sheet width the tree starts folded and the top field has focus.
@@ -1001,10 +1070,17 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
         await page.keyboard.up('F8')
         await page.waitForTimeout(250)
         const during = await snapshot()
+        const othersDuring = await visibleSnapshots()
         await page.keyboard.press('Escape')
         await sheet.waitFor({ state: 'detached' })
         await page.waitForTimeout(250)
         const after = await snapshot()
+        const othersAfter = await visibleSnapshots()
+        // Every terminal on screen, not only the one that had focus: none is resized or typed into.
+        const sameGrid = (a, b) => !!a && !!b && a.cols === b.cols && a.rows === b.rows && a.refits === b.refits && a.ptyCols === b.ptyCols && a.ptyRows === b.ptyRows && a.inputEvents === b.inputEvents
+        const shownIds = Object.keys(othersBefore)
+        check(`${layout} ${width}×${height}: every terminal on screen (${shownIds.length}) keeps its grid, refits, PTY size and input count`,
+          shownIds.length === (layout === 'split' ? 2 : 1) && shownIds.every((id) => sameGrid(othersBefore[id], othersDuring[id]) && sameGrid(othersBefore[id], othersAfter[id])), { shown: shownIds.length })
         const same = (a) => a.cols === before.cols && a.rows === before.rows && a.refits === before.refits && a.ptyCols === before.ptyCols && a.ptyRows === before.ptyRows && a.inputEvents === before.inputEvents
         const ticking = Number(/tick (\d+)/u.exec(after.bufferLines.join(' '))?.[1] ?? 0) > Number(/tick (\d+)/u.exec(before.bufferLines.join(' '))?.[1] ?? 0)
         check(`${layout} ${width}×${height}: grid, refits, PTY size and input count unchanged; output kept flowing`, same(during) && same(after) && ticking, {

@@ -25,6 +25,8 @@ export function SearchResults(props: {
   search: SearchView
   root: string | null
   picked: number
+  /** The results answer an earlier text of the field: dimmed, and none of them opens. */
+  stale: boolean
   onOpen(index: number): void
 }): React.JSX.Element {
   const list = useRef<HTMLDivElement>(null)
@@ -35,11 +37,11 @@ export function SearchResults(props: {
   const result = search.result
   const status = search.failure ?? search.waiting ?? (search.searching && !result ? 'Searching… · Esc stops it' : null)
   return (
-    <div className="ql-results" aria-label={search.mode === 'files' ? 'Files found' : 'Matching lines'}>
+    <div className={`ql-results${props.stale ? ' ql-stale' : ''}`} aria-label={search.mode === 'files' ? 'Files found' : 'Matching lines'} aria-busy={props.stale}>
       {status ? <p className="ql-results-status" role="status">{status}</p> : null}
       {!status && result?.mode === 'files' ? (
         <>
-          <div className="ql-results-head" role="status"><span>{search.searching ? 'Searching… · Esc stops it' : filesHeader(result)}</span></div>
+          <div className="ql-results-head" role="status"><span>{search.searching || props.stale ? 'Searching… · Esc stops it' : filesHeader(result)}</span></div>
           <div ref={list} className="ql-results-list" role="listbox" aria-label="Files">
             {result.files.map((file, index) => (
               <div key={file.path} className={`ql-rf${index === props.picked ? ' sel' : ''}`} role="option" aria-selected={index === props.picked}
@@ -52,7 +54,7 @@ export function SearchResults(props: {
         </>
       ) : null}
       {!status && result?.mode === 'contents' ? (
-        <ContentsResults result={result} searching={search.searching} root={props.root} picked={props.picked} listRef={list} onOpen={props.onOpen} />
+        <ContentsResults result={result} searching={search.searching || props.stale} root={props.root} picked={props.picked} listRef={list} onOpen={props.onOpen} />
       ) : null}
     </div>
   )

@@ -584,6 +584,12 @@
   background: var(--ground);
 }
 
+/* Results of an earlier text of the field, until the new answer comes: dimmed, and none of them opens. */
+.ql-results.ql-stale .ql-results-list {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 /* As the source view: the footer's keys say the page has focus, so it draws no ring around the whole column. */
 .quick-look .ql-page:focus-visible {
   outline: none;

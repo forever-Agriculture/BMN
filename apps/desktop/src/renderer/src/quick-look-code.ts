@@ -284,12 +284,24 @@ function secretNotes(onReveal: (index: number) => void): Extension {
 
 /**
  * A copy or cut of a selection that holds a hidden value puts "[secret hidden]" in its place; with no selection,
- * the caret's line is copied, as the view does by itself.
+ * the caret's line is copied, as the view does by itself. A selection dragged out of the view carries the same text.
  */
 const maskedCopy = EditorView.domEventHandlers({
   copy: (event, view) => copyMasked(event, view),
-  cut: (event, view) => copyMasked(event, view)
+  cut: (event, view) => copyMasked(event, view),
+  dragstart: (event, view) => dragMasked(event, view)
 })
+
+function dragMasked(event: DragEvent, view: EditorView): boolean {
+  const { secrets } = view.state.field(secretState)
+  const chosen = view.state.selection.ranges.filter((range) => !range.empty)
+  if (secrets.ranges.length === 0 || chosen.length === 0 || !event.dataTransfer) return false
+  const text = view.state.doc.toString()
+  event.dataTransfer.clearData()
+  event.dataTransfer.setData('text/plain', chosen.map((range) => maskedSlice(text, secrets.ranges, range.from, range.to, secrets.revealed)).join(view.state.lineBreak))
+  event.dataTransfer.effectAllowed = 'copy'
+  return true
+}
 
 function copyMasked(event: ClipboardEvent, view: EditorView): boolean {
   const { secrets } = view.state.field(secretState)

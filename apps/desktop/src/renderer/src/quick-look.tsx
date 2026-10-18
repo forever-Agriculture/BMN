@@ -484,15 +484,18 @@ export function QuickLook(props: {
    * Opens a reference as a Ctrl+click does: resolved by the session's launch folder (or a folder chosen for this
    * opening), then shown here at its line and column; a missing file says where it was looked for (Story 67.6).
    */
-  const openReference = useCallback((reference: string, baseDirectory: string | null = null, options: { fromResults?: boolean } = {}): void => {
+  const openReference = useCallback((reference: string, baseDirectory: string | null = null, options: { fromResults?: boolean; asked?: boolean } = {}): void => {
     void window.aiTerminal.readFileReference({ ...source, reference, baseDirectory })
-      .then((resolved) => open(resolved.resolvedPath, resolved.line, resolved.column, { reference: { text: reference, base: resolved.base }, ...options }))
+      // The file the opening asked for, resolved after he went to the top field, opens without taking its keys.
+      .then((resolved) => open(resolved.resolvedPath, resolved.line, resolved.column, {
+        reference: { text: reference, base: resolved.base }, fromResults: options.fromResults === true, focus: !(options.asked && fieldClaimed.current)
+      }))
       .catch((error: unknown) => setFeedback(failureText(error, 'The file reference could not be opened.')))
   }, [source, open])
 
   const openAsk = (wanted: QuickLookAsk): void => {
-    if ('reference' in wanted) openReference(wanted.reference)
-    else open(wanted.path, wanted.line, wanted.column)
+    if ('reference' in wanted) openReference(wanted.reference, null, { asked: true })
+    else open(wanted.path, wanted.line, wanted.column, { focus: !fieldClaimed.current })
   }
 
   /** Reads the shown file again and keeps the line at the top; nothing reloads by itself (Story 67.2 AC2). */
@@ -551,7 +554,7 @@ export function QuickLook(props: {
   hookRef.current = () => ({
     path: ready?.path ?? null, text: ready ? maskedSlice(text, secretRanges, 0, text.length, revealed) : null, hidden: secretRanges.length, revealed,
     search: showResults ? {
-      mode: searchMode, query, matchCase, wholeWord, searching: search.searching, fresh: search.answers === searchKey, picked, failure: search.failure,
+      mode: searchMode, query, matchCase, wholeWord, searching: search.searching, fresh, picked, failure: search.failure,
       header: search.result?.mode === 'contents' ? contentsHeader(search.result) : search.result?.mode === 'files' ? { count: filesHeader(search.result), read: '', notes: [] } : null,
       rows: search.result?.mode === 'contents' ? search.result.files.flatMap((each) => each.lines.map((line) => {
         const pieces = rowPieces(line)
@@ -710,6 +713,9 @@ export function QuickLook(props: {
   // the older search, and one search runs per window (Story 67.5).
   const searching = !!root && searchable(searchMode, query)
   const searchKey = JSON.stringify([root, searchMode, query, matchCase, wholeWord])
+  // Results answer the field only as it was when they came; until the new answer comes they are shown dimmed and
+  // nothing in them opens, so Enter never opens a file of the query before.
+  const fresh = search.answers === searchKey
   useEffect(() => {
     if (!root || !searching) {
       setSearch(IDLE_SEARCH)
@@ -754,6 +760,7 @@ export function QuickLook(props: {
 
   /** The next or previous match from the open one, across files. */
   const stepResult = (direction: 1 | -1): void => {
+    if (!fresh) return
     const next = stepSearchMatch(openedMatch ?? picked, flat.length, direction)
     if (next >= 0) showMatch(next, focusArea === 'file')
   }
@@ -769,7 +776,7 @@ export function QuickLook(props: {
     const total = searchMode === 'contents' ? flat.length : fileHits.length
     if (plain && !event.shiftKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       event.preventDefault()
-      if (total === 0) return
+      if (total === 0 || !fresh) return
       const next = stepSearchMatch(picked, total, event.key === 'ArrowDown' ? 1 : -1)
       if (searchMode === 'contents') showMatch(next, false)
       else setPicked(next)
@@ -777,6 +784,7 @@ export function QuickLook(props: {
     }
     if (plain && event.key === 'Enter') {
       event.preventDefault()
+      if (!fresh) return
       if (searchMode === 'contents') showMatch(Math.max(0, picked), true)
       else if (fileHits[picked]) open(fileHits[picked]!.path, null, null, { fromResults: true })
       return
@@ -933,7 +941,8 @@ export function QuickLook(props: {
     switch (escape) {
       case 'close-menu':
         setMenuOpen(false)
-        if (focusArea === 'file') (codeView.current ?? pageView.current)?.focus()
+        // As any menu: the focus goes back to the button that opened it.
+        dialog.current?.querySelector<HTMLElement>('.ql-path button[aria-label="More actions"]')?.focus()
         return
       case 'clear-typed': setTyped(''); return
       case 'hide-secret': setShownSecret(null); return
@@ -1058,11 +1067,37 @@ export function QuickLook(props: {
     }
     if (plain && event.key === 'Tab') {
       take()
-      const order: QuickLookFocus[] = [...(folded ? [] : ['tree' as const]), ...(ready ? ['file' as const] : [])]
-      if (order.length === 0) return
-      const index = order.indexOf(focusArea)
-      setFocusArea(order[(index + (event.shiftKey ? order.length - 1 : 1)) % order.length]!)
+      // The empty top field shows printed paths where the tree is; Tab from it brings the tree back and goes there.
+      if (!event.shiftKey && showRecent && document.activeElement === field.current) {
+        setFocusArea('tree')
+        return
+      }
+      const stops = tabStops()
+      if (stops.length === 0) return
+      const active = document.activeElement
+      // The innermost stop that holds the focus: a link before the page around it, the code view for its own parts.
+      let index = stops.indexOf(active as HTMLElement)
+      if (index === -1) index = stops.findLastIndex((stop) => !!active && stop.contains(active))
+      if (index === -1 && active?.closest('.ql-code')) index = stops.findIndex((stop) => !!stop.closest('.ql-code'))
+      const next = index === -1 ? (event.shiftKey ? stops.length - 1 : 0) : (index + (event.shiftKey ? stops.length - 1 : 1)) % stops.length
+      stops[next]!.focus()
     }
+  }
+
+  /**
+   * Where Tab goes, in order: the top field, the tree, the file, the page's links, the path row's buttons, the root's
+   * buttons, and round again. The tree and the code view are one stop each and keep their own keys; the tree and the
+   * file stay next to each other, as the footer's "Tab" says. An eye is left out: Ctrl+R shows the value.
+   */
+  const tabStops = (): HTMLElement[] => {
+    const element = dialog.current
+    if (!element) return []
+    const all = (selector: string): HTMLElement[] => [...element.querySelectorAll<HTMLElement>(selector)]
+    return [
+      field.current, folded ? null : tree.current,
+      element.querySelector<HTMLElement>('.ql-code .cm-content') ?? element.querySelector<HTMLElement>('.ql-page'),
+      ...all('.ql-find input'), ...all('.ql-page .ql-md-a, .ql-page .ql-md-img'), ...all('.ql-path button'), ...all('.ql-head button')
+    ].filter((stop): stop is HTMLElement => !!stop && stop.getClientRects().length > 0 && !(stop as HTMLButtonElement).disabled)
   }
 
   const onFindKey = (event: React.KeyboardEvent): void => {
@@ -1108,10 +1143,11 @@ export function QuickLook(props: {
       <div className="ql-body">
         {showResults ? (
           <aside className="ql-left ql-searching" aria-label={searchMode === 'files' ? 'Go to file' : 'Search contents'}>
-            <SearchResults root={root} picked={picked}
+            <SearchResults root={root} picked={picked} stale={!fresh}
               search={{ mode: searchMode, searching: search.searching, result: search.result, failure: search.failure,
                 waiting: !root ? 'This folder is unavailable' : searchMode === 'contents' && !searchable('contents', query) ? 'Type at least 2 characters' : null }}
               onOpen={(index) => {
+                if (!fresh) return
                 if (searchMode === 'contents') showMatch(index, true)
                 else if (fileHits[index]) {
                   setPicked(index)

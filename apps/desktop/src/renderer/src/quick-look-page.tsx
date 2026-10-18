@@ -50,8 +50,24 @@ interface Draw {
   matches: readonly FindMatch[]
   current: number
   onReveal(index: number): void
-  onTarget(target: MarkdownTarget, label: string): void
+  /** Opens or copies a target; `address` is its address with each hidden value masked unless revealed. */
+  onTarget(target: MarkdownTarget, address: string): void
   onStatus(text: string): void
+}
+
+/**
+ * Text of the file at `from` as it may leave the page: each hidden value it touches becomes "[secret hidden]",
+ * except the one revealed when `revealed` is given. Text the page made itself (from -1) holds no file bytes.
+ */
+export function maskedSource(text: string, from: number, ranges: readonly SecretRange[], revealed: number | null = null): string {
+  if (from < 0) return text
+  let out = text
+  for (let index = ranges.length - 1; index >= 0; index -= 1) {
+    const [start, end] = ranges[index]!
+    if (index === revealed || end <= from || start >= from + text.length) continue
+    out = `${out.slice(0, Math.max(0, start - from))}${SECRET_MASK}${out.slice(Math.min(text.length, end - from))}`
+  }
+  return out
 }
 
 const DOTS = '\u2022'.repeat(12)
@@ -93,7 +109,10 @@ function Run(props: { run: MarkdownRun; draw: Draw; tokens?: readonly { from: nu
   )
 }
 
-function targetLabel(target: MarkdownTarget, fallback: string): string {
+/** What the status line says of a target; an address holding a hidden value is shown masked, never derived. */
+function targetLabel(target: MarkdownTarget, fallback: string, address: { text: string; from: number }, ranges: readonly SecretRange[]): string {
+  const masked = maskedSource(address.text, address.from, ranges)
+  if (masked !== address.text) return target.kind === 'outside' ? `${masked} · Enter copies the address` : masked
   switch (target.kind) {
     case 'outside': return `${target.address} · Enter copies the address`
     case 'heading': return `#${target.slug}`
@@ -116,28 +135,31 @@ function Inlines(props: { inlines: readonly MarkdownInline[]; draw: Draw }): Rea
           case 'strike': return <s key={index}><Inlines inlines={inline.children} draw={draw} /></s>
           case 'break': return <br key={index} />
           case 'link': {
-            const label = targetLabel(inline.target, '')
+            const label = targetLabel(inline.target, '', { text: inline.address, from: inline.addressFrom }, draw.ranges)
+            const activate = (): void => draw.onTarget(inline.target, maskedSource(inline.address, inline.addressFrom, draw.ranges, draw.revealed))
             // No href: nothing on the page can make the window go anywhere; Quick look handles every activation.
             return (
               <a key={index} className="ql-md-a" role="link" tabIndex={0} data-target={inline.target.kind}
-                onClick={() => draw.onTarget(inline.target, label)}
-                onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); draw.onTarget(inline.target, label) } }}
+                onClick={activate}
+                onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); activate() } }}
                 onFocus={() => draw.onStatus(label)} onMouseEnter={() => draw.onStatus(label)}>
                 <Inlines inlines={inline.children} draw={draw} />
               </a>
             )
           }
           case 'image': {
-            const label = targetLabel(inline.target, inline.source)
-            // An image is one line of words: never loaded, local or remote.
+            const source = { text: inline.source, from: inline.sourceFrom }
+            const label = targetLabel(inline.target, maskedSource(inline.source, inline.sourceFrom, draw.ranges), source, draw.ranges)
+            const activate = (): void => draw.onTarget(inline.target, maskedSource(inline.source, inline.sourceFrom, draw.ranges, draw.revealed))
+            // An image is one line of words: never loaded, local or remote; its words and source are masked as text is.
             return (
               <a key={index} className="ql-md-img" role="link" tabIndex={0} data-target={inline.target.kind}
-                onClick={() => draw.onTarget(inline.target, label)}
-                onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); draw.onTarget(inline.target, label) } }}
+                onClick={activate}
+                onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); activate() } }}
                 onFocus={() => draw.onStatus(label)} onMouseEnter={() => draw.onStatus(label)}>
                 <span className="ql-eyebrow">Image</span>
-                {inline.alt ? <span className="ql-md-alt">{inline.alt}</span> : null}
-                <span className="ql-md-src">{inline.source}</span>
+                {inline.alt ? <span className="ql-md-alt"><Run run={{ kind: 'text', text: inline.alt, from: inline.altFrom }} draw={draw} /></span> : null}
+                <span className="ql-md-src"><Run run={{ kind: 'text', text: inline.source, from: inline.sourceFrom }} draw={draw} /></span>
               </a>
             )
           }
@@ -202,7 +224,7 @@ function CodeBlock(props: { block: Extract<MarkdownBlock, { kind: 'code' }>; dra
   const tokens = useMemo(() => codeTokens(block.run.text, block.language, block.run.from), [block.run.text, block.language, block.run.from])
   return (
     <pre data-line={block.line} className={`ql-md-pre${props.marked}`}>
-      {block.label ? <span className="ql-md-label">{block.label}</span> : null}
+      {block.label ? <span className="ql-md-label">{maskedSource(block.label, block.labelFrom, props.draw.ranges)}</span> : null}
       <code><Run run={block.run} draw={props.draw} tokens={tokens} /></code>
     </pre>
   )
@@ -302,9 +324,9 @@ export const MarkdownPageView = forwardRef<MarkdownPageHandle, MarkdownPageProps
     current: props.current,
     onReveal: props.onReveal,
     onStatus: props.onStatus,
-    onTarget: (target) => {
+    onTarget: (target, address) => {
       switch (target.kind) {
-        case 'outside': props.onAddress(target.address); return
+        case 'outside': props.onAddress(address); return
         case 'heading': {
           const heading = container.current?.querySelector<HTMLElement>(`[data-slug="${CSS.escape(target.slug)}"]`)
           if (heading && container.current) scrollTo(container.current, heading, 'start')

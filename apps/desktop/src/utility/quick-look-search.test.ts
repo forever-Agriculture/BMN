@@ -81,6 +81,17 @@ describe('what is searched', () => {
     expect(JSON.stringify(result)).not.toContain('OUTSIDE')
   })
 
+  it('searches a root reached through a link, and still follows no link below it', async () => {
+    const real = await folder({ 'a.ts': 'needle\n' })
+    const outside = await folder({ 'x.ts': 'needle\n' })
+    await symlink(outside, join(real, 'linked'))
+    const holder = await folder({})
+    await symlink(real, join(holder, 'alias'))
+    const result = await search(join(holder, 'alias'), 'needle')
+    expect(result.unavailable).toBeNull()
+    expect(names(result, join(holder, 'alias'))).toEqual(['a.ts'])
+  })
+
   it('says why when a folder cannot be searched or the text is too short, too long or not one line', async () => {
     expect((await search('/no/such/folder', 'needle')).unavailable).toBe('This folder is unavailable')
     expect(contentsQueryProblem('n')).toBe('Type at least 2 characters')
@@ -163,6 +174,39 @@ describe('running searches', () => {
     searches.cancel('window-1', 'r4')
     expect((await stopped).cancelled).toBe(true)
     expect(searches.running).toBe(0)
+  })
+
+  it('stops a search cancelled, or replaced by a newer one, while its root is still being checked', async () => {
+    const root = await folder({ 'a.ts': 'needle\n' })
+    const searches = new QuickLookSearches()
+    let release = (): void => undefined
+    const checking = new Promise<void>((resolve) => { release = resolve })
+    const cancelled = searches.checkedRun('window-1', 'r1', () => checking, (signal) => search(root, 'needle', {}, signal))
+    searches.cancel('window-1', 'r1')
+    release()
+    expect((await cancelled).cancelled).toBe(true)
+    // The older request's check ends last; it is still the older one and stops, and the newer one is kept.
+    let releaseOlder = (): void => undefined
+    const older = searches.checkedRun('window-1', 'r2', () => new Promise<void>((resolve) => { releaseOlder = resolve }), (signal) => search(root, 'needle', {}, signal))
+    const newer = searches.checkedRun('window-1', 'r3', async () => undefined, (signal) => search(root, 'needle', {}, signal))
+    expect(await newer).toMatchObject({ cancelled: false, matchCount: 1 })
+    releaseOlder()
+    expect((await older).cancelled).toBe(true)
+    expect(searches.running).toBe(0)
+  })
+
+  it('masks the lines of a big file of hidden values in one short step, not one scan of every value per line', () => {
+    // Before: 2.9 s for 60,000 masked lines, 28.8 s for one 1 MiB line of base64 in a .env; now tens of ms.
+    const cases: Array<[string, string, string]> = [
+      ['/p/.env', 'NAME=madeup\n'.repeat(60_000), 'NAME'],
+      ['/p/.env', `KEY=${'Ab0+/'.repeat(200_000)}\n`, 'ab'],
+      ['/p/notes.md', 'ab\n'.repeat(300_000), 'ab']
+    ]
+    for (const [path, text, query] of cases) {
+      const started = performance.now()
+      matchingLines(path, text, contentsPattern(query, false, false), 2_001)
+      expect(performance.now() - started).toBeLessThan(600)
+    }
   })
 
   it('leaves the terminals\' process a turn at least every 100 ms while it searches 20,000 made-up files', async () => {

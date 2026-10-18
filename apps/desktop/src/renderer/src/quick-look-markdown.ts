@@ -26,8 +26,9 @@ export interface MarkdownRun {
 export type MarkdownInline =
   | MarkdownRun
   | { kind: 'em' | 'strong' | 'strike'; children: MarkdownInline[] }
-  | { kind: 'link'; target: MarkdownTarget; children: MarkdownInline[] }
-  | { kind: 'image'; alt: string; source: string; target: MarkdownTarget }
+  // An address, an image's words and its source keep where they start in the file (-1 when none), so masks reach them.
+  | { kind: 'link'; target: MarkdownTarget; address: string; addressFrom: number; children: MarkdownInline[] }
+  | { kind: 'image'; alt: string; altFrom: number; source: string; sourceFrom: number; target: MarkdownTarget }
   | { kind: 'break' }
 
 export interface MarkdownListItem {
@@ -41,7 +42,7 @@ export type MarkdownAlign = 'left' | 'center' | 'right' | null
 export type MarkdownBlock =
   | { kind: 'heading'; line: number; level: 1 | 2 | 3 | 4 | 5 | 6; slug: string; children: MarkdownInline[] }
   | { kind: 'paragraph'; line: number; children: MarkdownInline[] }
-  | { kind: 'code'; line: number; label: string; language: QuickLookLanguage | null; run: MarkdownRun }
+  | { kind: 'code'; line: number; label: string; labelFrom: number; language: QuickLookLanguage | null; run: MarkdownRun }
   | { kind: 'quote'; line: number; blocks: MarkdownBlock[] }
   | { kind: 'list'; line: number; ordered: boolean; start: number; items: MarkdownListItem[] }
   | { kind: 'table'; line: number; align: MarkdownAlign[]; header: MarkdownInline[][]; rows: MarkdownInline[][][] }
@@ -71,8 +72,12 @@ const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"'
 
 function entityText(source: string): string {
   const body = source.slice(1, -1)
-  if (body.startsWith('#x') || body.startsWith('#X')) return String.fromCodePoint(Number.parseInt(body.slice(2), 16) || 0xfffd)
-  if (body.startsWith('#')) return String.fromCodePoint(Number.parseInt(body.slice(1), 10) || 0xfffd)
+  const hex = body.startsWith('#x') || body.startsWith('#X')
+  if (hex || body.startsWith('#')) {
+    const code = Number.parseInt(body.slice(hex ? 2 : 1), hex ? 16 : 10)
+    // Only a Unicode scalar value is a character; zero, a surrogate or anything past U+10FFFF reads as U+FFFD.
+    return String.fromCodePoint(Number.isInteger(code) && code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff) ? code : 0xfffd)
+  }
   return ENTITIES[body] ?? source
 }
 
@@ -141,7 +146,7 @@ const MARKS = new Set(['EmphasisMark', 'StrikethroughMark', 'CodeMark', 'LinkMar
 
 class Reader {
   private readonly lineStarts: number[] = [0]
-  readonly references = new Map<string, string>()
+  readonly references = new Map<string, { address: string; from: number }>()
   readonly headings: MarkdownPage['headings'] = []
   private readonly slugs = new Map<string, number>()
 
@@ -197,10 +202,14 @@ class Reader {
         case 'Autolink': {
           const url = child.getChild('URL')
           const address = url ? this.slice(url.from, url.to) : ''
-          out.push({ kind: 'link', target: markdownTarget(address), children: url ? [this.run('text', url.from, url.to)] : [] })
+          out.push({ kind: 'link', target: markdownTarget(address), address, addressFrom: url ? url.from : -1, children: url ? [this.run('text', url.from, url.to)] : [] })
           break
         }
-        case 'URL': out.push({ kind: 'link', target: markdownTarget(this.slice(child.from, child.to)), children: [this.run('text', child.from, child.to)] }); break
+        case 'URL': {
+          const address = this.slice(child.from, child.to)
+          out.push({ kind: 'link', target: markdownTarget(address), address, addressFrom: child.from, children: [this.run('text', child.from, child.to)] })
+          break
+        }
         case 'Escape': out.push(this.run('text', child.from + 1, child.to)); break
         case 'Entity': out.push({ kind: 'text', text: entityText(this.slice(child.from, child.to)), from: -1 }); break
         case 'HardBreak': out.push({ kind: 'break' }); break
@@ -232,16 +241,17 @@ class Reader {
     const close = marks[1]?.from ?? node.to
     const url = node.getChild('URL')
     const label = node.getChild('LinkLabel')
-    const address = url ? this.slice(url.from, url.to)
-      : this.references.get(normalLabel(label ? this.slice(label.from + 1, label.to - 1) : this.slice(open, close))) ?? ''
-    return { kind: 'link', target: markdownTarget(address), children: this.inlines(node, open, close) }
+    const defined = url ? { address: this.slice(url.from, url.to), from: url.from }
+      : this.references.get(normalLabel(label ? this.slice(label.from + 1, label.to - 1) : this.slice(open, close))) ?? { address: '', from: -1 }
+    return { kind: 'link', target: markdownTarget(defined.address), address: defined.address, addressFrom: defined.from, children: this.inlines(node, open, close) }
   }
 
   image(node: SyntaxNode): MarkdownInline {
     const marks = node.getChildren('LinkMark')
     const url = node.getChild('URL')
     const source = url ? this.slice(url.from, url.to) : ''
-    return { kind: 'image', alt: this.slice(marks[0]?.to ?? node.from, marks[1]?.from ?? node.to), source, target: markdownTarget(source) }
+    const altFrom = marks[0]?.to ?? node.from
+    return { kind: 'image', alt: this.slice(altFrom, marks[1]?.from ?? node.to), altFrom, source, sourceFrom: url ? url.from : -1, target: markdownTarget(source) }
   }
 
   blocks(parent: SyntaxNode): MarkdownBlock[] {
@@ -269,9 +279,9 @@ class Reader {
         const info = node.getChild('CodeInfo')
         const label = info ? this.slice(info.from, info.to) : ''
         const code = node.getChild('CodeText')
-        return { kind: 'code', line, label, language: codeLanguage(label), run: code ? this.run('code', code.from, code.to) : { kind: 'code', text: '', from: node.to } }
+        return { kind: 'code', line, label, labelFrom: info ? info.from : -1, language: codeLanguage(label), run: code ? this.run('code', code.from, code.to) : { kind: 'code', text: '', from: node.to } }
       }
-      case 'CodeBlock': return { kind: 'code', line, label: '', language: null, run: this.run('code', node.from, node.to) }
+      case 'CodeBlock': return { kind: 'code', line, label: '', labelFrom: -1, language: null, run: this.run('code', node.from, node.to) }
       case 'Blockquote': return { kind: 'quote', line, blocks: this.blocks(node) }
       case 'BulletList':
       case 'OrderedList': {
@@ -348,7 +358,7 @@ export function markdownPage(text: string): MarkdownPage {
     const body = front[0].replace(/\n$/u, '')
     const from = 4
     const to = body.lastIndexOf('\n')
-    blocks.push({ kind: 'code', line: 1, label: 'front matter', language: 'yaml', run: { kind: 'code', text: text.slice(from, Math.max(from, to)), from } })
+    blocks.push({ kind: 'code', line: 1, label: 'front matter', labelFrom: -1, language: 'yaml', run: { kind: 'code', text: text.slice(from, Math.max(from, to)), from } })
     start = front[0].length
   }
   const tree = parser.parse(text.slice(start))
@@ -359,11 +369,13 @@ export function markdownPage(text: string): MarkdownPage {
     if (node.name !== 'LinkReference') continue
     const label = node.getChild('LinkLabel')
     const url = node.getChild('URL')
-    if (label && url) rest.references.set(normalLabel(rest.slice(label.from + 1, label.to - 1)), rest.slice(url.from, url.to))
+    if (label && url) rest.references.set(normalLabel(rest.slice(label.from + 1, label.to - 1)), { address: rest.slice(url.from, url.to), from: url.from })
   }
   blocks.push(...shiftBlocks(rest.blocks(tree.topNode), start))
   return { blocks, headings: rest.headings }
 }
+
+const shiftAt = (from: number, by: number): number => (from < 0 ? from : from + by)
 
 function shiftRun<Run extends MarkdownRun>(run: Run, by: number): Run {
   return by === 0 || run.from < 0 ? run : { ...run, from: run.from + by }
@@ -375,7 +387,8 @@ function shiftInlines(inlines: MarkdownInline[], by: number): MarkdownInline[] {
     switch (inline.kind) {
       case 'text': case 'code': case 'html': return shiftRun(inline, by)
       case 'em': case 'strong': case 'strike': return { ...inline, children: shiftInlines(inline.children, by) }
-      case 'link': return { ...inline, children: shiftInlines(inline.children, by) }
+      case 'link': return { ...inline, addressFrom: shiftAt(inline.addressFrom, by), children: shiftInlines(inline.children, by) }
+      case 'image': return { ...inline, altFrom: shiftAt(inline.altFrom, by), sourceFrom: shiftAt(inline.sourceFrom, by) }
       default: return inline
     }
   })
@@ -386,7 +399,8 @@ function shiftBlocks(blocks: MarkdownBlock[], by: number): MarkdownBlock[] {
   return blocks.map((block): MarkdownBlock => {
     switch (block.kind) {
       case 'heading': case 'paragraph': return { ...block, children: shiftInlines(block.children, by) }
-      case 'code': case 'html': return { ...block, run: shiftRun(block.run, by) }
+      case 'code': return { ...block, labelFrom: shiftAt(block.labelFrom, by), run: shiftRun(block.run, by) }
+      case 'html': return { ...block, run: shiftRun(block.run, by) }
       case 'quote': return { ...block, blocks: shiftBlocks(block.blocks, by) }
       case 'list': return { ...block, items: block.items.map((item) => ({ ...item, blocks: shiftBlocks(item.blocks, by) })) }
       case 'table': return { ...block, header: block.header.map((cell) => shiftInlines(cell, by)), rows: block.rows.map((row) => row.map((cell) => shiftInlines(cell, by))) }
