@@ -1977,6 +1977,16 @@
   vertical-align: middle;
 }
 
+/* Health › Pushes and merges (Story 83.3): an owner's row ends in its switch; its repositories sit indented under it with their level. */
+.preferences-dialog .health-row.policy-owner {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto;
+}
+
+.preferences-dialog .health-row.policy-repository {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-left: 14px;
+}
+
 /* The one switch above the apps' rows: its name, what it starts, and the switch at the row's end. */
 .preferences-dialog .health-row.auto-test {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto;
@@ -2018,10 +2028,39 @@
   .preferences-dialog :is(.accepted, .app-note) {
     padding-left: 94px;
   }
+
+  /* The push policy's rows keep their own lines: an owner's state and switch, a repository's level, beside the name. */
+  .preferences-dialog .health-row.policy-owner {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .preferences-dialog .health-row.policy-repository {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .preferences-dialog .health-row:is(.policy-owner, .policy-repository) > :nth-child(2) {
+    grid-column: auto;
+    grid-row: auto;
+  }
 }
 
 /* Narrow: the navigation becomes one horizontal strip above the page. */
 @media (max-width: 560px) {
+  /* A repository's level goes under its name, full width, its three steps sharing it. */
+  .preferences-dialog .health-row.policy-repository {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .preferences-dialog .health-row.policy-repository > :nth-child(2) {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .preferences-dialog .health-row.policy-repository .segmented.fit {
+    display: grid;
+    grid-template-columns: repeat(var(--segments), minmax(0, 1fr));
+  }
+
   .preferences-dialog .facts {
     grid-template-columns: 1fr;
     gap: 2px 14px;

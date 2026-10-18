@@ -372,6 +372,11 @@ async function start(): Promise<void> {
       if (!('root' in answer)) throw new Error('The app did not answer for the folder')
       return answer.root
     },
+    // Story 83.3: whether the rules master carries the push policy's pointer, which only the entry point may read.
+    policyPointer: async () => {
+      const answer = await askTeam({ kind: 'policy-pointer' })
+      return 'pointer' in answer ? answer.pointer : null
+    },
     messageProviderAnswer: async (destination, senderRoot) => {
       const answer = await askTeam({ kind: 'provider', destination, senderRoot })
       if (!('allowed' in answer)) throw new Error('The app did not answer for the approved team')

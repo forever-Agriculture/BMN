@@ -42,6 +42,8 @@ import type {
   ControlInfo,
   OwnerAwayView,
   AwaySummaryPayload,
+  PushPolicyChange,
+  PushPolicyView,
   DraftSendExpectation,
   FileReferenceReadParams,
   QuickLookListParams,
@@ -362,6 +364,9 @@ export interface AiTerminalBridge {
   setAway(to: 'away' | 'back', note?: string | null): Promise<OwnerAwayView>
   markAwaySummaryShown(periodId: string): Promise<OwnerAwayView>
   awaySummary(): Promise<AwaySummaryPayload>
+  /** Story 83.3: the push policy as Health shows it, and the owner's one change at a time against the revision he saw. */
+  getPushPolicy(): Promise<PushPolicyView>
+  setPushPolicy(change: PushPolicyChange): Promise<PushPolicyView>
   /** Writes a backup to a folder the owner picks and checks the copy at once (Story 75.7); null when he cancels. */
   exportBackup(): Promise<BackupExportResult | null>
   /** Epic 60.5: the team file, the approved version, pending differences with consequences, and approval history. */

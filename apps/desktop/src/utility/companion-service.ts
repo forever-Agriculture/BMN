@@ -6,6 +6,10 @@ import { homedir, hostname, tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import {
   ERROR_CODES,
+  pushPolicyStatus,
+  type PushLevel,
+  type PushPolicyChange,
+  type PushPolicyView,
   DEFAULT_TELEGRAM_QUIET_HOURS,
   type TelegramQuietHours,
   exactAbsoluteFileReference,
@@ -118,6 +122,7 @@ import { DIGEST_KEY, DevAutoMorningDigest } from './dev-auto-digest'
 import { HEALTH_ALERTS_KEY, HealthAlerts } from './health-alerts'
 import { readMachineHealth, type HealthReaderOptions } from './machine-health'
 import { readDevAutoRuns } from './dev-auto-runs'
+import { pushPolicyView, systemPolicyReader, type PolicyReader } from './push-policy-listing'
 import { manualCardFits } from './telegram-cards'
 import { createScanMemory, procReader, scanSessionPorts, type ProcReader } from './listening-ports'
 import { PortWatch } from './port-watch'
@@ -216,6 +221,10 @@ export interface CompanionServiceOptions {
    */
   messageSourceRoot?: (folder: string) => Promise<string> | string
   messageProviderAnswer?: (destination: MessageDestination, senderRoot: string) => Promise<{ allowed: boolean; reason: string }> | { allowed: boolean; reason: string }
+  /** Story 83.3: whether the rules master carries the push policy's pointer, answered by the entry point; without it, null (not in force). */
+  policyPointer?: () => Promise<boolean | null>
+  /** Story 83.3: the git and gh reads Health's policy listing needs; tests give their own. */
+  policyReader?: PolicyReader
 }
 
 function invalid(message: string): never {
@@ -366,6 +375,7 @@ export class CompanionService {
   private measuredAway: boolean | null = null
   /** Story 76.3: what he said (away, back or nothing yet), read before any delivery at start. */
   private awayRecord: AwayRecord = parseAwayRecord(undefined)
+  private readonly policyReader: PolicyReader
   private readonly pager: ReturnType<typeof createAttentionPager>
   /** Delivers a phone answer into the dialog that asked; reachable only from inside this process (Epic 30). */
   private readonly answers: RemoteAnswers
@@ -493,6 +503,7 @@ export class CompanionService {
   private telegramDeliveryWrites: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: CompanionServiceOptions) {
+    this.policyReader = options.policyReader ?? systemPolicyReader(options.policyPointer ?? (async () => null))
     this.retainedHooks = new HookEventHistory({ root: options.roots.state,
       sessionExists: sessionId => this.knownSessions.has(sessionId), live: () => this.liveHookEvents() })
     this.now = options.now ?? (() => new Date())
@@ -756,6 +767,7 @@ export class CompanionService {
         dropTurnMark: (sessionId, requestId) => this.turns?.dropped(sessionId, requestId),
         reportRefusal: (method, sessionId, reason) => this.logRefusal(method, sessionId, reason),
         awayStatus: async (scope) => scope.kind === 'owner' ? this.awayForOwner() : this.awayForAgent(),
+        policyStatus: async () => pushPolicyStatus(await this.options.database.companion('getPushPolicy'), await this.policyReader.masterHasPointer()),
         awayPrinted: async (p) => ({ recorded: await this.awayNotices.printed(p.sessionId, p.agent, p.conversation, p.claimId) }),
         // Story 76.5: BMN binds the decision to this process's conversation, as its own hook reported it, never the caller's word.
         recordDecision: (p) => this.controlCall(async () => {
@@ -1264,6 +1276,22 @@ export class CompanionService {
         if (result.outcome === 'invalid') invalid(result.reason)
         return ownerAwayView(result.record)
       }
+      case METHOD_REGISTRY.policyGet:
+        return this.pushPolicyForOwner()
+      case METHOD_REGISTRY.policySet: {
+        // Story 83.3: only Health, the owner's own surface, reaches this method; the control socket refuses every write.
+        const expectedRevision = params.expectedRevision as number
+        const change: PushPolicyChange = params.kind === 'owner'
+          ? { kind: 'owner', login: params.login as string, allowed: params.allowed as boolean, expectedRevision }
+          : params.kind === 'level'
+            ? { kind: 'level', repository: params.repository as string, level: params.level as PushLevel, expectedRevision }
+            : invalid('kind must be owner or level')
+        const result = await this.options.database.companion('changePushPolicy', change, this.iso())
+        if (result.outcome === 'invalid') invalid(result.reason)
+        if (result.outcome === 'stale') throw new HostControlError(ERROR_CODES.revisionConflict, 'The policy changed since Health read it; read it again')
+        if (result.outcome === 'unknown') throw new HostControlError(ERROR_CODES.revisionConflict, `The policy could not be read (${result.reason}); it is left as it is`)
+        return this.pushPolicyForOwner()
+      }
       case METHOD_REGISTRY.awaySummary: {
         // Story 76.6: the current period, closed or still running; the renderer adds the live requests, asks and dev-auto runs.
         const record = this.awayRecord
@@ -1335,6 +1363,16 @@ export class CompanionService {
   }
 
   /** What the owner's surfaces see. */
+  /** Story 83.3: Health's view of the push policy, over the folders BMN's sessions work in. */
+  private async pushPolicyForOwner(): Promise<PushPolicyView> {
+    const workspaces = (await this.options.database.listWorkspaces()).filter((workspace) => workspace.archivedAt === null)
+    const sessions = (await Promise.all(workspaces.map((workspace) => this.options.database.listSessions(workspace.workspaceId)))).flat()
+      .filter((session) => session.archivedAt === null)
+    const directories = [...workspaces.map((workspace) => workspace.defaultCwd), ...sessions.map((session) => session.cwd),
+      ...sessions.flatMap((session) => this.options.manager.liveLaunchDirectory(session.sessionId) ?? [])].filter((cwd): cwd is string => !!cwd)
+    return pushPolicyView(await this.options.database.companion('getPushPolicy'), directories, this.policyReader)
+  }
+
   awayForOwner(): ReturnType<typeof ownerAwayView> {
     return ownerAwayView(this.awayRecord)
   }

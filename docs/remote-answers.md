@@ -37,7 +37,9 @@ payloads and screen text are the test fixtures in
   *question* reaches BMN through the events that today open a *permission* request; the mapper must
   file both under the question.
 - A string matcher works: a `PreToolUse` entry with `"matcher": "AskUserQuestion"` fired for the
-  question and not for `Bash`. BMN's `PreToolUse` entry is gated to it.
+  question and not for `Bash`. Since Story 83.4 BMN's `PreToolUse` entry is gated to
+  `AskUserQuestion|Bash` instead: on 2.1.302 that matcher fired for both tools, and the Bash half
+  serves only the command guard (docs/agent-control.md, "The command guard").
 - A permission prompt (here `Bash`) fires `PreToolUse`, `PermissionRequest` (with `tool_input` and
   `permission_suggestions`), then the same delayed `Notification`. Answered within a second, the
   `Notification` never fires: no late notification was observed, so no guard for one is built.

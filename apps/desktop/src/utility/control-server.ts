@@ -245,6 +245,8 @@ export interface ControlHandlers {
   clearResumeCommand(p: { sessionId: string; incarnationId: string }): Promise<unknown>
   /** Story 76.3: the owner's said state; the note only to the owner's token (R76-NFR3). */
   awayStatus(scope: ControlScope): Promise<unknown>
+  /** Story 83.3: the push policy's stored facts and standing, for `bmn policy`; read by any scope, written by none. */
+  policyStatus(): Promise<unknown>
   /** Story 76.4: the session's hook printed the away snapshot BMN handed for this conversation; printed is never read. */
   awayPrinted(p: { sessionId: string; agent: string; conversation: string; revision: number; claimId: string }): Promise<unknown>
   /** Story 76.5: a decision the session's agent made while the owner is away; the host binds provenance and period. */
@@ -1514,6 +1516,13 @@ export class ControlServer {
         closedParams(rawParams, [])
         return handlers.awayStatus(scope)
       }
+      case 'policy.status': {
+        closedParams(rawParams, [])
+        return handlers.policyStatus()
+      }
+      // Story 83.3: the push policy changes only in Health, by the owner's own hand; no caller of the socket writes it.
+      case 'policy.set':
+        throw unauthorized('Only the owner changes the push policy, in BMN Health')
       case 'away.set': {
         const params = closedParams(rawParams, ['to', 'note', 'revision', 'idempotencyKey'])
         const to = params.to

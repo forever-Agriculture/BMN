@@ -164,6 +164,8 @@ Commands:
   plan status|check|set                     The project's planning board, in BMN's format or BMAD's: print
                                             rows, check the plan's structure, change one row safely; not the
                                             subscription's Plan use (bmn plan --help)
+  policy [--repo OWNER/NAME]                The owner's push and merge policy: whether it authorizes anything,
+                                            the repository's level and what still asks (bmn policy --help)
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
@@ -248,6 +250,8 @@ What to send, and when
   judge ask               typed questions about one text to the team's judge; advice only.
   plan status|check|set   the project's plan and board (BMN's plan/ or BMAD's); set changes one row
                           with the token status --json gives. Not the subscription's Plan use.
+  policy --repo OWNER/NAME  the owner's push and merge policy for that repository; read it before
+                          each push, merge and pull-request write.
   team ask --role R --key K  a review, a design look or a second opinion from a teammate, read-only;
                           it works in your repository (--project names another), --file adds files.
                           Its answer is advice to weigh. Report a refusal; never work around it.
@@ -1712,10 +1716,13 @@ const HOOK_FILES = {
     path: ['.claude', 'settings.json'],
     events: ['Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'],
     optional: [],
-    // BMN only needs PreToolUse for the question dialog, and it blocks every tool until it returns, so the
-    // entry is gated to that tool. Measured on 2.1.283: a string matcher fires for AskUserQuestion and
-    // not for Bash (docs/remote-answers.md). An ungated entry still counts, since it covers the question too.
-    matchers: { PreToolUse: 'AskUserQuestion' },
+    // BMN needs PreToolUse for the question dialog and, since Story 83.4, for the command guard on Bash; it blocks
+    // every tool until it returns, so the entry is gated to those two. Measured on 2.1.302 (Story 83.1): the matcher
+    // `AskUserQuestion|Bash` fires for both. An ungated entry still counts, since it covers both too.
+    matchers: { PreToolUse: 'AskUserQuestion|Bash' },
+    // BMN's own group from before the guard: it still runs for the question, so it counts as an older wording, and
+    // `hooks install` (and BMN's start) widen its matcher in place.
+    olderMatchers: { PreToolUse: ['AskUserQuestion'] },
 // Measured against the real CLI, firing a PostToolUse hook on a real tool call: a matcher,
     // group or entry Claude Code cannot use kills that group and nothing else - a sibling group in
     // the same event still fired, and so did another event's. So BMN never refuses a Claude file
@@ -1800,6 +1807,35 @@ function raiseTimeouts(agent, data, events) {
       hooks: group.hooks.map((entry) => isObject(entry) && entry.type === 'command' && ['wired', 'older'].includes(hookEntryState(entry.command, agent)) &&
         typeof entry.timeout === 'number' && entry.timeout > 0 && entry.timeout < wanted ? { ...entry, timeout: wanted } : entry)
     })
+  }
+  return { ...data, hooks }
+}
+
+/** Whether this is the matcher BMN's own group carried for this event before the current one (Story 83.4). */
+function olderMatcher(matcher, agent, event) {
+  return typeof matcher === 'string' && (HOOK_FILES[agent]?.olderMatchers?.[event] ?? []).includes(matcher)
+}
+
+/** A group holding only BMN's own recognised entries, so changing its matcher changes no one else's hook. */
+function onlyOurs(group, agent) {
+  return Array.isArray(group.hooks) && group.hooks.length > 0 &&
+    group.hooks.every((entry) => isObject(entry) && entry.type === 'command' && ['wired', 'older'].includes(hookEntryState(entry.command, agent)))
+}
+
+/** The events whose BMN-only group still carries an older matcher (Story 83.4: Claude's PreToolUse before Bash). */
+function olderMatchers(agent, data) {
+  if (!isObject(data) || !isObject(data.hooks)) return []
+  return Object.keys(HOOK_FILES[agent]?.olderMatchers ?? {}).filter((event) => Array.isArray(data.hooks[event]) &&
+    data.hooks[event].some((group) => isObject(group) && olderMatcher(group.matcher, agent, event) && onlyOurs(group, agent)))
+}
+
+/** `data` with those groups given the matcher BMN writes now; every other group and byte of meaning kept. */
+function widenMatchers(agent, data, events) {
+  if (events.length === 0) return data
+  const hooks = { ...data.hooks }
+  for (const event of events) {
+    hooks[event] = hooks[event].map((group) => isObject(group) && olderMatcher(group.matcher, agent, event) && onlyOurs(group, agent)
+      ? { ...group, matcher: HOOK_FILES[agent].matchers[event] } : group)
   }
   return { ...data, hooks }
 }
@@ -1903,6 +1939,10 @@ function hookEventState(listed, agent, event) {
       const recognition = hookEntryState(entry.command, agent)
       const runnable = runnableEntry(entry, agent)
       const read = runnable ? recognition : (namesHook(entry.command, agent) ? 'named' : 'missing')
+      if (gated && olderMatcher(group.matcher, agent, event) && (read === 'wired' || read === 'older')) {
+        older = true
+        continue
+      }
       if (gated && read !== 'missing') {
         gatedEntries.push(entry.command)
         continue
@@ -2361,7 +2401,8 @@ async function installHooksCommand(agent, path, asJson, yes) {
   }
   const report = checkHooks(agent, path, file)
   const raised = file.state === 'read' ? shortTimeouts(agent, file.data) : []
-  if (report.missing.length === 0 && raised.length === 0) {
+  const widened = file.state === 'read' ? olderMatchers(agent, file.data) : []
+  if (report.missing.length === 0 && raised.length === 0 && widened.length === 0) {
     const message = `Nothing to do: every hook BMN expects is already in ${path}.`
     process.stdout.write(`${asJson ? JSON.stringify({ installed: [], backup: null, file: path }, null, 2) : message}\n`)
     return 0
@@ -2377,14 +2418,15 @@ async function installHooksCommand(agent, path, asJson, yes) {
     return 1
   }
   const indent = jsonIndent(file.text)
-  const nextText = `${JSON.stringify(installHooks(agent, raiseTimeouts(agent, file.data, raised), report.missing), null, indent)}\n`
+  const nextText = `${JSON.stringify(installHooks(agent, widenMatchers(agent, raiseTimeouts(agent, file.data, raised), widened), report.missing), null, indent)}\n`
   let target
   try { target = linkTarget(path) } catch (error) {
     process.stderr.write(`bmn: ${error.message}\n`)
     return 1
   }
   const diff = unifiedDiff(file.text, nextText, path)
-  const changes = [...report.missing, ...raised.map((event) => `${event} timeout ${hookEntryTimeout(agent, event)} s`)]
+  const changes = [...report.missing, ...raised.map((event) => `${event} timeout ${hookEntryTimeout(agent, event)} s`),
+    ...widened.map((event) => `${event} matcher ${HOOK_FILES[agent].matchers[event]}`)]
   if (!await confirmHookWrite(path, target, changes, diff, yes, asJson)) return confirmationResult(path, asJson)
   const unchanged = () => {
     holdAtTestGate()
@@ -2419,11 +2461,12 @@ async function installHooksCommand(agent, path, asJson, yes) {
     ? 'Codex must trust the hooks once: run /hooks in Codex. `bmn hooks check` reports configuration, not that a hook fired.'
     : '`bmn hooks check` reports configuration, not that a hook fired.'
   if (asJson) {
-    process.stdout.write(`${JSON.stringify({ installed: report.missing, ...(raised.length === 0 ? {} : { raised }), backup, file: path, diff, note: trust }, null, 2)}\n`)
+    process.stdout.write(`${JSON.stringify({ installed: report.missing, ...(raised.length === 0 ? {} : { raised }), ...(widened.length === 0 ? {} : { widened }), backup, file: path, diff, note: trust }, null, 2)}\n`)
     return 0
   }
   const lines = report.missing.length === 0 ? [] : [`Added ${report.missing.length} hook ${report.missing.length === 1 ? 'entry' : 'entries'} to ${path}: ${report.missing.join(', ')}`]
   if (raised.length > 0) lines.push(`Raised BMN's own entry timeout in ${path}: ${raised.map((event) => `${event} to ${hookEntryTimeout(agent, event)} s`).join(', ')}`)
+  if (widened.length > 0) lines.push(`Widened BMN's own matcher in ${path}: ${widened.map((event) => `${event} to ${HOOK_FILES[agent].matchers[event]}`).join(', ')}`)
   if (backup !== null) lines.push(`Backup: ${backup}`)
   lines.push('', diff, '', trust)
   process.stdout.write(`${lines.join('\n')}\n`)
@@ -2502,15 +2545,17 @@ function absentClaudeOrCodex(agent, path) {
   const done = { placed: verdicts.placed, older: verdicts.older, left: verdicts.left }
   // Epic 78: BMN's own entry with a timeout too short for what it now does is BMN's to raise.
   const raised = file.state === 'read' ? shortTimeouts(agent, file.data) : []
-  if (verdicts.absent.length === 0 && raised.length === 0) return { state: 'checked', ...done, installed: [] }
+  // Story 83.4: BMN's own group with the matcher from before the guard is BMN's to widen.
+  const widened = file.state === 'read' ? olderMatchers(agent, file.data) : []
+  if (verdicts.absent.length === 0 && raised.length === 0 && widened.length === 0) return { state: 'checked', ...done, installed: [] }
   if (rewrittenNumbers(file.text).length > 0) {
     return { state: 'left', ...done, installed: [], why: 'numbers', detail: `${path} holds a number BMN cannot write back unchanged` }
   }
-  const nextText = `${JSON.stringify(installHooks(agent, raiseTimeouts(agent, file.data, raised), verdicts.absent), null, jsonIndent(file.text))}\n`
+  const nextText = `${JSON.stringify(installHooks(agent, widenMatchers(agent, raiseTimeouts(agent, file.data, raised), widened), verdicts.absent), null, jsonIndent(file.text))}\n`
   const backup = writeHookFile(path, file.state === 'missing' ? null : file.text, linkTarget(path), nextText)
   return {
     state: 'installed', ...done, placed: [...verdicts.placed, ...verdicts.absent], installed: verdicts.absent,
-    ...(raised.length === 0 ? {} : { raised }), ...(backup === null ? {} : { backups: [backup] })
+    ...(raised.length === 0 ? {} : { raised }), ...(widened.length === 0 ? {} : { widened }), ...(backup === null ? {} : { backups: [backup] })
   }
 }
 
@@ -2587,6 +2632,7 @@ async function installAbsentCommand(agents, pathFor, asJson) {
     const body = [
       ...(result.installed.length > 0 ? [`  added: ${result.installed.join(', ')}`] : []),
       ...((result.raised ?? []).length > 0 ? [`  timeout raised: ${result.raised.join(', ')}`] : []),
+      ...((result.widened ?? []).length > 0 ? [`  matcher widened: ${result.widened.join(', ')}`] : []),
       `  in place: ${result.placed.length}${result.older.length > 0 ? ` (${result.older.join(', ')} in an older wording)` : ''}`,
       ...result.left.map((row) => `  ${row.event}: ${LEFT_WHY[row.why] ?? row.why}, left as it is${row.detail ? ` (${row.detail})` : ''}`),
       ...(result.detail ? [`  ${result.detail}; left as it is`] : []),
@@ -2959,12 +3005,6 @@ async function runHook(args) {
     return 0
   }
   if (process.stdin.isTTY) return 0
-  const socketPath = process.env.BMN_CONTROL_SOCKET ?? process.env.AITERM_CONTROL_SOCKET
-  const token = process.env.BMN_TOKEN ?? process.env.AITERM_TOKEN
-  const procRoot = process.env.BMN_PROC_ROOT ?? process.env.AITERM_PROC_ROOT ?? '/proc'
-  // An agent another agent started is a dispatch: `bmn roster check` answers for it, not this hook.
-  const agentPid = interactiveAgentPid(procRoot)
-  if (agentPid === null) return 0
   let event
   try {
     event = JSON.parse(readFileSync(0, 'utf8'))
@@ -2974,6 +3014,23 @@ async function runHook(args) {
   // Defence in depth: every branch below keys on `hook_event_name`, so nothing that is not an
   // object reaches one. No test can tell this line from its neighbours; it is not claimed as fenced.
   if (!isObject(event)) return 0
+  // Story 83.4: the command guard decides first, from the command text alone, for every agent this entry runs for (a
+  // dispatched one too), before any process, file or socket is read. It only ever holds; a command it does not hold goes on.
+  if (event.hook_event_name === 'PreToolUse' && event.tool_name === 'Bash') {
+    const answer = (await import('./command-guard.mjs').catch(() => null))?.guardAnswer(agent, event) ?? null
+    if (answer !== null) {
+      writeSync(1, answer)
+      return 0
+    }
+    // Claude's Bash reaches this hook only for the guard (its matcher), so nothing else is delivered for it.
+    if (agent === 'claude') return 0
+  }
+  const socketPath = process.env.BMN_CONTROL_SOCKET ?? process.env.AITERM_CONTROL_SOCKET
+  const token = process.env.BMN_TOKEN ?? process.env.AITERM_TOKEN
+  const procRoot = process.env.BMN_PROC_ROOT ?? process.env.AITERM_PROC_ROOT ?? '/proc'
+  // An agent another agent started is a dispatch: `bmn roster check` answers for it, not this hook.
+  const agentPid = interactiveAgentPid(procRoot)
+  if (agentPid === null) return 0
   // Cursor can also run Claude Code's hook files for its own agent (Epic 71: retired, its support kept at the tag
   // cursor-support-final); such a payload speaks for a Cursor chat, never for a Claude conversation, and BMN takes none.
   if (agent === 'claude' && Object.hasOwn(event, 'cursor_version')) return 0
@@ -3519,6 +3576,8 @@ async function main(argv) {
   if (argv[0] === 'hook') return runHook(argv.slice(1)).catch(() => 0)
   // hooks reads and writes the owner's own hook files; it never opens the control socket.
   if (argv[0] === 'hooks') return runHooks(argv.slice(1))
+  // Epic 83: the push policy, read through the socket; the repository's owner and default branch through the agent's own gh.
+  if (argv[0] === 'policy') return (await import('./policy-cli.mjs')).runPolicyCommand(argv.slice(1), { readCredentials, call })
   // Epic 77: the project's plan and board are files in the project; no socket, and it works with BMN closed.
   if (argv[0] === 'plan') return (await import('./plan-cli.mjs')).runPlanCommand(argv.slice(1))
   // Epic 60: the roster, its check and the rules master are owner files; no socket, no token.

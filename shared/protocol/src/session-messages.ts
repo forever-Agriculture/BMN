@@ -130,7 +130,7 @@ export interface MessageDestination {
 }
 
 /**
- * The two things about a message the terminal host may not work out itself: only the app's entry point reads
+ * What the terminal host may not work out itself about a message, or the push policy's pointer: only the app's entry point reads
  * the owner's team (its files never reach the process that holds the database). The host asks, the app answers.
  */
 export type MessageTeamQuestion =
@@ -138,8 +138,10 @@ export type MessageTeamQuestion =
   | { kind: 'source-root'; folder: string }
   /** May the provider behind this destination see private work under this root, by the approved team now? */
   | { kind: 'provider'; destination: MessageDestination; senderRoot: string }
+  /** Story 83.3: does the owner's rules master carry the push policy's pointer? Null when it cannot be read. */
+  | { kind: 'policy-pointer' }
 
-export type MessageTeamAnswer = { root: string } | { allowed: boolean; reason: string } | { failed: true }
+export type MessageTeamAnswer = { root: string } | { allowed: boolean; reason: string } | { pointer: boolean | null } | { failed: true }
 
 export interface MessageTeamQuestionMessage { kind: 'message-team-question'; id: string; question: MessageTeamQuestion }
 export interface MessageTeamAnswerMessage { kind: 'message-team-answer'; id: string; answer: MessageTeamAnswer }
@@ -150,6 +152,7 @@ export function isMessageTeamQuestion(value: unknown): value is MessageTeamQuest
   if (typeof value !== 'object' || value === null) return false
   const question = value as Record<string, unknown>
   if (question.kind === 'source-root') return Object.keys(question).length === 2 && text(question.folder, 4096)
+  if (question.kind === 'policy-pointer') return Object.keys(question).length === 1
   if (question.kind !== 'provider' || Object.keys(question).length !== 3 || !text(question.senderRoot, 4096)) return false
   const destination = question.destination as Record<string, unknown> | null
   return typeof destination === 'object' && destination !== null && Object.keys(destination).length === 4 &&
@@ -167,7 +170,8 @@ export function isMessageTeamAnswerMessage(value: unknown): value is MessageTeam
   const message = value as Record<string, unknown>
   if (message.kind !== 'message-team-answer' || !text(message.id, 100) || typeof message.answer !== 'object' || message.answer === null) return false
   const answer = message.answer as Record<string, unknown>
-  return answer.failed === true || text(answer.root, 4096) || (typeof answer.allowed === 'boolean' && typeof answer.reason === 'string')
+  return answer.failed === true || text(answer.root, 4096) || (typeof answer.allowed === 'boolean' && typeof answer.reason === 'string') ||
+    (Object.keys(answer).length === 1 && (answer.pointer === true || answer.pointer === false || answer.pointer === null))
 }
 
 /** What the hook gets for one event: the block to print, and the claim it reports back. */

@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url'
 import { spawn as spawnPty } from 'node-pty'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth, writeOwnerToken } from './control-auth'
-import { AWAY_AGENT_TEXT, ERROR_CODES, HANDOFF_OUTLINE } from '@bmn/protocol'
+import { AWAY_AGENT_TEXT, ERROR_CODES, HANDOFF_OUTLINE, pushPolicyStatus, readPushPolicy } from '@bmn/protocol'
+import type { PushLevel, PushPolicyStatus } from '@bmn/protocol'
 import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
 import { readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
@@ -110,7 +111,8 @@ async function cliFixture() {
     awayStatus: vi.fn<ControlHandlers['awayStatus']>(async (scope) => scope.kind === 'owner'
       ? { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3, note: 'back by 8' }
       : { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3 }),
-    changeAway: vi.fn<ControlHandlers['changeAway']>(async (p) => ({ outcome: 'changed', state: p.to, since: '2026-10-16T19:10:00.000Z', revision: 4 }))
+    changeAway: vi.fn<ControlHandlers['changeAway']>(async (p) => ({ outcome: 'changed', state: p.to, since: '2026-10-16T19:10:00.000Z', revision: 4 })),
+    policyStatus: vi.fn<ControlHandlers['policyStatus']>(async () => pushPolicyStatus(readPushPolicy(undefined), false))
   } satisfies ControlHandlers
   const server = new ControlServer({ socketPath, auth, handlers, receipts: new MemoryReceiptStore() })
   await server.listen()
@@ -601,8 +603,8 @@ describe('bmn help agents', () => {
     expect(brief.stderr).toBe('')
     const lines = brief.stdout.split('\n').slice(0, -1)
     // Story 72.6 AC1 adds at most three lines, for bmn team ask, to the 39 before it; Story 76.4 AC4 adds the away section:
-    // six lines and the away text word for word, wrapped at 100 columns (the brief points here for it).
-    expect(lines.length).toBeLessThanOrEqual(42 + 7 + Math.ceil(AWAY_AGENT_TEXT.length / 90))
+    // six lines and the away text word for word, wrapped at 100 columns (the brief points here for it); Story 83.3 adds two for bmn policy.
+    expect(lines.length).toBeLessThanOrEqual(42 + 7 + 2 + Math.ceil(AWAY_AGENT_TEXT.length / 90))
     expect(lines.filter((line) => line.length > 100)).toEqual([])
     expect(brief.stdout.replace(/\s+/g, ' ')).toContain(AWAY_AGENT_TEXT)
     for (const rule of [
@@ -3429,9 +3431,9 @@ describe('bmn hooks install', () => {
     }
     // Epic 78: the permission hook waits for the phone, so Claude must let it run that long.
     expect(after.hooks.PermissionRequest).toEqual([{ hooks: [{ type: 'command', timeout: 600, command: DOCUMENTED_CLAUDE }] }])
-    // PreToolUse blocks every tool until it returns, so BMN's entry is gated to the one tool it needs.
+    // PreToolUse blocks every tool until it returns, so BMN's entry is gated to the two tools it needs (Story 83.4).
     expect(after.hooks.PreToolUse).toEqual([
-      { matcher: 'AskUserQuestion', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }
+      { matcher: 'AskUserQuestion|Bash', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }
     ])
     expect(install.stdout).toContain(
       'Notification, PreToolUse, PermissionRequest, PostToolUse, PostToolUseFailure, UserPromptSubmit, SessionStart, SessionEnd'
@@ -4383,7 +4385,7 @@ describe('bmn hooks install --absent (Story 75.9 AC3)', () => {
     const after = JSON.parse(await readFile(path, 'utf8'))
     expect(after.model).toBe('kept')
     expect(after.hooks.Stop).toEqual([entryGroup('echo owner'), entryGroup(DOCUMENTED_CLAUDE)])
-    expect(after.hooks.PreToolUse[0].matcher).toBe('AskUserQuestion')
+    expect(after.hooks.PreToolUse[0].matcher).toBe('AskUserQuestion|Bash')
     expect((await runHooks(['check', 'claude', '--file', path])).code).toBe(0)
     const text = await readFile(path, 'utf8')
     const second = await installAbsent('claude', path)
@@ -4882,21 +4884,132 @@ describe('structured prompts from the recorded hooks (Epic 30)', () => {
   })
 })
 
-describe('Claude PreToolUse gated to its question tool (Epic 30)', () => {
-  it('counts BMN\'s own AskUserQuestion matcher as wired, and any other matcher as gated', async () => {
-    const own = await hookFileFixture({
-      hooks: { PreToolUse: [{ matcher: 'AskUserQuestion', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }] }
-    })
-    const ownReport = JSON.parse((await runHooks(['check', 'claude', '--file', own, '--json'])).stdout)
-    const ownRow = ownReport.agents[0].events.find((row: { event: string }) => row.event === 'PreToolUse')
-    expect(ownRow.state).toBe('wired')
+describe('Claude PreToolUse gated to its question tool and Bash (Epic 30, Story 83.4)', () => {
+  const preToolUse = async (file: string): Promise<{ state: string }> =>
+    JSON.parse((await runHooks(['check', 'claude', '--file', file, '--json'])).stdout).agents[0].events.find((row: { event: string }) => row.event === 'PreToolUse')
+  const own = (matcher: string): unknown => ({ matcher, hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] })
 
-    const other = await hookFileFixture({
-      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }] }
-    })
-    const otherReport = JSON.parse((await runHooks(['check', 'claude', '--file', other, '--json'])).stdout)
-    const otherRow = otherReport.agents[0].events.find((row: { event: string }) => row.event === 'PreToolUse')
-    expect(otherRow.state).toBe('missing')
+  it('counts BMN\'s own AskUserQuestion|Bash matcher as wired, its older AskUserQuestion one as an older wording, and any other as gated', async () => {
+    expect((await preToolUse(await hookFileFixture({ hooks: { PreToolUse: [own('AskUserQuestion|Bash')] } }))).state).toBe('wired')
+    expect((await preToolUse(await hookFileFixture({ hooks: { PreToolUse: [own('AskUserQuestion')] } }))).state).toBe('wired (older wording)')
+    expect((await preToolUse(await hookFileFixture({ hooks: { PreToolUse: [own('Bash')] } }))).state).toBe('missing')
+  })
+
+  it('widens BMN\'s own older matcher in place, adding no second group, and then has nothing to do', async () => {
+    const file = await hookFileFixture({ hooks: { PreToolUse: [{ matcher: 'Write', hooks: [{ type: 'command', command: 'mine' }] }, own('AskUserQuestion')] } })
+    const first = await runHooks(['install', 'claude', '--file', file, '--yes', '--json'])
+    expect(first.code).toBe(0)
+    expect(JSON.parse(first.stdout).widened).toEqual(['PreToolUse'])
+    const after = JSON.parse(await readFile(file, 'utf8'))
+    expect(after.hooks.PreToolUse).toEqual([{ matcher: 'Write', hooks: [{ type: 'command', command: 'mine' }] }, own('AskUserQuestion|Bash')])
+    expect((await preToolUse(file)).state).toBe('wired')
+    const second = await runHooks(['install', 'claude', '--file', file, '--yes', '--json'])
+    expect(JSON.parse(second.stdout)).toMatchObject({ installed: [], backup: null })
+  })
+
+  it('never widens a group that also holds the owner\'s own entry', async () => {
+    const mixed = { matcher: 'AskUserQuestion', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }, { type: 'command', command: 'mine' }] }
+    const file = await hookFileFixture({ hooks: { PreToolUse: [mixed] } })
+    await runHooks(['install', 'claude', '--file', file, '--yes', '--json'])
+    expect(JSON.parse(await readFile(file, 'utf8')).hooks.PreToolUse[0]).toEqual(mixed)
+  })
+})
+
+describe('bmn policy (Story 83.3)', () => {
+  /** A `gh` on PATH that answers `repo view` with the given JSON, or fails when given none. */
+  async function fakeGh(root: string, answer: unknown): Promise<string> {
+    const folder = join(root, 'fake-gh')
+    await mkdir(folder, { recursive: true })
+    const script = answer === null ? '#!/bin/sh\necho "HTTP 404" >&2\nexit 1\n' : `#!/bin/sh\ncat <<'JSON'\n${JSON.stringify(answer)}\nJSON\n`
+    await writeFile(join(folder, 'gh'), script)
+    await chmod(join(folder, 'gh'), 0o755)
+    return `${folder}:${process.env.PATH}`
+  }
+  const inForce = (levels: Array<{ repository: string; level: PushLevel }> = []): PushPolicyStatus => ({
+    state: 'read', revision: 4, standing: { authorizes: true, why: null }, allowed: ['octo'], denied: ['other'], levels, stillAsks: ['deploys, releases and tags']
+  })
+  const widgets = { owner: { login: 'Octo' }, defaultBranchRef: { name: 'trunk' }, name: 'widgets' }
+
+  it('authorizes nothing while no owner is allowed, and says why', async () => {
+    const fixture = await cliFixture()
+    const result = await runCli(['policy', '--repo', 'octo/widgets'], { env: { ...fixture.sessionEnv, PATH: await fakeGh(fixture.root, widgets) } })
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('Push policy: authorizes nothing: no owner is allowed in Health.')
+    expect(result.stdout).toContain('Repository octo/widgets: PRs only (default branch trunk).')
+    expect(result.stdout).toContain('Not authorized here: no owner is allowed in Health. Every push, merge and pull-request write asks the owner.')
+    expect(result.stdout).toContain('Still asks the owner:')
+  })
+
+  it('prints a raised repository\'s level and what it lets an agent do, with GitHub\'s default branch', async () => {
+    const fixture = await cliFixture()
+    fixture.handlers.policyStatus.mockImplementation(async () => inForce([{ repository: 'octo/widgets', level: 'merge-when-green' }]))
+    const result = await runCli(['policy', '--repo', 'Octo/Widgets'], { env: { ...fixture.sessionEnv, PATH: await fakeGh(fixture.root, widgets) } })
+    expect(result.stdout).toContain('Push policy: in force (revision 4).')
+    expect(result.stdout).toContain('Repository octo/widgets: Merge when green (default branch trunk).')
+    expect(result.stdout).toContain('- push branches other than trunk, never forced and never deleting a branch or tag')
+    expect(result.stdout).toContain('- merge a pull request whose current head has every required check green')
+    expect(result.stdout).not.toContain('- push trunk, never forced')
+    const json = JSON.parse((await runCli(['policy', '--repo', 'octo/widgets', '--json'], { env: { ...fixture.sessionEnv, PATH: await fakeGh(fixture.root, widgets) } })).stdout)
+    expect(json.repository).toEqual({ repository: 'octo/widgets', owner: 'octo', defaultBranch: 'trunk', level: 'merge-when-green', authorizes: true, why: null })
+  })
+
+  it('counts an unlisted repository of an allowed owner as PRs only, and a denied, moved or unreadable one as nothing', async () => {
+    const fixture = await cliFixture()
+    fixture.handlers.policyStatus.mockImplementation(async () => inForce())
+    const unlisted = await runCli(['policy', '--repo', 'octo/widgets', '--json'], { env: { ...fixture.sessionEnv, PATH: await fakeGh(fixture.root, widgets) } })
+    expect(JSON.parse(unlisted.stdout).repository).toMatchObject({ level: 'prs-only', authorizes: true, note: 'not raised in Health, so PRs only' })
+    // Transferred to another owner: GitHub's owner counts, not the name asked for.
+    const moved = await runCli(['policy', '--repo', 'octo/widgets', '--json'], { env: { ...fixture.sessionEnv, PATH: await fakeGh(fixture.root, { ...widgets, owner: { login: 'other' } }) } })
+    expect(JSON.parse(moved.stdout).repository).toMatchObject({ repository: 'other/widgets', authorizes: false, why: 'the owner other is not allowed in Health' })
+    const unreadable = await runCli(['policy', '--repo', 'octo/widgets', '--json'], { env: { ...fixture.sessionEnv, PATH: await fakeGh(fixture.root, null) } })
+    expect(JSON.parse(unreadable.stdout).repository).toMatchObject({ level: 'prs-only', authorizes: false, why: 'GitHub could not be read for this repository with your gh' })
+  })
+
+  it('authorizes nothing when BMN cannot be reached, and takes no write option', async () => {
+    const fixture = await cliFixture()
+    const closed = await runCli(['policy', '--repo', 'octo/widgets'], { env: { ...fixture.sessionEnv, BMN_CONTROL_SOCKET: join(fixture.root, 'gone.sock') } })
+    expect(closed.code).toBe(1)
+    expect(closed.stderr).toContain('it authorizes nothing, so every push, merge and pull-request write asks the owner')
+    const write = await runCli(['policy', 'allow', 'octo'], { env: fixture.sessionEnv })
+    expect(write.code).toBe(2)
+    expect(write.stderr).toContain('it changes only in BMN Health')
+    expect((await runCli(['policy', '--repo', 'not a repo'], { env: fixture.sessionEnv })).code).toBe(2)
+  })
+})
+
+describe('the command guard in the hook (Story 83.4)', () => {
+  const bash = (command: string): Record<string, unknown> => ({
+    hook_event_name: 'PreToolUse', tool_name: 'Bash', session_id: OBSERVED_REFERENCE, tool_use_id: 'toolu_guard', tool_input: { command }
+  })
+  const socketCalls = (fixture: Awaited<ReturnType<typeof cliFixture>>): number =>
+    Object.values(fixture.handlers).reduce((sum, handler) => sum + ((handler as { mock?: { calls: unknown[] } }).mock?.calls.length ?? 0), 0)
+
+  it('answers Claude\'s held command with its own prompt and Codex\'s with a block, calling BMN for neither', async () => {
+    const fixture = await cliFixture()
+    const claude = await runHook(fixture, 'claude', bash('git push --force origin main'))
+    const codex = await runHook(fixture, 'codex', bash('gh repo delete owner/name --yes'))
+    expect(JSON.parse(claude.stdout).hookSpecificOutput).toMatchObject({ hookEventName: 'PreToolUse', permissionDecision: 'ask' })
+    expect(JSON.parse(codex.stdout)).toMatchObject({ decision: 'block', hookSpecificOutput: { permissionDecision: 'deny' } })
+    expect([claude.code, codex.code]).toEqual([0, 0])
+    expect(socketCalls(fixture)).toBe(0)
+  })
+
+  it('still holds while BMN is closed and for an agent another agent started', async () => {
+    const fixture = await cliFixture()
+    const closed = await runHook(fixture, 'claude', bash('npm publish'), HOLDS_TERMINAL, { BMN_CONTROL_SOCKET: join(fixture.root, 'gone.sock') })
+    const dispatched = await runHook(fixture, 'codex', bash('gh release create v1'), { comm: 'codex', tty: 0, group: 7001, foreground: 7001 })
+    expect(JSON.parse(closed.stdout).hookSpecificOutput.permissionDecision).toBe('ask')
+    expect(JSON.parse(dispatched.stdout).decision).toBe('block')
+  })
+
+  it('delivers nothing for a Claude Bash command it does not hold, and leaves Codex\'s hook as it was', async () => {
+    const fixture = await cliFixture()
+    const plain = await runHook(fixture, 'claude', bash('git push origin feature-x'))
+    expect(plain).toEqual(QUIET)
+    expect(socketCalls(fixture)).toBe(0)
+    const codex = await runHook(fixture, 'codex', bash('git push origin feature-x'))
+    expect(codex).toEqual(QUIET)
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
   })
 })
 

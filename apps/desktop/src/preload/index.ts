@@ -60,6 +60,8 @@ import {
   type ControlInfo,
   type OwnerAwayView,
   type AwaySummaryPayload,
+  type PushPolicyChange,
+  type PushPolicyView,
   type DraftSendExpectation,
   type FileReferenceReadParams,
   type QuickLookListParams,
@@ -751,6 +753,13 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   /** Story 76.6: the current away period's summary sources, closed or still running. */
   awaySummary(): Promise<AwaySummaryPayload> {
     return invokeBridge('aiterm:away:summary', {})
+  },
+  /** Story 83.3: the push policy as Health shows it, and the owner's one change at a time against the revision he saw. */
+  getPushPolicy(): Promise<PushPolicyView> {
+    return invokeBridge('aiterm:policy:get', {})
+  },
+  setPushPolicy(change: PushPolicyChange): Promise<PushPolicyView> {
+    return invokeBridge('aiterm:policy:set', change)
   },
   exportBackup(): Promise<BackupExportResult | null> {
     return invokeBridge('aiterm:backup:export', {})

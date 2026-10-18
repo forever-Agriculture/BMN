@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { basename, dirname } from 'node:path'
 import {
   ERROR_CODES,
+  PUSH_POLICY_POINTER,
   RETIRED_APP_LINE,
   ROSTER_APP_NAMES,
   isRetiredApp,
@@ -858,7 +859,7 @@ async function rulesOutcome(context: RulesIpcContext, result: CliResult, success
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Epic 66: the two answers about a message between sessions that the terminal host asks for, because it reads
+ * Epic 66 (and Story 83.3's policy pointer): the answers about a message between sessions that the terminal host asks for, because it reads
  * nothing of the owner's team itself (R60-NFR3). The Git root of a folder the host already resolved, by the
  * prompt guard's own rule; and the prompt guard's question asked for a message instead of a prompt: may the
  * provider a receiving agent's hook resolved see private work in the root a message came from? The approved
@@ -868,6 +869,10 @@ async function rulesOutcome(context: RulesIpcContext, result: CliResult, success
  */
 export function messageTeamAnswer(question: MessageTeamQuestion): MessageTeamAnswer {
   if (question.kind === 'source-root') return { root: workspaceRoot(question.folder) }
+  if (question.kind === 'policy-pointer') {
+    // Story 83.3: the push policy authorizes nothing unless the master points to it; Rules Undo takes the pointer away.
+    try { return { pointer: readFileSync(masterPath(), 'utf8').includes(PUSH_POLICY_POINTER) } } catch { return { pointer: null } }
+  }
   const data = readApproved().data
   const { destination } = question
   if (!data.providers.some((provider) => provider.id === destination.provider)) {

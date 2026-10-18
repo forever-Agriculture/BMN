@@ -44,6 +44,7 @@ import { createMachineReads, endedSince, type MachineReads } from './machine-rea
 import { Segmented } from './history-preferences'
 import { quoteArgv } from './launch-template'
 import { Dot } from './roster-marks'
+import { PushPolicyHealth } from './push-policy-health'
 import { destinationProviders, diffBody, diffSummary, listedRoles, revokeVersion, setDestination, setSkillPublic, skillForApp, skillMark, thousands, toggleSkillApp, undoWords } from './roster-staging'
 import { displayPath } from './session-presentation'
 import { Issues, NumberField, PageHead, Row, Switch, TargetPath, shortDate } from './team-preferences'
@@ -1828,6 +1829,8 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
       <ToolsHealth rules={rules} action={action} setAction={setAction} />
 
       <ContextLimits rules={rules} action={action} setAction={setAction} />
+
+      <PushPolicyHealth />
 
       <HooksHealth hooks={snapshot.hooks} home={snapshot.home} />
     </>

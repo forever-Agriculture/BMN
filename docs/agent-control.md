@@ -134,6 +134,8 @@ Commands:
   plan status|check|set                     The project's planning board, in BMN's format or BMAD's: print
                                             rows, check the plan's structure, change one row safely; not the
                                             subscription's Plan use (bmn plan --help)
+  policy [--repo OWNER/NAME]                The owner's push and merge policy: whether it authorizes anything,
+                                            the repository's level and what still asks (bmn policy --help)
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
@@ -906,9 +908,45 @@ Deny from a Telegram card, while Claude's dialog stays open and answerable at th
 ([remote-answers.md](remote-answers.md#claude-code-21302-permissions-answered-by-the-hook-epic-78)). `install` and
 BMN's start raise BMN's own recognised entry from a shorter timeout to 600 and touch no other entry.
 
-`PreToolUse` runs before every tool and holds it until the hook returns, so BMN gates its entry to the one
-tool it needs with `"matcher": "AskUserQuestion"`; `check` reads that matcher as wired, and an ungated entry
-as wired too. Any other matcher on BMN's entry reads as gated.
+`PreToolUse` runs before every tool and holds it until the hook returns, so BMN gates its entry to the two
+tools it needs with `"matcher": "AskUserQuestion|Bash"`: the question, and the command guard below; `check`
+reads that matcher as wired, and an ungated entry as wired too. BMN's own entry with the matcher it wrote before
+Story 83.4, `"AskUserQuestion"`, reads as `wired (older wording)`: `install` and BMN's start widen it in place when
+its group holds only BMN's entry, and leave a group that also holds one of yours as it is. Any other matcher on
+BMN's entry reads as gated.
+
+### The command guard
+
+A small, deny-only guard in `bmn hook` holds the clearly critical shell commands for the owner, in Claude Code and
+Codex, in the main conversation and in sub-agents, and in an agent another agent started. It decides inside the
+hook process from the command text alone: it reads no socket and no file, so it holds while BMN is closed. It never
+allows anything and never loosens a hold or deny the app makes itself:
+
+- **Claude Code** gets `permissionDecision: "ask"` with a reason naming what is held, so Claude's own permission
+  prompt reaches the owner, in default and auto mode and for a command its allow list allows. A command Claude's
+  deny list denies stays denied (measured on 2.1.302, Story 83.1).
+- **Codex** gets a block whose reason tells the agent to ask him; its shell commands arrive at `PreToolUse` as
+  `Bash` (measured on 0.162.1).
+- **Any other command**, or input the guard cannot read, gets nothing: the app decides as before. A Claude `Bash`
+  command it does not hold returns at once and sends BMN nothing. The hook adds about 70 ms to a Bash command
+  (measured median, BMN running or closed).
+
+What it holds, matched over the whole command text, quoted parts included:
+
+- force pushes: `--force`, `-f`, `--force-with-lease`, `--force-if-includes` and `+` refspecs;
+- branch or tag deletion on a remote: `--delete`, `-d` on a push, `:ref` refspecs and `--prune`;
+- `--mirror`, `--tags`, `--follow-tags` and `refs/tags/` on a push;
+- `gh repo delete`, `edit`, `rename`, `archive` and `transfer` (visibility changes included);
+- `gh api` with a write method on a repository's own path, its rulesets or its branch protection;
+- `gh release create`, `edit` and `delete`;
+- `gh pr merge` with `--admin`, `--auto` or `--delete-branch` (`-d`);
+- `npm`, `pnpm` and `yarn` `publish`;
+- `kill`, `pkill` or `killall` in a command that names `bmn`, packaged BMN's executable.
+
+A false match only asks: a commit message that merely mentions `git push --force` is held too. The guard does not
+stop an agent that hides a command on purpose (encoded text, a script it writes first); GitHub's own repository
+rules are the hard guard there. It runs only where BMN's hook entry runs, which is in agents started inside a BMN
+session; deploys in general, CI changes and secrets stay the agents' own rule.
 
 For Codex, the same entries with `bmn hook codex` go in `~/.codex/hooks.json` for `PreToolUse`,
 `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` and `Interrupt`. Codex must
@@ -2992,6 +3030,8 @@ What to send, and when
   judge ask               typed questions about one text to the team's judge; advice only.
   plan status|check|set   the project's plan and board (BMN's plan/ or BMAD's); set changes one row
                           with the token status --json gives. Not the subscription's Plan use.
+  policy --repo OWNER/NAME  the owner's push and merge policy for that repository; read it before
+                          each push, merge and pull-request write.
   team ask --role R --key K  a review, a design look or a second opinion from a teammate, read-only;
                           it works in your repository (--project names another), --file adds files.
                           Its answer is advice to weigh. Report a refusal; never work around it.

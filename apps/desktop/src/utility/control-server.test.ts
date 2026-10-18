@@ -155,7 +155,8 @@ function fakeHandlers(current: Map<string, string>) {
     awayStatus: vi.fn(async (scope: { kind: string }): Promise<unknown> => scope.kind === 'owner'
       ? { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3, note: 'back by 8' }
       : { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3 }),
-    changeAway: vi.fn(async (p: { to: string }): Promise<unknown> => ({ outcome: 'changed', state: p.to, revision: 4 }))
+    changeAway: vi.fn(async (p: { to: string }): Promise<unknown> => ({ outcome: 'changed', state: p.to, revision: 4 })),
+    policyStatus: vi.fn(async (): Promise<unknown> => ({ state: 'read', revision: 0 }))
   } satisfies ControlHandlers
 }
 
@@ -1708,6 +1709,20 @@ describe('away state (Story 76.3)', () => {
     expectError(await owner.request('away.set', { to: 'away', extra: true }), ERROR_CODES.invalidArgument)
     expectError(await owner.request('away.status', { verbose: true }), ERROR_CODES.invalidArgument)
     expect(fixture.handlers.changeAway).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('push policy (Story 83.3)', () => {
+  it('lets any scope read the policy and refuses every write, an agent\'s first', async () => {
+    const fixture = await serverFixture()
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    expect((await agent.request('policy.status', {})).error).toBeUndefined()
+    expect((await owner.request('policy.status', {})).error).toBeUndefined()
+    expect(fixture.handlers.policyStatus).toHaveBeenCalledTimes(2)
+    expectError(await agent.request('policy.status', { repo: 'octo/widgets' }), ERROR_CODES.invalidArgument)
+    expectError(await agent.request('policy.set', { kind: 'owner', login: 'octo', allowed: true, expectedRevision: 0 }), ERROR_CODES.unauthorized)
+    expectError(await owner.request('policy.set', { kind: 'owner', login: 'octo', allowed: true, expectedRevision: 0 }), ERROR_CODES.unauthorized)
   })
 })
 

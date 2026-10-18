@@ -90,7 +90,9 @@ export const METHOD_REGISTRY = Object.freeze({
   awayGet: 'away.get',
   awaySet: 'away.set',
   awaySummaryShown: 'away.summaryShown',
-  awaySummary: 'away.summary'
+  awaySummary: 'away.summary',
+  policyGet: 'policy.get',
+  policySet: 'policy.set'
 } as const)
 
 export type ProtocolMethod = (typeof METHOD_REGISTRY)[keyof typeof METHOD_REGISTRY]
