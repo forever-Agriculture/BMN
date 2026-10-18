@@ -14,8 +14,8 @@ const execFileAsync = promisify(execFile)
 const TIMEOUT_MS = 5_000
 /** GitHub answers are kept this long, so opening Health does not ask GitHub again each time. */
 const CACHE_MS = 10 * 60_000
-/** At most this many repositories are looked up, which bounds what one Health read can cost. */
-const REPOSITORY_LIMIT = 64
+/** At most this many repositories are looked up on GitHub, which bounds what one Health read can cost; the rest are still listed. */
+export const REPOSITORY_LIMIT = 64
 
 export type RepositoryFacts = { owner: string; organisation: boolean; defaultBranch: string } | { unread: string }
 
@@ -104,8 +104,12 @@ export function systemPolicyReader(masterHasPointer: () => Promise<boolean | nul
 export async function pushPolicyView(read: PushPolicyRead, directories: readonly string[], reader: PolicyReader): Promise<PushPolicyView> {
   const [masterHasPointer, signedIn] = await Promise.all([reader.masterHasPointer(), reader.signedIn()])
   const remotes = [...new Set((await Promise.all([...new Set(directories)].map((directory) => reader.remote(directory)))).flatMap((remote) => remote ?? []))]
-    .sort().slice(0, REPOSITORY_LIMIT)
-  const facts = await Promise.all(remotes.map(async (repository) => ({ repository, facts: await reader.repository(repository) })))
+    .sort()
+  // Past the limit a repository is listed unread under the owner its remote names, so no owner drops out of the list.
+  const facts = await Promise.all(remotes.map(async (repository, index) => ({
+    repository,
+    facts: index < REPOSITORY_LIMIT ? await reader.repository(repository) : { unread: `not looked up: Health reads at most ${REPOSITORY_LIMIT} repositories from GitHub` }
+  })))
   const record = read.state === 'read' ? read.record : null
   const owners = new Map<string, PushPolicyOwnerView>()
   const ownerRow = (login: string): PushPolicyOwnerView => {

@@ -36,13 +36,17 @@ const waylandDisplay = originalRuntime && originalWaylandDisplay && !isAbsolute(
   : originalWaylandDisplay
 const callerEnvironment = Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== 'PROMPT_COMMAND' && !name.startsWith('BMN_') && !name.startsWith('AITERM_')))
 
-const report = { generatedAt: new Date().toISOString(), commit: null, checks: [] }
+const report = { generatedAt: new Date().toISOString(), build: tested.build, commit: null, uncommitted: null, checks: [] }
 const check = (name, ok, detail = {}) => {
   const result = ok === null ? 'UNVERIFIED' : ok ? 'PASS' : 'FAIL'
   report.checks.push({ name, result, ...detail })
   phase(`${result} ${name} ${JSON.stringify(detail)}`)
 }
-try { report.commit = execFileSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() } catch { /* no git */ }
+try {
+  report.commit = execFileSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+  // The source build runs the working tree: its uncommitted files are named, so a report never passes for a clean commit.
+  report.uncommitted = execFileSync('git', ['-C', repoRoot, 'status', '--porcelain'], { encoding: 'utf8' }).split('\n').filter(Boolean)
+} catch { /* no git */ }
 if (shots) mkdirSync(shots, { recursive: true })
 
 async function until(probe, what, timeout = 30_000) {

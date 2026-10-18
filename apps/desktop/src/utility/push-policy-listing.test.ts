@@ -1,7 +1,7 @@
 // MODULE: push-policy-listing.test.ts - Story 83.3: what Health lists, over made-up session folders, remotes and GitHub answers
 import { readPushPolicy, type PushPolicyRead } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
-import { pushPolicyView, type PolicyReader, type RepositoryFacts } from './push-policy-listing'
+import { REPOSITORY_LIMIT, pushPolicyView, type PolicyReader, type RepositoryFacts } from './push-policy-listing'
 
 const REMOTES: Record<string, string | null> = {
   '/work/widgets': 'octo/widgets', '/work/widgets-2': 'octo/widgets', '/work/api': 'acme/api', '/work/gone': 'octo/gone', '/work/plain': null
@@ -41,6 +41,21 @@ describe('Health\'s push policy listing (Story 83.3)', () => {
     expect(acme).toMatchObject({ allowed: true, repositories: [{ repository: 'acme/api', level: 'merge-and-push-main', defaultBranch: 'trunk', unread: null }] })
     const gone = view.owners.find((owner) => owner.login === 'octo')!.repositories.find((r) => r.name === 'gone')!
     expect(gone).toEqual({ repository: 'octo/gone', name: 'gone', level: 'prs-only', defaultBranch: null, unread: 'GitHub did not answer for this repository' })
+  })
+
+  it('looks up at most the limit on GitHub and still lists every repository past it, unread, under its remote\'s owner', async () => {
+    const asked: string[] = []
+    const many = Array.from({ length: REPOSITORY_LIMIT + 2 }, (_, index) => `/work/r${String(index).padStart(3, '0')}`)
+    const view = await pushPolicyView(readPushPolicy(undefined), [...many, '/work/zz'], {
+      ...reader(),
+      remote: async (directory) => directory === '/work/zz' ? 'zeta-org/last' : `octo/${directory.split('/').pop()}`,
+      repository: async (repository) => { asked.push(repository); return { owner: repository.split('/')[0]!, organisation: false, defaultBranch: 'main' } }
+    })
+    expect(asked).toHaveLength(REPOSITORY_LIMIT)
+    expect(view.owners.find((owner) => owner.login === 'octo')!.repositories).toHaveLength(REPOSITORY_LIMIT + 2)
+    expect(view.owners.find((owner) => owner.login === 'zeta-org')!.repositories).toEqual([
+      { repository: 'zeta-org/last', name: 'last', level: 'prs-only', defaultBranch: null, unread: `not looked up: Health reads at most ${REPOSITORY_LIMIT} repositories from GitHub` }
+    ])
   })
 
   it('is not in force without the master\'s pointer, and an unreadable store shows every owner denied', async () => {
