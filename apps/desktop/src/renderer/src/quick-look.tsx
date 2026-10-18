@@ -615,11 +615,15 @@ export function QuickLook(props: {
   /** A row of the edited .env file shown for ten seconds, or hidden again; one at a time (Story 68.1 AC2). */
   const toggleEnvValue = (row: number): void => setEnvShown((current) => (current?.row === row ? null : { row, until: Date.now() + REVEAL_SECONDS * 1000 }))
 
-  /** Edit mode on the file shown, from E or the header's Edit plate (Story 68.2 AC1; Fable's plate 2026-10-18). */
+  /**
+   * Edit mode on the file shown, from E or the header's Edit plate (Story 68.2 AC1; Fable's plate 2026-10-18). The
+   * file takes the keys, wherever they were: a click on the plate from the top field or the tree once left them there.
+   */
   const beginEdit = (): void => {
     if (!ready) return
     editDigest.current = ready.digest
     setEditing(true)
+    setFocusArea('file')
     setFind((state) => (state.open ? { ...state, open: false } : state))
     setGoTo({ open: false, text: '', invalid: false })
   }

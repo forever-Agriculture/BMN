@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { isAbsolute, join, resolve } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { _electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
 import { testedApp } from '../lib/tested-app.mjs'
@@ -385,6 +385,14 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await page.waitForTimeout(200)
     const topAfter = await topLine()
     check('F5 reloads the file and keeps the top visible line', await sheet.locator('.ql-changed').count() === 0 && topAfter === topBefore && topBefore > 1, { topBefore, topAfter })
+    // The Reload button by mouse: same length and lines, so the checks below see the same file.
+    writeFileSync(parser, readFileSync(parser, 'utf8').replace('export const added = 1\n', 'export const added = 2\n'))
+    await sheet.locator('.ql-changed').waitFor({ timeout: 6000 })
+    await sheet.locator('.ql-changed button', { hasText: 'Reload' }).click()
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-changed') === null)
+    await page.waitForTimeout(200)
+    const reloaded = { text: await page.evaluate(() => window.__aitermQuickLook?.snapshot().text?.includes('export const added = 2') === true), keys: await page.evaluate(() => !!document.activeElement?.closest('dialog.quick-look .ql-code')) }
+    check('the Reload button reloads the file, and the keys stay in it', reloaded.text && reloaded.keys, reloaded)
 
     // The trail: open another file, Alt+← returns to the previous file and line, Alt+→ goes forward again.
     const parserTop = await topLine()
@@ -942,8 +950,17 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     const boardText = await pageText()
     check('a planning board hides no story name, even one with "secret" or "keys" in it', await sheet.locator('.ql-secret').count() === 0 &&
       boardText.includes('1-1-hide-secret-shaped-text-sent-to-telegram') && boardText.includes('1-3-a-made-up-story-with-a-very-long-name-for-the-board'))
+    // As his screenshot had it (owner 2026-10-18, "I think this button doesn't work"): the top field empty and in focus,
+    // the printed paths listed on the left, and the plate clicked from there. The file takes the keys at once.
+    await page.keyboard.press('Control+p')
+    await sheet.locator('[aria-label="Printed paths"] .ql-rf').first().waitFor()
     await sheet.locator('.ql-path button.ql-edit-plate').click()
     await sheet.locator('.ql-editing-plate').waitFor()
+    await page.waitForTimeout(150)
+    const fromField = await page.evaluate(() => ({ inEditor: !!document.activeElement?.closest('dialog.quick-look .ql-code.ql-editing .cm-content'),
+      printed: document.querySelectorAll('dialog.quick-look [aria-label="Printed paths"]').length, ring: document.querySelectorAll('dialog.quick-look .ql-code.ql-editing').length }))
+    check('with the field in focus and the printed paths listed, the Edit plate puts the keys in the file: the list closes and the caret is in the editor',
+      fromField.inEditor && fromField.printed === 0 && fromField.ring === 1, fromField)
     await toLine(4)
     await page.keyboard.type(' # TODO made-up follow-up')
     await page.waitForTimeout(300)
@@ -955,6 +972,28 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
       { line: boardBack.split('\n')[3] })
     await page.waitForTimeout(300)
     await page.screenshot({ path: join(evidence, 'board.png') })
+    // From the tree, too: the plate takes the keys to the file, and pressed again with no edits it leaves them there.
+    await sheet.locator('.ql-tree').focus()
+    await sheet.locator('.ql-path button.ql-edit-plate').click()
+    await sheet.locator('.ql-editing-plate').waitFor()
+    await page.waitForTimeout(150)
+    const fromTree = await page.evaluate(() => !!document.activeElement?.closest('dialog.quick-look .ql-code.ql-editing .cm-content'))
+    await sheet.locator('.ql-path button.ql-edit-plate').click()
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-editing-plate') === null)
+    await page.waitForTimeout(150)
+    const leftTo = await page.evaluate(() => !!document.activeElement?.closest('dialog.quick-look .ql-code .cm-content'))
+    check('with the tree in focus, the Edit plate puts the caret in the file; pressed again it leaves edit mode with the keys still in the file', fromTree && leftTo, { fromTree, leftTo })
+    // The Save button by mouse, as Ctrl+S does.
+    await sheet.locator('.ql-path button.ql-edit-plate').click()
+    await sheet.locator('.ql-editing-plate').waitFor()
+    await toLine(6)
+    await page.keyboard.type(' # saved by click')
+    await sheet.locator('[role="region"][aria-label="Save"] button', { hasText: /^Save/u }).click()
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-editing-plate') === null)
+    const clickSaved = readFileSync(join(project, 'docs/plan/status.yaml'), 'utf8').split('\n')[5]
+    check('the Save button writes the draft as Ctrl+S does and leaves edit mode', clickSaved.endsWith(' # saved by click'), { clickSaved })
+    await page.waitForTimeout(400)
+    await sheet.locator('.ql-code .cm-content').click()
     await page.keyboard.press('e')
     await sheet.locator('.ql-editing-plate').waitFor()
     await toLine(1)
@@ -1048,6 +1087,16 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await sheet.locator('.ql-page .ql-md h1').waitFor()
     check('M switches between Rendered and Source, the footer says so, and the choice is kept for the file', keptSource && /Rendered \/ source/u.test(sourceFooter) &&
       await sheet.locator('.ql-mode button.on').textContent() === 'Rendered', { keptSource })
+    // The Source and Rendered buttons by mouse; the keys follow into the view shown.
+    await sheet.locator('.ql-mode button', { hasText: 'Source' }).click()
+    await sheet.locator('.ql-code .cm-content').waitFor()
+    await page.waitForTimeout(150)
+    const sourceKeys = await page.evaluate(() => !!document.activeElement?.closest('dialog.quick-look .ql-code'))
+    await sheet.locator('.ql-mode button', { hasText: 'Rendered' }).click()
+    await sheet.locator('.ql-page .ql-md h1').waitFor()
+    await page.waitForTimeout(150)
+    const pageKeys = await page.evaluate(() => !!document.activeElement?.closest('dialog.quick-look .ql-page'))
+    check('the Source and Rendered buttons switch the view as M does, and the keys follow into it', sourceKeys && pageKeys, { sourceKeys, pageKeys })
 
     // Masking and find work on the page as in source.
     const renderedText = await sheet.locator('.ql-page').innerText()
@@ -1220,6 +1269,11 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await sheet.locator('button[aria-label="Next match"]').click()
     await waitSearch(() => window.__aitermQuickLook?.snapshot().search?.opened === 'Match 3 of 11')
     check('next goes to the following match', true)
+    await sheet.locator('button[aria-label="Previous match"]').click()
+    await waitSearch(() => window.__aitermQuickLook?.snapshot().search?.opened === 'Match 2 of 11')
+    await sheet.locator('button[aria-label="Next match"]').click()
+    await waitSearch(() => window.__aitermQuickLook?.snapshot().search?.opened === 'Match 3 of 11')
+    check('previous goes back a match, and next forward again', true)
     await page.screenshot({ path: join(evidence, 'search.png') })
     await sheet.locator('.ql-code .cm-content').focus()
     await page.keyboard.press('Escape')
@@ -1374,8 +1428,40 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     for (const folder of [...Object.values(roots), join(root, 'home')]) {
       for (const path of listFiles(folder, [])) if (statSync(path).size < 64 * 1024 * 1024 && readFileSync(path).includes(PROBE)) traces.push(path)
     }
-    check('nothing is written under the data folder by a search, and the searched word is in no app file', dataAfter.filter((path) => !dataBefore.includes(path)).length === 0 && traces.length === 0,
-      { added: dataAfter.filter((path) => !dataBefore.includes(path)), traces })
+    // GNOME's file-metadata journal (gvfs-metadata/) is GIO's, not BMN's: on this desktop it lands in the made-up data
+    // folder in some runs (2026-10-18). It is still read for the searched word above, and the paths it names are shown.
+    const added = dataAfter.filter((path) => !dataBefore.includes(path))
+    const appAdded = added.filter((path) => !relative(roots.data, path).startsWith(`gvfs-metadata${sep}`))
+    const gvfsNames = added.filter((path) => !appAdded.includes(path))
+      .map((path) => [...new Set(readFileSync(path, 'latin1').match(/\/[\x21-\x7e]{3,}/gu) ?? [])].slice(0, 6))
+    check('nothing is written under the data folder by a search, and the searched word is in no app file', appAdded.length === 0 && traces.length === 0,
+      { added, traces, gvfsNames })
+
+    // The header's buttons by mouse (owner 2026-10-18: "test everything properly"): the Git root plate shows the
+    // repository's folder, then the session folder again; Files and Contents put the keys in the field in that mode.
+    await terminal.focus()
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.waitFor()
+    const gitPlate = sheet.locator('.ql-head button.ql-plate')
+    const plateWords = [(await gitPlate.textContent())?.trim()]
+    await gitPlate.click()
+    await page.waitForFunction((name) => document.querySelector('dialog.quick-look .ql-head .ql-root-name')?.textContent === name, basename(root))
+    plateWords.push((await gitPlate.textContent())?.trim())
+    await sheet.locator('.ql-tr', { hasText: /^project$/u }).first().waitFor()
+    const gitRows = await sheet.locator('.ql-tr', { hasText: /^project$/u }).count()
+    await gitPlate.click()
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-head .ql-root-name')?.textContent === 'project')
+    plateWords.push((await gitPlate.textContent())?.trim())
+    check('the Git root plate shows the repository\'s folder with the session folder in it, and Session folder goes back',
+      JSON.stringify(plateWords) === JSON.stringify(['Git root', 'Session folder', 'Git root']) && gitRows === 1, { plateWords, gitRows })
+    // With the field in focus and empty, the printed paths take the left column, so these come last.
+    await sheet.getByRole('button', { name: 'Contents', exact: true }).click()
+    const toContents = await activeLabel()
+    await sheet.getByRole('button', { name: 'Files', exact: true }).click()
+    const toFiles = await activeLabel()
+    check('the Files and Contents buttons switch the top field and put the keys in it', toContents === 'Search contents' && toFiles === 'Go to file', { toContents, toFiles })
+    await page.keyboard.press('Escape')
+    await sheet.waitFor({ state: 'detached' })
 
     // ---- a printed path opens in Quick look (Story 67.6) ----
     /** Where a printed text sits on the terminal's screen, in pixels, from its buffer row and column. */
