@@ -136,6 +136,13 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     // would leave the app thinking the sheet is open.
     await page.evaluate(() => {
       window.__qlEvents = []
+      window.addEventListener('keydown', (event) => window.__qlEvents.push({ at: Date.now(), kind: `key ${event.ctrlKey ? 'Ctrl+' : ''}${event.key}` }), true)
+      window.addEventListener('mousedown', (event) => window.__qlEvents.push({ at: Date.now(), kind: `mousedown ${event.ctrlKey ? 'Ctrl ' : ''}${event.target?.className ?? ''}`.slice(0, 80) }), true)
+      const show = HTMLDialogElement.prototype.showModal
+      HTMLDialogElement.prototype.showModal = function showModal(...args) {
+        if (this.classList.contains('quick-look')) window.__qlEvents.push({ at: Date.now(), kind: 'showModal()' })
+        return show.apply(this, args)
+      }
       const original = HTMLDialogElement.prototype.close
       HTMLDialogElement.prototype.close = function close(...args) {
         if (this.classList.contains('quick-look')) window.__qlEvents.push({ at: Date.now(), kind: 'close()', stack: new Error().stack.split('\n').slice(1, 6).join(' | ') })
@@ -800,11 +807,13 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
       const rect = document.querySelector(`.session-terminal[data-session-id="${id}"] .xterm-screen`).getBoundingClientRect()
       const width = rect.width / state.cols
       const height = rect.height / state.rows
-      return { x: rect.left + (column + 0.5) * width, y: rect.top + (row + 0.5) * height, width }
+      return { x: rect.left + (column + 0.5) * width, y: rect.top + (row + 0.5) * height, width, height }
     }, { id: sessionId, text, offset })
     const ctrlClick = async (text) => {
       const at = await cellOf(text)
-      await page.mouse.move(at.x, at.y - 20)
+      // From the row below, inside the terminal: xterm looks for links when the pointer reaches a new cell, so a
+      // second click on the cell it last saw needs the pointer to arrive from another cell, as a hand's does.
+      await page.mouse.move(at.x, at.y + at.height)
       await page.keyboard.down('Control')
       await page.mouse.move(at.x, at.y)
       await page.waitForTimeout(150)
@@ -861,6 +870,67 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await page.keyboard.press('Escape')
     await sheet.waitFor({ state: 'detached' })
     await page.evaluate((id) => window.__aitermTest.snapshot(id), sessionId)
+
+    // ---- the sheet's states in Steel, Brown and Dark, for the eye (evidence only) ----
+    const appearance = await page.evaluate(async () => (await window.aiTerminal.getSettings()).appearance)
+    const shown = (name) => page.waitForFunction((end) => document.querySelector('dialog.quick-look .ql-path .ql-pth')?.title.endsWith(end), name)
+    const goTo = async (query, name) => {
+      await page.keyboard.press('Control+p')
+      await page.keyboard.press('Control+a')
+      await page.keyboard.type(query)
+      await sheet.locator('.ql-rf').filter({ hasText: name }).first().waitFor()
+      await page.keyboard.press('Enter')
+      await shown(name)
+      await page.waitForTimeout(300)
+    }
+    const themeShots = []
+    const shoot = async (name) => { const path = join(evidence, name); await page.screenshot({ path }); themeShots.push(name) }
+    for (const colorMode of ['steel', 'brown', 'dark']) {
+      await page.evaluate(async (next) => window.aiTerminal.putSettings('appearance', next), { ...appearance, colorMode })
+      await page.waitForFunction((mode) => document.documentElement.dataset.colorMode === mode, colorMode)
+      // The terminal redraws in the new colours; its links are found again once the pointer moves over it.
+      await terminal.focus()
+      await page.waitForTimeout(400)
+      await ctrlClick('apps/desktop/src/parser.ts:42:7')
+      await sheet.locator('.ql-code .ql-target').waitFor()
+      await sheet.getByRole('button', { name: 'More actions', exact: true }).click()
+      await shoot(`theme-${colorMode}-code-menu.png`)
+      await page.keyboard.press('Escape')
+      await goTo('.env', '.env')
+      await shoot(`theme-${colorMode}-masked.png`)
+      await goTo('plan.md', 'plan.md')
+      await shoot(`theme-${colorMode}-markdown.png`)
+      if (colorMode === 'steel') {
+        const ring = await sheet.locator('.ql-page').evaluate((element) => ({ focused: document.activeElement === element, outline: getComputedStyle(element).outlineStyle }))
+        check('the Markdown page, focused, draws no ring around the whole column, as the source view draws none', ring.focused && ring.outline === 'none', ring)
+      }
+      await goTo('archive.zip', 'archive.zip')
+      await shoot(`theme-${colorMode}-binary.png`)
+      await page.keyboard.press('Control+Shift+G')
+      await page.keyboard.press('Control+a')
+      await page.keyboard.type('made-up')
+      await sheet.locator('.ql-rl').first().waitFor()
+      await page.waitForTimeout(300)
+      await shoot(`theme-${colorMode}-contents.png`)
+      await page.keyboard.press('Control+p')
+      await page.keyboard.press('Control+a')
+      await page.keyboard.press('Backspace')
+      await sheet.locator('[aria-label="Printed paths"] .ql-rf').first().waitFor()
+      await shoot(`theme-${colorMode}-recent.png`)
+      await page.keyboard.press('ArrowDown')
+      await page.keyboard.press('Enter')
+      await sheet.locator('.ql-missing-title').waitFor()
+      await shoot(`theme-${colorMode}-missing.png`)
+      // Esc steps back (missing view, results, tree) and then closes the sheet.
+      for (let step = 0; step < 8 && await sheet.count(); step += 1) {
+        await page.keyboard.press('Escape')
+        await page.waitForTimeout(150)
+      }
+      await sheet.waitFor({ state: 'detached' })
+    }
+    await page.evaluate(async (next) => window.aiTerminal.putSettings('appearance', next), appearance)
+    await page.waitForFunction((mode) => document.documentElement.dataset.colorMode === mode, appearance.colorMode)
+    check('the sheet\'s states were drawn in Steel, Brown and Dark', themeShots.length === 21, { themeShots: themeShots.length })
 
     // ---- the terminal is untouched: normal, focus and split views at five sizes, through a peek ----
     for (const layout of ['normal', 'focus', 'split']) {
@@ -998,7 +1068,9 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     console.log('PASS: Quick look live run')
   } catch (error) {
     const events = await app.windows()[0]?.evaluate(() => window.__qlEvents ?? []).catch(() => [])
-    console.log('Quick look dialog events', JSON.stringify(events?.slice(-12).map(({ at, kind, cancelable }) => ({ at, kind, cancelable }))), 'navigations', JSON.stringify(navigations))
+    await app.windows()[0]?.screenshot({ path: join(evidence, 'failure.png') }).catch(() => undefined)
+    console.log('Quick look dialog events', JSON.stringify(events?.slice(-40).map(({ at, kind, cancelable }) => ({ at, kind, cancelable }))), 'navigations', JSON.stringify(navigations))
+    console.log('last close stacks', JSON.stringify(events?.filter((event) => event.stack).slice(-2).map(({ at, stack }) => ({ at, stack }))))
     appendFileSync(join(evidence, 'error.txt'), `${new Date().toISOString()} ${error?.stack ?? error}\n`)
     throw error
   } finally {
