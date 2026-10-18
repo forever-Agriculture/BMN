@@ -910,6 +910,29 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     const craftedStopped = await quick()
     check('Esc stops a search inside the crafted files at once and says it is partial', craftedStopped.search.header.notes.includes('Partial results · search stopped') && Date.now() - stopAt < 1_000,
       { stopMs: Date.now() - stopAt, header: craftedStopped.search.header })
+    // Closing the sheet during a search of the crafted files stops it (leaving the workspace closes the sheet the same
+    // way, main.tsx's dialog effect): a search asked right after reopening reads as fast as one with nothing running.
+    const secondsOf = (read) => Number(/· ([\d.]+) s/u.exec(read)?.[1] ?? 'NaN')
+    await page.keyboard.press('Control+a')
+    await page.keyboard.type('madeupneedle')
+    await waitSearch(() => window.__aitermQuickLook?.snapshot().search?.searching === true)
+    await page.waitForTimeout(40)
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.waitFor({ state: 'detached' })
+    await terminal.focus()
+    await page.keyboard.press('Control+Shift+G')
+    await sheet.waitFor()
+    // The counter is watched while the next search runs, as 67.5 AC6 asks; the sheet's own closing and opening is the window's work.
+    await watchTicks()
+    await page.keyboard.type('zebra-after-close')
+    await waitSearch(() => { const state = window.__aitermQuickLook?.snapshot().search; return state?.query === 'zebra-after-close' && state.fresh && !state.searching && !!state.header }, undefined, 60_000)
+    const afterCloseTicks = await stopTicks()
+    const afterClose = await quick()
+    const baseSeconds = secondsOf(replaced.search.header.read)
+    const afterSeconds = secondsOf(afterClose.search.header.read)
+    check('closing the sheet stops a search of the crafted files: the next search reads as fast as one with nothing running, and the counter keeps arriving',
+      afterSeconds <= baseSeconds + 0.6 && afterCloseTicks.longest <= 100 && afterClose.search.header.count === 'No matches',
+      { baseSeconds, afterSeconds, afterCloseTicks, header: afterClose.search.header })
     await page.keyboard.press('Escape')
     await page.keyboard.press('Escape')
     await sheet.waitFor({ state: 'detached' })
