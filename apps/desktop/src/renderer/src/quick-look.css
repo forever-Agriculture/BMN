@@ -1418,3 +1418,58 @@
   background: var(--identity);
   vertical-align: 1px;
 }
+
+/* A config file in edit mode (Story 68.2): an EDITING plate in the path row, the focus ring around the file, a bar
+   and a heavier number for a changed line, a plus for an added one, and the syntax line under the file. */
+.quick-look .ql-editing-plate {
+  flex: none;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 5px;
+  color: var(--text);
+  background: var(--ql-plate-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 20px;
+}
+
+.ql-code.ql-editing {
+  box-shadow: inset 0 0 0 1px var(--focus);
+}
+
+.ql-code .ql-change-gutter .cm-gutterElement {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  width: 10px;
+}
+
+.ql-change-mark {
+  display: block;
+  width: 3px;
+  font: 600 11px/18px var(--font-mono);
+}
+
+.ql-change-mark.changed {
+  border-radius: 2px;
+  background: var(--text);
+}
+
+.ql-change-mark.added {
+  width: auto;
+  color: var(--text);
+}
+
+.ql-code .cm-lineNumbers .cm-gutterElement.ql-line-changed {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.ql-syntax {
+  flex: none;
+  padding: 6px 14px;
+  border-top: 1px solid var(--hairline);
+  color: var(--muted);
+  font: 11.5px var(--font-mono);
+}

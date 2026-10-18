@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { isAbsolute, join, resolve } from 'node:path'
 import { _electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
@@ -31,6 +32,11 @@ const PAGE_KEY = 'sk-madeupQL67pagekey0123456789abcdef'
 // Story 68.1: a made-up value pasted into an edited .env file, and one another program writes meanwhile.
 const PASTED = 'madeupQL68pastedValue0123456789'
 const PASTED_TWO = 'madeupQL68secondPaste9876543210'
+// Story 68.2: made-up config files edited in place; the JSONC one has Windows line endings, which Save keeps.
+const PASTED_JSONC = 'madeupQL68jsoncPasted012'
+const PASTED_YAML = 'madeupQL68yamlPasted0123'
+const PASTED_TOML = 'madeupQL68tomlPasted0123'
+const SETTINGS_JSONC = ['{', '  // made-up settings', '  "model": "made-up/model",', '  "apiKey": "madeupQL68jsoncOld000",', '  "retries": 2', '}', ''].join('\r\n')
 const EDITED_ENV = '# made-up config\nexport MADEUP_HOST=made-up.example\nMADEUP_SECRET="madeupQL68oldValue"\n\nMADEUP_MODE=dev\n'
 // A word only one made-up file holds, so a search's traces can be looked for in the app's folders afterwards.
 const PROBE = 'QL67searchprobe'
@@ -71,6 +77,11 @@ function writeProject(project) {
   file('config/app.env', EDITED_ENV)
   chmodSync(join(project, 'config/app.env'), 0o640)
   file('config/multi.env', 'MADEUP_OK=1\nMADEUP_BLOCK="made-up\nsecond line"\n')
+  file('config/settings.jsonc', SETTINGS_JSONC)
+  file('config/app.yaml', 'name: made-up\ntoken: madeupQL68yamlOld0000\n')
+  file('config/app.toml', 'title = "made-up"\napi_key = \'madeupQL68tomlOld0000\'\n')
+  file('config/locked.json', '{"a": 1}\n')
+  chmodSync(join(project, 'config/locked.json'), 0o444)
   file('docs/plan.md', [
     '---', 'title: Made-up plan', '---', '# Made-up plan', '',
     'Text with *emphasis*, **strong**, ~~struck~~ and `inline code`. See [the site](https://example.invalid/page),',
@@ -609,7 +620,9 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await page.keyboard.press('Control+r')
     await sheet.locator('.ql-env-shown').waitFor()
     const shownRow = await sheet.locator('.ql-env-row.sel').innerText()
-    check('Ctrl+R shows the new value for ten seconds', shownRow.includes(PASTED) && shownRow.includes('Shown · hides in 10 s') && !JSON.stringify(await hook()).includes(PASTED))
+    const shownHook = JSON.stringify(await hook())
+    check('Ctrl+R shows the new value for ten seconds', shownRow.includes(PASTED) && /Shown · hides in (?:10|9) s/u.test(shownRow) && !shownHook.includes(PASTED),
+      { row: shownRow.replace(PASTED, '<pasted>'), hookHasValue: shownHook.includes(PASTED) })
     await page.keyboard.press('Escape')
     check('Esc hides it again, and the sheet stays', await sheet.locator('.ql-env-shown').count() === 0 && await sheet.count() === 1)
 
@@ -644,8 +657,9 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     const savedBytes = readFileSync(envPath, 'utf8')
     check('Ctrl+S writes only the changed value, in its old quoting; comment, order, blank line and final newline are the same',
       savedBytes === EDITED_ENV.replace('"madeupQL68oldValue"', `"${PASTED}"`), { same: savedBytes === EDITED_ENV.replace('"madeupQL68oldValue"', `"${PASTED}"`) })
+    const configFiles = JSON.stringify(['app.env', 'app.toml', 'app.yaml', 'locked.json', 'multi.env', 'settings.jsonc'])
     check('the file keeps its mode and no second file is left beside it', (statSync(envPath).mode & 0o7777) === 0o640 &&
-      JSON.stringify(readdirSync(join(project, 'config')).sort()) === JSON.stringify(['app.env', 'multi.env']), { mode: (statSync(envPath).mode & 0o7777).toString(8) })
+      JSON.stringify(readdirSync(join(project, 'config')).sort()) === configFiles, { mode: (statSync(envPath).mode & 0o7777).toString(8) })
     check('after the save the row reads "Saved" with the time, the bar and the dot are gone', await sheet.locator('.ql-save').count() === 0 && await sheet.locator('.ql-tr .ql-dirty').count() === 0 &&
       /Saved \d/u.test(await lastFacts()))
 
@@ -685,6 +699,141 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await sheet.locator('.ql-env-row, .ql-tr').first().waitFor()
     check('the sheet opens again with no draft', await sheet.locator('.ql-save').count() === 0)
     await page.screenshot({ path: join(evidence, 'env-edit.png') })
+    // ---- Story 68.2: fix a line in a config file ----
+    const pasteInEditor = (text) => sheet.locator('.ql-code .cm-content').evaluate((content, value) => {
+      const data = new DataTransfer()
+      data.setData('text/plain', value)
+      content.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+    }, text)
+    const toLine = async (line) => {
+      await page.keyboard.press('Control+Home')
+      for (let index = 1; index < line; index += 1) await page.keyboard.press('ArrowDown')
+      await page.keyboard.press('End')
+    }
+    const syntaxLine = () => sheet.locator('.ql-syntax').textContent().catch(() => '')
+    const settingsPath = join(project, 'config/settings.jsonc')
+    if (await sheet.locator('.ql-tr', { hasText: 'settings.jsonc' }).count() === 0) await sheet.locator('.ql-tr', { hasText: 'config' }).first().click()
+    await openRow('.gitignore')
+    await sheet.locator('.ql-code .cm-content').click()
+    await page.keyboard.press('e')
+    check('E on an ordinary file says "Read-only · source file" where the hint would be', /Read-only · source file/u.test(await footerText()) && await sheet.locator('.ql-editing-plate').count() === 0)
+    await openRow('locked.json')
+    check('a config file that may not be edited says why there, and carries no Edit hint', /Read-only · not writable/u.test(await footerText()) && !/EEdit/u.test(await footerText()), { footer: await footerText() })
+    await openRow('settings.jsonc')
+    await sheet.locator('.ql-code .cm-content').click()
+    check('an editable config file\'s footer shows "E Edit"', /EEdit/u.test(await footerText()), { footer: await footerText() })
+    await page.keyboard.press('e')
+    await sheet.locator('.ql-editing-plate').waitFor()
+    check('E enters edit mode: an EDITING plate and the focus ring around the file', await sheet.locator('.ql-code.ql-editing').count() === 1 &&
+      !(await pageText()).includes('madeupQL68jsoncOld000') && /Undo/u.test(await footerText()))
+    // The hidden value on line 4: from the line's end, Left steps over the comma and the quote, then over the value as one piece.
+    await toLine(4)
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('Shift+ArrowLeft')
+    await pasteInEditor(PASTED_JSONC)
+    await page.waitForTimeout(150)
+    const afterPaste = { text: await pageText(), footer: await footerText(), hook: await hook(), notes: await sheet.locator('.ql-secret-note').allTextContents() }
+    check('a paste on a selected hidden value replaces it whole and stays masked; the footer reads "Paste, masked" and the note "Pasted"',
+      !afterPaste.text.includes(PASTED_JSONC) && /Paste, masked/u.test(afterPaste.footer) && afterPaste.notes.includes(`Pasted · ${PASTED_JSONC.length} chars`) &&
+      afterPaste.hook?.edit?.draft?.includes('"apiKey": "[secret hidden]"') && !JSON.stringify(afterPaste.hook).includes(PASTED_JSONC), { notes: afterPaste.notes, footer: afterPaste.footer })
+    await page.keyboard.press('Control+a')
+    const draftCopy = await sheet.locator('.ql-code .cm-content').evaluate((content) => {
+      const data = new DataTransfer()
+      content.dispatchEvent(new ClipboardEvent('copy', { clipboardData: data, bubbles: true, cancelable: true }))
+      return data.getData('text/plain')
+    })
+    check('copying the draft carries "[secret hidden]" in place of the pasted value', draftCopy.includes('"apiKey": "[secret hidden]"') && !draftCopy.includes(PASTED_JSONC))
+    await toLine(5)
+    await page.keyboard.press('Backspace')
+    await page.keyboard.type('3')
+    await toLine(2)
+    await page.keyboard.press('Enter')
+    // Enter may indent the new line; Shift+Home takes the indent so the line is exactly what is typed.
+    await page.keyboard.press('Shift+Home')
+    await page.keyboard.type('  // made-up note')
+    await page.waitForTimeout(450)
+    const marks = { changed: await sheet.locator('.ql-change-mark.changed').count(), added: await sheet.locator('.ql-change-mark.added').count(), bar: await envBar(), syntax: await syntaxLine() }
+    check('a changed line carries a bar, an added line a plus, and the bar counts them; the syntax line reads "Syntax valid"',
+      marks.changed === 2 && marks.added === 1 && marks.bar.includes('2 lines changed · 1 added') && marks.syntax === 'Syntax valid', marks)
+    await toLine(6)
+    await page.keyboard.type(',')
+    await page.waitForTimeout(450)
+    const broken = await syntaxLine()
+    check('300 ms after typing stops a broken draft reads "Invalid JSONC · line 6: unexpected comma", and its masks stay', broken === 'Invalid JSONC · line 6: unexpected comma' &&
+      await sheet.locator('.ql-code .ql-secret').count() === 1, { broken })
+    await page.keyboard.press('Control+s')
+    await sheet.locator('.ql-save-ask').waitFor()
+    const invalidRow = { text: await sheet.locator('.ql-save-ask').innerText(), focus: (await active()).text, disk: readFileSync(settingsPath, 'utf8') === SETTINGS_JSONC }
+    check('Ctrl+S on a draft that does not parse writes nothing and offers Keep editing, in focus, and Save invalid file', invalidRow.disk && invalidRow.focus === 'Keep editing' &&
+      invalidRow.text.includes('Save invalid file') && invalidRow.text.includes('Invalid JSONC · line 6'), { text: invalidRow.text })
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(100)
+    await page.keyboard.press('Backspace')
+    await page.waitForTimeout(450)
+    await page.keyboard.press('Control+s')
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-editing-plate') === null)
+    // The saved file is read again before E is pressed on it.
+    await page.waitForTimeout(400)
+    const savedJsonc = readFileSync(settingsPath, 'utf8')
+    const expectedJsonc = ['{', '  // made-up settings', '  // made-up note', '  "model": "made-up/model",', `  "apiKey": "${PASTED_JSONC}",`, '  "retries": 3', '}', ''].join('\r\n')
+    check('Save writes the text he sees with the file\'s Windows line endings kept, and leaves edit mode with "Saved" and the time', savedJsonc === expectedJsonc &&
+      /Saved \d/u.test(await lastFacts()), { same: savedJsonc === expectedJsonc, ...(savedJsonc === expectedJsonc ? {} : { saved: savedJsonc.replace(PASTED_JSONC, '…') }) })
+    await page.keyboard.press('e')
+    await sheet.locator('.ql-editing-plate').waitFor()
+    await toLine(7)
+    await page.keyboard.type('}')
+    await page.keyboard.press('Control+s')
+    await sheet.getByRole('button', { name: 'Save invalid file', exact: true }).click()
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-editing-plate') === null)
+    // The saved file is read again before E is pressed on it.
+    await page.waitForTimeout(400)
+    check('"Save invalid file" writes it as it is', readFileSync(settingsPath, 'utf8') === expectedJsonc.replace('\r\n}\r\n', '\r\n}}\r\n'))
+
+    const require = createRequire(join(repo, 'apps/desktop/package.json'))
+    const pnpmStore = join(repo, 'node_modules/.pnpm')
+    const jsYaml = createRequire(join(pnpmStore, readdirSync(pnpmStore).find((name) => name.startsWith('js-yaml@')), 'node_modules/js-yaml/package.json'))('js-yaml')
+    const replaceValue = async (name, line, value) => {
+      await openRow(name)
+      await sheet.locator('.ql-code .cm-content').click()
+      await page.keyboard.press('e')
+      await sheet.locator('.ql-editing-plate').waitFor()
+      await toLine(line)
+      // A TOML value ends with its quote; a YAML value is bare to the line's end.
+      if (name.endsWith('.toml')) await page.keyboard.press('ArrowLeft')
+      await page.keyboard.press('Shift+ArrowLeft')
+      await pasteInEditor(value)
+      await page.waitForTimeout(450)
+      await page.keyboard.press('Control+s')
+      await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-editing-plate') === null)
+      // The saved file is read again before E is pressed on it.
+      await page.waitForTimeout(400)
+    }
+    await replaceValue('app.yaml', 2, PASTED_YAML)
+    await replaceValue('app.toml', 2, PASTED_TOML)
+    const yamlBack = jsYaml.load(readFileSync(join(project, 'config/app.yaml'), 'utf8'))
+    const tomlBack = require('smol-toml').parse(readFileSync(join(project, 'config/app.toml'), 'utf8'))
+    check('a YAML and a TOML file with a replaced value read back by a parser as that value', yamlBack.token === PASTED_YAML && yamlBack.name === 'made-up' &&
+      tomlBack.api_key === PASTED_TOML && tomlBack.title === 'made-up', { yaml: readFileSync(join(project, 'config/app.yaml'), 'utf8').replace(PASTED_YAML, '…'), toml: readFileSync(join(project, 'config/app.toml'), 'utf8').replace(PASTED_TOML, '…') })
+    check('no second file is left beside the saved configs', JSON.stringify(readdirSync(join(project, 'config')).sort()) === configFiles)
+    await page.keyboard.press('e')
+    await sheet.locator('.ql-editing-plate').waitFor()
+    await toLine(1)
+    await page.keyboard.type('# made-up')
+    await page.keyboard.press('Escape')
+    await sheet.locator('.ql-save-ask').waitFor()
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(100)
+    check('a config draft asks on the way out too, and Esc keeps editing', await sheet.locator('.ql-save-ask').count() === 0 && await sheet.locator('.ql-editing-plate').count() === 1)
+    await page.screenshot({ path: join(evidence, 'config-edit.png') })
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.getByRole('button', { name: 'Discard', exact: true }).click()
+    await sheet.waitFor({ state: 'detached' })
+    await terminal.focus()
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.waitFor()
+    await sheet.locator('.ql-tr').first().waitFor()
+
     // Markdown's checks below open docs/plan.md from the tree.
     if (await sheet.locator('.ql-tr', { hasText: 'plan.md' }).count() === 0) await sheet.locator('.ql-tr', { hasText: 'docs' }).first().click()
     await sheet.locator('.ql-tr', { hasText: 'plan.md' }).first().waitFor()
@@ -1377,7 +1526,7 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
         if (entry.isDirectory()) walk(path)
         else if (entry.isFile() && statSync(path).size < 64 * 1024 * 1024) {
           const bytes = readFileSync(path)
-          if ([CANARY, CANARY_TWO, CANARY_JSON, PASTED, PASTED_TWO].some((value) => bytes.includes(value))) leaks.push(path)
+          if ([CANARY, CANARY_TWO, CANARY_JSON, PASTED, PASTED_TWO, PASTED_JSONC, PASTED_YAML, PASTED_TOML].some((value) => bytes.includes(value))) leaks.push(path)
         }
       }
     }

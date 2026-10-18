@@ -71,6 +71,15 @@ describe('Quick look footer', () => {
     expect(quickLookFooter({ ...base, focus: 'file', edit: 'env-rows', escape: 'keep-editing' }).at(-1)).toEqual({ keys: ['Esc'], label: 'Keep editing' })
   })
 
+  it('offers E Edit on a config file that may be edited, says why not on one that may not, and shows the edit keys in edit mode (Story 68.2)', () => {
+    expect(quickLookFooter({ ...base, focus: 'file', edit: 'config-available' }).map((hint) => hint.label).slice(0, 2)).toEqual(['Move', 'Edit'])
+    expect(quickLookFooter({ ...base, focus: 'file', edit: 'config-available' })[1]).toEqual({ keys: ['E'], label: 'Edit' })
+    expect(quickLookFooter({ ...base, focus: 'file', note: 'Read-only · over 256 KB' })[1]).toEqual({ keys: [], label: 'Read-only · over 256 KB' })
+    expect(quickLookFooter({ ...base, focus: 'file' }).map((hint) => hint.label)).not.toContain('Edit')
+    expect(quickLookFooter({ ...base, focus: 'file', edit: 'config' }).map((hint) => hint.label)).toEqual(['Undo', 'Paste', 'Reveal 10 s', 'Save', 'Close'])
+    expect(quickLookFooter({ ...base, focus: 'file', edit: 'config', note: 'Paste, masked' }).map((hint) => hint.label)[0]).toBe('Paste, masked')
+  })
+
   it('shows Back only when there is a file to return to (Story 67.2 AC7)', () => {
     expect(quickLookFooter({ ...base, focus: 'file' }).map((hint) => hint.label)).not.toContain('Back')
     expect(quickLookFooter({ ...base, focus: 'file', back: true }).find((hint) => hint.label === 'Back')).toEqual({ keys: ['Alt ←'], label: 'Back' })

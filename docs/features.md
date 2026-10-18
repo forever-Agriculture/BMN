@@ -495,9 +495,29 @@ closing the window and Quit each ask first: **Save**, **Discard**, **Keep editin
 focus. Your edits stay in memory and are dropped when the file is closed; no value is logged or kept
 anywhere but the file.
 
+**Fixing a line in a config file.** A `*.json`, `*.jsonc`, `*.yaml`, `*.yml` or `*.toml` file that Quick
+look may write (the same rules as a `.env` file, and line endings all of one kind) shows **E Edit** in the
+footer; `E` puts it in edit mode, with an **EDITING** plate and the focus ring around the file. One that may
+not be edited says why where the hint would be ("Read-only · over 256 KB"), and `E` on any other file says
+"Read-only · source file". In edit mode typing, selection, undo and redo work as in a plain editor, with the
+history in memory; a changed line carries a bar and a heavier number, an added line a plus, and the Save bar
+counts changed, added and removed lines. A hidden value stays a plate of dots over the real draft and moves as
+one piece: the caret steps over it, typing or pasting on it replaces the whole value as a double-quoted string
+with the format's escapes, Backspace or Delete leaves an empty string, and a multi-line value is not replaced
+("edit it in the terminal"). A pasted single line of 8 or more characters with no space lands masked and reads
+"Pasted" with its length; the footer says "Paste, masked". 300 ms after typing stops, the format's own parser
+reads the draft (JSON, and JSONC with its comments blanked, by the platform; YAML by the editor's own parser;
+TOML by smol-toml) and a line says
+"Syntax valid" or, for example, "Invalid JSONC · line 14: unexpected comma"; it says nothing about whether the
+program that reads the file accepts it. `Ctrl+S` saves a draft that parses through the same Save as a `.env`
+file, with the file's line endings kept, and leaves edit mode; a draft that does not parse is not saved unless
+you choose **Save invalid file**. A file changed on disk, a failed save and the way out with unsaved edits
+work as for a `.env` file; **Review latest** carries your edits onto the file as it is now when the other
+program changed other lines.
+
 Quick look's keys: `Ctrl+Shift+E` opens or closes it, `Ctrl+Shift+G` opens it on **Contents**, `Ctrl+P`
 goes to a file, `Ctrl+F` finds in the file, `Ctrl+G` goes to a line, `Ctrl+R` shows a hidden value for
-ten seconds, `Ctrl+S` saves an edited `.env` file, `M` switches a Markdown file between page and source, `Alt+←`/`Alt+→` step through the files
+ten seconds, `E` edits a config file, `Ctrl+S` saves an edited `.env` or config file, `M` switches a Markdown file between page and source, `Alt+←`/`Alt+→` step through the files
 you opened, `F5` reloads a changed file, holding `F8` shows the terminals, `Ctrl+B` folds the tree and
 `Escape` closes the innermost thing first. It shows text files of at most 2 MiB, Markdown pages of at
 most 512 KB and folders of at most 2,000 entries; search contents reads at most 20,000 files of at most

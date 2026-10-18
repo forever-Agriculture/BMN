@@ -24,8 +24,13 @@ export interface QuickLookFooterState {
   forward: boolean
   /** The top field shows results of this search (Story 67.5), or the paths the terminal printed (Story 67.6). */
   search?: 'files' | 'contents' | 'recent' | null
-  /** The shown file is edited: a .env file's rows or one of its fields (Story 68.1), or a config file (Story 68.2). */
-  edit?: 'env-rows' | 'env-field' | null
+  /**
+   * The shown file is edited: a .env file's rows or one of its fields (Story 68.1), or a config file in edit mode;
+   * `config-available` is a config file E puts in edit mode (Story 68.2).
+   */
+  edit?: 'env-rows' | 'env-field' | 'config' | 'config-available' | null
+  /** Why the file may not be edited, or what just happened, where the hint would be (Story 68.2 AC1, AC4). */
+  note?: string | null
 }
 
 const hint = (label: string, ...keys: string[]): QuickLookHint => ({ keys, label })
@@ -51,9 +56,12 @@ export function quickLookFooter(state: QuickLookFooterState): QuickLookHint[] {
       // The board's .env frame: key, edit, paste, reveal, save, Esc.
       if (state.edit === 'env-rows') return [hint('Key', '↑ ↓'), hint('Edit', 'Enter'), hint('Paste', 'Ctrl V'), hint('Reveal 10 s', 'Ctrl R'), hint('Save', 'Ctrl S'), tree, escape]
       if (state.edit === 'env-field') return [hint('Paste', 'Ctrl V'), hint('Reveal 10 s', 'Ctrl R'), hint('Done', 'Enter'), hint('Save', 'Ctrl S'), escape]
+      // The board's config frame: undo, paste, reveal, save, Esc; a note takes the place of the first hint.
+      if (state.edit === 'config') return [...(state.note ? [hint(state.note)] : []), hint('Undo', 'Ctrl Z'), hint('Paste', 'Ctrl V'), hint('Reveal 10 s', 'Ctrl R'), hint('Save', 'Ctrl S'), escape]
       // The board's order for a source file: move, tree, go to line, find, back, Esc; a Markdown page scrolls and
       // M switches it to source and back.
-      return [hint(state.markdown === 'rendered' ? 'Scroll' : 'Move', '↑ ↓'), ...(state.markdown ? [hint('Rendered / source', 'M')] : []), tree,
+      return [hint(state.markdown === 'rendered' ? 'Scroll' : 'Move', '↑ ↓'), ...(state.edit === 'config-available' ? [hint('Edit', 'E')] : state.note ? [hint(state.note)] : []),
+        ...(state.markdown ? [hint('Rendered / source', 'M')] : []), tree,
         hint('Go to line', 'Ctrl G'), hint('Find in file', 'Ctrl F'), ...(state.secrets ? [hint('Reveal 10 s', 'Ctrl R')] : []), ...trail, escape]
     case 'find':
       return [hint('Next', 'Enter'), hint('Previous', 'Shift Enter'), hint('Case', 'Alt C'), escape]

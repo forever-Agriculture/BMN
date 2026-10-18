@@ -49,6 +49,9 @@ import { treeKey, treeRows, type TreeListing, type TreeRow } from './quick-look-
 import { readEnvFile, readersOf } from './quick-look-env'
 import { EMPTY_ENV_DRAFT, EnvView, envDraftDirty, envDraftSummary, envDraftText, rebaseEnvDraft, type EnvDraft, type EnvViewHandle } from './quick-look-env-view'
 import { SaveBar, asksQuestion, type SaveRow } from './quick-look-save-bar'
+import { ConfigEditor, type ConfigDraftState, type ConfigEditorHandle } from './quick-look-config-editor'
+import { lineEndingOf } from './quick-look-config-edit'
+import { configFormatOf, syntaxWords } from './quick-look-syntax'
 import { quickLookFooter, type QuickLookFocus } from './quick-look-keys'
 import { SearchResults } from './quick-look-results'
 import { copiedReference, missingWords, type PrintedReference, type QuickLookAsk } from './quick-look-open'
@@ -132,7 +135,7 @@ interface QuickLookTestSnapshot {
   hidden: number
   revealed: number | null
   /** An edited file: its rows with every value masked, what is unsaved and what the Save bar or its row says (Story 68.1). */
-  edit?: { rows: string[]; dirty: boolean; bar: string | null; row: string | null; saved: string | null; readOnly: string | null } | null
+  edit?: { rows: string[]; dirty: boolean; bar: string | null; row: string | null; saved: string | null; readOnly: string | null; draft?: string; syntax?: string | null; editing?: boolean } | null
   search: {
     mode: QuickLookSearchMode
     query: string
@@ -383,6 +386,14 @@ export function QuickLook(props: {
   const [envShown, setEnvShown] = useState<{ row: number; until: number } | null>(null)
   const [savedAt, setSavedAt] = useState<{ path: string; at: string } | null>(null)
   const [envField, setEnvField] = useState(false)
+  // A config file's edit mode (Story 68.2): on with E, its draft's state, and a note where the footer's hint is.
+  const [editing, setEditing] = useState(false)
+  const [configDraft, setConfigDraft] = useState<ConfigDraftState | null>(null)
+  const [configShown, setConfigShown] = useState(false)
+  const [footerNote, setFooterNote] = useState<string | null>(null)
+  const configEditor = useRef<ConfigEditorHandle | null>(null)
+  /** The bytes the config draft was made on: the file as read when E was pressed, or as it was when the draft was carried. */
+  const editDigest = useRef<string | null>(null)
   const envView = useRef<EnvViewHandle | null>(null)
   const dirtyRef = useRef(false)
   /** A close of the window or a Quit that waits for his answer to the unsaved edits. */
@@ -426,7 +437,13 @@ export function QuickLook(props: {
   const envModel = useMemo(() => (ready && envKind && ready.edit?.status === 'editable' ? readEnvFile(ready.content) : null), [ready, envKind])
   const envRows = envModel?.status === 'rows' ? envModel : null
   const readOnlyWords = envKind && ready ? (ready.edit?.status === 'read-only' ? ready.edit.message : envModel?.status === 'read-only' ? envModel.reason : null) : null
-  const dirty = !!envRows && envDraftDirty(envDraft)
+  // A JSON, JSONC, YAML or TOML file the host says may be edited enters edit mode with E (Story 68.2 AC1).
+  const configFormat = ready ? configFormatOf(ready.path) : null
+  const configEnding = ready ? lineEndingOf(ready.content) : '\n'
+  const configReadOnly = configFormat && ready ? (ready.edit?.status === 'read-only' ? ready.edit.message : configEnding === 'mixed' ? 'Read-only · mixed line endings' : null) : null
+  const configEditable = !!configFormat && ready?.edit?.status === 'editable' && configEnding !== 'mixed'
+  const configEditing = editing && configEditable
+  const dirty = (!!envRows && envDraftDirty(envDraft)) || (configEditing && !!configDraft?.dirty)
   dirtyRef.current = dirty
   // Values that look like secrets are hidden as soon as the file is drawn; masking does not find every secret.
   const secretRanges = useMemo(() => (ready ? quickLookSecretRanges(ready.path, ready.canonicalPath, text) : []), [ready, text])
@@ -593,6 +610,9 @@ export function QuickLook(props: {
     setEnvDraft(EMPTY_ENV_DRAFT)
     setEnvShown(null)
     setSaveRow(null)
+    setEditing(false)
+    setConfigDraft(null)
+    setConfigShown(false)
   }
 
   /**
@@ -601,14 +621,15 @@ export function QuickLook(props: {
    */
   const saveDraft = async (): Promise<boolean> => {
     const base = ready
-    if (!base || !envRows || !rootRef.current) return false
-    const out = envDraftText(base.content, envRows, envDraft)
+    if (!base || !rootRef.current || (!envRows && !configEditing)) return false
+    const out = configEditing ? { status: 'ready' as const, text: configEditor.current?.text() ?? '' } : envDraftText(base.content, envRows!, envDraft)
     if (out.status === 'refused') {
       setSaveRow({ kind: 'failed', message: `Could not save · ${out.message}` })
       return false
     }
     setSaveRow({ kind: 'saving' })
-    const result: QuickLookSaveResult = await window.aiTerminal.saveQuickLookFile({ ...source, root: rootRef.current, path: base.path, digest: base.digest, text: out.text })
+    const digest = configEditing ? editDigest.current ?? base.digest : base.digest
+    const result: QuickLookSaveResult = await window.aiTerminal.saveQuickLookFile({ ...source, root: rootRef.current, path: base.path, digest, text: out.text })
       .catch(() => ({ status: 'failed', message: 'Could not save · BMN could not reach the file' }))
     if (result.status === 'changed') {
       setSaveRow({ kind: 'conflict' })
@@ -636,7 +657,19 @@ export function QuickLook(props: {
     const row = saveRow
     setSaveRow(row?.kind === 'failed' ? row : null)
     if (row?.kind === 'guard') row.keep?.()
-    window.setTimeout(() => envView.current?.focus(), 0)
+    window.setTimeout(() => (configEditor.current ?? envView.current)?.focus(), 0)
+  }
+
+  /** Ctrl+S or Save: a config draft that does not parse asks first, with Keep editing in focus (Story 68.2 AC6). */
+  const saveOrAsk = (): void => {
+    const verdict = configEditing ? configEditor.current?.verdict() : null
+    if (verdict?.status === 'invalid' && configFormat) {
+      // A close waiting on the answer stays open: he is asked about the file first.
+      if (saveRow?.kind === 'guard') saveRow.keep?.()
+      setSaveRow({ kind: 'invalid', words: syntaxWords(configFormat, verdict) })
+      return
+    }
+    onSaveBarSave()
   }
 
   const onSaveBarSave = (): void => {
@@ -656,15 +689,35 @@ export function QuickLook(props: {
 
   /** The file as it is on disk now, masked, while his draft is kept and carried onto it (AC6). */
   const reviewLatest = (): void => {
-    if (!ready || !envRows) return
+    if (!ready || (!envRows && !configEditing)) return
     const path = ready.path
+    if (configEditing) {
+      void read(path).then((next) => {
+        if (next.status !== 'ready' || shownPath.current !== path) {
+          setSaveRow({ kind: 'failed', message: 'Could not save · the file can no longer be read' })
+          return
+        }
+        if (!configEditor.current?.carry(viewText(next.content))) {
+          setSaveRow({ kind: 'failed', message: 'Could not save · the other program changed the lines you changed' })
+          return
+        }
+        editDigest.current = next.digest
+        setSaveRow(null)
+        setChanged(false)
+        setFile((current) => (current?.path === path ? { ...current, result: next } : current))
+        setFeedback('Latest from disk · your edits are kept on it')
+      })
+      return
+    }
+    const from = envRows
+    if (!from) return
     void read(path).then((next) => {
       if (next.status !== 'ready' || shownPath.current !== path) {
         setSaveRow({ kind: 'failed', message: 'Could not save · the file can no longer be read' })
         return
       }
       const model = readEnvFile(next.content)
-      const carried = model.status === 'rows' ? rebaseEnvDraft(envRows, model, envDraft) : null
+      const carried = model.status === 'rows' ? rebaseEnvDraft(from, model, envDraft) : null
       if (!carried) {
         setSaveRow({ kind: 'failed', message: 'Could not save · a key you changed is no longer in the file' })
         return
@@ -703,7 +756,14 @@ export function QuickLook(props: {
   useEffect(() => {
     dropDraft()
     setEnvField(false)
+    setFooterNote(null)
   }, [ready?.path])
+  // A note where the footer's hint is lasts a few seconds.
+  useEffect(() => {
+    if (!footerNote) return
+    const timer = window.setTimeout(() => setFooterNote(null), 4000)
+    return () => window.clearTimeout(timer)
+  }, [footerNote])
 
   // The window's close and Quit learn only whether there are unsaved edits, never what they are.
   useEffect(() => {
@@ -743,7 +803,12 @@ export function QuickLook(props: {
       dirty, bar: dirty ? envDraftSummary(envRows, envDraft) : null,
       row: saveRow ? (saveRow.kind === 'failed' ? saveRow.message : saveRow.kind === 'invalid' ? saveRow.words : saveRow.kind) : null,
       saved: savedAt && ready && savedAt.path === ready.path ? savedAt.at : null, readOnly: null
-    } : readOnlyWords ? { rows: [], dirty: false, bar: null, row: null, saved: null, readOnly: readOnlyWords } : null,
+    } : configEditing ? {
+      rows: [], dirty, bar: dirty ? configDraft?.summary ?? null : null, editing: true, draft: configEditor.current?.masked() ?? '', syntax: configDraft?.syntax ?? null,
+      row: saveRow ? (saveRow.kind === 'failed' ? saveRow.message : saveRow.kind === 'invalid' ? saveRow.words : saveRow.kind) : null,
+      saved: savedAt && ready && savedAt.path === ready.path ? savedAt.at : null, readOnly: null
+    } : readOnlyWords || configReadOnly ? { rows: [], dirty: false, bar: null, row: null, saved: savedAt && ready && savedAt.path === ready.path ? savedAt.at : null, readOnly: readOnlyWords ?? configReadOnly }
+      : savedAt && ready && savedAt.path === ready.path ? { rows: [], dirty: false, bar: null, row: null, saved: savedAt.at, readOnly: null } : null,
     search: showResults ? {
       mode: searchMode, query, matchCase, wholeWord, searching: search.searching, fresh, picked, failure: search.failure,
       header: search.result?.mode === 'contents' ? contentsHeader(search.result) : search.result?.mode === 'files' ? { count: filesHeader(search.result), read: '', notes: [] } : null,
@@ -800,6 +865,7 @@ export function QuickLook(props: {
           setPeeking(true)
           setShownSecret(null)
           setEnvShown(null)
+          configEditor.current?.hide()
         }
         return
       }
@@ -818,6 +884,7 @@ export function QuickLook(props: {
       setPeeking(false)
       setShownSecret(null)
       setEnvShown(null)
+      configEditor.current?.hide()
     }
     const other = (event: Event): void => { if (peekingRef.current) swallow(event as KeyboardEvent) }
     window.addEventListener('keydown', down, true)
@@ -1127,7 +1194,7 @@ export function QuickLook(props: {
     return next
   })
 
-  const escape = escapeStep({ focus: focusArea === 'tree' ? 'tree' : focusArea === 'field' ? 'field' : 'file', typed: typed.length > 0, revealed: revealed !== null || envShown !== null,
+  const escape = escapeStep({ focus: focusArea === 'tree' ? 'tree' : focusArea === 'field' ? 'field' : 'file', typed: typed.length > 0, revealed: revealed !== null || envShown !== null || configShown,
     goTo: goTo.open, find: find.open, search: search.searching ? 'searching' : showResults ? 'results' : null, fromResults, menu: menuOpen,
     question: asksQuestion(saveRow), editField: !!envRows && envField && focusArea === 'file' })
   const cancelRef = useRef<() => void>(() => undefined)
@@ -1144,6 +1211,7 @@ export function QuickLook(props: {
       case 'hide-secret':
         setShownSecret(null)
         setEnvShown(null)
+        configEditor.current?.hide()
         return
       case 'close-goto':
         setGoTo({ open: false, text: '', invalid: false })
@@ -1196,9 +1264,25 @@ export function QuickLook(props: {
       guarded(() => onClose.current())
       return
     }
-    if (ctrl && !event.shiftKey && event.code === 'KeyS' && envRows) {
+    if (ctrl && !event.shiftKey && event.code === 'KeyS' && (envRows || configEditing)) {
       take()
-      if (dirty && saveRow?.kind !== 'saving' && !asksQuestion(saveRow)) onSaveBarSave()
+      if (dirty && saveRow?.kind !== 'saving' && !asksQuestion(saveRow)) saveOrAsk()
+      return
+    }
+    if (ctrl && !event.shiftKey && event.code === 'KeyR' && configEditing) {
+      take()
+      if (!configEditor.current?.revealAtCaret()) setFeedback('No hidden value on this line.')
+      return
+    }
+    // E enters edit mode on a config file that may be edited, and says why not on any other (Story 68.2 AC1).
+    if (plain && !event.shiftKey && event.key.toLowerCase() === 'e' && focusArea === 'file' && ready && !configEditing && !envRows && !event.nativeEvent.isComposing) {
+      take()
+      if (configEditable) {
+        editDigest.current = ready.digest
+        setEditing(true)
+        setFind((state) => (state.open ? { ...state, open: false } : state))
+        setGoTo({ open: false, text: '', invalid: false })
+      } else setFooterNote(configReadOnly ?? readOnlyWords ?? 'Read-only · source file')
       return
     }
     if (ctrl && !event.shiftKey && event.code === 'KeyR' && envRows) {
@@ -1231,12 +1315,12 @@ export function QuickLook(props: {
       })
       return
     }
-    if (ctrl && !event.shiftKey && event.code === 'KeyF' && ready && ready.byteLength > 0) {
+    if (ctrl && !event.shiftKey && event.code === 'KeyF' && ready && ready.byteLength > 0 && !configEditing) {
       take()
       openFind()
       return
     }
-    if (ctrl && !event.shiftKey && event.code === 'KeyG' && ready && ready.byteLength > 0) {
+    if (ctrl && !event.shiftKey && event.code === 'KeyG' && ready && ready.byteLength > 0 && !configEditing) {
       take()
       setFind((state) => (state.open ? { ...state, open: false } : state))
       if (codeView.current) showFindMatches(codeView.current, [], -1, false)
@@ -1327,7 +1411,8 @@ export function QuickLook(props: {
   const type = file ? quickLookFileType(file.path) : null
   const footer = quickLookFooter({ focus: focusArea, fileOpen: !!ready, escape, folded, secrets: secretRanges.length > 0, back: canGoBack(trail), forward: canGoForward(trail),
     markdown: page ? (rendered ? 'rendered' : 'source') : null, search: showResults ? searchMode : showRecent ? 'recent' : null,
-    edit: envRows ? (envField ? 'env-field' : 'env-rows') : null })
+    edit: envRows ? (envField ? 'env-field' : 'env-rows') : configEditing ? 'config' : configEditable ? 'config-available' : null,
+    note: footerNote ?? (configReadOnly && !configEditing ? configReadOnly : null) })
 
   return (
     <dialog ref={dialog} className={`app-dialog quick-look${peeking ? ' peeking' : ''}`} aria-label="Quick look" tabIndex={-1} onKeyDownCapture={onSheetKey}>
@@ -1420,9 +1505,11 @@ export function QuickLook(props: {
                   facts={openedSearch ? matchLabel(openedMatch!, flat.length)
                     : envRows && ready.edit?.status === 'editable'
                       ? [`${envRows.keys} ${envRows.keys === 1 ? 'key' : 'keys'}`, readersOf(ready.edit.mode), ...(savedAt?.path === ready.path && !dirty ? [`Saved ${savedAt.at}`] : [])].join(' · ')
-                      : [type?.label, `${quickLookCount(ready.lineCount)} ${ready.lineCount === 1 ? 'line' : 'lines'}`, quickLookSize(ready.byteLength)].join(' · ')}
+                      : [type?.label, `${quickLookCount(ready.lineCount)} ${ready.lineCount === 1 ? 'line' : 'lines'}`, quickLookSize(ready.byteLength),
+                        ...(savedAt?.path === ready.path && !dirty ? [`Saved ${savedAt.at}`] : [])].join(' · ')}
                   actions={(
                     <>
+                      {configEditing ? <span className="ql-editing-plate">EDITING</span> : null}
                       {openedSearch ? (
                         <span className="ql-match-nav" role="group" aria-label="Matches">
                           <button type="button" className="ql-icon-button" aria-label="Previous match" title="Previous match" onClick={() => stepResult(-1)}>
@@ -1470,9 +1557,16 @@ export function QuickLook(props: {
                     <span className="ql-count">{goTo.invalid ? 'Type a line, or a line and a column: 44 or 44:7' : `1–${quickLookCount(ready.lineCount)}`}</span>
                   </div>
                 ) : null}
-                {envRows ? (
+                {configEditing && configFormat ? (
+                  <>
+                    <ConfigEditor key={ready.path} ref={configEditor} path={ready.path} canonicalPath={ready.canonicalPath} content={text} format={configFormat}
+                      lineEnding={configEnding === '\r\n' ? '\r\n' : '\n'} focus={focusArea === 'file' && !asksQuestion(saveRow)}
+                      onDraft={setConfigDraft} onNote={setFooterNote} onShown={setConfigShown} onFocus={() => setFocusArea('file')} />
+                    {configDraft?.syntax ? <p className={`ql-syntax${configDraft.valid === false ? ' ql-refused' : ''}`} role="status">{configDraft.syntax}</p> : null}
+                  </>
+                ) : envRows ? (
                   <EnvView ref={envView} model={envRows} draft={envDraft} onDraft={setEnvDraft}
-                    shown={envShown ? { row: envShown.row, secondsLeft: Math.max(1, Math.ceil((envShown.until - now) / 1000)) } : null}
+                    shown={envShown ? { row: envShown.row, secondsLeft: Math.min(REVEAL_SECONDS, Math.max(1, Math.ceil((envShown.until - now) / 1000))) } : null}
                     onReveal={toggleEnvValue} onStatus={setFeedback} focus={focusArea === 'file' && !asksQuestion(saveRow)}
                     onFocus={() => setFocusArea('file')} onEditing={setEnvField} />
                 ) : ready.byteLength === 0 ? <p className="ql-message">Empty file. Nothing to show.</p> : rendered && page ? (
@@ -1508,9 +1602,9 @@ export function QuickLook(props: {
             ) : <PathRow path={file.path} root={root} line={file.line} facts="Reading…" />
           ) : <p className="ql-empty">{goneNote ?? (root ? 'Choose a file in the tree.' : rootInfo ? '' : 'Reading the project…')}</p>}
           {feedback ? <p className="ql-feedback" aria-live="polite">{feedback}</p> : null}
-          {ready && envRows && (dirty || saveRow) ? (
-            <SaveBar path={ready.path} summary={envDraftSummary(envRows, envDraft)} row={saveRow}
-              onSave={onSaveBarSave} onSaveInvalid={onSaveBarSave} onDiscard={onSaveBarDiscard} onKeep={keepEditing} onReview={reviewLatest} />
+          {ready && (envRows || configEditing) && (dirty || saveRow) ? (
+            <SaveBar path={ready.path} summary={envRows ? envDraftSummary(envRows, envDraft) : configDraft?.summary ?? ''} row={saveRow}
+              onSave={saveOrAsk} onSaveInvalid={onSaveBarSave} onDiscard={onSaveBarDiscard} onKeep={keepEditing} onReview={reviewLatest} />
           ) : null}
         </section>
       </div>
