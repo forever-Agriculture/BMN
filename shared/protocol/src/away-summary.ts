@@ -332,7 +332,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   const waiting: AwaySummaryView['waiting'] = {
     open: open.length,
     groups: bySession(waitingRows, input.order).map(([sessionId, rows]) => ({ sessionId, where: where(sessionId), rows })),
-    more: open.length > AWAY_SUMMARY_LIMITS.waiting ? `${open.length - AWAY_SUMMARY_LIMITS.waiting} more · Go to next request needing you walks them.` : null,
+    more: open.length > AWAY_SUMMARY_LIMITS.waiting ? `${open.length - AWAY_SUMMARY_LIMITS.waiting} more · Go to next request needing you reaches each one.` : null,
     empty: input.attention !== null && open.length === 0 ? 'Nothing waits on you.' : null
   }
 
@@ -410,7 +410,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   const decided: AwaySummaryView['decided'] = {
     incomplete: gaps.decisions !== undefined,
     groups: bySession(shown.map(decisionView), input.order).map(([sessionId, items]) => ({ sessionId, where: where(sessionId), records: items })),
-    more: records.length > AWAY_SUMMARY_LIMITS.decisions ? `${records.length - AWAY_SUMMARY_LIMITS.decisions} more recorded; the list is cut at ${AWAY_SUMMARY_LIMITS.decisions}.` : null,
+    more: records.length > AWAY_SUMMARY_LIMITS.decisions ? `${records.length - AWAY_SUMMARY_LIMITS.decisions} more · list cut at ${AWAY_SUMMARY_LIMITS.decisions}` : null,
     empty: input.decisions !== null && input.decisions.complete && records.length === 0 ? 'No BMN decision records for this period.' : null,
     tail: 'Decisions kept only in a workflow\'s own log, and any an agent did not report, are outside this list.'
   }

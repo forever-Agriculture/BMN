@@ -36,7 +36,7 @@ export function SaveBar(props: {
       <div className="ql-save ql-save-ask" role="alertdialog" aria-label="Unsaved edits">
         <div className="ql-save-text"><span className="ql-save-eyebrow">Unsaved edits</span><span className="ql-save-path"><bdi>{props.path}</bdi></span></div>
         <button type="button" onClick={props.onSave}>Save</button>
-        <button type="button" onClick={props.onDiscard}>Discard</button>
+        <button type="button" className="ql-quiet" onClick={props.onDiscard}>Discard</button>
         <button ref={keep} type="button" className="primary" onClick={props.onKeep}>Keep editing</button>
       </div>
     )
@@ -66,7 +66,7 @@ export function SaveBar(props: {
         <span className={`ql-save-what${row?.kind === 'failed' ? ' ql-refused' : ''}`}>{row?.kind === 'failed' ? row.message : row?.kind === 'saving' ? 'Saving…' : props.summary}</span>
         <span className="ql-save-path"><bdi>{props.path}</bdi></span>
       </div>
-      <button type="button" onClick={props.onDiscard} disabled={row?.kind === 'saving'}>Discard</button>
+      <button type="button" className="ql-quiet" onClick={props.onDiscard} disabled={row?.kind === 'saving'}>Discard</button>
       <button type="button" className="primary" onClick={props.onSave} disabled={row?.kind === 'saving'}>Save <kbd>Ctrl S</kbd></button>
     </div>
   )

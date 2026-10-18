@@ -596,8 +596,11 @@
   pointer-events: none;
 }
 
-/* As the source view: the footer's keys say the page has focus, so it draws no ring around the whole column. */
-.quick-look .ql-page:focus-visible {
+/* As the source view: the footer's keys say the page has focus, so it draws no ring around the whole column. The tree and
+   the .env rows likewise: their selected row carries focus, never a box around the whole panel (Fable's review 2026-10-18). */
+.quick-look .ql-page:focus-visible,
+.quick-look .ql-tree:focus-visible,
+.quick-look .ql-env-rows:focus-visible {
   outline: none;
 }
 
@@ -1401,6 +1404,18 @@
   height: 28px;
   padding: 0 12px;
   font-size: 12px;
+}
+
+/* Discard is the one that loses work: a quiet word beside the filled choice, never a second filled plate. */
+.quick-look .ql-save button.ql-quiet {
+  border-color: transparent;
+  color: var(--muted);
+  background: transparent;
+}
+
+.quick-look .ql-save button.ql-quiet:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
 }
 
 .quick-look .ql-save button kbd {

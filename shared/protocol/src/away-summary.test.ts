@@ -96,7 +96,7 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
     const many = Array.from({ length: AWAY_SUMMARY_LIMITS.waiting + 3 }, (_, index) => request(`m${index}`, 's1', at(15, 1, index % 60)))
     const bounded = buildAwaySummary(input({ attention: many }))
     expect(bounded.waiting.groups.flatMap((group) => group.rows)).toHaveLength(AWAY_SUMMARY_LIMITS.waiting)
-    expect(bounded.waiting.more).toBe('3 more · Go to next request needing you walks them.')
+    expect(bounded.waiting.more).toBe('3 more · Go to next request needing you reaches each one.')
   })
 
   it('shows each decision with its rows, validated references as navigation only, dependencies and the outcome', () => {
@@ -125,7 +125,7 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
     const records = Array.from({ length: 33 }, (_, index) => decision(`k${index}`, 's1'))
     const cut = buildAwaySummary(input({ decisions: { decisions: records, complete: false } }))
     expect(cut.decided.groups[0]!.records).toHaveLength(30)
-    expect(cut.decided.more).toBe('3 more recorded; the list is cut at 30.')
+    expect(cut.decided.more).toBe('3 more · list cut at 30')
     expect(cut.decided.incomplete).toBe(true)
     expect(cut.couldNotRead).toBe('Not fully read: decision records · counts there may be low.')
     expect(cut.couldNotReadWhy).toBe('decision records: cut at 33 listings')

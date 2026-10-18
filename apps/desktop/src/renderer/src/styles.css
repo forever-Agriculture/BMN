@@ -1082,12 +1082,25 @@ input[type='radio'] {
   background: var(--selected);
 }
 
+/* A toggle that is on (Split, Focus, Files) is a bar under its word, so the project plate stays the one filled thing in
+   the row; in a split pane the two no longer read as twins (Fable's review 2026-10-18). */
+.pane-actions button[aria-pressed='true']:not(.project-plate) {
+  border-color: transparent;
+  border-radius: 6px 6px 2px 2px;
+  background: transparent;
+  box-shadow: inset 0 -2px 0 var(--text);
+}
+
 .pane-actions button:disabled {
   color: var(--faint);
 }
 
 /* The project plate: the one filled button in the row, named by the project's folder (Fable, 2026-10-18). Filled means a
    thing of this session that opens; the borderless toggles beside it are views. Narrow panes hide its word, not its fill. */
+.pane-actions button.project-plate {
+  margin-right: 6px;
+}
+
 .pane-actions button.project-plate,
 .empty-state button.project-plate {
   border-color: transparent;

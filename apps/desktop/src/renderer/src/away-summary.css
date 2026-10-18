@@ -5,8 +5,9 @@
 .away-summary-dialog .message-list { max-height: none; overflow: visible; }
 .away-summary-dialog .away-count-on { color: var(--identity); font-weight: 600; }
 .app-dialog .message-row.away-decision-row { grid-template-columns: 64px minmax(96px, 190px) minmax(0, 1fr); }
-.app-dialog .message-row.away-run-row { grid-template-columns: minmax(140px, 260px) 64px minmax(0, 1fr); }
-.app-dialog .message-row.away-activity-row { grid-template-columns: minmax(96px, 190px) minmax(0, 1fr); }
+.app-dialog .message-row.away-run-row { grid-template-columns: minmax(140px, 264px) 64px minmax(0, 1fr); }
+/* Every list keeps the Needs you lines: a session name on the 74 px line, a state on the 274 px line (Fable's review). */
+.app-dialog .message-row.away-activity-row { grid-template-columns: 64px minmax(96px, 190px) minmax(0, 1fr); }
 .away-run-row .route { font-weight: 600; }
 .away-head-line { margin: 0; font-size: 13px; }
 .away-note { margin: 4px 0 0; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }

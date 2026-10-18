@@ -247,6 +247,7 @@ export function AwaySummaryDialog(props: {
                 {view.activity.rows.map((row) => (
                   <li key={row.sessionId}>
                     <button type="button" className="message-row away-activity-row" onClick={() => props.onOpenSession(row.sessionId)}>
+                      <span className="age" aria-hidden="true" />
                       <span className="route" title={row.where}>{sessionWords(row.where)}</span>
                       <span className="first-line" title={row.lines.join('\n')}>{row.text}</span>
                     </button>
