@@ -1,4 +1,4 @@
-// MODULE: file-reference-self-test.ts - Electron self-test of file references: keyboard palette, Ctrl+click, mouse mode, no PTY input
+// MODULE: file-reference-self-test.ts - Electron self-test of file references: keyboard palette and its dialog, Ctrl+click into Quick look (Story 67.6), mouse mode, no PTY input
 import type { Terminal } from '@xterm/xterm'
 import type { FileReferenceFlowProbe } from '../file-reference-probe'
 
@@ -25,6 +25,34 @@ function setInputValue(input: HTMLInputElement, value: string): void {
 
 function openDialog(): HTMLDialogElement | null {
   return document.querySelector<HTMLDialogElement>('dialog.file-reference-dialog[open]')
+}
+
+/** Story 67.6: a printed path opens in Quick look's sheet. */
+function openSheet(): HTMLDialogElement | null {
+  return document.querySelector<HTMLDialogElement>('dialog.quick-look[open]')
+}
+
+/** Either surface open: neither may open on a plain click, a drag or in mouse mode. */
+const anyOpen = (): boolean => openDialog() !== null || openSheet() !== null
+
+/** What the sheet shows for the file a link opened: its path row, the full path, and the marked line once drawn. */
+async function sheetOpening(label: string): Promise<{ sheet: HTMLDialogElement; reference: string; file: string; marked: string }> {
+  const sheet = await waitFor(`${label} sheet`, openSheet)
+  const marked = await waitFor(`${label} marked line`, () => sheet.querySelector('.ql-code .ql-target')?.textContent ?? undefined)
+  const path = sheet.querySelector<HTMLElement>('.ql-path .ql-pth')
+  return { sheet, reference: path?.textContent?.trim() ?? '', file: path?.title ?? '', marked }
+}
+
+/** The full path of the file a palette row opened in the sheet, once its text is drawn (no line is marked). */
+async function sheetFile(label: string): Promise<{ sheet: HTMLDialogElement; file: string }> {
+  const sheet = await waitFor(`${label} sheet`, openSheet)
+  await waitFor(`${label} text`, () => sheet.querySelector('.ql-code .cm-content'))
+  return { sheet, file: sheet.querySelector<HTMLElement>('.ql-path .ql-pth')?.title ?? '' }
+}
+
+async function closeSheet(sheet: HTMLDialogElement): Promise<void> {
+  sheet.dispatchEvent(new Event('cancel', { cancelable: true }))
+  await waitFor('sheet close', () => (openSheet() ? undefined : true))
 }
 
 function button(scope: ParentNode, label: string): HTMLButtonElement {
@@ -228,22 +256,24 @@ export async function runFileReferenceIntegration(options: {
     const layout = (await window.aiTerminal.getLayout(options.workspaceId)).layout
     return layout.selectedSessionId === otherSessionId ? true : undefined
   })
-  const opener = await waitFor('other pane focus', () =>
+  await waitFor('other pane focus', () =>
     otherPane.contains(document.activeElement) ? document.activeElement : undefined)
   const underlinedWithCtrl = hover(column + 2, true)
   click(column + 2, true)
-  const linkDialog = await waitFor('link dialog', openDialog)
-  const linkMarked = await waitFor('link marked line', () => linkDialog.querySelector('.file-reference-line')?.textContent ?? undefined)
+  const clickFocused = document.activeElement === textarea
+  const linkSheet = await sheetOpening('link')
   const link = {
-    reference: linkDialog.querySelector<HTMLInputElement>('input[aria-label="File reference"]')?.value ?? '',
-    session: detail(linkDialog, 'Session'),
-    marked: linkMarked,
+    reference: linkSheet.reference,
+    session: linkSheet.file,
+    marked: linkSheet.marked,
     selectedElsewhere,
     underlinedWithCtrl,
     focusReturned: false
   }
-  await closeWithEscape(linkDialog)
-  link.focusReturned = await waitFor('link focus return', () => (document.activeElement === opener ? true : undefined))
+  await closeSheet(linkSheet.sheet)
+  // Story 67.6: the press focused the clicked terminal before the link opened (the synthetic press selects no pane;
+  // a real one would select it too), and Quick look gives focus back to the terminal that had it when it opened.
+  link.focusReturned = clickFocused && await waitFor('link focus return', () => (document.activeElement === textarea ? true : undefined))
 
   // macOS turns Ctrl+click into a press and a context menu, and the release may follow too. The link opens once.
   hover(column + 2, true)
@@ -258,22 +288,21 @@ export async function runFileReferenceIntegration(options: {
     view: window
   }))
   mouse('mouseup', { x: column + 2, y: viewportRow }, true)
-  // xterm focuses the clicked terminal on a context menu, as a real click would; the dialog returns focus there.
+  // xterm focuses the clicked terminal on a context menu, as a real click would; the sheet returns focus there.
   const clickedTerminalFocused = document.activeElement === textarea
-  const contextMenuDialog = await waitFor('context-menu link dialog', openDialog)
-  await waitFor('context-menu marked line', () => contextMenuDialog.querySelector('.file-reference-line')?.textContent ?? undefined)
+  const contextMenuSheet = await sheetOpening('context-menu link')
   const contextMenuClick = {
-    reference: contextMenuDialog.querySelector<HTMLInputElement>('input[aria-label="File reference"]')?.value ?? '',
+    reference: contextMenuSheet.reference,
     focusReturned: false
   }
-  await closeWithEscape(contextMenuDialog)
+  await closeSheet(contextMenuSheet.sheet)
   contextMenuClick.focusReturned = clickedTerminalFocused &&
     await waitFor('context-menu focus return', () => (document.activeElement === textarea ? true : undefined))
 
   const plainUnderlined = hover(column + 3, false)
   click(column + 3, false)
   await pause(300)
-  const plainClick = { underlined: plainUnderlined, opened: openDialog() !== null }
+  const plainClick = { underlined: plainUnderlined, opened: anyOpen() }
 
   const clipboardBeforeDrag = await window.aiTerminal.readClipboardText()
   hover(column, true)
@@ -292,7 +321,7 @@ export async function runFileReferenceIntegration(options: {
   const ctrlDrag = {
     selected,
     copiedSelection: selected.length > 0 && (await window.aiTerminal.readClipboardText()).text === selected,
-    opened: openDialog() !== null
+    opened: anyOpen()
   }
   terminal.clearSelection()
   await window.aiTerminal.writeClipboardText(clipboardBeforeDrag.text)
@@ -321,7 +350,7 @@ export async function runFileReferenceIntegration(options: {
   const expectedMouseModeSelection = buffer.getLine(row)!.translateToString(true).slice(column, column + 8)
   const mouseMode = {
     underlined: mouseModeUnderlined,
-    opened: openDialog() !== null,
+    opened: anyOpen(),
     reportsToProgram,
     dragReportsToProgram: ptyInput - reportsBeforeDrag,
     copiedSelection: expectedMouseModeSelection.length > 0 &&
@@ -354,24 +383,22 @@ export async function runFileReferenceIntegration(options: {
   click(column + 2, true)
   await nextFrames()
   await pause(300)
-  const staleOpened = openDialog() !== null
+  const staleOpened = anyOpen()
   const staleUnderlined = screen.classList.contains('xterm-cursor-pointer')
   await rewriteRow('FILEREF refs/src/parser.ts:7')
   await nextFrames()
   hover(column + 2, true)
   click(column + 2, true)
-  const redrawDialog = await waitFor('redrawn link dialog', openDialog)
-  const redrawMarked = await waitFor('redrawn marked line', () =>
-    redrawDialog.querySelector('.file-reference-line')?.textContent ?? undefined)
+  const redrawSheet = await sheetOpening('redrawn link')
   const redraw = {
     underlinedBefore,
     staleOpened,
     staleUnderlined,
-    reference: redrawDialog.querySelector<HTMLInputElement>('input[aria-label="File reference"]')?.value ?? '',
-    marked: redrawMarked,
+    reference: redrawSheet.reference,
+    marked: redrawSheet.marked,
     ptyInputEvents: 0
   }
-  await closeWithEscape(redrawDialog)
+  await closeSheet(redrawSheet.sheet)
   redrawCounter.dispose()
   redraw.ptyInputEvents = redrawInput
 
@@ -529,12 +556,10 @@ export async function runEpic27FileReferenceIntegration(options: {
   setInputValue(foreignPalette, 'parser.ts')
   await waitFor('foreign file row', () => document.querySelector('.palette-results [data-group="Files"][aria-selected="true"]'))
   foreignPalette.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  const foreignDialog = await waitFor('foreign file preview', openDialog)
-  await waitFor('foreign file loaded', () => foreignDialog.querySelector('.file-reference-line') ??
-    foreignDialog.querySelector('.file-reference-preview'))
-  const foreignSearchSession = detail(foreignDialog, 'Session')
-  const foreignSearchFile = detail(foreignDialog, 'File')
-  await closeWithEscape(foreignDialog)
+  // Story 67.6: a palette file row opens in Quick look, read for the session that searched.
+  const foreign = await sheetFile('foreign file')
+  const foreignSearchFile = foreign.file
+  await closeSheet(foreign.sheet)
 
   options.targetPane.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
   await waitFor('search session selected', async () =>
@@ -559,12 +584,9 @@ export async function runEpic27FileReferenceIntegration(options: {
   const supersededRowsAbsent = fileRows().every((row) => !row.textContent?.includes('search-cap'))
   await waitFor('file row selected', () => document.querySelector('.palette-results [data-group="Files"][aria-selected="true"]'))
   paletteInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  const foundDialog = await waitFor('palette file preview', openDialog)
-  await waitFor('palette file loaded', () => foundDialog.querySelector('.file-reference-line') ??
-    foundDialog.querySelector('.file-reference-preview'))
-  const openedFromSession = detail(foundDialog, 'Session')
-  const openedFile = detail(foundDialog, 'File')
-  await closeWithEscape(foundDialog)
+  const found = await sheetFile('palette file')
+  const openedFile = found.file
+  await closeSheet(found.sheet)
   window.dispatchEvent(new KeyboardEvent('keydown', {
     key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true
   }))
@@ -574,10 +596,9 @@ export async function runEpic27FileReferenceIntegration(options: {
     .find((row) => row.textContent?.includes('a:b.ts')))
   await waitFor('colon file selected', () => document.querySelector('.palette-results [data-group="Files"][aria-selected="true"]'))
   colonPalette.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  const colonDialog = await waitFor('colon file preview', openDialog)
-  await waitFor('colon file loaded', () => colonDialog.querySelector('.file-reference-preview'))
-  const colonFile = detail(colonDialog, 'File')
-  await closeWithEscape(colonDialog)
+  const colon = await sheetFile('colon file')
+  const colonFile = colon.file
+  await closeSheet(colon.sheet)
   window.dispatchEvent(new KeyboardEvent('keydown', {
     key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true
   }))
@@ -587,13 +608,14 @@ export async function runEpic27FileReferenceIntegration(options: {
     .find((row) => row.textContent?.includes('report:42')))
   await waitFor('numeric suffix selected', () => document.querySelector('.palette-results [data-group="Files"][aria-selected="true"]'))
   numericPalette.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  const numericSuffixRejected = await waitFor('numeric suffix rejection', () =>
-    !openDialog() && [...document.querySelectorAll<HTMLElement>('.feedback-notice.brief')]
-      .some((notice) => notice.textContent?.includes('cannot be represented')) || undefined)
+  // A name no reference can spell ("report:42" reads as line 42) still opens: the row passes its path, not a reference.
+  const numeric = await sheetFile('numeric suffix file')
+  const numericSuffixFile = numeric.file
+  await closeSheet(numeric.sheet)
   return {
     chooserDefaultEmpty, chooserCrossWorkspace, previewPayload, previewTarget, previewIncarnation,
     pastedFeedback, pastedIntoTarget, focusLossClearedTarget, searchCapLabel, searchRows,
-    skippedRowsAbsent, supersededRowsAbsent, openedFromSession, openedFile, colonFile,
-    foreignSearchSession, foreignSearchFile, numericSuffixRejected
+    skippedRowsAbsent, supersededRowsAbsent, openedFile, colonFile,
+    foreignSearchFile, numericSuffixFile
   }
 }

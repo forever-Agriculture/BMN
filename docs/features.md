@@ -395,6 +395,9 @@ session without pressing Enter. Imports are bounded: 250 MiB per file, 10 GiB in
 Agents can publish only regular files under their session's working directory or the system
 temporary folder; a symlink that escapes those is refused.
 
+Two surfaces show files: **Files** for what moved through a session, and **Quick look** for the
+project the session works in.
+
 **Quick look** is for the project. `Ctrl+Shift+E`, the **Project** plate beside **Files** in the pane
 header, or **Project files…** in the palette opens one sheet over the window; the window dims behind
 it and no terminal is resized or typed into. The tree starts at the folder the selected session's
@@ -451,20 +454,43 @@ masked as the file view masks it before it leaves the search, and a hidden value
 Nothing is indexed, watched or stored, and files are read a few at a time so the terminals keep
 printing.
 
-**File references.** `Ctrl+click` a path an agent printed, such as `src/parser.ts:42:7`, or use
-**Open file reference…** in the palette, to see a read-only snapshot of that file at the line and
-column, with **Copy reference** and **Show in Folder**. Relative paths resolve from the session's
-launch directory, which the dialog names; you can pick another folder for one opening. The preview
-reads regular UTF-8 text files of at most 1 MiB, refreshes only when you ask, and edits, runs and
-stores nothing.
+**Printed paths open in Quick look.** `Ctrl+click` a path an agent printed, such as
+`src/parser.ts:42:7`, a file row in the palette's **Files** group, or **Open** in **Pinned files…**,
+and Quick look opens that file at its line and column with the line marked. A relative path resolves
+from the session's launch folder, as before; a file outside the root opens too, with no row selected
+in the tree and "Outside" and the root in the path row. A reference whose file is missing says "No
+file at this path", where it resolved from, and offers **Choose folder…** for that one opening. With
+the top field empty and in focus, the left column lists up to twenty paths the session's terminal
+printed, newest first, found in its scrollback by the same grammar as the links; `Enter` opens one at
+its line, and a path that is gone opens as missing. With text selected in a terminal that reads as one
+file reference, `Ctrl+Shift+E` opens that file at its line. The path row's **…** menu holds **Copy
+reference** (the absolute path and the line, as the reference dialog copies it), **Show in Folder**
+(for a file this window was shown) and, in a session's sheet, **Send to session…**, which opens the
+reference dialog on that file at its send step. A file opened for a workspace rather than a session
+closes with the sheet when you leave or archive the workspace.
 
-To put a reference into another session, open its preview and choose **Send to session**. The
-chooser lists unarchived sessions across visible workspaces and starts with no destination selected.
-**Review send…** shows the exact absolute path and line to append, plus the destination's workspace,
-name and current process. **Paste reference** appends that text to the chosen session's input without
-pressing Enter; BMN reports it as pasted, not submitted. If the window loses focus or the destination
-stops, restarts or is archived, choose it again. A path the reference grammar cannot represent
-cannot be sent.
+Quick look's keys: `Ctrl+Shift+E` opens or closes it, `Ctrl+Shift+G` opens it on **Contents**, `Ctrl+P`
+goes to a file, `Ctrl+F` finds in the file, `Ctrl+G` goes to a line, `Ctrl+R` shows a hidden value for
+ten seconds, `M` switches a Markdown file between page and source, `Alt+←`/`Alt+→` step through the files
+you opened, `F5` reloads a changed file, holding `F8` shows the terminals, `Ctrl+B` folds the tree and
+`Escape` closes the innermost thing first. It shows text files of at most 2 MiB, Markdown pages of at
+most 512 KB and folders of at most 2,000 entries; search contents reads at most 20,000 files of at most
+1 MiB and returns at most 2,000 lines. Masking hides values that look like secrets; it does not find
+every secret. Nothing is indexed, watched or stored: each folder, file and search is read when you ask.
+
+**The reference dialog.** **Open file reference…** in the palette opens a dialog where you type or
+paste a reference, see a read-only snapshot of the file at the line and column, and use **Copy
+reference** and **Show in Folder**. Relative paths resolve from the session's launch directory, which
+the dialog names; you can pick another folder for one opening. It reads regular UTF-8 text files of
+at most 1 MiB, refreshes only when you ask, and edits, runs and stores nothing.
+
+To put a reference into another session, choose **Send to session** in the dialog (or **Send to
+session…** in Quick look's menu). The chooser lists unarchived sessions across visible workspaces and
+starts with no destination selected. **Review send…** shows the exact absolute path and line to
+append, plus the destination's workspace, name and current process. **Paste reference** appends that
+text to the chosen session's input without pressing Enter; BMN reports it as pasted, not submitted.
+If the window loses focus or the destination stops, restarts or is archived, choose it again. A path
+the reference grammar cannot represent cannot be sent.
 
 In the command palette (`Ctrl+Shift+P`), typing a query also searches filenames and paths in a
 labelled **Files** group. **Commands**, **Sessions** and **Workspaces** also accept label
@@ -475,15 +501,15 @@ Filename traversal excludes `.git` and `node_modules` by name, and descendant di
 `dist`, `build`, `out`, `coverage`, `.next` and `.cache`. A selected root with one of those names is
 still searched, as are regular files with the six generated names. Genuine source folders with
 those names can be hidden: use **Open file reference…** with the exact path or an existing context
-rooted there. This fixed policy does not interpret `.gitignore`.
+rooted there. This fixed policy does not interpret `.gitignore`; Quick look's contents search does.
 
 With a selected session, the filename-search root is that process's launch directory while
 it runs, or the session's stored directory after it stops. With no selected session, the root is the
-workspace's default directory; opening a match then asks you to select a session for the preview.
+workspace's default directory, and a match opens in Quick look for the workspace.
 The read is on demand and stops at six directory levels, 20,000 entries scanned or 50 matching files;
 the palette labels a cap. It does not follow symbolic links, and
-new typing supersedes an older search. An unavailable directory shows no files. There is no index,
-content search or watcher.
+new typing supersedes an older search. An unavailable directory shows no files. There is no index or
+watcher; contents are searched only in Quick look.
 
 ## Voice dictation
 

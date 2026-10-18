@@ -1270,7 +1270,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error('the Files panel still offers a handoff section or form (Story 75.5)')
     }
     const quickLookFlow = preloadProbe.quickLookFlow
-    if (!quickLookFlow.opened || !quickLookFlow.focusInTree || !quickLookFlow.rows.includes('refs/src') ||
+    if (!quickLookFlow.opened || quickLookFlow.focusAtOpen !== (quickLookFlow.recalledAtOpen ? 'file' : 'tree') ||
+      !quickLookFlow.recalledAtOpen?.startsWith(realpathSync(isolatedCwd)) || !quickLookFlow.rows.includes('refs/src') ||
       !quickLookFlow.pathRow.includes('refs/src/quick-look.ts') || !quickLookFlow.pathRow.includes('TypeScript · 5 lines') ||
       quickLookFlow.highlighted.keyword < 1 || quickLookFlow.highlighted.comment < 1 || quickLookFlow.highlighted.def < 1 ||
       quickLookFlow.highlighted.lineNumbers < 5 || !quickLookFlow.focusInFile || !quickLookFlow.closed ||
@@ -1294,10 +1295,17 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       'refs/src/parser.ts:42:7',
       'refs/src/parser.ts:42:7',
       'refs/src/parser.ts:42:7',
-      'refs/src/parser.ts:42:7',
-      referencedFile,
-      referencedFile,
-      '"' + join(searchRoot, 'a:b.ts') + '"'
+      'refs/src/parser.ts:42:7'
+    ]
+    // Story 67.6: palette file rows open in Quick look by path, read for the session that searched: the other
+    // workspace's chat, then the selected one, then a colon-named file and one whose name ends ":42".
+    const colonRead = taps.quickLookReads.findIndex((read) => read.path === join(searchRoot, 'a:b.ts'))
+    const paletteQuickLookReads = colonRead < 2 ? [] : taps.quickLookReads.slice(colonRead - 2, colonRead + 2)
+    const expectedPaletteQuickLookReads = [
+      { source: thirdSession.sessionId, path: referencedFile },
+      { source: secondSession.sessionId, path: referencedFile },
+      { source: secondSession.sessionId, path: join(searchRoot, 'a:b.ts') },
+      { source: secondSession.sessionId, path: join(searchRoot, 'report:42') }
     ]
     if (
       !fileReferenceFlow.palette.focusedInput ||
@@ -1316,13 +1324,14 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       fileReferenceFlow.chosenFolder.canonicalPath !== referencedFile ||
       fileReferenceFlow.rejected.message !== 'Shell variables are not expanded; enter the full path.' ||
       !fileReferenceFlow.rejected.inputPreserved ||
-      fileReferenceFlow.link.reference !== 'refs/src/parser.ts:42:7' ||
-      !fileReferenceFlow.link.session.startsWith('Same CLI chat B · ') ||
+      // Story 67.6: the link opens in Quick look rooted at the printing session's folder, at line 42.
+      fileReferenceFlow.link.reference !== 'refs/src/parser.ts:42' ||
+      fileReferenceFlow.link.session !== join(fileReferenceFlow.launchDirectory, 'refs', 'src', 'parser.ts') ||
       fileReferenceFlow.link.marked !== 'FILE-REFERENCE-TARGET line 42' ||
       !fileReferenceFlow.link.selectedElsewhere ||
       !fileReferenceFlow.link.underlinedWithCtrl ||
       !fileReferenceFlow.link.focusReturned ||
-      fileReferenceFlow.contextMenuClick.reference !== 'refs/src/parser.ts:42:7' ||
+      fileReferenceFlow.contextMenuClick.reference !== 'refs/src/parser.ts:42' ||
       !fileReferenceFlow.contextMenuClick.focusReturned ||
       fileReferenceFlow.plainClick.underlined ||
       fileReferenceFlow.plainClick.opened ||
@@ -1349,7 +1358,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       fileReferenceFlow.redraw.ptyInputEvents !== 0 ||
       JSON.stringify(taps.readFileReferences.map((read) => read.reference)) !==
         JSON.stringify(expectedFileReferenceReads) ||
-      taps.readFileReferences.at(-1)?.sessionId !== secondSession.sessionId ||
+      // The last read is the send step's, made for the other workspace's chat it starts from.
+      taps.readFileReferences.at(-1)?.sessionId !== thirdSession.sessionId ||
       !fileReferenceFlow.epic27?.chooserDefaultEmpty ||
       !fileReferenceFlow.epic27.chooserCrossWorkspace ||
       fileReferenceFlow.epic27.previewPayload !== `${referencedFile}:42:7` ||
@@ -1363,12 +1373,11 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       fileReferenceFlow.epic27.searchRows !== 50 ||
       !fileReferenceFlow.epic27.skippedRowsAbsent ||
       !fileReferenceFlow.epic27.supersededRowsAbsent ||
-      !fileReferenceFlow.epic27.openedFromSession.includes('Same CLI chat B') ||
       fileReferenceFlow.epic27.openedFile !== referencedFile ||
-      !fileReferenceFlow.epic27.foreignSearchSession.includes('Archived running chat') ||
       fileReferenceFlow.epic27.foreignSearchFile !== referencedFile ||
       fileReferenceFlow.epic27.colonFile !== join(searchRoot, 'a:b.ts') ||
-      !fileReferenceFlow.epic27.numericSuffixRejected ||
+      fileReferenceFlow.epic27.numericSuffixFile !== join(searchRoot, 'report:42') ||
+      JSON.stringify(paletteQuickLookReads) !== JSON.stringify(expectedPaletteQuickLookReads) ||
       fileReferenceFlow.ptyInputEvents !== 0 ||
       !fileReferenceFlow.terminalUnchanged ||
       !fileReferenceFlow.attentionUnchanged
@@ -1377,6 +1386,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         ...fileReferenceFlow,
         shownPaths: taps.shownFileReferences,
         reads: taps.readFileReferences,
+        paletteQuickLookReads,
         expectedFile: referencedFile
       })}`)
     }
@@ -5211,9 +5221,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error('database worker did not enable WAL, foreign keys, and the busy timeout')
     }
 
-    // The fourteen reads checked with the file-reference flow, plus the one the send dialog made.
-    if (taps.readFileReferences.length !== 15) {
-      throw new Error(`the renderer read file references ${taps.readFileReferences.length} times, not 15`)
+    // The eleven reads checked with the file-reference flow, plus the one the send dialog made; palette rows read
+    // through Quick look (Story 67.6).
+    if (taps.readFileReferences.length !== 12) {
+      throw new Error(`the renderer read file references ${taps.readFileReferences.length} times, not 12`)
     }
     const registeredInvokeChannels = host.bridgeRegistrations().map(({ channel }) => channel)
     if (JSON.stringify(registeredInvokeChannels) !== JSON.stringify(envelopedInvokeChannels)) {

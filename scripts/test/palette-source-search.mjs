@@ -54,9 +54,11 @@ process.stdout.write('palette fixture ready\\r\\n');let sent=false;setInterval((
     assert.ok((await page.locator('.palette-file-status').innerText()).includes(root))
     await page.screenshot({ path: join(evidence, 'source-match.png') })
     await file.click()
-    await page.waitForSelector('.file-reference-dialog')
-    assert.ok((await page.locator('.file-reference-dialog').innerText()).includes('syntheticSource'))
+    // Story 67.6: a file row opens in Quick look.
+    await page.waitForSelector('dialog.quick-look[open] .ql-code .cm-content')
+    assert.ok((await page.locator('dialog.quick-look[open] .ql-code').innerText()).includes('syntheticSource'))
     await page.keyboard.press('Escape')
+    await page.waitForSelector('dialog.quick-look', { state: 'detached' })
     writeFileSync(trigger, '')
     await waitForAsyncState(page, async () => (await window.aiTerminal.listAttention()).filter(r => r.state === 'open').length === 1)
     await openPalette(); await search.fill('nxt req')

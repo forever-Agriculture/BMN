@@ -8,7 +8,9 @@ import {
   quickLookName,
   quickLookPathParts,
   quickLookSize,
+  exactAbsoluteFileReference,
   sameQuickLookIdentity,
+  type FileReferenceBase,
   type QuickLookReadResult,
   type QuickLookRootResult,
   type QuickLookSearchResult,
@@ -43,6 +45,7 @@ import {
 import { treeKey, treeRows, type TreeListing, type TreeRow } from './quick-look-tree'
 import { quickLookFooter, type QuickLookFocus } from './quick-look-keys'
 import { SearchResults } from './quick-look-results'
+import { copiedReference, missingWords, type PrintedReference, type QuickLookAsk } from './quick-look-open'
 import {
   CONTENTS_SEARCH_WAIT_MS,
   FILES_SEARCH_WAIT_MS,
@@ -68,8 +71,10 @@ const markdownModes = new Map<string, 'rendered' | 'source'>()
 
 export interface QuickLookRequest {
   source: QuickLookSource
-  /** A file to show at once, at its place. */
-  open?: { path: string; line: number | null; column: number | null } | null
+  /** A file to show at once, at its place: a path, or a reference resolved as a Ctrl+click is (Story 67.6). */
+  open?: QuickLookAsk | null
+  /** The paths the session's terminal printed, newest first, listed while the top field is empty (Story 67.6 AC7). */
+  recent?: PrintedReference[]
   /** Open with the top field in "Contents" mode (Ctrl+Shift+G, Story 67.5). */
   search?: 'contents' | null
 }
@@ -82,6 +87,8 @@ interface OpenFile {
   topLine: number | null
   /** A heading a Markdown link named, shown at the top. */
   heading: string | null
+  /** The reference this file was opened by and the folder it resolved from; null for a path opened directly. */
+  reference: { text: string; base: FileReferenceBase | null } | null
   result: QuickLookReadResult | null
 }
 
@@ -215,6 +222,52 @@ function FileFacts(props: { result: Extract<QuickLookReadResult, { status: 'unav
   )
 }
 
+/** The path row's "…" menu: Copy reference, Show in Folder, and Send to session… for a session's file (Story 67.6 AC2). */
+function PathMenu(props: { open: boolean; sendable: boolean; onToggle(): void; onAction(action: 'copy' | 'show' | 'send'): void; onDismiss(): void }): React.JSX.Element {
+  const menu = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (props.open) menu.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
+  }, [props.open])
+  const onKey = (event: React.KeyboardEvent): void => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    event.preventDefault()
+    event.stopPropagation()
+    const items = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])]
+    const at = items.indexOf(document.activeElement as HTMLButtonElement)
+    items[(at + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus()
+  }
+  return (
+    <span className="ql-menu-wrap" onBlur={(event) => { if (props.open && !event.currentTarget.contains(event.relatedTarget as Node | null)) props.onDismiss() }}>
+      <button type="button" className="ql-icon-button" aria-label="More actions" aria-haspopup="menu" aria-expanded={props.open} title="More actions" onClick={props.onToggle}>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" /></svg>
+      </button>
+      {props.open ? (
+        <div ref={menu} className="ql-menu" role="menu" aria-label="File actions" onKeyDown={onKey}>
+          <button type="button" role="menuitem" onClick={() => props.onAction('copy')}>Copy reference</button>
+          <button type="button" role="menuitem" onClick={() => props.onAction('show')}>Show in Folder</button>
+          {props.sendable ? <button type="button" role="menuitem" onClick={() => props.onAction('send')}>Send to session…</button> : null}
+        </div>
+      ) : null}
+    </span>
+  )
+}
+
+/** A reference whose file is missing: where it was looked for, and a folder to look in for this one opening (Story 67.6 AC3). */
+function MissingFile(props: { path: string; root: string | null; line: number | null; words: ReturnType<typeof missingWords>; onChooseFolder(): void }): React.JSX.Element {
+  return (
+    <>
+      <PathRow path={props.path} root={props.root} line={props.line} eyebrow="Missing" facts={null} />
+      <div className="ql-facts-block">
+        <p className="ql-missing-title" role="status">{props.words.title}</p>
+        <p className="ql-missing-from">{props.words.from}</p>
+        {props.words.chooseFolder ? (
+          <div className="ql-actions"><button type="button" className="ql-button" onClick={props.onChooseFolder}>Choose folder…</button></div>
+        ) : null}
+      </div>
+    </>
+  )
+}
+
 /** The file read-only in CodeMirror; recreated for each read so a reload starts from the bytes on disk. */
 function CodeView(props: {
   result: Extract<QuickLookReadResult, { status: 'ready' }>
@@ -278,6 +331,8 @@ export function QuickLook(props: {
   request: QuickLookRequest
   /** In test mode the sheet offers `window.__aitermQuickLook`, which returns only masked text. */
   testMode?: boolean
+  /** "Send to session…": today's file-reference dialog on this reference, at its send step; a session's sheet only. */
+  onSendReference?(reference: string): void
   onClose(): void
 }): React.JSX.Element {
   const dialog = useRef<HTMLDialogElement>(null)
@@ -322,6 +377,9 @@ export function QuickLook(props: {
   const [fromResults, setFromResults] = useState(false)
   /** Set once he moves to the top field or types in it; a remembered file opening late then leaves the keys there. */
   const fieldClaimed = useRef(props.request.search === 'contents')
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [recentPicked, setRecentPicked] = useState(0)
+  const recent = props.request.recent ?? []
   const source = props.request.source
   const onClose = useRef(props.onClose)
   onClose.current = props.onClose
@@ -336,6 +394,7 @@ export function QuickLook(props: {
   const root = rootInfo?.status === 'ready' ? (atGitRoot && rootInfo.gitRoot ? rootInfo.gitRoot : rootInfo.sessionFolder) : null
   const rows = useMemo(() => (root ? treeRows(root, listings, expanded) : []), [root, listings, expanded])
   const ready = file?.result?.status === 'ready' ? file.result : null
+  const unavailable = file?.result?.status === 'unavailable' ? file.result : null
   const text = useMemo(() => (ready ? viewText(ready.content) : ''), [ready])
   // Values that look like secrets are hidden as soon as the file is drawn; masking does not find every secret.
   const secretRanges = useMemo(() => (ready ? quickLookSecretRanges(ready.path, ready.canonicalPath, text) : []), [ready, text])
@@ -358,6 +417,8 @@ export function QuickLook(props: {
   const findRef = useRef({ matches, current: currentMatch, open: find.open })
   findRef.current = { matches, current: currentMatch, open: find.open }
   const showResults = searchMode === 'files' ? query.trim().length > 0 : query.length > 0
+  // With the top field empty and in focus, the left column lists the paths the terminal printed (Story 67.6 AC7).
+  const showRecent = !showResults && !folded && focusArea === 'field' && query === '' && recent.length > 0
   const flat = useMemo(() => (search.result?.mode === 'contents' ? flatMatches(search.result) : []), [search.result])
   const fileHits = search.result?.mode === 'files' ? search.result.files : []
   const openedSearch = openedMatch !== null && file && flat[openedMatch]?.path === file.path ? flat[openedMatch]! : null
@@ -387,15 +448,17 @@ export function QuickLook(props: {
   const currentTop = useCallback((): number | null => (shownTop.current && shownTop.current.path === shownPath.current ? shownTop.current.line : null), [])
 
   const open = useCallback((path: string, line: number | null = null, column: number | null = null,
-    options: { way?: OpenWay; topLine?: number | null; focus?: boolean; heading?: string | null; match?: number | null; fromResults?: boolean } = {}): void => {
+    options: { way?: OpenWay; topLine?: number | null; focus?: boolean; heading?: string | null; match?: number | null; fromResults?: boolean
+      reference?: { text: string; base: FileReferenceBase | null } | null } = {}): void => {
     const way = options.way ?? 'visit'
+    setMenuOpen(false)
     setOpenedMatch(options.match ?? null)
     setFromResults(options.fromResults === true)
     if (way !== 'trail' && way !== 'preview') {
       const here = currentTop()
       setTrail((current) => trailVisit(current, { path, line, column }, here))
     }
-    setFile({ path, line, column, topLine: options.topLine ?? null, heading: options.heading ?? null, result: null })
+    setFile({ path, line, column, topLine: options.topLine ?? null, heading: options.heading ?? null, reference: options.reference ?? null, result: null })
     setShownSecret(null)
     setPageStatus('')
     setFeedback('')
@@ -416,6 +479,21 @@ export function QuickLook(props: {
       setFile((current) => (current?.path === path && current.line === line && current.column === column && !current.result ? { ...current, result } : current))
     })
   }, [read, currentTop])
+
+  /**
+   * Opens a reference as a Ctrl+click does: resolved by the session's launch folder (or a folder chosen for this
+   * opening), then shown here at its line and column; a missing file says where it was looked for (Story 67.6).
+   */
+  const openReference = useCallback((reference: string, baseDirectory: string | null = null, options: { fromResults?: boolean } = {}): void => {
+    void window.aiTerminal.readFileReference({ ...source, reference, baseDirectory })
+      .then((resolved) => open(resolved.resolvedPath, resolved.line, resolved.column, { reference: { text: reference, base: resolved.base }, ...options }))
+      .catch((error: unknown) => setFeedback(failureText(error, 'The file reference could not be opened.')))
+  }, [source, open])
+
+  const openAsk = (wanted: QuickLookAsk): void => {
+    if ('reference' in wanted) openReference(wanted.reference)
+    else open(wanted.path, wanted.line, wanted.column)
+  }
 
   /** Reads the shown file again and keeps the line at the top; nothing reloads by itself (Story 67.2 AC2). */
   const reload = (): void => {
@@ -590,7 +668,7 @@ export function QuickLook(props: {
     for (const folder of place?.expanded ?? []) list(folder)
     const wanted = asked.current
     asked.current = null
-    if (wanted) open(wanted.path, wanted.line, wanted.column)
+    if (wanted) openAsk(wanted)
     // Opened for a search, or once he went to the top field, the remembered file opens without taking the keys.
     else if (place?.file) open(place.file.path, null, null, { way: 'recall', topLine: place.file.topLine, focus: !fieldClaimed.current })
     else {
@@ -605,7 +683,7 @@ export function QuickLook(props: {
     if ((rootInfo?.status !== 'unavailable' && !rootError) || !asked.current) return
     const wanted = asked.current
     asked.current = null
-    open(wanted.path, wanted.line, wanted.column)
+    openAsk(wanted)
   }, [rootInfo, rootError])
 
   // While the sheet is open and the window has focus, the shown file's identity is asked for every 2 s and once
@@ -682,6 +760,12 @@ export function QuickLook(props: {
 
   const onFieldKey = (event: React.KeyboardEvent): void => {
     const plain = !event.ctrlKey && !event.altKey && !event.metaKey
+    if (showRecent && plain && !event.shiftKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter')) {
+      event.preventDefault()
+      if (event.key === 'Enter') openRecent(recentPicked)
+      else setRecentPicked((index) => stepSearchMatch(index, recent.length, event.key === 'ArrowDown' ? 1 : -1))
+      return
+    }
     const total = searchMode === 'contents' ? flat.length : fileHits.length
     if (plain && !event.shiftKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       event.preventDefault()
@@ -702,6 +786,43 @@ export function QuickLook(props: {
       if (event.code === 'KeyC') setMatchCase((value) => !value)
       else setWholeWord((value) => !value)
     }
+  }
+
+  /** A printed path opens as its Ctrl+click would, resolved by the session's launch folder; nothing was read to list it. */
+  const openRecent = (index: number): void => {
+    const each = recent[index]
+    if (!each) return
+    setRecentPicked(index)
+    openReference(each.text)
+  }
+
+  /** The "…" menu's actions on the shown file (Story 67.6 AC2). */
+  const menuPath = ready ? ready.canonicalPath : unavailable?.facts ? unavailable.canonicalPath ?? unavailable.path : null
+  const sendable = !!props.onSendReference && !!source.sessionId && !!ready
+  const menuAction = (action: 'copy' | 'show' | 'send'): void => {
+    setMenuOpen(false)
+    if (!menuPath || !file) return
+    if (action === 'copy') {
+      void window.aiTerminal.writeClipboardText(copiedReference(menuPath, file.line, file.column))
+        .then(() => setFeedback('Reference copied.'))
+        .catch((error: unknown) => setFeedback(failureText(error, 'Copy failed.')))
+    } else if (action === 'show') {
+      void window.aiTerminal.showFileReference(menuPath)
+        .then(() => setFeedback('Shown in the file manager.'))
+        .catch((error: unknown) => setFeedback(failureText(error, 'Show in Folder failed.')))
+    } else {
+      const reference = exactAbsoluteFileReference(menuPath, file.line, file.column)
+      if (reference && props.onSendReference) props.onSendReference(reference)
+      else setFeedback('This path cannot be written as a file reference.')
+    }
+  }
+
+  const chooseFolder = (): void => {
+    const reference = file?.reference
+    if (!reference) return
+    void window.aiTerminal.chooseFileReferenceBase()
+      .then((folder) => { if (folder) openReference(reference.text, folder) })
+      .catch((error: unknown) => setFeedback(failureText(error, 'The folder picker is unavailable.')))
   }
 
   /** Ctrl+P and Ctrl+Shift+G: the top field in its mode, its text selected. */
@@ -806,10 +927,14 @@ export function QuickLook(props: {
   })
 
   const escape = escapeStep({ focus: focusArea === 'tree' ? 'tree' : focusArea === 'field' ? 'field' : 'file', typed: typed.length > 0, revealed: revealed !== null,
-    goTo: goTo.open, find: find.open, search: search.searching ? 'searching' : showResults ? 'results' : null, fromResults })
+    goTo: goTo.open, find: find.open, search: search.searching ? 'searching' : showResults ? 'results' : null, fromResults, menu: menuOpen })
   const cancelRef = useRef<() => void>(() => undefined)
   cancelRef.current = () => {
     switch (escape) {
+      case 'close-menu':
+        setMenuOpen(false)
+        if (focusArea === 'file') (codeView.current ?? pageView.current)?.focus()
+        return
       case 'clear-typed': setTyped(''); return
       case 'hide-secret': setShownSecret(null); return
       case 'close-goto':
@@ -952,10 +1077,9 @@ export function QuickLook(props: {
 
   const rootName = root ? quickLookName(root) || root : null
   const home = rootInfo?.home ?? null
-  const unavailable = file?.result?.status === 'unavailable' ? file.result : null
   const type = file ? quickLookFileType(file.path) : null
   const footer = quickLookFooter({ focus: focusArea, fileOpen: !!ready, escape, folded, secrets: secretRanges.length > 0, back: canGoBack(trail), forward: canGoForward(trail),
-    markdown: page ? (rendered ? 'rendered' : 'source') : null, search: showResults ? searchMode : null })
+    markdown: page ? (rendered ? 'rendered' : 'source') : null, search: showResults ? searchMode : showRecent ? 'recent' : null })
 
   return (
     <dialog ref={dialog} className={`app-dialog quick-look${peeking ? ' peeking' : ''}`} aria-label="Quick look" tabIndex={-1} onKeyDownCapture={onSheetKey}>
@@ -995,6 +1119,21 @@ export function QuickLook(props: {
                 }
               }} />
           </aside>
+        ) : showRecent ? (
+          <aside className="ql-left ql-searching" aria-label="Printed paths">
+            <div className="ql-results">
+              <div className="ql-results-head"><span>Printed in this session</span><span className="ql-results-read">newest first</span></div>
+              <div className="ql-results-list" role="listbox" aria-label="Printed paths">
+                {recent.map((each, index) => (
+                  <div key={each.text} className={`ql-rf${index === recentPicked ? ' sel' : ''}`} role="option" aria-selected={index === recentPicked}
+                    onMouseDown={(event) => event.preventDefault()} onClick={() => openRecent(index)}>
+                    <span className="ql-rf-name">{quickLookName(each.path)}{each.line !== null ? <span className="ql-pp">:{each.line}</span> : null}</span>
+                    <span className="ql-rf-dir"><bdi>{each.path.includes('/') ? each.path.slice(0, each.path.lastIndexOf('/')) : ''}</bdi></span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </aside>
         ) : folded ? null : (
           <aside className="ql-left" aria-label="Project">
             <div className="ql-head">
@@ -1031,7 +1170,7 @@ export function QuickLook(props: {
                 <PathRow path={file.path} root={root} line={file.line}
                   facts={openedSearch ? matchLabel(openedMatch!, flat.length)
                     : [type?.label, `${quickLookCount(ready.lineCount)} ${ready.lineCount === 1 ? 'line' : 'lines'}`, quickLookSize(ready.byteLength)].join(' · ')}
-                  actions={page || openedSearch ? (
+                  actions={(
                     <>
                       {openedSearch ? (
                         <span className="ql-match-nav" role="group" aria-label="Matches">
@@ -1049,8 +1188,9 @@ export function QuickLook(props: {
                           <button type="button" className={rendered ? '' : 'on'} aria-pressed={!rendered} onClick={() => switchMarkdown('source')}>Source</button>
                         </span>
                       ) : null}
+                      <PathMenu open={menuOpen} sendable={sendable} onToggle={() => setMenuOpen((value) => !value)} onAction={menuAction} onDismiss={() => setMenuOpen(false)} />
                     </>
-                  ) : null} />
+                  )} />
                 {pageTooLarge ? <p className="ql-note">Over 512 KB, so shown as source.</p> : null}
                 {ready.canonicalPath !== ready.path ? <p className="ql-note">Through symlink · {ready.canonicalPath}</p> : null}
                 {changed ? (
@@ -1097,12 +1237,15 @@ export function QuickLook(props: {
                     }} onFocus={() => setFocusArea('file')} />
                 )}
               </>
+            ) : unavailable?.reason === 'missing' ? (
+              <MissingFile path={file.path} root={root} line={file.line} words={missingWords(file.reference?.base ?? null)} onChooseFolder={chooseFolder} />
             ) : unavailable ? (
               <>
                 <PathRow path={file.path} root={root} line={null}
                   eyebrow={unavailable.reason === 'too-large' ? 'Large' : unavailable.reason === 'binary' ? 'Binary' : undefined}
                   facts={unavailable.facts ? (unavailable.reason === 'too-large' ? `${quickLookSize(unavailable.facts.byteLength)} · over 2 MB, not shown`
-                    : unavailable.reason === 'binary' ? `${quickLookSize(unavailable.facts.byteLength)} · no text preview` : null) : null} />
+                    : unavailable.reason === 'binary' ? `${quickLookSize(unavailable.facts.byteLength)} · no text preview` : null) : null}
+                  actions={unavailable.facts ? <PathMenu open={menuOpen} sendable={false} onToggle={() => setMenuOpen((value) => !value)} onAction={menuAction} onDismiss={() => setMenuOpen(false)} /> : null} />
                 <FileFacts result={unavailable} onFeedback={setFeedback} />
               </>
             ) : <PathRow path={file.path} root={root} line={file.line} facts="Reading…" />

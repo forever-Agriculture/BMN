@@ -15,6 +15,10 @@ export interface FileReferenceFlowProbe {
   shellDirectoryIgnored: { base: string; file: string; message: string }
   chosenFolder: { pickerMessage: string; kind: string; canonicalPath: string }
   rejected: { message: string; inputPreserved: boolean }
+  /**
+   * Story 67.6: a Ctrl+click opens Quick look; `reference` is its path row ("refs/src/parser.ts:42"), `session` the
+   * full path, and `focusReturned` that focus went back to the clicked terminal, which the press had focused.
+   */
   link: {
     reference: string
     session: string
@@ -64,11 +68,10 @@ export interface FileReferenceFlowProbe {
     searchRows: number
     skippedRowsAbsent: boolean
     supersededRowsAbsent: boolean
-    openedFromSession: string
     openedFile: string
     colonFile: string
-    foreignSearchSession: string
     foreignSearchFile: string
-    numericSuffixRejected: boolean
+    /** Story 67.6: the full path a "report:42" row opened in Quick look. */
+    numericSuffixFile: string
   } | null
 }

@@ -22,8 +22,8 @@ export interface QuickLookFooterState {
   /** True when Alt+← has a file to return to. */
   back: boolean
   forward: boolean
-  /** The top field shows results of this search (Story 67.5). */
-  search?: 'files' | 'contents' | null
+  /** The top field shows results of this search (Story 67.5), or the paths the terminal printed (Story 67.6). */
+  search?: 'files' | 'contents' | 'recent' | null
 }
 
 const hint = (label: string, ...keys: string[]): QuickLookHint => ({ keys, label })
@@ -58,6 +58,7 @@ export function quickLookFooter(state: QuickLookFooterState): QuickLookHint[] {
       // The board's search frame: match, open at line, case, whole word, Esc.
       if (state.search === 'contents') return [hint('Match', '↑ ↓'), hint('Open at line', 'Enter'), hint('Case', 'Alt C'), hint('Whole word', 'Alt W'), escape]
       if (state.search === 'files') return [hint('Move', '↑ ↓'), hint('Open', 'Enter'), escape]
+      if (state.search === 'recent') return [hint('Move', '↑ ↓'), hint('Open at line', 'Enter'), hint('Search contents', 'Ctrl Shift G'), escape]
       return [hint('Search contents', 'Ctrl Shift G'), ...trail, tree, escape]
   }
 }

@@ -17,6 +17,8 @@ export interface FileReferenceRequest {
   reference: string
   /** A terminal link opens at once; typed or prefilled text waits for Open. */
   openNow: boolean
+  /** Opened from Quick look's "Send to session…": the session chooser has focus once the file is read (Story 67.6). */
+  sendStep?: boolean
 }
 
 export interface FileReferenceSendTarget {
@@ -41,6 +43,7 @@ export function FileReferenceDialog(props: {
   const [busy, setBusy] = useState(false)
   const [feedback, setFeedback] = useState('')
   const marked = useRef<HTMLElement>(null)
+  const chooser = useRef<HTMLSelectElement>(null)
   const sending = useRef(false)
   const [sendTarget, setSendTarget] = useState<(FileReferenceSendTarget & { requestId: string }) | null>(null)
   const [sendPreview, setSendPreview] = useState(false)
@@ -76,6 +79,15 @@ export function FileReferenceDialog(props: {
   useEffect(() => {
     marked.current?.scrollIntoView({ block: 'center' })
   }, [result])
+
+  // The chooser takes focus once, when the file is read and the chooser can be used.
+  const sendStepTaken = useRef(false)
+  useEffect(() => {
+    if (!request.sendStep || sendStepTaken.current || busy || result?.status !== 'ready' || !chooser.current) return
+    sendStepTaken.current = true
+    chooser.current.scrollIntoView({ block: 'nearest' })
+    chooser.current.focus()
+  }, [result, busy])
 
   useEffect(() => {
     const lostFocus = (): void => {
@@ -205,7 +217,7 @@ export function FileReferenceDialog(props: {
       {snapshot && props.targets.length > 0 ? (
         <div className="file-reference-send">
           <label>Send to session
-            <select aria-label="Send to session" disabled={busy} value={sendTarget?.sessionId ?? ''} onChange={(event) => {
+            <select ref={chooser} aria-label="Send to session" disabled={busy} value={sendTarget?.sessionId ?? ''} onChange={(event) => {
               const target = props.targets.find((item) => item.sessionId === event.target.value)
               setSendTarget(target ? { ...target, requestId: crypto.randomUUID() } : null)
               setSendPreview(false)

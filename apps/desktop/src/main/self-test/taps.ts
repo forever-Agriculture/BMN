@@ -44,6 +44,8 @@ export class SelfTestRecorder implements SelfTestTaps {
   attentionNotice(notice: { title: string; body: string; sessionId: string }): void { this.attentionNotices.push(notice) }
   /** Every reference the renderer asked to read, in order: hovering and output must add none. */
   readonly readFileReferences: Array<{ sessionId: string; reference: string }> = []
+  /** Every file Quick look read, with the session or workspace it read for (Story 67.6: palette rows open there). */
+  readonly quickLookReads: Array<{ source: string; path: string }> = []
   readonly voiceTranscriptions: SelfTestTranscription[] = []
   voiceFetchCalls = 0
   /** Acknowledgements from the production lifecycle flush, distinct from activity captures. */
@@ -126,6 +128,10 @@ export class SelfTestRecorder implements SelfTestTaps {
         if (method === METHOD_REGISTRY.fileReferenceRead) {
           const { sessionId, reference } = params as { sessionId?: unknown; reference?: unknown }
           this.readFileReferences.push({ sessionId: String(sessionId), reference: String(reference) })
+        }
+        if (method === METHOD_REGISTRY.quickLookRead) {
+          const { sessionId, workspaceId, path } = params as { sessionId?: unknown; workspaceId?: unknown; path?: unknown }
+          this.quickLookReads.push({ source: String(sessionId ?? workspaceId), path: String(path) })
         }
         return client.request<Result>(method, params)
       }

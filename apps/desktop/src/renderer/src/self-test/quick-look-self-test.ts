@@ -23,7 +23,15 @@ export async function runQuickLookIntegration(options: { refitCount(): number })
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'E', code: 'KeyE', ctrlKey: true, shiftKey: true, bubbles: true }))
   const dialog = await waitFor('the sheet', sheet)
   await waitFor('the first row', () => dialog.querySelector('.ql-tr'))
-  const focusInTree = document.activeElement?.classList.contains('ql-tree') === true
+  const focusAt = (): 'tree' | 'file' | 'elsewhere' => document.activeElement?.classList.contains('ql-tree')
+    ? 'tree' : document.activeElement?.closest('.ql-code') ? 'file' : 'elsewhere'
+  // A remembered file opens a moment after the tree's first rows and then takes focus.
+  await waitFor('focus in the tree or the recalled file', () => {
+    const drawn = dialog.querySelector('.ql-code .cm-content')
+    return focusAt() === 'file' || (focusAt() === 'tree' && !drawn) ? true : undefined
+  }).catch(() => undefined)
+  const focusAtOpen = focusAt()
+  const recalledAtOpen = dialog.querySelector('.ql-code .cm-content') ? dialog.querySelector<HTMLElement>('.ql-path .ql-pth')?.title ?? null : null
   const rows = [...dialog.querySelectorAll('.ql-tr .ql-nm')].map((item) => item.textContent ?? '')
   const rootShown = dialog.querySelector('.ql-head')?.textContent ?? ''
   // `refs` holds only `src`, so the tree shows the two joined as one row.
@@ -44,5 +52,5 @@ export async function runQuickLookIntegration(options: { refitCount(): number })
   dialog.dispatchEvent(new Event('cancel', { cancelable: true }))
   await waitFor('the sheet to close', () => (sheet() ? undefined : true))
   await new Promise<void>((resolve) => setTimeout(resolve, 150))
-  return { opened: true, focusInTree, rootShown, rows, pathRow, highlighted, focusInFile, closed: true, refitsBefore, refitsAfter: options.refitCount() }
+  return { opened: true, focusAtOpen, recalledAtOpen, rootShown, rows, pathRow, highlighted, focusInFile, closed: true, refitsBefore, refitsAfter: options.refitCount() }
 }

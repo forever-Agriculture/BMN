@@ -85,8 +85,10 @@ feature stops. This page sums up the product and how to install it.
 | --- | --- |
 | `Ctrl+Shift+P` | Command palette |
 | `Ctrl+Shift+F` | Search in the terminal output |
-| `Ctrl+Shift+E` | Quick look: open the project over the window, or close it |
+| `Ctrl+Shift+E` | Quick look: open the project over the window (a selected file reference opens that file), or close it |
 | `Ctrl+Shift+G` | Quick look: search the project's contents |
+| `Ctrl+P`, `Ctrl+F`, `Ctrl+G`, `Ctrl+R` | In Quick look: go to a file, find in the file, go to a line, show a hidden value for ten seconds |
+| `Ctrl+click` a printed path | Open it in Quick look at its line |
 | `Ctrl+Shift+Enter` | Split the view (asks which session opens beside) or close the split |
 | `Ctrl+Tab` | Switch to the other pane |
 | `Ctrl+Shift+Z` | Focus mode |

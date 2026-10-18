@@ -31,7 +31,6 @@ import {
   type OwnerAwayView,
   awaySinceWords,
   awayPeriodWords,
-  exactAbsoluteFileReference,
   telegramOwnerCue,
   effectiveTerminalGraphics,
   isWorkspaceMarker,
@@ -52,6 +51,7 @@ import { restoreArchive, type ArchiveUndoTarget } from './archive-undo'
 import { conversationBindingPresentation, reportedResumeLine, resumeAvailable } from './conversation-resume'
 import { FileReferenceDialog, type FileReferenceRequest, type FileReferenceSendTarget } from './file-reference-dialog'
 import { QuickLook, type QuickLookRequest } from './quick-look'
+import { RECENT_SCROLLBACK_BYTES, RECENT_SCROLLBACK_ROWS, printedReferences, quickLookSourceFor, selectedReference } from './quick-look-open'
 import { FilesPanel } from './files-panel'
 import { HookEventsDialog } from './hook-events-dialog'
 import { ProgressEvidenceDialog } from './progress-evidence-dialog'
@@ -1244,20 +1244,46 @@ function App(): React.JSX.Element {
    * Opens Quick look over the window (Story 67.1): rooted at the selected session's launch folder, or at the active
    * workspace's folder when no session is selected. The pane that had focus gets it back when the sheet closes.
    */
-  const openQuickLook = (open: QuickLookRequest['open'] = null, sessionId: string | null = selectedSessionId, search: QuickLookRequest['search'] = null): void => {
+  const openQuickLook = (open: QuickLookRequest['open'] = null, sessionId: string | null = selectedSessionId, search: QuickLookRequest['search'] = null,
+    workspaceId: string | null = activeWorkspaceId): void => {
     const focused = document.activeElement instanceof HTMLElement
       ? document.activeElement.closest<HTMLElement>('[data-session-id]')?.dataset.sessionId ?? null : null
-    const record = sessionsRef.current.find((session) => session.sessionId === sessionId && session.archivedAt === null)
-    const workspace = activeWorkspaceId ? workspacesRef.current.find((item) => item.workspaceId === activeWorkspaceId && item.archivedAt === null) : undefined
-    if (!record && !workspace) {
+    const record = sessionsRef.current.find((session) => session.sessionId === sessionId)
+    const workspace = workspaceId ? workspacesRef.current.find((item) => item.workspaceId === workspaceId) : undefined
+    const source = quickLookSourceFor(record, workspace)
+    if (!source) {
       brief('Open a workspace to look at its files.')
       return
     }
+    // The paths this session's terminal printed, read from its scrollback now; nothing is read from disk for them.
+    const recent = source.sessionId
+      ? printedReferences(controllers.current.get(source.sessionId)?.recentText(RECENT_SCROLLBACK_ROWS, RECENT_SCROLLBACK_BYTES) ?? []) : []
     setDialog({
       kind: 'quick-look',
-      request: { source: record ? { sessionId: record.sessionId } : { workspaceId: workspace!.workspaceId }, open, ...(search ? { search } : {}) },
+      request: { source, open, ...(search ? { search } : {}), ...(recent.length > 0 ? { recent } : {}) },
       returnTo: focused ?? record?.sessionId ?? null,
       openedFromWorkspaceId: activeWorkspaceId
+    })
+  }
+
+  /** "Send to session…" in Quick look's menu: today's dialog on that reference, at its send step (Story 67.6 AC2). */
+  const sendFromQuickLook = (sessionId: string, reference: string): void => {
+    const record = sessionsRef.current.find((session) => session.sessionId === sessionId)
+    if (!record) {
+      brief('The session is gone; open the file again.')
+      return
+    }
+    setDialog({
+      kind: 'file-reference',
+      request: {
+        sessionId: record.sessionId,
+        sessionName: record.name,
+        workspaceName: workspaceName(record.workspaceId),
+        launchDirectory: liveRef.current.get(record.sessionId)?.cwd ?? record.cwd,
+        reference,
+        openNow: true,
+        sendStep: true
+      }
     })
   }
 
@@ -1487,7 +1513,11 @@ function App(): React.JSX.Element {
       }
       case 'attention-next': return nextNeedingYou()
       case 'palette': return setDialog({ kind: 'palette' })
-      case 'quick-look': return openQuickLook()
+      case 'quick-look': {
+        // Text selected in the terminal that reads as one file reference opens that file at its line (Story 67.6 AC8).
+        const reference = selectedReference(selectedSessionId ? controllers.current.get(selectedSessionId)?.selection() ?? '' : '')
+        return openQuickLook(reference ? { reference } : null)
+      }
       case 'quick-look-contents': return openQuickLook(null, selectedSessionId, 'contents')
       case 'recent-sessions': return setDialog({ kind: 'recent-sessions', sessionIds: [...recentSessions.current] })
       case 'copy': return copySelection(selectedSessionId)
@@ -2089,7 +2119,7 @@ function App(): React.JSX.Element {
                     .then((records) => deliver(records, terminalStartup.sessionId))
                     .catch(fail('Drop failed'))
                 }}
-                onOpenFileReference={(reference) => openFileReference(terminalStartup.sessionId, reference, true)}
+                onOpenFileReference={(reference) => openQuickLook({ reference }, terminalStartup.sessionId)}
               />
             )
           })}
@@ -2573,18 +2603,8 @@ function App(): React.JSX.Element {
                 sessions.find((item) => item.sessionId === selectedSessionId), live[selectedSessionId]
               )
               : activeWorkspace?.defaultCwd ?? 'unavailable workspace directory',
-            open: (path, sessionId) => {
-              if (!sessionId) {
-                openFileReference(null, path, true)
-                return
-              }
-              const reference = exactAbsoluteFileReference(path, null, null)
-              if (!reference) {
-                brief('This filename cannot be represented as a file reference.')
-                return
-              }
-              openFileReference(sessionId, reference, true)
-            }
+            // A file row opens in Quick look, for the selected session or else the workspace (Story 67.6 AC1).
+            open: (path, sessionId) => openQuickLook({ path, line: null, column: null }, sessionId)
           } : undefined}
           onClose={() => setDialog(null)}
         />
@@ -2618,7 +2638,8 @@ function App(): React.JSX.Element {
         })}
         onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === 'quick-look' ? (
-        <QuickLook key={JSON.stringify(dialog.request)} request={dialog.request} testMode={startup?.testMode === true} onClose={() => closeQuickLook(dialog.returnTo)} />
+        <QuickLook key={JSON.stringify(dialog.request)} request={dialog.request} testMode={startup?.testMode === true} onClose={() => closeQuickLook(dialog.returnTo)}
+          {...(dialog.request.source.sessionId ? { onSendReference: (reference: string) => sendFromQuickLook(dialog.request.source.sessionId!, reference) } : {})} />
       ) : null}
       {dialog?.kind === 'file-reference' ? (
         <FileReferenceDialog
@@ -2643,10 +2664,9 @@ function App(): React.JSX.Element {
           onUpdated={updated => setWorkspaces(current => current.map(item => item.workspaceId === updated.workspaceId && item.revision <= updated.revision ? updated : item))}
           onOpen={path => {
             const current = workspacesRef.current.find(item => item.workspaceId === workspace.workspaceId && item.archivedAt === null)
-            const reference = exactAbsoluteFileReference(path, null, null)
-            if (!current || !reference) { brief('This pin is unavailable. Reopen Pinned files.'); return }
-            setDialog({ kind: 'file-reference', request: { workspaceId: current.workspaceId, sessionName: '', workspaceName: current.name,
-              launchDirectory: current.defaultCwd ?? '/', reference, openNow: true, openedFromWorkspaceId: activeWorkspaceId } })
+            if (!current) { brief('This pin is unavailable. Reopen Pinned files.'); return }
+            // A pin opens in Quick look for its workspace, which closes when the active workspace changes (Story 67.6 AC1, AC5).
+            openQuickLook({ path, line: null, column: null }, null, null, current.workspaceId)
           }} /> : null
       })() : null}
       {dialog?.kind === 'preferences' ? (

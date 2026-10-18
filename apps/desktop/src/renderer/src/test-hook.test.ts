@@ -211,7 +211,7 @@ describe('renderer acceptance hook', () => {
         }
       },
       quickLookFlow: {
-        opened: true, focusInTree: true, rootShown: 'work', rows: ['refs'], pathRow: 'refs/src/quick-look.ts',
+        opened: true, focusAtOpen: 'tree' as const, recalledAtOpen: null, rootShown: 'work', rows: ['refs'], pathRow: 'refs/src/quick-look.ts',
         highlighted: { keyword: 1, comment: 1, def: 1, lineNumbers: 5 }, focusInFile: true, closed: true, refitsBefore: 0, refitsAfter: 0
       },
       fileReferenceFlow: {

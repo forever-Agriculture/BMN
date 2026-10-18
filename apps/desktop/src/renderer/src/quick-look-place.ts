@@ -87,7 +87,7 @@ export function forgetPlaces(): void {
   places.clear()
 }
 
-export type EscapeStep = 'clear-typed' | 'hide-secret' | 'close-goto' | 'close-find' | 'stop-search' | 'clear-search' | 'back-to-results' | 'close-sheet'
+export type EscapeStep = 'close-menu' | 'clear-typed' | 'hide-secret' | 'close-goto' | 'close-find' | 'stop-search' | 'clear-search' | 'back-to-results' | 'close-sheet'
 
 export interface EscapeState {
   focus: 'field' | 'tree' | 'file'
@@ -100,14 +100,17 @@ export interface EscapeState {
   search?: 'searching' | 'results' | null
   /** The open file was opened from those results. */
   fromResults?: boolean
+  /** The path row's "…" menu is open (Story 67.6). */
+  menu?: boolean
 }
 
 /**
- * Esc closes the innermost open thing first and the sheet last: letters typed in the tree while it has the keys,
+ * Esc closes the innermost open thing first and the sheet last: the path row's menu, letters typed in the tree while it has the keys,
  * then a value shown for ten seconds, then the go-to-line row, then the find row, then a running search, its results
  * (back to the tree) or a file opened from them (back to the results), then any letters left typed.
  */
 export function escapeStep(state: EscapeState): EscapeStep {
+  if (state.menu) return 'close-menu'
   if (state.focus === 'tree' && state.typed) return 'clear-typed'
   if (state.revealed) return 'hide-secret'
   if (state.goTo) return 'close-goto'
@@ -120,6 +123,7 @@ export function escapeStep(state: EscapeState): EscapeStep {
 }
 
 export const ESCAPE_LABELS: Record<EscapeStep, string> = {
+  'close-menu': 'Close menu',
   'clear-typed': 'Clear typed',
   'hide-secret': 'Hide value',
   'close-goto': 'Close go to line',

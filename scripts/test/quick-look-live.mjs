@@ -85,6 +85,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const project = join(root, 'project')
   const fixture = join(root, 'terminal.mjs')
   const input = join(root, 'input.txt')
+  const outsideFile = join(root, 'outside.txt')
+  writeFileSync(outsideFile, 'A made-up file outside the project.\nIts second line.\n')
   writeProject(project)
   // The project lies inside a made-up Git work tree whose root is the temporary folder, so the tree shows no `.git`
   // row and the contents search reads what Git tracks plus untracked files it does not ignore.
@@ -93,6 +95,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   writeFileSync(fixture, `import {appendFileSync,writeFileSync} from 'node:fs';
 writeFileSync(${JSON.stringify(input)},'');process.stdin.setRawMode(true);
 process.stdin.on('data',b=>appendFileSync(${JSON.stringify(input)},b));
+process.stdout.write('PATHS apps/desktop/src/parser.ts:42:7 docs/missing.md:3 '+${JSON.stringify(outsideFile)}+':2\\r\\n');
 let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '+n+'   ')},10);`)
   const env = { ...process.env }
   if (env.WAYLAND_DISPLAY && !isAbsolute(env.WAYLAND_DISPLAY)) env.WAYLAND_DISPLAY = join(env.XDG_RUNTIME_DIR, env.WAYLAND_DISPLAY)
@@ -787,6 +790,78 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     check('nothing is written under the data folder by a search, and the searched word is in no app file', dataAfter.filter((path) => !dataBefore.includes(path)).length === 0 && traces.length === 0,
       { added: dataAfter.filter((path) => !dataBefore.includes(path)), traces })
 
+    // ---- a printed path opens in Quick look (Story 67.6) ----
+    /** Where a printed text sits on the terminal's screen, in pixels, from its buffer row and column. */
+    const cellOf = async (text, offset = 2) => page.evaluate(({ id, text, offset }) => {
+      const state = window.__aitermTest.snapshot(id)
+      const row = state.bufferLines.findIndex((line) => line.includes(text))
+      if (row === -1) throw new Error(`not on screen: ${text}; cols ${state.cols}; lines ${JSON.stringify(state.bufferLines.filter(Boolean).slice(0, 6))}`)
+      const column = state.bufferLines[row].indexOf(text) + offset
+      const rect = document.querySelector(`.session-terminal[data-session-id="${id}"] .xterm-screen`).getBoundingClientRect()
+      const width = rect.width / state.cols
+      const height = rect.height / state.rows
+      return { x: rect.left + (column + 0.5) * width, y: rect.top + (row + 0.5) * height, width }
+    }, { id: sessionId, text, offset })
+    const ctrlClick = async (text) => {
+      const at = await cellOf(text)
+      await page.mouse.move(at.x, at.y - 20)
+      await page.keyboard.down('Control')
+      await page.mouse.move(at.x, at.y)
+      await page.waitForTimeout(150)
+      await page.mouse.click(at.x, at.y)
+      await page.keyboard.up('Control')
+    }
+    const targetLine = () => sheet.locator('.ql-code .ql-target').textContent()
+    await ctrlClick('apps/desktop/src/parser.ts:42:7')
+    await sheet.locator('.ql-code .ql-target').waitFor()
+    check('Ctrl+click on a printed relative path opens it in Quick look at line 42 with the line marked', (await targetLine()).includes('// line 42') &&
+      (await sheet.locator('.ql-path .ql-pth').textContent()).trim() === 'apps/desktop/src/parser.ts:42', { target: await targetLine() })
+    await sheet.getByRole('button', { name: 'More actions', exact: true }).click()
+    const menuItems = await sheet.getByRole('menuitem').allTextContents()
+    check('the path row\'s … menu holds Copy reference, Show in Folder and Send to session…', JSON.stringify(menuItems) === JSON.stringify(['Copy reference', 'Show in Folder', 'Send to session…']), { menuItems })
+    await sheet.getByRole('menuitem', { name: 'Copy reference', exact: true }).click()
+    await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-feedback')?.textContent === 'Reference copied.')
+    const copiedRef = (await app.evaluate(() => globalThis.__qlClipboard)).at(-1)
+    check('Copy reference copies the absolute path, line and column, as the dialog does', copiedRef === `${project}/apps/desktop/src/parser.ts:42:7`, { copiedRef })
+    await page.keyboard.press('Escape')
+    await sheet.waitFor({ state: 'detached' })
+    await ctrlClick(`${outsideFile}:2`)
+    await sheet.locator('.ql-code .ql-target').waitFor()
+    const outsideRow = await sheet.locator('.ql-path').textContent()
+    check('a file outside the root opens too: no row is selected and the path row says Outside and the root', outsideRow.includes(`Outside ${project}`) &&
+      await sheet.locator('.ql-tr.open').count() === 0 && (await targetLine()).includes('Its second line.'), { outsideRow })
+    await page.keyboard.press('Escape')
+    await sheet.waitFor({ state: 'detached' })
+    await terminal.focus()
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.waitFor()
+    await page.keyboard.press('Control+p')
+    await sheet.locator('[aria-label="Printed paths"] .ql-rf').first().waitFor()
+    const printed = await sheet.locator('[aria-label="Printed paths"] .ql-rf .ql-rf-name').allTextContents()
+    check('with the top field empty and in focus, the left column lists the paths the terminal printed, newest first', JSON.stringify(printed) === JSON.stringify(['outside.txt:2', 'missing.md:3', 'parser.ts:42']), { printed })
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Enter')
+    await sheet.locator('.ql-missing-title').waitFor()
+    const missing = { title: await sheet.locator('.ql-missing-title').textContent(), from: await sheet.locator('.ql-missing-from').textContent(),
+      choose: await sheet.getByRole('button', { name: 'Choose folder…', exact: true }).count() }
+    check('a printed path that is gone opens as missing: "No file at this path", the folder it resolved from, and Choose folder…', missing.title === 'No file at this path' &&
+      missing.from === `Resolved from ${project}, the session's launch folder.` && missing.choose === 1, missing)
+    await page.keyboard.press('Escape')
+    await sheet.waitFor({ state: 'detached' })
+    // A selection that reads as one reference: Ctrl+Shift+E opens that file at its line.
+    const start = await cellOf('apps/desktop/src/parser.ts:42:7', 0)
+    const end = await cellOf('apps/desktop/src/parser.ts:42:7', 'apps/desktop/src/parser.ts:42:7'.length - 1)
+    await page.mouse.move(start.x - start.width / 2 + 1, start.y)
+    await page.mouse.down()
+    await page.mouse.move(end.x + end.width / 2 - 1, end.y, { steps: 8 })
+    await page.mouse.up()
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.locator('.ql-code .ql-target').waitFor()
+    check('Ctrl+Shift+E on a selected reference opens that file at its line', (await targetLine()).includes('// line 42'))
+    await page.keyboard.press('Escape')
+    await sheet.waitFor({ state: 'detached' })
+    await page.evaluate((id) => window.__aitermTest.snapshot(id), sessionId)
+
     // ---- the terminal is untouched: normal, focus and split views at five sizes, through a peek ----
     for (const layout of ['normal', 'focus', 'split']) {
       const action = page.locator('.session-terminal.selected .pane-actions button').filter({ hasText: layout === 'focus' ? 'Focus' : 'Split' })
@@ -837,6 +912,7 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
       if (layout !== 'normal') await action.click()
     }
     check('no byte reached the terminal program', readFileSync(input, 'utf8') === '')
+
     const dialogEvents = await page.evaluate(() => window.__qlEvents)
     const browserCloses = dialogEvents.filter((event, index) => event.kind === 'close' && dialogEvents[index - 1]?.kind !== 'close()')
     check('the browser never closed the sheet by itself; every Esc stayed with the sheet', browserCloses.length === 0 &&
@@ -855,6 +931,69 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     }
     for (const folder of [...Object.values(roots), join(root, 'home')]) walk(folder)
     check('no made-up secret value reached a log or a state file', leaks.length === 0, { leaks })
+    // Send to session… from Quick look's menu ends in today's dialog and its "pasted, not submitted" receipt, into a
+    // second made-up session (Story 67.6 AC2).
+    const secondInput = join(root, 'second-input.txt')
+    const secondFixture = join(root, 'second.mjs')
+    writeFileSync(secondFixture, `import {appendFileSync,writeFileSync} from 'node:fs';writeFileSync(${JSON.stringify(secondInput)},'');process.stdin.setRawMode(true);process.stdin.on('data',b=>appendFileSync(${JSON.stringify(secondInput)},b));process.stdout.write('SECOND FIXTURE ready\\r\\n');setInterval(()=>{},1000);`)
+    const secondId = await page.evaluate(async (params) => {
+      const workspace = (await window.aiTerminal.listWorkspaces())[0]
+      return (await window.aiTerminal.createSession({ ...params, workspaceId: workspace.workspaceId })).session.sessionId
+    }, { name: 'Second fixture', cwd: project, executable: process.execPath, argv: [secondFixture], cols: 80, rows: 24, backgroundChoice: 'stop' })
+    // As at the start: the page is loaded again to show the new session, which starts when it is shown once.
+    await page.reload()
+    await page.locator(`.session-row > button[data-session-id="${secondId}"]`).click()
+    await page.waitForFunction((id) => {
+      try { return window.__aitermTest.snapshot(id).bufferLines.some((line) => line.includes('SECOND FIXTURE ready')) } catch { return false }
+    }, secondId)
+    // The reload replays the first terminal's screen, not every line it printed, so the file is opened by name.
+    await page.locator(`.session-row > button[data-session-id="${sessionId}"]`).click()
+    await page.waitForTimeout(300)
+    await terminal.focus()
+    await page.keyboard.press('Control+Shift+E')
+    await sheet.waitFor()
+    await page.keyboard.press('Control+p')
+    await page.keyboard.type('parser')
+    await sheet.locator('.ql-rf').filter({ hasText: 'parser.ts' }).waitFor()
+    await page.keyboard.press('Enter')
+    await sheet.locator('.ql-code .cm-content').waitFor()
+    await sheet.getByRole('button', { name: 'More actions', exact: true }).click()
+    await sheet.getByRole('menuitem', { name: 'Send to session…', exact: true }).click()
+    const referenceDialog = page.locator('dialog.file-reference-dialog[open]')
+    const chooser = referenceDialog.getByRole('combobox', { name: 'Send to session' })
+    await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Send to session')
+    check('Send to session… opens today\'s dialog on that reference with the session chooser in focus', await sheet.count() === 0 &&
+      await referenceDialog.locator('input[aria-label="File reference"]').inputValue() === `${project}/apps/desktop/src/parser.ts`)
+    await chooser.selectOption(secondId)
+    await referenceDialog.getByRole('button', { name: 'Review send…', exact: true }).click()
+    await referenceDialog.getByRole('button', { name: 'Paste reference', exact: true }).click()
+    await referenceDialog.locator('.file-reference-feedback').filter({ hasText: 'not submitted' }).waitFor()
+    await page.waitForFunction(() => true)
+    const pasted = readFileSync(secondInput, 'utf8')
+    check('it ends in "pasted, not submitted", the reference in the other session\'s input and no Enter', pasted.includes(`${project}/apps/desktop/src/parser.ts`) && !/[\r\n]/u.test(pasted) &&
+      readFileSync(input, 'utf8') === '', { pasted: JSON.stringify(pasted) })
+    await page.keyboard.press('Escape')
+    await referenceDialog.waitFor({ state: 'detached' })
+    // A workspace pin opens in Quick look for its workspace, whose menu offers no Send to session… (Story 67.6 AC1).
+    const pinned = `${project}/apps/desktop/src/parser.ts`
+    const workspaceName = await page.evaluate(async () => (await window.aiTerminal.listWorkspaces())[0].name)
+    // At this window's width the sidebar is a rail; a wider window shows the workspace row and its ⋯ on hover.
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setSize(1280, 800))
+    await page.locator('.workspace-row').filter({ hasText: workspaceName }).first().hover()
+    await page.getByRole('button', { name: `Actions for ${workspaceName}`, exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Pinned files…', exact: true }).click()
+    const pins = page.getByRole('dialog', { name: `Pinned files — ${workspaceName}`, exact: true })
+    await pins.getByRole('textbox', { name: 'Pinned file path' }).fill(pinned)
+    await pins.getByRole('button', { name: 'Add path', exact: true }).click()
+    await pins.getByRole('button', { name: `Open ${pinned}`, exact: true }).click()
+    await sheet.locator('.ql-code .cm-content').waitFor()
+    await sheet.getByRole('button', { name: 'More actions', exact: true }).click()
+    const pinMenu = await sheet.getByRole('menuitem').allTextContents()
+    check('a pin opens in Quick look for its workspace, with Copy reference and Show in Folder and no Send to session…',
+      await sheet.locator('.ql-path .ql-pth').getAttribute('title') === pinned && JSON.stringify(pinMenu.map((item) => item.trim())) === JSON.stringify(['Copy reference', 'Show in Folder']), { pinMenu })
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Escape')
+    await sheet.waitFor({ state: 'detached' })
     assert.ok(checks.every((each) => each.result === 'PASS'), 'a Quick look check failed')
     console.log('PASS: Quick look live run')
   } catch (error) {
