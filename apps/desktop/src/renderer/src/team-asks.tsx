@@ -236,7 +236,7 @@ export function TeamAsks(props: TeamAsksProps): React.JSX.Element {
           </div>
         ) : (
           <div className="page-foot">
-            <p className="preferences-help">{`${plural(snapshot.asks.length, 'ask')} kept. An ask stays ${snapshot.keptDays} days after it ends, or until removed; Export writes the allowlisted record, never a sign-in or the app's home.`}</p>
+            <p className="preferences-help">{`${plural(snapshot.asks.length, 'ask')} kept ${snapshot.keptDays} days after each ends, or until removed. Export writes an allowlisted record: no sign-in, no app home.`}</p>
             <span className="spacer" />
             <button type="button" className="small" onClick={() => setConfirming(true)}>Remove all…</button>
           </div>

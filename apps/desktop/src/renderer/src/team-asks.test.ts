@@ -194,7 +194,7 @@ describe('Agents › Asks', () => {
   })
 
   it('says how long an ask is kept beside Remove all, and asks before removing all; an ask under way stays (AC3)', () => {
-    expect(words(render())).toContain('5 asks kept. An ask stays 30 days after it ends, or until removed; Export writes the allowlisted record, never a sign-in or the app\'s home. Remove all…')
+    expect(words(render())).toContain('5 asks kept 30 days after each ends, or until removed. Export writes an allowlisted record: no sign-in, no app home. Remove all…')
   })
 
   it('says so when nothing was asked yet, with nothing to remove', () => {

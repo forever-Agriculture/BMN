@@ -153,11 +153,13 @@ export function PageHead(props: { title: ReactNode; status?: ReactNode; children
 }
 
 /** A label column and its control, as every Preferences page lays rows out. */
-export function Row(props: { label: string; id?: string; hint?: ReactNode; children: ReactNode }): React.JSX.Element {
+export function Row(props: { label: string; id?: string; hint?: ReactNode | readonly string[]; children: ReactNode }): React.JSX.Element {
+  // A hint given as lines shows one line each (docs/design.md W2): never one paragraph of sentences.
+  const lines = Array.isArray(props.hint) ? props.hint as readonly string[] : props.hint ? [props.hint as ReactNode] : []
   return (
     <div className="preferences-row">
       <div className="preferences-row-label"><span id={props.id}>{props.label}</span></div>
-      <div className="preferences-row-control">{props.children}{props.hint ? <p className="preferences-help">{props.hint}</p> : null}</div>
+      <div className="preferences-row-control">{props.children}{lines.map((line, index) => <p key={index} className="preferences-help">{line}</p>)}</div>
     </div>
   )
 }
@@ -337,7 +339,7 @@ function OutsideHead(props: { team: TeamState }): React.JSX.Element {
   return (
     <div className="outside-row outside-head">
       <Dot label="Needs you" />
-      <span className="outside-why">The team file was edited directly, not on these pages: by hand, by a script or by an agent. The approved team stays in effect until you keep {count === 1 ? 'the change' : 'them'}.</span>
+      <span className="outside-why">The team file was edited elsewhere: by hand, a script or an agent. The approved team holds until you keep {count === 1 ? 'the change' : 'them'}.</span>
       {count > 1 ? (
         <span className="actions">
           <button type="button" className="small" disabled={team.busy} aria-label={`Keep all ${outsideCountWords(count)} to the team file`}
@@ -367,14 +369,20 @@ export function lunaGoClause(proposed: RosterDataShape): string {
   const roles = helper && researcher ? 'a read-only helper and a researcher' : helper ? 'a read-only helper' : researcher ? 'a researcher' : 'an agent with no role yet'
   const provider = proposed.providers.find((entry) => entry.id === luna.provider)
   const work = provider?.private_work === 'allowed' ? `${provider.name} may see private work, as you chose` : `${provider?.name ?? luna.provider} gets public work only until you allow it`
-  return `${luna.name} as ${roles}, run by OpenCode, which lists her model on OpenCode Go; ${work}, and once you approve BMN copies your OpenCode Go sign-in into its own OpenCode folder`
+  return `${luna.name} as ${roles}, run by OpenCode, which lists her model on OpenCode Go; ${work}`
 }
+
+/** What approving Luna through OpenCode Go also does, said on its own line under the proposals. */
+export const LUNA_GO_SIGN_IN_WORDS = 'Once you approve, BMN copies your OpenCode Go sign-in into its own OpenCode folder.'
+
+/** What Copy sign-in takes, said under why an agent on OpenCode Go cannot run yet. */
+export const OPEN_CODE_COPY_WORDS = "Copy sign-in takes yours from OpenCode on this computer, once, and nothing else of OpenCode's."
 
 /** Why an approved agent on OpenCode Go cannot run yet: BMN's folder holds no Go sign-in. */
 export function openCodeSignInWords(approved: RosterDataShape | null | undefined): string {
   const names = (approved?.agents ?? []).filter((agent) => agent.harness === 'opencode' && agent.provider === LUNA_GO_PROPOSAL.provider.id).map((agent) => agent.name)
   const who = names.length === 0 ? 'An agent on OpenCode Go' : names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
-  return `${who} cannot run yet: BMN's OpenCode folder holds no OpenCode Go sign-in. Copy sign-in takes yours from OpenCode on this computer, once, and nothing else of OpenCode's.`
+  return `${who} cannot run yet: BMN's OpenCode folder holds no OpenCode Go sign-in.`
 }
 
 /** What OpenCode on this computer says of Luna through OpenCode Go (70.4), and the press that copies a sign-in. */
@@ -412,7 +420,7 @@ export function OpenCodeSignInNote(props: { team: TeamState; state: OpenCodeGoSt
   return (
     <div className="page-note with-action" role="status">
       <Dot label="Needs you" />
-      <span className="note-text">{openCodeSignInWords(team.snapshot?.approved?.data)}</span>
+      <div className="note-text"><div>{openCodeSignInWords(team.snapshot?.approved?.data)}</div><div>{OPEN_CODE_COPY_WORDS}</div></div>
       <button type="button" className="small" disabled={state.copying} onClick={state.copy}>{state.copying ? 'Copying…' : 'Copy sign-in'}</button>
     </div>
   )
@@ -431,7 +439,7 @@ export function retiredAppClause(removed: RetiredRemoval): string {
 }
 
 /** BMN's pending proposals taken in one go (Story 75.10), each said as one clause in the order they are taken. */
-interface TeamProposals { data: RosterDataShape; clauses: string[] }
+interface TeamProposals { data: RosterDataShape; clauses: string[]; /** Lines that say what approving the clauses also does. */ notes?: string[] }
 
 /**
  * Every proposal BMN has pending for this team, taken one after the other in the order BMN applies
@@ -459,15 +467,15 @@ export function teamProposals(data: RosterDataShape, pending: { lunaListed: bool
     ...(luna === null ? [] : [lunaGoClause(next)]),
     ...(held.length === 0 ? [] : [`${listedRoles(held)} held to read-only`])
   ]
-  return clauses.length === 0 ? null : { data: next, clauses }
+  return clauses.length === 0 ? null : { data: next, clauses, ...(luna === null ? {} : { notes: [LUNA_GO_SIGN_IN_WORDS] }) }
 }
 
-/** The one card's paragraph: every pending proposal, or with nothing approved yet the first approval that carries them. */
-function proposalsWords(proposals: TeamProposals, nothingInEffect: string | null): string {
+/** The one card's lines: a head, then every pending proposal on a line of its own (docs/design.md W2), or with nothing approved yet the first approval that carries them. */
+function proposalsWords(proposals: TeamProposals, nothingInEffect: string | null): string[] {
   const count = proposals.clauses.length
-  const list = proposals.clauses.join(' · ')
-  if (nothingInEffect !== null) return `${nothingInEffect} BMN's proposal${count === 1 ? ' is' : 's are'} included: ${list}.`
-  return `BMN proposes ${count} change${count === 1 ? '' : 's'} to your team: ${list}. Nothing changes until you approve it.`
+  const head = nothingInEffect !== null ? [nothingInEffect, `BMN's proposal${count === 1 ? ' is' : 's are'} included:`]
+    : [`BMN proposes ${count} change${count === 1 ? '' : 's'} to your team. Nothing changes until you approve it.`]
+  return [...head, ...proposals.clauses, ...(proposals.notes ?? [])]
 }
 
 /**
@@ -485,7 +493,7 @@ function ProposalsCard(props: { team: TeamState; proposals: TeamProposals | null
   return (
     <div className="page-note with-action" role="status" data-proposals={proposals.clauses.length}>
       <Dot label="Needs you" />
-      <span className="note-text">{words}</span>
+      <div className="note-text">{words.map((line) => <div key={line}>{line}</div>)}</div>
       <button type="button" className="primary small" disabled={team.busy} onClick={() => void team.approveProposals(proposals.data, { title, action: 'Approve' })}>Approve…</button>
     </div>
   )
@@ -514,10 +522,10 @@ function AgentsPage(props: { team: TeamState; data: RosterDataShape; proposals: 
       <ProposalsCard team={team} proposals={props.proposals} />
       {props.openCodeGo ? <OpenCodeSignInNote team={team} state={props.openCodeGo} /> : null}
       {team.snapshot?.file.link ? (
-        <p className="page-note">
-          The team file is a link to <span className="path mono" title={team.snapshot.file.link}>{displayPath(team.snapshot.file.link, team.snapshot.home)}</span>.
-          {' '}A change saved from these pages replaces the link with a regular file here; the file it points to stays as it is.
-        </p>
+        <div className="page-note">
+          <dl className="kv"><dt>Team file</dt><dd className="path" title={team.snapshot.file.link}><bdi>{displayPath(team.snapshot.file.link, team.snapshot.home)}</bdi></dd></dl>
+          <p className="preferences-help">The team file is a link. Saving here replaces the link with a regular file; the file it points to stays as it is.</p>
+        </div>
       ) : null}
       {team.outside.groups.length > 0 ? <OutsideHead team={team} /> : null}
       {team.outside.groups.map((group) => <OutsideRow key={group.key} group={group} team={team} />)}
@@ -1137,10 +1145,10 @@ const JUDGE_ROLE_HELP = 'BMN calls a judge itself: no agent app runs for this ro
 const READ_ONLY_HELP = 'A run for this role is refused unless it is started so that it cannot write.'
 
 /** What the Researcher switch on an agent's page means as the team stands (63.3): who researches is part of the team. */
-export function researcherWords(data: Pick<RosterDataShape, 'agents'>, agent: Pick<RosterAgentShape, 'name' | 'researcher'>): string {
-  if (namedResearchers(data) === null) return `Your team names no researcher yet, so every agent that can research is offered on Models. Switching this on makes ${agent.name} the only one until you name others; Models proposes whom.`
-  if (agent.researcher === true) return 'Offered on Models as a researcher, where its app can research.'
-  return namedResearchers(data)?.length === 0 ? `Your team names no researcher, so nobody researches: a research with ${agent.name} is refused.` : `Not offered on Models: a research with ${agent.name} is refused.`
+export function researcherWords(data: Pick<RosterDataShape, 'agents'>, agent: Pick<RosterAgentShape, 'name' | 'researcher'>): string[] {
+  if (namedResearchers(data) === null) return ['No researcher is named yet, so Models offers every agent that can research.', `Switching this on makes ${agent.name} the only one until you name others; Models proposes whom.`]
+  if (agent.researcher === true) return ['Offered on Models as a researcher, where its app can research.']
+  return [namedResearchers(data)?.length === 0 ? `Your team names no researcher, so nobody researches: a research with ${agent.name} is refused.` : `Not offered on Models: a research with ${agent.name} is refused.`]
 }
 
 function NewRole(props: { team: TeamState; data: RosterDataShape; done(): void }): React.JSX.Element {
@@ -1216,7 +1224,7 @@ function VersionView(props: { number: number; earlier: boolean }): React.JSX.Ele
     window.aiTerminal.agentsGeneration(props.number).then((version) => { if (!cancelled) setData(version?.data ?? 'missing') }).catch(() => { if (!cancelled) setData('missing') })
     return () => { cancelled = true }
   }, [props.number, props.earlier])
-  if (props.earlier) return <p className="page-note">This version was approved under an earlier layout of the team file. It can be viewed in the file's history, never restored.</p>
+  if (props.earlier) return <p className="page-note">This version was approved under an earlier layout of the team file: viewable in the file&apos;s history, never restored.</p>
   if (data === null) return <p className="page-note">Reading version {props.number}…</p>
   if (data === 'missing') return <p className="page-note">Version {props.number} cannot be read.</p>
   return (
@@ -1312,7 +1320,7 @@ export function TeamPreferences(props: {
     return (
       <>
         <PageHead title="Team" status="No team yet" />
-        <p className="page-note">Your agents, the providers they run on and who does which job live in one file. Start with an empty team and add agents here.</p>
+        <p className="page-note">Your agents, their providers and who does which job live in one file. Start with an empty team and add agents here.</p>
         <button type="button" className="primary" disabled={team.busy} onClick={() => {
           window.aiTerminal.startTeam().then((result) => { team.setNotice({ ok: result.ok, text: result.message }); return team.reload() })
             .catch(() => team.setNotice({ ok: false, text: 'The team file could not be created' }))
@@ -1325,7 +1333,7 @@ export function TeamPreferences(props: {
     return (
       <>
         <PageHead title="Team" status="The team file needs fixing" />
-        <p className="page-note">BMN cannot read <span className="mono">{displayPath(snapshot.rosterPath, snapshot.home)}</span>. Nothing in it takes effect until it is fixed and approved; BMN reads it again when you come back.</p>
+        <p className="page-note">BMN cannot read <span className="mono">{displayPath(snapshot.rosterPath, snapshot.home)}</span>. Nothing in it applies until it is fixed and approved; BMN reads it again when you come back.</p>
         <Issues issues={snapshot.file.errors} />
         <button type="button" onClick={() => void window.aiTerminal.openTeamFile()}>Open team file</button>
       </>

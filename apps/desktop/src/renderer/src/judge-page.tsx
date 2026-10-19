@@ -54,7 +54,7 @@ export function outcomeWords(call: Pick<JudgeCallView, 'outcome' | 'code'>): str
 /** The months' calls that are counted by the size of their request, said under the sums; null where every call has the gateway's own count. */
 export function estimatedWords(current: Pick<JudgeMonthView, 'estimated'>, previous: Pick<JudgeMonthView, 'estimated'>): string | null {
   if (current.estimated + previous.estimated === 0) return null
-  return `The gateway gave no count of tokens for ${current.estimated} ${current.estimated === 1 ? 'call' : 'calls'} this month and ${previous.estimated} last month. BMN counted those by the size of what it sent, so their cost is an estimate.`
+  return `The gateway gave no token count for ${current.estimated} ${current.estimated === 1 ? 'call' : 'calls'} this month and ${previous.estimated} last month; BMN estimated their cost from what it sent.`
 }
 
 /**
@@ -70,7 +70,7 @@ const OWN_NEXT: Readonly<Record<string, string>> = {
   NO_PRICE: "Record the model's price for it in the team file and approve the team.",
   RECORD_UNREADABLE: 'Mend what the message names or move it away, and BMN counts again. Nothing is asked meanwhile.',
   LIMIT_UNREADABLE: 'Set the monthly limit again above: switch it on, or press Keep it off.',
-  NO_KEY: "Sign in to OpenCode on this computer (opencode auth login). BMN reads the key from OpenCode's own sign-in file and keeps none."
+  NO_KEY: "Sign in to OpenCode on this computer (opencode auth login). BMN reads the key from OpenCode's file and keeps none."
 }
 
 const TRY_HEADS = { timeout: 'No answer in time', failed: 'The request failed', shape: "Not Jev's shape" } as const
@@ -245,7 +245,7 @@ export function JudgeGroups(props: {
         <>
           {view.unreadable !== undefined ? (
             <p className="preferences-error" role="alert">
-              BMN cannot read its record of {agent.name}'s calls at <span className="mono">{view.unreadable}</span>, so it does not know what this month cost and asks nothing. Mend it or move it away, and BMN counts again.
+              Cannot read {agent.name}&apos;s call record at <span className="mono">{view.unreadable}</span>: the cost is unknown, so nothing is asked. Mend or move it to count again.
             </p>
           ) : basis === null ? <p className="preferences-help">No calls yet. The first one you ask under Try it is counted here.</p> : (
             <table className="cost-table" aria-labelledby={costId}>

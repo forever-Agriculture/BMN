@@ -157,7 +157,7 @@ export function codexToolsLine(tools: readonly string[]): string {
     return tool === 'custom:functions.exec' && inner.length > 0 ? `${name} (a script tool that reaches ${list(inner)})` : name
   })
   if (named.length === 0) return 'The fence test of this Codex version saw no other tool offered.'
-  return `Codex also keeps offering ${list(named)}. None of them reads or writes your files: the fence test of this Codex version showed it.`
+  return `Codex also offers ${list(named)}; this Codex version's fence test showed none of them reads or writes your files.`
 }
 
 /** The page's status line: when it was last researched, by whom, and how it ended. */

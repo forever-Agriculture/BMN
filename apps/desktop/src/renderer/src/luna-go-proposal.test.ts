@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { parseRoster, rewriteRoster, starterRoster } from '../../../bin/agents-roster.mjs'
 import { LUNA_GO_MODEL, OPENCODE_GO_PROVIDER } from '../../../bin/agents-opencode.mjs'
 import { lunaGoProposal, namedResearchers, setProviderAnswer, setResearcher } from './roster-staging'
-import { OpenCodeSignInNote, judgeClause, lunaGoClause, openCodeSignInWords, teamProposals } from './team-preferences'
+import { LUNA_GO_SIGN_IN_WORDS, OpenCodeSignInNote, judgeClause, lunaGoClause, openCodeSignInWords, teamProposals } from './team-preferences'
 import { approvalNotice, type TeamState } from './team-state'
 
 const noop = (): void => {}
@@ -59,7 +59,7 @@ describe('BMN proposes Luna (Go) (70.4 AC1)', () => {
     expect(PROPOSED.roles).toEqual([BEFORE.roles[0], { id: 'helper', candidates: ['luna@max', 'luna-go@max'], then: 'lead' }])
     expect(PROPOSED.harness_routes).toEqual(BEFORE.harness_routes)
     expect(namedResearchers(PROPOSED)).toEqual(['opus', 'luna-go'])
-    expect(lunaGoClause(PROPOSED)).toBe('Luna (Go) as a read-only helper and a researcher, run by OpenCode, which lists her model on OpenCode Go; OpenCode Go gets public work only until you allow it, and once you approve BMN copies your OpenCode Go sign-in into its own OpenCode folder')
+    expect(lunaGoClause(PROPOSED)).toBe('Luna (Go) as a read-only helper and a researcher, run by OpenCode, which lists her model on OpenCode Go; OpenCode Go gets public work only until you allow it')
   })
 
   it('is a team the team file takes', () => {
@@ -72,7 +72,7 @@ describe('BMN proposes Luna (Go) (70.4 AC1)', () => {
     const held = { ...BEFORE, providers: [...BEFORE.providers, { id: 'opencode-go', name: 'OpenCode Go', hosts: [], private_work: 'allowed' as const }] }
     const proposed = lunaGoProposal(held) as RosterDataShape
     expect(proposed.providers).toEqual(held.providers)
-    expect(lunaGoClause(proposed)).toContain('; OpenCode Go may see private work, as you chose, and once you approve')
+    expect(lunaGoClause(proposed)).toMatch(/; OpenCode Go may see private work, as you chose$/)
     // Every agent that can research does so on a team from before the mark; marking her alone would take that from the others.
     const unmarked = setResearcher(BEFORE, 'opus', false)
     expect(namedResearchers(unmarked)).toBeNull()
@@ -103,6 +103,9 @@ describe('the Team page shows the proposal and the sign-in (70.4, Story 75.10)',
     // The team holds no judge either, so the card proposes Jev first and Luna after him.
     const listed = teamProposals(BEFORE, { lunaListed: true, researchers: null })
     expect(listed?.clauses).toEqual([judgeClause(listed!.data), lunaGoClause(listed!.data)])
+    // The sign-in an approval copies is said on its own line under the clauses.
+    expect(listed?.notes).toEqual([LUNA_GO_SIGN_IN_WORDS])
+    expect(LUNA_GO_SIGN_IN_WORDS).toBe('Once you approve, BMN copies your OpenCode Go sign-in into its own OpenCode folder.')
     expect(listed?.data.agents.at(-1)).toEqual(PROPOSED.agents.at(-1))
     expect(teamProposals(BEFORE, { lunaListed: false, researchers: null })?.clauses).toEqual([judgeClause(listed!.data)])
     expect(teamProposals(listed!.data, { lunaListed: true, researchers: null })).toBeNull()

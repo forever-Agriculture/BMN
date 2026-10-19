@@ -1868,8 +1868,8 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     await fenceRow.getByText(`${inWords(codexNames)} research only where this test passed for exactly the installed Codex: ${untested}.`, { exact: false }).waitFor()
     // A team from before the choice: it offers what it offered, both Opus among them, and the page says the choice waits for him.
     assert.equal(await who.getByRole('radio', { name: /Opus$/ }).count(), 2, 'a team that names no researcher does not offer both of its Opus agents')
-    const proposal = main.locator('.page-note', { hasText: 'Who researches is your choice' })
-    await proposal.getByText('Who researches is your choice and you have not made it yet, so every agent that can research is offered; BMN\'s proposal is on Team.', { exact: true }).waitFor()
+    const proposal = main.locator('.page-note', { hasText: 'You have not chosen who researches' })
+    await proposal.getByText('You have not chosen who researches, so every agent that can research is offered; BMN\'s proposal is on Team.', { exact: true }).waitFor()
     await shot('models-researchers-before-1280.png')
 
     // The row is read-only: no Run test. The test runs the very research command against the stand-in and records what it saw.
@@ -1886,7 +1886,8 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     // A Codex researcher has the words of the others and one line naming the tools Codex keeps offering.
     await who.getByRole('radio', { name: /Astra$/ }).click()
     await who.getByRole('radio', { name: /Astra$/ }).and(main.locator('[aria-checked="true"]')).waitFor()
-    await main.getByText(/Gets only your model names and the source list, never your files\. Runs in an empty folder, with a Codex folder of its own and web search\. Codex also keeps offering exec \(a script tool that reaches [^)]*web__run[^)]*\), .*spawn_agent.*\. None of them reads or writes your files: the fence test of this Codex version showed it\./).waitFor()
+    await main.getByText('Runs in an empty folder, with a Codex folder of its own and web search.', { exact: true }).waitFor()
+    await main.getByText(/^Codex also offers exec \(a script tool that reaches [^)]*web__run[^)]*\), .*spawn_agent.*; this Codex version's fence test showed none of them reads or writes your files\.$/).waitFor()
     await shot('models-codex-researcher-1280.png')
 
     // An update of Codex: no test is on record for the new version, so the offer closes by itself. He takes BMN's proposal and approves it.
@@ -1982,7 +1983,8 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
       assert.equal(none.said().code, 'NO_JUDGE')
       await go('Team')
       const waits = main.locator('.page-note.with-action[data-proposals]')
-      assert.equal(await text(waits.locator('.note-text')), 'BMN proposes 1 change to your team: Jev as Judge, with its two providers OpenCode Zen and TypeSafe AI, which may both see private work, as you chose. Nothing changes until you approve it.')
+      assert.deepEqual(await waits.locator('.note-text > div').allTextContents(), ['BMN proposes 1 change to your team. Nothing changes until you approve it.',
+        'Jev as Judge, with its two providers OpenCode Zen and TypeSafe AI, which may both see private work, as you chose'])
       await shot('judge-proposal-1280.png')
       const beforeProposal = { roster: rosterHash(), state: stateHash() }
       // Approve… stages Jev and opens the approval at once; the card goes, as nothing is left to propose.

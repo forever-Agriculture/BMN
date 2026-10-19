@@ -146,11 +146,11 @@ export function researchedModels(snapshot: ResearchSnapshot | null): { models: r
  * web tools alone, so the tools it keeps offering are named, with what showed that none of them
  * reads or writes the owner's files.
  */
-export function researcherHint(researcher: Pick<ResearcherView, 'harness' | 'fence'> | undefined): string {
+export function researcherHint(researcher: Pick<ResearcherView, 'harness' | 'fence'> | undefined): string[] {
   const gets = 'Gets only your model names and the source list, never your files.'
-  if (researcher?.harness !== 'codex') return `${gets} Runs in an empty folder with web tools only.`
-  const first = researcher.fence?.compared === false ? ' Its first research starts by asking its provider for the model list and repeating the fence test under that list; a different tool list stops it before any answer is used.' : ''
-  return `${gets} Runs in an empty folder, with a Codex folder of its own and web search. ${codexToolsLine(researcher.fence?.tools ?? [])}${first}`
+  if (researcher?.harness !== 'codex') return [`${gets} Runs in an empty folder with web tools only.`]
+  const first = researcher.fence?.compared === false ? ["Its first research repeats the fence test under the provider's model list; another tool list stops it before any answer."] : []
+  return [gets, 'Runs in an empty folder, with a Codex folder of its own and web search.', codexToolsLine(researcher.fence?.tools ?? []), ...first]
 }
 
 /** What research needs, said where no agent on the team can research: `named` is who the team names, null for a team that has not chosen yet. Mirrors bin agents-ask.mjs `noResearcherWords`: the renderer cannot load bin modules. */
@@ -162,15 +162,16 @@ export function noResearcherWords(named: readonly string[] | null): string {
 }
 
 /** The fence test's line on Models: how the installed Codex (or OpenCode, 70.3) stands for the team's researchers on it. */
-export function fenceWords(codex: readonly ResearcherView[], app = 'Codex'): string {
+export function fenceWords(codex: readonly ResearcherView[], app = 'Codex'): string[] {
   const waiting = codex.filter((entry) => !entry.ok && /fence test|other tools than/.test(entry.why ?? ''))
   const names = (entries: readonly ResearcherView[]): string => {
     const all = entries.map((entry) => entry.name)
     return all.length <= 1 ? all.join('') : `${all.slice(0, -1).join(', ')} and ${all.at(-1) as string}`
   }
-  const about = `BMN runs it by itself when ${app} or a researcher's model changes: ${app} against a stand-in on this computer with made-up files, so no provider is called and none of your files is read.`
+  const about = [`BMN runs it by itself when ${app} or a researcher's model changes, against a stand-in with made-up files.`,
+    'No provider is called and none of your files is read.']
   if (waiting.length === 0) return about
-  return `${names(waiting)} research${waiting.length === 1 ? 'es' : ''} only where this test passed for exactly the installed ${app}: ${waiting[0]!.why ?? 'it has not passed'}. ${about}`
+  return [`${names(waiting)} research${waiting.length === 1 ? 'es' : ''} only where this test passed for exactly the installed ${app}: ${waiting[0]!.why ?? 'it has not passed'}.`, ...about]
 }
 
 /** The fence test's result on its read-only row: the last one recorded, its day and the version it ran on (Story 75.8). */
@@ -242,8 +243,8 @@ function Facts(props: { model: ResearchModelView; teamHas?: string | undefined }
 }
 
 /** The agents that cannot research now, each with why in a few plain words; the check's own message stays in `bmn roster check`. */
-function notOffered(unable: readonly ResearcherView[]): string {
-  return unable.map((entry) => ` ${entry.name} cannot research${entry.why ? `: ${entry.why}` : ''}.`).join('')
+function notOffered(unable: readonly ResearcherView[]): string[] {
+  return unable.map((entry) => `${entry.name} cannot research${entry.why ? `: ${entry.why}` : ''}.`)
 }
 
 function FoundLine(props: { model: ResearchModelView; provider: string; add(): void }): React.JSX.Element {
@@ -372,12 +373,12 @@ export function ModelsPage(props: {
       ) : null}
       {/* BMN's proposal of who researches is taken with the others from the one card on Team (Story 75.10). */}
       {proposed.length > 0 ? (
-        <p className="page-note">Who researches is your choice and you have not made it yet, so every agent that can research is offered; BMN&apos;s proposal is on Team.</p>
+        <p className="page-note">You have not chosen who researches, so every agent that can research is offered; BMN&apos;s proposal is on Team.</p>
       ) : null}
       <Row label="Researcher" id={researcherId}
         hint={able.length === 0
-          ? `${noResearcherWords(snapshot.choice.named)} A price can still be written in the team file.${notOffered(unable)}`
-          : `${chosen === undefined ? 'Pick who researches.' : researcherHint(chosen)}${notOffered(unable)}`}>
+          ? [noResearcherWords(snapshot.choice.named), 'A price can still be written in the team file.', ...notOffered(unable)]
+          : [...(chosen === undefined ? ['Pick who researches.'] : researcherHint(chosen)), ...notOffered(unable)]}>
         {able.length === 0
           ? <span className="muted">No agent on your team can research.</span>
           : <Segmented labelledBy={researcherId} fit options={able.map((entry) => entry.id)} value={chosen?.id ?? ''} disabled={running || research.busy}
@@ -385,7 +386,7 @@ export function ModelsPage(props: {
       </Row>
       {codex.length > 0 ? <FenceRow harness="codex" researchers={codex} snapshot={snapshot} research={research} locked={testing || running || research.busy} /> : null}
       {openCode.length > 0 ? <FenceRow harness="opencode" researchers={openCode} snapshot={snapshot} research={research} locked={testing || running || research.busy} /> : null}
-      <Row label="Sources" hint="Prices come from provider pages first; other sites are cited and never override. BMN reads each cited page itself and marks what it cannot confirm.">
+      <Row label="Sources" hint="Provider pages first; other sites are cited, never override. BMN reads each cited page and marks what it cannot confirm.">
         <ol className="sources"><li>Provider pages</li><li>Other sites</li></ol>
       </Row>
       {applying && changes.length > 0 ? (

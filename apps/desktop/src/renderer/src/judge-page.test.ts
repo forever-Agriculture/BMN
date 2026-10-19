@@ -144,7 +144,7 @@ describe('Agents › Team with a judge (65.1 AC5, AC7)', () => {
     const proposals = teamProposals(BEFORE, { lunaListed: false, researchers: null })
     expect(proposals?.data).toEqual(DATA)
     const markup = renderToStaticMarkup(createElement(TeamPreferences, { team: team(BEFORE), page: { name: 'agents' }, go: noop, proposals }))
-    expect(words(markup)).toContain('BMN proposes 1 change to your team: Jev as Judge, with its two providers OpenCode Zen and TypeSafe AI, which may both see private work, as you chose. Nothing changes until you approve it.')
+    expect(words(markup)).toContain('BMN proposes 1 change to your team. Nothing changes until you approve it. Jev as Judge, with its two providers OpenCode Zen and TypeSafe AI, which may both see private work, as you chose')
     expect(markup).toMatch(/<div class="page-note with-action" role="status" data-proposals="1">.*?>Approve…<\/button>/)
     expect(teamProposals(DATA, { lunaListed: false, researchers: null })).toBeNull()
     expect(pageMarkup({ name: 'agents' })).not.toMatch(/Use proposal|BMN proposes/)
@@ -347,11 +347,11 @@ describe('what Jev\'s calls cost (65.3 AC1)', () => {
 
   it('calls counted by the size of their request are said under the sums, and a record that cannot be read is said in place of them', () => {
     expect(estimatedWords({ estimated: 0 }, { estimated: 0 })).toBeNull()
-    expect(text).not.toContain('gave no count')
+    expect(text).not.toContain('gave no token count')
     const some = words(groups({ ...VIEW, current: { ...VIEW.current, estimated: 1 }, previous: { ...VIEW.previous, estimated: 4 } }))
-    expect(some).toContain('The gateway gave no count of tokens for 1 call this month and 4 last month. BMN counted those by the size of what it sent, so their cost is an estimate.')
+    expect(some).toContain('The gateway gave no token count for 1 call this month and 4 last month; BMN estimated their cost from what it sent.')
     const unreadable = words(groups({ ...VIEW, current: { ...VIEW.previous, month: '2026-10' }, calls: [], unreadable: '~/.config/bmn/agents/state/judge/calls.json' }))
-    expect(unreadable).toContain("BMN cannot read its record of Jev's calls at ~/.config/bmn/agents/state/judge/calls.json , so it does not know what this month cost and asks nothing. Mend it or move it away, and BMN counts again.")
+    expect(unreadable).toContain("Cannot read Jev's call record at ~/.config/bmn/agents/state/judge/calls.json : the cost is unknown, so nothing is asked. Mend or move it to count again.")
     // Neither sums nor calls are shown of a record that cannot be read: "no calls" would be a claim.
     expect(unreadable).not.toContain('Last calls')
     expect(unreadable).not.toContain('No calls yet')
