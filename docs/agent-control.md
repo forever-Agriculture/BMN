@@ -1969,27 +1969,6 @@ Codex agent is yours to start.
 - Claude Code researchers: their limits are in the command and checked, and not yet tested this
   way on a live run.
 
-#### OpenCode as a helper: what 2.0.29 showed
-
-Before BMN checks an `opencode run` a lead starts, the run was measured on OpenCode 2.0.29 against
-a stand-in model on this computer, in throwaway profiles holding 26 markers where OpenCode could
-pick something up (Story 70.1; scripts, records and details in
-`plan/references/reference-70-opencode-helpers/RESULT.md`). The form measured:
-`env -i` with a home, configuration, data, state and cache folder of the run's own,
-`OPENCODE_DISABLE_PROJECT_CONFIG=1`, then `opencode run --standalone --format json --agent
-bmn-helper -m <model#variant> --title <title>` with the prompt on standard input. BMN's agent
-denies every action but reading inside the project (`read`, `glob`, `grep`, `list`), and web
-search for a researcher.
-
-| Measured | Verdict | Why |
-| --- | --- | --- |
-| What a run prints, and the shared background service | PASS, with a limit | Every JSON event names the session (`ses_…`); the answer is the `text` events; an error is one `error` event and exit 1. Tokens and cost are not printed: `opencode session export` gives them. `--standalone` never touched the background service. A provider answering with a server error is retried without end and without an event, so a dispatch needs its own time limit. |
-| Read-only | PASS | Only `read`, `glob` and `grep` are offered; writing, editing, the shell, Code Mode (`execute`, which can fetch), MCP tools, sub-agents, the web, questions and skills are refused when asked for anyway, as is a read outside the project; nothing was written, with `--auto` too. A permission that would ask is refused at once in a run nobody watches. Only with `OPENCODE_DISABLE_PROJECT_CONFIG=1`: without it a repository's own `opencode.json` or `.opencode/` folder replaces BMN's agent, and the run wrote files, ran a command, read outside the project, reached this computer, sent requests where the repository chose and ran the repository's plugin. |
-| What reaches the provider | PASS for the run's own folders, FAIL as OpenCode starts by default | By default the provider gets the rules file, agents and skills of the OpenCode configuration and of Claude Code's and `~/.agents`' folders, and his plugins and MCP servers start. With the run's own folders, none of the markers reached it. OpenCode 2.0.29 keeps the sign-in in its database, not in a file, so a folder that only links a sign-in file cannot sign in; which form signs a helper in is the owner's choice. |
-| Model, effort and title | PASS | `-m provider/model#variant` sets the effort (`opencode-go/gpt-6-luna` has none, low, medium, high, xhigh and max); an unknown variant is refused before any request. Without `--title` one more request goes to the configuration's small model; with it, none. |
-| Web search | PASS | Needs the `websearch` permission and a provider named in the run's configuration; without one the search is cancelled, never left waiting. TinyFish and Tavily answer without an account. A search for a local address or file fetched nothing on this computer. |
-| BMN's terminal plugin | PASS | `opencode run` does not load it, so a helper run never reaches `bmn hook` as if it were your session. |
-
 #### Checking an OpenCode helper run
 
 `bmn roster check` reads one OpenCode command, the form 70.1 measured, and refuses every other
@@ -2038,7 +2017,7 @@ What the check reads and refuses:
   built into OpenCode, which holds OpenCode Go's models on 2.0.29, and makes no call to
   `models.opencode.ai`. A model newer than the installed OpenCode waits for an OpenCode update. A
   model list planted in the run's cache did not move OpenCode Go's address in either mode
-  (the 70.2 probe at the end of the 70.1 record).
+  (the 70.2 probe at the end of the 70.1 record, `plan/references/reference-70-opencode-helpers/RESULT.md`).
 - **Binding.** The first JSON event of a run names its session (`ses_` and 26 characters);
   `bmn roster bind --receipt <file> --session <ses_…>` takes that shape for an OpenCode receipt,
   inside the same ten minutes as for Codex, and no other. A research run on OpenCode binds its
@@ -2064,6 +2043,8 @@ for, and only the project file the model asked to read reached it.
 - *Usage.* Tokens and cost are not printed; `opencode session export <id> --standalone` with the
   same environment gives them.
 - *Versions.* The form was measured on 2.0.29; on another version the check says so in its steps.
+- *BMN's terminal plugin.* `opencode run` does not load it, so a helper run never reaches `bmn hook` as if it
+  were your session.
 - *Your own OpenCode.* None of this changes what BMN writes into your own OpenCode configuration:
   it still gets the public rules only.
 
@@ -2519,14 +2500,13 @@ session's first prompt was not stopped for want of its saved record in that test
 
 ## Asking a teammate: `bmn team ask`
 
-This is the contract of Epic 72 as Story 72.9 redrew it on 2026-10-15 (plan version 8): a teammate
-answers in its own app's read-only mode with that mode's tools, the way dev-auto runs a helper, in
+A teammate answers in its own app's read-only mode with that mode's tools, the way dev-auto runs a helper, in
 the owner's own home and sign-in; BMN only coordinates. It picks the teammate, checks the ask,
 launches it, supervises it in a systemd user scope of its own and keeps its record. It builds no
 container, frozen copy, run home or sign-in of its own. Measured on this computer (Codex 0.162.1, Claude
 Code 2.1.300, OpenCode 2.0.29, Linux 7.0, the owner's systemd user manager). The scripts and raw
 records are in `plan/references/reference-72-team-ask/`: `RESULT-v8.md` holds 72.9's
-measurements, and `RESULT.md` holds 72.1's measurements of the container engine it replaced.
+measurements.
 
 ### Commands
 
@@ -2615,6 +2595,8 @@ options, every shell redirection, a background shell) and every tool not given. 
 - **The project's state.** A project ask records the project's commit and whether its tree is clean
   (by Git's own status, read without its locks), immediately before the app starts and once it has
   ended (`project-start.json`, `outcome.project`), so a reader can tell the tree the teammate saw.
+- **Read the commits.** A project ask's prompt ends by saying to read the commits behind the code it judges
+  (`git log -p` or `git blame` on the lines in question, then `git show`), as 72.6's quality gate required.
 
 ### Supervision: a systemd user scope per ask
 
@@ -2703,7 +2685,7 @@ sockets Chrome makes there), which BMN removes with the record. It starts throug
 (a screenshot, a snapshot, a console or network log) inside the client's first workspace root, and
 Codex or Claude Code may give the project as that root. The relay starts the server in `browser/`
 and takes the client's offer of roots out of its start, so every such file lands in `browser/` and a
-name reaching out of it is refused by Playwright (measured, below).
+name reaching out of it is refused by Playwright (measured in 74.3).
 
 Playwright's origin limit, in its own words, "does not serve as a security boundary": it does not
 stop redirects or every request a page makes itself. So every browser ask needs `--disposable`,
@@ -2992,77 +2974,6 @@ pictures, the key, the exits, reading the answer as advice, and that a refusal i
 Claude Code's auto mode, as the owner runs it, let `bmn team ask` command lines run when 72.1 measured them
 (2026-10-15), so BMN offers no permission rule for it; should a later Claude Code refuse it, the narrowest rule is `Bash(bmn team ask:*)`, installed only
 by the owner.
-
-### Measured (72.9)
-
-`RESULT-v8.md` holds what 72.9 measured before any code changed. AC1: each candidate form, with no
-container, against a stand-in provider: the forms above PASS (nothing written of 46 writes by the
-teammate and a forced sub-agent, every tool not given refused, the project's files and history read).
-Rejected: Claude Code's plan mode (with nobody to approve it denies sub-agents and sends Bash through
-auto mode's classifier), and OpenCode's reader without the redirection rule (`git log -1 > file`
-wrote). AC2: one live call per app with its own home and sign-in, each answer right and each
-sub-agent's session and usage found. AC3: the scope's Stop, time limit and supervisor death, above.
-
-### Measured (74.3)
-
-Against the real Playwright MCP 0.0.75 server, scripted without a provider (2026-10-15): an
-off-origin navigation fails `ERR_BLOCKED_BY_CLIENT` and the other server counts no request (an image
-from it included); `file://` is refused; a download lands in the output folder under the name the
-app suggests, so a download named as a screenshot replaced it, and after the server was killed the
-download's bytes stayed in Playwright's temporary folder with the browser's profile; with
-`acceptDownloads: false` the download fails, the screenshot stays and no payload is anywhere, and
-Chrome does not start with `TMPDIR` on a path as long as a run folder's; the session log holds each
-completed call with its page and screenshot links. A client that offers its project as
-a root had a named screenshot, a named network log and a file named by `_meta.cwd` written into the
-project; through BMN's relay the project stayed empty, the named screenshot landed in `browser/`,
-and names reaching out (`../`, an absolute path, `_meta.cwd`) were refused.
-
-Forced calls (AC2), real Codex 0.162.1 and Claude Code 2.1.300 started with BMN's own command against
-a stand-in provider: in a look ask every interaction tool, script evaluation, file upload, drag and
-`browser_run_code_unsafe` were refused (Codex: not in its code-mode host, "unsupported call" by name;
-Claude Code: denied by `dontAsk`) and the server ran only navigate; with `--interact` the six
-interaction tools ran and the other four did not; no request reached the forbidden server and the
-project was untouched. Live asks (AC5), Luna on Codex and Haiku on Claude Code, look and interact, on a
-synthetic app: each gave the right answer in 13 to 28 seconds, with its page and screenshot in the
-record, `asks show`, Agents › Asks and the export; the page's fetches off the origin were blocked, and
-an image whose address redirected off it reached the forbidden server once per ask: the known limit
-above (`reference-74-browser/RESULT-v8.md`).
-
-### Measured (72.1), the engine 72.9 replaced
-
-72.1 measured each app in a bubblewrap container BMN built per run, with its own home and a bound
-sign-in, against a stand-in provider with synthetic credentials and 34 planted markers; question,
-file and picture asks passed for Codex and Claude Code, and Claude Code's project ask passed with
-BMN's `git`. Codex had no project form there: its own sandbox nested in the container was refused by
-AppArmor. 72.9 (owner, 2026-10-15, "Dev-auto's way") replaced that engine with each app's own
-read-only mode, as dev-auto runs its helpers: a teammate may read any file its mode reads, as a
-helper does today. The early quality look (72.1 AC9; one synthetic project review, Claude Code
-`claude-opus-5-5` at medium, three runs each way): dev-auto's tools-disabled packet review and the
-project-ask prototype both found the skipped last page and the swallowed store errors every time;
-only the prototype found the critical defect whose cause is in the history, three times out of
-three, against none for the packet. Reported cost per run: packet $0.04–0.08, prototype $0.06–0.13.
-
-### Review quality (72.6)
-
-The gate compared each app's current dev-auto way with `team ask`, same teammate, effort, repository
-state and question, on four synthetic reviews with seeded defects (two project cases, each with a
-defect findable only through its history; two file cases), floors fixed before any run: every
-critical seed in at least two thirds of the team-ask runs, every seed the old way found that often
-found by team ask too, and team ask's totals no worse.
-
-| App and mode | Teammate | Result |
-| --- | --- | --- |
-| Claude Code, project | Opus, medium | FAIL over six runs (the history-only critical seed of one case 3 of 6; the old way 0 of 6); after the repair below PASS, 3 of 3 for every seed |
-| Claude Code, files | Opus, medium | INCONCLUSIVE: every floor passes; 12 "Missing context" lines against 10 (the brief asks for them); for the owner |
-| Codex, files | Astra, medium | PASS |
-| OpenCode, files | Luna (Go), xhigh | PASS |
-| Codex, project; OpenCode, project | | not asked in 72.6: no form in the container engine; 72.9's gate rerun asks Codex's |
-
-The repair: in the failing runs the reviewer listed the log, saw the revert's subject and judged the
-change without opening it, so a project ask's prompt now ends by saying to read the commits behind
-the code it judges (`git log -p` or `git blame`, then `git show`). The record, with every answer and
-a hand audit of each scoring miss, is in `plan/references/reference-72-team-ask/records/gate/`.
-72.9 reruns the gate with its forms into `records/gate-v8/`.
 
 ## The project's plan: `bmn plan`
 
