@@ -664,21 +664,19 @@ unchecked.
 
 ### Wiring the hooks
 
-BMN wires them itself (Story 75.9). At every start it runs `bmn hooks install --absent --yes` for
-each app set up on this computer, one whose settings folder exists; it creates no folder for an app
-that never ran here. It adds an entry only where an event has none of BMN's in any shape. An entry
-inside a matcher, one in BMN's wording with a field the app will not run (changed), or one naming
-`bmn hook <agent>` in a wording BMN did not write (not BMN's) is left as it is, and nothing is added
-beside it; so is an OpenCode plugin file BMN did not write, with its `cli.json`, and a file BMN
-cannot add to. An older wording still runs and counts as in place. Every file is copied before it
-changes and written the way `install` writes it, checked once more against the bytes and the link
-it read. A second start writes nothing. Integrations › Health › **Hooks** says what the start found; Codex
-still asks once, in `/hooks`, before it runs entries it has not seen. The exit is `0` when every
-set-up app has every entry, `1` when one was left or could not be written, and `--json` prints
-each app's `state` (`checked`, `installed`, `left`, `failed` or `not-set-up`), what is in place,
-in an older wording, added and left, with why.
+**At every start** BMN runs `bmn hooks install --absent --yes` for each app set up on this computer, one whose settings
+folder exists (it creates no folder). It adds an entry only where an event has none of BMN's in any shape. It leaves as
+it is, and adds nothing beside: an entry inside a matcher, BMN's wording with a field the app will not run, a
+`bmn hook <agent>` call in a wording BMN did not write, an OpenCode plugin file BMN did not write (with its `cli.json`),
+and a file BMN cannot add to. An older wording runs and counts as in place. Every file is copied before it changes,
+written as `install` writes it and checked once more against the bytes and the link it read; a second start writes
+nothing. Exit `0` when every set-up app has every entry, `1` when one was left or could not be written; `--json` prints
+each app's `state` (`checked`, `installed`, `left`, `failed` or `not-set-up`), what is in place, in an older wording,
+added and left, with why. Integrations › Health › **Hooks** shows what the start found, an app with an entry left first,
+without the files' contents and without a button. Codex still asks once, in `/hooks`, before it runs entries it has not
+seen.
 
-By hand, or in a script, two commands do it, and neither needs BMN to be running:
+**By hand**, also with BMN closed:
 
 ```bash
 bmn hooks check              # what each agent's own hook file carries, for every event BMN expects
@@ -687,244 +685,123 @@ bmn hooks install codex
 bmn hooks install opencode   # BMN's terminal plugin beside OpenCode's cli.json, named in it
 ```
 
-`check` prints one line per event: `wired` for the documented command, `wired (older wording)` for
-the two other entries BMN recognises (see below), or `missing`. It exits `0` when nothing is missing
-and `1` otherwise, and `--json` prints the same report as one object. Run it after a harness
-update rewrites its hook or plugin file. Per app it also says whether the prompt guard is in force
-and, on a `messages:` line, whether that app's hook hands
-[messages](#messages-between-sessions) to a working agent and on which version that was measured.
-A `turn changes:` line says whether that app's turns are recorded, as they are in every workspace
-that is not archived, and on which version waiting for the prompt hook was
-measured ([turn-changes.md](turn-changes.md#how-a-turn-is-recorded)).
+`check` prints one line per event, `wired`, `wired (older wording)` or `missing`, and exits `0` when nothing is missing
+and `1` otherwise; `--json` prints the same report as one object. Per app it also says whether the prompt guard is in
+force, on a `messages:` line whether the hook hands [messages](#messages-between-sessions) to a working agent, and on a
+`turn changes:` line whether turns are recorded ([turn-changes.md](turn-changes.md#how-a-turn-is-recorded)), each with
+the version it was measured on. Run it after a harness update rewrites its hook or plugin file. For Claude Code and
+Codex both commands read the file the app reads, `~/.claude/settings.json` and `~/.codex/hooks.json`, or the same file
+under `CLAUDE_CONFIG_DIR` or `CODEX_HOME`; `--file PATH` replaces it, for tests.
 
-For OpenCode 2 (2.0.28, checked 2026-10-14), `bmn hooks print opencode` prints the terminal plugin
-shipped with this CLI. `install` writes it as `bmn/tui.ts` in OpenCode's config folder
-(`OPENCODE_CONFIG_DIR`, otherwise `~/.config/opencode`) and adds the `bmn` folder to `plugins` in
-`cli.json` there. OpenCode 2 reads terminal plugins only from that list, and loads a local one only as a
-folder, from its `tui.ts`: an entry naming a file is skipped without a word. `check` reports two lines:
-`plugin` compares `tui.ts` byte for byte (`wired`, `wired (older wording)` or `missing`), and `cli.json`
-says whether the list names the folder. A
-`cli.json` that is not a JSON object with a `plugins` list is reported and left untouched. `install`
-backs up every file before it changes it. It also removes OpenCode 1's BMN plugin from `plugin/` or
-`plugins/`, because OpenCode 2 refuses to load it ("Plugin must export a default definition with an id
-and an effect or setup function"). That copy is kept in the `bmn` folder as
-`plugin-bmn.ts.bmn-backup-<time>`, outside the folders OpenCode loads. A file there that is not BMN's
-stays. Restart OpenCode after installing.
+Both commands say what is **configured**: never that a hook fired (the session's **Hook events…** list shows that), nor
+that it will run (BMN's entry does nothing while BMN is not running). Codex loads its hook file strictly, so a mistake
+anywhere in it can stop every hook; BMN does not check that, and every Codex report ends by saying so: run `/hooks` in
+Codex once, then confirm the event shows under Hook events. Session details shows the run's latest event (**Observed
+by BMN**, or **Not observed in this run**), and its **Hooks in Integrations › Health** opens this section; one received
+event proves only that event reached BMN.
 
-The plugin runs in the terminal's own process, so it acts only inside BMN. It follows the session the
-terminal shows and that session's subagents; the background service it talks to may serve other
-terminals, whose events it ignores. It translates OpenCode 2's events into the OpenCode 1 shapes
-`bmn hook opencode` reads ([remote-answers.md](remote-answers.md#opencode-2028)), one call at a time,
-each killed after 3 seconds. While a question or permission of its session waits, it runs
-`bmn answer take --wait 25` in a loop and sends any answer through its own OpenCode client. It then
-tells BMN what OpenCode said with `--reported <id>=ok|failed`: `ok` for an accepted reply, `failed`
-only for the server's own refusal (for example `PermissionNotFoundError` or `FormAlreadySettledError`:
-nothing applied), and nothing for a lost connection or a decoding error, as the reply may still have
-landed. It sends a reject only while that permission is the only one of its
-session still waiting. It stops when nothing waits and after three failed calls, so an absent BMN costs
-nothing. On 2026-10-14 a real OpenCode 2.0.28 terminal, with the plugin put there by `bmn hooks install
-opencode` and a stand-in `bmn`, sent each event in order and carried a permission ("once") and a
-question ("Beta") from the stand-in back to the model, both reported `ok`; those payloads are a test
-fixture (`test-fixtures/remote-answers/opencode-2/`).
+**Installing for Claude Code and Codex.** `install` shows the requested path, the resolved target, the entries and the
+proposed diff on stderr, then asks Yes with No as the default: an empty answer, No or a closed prompt writes nothing.
+Without TTY stdin and stderr it needs `--yes`; `--json` does not approve the write. It copies the file to
+`<file>.bmn-backup-<timestamp>`, adds the missing entries beside the hooks already there, writes atomically and prints a
+unified diff. It never removes, reorders or rewrites an entry, and writes nothing when nothing is missing. It writes
+nothing, and says why, when the file is not valid JSON, its `hooks` is not an object or an event is not a list, when
+the file changed while it was read (run it again), and when the file holds a number it cannot write back unchanged
+(`18446744073709551615` would become `18446744073709552000`; it names the number). The JSON writer keeps your indent,
+key order and values, but not an escape: `"\u0061"` comes back as `"a"`. Approval guards only `bmn hooks install`;
+any process with file access can still edit these files.
 
-For Claude and Codex, `install` copies the file to `<file>.bmn-backup-<timestamp>`, adds the missing entries next to the
-hooks already registered for that event, writes the file atomically and prints a unified diff. It
-shows the requested path, resolved target, entries and proposed diff on stderr before writing, then
-asks Yes with No as the default. An empty answer, No or a closed prompt writes nothing. A script
-without TTY stdin and stderr must pass `--yes`; `--json` does not approve the write. The OpenCode
-prompt also shows the entire proposed plugin file. Approval only guards `bmn hooks install`:
-a process with filesystem access can still edit these files directly. Installation never removes,
-reorders or rewrites an entry, including one with the older wording, and writes
-nothing when nothing is missing. A file that is not valid JSON is reported and left untouched, as is
-one whose `hooks` is not an object or whose event is not a list: BMN says what it cannot add to
-rather than replacing somebody's configuration. If the file changed while `install` was reading it,
-nothing is written and it says so; run it again.
+**The window it cannot close.** If the harness writes the file between that last check and the rename, its change is
+lost and the backup, taken before the check, does not hold it. Neither harness offers a lock, so close the harness, or
+keep it from rewriting its settings, while `install` runs.
 
-That check closes the window it can. If your harness writes the same file in the instant between
-that check and the rename, **its change is lost and the backup does not contain it** — the backup is
-taken before the check, so it holds the configuration as it was before `install` started, not the
-edit that raced it. No program can close that window without the other writer agreeing to a lock,
-and neither harness offers one. So: close the harness, or at least do not let it rewrite its
-settings, while `install` runs.
+**OpenCode 2** (2.0.28). `bmn hooks print opencode` prints the terminal plugin shipped with this CLI. `install` writes it
+as `bmn/tui.ts` in OpenCode's config folder (`OPENCODE_CONFIG_DIR`, otherwise `~/.config/opencode`) and adds the `bmn`
+folder to `plugins` in `cli.json` there: OpenCode 2 loads a local terminal plugin only as a folder named in that list,
+and skips an entry naming a file without a word. `check` reports `plugin` (`tui.ts` byte for byte: `wired`, `wired
+(older wording)` or `missing`) and `cli.json` (whether the list names the folder); a `cli.json` that is not a JSON
+object with a `plugins` list is reported and left untouched. `install` backs up every file it changes, shows the whole
+plugin file in its prompt, and moves OpenCode 1's BMN plugin, which OpenCode 2 refuses to load, out of `plugin/` or
+`plugins/` to `bmn/plugin-bmn.ts.bmn-backup-<time>`; a file there that is not BMN's stays. Restart OpenCode after
+installing.
 
-One more limit worth knowing: the file is rewritten by a JSON writer, so your indent, key order and
-values survive, but an escape does not stay an escape — `"\u0061"` comes back as `"a"`. It is the
-same string; it is not the same bytes.
+The plugin runs in the terminal's own process, so it acts only inside BMN, for the session the terminal shows and its
+subagents. It turns OpenCode 2's events into the OpenCode 1 shapes `bmn hook opencode` reads
+([remote-answers.md](remote-answers.md#opencode-2028)), one call at a time, each killed after 3 seconds. While a
+question or permission of its session waits, it runs `bmn answer take --wait 25` in a loop, sends any answer through its
+own OpenCode client and reports it with `--reported <id>=ok|failed`: `ok` for an accepted reply, `failed` only for the
+server's own refusal (nothing applied), and nothing for a lost connection or a decoding error, as the reply may still
+have landed. It sends a reject only while that permission is the only one of its session waiting, and stops when
+nothing waits and after three failed calls (a real 2.0.28 run's payloads: `test-fixtures/remote-answers/opencode-2/`).
 
-For Claude and Codex, both commands read the file each harness actually reads: `~/.claude/settings.json` and
-`~/.codex/hooks.json`, or the same file under `CLAUDE_CONFIG_DIR` or `CODEX_HOME` when you have
-moved that directory. `--file PATH` replaces it, for tests.
-
-Both commands say what is **configured**. Neither says that a hook has ever fired; the session's
-**Hook events…** list is what shows that. Nor does either say the command *will* run: the documented
-entry is guarded and does nothing while BMN is not running, which is the point of the guard.
-
-BMN recognises its own entry by what it is, not by reading the shell it is written in. Exactly three
-commands count, compared whole and never parsed. `wired`:
+**What counts as BMN's entry.** Exactly three commands, compared whole and never parsed, after dropping only the space,
+tab and newline bash itself drops at either end. `wired`:
 
 ```bash
 [ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0
 ```
 
-and `wired (older wording)` for these two — the wording from before BMN was renamed, which
-`bmn hook` still reads, and the call with nothing around it:
+and `wired (older wording)` for the wording from before BMN's rename, which `bmn hook` still reads, and the bare call:
 
 ```bash
 [ -n "$AITERM_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0
-```
-
-```bash
 bmn hook claude
 ```
 
-Copy one of those three exactly. Only the whitespace bash itself drops — space, tab and newline at
-either end — is ignored; a non-breaking space or a byte-order mark picked up from a paste is part of
-the command as far as bash is concerned, so it is part of the command as far as `check` is concerned
-too, and such an entry reads `missing`.
+Everything else reads `missing`: a wrapper, a redirection, a condition, an extra space, a non-breaking space or a
+byte-order mark from a paste, and BMN's own entry in a group with a `matcher`. For an event that reads `missing`,
+`check` prints each entry naming `bmn hook <agent>` as a JSON string, exactly as in the file, under "an entry here names
+bmn hook claude but is not one BMN recognises", and BMN's own entry inside a matcher under "an entry here is inside a
+matcher, so it wires only part of this event"; an event that is wired prints neither. BMN does not read the shell around
+the call, because a command wrongly called `wired` would leave no hook and no warning; a duplicate is visible and
+harmless.
 
-**Everything else reads as `missing`** — a wrapper, a redirection, a condition, a group, your own
-variant with one extra space, and BMN's own entry inside a group carrying a `matcher`. When such an
-entry names `bmn hook <agent>`, `check` prints it under the event, so you can see what it declined
-to read:
+- **Matchers.** Only an absent or empty matcher leaves a group ungated, and for Codex `null` too; BMN does not answer for
+  an entry in a gated group. Claude Code fired a `PostToolUse` hook only with an absent or empty matcher (`null`,
+  `["Bash"]` and `42` did not). Where a harness ignores the matcher on an event (Codex on `Stop`, `UserPromptSubmit` and
+  `Interrupt`), the entry `install` adds beside yours is a duplicate.
+- **`timeout`.** A Claude Code entry counts only with an absent or positive-number `timeout` (`"5"`, `-1`, `null` and
+  `0` stopped it running). A Codex entry counts with an absent or `null` one, or a whole number from 0 to
+  9,007,199,254,740,991 (`Number.MAX_SAFE_INTEGER`); for one of BMN's own entries the event's line then says `timeout
+  is not a whole number of seconds`, and `--json` carries it as `reason`.
+- **Duplicates.** For an event that reads `missing` because of an entry of yours, `bmn hooks install <agent>` adds BMN's
+  beside it (the start's `--absent` install does not). Removing BMN's puts the event back to `missing`; to keep only
+  yours, first make the harness fire that event and look for it under **Hook events…**. A hand-written entry that works
+  still reads `missing` unless it is one of the three exactly.
 
-```
-  Stop              missing
-    an entry here names bmn hook claude but is not one BMN recognises:
-      timeout 5 bmn hook claude
-```
-
-Anything that is not printable ASCII is printed as `\u{...}`, because an invisible character is
-usually the whole reason — delimited so that `\u{10000}` and `\u{1000}0` cannot be read as each
-other, and with a backslash doubled so the text `\u00a0` and the character it names cannot be
-confused either:
-
-```
-  Stop              missing
-    an entry here names bmn hook claude but is not one BMN recognises:
-      \u{a0}bmn hook claude
-```
-
-An entry BMN *does* recognise, sitting inside a matcher, gets its own line instead — it is not an
-entry BMN failed to recognise, and the matcher is the whole reason:
-
-```
-  PostToolUse       missing
-    an entry here is inside a matcher, so it wires only part of this event:
-      [ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0
-```
-
-The line is only printed when the event is missing. An event something else already wires has no
-duplicate coming and nothing to explain, so nothing is printed for it.
-
-**About matchers.** A matcher names the tools its group's hooks run for. BMN does not read one, so
-it does not answer for an entry inside a group that has one — only an absent or empty matcher
-leaves a group ungated, and for Codex a `null` one as well. That is a rule about what BMN
-recognises, not a claim that the entry never fires: a harness may ignore the matcher on some events (Codex does on `Stop`,
-`UserPromptSubmit` and `Interrupt`), in which case the entry `install` adds beside yours is simply a
-duplicate.
-
-What counts as *no matcher at all* differs by harness, and it was measured rather than assumed. A
-Claude Code hook was run against a real tool call with each shape in turn: only an absent matcher
-and an empty one fired. `null` did not, nor did `["Bash"]`, nor `42` — so BMN treats all three as
-gating, and a `null` matcher as a dead hook rather than an unmatched one. That was measured on
-`PostToolUse`; an event where the harness ignores matchers entirely could fire anyway, which would
-cost a duplicate entry and nothing worse. For Codex, which has never been run here, `null` is taken
-as absence.
-
-**About `timeout`.** A recognised command in an entry the harness will not run is not a wired hook,
-so `check` does not call it one. Under Claude Code this was measured one entry at a time against a
-real tool call, each with a control that fired: an absent `timeout` ran, `1` and `1.5` ran, and
-`"5"`, `-1`, `null` and `0` did not. So BMN counts a Claude entry only when its `timeout` is absent
-or a positive number, and prints the entry under the event like any other it did not count. For
-Codex the rule follows its `Option<u64>` seconds: absent, `null`, or a whole number from 0 to
-9,007,199,254,740,991 (`Number.MAX_SAFE_INTEGER`, the largest a JSON number holds exactly). Any
-other value keeps the entry from counting; when it is one of BMN's own entries, the event's line
-says `timeout is not a whole number of seconds`, and `--json` carries the same text as `reason`.
-
-**What `check` does not do: read your harness's config file for it.** Codex in particular loads its
-hook file strictly, so a mistake anywhere in that file can stop every hook in it, BMN's included.
-BMN does not check for that, so every Codex report ends with the limit instead: this command reports
-what is *configured*, never that a hook fired. Run `/hooks` in Codex once, then confirm the event
-shows up under Hook events. That is the check BMN cannot do for you.
-
-Integrations › Health › **Hooks** shows, per app, what the install at BMN's start found, an app with an
-entry left first: the entries in place, those added at start, and each event left as it is with
-why, without the file's contents and without a button. Session details separately shows the
-latest hook event **Observed by BMN** in that session's run, or **Not observed in this run**, and
-its **Hooks in Integrations › Health** opens Health scrolled to that section, Local control just under it. One received event proves only that event
-reached BMN; neither view says every hook or permission path works.
-
-What BMN still refuses to add to, for both harnesses, is a file it cannot merge into without
-removing something: `hooks` that is not an object, or an event whose value is not a list. That is
-about the merge, not about the harness.
-
-One more thing `install` will not do: rewrite a number it cannot reproduce. It reserializes the
-file, and `JSON.stringify` turns `18446744073709551615` into `18446744073709552000`. Rather than
-silently edit a value nobody asked it to touch, it declines and names the number.
-
-For an event that reads `missing` because of an entry of yours, `bmn hooks install <agent>` adds BMN's own entry
-beside it (the start's `--absent` install leaves it as it is), so the hook fires from BMN's entry whatever yours
-does; that is why you may see a duplicate.
-
-**Which one you may remove:** BMN's own entry is the one `check` answers for, so removing it puts the
-event back to `missing`. Yours is one BMN declined to read — which is not the same as one it judged
-broken, and not the same as one that works. `check` no longer has an opinion either way, so if you
-want to keep only yours, confirm it delivers first (make the harness fire that event and look at the
-session's **Hook events…** list), then remove BMN's and accept that `check` will read `missing`.
-
-That is the whole rule: BMN does not read the shell around the call, because a command it wrongly
-called `wired` would leave you with no hook and no warning. A duplicate entry is visible and
-harmless; a silent gap is neither.
-
-The consequence to be clear about: `check` tells you what is **configured**, and now makes no claim
-at all about a command it does not recognise. A hand-written entry that works perfectly still reads
-`missing`. Run `bmn hooks install <agent>` and let BMN write its own, or paste one of the three
-exactly, and `check` will answer for it.
-
-The entries themselves, for wiring them by hand. `~/.claude/settings.json` needs `Notification`,
-`PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SessionStart`
-and `SessionEnd`, next to any hooks already there:
+**The entries, for wiring by hand.** `~/.claude/settings.json` needs `Notification`, `PreToolUse`, `PermissionRequest`,
+`PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SessionStart` and `SessionEnd`, next to any hooks
+already there:
 
 ```json
 { "hooks": [{ "type": "command", "timeout": 5,
   "command": "[ -n \"$BMN_CONTROL_SOCKET\" ] && command -v bmn >/dev/null && bmn hook claude; exit 0" }] }
 ```
 
-`PermissionRequest` carries `"timeout": 600` instead (Epic 78): its hook waits up to 590 s for an Allow once or
-Deny from a Telegram card, while Claude's dialog stays open and answerable at the desk
-([remote-answers.md](remote-answers.md#claude-code-21302-permissions-answered-by-the-hook-epic-78)). `install` and
-BMN's start raise BMN's own recognised entry from a shorter timeout to 600 and touch no other entry.
+- `PermissionRequest` carries `"timeout": 600` instead (Epic 78): its hook waits up to 590 s for Allow once or Deny from
+  a Telegram card, while Claude's dialog stays answerable at the desk
+  ([remote-answers.md](remote-answers.md#claude-code-21302-permissions-answered-by-the-hook-epic-78)). `install` and
+  BMN's start raise BMN's own recognised entry from a shorter timeout to 600 and touch no other entry.
+- `PreToolUse` holds every tool until the hook returns, so BMN gates its entry with `"matcher": "AskUserQuestion|Bash"`
+  (the question and the [command guard](#the-command-guard)); `check` reads that, and an ungated entry, as wired. BMN's
+  entry with its earlier matcher `"AskUserQuestion"` reads `wired (older wording)`, and `install` and BMN's start widen
+  it in place when its group holds only BMN's entry. Any other matcher on BMN's entry gates it.
+- For Codex, the same entries with `bmn hook codex` go in `~/.codex/hooks.json` for `PreToolUse`, `PostToolUse`,
+  `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` and `Interrupt`; Codex must then trust them once with
+  `/hooks`, which no command can do for you. `PreToolUse` carries queued `request_user_input_async` questions, as Codex
+  has no `Notification` event. `PermissionRequest` is optional and `install` never adds it: Codex fires it before Auto
+  Review decides whether you must approve, so add it only without Auto Review.
 
-`PreToolUse` runs before every tool and holds it until the hook returns, so BMN gates its entry to the two
-tools it needs with `"matcher": "AskUserQuestion|Bash"`: the question, and the command guard below; `check`
-reads that matcher as wired, and an ungated entry as wired too. BMN's own entry with the matcher it wrote before
-Story 83.4, `"AskUserQuestion"`, reads as `wired (older wording)`: `install` and BMN's start widen it in place when
-its group holds only BMN's entry, and leave a group that also holds one of yours as it is. Any other matcher on
-BMN's entry reads as gated.
-
-For Codex, the same entries with `bmn hook codex` go in `~/.codex/hooks.json` for `PreToolUse`,
-`PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` and `Interrupt`. Codex must
-then trust them once with `/hooks`, which no command can do for you. `PreToolUse` is required for
-queued `request_user_input_async` questions because Codex has no `Notification` hook event. Add
-`PermissionRequest` only without Auto Review: Codex fires it before Auto Review decides whether you
-must approve, so it would flag tools that never need you, and `install` therefore never adds it.
-
-Session details shows when a session's conversation was compacted ("Compacted: 16:10 (2 times this
-run)", or "No compaction observed in this run"), and the Hook events list reads such an event as
-"Conversation compacted". It is information only: nothing opens in Needs you or goes to Telegram,
-and a new run starts from none. Claude Code reports compaction as `SessionStart` with source
-`compact`, OpenCode as `session.compacted` (a subagent's is logged, not counted). Codex 0.157.1,
-measured on a disposable profile on 2026-09-28, sends `SessionStart` with source `compact` after an
-automatic compaction (with `PreCompact`/`PostCompact`, trigger `auto`), but its manual `/compact`
-sends only `PreCompact` and `PostCompact` with trigger `manual`. `PostCompact` is therefore an
-optional Codex entry, reported by `check` and never installed: add it to see manual compactions too;
-BMN counts its `manual` trigger only, so an automatic compaction still counts once. Codex runs the same
-`PreCompact`/`PostCompact` hooks and the same automatic call site whichever way it compacts (locally or
-on OpenAI's side), but only the local path was measured, so whether `SessionStart` with source
-`compact` also follows an automatic compaction on OpenAI's side is not yet known. OpenCode's compactions
-count for the session the plugin holds as yours: the first one it hears from, or the one you last
-selected in its session list. A compaction in any other session is logged as a subagent's and not
-counted, so the line can undercount but never invents one.
+**Compaction.** Session details shows when a conversation was compacted ("Compacted: 16:10 (2 times this run)", or "No
+compaction observed in this run"), and Hook events reads such an event as "Conversation compacted". It is information
+only: nothing opens in Needs you or goes to Telegram, and a new run starts from none. Claude Code reports `SessionStart`
+with source `compact`, OpenCode `session.compacted` (a subagent's is logged, not counted). Codex 0.157.1 sends
+`SessionStart` with source `compact` after an automatic compaction, but for a manual `/compact` only `PreCompact` and
+`PostCompact` with trigger `manual`; `PostCompact` is therefore an optional Codex entry, reported by `check` and never
+installed, and BMN counts its `manual` trigger only. Whether an automatic compaction on OpenAI's side also sends
+`SessionStart` is not measured. OpenCode's count follows the session the plugin holds as yours (the first it hears
+from, or the one you last selected); a compaction elsewhere is logged as a subagent's, so the line can undercount but
+never invents one.
 
 ### The push policy
 
