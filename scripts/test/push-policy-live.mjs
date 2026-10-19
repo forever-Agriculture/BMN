@@ -234,7 +234,7 @@ esac`)
     check('a repository renamed on GitHub is listed once by its own name, and raising and lowering it there is what `bmn policy` reads through the old remote (epic review)',
       JSON.stringify(gizmoRows) === JSON.stringify([{ name: 'gizmo', level: 'PRs only' }])
         && raisedOld.includes('Repository octo-probe/gizmo: Merge and push main (default branch main).') && raisedOld.includes('- push main, never forced')
-        && loweredOld.includes('Repository octo-probe/gizmo: PRs only (default branch main).') && !loweredOld.includes('- push main, never forced'),
+        && loweredOld.includes('Repository octo-probe/gizmo: PRs only (default branch main)') && !loweredOld.includes('- push main, never forced'),
       { gizmoRows, raisedOld, loweredOld })
     await page.evaluate(async (spaces) => { for (const space of spaces) await window.aiTerminal.updateWorkspace({ workspaceId: space.workspaceId, expectedRevision: space.revision, archived: true }) }, gizmoSpaces)
 
@@ -257,10 +257,11 @@ esac`)
     const gizmoGone = (await repositories(main)).every((row) => !row.name.startsWith('gizmo'))
     const beforeDeny = policy('--repo', 'acme-probe/api')
     await owner(main, 'acme-probe').getByRole('switch', { name: 'Allow acme-probe' }).click()
-    await until(async () => (await ownerText(main, 'acme-probe')).startsWith('acme-probe Org Denied'), 'acme denied')
+    // No session names the owner any more, so its kind is no longer read from GitHub.
+    await until(async () => /^acme-probe .*Denied/.test(await ownerText(main, 'acme-probe')), 'acme denied')
     const afterDeny = policy('--repo', 'acme-probe/api')
     check('an allowed owner and a raised repository stay listed after their workspace is archived, and denying the owner there makes `bmn policy` authorize nothing in it; a lowered repository is not kept (epic review)',
-      keptOwner === 'acme-probe Org Allowed' && keptRow.includes('No session works in it now') && gizmoGone
+      /^acme-probe .*Allowed$/.test(keptOwner) && keptRow.includes('No session works in it now') && gizmoGone
         && beforeDeny.includes('- merge a pull request whose current head has every required check green')
         && afterDeny.includes('Not authorized here: the owner acme-probe is not allowed in Health.'),
       { keptOwner, keptRow, gizmoGone, beforeDeny, afterDeny })
