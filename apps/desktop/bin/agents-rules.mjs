@@ -300,7 +300,7 @@ export async function routeStillMatches(harness, decision, environment) {
   const inspected = inspectRoute({ harness }, null, environment, environment.HOME || homedir())
   if (inspected.basis !== 'default' || inspected.provider !== decision.route.provider) {
     return {
-      ok: false, remedy: "set the app's destination again in Preferences > Rules > Health",
+      ok: false, remedy: "set the app's destination again in Preferences > Integrations > Health",
       reason: `${APP_NAMES[harness]} now sends data to ${inspected.host ?? 'an unknown destination'}${inspected.reason ? ` (${inspected.reason})` : ''}, not default:${decision.route.provider}`
     }
   }

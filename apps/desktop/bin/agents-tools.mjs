@@ -579,7 +579,7 @@ export async function planToolsInstall(harnesses = [], { environment = process.e
   const stop = (code, message) => ({ code, message, targets: [], exposed: [], blocked: [], planHash: null })
   const check = checkTools({ environment, tests, versions, generation })
   const named = harnesses.length > 0 ? harnesses : check.apps.filter((app) => app.supported).map((app) => app.harness)
-  if (named.length === 0) return stop('TOOLS_UNSUPPORTED', 'tools are not supported yet in any app: run the test first (Preferences > Rules > Health, or bmn tools test <app>); nothing was written')
+  if (named.length === 0) return stop('TOOLS_UNSUPPORTED', 'tools are not supported yet in any app: run the test first (Preferences > Integrations > Health, or bmn tools test <app>); nothing was written')
   const tools = new Map((generation?.data.tools ?? []).map((tool) => [tool.id, tool]))
   const targets = []
   const exposed = []

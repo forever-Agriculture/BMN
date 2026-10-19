@@ -160,7 +160,7 @@ function untestedReason(app, harness, standing) {
     return `the context test showed nothing on this ${app} version; BMN tries it again by itself, up to three times`
   }
   if (standing === 'unknown') return `the ${app} version cannot be read, so its context setting counts as not tested`
-  return `the context setting is not tested on this ${app} version yet; BMN tests it by itself when it starts, when Rules > Health is read and after an update there`
+  return `the context setting is not tested on this ${app} version yet; BMN tests it by itself when it starts, when Integrations > Health is read and after an update there`
 }
 
 /**

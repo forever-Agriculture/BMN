@@ -1457,7 +1457,7 @@ judged from where the test runs, a folder of its own under your home folder; a p
 settings of its own may fare differently, and the check says so for that run.
 
 `bmn roster check` never starts an app and writes nothing. For a version without a test its step
-says who acts next: "BMN tests it by itself when it starts, when Rules > Health is read and after
+says who acts next: "BMN tests it by itself when it starts, when Integrations > Health is read and after
 an update there"; after a test that showed nothing, that BMN tries it again by itself, up to three
 times. What a test costs: Claude Code is asked for its `/context` report; Codex gets one short
 synthetic request to its provider, so one per new Codex version.

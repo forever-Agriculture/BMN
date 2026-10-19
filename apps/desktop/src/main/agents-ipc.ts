@@ -1015,7 +1015,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
         const harness = route.harness as RosterHarness
         const { resolution, reason } = inspect(harness)
         if (resolution.basis !== 'default' || resolution.provider !== route.provider) {
-          throw new RosterError('ROUTE_CHANGED', `${ROSTER_APP_NAMES[harness]} sends data to ${resolution.host ?? `an unknown destination${reason ? ` (${reason})` : ''}`}, not to ${route.provider}'s own servers; set its destination again in Rules > Health`)
+          throw new RosterError('ROUTE_CHANGED', `${ROSTER_APP_NAMES[harness]} sends data to ${resolution.host ?? `an unknown destination${reason ? ` (${reason})` : ''}`}, not to ${route.provider}'s own servers; set its destination again in Integrations > Health`)
         }
       }
     }

@@ -62,7 +62,7 @@ function tested(harness: string, version: string, limit: ContextTestEntry['limit
 const CODEX = '0.161.0'
 const CLAUDE = '2.1.295'
 /** How the check says that BMN's own test of an untested version is still to come (63.1 AC6). */
-const BY_ITSELF = 'BMN tests it by itself when it starts, when Rules > Health is read and after an update there'
+const BY_ITSELF = 'BMN tests it by itself when it starts, when Integrations > Health is read and after an update there'
 
 beforeEach(() => {
   home = realpathSync(mkdtempSync(join(tmpdir(), 'bmn-context-')))

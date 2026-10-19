@@ -64,7 +64,7 @@ function judgeInspected(previous: RosterData | null, next: RosterData, seams: Ap
   const routes = newlyInspected(previous, next)
   if (routes.length > 0) {
     if (seams.checkInspectedRoutes === undefined) {
-      throw new RosterError('ROUTE_CHANGED', `where ${routes.map((route) => route.harness).join(', ')} sends data can be recorded as inspected only by BMN, in Preferences > Rules > Health`)
+      throw new RosterError('ROUTE_CHANGED', `where ${routes.map((route) => route.harness).join(', ')} sends data can be recorded as inspected only by BMN, in Preferences > Integrations > Health`)
     }
     seams.checkInspectedRoutes(routes)
   }

@@ -465,7 +465,7 @@ export async function planSkillsInstall(harnesses = [], { environment = process.
   const check = checkSkills({ environment, tests, versions, generation })
   if (!check.source.readable) return { code: 'SOURCE_UNREADABLE', message: `${check.source.path}: ${check.source.detail}; nothing was written`, targets: [], exposed: [], planHash: null }
   const named = harnesses.length > 0 ? harnesses : check.apps.filter((app) => app.supported).map((app) => app.harness)
-  if (named.length === 0) return { code: 'SKILLS_UNSUPPORTED', message: 'skills are not supported yet in any app: run the test first (Preferences > Rules > Health, or bmn skills test <app>); nothing was written', targets: [], exposed: [], planHash: null }
+  if (named.length === 0) return { code: 'SKILLS_UNSUPPORTED', message: 'skills are not supported yet in any app: run the test first (Preferences > Integrations > Health, or bmn skills test <app>); nothing was written', targets: [], exposed: [], planHash: null }
   const source = sourceSkills(check.source.path)
   const byName = new Map(source.skills.map((skill) => [skill.name, skill]))
   const records = written()
