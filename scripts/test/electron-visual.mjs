@@ -7,9 +7,11 @@
 // A "before" set is captured by running the preceding revision's own runner in a built checkout of that commit,
 // never by restyling this one. --electron names the Electron binary when this checkout's own may not create user
 // namespaces (a worktree, under Ubuntu's AppArmor profile, docs/development.md); the app it runs is this checkout's.
+// Last, the button-screens pass (button-screens.mjs) saves every screen state with a button under DIR/buttons.
 /* global window, document, HTMLElement, HTMLButtonElement, getComputedStyle, requestAnimationFrame */
 import { toggleSessionRequests } from './session-request-helpers.mjs'
 import { sessionRequestControl } from './session-request-helpers.mjs'
+import { captureButtonScreens } from './button-screens.mjs'
 import assert from 'node:assert/strict'
 import { execFile, execFileSync } from 'node:child_process'
 import { rmSync } from 'node:fs'
@@ -66,7 +68,7 @@ async function fixPageClock(application, page) {
   await page.reload({ waitUntil: 'domcontentloaded' })
 }
 
-async function launchFixture(roots) {
+async function launchFixture(roots, environment = {}) {
   const home = join(dirname(roots.config), 'home')
   await mkdir(home, { recursive: true, mode: 0o700 })
   return electron.launch({
@@ -94,7 +96,8 @@ async function launchFixture(roots) {
       BMN_DATA_HOME: join(roots.data, 'bmn'),
       BMN_STATE_HOME: join(roots.state, 'bmn'),
       BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
-      BMN_LAUNCH_CWD: fixtureFolder
+      BMN_LAUNCH_CWD: fixtureFolder,
+      ...environment
     }
   })
 }
@@ -122,6 +125,16 @@ async function waitForInstanceGone(roots) {
     }
     await new Promise((resolveWait) => setTimeout(resolveWait, 100))
   }
+}
+
+async function closeFixture(application, roots) {
+  const child = application.process()
+  const exited = child.exitCode === null && child.signalCode === null
+    ? new Promise((resolveExit) => child.once('exit', resolveExit))
+    : Promise.resolve()
+  await application.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+  await exited
+  await waitForInstanceGone(roots)
 }
 
 function ratio(first, second) {
@@ -185,11 +198,11 @@ async function settleActivity(page) {
 
 // A settled capture: the activity words have held (above), CSS animations and transitions are finished (or, when
 // infinite, held at their start) and the text caret is hidden for the shot only, so the measured styles around it stay
-// the product's own.
-async function screenshot(page, name, directory = evidenceDirectory) {
+// the product's own. `options` adds Playwright screenshot options, such as a mask over a random id.
+async function screenshot(page, name, directory = evidenceDirectory, options = {}) {
   const path = join(directory, name)
   await settleActivity(page)
-  await page.screenshot({ path, animations: 'disabled', caret: 'hide' })
+  await page.screenshot({ path, animations: 'disabled', caret: 'hide', ...options })
   return path
 }
 
@@ -2435,6 +2448,20 @@ const interruptedGlance = await withTemporaryRoot(
   }
 )
 evidence.epic20Glance.interrupted = interruptedGlance
+evidence.buttonScreens = await captureButtonScreens({
+  directory: join(outputDirectory, 'buttons'),
+  appDirectory,
+  fixtureParent,
+  fixtureFolder,
+  fixtureTime,
+  launch: launchFixture,
+  close: closeFixture,
+  fixPageClock,
+  setContentSize,
+  setAppearance,
+  screenshot,
+  phase
+})
 
 await writeFile(
   join(outputDirectory, 'runtime-evidence.json'),
