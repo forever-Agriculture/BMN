@@ -920,324 +920,178 @@ what he granted; without a grant there the output, `--json` included, is as befo
 
 ## The team: team file, check and rules
 
-The team lives in two files you own, both under `~/.config/bmn/agents/`, outside every repository
-and BMN's own data, so updates and uninstall never touch them:
+The team lives in two files you own under `~/.config/bmn/agents/`, outside every repository and BMN's own data, so
+updates and uninstall never touch them:
 
-- `roster.md`, the team file. `## roster` holds the layout version (`schema_version: 3`; a file
-  that says `schema_version: 2`, the layout before it, reads as it did and stays approved).
-  `## providers` names each provider, its hosts and whether it may see private work
-  (`private_work: allowed` or `public_only`). Then one `## <agent-id>` section per agent: a single
-  fenced `yaml` block (name, class, harness, model, provider, host, enabled, status, efforts and
-  roles; optionally `context_window`, `context_limit`, `compact_at`, `paid_by`, `price`, `aliases`
-  and `enabled_note`) followed by free prose, your notes on that agent. `## roles` gives each role
-  an optional description, its ordered candidates as `agent@effort` (`agent@low|high` for an effort
-  the lead chooses), what happens when every candidate fails, and `read_only: true` where a run
-  for the role must not be able to write. `## exceptions` lists a
-  public-only provider you allowed in one named folder, and `## harness-routes` records where each
-  agent app sends data and whether BMN observed that or you declared it. `## project-choices`
-  names your teammate for a role in one project (below, "Your teammate for a project").
+- `roster.md`, the team file. `## roster` holds the layout version (`schema_version: 3`; a file that says
+  `schema_version: 2`, the layout before it, reads as it did and stays approved). `## providers` names each provider,
+  its hosts and whether it may see private work (`private_work: allowed` or `public_only`). One `## <agent-id>` section
+  per agent holds a single fenced `yaml` block (name, class, harness, model, provider, host, enabled, status, efforts and
+  roles; optionally `context_window`, `context_limit`, `compact_at`, `paid_by`, `price`, `aliases` and `enabled_note`)
+  and then your free notes. `## roles` gives each role an optional description, its ordered candidates as
+  `agent@effort` (`agent@low|high` for an effort the lead chooses), what happens when every candidate fails, and
+  `read_only: true` where a run for the role must not write. `## exceptions` lists a public-only provider allowed in one
+  named folder, `## harness-routes` where each agent app sends data (observed by BMN or declared by you), and
+  `## project-choices` your teammate for a role in one project (below).
 - `global-rules.md`, the rules master BMN renders into each agent app's own rules file.
 
-**An agent BMN itself calls.** Layout 3 adds one kind of agent that runs in no agent app: in
-place of an app it says `harness: bmn`, and BMN makes the call itself. It has a name, class,
-model, provider, host, `enabled`, `status` and roles like every agent, and names two parties:
-`provider` is who receives the request, `run_by` is who runs the model (both from
-`## providers`). It carries no efforts, no context fields (`context_window`, `context_limit`,
-`compact_at`) and no researcher mark; a file that gives it one is refused with the line (for
-example `jev.efforts: jev is called by BMN and has no efforts (it runs in no agent app); remove
-the line`, code `CALLED_FIELD`). Its `host` is the name BMN sends the request to, never `default`,
-and its provider must list it.
+**Classes.** A knight leads an epic or project, a queen does whatever she wants, a rook designs, a bishop reviews and
+advises, a pawn does jobs a lead hands off. Only a knight or a queen holds `lead`, only a rook or a queen `designer`; a
+rook may also review and advise, and every role is open to a queen.
 
-Private work is allowed for such an agent only where **both** providers say `allowed`; in every
-other case it reads public work only, said with who holds it back ("public work only: TypeSafe
-AI gets public work only").
+**An agent BMN itself calls** (layout 3) runs in no agent app: it says `harness: bmn`, and BMN makes the call. It names
+two parties from `## providers`, `provider` (who receives the request) and `run_by` (who runs the model), and carries no
+efforts, context fields or researcher mark (`CALLED_FIELD`); its `host` is never `default` and its provider must list
+it. It may see private work only where **both** providers say `allowed`. It holds the role `judge` and no other
+(`CALLED_ROLE`; `JUDGE_NOT_CALLED` refuses an app-run judge), named by id alone (`candidates: [jev]`), and appears in no
+other role's order, Team line or researcher list; `bmn roster check` for it is refused with `CALLED_BY_BMN`, whose next
+step names `bmn judge ask`, `bmn team` lists it as "called by BMN", and `bmn roster role judge` says no dispatch goes to
+that role. Its Team page shows "Judge", "Called by BMN", both providers with their answer, the verdict ("Private text:
+may be sent" or "not sent") and the price with its page; another agent's app choice offers "Called by BMN" only while
+that agent holds no role. While the team holds no judge, the [one proposals card](#bmns-proposals-one-card) names Jev
+(`jev`, a bishop, `jev-1.13`) with OpenCode's gateway (`opencode.ai`) and TypeSafe AI as its providers.
 
-It holds one role, `judge` ("answers typed questions about a text with numbers; advice only"),
-and no other: `CALLED_ROLE` refuses it as a candidate of any other role, and `JUDGE_NOT_CALLED`
-refuses an agent that runs in an app as a judge. A judge's candidates are written by their id
-alone (`candidates: [jev]`), since such an agent has no effort, and the role holds a
-description, candidates and `then` only. So an agent BMN calls is never offered as a lead,
-designer, helper, browser, reviewer, consultant or researcher: it is in no other role's order,
-not in the Team line written into the apps' rules files, not among the researchers of Models,
-and `bmn roster check` for it is refused with `CALLED_BY_BMN`, whose next step names `bmn judge
-ask`. `bmn team` lists it with "called by BMN" where others name their app, and `bmn roster role
-judge` says that no dispatch goes to this role.
+**Privacy is per provider.** A `public_only` provider never receives private work. A workspace counts as public only
+while a record under seven days old says GitHub reports its `origin` public; `bmn roster visibility <workspace>
+--refresh` asks GitHub once, without credentials (with `bmn roster fence --live`, the only network call of these
+commands), and the app refreshes the record when a session opens there, at most once a day, once a team file exists. A
+missing origin, another host, a private repository, an error, a timeout, a malformed record and a repository nested in
+a public workspace all mean private. An exception admits one public-only provider in one workspace (its Git top-level),
+only for a destination BMN can confirm and only when every folder the agent would work in belongs to it; it must name
+the workspace's real path (a path through a link grants nothing, and `bmn roster validate` says so). A changed
+exception shows on Team with both folders, to approve or revert.
 
-On Team its card shows its class with "Judge", "Called by BMN" with the model name, and "public
-work only" where either provider says so. Its page has the on and off control, both providers
-with their answer (each changed there, staged and approved like every change), the verdict in
-one line ("Private text: may be sent" or "not sent"), the price with the page it came from, and
-no row that belongs to an agent app. On a normal agent's page the app choice offers "Called by
-BMN" only while the agent holds no role. While your team holds no judge, the
-[one proposals card](#bmns-proposals-one-card) on Agents › Team names Jev: the agent `jev` (a bishop, `jev-1.13`, active), the role
-`judge`, and two providers, OpenCode's gateway (`opencode.ai`) and TypeSafe AI, each with the
-private-work answer you chose (a provider your team already names for that host keeps its own
-answer). It is a proposal: nothing can be asked until you approve it like every team change.
+**Approval.** A machine field takes effect only once you approve it in **Preferences › Agents**; notes take effect at
+once and never reach an agent. Approval writes a numbered version under `state/` (folders `0700`, files `0600`) and
+only then moves the `current` pointer, so a crash leaves the previous version in force. No command approves (exit 12);
+agents and dev-auto read the approved version with BMN closed. A missing, invalid or unreadable state never yields a
+default team: every check refuses until the first approval. Without the team file `bmn team` and `bmn roster role`
+print nothing (exit 3), and while it is missing or invalid no check passes (exit 3 or 4). An unapproved edit changes
+nothing; a team approved under the earlier layout is read-only history and must be approved again.
 
-**Classes.** Every agent has one of five chess classes: a knight leads an epic or project, a queen
-does whatever she wants, a rook is the artist who designs, a bishop reviews and advises, a pawn does
-jobs a lead hands off. Only a knight or a queen may hold the `lead` role, and only a rook or a
-queen the `designer` role; a rook may also review and advise, and every role is open to a queen.
+**On Agents** ([overview](features.md#the-team-and-one-rules-master)) edits are staged; **Review** lists them with their
+consequences ("Luna could lead") and each rules file the change would rewrite, and **Approve** writes the team file and
+approves exactly what was shown. A first approval commits only from a sheet naming every allowed folder, agent, role and
+project choice. Escape or Discard drops staged edits; a file that changed meanwhile, or that a link now leads to
+elsewhere, is reloaded and nothing is written. An edit made outside BMN shows as its own row with **Keep** (a sheet
+listing every value it carries and what it would do) and **Revert**. **Changes** lists every approved version, to
+compare or restore as a new version; **Restore…** waits until outside edits are kept or reverted and puts back only the
+file you were shown. A save replaces a team file that is a link with a regular file and leaves the target alone. When
+the approved team can no longer be read the page names the last version that still reads, and restoring it leaves the
+team file to keep or revert; a version written but never put into effect is listed as such.
 
-**Privacy is per provider.** A provider marked `public_only` never receives private work. A
-workspace counts as public only while a record under seven days old says GitHub reports its
-`origin` public; `bmn roster visibility <workspace> --refresh` asks GitHub once, without
-credentials, and is the only network call in these commands. The app refreshes that record when a
-session opens in the workspace, at most once a day, and only once a team file exists. A missing
-origin, another host, a private repository, an error, a timeout or a malformed record all mean
-private. An exception admits one public-only provider in one workspace (its Git top-level; nested
-repositories are not covered) and never applies to a destination BMN cannot confirm. It covers a
-dispatch only when every folder the agent would work in belongs to that workspace, and it must
-name the workspace's real path: a path that passes through a link grants nothing, wherever the
-link points, and `bmn roster validate` says so. A changed exception shows on the Team page with
-both folders, to approve or revert, and a first approval lists every such folder first. Work in a repository nested inside a public workspace counts
-as private.
+<a id="bmns-proposals-one-card"></a>**BMN's proposals: one card.** What BMN proposes waits in one card at the top of
+Agents › Team, with one Needs-you dot: removing an app BMN retired, the judge Jev, who researches, Luna (Go) where
+OpenCode lists her model, and holding the reviewer roles and the consultant to read-only, one clause each ("BMN proposes
+3 changes to your team: … Nothing changes until you approve it."). **Approve…** stages them all and opens the approval
+sheet; **Cancel** there takes them all out and restores what you had staged. To take only some, approve and change the
+one you do not want, or make the change yourself (a role's **Read-only** switch, an agent's **Researcher** switch).
+With nothing approved yet the card is the first approval as well. **Copy sign-in** for OpenCode Go stays a note apart.
 
-**Approval.** A machine field takes effect only after you approve it in **Preferences › Agents**;
-notes take effect at once and never reach an agent. Approval writes a numbered version under
-`state/` (folders `0700`, files `0600`) and only then moves the `current` pointer, so a crash
-leaves the previous version in force. No command approves (exit 12): agents and dev-auto read the
-approved version with BMN closed. A missing, invalid or unreadable state never yields a default
-team; every check refuses until the first approval. The team file must still be there: without it
-`bmn team` and `bmn roster role` print nothing (exit 3), and while it is missing or invalid no
-check passes (exit 3 or 4). A valid edit you have not approved yet changes nothing. A team
-approved under the earlier layout is kept as read-only history and must be approved again.
+**Asking the team.** `bmn team` prints the approved team; `bmn roster role <role>` the ordered chain with each
+candidate's eligibility. Neither prints your notes or prices.
 
-**Preferences › Agents** shows its views in one control under the page head: **Team**, **Roles**,
-**Models**, **Changes** and **Asks** (Story 75.10). **Team** shows one card per agent with its class piece,
-app, model, provider and an on/off switch, grouped Active, Proposed and Off; a card opens the
-agent's page in place (identity, model, work, and under Advanced who pays, context limits, host, other
-names and the team file), and pressing **Team** again comes back to the cards. **Roles** edits each role's ordered candidates. **Changes** lists every
-approved version: open one to see how it differs, or restore it as a new version. Edits are
-staged. The bar at the foot counts them, **Review** shows one grouped list with its consequences
-in words ("Luna could lead", "Haiku could receive private work") and each rules file the change
-would rewrite, and **Approve** writes the team file and approves exactly what was shown. The
-first approval never commits from the bar alone: it opens a sheet that names every allowed
-folder, agent and role, and commits from there. Escape
-or Discard drops staged edits; a file that changed meanwhile, or that a link now leads to in
-another folder, is reloaded and nothing is written.
-An edit made outside BMN shows as its own row with **Keep** and **Revert**. The row gives an added
-or removed entry one word, so **Keep** then opens a sheet that lists every value it carries (an
-allowed folder, a provider's answer) and what the change would do, and commits from there.
-**Restore…** waits until such edits are kept or reverted, because the team file follows the
-restored version; only the file you were shown is put back, so an edit that lands meanwhile stays
-and shows as a difference. A team file that is a link is named with where it points: a change saved from
-these pages replaces the link with a regular file and leaves the file it pointed to alone; the
-rules master's Save sheet says the same. When the approved team can no longer be read, the page
-says so and names the last version that still reads; restoring it then lists that version's team
-and leaves the team file as it is, to keep or revert. A version that was written and never put
-into effect (BMN stopped between the two) is listed as never having taken effect.
-
-<a id="bmns-proposals-one-card"></a>**BMN's proposals: one card (Story 75.10).** What BMN proposes for
-your team waits in one card at the top of Agents › Team, with one Needs-you dot: removing an app BMN
-retired, the judge Jev, who researches, Luna (Go) where OpenCode lists her model, and holding the
-reviewer roles and the consultant to read-only, one clause each in the order BMN takes them ("BMN
-proposes 3 changes to your team: … Nothing changes until you approve it."). Its **Approve…** stages
-them all and opens the approval sheet, which groups each change as a staged edit is grouped;
-**Cancel** there takes them all out again and puts back what you had staged before, so nothing is
-half-taken. To take only some, approve and then change the one you do not want on its page, or
-make the change yourself (a role's **Read-only** switch, an agent's **Researcher** switch); Roles and
-Models say where the proposal is. With nothing approved yet the card is the first approval as well:
-"Nothing here takes effect until you approve the team for the first time. BMN's proposals are
-included: …". **Copy sign-in** for OpenCode Go is not a proposal and stays a note of its own. The
-Agents page's dot covers the card.
-
-**Asking the team.** `bmn team` prints the approved team; `bmn roster role <role>` the ordered
-chain with each candidate's eligibility. Neither prints your notes or prices.
-
-**Your teammate for a project.** `## project-choices` holds, keyed by an id you pick, the teammate
-you chose for one role in one project:
+**Your teammate for a project.** `## project-choices` holds, under an id you pick, the teammate for one role in one
+project:
 
 ```yaml
 shop-review: {project: /home/you/code/shop, role: reviewer, agent: astra, effort: medium, ends: 2026-12-31}
 ```
 
-`project` is the project's real folder, written out (no `~`, `.` or `..`; a path through a link
-counts for nothing, as with an exception): a repository's main folder, never one of its linked
-worktrees. The repository's linked worktrees count as it, each only where the repository itself
-records that worktree (a copy of a linked checkout does not); any other folder, a subfolder
-included, does not. Every choice of the project counts wherever in it you ask, also one approved
-for a folder that later became one of its linked worktrees. `effort` and `ends` are optional: without an effort,
-the efforts the role gives that agent apply; a choice applies through the day `ends` names. One
-choice per project and role. A choice takes effect like every edit of the team file, once you
-approve it in BMN (Preferences › Agents › Team), whose review says who that role's asks in the project would
-reach before and after; no command approves one. The approval refuses a new or changed choice
-whose agent is not active, does not hold the role, is of a class the role refuses or is given an
-effort the role does not allow it, one that already ended, one whose project passes through a
-link, and one naming a linked worktree (`PROJECT_CHOICE_UNAVAILABLE`). No version with two
-choices for one role in one project, its linked worktrees counted as it, is ever published
-(`PROJECT_CHOICE_COLLISION`): not by an approval, whatever it changes and ended or unchanged
-choices included, not by a restore, not by Allow here, and no review of one is offered. A folder
-can still become a linked worktree after its choice was approved, so that two approved choices meet
-in one project: then that role's asks anywhere in the project are refused, naming both, an ask that
-names its teammate, a small-work ask and a recheck included, never sent to either or to the chain;
-`bmn roster role --project` and `bmn roster validate` say so. Remove one of the two in the team file
-and approve that; every version that keeps both is refused. A first approval's review
-names each choice with its folder, role, teammate, effort and end date. A
-choice picks who answers and grants nothing: what data may reach that agent, its tools and what it
-can read stay the team's.
+`project` is a repository's main folder, its real path written out (no `~`, `.`, `..` or link); its linked worktrees
+count as it where the repository records them, and no other folder does. `effort` (else the role's efforts for that
+agent) and `ends` (the last day it holds) are optional; one choice per project and role. A choice picks who answers and
+grants nothing. It takes effect once you approve it in BMN, whose review says who that role's asks would reach before
+and after. The approval refuses a choice whose agent is not active, does not hold the role, is of a class the role
+refuses or gets an effort the role does not allow, one already ended, one through a link and one naming a linked
+worktree (`PROJECT_CHOICE_UNAVAILABLE`), and no version with two choices for one role in one project is ever published
+(`PROJECT_CHOICE_COLLISION`); should two approved choices meet later (a folder became a linked worktree), that role's
+asks there are refused, naming both, until you remove one. With a choice, `bmn team ask` there asks the chosen agent
+(`request.json`: `chosen_by: project-choice` and the id); an ask naming someone else, a recheck included, is refused
+(`PROJECT_CHOICE_CONFLICT`). `bmn roster role <role> --project <path>` says whether a choice applies. A chosen agent
+later off, retired or out of the role leaves the team valid: `bmn roster validate` notes `PROJECT_CHOICE_UNAVAILABLE`
+and asks there are refused with the reason, never sent to someone else; a choice past its end is `PROJECT_CHOICE_ENDED`.
 
-With an approved choice, `bmn team ask` in that project asks the chosen agent (the run's
-`request.json` says `chosen_by: project-choice` and the choice's id); an agent naming someone else
-there is refused naming the choice (`PROJECT_CHOICE_CONFLICT`), a recheck of an earlier run by
-another teammate included, and a different teammate there needs you to change the choice first. `bmn roster role <role> --project <path>` says whether a
-choice applies there. When the chosen agent is later turned off, retired or taken out of the role,
-the team stays valid: `bmn roster validate` notes it (`PROJECT_CHOICE_UNAVAILABLE`), `bmn roster
-role --project` says the choice cannot be asked and why, and asks there are refused with that
-reason, never sent to someone else. A choice past its end date is noted as ended
-(`PROJECT_CHOICE_ENDED`) and no longer applies.
+**The check.** Immediately before work leaves for another agent, `bmn roster check` takes the agent, role, workspace,
+private or public data and the exact dispatch command, and answers PASS with a receipt or the first refusal in a fixed
+order (exit 10). It parses `codex exec [resume <id>]` and `claude -p` (optionally under `env -i`), and `opencode run` in
+the one form under [Checking an OpenCode helper run](#checking-an-opencode-helper-run).
 
-**The check.** Immediately before work leaves for another agent, `bmn roster check` takes the
-agent, role, workspace, whether the data is private or public and the exact dispatch command, and
-answers PASS with a receipt or the first refusal in a fixed order (exit 10). It parses
-`codex exec [resume <id>]` and `claude -p` (optionally under `env -i`), and `opencode run` in the
-one form described under [Checking an OpenCode helper run](#checking-an-opencode-helper-run); for
-the first two it resolves the destination
-from named, non-secret settings only (Codex `config.toml` model and provider keys and
-`OPENAI_BASE_URL`; Claude's `ANTHROPIC_BASE_URL` from the environment and settings files, an
-unknown host when they disagree; settings are read under `--safe-mode` too, because Claude Code
-2.1.295 still applies their `env` there), never opens an auth file, and reads only the first line
-of a Codex session record to bind a resume. Files it cannot prove an app skips count as well: a
-`.codex/config.toml` in the working folder or a folder above it, or `/etc/codex`, that names a
-provider or address makes a Codex destination unknown (`HOST_UNKNOWN`), and Claude settings in the
-folders above the working one and in `/etc/claude-code/managed-settings.d` are read like the
-project's own. A command that runs without `HOME` (an `env -i` that does not name it) is refused
-(`ROUTE_UNSUPPORTED`): the app would read the account's own settings, which the command hides from
-the check, so write `env -i HOME="$HOME" …`. A named setting that is not text, or a `config.toml`
-value BMN cannot follow, makes the destination unknown. Private work goes only to a provider that allows it.
-Any installed version of the app passes; one whose version cannot be read is refused private work
-(`HARNESS_UNKNOWN`).
-A public-only destination may receive only a packet of files that match the public commit the
-visibility record names, through a tools-disabled, safe-mode Claude Code call whose appended
-system prompt is exactly the public rules rendering. The commit's files are read from the
-workspace's own repository with Git's replacement refs off and no `GIT_*` variable in effect, so
-nothing local can stand in for the published commit. `bmn roster explain` gives the same
-evaluation in words; `--verify <receipt>` recomputes it as of now and exits 11 on any difference,
-including a public record that went stale since and approved state or a team file that has gone
-missing or corrupt. `bmn roster bind` ties a started session to its receipt so a later resume can
-be checked.
+- *Destination*, from named, non-secret settings only: Codex `config.toml` model and provider keys and
+  `OPENAI_BASE_URL`; Claude's `ANTHROPIC_BASE_URL` from the environment and settings files (unknown when they disagree),
+  settings read under `--safe-mode` too. It never opens an auth file and reads only the first line of a Codex session
+  record to bind a resume. A `.codex/config.toml` in or above the working folder, or `/etc/codex`, naming a provider or
+  address makes a Codex destination unknown (`HOST_UNKNOWN`); Claude settings above the working folder and in
+  `/etc/claude-code/managed-settings.d` count like the project's. A command without `HOME` is refused
+  (`ROUTE_UNSUPPORTED`): write `env -i HOME="$HOME" …`. A named setting that is not text, or a `config.toml` value BMN
+  cannot follow, makes the destination unknown.
+- *Private work* goes only to a provider that allows it, on any installed app version; one whose version cannot be read
+  is refused it (`HARNESS_UNKNOWN`). A public-only destination may receive only a packet of files matching the public
+  commit the visibility record names, through a tools-disabled, safe-mode Claude Code call whose appended system prompt
+  is exactly the public rules rendering, read from the workspace's own repository with Git's replacement refs off and
+  no `GIT_*` variable in effect.
+- `bmn roster explain` gives the same evaluation in words; `--verify <receipt>` recomputes it as of now and exits 11 on
+  any difference (a stale public record or missing approved state included); `bmn roster bind` ties a started session
+  to its receipt so a later resume can be checked.
+- *Efforts.* Where a role names an agent (`astra@medium`, `opus-2@medium|high|xhigh`), its command under that role may
+  use only those efforts, plus the role's `recheck` and `small_work` efforts; any other is `EFFORT_UNSUPPORTED`, naming
+  the efforts the role allows. An agent holding a role without being its candidate is judged by its own efforts.
+- *Read-only roles.* A role marked `read_only: true` passes only a run that cannot write, else `READ_ONLY_REQUIRED` with
+  what the command must carry. Codex: sandbox `read-only` and approvals `never`, resolved from `--sandbox`, a
+  `-c sandbox_mode=…` or `-c approval_policy=…` item, the selected profile or your `config.toml`, in that order (nothing
+  named, two items that disagree, an unreadable value, or a `.codex/config.toml` in or above the working folder or
+  `/etc/codex` naming either without the command's own, are refused). Claude Code: `--tools` naming only `Read`, `Grep`
+  and `Glob` (or `''`), `--strict-mcp-config` and `--mcp-config '{"mcpServers":{}}'`, never `--permission-mode
+  bypassPermissions`; that is the form a write-attempt test showed writing nothing on 2.1.296 (`--tools` alone still
+  offered your MCP tools), `scripts/test/claude-write-attempt.sh` runs it again, and an agent whose approved tools
+  include an MCP server cannot take a read-only role through Claude Code. OpenCode's one form is read-only already
+  (`bmn-helper` from BMN's folder, both checked whole). A PASS records what it saw in the receipt's `sandbox` (with
+  `form_tested_on`) beside `effort`; `bmn roster role <role>` says a role is read-only, and `--json` gives each
+  candidate the items its command must carry (`read_only.argv`). Which roles are read-only is yours to approve: BMN
+  proposes every role ending in `reviewer`, and `consultant`; until one is held, **Integrations › Health** says so.
 
-**The check holds a run to its role.** Two things, both of which only refuse more than before:
+**Rules.** The master is ordinary Markdown. Untagged text reaches every agent app; `<!-- bmn:apps codex opencode -->` …
+`<!-- /bmn:apps -->` limits a section to those apps; `<!-- bmn:public -->` … `<!-- /bmn:public -->` marks a section a
+public-only destination may receive; one `<!-- bmn:team -->`, even inside a sentence, becomes the approved team's names
+by app (at most 400 bytes). An app whose approved destination may not receive private work gets only the public
+sections, and OpenCode always does (owner decisions 2026-10-10 and 2026-10-14, see below). Each rendering starts with a
+line naming the master and its hash. **Integrations › Rules** edits it; rules that would not render are not saved, and
+a save keeps the text it replaces and refuses a change or swapped link made meanwhile. **Save…** shows the rules'
+difference and every app file's (a link, a hand-written file or an outside edit it replaces included), then writes the
+rules and every file; an app whose destination no longer matches is named and not written, and a file that cannot be
+written is named ("Saved … · Codex not written") until a later Save writes it. **Undo** puts back the rules and every
+file that save wrote, installing nothing; **Restore…** saves an earlier version again. A file that is a link is
+replaced by a regular file and its target never written. Claude Code and Codex get the full rules on any installed
+version, refused only where it cannot be read. Each action confirms against the plan it showed, bound to the folder
+that really holds each file, and refuses if a file or a link on the way changed since. **Health** reads each file
+(current, differs, edited outside BMN, not installed, a link, missing or unreadable) and, under **Agent apps**, where
+each app sends data and its version (tested, newer than tested or not tested; every version is supported, and both go
+into the receipt). The **loading test** (`bmn rules probe <app>`) sends the rendered rules to the app's provider, so it
+runs only where private work is allowed, inspects the destination again just before sending, and answers passed,
+failed, inconclusive or unavailable (Codex: only when its session record carries the rendered header before any tool
+ran); a result turns stale when the rendering, approved destination, app version or host changes.
 
-- *Efforts.* Where a role names an agent (`astra@medium`, `opus-2@medium|high|xhigh`), a command
-  for that agent under that role may use only those efforts, plus the role's `recheck` effort for
-  the agent and its `small_work` effort. Any other is refused with `EFFORT_UNSUPPORTED`, also where
-  the agent itself lists it; the message names the role and the efforts it allows. An agent that
-  holds a role without being one of its candidates is judged by its own efforts, as before.
-- *Read-only roles.* A role the approved team marks `read_only: true` passes only a run that
-  cannot write; anything else is refused with `READ_ONLY_REQUIRED`, and the message says what the
-  command must carry. For Codex the sandbox must resolve to `read-only` and approvals to `never`:
-  from `--sandbox`, a `-c sandbox_mode=…` or `-c approval_policy=…` item, the selected profile or
-  your own `config.toml`, in that order. Nothing named anywhere is refused, as are two items that
-  disagree, a value BMN cannot read (an approval policy written as a table), and a
-  `.codex/config.toml` in the working folder or above it, or `/etc/codex`, that names either
-  setting, unless the command carries its own. For Claude Code the command must carry `--tools`
-  naming only `Read`, `Grep` and `Glob` (or `''` for none), `--strict-mcp-config`, and
-  `--mcp-config` with an empty server list (`'{"mcpServers":{}}'`): that is the form the write
-  test showed, and the same command without the empty list was not tried, so it is refused;
-  `--permission-mode bypassPermissions` is refused. For OpenCode the one form the check reads is
-  read-only already: BMN's agent `bmn-helper` from BMN's own folder, both checked whole. A PASS for a
-  read-only role records what the check saw in the receipt's `sandbox` (mode, the source that
-  named it, the approval policy and its source, the tool list, or OpenCode's agent and a mark of
-  its text) beside `effort`, so
-  `bmn roster bind` and a later reader can tell. `bmn roster role <role>` says that a role is
-  read-only, and with `--json` gives each candidate the items its command must carry
-  (`read_only.argv`). A role that may write is judged as before and its receipt carries no
-  `sandbox`.
-
-Which roles are read-only is part of the team and yours to approve. BMN proposes every role whose
-name ends in `reviewer`, and `consultant`; lead, designer, helper and browser keep write access.
-A team file from before the mark holds no role: every command passes as it did, **Integrations ›
-Health** says that no role is held to read-only yet, and BMN's proposal to hold those roles waits
-in the [one proposals card](#bmns-proposals-one-card) on **Agents › Team**; **Agents › Roles** says
-where it is. Each held role shows **Read-only** beside its name; **Edit** has the switch for one
-role, so you can hold some yourself.
-
-The Claude Code form rests on a write-attempt test you authorized (2026-10-11, Claude Code
-2.1.296, Haiku, each run in its own empty throwaway folder, the model asked to write with every
-tool it had). With `--permission-mode acceptEdits`, the control, it wrote three files. With
-`--tools 'Read,Grep,Glob'` alone it was offered those three tools and 82 MCP tools from your own
-settings, among them ones that create files elsewhere, so the tool list alone is not enough. With
-`--strict-mcp-config` and an empty `--mcp-config` added it was offered exactly `Glob`, `Grep` and
-`Read`, with and without `--safe-mode`, and wrote nothing. `--permission-mode plan` is not
-accepted: the app refused the Write tool there, but the model tried no shell command under it,
-and your MCP tools stay offered. `scripts/test/claude-write-attempt.sh` runs the test again on
-another version; BMN records the version the form was shown on in the receipt
-(`sandbox.form_tested_on`) and requires the form on every version. An agent whose approved
-tools include an MCP server therefore cannot take a read-only role through Claude Code.
-
-**Rules.** The master is ordinary Markdown. Untagged text reaches every agent app;
-`<!-- bmn:apps codex opencode -->` … `<!-- /bmn:apps -->` limits a section to those apps;
-`<!-- bmn:public -->` … `<!-- /bmn:public -->` marks a section a public-only destination may
-receive; one `<!-- bmn:team -->`, which may sit inside a sentence, becomes the approved team's
-names by app (at most 400 bytes). An app whose approved destination may not receive private work
-gets only the public sections. So does OpenCode, always: it converts older configuration
-shapes BMN's reading does not follow, so no setting gives it the full rules (owner decisions
-2026-10-10 and 2026-10-14). Each rendering starts with a line naming the master and its hash.
-
-**Preferences › Integrations** shows its views under the page head: **Health** (where it opens,
-with Hooks and Local control as its last sections), **Rules**, **Skills** and **Tools** (Story 75.10);
-head and views stay at the top while a view scrolls. Health's status counts the rows that carry the
-Needs-you dot ("Checked Oct 16, 13:39 · 2 need you"), and within each section those rows come first.
-**Rules** edits the master with line numbers, dimmed
-markers and an **Insert** menu for the three markers; rules that would not render are not saved,
-and every save first keeps the text it replaces, then the new text, and refuses a change or a
-swapped link made meanwhile, including a link on the way to the folder that holds the rules. Beside it, **What each app reads** shows each app's exact file, and
-**Save…** saves and installs in one step (Story 75.9): its sheet shows the rules' difference and
-every app file's, including a link, a hand-written file or an outside edit it replaces, and Save
-writes the rules and then every file. An app whose destination no longer matches is named and not
-written; a file that cannot be written is named while the others are written, and the head says
-"Saved … · Codex not written" with its mark until a later Save writes it. With no edit, **Save…**
-rewrites only the files that differ. **Undo**, in the notice after a save or as **Undo…** under
-**Earlier versions**, puts the rules and every file that save wrote back together and installs
-nothing again; **Restore…** saves an earlier version again, so it installs too. A file that is a
-link is replaced by a regular file, and the file it pointed to is never written. The full rules are written, updated or sent in a test on any
-installed version of Claude Code or Codex; only one whose version cannot be read (not installed,
-or not on `PATH`) is refused them. OpenCode never gets them. Each action confirms against the exact plan it showed, plans again
-once you confirm, and refuses if the files changed since. A plan is bound to the folder that
-really holds each file: when a link on the way to a file leads elsewhere, the confirmation names
-that place too, and a link that moves afterwards makes the plan refuse. **Health** reads each file the way the
-hooks check is read (current, differs from the rules, edited outside BMN, not installed, a link,
-missing or unreadable) and, under **Agent apps**, where each app sends data and its installed
-version, marked tested, newer than tested or not tested. Every installed version is supported:
-BMN works out where an app sends data the same way on each, at every check, and writes the
-version and that mark into the receipt. The **loading test** (`bmn rules probe <app>`) asks an app which rules it loaded; it sends the rendered rules to that
-app's provider, so it runs only where private work is allowed, inspects the destination again
-just before sending, and answers passed, failed, inconclusive or unavailable. A Codex test passes
-only when its own session record carries the rendered header before any tool ran. A result turns
-stale when the rendering, the approved destination, the app version or the host changes.
-
-**Tests BMN runs by itself (Story 75.8).** No test waits for a button. BMN runs each test an app
-needs by itself: the rules loading test, where an app reads skills (with its listing test),
-whether a model gets a skill, where an app reads tools, the context test and the research fence
-test. It looks when BMN starts, when Health reads the machine, when an update command it typed
-ends and after you approve a team change. A test is needed on a first install and on a new app
-version, and where its result is bound to more than the version: new rules once they are
-installed, new skills, a new set of sources naming a context size, a new research form or
-researcher model, or, for a test that sends a prompt, a new sign-in. The tests that send no prompt
-run first, one at a time; the loading tests and the Codex context test send one synthetic prompt
-each, and their rows say "one prompt sent". Each test is started at most three times for the same
-version and binding, ten minutes apart; the count is written to `state/auto-tests.json` before
-each start, so a restart or a crash does not start it again and again. A pass or a failure settles
-it. A failure, or three tries that showed nothing, is told once as a notice; that row then carries
-the Needs-you dot, says "BMN stopped after 3 tries on 2.1.296" where it stopped, and offers
-**Test again…**, which runs your own test. BMN runs the same commands you would, with `--auto`,
-and their records carry `"by": "bmn"`. The sign-in a prompt test is bound to is the time of the
-app's own credential file; BMN never reads what it holds. A test run of BMN (test mode or the
-self-test) starts none of these unless `BMN_AUTO_TESTS` names them: `all`, or a comma-separated
+**Tests BMN runs by itself.** No test waits for a button: the rules loading test, the skills and listing tests, whether
+a model gets a skill, the tools test, the context test and the research fence test. BMN looks when it starts, when
+Health reads the machine, when an update command it typed ends and after a team approval, and runs a test on a first
+install, a new app version, or a change in what the result is bound to (installed rules, skills, sources naming a
+context size, the research form or researcher model, or for a prompt test the sign-in, read as the time of the app's
+credential file, never its contents). Tests that send no prompt run first, one at a time; the loading tests and the
+Codex context test send one synthetic prompt each ("one prompt sent"). Each starts at most three times per version and
+binding, ten minutes apart, counted in `state/auto-tests.json` before each start; a pass or a failure settles it. A
+failure, or three tries that showed nothing, is told once; the row keeps the Needs-you dot ("BMN stopped after 3 tries on
+2.1.296") and offers **Test again…**, your own run. BMN runs your commands with `--auto`, recorded with `"by": "bmn"`. A
+test run of BMN (test mode or the self-test) starts none unless `BMN_AUTO_TESTS` names them: `all`, or a comma-separated
 list of `rules`, `skills`, `skills-loading`, `tools`, `context` and `fence`.
 
-After you approve a team change that alters the team's names, BMN rewrites the team line in the
-rules files that were current, exactly the files the Review listed; a file that changed
-meanwhile, or whose app, app version or deciding setting changed, is skipped, and the notice
-offers **Undo**. Undo first shows what each file would become, including any edit made since that
-it would replace, and puts nothing back until you confirm.
+After you approve a change to the team's names, BMN rewrites the team line in the rules files that were current, those
+the Review listed; a file that changed meanwhile, or whose app, version or deciding setting changed, is skipped, and the
+notice's **Undo** shows what each file would become before it puts anything back.
 
 ### Context limits
 
-An agent's **Context limit** is how large its conversation may grow; **Compact at**, under
-Advanced once a limit is set, is where the app starts summarising. Each app has its own setting,
-and BMN uses one only on an app version where your own test showed that the app takes it:
+An agent's **Context limit** is how large its conversation may grow; **Compact at**, under Advanced once a limit is set,
+is where the app starts summarising. BMN uses an app's setting only on a version where a test showed the app takes it:
 
 | App | Limit | Where summarising starts | Tested on a live app |
 | --- | --- | --- | --- |
@@ -1245,33 +1099,22 @@ and BMN uses one only on an app version where your own test showed that the app 
 | Claude Code | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100 000 to 1 000 000): an `env -i` entry on a run, an `env` entry of `settings.json` for your sessions | no setting | not yet |
 | OpenCode | no setting | no setting | does not apply |
 
-Claude Code 2.1.296 reads `CLAUDE_CODE_MAX_CONTEXT_TOKENS` only for a model it does not know or
-with compaction off, so BMN does not use it.
+Claude Code 2.1.296 reads `CLAUDE_CODE_MAX_CONTEXT_TOKENS` only for a model it does not know or with compaction off, so
+BMN does not use it.
 
-**The test.** `bmn context test <app>`, which BMN also runs by itself (above), starts
-the app once in an empty folder under your home folder with a short synthetic prompt and asks for
-a size no default equals (Codex 123 000, Claude Code 137 000). It passes when the app's own
-report shows that size: Codex's session record (which holds a little less than was asked, because
-Codex keeps part of the window back), or the Tokens line of Claude Code's `/context`. The result
-is kept for exactly that app version in `state/context-tests.jsonl`; the latest test of a version
-decides, and a new version starts untested. Until a test passed, the limit is **not supported
-yet** on that version: BMN writes nothing, passes nothing and requires nothing. Where summarising
-starts has no test yet, so it stays not supported on every app.
+**The test.** `bmn context test <app>` starts the app once in an empty folder under your home folder with a short
+synthetic prompt and asks for a size no default equals (Codex 123 000, Claude Code 137 000). It passes when the app's
+own report shows that size: Codex's session record (a little less, as Codex keeps part back) or the Tokens line of
+Claude Code's `/context` (Codex sends one short request to its provider; Claude Code is only asked for that report).
+The result is kept per app version in `state/context-tests.jsonl`; the latest test of a version decides, and a new
+version starts untested. Until a test passed the limit is **not supported yet** on that version: BMN writes, passes and
+requires nothing. Where summarising starts has no test yet on any app. The Claude Code test also keeps which of your
+files named another size for that run (`rivals`: part, file, key and size), so a pass shows the run's own value winning
+over each on its side; a file naming a size within one percent of the asked one makes the test inconclusive, naming
+the file, without starting a run.
 
-The Claude Code test also keeps which of your own files named another size for that very run
-(`rivals`: each source by the part it plays, its file and key, with its size; for example your
-user settings' `autoCompactWindow` at 450 000). A pass then shows one more thing for that version:
-the run's own value wins over that very source, on that side (the file's size above or below the
-run's). Where one of your files names a size within one percent of the size the test asks for,
-Claude Code's rounded report would read the same whichever source it obeyed; the test then answers
-inconclusive, names the file, and starts no run of the app: it has only asked the app for its
-version.
-
-**BMN runs the test by itself.** A new app version starts untested, so without anything more an
-agent's own limit would stop holding at every app update. BMN therefore runs that same test
-itself, as it runs every test (above), and only where an approved, enabled agent on that app has a
-limit of its own; an app no agent has a limit for is never started for it. What it does follows
-the latest test of exactly the installed version:
+**BMN tests by itself**, only where an approved, enabled agent on that app has a limit, by the latest test of exactly
+the installed version:
 
 | Latest test of the installed version | What BMN does |
 | --- | --- |
@@ -1280,133 +1123,80 @@ the latest test of exactly the installed version:
 | failed | nothing: that version waits for your **Test again…** |
 | showed nothing (`inconclusive`, `unavailable`) | tries again ten minutes later, three times in all for that version, set of sources and sign-in |
 
-For Claude Code a passed version is tested once more when your files have changed since: a run
-of one of those agents would now meet a source the recorded test did not see lose on that side,
-so the check would answer `conflict`, and a test started now would meet a set of sources (which
-one, and on which side of the size the test asks for) that the recorded test did not. The record
-is the memory, so each such set is tested once for a version: a set any recorded test of that
-version already met starts no test, also when you change your files back to it later, and a
-second change during one run of BMN is tested like the first. What a version has shown is read
-from its unbroken run of passed tests, so a source one of them saw lose still counts after a
-later test met other sources. A source whose size the report could not tell from the test's own
-starts no test. Two looks at once start one test, never two.
+For Claude Code a passed version is tested once more when your files changed so that a run would meet a set of sources
+(which, and on which side of the asked size) no recorded test of that version met; each set is tested once, also when
+you change back to it, and two looks at once start one test. Health's row reads "BMN tested 2.1.296 by itself Oct 11 ·
+it takes the setting" (or "the test failed", "the test showed nothing"; Codex adds "one prompt sent"); a failure, or
+three tries that showed nothing, is told once, naming the agents whose limit does not hold. Under each app's row Health
+names every agent with a limit and whether a run started now applies it, not, or is refused, with the reason (judged
+from the test's own folder). `bmn roster check` never starts an app and writes nothing; for an untested version its step
+says "BMN tests it by itself when it starts, when Integrations > Health is read and after an update there".
 
-A test BMN ran is recorded exactly like yours, with `"by": "bmn"` beside it, and the app's row on
-Health then reads "BMN tested 2.1.296 by itself Oct 11 · it takes the setting" (or "the test
-failed", "the test showed nothing"; a Codex row adds "one prompt sent"). A failure, or three tries
-that showed nothing, is told once as a notice that names the agents whose limit does not hold;
-the row then offers **Test again…**. Under each app's row Health names every
-agent with a limit of its own and what becomes of it in a run started now: applied, not applied
-(the run gets the app's own size) or refused, with the check's reason behind the line. That is
-judged from where the test runs, a folder of its own under your home folder; a project with
-settings of its own may fare differently, and the check says so for that run.
+**Runs BMN checks.** `bmn roster role <role> --json` gives each candidate a `context` entry: `applied` with the exact
+`argv` items (Codex) or `env` entries (Claude Code), `app-default`, `not-supported-yet` or `out-of-range`. `bmn roster
+check` resolves what the run would use and refuses with `CONTEXT_MISMATCH` (after the effort, before the destination)
+when that differs from the agent's limit or cannot be resolved, with `detail` `conflict`, `unresolved`, `missing`,
+`differs` or `out-of-range`. A PASS records `context_limit_applied`, or `context_limit_note` says why the agent's limit is
+not applied. For Codex a `-c` item wins, then the selected profile, then `config.toml`; a `.codex/config.toml` in or
+above the working folder, or `/etc/codex`, that sets a size leaves it unresolved unless the run carries its own item. For
+Claude Code every source naming a size (the run's environment, `env` in each settings file it loads, a settings file's
+`autoCompactWindow`) must name the same one, unless the installed version's test saw the run's environment win over each
+other source on the same side: then the run's size holds and the step names both, so an agent may keep its own limit
+while your sessions' default is larger. Any other disagreement is unresolved, the same file in another part included (a
+run started in your home folder reads your user settings a second time, as that folder's own). An agent without a limit
+is never asked for one.
 
-`bmn roster check` never starts an app and writes nothing. For a version without a test its step
-says who acts next: "BMN tests it by itself when it starts, when Integrations > Health is read and after
-an update there"; after a test that showed nothing, that BMN tries it again by itself, up to three
-times. What a test costs: Claude Code is asked for its `/context` report; Codex gets one short
-synthetic request to its provider, so one per new Codex version.
-
-**Runs BMN checks.** `bmn roster role <role> --json` gives each candidate a `context` entry:
-`applied` with the exact `argv` items (Codex) or `env` entries (Claude Code), `app-default`,
-`not-supported-yet` or `out-of-range`. `bmn roster check` then resolves what the run would really
-use and refuses with `CONTEXT_MISMATCH`, after the effort and before the destination, when that
-differs from the agent's limit or cannot be resolved; a PASS records the limit in the receipt's
-`context_limit_applied`, and where an agent's own limit is not applied the receipt's
-`context_limit_note` says why: that BMN tests the version by itself, or how its test ended. For Codex a `-c` item wins, then the selected profile, then
-`config.toml`; a `.codex/config.toml` in the working folder or above it, or `/etc/codex`, that
-sets a size makes the answer unresolved unless the run carries its own item. For Claude Code BMN
-cannot tell from the files which source wins, so every source that names a size must name the
-same one: the run's environment, `env` in each settings file it loads, and a settings file's own
-`autoCompactWindow`. The one exception is what the test of the installed version saw: where the
-run's environment names the agent's limit and every other size comes from a source the test saw
-it win over, on the same side, the run's size is the answer and the check's step names both
-("which the test of this version showed wins over user settings autoCompactWindow (450000)"). So
-an agent may keep its own limit while your sessions' default is larger. Any other disagreement
-stays unresolved: a smaller size where the test saw a larger one, another file or key, the same
-file playing another part (a run started in your home folder reads your user settings a second
-time as that folder's own), or a version without that test. A refusal carries its reason as
-`detail` beside the code: `conflict`, `unresolved`, `missing`, `differs` or `out-of-range`. An
-agent without a limit is never asked for one.
-
-**Your own sessions.** Integrations › Health › Context limits shows one row per app: its file, the agents
-that share it, the default it holds and whether the setting is tested on the installed version.
-**Change…**, offered only after a passed test, shows the file, where the write lands and the
-exact diff, and writes after you confirm: only the named key changes, every other byte stays, the
-file as it was is kept beside it as `<file>.bmn-backup-<time>`, and a file that changed since the
-diff was shown is left alone. A file that is a link is replaced by a regular file; the file it
-pointed to is never written. `bmn context set <app> --limit N|default` does the same in a
-terminal, with Yes/No. Claude Code's file is shared by every Claude Code agent, so a default set
-there reaches the runs BMN starts too: an agent whose own limit differs is refused until they agree.
+**Your own sessions.** Integrations › Health › Context limits shows one row per app (its file, the agents sharing it, its
+default, whether the setting is tested). **Change…**, offered only after a passed test, shows the file, where the write
+lands and the exact diff, and writes after you confirm: only the named key changes, the old file is kept as
+`<file>.bmn-backup-<time>`, a file changed since the diff was shown is left alone, and a link is replaced by a regular
+file, its target never written. `bmn context set <app> --limit N|default` does the same in a terminal, with Yes/No.
+Claude Code's file is shared by every Claude Code agent, so one whose own limit differs from a default set there is
+refused until they agree.
 
 ### Skills
 
-You keep your skills in one folder, `~/.claude/skills/` unless the approved team file names
-another (`source:` in its `## skills` section): one folder, or link to a folder, per skill, each
-with a `SKILL.md`. BMN gives every agent app the skills it may have and tells you where they
-differ. Integrations › **Skills** lists each skill with its first line, the apps it is for and its state
-in each; `bmn skills check` prints the same.
+You keep your skills in one folder, `~/.claude/skills/` unless the approved team file names another (`source:` in its
+`## skills` section): one folder, or link to a folder, per skill, each with a `SKILL.md`. BMN gives every agent app the
+skills it may have: Integrations › **Skills** lists each with its first line, the apps it is for and its state in each,
+and `bmn skills check` prints the same.
 
-**Where an app reads skills is tested, not assumed.** Until the skills test (`bmn skills test
-<app>`, which BMN runs by itself) passed on exactly the installed version, an app's skills are "not
-supported yet" and nothing is written for it. The test starts the app in an empty home folder
-that holds only test skills, one real folder and one link in each folder the app may read, and
-asks which it sees; BMN sends no prompt and no sign-in is there. It records the folders the app
-named and whether it follows links. Where the app may receive private work, the test then puts
-one empty test skill where the app keeps its skills, asks again, and removes it. That second
-part is a **listing test**: no prompt is sent, so it shows that the app finds a skill placed
-there, not that a model gets it.
-
-OpenCode 2.0.29 lists a skill once when two of its folders hold the same name, and the one in
-`~/.agents/skills` wins over `~/.claude/skills` (measured 2026-10-14); a link BMN puts there for
-Codex points at the same skill, so OpenCode reads it once.
-
-**BMN tests by itself.** On a first install and on each new version BMN runs that test itself
-(above), the listing test included where the app may receive private work, with no prompt and
-nothing of yours in it (`bmn skills test <app> --auto`, recorded as BMN's). The row says "BMN is
-testing …" meanwhile; after a failure, or three tries that showed nothing, it offers **Test
-again…**.
+**Where an app reads skills is tested.** Until the skills test (`bmn skills test <app>`) passed on exactly the installed
+version, an app's skills are "not supported yet" and nothing is written for it. It starts the app in an empty home
+folder holding only test skills (a real folder and a link in each folder the app may read), with no prompt and no
+sign-in, and records the folders the app named and whether it follows links. Where the app may receive private work, a
+**listing test** then puts one empty test skill where the app keeps its skills, asks again and removes it: the app finds
+a skill there, which does not show that a model gets it. BMN runs both by itself on a first install and each new
+version (`--auto`); the row says "BMN is testing …" meanwhile.
 
 | App | What BMN asks | Folders it looks in | Tested on a live app |
 | --- | --- | --- | --- |
 | Claude Code | the start-up message of `claude -p`, given `/context` | `~/.claude/skills` | 2.1.300, 2026-10-14 |
 | Codex | `codex debug prompt-input` | `~/.agents/skills`, `~/.codex/skills`, `~/.claude/skills` | 0.162.1, 2026-10-11 |
-| OpenCode | its own server's skill list: `opencode serve --port 0` on loopback with a password made for the run, then `opencode api --server <url> skill.list` until two answers agree (OpenCode 2 has no `debug skill`) | `~/.config/opencode/skills`, `~/.config/opencode/skill`, `~/.agents/skills`, `~/.claude/skills` | 2.0.29, 2026-10-14 |
+| OpenCode | its own server's skill list: `opencode serve --port 0` on loopback with a password made for the run, then `opencode api --server <url> skill.list` until two answers agree | `~/.config/opencode/skills`, `~/.config/opencode/skill`, `~/.agents/skills`, `~/.claude/skills` (one skill of a name, `~/.agents/skills` first, on 2.0.29) | 2.0.29, 2026-10-14 |
 
-**Whether a model gets a skill is a second test.** `bmn skills test <app> --prompt`, which BMN
-runs by itself once the skills test passed and again whenever the skills change, sends one prompt
-to the app's provider, so it runs only where the app may receive private work, and the row says
-"one prompt sent". BMN puts one test skill where the app keeps its skills;
-only the skill's body holds a token made for that run, not its name, its description or the
-prompt. The app is started once in an empty folder and asked for the skill by name, and the
-skill is removed and checked to be gone. The test passes only when the token comes back and no
-tool can have read the file:
+**Whether a model gets a skill** is a second test, `bmn skills test <app> --prompt`, which BMN runs once the skills test
+passed and whenever the skills change. It sends one prompt to the app's provider, so it runs only where the app may
+receive private work ("one prompt sent"): one test skill carrying a token made for the run in its body only, the app
+started once in an empty folder and asked for it by name, the skill then removed and checked gone. It passes only when
+the token comes back and no tool can have read the file:
 
 | App | The run | It passes when | Tested on a live app |
 | --- | --- | --- | --- |
-| Claude Code | `claude -p --tools "" --strict-mcp-config`, asked `/<skill>` | the run itself reports that it had no tools, nothing it reports is a tool being used, and its answer holds the token | not yet |
-| Codex | `codex exec --sandbox read-only`, asked to use `$<skill>` | the record Codex saved for the run shows the token in the words of a message Codex gave the model before any tool was called, and shows that the run came to its end | not yet |
+| Claude Code | `claude -p --tools "" --strict-mcp-config`, asked `/<skill>` | the run reports that it had no tools, reports no tool used, and its answer holds the token | not yet |
+| Codex | `codex exec --sandbox read-only`, asked to use `$<skill>` | the run's saved record shows the token in the words of a message Codex gave the model (`input_text`) before any tool, and that the run came to its end | not yet |
 | OpenCode | none | never yet: BMN cannot tell the app handing over a skill from the model reading the file | does not apply |
 
-It **fails** when a run BMN could read to its end, with an answer and no tool in it, came back
-without the token. It is **inconclusive** when the run ended in an error or took too long, when
-BMN cannot read what the run reported or the report stops before the run's end, when the token
-shows only somewhere other than the words of a message the app gave the model, when a tool ran
-(the model may have read the file itself), or when the test skill could not be removed; that last
-one names the folder to delete. The kinds of line a Codex record holds were read from one record
-of Codex 0.162.0 (2026-10-11); a record with a kind BMN does not know is inconclusive. Within a
-message only the kinds of part that version writes count: `input_text` as words Codex gave the
-model, `output_text` with words in it as the model's answer; the token in a part of another kind
-is "somewhere else", and a message of the model without such words is no answer. The two tests are kept as
-separate records and Health names each: a listing, also one recorded before the loading test
-existed, never counts as a loading test.
+It **fails** when a run read to its end, with an answer and no tool, came back without the token. It is
+**inconclusive** when the run errored or took too long, its report cannot be read or stops early, the token shows only
+outside the words of a message the app gave the model, a Codex record holds a line of a kind 0.162.0 did not write, a
+tool ran, or the test skill could not be removed (it names the folder to delete). Health keeps the two tests apart: a
+listing never counts as a loading test.
 
-**Which skills an app may have.** Every skill reaches every app, with two limits you set on the
-Skills page and approve like any team change: a skill kept to some apps (`only`) reaches only
-those, and an app whose approved destination is public-only, unknown or your word gets only the
-skills you marked **Public** (`public`). The approval names the apps a change reaches.
-
-**One state per app and skill.**
+**Which skills an app may have.** Every skill reaches every app, with two limits you set on Skills and approve like any
+team change: a skill kept to some apps (`only`) reaches only those, and an app whose approved destination is
+public-only, unknown or your word gets only the skills you marked **Public** (`public`). The approval names the apps a
+change reaches.
 
 | State | Meaning |
 | --- | --- |
@@ -1421,67 +1211,44 @@ skills you marked **Public** (`public`). The approval names the apps a change re
 | `excluded` | the app is not meant to have the skill, and does not |
 | `exposed` | the app can see a skill it may not have |
 
-`bmn skills check` exits 0 only when at least one app is supported, the folder is readable and
-every skill is `current`, `read-directly` or `excluded` in every supported app.
+`bmn skills check` exits 0 only when at least one app is supported, the folder is readable and every skill is
+`current`, `read-directly` or `excluded` in every supported app. **Exposed cannot be installed away:** an app reading
+the folder itself sees every skill in it, so one it may not have, or an entry BMN did not write, stays `exposed` until
+you mark it Public or move it out; meanwhile the check exits 1 and an install does not report success.
 
-**Install.** BMN installs the skills by itself (Story 75.9): after an approval, after its own test of
-an app passed, and at its start, it runs `bmn skills install --absent`, which adds what an app lacks
-and updates or removes BMN's own entries, and leaves an entry BMN did not write, or one changed
-outside it, as it is; the Skills page names that entry, and BMN adds the skill once it is gone.
-Each such install is its own transaction under **Earlier installs**; its **Undo…** puts the entries
-back, and what the list still gives an app comes back at the next start or approval, so keep the
-skill from that app to keep it out. `bmn skills install [app…]` by hand lists every entry
-first and writes after you confirm: a link to the skill where the app follows links, or a copy
-with BMN's line in its `SKILL.md` where it does not. An entry BMN did not write is named, with
-its link target or the files that differ, and replaced only then; a link is replaced as a link,
-and what it points at is never written. Entries an app may no longer have, and entries of a skill
-that left the folder, are removed in the same install. It is one transaction: every entry's prior
-state is kept under BMN's own private state, a folder as a complete copy with its modes and its
-own links, and **Undo…** (or `bmn rules restore --transaction <id>`) puts all of it back.
-An install that ended part-way is undone too: BMN notes each entry before it writes it, puts back
-one that still holds exactly what the install meant to leave, and stops at one that changed
-since, naming it. That holds for every entry of the install, finished or not.
-A skill's lines are never printed: a plan names files, not their text.
-
-**Exposed cannot be installed away.** An app that reads the skills folder itself sees every skill
-in it, so a skill it may not have stays `exposed` until you mark it Public or move it out of the
-folder; so does an entry BMN did not write. While anything is exposed the check exits 1 and an
-install does not report success.
-
-When the approved team cannot be read (a damaged or missing approval, once a team was approved),
-the check, the install and the Skills page report that and change nothing; they never fall back
-to "no team".
+**Install.** BMN runs `bmn skills install --absent` by itself after an approval, after its own test of an app passed and
+at its start: it adds what an app lacks, updates or removes BMN's own entries, and leaves an entry it did not write, or
+one changed outside it, for Skills to name. `bmn skills install [app…]` by hand lists every entry first and writes
+after you confirm: a link to the skill where the app follows links, else a copy with BMN's line in its `SKILL.md`; an
+entry BMN did not write is named (its link target or the files that differ) and replaced only then, a link as a link,
+its target never written. Entries an app may no longer have, and those of a skill that left the folder, are removed in
+the same install; a skill's lines are never printed. Each install is one transaction under **Earlier installs**, every
+entry's prior state kept in BMN's private state (a folder as a complete copy with its modes and links); **Undo…** (or
+`bmn rules restore --transaction <id>`) puts it all back, and what the list still gives an app returns at the next start
+or approval, so keep the skill from that app to keep it out. An install that ended part-way is undone too: BMN notes
+each entry before writing it, puts back one that still holds what the install meant to leave, and stops at one that
+changed since, naming it. When the approved team cannot be read (once a team was approved), the check, the install and
+the Skills page say so and change nothing; they never fall back to "no team".
 
 #### BMN's own skills (Story 77.4)
 
-BMN ships five skills of its own in the repository's `skills/` (listed in `skills/manifest.json`, packaged
-under `resources/skills`): `plan` (the project's planning, [planning.md](planning.md)), `team-ask`,
-`team-page`, `web-question` and `jev-judge`. At every start, before the skills install, BMN runs
-`bmn skills own`: each one the skills folder lacks becomes a link to BMN's own copy under
-`~/.local/share/bmn/skills/<name>`, which stays readable with BMN closed and is refreshed when an
-update brings a new version (the link stays, the copy changes). The skills install then carries them
-into Codex and OpenCode with the same ownership, route and eligibility checks as any other skill; they
-count as public, as BMN's repository is, unless the team file marks them otherwise. Integrations › Skills lists
-them like every other skill; a pointer to one in your global rules is your own edit.
+BMN ships five skills in the repository's `skills/` (listed in `skills/manifest.json`, packaged under `resources/skills`):
+`plan` ([planning.md](planning.md)), `team-ask` (Asking a teammate), `team-page`, `web-question` and `jev-judge` (under
+Models). At every start, before the skills install, `bmn skills own` makes each one your skills folder lacks a link to
+BMN's copy under `~/.local/share/bmn/skills/<name>`, which stays readable with BMN closed and is refreshed by an update
+(the link stays, the copy changes). The skills install then carries them like any other skill; they count as public,
+as BMN's repository is, unless the team file marks them otherwise. A pointer to one in your global rules is your own
+edit.
 
-`team-page` is the page for finished work: when a piece of work is complete (dev-auto ends every completed epic
-with one), the agent writes one HTML page in the owner's fixed structure (why, what changes with one example,
-optional safety and money, how it was checked, known limits, what was decided for him, what waits on him, an
-honest opinion) from its `template.html`, checks it with `check.py` (PASS/FAIL per rule) and publishes it
-privately: Claude Code as an Artifact, any other app with `bmn publish`, a new key per revision. The other four
-are described where their commands are: `plan` in [planning.md](planning.md), `team-ask` under Asking a
-teammate, `web-question` and `jev-judge` under Models.
+- A link of the same name into a BMN checkout or install is taken over: it becomes a link to BMN's copy.
+- Anything else of that name (your own folder, a link elsewhere) is yours and left as it is; Skills says so.
+- An entry BMN made that you remove stays removed: BMN records it in `~/.config/bmn/agents/state/own-skills.json` and
+  never adds it back. A copy BMN cannot read is put back, never taken for your removal.
 
-- A link of the same name into a BMN checkout or install (how `web-question` and `jev-judge` were
-  linked by hand) is taken over: it becomes a link to BMN's copy.
-- Anything else of that name (your own folder, a link elsewhere) is yours and is left as it is;
-  Integrations › Skills says so.
-- An entry BMN made that you remove stays removed: BMN records it in
-  `~/.config/bmn/agents/state/own-skills.json` and never adds it back. A copy BMN cannot read is put
-  back, never taken for your removal.
-
-`bmn skills own --plan --json` says what it would do without writing; `bmn skills check --json` lists
-the same rows under `own`.
+`team-page` is the page for finished work (dev-auto ends every completed epic with one): the agent writes one HTML page
+in the owner's fixed structure from its `template.html`, checks it with `check.py` (PASS/FAIL per rule) and publishes it
+privately, Claude Code as an Artifact and any other app with `bmn publish`, a new key per revision. `bmn skills own
+--plan --json` says what it would do without writing; `bmn skills check --json` lists the same rows under `own`.
 
 ### Tools (MCP)
 
