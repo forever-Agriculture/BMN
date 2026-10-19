@@ -1,5 +1,5 @@
 // MODULE: turn-changes-client.test.ts - the real worker thread, asked from the host's side: a capture and its comparison, a publication whose time passed or that was stopped before it was asked, a comparison stopped while it runs with the host's own thread left free, the stop where no line is compared and in the search for secrets, named secret values of config files masked in every kind of line, and a worker that died
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -235,7 +235,8 @@ describe('what can reach a capture', () => {
   // the `bmn` command loads anything that scans, compares or reads the store, and no command reads a turn.
   it('is one control-socket method that marks a turn; the socket and the bmn command load nothing that reads a capture', () => {
     const server = readFileSync(join(here, 'control-server.ts'), 'utf8')
-    const cli = readFileSync(join(here, '../../bin/bmn'), 'utf8')
+    // bin/bmn and its parts (Story 80.17), read as one text.
+    const cli = readdirSync(join(here, '../../bin')).filter((name) => name === 'bmn' || /^bmn-.+\.mjs$/.test(name)).map((name) => readFileSync(join(here, '../../bin', name), 'utf8')).join('\n')
     const marks = readFileSync(join(here, '../../bin/turn-marks.mjs'), 'utf8')
     expect(server).not.toMatch(/from '\.\/turn-changes/)
     expect(cli).not.toMatch(/turn-changes/)

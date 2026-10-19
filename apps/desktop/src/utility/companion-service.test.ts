@@ -1,6 +1,6 @@
 // MODULE: companion-service.test.ts - backup export/verify completeness and artifact reconciliation against the real store
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -3139,7 +3139,9 @@ describe('answers from the phone go only into the dialog that asked (Epic 30.2)'
     const service = readFileSync(join(__dirname, 'companion-service.ts'), 'utf8')
     // The engine's answer is called from answerAttention alone; the owner route and socket handlers never name it.
     expect([...service.matchAll(/this\.answers\.answer\(/g)]).toHaveLength(1)
-    const cli = readFileSync(join(__dirname, '..', '..', 'bin', 'bmn'), 'utf8')
+    // bin/bmn and its parts (Story 80.17), read as one text.
+    const bin = join(__dirname, '..', '..', 'bin')
+    const cli = readdirSync(bin).filter((name) => name === 'bmn' || /^bmn-.+\.mjs$/.test(name)).map((name) => readFileSync(join(bin, name), 'utf8')).join('\n')
     // The OpenCode plugin's `answer take` and Claude's waiting permission hook (Epic 78) both only collect.
     expect([...new Set([...cli.matchAll(/method: '(answer\.[^']*)'/g)].map((match) => match[1]))]).toEqual(['answer.take'])
   })

@@ -292,6 +292,7 @@ the [survival matrix](survival-matrix.md) for the recorded FAIL and other eviden
 ```text
 apps/desktop/
   bin/bmn                command-line client for the control socket
+  bin/bmn-*.mjs          its parts: words, commands, results, hooks, hook runtime, status line, OpenCode plugin
   src/main/              Electron main process
   src/preload/           the renderer's API
   src/renderer/          React interface

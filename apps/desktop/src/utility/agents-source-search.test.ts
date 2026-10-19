@@ -142,10 +142,12 @@ describe('team and rules state has no path into the database, Backup export, Tel
   it('only the app entry point and the CLI reach them', () => {
     const sources = [
       ...inFolder('apps/desktop/src/main', /\.ts$/), ...inFolder('apps/desktop/src/utility', /\.ts$/),
-      ...inFolder('apps/desktop/src/preload', /\.ts$/), ...inFolder('apps/desktop/src/renderer/src', /\.tsx?$/), 'apps/desktop/bin/bmn'
+      ...inFolder('apps/desktop/src/preload', /\.ts$/), ...inFolder('apps/desktop/src/renderer/src', /\.tsx?$/), 'apps/desktop/bin/bmn',
+      // Story 80.17: the CLI's parts.
+      ...inFolder('apps/desktop/bin', /^bmn-.+\.mjs$/)
     ].filter((file) => !/\.test\.tsx?$/.test(file) && !HOLDERS.includes(file))
     const reaching = sources.filter((file) => imports(file).some((name) => /(^|\/)(agents-(roster|state|check|rules|cli|approval|ipc|context|skills|research|guard)|visibility-refresh)(\.mjs)?$/.test(name)))
-    expect(reaching.sort()).toEqual(['apps/desktop/bin/bmn', 'apps/desktop/src/main/index.ts'])
+    expect(reaching.sort()).toEqual(['apps/desktop/bin/bmn', 'apps/desktop/bin/bmn-hook-runtime.mjs', 'apps/desktop/bin/bmn-hooks.mjs', 'apps/desktop/src/main/index.ts'])
   })
 })
 

@@ -1,7 +1,7 @@
 // MODULE: file-reference-ipc.test.ts - sender checks and argument bounds on the file-reference renderer channels
 import { METHOD_REGISTRY } from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -208,7 +208,9 @@ describe('Quick look IPC', () => {
   it('has no control-socket method and no bmn command that reaches Quick look, Save included (Stories 67.1, 68.1)', () => {
     const here = dirname(fileURLToPath(import.meta.url))
     const server = readFileSync(join(here, '..', 'utility', 'control-server.ts'), 'utf8')
-    const cli = readFileSync(join(here, '..', '..', 'bin', 'bmn'), 'utf8')
+    // bin/bmn and its parts (Story 80.17), read as one text.
+    const bin = join(here, '..', '..', 'bin')
+    const cli = readdirSync(bin).filter((name) => name === 'bmn' || /^bmn-.+\.mjs$/.test(name)).map((name) => readFileSync(join(bin, name), 'utf8')).join('\n')
     for (const text of [server, cli]) {
       expect(text).not.toMatch(/quick\.look|quickLook/u)
     }

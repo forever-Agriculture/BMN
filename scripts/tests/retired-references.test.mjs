@@ -1,7 +1,7 @@
 // MODULE: retired-references.test.mjs - Epic 71 (71.2 AC5): the retired app is named only where the allowlist says why
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -42,10 +42,14 @@ describe('the retired app named in the repository (Epic 71, 71.2 AC5)', () => {
   it('keeps none of its history reader, its recorded payloads or its hook writer', () => {
     assert.equal(existsSync(join(repoRoot, `apps/desktop/src/utility/agent-history-${ID}.ts`)), false)
     assert.equal(existsSync(join(repoRoot, `apps/desktop/src/utility/test-fixtures/${ID}`)), false)
-    // The hook writer lived in bin/bmn; what is left there is the refusal of its payloads in bmn hook claude.
-    const bmn = readFileSync(join(repoRoot, 'apps/desktop/bin/bmn'), 'utf8')
-    assert.equal(bmn.includes(`${ID}Requests`), false)
-    assert.deepEqual(findReferences(repoRoot).filter((entry) => entry.file === 'apps/desktop/bin/bmn').map((entry) => entry.line).length, 2)
-    assert.match(bmn, new RegExp(`agent === 'claude' && Object\\.hasOwn\\(event, '${ID}_version'\\)\\) return 0`))
+    // The hook writer lived in bin/bmn; what is left of it in bin/bmn and its parts is the refusal of its payloads in
+    // bmn hook claude, which Story 80.17 moved to bin/bmn-hook-runtime.mjs.
+    const bin = join(repoRoot, 'apps/desktop/bin')
+    const cli = readdirSync(bin).filter((name) => name === 'bmn' || /^bmn-.+\.mjs$/.test(name)).map((name) => readFileSync(join(bin, name), 'utf8'))
+    assert.ok(cli.length > 1)
+    assert.equal(cli.some((text) => text.includes(`${ID}Requests`)), false)
+    const runtime = readFileSync(join(bin, 'bmn-hook-runtime.mjs'), 'utf8')
+    assert.deepEqual(findReferences(repoRoot).filter((entry) => entry.file.startsWith('apps/desktop/bin/bmn')).map((entry) => entry.file), ['apps/desktop/bin/bmn-hook-runtime.mjs', 'apps/desktop/bin/bmn-hook-runtime.mjs'])
+    assert.match(runtime, new RegExp(`agent === 'claude' && Object\\.hasOwn\\(event, '${ID}_version'\\)\\) return 0`))
   })
 })

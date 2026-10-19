@@ -27,6 +27,21 @@ extraResources:
     to: bin/bmn-bashrc
   - from: bin/bmn
     to: bin/bmn.mjs
+  # Story 80.17: bmn.mjs's own parts, which it imports by relative path.
+  - from: bin/bmn-words.mjs
+    to: bin/bmn-words.mjs
+  - from: bin/bmn-commands.mjs
+    to: bin/bmn-commands.mjs
+  - from: bin/bmn-opencode-plugin.mjs
+    to: bin/bmn-opencode-plugin.mjs
+  - from: bin/bmn-results.mjs
+    to: bin/bmn-results.mjs
+  - from: bin/bmn-hooks.mjs
+    to: bin/bmn-hooks.mjs
+  - from: bin/bmn-statusline.mjs
+    to: bin/bmn-statusline.mjs
+  - from: bin/bmn-hook-runtime.mjs
+    to: bin/bmn-hook-runtime.mjs
   # bmn.mjs imports it by relative path; the utility process bundles its own copy.
   - from: bin/safe-config-write.mjs
     to: bin/safe-config-write.mjs

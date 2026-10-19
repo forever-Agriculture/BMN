@@ -23,7 +23,7 @@ export const ALLOWED = {
   // The retirement line and the names it uses.
   'apps/desktop/bin/agents-roster.mjs': 'the retirement line, the tag and the retired program',
   'apps/desktop/bin/agents-roster.d.mts': 'the retired app type',
-  'apps/desktop/bin/bmn': 'bmn hook claude refuses a payload the retired app sends through Claude Code\'s hook files',
+  'apps/desktop/bin/bmn-hook-runtime.mjs': 'bmn hook claude refuses a payload the retired app sends through Claude Code\'s hook files',
   'shared/protocol/src/agents-roster.ts': 'the retirement line on screens and the retired program',
   // Old records, read as they were saved.
   'shared/protocol/src/binding.ts': 'a binding saved before the retirement',
