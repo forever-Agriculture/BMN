@@ -17,7 +17,9 @@ export const POLICY_USAGE = `Usage: bmn policy [--repo OWNER/NAME] [--json]
 The owner's push and merge policy (Epic 83), read before each push, merge and pull-request write.
 Without --repo it reads the checkout's GitHub remote (origin), if there is one. It prints whether the
 policy authorizes anything and why not, the repository's level and default branch, what that level
-lets you do without asking, and what still asks. The owner changes it only in BMN Health.`
+lets you do without asking, and what still asks. The owner changes it only in BMN Health. While he
+is away, the merges and pushes he granted for the night in that repository follow the level's lines
+(bmn grant --help); they raise no level.`
 
 const LOGIN = /^[a-z0-9](?:[a-z0-9-]{0,38})$/
 const REPOSITORY = /^([a-z0-9](?:[a-z0-9-]{0,38}))\/([a-z0-9._-]{1,100})$/
@@ -106,6 +108,12 @@ export function repositoryVerdict(status, asked, facts) {
   return { ...base, authorizes: true, why: null, ...(stored === undefined ? { note: 'not raised in Health, so PRs only' } : {}) }
 }
 
+/** The night's granted merges and pushes in the repository asked about (Story 84.9); none without a grant. */
+export function grantedHere(status, verdict) {
+  if (verdict === null || !Array.isArray(status.granted)) return []
+  return status.granted.filter((entry) => entry.repository === verdict.repository)
+}
+
 export function describePolicy(status, verdict) {
   const lines = []
   lines.push(status.standing.authorizes ? `Push policy: in force (revision ${status.revision}).` : `Push policy: authorizes nothing: ${status.standing.why}.`)
@@ -120,6 +128,12 @@ export function describePolicy(status, verdict) {
       lines.push('Without asking you may:', ...mayWords(verdict.level, verdict.defaultBranch).map((line) => `- ${line}`))
     } else {
       lines.push(`Not authorized here: ${verdict.why}. Every push, merge and pull-request write asks the owner.`)
+    }
+    const granted = grantedHere(status, verdict)
+    if (granted.length > 0) {
+      lines.push(`Granted by the owner for the night, on his card in BMN (until he is back; for that run and target only; it raises no level):`)
+      for (const entry of granted) lines.push(`- run ${entry.runId} (${entry.title}), item ${entry.item}: ${entry.words}; ${entry.left} of ${entry.count} left`)
+      lines.push('- for each: read bmn grant --run <run> and record the use first; no admin bypass; a PR that changes CI or workflows, or deploys, still asks')
     }
   }
   lines.push('Still asks the owner:', ...status.stillAsks.map((line) => `- ${line}`))
@@ -160,7 +174,12 @@ export async function runPolicyCommand(argv, { readCredentials, call }) {
     return 1
   }
   const verdict = asked === null ? null : repositoryVerdict(status, asked, await githubFacts(asked))
-  process.stdout.write(`${options.json ? JSON.stringify({ ...status, repository: verdict }, null, 2) : describePolicy(status, verdict)}\n`)
+  // Without a grant here the output is as before Story 84.9: the night's list joins only when it names this repository.
+  const policy = { ...status }
+  delete policy.granted
+  const granted = grantedHere(status, verdict)
+  const json = { ...policy, repository: verdict, ...(granted.length > 0 ? { granted } : {}) }
+  process.stdout.write(`${options.json ? JSON.stringify(json, null, 2) : describePolicy(status, verdict)}\n`)
   return 0
 }
 

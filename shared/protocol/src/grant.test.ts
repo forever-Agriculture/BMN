@@ -19,6 +19,8 @@ import {
   grantStatusLines,
   grantTermChoices,
   grantTermLabel,
+  grantReportText,
+  grantedRepositoryActions,
   markDepartureTold,
   openGrantPeriod,
   parseGrantCardInput,
@@ -537,6 +539,38 @@ describe('named actions for the night (Story 84.6)', () => {
       const parsed = parseGrantCardInput({ ...CARD, terms: [{ kind, id: 'x', repository: 'octo/widgets', proposed: 'yes', reason: 'tonight' }] })
       expect(parsed).toMatchObject({ problem: expect.stringContaining('are never on a card') })
     }
+  })
+})
+
+describe('the night\'s grant where the agent apps look (Story 84.9)', () => {
+  const read = (record: GrantRecord) => ({ state: 'read' as const, record })
+
+  it('lists every run\'s granted merges and pushes in force, with what is left, and none without a grant (AC1)', () => {
+    expect(grantedRepositoryActions(read(away(asked())), AWAY)).toEqual([])
+    const record = granted(away(asked()), all)
+    expect(grantedRepositoryActions(read(record), AWAY)).toEqual([
+      { runId: 'run-80', title: 'Epic 80 · clean up ai slop', item: 'merge-12', kind: 'merge', repository: 'forever-agriculture/bmn',
+        words: 'merge PR 12 in forever-agriculture/bmn, only at head 3f2a9c1; another head waits', left: 1, count: 1 },
+      { runId: 'run-80', title: 'Epic 80 · clean up ai slop', item: 'push-81', kind: 'push-default', repository: 'forever-agriculture/dev-auto',
+        words: 'push dev-auto/epic-81 to the default branch of forever-agriculture/dev-auto, never forced', left: 1, count: 1 }
+    ])
+    const usedOnce = useGrant(read(record), AWAY, { runId: 'run-80', sessionId: 's-builder', id: 'm1', kind: 'action', item: 'merge-12' }, T1)
+    expect(usedOnce.outcome).toBe('recorded')
+    expect(grantedRepositoryActions(read((usedOnce as { record: GrantRecord }).record), AWAY)[0]).toMatchObject({ item: 'merge-12', left: 0 })
+    // Not granted, a PR elsewhere, rounds only, Back, or an unreadable record: nothing listed.
+    expect(grantedRepositoryActions(read(granted(away(asked()), { ...all, 'merge-12': 'no' })), AWAY).map((entry) => entry.item)).toEqual(['push-81'])
+    expect(grantedRepositoryActions(read(granted(away(asked(leaving(), { terms: [
+      { kind: 'pr-elsewhere', id: 'pr-a', repository: 'octo/skills', branch: 'fix/grant', proposed: 'yes', reason: 'the skill fix' }
+    ] })), { 'pr-a': 'yes' })), AWAY)).toEqual([])
+    expect(grantedRepositoryActions(read(granted(away(asked()), { ...all, 'merge-12': 'no', 'push-81': 'no' })), AWAY)).toEqual([])
+    expect(grantedRepositoryActions(read(record), BACK)).toEqual([])
+    expect(grantedRepositoryActions({ state: 'unknown', reason: 'the grant record is not valid JSON' }, AWAY)).toEqual([])
+  })
+
+  it('takes a report text of up to 1,000 characters and refuses a longer one with the limit named (AC2)', () => {
+    expect(grantReportText('x'.repeat(1000), true)).toEqual({ text: 'x'.repeat(1000) })
+    expect(grantReportText('x'.repeat(1001), true)).toEqual({ problem: '--text must be plain text of at most 1000 characters' })
+    expect(grantReportText(undefined, false)).toEqual({ text: null })
   })
 })
 

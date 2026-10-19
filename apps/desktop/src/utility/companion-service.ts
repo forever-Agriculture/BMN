@@ -56,10 +56,12 @@ import {
   EMPTY_GRANT_RECORD,
   grantStatus,
   grantStatusLines,
+  grantedRepositoryActions,
   openGrantPeriod,
   ownerGrantView,
   type GrantAnswerResult,
   type GrantRead,
+  type GrantedRepositoryAction,
   type OwnerGrantView,
   type ArtifactPreview,
   type ArtifactRecord,
@@ -807,7 +809,10 @@ export class CompanionService {
         dropTurnMark: (sessionId, requestId) => this.turns?.dropped(sessionId, requestId),
         reportRefusal: (method, sessionId, reason) => this.logRefusal(method, sessionId, reason),
         awayStatus: async (scope) => scope.kind === 'owner' ? this.awayForOwner() : this.awayForAgent(),
-        policyStatus: async () => pushPolicyStatus(await this.options.database.companion('getPushPolicy'), await this.policyReader.masterHasPointer()),
+        policyStatus: async () => ({
+          ...pushPolicyStatus(await this.options.database.companion('getPushPolicy'), await this.policyReader.masterHasPointer()),
+          granted: await this.grantedActions()
+        }),
         awayPrinted: async (p) => ({ recorded: await this.awayNotices.printed(p.sessionId, p.agent, p.conversation, p.claimId) }),
         // Story 76.5: BMN binds the decision to this process's conversation, as its own hook reported it, never the caller's word.
         recordDecision: (p) => this.controlCall(async () => {
@@ -1503,6 +1508,19 @@ export class CompanionService {
         const status = grantStatus(read, away, id)
         return { runId: id, ...status, lines: grantStatusLines(id, status) }
       })
+    }
+  }
+
+  /**
+   * Story 84.9: the night's granted merges and pushes, for `bmn policy`, where an agent app's own reviewer reads what the owner
+   * granted. A record BMN cannot read grants nothing, so it lists none.
+   */
+  private async grantedActions(): Promise<GrantedRepositoryAction[]> {
+    try {
+      const { read, away } = await this.options.database.companion('getGrants')
+      return grantedRepositoryActions(read, away)
+    } catch {
+      return []
     }
   }
 

@@ -942,6 +942,8 @@ read.
   settings, force pushes and deletions, publishing, secrets, PR labels or comments that trigger a deployment or a bot, a merge without green required checks, a merge or a
   push of the default branch before the work passed its acceptance, anything in a repository of a denied or
   unknown owner, and more). The policy removes the ask; it never makes work ready.
+- **Granted for the night**: while he is away, the merges and pushes he granted on a run's card in that repository
+  follow the level's lines (`bmn grant`, below); they raise no level and change no Still asks line.
 
 The policy is the agents' own rule: nothing in BMN allows a command because of it. The hard limits are GitHub's
 repository rules where a repository can carry them (`non_fast_forward` and `deletion` on the default branch, and
@@ -1059,12 +1061,16 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   action done, refused, with `--text` saying why, or uncertain while the agent reads the target's state; the latest
   report counts); `--boundary B --step-back --text T` gives the step-back consult's option before a boundary's last
   granted round; `--item I --text T` names a granted step that GitHub, the command guard or a rule refused before
-  any use. Reports are taken after Back too, since a running step finishes. The summary's **Granted** section shows
+  any use. A report's `--text` is plain text of at most 1,000 characters; longer is refused with the limit named.
+  Reports are taken after Back too, since a running step finishes. The summary's **Granted** section shows
   them as "the agent's report", apart from "BMN's record" (his answer, each use, each refusal BMN made, a use with
   no outcome, the end).
 
 A granted merge or push is a named one-night action above the repository's level in `bmn policy`; the standing
 levels do not change, every merge still has no admin bypass, and GitHub's rules and the command guard still hold.
+`bmn policy --repo` lists each one in force in that repository after the level's lines (run, item, target and
+condition, what is left, until he is back), so an agent app's own approval reviewer, which reads the policy, sees
+what he granted; without a grant there the output, `--json` included, is as before.
 
 ## The team: team file, check and rules
 

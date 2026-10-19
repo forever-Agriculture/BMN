@@ -11,7 +11,9 @@ export const GRANT_RECORD_KEY = 'night-grant-v1'
 /** Bounds: text is refused past them, never cut; lists keep their newest entries. */
 export const GRANT_LIMITS = Object.freeze({
   runId: 120, title: 120, scope: 300, reason: 300, terms: 8, itemId: 40, runs: 32, told: 64, uses: 500, operations: 500,
-  boundary: 120, useId: 120, count: 10, periods: 2, reports: 500, carried: 2000, periodId: 64
+  boundary: 120, useId: 120, count: 10, periods: 2, reports: 500, carried: 2000, periodId: 64,
+  /** A step-back or outcome report's words (Story 84.9: a consult's option did not fit in 300). */
+  report: 1000
 })
 
 /** The extra repair rounds a card may offer per boundary (owner 2026-10-18: "2-4 by default"); 0 is No. */
@@ -831,8 +833,8 @@ export function reportGrant(read: GrantRead, report: GrantReportInput, now: stri
 /** The report's words, one line of plain text, or why not. */
 export function grantReportText(value: unknown, required: boolean): { text: string | null } | { problem: string } {
   if (value === undefined || value === null) return required ? { problem: 'this report needs --text' } : { text: null }
-  const text = grantWords(value, GRANT_LIMITS.reason)
-  return text === null || text === '' ? { problem: `--text must be plain text of at most ${GRANT_LIMITS.reason} characters` } : { text }
+  const text = grantWords(value, GRANT_LIMITS.report)
+  return text === null || text === '' ? { problem: `--text must be plain text of at most ${GRANT_LIMITS.report} characters` } : { text }
 }
 
 function leftFor(grant: ActiveGrant, use: { kind: 'round'; boundary: string } | { kind: 'action'; item: string }): number {
@@ -969,6 +971,37 @@ function grantItemWords(term: GrantActionTerm, choice: GrantChoice): string {
   }
   if (term.kind === 'push-default') return `push ${term.branch} to the default branch of ${term.repository}, never forced`
   return `${prElsewhereWords(term, term.repository)}; another PR or branch waits`
+}
+
+/** A merge or push granted to one run, in force now, as `bmn policy --repo` lists it after the level's lines (84.9 AC1). */
+export interface GrantedRepositoryAction {
+  runId: string
+  title: string
+  item: string
+  kind: 'merge' | 'push-default'
+  repository: string
+  /** Its target and condition, as `bmn grant` words it. */
+  words: string
+  left: number
+  count: number
+}
+
+/**
+ * Every run's granted merges and pushes in the open period, read as `bmn grant` reads each run, so an unanswered card, Back
+ * or an unreadable record lists none. The list raises no level and changes no guard: it says what he answered.
+ */
+export function grantedRepositoryActions(read: GrantRead, away: Pick<AwayRecord, 'state' | 'periodId'>): GrantedRepositoryAction[] {
+  const open = read.state === 'read' ? openGrantPeriod(read.record) : null
+  const actions: GrantedRepositoryAction[] = []
+  for (const run of open?.runs ?? []) {
+    const status = grantStatus(read, away, run.runId)
+    if (!status.active) continue
+    for (const { term, choice, left, count } of status.grant.items) {
+      if (term.kind !== 'merge' && term.kind !== 'push-default') continue
+      actions.push({ runId: run.runId, title: run.title, item: term.id, kind: term.kind, repository: term.repository, words: grantItemWords(term, choice), left, count })
+    }
+  }
+  return actions
 }
 
 /** One run's status as `bmn grant` prints it, for the CLI and dev-auto's check (84.3 AC4, 84.5 AC2). */

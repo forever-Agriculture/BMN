@@ -44,7 +44,8 @@ grant report Tells BMN what happened, for his morning summary; it grants nothing
              refused (by GitHub or a guard; --text says why), or uncertain while you read the
              target's state. --boundary B --step-back --text: the step-back consult's option,
              before the boundary's last granted round. --item I --text: a granted step that a rule
-             or GitHub refused before any use. Kept as the agent's report, apart from BMN's record.
+             or GitHub refused before any use. --text is at most 1,000 characters. Kept as the
+             agent's report, apart from BMN's record.
 
 Exit 0 printed or recorded, 1 refused or BMN unreachable (then nothing is granted), 2 usage.`
 

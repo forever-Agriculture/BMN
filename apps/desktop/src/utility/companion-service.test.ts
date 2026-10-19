@@ -4289,6 +4289,27 @@ describe('Away (Story 76.3)', () => {
     expect(writes).toHaveLength(0)
   })
 
+  it('lists the night\'s granted merges and pushes for bmn policy, and none without a grant (Story 84.9 AC1)', async () => {
+    const handlers = service['control']['options'].handlers
+    const agent = { kind: 'session' as const, sessionId: 's1', incarnationId: 'incarnation-1' }
+    expect(await handlers.policyStatus()).toMatchObject({ granted: [] })
+    await handlers.leaveAway({ scope: agent, expectedRevision: 0 })
+    const card = { title: 'Epic 80 · clean up', scope: 'Stories 80.2–80.6', nothing: false, terms: [
+      { id: 'merge-12', kind: 'merge' as const, repository: 'octo/widgets', pr: 12, headSha: '3f2a9c1', upTo: null, proposed: 'pr' as const, reason: 'green at 22:20' }
+    ] }
+    await handlers.askGrant({ scope: agent, runId: 'run-80', card })
+    const periodId = service.grantForOwner().period!.periodId
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    expect(await handlers.policyStatus()).toMatchObject({ granted: [] })
+    await service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-80', cardRevision: 1, choices: { 'merge-12': 'pr' }, operationKey: 'press-1' })
+    expect((await handlers.policyStatus() as { granted: unknown }).granted).toEqual([{
+      runId: 'run-80', title: 'Epic 80 · clean up', item: 'merge-12', kind: 'merge', repository: 'octo/widgets',
+      words: 'merge PR 12 in octo/widgets, only at head 3f2a9c1; another head waits', left: 1, count: 1
+    }])
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'back' })
+    expect(await handlers.policyStatus()).toMatchObject({ granted: [] })
+  })
+
   it('records a decision only for a process whose conversation BMN knows, and never shows or pages it (Story 76.5)', async () => {
     const handlers = service['control']['options'].handlers
     const decision = { sessionId: 's1', incarnationId: 'incarnation-1', key: 'storage-format', revision: 1,

@@ -1799,10 +1799,28 @@ describe('Away grant (Story 84.3)', () => {
       { runId: 'r', result: 'passed', item: 'i', text: 't' },
       { runId: 'r', boundary: 'b', stepBack: true },
       { runId: 'r', item: 'i', text: 'one\u0007bell' },
-      { runId: 'r', item: 'i', text: 'x'.repeat(301) },
+      { runId: 'r', item: 'i', text: 'x'.repeat(1001) },
       { runId: 'r' }
     ]) expectError(await agent.request('grant.report', params), ERROR_CODES.invalidArgument)
     expect(fixture.handlers.reportGrant).toHaveBeenCalledTimes(4)
+  })
+})
+
+describe('a report\'s length (Story 84.9 AC2)', () => {
+  it('takes a step-back or outcome report of up to 1,000 characters and refuses a longer one with the limit named', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    expect((await agent.request('grant.report', { runId: 'r', boundary: '80.3-review', stepBack: true, text: 'x'.repeat(1000) })).error).toBeUndefined()
+    expect((await agent.request('grant.report', { runId: 'r', periodId: 'p-1', useId: 'm1', result: 'refused', text: 'y'.repeat(1000) })).error).toBeUndefined()
+    for (const params of [
+      { runId: 'r', boundary: '80.3-review', stepBack: true, text: 'x'.repeat(1001) },
+      { runId: 'r', periodId: 'p-1', useId: 'm1', result: 'refused', text: 'y'.repeat(1001) }
+    ]) {
+      const refused = await agent.request('grant.report', params)
+      expectError(refused, ERROR_CODES.invalidArgument)
+      expect(refused.error?.message).toContain('at most 1000 characters')
+    }
+    expect(fixture.handlers.reportGrant).toHaveBeenCalledTimes(2)
   })
 })
 

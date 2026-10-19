@@ -5009,6 +5009,47 @@ esac
     expect(JSON.parse(unreadable.stdout).repository).toMatchObject({ level: 'prs-only', authorizes: false, why: 'GitHub could not be read for this repository with your gh' })
   })
 
+  it('lists the night\'s granted merges and pushes in that repository after the level\'s lines, and nothing else changes (Story 84.9 AC1)', async () => {
+    const fixture = await cliFixture()
+    const env = { ...fixture.sessionEnv, PATH: await fakeGh(fixture.root, widgets) }
+    const granted = [
+      { runId: 'run-80', title: 'Epic 80', item: 'merge-12', kind: 'merge', repository: 'octo/widgets', words: 'merge PR 12 in octo/widgets, only at head 3f2a9c1; another head waits', left: 1, count: 1 },
+      { runId: 'run-81', title: 'Epic 81', item: 'push-81', kind: 'push-default', repository: 'octo/widgets', words: 'push dev-auto/epic-81 to the default branch of octo/widgets, never forced', left: 0, count: 1 },
+      { runId: 'run-80', title: 'Epic 80', item: 'merge-7', kind: 'merge', repository: 'octo/gadgets', words: 'merge PR 7 in octo/gadgets, only at head 9b1e004; another head waits', left: 1, count: 1 }
+    ]
+    const status = inForce([{ repository: 'octo/widgets', level: 'merge-when-green' }])
+    fixture.handlers.policyStatus.mockImplementation(async () => ({ ...status, granted: [] }))
+    const before = await runCli(['policy', '--repo', 'octo/widgets'], { env })
+    const beforeJson = (await runCli(['policy', '--repo', 'octo/widgets', '--json'], { env })).stdout
+    fixture.handlers.policyStatus.mockImplementation(async () => status)
+    // Without a grant the output is as today, --json included.
+    expect(before.stdout).toBe((await runCli(['policy', '--repo', 'octo/widgets'], { env })).stdout)
+    expect(beforeJson).toBe((await runCli(['policy', '--repo', 'octo/widgets', '--json'], { env })).stdout)
+    expect(before.stdout).not.toContain('Granted by the owner')
+    expect(JSON.parse(beforeJson)).not.toHaveProperty('granted')
+
+    fixture.handlers.policyStatus.mockImplementation(async () => ({ ...status, granted }))
+    const result = await runCli(['policy', '--repo', 'octo/widgets'], { env })
+    const lines = result.stdout.split('\n')
+    const head = lines.indexOf('Granted by the owner for the night, on his card in BMN (until he is back; for that run and target only; it raises no level):')
+    expect(head).toBeGreaterThan(lines.findIndex((line) => line.startsWith('- merge a pull request whose current head')))
+    expect(head).toBeLessThan(lines.indexOf('Still asks the owner:'))
+    expect(lines.slice(head + 1, head + 4)).toEqual([
+      '- run run-80 (Epic 80), item merge-12: merge PR 12 in octo/widgets, only at head 3f2a9c1; another head waits; 1 of 1 left',
+      '- run run-81 (Epic 81), item push-81: push dev-auto/epic-81 to the default branch of octo/widgets, never forced; 0 of 1 left',
+      '- for each: read bmn grant --run <run> and record the use first; no admin bypass; a PR that changes CI or workflows, or deploys, still asks'
+    ])
+    expect(result.stdout).not.toContain('octo/gadgets')
+    // It raises no level and changes no guard list.
+    expect(result.stdout).toContain('Repository octo/widgets: Merge when green (default branch trunk).')
+    expect(result.stdout).not.toContain('- push trunk, never forced')
+    expect(result.stdout.slice(result.stdout.indexOf('Still asks the owner:'))).toBe(before.stdout.slice(before.stdout.indexOf('Still asks the owner:')))
+    const json = JSON.parse((await runCli(['policy', '--repo', 'octo/widgets', '--json'], { env })).stdout)
+    expect(json.granted).toEqual(granted.slice(0, 2))
+    expect(json.repository).toEqual(JSON.parse(beforeJson).repository)
+    expect(json.stillAsks).toEqual(JSON.parse(beforeJson).stillAsks)
+  })
+
   it('authorizes nothing when BMN cannot be reached, and takes no write option', async () => {
     const fixture = await cliFixture()
     const closed = await runCli(['policy', '--repo', 'octo/widgets'], { env: { ...fixture.sessionEnv, BMN_CONTROL_SOCKET: join(fixture.root, 'gone.sock') } })
