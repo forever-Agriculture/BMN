@@ -1,4 +1,4 @@
-// MODULE: rules-preferences.tsx - Epic 60.6: Preferences › Rules: the master editor with what each app reads, install and earlier versions; Skills and Tools with each one's apps and state; Health with each rules file and agent app
+// MODULE: rules-preferences.tsx - Epic 60.6: Preferences › Integrations: the master editor with what each app reads, install and earlier versions; Skills and Tools with each one's apps and state; Health with each rules file and agent app
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { takesPress, type CommandPress, type CommandStart, type RunInSession } from './session-command'
 import {

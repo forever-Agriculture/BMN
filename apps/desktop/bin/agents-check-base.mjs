@@ -32,10 +32,10 @@ export const BINDING_WINDOW_MS = 10 * 60 * 1000
 
 const NEXT_STEP = {
   UNKNOWN_AGENT: 'name an agent from `bmn team --all`',
-  PROPOSED: 'the owner activates this agent in Preferences > Team first',
+  PROPOSED: 'the owner activates this agent in Preferences > Agents > Team first',
   DISABLED: 'pick the next candidate from `bmn roster role <role>`',
   CALLED_BY_BMN: 'ask it with `bmn judge ask` (see `bmn judge --help`); no dispatch goes to it',
-  NOT_A_RESEARCHER: 'pick a researcher the team names (Preferences > Team > Models); only the owner names one, on the agent\'s own page',
+  NOT_A_RESEARCHER: 'pick a researcher the team names (Preferences > Agents > Models); only the owner names one, on the agent\'s own page',
   ROLE_UNKNOWN: 'name a role from the roster\'s ## roles',
   ROLE_INELIGIBLE: 'pick a candidate that holds this role (`bmn roster role <role>`)',
   CLASS_CANNOT_LEAD: 'only a knight or a queen leads; pick one',
@@ -43,7 +43,7 @@ const NEXT_STEP = {
   ROUTE_UNSUPPORTED: 'use a dispatch form BMN checks (`codex exec … -` or `claude -p`), exactly as documented',
   MODEL_MISMATCH: 'pass the agent\'s own model or an approved alias',
   EFFORT_UNSUPPORTED: 'pass an effort the agent lists and its role names (`bmn roster role <role>`)',
-  READ_ONLY_REQUIRED: 'start the run so that it cannot write, with the items `bmn roster role <role> --json` gives; only the owner changes which roles are read-only (Preferences > Team > Roles)',
+  READ_ONLY_REQUIRED: 'start the run so that it cannot write, with the items `bmn roster role <role> --json` gives; only the owner changes which roles are read-only (Preferences > Agents > Roles)',
   CONTEXT_MISMATCH: 'pass the context limit `bmn roster role --json` gives for this agent',
   TOOL_MISMATCH: 'pass exactly the tools `bmn roster role --json` gives for this agent',
   HOST_UNKNOWN: 'make the destination knowable (no unresolved base URL) or record the host in the roster',

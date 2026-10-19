@@ -1450,7 +1450,7 @@ describe('bmn tools', () => {
     expect(JSON.parse(json.stdout).proposals).toHaveLength(2)
     const written = await run(['tools', 'import', '--yes'])
     expect(written.code, written.stderr).toBe(0)
-    expect(written.stdout).toContain('Added keyed, playwright to the team file. Nothing reaches an app until you approve them in BMN (Preferences > Team) and install.')
+    expect(written.stdout).toContain('Added keyed, playwright to the team file. Nothing reaches an app until you approve them in BMN (Preferences > Agents > Team) and install.')
     const file = readFileSync(join(home, '.config/bmn/agents/roster.md'), 'utf8')
     expect(parseRoster(file).data!.tools).toEqual([
       { id: 'keyed', name: 'Keyed', command: 'keyed-tool', apps: ['codex'] },

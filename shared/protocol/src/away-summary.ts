@@ -85,7 +85,7 @@ const emptyActivity = (sessionId: string): AwaySessionActivity => ({
 export function withCompletedAsks(activity: AwayPeriodActivity, asks: readonly TeamAskLine[] | null, since: string, until: string | null,
   retention?: { keptDays: number; now: Date }): AwayPeriodActivity {
   if (asks === null) return { ...activity, gaps: { ...activity.gaps, asks: { kind: 'unreadable' } } }
-  // Team › Asks keeps a record its own number of days: a period that began before that may have lost some.
+  // Agents › Asks keeps a record its own number of days: a period that began before that may have lost some.
   const expired = retention !== undefined && Date.parse(since) < retention.now.getTime() - retention.keptDays * 86_400_000
   if (expired) activity = { ...activity, gaps: { ...activity.gaps, asks: { kind: 'expired' } } }
   const sessions = new Map(activity.sessions.map((session) => [session.sessionId, { ...session, asksCompleted: [...session.asksCompleted] }]))

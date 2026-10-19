@@ -77,7 +77,7 @@ async function promptVerdict(agent, event, agentPid, procRoot) {
   } catch {
     verdict = {
       agent, app: HOOK_AGENTS[agent], pid: agentPid || null, start: null, folder: null, workspace: null, provider: null, host: null, name: null, outcome: 'stop', cause: 'state', allow: false,
-      line: 'BMN stopped this prompt: its check failed. Open BMN Preferences › Team; if the team shows no problem, start the session again.'
+      line: 'BMN stopped this prompt: its check failed. Open BMN Preferences › Agents; if the team shows no problem, start the session again.'
     }
   }
   return { verdict, answer: verdict.outcome === 'stop' ? guard.stopAnswer(agent, verdict.line) : null }

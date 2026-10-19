@@ -449,7 +449,7 @@ export function allowWorkspace(provider: string, folder: string, seams: Approval
   return withLock(seams, () => {
     seams.afterLock?.()
     const current = currentGeneration()
-    if (current === null) throw new RosterError('NOT_APPROVED', 'nothing is approved yet; approve the team in Preferences > Team first')
+    if (current === null) throw new RosterError('NOT_APPROVED', 'nothing is approved yet; approve the team in Preferences > Agents > Team first')
     if (!current.data.providers.some((entry) => entry.id === provider)) throw new RosterError('INVALID_VALUE', `the approved team has no provider ${provider}`)
     if (current.data.exceptions.some((entry) => entry.provider === provider && entry.folder === folder)) {
       throw new RosterError('INVALID_VALUE', 'that provider is already allowed in that workspace; send the prompt again')
@@ -462,7 +462,7 @@ export function allowWorkspace(provider: string, folder: string, seams: Approval
     try {
       validData(nextText)
     } catch {
-      throw new RosterError('ROSTER_INVALID', 'the team file has unapproved changes this would not fit with; review them in Preferences > Team first')
+      throw new RosterError('ROSTER_INVALID', 'the team file has unapproved changes this would not fit with; review them in Preferences > Agents > Team first')
     }
     // The approved result on its own must be a valid team too: only the entry is new in it.
     const approved = parseRoster(rewriteRoster(nextText, { ...current.data, exceptions: [...current.data.exceptions, entry] }))

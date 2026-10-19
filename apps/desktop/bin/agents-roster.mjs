@@ -1728,7 +1728,7 @@ export function starterRoster() {
     '',
     'Your agents, the providers they run on and who does which job. BMN reads only the `yaml`',
     'blocks; any text outside them is your own notes. Nothing here takes effect until you approve',
-    'it in BMN (Preferences, Team).',
+    'it in BMN (Preferences > Agents > Team).',
     '',
     '## roster',
     '',

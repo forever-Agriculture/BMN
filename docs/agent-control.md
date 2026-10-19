@@ -1183,7 +1183,7 @@ included, does not. Every choice of the project counts wherever in it you ask, a
 for a folder that later became one of its linked worktrees. `effort` and `ends` are optional: without an effort,
 the efforts the role gives that agent apply; a choice applies through the day `ends` names. One
 choice per project and role. A choice takes effect like every edit of the team file, once you
-approve it in BMN (Preferences, Team), whose review says who that role's asks in the project would
+approve it in BMN (Preferences › Agents › Team), whose review says who that role's asks in the project would
 reach before and after; no command approves one. The approval refuses a new or changed choice
 whose agent is not active, does not hold the role, is of a class the role refuses or is given an
 effort the role does not allow it, one that already ended, one whose project passes through a

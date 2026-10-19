@@ -1465,7 +1465,7 @@ async function writeProposals(result, { yes, asJson }) {
   const next = rewriteRoster(state.text, { ...parsed.data, tools })
   if (parseRoster(next).data === null) return { code: 'ROSTER_INVALID', added: [], message: 'the tools would not read back from the team file; nothing was written' }
   replaceFileSafely(rosterPath(), state, next)
-  return { code: 'OK', added: fresh.map((proposal) => proposal.id), message: `Added ${fresh.map((proposal) => proposal.id).join(', ')} to the team file. Nothing reaches an app until you approve them in BMN (Preferences > Team) and install.` }
+  return { code: 'OK', added: fresh.map((proposal) => proposal.id), message: `Added ${fresh.map((proposal) => proposal.id).join(', ')} to the team file. Nothing reaches an app until you approve them in BMN (Preferences > Agents > Team) and install.` }
 }
 
 export async function runToolsCommand(argv) {

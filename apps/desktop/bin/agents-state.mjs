@@ -195,7 +195,7 @@ export function readApproved() {
     pointerText = readFileSync(currentPointerPath(), 'utf8')
   } catch (error) {
     if (error.code === 'ENOENT') {
-      throw new RosterError('NOT_APPROVED', 'nothing is approved yet: every agent is proposed until the owner approves the team in BMN Preferences > Team')
+      throw new RosterError('NOT_APPROVED', 'nothing is approved yet: every agent is proposed until the owner approves the team in BMN Preferences > Agents > Team')
     }
     throw corrupt(`cannot read ${currentPointerPath()} (${error.code})`)
   }
@@ -210,7 +210,7 @@ export function readApproved() {
   }
   const verified = readVerified(pointer.generation)
   if (verified !== null && verified.hash === pointer.hash && isEarlierSchema(verified)) {
-    throw new RosterError('NOT_APPROVED', `the approved team is from an earlier roster layout (schema ${verified.data.schema_version}); approve the roster again on the Team pages in BMN Preferences`)
+    throw new RosterError('NOT_APPROVED', `the approved team is from an earlier roster layout (schema ${verified.data.schema_version}); approve the roster again on the Team pages in BMN Preferences > Agents`)
   }
   const generation = readGeneration(pointer.generation)
   if (generation === null || generation.hash !== pointer.hash) {

@@ -1212,7 +1212,7 @@ export async function runRulesCommand(argv) {
     if (action === 'import') {
       if (positionals.length > 0) return usage('rules import takes no arguments')
       const expected = pathState(masterPath())
-      if (expected.kind !== 'missing') throw new RosterError('MASTER_EXISTS', `${masterPath()} already exists; import is one-shot (edit it in Preferences > Rules)`)
+      if (expected.kind !== 'missing') throw new RosterError('MASTER_EXISTS', `${masterPath()} already exists; import is one-shot (edit it in Preferences > Integrations > Rules)`)
       const source = options.from ?? targetPath('claude')
       let sourceText
       try {
@@ -1226,7 +1226,7 @@ export async function runRulesCommand(argv) {
         ...(changes.length === 0 ? ['Unchanged.'] : ['Changed:', ...changes.map((change) => `  ${change}`)]), unifiedDiff(sourceText, text, masterPath())].join('\n')
       if (!await confirm('Create the rules master from these rules?', details, { yes: options.yes === true, asJson })) return asJson ? 2 : 1
       writeMaster(expected, text, `import from ${source}`)
-      out(asJson ? JSON.stringify({ code: 'OK', master: masterPath(), bytes: Buffer.byteLength(text), changes }, null, 2) : `Created ${masterPath()}. Mark any public sections in Preferences > Rules, then install.`)
+      out(asJson ? JSON.stringify({ code: 'OK', master: masterPath(), bytes: Buffer.byteLength(text), changes }, null, 2) : `Created ${masterPath()}. Mark any public sections in Preferences > Integrations > Rules, then install.`)
       return 0
     }
     if (positionals.length !== 1 || !HARNESSES.includes(positionals[0])) return usage(appRefusal(positionals[0], `rules probe expects one app: ${HARNESSES.join(', ')}`))

@@ -720,7 +720,7 @@ the search sites. Without --agent it goes to the researcher picked on Models.
 Every claim names its page and carries one of three marks from BMN's own read of that page:
 "${MARKS.found}", "${MARKS.missing}", "${MARKS.unreadable}". A claim whose passage
 BMN did not find is not evidence. One question at a time (Models research included), ${ASK_LIMIT_MS / 60000} minutes
-each, ${ASK_PER_DAY} a day; every question is kept on Models (Preferences > Team > Models) with who asked it.
+each, ${ASK_PER_DAY} a day; every question is kept on Models (Preferences > Agents > Models) with who asked it.
 Works with BMN closed.
 Exit: 0 answered, 1 no usable answer, failed, stopped or out of time, 2 usage, 10 refused.`
 

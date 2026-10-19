@@ -83,8 +83,8 @@ export const TEAM_USAGE = `Usage: bmn team [--all] [--json]
 Prints the approved team, one line per enabled active agent in roster order: id, name, class,
 app, model, provider, whether that provider may see private work, roles, efforts and context
 limit. --all adds disabled and proposed agents, marked. Reads only the approved team
-(Preferences > Team); a roster edit takes effect once the owner approves it there. Exit 5 when
-nothing is approved yet, 6 when approved state is corrupt.`
+(Preferences > Agents > Team); a roster edit takes effect once the owner approves it there.
+Exit 5 when nothing is approved yet, 6 when approved state is corrupt.`
 
 export const ROSTER_USAGE = `Usage: bmn roster validate [--json]          Check ~/.config/bmn/agents/roster.md; exit 4 lists each error and line
        bmn roster status [--json]            Approved version and every pending file difference
@@ -108,8 +108,8 @@ export const ROSTER_USAGE = `Usage: bmn roster validate [--json]          Check 
        bmn roster fence [--live] [--json]    Owner-run: test that the installed Codex keeps a research run fenced
                                              (a stand-in provider on this computer; bmn roster fence --help)
 
-Machine fields take effect only after the owner approves them in BMN (Preferences > Team); no
-command approves (exit 12). Works with BMN closed; only visibility --refresh and fence --live use the network.
+Machine fields take effect only after the owner approves them in BMN (Preferences > Agents > Team);
+no command approves (exit 12). Works with BMN closed; only visibility --refresh and fence --live use the network.
 Exit: 0 PASS, 2 usage, 3 roster missing, 4 invalid, 5 nothing approved, 6 state corrupt,
 10 refusal, 11 receipt stale or invalid.`
 
@@ -165,7 +165,7 @@ export async function runRoster(argv) {
     return action === undefined ? 2 : 0
   }
   if (action === 'approve' || action === 'restore' || action === 'revert') {
-    err('bmn: OWNER_APPROVAL_IN_APP: roster changes are approved, reverted and restored only in BMN Preferences > Team; nothing was changed')
+    err('bmn: OWNER_APPROVAL_IN_APP: roster changes are approved, reverted and restored only in BMN Preferences > Agents; nothing was changed')
     return EXIT.OWNER_APPROVAL_IN_APP
   }
   if (action === 'validate') return rosterValidate(rest)
@@ -220,7 +220,7 @@ async function rosterValidate(argv) {
     } else {
       const lines = [`${roster.path} is valid: ${roster.data.agents.length} agent${roster.data.agents.length === 1 ? '' : 's'}, ${roster.data.roles.length} role${roster.data.roles.length === 1 ? '' : 's'}.`]
       for (const warning of warnings) lines.push(`  note, line ${warning.line ?? '?'}: ${warning.code}: ${warning.message}`)
-      lines.push('Validation reads the file; nothing in it takes effect until it is approved in BMN Preferences > Team.')
+      lines.push('Validation reads the file; nothing in it takes effect until it is approved in BMN Preferences > Agents > Team.')
       out(lines.join('\n'))
     }
     return 0
@@ -288,11 +288,11 @@ async function rosterStatus(argv) {
     if (differences !== null) {
       lines.push(differences.length === 0
         ? 'No pending differences: the file matches the approved roster.'
-        : `${differences.length} pending difference${differences.length === 1 ? '' : 's'}, none in effect until approved in Preferences > Team:`)
+        : `${differences.length} pending difference${differences.length === 1 ? '' : 's'}, none in effect until approved in Preferences > Agents > Team:`)
       for (const entry of differences) lines.push(`  ${diffLine(entry)}`)
       if (effects.length > 0) lines.push('If approved:', ...effects.map((effect) => `  ${effect}`))
     } else if (generation === null && roster !== null) {
-      lines.push('Nothing takes effect until the first approval in Preferences > Team.')
+      lines.push('Nothing takes effect until the first approval in Preferences > Agents > Team.')
     }
     out(lines.join('\n'))
   }
