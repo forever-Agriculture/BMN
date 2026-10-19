@@ -1289,7 +1289,8 @@ function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
           BMN&apos;s own skill <b>{left.name}</b> is not BMN&apos;s here: {left.state === 'removed' ? 'you removed it, so BMN does not add it back' : left.state === 'foreign' ? `${left.detail}; remove it and BMN adds its own at the next start` : left.detail}.
         </p>
       ))}
-      <p className="preferences-help">A skill reaches every app unless you keep it to some. An app that gets public work only receives just the skills you mark Public. A change here takes effect once you approve it, and BMN then installs it in each app; it also installs at every start what an app lacks.</p>
+      <p className="preferences-help">A skill reaches every app unless you keep it to some; an app that gets public work only gets just the Public skills.</p>
+      <p className="preferences-help">A change takes effect on approval; BMN then installs it in each app, and at every start what an app lacks.</p>
 
       <details className="advanced">
         <summary>Earlier installs</summary>
@@ -1346,18 +1347,25 @@ function SkillsHealth(props: { rules: RulesState; action: AppAction | null; setA
             </div>
             {action?.kind === 'skills-test' && action.harness === app.harness ? (
               <Sheet title={`Test where ${name} reads skills`} action="Run test" busy={rules.busy} onCancel={() => props.setAction(null)}
-                note={`Starts ${name} in an empty home folder that holds only test skills and asks which it sees; BMN sends no prompt and no sign-in is there.${app.kind === 'full' ? ` Then puts one empty test skill where ${name} keeps its skills, asks again, and removes it.` : ''} The result is kept for this version.`}
-                onConfirm={() => void rules.run(() => window.aiTerminal.testSkills(app.harness)).then(() => props.setAction(null))} />
+                note={`Starts ${name} in an empty home with test skills only and asks which it sees; no prompt, no sign-in.`}
+                onConfirm={() => void rules.run(() => window.aiTerminal.testSkills(app.harness)).then(() => props.setAction(null))}>
+                {app.kind === 'full' ? <p className="preferences-help">{`Then puts one empty test skill where ${name} keeps its skills, asks again and removes it.`}</p> : null}
+                <p className="preferences-help">The result is kept for this version.</p>
+              </Sheet>
             ) : null}
             {action?.kind === 'skills-loading-test' && action.harness === app.harness ? (
               <Sheet title={`Test whether ${name} loads a skill`} action="Run test" busy={rules.busy} onCancel={() => props.setAction(null)}
-                note={`Puts one test skill where ${name} keeps its skills, starts ${name} once in an empty folder and sends one prompt that calls the skill by name. The prompt goes to ${name}'s provider with whatever ${name} adds to every prompt; the test skill holds nothing of yours and is removed afterwards. It passes only when the skill's own words come back and no tool can have read the file.`}
-                onConfirm={() => void rules.run(() => window.aiTerminal.testSkillsLoading(app.harness)).then(() => props.setAction(null))} />
+                note={`Puts one test skill where ${name} keeps its skills, starts ${name} once in an empty folder and sends one prompt naming it.`}
+                onConfirm={() => void rules.run(() => window.aiTerminal.testSkillsLoading(app.harness)).then(() => props.setAction(null))}>
+                <p className="preferences-help">{`The prompt goes to ${name}'s provider with what ${name} adds to every prompt; the test skill holds nothing of yours.`}</p>
+                <p className="preferences-help">The skill is removed afterwards. The test passes only when its own words come back and no tool can have read the file.</p>
+              </Sheet>
             ) : null}
           </div>
         )
       })}
-      <p className="preferences-help">Nothing is written for an app until its test passed on the installed version. Skills inside a project folder, and sessions already running, are outside what BMN installs.</p>
+      <p className="preferences-help">Nothing is written for an app until its test passed on the installed version.</p>
+      <p className="preferences-help">Skills inside a project folder, and sessions already running, are outside what BMN installs.</p>
     </>
   )
 }
@@ -1605,7 +1613,9 @@ function ToolsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Ele
           {pending?.kind === 'tools' ? <PendingSheet rules={rules} /> : null}
         </>
       ) : null}
-      <p className="preferences-help">A tool names environment variables and never holds their values. It reaches every app unless you keep it to some apps, or to the runs of some agents. A change here takes effect once you approve it, and BMN then installs it in each app's settings; it also installs at every start what an app lacks.</p>
+      <p className="preferences-help">A tool names environment variables and never holds their values.</p>
+      <p className="preferences-help">It reaches every app unless you keep it to some apps, or to the runs of some agents.</p>
+      <p className="preferences-help">A change takes effect on approval; BMN then installs it in each app&apos;s settings, and at every start what an app lacks.</p>
 
       <details className="advanced">
         <summary>Earlier installs</summary>
@@ -1657,13 +1667,18 @@ function ToolsHealth(props: { rules: RulesState; action: AppAction | null; setAc
             </div>
             {action?.kind === 'tools-test' && action.harness === app.harness ? (
               <Sheet title={`Test where ${name} keeps its tools`} action="Run test" busy={rules.busy} onCancel={() => props.setAction(null)}
-                note={`Starts ${name} in an empty home folder with no sign-in, so no prompt can be answered there. BMN writes one stand-in tool into its settings file, asks ${name} which tools it sees${app.harness === 'claude' ? ', starts it three more times to see which tools a run begins with' : ''}, and removes the folder. The result is kept for this version.`}
-                onConfirm={() => void rules.run(() => window.aiTerminal.testTools(app.harness)).then(() => props.setAction(null))} />
+                note={`Starts ${name} in an empty home folder with no sign-in, so no prompt can be answered there.`}
+                onConfirm={() => void rules.run(() => window.aiTerminal.testTools(app.harness)).then(() => props.setAction(null))}>
+                <p className="preferences-help">{`BMN writes one stand-in tool into its settings file and asks ${name} which tools it sees.`}</p>
+                {app.harness === 'claude' ? <p className="preferences-help">{`It then starts ${name} three more times to see which tools a run begins with.`}</p> : null}
+                <p className="preferences-help">The folder is removed afterwards. The result is kept for this version.</p>
+              </Sheet>
             ) : null}
           </div>
         )
       })}
-      <p className="preferences-help">Nothing is written for an app until its test passed on the installed version. Tools inside a project folder, and sessions already running, are outside what BMN installs.</p>
+      <p className="preferences-help">Nothing is written for an app until its test passed on the installed version.</p>
+      <p className="preferences-help">Tools inside a project folder, and sessions already running, are outside what BMN installs.</p>
     </>
   )
 }

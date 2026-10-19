@@ -1259,7 +1259,7 @@ describe('skills (60.11 AC5)', () => {
   it('offers no Install…: what is not installed yet is said in the head, and BMN installs it (Story 75.9); a skill it cannot read stays out of reach', () => {
     expect(page).toContain('<span class="faint">3 skills · 1 not installed yet</span>')
     expect(page).not.toContain('Install…')
-    expect(words(page)).toContain('A change here takes effect once you approve it, and BMN then installs it in each app; it also installs at every start what an app lacks.')
+    expect(words(page)).toContain('A change takes effect on approval; BMN then installs it in each app, and at every start what an app lacks.')
     expect(page).toContain('<b class="mono">Bad_Name</b><span class="faint">the name must be lowercase letters, digits and hyphens</span>')
     expect(page).toMatch(/aria-label="Bad_Name is public" disabled=""/)
   })
