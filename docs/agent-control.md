@@ -920,7 +920,9 @@ BMN's entry reads as gated.
 `bmn policy [--repo OWNER/NAME] [--json]` prints what the owner's policy authorizes in a repository (Epic 83). Agents
 read it before each push, merge or pull-request write; the owner changes it only in Health › Pushes and merges, and
 no command changes it (`policy.set` on the socket refuses every caller). Without `--repo` it reads the repository
-from the folder's `origin`. The repository's owner and default branch come from the agent's own `gh repo view`.
+from the folder's `origin`. The repository's owner and default branch come from the agent's own `gh repo view`, tried
+with each account signed in to `gh` in turn, as Health does, so a repository only a second account can see is still
+read.
 
 - **In force** only while at least one owner is allowed and the rules master carries the pointer `bmn policy
   --repo`. Otherwise, and when BMN is closed or its store cannot be read, it prints why and authorizes nothing:

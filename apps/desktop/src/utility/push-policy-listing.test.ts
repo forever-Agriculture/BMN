@@ -1,7 +1,10 @@
 // MODULE: push-policy-listing.test.ts - Story 83.3: what Health lists, over made-up session folders, remotes and GitHub answers
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { readPushPolicy, type PushPolicyRead } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
-import { REPOSITORY_LIMIT, pushPolicyView, type PolicyReader, type RepositoryFacts } from './push-policy-listing'
+import { REPOSITORY_LIMIT, pushPolicyView, systemPolicyReader, type PolicyReader, type RepositoryFacts } from './push-policy-listing'
 
 const REMOTES: Record<string, string | null> = {
   '/work/widgets': 'octo/widgets', '/work/widgets-2': 'octo/widgets', '/work/api': 'acme/api', '/work/gone': 'octo/gone', '/work/plain': null
@@ -98,5 +101,31 @@ describe('Health\'s push policy listing (Story 83.3)', () => {
     const unknown = await pushPolicyView(readPushPolicy('{"version":1}'), Object.keys(REMOTES), reader())
     expect(unknown.state).toBe('unknown')
     expect(unknown.owners.every((owner) => !owner.allowed)).toBe(true)
+  })
+
+  it('reads a repository only another signed-in account sees, asking gh for that account\'s token by gh\'s own spelling', async () => {
+    // Like the real gh: `auth token --user` matches the name exactly, and `auth status` exits 1 when one account is broken.
+    const folder = await mkdtemp(join(tmpdir(), 'bmn-policy-gh-'))
+    await writeFile(join(folder, 'gh'), `#!/bin/sh
+case "$1 $2" in
+  "auth status") echo "  ✓ Logged in to github.com account Active-One (keyring)" >&2; echo "  ✓ Logged in to github.com account Forever-Probe (keyring)" >&2; exit 1;;
+  "auth token") if [ "$4" = "Forever-Probe" ]; then echo made-up-token; else echo "no oauth token found for github.com account $4" >&2; exit 1; fi;;
+  "repo view") if [ "$GH_TOKEN" = "made-up-token" ]; then echo '{"owner":{"login":"Forever-Probe"},"name":"Tool","isInOrganization":false,"defaultBranchRef":{"name":"main"}}'; else echo "HTTP 404" >&2; exit 1; fi;;
+  *) exit 1;;
+esac
+`)
+    await chmod(join(folder, 'gh'), 0o755)
+    const path = process.env.PATH
+    process.env.PATH = `${folder}:${path}`
+    try {
+      const reader = systemPolicyReader(async () => true)
+      expect(await reader.signedIn()).toEqual(['Active-One', 'Forever-Probe'])
+      expect(await reader.repository('forever-probe/tool')).toEqual({ repository: 'forever-probe/tool', owner: 'forever-probe', organisation: false, defaultBranch: 'main' })
+      const view = await pushPolicyView(readPushPolicy(undefined), [], reader)
+      expect(view.owners.map((owner) => owner.login)).toEqual(['active-one', 'forever-probe'])
+    } finally {
+      process.env.PATH = path
+      await rm(folder, { recursive: true, force: true })
+    }
   })
 })

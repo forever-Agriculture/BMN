@@ -1,8 +1,8 @@
 // MODULE: policy-cli.mjs - `bmn policy`: the owner's push and merge policy as an agent reads it before each push, merge or PR write (Story 83.3)
 //
 // The stored policy comes from BMN through the control socket (read by any scope, written by none); the repository's owner
-// and default branch come from GitHub through the agent's own `gh`, read at this call, so a renamed or transferred repository
-// counts as its real owner's. Nothing here allows anything by itself: the agents follow what it prints (Epic 83, R83-FR1).
+// and default branch come from GitHub through the agent's own `gh`, each signed-in account in turn, read at this call, so a
+// renamed or transferred repository counts as its real owner's. Nothing here allows anything by itself: the agents follow what it prints (Epic 83, R83-FR1).
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
@@ -42,10 +42,29 @@ async function checkoutRepository() {
   }
 }
 
-async function githubFacts(repository) {
+/** The accounts signed in with `gh`, spelled as `gh` spells them (its token lookup matches the name exactly). */
+async function signedInAccounts(env) {
+  let text
   try {
+    const { stdout, stderr } = await execFileAsync('gh', ['auth', 'status', '--hostname', 'github.com'], { timeout: TIMEOUT_MS, encoding: 'utf8', env })
+    text = `${stdout}\n${stderr}`
+  } catch (error) {
+    // `gh auth status` exits 1 when any one account's token is invalid, and still lists the others.
+    text = `${typeof error?.stdout === 'string' ? error.stdout : ''}\n${typeof error?.stderr === 'string' ? error.stderr : ''}`
+  }
+  return [...text.matchAll(/Logged in to github\.com account ([A-Za-z0-9-]+)/g)].map((match) => match[1]).filter((account) => LOGIN.test(account.toLowerCase()))
+}
+
+/**
+ * The repository as GitHub names it, read with the active `gh` account and then, as BMN Health does, with each other
+ * signed-in account in turn: a repository only a second account can see is still read. A token goes only into that one
+ * child's environment and is never printed.
+ */
+async function githubFacts(repository) {
+  const env = { ...process.env, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1' }
+  const view = async (token) => {
     const { stdout } = await execFileAsync('gh', ['repo', 'view', repository, '--json', 'owner,defaultBranchRef,name'], {
-      timeout: TIMEOUT_MS, encoding: 'utf8', env: { ...process.env, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1' }
+      timeout: TIMEOUT_MS, encoding: 'utf8', env: token === undefined ? env : { ...env, GH_TOKEN: token }
     })
     const value = JSON.parse(stdout)
     const owner = typeof value?.owner?.login === 'string' && LOGIN.test(value.owner.login.toLowerCase()) ? value.owner.login.toLowerCase() : null
@@ -53,9 +72,17 @@ async function githubFacts(repository) {
     const name = typeof value?.name === 'string' ? value.name.toLowerCase() : null
     if (owner === null || branch === null || name === null) return { unread: 'GitHub did not name the owner or the default branch' }
     return { repository: `${owner}/${name}`, owner, defaultBranch: branch }
-  } catch {
-    return { unread: 'GitHub could not be read for this repository with your gh' }
   }
+  try {
+    return await view()
+  } catch { /* another signed-in account may see it */ }
+  for (const account of await signedInAccounts(env)) {
+    try {
+      const { stdout } = await execFileAsync('gh', ['auth', 'token', '--user', account], { timeout: TIMEOUT_MS, encoding: 'utf8', env })
+      return await view(stdout.trim())
+    } catch { /* the next account */ }
+  }
+  return { unread: 'GitHub could not be read for this repository with your gh' }
 }
 
 /** What one repository's level lets an agent do without asking, when the policy authorizes it there. */

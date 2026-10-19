@@ -28,7 +28,10 @@ export interface PolicyReader {
   remote(directory: string): Promise<string | null>
   /** The repository's own name, its owner, whether that is an organisation, and its default branch, as GitHub says. */
   repository(repository: string): Promise<RepositoryFacts>
-  /** The accounts signed in with `gh` on this computer; they only name rows. */
+  /**
+   * The accounts signed in with `gh` on this computer, spelled as `gh` spells them: its token lookup matches the name exactly,
+   * so a lowercased name finds no token. They only name rows.
+   */
   signedIn(): Promise<string[]>
   /** Whether the rules master carries the policy pointer; null when it cannot be read. */
   masterHasPointer(): Promise<boolean | null>
@@ -90,12 +93,16 @@ export function systemPolicyReader(masterHasPointer: () => Promise<boolean | nul
       return facts
     },
     async signedIn() {
+      let text: string
       try {
         const { stdout, stderr } = await execFileAsync('gh', ['auth', 'status', '--hostname', 'github.com'], { timeout: TIMEOUT_MS, encoding: 'utf8', env: ghEnvironment() })
-        return [...`${stdout}\n${stderr}`.matchAll(/Logged in to github\.com account ([A-Za-z0-9-]+)/g)].flatMap((match) => pushPolicyLogin(match[1]) ?? [])
-      } catch {
-        return []
+        text = `${stdout}\n${stderr}`
+      } catch (error) {
+        // `gh auth status` exits 1 when any one account's token is invalid, and still lists the others.
+        const failed = error as { stdout?: unknown; stderr?: unknown }
+        text = `${typeof failed.stdout === 'string' ? failed.stdout : ''}\n${typeof failed.stderr === 'string' ? failed.stderr : ''}`
       }
+      return [...text.matchAll(/Logged in to github\.com account ([A-Za-z0-9-]+)/g)].flatMap((match) => pushPolicyLogin(match[1]) === null ? [] : [match[1]!])
     },
     // Only the app's entry point reads the rules master (R60-NFR3); this process asks it.
     masterHasPointer
@@ -109,7 +116,8 @@ export function systemPolicyReader(masterHasPointer: () => Promise<boolean | nul
  * with why, and a raised one no session works in any more, so every grant stays in sight and can be taken back.
  */
 export async function pushPolicyView(read: PushPolicyRead, directories: readonly string[], reader: PolicyReader): Promise<PushPolicyView> {
-  const [masterHasPointer, signedIn] = await Promise.all([reader.masterHasPointer(), reader.signedIn()])
+  const [masterHasPointer, accounts] = await Promise.all([reader.masterHasPointer(), reader.signedIn()])
+  const signedIn = accounts.flatMap((account) => pushPolicyLogin(account) ?? [])
   const remotes = [...new Set((await Promise.all([...new Set(directories)].map((directory) => reader.remote(directory)))).flatMap((remote) => remote ?? []))]
     .sort()
   // Past the limit a repository is listed unread under the owner its remote names, so no owner drops out of the list.

@@ -4969,6 +4969,28 @@ describe('bmn policy (Story 83.3)', () => {
     expect(result.stdout).toContain('- a pull-request label or comment that triggers a deployment or a bot (a slash command, a deploy or merge label)')
   })
 
+  it('reads a repository only a second signed-in account sees, asking gh for that account by its own spelling', async () => {
+    const fixture = await cliFixture()
+    fixture.handlers.policyStatus.mockImplementation(async () => inForce([{ repository: 'octo/widgets', level: 'merge-when-green' }]))
+    const folder = join(fixture.root, 'fake-gh-accounts')
+    await mkdir(folder, { recursive: true })
+    // Like the real gh: `auth token --user` matches the name exactly, and `auth status` exits 1 when one account is broken.
+    await writeFile(join(folder, 'gh'), `#!/bin/sh
+case "$1 $2" in
+  "auth status") echo "  ✓ Logged in to github.com account Active-One (keyring)" >&2; echo "  ✓ Logged in to github.com account Octo (keyring)" >&2; exit 1;;
+  "auth token") if [ "$4" = "Octo" ]; then echo made-up-token; else echo "no oauth token found for github.com account $4" >&2; exit 1; fi;;
+  "repo view") if [ "$GH_TOKEN" = "made-up-token" ]; then echo '${JSON.stringify(widgets)}'; else echo "HTTP 404" >&2; exit 1; fi;;
+  *) exit 1;;
+esac
+`)
+    await chmod(join(folder, 'gh'), 0o755)
+    const env: Record<string, string> = { ...fixture.sessionEnv as Record<string, string>, PATH: `${folder}:${process.env.PATH}` }
+    delete env.GH_TOKEN
+    const result = await runCli(['policy', '--repo', 'octo/widgets', '--json'], { env })
+    expect(JSON.parse(result.stdout).repository).toEqual({ repository: 'octo/widgets', owner: 'octo', defaultBranch: 'trunk', level: 'merge-when-green', authorizes: true, why: null })
+    expect(result.stdout).not.toContain('made-up-token')
+  })
+
   it('counts an unlisted repository of an allowed owner as PRs only, and a denied, moved or unreadable one as nothing', async () => {
     const fixture = await cliFixture()
     fixture.handlers.policyStatus.mockImplementation(async () => inForce())
