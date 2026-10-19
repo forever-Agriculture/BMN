@@ -77,6 +77,14 @@ All commands run from the repository root.
   leaves behind; nothing else reads it.
 - `scripts/lib/sandbox-flag-audit.mjs` fails the tests if a flag that disables Chromium's sandbox
   appears anywhere in `apps`, `shared` or `scripts`.
+- `pnpm run test:visual [-- --out DIR]` builds the app, checks its screens on a fixed made-up fixture
+  (one folder, window sizes, themes, system fonts, a page clock that starts at 2026-01-01, a
+  settled screen) and keeps the screenshots as one set under its commit:
+  `.dev-auto/evidence/visual/<short commit>`, with `-dirty` for uncommitted changes, or `DIR`. A
+  folder that already holds a set is refused. A "before" set comes from the preceding revision's
+  own build: check that commit out in another worktree, run its `pnpm install` and
+  `pnpm run test:visual -- --out DIR` there, never restyling the current build. In a worktree, add
+  `--electron` with the main checkout's Electron, the one the AppArmor profile above allows.
 
 ## Data folders
 

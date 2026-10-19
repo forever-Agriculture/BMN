@@ -1,61 +1,128 @@
+// MODULE: electron-visual.mjs - `pnpm run test:visual`: drives the built app on a synthetic fixture, asserts its
+// screens and saves one capture set of the checkout it runs in.
+//
+// Usage: node scripts/test/electron-visual.mjs [--out DIR] [--electron PATH]
+// Every screenshot and runtime-evidence.json go under DIR (default .dev-auto/evidence/visual/<short HEAD>, with
+// -dirty when the tree has uncommitted changes); a DIR that already holds files is refused, so each set stays whole.
+// A "before" set is captured by running the preceding revision's own runner in a built checkout of that commit,
+// never by restyling this one. --electron names the Electron binary when this checkout's own may not create user
+// namespaces (a worktree, under Ubuntu's AppArmor profile, docs/development.md); the app it runs is this checkout's.
 /* global window, document, HTMLElement, HTMLButtonElement, getComputedStyle, requestAnimationFrame */
 import { toggleSessionRequests } from './session-request-helpers.mjs'
 import { sessionRequestControl } from './session-request-helpers.mjs'
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { execFile, execFileSync } from 'node:child_process'
+import { rmSync } from 'node:fs'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { promisify } from 'node:util'
+import { dirname, join, resolve } from 'node:path'
+import { parseArgs, promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
 
+const cliArguments = process.argv.slice(2)
+const { values: options } = parseArgs({
+  args: cliArguments[0] === '--' ? cliArguments.slice(1) : cliArguments,
+  options: { out: { type: 'string' }, electron: { type: 'string' } }
+})
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDirectory, '../..')
 const appDirectory = join(repoRoot, 'apps/desktop')
-const evidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-5')
-const activityEvidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-14')
-const markerEvidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-11')
-const glanceEvidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-20')
+const git = (...args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8' }).trim()
+const revision = {
+  commit: git('rev-parse', 'HEAD'),
+  short: git('rev-parse', '--short', 'HEAD'),
+  dirty: git('status', '--porcelain', '--untracked-files=normal') !== ''
+}
+const outputDirectory = options.out
+  ? resolve(options.out)
+  : join(repoRoot, '.dev-auto/evidence/visual', `${revision.short}${revision.dirty ? '-dirty' : ''}`)
+const evidenceDirectory = join(outputDirectory, 'epic-5')
+const activityEvidenceDirectory = join(outputDirectory, 'epic-14')
+const markerEvidenceDirectory = join(outputDirectory, 'epic-11')
+const glanceEvidenceDirectory = join(outputDirectory, 'epic-20')
 const requireFromApp = createRequire(join(appDirectory, 'package.json'))
-const electronBinary = requireFromApp('electron')
+const electronBinary = options.electron ? resolve(options.electron) : requireFromApp('electron')
 const execFileAsync = promisify(execFile)
 const phase = (label) => console.error(`[BMN visual] ${label}`)
 
-const originalRuntime = process.env.XDG_RUNTIME_DIR
-const originalWaylandDisplay = process.env.WAYLAND_DISPLAY
-const waylandDisplay =
-  originalRuntime && originalWaylandDisplay && !isAbsolute(originalWaylandDisplay)
-    ? join(originalRuntime, originalWaylandDisplay)
-    : originalWaylandDisplay
+// The fixture is the same on every run, so a difference between two sets is the app's. Sessions work in one made-up
+// folder at a fixed path, since panes and rows show it; HOME and the XDG and BMN folders live in the temporary root;
+// the environment is fixed (no inherited shell hooks such as PROMPT_COMMAND, UTC, C.UTF-8, system fonts only, as no
+// personal font or fontconfig folder is reachable); and the window runs on Chromium's headless Ozone platform, on a
+// 1920x1080 screen at a device scale of 1, so nothing typed or clicked on the owner's desktop reaches it and it never
+// takes his focus. Each changed area is drawn again whole, on one raster thread: without that, the edge of a 7px dot
+// came out up to 20 shades off between two runs of one revision (5bf4595, 2026-10-19), with or without the GPU.
+const fixtureParent = '/tmp/bmn-visual-fixture'
+const fixtureFolder = join(fixtureParent, 'synthetic-project')
+// The renderer's clock is Playwright's, started at fixtureTime, before any time the app records, and running on from
+// there: every age the app shows reads "0 s ago" and no expiry is near on every run, while the app's own timers (the
+// activity tick, the 15-second refresh) keep their pace. It takes effect at the next load of the window.
+const fixtureTime = new Date('2026-01-01T00:00:00Z')
 
-const baselineCss = `
-  .session-row.selected > button:first-child { border-left-color: var(--text) !important; }
-  .session-row.selected .session-name { font-weight: 400 !important; }
-  .session-area.split .session-terminal.selected { outline-color: var(--focus) !important; }
-  .session-area.split .session-terminal:not(.selected) .pane-heading strong {
-    color: var(--text) !important;
-    font-weight: 600 !important;
-  }
-  .palette-results [role='option'][aria-selected='true'] {
-    box-shadow: inset 2px 0 var(--text) !important;
-  }
-  button:disabled { color: var(--muted) !important; opacity: 1 !important; }
-  .pane-actions button[aria-pressed='true'] { background: transparent !important; }
-  .session-row > button:first-child:focus-visible,
-  .workspace-row > button:first-child:focus-visible,
-  .popup-menu [role='menuitem']:focus-visible,
-  .app-dialog-body button:focus-visible,
-  .session-request-card button:focus-visible { outline-offset: 2px !important; }
-`
+async function fixPageClock(application, page) {
+  await application.context().clock.install({ time: fixtureTime })
+  await page.reload({ waitUntil: 'domcontentloaded' })
+}
 
-const epic20BaselineCss = `
-  .workspace-row .status-dot.needs-you { display: none !important; }
-  .session-row[data-live='false'] .session-name { color: var(--text) !important; }
-  .workspace-row .row-menu-button,
-  .session-row .row-menu-button { opacity: 1 !important; }
-`
+async function launchFixture(roots) {
+  const home = join(dirname(roots.config), 'home')
+  await mkdir(home, { recursive: true, mode: 0o700 })
+  return electron.launch({
+    chromiumSandbox: true,
+    executablePath: electronBinary,
+    args: [
+      '--ozone-platform=headless', '--ozone-override-screen-size=1920,1080', '--force-device-scale-factor=1',
+      '--disable-partial-raster', '--num-raster-threads=1',
+      appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'
+    ],
+    cwd: fixtureFolder,
+    env: {
+      PATH: '/usr/bin:/bin',
+      HOME: home,
+      ...(process.env.USER ? { USER: process.env.USER } : {}),
+      SHELL: '/bin/bash',
+      LANG: 'C.UTF-8',
+      TZ: 'UTC',
+      XDG_CONFIG_HOME: roots.config,
+      XDG_DATA_HOME: roots.data,
+      XDG_STATE_HOME: roots.state,
+      XDG_CACHE_HOME: roots.cache,
+      XDG_RUNTIME_DIR: roots.runtime,
+      BMN_CONFIG_HOME: join(roots.config, 'bmn'),
+      BMN_DATA_HOME: join(roots.data, 'bmn'),
+      BMN_STATE_HOME: join(roots.state, 'bmn'),
+      BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
+      BMN_LAUNCH_CWD: fixtureFolder
+    }
+  })
+}
+
+// Chromium's helper processes (the network service among them) can outlive the main process for a moment and write
+// into the data folder after the temporary root is removed, which left /tmp/bmn-development-* folders holding only
+// data/bmn/Network Persistent State. So closing waits until no process started with this run's data folder is left.
+async function waitForInstanceGone(roots) {
+  const dataFolder = join(roots.data, 'bmn')
+  const deadline = Date.now() + 10_000
+  for (;;) {
+    let alive = false
+    for (const pid of await readdir('/proc').catch(() => [])) {
+      if (!/^\d+$/.test(pid)) continue
+      const commandLine = await readFile(`/proc/${pid}/cmdline`, 'utf8').catch(() => '')
+      if (commandLine.includes(dataFolder)) {
+        alive = true
+        break
+      }
+    }
+    if (!alive) return
+    if (Date.now() > deadline) {
+      phase(`a process started with ${dataFolder} is still running after 10 s; its folder may be left in /tmp`)
+      return
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100))
+  }
+}
 
 function ratio(first, second) {
   const luminance = (color) => {
@@ -94,9 +161,35 @@ async function setAppearance(page, identity, colorMode) {
   )
 }
 
+// The activity words a capture shows ("Working", "Idle") follow the terminals' output: a byte makes a session Working
+// at once, and 1.5 s of quiet makes it Idle at the app's next 500 ms tick, so a redraw passes within 2 s. A capture
+// waits until the words have held for longer than that, counted from the capture on, so no passing redraw is on screen
+// and a session that keeps printing keeps reading Working.
+const activityHoldMs = 2_500
+
+async function settleActivity(page) {
+  const read = () => page.evaluate(() => JSON.stringify(window.__bmnActivity?.words() ?? null))
+  const deadline = Date.now() + 30_000
+  let words = await read()
+  let since = Date.now()
+  while (Date.now() - since < activityHoldMs) {
+    if (Date.now() > deadline) throw new Error(`activity words never held for ${activityHoldMs} ms: ${words}`)
+    await page.waitForTimeout(100)
+    const now = await read()
+    if (now !== words) {
+      words = now
+      since = Date.now()
+    }
+  }
+}
+
+// A settled capture: the activity words have held (above), CSS animations and transitions are finished (or, when
+// infinite, held at their start) and the text caret is hidden for the shot only, so the measured styles around it stay
+// the product's own.
 async function screenshot(page, name, directory = evidenceDirectory) {
   const path = join(directory, name)
-  await page.screenshot({ path })
+  await settleActivity(page)
+  await page.screenshot({ path, animations: 'disabled', caret: 'hide' })
   return path
 }
 
@@ -290,6 +383,24 @@ async function pointerStates(page, locator, activeScreenshotName) {
   return { idle, hover, active, activeScreenshot }
 }
 
+const existingOutput = await readdir(outputDirectory).catch((error) => {
+  if (error.code === 'ENOENT') return []
+  throw error
+})
+if (existingOutput.length > 0) {
+  console.error(`[BMN visual] ${outputDirectory} already holds a capture set; remove it or pass another --out DIR`)
+  process.exit(2)
+}
+phase(`capturing ${revision.short}${revision.dirty ? ' (uncommitted changes)' : ''} into ${outputDirectory}`)
+try {
+  await mkdir(fixtureParent, { mode: 0o700 })
+} catch (error) {
+  if (error.code !== 'EEXIST') throw error
+  console.error(`[BMN visual] ${fixtureParent} exists: another visual run is using it, or a stopped run left it; remove it and run again`)
+  process.exit(2)
+}
+process.once('exit', () => rmSync(fixtureParent, { recursive: true, force: true }))
+await mkdir(fixtureFolder, { mode: 0o700 })
 await mkdir(evidenceDirectory, { recursive: true })
 await mkdir(activityEvidenceDirectory, { recursive: true })
 await mkdir(markerEvidenceDirectory, { recursive: true })
@@ -297,27 +408,9 @@ await mkdir(glanceEvidenceDirectory, { recursive: true })
 
 const evidence = await withTemporaryRoot(
   temporaryRootContracts.electronDevelopment,
-  async ({ root, roots }) => {
+  async ({ roots }) => {
     phase('launching isolated Electron app')
-    const application = await electron.launch({ chromiumSandbox: true,
-      executablePath: electronBinary,
-      args: [appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        XDG_CONFIG_HOME: roots.config,
-        XDG_DATA_HOME: roots.data,
-        XDG_STATE_HOME: roots.state,
-        XDG_CACHE_HOME: roots.cache,
-        XDG_RUNTIME_DIR: roots.runtime,
-        BMN_CONFIG_HOME: join(roots.config, 'bmn'),
-        BMN_DATA_HOME: join(roots.data, 'bmn'),
-        BMN_STATE_HOME: join(roots.state, 'bmn'),
-        BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
-        BMN_LAUNCH_CWD: root,
-        ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
-      }
-    })
+    const application = await launchFixture(roots)
 
     try {
       const page = await application.firstWindow()
@@ -390,11 +483,11 @@ const evidence = await withTemporaryRoot(
           longSessionId: sessions[4].sessionId,
           sessionIds: sessions.map((item) => item.sessionId)
         }
-      }, root)
+      }, fixtureFolder)
 
       assert.equal(fixture.initialSettings.colorMode, 'black')
-      phase('reloading fixture into renderer')
-      await page.reload({ waitUntil: 'domcontentloaded' })
+      phase('reloading fixture into renderer on the fixed page clock')
+      await fixPageClock(application, page)
       await page.waitForSelector('.session-area.split')
       await page.waitForFunction(() => document.querySelectorAll('.session-row').length === 6)
       await setContentSize(application, page, 1440, 900)
@@ -453,31 +546,22 @@ const evidence = await withTemporaryRoot(
       await setAppearance(page, 'knight', 'black')
 
       const screenshots = []
-      phase('capturing paired palette screenshots')
+      phase('capturing palette screenshots')
       for (const [identity, colorMode] of [
         ['knight', 'black'],
-        ['cross', 'black']
-      ]) {
-        await setAppearance(page, identity, colorMode)
-        await disableTarget()
-        const baseline = await page.addStyleTag({ content: baselineCss })
-        screenshots.push(await screenshot(page, `${colorMode}-${identity}-before.png`))
-        await baseline.evaluate((element) => element.remove())
-        screenshots.push(await screenshot(page, `${colorMode}-${identity}-after.png`))
-      }
-      for (const [identity, colorMode] of [
+        ['cross', 'black'],
         ['knight', 'steel'],
         ['cross', 'brown']
       ]) {
         await setAppearance(page, identity, colorMode)
         await disableTarget()
-        screenshots.push(await screenshot(page, `${colorMode}-${identity}-after.png`))
+        screenshots.push(await screenshot(page, `${colorMode}-${identity}.png`))
       }
 
       await setAppearance(page, 'knight', 'black')
       await disableTarget()
       const grayscale = await page.addStyleTag({ content: '.shell-window { filter: grayscale(1); }' })
-      screenshots.push(await screenshot(page, 'black-knight-after-grayscale.png'))
+      screenshots.push(await screenshot(page, 'black-knight-grayscale.png'))
       await grayscale.evaluate((element) => element.remove())
 
       await page.waitForSelector('.session-terminal.selected .pane-status')
@@ -720,7 +804,11 @@ const evidence = await withTemporaryRoot(
         'black-knight-active-selected-control.png'
       )
       if (selectedTogglePress.activeScreenshot) screenshots.push(selectedTogglePress.activeScreenshot)
-      assert.notEqual(selectedTogglePress.active.boxShadow, selectedTogglePress.hover.boxShadow)
+      // 7ead0fc: a toggle that is on is a bar under its word, and it keeps that bar, unchanged, while hovered and
+      // pressed (its rule outranks `button:active`), so the press no longer adds a shadow of its own.
+      assert.match(selectedTogglePress.idle.boxShadow, /0px -2px 0px 0px inset/, JSON.stringify(selectedTogglePress))
+      assert.equal(selectedTogglePress.active.boxShadow, selectedTogglePress.idle.boxShadow)
+      assert.equal(selectedTogglePress.hover.boxShadow, selectedTogglePress.idle.boxShadow)
       assert.equal(selectedTogglePress.active.background, selectedTogglePress.hover.background)
 
       const selectedRowPress = await pointerStates(page, selectedButton)
@@ -1025,7 +1113,7 @@ const evidence = await withTemporaryRoot(
         roots,
         fixture.selectedSessionId,
         'send',
-        "for index in $(seq 1 12000); do printf 'EPIC14-WORKING\\n'; sleep 0.05; done",
+        "for index in $(seq 1 12000); do printf '\\rEPIC14-WORKING'; sleep 0.05; done",
         '--submit'
       )
       await page.waitForFunction(({ working, idle }) => {
@@ -1974,25 +2062,18 @@ const evidence = await withTemporaryRoot(
         }
       }, glanceFixture)
 
-      const captureGlancePair = async (identity, stateName) => {
+      const captureGlance = async (identity, stateName) => {
         await setAppearance(page, identity, 'black')
         await page.mouse.move(0, 0)
-        const baseline = await page.addStyleTag({ content: epic20BaselineCss })
         glanceScreenshots.push(await screenshot(
           page,
-          `black-${identity}-epic20-${stateName}-before.png`,
-          glanceEvidenceDirectory
-        ))
-        await baseline.evaluate((element) => element.remove())
-        glanceScreenshots.push(await screenshot(
-          page,
-          `black-${identity}-epic20-${stateName}-after.png`,
+          `black-${identity}-epic20-${stateName}.png`,
           glanceEvidenceDirectory
         ))
       }
 
       const glanceIdentities = ['knight', 'cross']
-      for (const identity of glanceIdentities) await captureGlancePair(identity, 'expanded')
+      for (const identity of glanceIdentities) await captureGlance(identity, 'expanded')
       const expandedGlance = await readGlanceState()
       const expandedDetail = JSON.stringify(expandedGlance)
       assert.equal(expandedGlance.workspace.expanded, true, expandedDetail)
@@ -2031,7 +2112,7 @@ const evidence = await withTemporaryRoot(
       const selectedExitedStates = []
       await page.locator(`.session-row button[data-session-id="${glanceFixture.dormantSessionId}"]`).click()
       for (const identity of glanceIdentities) {
-        await captureGlancePair(identity, 'selected-exited')
+        await captureGlance(identity, 'selected-exited')
         const state = await readGlanceState()
         const row = state.rows.dormant
         const detail = JSON.stringify({ identity, row, state })
@@ -2061,7 +2142,7 @@ const evidence = await withTemporaryRoot(
           rows?.length === 1 && rows[0].querySelector('button[data-session-id]')?.getAttribute('aria-current') === 'true'
       }, glanceFixture.workspaceName)
       await settleTerminalLayout(page)
-      for (const identity of glanceIdentities) await captureGlancePair(identity, 'collapsed')
+      for (const identity of glanceIdentities) await captureGlance(identity, 'collapsed')
       const collapsedGlance = await readGlanceState()
       const collapsedDetail = JSON.stringify(collapsedGlance)
       assert.equal(collapsedGlance.workspace.expanded, false, collapsedDetail)
@@ -2070,7 +2151,7 @@ const evidence = await withTemporaryRoot(
 
       await setContentSize(application, page, 780, 600)
       await settleTerminalLayout(page)
-      for (const identity of glanceIdentities) await captureGlancePair(identity, 'rail')
+      for (const identity of glanceIdentities) await captureGlance(identity, 'rail')
       const narrowGlance = await readGlanceState()
       const narrowDetail = JSON.stringify(narrowGlance)
       assert.equal(narrowGlance.workspace.expanded, false, narrowDetail)
@@ -2187,10 +2268,7 @@ const evidence = await withTemporaryRoot(
         activityAttentionPrecedence: precedence,
         activityCompactRail: railRow,
         activityProvenanceLines: provenanceLines,
-        screenshotProvenance: {
-          before: 'Reconstructed previous CSS selectors applied to the repaired runtime; not a base-HEAD capture.',
-          after: 'Current repaired runtime.'
-        },
+        capture: { ...revision, out: outputDirectory, electron: electronBinary },
         screenshots,
         measuredContrasts,
         hierarchyPolish,
@@ -2228,6 +2306,7 @@ const evidence = await withTemporaryRoot(
         : Promise.resolve()
       await application.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
       await exited
+      await waitForInstanceGone(roots)
     }
   }
 )
@@ -2236,26 +2315,8 @@ const evidence = await withTemporaryRoot(
 // exited-with-question and selected-exited rows. All five are visible in each identity capture.
 const interruptedGlance = await withTemporaryRoot(
   temporaryRootContracts.electronDevelopment,
-  async ({ root, roots }) => {
-    const launch = () => electron.launch({ chromiumSandbox: true,
-      executablePath: electronBinary,
-      args: [appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        XDG_CONFIG_HOME: roots.config,
-        XDG_DATA_HOME: roots.data,
-        XDG_STATE_HOME: roots.state,
-        XDG_CACHE_HOME: roots.cache,
-        XDG_RUNTIME_DIR: roots.runtime,
-        BMN_CONFIG_HOME: join(roots.config, 'bmn'),
-        BMN_DATA_HOME: join(roots.data, 'bmn'),
-        BMN_STATE_HOME: join(roots.state, 'bmn'),
-        BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
-        BMN_LAUNCH_CWD: root,
-        ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
-      }
-    })
+  async ({ roots }) => {
+    const launch = () => launchFixture(roots)
     const exit = async (application) => {
       const process = application.process()
       const exited = process.exitCode === null && process.signalCode === null
@@ -2263,6 +2324,7 @@ const interruptedGlance = await withTemporaryRoot(
         : Promise.resolve()
       await application.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
       await exited
+      await waitForInstanceGone(roots)
     }
     phase('creating real interrupted sidebar fixture')
     let application = await launch()
@@ -2285,7 +2347,7 @@ const interruptedGlance = await withTemporaryRoot(
         for (const session of [exited, question, selected]) await window.aiTerminal.stopSession(session.sessionId)
         return { workspaceId: workspace.workspaceId, interrupted: initial.sessionId,
           exited: exited.sessionId, question: question.sessionId, selected: selected.sessionId }
-      }, root)
+      }, fixtureFolder)
       await page.reload({ waitUntil: 'domcontentloaded' })
       await page.waitForSelector(`.session-row button[data-session-id="${fixture.question}"]`)
       await runControlCli(roots, fixture.question, 'ask', 'epic20-interrupted-question',
@@ -2298,6 +2360,8 @@ const interruptedGlance = await withTemporaryRoot(
       application = await launch()
       page = await application.firstWindow()
       page.setDefaultTimeout(15_000)
+      await page.waitForSelector('.session-row')
+      await fixPageClock(application, page)
       await page.waitForSelector(`.session-row button[data-session-id="${fixture.selected}"]`)
       fixture.live = await page.evaluate(async (ids) => {
         const records = await window.aiTerminal.listSessions(ids.workspaceId)
@@ -2314,10 +2378,7 @@ const interruptedGlance = await withTemporaryRoot(
       for (const identity of ['knight', 'cross']) {
         await setAppearance(page, identity, 'black')
         await settleTerminalLayout(page)
-        const baseline = await page.addStyleTag({ content: epic20BaselineCss })
-        screenshots.push(await screenshot(page, `black-${identity}-epic20-interrupted-before.png`, glanceEvidenceDirectory))
-        await baseline.evaluate((element) => element.remove())
-        screenshots.push(await screenshot(page, `black-${identity}-epic20-interrupted-after.png`, glanceEvidenceDirectory))
+        screenshots.push(await screenshot(page, `black-${identity}-epic20-interrupted.png`, glanceEvidenceDirectory))
         const measured = await page.evaluate(async (ids) => {
           const records = await window.aiTerminal.listSessions(ids.workspaceId)
           const state = (id) => records.find((row) => row.sessionId === id)?.lastProcess?.state ?? null
@@ -2376,8 +2437,8 @@ const interruptedGlance = await withTemporaryRoot(
 evidence.epic20Glance.interrupted = interruptedGlance
 
 await writeFile(
-  join(evidenceDirectory, 'runtime-evidence.json'),
+  join(outputDirectory, 'runtime-evidence.json'),
   `${JSON.stringify(evidence, null, 2)}\n`,
   { mode: 0o600 }
 )
-console.log(JSON.stringify({ epic5Visual: 'PASS', evidence: join(evidenceDirectory, 'runtime-evidence.json') }))
+console.log(JSON.stringify({ epic5Visual: 'PASS', evidence: join(outputDirectory, 'runtime-evidence.json') }))
