@@ -153,7 +153,7 @@ export function researcherHint(researcher: Pick<ResearcherView, 'harness' | 'fen
   return `${gets} Runs in an empty folder, with a Codex folder of its own and web search. ${codexToolsLine(researcher.fence?.tools ?? [])}${first}`
 }
 
-/** What research needs, said where no agent on the team can research: `named` is who the team names, null for a team that has not chosen yet. */
+/** What research needs, said where no agent on the team can research: `named` is who the team names, null for a team that has not chosen yet. Mirrors bin agents-ask.mjs `noResearcherWords`: the renderer cannot load bin modules. */
 export function noResearcherWords(named: readonly string[] | null): string {
   const where = 'on Claude Code, or on Codex or OpenCode where its fence test passed, whose provider may see private work'
   if (named === null) return `Research needs an active agent ${where}.`

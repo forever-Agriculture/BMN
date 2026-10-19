@@ -2,6 +2,7 @@ import type { BoundConversationBinding, PersistedConversationBinding } from './b
 import { hasExactKeys } from './closed-shape'
 import { parseReportedResumeCommand, type ReportedResumeCommand } from './resume-command'
 import { hasControlOrFormatCharacter } from './file-reference'
+import { isRecord } from './shared-helpers'
 
 export const DEFAULT_WORKSPACE_ID = '00000000-0000-4000-8000-000000000001'
 const WORKSPACE_NAME_MAX_LENGTH = 120
@@ -343,10 +344,6 @@ export type LayoutPutResult = WorkspaceLayoutState
 export type SessionBindingReplaceResult = ExplicitConversationBinding
 export interface SessionBindingClearResult {
   cleared: boolean
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
 const WORKSPACE_RECORD_KEYS = ['workspaceId', 'name', 'defaultCwd', 'pinnedFilePaths', 'position', 'marker', 'archivedAt', 'revision'] as const

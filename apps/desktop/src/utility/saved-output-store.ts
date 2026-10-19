@@ -10,6 +10,7 @@ import {
   type SavedOutputUnreadableEntry
 } from '@bmn/protocol'
 import type { SavedOutputStore, SessionIdentity } from './session-manager'
+import { isObjectOrArray, isText } from './shared-helpers'
 
 const RETENTION_FILE = '_retention.json'
 const LEGACY_VIEW_EPOCH = 'legacy'
@@ -45,14 +46,6 @@ function snapshotFileName(identity: SessionIdentity & { viewEpoch: string }): st
 
 function failureFileName(identity: SessionIdentity & { viewEpoch: string }): string {
   return `${encoded(identity.sessionId)}--${encoded(identity.incarnationId)}--${encoded(identity.viewEpoch)}.loss.json`
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object'
-}
-
-function isText(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0
 }
 
 function isDate(value: unknown): value is string {
@@ -103,7 +96,7 @@ function parseSnapshot(value: unknown):
   | { kind: 'capture'; snapshot: SavedOutputSnapshot }
   | { kind: 'unsupported' }
   | { kind: 'invalid' } {
-  if (!isRecord(value)) return { kind: 'invalid' }
+  if (!isObjectOrArray(value)) return { kind: 'invalid' }
   if (value.formatVersion !== undefined && value.formatVersion !== SAVED_OUTPUT_FORMAT_VERSION) {
     return { kind: 'unsupported' }
   }
@@ -149,7 +142,7 @@ function parseFailure(value: unknown):
   | { kind: 'failure'; record: StoredFinalCaptureUnavailable }
   | { kind: 'unsupported' }
   | { kind: 'invalid' } {
-  if (!isRecord(value) || value.recordType !== 'final-capture-unavailable') {
+  if (!isObjectOrArray(value) || value.recordType !== 'final-capture-unavailable') {
     return { kind: 'invalid' }
   }
   if (value.formatVersion !== SAVED_OUTPUT_FORMAT_VERSION) {
@@ -176,7 +169,7 @@ function parseFailure(value: unknown):
 }
 
 function identityFrom(value: unknown, name: string): Partial<SessionIdentity & { viewEpoch: string }> {
-  if (isRecord(value)) {
+  if (isObjectOrArray(value)) {
     const identity = {
       ...(isText(value.sessionId) ? { sessionId: value.sessionId } : {}),
       ...(isText(value.incarnationId) ? { incarnationId: value.incarnationId } : {}),
@@ -365,11 +358,11 @@ export class FileSavedOutputStore implements SavedOutputStore {
         continue
       }
       if (name === RETENTION_FILE) {
-        if (isRecord(value) && isCount(value.pruned)) pruned = value.pruned
+        if (isObjectOrArray(value) && isCount(value.pruned)) pruned = value.pruned
         else unreadable.push(unreadableEntry(name, 'invalid', value))
         continue
       }
-      if (isRecord(value) && value.recordType === 'final-capture-unavailable') {
+      if (isObjectOrArray(value) && value.recordType === 'final-capture-unavailable') {
         const parsed = parseFailure(value)
         const namedIdentity = identityFrom(undefined, name)
         if (

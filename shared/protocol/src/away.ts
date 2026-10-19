@@ -1,4 +1,5 @@
 // MODULE: away.ts - the owner's said away state: one versioned record, its one change rule and what each caller may see (Story 76.3)
+import { isIso, isTextOrEmpty, pad } from './shared-helpers'
 
 /** Who said it: the owner in the app, the owner's CLI token, an agent on his words, or Telegram. */
 export type AwaySource = 'app' | 'cli' | 'agent' | 'telegram'
@@ -63,15 +64,13 @@ export type AwayChangeResult =
   | { outcome: 'stale'; record: AwayRecord }
   | { outcome: 'invalid'; record: AwayRecord; reason: string }
 
-const isText = (value: unknown): value is string => typeof value === 'string'
-const isIso = (value: unknown): value is string => isText(value) && Number.isFinite(Date.parse(value))
 const orNull = <T>(value: unknown, test: (value: unknown) => value is T): T | null => test(value) ? value : null
 const isSource = (value: unknown): value is AwaySource => AWAY_SOURCES.includes(value as AwaySource)
 
 /** A note as stored: plain text of at most AWAY_NOTE_LIMIT characters, controls refused; null clears. */
 export function awayNoteProblem(note: unknown): string | null {
   if (note === null || note === undefined) return null
-  if (!isText(note)) return 'The note must be text'
+  if (!isTextOrEmpty(note)) return 'The note must be text'
   if ([...note].length > AWAY_NOTE_LIMIT) return `The note is longer than ${AWAY_NOTE_LIMIT} characters; nothing was changed`
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/.test(note)) return 'The note may not hold control or direction characters'
@@ -89,19 +88,19 @@ export function parseAwayRecord(value: unknown): AwayRecord {
   if (row.version !== 1 || (state !== 'none' && state !== 'away' && state !== 'back')) return { ...EMPTY_AWAY_RECORD, operations: [] }
   const revision = Number.isSafeInteger(row.revision) && (row.revision as number) >= 0 ? row.revision as number : 0
   const since = orNull(row.since, isIso)
-  const periodId = orNull(row.periodId, isText)
+  const periodId = orNull(row.periodId, isTextOrEmpty)
   if (state !== 'none' && (since === null || periodId === null)) return { ...EMPTY_AWAY_RECORD, revision, operations: [] }
-  const note = isText(row.note) && awayNoteProblem(row.note) === null ? row.note : null
+  const note = isTextOrEmpty(row.note) && awayNoteProblem(row.note) === null ? row.note : null
   const operations = Array.isArray(row.operations)
     ? row.operations.filter((item): item is { key: string; revision: number } => typeof item === 'object' && item !== null &&
-      isText((item as { key: unknown }).key) && Number.isSafeInteger((item as { revision: unknown }).revision))
+      isTextOrEmpty((item as { key: unknown }).key) && Number.isSafeInteger((item as { revision: unknown }).revision))
       .map((item) => ({ key: item.key, revision: item.revision, ...((item as { unchanged?: unknown }).unchanged === true ? { unchanged: true as const } : {}) }))
     : []
   return {
     version: 1, state, revision, periodId, since,
     endedAt: state === 'back' ? orNull(row.endedAt, isIso) : null,
     source: orNull(row.source, isSource), endedBy: state === 'back' ? orNull(row.endedBy, isSource) : null,
-    agentSessionId: orNull(row.agentSessionId, isText), note, summaryShownAt: state === 'back' ? orNull(row.summaryShownAt, isIso) : null,
+    agentSessionId: orNull(row.agentSessionId, isTextOrEmpty), note, summaryShownAt: state === 'back' ? orNull(row.summaryShownAt, isIso) : null,
     operations
   }
 }
@@ -187,7 +186,6 @@ export function effectiveAway(record: Pick<AwayRecord, 'state'>, measured: boole
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-const pad = (value: number): string => String(value).padStart(2, '0')
 const clock = (at: Date): string => `${pad(at.getHours())}:${pad(at.getMinutes())}`
 const dayStart = (at: Date): number => new Date(at.getFullYear(), at.getMonth(), at.getDate()).getTime()
 

@@ -13,6 +13,11 @@ export class MainIpcError extends Error {
   }
 }
 
+/** Throws the invalid-argument MainIpcError an IPC handler raises on a bad parameter. */
+export function invalidMainIpc(message: string): never {
+  throw new MainIpcError(ERROR_CODES.invalidArgument, message)
+}
+
 export function requireSessionRuntime<Runtime>(
   event: IpcMainInvokeEvent,
   sessionId: unknown,

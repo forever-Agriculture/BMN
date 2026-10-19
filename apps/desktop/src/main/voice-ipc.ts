@@ -19,7 +19,7 @@ import {
   voiceModel,
   type DownloadOptions
 } from './voice-engine'
-import { MainIpcError } from './workspace-ipc'
+import { invalidMainIpc, MainIpcError } from './workspace-ipc'
 
 interface VoiceIpcRegistrar {
   handle(channel: `aiterm:${string}`, listener: (event: IpcMainInvokeEvent, params?: unknown) => unknown): void
@@ -48,12 +48,8 @@ function engineBuilt(binary: string): boolean {
   return Object.values(engineFiles(binary)).every((path) => existsSync(path))
 }
 
-function invalid(message: string): never {
-  throw new MainIpcError(ERROR_CODES.invalidArgument, message)
-}
-
 function objectParams(params: unknown): Record<string, unknown> {
-  if (!params || typeof params !== 'object' || Array.isArray(params)) invalid('Voice parameters must be an object')
+  if (!params || typeof params !== 'object' || Array.isArray(params)) invalidMainIpc('Voice parameters must be an object')
   return params as Record<string, unknown>
 }
 
@@ -61,7 +57,7 @@ function modelParam(params: Record<string, unknown>) {
   try {
     return voiceModel(params.model)
   } catch {
-    return invalid('Unknown voice model')
+    return invalidMainIpc('Unknown voice model')
   }
 }
 
@@ -187,11 +183,11 @@ export function installVoiceIpcHandlers(ipc: VoiceIpcRegistrar, options: VoiceIp
     const values = objectParams(params)
     const model = modelParam(values)
     const language = values.language as VoiceLanguage
-    if (!VOICE_LANGUAGES.some((candidate) => candidate.code === language)) invalid('Voice language is not supported')
-    if (!(values.wav instanceof Uint8Array)) invalid('Recording must be WAV bytes')
+    if (!VOICE_LANGUAGES.some((candidate) => candidate.code === language)) invalidMainIpc('Voice language is not supported')
+    if (!(values.wav instanceof Uint8Array)) invalidMainIpc('Recording must be WAV bytes')
     // The renderer's snapshot is re-checked here: the same rules as storage, so nothing else reaches argv.
     const vocabulary = validateVocabulary(values.vocabulary ?? [])
-    if (!vocabulary.ok) invalid(vocabulary.reason)
+    if (!vocabulary.ok) invalidMainIpc(vocabulary.reason)
     if (!engineBuilt(options.binary)) {
       throw new MainIpcError(ERROR_CODES.notFound, 'Voice engine is not built; run pnpm run voice:build')
     }

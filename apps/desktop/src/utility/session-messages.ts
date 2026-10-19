@@ -26,7 +26,7 @@ import {
 } from '@bmn/protocol'
 import type { DatabaseWorkerClient } from './database-client'
 import type { HandoffAttachmentSource, SendOutcome } from './database-message-store'
-import { HostControlError } from './session-manager'
+import { HostControlError, invalidHostControl } from './session-manager'
 
 export type { MessageDestination }
 
@@ -60,10 +60,6 @@ interface SessionMessagesOptions {
 const DAY_MS = 86_400_000
 /** How many held-back reasons one run keeps; the oldest leave first. */
 const HELD_MAX = 500
-
-function invalid(message: string): never {
-  throw new HostControlError(ERROR_CODES.invalidArgument, message)
-}
 
 function appName(app: string | null): string | null {
   return app !== null && Object.hasOwn(ROSTER_APP_NAMES, app) ? ROSTER_APP_NAMES[app as keyof typeof ROSTER_APP_NAMES] : null
@@ -136,7 +132,7 @@ export class SessionMessages {
 
   /** A send speaks for the process its token was given to, and for no later one in that terminal. */
   private sameProcess(sessionId: string, incarnationId: string): void {
-    if (this.options.liveIncarnationId(sessionId) !== incarnationId) invalid('The sending session is running a different process now')
+    if (this.options.liveIncarnationId(sessionId) !== incarnationId) invalidHostControl('The sending session is running a different process now')
   }
 
   private iso(): string {
@@ -168,16 +164,16 @@ export class SessionMessages {
   }): Promise<{ messageId: string; state: 'waiting' }> {
     this.sameProcess(p.senderSessionId, p.senderIncarnationId)
     const cleaned = cleanSessionMessageText(p.text)
-    if ('problem' in cleaned) invalid(cleaned.problem)
+    if ('problem' in cleaned) invalidHostControl(cleaned.problem)
     const sender = await this.options.session(p.senderSessionId)
-    if (!sender) invalid('The sending session is unavailable')
+    if (!sender) invalidHostControl('The sending session is unavailable')
     const folder = await this.existingFolder(p.senderCwd)
-    if (folder === null) invalid('BMN cannot find the folder this command ran in; run bmn tell from an existing folder')
+    if (folder === null) invalidHostControl('BMN cannot find the folder this command ran in; run bmn tell from an existing folder')
     let senderRoot: string
     try {
       senderRoot = await this.options.sourceRoot(folder)
     } catch {
-      return invalid('BMN cannot tell which repository the folder this command ran in belongs to; try again')
+      return invalidHostControl('BMN cannot tell which repository the folder this command ran in belongs to; try again')
     }
     const stamp = sessionMessageStamp({
       sessionId: sender.sessionId, name: sender.name, folder: senderRoot,
@@ -222,7 +218,7 @@ export class SessionMessages {
           title: `Sessions in ${cleanSessionMessageName(outcome.workspaceName)} exchanged ${SESSION_MESSAGE_WORKSPACE_HOURLY} messages in an hour; messages in it are paused`,
           body: 'They are allowed again by themselves once fewer were sent in the last hour; Messages… in the command palette shows them. BMN stopped nothing else.'
         }).catch(() => undefined)
-    return invalid(outcome.reason)
+    return invalidHostControl(outcome.reason)
   }
 
   /**
@@ -240,18 +236,18 @@ export class SessionMessages {
   }): Promise<{ senderRoot: string; stamp: string; receiverRefusal: string | null }> {
     this.sameProcess(p.senderSessionId, p.senderIncarnationId)
     const sender = await this.options.session(p.senderSessionId)
-    if (!sender) invalid('The sending session is unavailable')
+    if (!sender) invalidHostControl('The sending session is unavailable')
     const folder = await this.existingFolder(p.senderCwd)
-    if (folder === null) invalid('BMN cannot find the folder this command ran in; run bmn handoff from an existing folder')
+    if (folder === null) invalidHostControl('BMN cannot find the folder this command ran in; run bmn handoff from an existing folder')
     let senderRoot: string
     try {
       senderRoot = await this.options.sourceRoot(folder)
     } catch {
-      return invalid('BMN cannot tell which repository the folder this command ran in belongs to; try again')
+      return invalidHostControl('BMN cannot tell which repository the folder this command ran in belongs to; try again')
     }
     for (const file of p.attachments) {
       if (await this.attachmentRoot(file) === null) {
-        invalid(`BMN cannot tell which folder ${cleanSessionMessageName(file.name)} came from, so it hands it to nobody; nothing was sent`)
+        invalidHostControl(`BMN cannot tell which folder ${cleanSessionMessageName(file.name)} came from, so it hands it to nobody; nothing was sent`)
       }
     }
     const stamp = sessionHandoffStamp({

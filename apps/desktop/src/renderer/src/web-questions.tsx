@@ -1,6 +1,6 @@
 // MODULE: web-questions.tsx - Story 64.3: Preferences › Agents › Models › Web questions: what was asked of the web and by whom, the owner's own Ask, the question under way, and the switch for agents
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { ROSTER_APP_NAMES, WEB_QUESTION_MARKS, type RosterHarness, type WebQuestionAsker, type WebQuestionClaim, type WebQuestionOutcome, type WebQuestionView, type WebQuestionsSnapshot } from '@bmn/protocol'
+import { ROSTER_APP_NAMES, WEB_QUESTION_MARKS, plural, thousandsWithCommas, type RosterHarness, type WebQuestionAsker, type WebQuestionClaim, type WebQuestionOutcome, type WebQuestionView, type WebQuestionsSnapshot } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { Row, Switch, shortDate } from './team-preferences'
 
@@ -15,9 +15,7 @@ export const OUTCOME_WORDS: Readonly<Record<WebQuestionOutcome, string>> = {
   running: 'Asking now', answered: 'Answered', 'no-answer': 'No answer', failed: 'Failed', stopped: 'Stopped', limit: 'Hit a limit', refused: 'Refused', interrupted: 'Cut short'
 }
 
-const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`
 const capital = (words: string): string => words.charAt(0).toUpperCase() + words.slice(1)
-const thousands = (count: number): string => count.toLocaleString('en-US')
 
 /** Who asked, as the page names them: a session by the name it has in BMN, where it is still there. */
 export function askerName(by: WebQuestionAsker, sessionName: (id: string) => string | undefined): string {
@@ -171,7 +169,7 @@ export function WebQuestions(props: WebQuestionsProps): React.JSX.Element {
     <QuestionLine key={record.id} record={record} open={openId === record.id} busy={props.busy} sessionName={props.sessionName} now={props.now}
       toggle={() => setOpenId(openId === record.id ? null : record.id)} remove={() => props.remove(record.id)} openPage={(claim) => props.openPage(record.id, claim)} />
   )
-  const limits = `Limits: ${perDay} a day, ${minutes} minutes and ${thousands(characters)} characters each, one research at a time.`
+  const limits = `Limits: ${perDay} a day, ${minutes} minutes and ${thousandsWithCommas(characters)} characters each, one research at a time.`
   return (
     <section className="web-questions" aria-labelledby={headId}>
       <h4 className="group-head" id={headId}>Web questions<span className="caption">{"yours and your agents', newest first"}</span></h4>
@@ -186,7 +184,7 @@ export function WebQuestions(props: WebQuestionsProps): React.JSX.Element {
           onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && canAsk) { event.preventDefault(); void send() } }} />
         <div className="ask-line">
           <span className="muted" id={goesId}>{waits ?? `Goes to ${props.researcher}.`}</span>
-          {text.length > characters * 0.9 ? <span className="faint">{thousands(text.length)} of {thousands(characters)} characters</span> : null}
+          {text.length > characters * 0.9 ? <span className="faint">{thousandsWithCommas(text.length)} of {thousandsWithCommas(characters)} characters</span> : null}
           <button type="button" className="small" disabled={!canAsk} title="Ctrl+Enter" onClick={() => void send()}>{sending ? 'Asking…' : 'Ask'}</button>
         </div>
         {refusal !== null ? <p className="ask-reply" role="alert">Not asked: {refusal}</p> : null}

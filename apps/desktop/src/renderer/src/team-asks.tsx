@@ -1,6 +1,7 @@
 // MODULE: team-asks.tsx - Story 73.1: Preferences › Agents › Asks: a read-only record of every ask his agents made on this computer, newest first, with what was readable and what the teammate's mode could read (72.9), who answered and its sub-agents, the answer as the teammate's own words, the usage, Stop, Copy, Export and Remove
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { TeamAskDetail, TeamAskLine, TeamAskProjectState, TeamAskState, TeamAskSubagentView, TeamAskUsageView, TeamAsksSnapshot } from '@bmn/protocol'
+import { plural, thousandsWithCommas } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { roleName } from './roster-staging'
 import { displayPath } from './session-presentation'
@@ -18,8 +19,6 @@ export const ASK_OUTCOME_WORDS: Readonly<Record<TeamAskState, string>> = {
   running: 'Asking now', answered: 'Answered', failed: 'Failed', refused: 'Refused', 'out-of-time': 'Out of time', stopped: 'Stopped', 'not-attributed': 'Not attributed', interrupted: 'Cut short'
 }
 
-const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? '' : 's'}`
-const thousands = (count: number): string => count.toLocaleString('en-US')
 
 export function outcomeWords(state: string): string {
   return ASK_OUTCOME_WORDS[state as TeamAskState] ?? (state.charAt(0).toUpperCase() + state.slice(1).replace(/-/gu, ' '))
@@ -53,8 +52,8 @@ export function projectStateWords(state: TeamAskProjectState | null): string {
 export function subagentWords(entry: TeamAskSubagentView): string {
   const model = [entry.model, entry.effort].filter((part) => part !== null).join(' ')
   const usage = entry.usage === null ? entry.usageNote
-    : [entry.usage.input === null ? null : `${thousands(entry.usage.input)} in`, entry.usage.output === null ? null : `${thousands(entry.usage.output)} out`].filter((part) => part !== null).join(' · ') || 'usage unknown'
-  const own = entry.ownTokens === null ? null : `${thousands(entry.ownTokens)} tokens of its own`
+    : [entry.usage.input === null ? null : `${thousandsWithCommas(entry.usage.input)} in`, entry.usage.output === null ? null : `${thousandsWithCommas(entry.usage.output)} out`].filter((part) => part !== null).join(' · ') || 'usage unknown'
+  const own = entry.ownTokens === null ? null : `${thousandsWithCommas(entry.ownTokens)} tokens of its own`
   return [entry.name ?? entry.role ?? `session ${entry.session}`, entry.kind, model === '' ? null : model, usage, own].filter((part) => part !== null && part !== '').join(' · ')
 }
 
@@ -97,7 +96,7 @@ export function usageWords(line: Pick<TeamAskLine, 'state' | 'usage'>): string {
   const usage = line.usage
   if (usage === null) return line.state === 'refused' ? 'no usage' : 'usage unknown'
   if (usage.input === null && usage.output === null && usage.reportedCost === null) return `usage unknown · ${billingWords(usage.billing)}`
-  return [usage.input === null ? null : `${thousands(usage.input)} in`, usage.output === null ? null : `${thousands(usage.output)} out`, costWords(usage.reportedCost), billingWords(usage.billing), usage.complete === false ? 'incomplete' : null]
+  return [usage.input === null ? null : `${thousandsWithCommas(usage.input)} in`, usage.output === null ? null : `${thousandsWithCommas(usage.output)} out`, costWords(usage.reportedCost), billingWords(usage.billing), usage.complete === false ? 'incomplete' : null]
     .filter((part) => part !== null).join(' · ')
 }
 
@@ -106,7 +105,7 @@ export function fullUsageWords(usage: TeamAskUsageView | null): string {
   if (usage === null) return 'not reported'
   const counts: Array<[number | null, string]> = [[usage.input, 'in'], [usage.cached, 'cached'], [usage.output, 'out'], [usage.reasoning, 'reasoning']]
   const incomplete = usage.complete === false ? [`incomplete: ${usage.incompleteReason ?? 'not every usage record was read'}`] : []
-  return [...counts.filter(([value]) => value !== null).map(([value, word]) => `${thousands(value as number)} ${word}`), costWords(usage.reportedCost), billingWords(usage.billing), ...incomplete].join(' · ')
+  return [...counts.filter(([value]) => value !== null).map(([value, word]) => `${thousandsWithCommas(value as number)} ${word}`), costWords(usage.reportedCost), billingWords(usage.billing), ...incomplete].join(' · ')
 }
 
 /** Bytes as the page says them: "41 KB", "2.8 MB". */

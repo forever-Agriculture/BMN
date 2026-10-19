@@ -59,7 +59,7 @@ import { PUSH_POLICY_OPERATIONS } from './database-push-policy-store'
 import { GRANT_OPERATIONS } from './database-grant-store'
 import { AWAY_SUMMARY_OPERATIONS } from './database-away-summary'
 import { DECISION_OPERATIONS } from './database-decision-store'
-import { selectSession, selectWorkspace, WorkspaceStoreError } from './database-workspace-store'
+import { invalidWorkspaceStore, selectSession, selectWorkspace, WorkspaceStoreError } from './database-workspace-store'
 
 interface ArtifactRow {
   artifact_id: string
@@ -867,7 +867,7 @@ export function claimInputDraft(
   now: string
 ): { record: InputDraftRecord; claimed: boolean } {
   const current = getDraft(database, draftId)
-  if (current.origin === 'handoff') invalid('A handoff is never typed into a terminal')
+  if (current.origin === 'handoff') invalidWorkspaceStore('A handoff is never typed into a terminal')
   if (current.state !== 'draft') return { record: current, claimed: false }
   if (current.updatedAt !== expectedUpdatedAt) {
     throw new WorkspaceStoreError(ERROR_CODES.revisionConflict, 'The draft changed before sending')
@@ -910,7 +910,7 @@ export function queueAgentHandoff(database: DatabaseConnection, p: {
     const file = database.prepare('SELECT session_id, direction, state FROM artifact WHERE artifact_id = ?').get(artifactId) as
       { session_id: string | null; direction: string; state: string } | undefined
     if (file?.session_id !== p.senderSessionId || file.direction !== 'output' || file.state !== 'ready') {
-      invalid('Every handoff file must be a ready file this session published')
+      invalidWorkspaceStore('Every handoff file must be a ready file this session published')
     }
   }
   insertArtifact(database, p.file)
@@ -961,16 +961,16 @@ export function withdrawAgentHandoff(
   const draft = getDraft(database, draftId)
   const key = (database.prepare('SELECT origin_key FROM input_draft WHERE draft_id = ?').get(draftId) as { origin_key: string | null }).origin_key
   if (draft.sourceSessionId === sourceSessionId && key?.startsWith(HANDOFF_MESSAGE_KEY) === true) {
-    invalid('A handoff BMN queued delivers itself and cannot be withdrawn; if no hook takes it, it expires two hours after it was sent')
+    invalidWorkspaceStore('A handoff BMN queued delivers itself and cannot be withdrawn; if no hook takes it, it expires two hours after it was sent')
   }
   if (draft.preparedBy !== 'agent' || draft.sourceSessionId !== sourceSessionId ||
       draft.state !== 'draft' || !draft.requestId) {
-    invalid('Only an open handoff from this session can be withdrawn')
+    invalidWorkspaceStore('Only an open handoff from this session can be withdrawn')
   }
   const request = getAttention(database, draft.requestId)
   if (request.state !== 'open' || request.sessionId !== sourceSessionId ||
       request.requestKey !== `handoff:${draftId}`) {
-    invalid('Only an open handoff from this session can be withdrawn')
+    invalidWorkspaceStore('Only an open handoff from this session can be withdrawn')
   }
   if (draft.updatedAt === draft.createdAt) {
     updateDraft(database, draftId, 'discarded', 'Withdrawn by the agent', now)
@@ -988,7 +988,7 @@ export function withdrawAgentHandoff(
  */
 export function discardDraft(database: DatabaseConnection, draftId: string, now: string): InputDraftRecord {
   const draft = getDraft(database, draftId)
-  if (draft.origin === 'handoff') invalid('A handoff is kept as it is; it cannot be discarded here')
+  if (draft.origin === 'handoff') invalidWorkspaceStore('A handoff is kept as it is; it cannot be discarded here')
   return updateDraft(database, draftId, 'discarded', null, now)
 }
 
@@ -1128,13 +1128,9 @@ export function getTelegramMessage(
 
 type SettingsSection = keyof AppSettings
 
-function invalid(message: string): never {
-  throw new WorkspaceStoreError(ERROR_CODES.invalidArgument, message)
-}
-
 function nullableInteger(value: unknown, name: string): number | null {
   if (value === null) return null
-  if (typeof value !== 'number' || !Number.isSafeInteger(value)) invalid(`${name} must be an integer or empty`)
+  if (typeof value !== 'number' || !Number.isSafeInteger(value)) invalidWorkspaceStore(`${name} must be an integer or empty`)
   return value
 }
 
@@ -1151,15 +1147,15 @@ const LEGACY_THEMES: ReadonlyMap<string, Pick<AppearanceSettings, 'identity' | '
 
 /** Validates one settings section; an invalid value throws and the stored value stays unchanged. */
 function validateSettingsSection(section: string, value: unknown): AppSettings[SettingsSection] {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) invalid('Settings must be an object')
+  if (!value || typeof value !== 'object' || Array.isArray(value)) invalidWorkspaceStore('Settings must be an object')
   const candidate = value as Record<string, unknown>
   switch (section) {
     case 'appearance': {
       const legacy = typeof candidate.theme === 'string' ? LEGACY_THEMES.get(candidate.theme) : undefined
       const identity = candidate.identity ?? legacy?.identity
       const colorMode = candidate.colorMode ?? legacy?.colorMode
-      if (!IDENTITY_NAMES.includes(identity as IdentityName)) invalid('Identity must be Knight, Cross or Boss')
-      if (!COLOR_MODE_NAMES.includes(colorMode as ColorModeName)) invalid('Color mode must be Steel, Brown, Dark or Black')
+      if (!IDENTITY_NAMES.includes(identity as IdentityName)) invalidWorkspaceStore('Identity must be Knight, Cross or Boss')
+      if (!COLOR_MODE_NAMES.includes(colorMode as ColorModeName)) invalidWorkspaceStore('Color mode must be Steel, Brown, Dark or Black')
       const size = candidate.terminalFontSize
       if (
         typeof size !== 'number' ||
@@ -1167,32 +1163,32 @@ function validateSettingsSection(section: string, value: unknown): AppSettings[S
         size < TERMINAL_FONT_SIZE_RANGE.min ||
         size > TERMINAL_FONT_SIZE_RANGE.max
       ) {
-        invalid(`Terminal font size must be ${TERMINAL_FONT_SIZE_RANGE.min}–${TERMINAL_FONT_SIZE_RANGE.max}`)
+        invalidWorkspaceStore(`Terminal font size must be ${TERMINAL_FONT_SIZE_RANGE.min}–${TERMINAL_FONT_SIZE_RANGE.max}`)
       }
       return { identity: identity as IdentityName, colorMode: colorMode as ColorModeName, terminalFontSize: size }
     }
     case 'notifications':
-      if (typeof candidate.desktop !== 'boolean') invalid('Desktop notifications must be on or off')
+      if (typeof candidate.desktop !== 'boolean') invalidWorkspaceStore('Desktop notifications must be on or off')
       return { desktop: candidate.desktop }
     case 'telegram': {
-      if (typeof candidate.enabled !== 'boolean') invalid('Telegram enabled must be on or off')
+      if (typeof candidate.enabled !== 'boolean') invalidWorkspaceStore('Telegram enabled must be on or off')
       if (candidate.notifyOn !== 'attention' && candidate.notifyOn !== 'attention-and-exit') {
-        invalid('Telegram notification scope is invalid')
+        invalidWorkspaceStore('Telegram notification scope is invalid')
       }
-      if (typeof candidate.autoSubmitReplies !== 'boolean') invalid('Reply submission must be on or off')
+      if (typeof candidate.autoSubmitReplies !== 'boolean') invalidWorkspaceStore('Reply submission must be on or off')
       // Sections saved before Epic 30 have no answerPermissions and keep it off.
       const answerPermissions = candidate.answerPermissions ?? DEFAULT_APP_SETTINGS.telegram.answerPermissions
-      if (typeof answerPermissions !== 'boolean') invalid('Answering permission prompts must be on or off')
+      if (typeof answerPermissions !== 'boolean') invalidWorkspaceStore('Answering permission prompts must be on or off')
       const morningDigest = candidate.morningDigest ?? DEFAULT_TELEGRAM_MORNING_DIGEST
-      if (!isTelegramMorningDigest(morningDigest)) invalid('Morning digest needs a valid HH:MM time')
+      if (!isTelegramMorningDigest(morningDigest)) invalidWorkspaceStore('Morning digest needs a valid HH:MM time')
       const quietHours = candidate.quietHours ?? DEFAULT_TELEGRAM_QUIET_HOURS
-      if (!isTelegramQuietHours(quietHours)) invalid('Quiet hours require different HH:MM times and valid allow-through choices')
+      if (!isTelegramQuietHours(quietHours)) invalidWorkspaceStore('Quiet hours require different HH:MM times and valid allow-through choices')
       // Sections saved before Epic 62 have no healthAlerts and keep the watch off.
       const healthAlerts = candidate.healthAlerts ?? DEFAULT_TELEGRAM_HEALTH_ALERTS
-      if (!isTelegramHealthAlerts(healthAlerts)) invalid('Health alerts need on or off and a valid HH:MM switch-off time or none')
+      if (!isTelegramHealthAlerts(healthAlerts)) invalidWorkspaceStore('Health alerts need on or off and a valid HH:MM switch-off time or none')
       const allowedChatId = nullableInteger(candidate.allowedChatId, 'Allowed chat id')
       const allowedUserId = nullableInteger(candidate.allowedUserId, 'Allowed user id')
-      if (candidate.enabled && allowedChatId === null) invalid('Choose the allowed chat before enabling Telegram')
+      if (candidate.enabled && allowedChatId === null) invalidWorkspaceStore('Choose the allowed chat before enabling Telegram')
       return {
         enabled: candidate.enabled,
         allowedChatId,
@@ -1206,19 +1202,19 @@ function validateSettingsSection(section: string, value: unknown): AppSettings[S
       }
     }
     case 'voice': {
-      if (!VOICE_MODEL_IDS.includes(candidate.model as VoiceModelId)) invalid('Voice model must be Base or Small')
-      if (!VOICE_LANGUAGES.some((language) => language.code === candidate.language)) invalid('Voice language is not supported')
+      if (!VOICE_MODEL_IDS.includes(candidate.model as VoiceModelId)) invalidWorkspaceStore('Voice model must be Base or Small')
+      if (!VOICE_LANGUAGES.some((language) => language.code === candidate.language)) invalidWorkspaceStore('Voice language is not supported')
       // Sections saved before the folder setting existed have no modelFolder and keep the default folder.
       const folder = candidate.modelFolder ?? null
       if (folder !== null && (typeof folder !== 'string' || !isAbsolute(folder) || folder.length > 4_096 || folder.includes('\0'))) {
-        invalid('Voice model folder must be an absolute path')
+        invalidWorkspaceStore('Voice model folder must be an absolute path')
       }
       // Sections saved before hold to talk existed keep it on, like a fresh install.
       const holdSpaceToTalk = candidate.holdSpaceToTalk ?? DEFAULT_APP_SETTINGS.voice.holdSpaceToTalk
-      if (typeof holdSpaceToTalk !== 'boolean') invalid('Hold Space to talk must be on or off')
+      if (typeof holdSpaceToTalk !== 'boolean') invalidWorkspaceStore('Hold Space to talk must be on or off')
       // Sections saved before the vocabulary existed have none; the storage rules are the shared ones.
       const vocabulary = validateVocabulary(candidate.vocabulary ?? [])
-      if (!vocabulary.ok) invalid(vocabulary.reason)
+      if (!vocabulary.ok) invalidWorkspaceStore(vocabulary.reason)
       return {
         model: candidate.model as VoiceModelId,
         language: candidate.language as VoiceLanguage,
@@ -1229,23 +1225,23 @@ function validateSettingsSection(section: string, value: unknown): AppSettings[S
     }
     case 'archive':
       if (!ARCHIVE_DELETE_AFTER_DAYS.includes(candidate.deleteAfterDays as ArchiveDeleteAfterDays)) {
-        invalid('Delete archived items after must be Never, 90, 30 or 10 days')
+        invalidWorkspaceStore('Delete archived items after must be Never, 90, 30 or 10 days')
       }
       return { deleteAfterDays: candidate.deleteAfterDays as ArchiveDeleteAfterDays }
     case 'agentHistory': {
       if (!AGENT_HISTORY_KEEP_DAYS.includes(candidate.keepDays as AgentHistoryKeepDays)) {
-        invalid('Keep agent history must be 10, 30 or 90 days, or Never')
+        invalidWorkspaceStore('Keep agent history must be 10, 30 or 90 days, or Never')
       }
       const confirmed = candidate.confirmedKeepDays
       if (confirmed !== undefined && !AGENT_HISTORY_KEEP_DAYS.includes(confirmed as AgentHistoryKeepDays)) {
-        invalid('The confirmed agent history limit is invalid')
+        invalidWorkspaceStore('The confirmed agent history limit is invalid')
       }
       const folders = candidate.claudeConfigDirs ?? []
       if (
         !Array.isArray(folders) || folders.length > MAX_CLAUDE_CONFIG_DIRS + 1 ||
         !folders.every((folder) => typeof folder === 'string' && isAbsolute(folder) && folder.length <= 4_096 && !folder.includes('\0'))
       ) {
-        invalid('Claude config folders must be absolute paths')
+        invalidWorkspaceStore('Claude config folders must be absolute paths')
       }
       return {
         keepDays: candidate.keepDays as AgentHistoryKeepDays,
@@ -1254,10 +1250,10 @@ function validateSettingsSection(section: string, value: unknown): AppSettings[S
       }
     }
     case 'terminal':
-      if (typeof candidate.programClipboard !== 'boolean') invalid('Letting programs copy to the clipboard must be on or off')
+      if (typeof candidate.programClipboard !== 'boolean') invalidWorkspaceStore('Letting programs copy to the clipboard must be on or off')
       return { programClipboard: candidate.programClipboard }
     default:
-      return invalid(`Unknown settings section ${section}`)
+      return invalidWorkspaceStore(`Unknown settings section ${section}`)
   }
 }
 

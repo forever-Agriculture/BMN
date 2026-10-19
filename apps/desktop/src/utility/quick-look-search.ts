@@ -18,6 +18,7 @@ import {
 } from '@bmn/protocol'
 import { FILE_SEARCH_MAX_DEPTH, GENERATED_DIRECTORIES } from './file-reference-search'
 import { gitTopLevel, repositoryGit, repositoryGitError } from './repository-git'
+import { yieldTurn } from './shared-helpers'
 
 interface ContentsSearchLimits {
   maxFiles?: number
@@ -49,7 +50,6 @@ const LEAD = 80
 const GIT_LIST_BYTES = 64 * 1024 * 1024
 const GIT_LIST_MS = 15_000
 
-const pause = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
 
 /** The search's pattern: the text taken literally, by case or not, and as a whole word when asked. */
@@ -210,7 +210,7 @@ async function walkFiles(root: string, max: number, signal: AbortSignal): Promis
         if (entry.isDirectory()) {
           if (!GENERATED_DIRECTORIES.has(entry.name) && folder.depth < FILE_SEARCH_MAX_DEPTH) entries.push({ name: entry.name, folder: true })
         } else if (entry.isFile()) entries.push({ name: entry.name, folder: false })
-        if (++seen % 256 === 0) await pause()
+        if (++seen % 256 === 0) await yieldTurn()
       }
     } catch {
       // A folder removed during the walk gives what was read of it.
@@ -315,7 +315,7 @@ export async function searchQuickLookContents(rootPath: string, options: Content
         lines += outcome.lines.length
         if (lines > maxLines) full = true
       }
-      await pause()
+      await yieldTurn()
     }
   }))
   // In the listing's order, so the first 2,000 lines are the same whichever reader finished first: every file

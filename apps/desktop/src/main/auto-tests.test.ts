@@ -190,7 +190,7 @@ describe('BMN runs its own app tests (Story 75.8)', () => {
     tries.old = { count: 1, at: new Date(now - 181 * 86_400_000).toISOString(), outcome: 'pass' }
     const kept = keptTries(tries, now)
     expect(Object.keys(kept)).toHaveLength(500)
-    expect(kept.t0).toBeDefined()
+    expect(kept.t0).toEqual({ count: 1, at: new Date(now).toISOString(), outcome: 'pass' })
     expect(kept.t519).toBeUndefined()
     expect(kept.old).toBeUndefined()
   })

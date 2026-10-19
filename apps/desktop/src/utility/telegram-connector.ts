@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { link, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { isObjectOrArray, isText } from './shared-helpers'
 
 const API_ORIGIN = 'https://api.telegram.org'
 const MESSAGE_CHAR_LIMIT = 4096
@@ -151,16 +152,8 @@ export function redactToken(text: string, token: string): string {
     .reduce((redacted, form) => redacted.split(form).join(masked), text)
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object'
-}
-
 function isInteger(value: unknown): value is number {
   return Number.isSafeInteger(value)
-}
-
-function isText(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0
 }
 
 function errorMessage(error: unknown): string {
@@ -191,7 +184,7 @@ async function readLockHolder(path: string): Promise<{ raw: string; pid: number 
   }
   try {
     const value: unknown = JSON.parse(raw)
-    return { raw, pid: isRecord(value) && isInteger(value.pid) && value.pid > 0 ? value.pid : null }
+    return { raw, pid: isObjectOrArray(value) && isInteger(value.pid) && value.pid > 0 ? value.pid : null }
   } catch {
     return { raw, pid: null }
   }
@@ -241,7 +234,7 @@ function largestPhoto(sizes: unknown[]): Record<string, unknown> | null {
   let bestArea = -1
   let bestBytes = -1
   for (const size of sizes) {
-    if (!isRecord(size) || !isText(size.file_id)) continue
+    if (!isObjectOrArray(size) || !isText(size.file_id)) continue
     const area = (isInteger(size.width) ? size.width : 0) * (isInteger(size.height) ? size.height : 0)
     const bytes = isInteger(size.file_size) ? size.file_size : 0
     if (area > bestArea || (area === bestArea && bytes > bestBytes)) {
@@ -255,7 +248,7 @@ function largestPhoto(sizes: unknown[]): Record<string, unknown> | null {
 
 function attachedFile(message: Record<string, unknown>, messageId: number): InboundReply['file'] {
   const document = message.document
-  if (isRecord(document) && isText(document.file_id)) {
+  if (isObjectOrArray(document) && isText(document.file_id)) {
     return {
       fileId: document.file_id,
       fileName: isText(document.file_name) ? document.file_name : `document-${messageId}`,
@@ -282,14 +275,14 @@ function parseUpdate(
   allowedUserId: number | null
 ): ParsedUpdate {
   const updateId = update.update_id
-  if (isRecord(update.callback_query)) return parseTap(updateId, update.callback_query, allowedChatId, allowedUserId)
+  if (isObjectOrArray(update.callback_query)) return parseTap(updateId, update.callback_query, allowedChatId, allowedUserId)
   const message = update.message
-  if (!isRecord(message)) return { updateId, outcome: 'ignored' }
+  if (!isObjectOrArray(message)) return { updateId, outcome: 'ignored' }
   const chat = message.chat
   const from = message.from
-  if (!isRecord(chat) || chat.id !== allowedChatId) return { updateId, outcome: 'rejected' }
+  if (!isObjectOrArray(chat) || chat.id !== allowedChatId) return { updateId, outcome: 'rejected' }
   if (allowedUserId === null && chat.type !== 'private') return { updateId, outcome: 'rejected' }
-  if (!isRecord(from) || !isInteger(from.id)) return { updateId, outcome: 'rejected' }
+  if (!isObjectOrArray(from) || !isInteger(from.id)) return { updateId, outcome: 'rejected' }
   if (allowedUserId !== null && from.id !== allowedUserId) return { updateId, outcome: 'rejected' }
   if (!isInteger(message.message_id)) return { updateId, outcome: 'rejected' }
   const replyTo = message.reply_to_message
@@ -303,7 +296,7 @@ function parseUpdate(
       chatId: allowedChatId,
       fromUserId: from.id,
       messageId: message.message_id,
-      replyToMessageId: isRecord(replyTo) && isInteger(replyTo.message_id) ? replyTo.message_id : null,
+      replyToMessageId: isObjectOrArray(replyTo) && isInteger(replyTo.message_id) ? replyTo.message_id : null,
       text,
       textSource: typeof message.text === 'string' ? 'text' : typeof message.caption === 'string' ? 'caption' : null,
       file: attachedFile(message, message.message_id)
@@ -319,11 +312,11 @@ function parseTap(
   allowedUserId: number | null
 ): ParsedUpdate {
   const message = query.message
-  const chat = isRecord(message) ? message.chat : null
+  const chat = isObjectOrArray(message) ? message.chat : null
   const from = query.from
-  if (!isRecord(message) || !isRecord(chat) || chat.id !== allowedChatId) return { updateId, outcome: 'rejected' }
+  if (!isObjectOrArray(message) || !isObjectOrArray(chat) || chat.id !== allowedChatId) return { updateId, outcome: 'rejected' }
   if (allowedUserId === null && chat.type !== 'private') return { updateId, outcome: 'rejected' }
-  if (!isRecord(from) || !isInteger(from.id)) return { updateId, outcome: 'rejected' }
+  if (!isObjectOrArray(from) || !isInteger(from.id)) return { updateId, outcome: 'rejected' }
   if (allowedUserId !== null && from.id !== allowedUserId) return { updateId, outcome: 'rejected' }
   if (!isText(query.id) || !isInteger(message.message_id)) return { updateId, outcome: 'rejected' }
   const data = query.data
@@ -434,7 +427,7 @@ export class TelegramConnector {
       const timeout = (): AbortSignal => AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
       const listed = await this.call('getMyCommands', {}, timeout())
       const same = Array.isArray(listed) && listed.length === BOT_COMMANDS.length && BOT_COMMANDS.every((wanted, index) =>
-        isRecord(listed[index]) && listed[index].command === wanted.command && listed[index].description === wanted.description)
+        isObjectOrArray(listed[index]) && listed[index].command === wanted.command && listed[index].description === wanted.description)
       if (!same) await this.call('setMyCommands', { commands: BOT_COMMANDS }, timeout())
       this.publish({ menu: { state: 'set', error: null } })
     } catch (error) {
@@ -450,7 +443,7 @@ export class TelegramConnector {
   }
 
   private rememberBot(result: unknown): void {
-    if (isRecord(result) && typeof result.username === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(result.username)) this.username = result.username
+    if (isObjectOrArray(result) && typeof result.username === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(result.username)) this.username = result.username
   }
 
   /**
@@ -463,7 +456,7 @@ export class TelegramConnector {
     form.set('caption', caption)
     form.set('document', new Blob([new TextEncoder().encode(text)], { type: 'text/plain; charset=utf-8' }), fileName)
     const result = await this.post('sendDocument', { body: form }, AbortSignal.timeout(REQUEST_TIMEOUT_MS))
-    if (!isRecord(result) || !isInteger(result.message_id)) {
+    if (!isObjectOrArray(result) || !isInteger(result.message_id)) {
       throw new TelegramConnectorError('protocol', 'Telegram sendDocument returned a malformed result')
     }
     return { messageId: result.message_id }
@@ -483,7 +476,7 @@ export class TelegramConnector {
         ? { reply_parameters: { message_id: options.replyToMessageId, allow_sending_without_reply: true } }
         : {})
     }, AbortSignal.timeout(REQUEST_TIMEOUT_MS))
-    if (!isRecord(result) || !isInteger(result.message_id)) {
+    if (!isObjectOrArray(result) || !isInteger(result.message_id)) {
       throw new TelegramConnectorError('protocol', 'Telegram sendMessage returned a malformed result')
     }
     return { messageId: result.message_id }
@@ -547,7 +540,7 @@ export class TelegramConnector {
       throw new TelegramConnectorError('invalid-argument', 'Download limit must be a positive integer')
     }
     const file = await this.call('getFile', { file_id: fileId }, AbortSignal.timeout(REQUEST_TIMEOUT_MS))
-    if (!isRecord(file) || !isText(file.file_path)) {
+    if (!isObjectOrArray(file) || !isText(file.file_path)) {
       throw new TelegramConnectorError('protocol', 'Telegram did not return a downloadable path for this file')
     }
     if (isInteger(file.file_size) && file.file_size > maxBytes) {
@@ -644,7 +637,7 @@ export class TelegramConnector {
     }
     const updates = result.filter(
       (update): update is Record<string, unknown> & { update_id: number } =>
-        isRecord(update) && isInteger(update.update_id)
+        isObjectOrArray(update) && isInteger(update.update_id)
     )
     if (result.length > 0 && updates.length === 0) {
       throw new TelegramConnectorError('protocol', 'Telegram getUpdates returned updates without ids')
@@ -731,7 +724,7 @@ export class TelegramConnector {
     if (!holder) return
     try {
       const value: unknown = JSON.parse(holder.raw)
-      if (isRecord(value) && value.nonce === nonce) await unlink(this.lockPath)
+      if (isObjectOrArray(value) && value.nonce === nonce) await unlink(this.lockPath)
     } catch {
       // A lock we no longer own (or cannot parse) is left for its holder.
     }
@@ -761,11 +754,11 @@ export class TelegramConnector {
   private async post(method: string, init: Pick<RequestInit, 'headers' | 'body'>, signal: AbortSignal): Promise<unknown> {
     const response = await this.request(`${this.apiOrigin}/bot${this.options.token}/${method}`, { method: 'POST', ...init, signal }, method)
     const payload: unknown = await response.json().catch(() => null)
-    if (response.ok && isRecord(payload) && payload.ok === true) return payload.result
+    if (response.ok && isObjectOrArray(payload) && payload.ok === true) return payload.result
     const status = !response.ok
       ? response.status
-      : isRecord(payload) && isInteger(payload.error_code) ? payload.error_code : response.status
-    const description = isRecord(payload) && typeof payload.description === 'string'
+      : isObjectOrArray(payload) && isInteger(payload.error_code) ? payload.error_code : response.status
+    const description = isObjectOrArray(payload) && typeof payload.description === 'string'
       ? payload.description
       : response.statusText || 'no description'
     const kind: TelegramErrorKind = status === 409 ? 'conflict' : status === 401 || status === 404 ? 'unauthorized' : 'http'

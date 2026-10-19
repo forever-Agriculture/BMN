@@ -1040,7 +1040,6 @@ function pluginsIn(text) {
 export function uncoveredSources(harness, { environment = process.env, cwd = null, covers = [], policyRoot = CLAUDE_POLICY_ROOT, settings } = {}) {
   if (harness !== 'claude') return [`the places ${appName(harness)} takes tools from besides its settings`]
   const found = []
-  // The run's folder under each of its spellings, each with the folders above it.
   const chains = cwd === null ? [] : spellings(cwd).map(foldersUp)
   const folders = [...new Set(chains.flat())]
   if (cwd === null) found.push('the folder of this run (unknown)')

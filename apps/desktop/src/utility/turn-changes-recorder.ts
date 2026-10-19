@@ -145,7 +145,7 @@ const VERSIONS_KEPT = 32
 const refused = (answer: TurnCaptureAnswer): answer is TurnRefusal => !('record' in answer)
 const sameTurn = (a: string | null, b: string | null): boolean => a === null || b === null || a === b
 const two = (value: number): string => String(value).padStart(2, '0')
-/** The folder itself, or a folder inside it. */
+/** The folder itself, or a folder inside it. Not merged with turn-changes-capture's `within`, which splits on the platform separator: the two differ on Windows. */
 const inside = (folder: string, key: string): boolean => folder === key || folder.startsWith(key.endsWith('/') ? key : `${key}/`)
 /** The pauses kept in one file of BMN's state folder, replaced whole: a missing file keeps none. */
 export function turnPausesFile(path: string): NonNullable<TurnRecorderOptions['pauses']> {

@@ -129,9 +129,9 @@ describe('team and rules state has no path into the database, Backup export, Tel
     const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check(-(base|argv|routes|workspace|consequences|evaluate|team-ask))?|rules|cli|approval|guard|context|skills|own-skills|research|ask|fence|supervised|judge|tools|tool-files|opencode|container|team-app|team-ask|team-browser|team-cli|team-forms|team-inputs|team-nested|team-pictures|team-places|team-resolve|team-run|team-supervisor|team-tree)|safe-config-write|text-diff|shared-helpers)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/auto-tests)$/
     const hits = HOLDERS.flatMap((file) => imports(file).filter((name) => !allowed.test(name)).map((name) => `${file}: imports ${name}`))
     expect(hits.length === 0 ? 'PASS' : `FAIL\n${hits.join('\n')}`).toBe('PASS')
-    // The one Electron import is a type, and the IPC module takes only its error class from the workspace handlers.
+    // The one Electron import is a type, and the IPC module takes only its error class and that error's one helper from the workspace handlers.
     expect(readFileSync(join(REPOSITORY, 'apps/desktop/src/main/agents-ipc.ts'), 'utf8')).toMatch(/^import type \{ IpcMainInvokeEvent \} from 'electron'$/m)
-    expect(readFileSync(join(REPOSITORY, 'apps/desktop/src/main/agents-ipc.ts'), 'utf8')).toMatch(/^import \{ MainIpcError \} from '\.\/workspace-ipc'$/m)
+    expect(readFileSync(join(REPOSITORY, 'apps/desktop/src/main/agents-ipc.ts'), 'utf8')).toMatch(/^import \{ invalidMainIpc, MainIpcError \} from '\.\/workspace-ipc'$/m)
   })
 
   it('they write nothing to a console or a logger', () => {

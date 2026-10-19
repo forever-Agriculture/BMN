@@ -101,7 +101,7 @@ export function roleName(id: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1)
 }
 
-/** 272000 reads "272 000". */
+/** 272000 reads "272 000". Mirrors bin shared-helpers.mjs `thousands`: the renderer cannot load bin modules. */
 export function thousands(value: number): string {
   return String(value).replace(/\B(?=(\d{3})+$)/g, ' ')
 }
@@ -452,6 +452,7 @@ export function updateAgent(data: RosterDataShape, id: string, patch: AgentPatch
 
 interface Candidate { agent: string; efforts: RosterEffort[]; choice: boolean }
 
+/** Mirrors bin agents-roster.mjs `parseCandidate`: the renderer cannot load bin modules. */
 export function parseCandidate(text: string): Candidate {
   const [agent = '', efforts = ''] = text.split('@')
   return { agent, efforts: efforts.split('|').filter(Boolean) as RosterEffort[], choice: efforts.includes('|') }
@@ -474,7 +475,7 @@ export function classBar(agentClass: RosterClass, roleId: string): string | null
   return null
 }
 
-/** Whether BMN itself calls the agent: it runs in no agent app (Epic 65). */
+/** Whether BMN itself calls the agent: it runs in no agent app (Epic 65). Mirrors bin agents-roster.mjs `isCalled`: the renderer cannot load bin modules. */
 export function isCalled(agent: Pick<RosterAgentShape, 'harness'>): boolean {
   return rosterApp(agent) === null
 }
@@ -542,12 +543,12 @@ export function setRoleReadOnly(data: RosterDataShape, roleId: string, on: boole
   })
 }
 
-/** BMN's proposal for read-only roles (63.2): every role whose name ends in "reviewer", and the consultant. The same rule as the CLI's. */
+/** BMN's proposal for read-only roles (63.2): every role whose name ends in "reviewer", and the consultant. The same rule as the CLI's, mirrored because the renderer cannot load bin modules. */
 export function readOnlyProposed(roleId: string): boolean {
   return /reviewer$/.test(roleId) || roleId === 'consultant'
 }
 
-/** The roles BMN proposes to hold to read-only, while the team holds none yet; empty once any role is held, since the choice is the owner's from then on. */
+/** The roles BMN proposes to hold to read-only, while the team holds none yet; empty once any role is held, since the choice is the owner's from then on. Mirrors bin agents-roster.mjs `readOnlyProposal`: the renderer cannot load bin modules. */
 export function readOnlyProposal(data: Pick<RosterDataShape, 'roles'>): string[] {
   if (data.roles.some((role) => role.read_only === true)) return []
   return data.roles.filter((role) => readOnlyProposed(role.id)).map((role) => role.id)
@@ -558,7 +559,7 @@ export function holdProposed(data: RosterDataShape): RosterDataShape {
   return readOnlyProposal(data).reduce((next, roleId) => setRoleReadOnly(next, roleId, true), data)
 }
 
-/** The agents a team names as researchers (63.3): null only for a team from before the mark, in which no agent carries it; otherwise exactly the agents marked yes, none where every mark says no. The same rule as the CLI's. */
+/** The agents a team names as researchers (63.3): null only for a team from before the mark, in which no agent carries it; otherwise exactly the agents marked yes, none where every mark says no. The same rule as the CLI's, mirrored because the renderer cannot load bin modules. */
 export function namedResearchers(data: Pick<RosterDataShape, 'agents'>): string[] | null {
   if (!data.agents.some((agent) => typeof agent.researcher === 'boolean')) return null
   return data.agents.filter((agent) => agent.researcher === true).map((agent) => agent.id)
@@ -755,7 +756,7 @@ export interface CalledParty { id: string; name: string; private_work: RosterPri
 /**
  * The two parties of an agent BMN calls, who receives the request and who runs the model, each
  * with its answer, and the one sentence that says what follows: the same words as the CLI's
- * `calledParties`.
+ * `calledParties`, mirrored because the renderer cannot load bin modules.
  */
 export function calledParties(data: RosterDataShape, agent: Pick<RosterAgentShape, 'provider' | 'run_by'>): { receives: CalledParty; runs: CalledParty; allowed: boolean; reason: string } {
   const party = (id: string): CalledParty => {
@@ -787,6 +788,7 @@ export const JUDGE_PROPOSAL = {
  * The team with BMN's judge proposal taken, or null where there is nothing to propose: the team
  * already holds an agent BMN calls or a role judge, or its names are in use. The same rule as the
  * CLI's `judgeProposal`: a provider the team already names for that host keeps its own answer.
+ * Mirrored because the renderer cannot load bin modules.
  */
 export function judgeProposal(data: RosterDataShape): RosterDataShape | null {
   if (data.agents.some(isCalled) || data.roles.some((role) => role.id === ROSTER_JUDGE_ROLE) || data.agents.some((agent) => agent.id === JUDGE_PROPOSAL.agent.id)) return null

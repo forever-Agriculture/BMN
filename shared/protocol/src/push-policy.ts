@@ -1,4 +1,5 @@
 // MODULE: push-policy.ts - the owner's push and merge policy: one versioned record, its one change rule, and what it authorizes (Epic 83)
+import { isIso } from './shared-helpers'
 
 /** The raw setting that holds the record: one `app_setting` row, no new table (Epic 83, Decisions "Store"). */
 export const PUSH_POLICY_KEY = 'push-policy-v1'
@@ -62,8 +63,6 @@ interface PushPolicyRecord {
 export type PushPolicyRead = { state: 'read'; record: PushPolicyRecord } | { state: 'unknown'; reason: string }
 
 const EMPTY_PUSH_POLICY: PushPolicyRecord = Object.freeze({ version: 1, revision: 0, owners: [], levels: [] }) as PushPolicyRecord
-
-const isIso = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value))
 
 /** A missing row is the empty start (no owner allowed); a row that is not a valid record is `unknown`. */
 export function readPushPolicy(raw: string | undefined): PushPolicyRead {

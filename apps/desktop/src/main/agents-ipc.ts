@@ -90,7 +90,7 @@ import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCount
 import { allowWorkspace, approveRoster, approveSections, judgeChoiceUniqueness, judgeProjectChoices, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
 import { findAppProgram } from './app-program'
 import { createAutoTests, signInMark, type AutoTestEntry, type AutoTestOutcome, type AutoTestTry, type AutoTestsSeams } from './auto-tests'
-import { MainIpcError } from './workspace-ipc'
+import { invalidMainIpc, MainIpcError } from './workspace-ipc'
 
 interface AgentsIpcRegistrar {
   handle(channel: `aiterm:${string}`, listener: (event: IpcMainInvokeEvent, params?: unknown) => unknown): void
@@ -171,13 +171,9 @@ const CLI_TIMEOUT_MS = 30_000
 const PROBE_TIMEOUT_MS = 240_000
 const OUTPUT_LIMIT = 2 * 1024 * 1024
 
-function invalid(message: string): never {
-  throw new MainIpcError(ERROR_CODES.invalidArgument, message)
-}
-
 function objectParams(params: unknown): Record<string, unknown> {
   if (params === undefined) return {}
-  if (!params || typeof params !== 'object' || Array.isArray(params)) invalid('Agents parameters must be an object')
+  if (!params || typeof params !== 'object' || Array.isArray(params)) invalidMainIpc('Agents parameters must be an object')
   return params as Record<string, unknown>
 }
 
@@ -185,10 +181,10 @@ function shownParam(params: Record<string, unknown>): AgentsShownRevision {
   const shown = params.shown as Partial<AgentsShownRevision> | undefined
   if (!shown || typeof shown !== 'object' || typeof shown.fileHash !== 'string'
     || !(shown.generation === null || (typeof shown.generation === 'number' && Number.isSafeInteger(shown.generation)))) {
-    invalid('shown must name the approved version and file hash the page showed')
+    invalidMainIpc('shown must name the approved version and file hash the page showed')
   }
-  if (shown.link !== undefined && shown.link !== null && typeof shown.link !== 'string') invalid('shown.link must be the link target or null')
-  if (shown.directory !== undefined && shown.directory !== null && (typeof shown.directory !== 'string' || shown.directory.length > 4096)) invalid('shown.directory must be a folder path or null')
+  if (shown.link !== undefined && shown.link !== null && typeof shown.link !== 'string') invalidMainIpc('shown.link must be the link target or null')
+  if (shown.directory !== undefined && shown.directory !== null && (typeof shown.directory !== 'string' || shown.directory.length > 4096)) invalidMainIpc('shown.directory must be a folder path or null')
   return { generation: shown.generation, fileHash: shown.fileHash, ...(shown.link === undefined ? {} : { link: shown.link }), ...(typeof shown.directory === 'string' ? { directory: shown.directory } : {}) }
 }
 
@@ -206,17 +202,17 @@ function scopeParam(params: Record<string, unknown>): string[] | null {
   if (params.scope === undefined || params.scope === null) return null
   if (Array.isArray(params.scope) && params.scope.length > 0 && params.scope.length <= 64
     && params.scope.every((id) => typeof id === 'string' && id.length <= 32)) return params.scope as string[]
-  invalid('scope must be a list of section ids')
+  invalidMainIpc('scope must be a list of section ids')
 }
 
 function harnessParam(value: unknown): RosterHarness {
-  if (typeof value !== 'string' || !(HARNESSES as readonly string[]).includes(value)) invalid(`harness is not one of ${HARNESSES.join(', ')}`)
+  if (typeof value !== 'string' || !(HARNESSES as readonly string[]).includes(value)) invalidMainIpc(`harness is not one of ${HARNESSES.join(', ')}`)
   return value as RosterHarness
 }
 
 function textParam(params: Record<string, unknown>, key: string, max = 256 * 1024): string {
   const value = params[key]
-  if (typeof value !== 'string' || value.length > max) invalid(`${key} must be text of at most ${max} characters`)
+  if (typeof value !== 'string' || value.length > max) invalidMainIpc(`${key} must be text of at most ${max} characters`)
   return value
 }
 
@@ -389,14 +385,14 @@ function stagedParam(params: Record<string, unknown>): RosterDataShape {
   const data = params.data as RosterDataShape | undefined
   if (!data || typeof data !== 'object' || (data.schema_version !== 2 && data.schema_version !== 3) || !Array.isArray(data.agents) || !Array.isArray(data.roles)
     || !Array.isArray(data.providers) || !Array.isArray(data.exceptions) || !Array.isArray(data.harness_routes)) {
-    invalid('data must be team data')
+    invalidMainIpc('data must be team data')
   }
   return data
 }
 
 function numberParam(params: Record<string, unknown>): number {
   const number = params.number
-  if (typeof number !== 'number' || !Number.isSafeInteger(number) || number < 1) invalid('number must be a version number')
+  if (typeof number !== 'number' || !Number.isSafeInteger(number) || number < 1) invalidMainIpc('number must be a version number')
   return number
 }
 
@@ -406,17 +402,17 @@ function requestParam(params: Record<string, unknown>): AgentsApprovalRequest {
   if (request.kind === 'file') return { kind: 'file' }
   if (request.kind === 'restore') return { kind: 'restore', number: numberParam(request) }
   const scope = request.kind === 'sections' ? scopeParam(request) : null
-  if (scope === null) invalid('request must name what to approve')
+  if (scope === null) invalidMainIpc('request must name what to approve')
   return { kind: 'sections', scope }
 }
 
 /** The rules files the owner was shown beside an approving control; absent means none were shown. */
 function teamUpdateParam(params: Record<string, unknown>): Pick<TeamUpdateTarget, 'harness' | 'binding'>[] {
   if (params.teamUpdate === undefined) return []
-  if (!Array.isArray(params.teamUpdate) || params.teamUpdate.length > HARNESSES.length) invalid('teamUpdate must list the rules files that were shown')
+  if (!Array.isArray(params.teamUpdate) || params.teamUpdate.length > HARNESSES.length) invalidMainIpc('teamUpdate must list the rules files that were shown')
   return (params.teamUpdate as unknown[]).map((entry) => {
     const target = objectParams(entry)
-    if (typeof target.binding !== 'string' || !/^[0-9a-f]{64}$/.test(target.binding)) invalid('teamUpdate entries carry the binding that was shown')
+    if (typeof target.binding !== 'string' || !/^[0-9a-f]{64}$/.test(target.binding)) invalidMainIpc('teamUpdate entries carry the binding that was shown')
     return { harness: harnessParam(target.harness), binding: target.binding }
   })
 }
@@ -685,7 +681,7 @@ function toolsPlanFrom(result: CliResult, removeUnlisted: boolean): ToolsPlan {
 }
 
 function contextApp(value: unknown): ContextLimitApp {
-  if (typeof value !== 'string' || !(CONTEXT_APPS as readonly string[]).includes(value)) invalid('harness is not one of codex, claude')
+  if (typeof value !== 'string' || !(CONTEXT_APPS as readonly string[]).includes(value)) invalidMainIpc('harness is not one of codex, claude')
   return value as ContextLimitApp
 }
 
@@ -693,7 +689,7 @@ function contextApp(value: unknown): ContextLimitApp {
 function sizeParam(params: Record<string, unknown>, key: string): number | null {
   const value = params[key]
   if (value === null || value === undefined) return null
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0 || value > 999_999_999) invalid(`${key} must be a positive whole number of tokens, or null`)
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0 || value > 999_999_999) invalidMainIpc(`${key} must be a positive whole number of tokens, or null`)
   return value
 }
 
@@ -1286,7 +1282,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   })
   handle('aiterm:rules:plan-revert-master', (params) => {
     const revision = params.revision
-    if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) invalid('revision must be a number')
+    if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) invalidMainIpc('revision must be a number')
     const entry = masterHistory().find((item) => item.revision === revision)
     if (entry === undefined || !entry.intact) return { ok: false, diff: '', expectedHash: null, message: `revision ${revision} is missing or corrupt` }
     const text = readFileSync(`${masterPath().replace(/global-rules\.md$/, '')}state/rules/master-history/${String(revision).padStart(6, '0')}.md`, 'utf8')
@@ -1498,7 +1494,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   handle('aiterm:research:fence-test', (params) => {
     // Test again on one app's row tests that app; with none named, Codex and OpenCode as before.
     const only = params.harness === undefined ? null : harnessParam(params.harness)
-    if (only === 'claude') invalid('the fence test is for Codex and OpenCode')
+    if (only === 'claude') invalidMainIpc('the fence test is for Codex and OpenCode')
     if (fenceTest.running || research !== null) return researchSnapshot(false)
     const ctx = context()
     fenceTest = { running: true, ended: null }
@@ -1640,13 +1636,13 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     return questionsSnapshot()
   })
   handle('aiterm:questions:allow', (params) => {
-    if (typeof params.on !== 'boolean') invalid('on must be true or false')
+    if (typeof params.on !== 'boolean') invalidMainIpc('on must be true or false')
     setAgentsMayAsk(params.on)
     return questionsSnapshot()
   })
   handle('aiterm:questions:open-page', async (params) => {
     const id = textParam(params, 'id', 64)
-    if (!Number.isSafeInteger(params.claim) || (params.claim as number) < 0) invalid('claim must be a claim\'s place in the record')
+    if (!Number.isSafeInteger(params.claim) || (params.claim as number) < 0) invalidMainIpc('claim must be a claim\'s place in the record')
     // The address comes from the kept record, written by a researcher: only an https address of a public name is opened, and only in the browser.
     const source = readQuestions().find((entry) => entry.id === id)?.claims?.[params.claim as number]?.source
     const address = httpsPage(source)
@@ -1657,7 +1653,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     return { opened: true }
   })
   handle('aiterm:questions:remove', async (params) => {
-    if (params.id !== null && (typeof params.id !== 'string' || params.id.length > 64)) invalid('id must be a question id or null')
+    if (params.id !== null && (typeof params.id !== 'string' || params.id.length > 64)) invalidMainIpc('id must be a question id or null')
     await removeQuestions(params.id, context().now())
     return questionsSnapshot()
   })
@@ -1669,7 +1665,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     try {
       return run()
     } catch (error) {
-      if (error instanceof AskRefusal) invalid(error.message)
+      if (error instanceof AskRefusal) invalidMainIpc(error.message)
       throw error
     }
   }
@@ -1718,8 +1714,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   }
   handle('aiterm:judge:load', () => judgeView())
   handle('aiterm:judge:limit', (params) => {
-    if (typeof params.on !== 'boolean') invalid('on must be true or false')
-    if (typeof params.usd !== 'number' || !Number.isFinite(params.usd) || params.usd <= 0 || params.usd > 10_000) invalid('usd must be an amount of dollars above 0')
+    if (typeof params.on !== 'boolean') invalidMainIpc('on must be true or false')
+    if (typeof params.usd !== 'number' || !Number.isFinite(params.usd) || params.usd <= 0 || params.usd > 10_000) invalidMainIpc('usd must be an amount of dollars above 0')
     setJudgeLimit({ on: params.on, usd: params.usd })
     return judgeView()
   })
@@ -1727,7 +1723,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     // Longer than the page lets in, so that a text too long is refused in the command's own words.
     const text = textParam(params, 'text', 4 * JUDGE_TRY_TEXT_MAX)
     const statement = textParam(params, 'statement', 4 * JUDGE_TRY_STATEMENT_MAX)
-    if (params.data !== 'public' && params.data !== 'private') invalid('data must be public or private')
+    if (params.data !== 'public' && params.data !== 'private') invalidMainIpc('data must be public or private')
     const ctx = context()
     const testPort = options.judgeTestPort?.() ?? null
     let reply: JudgeTryReply
@@ -1770,7 +1766,7 @@ const TEAM_ASK_ID = /^\d{8}T\d{6}-[0-9a-f]{8}$/u
 
 function askIdParam(params: Record<string, unknown>): string {
   const id = params.id
-  if (typeof id !== 'string' || !TEAM_ASK_ID.test(id)) invalid('id must be the id of an ask')
+  if (typeof id !== 'string' || !TEAM_ASK_ID.test(id)) invalidMainIpc('id must be the id of an ask')
   return id
 }
 

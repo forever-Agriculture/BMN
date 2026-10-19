@@ -5,6 +5,7 @@ import type { AttentionKind, AttentionRecord } from './companion'
 import type { DevAutoRunsResult } from './dev-auto'
 import { awayGrantSection, type AwayGrantSection } from './away-grant-summary'
 import type { GrantCarried, GrantPeriod } from './grant'
+import { pad } from './shared-helpers'
 
 /** Fable's bounds (Story 76.1 §4–5). */
 export const AWAY_SUMMARY_LIMITS = Object.freeze({
@@ -184,12 +185,11 @@ const KIND_WORDS: Readonly<Record<AttentionKind, string>> = Object.freeze({
 const kindWords = (record: AttentionRecord): string => record.manualChoices
   ? record.kind === 'permission' ? 'Manual decision' : 'Manual question'
   : KIND_WORDS[record.kind] ?? record.kind
-const pad = (value: number): string => String(value).padStart(2, '0')
 const clockWords = (iso: string): string => {
   const at = new Date(iso)
   return Number.isNaN(at.getTime()) ? '--:--' : `${pad(at.getHours())}:${pad(at.getMinutes())}`
 }
-const plural = (count: number, one: string, many = `${one}s`): string => `${count} ${count === 1 ? one : many}`
+const pluralWithMany = (count: number, one: string, many = `${one}s`): string => `${count} ${count === 1 ? one : many}`
 const oneLine = (text: string, limit: number): string => {
   const line = text.replace(/\s+/g, ' ').trim()
   return line.length > limit ? `${line.slice(0, limit - 1)}…` : line
@@ -431,7 +431,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     const lines: string[] = []
     if (activity.turnsEnded > 0) {
       const changed = activity.turnsWithChanges > 0 ? `, ${activity.changesAtLeast ? '≥' : ''}${activity.turnsWithChanges} changed files` : ''
-      lines.push(`${atLeast('turns')}${plural(activity.turnsEnded, 'turn')}${changed}`)
+      lines.push(`${atLeast('turns')}${pluralWithMany(activity.turnsEnded, 'turn')}${changed}`)
     }
     if (activity.publishedCount > 0) {
       const names = activity.published.slice(0, AWAY_SUMMARY_LIMITS.published)
@@ -439,7 +439,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     }
     if (activity.asksCompleted.length > 0) {
       const roles = [...new Set(activity.asksCompleted)].slice(0, 3)
-      lines.push(`${atLeast('asks')}${plural(activity.asksCompleted.length, 'ask')} answered (${roles.join(', ')})`)
+      lines.push(`${atLeast('asks')}${pluralWithMany(activity.asksCompleted.length, 'ask')} answered (${roles.join(', ')})`)
     }
     const counts = (['printed', 'queued', 'uncertain', 'expired'] as const).filter((state) => activity.messages[state] > 0).map((state) => `${activity.messages[state]} ${state}`)
     if (counts.length > 0) lines.push(`${atLeast('messages')}messages ${counts.join(', ')}`)
@@ -468,7 +468,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     const workspace = run.workspaceIds.map((id) => input.devAuto!.workspaceNames[id] ?? 'Workspace unavailable').join(', ')
     const title = `${spansWorkspaces ? `${workspace} · ` : ''}${devAutoTitle(run)}`
     const note = (run.status ?? '').replace(/^(?:BLOCKED|COMPLETE)\b\s*[—–:;.,-]*\s*/iu, '')
-    const text = note !== '' ? oneLine(note, 200) : run.decisions.length > 0 ? plural(run.decisions.length, 'decision') + ' recorded' : ''
+    const text = note !== '' ? oneLine(note, 200) : run.decisions.length > 0 ? pluralWithMany(run.decisions.length, 'decision') + ' recorded' : ''
     const rows: AwayDecisionRow[] = [
       { label: 'Run', text: run.project ?? 'Epics not recorded' },
       { label: 'Status', text: run.status ?? 'Not recorded' },

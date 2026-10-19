@@ -7,6 +7,7 @@ import {
   ROSTER_APP_UPDATE_ARGUMENTS,
   ROSTER_HARNESSES,
   appDisplayName,
+  named,
   type AgentAppView,
   type ContextAgentLimit,
   type ContextLimitApp,
@@ -990,11 +991,6 @@ function DestinationSheet(props: { app: AgentAppView; data: RosterDataShape; onD
       <p className="preferences-help">Anything on your word is not checked by BMN: {name} then gets public sections only and its agents public work only.</p>
     </Sheet>
   )
-}
-
-/** "Opus, Fable and Sonnet". */
-function named(names: readonly string[]): string {
-  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`
 }
 
 /** An app's default for the owner's own sessions, as its file holds it. */

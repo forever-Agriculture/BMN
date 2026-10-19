@@ -1,6 +1,7 @@
 // MODULE: attention-prompt.ts - the structured question or permission an agent asked, as hooks report it
 import { hasExactKeys } from './closed-shape'
 import { stripFormatCharacters } from './file-reference'
+import { isRecord } from './shared-helpers'
 
 /** The harness whose dialog the prompt is; each is answered its own way (docs/remote-answers.md). */
 type AttentionPromptHarness = 'claude' | 'codex' | 'opencode'
@@ -91,10 +92,6 @@ const QUESTION_SHAPES: readonly AttentionQuestionsPrompt['shape'][] = ['choice',
 const PERMISSION_SHAPES: readonly AttentionPermissionPrompt['shape'][] = ['permission', 'sandbox-network', 'subagent']
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
 
 /** Any C0 control, DEL or C1 control; `multiline` lets tab, line feed and carriage return through. */
 function hasControl(value: string, multiline: boolean): boolean {

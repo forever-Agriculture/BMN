@@ -30,7 +30,7 @@ interface ContentsHeader {
   notes: string[]
 }
 
-const plural = (count: number, one: string, many: string): string => `${quickLookCount(count)} ${count === 1 ? one : many}`
+const pluralWithCommas = (count: number, one: string, many: string): string => `${quickLookCount(count)} ${count === 1 ? one : many}`
 
 /** What a contents search covered and what cut it short (AC4). */
 export function contentsHeader(result: QuickLookContentsResult): ContentsHeader {
@@ -38,11 +38,11 @@ export function contentsHeader(result: QuickLookContentsResult): ContentsHeader 
   if (result.cancelled) notes.push('Partial results · search stopped')
   else if (result.limit === 'files') notes.push(`Partial results · limit reached: ${quickLookCount(QUICK_LOOK_SEARCH_MAX_FILES)} files searched`)
   else if (result.limit === 'lines') notes.push(`Partial results · limit reached: ${quickLookCount(QUICK_LOOK_SEARCH_MAX_LINES)} matching lines`)
-  if (result.unreadable > 0) notes.push(`${plural(result.unreadable, 'file', 'files')} could not be read`)
+  if (result.unreadable > 0) notes.push(`${pluralWithCommas(result.unreadable, 'file', 'files')} could not be read`)
   if (result.scope === 'git') notes.push('Files Git ignores were skipped.')
   return {
-    count: result.matchCount === 0 ? 'No matches' : `${plural(result.matchCount, 'match', 'matches')} in ${plural(result.files.length, 'file', 'files')}`,
-    read: `${plural(result.filesRead, 'file', 'files')} read · ${(result.elapsedMs / 1000).toFixed(1)} s`,
+    count: result.matchCount === 0 ? 'No matches' : `${pluralWithCommas(result.matchCount, 'match', 'matches')} in ${pluralWithCommas(result.files.length, 'file', 'files')}`,
+    read: `${pluralWithCommas(result.filesRead, 'file', 'files')} read · ${(result.elapsedMs / 1000).toFixed(1)} s`,
     notes
   }
 }
@@ -53,7 +53,7 @@ export function filesHeader(result: Extract<QuickLookSearchResult, { mode: 'file
   if (result.files.length === 0) return result.capped ? `No matches; search capped after ${quickLookCount(result.scanned)} entries.` : 'No matches'
   return result.capped
     ? `Showing first ${result.files.length} matches; search capped after ${result.scanned} entries.`
-    : plural(result.files.length, 'file', 'files')
+    : pluralWithCommas(result.files.length, 'file', 'files')
 }
 
 interface SearchMatch {

@@ -1,6 +1,7 @@
 // MODULE: grant.ts - the Away grant: one versioned record of each departure's cards, the owner's answers and their uses, and its change rules (Epic 84)
 import { awayMomentWords, type AwayRecord, type AwaySource } from './away'
 import { pushPolicyRepository } from './push-policy'
+import { isIso, isTextOrEmpty } from './shared-helpers'
 
 /**
  * The raw setting that holds every grant (Epic 84, Decisions "schema"): its own `app_setting` row beside `owner-away-v1`,
@@ -175,18 +176,16 @@ const SHA = /^[0-9a-f]{7,40}$/
 const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/
 // eslint-disable-next-line no-control-regex
 const CONTROLS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/
-const isText = (value: unknown): value is string => typeof value === 'string'
-const isIso = (value: unknown): value is string => isText(value) && Number.isFinite(Date.parse(value))
 const isCount = (value: unknown, max: number): value is number => Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= max
 
 /** A run id, use id, boundary or item id: a plain identifier within its limit, or null. */
 export function grantIdentifier(value: unknown, limit: number): string | null {
-  return isText(value) && value.length <= limit && IDENTIFIER.test(value) && !value.includes('..') ? value : null
+  return isTextOrEmpty(value) && value.length <= limit && IDENTIFIER.test(value) && !value.includes('..') ? value : null
 }
 
 /** One line of the agent's words: plain text within its limit, controls refused; null when it is not. */
 function grantWords(value: unknown, limit: number, empty = false): string | null {
-  if (!isText(value)) return null
+  if (!isTextOrEmpty(value)) return null
   const text = value.trim()
   if ((!empty && text === '') || [...text].length > limit || CONTROLS.test(text)) return null
   return text
@@ -225,7 +224,7 @@ function parseGrantTerms(raw: unknown): { terms: GrantTerm[] } | { problem: stri
     if (repository === null) return { problem: `${where}: repository must be OWNER/NAME on GitHub` }
     if (term.kind === 'merge') {
       if (!Number.isSafeInteger(term.pr) || (term.pr as number) < 1) return { problem: `${where}: pr must be the pull request's number` }
-      const headSha = term.headSha === undefined || term.headSha === null ? null : isText(term.headSha) && SHA.test(term.headSha.toLowerCase()) ? term.headSha.toLowerCase() : undefined
+      const headSha = term.headSha === undefined || term.headSha === null ? null : isTextOrEmpty(term.headSha) && SHA.test(term.headSha.toLowerCase()) ? term.headSha.toLowerCase() : undefined
       if (headSha === undefined) return { problem: `${where}: headSha must be 7 to 40 hexadecimal characters` }
       const upTo = term.upTo === undefined || term.upTo === null ? null : isCount(term.upTo, GRANT_LIMITS.count) ? term.upTo : undefined
       if (upTo === undefined) return { problem: `${where}: upTo must be 1 to ${GRANT_LIMITS.count}` }
@@ -240,7 +239,7 @@ function parseGrantTerms(raw: unknown): { terms: GrantTerm[] } | { problem: stri
     const count = term.count === undefined ? 1 : isCount(term.count, GRANT_LIMITS.count) ? term.count : null
     if (count === null) return { problem: `${where}: count must be 1 to ${GRANT_LIMITS.count}` }
     if (term.proposed !== 'no' && term.proposed !== 'yes') return { problem: `${where}: proposed must be no or yes` }
-    const isBranch = (value: unknown): value is string => isText(value) && BRANCH.test(value) && !value.includes('..')
+    const isBranch = (value: unknown): value is string => isTextOrEmpty(value) && BRANCH.test(value) && !value.includes('..')
     if (term.kind === 'push-default') {
       if (!isBranch(term.branch)) return { problem: `${where}: branch must be the branch to push` }
       terms.push({ id, kind: 'push-default', repository, branch: term.branch, count, proposed: term.proposed, reason })
@@ -298,15 +297,15 @@ function readTerm(value: unknown): GrantTerm | null {
 function readCard(value: unknown): GrantCard | null {
   if (typeof value !== 'object' || value === null) return null
   const card = value as Record<string, unknown>
-  if (!isCount(card.revision, Number.MAX_SAFE_INTEGER) || !isIso(card.askedAt) || !isText(card.scope) || typeof card.nothing !== 'boolean') return null
+  if (!isCount(card.revision, Number.MAX_SAFE_INTEGER) || !isIso(card.askedAt) || !isTextOrEmpty(card.scope) || typeof card.nothing !== 'boolean') return null
   if (!['open', 'answered', 'nothing', 'withdrawn'].includes(card.state as string) || !Array.isArray(card.terms)) return null
   const terms = card.terms.map(readTerm)
   if (terms.some((term) => term === null)) return null
   const withdrawnFor = card.withdrawnFor === 'back' || card.withdrawnFor === 'not-leaving' ? card.withdrawnFor : null
   return {
-    revision: card.revision as number, askedAt: card.askedAt, sessionId: isText(card.sessionId) ? card.sessionId : null,
-    agentCli: isText(card.agentCli) ? card.agentCli : null, scope: card.scope, nothing: card.nothing, terms: terms as GrantTerm[],
-    state: card.state as GrantCardState, change: isText(card.change) ? card.change : null, withdrawnFor
+    revision: card.revision as number, askedAt: card.askedAt, sessionId: isTextOrEmpty(card.sessionId) ? card.sessionId : null,
+    agentCli: isTextOrEmpty(card.agentCli) ? card.agentCli : null, scope: card.scope, nothing: card.nothing, terms: terms as GrantTerm[],
+    state: card.state as GrantCardState, change: isTextOrEmpty(card.change) ? card.change : null, withdrawnFor
   }
 }
 
@@ -314,7 +313,7 @@ function readAnswer(value: unknown, card: GrantCard): GrantAnswer | null | undef
   if (value === null || value === undefined) return null
   if (typeof value !== 'object') return undefined
   const answer = value as Record<string, unknown>
-  if (!isCount(answer.cardRevision, card.revision) || !isIso(answer.at) || (answer.via !== 'app' && answer.via !== 'telegram') || !isText(answer.operationKey)) return undefined
+  if (!isCount(answer.cardRevision, card.revision) || !isIso(answer.at) || (answer.via !== 'app' && answer.via !== 'telegram') || !isTextOrEmpty(answer.operationKey)) return undefined
   if (typeof answer.choices !== 'object' || answer.choices === null || !Array.isArray(answer.terms)) return undefined
   const terms = answer.terms.map(readTerm)
   if (terms.some((term) => term === null)) return undefined
@@ -331,7 +330,7 @@ function readAnswer(value: unknown, card: GrantCard): GrantAnswer | null | undef
 function readPeriod(value: unknown): GrantPeriod | null {
   if (typeof value !== 'object' || value === null) return null
   const row = value as Record<string, unknown>
-  if (!isText(row.periodId) || !['leaving', 'away', 'ended', 'cancelled'].includes(row.state as string) || !isIso(row.startedAt)) return null
+  if (!isTextOrEmpty(row.periodId) || !['leaving', 'away', 'ended', 'cancelled'].includes(row.state as string) || !isIso(row.startedAt)) return null
   if (!['app', 'cli', 'agent', 'telegram'].includes(row.startedBy as string)) return null
   if (!Array.isArray(row.runs) || !Array.isArray(row.uses) || !Array.isArray(row.told)) return null
   const runs: GrantRun[] = []
@@ -339,7 +338,7 @@ function readPeriod(value: unknown): GrantPeriod | null {
     const run = item as Record<string, unknown>
     const runId = grantIdentifier(run?.runId, GRANT_LIMITS.runId)
     const card = readCard(run?.card)
-    if (runId === null || card === null || !isText(run.title) || runs.some((other) => other.runId === runId)) return null
+    if (runId === null || card === null || !isTextOrEmpty(run.title) || runs.some((other) => other.runId === runId)) return null
     const answer = readAnswer(run.answer, card)
     if (answer === undefined) return null
     const earlier = run.earlier === undefined ? [] : Array.isArray(run.earlier) ? run.earlier.map((item) => readAnswer(item, card)) : [undefined]
@@ -353,7 +352,7 @@ function readPeriod(value: unknown): GrantPeriod | null {
   const uses: GrantUse[] = []
   for (const item of row.uses) {
     const use = item as Record<string, unknown>
-    if (!isText(use?.id) || !isText(use.runId) || !isText(use.sessionId) || (use.kind !== 'round' && use.kind !== 'action') || !isIso(use.at)) return null
+    if (!isTextOrEmpty(use?.id) || !isTextOrEmpty(use.runId) || !isTextOrEmpty(use.sessionId) || (use.kind !== 'round' && use.kind !== 'action') || !isIso(use.at)) return null
     // A round counts against its boundary and an action against its item: a use missing either would be counted nowhere.
     const boundary = use.kind === 'round' ? grantIdentifier(use.boundary, GRANT_LIMITS.boundary) : null
     const itemId = use.kind === 'action' ? grantIdentifier(use.item, GRANT_LIMITS.itemId) : null
@@ -361,30 +360,30 @@ function readPeriod(value: unknown): GrantPeriod | null {
     uses.push({ id: use.id, runId: use.runId, sessionId: use.sessionId, kind: use.kind, boundary, item: itemId, cardRevision: use.cardRevision as number, at: use.at })
   }
   const refusals: GrantRefusal[] = Array.isArray(row.refusals)
-    ? row.refusals.filter((item): item is GrantRefusal => typeof item === 'object' && item !== null && isText((item as GrantRefusal).runId) &&
-      ['round', 'action', 'answer'].includes((item as GrantRefusal).kind) && isText((item as GrantRefusal).reason) && isIso((item as GrantRefusal).at))
+    ? row.refusals.filter((item): item is GrantRefusal => typeof item === 'object' && item !== null && isTextOrEmpty((item as GrantRefusal).runId) &&
+      ['round', 'action', 'answer'].includes((item as GrantRefusal).kind) && isTextOrEmpty((item as GrantRefusal).reason) && isIso((item as GrantRefusal).at))
       .map((item) => ({
-        runId: item.runId, kind: item.kind, boundary: isText(item.boundary) ? item.boundary : null, item: isText(item.item) ? item.item : null, reason: item.reason,
+        runId: item.runId, kind: item.kind, boundary: isTextOrEmpty(item.boundary) ? item.boundary : null, item: isTextOrEmpty(item.item) ? item.item : null, reason: item.reason,
         via: item.via === 'app' || item.via === 'telegram' ? item.via : null, at: item.at
       }))
     : []
   // A report that cannot be read is dropped, never trusted: it carries no authority, only the morning's words.
   const reports: GrantReport[] = Array.isArray(row.reports)
-    ? row.reports.filter((item): item is GrantReport => typeof item === 'object' && item !== null && isText((item as GrantReport).runId) &&
-      isText((item as GrantReport).sessionId) && ['outcome', 'step-back', 'refused'].includes((item as GrantReport).kind) && isIso((item as GrantReport).at))
+    ? row.reports.filter((item): item is GrantReport => typeof item === 'object' && item !== null && isTextOrEmpty((item as GrantReport).runId) &&
+      isTextOrEmpty((item as GrantReport).sessionId) && ['outcome', 'step-back', 'refused'].includes((item as GrantReport).kind) && isIso((item as GrantReport).at))
       .map((item) => ({
-        runId: item.runId, sessionId: item.sessionId, kind: item.kind, useId: isText(item.useId) ? item.useId : null,
-        boundary: isText(item.boundary) ? item.boundary : null, item: isText(item.item) ? item.item : null,
+        runId: item.runId, sessionId: item.sessionId, kind: item.kind, useId: isTextOrEmpty(item.useId) ? item.useId : null,
+        boundary: isTextOrEmpty(item.boundary) ? item.boundary : null, item: isTextOrEmpty(item.item) ? item.item : null,
         result: [...GRANT_ROUND_RESULTS, ...GRANT_ACTION_RESULTS].includes(item.result as GrantReportResult) ? item.result : null,
-        text: isText(item.text) ? item.text : null, at: item.at
+        text: isTextOrEmpty(item.text) ? item.text : null, at: item.at
       }))
     : []
   return {
     periodId: row.periodId, state: row.state as GrantPeriodState, startedAt: row.startedAt, startedBy: row.startedBy as AwaySource,
-    agentSessionId: isText(row.agentSessionId) ? row.agentSessionId : null, awayAt: isIso(row.awayAt) ? row.awayAt : null,
+    agentSessionId: isTextOrEmpty(row.agentSessionId) ? row.agentSessionId : null, awayAt: isIso(row.awayAt) ? row.awayAt : null,
     endedAt: isIso(row.endedAt) ? row.endedAt : null,
     endedBy: ['app', 'cli', 'agent', 'telegram'].includes(row.endedBy as string) ? row.endedBy as AwaySource : null,
-    told: row.told.filter(isText).slice(-GRANT_LIMITS.told), runs, uses, refusals, reports
+    told: row.told.filter(isTextOrEmpty).slice(-GRANT_LIMITS.told), runs, uses, refusals, reports
   }
 }
 
@@ -413,7 +412,7 @@ export function readGrantRecord(raw: string | undefined): GrantRead {
     return { state: 'unknown', reason: 'the grant record has two open periods' }
   }
   const operations = row.operations.filter((item): item is { key: string; revision: number; unchanged?: true } =>
-    typeof item === 'object' && item !== null && isText((item as { key: unknown }).key) && Number.isSafeInteger((item as { revision: unknown }).revision))
+    typeof item === 'object' && item !== null && isTextOrEmpty((item as { key: unknown }).key) && Number.isSafeInteger((item as { revision: unknown }).revision))
     .map((item) => ({ key: item.key, revision: item.revision, ...(item.unchanged === true ? { unchanged: true as const } : {}) }))
   // Carried rounds limit what is left, so a carried count that cannot be read is no grant, never a smaller count.
   const carried: GrantCarried[] = []

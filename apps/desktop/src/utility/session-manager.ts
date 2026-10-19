@@ -458,6 +458,11 @@ export class HostControlError extends Error {
   }
 }
 
+/** Throws the invalid-argument HostControlError a host request raises on a bad parameter. */
+export function invalidHostControl(message: string): never {
+  throw new HostControlError(ERROR_CODES.invalidArgument, message)
+}
+
 /** A fresh process failed after its ordinary session row was saved; the owner can still inspect it. */
 export class PersistedSessionStartError extends HostControlError {
   constructor(readonly sessionId: string, cause: HostControlError) {

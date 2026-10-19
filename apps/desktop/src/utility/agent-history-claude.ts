@@ -1,5 +1,5 @@
 // MODULE: agent-history-claude.ts - reads and writes cleanupPeriodDays in Claude-family settings.json files (Story 31.1)
-import { CLAUDE_KEEP_FOREVER_DAYS, type AgentHistoryKeepDays } from '@bmn/protocol'
+import { CLAUDE_KEEP_FOREVER_DAYS, isRecord, type AgentHistoryKeepDays } from '@bmn/protocol'
 import {
   ConfigWriteError,
   currentText,
@@ -23,10 +23,6 @@ export function claudeSettingsPath(folder: string): string {
 /** The number BMN writes for a limit: the days themselves, or a century for Never. Never 0. */
 export function claudeTargetDays(keepDays: AgentHistoryKeepDays): number {
   return keepDays === null ? CLAUDE_KEEP_FOREVER_DAYS : keepDays
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
 /** What the folder's settings.json says now; a missing file reads as Claude's default. */

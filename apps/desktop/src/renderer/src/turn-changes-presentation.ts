@@ -1,5 +1,5 @@
 // MODULE: turn-changes-presentation.ts - the words the window shows for turn changes (Story 69.5): a turn's time, end and totals, the state of recording, the header plate in both its widths, a file's sizes and a hunk's range
-import { RETIRED_APP_NAMES, TURN_APP_NAMES, TURN_PAUSE_REASONS, TURN_PAUSE_WORDS, type TurnSessionView, type TurnShownHunk, type TurnSummary } from '@bmn/protocol'
+import { RETIRED_APP_NAMES, TURN_APP_NAMES, TURN_PAUSE_REASONS, TURN_PAUSE_WORDS, pad, type TurnSessionView, type TurnShownHunk, type TurnSummary } from '@bmn/protocol'
 import { shortDate } from './history-rows'
 
 /** The sign of a removed line and of a count of removed lines: a real minus, as wide as the plus. */
@@ -13,7 +13,6 @@ export function turnAppName(app: string): string {
 }
 
 const count = (value: number): string => value.toLocaleString('en-US')
-const pad = (value: number): string => String(value).padStart(2, '0')
 
 /** `14:32` for a turn of today, `12 Oct 18:04` for an earlier one, in the owner's local time. */
 export function turnWhen(iso: string, now: number): string {

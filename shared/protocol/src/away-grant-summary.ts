@@ -1,5 +1,6 @@
 // MODULE: away-grant-summary.ts - the summary's Granted section: what each run's card granted and what the night used of it, BMN's record and the agent's report told apart (Story 84.7, the notes §4)
 import { awayMomentWords } from './away'
+import { pad } from './shared-helpers'
 import {
   grantShortName,
   grantTermLabel,
@@ -28,7 +29,6 @@ export interface AwayGrantLine { label: string; text: string; source: AwayGrantS
 interface AwayGrantRow { key: string; title: string; state: 'used' | 'unused' | 'none'; text: string; lines: AwayGrantLine[] }
 export interface AwayGrantSection { count: number; rows: AwayGrantRow[]; more: string | null; empty: string | null }
 
-const pad = (value: number): string => String(value).padStart(2, '0')
 const clock = (iso: string): string => {
   const at = new Date(iso)
   return Number.isNaN(at.getTime()) ? '--:--' : `${pad(at.getHours())}:${pad(at.getMinutes())}`

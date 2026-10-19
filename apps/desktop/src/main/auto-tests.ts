@@ -1,7 +1,7 @@
 // MODULE: auto-tests.ts - Story 75.8: BMN runs every app test by itself when it is needed: one at a time, at most three tries per version on disk, a failure or a stop told once
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
-import { AUTO_TEST_TRIES, ROSTER_APP_NAMES, type AutoTestKind, type AutoTestsView, type RosterHarness } from '@bmn/protocol'
+import { AUTO_TEST_TRIES, ROSTER_APP_NAMES, named, type AutoTestKind, type AutoTestsView, type RosterHarness } from '@bmn/protocol'
 
 /** How long after a try that settled nothing BMN tries the same test again. */
 export const AUTO_TEST_RETRY_MS = 10 * 60_000
@@ -63,10 +63,6 @@ const TEST_NAMES: Readonly<Record<AutoTestKind, string>> = {
 }
 const WHERE: Readonly<Record<AutoTestKind, string>> = {
   rules: 'Integrations › Health', skills: 'Integrations › Skills', 'skills-loading': 'Integrations › Skills', tools: 'Integrations › Tools', context: 'Integrations › Health', fence: 'Agents › Models'
-}
-
-function named(names: readonly string[]): string {
-  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`
 }
 
 /** What the owner is told when a test BMN ran by itself failed, or when BMN stopped trying one; a context test names the agents whose limit waits for it. */

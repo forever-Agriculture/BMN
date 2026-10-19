@@ -22,7 +22,7 @@ import {
   type QuickLookSource
 } from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
-import { MainIpcError } from './workspace-ipc'
+import { invalidMainIpc, MainIpcError } from './workspace-ipc'
 
 interface FileReferenceIpcRegistrar {
   handle(channel: `aiterm:${string}`, listener: (event: IpcMainInvokeEvent, params?: unknown) => unknown): void
@@ -39,18 +39,14 @@ export interface FileReferenceIpcActions {
   ownerFocused(event: IpcMainInvokeEvent): boolean
 }
 
-function invalid(message: string): never {
-  throw new MainIpcError(ERROR_CODES.invalidArgument, message)
-}
-
 function objectParams(params: unknown): Record<string, unknown> {
-  if (!params || typeof params !== 'object' || Array.isArray(params)) invalid('File reference parameters must be an object')
+  if (!params || typeof params !== 'object' || Array.isArray(params)) invalidMainIpc('File reference parameters must be an object')
   return params as Record<string, unknown>
 }
 
 function boundedText(value: unknown, name: string): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > FILE_REFERENCE_MAX_LENGTH) {
-    invalid(`${name} must be text of at most ${FILE_REFERENCE_MAX_LENGTH} characters`)
+    invalidMainIpc(`${name} must be text of at most ${FILE_REFERENCE_MAX_LENGTH} characters`)
   }
   return value
 }
@@ -58,7 +54,7 @@ function boundedText(value: unknown, name: string): string {
 /** An absolute, already-normalized path without control characters, as the reader reports it. */
 function displayedFilePath(value: unknown): string {
   const path = boundedText(value, 'The file path')
-  if (hasControlOrFormatCharacter(path) || !isAbsolute(path) || normalize(path) !== path) invalid('The file path must be an absolute path')
+  if (hasControlOrFormatCharacter(path) || !isAbsolute(path) || normalize(path) !== path) invalidMainIpc('The file path must be an absolute path')
   return path
 }
 
@@ -86,7 +82,7 @@ export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, 
 
   handle('aiterm:file-reference:read', (event, params) => {
     const input = objectParams(params)
-    if ((input.sessionId !== undefined) === (input.workspaceId !== undefined)) invalid('Choose exactly one source session or workspace')
+    if ((input.sessionId !== undefined) === (input.workspaceId !== undefined)) invalidMainIpc('Choose exactly one source session or workspace')
     const baseDirectory = input.baseDirectory
     if (baseDirectory !== undefined && baseDirectory !== null) boundedText(baseDirectory, 'The chosen folder')
     // Only the three known fields cross to the utility, which parses and checks all of them again.
@@ -106,7 +102,7 @@ export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, 
   // Quick look (Story 67.1) reaches the utility only through these window channels: no control-socket method and no
   // `bmn` command names them. Each names its source, which the utility checks is still there.
   const quickLookSource = (input: Record<string, unknown>): QuickLookSource => {
-    if ((input.sessionId !== undefined) === (input.workspaceId !== undefined)) invalid('Choose exactly one source session or workspace')
+    if ((input.sessionId !== undefined) === (input.workspaceId !== undefined)) invalidMainIpc('Choose exactly one source session or workspace')
     return input.workspaceId === undefined ? { sessionId: boundedText(input.sessionId, 'The source session') }
       : { workspaceId: boundedText(input.workspaceId, 'The source workspace') }
   }
@@ -145,7 +141,7 @@ export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, 
   // Nothing here logs or keeps it.
   handle('aiterm:quick-look:save', (_event, params) => {
     const input = objectParams(params)
-    if (typeof input.text !== 'string' || input.text.length > QUICK_LOOK_EDIT_MAX_BYTES) invalid('The text to save')
+    if (typeof input.text !== 'string' || input.text.length > QUICK_LOOK_EDIT_MAX_BYTES) invalidMainIpc('The text to save')
     return actions.client().request<QuickLookSaveResult>(METHOD_REGISTRY.quickLookSave, {
       ...quickLookSource(input),
       root: displayedFilePath(input.root),
@@ -158,9 +154,9 @@ export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, 
   // One search per window: the window is the owner, so a newer search from it aborts the older (Story 67.5).
   handle('aiterm:quick-look:search', (event, params) => {
     const input = objectParams(params)
-    if (input.mode !== 'files' && input.mode !== 'contents') invalid('Choose Files or Contents')
-    const query = typeof input.query === 'string' ? input.query : invalid('The search query')
-    if (query.length > QUICK_LOOK_SEARCH_MAX_CHARS * 2) invalid('The search query is too long')
+    if (input.mode !== 'files' && input.mode !== 'contents') invalidMainIpc('Choose Files or Contents')
+    const query = typeof input.query === 'string' ? input.query : invalidMainIpc('The search query')
+    if (query.length > QUICK_LOOK_SEARCH_MAX_CHARS * 2) invalidMainIpc('The search query is too long')
     return actions.client().request<QuickLookSearchResult>(METHOD_REGISTRY.quickLookSearch, {
       ...quickLookSource(input),
       ownerId: `quick-look:${event.sender.id}`,
@@ -180,23 +176,23 @@ export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, 
 
   handle('aiterm:file-reference:show', (event, params) => {
     const path = displayedFilePath(objectParams(params).path)
-    if (!shownFiles.get(event.sender.id)?.includes(path)) invalid('Only a file shown in the preview can be revealed')
+    if (!shownFiles.get(event.sender.id)?.includes(path)) invalidMainIpc('Only a file shown in the preview can be revealed')
     actions.showInFolder(path)
     return { shown: true }
   })
 
   handle('aiterm:file-reference:paste', (event, params) => {
     const input = objectParams(params)
-    if (!actions.ownerFocused(event)) invalid('The window lost focus; choose the destination again')
+    if (!actions.ownerFocused(event)) invalidMainIpc('The window lost focus; choose the destination again')
     const sourcePath = displayedFilePath(input.sourcePath)
     if (!shownFiles.get(event.sender.id)?.includes(sourcePath)) {
-      invalid('Open this file in the preview again before sending it')
+      invalidMainIpc('Open this file in the preview again before sending it')
     }
     const line = input.line
     const column = input.column
     if ((line !== null && (!Number.isSafeInteger(line) || Number(line) < 1)) ||
       (column !== null && (!Number.isSafeInteger(column) || Number(column) < 1))) {
-      invalid('The reference position is invalid')
+      invalidMainIpc('The reference position is invalid')
     }
     const request: FileReferencePasteParams = {
       requestId: boundedText(input.requestId, 'The paste request'),
@@ -218,7 +214,7 @@ export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, 
       sessionId: input.sessionId === null ? null : boundedText(input.sessionId, 'The selected session'),
       query: boundedText(input.query, 'The search query')
     }
-    if (request.query.length > 256) invalid('The search query is too long')
+    if (request.query.length > 256) invalidMainIpc('The search query is too long')
     return actions.client().request<FileReferenceSearchResult>(METHOD_REGISTRY.fileReferenceSearch, request)
   })
 

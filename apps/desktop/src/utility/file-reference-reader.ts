@@ -4,7 +4,6 @@ import { constants, type BigIntStats } from 'node:fs'
 import { open, realpath, stat, type FileHandle } from 'node:fs/promises'
 import { isAbsolute, normalize, resolve } from 'node:path'
 import {
-  ERROR_CODES,
   FILE_REFERENCE_MAX_BYTES,
   FILE_REFERENCE_MAX_LENGTH,
   fileReferenceLines,
@@ -15,7 +14,7 @@ import {
   type FileReferenceTarget,
   type FileReferenceUnavailableReason
 } from '@bmn/protocol'
-import { HostControlError } from './session-manager'
+import { invalidHostControl } from './session-manager'
 
 export interface FileReferenceReadRequest {
   sessionId?: string
@@ -33,10 +32,6 @@ export interface FileReferenceReaderOptions {
   afterCheck?: () => Promise<void>
 }
 
-function invalid(message: string): never {
-  throw new HostControlError(ERROR_CODES.invalidArgument, message)
-}
-
 function errorCode(error: unknown): string | undefined {
   return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : undefined
 }
@@ -44,9 +39,9 @@ function errorCode(error: unknown): string | undefined {
 function chosenBase(value: unknown): string | null {
   if (value === undefined || value === null) return null
   if (typeof value !== 'string' || value.length === 0 || value.length > FILE_REFERENCE_MAX_LENGTH || hasControlOrFormatCharacter(value)) {
-    invalid('The chosen folder is not a valid path')
+    invalidHostControl('The chosen folder is not a valid path')
   }
-  if (!isAbsolute(value)) invalid('The chosen folder must be an absolute path')
+  if (!isAbsolute(value)) invalidHostControl('The chosen folder must be an absolute path')
   return normalize(value)
 }
 
@@ -80,9 +75,9 @@ export async function readFileReference(
   request: FileReferenceReadRequest,
   options: FileReferenceReaderOptions = {}
 ): Promise<FileReferenceReadResult> {
-  if (typeof request.reference !== 'string') invalid('The file reference must be text')
+  if (typeof request.reference !== 'string') invalidHostControl('The file reference must be text')
   const parsed = parseFileReference(request.reference)
-  if (!parsed.ok) invalid(parsed.reason)
+  if (!parsed.ok) invalidHostControl(parsed.reason)
   const { path, line, column } = parsed.reference
   const chosen = chosenBase(request.baseDirectory)
   const base: FileReferenceBase | null = isAbsolute(path)

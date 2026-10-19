@@ -1,6 +1,6 @@
 // MODULE: codex-usage.ts - reads Codex's plan windows from the tail of its own session file (Story 37.2)
 import { open } from 'node:fs/promises'
-import { MAX_USAGE_WINDOWS, type UsageWindow } from '@bmn/protocol'
+import { MAX_USAGE_WINDOWS, isRecord, type UsageWindow } from '@bmn/protocol'
 
 /** How far back from the end the reader looks before it gives up (Story 37.1 AC3). */
 export const CODEX_USAGE_READ_LIMIT = 256 * 1024
@@ -20,13 +20,13 @@ export function codexUsageFromLine(line: string): UsageWindow[] | null {
   } catch {
     return null
   }
-  if (!isObject(parsed) || parsed.type !== 'event_msg' || !isObject(parsed.payload) ||
+  if (!isRecord(parsed) || parsed.type !== 'event_msg' || !isRecord(parsed.payload) ||
     parsed.payload.type !== 'token_count') return null
-  const limits = isObject(parsed.payload.rate_limits) ? parsed.payload.rate_limits : {}
+  const limits = isRecord(parsed.payload.rate_limits) ? parsed.payload.rate_limits : {}
   const windows: UsageWindow[] = []
   for (const name of ['primary', 'secondary']) {
     const window = limits[name]
-    if (!isObject(window)) continue
+    if (!isRecord(window)) continue
     const { used_percent: used, window_minutes: minutes, resets_at: resets } = window
     if (typeof used !== 'number' || !Number.isFinite(used) || used < 0 || used > 1000) continue
     if (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes < 1 || minutes > 527_040) continue
@@ -76,8 +76,4 @@ export async function readCodexUsage(path: string, limit = CODEX_USAGE_READ_LIMI
   } finally {
     await handle.close().catch(() => undefined)
   }
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

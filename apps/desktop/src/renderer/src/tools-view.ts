@@ -20,7 +20,7 @@ export function toolForApp(tool: Pick<RosterToolShape, 'apps' | 'agents'>, harne
   return tool.agents === undefined && (tool.apps === undefined || tool.apps.includes(harness))
 }
 
-/** What a tool runs or where it is, in a few words: the program and its first plain argument, or the address's site. */
+/** What a tool runs or where it is, in a few words: the program and its first plain argument, or the address's site. Mirrors bin agents-tools.mjs `transportWords`: the renderer cannot load bin modules. */
 export function transportWords(tool: Pick<RosterToolShape, 'command' | 'args' | 'url'>): string {
   if (tool.url !== undefined) {
     try {

@@ -18,6 +18,7 @@ import {
 import { readLocalTextFile, type FileReferenceReaderOptions } from './file-reference-reader'
 import { gitTopLevel } from './repository-git'
 import { quickLookEditState } from './quick-look-save'
+import { yieldTurn } from './shared-helpers'
 
 const DIMMED = new Set(QUICK_LOOK_DIMMED_NAMES)
 /** At most this many names are held while a folder is read; past it they are cut to the first rows in the tree's order. */
@@ -31,7 +32,6 @@ interface QuickLookOptions {
   gitRoot?: (folder: string) => Promise<string | null>
 }
 
-const pause = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 
 
 /** Where Quick look starts for a source: a running session's launch folder, a stopped one's stored folder, or a workspace's folder. */
@@ -124,7 +124,7 @@ export async function listQuickLookFolder(folder: string, limits: { maxEntries?:
         found.sort(compareEntries)
         found.length = maxEntries
       }
-      if (total % YIELD_EVERY === 0) await pause()
+      if (total % YIELD_EVERY === 0) await yieldTurn()
     }
   } catch {
     // A folder removed while it is read lists what was read before; its rows open as missing.
@@ -145,7 +145,7 @@ export async function listQuickLookFolder(folder: string, limits: { maxEntries?:
       }
     }
     entries.push({ name: entry.name, kind: entry.kind, dimmed, joined })
-    if ((index + 1) % YIELD_EVERY === 0) await pause()
+    if ((index + 1) % YIELD_EVERY === 0) await yieldTurn()
   }
   return { status: 'ready', folder: path, entries, more: total - entries.length }
 }

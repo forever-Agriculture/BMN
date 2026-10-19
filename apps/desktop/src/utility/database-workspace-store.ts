@@ -83,7 +83,8 @@ const SESSION_SELECT = `SELECT s.session_id, s.workspace_id, s.name, s.cwd, s.ex
          ORDER BY latest.started_at DESC, latest.rowid DESC LIMIT 1
        )`
 
-function invalid(message: string): never {
+/** Throws the invalid-argument WorkspaceStoreError a store raises on a bad value. */
+export function invalidWorkspaceStore(message: string): never {
   throw new WorkspaceStoreError(ERROR_CODES.invalidArgument, message)
 }
 
@@ -267,7 +268,7 @@ export function createWorkspace(
   workspaceId: string,
   now: string
 ): WorkspaceRecord {
-  if (!isWorkspaceCreateParams(params)) invalid('Workspace create parameters are invalid')
+  if (!isWorkspaceCreateParams(params)) invalidWorkspaceStore('Workspace create parameters are invalid')
   const nextPosition = params.position ?? Number((database
     .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS position FROM workspace')
     .get() as { position: number }).position)
@@ -300,19 +301,19 @@ export function updateWorkspace(
   params: WorkspaceUpdateParams,
   now: string
 ): WorkspaceRecord {
-  if (!isWorkspaceUpdateParams(params)) invalid('Workspace update parameters are invalid')
+  if (!isWorkspaceUpdateParams(params)) invalidWorkspaceStore('Workspace update parameters are invalid')
   const current = selectWorkspace(database, params.workspaceId)
   if (current.revision !== params.expectedRevision) {
     return conflict('Workspace', params.workspaceId, current.revision)
   }
   let pins = current.pinnedFilePaths
   if (params.pinnedFilePaths !== undefined) {
-    if (current.archivedAt !== null) invalid('Archived workspace pins cannot be changed')
+    if (current.archivedAt !== null) invalidWorkspaceStore('Archived workspace pins cannot be changed')
     pins = params.pinnedFilePaths.map(path => {
-      if (!isAbsolute(path) && (!current.defaultCwd || !isAbsolute(current.defaultCwd))) invalid('Choose an absolute path; this workspace has no default folder')
+      if (!isAbsolute(path) && (!current.defaultCwd || !isAbsolute(current.defaultCwd))) invalidWorkspaceStore('Choose an absolute path; this workspace has no default folder')
       return isAbsolute(path) ? normalize(path) : resolve(current.defaultCwd!, path)
     })
-    if (!isPinnedFilePaths(pins, true)) invalid('Use at most eight unique absolute paths of up to 4096 characters')
+    if (!isPinnedFilePaths(pins, true)) invalidWorkspaceStore('Use at most eight unique absolute paths of up to 4096 characters')
   }
   const archivedAt = 'archived' in params
     ? params.archived
@@ -355,7 +356,7 @@ export function updateSession(
   params: SessionUpdateParams,
   now: string
 ): SessionRecord {
-  if (!isSessionUpdateParams(params)) invalid('Session update parameters are invalid')
+  if (!isSessionUpdateParams(params)) invalidWorkspaceStore('Session update parameters are invalid')
   const current = selectSession(database, params.sessionId)
   if (current.revision !== params.expectedRevision) {
     return conflict('Session', params.sessionId, current.revision)
@@ -445,7 +446,7 @@ export function putLayout(
     state.workspaceId !== workspaceId ||
     state.revision !== expectedRevision
   ) {
-    return invalid('Workspace layout state is invalid')
+    return invalidWorkspaceStore('Workspace layout state is invalid')
   }
   const next: WorkspaceLayoutState = { ...state, revision: currentRevision + 1 }
   const revisionWasValid = !!current && currentRevision === current.revision
