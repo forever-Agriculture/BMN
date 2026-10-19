@@ -169,7 +169,7 @@ Exit status: 0 success, 1 remote or connection error, 2 usage error
 ### Long text from standard input
 
 Long or multi-line text breaks inside one shell-quoted argument: quotes, backticks and `$( )` in it
-get read by the shell. Four options read their field from standard input instead, so an agent can
+get read by the shell. Five options read their field from standard input instead, so an agent can
 pipe it or use a quoted heredoc:
 
 ```bash
@@ -186,6 +186,7 @@ cat notes.md | bmn handoff <destination-session-id> --text-file - --key result-2
 | `progress … --detail-file -` | progress detail | 2,000 characters |
 | `send --text-file -` | pasted text | 64 KiB |
 | `handoff … --text-file -` | handoff text | 16 KiB |
+| `tell … --text-file -` | message text | 2,000 characters |
 
 Only `-` is accepted; to send a file, `cat` it into `bmn`. A field takes exactly one source, so
 `--body` with `--body-file`, `--text` or `-- text` with `--text-file`, and `send` text with
@@ -462,8 +463,12 @@ your user.
 ## Agent hooks: Needs you for Claude Code, Codex and OpenCode
 
 `bmn hook claude`, `bmn hook codex` and `bmn hook opencode` read one hook event as JSON on stdin
-and keep **Needs you** in step with the agent ([Cursor was retired](#cursor-retired)). They always exit 0 and print only a [prompt guard](#the-prompt-guard) stop or a [message for their own agent](#messages-between-sessions), so a hook can never disturb the
-agent, with one exception: the answer that stops a prompt the [prompt guard](#the-prompt-guard) refused. They do nothing outside BMN.
+and keep **Needs you** in step with the agent ([Cursor was retired](#cursor-retired)). They always exit 0 and print
+only BMN's answers to their own agent, so a hook never disturbs it otherwise: the [command guard](#the-command-guard)'s
+ask or block, a [prompt guard](#the-prompt-guard) stop, the away refusal of a blocking question, BMN's
+[start brief](#bmns-start-brief), the away and departure notices, a [message for their own agent](#messages-between-sessions),
+and the phone's decision on a Claude `PermissionRequest` (Epic 78). Apart from the command guard, which decides from
+the command text alone and holds while BMN is closed, they do nothing outside BMN.
 
 | Event | Effect |
 | --- | --- |
@@ -877,13 +882,11 @@ about the merge, not about the harness.
 
 One more thing `install` will not do: rewrite a number it cannot reproduce. It reserializes the
 file, and `JSON.stringify` turns `18446744073709551615` into `18446744073709552000`. Rather than
-silently edit a value nobody asked it to touch, it declines and names the number. Node hands a
-parser the literal source only from 21 on, so under an older node this guard finds nothing and
-`install` writes as it always did.
+silently edit a value nobody asked it to touch, it declines and names the number.
 
-
-`install` then adds BMN's own entry beside yours, so the hook fires from BMN's entry whatever yours
-does. If you see a duplicate, that is why.
+For an event that reads `missing` because of an entry of yours, `bmn hooks install <agent>` adds BMN's own entry
+beside it (the start's `--absent` install leaves it as it is), so the hook fires from BMN's entry whatever yours
+does; that is why you may see a duplicate.
 
 **Which one you may remove:** BMN's own entry is the one `check` answers for, so removing it puts the
 event back to `missing`. Yours is one BMN declined to read — which is not the same as one it judged
@@ -2557,11 +2560,11 @@ measurements, and `RESULT.md` holds 72.1's measurements of the container engine 
 ### Commands
 
 ```bash
-bmn team ask --role R (--question TEXT | --question-file -) [--agent A] [--effort E] [--small-work]
-  [--recheck-of ID] [--project P] [--file PATH]... [--image PATH]... [--data public]
-  [--time-limit MINUTES] [--key K] [--background] [--json]
-bmn team ask [--role R] (--question TEXT | --question-file -) --origin http://127.0.0.1:PORT --disposable
-  [--interact] [other options as above]
+bmn team ask --role R (--question TEXT | --question-file PATH|-) --key K [--agent A] [--effort E]
+  [--small-work] [--recheck-of ID] [--project P] [--file PATH]... [--image PATH]...
+  [--data public] [--time-limit MINUTES] [--background] [--json]
+bmn team ask [--role R] (--question TEXT | --question-file PATH|-) --key K
+  --origin http://127.0.0.1:PORT --disposable [--interact] [other options as above]
 bmn team ask --features [--json]
 bmn team asks [--json]
 bmn team asks show <id> [--json]
@@ -2573,7 +2576,7 @@ bmn team asks export <id> --output PATH
 | Option | Meaning |
 | --- | --- |
 | `--role R` | The team role whose teammate answers. Required, except with `--image`: a picture ask goes to the `designer` unless a role is named; and with `--origin`: a browser ask goes to `browser`. |
-| `--question TEXT`, `--question-file -` | The question; `-` reads standard input as the other long-text options do (one trailing newline dropped, a terminal refused). Exactly one. |
+| `--question TEXT`, `--question-file PATH\|-` | The question, inline or from a file; `-` reads standard input as the other long-text options do (one trailing newline dropped, a terminal refused). Exactly one. |
 | `--agent A` | Ask this teammate; refused with the reason and the eligible alternatives when it is not valid now, never passed over. Where the owner approved a choice for the role in the project, it answers, and naming someone else is refused (`PROJECT_CHOICE_CONFLICT`; "Your teammate for a project"). |
 | `--effort E` | One effort the role's applicable phase allows; with none given or saved, the first one the team lists for that teammate (Story 76.8). |
 | `--small-work` | The role's small-work candidate. |
@@ -3311,8 +3314,8 @@ merge only at the level it prints; run git push and gh pr as commands of their o
   only when the agent it names matches the command the session was launched with, and only as a
   UUID for Claude Code and Codex or the `ses_` ID OpenCode 1.18.31 uses. Two live sessions can never
   bind one conversation: the second report is refused and the
-  first session keeps it. The owner token cannot report a conversation. A hook prints only a prompt
-  guard stop or a message for its own agent, and throws away what the app answers, so every refusal is written with its reason to
+  first session keeps it. The owner token cannot report a conversation. A hook prints only BMN's
+  answers to its own agent (Agent hooks, above) and throws away what the app answers, so every refusal is written with its reason to
   `refused-requests.log` in BMN's state folder (`$XDG_STATE_HOME/bmn/`), newest last and owner-only.
   The file is trimmed back to its newest half as soon as an append carries it past 256 KiB.
 - `resume.report` and `resume.clear` are accepted only from a session token, for its own live
