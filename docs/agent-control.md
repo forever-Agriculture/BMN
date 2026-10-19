@@ -1626,27 +1626,24 @@ A lone `-` (`… | bmn research ask -`) says "standard input" out loud and chang
   not show reads "not found" (the frame asks for the page's visible words). An answer not in the asked shape is "no
   usable answer" with the run's id; BMN never repairs one.
 - **The limits.** One research at a time, Models research included: a second is refused with "a research is running",
-  never queued. One lock holds this across the app and the command line, a row of files `research/lock.1`, `lock.2` …
-  whose highest is the lock as it stands: a holder that is done writes "released" into its own file, the next makes one
-  number higher, and nobody removes the highest, so no takeover removes a file another process just made; an unreadable
-  lock counts as held. The app runs under BMN's supervisor (`bin/agents-supervised.mjs`), written into the lock before
-  the app starts, which ends the app and all it started when BMN's process ends however it ends, at the time limit and on
-  Stop, and the lock counts as held while either lives: a killed command leaves no researcher and no second research
-  beside one still ending (a Codex researcher's first comparison runs the same way; a process that leaves the app's
-  process group is outside this, as outside Stop). A question ends after 10 minutes with what it has. 20 questions may
-  start in one local day; a refused one does not count, and the day's count is kept apart from the list, so a question
-  that left the list stays counted on its own day. The researcher runs at its lowest effort; Ctrl-C, or the end of its
-  terminal, ends the run. These limits bind this command and Models' own Ask, not the web search inside your own
-  sessions.
+  never queued. One lock holds this across the app and the command line (files `research/lock.<n>`, the highest
+  standing, never removed; an unreadable one counts as held). The app runs under BMN's supervisor
+  (`bin/agents-supervised.mjs`), entered in the lock before the app starts, which ends the app and all it started when
+  BMN's process ends however it ends, at the time limit and on Stop; the lock is held while either lives, so a killed
+  command leaves no researcher and no second research beside one still ending. The comparison before a Codex
+  researcher's first run is held the same way; a process that leaves the app's process group is outside this, as
+  outside Stop. A question ends after 10 minutes with what it has; 20 may start in one local
+  day (a refused one does not count, and one that left the list stays counted on its day). The researcher runs at its
+  lowest effort; Ctrl-C, or the end of its terminal, ends the run. These limits bind this command and Models' own Ask,
+  not the web search inside your own sessions.
 - **What is kept.** One record per question in `~/.config/bmn/agents/state/research/questions.json`, the last 200 (a
   running one is never pushed out): when, who asked (the BMN session and its app, the session's shell, or "from a
   shell"), the researcher, the exact question, the outcome, the claims with their marks and how long it took; no key and
-  no page text beyond the quoted passages. One whose process ended before its record was written reads as interrupted.
-  One writer at a time holds the file (`questions.json.writing.<n>`, a lock of the same kind); a second waits up to five
-  seconds without holding up its process, then gives up without writing, and a question whose first record cannot be
-  written is not asked (`RECORD_BUSY`). A question's end is written whole under `research/question-ends/` before the
-  caller hears of it, read over the file by every reader and taken in exactly once. The run's folder under
-  `research/runs/` holds BMN's prompt with the question, never the raw answer, and goes when the question leaves the list.
+  no page text beyond the quoted passages; one whose process ended before its record was written reads as interrupted.
+  One writer at a time holds the file (a lock of the same kind): a second waits up to five seconds, then gives up
+  without writing, and a question whose first record cannot be written is not asked (`RECORD_BUSY`). A question's end is
+  written whole under `research/question-ends/` before the caller hears of it and taken into the file exactly once. The
+  run's folder under `research/runs/` holds BMN's prompt, never the raw answer, and goes with the record.
 - **With BMN closed** the command works by itself. Exit 0 answered; 1 no usable answer, failed, stopped or out of time;
   2 usage; 10 refused.
 - **Not here.** Research across many steps, pages behind a sign-in, attached files, a researcher your team does not
@@ -1662,15 +1659,13 @@ A lone `-` (`… | bmn research ask -`) says "standard input" out loud and chang
 - **Switched off.** With "Agents may ask the web" off (Agents › Models), an agent's question is refused with
   `ASKING_OFF`, told to ask you; your own Ask still works.
 - **On Models.** "Web questions" ends the page: the switch "Agents may ask the web" (on until you switch it off) with the
-  day's count, and **Ask** (Ctrl+Enter or the button), your own question by the same route to the picked researcher; a
-  refusal shows under the field in the command's words and what you typed stays. A question under way shows who asked
-  and a **Stop** that ends it whoever started it (an agent's by the signal Ctrl-C sends to its `bmn research ask`, and
-  nothing else); meanwhile "Research now" waits and says why. Kept questions are listed newest first; one opened shows
-  the question, the answer, the claims that are evidence and the others under "Not evidence", each page a link: BMN hands
-  the browser only an https address without a sign-in part, written as a public name, that leads to public addresses
-  when BMN looks it up then. **Remove** deletes one record with its text and run folder, **Remove all…** every one after
-  a confirmation; removing gives no question of the day back. The day's limit is decided as a question takes its place in
-  the kept file, one process at a time, so questions from several processes cannot pass it together.
+  day's count, and **Ask**, your own question by the same route to the picked researcher (a refusal shows in the
+  command's words; your text stays). A question under way shows who asked and a **Stop** that ends it whoever started it
+  (an agent's by the signal Ctrl-C sends to its `bmn research ask`, nothing else); meanwhile "Research now" waits. An
+  opened question shows the answer, the claims that are evidence and the others under "Not evidence", each page a link
+  BMN hands the browser only as an https address without a sign-in part, a public name leading to public addresses.
+  **Remove** and **Remove all…** (after a confirmation) delete records with their run folders; removing gives no
+  question of the day back, as the day's limit is decided when a question enters the kept file, one process at a time.
 
 #### The judge
 
