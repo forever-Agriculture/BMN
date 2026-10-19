@@ -5,7 +5,7 @@ import { shortDate } from './history-rows'
 /** The sign of a removed line and of a count of removed lines: a real minus, as wide as the plus. */
 export const MINUS = '−'
 
-const APP_NAMES: Readonly<Record<string, string | undefined>> = Object.freeze({ opencode: 'OpenCode', ...RETIRED_APP_NAMES, gemini: 'Gemini', aider: 'Aider' })
+const APP_NAMES: Readonly<Record<string, string | undefined>> = Object.freeze({ opencode: 'OpenCode', ...RETIRED_APP_NAMES })
 
 /** How an app is named beside a turn; one BMN has no name for keeps its own. */
 export function turnAppName(app: string): string {
