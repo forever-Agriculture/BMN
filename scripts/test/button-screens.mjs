@@ -27,6 +27,17 @@ const buttonVariants = Object.freeze([
 ])
 const windowHeight = 800
 
+// B1 and B3 (docs/design.md): a button draws no line, as a border side or as a ring shadow. A selected sidebar row's
+// left border is its F2 bar, the one exception the rules name.
+const clearColor = /^transparent$|rgba\([^)]*,\s*0\)$/
+function drawsLine(button) {
+  const side = button.border.split(' | ').some((part) => {
+    const [width, style, ...color] = part.split(' ')
+    return Number.parseFloat(width) > 0 && style !== 'none' && !clearColor.test(color.join(' '))
+  })
+  return side || /(^|\s)0px 0px 0px [1-9]/.test(button.shadow)
+}
+
 const stateSlug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 
 // Epic 84's cards, as its live test asks them (scripts/test/away-grant-live.mjs): made-up repositories and reasons.
@@ -133,6 +144,10 @@ export async function captureButtonScreens(context) {
       rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
     }
     await writeFile(join(directory, 'buttons.json'), `${JSON.stringify({ variant, states: walked.facts }, null, 1)}\n`)
+    const outlined = Object.entries(walked.facts).flatMap(([slug, buttons]) => buttons
+      .filter((button) => drawsLine(button) && !/\bdiv\.session-row\.selected > button$/.test(button.where))
+      .map((button) => `${slug}: ${button.where} "${button.text}" border ${button.border}, shadow ${button.shadow}`))
+    if (outlined.length > 0) throw new Error(`${label}: a button draws a line (B1, B3):\n${outlined.join('\n')}`)
     const order = walked.states.map((state) => state.slug).join('\n')
     if (index === null) index = { order, states: walked.states }
     else if (order !== index.order) throw new Error(`${label} reached other states than ${buttonVariants[0].colorMode}-${buttonVariants[0].width}`)

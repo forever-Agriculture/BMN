@@ -124,28 +124,27 @@ button {
   gap: 6px;
   min-height: 28px;
   padding: 3px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 6px;
   color: var(--text);
-  background: transparent;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   font: inherit;
+  font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
   transition: var(--hover-transition);
 }
 
 button:hover:not(:disabled) {
-  background: var(--hover);
+  background: color-mix(in srgb, var(--text) 13%, transparent);
 }
 
 button:active:not(:disabled) {
-  background: var(--selected);
-  box-shadow: inset 0 0 0 1px var(--border);
+  background: color-mix(in srgb, var(--text) 16%, transparent);
   transition-duration: 0ms;
 }
 
 button.primary {
-  border-color: var(--text);
   color: var(--ground);
   background: var(--text);
 }
@@ -157,12 +156,10 @@ button.primary:hover:not(:disabled) {
 button.primary:active:not(:disabled) {
   color: var(--ground);
   background: var(--text);
-  box-shadow: inset 0 0 0 2px var(--ground);
 }
 
 button.ghost,
 .icon-button {
-  border-color: transparent;
   color: var(--muted);
 }
 
@@ -180,13 +177,32 @@ button.ghost:hover:not(:disabled),
 button:disabled {
   cursor: not-allowed;
   color: var(--faint);
-  border-color: var(--hairline);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
   opacity: 0.55;
 }
 
 button.primary:disabled {
   color: var(--faint);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+/* B4, B5, B7: a quiet word, a glyph, a row and a toggle are not plates. They have no fill at rest or disabled, keep
+   their own weight, and take the hover and press tints above, which outrank the first rule. */
+button:where(.ghost, .icon-button, .row-menu-button, .workspace-row > :first-child, .session-row > :first-child,
+  .popup-menu [role^='menuitem'], .pane-actions button:not(.project-plate), .pane-footer .speak-button,
+  .pane-request-control) {
   background: transparent;
+}
+
+button:where(.ghost, .icon-button, .row-menu-button, .workspace-row > :first-child, .session-row > :first-child,
+  .popup-menu [role^='menuitem'], .pane-actions button:not(.project-plate), .pane-footer .speak-button,
+  .pane-request-control):disabled {
+  background: transparent;
+}
+
+button:where(.icon-button, .row-menu-button, .workspace-row > :first-child, .session-row > :first-child,
+  .popup-menu [role^='menuitem'], .pane-actions button:not(.project-plate), .pane-footer .speak-button) {
+  font-weight: inherit;
 }
 
 input,
@@ -782,6 +798,10 @@ input[type='radio'] {
   background: var(--selected);
 }
 
+.session-row.selected > button:first-child:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
 .session-row.selected .session-name {
   font-weight: 500;
 }
@@ -817,8 +837,6 @@ input[type='radio'] {
 
 .new-workspace {
   justify-content: flex-start;
-  border-style: dashed;
-  border-color: var(--hairline);
   color: var(--muted);
 }
 
@@ -1077,7 +1095,6 @@ input[type='radio'] {
 }
 
 .pane-actions button[aria-pressed='true'] {
-  border-color: var(--border);
   color: var(--text);
   background: var(--selected);
 }
@@ -1113,8 +1130,13 @@ input[type='radio'] {
   background: color-mix(in srgb, var(--text) 13%, transparent);
 }
 
+/* B3: the hover above outranks `button:active`, so the press is repeated here. */
+.pane-actions button.project-plate:active:not(:disabled),
+.empty-state button.project-plate:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
 .pane-actions button.project-plate[aria-pressed='true'] {
-  border-color: var(--border);
   background: var(--selected);
 }
 
@@ -1519,8 +1541,10 @@ input[type='radio'] {
 }
 
 .pane-footer .speak-button.recording {
-  border-color: var(--error);
-  color: var(--error);
+  border-radius: 6px 6px 2px 2px;
+  color: var(--text);
+  background: transparent;
+  box-shadow: inset 0 -2px 0 var(--text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1712,6 +1736,10 @@ input[type='radio'] {
   background: var(--hover);
 }
 
+:is(.session-inspector, .session-launcher) button.ghost.small:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
 /* Stop is quiet until intended: it sits apart on the right and takes the error tone only on hover. */
 .session-inspector button.danger {
   color: var(--muted);
@@ -1724,6 +1752,10 @@ input[type='radio'] {
 .session-inspector button.danger:hover:not(:disabled) {
   color: var(--error);
   background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+
+.session-inspector button.danger:active:not(:disabled) {
+  background: color-mix(in srgb, var(--error) 16%, transparent);
 }
 
 :is(.session-inspector, .session-launcher) .actions {
@@ -1938,7 +1970,6 @@ input[type='radio'] {
   min-height: 48px;
   padding: 7px 10px 7px 13px;
   overflow: hidden;
-  border: 1px solid var(--hairline);
   border-radius: 8px;
   background: var(--raised);
   text-align: left;
@@ -1958,12 +1989,13 @@ input[type='radio'] {
 }
 
 .agent-picker [role='radio']:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--text) 18%, transparent);
   background: var(--hover);
 }
 
-.agent-picker [role='radio'][aria-checked='true'] {
-  border-color: color-mix(in srgb, var(--text) 22%, transparent);
+/* B8: pressed, a card shows the fill it is about to take; chosen, it keeps that fill under the pointer. */
+.agent-picker [role='radio']:active:not(:disabled),
+.agent-picker [role='radio'][aria-checked='true'],
+.agent-picker [role='radio'][aria-checked='true']:hover:not(:disabled) {
   background: var(--selected);
 }
 
@@ -2141,6 +2173,10 @@ input[type='radio'] {
   background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
+.app-dialog-heading .icon-button:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
 .app-dialog-body {
   display: flex;
   flex-direction: column;
@@ -2184,7 +2220,6 @@ input[type='radio'] {
 .app-dialog :where(button:not(.icon-button)):disabled {
   border-color: transparent;
   background: color-mix(in srgb, var(--text) 4%, transparent);
-  opacity: 0.6;
 }
 
 .app-dialog :where(button.ghost) {
@@ -2193,6 +2228,10 @@ input[type='radio'] {
 
 .app-dialog :where(button.ghost):hover:not(:disabled) {
   background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.app-dialog :where(button.ghost):active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
 }
 
 .app-dialog button.primary:disabled {
@@ -2206,6 +2245,10 @@ input[type='radio'] {
 
 .app-dialog :where(button.danger):hover:not(:disabled) {
   background: color-mix(in srgb, var(--error) 22%, transparent);
+}
+
+.app-dialog :where(button.danger):active:not(:disabled) {
+  background: color-mix(in srgb, var(--error) 26%, transparent);
 }
 
 .dialog-form {
@@ -2663,9 +2706,8 @@ input[type='radio'] {
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
 }
 
 .file-reference-send label {

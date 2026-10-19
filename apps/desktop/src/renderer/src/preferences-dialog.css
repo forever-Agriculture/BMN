@@ -333,6 +333,10 @@
   background: color-mix(in srgb, var(--text) 13%, transparent);
 }
 
+.preferences-dialog .voice-vocabulary-chip button:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
 .preferences-dialog .voice-vocabulary-chip button:disabled {
   background: transparent;
   color: var(--faint);
@@ -453,6 +457,11 @@
 .segmented [role='radio']:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+/* B3: this hover outranks `button:active`, so the press is repeated here. */
+.segmented [role='radio']:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
 }
 
 .segmented [role='radio']:disabled {
@@ -1296,6 +1305,10 @@
 .preferences-dialog .candidate .order button:hover:not(:disabled) {
   background: var(--hover);
   color: var(--text);
+}
+
+.preferences-dialog .candidate .order button:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
 }
 
 .preferences-dialog :is(.chain-editor, .sheet) :is(.chip:not(.on), .field) {

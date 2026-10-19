@@ -699,7 +699,8 @@ const evidence = await withTemporaryRoot(
       if (primaryPress.activeScreenshot) screenshots.push(primaryPress.activeScreenshot)
       assert.notEqual(primaryPress.hover.background, primaryPress.idle.background)
       assert.notEqual(primaryPress.active.background, primaryPress.hover.background)
-      assert.notEqual(primaryPress.active.boxShadow, 'none')
+      // B3 (docs/design.md): a press shows in the fill, never as a ring.
+      assert.equal(primaryPress.active.boxShadow, 'none')
       assert.equal(primaryPress.active.transitionDuration, '0s')
       await page.keyboard.press('Escape')
       assert.equal(await needsButton.evaluate((element) => document.activeElement === element), true)
@@ -808,7 +809,8 @@ const evidence = await withTemporaryRoot(
       const pointer = await pointerStates(page, hoverTarget, 'black-knight-active-control.png')
       if (pointer.activeScreenshot) screenshots.push(pointer.activeScreenshot)
       assert.notEqual(pointer.hover.background, pointer.idle.background)
-      assert.notEqual(pointer.active.boxShadow, 'none')
+      assert.notEqual(pointer.active.background, pointer.hover.background)
+      assert.equal(pointer.active.boxShadow, 'none')
       assert.equal(pointer.active.transitionDuration, '0s')
 
       const selectedTogglePress = await pointerStates(
@@ -827,10 +829,11 @@ const evidence = await withTemporaryRoot(
       const selectedRowPress = await pointerStates(page, selectedButton)
       assert.equal(selectedRowPress.active.activePseudo, true, JSON.stringify(selectedRowPress))
       assert.notEqual(
-        selectedRowPress.active.boxShadow,
-        selectedRowPress.hover.boxShadow,
+        selectedRowPress.active.background,
+        selectedRowPress.hover.background,
         JSON.stringify(selectedRowPress)
       )
+      assert.equal(selectedRowPress.active.boxShadow, 'none', JSON.stringify(selectedRowPress))
       assert.equal(selectedRowPress.active.borderLeftColor, selectionFocus.borderLeftColor)
 
       const disabledAction = await page.evaluate(() => {
@@ -1702,8 +1705,8 @@ const evidence = await withTemporaryRoot(
                 ? { background: statusStyle.backgroundColor, width: statusStyle.width, radius: statusStyle.borderRadius }
                 : null,
               // A selected row draws its keyboard ring as a ::after border, not an outline
-              // (styles.css:661-672), so the outline properties would report a default that happens to
-              // match --focus. The real ring is read here.
+              // (styles.css, `.session-row.selected > button:first-child:focus-visible::after`), so the outline
+              // properties would report a default that happens to match --focus. The real ring is read here.
               focusRing: selectedRow
                 ? {
                     color: getComputedStyle(selectedRow, '::after').borderTopColor,

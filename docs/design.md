@@ -7,7 +7,8 @@ rule has an ID that reviews and commits cite. "Text 8%" means `color-mix(in srgb
 ## Buttons
 
 - **B1 Plate.** A button is a filled plate: transparent border, fill text 8%, radius 6 in panes and 10 in
-  dialogs, weight 500. No `button` rule sets a border colour other than transparent.
+  dialogs, weight 500. No `button` rule sets a border colour other than transparent, except on a selected
+  sidebar row (`.session-row.selected`): its F2 bar is its left border, and its F1 ring a border on `::after`.
 - **B2 Primary.** A screen's one primary button is filled `--text` with `--ground` text; its focus ring is
   `--ground`. It is the only bright plate on the screen.
 - **B3 States.** Hover text 13%, active text 16% with no inset ring, disabled text 4% at 0.55 opacity. No state
