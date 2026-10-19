@@ -3,11 +3,15 @@ import { randomUUID } from 'node:crypto'
 import {
   AWAY_RECORD_KEY,
   applyAwayChange,
+  departurePeriodId,
+  followAwayChange,
   parseAwayRecord,
   type AwayChange,
   type AwayChangeResult,
-  type AwayRecord
+  type AwayRecord,
+  type GrantRead
 } from '@bmn/protocol'
+import { grantBase, readGrantRow, writeGrantRow } from './database-grant-store'
 import type { DatabaseConnection } from './database-initialization'
 
 function readRecord(database: DatabaseConnection): AwayRecord {
@@ -29,14 +33,20 @@ export function getAway(database: DatabaseConnection): AwayRecord {
 
 /**
  * Reads, decides and writes in the worker's one transaction, so the app, the CLI and Telegram changing it at once are
- * applied one after another, each against the record the one before it left. The period id is made here, never by a caller.
+ * applied one after another, each against the record the one before it left. The period id is made here, never by a caller:
+ * a pending departure's (Epic 84, Decisions "departure lifecycle"), else a new one. The grant record follows in the same
+ * transaction: Away carries the departure, Back ends its grants, back while only leaving cancels it. `grant` is the grant
+ * record when this change changed it, else null.
  */
-export function changeAway(database: DatabaseConnection, change: Omit<AwayChange, 'periodId'>, now: string): AwayChangeResult {
+export function changeAway(database: DatabaseConnection, change: Omit<AwayChange, 'periodId'>, now: string): AwayChangeResult & { grant: GrantRead | null } {
   const current = readRecord(database)
-  const result = applyAwayChange(current, { ...change, periodId: randomUUID() }, now)
+  const grants = readGrantRow(database)
+  const result = applyAwayChange(current, { ...change, periodId: departurePeriodId(grantBase(grants)) ?? randomUUID() }, now)
   // An unchanged state with a remembered key is written too: the key is what makes a later replay a no-op.
   if (result.outcome === 'changed' || result.record !== current) writeRecord(database, result.record, now)
-  return result
+  const followed = followAwayChange(grantBase(grants), current, result.record, { to: change.to, source: change.source, outcome: result.outcome }, now)
+  if (followed.outcome === 'changed') writeGrantRow(database, followed.record, now)
+  return { ...result, grant: followed.outcome === 'changed' ? { state: 'read', record: followed.record } : null }
 }
 
 /** The summary of this closed period was shown: stored once, so a crash before this shows it again and after it does not. */

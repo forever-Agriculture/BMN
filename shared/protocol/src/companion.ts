@@ -805,7 +805,8 @@ export const APP_EVENT_TOPICS = [
   'guard',
   'messages',
   'turns',
-  'away'
+  'away',
+  'grant'
 ] as const
 
 export type AppEventTopic = (typeof APP_EVENT_TOPICS)[number]

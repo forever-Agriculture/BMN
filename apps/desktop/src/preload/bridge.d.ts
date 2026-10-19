@@ -41,6 +41,9 @@ import type {
   ClosePromptRequest,
   ControlInfo,
   OwnerAwayView,
+  OwnerGrantView,
+  GrantChoice,
+  GrantRefusalReason,
   AwaySummaryPayload,
   PushPolicyChange,
   PushPolicyView,
@@ -367,6 +370,11 @@ export interface AiTerminalBridge {
   /** Story 83.3: the push policy as Health shows it, and the owner's one change at a time against the revision he saw. */
   getPushPolicy(): Promise<PushPolicyView>
   setPushPolicy(change: PushPolicyChange): Promise<PushPolicyView>
+  /** Story 84.3: the departure's cards, and the owner's answer to one; nothing else can answer it. */
+  getGrant(): Promise<OwnerGrantView>
+  answerGrant(answer: { periodId: string; runId: string; cardRevision: number; choices: Record<string, GrantChoice>; operationKey: string }): Promise<{
+    outcome: 'granted' | 'repeated' | 'refused'; reason?: GrantRefusalReason; detail?: string; view: OwnerGrantView
+  }>
   /** Writes a backup to a folder the owner picks and checks the copy at once (Story 75.7); null when he cancels. */
   exportBackup(): Promise<BackupExportResult | null>
   /** Epic 60.5: the team file, the approved version, pending differences with consequences, and approval history. */

@@ -82,6 +82,15 @@ session. It uses a bot you create and own. It is off by default.
   (each dev-auto run blocked now, one row titled by its epics and a short name) and **Finished** (runs whose handoff
   changed to COMPLETE during the period; older finished runs are left out); a run's row opens its brief, status, next
   step and decisions in place.
+- Before you go (Epic 84): a run's departure card comes as one message with the run's terms and **Grant all**,
+  **Choose…** and **Grant none** (a card with one term has its own buttons, and one tap answers). **Choose…** walks
+  the terms one at a time with **‹ Back**, ● marking the proposal, and only the last tap grants. The buttons go and
+  one line says what was granted; a card answered at the laptop says **Answered at the laptop**, and one withdrawn
+  says why. A card asked again is edited in place; a tap on its earlier buttons grants nothing and says **This card
+  changed. Look again.** After a BMN restart an open card is drawn again with fresh buttons, since your answer is
+  checked against the stored card. A typed reply to one gets **Answer this card with its buttons.** A card waits
+  while you are at the desk and only leaving, goes at once when you are away or it came within 30 minutes of Away,
+  and later in the night follows quiet hours.
 - It cannot manage sessions remotely. A handoff delivers itself to its agent (Story 75.5), so no
   handoff reaches Telegram; a reply to a handoff card sent before then goes to its source session.
 

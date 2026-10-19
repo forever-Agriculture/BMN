@@ -34,6 +34,7 @@ import { runQuietHoursSelfTest } from './quiet-hours'
 import { runMorningDigestSelfTest } from './morning-digest'
 import { runHealthAlertsSelfTest } from './health-alerts'
 import { runAwaySelfTest } from './away'
+import { runAwayGrantSelfTest } from './away-grant'
 import {
   closeWithinDeadline,
   drainAfterExit,
@@ -5203,6 +5204,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     console.error(`[BMN] self-test phase: health alerts ${JSON.stringify(healthAlerts)}`)
     const away = await runAwaySelfTest(host, client, taps)
     console.error(`[BMN] self-test phase: away ${JSON.stringify(away)}`)
+    const awayGrant = await runAwayGrantSelfTest(host, client, taps)
+    console.error(`[BMN] self-test phase: away grant ${JSON.stringify(awayGrant)}`)
     const secondClose = await client.close()
     console.error('[BMN] self-test phase: second host closed')
     clientClosed = true
@@ -5317,6 +5320,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       morningDigest,
       healthAlerts,
       away,
+      awayGrant,
       fullerAnswers: fuller,
       telegramCue,
       survivalTable: {

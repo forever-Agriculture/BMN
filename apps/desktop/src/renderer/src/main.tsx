@@ -29,6 +29,7 @@ import {
   type SessionRecord,
   type TelegramStatus,
   type OwnerAwayView,
+  type OwnerGrantView,
   awaySinceWords,
   awayPeriodWords,
   telegramOwnerCue,
@@ -44,6 +45,7 @@ import { failureDetail, sessionFailureDetail } from './bridge-error'
 import { CommandPalette, paletteFileSearchRootLabel, type PaletteCommand } from './command-palette'
 import { AwayCheck, awaySourceWords } from './away-check'
 import { AwaySummaryDialog } from './away-summary-dialog'
+import { BeforeYouGoDialog } from './before-you-go-dialog'
 import { AWAY_NOTE_LIMIT } from '@bmn/protocol'
 import { rememberRecentSession } from './recent-sessions'
 import { WorkspacePinsDialog } from './workspace-pins-dialog'
@@ -202,6 +204,8 @@ type ShellDialog =
   | { kind: 'away-note' }
   /** Story 76.6: "While you were away", the current period's summary, read-only. */
   | { kind: 'away-summary' }
+  /** Story 84.3: Before you go, the departure's cards, answered only here or on Telegram. */
+  | { kind: 'before-you-go' }
   /**
    * Read-only: one progress observation and the published files it points at. The observation is
    * captured when the detail opens, so a newer report cannot swap itself in under the owner.
@@ -270,6 +274,8 @@ function App(): React.JSX.Element {
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
   /** Story 76.3: what the owner said, away or back, as the host keeps it. */
   const [awayView, setAwayView] = useState<OwnerAwayView | null>(null)
+  /** Story 84.3: the departure, its runs' cards and his answers, as the host keeps them. */
+  const [grantView, setGrantView] = useState<OwnerGrantView | null>(null)
   const [panel, setPanel] = useState<SidePanel>(null)
   const sessionNameInput = useRef<HTMLInputElement>(null)
   const [focusMode, setFocusMode] = useState(false)
@@ -603,6 +609,7 @@ function App(): React.JSX.Element {
       if (history) setHistoryPending(history.needsConfirmation)
     },
     away: () => window.aiTerminal.getAway().then(setAwayView),
+    grant: () => window.aiTerminal.getGrant().then(setGrantView),
     // A phone channel that stopped delivering must not sit unseen behind the gear either.
     telegram: async () => {
       const status = await window.aiTerminal.getTelegramStatus().catch(() => null)
@@ -1686,6 +1693,12 @@ function App(): React.JSX.Element {
       awayView?.state === 'away' && awayView.since !== null
         ? command('away', "I'm back", () => sayAway('back'), { context: `${awaySinceWords(awayView.since, new Date(now))} · ${awaySourceWords(awayView, sessionNameOf)}` })
         : command('away', "I'm away…", () => setDialog({ kind: 'away-note' }), { disabled: awayView === null }),
+      // Story 84.3 (the notes §2, palette): only while leaving or while a card is open.
+      ...(grantView !== null && (grantView.period?.state === 'leaving' || grantView.openCards > 0) ? [
+        command('before-you-go', 'Before you go…', () => setDialog({ kind: 'before-you-go' }), {
+          context: grantView.openCards > 0 ? `${grantView.openCards} ${grantView.openCards === 1 ? 'card' : 'cards'} open` : 'leaving · no card yet'
+        })
+      ] : []),
       command('new-workspace', 'New workspace…', () => setDialog({ kind: 'new-workspace' })),
       command('new-session', 'New session…', () => beginNewSession(activeWorkspace), { disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, context: activeWorkspace?.name }),
       command('split', (layout?.split.panes.length ?? 0) >= 2 ? 'Close split' : 'Split view…', () => toggleSplit(), { shortcut: SHORTCUT_LABELS['split-toggle'] }),
@@ -1926,7 +1939,8 @@ function App(): React.JSX.Element {
         </nav>
         <div className="header-actions">
           <AwayCheck view={awayView} now={new Date(now)} onChange={(to) => sayAway(to)} onOpenSummary={() => setDialog({ kind: 'away-summary' })}
-            sessionName={(sessionId) => sessions.find((item) => item.sessionId === sessionId)?.name ?? null} />
+            sessionName={(sessionId) => sessions.find((item) => item.sessionId === sessionId)?.name ?? null}
+            grant={grantView} onOpenGrants={() => setDialog({ kind: 'before-you-go' })} />
           <button type="button" className="icon-button" aria-label="Command palette" title={`Command palette (${SHORTCUT_LABELS.palette})`} onClick={() => setDialog({ kind: 'palette' })}>
             <Icon name="search" />
           </button>
@@ -2605,6 +2619,23 @@ function App(): React.JSX.Element {
           onPresented={(periodId) => {
             if (awayView.summaryShownAt === null) void window.aiTerminal.markAwaySummaryShown(periodId).then(setAwayView).catch(() => undefined)
           }}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
+      {dialog?.kind === 'before-you-go' && grantView !== null ? (
+        <BeforeYouGoDialog
+          grant={grantView}
+          now={new Date(now)}
+          place={place}
+          sessionName={(sessionId) => sessions.find((item) => item.sessionId === sessionId)?.name ?? null}
+          onAnswer={async (answer) => {
+            const reply = await window.aiTerminal.answerGrant({ ...answer, operationKey: crypto.randomUUID() })
+            setGrantView(reply.view)
+            // The dialog stays while cards are open; once none is, it closes by itself after Away (the notes §2).
+            return reply
+          }}
+          onAwayNow={() => sayAway('away')}
+          onNotLeaving={() => { sayAway('back'); setDialog(null) }}
           onClose={() => setDialog(null)}
         />
       ) : null}

@@ -59,6 +59,9 @@ import {
   type BackupExportResult,
   type ControlInfo,
   type OwnerAwayView,
+  type OwnerGrantView,
+  type GrantChoice,
+  type GrantRefusalReason,
   type AwaySummaryPayload,
   type PushPolicyChange,
   type PushPolicyView,
@@ -760,6 +763,15 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   setPushPolicy(change: PushPolicyChange): Promise<PushPolicyView> {
     return invokeBridge('aiterm:policy:set', change)
+  },
+  /** Story 84.3: the departure's cards as the owner sees them, and his answer to one card. */
+  getGrant(): Promise<OwnerGrantView> {
+    return invokeBridge('aiterm:grant:get', {})
+  },
+  answerGrant(answer: { periodId: string; runId: string; cardRevision: number; choices: Record<string, GrantChoice>; operationKey: string }): Promise<{
+    outcome: 'granted' | 'repeated' | 'refused'; reason?: GrantRefusalReason; detail?: string; view: OwnerGrantView
+  }> {
+    return invokeBridge('aiterm:grant:answer', answer)
   },
   exportBackup(): Promise<BackupExportResult | null> {
     return invokeBridge('aiterm:backup:export', {})

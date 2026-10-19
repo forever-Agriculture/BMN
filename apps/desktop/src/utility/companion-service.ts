@@ -53,6 +53,14 @@ import {
   effectiveAway,
   ownerAwayView,
   parseAwayRecord,
+  EMPTY_GRANT_RECORD,
+  grantStatus,
+  grantStatusLines,
+  openGrantPeriod,
+  ownerGrantView,
+  type GrantAnswerResult,
+  type GrantRead,
+  type OwnerGrantView,
   type ArtifactPreview,
   type ArtifactRecord,
   type AttentionEvidence,
@@ -117,6 +125,7 @@ import { observeTelegramDelivery, type TelegramDeliveryEvent } from './telegram-
 import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer, type PromptDeadline } from './remote-answer'
 import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramCardKeeper } from './telegram-card-keeper'
+import { GRANT_TOKEN_PREFIX, GRANT_TYPED_REPLY, TelegramGrantCards } from './telegram-grant-cards'
 import { QUIET_LEDGER_KEY, QuietHoursDelivery, phoneField } from './quiet-hours-delivery'
 import { DEFAULT_TELEGRAM_HEALTH_ALERTS, DEFAULT_TELEGRAM_MORNING_DIGEST, telegramQuietWindow, type TelegramHealthAlerts, type TelegramMorningDigest } from '@bmn/protocol'
 import { DIGEST_KEY, DevAutoMorningDigest } from './dev-auto-digest'
@@ -133,6 +142,7 @@ import { TELEGRAM_HELP_TEXT, awayReplyText, backReplyText, telegramAwayCommand, 
 import { SessionMessages, type MessageDestination } from './session-messages'
 import { AgentBriefs } from './agent-briefs'
 import { AwayNotices } from './agent-away-notices'
+import { GrantDepartureNotices } from './agent-grant-notices'
 import { foregroundProcessFolder } from './foreground-process'
 import type { TurnChangesPort, TurnStoreKeeper } from './turn-changes-engine'
 import { TurnRecorder, turnPausesFile } from './turn-changes-recorder'
@@ -376,12 +386,17 @@ export class CompanionService {
   private measuredAway: boolean | null = null
   /** Story 76.3: what he said (away, back or nothing yet), read before any delivery at start. */
   private awayRecord: AwayRecord = parseAwayRecord(undefined)
+  /** Story 84.3: every departure's cards and grants, as last read or written; reads for authority go to the store. */
+  private grantRead: GrantRead = { state: 'read', record: EMPTY_GRANT_RECORD }
+  private readonly grantNotices: GrantDepartureNotices
   private readonly policyReader: PolicyReader
   private readonly pager: ReturnType<typeof createAttentionPager>
   /** Delivers a phone answer into the dialog that asked; reachable only from inside this process (Epic 30). */
   private readonly answers: RemoteAnswers
   /** The Telegram card of each page, kept true to its request (Story 30.3). */
   private readonly cards: TelegramCardKeeper
+  /** Story 84.3: the departure cards on the phone, beside the request cards. */
+  private readonly grantCards: TelegramGrantCards
   private readonly draftOperations = new Map<string, Promise<void>>()
   private readonly telegramReplyOperations = new Map<string, Promise<void>>()
   /** A request key claims the one PTY write before any asynchronous availability check. */
@@ -622,6 +637,13 @@ export class CompanionService {
       now: () => this.now(),
       save: (entries) => options.database.companion('putAwayNotices', entries, this.iso())
     })
+    this.grantNotices = new GrantDepartureNotices({
+      now: () => this.now(),
+      mark: async (periodId, sessionId) => {
+        const result = await options.database.companion('markGrantTold', periodId, sessionId, this.iso())
+        if (result.outcome === 'changed') this.grantChanged({ state: 'read', record: result.record })
+      }
+    })
     this.messages = new SessionMessages({
       database: options.database,
       liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
@@ -702,6 +724,23 @@ export class CompanionService {
       observeDelivery: (event) => this.logTelegramDelivery(event)
     })
     this.answers.onLateOutcome((requestId, outcome) => this.cards.lateOutcome(requestId, outcome))
+    this.grantCards = new TelegramGrantCards({
+      connector: () => this.telegram && this.telegramHealth?.state === 'polling' ? this.telegram : undefined,
+      read: () => this.grantRead,
+      header: (run) => ({
+        session: run.card.sessionId === null ? 'bmn grant' : this.knownSessions.get(run.card.sessionId)?.name ?? 'Session',
+        agent: run.card.agentCli === 'claude' || run.card.agentCli === 'codex' || run.card.agentCli === 'opencode' ? run.card.agentCli : null,
+        flag: null
+      }),
+      ownerAway: () => this.ownerAway(),
+      quiet: () => this.quietSettings,
+      now: () => this.now(),
+      answer: (answer) => this.answerGrant(answer),
+      keep: async (periodId, runId, phone) => {
+        const result = await options.database.companion('setGrantPhoneMessage', periodId, runId, phone, this.iso())
+        if (result.outcome === 'changed') this.grantChanged({ state: 'read', record: result.record })
+      }
+    })
     this.socketPath = join(options.roots.runtime, 'control', 'control.sock')
     this.turns = options.turnChanges === undefined ? null : new TurnRecorder({
       port: options.turnChanges,
@@ -802,6 +841,32 @@ export class CompanionService {
           const view = p.scope.kind === 'owner' ? ownerAwayView(result.record) : agentAwayView(result.record)
           return { outcome: result.outcome, ...view }
         }),
+        leaveAway: (p) => this.controlCall(async () => {
+          if (p.expectedRevision !== undefined && p.expectedRevision !== this.awayRecord.revision) {
+            throw new HostControlError(ERROR_CODES.revisionConflict, `The away state changed since the revision you saw; it is at revision ${this.awayRecord.revision} now; nothing was changed`)
+          }
+          return this.leaveAway(p.scope.kind === 'owner' ? 'cli' : 'agent', p.scope.kind === 'session' ? p.scope.sessionId : null)
+        }),
+        askGrant: (p) => this.controlCall(async () => {
+          const sessionId = p.scope.kind === 'session' ? p.scope.sessionId : null
+          const producer = p.scope.kind === 'session' ? this.producers.stamp(p.scope.sessionId, p.scope.incarnationId) : null
+          const result = await this.options.database.companion('askGrantCard', {
+            runId: p.runId, sessionId, agentCli: producer?.agentCli ?? null, card: p.card, ...(p.operationKey === undefined ? {} : { operationKey: p.operationKey })
+          }, this.iso())
+          if (result.outcome === 'no-departure') throw new HostControlError(ERROR_CODES.notFound, `${result.reason}; nothing was asked`)
+          if (result.outcome === 'opened' || result.outcome === 'replaced') this.grantChanged({ state: 'read', record: result.record })
+          return { outcome: result.outcome, periodId: result.periodId, runId: result.run.runId, cardRevision: result.run.card.revision, state: result.run.card.state }
+        }),
+        grantStatus: (p) => this.controlCall(async () => this.grantStatusFor(p.scope, p.runId)),
+        useGrant: (p) => this.controlCall(async () => {
+          const use = p.boundary !== undefined
+            ? { runId: p.runId, sessionId: p.sessionId, id: p.useId, kind: 'round' as const, boundary: p.boundary }
+            : { runId: p.runId, sessionId: p.sessionId, id: p.useId, kind: 'action' as const, item: p.item ?? '' }
+          const result = await this.options.database.companion('useGrantRecord', use, this.iso())
+          if (result.outcome !== 'repeated') this.grantChanged({ state: 'read', record: result.record })
+          if (result.outcome === 'refused') throw new HostControlError(ERROR_CODES.invalidArgument, `Not recorded: ${result.reason}; the step waits`)
+          return { outcome: result.outcome, left: result.left }
+        }),
         observeConversation: (p) => this.controlCall(async () => {
           if (p.agentCli === 'claude' || p.agentCli === 'codex') {
             const previous = this.producers.stamp(p.sessionId, p.incarnationId)
@@ -850,9 +915,12 @@ export class CompanionService {
           const due = this.briefs.answer(p)
           // Story 83.5: with the push policy's line only while Health allows at least one owner.
           const brief = due === null ? null : agentStartBrief(await this.anyOwnerAllowed())
+          // Story 84.3: while he is leaving or away, once per conversation and departure: a run may ask him on one card.
+          const departure = this.grantNotices.answer(p, this.grantRead.state === 'read' ? openGrantPeriod(this.grantRead.record) : null)
           return {
             ...recorded, ...(waiting ? { messageWaiting: true } : {}), ...(brief === null ? {} : { brief }),
-            ...(notice === null ? {} : { awayNotice: notice.text, awayRevision: notice.revision, awayClaim: notice.claimId })
+            ...(notice === null ? {} : { awayNotice: notice.text, awayRevision: notice.revision, awayClaim: notice.claimId }),
+            ...(departure === null ? {} : { grantNotice: departure })
           }
         }),
         reportUsage: (p) => this.controlCall(async () => this.recordUsage(p)),
@@ -957,6 +1025,7 @@ export class CompanionService {
   async start(): Promise<void> {
     // Story 76.3 (R76-NFR1): the said state is restored before anything at start can deliver.
     this.awayRecord = await this.options.database.companion('getAway')
+    this.grantRead = (await this.options.database.companion('getGrants')).read
     this.awayNotices.load(await this.options.database.companion('getAwayNotices'))
     // Epic 69: a turn stored as open has nobody left to end it.
     await this.turns?.start()
@@ -1004,6 +1073,7 @@ export class CompanionService {
     if (this.sweepTimer) clearInterval(this.sweepTimer)
     this.pager.close()
     this.cards.dispose()
+    this.grantCards.dispose()
     this.answers.dispose()
     await Promise.allSettled([this.control.close(), this.telegram?.stop(), this.retainedHooks.close()])
     await unlink(join(dirname(this.socketPath), 'owner.token')).catch(() => undefined)
@@ -1272,9 +1342,23 @@ export class CompanionService {
       }
       case METHOD_REGISTRY.awayGet:
         return this.awayForOwner()
+      case METHOD_REGISTRY.grantGet:
+        return this.grantForOwner()
+      case METHOD_REGISTRY.grantAnswer: {
+        // Story 84.3 AC2: the window's own answer; the control socket refuses this method for every token.
+        const { periodId, runId, cardRevision, choices, operationKey } = params
+        if (typeof periodId !== 'string' || typeof runId !== 'string' || !Number.isSafeInteger(cardRevision) || typeof operationKey !== 'string' ||
+          typeof choices !== 'object' || choices === null || Array.isArray(choices)) invalid('periodId, runId, cardRevision, choices and operationKey are required')
+        const result = await this.answerGrant({
+          periodId: periodId as string, runId: runId as string, cardRevision: cardRevision as number, choices: choices as Record<string, unknown>,
+          via: 'app', operationKey: `app:${operationKey as string}`
+        })
+        return { outcome: result.outcome, ...(result.outcome === 'refused' ? { reason: result.reason, detail: result.detail } : {}), view: this.grantForOwner() }
+      }
       case METHOD_REGISTRY.awaySet: {
         const to = params.to
         if (to !== 'away' && to !== 'back') invalid('to must be away or back')
+        // Back while only leaving is the dialog's Not leaving: it cancels the departure and withdraws its cards (84.3 AC1).
         const result = await this.changeAway({ to, source: 'app', ...(params.note === undefined ? {} : { note: params.note as string | null }) })
         if (result.outcome === 'invalid') invalid(result.reason)
         return ownerAwayView(result.record)
@@ -1346,18 +1430,72 @@ export class CompanionService {
     if (before === true || this.ownerAway() !== true) return
     this.pager.ownerLeft()
     void this.quietDelivery.sweep().catch(() => undefined)
+    void this.grantCards.reconcile()
   }
 
   /** Story 76.3: one serialised change of the said state, from any surface; the caller's source decides what it may do. */
   async changeAway(change: Omit<AwayChange, 'periodId'>): Promise<AwayChangeResult> {
     const before = this.ownerAway()
-    const result: AwayChangeResult = await this.options.database.companion('changeAway', change, this.iso())
+    const result = await this.options.database.companion('changeAway', change, this.iso())
     if (result.outcome === 'changed' || result.record.revision > this.awayRecord.revision) {
       this.awayRecord = result.record
       this.presenceChanged(before)
       this.emit('away', null)
     }
+    // Epic 84: Away carried the departure, Back ended its grants, or back while leaving cancelled it.
+    if (result.grant !== null) this.grantChanged(result.grant)
     return result
+  }
+
+  /** Story 84.3 AC1: his departure words, `bmn away --leaving` or the CLI: a pending departure; the runs are told on their next tool call. */
+  private async leaveAway(source: 'cli' | 'agent', agentSessionId: string | null): Promise<unknown> {
+    const result = await this.options.database.companion('leaveAway', { source, agentSessionId }, this.iso())
+    if (result.outcome === 'changed') this.grantChanged(result.read)
+    const open = result.read.state === 'read' ? openGrantPeriod(result.read.record) : null
+    return { outcome: result.outcome, state: open?.state ?? this.awayRecord.state, periodId: open?.periodId ?? null, since: open?.startedAt ?? null, revision: this.awayRecord.revision }
+  }
+
+  /** Story 84.3 AC2–AC3: the owner's answer from the window or Telegram, the only two callers. */
+  private async answerGrant(answer: { periodId: string; runId: string; cardRevision: number; choices: Record<string, unknown>; via: 'app' | 'telegram'; operationKey: string }): Promise<GrantAnswerResult> {
+    const result = await this.options.database.companion('answerGrantCard', answer, this.iso())
+    if (result.outcome === 'granted') this.grantChanged({ state: 'read', record: result.record })
+    return result
+  }
+
+  private grantChanged(read: GrantRead): void {
+    this.grantRead = read
+    this.emit('grant', null)
+    void this.grantCards.reconcile()
+  }
+
+  grantForOwner(): OwnerGrantView {
+    return ownerGrantView(this.grantRead)
+  }
+
+  /**
+   * Story 84.3 AC4: read fresh from the store, never from a handoff or a cache. One run when named (any session may read
+   * the run it names); otherwise every run whose latest card this session asked, or all for the owner's token.
+   */
+  private async grantStatusFor(scope: ControlScope, runId?: string): Promise<unknown> {
+    let read: GrantRead
+    let away: AwayRecord
+    try {
+      ({ read, away } = await this.options.database.companion('getGrants'))
+    } catch {
+      const reason = 'BMN could not read its grant record, so nothing is granted'
+      return { departure: null, runs: runId === undefined ? [] : [{ runId, active: false, reason, lines: grantStatusLines(runId, { active: false, reason }) }] }
+    }
+    const open = read.state === 'read' ? openGrantPeriod(read.record) : null
+    const departure = open === null ? null : { periodId: open.periodId, state: open.state, since: open.startedAt }
+    const ids = runId !== undefined ? [runId]
+      : (open?.runs ?? []).filter((run) => scope.kind === 'owner' || run.card.sessionId === scope.sessionId).map((run) => run.runId)
+    return {
+      departure,
+      runs: ids.map((id) => {
+        const status = grantStatus(read, away, id)
+        return { runId: id, ...status, lines: grantStatusLines(id, status) }
+      })
+    }
   }
 
   /** A blocking question tool of an app whose refusal Story 76.2 measured clean, reported by that app's own PreToolUse. */
@@ -3152,7 +3290,7 @@ export class CompanionService {
           set: (next) => this.options.database.companion('putRawSetting', TELEGRAM_OFFSET_KEY, next, this.iso())
         },
         onReply: (reply) => this.handleTelegramReply(reply),
-        onTap: (tap) => this.cards.tap(tap),
+        onTap: (tap) => tap.data.startsWith(GRANT_TOKEN_PREFIX) ? this.grantCards.tap(tap) : this.cards.tap(tap),
         onHealth: (health) => {
           if (this.telegram !== connector) return
           const entered = health.state !== this.telegramHealth?.state
@@ -3163,6 +3301,8 @@ export class CompanionService {
             this.telegramRecovery = this.cards.sweep().then(async ready => {
               if (this.telegram !== connector) return
               this.telegramReady = ready
+              // Story 84.3: an open departure card is redrawn on its own message with fresh buttons after a restart.
+              if (this.telegramHealth?.state === 'polling') void this.grantCards.reconcile()
               if (ready && this.telegramHealth?.state === 'polling') {
                 try { await this.quietDelivery.sweep() }
                 finally {
@@ -3218,6 +3358,8 @@ export class CompanionService {
     const other = telegramOtherCommand(reply, () => connector.botUsername())
     if (other === 'elsewhere') return
     if (other !== null) return this.telegramCommandReply(connector, reply, TELEGRAM_HELP_TEXT, bot)
+    // Story 84.3: a departure card is answered with its buttons only; a typed reply to one does nothing else.
+    if (reply.replyToMessageId !== null && this.grantCards.owns(reply.replyToMessageId)) return this.telegramCommandReply(connector, reply, GRANT_TYPED_REPLY, bot)
     const key = `telegram-reply:${bot}:${reply.updateId}`
     const pending = this.telegramReplyOperations.get(key)
     if (pending) return pending

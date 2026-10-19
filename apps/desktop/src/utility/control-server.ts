@@ -7,6 +7,10 @@ import {
   AGENT_ATTENTION_ORIGINS,
   DECISION_LIMITS,
   DECISION_REFERENCE_KINDS,
+  GRANT_LIMITS,
+  grantIdentifier,
+  parseGrantCardInput,
+  type GrantTerm,
   type DecisionPayload,
   type DecisionReferenceKind,
   ERROR_CODES,
@@ -258,6 +262,14 @@ export interface ControlHandlers {
    * it saw, as `agent`. `operationKey` makes a retry return the first result.
    */
   changeAway(p: { scope: ControlScope; to: 'away' | 'back'; note?: string | null; expectedRevision?: number; operationKey?: string }): Promise<unknown>
+  /** Story 84.3: his departure words, forwarded by an agent naming the away revision it saw, or the owner's CLI. */
+  leaveAway(p: { scope: ControlScope; expectedRevision?: number }): Promise<unknown>
+  /** Story 84.3: a run's card for the open departure; the host binds the asking session. */
+  askGrant(p: { scope: ControlScope; runId: string; card: { title: string; scope: string; nothing: boolean; terms: GrantTerm[] }; operationKey?: string }): Promise<unknown>
+  /** Story 84.3 AC4: one run's grant, or every run this caller may see. */
+  grantStatus(p: { scope: ControlScope; runId?: string }): Promise<unknown>
+  /** R84-FR3, FR8: one round or one item use, recorded before the step it pays for. */
+  useGrant(p: { sessionId: string; runId: string; useId: string; boundary?: string; item?: string }): Promise<unknown>
 }
 
 export interface ReceiptRecord {
@@ -1526,7 +1538,16 @@ export class ControlServer {
       case 'away.set': {
         const params = closedParams(rawParams, ['to', 'note', 'revision', 'idempotencyKey'])
         const to = params.to
-        if (to !== 'away' && to !== 'back') throw invalid('to must be away or back')
+        if (to === 'leaving') {
+          // Story 84.3: his departure words start a departure; no note, and an agent names the revision it saw, as for away.
+          if (params.note !== undefined) throw invalid('A note goes with away, not leaving')
+          const revision = params.revision
+          if (revision !== undefined && (!Number.isSafeInteger(revision) || (revision as number) < 0)) throw invalid('revision must be a whole number')
+          if (scope.kind === 'session' && revision === undefined) throw invalid('An agent names the away revision it saw (bmn away --status)')
+          readText(params, 'idempotencyKey', RULES.idempotencyKey)
+          return handlers.leaveAway({ scope, ...(revision === undefined ? {} : { expectedRevision: revision as number }) })
+        }
+        if (to !== 'away' && to !== 'back') throw invalid('to must be away, back or leaving')
         const note = params.note === undefined || params.note === null ? params.note : readText(params, 'note', RULES.awayNote)
         const revision = params.revision
         if (revision !== undefined && (!Number.isSafeInteger(revision) || (revision as number) < 0)) throw invalid('revision must be a whole number')
@@ -1543,6 +1564,37 @@ export class ControlServer {
           ...(operationKey === undefined ? {} : { operationKey: `${scopeKey(scope)}|${operationKey}` })
         })
       }
+      case 'grant.ask': {
+        const params = closedParams(rawParams, ['runId', 'card', 'idempotencyKey'])
+        const runId = grantIdentifier(params.runId, GRANT_LIMITS.runId)
+        if (runId === null) throw invalid(`runId must be your run's id: letters, digits and . _ : / - (at most ${GRANT_LIMITS.runId})`)
+        const parsed = parseGrantCardInput(params.card)
+        if ('problem' in parsed) throw invalid(`Nothing was asked: ${parsed.problem}`)
+        const operationKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
+        return handlers.askGrant({ scope, runId, card: parsed.card, ...(operationKey === undefined ? {} : { operationKey: `${scopeKey(scope)}|${operationKey}` }) })
+      }
+      case 'grant.status': {
+        const params = closedParams(rawParams, ['runId'])
+        if (params.runId === undefined) return handlers.grantStatus({ scope })
+        const runId = grantIdentifier(params.runId, GRANT_LIMITS.runId)
+        if (runId === null) throw invalid(`runId must be a run's id (at most ${GRANT_LIMITS.runId})`)
+        return handlers.grantStatus({ scope, runId })
+      }
+      case 'grant.use': {
+        const params = closedParams(rawParams, ['runId', 'useId', 'boundary', 'item'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session\'s agent records a use of its run\'s grant')
+        const runId = grantIdentifier(params.runId, GRANT_LIMITS.runId)
+        const useId = grantIdentifier(params.useId, GRANT_LIMITS.useId)
+        if (runId === null || useId === null) throw invalid('runId and useId are identifiers: letters, digits and . _ : / -')
+        const boundary = params.boundary === undefined ? undefined : grantIdentifier(params.boundary, GRANT_LIMITS.boundary)
+        const item = params.item === undefined ? undefined : grantIdentifier(params.item, GRANT_LIMITS.itemId)
+        if (boundary === null || item === null || (boundary === undefined) === (item === undefined)) throw invalid('A use names either one boundary (a round) or one item')
+        return handlers.useGrant({ sessionId: scope.sessionId, runId, useId, ...(boundary === undefined ? {} : { boundary }), ...(item === undefined ? {} : { item }) })
+      }
+      // Story 84.3 AC3: only the owner answers a card, in the window or on Telegram; no token reaching this socket can,
+      // the owner's CLI token included, since agents can read it (the reason Telegram answers stay in-process, 8ee22dd).
+      case 'grant.answer':
+        throw unauthorized('Only the owner answers a grant card, in the BMN window or on Telegram')
       default:
         throw invalid(`Unknown method: ${method.slice(0, 64)}`)
     }

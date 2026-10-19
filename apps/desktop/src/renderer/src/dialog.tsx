@@ -22,7 +22,8 @@ export function Dialog(props: {
     if (!dialog.open) dialog.showModal()
     // showModal() focuses the header close button; React's autoFocus does not survive that, so move
     // focus to the first control in the body.
-    dialog.querySelector<HTMLElement>('.app-dialog-body :is(input, select, textarea, button):not([disabled])')?.focus()
+    // A choice that is not its group's tab stop is skipped, so focus lands on the chosen one, never on No (Story 84.3).
+    dialog.querySelector<HTMLElement>('.app-dialog-body :is(input, select, textarea, button):not([disabled]):not([tabindex="-1"])')?.focus()
     const cancel = (event: Event): void => {
       event.preventDefault()
       onClose.current()

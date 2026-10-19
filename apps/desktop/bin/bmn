@@ -43,7 +43,7 @@ const PIPED_FIELDS = {
 const MAX_ANSWER_WAIT_SECONDS = 25
 /** Options that may be repeated; each occurrence appends, so the order given is the order stored. */
 const LIST_OPTIONS = new Set(['evidence-id', 'file-id', 'ref', 'depends'])
-const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help', 'outline', 'clear', 'yes', 'absent', 'status'])
+const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help', 'outline', 'clear', 'yes', 'absent', 'status', 'leaving'])
 const GLOBAL_OPTIONS = ['json', 'owner', 'token-file', 'socket', 'help']
 /**
  * Story 35.2: what `bmn handoff --outline` prints. bin/bmn runs unbundled, so this is a copy of HANDOFF_OUTLINE in
@@ -101,6 +101,9 @@ Commands:
                                             A repeated away keeps the period's time and note unless --note is
                                             given; a repeated back changes nothing. Only the owner sets a note
                                             (at most 200 characters), and only he sees it
+  away --leaving [--revision R]             He says he is leaving: a departure starts, the runs are told and
+                                            may each ask him on one card (bmn grant); then say away. Back
+                                            while only leaving cancels it
   away --status [--json]                    Away or back, since when, and the revision
   decision record --key K --revision R --choice T --reason T --affects T --reverse T [--ref KIND:ID]... [--depends KEY]...
                                             A consequential choice you made while the owner is away (Decided for
@@ -166,6 +169,8 @@ Commands:
                                             subscription's Plan use (bmn plan --help)
   policy [--repo OWNER/NAME]                The owner's push and merge policy: whether it authorizes anything,
                                             the repository's level and what still asks (bmn policy --help)
+  grant [--run ID] | grant ask | grant use  The Away grant: a run's one card before the owner leaves, what he
+                                            granted, and each use of it (bmn grant --help)
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
@@ -281,6 +286,8 @@ Submission is not delivery
 While the owner is away
   bmn away --status shows away or back, since when, and the revision. Set it (bmn away --revision R,
   bmn back --revision R) only on the owner's own words to you, never because he seems to be gone.
+  When he says he is leaving (bmn away --leaving), a run with authorised work left for the night may
+  ask him once, on one card, for only what that work needs: bmn grant --help.
   While he is away BMN refuses your blocking question tool (Claude Code's AskUserQuestion, Codex's
   request_user_input) and hands you this text, word for word:
   The owner is away. Continue the task already authorised, including independent work while another
@@ -407,7 +414,8 @@ function describeAway(result) {
   const since = typeof result.since === 'string' ? new Date(result.since) : null
   const at = since && Number.isFinite(since.getTime())
     ? since.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : 'an unknown time'
-  const head = result.state === 'away' ? `Away since ${at}`
+  const head = result.state === 'leaving' ? `Leaving since ${at}; the runs are told and may each ask on one card (bmn grant --help)`
+    : result.state === 'away' ? `Away since ${at}`
     : result.state === 'back' ? `Back; was away from ${at}` : 'Nothing said: BMN goes by the desk input'
   const outcome = result.outcome === 'unchanged' ? ' (nothing changed)' : result.outcome === 'repeated' ? ' (already done earlier; not repeated)' : ''
   const note = typeof result.note === 'string' && result.note !== '' ? `\nNote: ${result.note}` : ''
@@ -567,13 +575,17 @@ const COMMANDS = {
   },
   away: {
     args: [],
-    options: ['note', 'status', 'revision', 'key'],
+    options: ['note', 'status', 'revision', 'key', 'leaving'],
     build: (_positionals, options) => {
       if (options.status) {
-        if (options.note !== undefined || options.revision !== undefined || options.key !== undefined) {
+        if (options.note !== undefined || options.revision !== undefined || options.key !== undefined || options.leaving) {
           throw new UsageError('away --status takes no other option')
         }
         return { method: 'away.status', params: {} }
+      }
+      if (options.leaving) {
+        if (options.note !== undefined) throw new UsageError('away --leaving takes no note; the note goes with away')
+        return { method: 'away.set', params: { to: 'leaving', ...awayOptions(options) } }
       }
       return { method: 'away.set', params: { to: 'away', ...awayOptions(options) } }
     }
@@ -2970,7 +2982,7 @@ async function handMessage(agent, event, agentPid, procRoot, socketPath, token, 
   await callEach(socketPath, token, [take, report], Math.max(1, left())).catch(() => undefined)
 }
 
-/** The one answer that puts text in front of the agent: BMN's brief, the away state and a message, in that order. */
+/** The one answer that puts text in front of the agent: BMN's brief, the away state, the departure and a message, in that order. */
 function contextAnswer(event, parts) {
   return JSON.stringify({
     hookSpecificOutput: { hookEventName: event.hook_event_name, additionalContext: parts.filter((part) => part !== null).join('\n\n') }
@@ -3103,14 +3115,16 @@ async function runHook(args) {
   const brief = typeof answer?.brief === 'string' && answer.brief !== '' ? answer.brief : null
   const notice = awayLock && typeof answer?.awayNotice === 'string' && answer.awayNotice !== '' && Number.isSafeInteger(answer.awayRevision) &&
     typeof answer.awayClaim === 'string' ? answer.awayNotice : null
+  // Story 84.3: he is leaving or away, and a run may ask him on one card; once per conversation and departure.
+  const departure = typeof answer?.grantNotice === 'string' && answer.grantNotice !== '' ? answer.grantNotice : null
   const said = { printed: false }
   if (answer?.messageWaiting === true) {
     // Should one event ever carry both a turn's start and a message, they share the one allowance (R69-NFR5).
-    await handMessage(agent, event, agentPid, procRoot, socketPath, token, mark?.edge === 'start' ? marked : reported, [brief, notice], said)
+    await handMessage(agent, event, agentPid, procRoot, socketPath, token, mark?.edge === 'start' ? marked : reported, [brief, notice, departure], said)
       .catch(() => undefined)
   }
-  if (!said.printed && (brief !== null || notice !== null)) {
-    writeSync(1, contextAnswer(event, [brief, notice]))
+  if (!said.printed && (brief !== null || notice !== null || departure !== null)) {
+    writeSync(1, contextAnswer(event, [brief, notice, departure]))
     said.printed = true
   }
   if (notice !== null && said.printed) {
@@ -3578,6 +3592,8 @@ async function main(argv) {
   if (argv[0] === 'hooks') return runHooks(argv.slice(1))
   // Epic 83: the push policy, read through the socket; the repository's owner and default branch through the agent's own gh.
   if (argv[0] === 'policy') return (await import('./policy-cli.mjs')).runPolicyCommand(argv.slice(1), { readCredentials, call })
+  // Epic 84: a run's card before the owner leaves, his grant and its uses; all decided in BMN, through the socket.
+  if (argv[0] === 'grant') return (await import('./grant-cli.mjs')).runGrantCommand(argv.slice(1), { readCredentials, call })
   // Epic 77: the project's plan and board are files in the project; no socket, and it works with BMN closed.
   if (argv[0] === 'plan') return (await import('./plan-cli.mjs')).runPlanCommand(argv.slice(1))
   // Epic 60: the roster, its check and the rules master are owner files; no socket, no token.

@@ -145,6 +145,16 @@ caller), and the repository's owner and default branch with their own `gh`. Heal
 repositories comes from the session folders' `origin` remotes and `gh repo view`, cached ten minutes. Nothing here
 enforces the policy: GitHub's repository rules and the hook's deny-only command guard are the hard limits.
 
+**The Away grant is the owner's answer; agents only ask and read it (Epic 84).** One `app_setting` row,
+`night-grant-v1`, keeps the current and the previous departure: its state (leaving, away, ended or cancelled), each
+run's latest card, the owner's answer bound to the card revision and terms he saw, and each use. It changes in the
+same database-worker transaction as `owner-away-v1`, whose shape is unchanged: a departure made by `bmn away
+--leaving` creates the period id that Away then carries, and Back ends the period. Agents ask and read through the
+socket (`grant.ask`, `grant.status`, `grant.use`); `grant.answer` there refuses every caller, and answers come only
+from the window, through preload and main, and from Telegram taps handled inside the utility. A row that cannot be
+read grants nothing and is never written over by a use. The departure notice rides the hook answer beside the away
+notice, once per conversation and period.
+
 **Palette file search is an on-demand directory read.** It uses the selected session's live launch
 directory (or stored directory after exit), or the workspace's default directory when no session
 is selected. The utility caps traversal at six directory levels, 20,000 entries and 50 results,

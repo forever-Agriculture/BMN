@@ -112,7 +112,11 @@ async function cliFixture() {
       ? { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3, note: 'back by 8' }
       : { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3 }),
     changeAway: vi.fn<ControlHandlers['changeAway']>(async (p) => ({ outcome: 'changed', state: p.to, since: '2026-10-16T19:10:00.000Z', revision: 4 })),
-    policyStatus: vi.fn<ControlHandlers['policyStatus']>(async () => pushPolicyStatus(readPushPolicy(undefined), false))
+    policyStatus: vi.fn<ControlHandlers['policyStatus']>(async () => pushPolicyStatus(readPushPolicy(undefined), false)),
+    leaveAway: vi.fn<ControlHandlers['leaveAway']>(async () => ({ outcome: 'changed', state: 'leaving', periodId: 'p-1', since: '2026-10-19T19:31:00.000Z' })),
+    askGrant: vi.fn<ControlHandlers['askGrant']>(async (p) => ({ outcome: 'opened', periodId: 'p-1', runId: p.runId, cardRevision: 1, state: p.card.nothing ? 'nothing' : 'open' })),
+    grantStatus: vi.fn<ControlHandlers['grantStatus']>(async () => ({ departure: null, runs: [] })),
+    useGrant: vi.fn<ControlHandlers['useGrant']>(async () => ({ outcome: 'recorded', left: 2 }))
   } satisfies ControlHandlers
   const server = new ControlServer({ socketPath, auth, handlers, receipts: new MemoryReceiptStore() })
   await server.listen()
@@ -603,8 +607,9 @@ describe('bmn help agents', () => {
     expect(brief.stderr).toBe('')
     const lines = brief.stdout.split('\n').slice(0, -1)
     // Story 72.6 AC1 adds at most three lines, for bmn team ask, to the 39 before it; Story 76.4 AC4 adds the away section:
-    // six lines and the away text word for word, wrapped at 100 columns (the brief points here for it); Story 83.3 adds two for bmn policy.
-    expect(lines.length).toBeLessThanOrEqual(42 + 7 + 2 + Math.ceil(AWAY_AGENT_TEXT.length / 90))
+    // six lines and the away text word for word, wrapped at 100 columns (the brief points here for it); Story 83.3 adds two for bmn policy,
+    // Story 84.3 two for bmn grant.
+    expect(lines.length).toBeLessThanOrEqual(42 + 7 + 2 + 2 + Math.ceil(AWAY_AGENT_TEXT.length / 90))
     expect(lines.filter((line) => line.length > 100)).toEqual([])
     expect(brief.stdout.replace(/\s+/g, ' ')).toContain(AWAY_AGENT_TEXT)
     for (const rule of [
@@ -5808,6 +5813,70 @@ describe('bmn away and bmn back (Story 76.3)', () => {
     const refused = await runCli(['away'], { env: fixture.sessionEnv })
     expect(refused.code).toBe(1)
     expect(refused.stderr).toMatch(/^bmn: INVALID_ARGUMENT: An agent names the away revision/)
+  })
+})
+
+describe('bmn away --leaving and bmn grant (Story 84.3)', () => {
+  const CARD = { title: 'Epic 80 · clean up ai slop', scope: 'Stories 80.2–80.6', terms: [{ kind: 'rounds', proposed: 3, reason: 'two boundaries ahead' }] }
+
+  it('starts a departure on the owner\'s words, naming the revision the agent saw', async () => {
+    const fixture = await cliFixture()
+    const left = await runCli(['away', '--leaving', '--revision', '3', '--key', 'leave-1'], { env: fixture.sessionEnv })
+    expect(left.code).toBe(0)
+    expect(left.stdout).toMatch(/^Leaving since .+; the runs are told and may each ask on one card \(bmn grant --help\)/)
+    expect(fixture.handlers.leaveAway).toHaveBeenCalledWith({ scope: { kind: 'session', sessionId: 'session-1', incarnationId: 'incarnation-1' }, expectedRevision: 3 })
+    expect((await runCli(['away', '--leaving', '--revision', '3', '--note', 'bed'], { env: fixture.sessionEnv })).code).toBe(2)
+    expect((await runCli(['away', '--status', '--leaving'], { env: fixture.sessionEnv })).code).toBe(2)
+  })
+
+  it('asks a card piped as JSON, or says the run needs nothing', async () => {
+    const fixture = await cliFixture()
+    const asked = await runCli(['grant', 'ask', '--run', 'dev-auto-80', '--card-file', '-', '--key', 'card-1'], { env: fixture.sessionEnv, input: JSON.stringify(CARD) })
+    expect(asked.stderr).toBe('')
+    expect(asked.code).toBe(0)
+    expect(asked.stdout).toBe('Card revision 1 for run dev-auto-80 is open in the BMN window and on his phone. Nothing is granted until he answers; read it with bmn grant --run dev-auto-80.\n')
+    expect(fixture.handlers.askGrant).toHaveBeenLastCalledWith(expect.objectContaining({ runId: 'dev-auto-80', operationKey: 'session:session-1|card-1', card: expect.objectContaining({ terms: [expect.objectContaining({ id: 'rounds', proposed: 3 })] }) }))
+    const nothing = await runCli(['grant', 'ask', '--run', 'dev-auto-81', '--nothing'], { env: fixture.sessionEnv })
+    expect(nothing.stdout).toBe('Recorded: run dev-auto-81 needs nothing for the night.\n')
+    expect(fixture.handlers.askGrant).toHaveBeenLastCalledWith(expect.objectContaining({ card: { title: 'dev-auto-81', scope: 'Needs nothing for the night', nothing: true, terms: [] } }))
+  })
+
+  it('refuses a malformed card, a never-on-a-card term and bad usage before or at BMN', async () => {
+    const fixture = await cliFixture()
+    for (const [args, input] of [
+      [['grant', 'ask', '--card-file', '-'], JSON.stringify(CARD)],
+      [['grant', 'ask', '--run', 'r'], ''],
+      [['grant', 'ask', '--run', 'r', '--card-file', '-', '--nothing'], ''],
+      [['grant', 'ask', '--run', 'r', '--card-file', '-'], '{not json'],
+      [['grant', 'ask', '--run', 'r', '--card-file', 'card.json'], ''],
+      [['grant', 'use', '--run', 'r', '--use-id', 'u'], ''],
+      [['grant', 'use', '--run', 'r', '--use-id', 'u', '--boundary', 'b', '--item', 'i'], ''],
+      [['grant', '--answer', 'yes'], '']
+    ] as Array<[string[], string]>) {
+      expect((await runCli(args, { env: fixture.sessionEnv, input })).code, args.join(' ')).toBe(2)
+    }
+    expect(fixture.handlers.askGrant).not.toHaveBeenCalled()
+    const refused = await runCli(['grant', 'ask', '--run', 'r', '--card-file', '-'], {
+      env: fixture.sessionEnv, input: JSON.stringify({ ...CARD, terms: [{ kind: 'force-push', repository: 'o/r', proposed: 'yes', reason: 'r' }] })
+    })
+    expect(refused.code).toBe(1)
+    expect(refused.stderr).toContain('never on a card')
+  })
+
+  it('prints the grant BMN words, or no grant and why, and records a use', async () => {
+    const fixture = await cliFixture()
+    fixture.handlers.grantStatus.mockImplementation(async () => ({
+      departure: { periodId: 'p-1', state: 'away', since: '2026-10-19T19:31:00.000Z' },
+      runs: [{ runId: 'dev-auto-80', active: false, reason: 'the owner granted none', lines: ['No grant for run dev-auto-80: the owner granted none.'] }]
+    }))
+    const status = await runCli(['grant', '--run', 'dev-auto-80'], { env: fixture.sessionEnv })
+    expect(status.stdout).toBe('No grant for run dev-auto-80: the owner granted none.\n')
+    expect(fixture.handlers.grantStatus).toHaveBeenLastCalledWith({ scope: expect.objectContaining({ kind: 'session' }), runId: 'dev-auto-80' })
+    const mine = await runCli(['grant'], { env: fixture.sessionEnv })
+    expect(mine.stdout).toMatch(/^The owner is away since 2026-10-19T19:31:00.000Z \(period p-1\)\.\n/)
+    const used = await runCli(['grant', 'use', '--run', 'dev-auto-80', '--use-id', 'u1', '--boundary', '80.3-review'], { env: fixture.sessionEnv })
+    expect(used.stdout).toBe('Recorded one extra round at 80.3-review for run dev-auto-80; 2 left.\n')
+    expect(fixture.handlers.useGrant).toHaveBeenLastCalledWith({ sessionId: 'session-1', runId: 'dev-auto-80', useId: 'u1', boundary: '80.3-review' })
   })
 })
 

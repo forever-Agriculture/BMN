@@ -156,7 +156,11 @@ function fakeHandlers(current: Map<string, string>) {
       ? { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3, note: 'back by 8' }
       : { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3 }),
     changeAway: vi.fn(async (p: { to: string }): Promise<unknown> => ({ outcome: 'changed', state: p.to, revision: 4 })),
-    policyStatus: vi.fn(async (): Promise<unknown> => ({ state: 'read', revision: 0 }))
+    policyStatus: vi.fn(async (): Promise<unknown> => ({ state: 'read', revision: 0 })),
+    leaveAway: vi.fn<ControlHandlers['leaveAway']>(async () => ({ outcome: 'changed', state: 'leaving', periodId: 'p-1' })),
+    askGrant: vi.fn<ControlHandlers['askGrant']>(async (p) => ({ outcome: 'opened', runId: p.runId, cardRevision: 1, state: 'open' })),
+    grantStatus: vi.fn<ControlHandlers['grantStatus']>(async () => ({ departure: null, runs: [] })),
+    useGrant: vi.fn(async (): Promise<unknown> => ({ outcome: 'recorded', left: 2 }))
   } satisfies ControlHandlers
 }
 
@@ -1709,6 +1713,62 @@ describe('away state (Story 76.3)', () => {
     expectError(await owner.request('away.set', { to: 'away', extra: true }), ERROR_CODES.invalidArgument)
     expectError(await owner.request('away.status', { verbose: true }), ERROR_CODES.invalidArgument)
     expect(fixture.handlers.changeAway).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('Away grant (Story 84.3)', () => {
+  const CARD = { title: 'Epic 80 · clean up', scope: 'Stories 80.2–80.6', terms: [{ kind: 'rounds', proposed: 3, reason: 'two boundaries ahead' }] }
+
+  it('starts a departure from the owner\'s CLI or an agent naming the revision it saw', async () => {
+    const fixture = await serverFixture()
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    expect((await owner.request('away.set', { to: 'leaving' })).error).toBeUndefined()
+    expect((await agent.request('away.set', { to: 'leaving', revision: 3, idempotencyKey: 'k' })).error).toBeUndefined()
+    expect(fixture.handlers.leaveAway.mock.calls.map(([call]) => [call.scope.kind, call.expectedRevision])).toEqual([['owner', undefined], ['session', 3]])
+    expectError(await agent.request('away.set', { to: 'leaving' }), ERROR_CODES.invalidArgument)
+    expectError(await owner.request('away.set', { to: 'leaving', note: 'bed' }), ERROR_CODES.invalidArgument)
+    expect(fixture.handlers.changeAway).not.toHaveBeenCalled()
+  })
+
+  it('takes a card from any token and checks it; never-on-a-card kinds and bad run ids are refused', async () => {
+    const fixture = await serverFixture()
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    expect((await agent.request('grant.ask', { runId: 'dev-auto-epics-80', card: CARD, idempotencyKey: 'k1' })).error).toBeUndefined()
+    expect((await owner.request('grant.ask', { runId: 'dev-auto-epics-80', card: { title: 'Night', scope: 'Epic 81', nothing: true } })).error).toBeUndefined()
+    const calls = fixture.handlers.askGrant.mock.calls.map(([call]) => call)
+    expect(calls[0]).toMatchObject({ runId: 'dev-auto-epics-80', card: { terms: [{ id: 'rounds', proposed: 3 }] }, operationKey: expect.stringContaining('session:') })
+    expect(calls[1]).toMatchObject({ card: { nothing: true, terms: [] } })
+    const refused = await agent.request('grant.ask', { runId: 'r', card: { ...CARD, terms: [{ kind: 'force-push', repository: 'o/r', proposed: 'yes', reason: 'r' }] } })
+    expectError(refused, ERROR_CODES.invalidArgument)
+    expect(refused.error?.message).toContain('never on a card')
+    expectError(await agent.request('grant.ask', { runId: 'bad id', card: CARD }), ERROR_CODES.invalidArgument)
+    expectError(await agent.request('grant.ask', { runId: 'r', card: CARD, extra: 1 }), ERROR_CODES.invalidArgument)
+    expect(fixture.handlers.askGrant).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses every token an answer, the owner\'s CLI token included (AC3)', async () => {
+    const fixture = await serverFixture()
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    const answer = { periodId: 'p-1', runId: 'r', cardRevision: 1, choices: { rounds: 3 }, operationKey: 'k' }
+    expectError(await owner.request('grant.answer', answer), ERROR_CODES.unauthorized)
+    expectError(await agent.request('grant.answer', answer), ERROR_CODES.unauthorized)
+  })
+
+  it('reads a grant for any scope and records a use from a session only, naming one boundary or one item', async () => {
+    const fixture = await serverFixture()
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    expect((await agent.request('grant.status', { runId: 'r' })).error).toBeUndefined()
+    expect((await owner.request('grant.status', {})).error).toBeUndefined()
+    expect(fixture.handlers.grantStatus.mock.calls.map(([call]) => [call.scope.kind, call.runId])).toEqual([['session', 'r'], ['owner', undefined]])
+    expect((await agent.request('grant.use', { runId: 'r', useId: 'u1', boundary: '80.3-review' })).error).toBeUndefined()
+    expectError(await owner.request('grant.use', { runId: 'r', useId: 'u1', boundary: 'b' }), ERROR_CODES.unauthorized)
+    expectError(await agent.request('grant.use', { runId: 'r', useId: 'u2', boundary: 'b', item: 'i' }), ERROR_CODES.invalidArgument)
+    expectError(await agent.request('grant.use', { runId: 'r', useId: 'u2' }), ERROR_CODES.invalidArgument)
+    expect(fixture.handlers.useGrant).toHaveBeenCalledTimes(1)
   })
 })
 

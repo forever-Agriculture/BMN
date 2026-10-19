@@ -56,6 +56,7 @@ import { admitHandoff, HANDOFF_MESSAGE_KEY, MESSAGE_OPERATIONS, type SendOutcome
 import { TURN_OPERATIONS } from './database-turn-store'
 import { AWAY_OPERATIONS } from './database-away-store'
 import { PUSH_POLICY_OPERATIONS } from './database-push-policy-store'
+import { GRANT_OPERATIONS } from './database-grant-store'
 import { AWAY_SUMMARY_OPERATIONS } from './database-away-summary'
 import { DECISION_OPERATIONS } from './database-decision-store'
 import { selectSession, selectWorkspace, WorkspaceStoreError } from './database-workspace-store'
@@ -1460,6 +1461,7 @@ export const COMPANION_OPERATIONS = Object.freeze({
   ...TURN_OPERATIONS,
   ...AWAY_OPERATIONS,
   ...PUSH_POLICY_OPERATIONS,
+  ...GRANT_OPERATIONS,
   ...DECISION_OPERATIONS,
   ...AWAY_SUMMARY_OPERATIONS
 })

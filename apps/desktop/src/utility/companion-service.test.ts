@@ -4237,6 +4237,53 @@ describe('Away (Story 76.3)', () => {
     expect(resumed.awayNotice?.endsWith(AWAY_BACK_AGENT_TEXT)).toBe(true)
   })
 
+  it('runs a departure: told once per conversation, one card, the window\'s answer, a use, and Back ending it (Story 84.3)', async () => {
+    const handlers = service['control']['options'].handlers
+    const conversation = '0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e'
+    const observe = (event: string, source: string | null = null) => handlers.observeHookEvent({
+      sessionId: 's1', incarnationId: liveIncarnations.get('s1') ?? null, agent: 'claude', event, source, toolName: event === 'PostToolUse' ? 'Bash' : null,
+      effects: [], turn: { conversation, turn: null, nested: false }
+    }) as Promise<{ grantNotice?: string }>
+    const agent = { kind: 'session' as const, sessionId: 's1', incarnationId: 'incarnation-1' }
+    expect(await observe('PostToolUse')).not.toHaveProperty('grantNotice')
+    await expect(handlers.leaveAway({ scope: agent, expectedRevision: 1 })).rejects.toThrow('changed since the revision you saw')
+    expect(await handlers.leaveAway({ scope: agent, expectedRevision: 0 })).toMatchObject({ outcome: 'changed', state: 'leaving' })
+    const told = await observe('PostToolUse')
+    expect(told.grantNotice).toMatch(/^\[BMN state: the owner is leaving since \d\d:\d\d; runs may ask him for a night grant\./)
+    expect(await observe('PostToolUse')).not.toHaveProperty('grantNotice')
+    expect((await observe('SessionStart', 'compact')).grantNotice).toBeDefined()
+    await vi.waitFor(() => expect(service.grantForOwner().period?.told).toEqual(['s1']))
+
+    const card = { title: 'Epic 80 · clean up', scope: 'Stories 80.2–80.6', nothing: false, terms: [{ id: 'rounds' as const, kind: 'rounds' as const, proposed: 3, reason: 'two boundaries ahead' }] }
+    emitted.length = 0
+    expect(await handlers.askGrant({ scope: agent, runId: 'run-80', card })).toMatchObject({ outcome: 'opened', cardRevision: 1, state: 'open' })
+    expect(service.grantForOwner().openCards).toBe(1)
+    expect(emitted.filter(event => event.topic === 'grant')).toHaveLength(1)
+    const periodId = service.grantForOwner().period!.periodId
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    expect(service.awayForOwner().periodId).toBe(periodId)
+    expect(await handlers.grantStatus({ scope: agent, runId: 'run-80' })).toMatchObject({ runs: [{ active: false, reason: expect.stringContaining('unanswered card grants nothing') }] })
+
+    await expect(service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-80', cardRevision: 1, choices: { rounds: 3 } })).rejects.toThrow('required')
+    expect(await service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-80', cardRevision: 2, choices: { rounds: 3 }, operationKey: 'press-0' }))
+      .toMatchObject({ outcome: 'refused', reason: 'changed' })
+    expect(await service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-80', cardRevision: 1, choices: { rounds: 3 }, operationKey: 'press-1' }))
+      .toMatchObject({ outcome: 'granted', view: { openCards: 0 } })
+    const status = await handlers.grantStatus({ scope: agent, runId: 'run-80' }) as { runs: Array<{ active: boolean; lines: string[] }> }
+    expect(status.runs[0]!.active).toBe(true)
+    expect(status.runs[0]!.lines[1]).toBe('  Extra repair rounds: 3 per boundary; none used.')
+    expect(await handlers.useGrant({ sessionId: 's1', runId: 'run-80', useId: 'u1', boundary: '80.3-review' })).toEqual({ outcome: 'recorded', left: 2 })
+
+    // A restart reads the record back: the grant still holds, and no handoff is needed for it.
+    service = new CompanionService(service['options']); await service.start()
+    const after = service['control']['options'].handlers
+    expect(await after.grantStatus({ scope: agent, runId: 'run-80' })).toMatchObject({ runs: [{ active: true, grant: { roundsUsed: { '80.3-review': 1 } } }] })
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'back' })
+    expect(await after.grantStatus({ scope: agent, runId: 'run-80' })).toMatchObject({ runs: [{ active: false, reason: expect.stringContaining('the owner is back since') }] })
+    await expect(after.useGrant({ sessionId: 's1', runId: 'run-80', useId: 'u2', boundary: '80.3-review' })).rejects.toThrow('Not recorded')
+    expect(writes).toHaveLength(0)
+  })
+
   it('records a decision only for a process whose conversation BMN knows, and never shows or pages it (Story 76.5)', async () => {
     const handlers = service['control']['options'].handlers
     const decision = { sessionId: 's1', incarnationId: 'incarnation-1', key: 'storage-format', revision: 1,

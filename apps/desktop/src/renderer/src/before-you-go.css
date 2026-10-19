@@ -1,0 +1,50 @@
+/* MODULE: before-you-go.css - Before you go: the Messages dialog shape, cards split by the article's hairline, no boxes; gold only on what needs him (Story 84.3, the notes 84.2) */
+.before-you-go-dialog { width: min(820px, calc(100vw - 32px)); }
+.before-you-go { display: flex; flex-direction: column; gap: 4px; }
+.before-you-go .grant-head-line { margin: 0; font-size: 13px; }
+.before-you-go .grant-head-note,
+.before-you-go .grant-empty,
+.before-you-go .grant-nothing { margin: 0; color: var(--muted); font-size: 12px; }
+.before-you-go .grant-head-note { padding-bottom: 6px; border-bottom: 1px solid var(--hairline); }
+.before-you-go .grant-empty,
+.before-you-go .grant-nothing { padding: 8px 12px; }
+
+.grant-card .grant-scope { margin: 0; overflow: hidden; color: var(--muted); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
+.grant-card .grant-terms { display: flex; flex-direction: column; gap: 8px; }
+
+/* Normal width: label and reason on the left, the choice on the right, level with the label. */
+.grant-card .grant-term { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: start; }
+.grant-card .grant-term-words { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.grant-card .grant-term-label { font-size: 13px; color: var(--text); }
+.grant-card .grant-term-reason {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.grant-card .grant-rule { margin: 0; color: var(--muted); font-size: 11.5px; }
+.grant-card .grant-answered { margin: 0; font-size: 12px; }
+
+.before-you-go .grant-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 10px; }
+
+/* Narrow (~540 px): label, reason, then the choice on its own line, sized by its words. */
+@media (max-width: 640px) {
+  .grant-card .grant-term { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .grant-card .grant-term .segmented { justify-self: start; }
+}
+
+/* The head (the notes §2): "leaving" is a muted text button; "N cards" is gold, weight 600, only while a card is open. */
+.away-check .away-grant-separator { color: var(--muted); }
+.away-check button.away-grant {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.away-check button.away-grant.cards { color: var(--identity); font-weight: 600; }
+.away-check button.away-grant:hover { text-decoration: underline; }

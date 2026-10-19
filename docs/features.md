@@ -389,6 +389,15 @@ master carries the pointer, so Rules › Undo of that save turns it off, and so 
 releases, CI changes, secrets, force pushes and deletions always ask you, and BMN's hook holds the clearly
 critical commands itself ([agent-control.md](agent-control.md#the-push-policy)).
 
+**Before you go** (Epic 84): when you say you are leaving, an agent forwards it with `bmn away --leaving` and the
+Away check reads **leaving**. Each run with authorised work left for the night may then ask you once, on one card,
+for only what that work needs: extra repair rounds at a review boundary, or a named merge, push to the default
+branch or pull request elsewhere, each with its reason. A gold **N cards** beside the Away check opens them, the
+cards' only place; you grant all, some or none, and a run that needs nothing says so. Your answer holds until you
+are back; an unanswered card grants nothing, a run that asks again cannot change what you granted until you answer
+again, and **Not leaving** withdraws the open cards. The same cards reach Telegram once you are away
+([telegram.md](telegram.md)); agents read their grant with `bmn grant` ([agent-control.md](agent-control.md#the-away-grant)).
+
 Preferences → Integrations › **Rules** keeps one rules text and writes it into each agent app's own rules file
 (Claude Code, Codex and OpenCode), shows each file's difference before it writes, and can
 undo an install. An app whose provider may not see private work receives only the sections you

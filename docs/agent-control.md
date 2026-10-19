@@ -71,6 +71,9 @@ Commands:
                                             A repeated away keeps the period's time and note unless --note is
                                             given; a repeated back changes nothing. Only the owner sets a note
                                             (at most 200 characters), and only he sees it
+  away --leaving [--revision R]             He says he is leaving: a departure starts, the runs are told and
+                                            may each ask him on one card (bmn grant); then say away. Back
+                                            while only leaving cancels it
   away --status [--json]                    Away or back, since when, and the revision
   decision record --key K --revision R --choice T --reason T --affects T --reverse T [--ref KIND:ID]... [--depends KEY]...
                                             A consequential choice you made while the owner is away (Decided for
@@ -136,6 +139,8 @@ Commands:
                                             subscription's Plan use (bmn plan --help)
   policy [--repo OWNER/NAME]                The owner's push and merge policy: whether it authorizes anything,
                                             the repository's level and what still asks (bmn policy --help)
+  grant [--run ID] | grant ask | grant use  The Away grant: a run's one card before the owner leaves, what he
+                                            granted, and each use of it (bmn grant --help)
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
@@ -1012,6 +1017,38 @@ after a minute without input it reports the focus lost, so Claude Code sends its
 notifications while you are away. A Claude session connected to Remote Control is never sent to
 Telegram: the Claude app already notifies your phone. The hook reads that from Claude Code's
 `~/.claude/sessions/<pid>.json` (or `$CLAUDE_CONFIG_DIR/sessions`), which needs `/proc`.
+
+### The Away grant
+
+`bmn grant` (Epic 84) lets a run with authorised work left for the night ask the owner once, before he leaves, for
+only what that work needs. Only his own answer, in the BMN window or on Telegram, creates a grant, and every grant
+ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
+
+- **The departure.** `bmn away --leaving`, from an agent on his words that he is leaving, starts a departure with
+  its period id; Away, once set, carries that id, and Back while only leaving cancels it. Away pressed with no
+  departure starts the period at Away. While he is leaving or away, each Claude Code and Codex conversation is
+  handed the departure notice once, in the answer to the event its away notice rides on; a compaction or clear
+  tells it again. A missed or repeated notice is harmless: a run that does not ask is granted nothing.
+- **The card.** `bmn grant ask --run ID --card-file -` takes the card as JSON on standard input (`bmn grant --help`
+  shows it): a title, the remaining scope and terms, each with its reason. A term is extra repair rounds per
+  boundary (2, 3 or 4) or one of three named actions with its target: merge a pull request (this PR at a head SHA,
+  or up to N of this run's PRs when their required checks are green), push a branch to the default branch, or open
+  or update a pull request in another repository. `--nothing` says the run needs nothing. BMN binds the asking
+  session itself. A second ask for the same run is a new revision, and his earlier answer holds until he answers
+  it. Never on a card: force pushes, deletions, releases, publishes, killing BMN, credentials and acceptance
+  changes.
+- **The answer.** Only the window and Telegram answer; `grant.answer` on the socket refuses every token, the
+  owner's CLI token included. An answer is bound to the period, the run, the terms shown and the card's revision;
+  a changed, withdrawn, already answered or earlier-period card is refused and nothing changes, and the same
+  operation key returns the first answer.
+- **Reading and using it.** `bmn grant --run ID` reads the grant fresh each time: its terms, the period and what
+  is left, or "No grant" and why (none answered, Back, a new period, a malformed row, an unreadable store). Read
+  it right before each step that uses it; a grant never comes from a handoff. `bmn grant use --run ID --use-id U
+  (--boundary B | --item I)` records one extra round or one use before the step runs; the same use id returns the
+  first record, and a refused use means the step waits.
+
+A granted merge or push is a named one-night action above the repository's level in `bmn policy`; the standing
+levels do not change, every merge still has no admin bypass, and GitHub's rules and the command guard still hold.
 
 ## The team: team file, check and rules
 
@@ -3089,6 +3126,8 @@ Submission is not delivery
 While the owner is away
   bmn away --status shows away or back, since when, and the revision. Set it (bmn away --revision R,
   bmn back --revision R) only on the owner's own words to you, never because he seems to be gone.
+  When he says he is leaving (bmn away --leaving), a run with authorised work left for the night may
+  ask him once, on one card, for only what that work needs: bmn grant --help.
   While he is away BMN refuses your blocking question tool (Claude Code's AskUserQuestion, Codex's
   request_user_input) and hands you this text, word for word:
   The owner is away. Continue the task already authorised, including independent work while another

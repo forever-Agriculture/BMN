@@ -21,7 +21,7 @@ const waylandDisplay =
 const requiredPhases = [
   'sixelPty', 'sixelRender', 'sixelAnimation', 'sixelTwoPaneAnimation', 'sixelAlternateScreen',
   'sixelPlacement', 'sixelResize', 'sixelCapPressure', 'sixelColdView', 'shellRegression', 'sixelViewSwap',
-  'modelOrigin', 'remoteAnswers', 'telegramCards', 'quietHours', 'morningDigest', 'healthAlerts', 'away', 'fullerAnswers', 'telegramCue', 'resetModes', 'cspProbe',
+  'modelOrigin', 'remoteAnswers', 'telegramCards', 'quietHours', 'morningDigest', 'healthAlerts', 'away', 'awayGrant', 'fullerAnswers', 'telegramCue', 'resetModes', 'cspProbe',
   'graphicsTerminfo', 'workspaceResults', 'crossWorkspaceResults', 'hookIntegration', 'harnessObservations',
   'repositoryLaunch', 'checkoutPeers', 'graceful', 'quietSidebarAcceptance', 'interruptedSidebarAcceptance',
   'subagentAcceptance', 'repeatAcceptance', 'agentHandoff', 'openCodeAcceptance',
