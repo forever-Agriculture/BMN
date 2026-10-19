@@ -704,7 +704,8 @@ event proves only that event reached BMN.
 proposed diff on stderr, then asks Yes with No as the default: an empty answer, No or a closed prompt writes nothing.
 Without TTY stdin and stderr it needs `--yes`; `--json` does not approve the write. It copies the file to
 `<file>.bmn-backup-<timestamp>`, adds the missing entries beside the hooks already there, writes atomically and prints a
-unified diff. It never removes, reorders or rewrites an entry, and writes nothing when nothing is missing. It writes
+unified diff. It never removes or reorders an entry and rewrites only BMN's own (its timeout and matcher, below), and
+writes nothing when nothing is missing. It writes
 nothing, and says why, when the file is not valid JSON, its `hooks` is not an object or an event is not a list, when
 the file changed while it was read (run it again), and when the file holds a number it cannot write back unchanged
 (`18446744073709551615` would become `18446744073709552000`; it names the number). The JSON writer keeps your indent,
@@ -972,7 +973,7 @@ nothing; a team approved under the earlier layout is read-only history and must 
 **On Agents** ([overview](features.md#the-team-and-one-rules-master)) edits are staged; **Review** lists them with their
 consequences ("Luna could lead") and each rules file the change would rewrite, and **Approve** writes the team file and
 approves exactly what was shown. A first approval commits only from a sheet naming every allowed folder, agent, role and
-project choice. Escape or Discard drops staged edits; a file that changed meanwhile, or that a link now leads to
+project choice, each choice with its folder, role, teammate, effort and end date. Escape or Discard drops staged edits; a file that changed meanwhile, or that a link now leads to
 elsewhere, is reloaded and nothing is written. An edit made outside BMN shows as its own row with **Keep** (a sheet
 listing every value it carries and what it would do) and **Revert**. **Changes** lists every approved version, to
 compare or restore as a new version; **Restore…** waits until outside edits are kept or reverted and puts back only the
@@ -1642,7 +1643,8 @@ A lone `-` (`… | bmn research ask -`) says "standard input" out loud and chang
   no page text beyond the quoted passages; one whose process ended before its record was written reads as interrupted.
   One writer at a time holds the file (a lock of the same kind): a second waits up to five seconds, then gives up
   without writing, and a question whose first record cannot be written is not asked (`RECORD_BUSY`). A question's end is
-  written whole under `research/question-ends/` before the caller hears of it and taken into the file exactly once. The
+  written whole under `research/question-ends/` before the caller hears of it and taken into the file exactly once; if
+  that write fails, the caller hears it in a note and the list shows the question without its end. The
   run's folder under `research/runs/` holds BMN's prompt, never the raw answer, and goes with the record.
 - **With BMN closed** the command works by itself. Exit 0 answered; 1 no usable answer, failed, stopped or out of time;
   2 usage; 10 refused.
@@ -1663,7 +1665,8 @@ A lone `-` (`… | bmn research ask -`) says "standard input" out loud and chang
   command's words; your text stays). A question under way shows who asked and a **Stop** that ends it whoever started it
   (an agent's by the signal Ctrl-C sends to its `bmn research ask`, nothing else); meanwhile "Research now" waits. An
   opened question shows the answer, the claims that are evidence and the others under "Not evidence", each page a link
-  BMN hands the browser only as an https address without a sign-in part, a public name leading to public addresses.
+  BMN hands the browser only as an https address without a sign-in part, a public name leading to public addresses;
+  what the browser does from there (its own lookup, a redirect the site sends) is the browser's.
   **Remove** and **Remove all…** (after a confirmation) delete records with their run folders; removing gives no
   question of the day back, as the day's limit is decided when a question enters the kept file, one process at a time.
 
