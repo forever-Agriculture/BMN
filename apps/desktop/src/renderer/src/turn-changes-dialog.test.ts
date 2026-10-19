@@ -365,7 +365,8 @@ describe('the card of a paused recording', () => {
     expect(html).toContain(`<dt>Reason</dt><dd>${TURN_PAUSE_REASONS.incomplete}</dd>`)
     expect(html).toContain('<span class="attention-kind">Claude Code</span>')
     expect(text(html)).toContain('BMN scans nothing here for now and tries again with the next turn. Each try that fails waits longer.')
-    expect(text(card({ retryAt: Date.now() + 60 * 60_000 }))).toMatch(/BMN scans nothing here for now and tries again at \d\d:\d\d\. Each try/)
+    // An hour ahead is tomorrow after 23:00, when the time carries its date (turnWhen).
+    expect(text(card({ retryAt: Date.now() + 60 * 60_000 }))).toMatch(/BMN scans nothing here for now and tries again at (?:[^.]+ )?\d\d:\d\d\. Each try/)
     expect(html).not.toMatch(/Resume/)
     expect([...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1])).toEqual(['×', 'Close'])
   })
