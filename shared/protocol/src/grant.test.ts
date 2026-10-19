@@ -15,6 +15,7 @@ import {
   grantNoChoices,
   grantProposedChoices,
   grantStatus,
+  grantStatusLines,
   grantTermChoices,
   markDepartureTold,
   openGrantPeriod,
@@ -349,5 +350,31 @@ describe('the card\'s words (the notes §1)', () => {
     expect(grantAnswerWords(card().terms, { rounds: 3, 'merge-12': 'pr', 'push-81': 'no' })).toEqual({
       granted: ['3 rounds per boundary', 'merge PR 12 at 3f2a9c1'], notGranted: ['push to the default branch in dev-auto']
     })
+  })
+})
+
+describe('named actions for the night (Story 84.6)', () => {
+  const read = (record: GrantRecord) => ({ state: 'read' as const, record })
+
+  it('lists each granted item with its kind, target, condition and what is left, and the rules every item keeps (AC1, AC3)', () => {
+    const record = granted(away(asked()), all)
+    const lines = grantStatusLines('run-80', grantStatus(read(record), AWAY, 'run-80'))
+    expect(lines).toContain('  Item merge-12: merge PR 12 in forever-agriculture/bmn, only at head 3f2a9c1; another head waits; 1 of 1 left.')
+    expect(lines).toContain('  Item push-81: push dev-auto/epic-81 to the default branch of forever-agriculture/dev-auto, never forced; 1 of 1 left.')
+    expect(lines).toContain('  Every item: no admin bypass; a PR that changes CI or workflows, or deploys, still asks; a different target, run or condition waits.')
+    const green = granted(away(asked()), { ...all, 'merge-12': 'green' })
+    expect(grantStatusLines('run-80', grantStatus(read(green), AWAY, 'run-80'))).toContain(
+      '  Item merge-12: merge this run\'s PRs in forever-agriculture/bmn, each only when its required checks are all green; 2 of 2 left.')
+    const rounds = granted(away(asked()), { ...all, 'merge-12': 'no', 'push-81': 'no' })
+    expect(grantStatusLines('run-80', grantStatus(read(rounds), AWAY, 'run-80')).some((line) => line.startsWith('  Every item'))).toBe(false)
+  })
+
+  it('refuses another run\'s item, and a card naming anything outside the three actions (AC2, AC5)', () => {
+    const record = granted(away(asked()), all)
+    expect(useGrant(read(record), AWAY, { runId: 'run-81', sessionId: 's', id: 'x1', kind: 'action', item: 'merge-12' }, T1)).toMatchObject({ outcome: 'refused' })
+    for (const kind of ['force-push', 'delete-branch', 'release', 'publish']) {
+      const parsed = parseGrantCardInput({ ...CARD, terms: [{ kind, id: 'x', repository: 'octo/widgets', proposed: 'yes', reason: 'tonight' }] })
+      expect(parsed).toMatchObject({ problem: expect.stringContaining('are never on a card') })
+    }
   })
 })

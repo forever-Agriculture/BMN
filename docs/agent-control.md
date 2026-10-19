@@ -3143,21 +3143,24 @@ While the owner is away
   Away adds no authority: irreversible actions, destructive cleanup, external writes (push, merge,
   deploy, sending messages), credentials, private-data transfers, scope or acceptance changes and
   paid work need the owner's authorisation naming scope and target; an authorisation you already
-  have stays valid within its limits, and a cap he gave for paid work covers only that spending.
-  Before running a command, prefer a method already permitted (a tool's working-directory option
-  instead of a compound cd); an approval procedure your app offers may be used where policy permits,
-  and you proceed only if it is granted; a denial by the owner, policy or a reviewer is binding:
-  never retry it through another tool, shell, identity or wording; an unclear refusal is not
-  permission. Do not ask the absent owner in conversation to run a command: keep an existing native
-  permission request as it is; otherwise, where your workflow permits questions, leave one
-  non-blocking `bmn ask` card saying what is needed and why; where it says to record instead, record
-  it there. When evidence cannot settle a consequential technical choice, consult only if existing
-  dispatch consent, provider and data rules and remaining spend and retry allowances permit: one
-  `bmn team ask --role consultant` with one stable key and a bounded time limit, no recursion, no
-  other provider; on a refusal, timeout or uncertain completion read the existing ask record instead
-  of asking again; advice grants no authority: you decide and record. Withdraw a card when it stops
-  mattering. Stops, refusals, retry limits and owner-only checks stay binding. If no authorised work
-  remains, finish with what completed and what waits; do not invent work.
+  have stays valid within its limits, and a cap he gave for paid work covers only that spending. An
+  Away grant he answered on a run's card is such an authorisation: `bmn grant --run <id>` lists its
+  rounds and actions; read it right before acting, record the use first, and anything it does not
+  name waits. Before running a command, prefer a method already permitted (a tool's
+  working-directory option instead of a compound cd); an approval procedure your app offers may be
+  used where policy permits, and you proceed only if it is granted; a denial by the owner, policy or
+  a reviewer is binding: never retry it through another tool, shell, identity or wording; an unclear
+  refusal is not permission. Do not ask the absent owner in conversation to run a command: keep an
+  existing native permission request as it is; otherwise, where your workflow permits questions,
+  leave one non-blocking `bmn ask` card saying what is needed and why; where it says to record
+  instead, record it there. When evidence cannot settle a consequential technical choice, consult
+  only if existing dispatch consent, provider and data rules and remaining spend and retry
+  allowances permit: one `bmn team ask --role consultant` with one stable key and a bounded time
+  limit, no recursion, no other provider; on a refusal, timeout or uncertain completion read the
+  existing ask record instead of asking again; advice grants no authority: you decide and record.
+  Withdraw a card when it stops mattering. Stops, refusals, retry limits and owner-only checks stay
+  binding. If no authorised work remains, finish with what completed and what waits; do not invent
+  work.
 
 bmn hook is not yours
   bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.

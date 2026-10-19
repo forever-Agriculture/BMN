@@ -782,6 +782,17 @@ export function ownerGrantView(read: GrantRead): OwnerGrantView {
   return { read: 'read', reason: null, period, openCards: open === null ? 0 : open.runs.filter((run) => run.card.state === 'open').length }
 }
 
+/** A granted item's kind, target and condition, as `bmn grant` lists it (84.6 AC1). */
+function grantItemWords(term: GrantActionTerm, choice: GrantChoice): string {
+  if (term.kind === 'merge') {
+    return choice === 'green'
+      ? `merge this run's PRs in ${term.repository}, each only when its required checks are all green`
+      : `merge PR ${term.pr} in ${term.repository}, only at head ${term.headSha ?? '(none)'}; another head waits`
+  }
+  if (term.kind === 'push-default') return `push ${term.branch} to the default branch of ${term.repository}, never forced`
+  return `open or update a PR in ${term.repository}`
+}
+
 /** One run's status as `bmn grant` prints it, for the CLI and dev-auto's check (84.3 AC4, 84.5 AC2). */
 export function grantStatusLines(runId: string, status: GrantStatus): string[] {
   if (!status.active) return [`No grant for run ${runId}: ${status.reason}.`]
@@ -791,9 +802,8 @@ export function grantStatusLines(runId: string, status: GrantStatus): string[] {
     const used = Object.entries(grant.roundsUsed).map(([boundary, count]) => `${boundary}: ${count} of ${grant.rounds} used`)
     lines.push(`  Extra repair rounds: ${grant.rounds} per boundary${used.length === 0 ? '; none used' : `; ${used.join(', ')}`}.`)
   }
-  for (const item of grant.items) {
-    lines.push(`  Item ${item.term.id}: ${grantShortName(item.term, item.choice)} in ${item.term.repository}; ${item.left} of ${item.count} left.`)
-  }
+  for (const item of grant.items) lines.push(`  Item ${item.term.id}: ${grantItemWords(item.term, item.choice)}; ${item.left} of ${item.count} left.`)
+  if (grant.items.length > 0) lines.push(`  Every item: no admin bypass; a PR that changes CI or workflows, or deploys, still asks; a different target, run or condition waits.`)
   for (const term of grant.notGranted) lines.push(`  Not granted: item ${term.id} (${grantTermLabel(term)}).`)
   if (grant.newerOpen !== null) lines.push(`  Card revision ${grant.newerOpen} is open; this answer holds until he answers it.`)
   return lines
