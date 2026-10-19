@@ -64,6 +64,7 @@ export function SessionRequestCard(props: {
 
   const item = (request: AttentionRecord, cleared: boolean, phone = props.phone): React.JSX.Element => {
     const actionable = isActionableAttention(request)
+    const answerable = actionable && request.kind !== 'handoff'
     const place = props.place(request.sessionId)
     const age = relativeAge(request.openedAt, props.now)
     const expiry = expiryText(request.expiresAt, props.now)
@@ -102,9 +103,10 @@ export function SessionRequestCard(props: {
       {phone?.uncertainRevisions[request.requestId]?.some(revision => revision !== request.revision)
         ? <p className="seen">Phone: an earlier revision may not have arrived</p> : null}
       {!cleared ? <div className="actions">
-        <button type="button" className="primary"
+        {/* With Mark answered beside it, Dismiss is the quiet word and Mark answered the primary (owner 2026-10-19, B5). */}
+        <button type="button" className={answerable ? 'ghost' : 'primary'}
           onClick={() => props.onAcknowledge(request)} title="Clear this reminder; keep the task or draft.">Dismiss</button>
-        {actionable && request.kind !== 'handoff' ? <button type="button" title="Close this request after answering it in the terminal"
+        {answerable ? <button type="button" className="primary" title="Close this request after answering it in the terminal"
           onClick={() => props.onMarkAnswered(request)}>Mark answered</button> : null}
       </div> : null}
     </article>

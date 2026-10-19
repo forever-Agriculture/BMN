@@ -487,7 +487,7 @@ describe('session presentation', () => {
     expect(popover([{ ...soon, expiresAt: null }])).not.toContain('expires')
   })
 
-  it('gives every card one primary and plates for the rest, and says the source on the seen line (Story 40.1)', () => {
+  it('gives every card one primary, Mark answered where it is offered with Dismiss the quiet word, and says the source on the seen line (Story 40.1)', () => {
     const markup = renderToStaticMarkup(createElement(SessionRequestCard, {
       requests: [
         { ...request('asked', 's1', '2026-09-14T11:55:00.000Z'), openedBy: 'cli' },
@@ -501,10 +501,16 @@ describe('session presentation', () => {
     }))
     const actions = [...markup.matchAll(/<div class="actions">(.*?)<\/div>/gu)].map((match) => match[1]!)
     expect(actions).toHaveLength(3)
-    for (const row of actions) {
-      expect(row.match(/class="primary"/gu)).toHaveLength(1)
-      expect(row).not.toContain('ghost')
+    for (const row of actions) expect(row.match(/class="primary"/gu)).toHaveLength(1)
+    // A question and a permission offer Mark answered: it is the primary and Dismiss the quiet word (owner 2026-10-19, B5);
+    // a notice offers only Dismiss, which stays its plate.
+    for (const row of actions.slice(0, 2)) {
+      expect(row).toMatch(/class="ghost"[^>]*>Dismiss<\/button>/u)
+      expect(row).toMatch(/class="primary"[^>]*>Mark answered<\/button>/u)
     }
+    expect(actions[2]).toMatch(/class="primary"[^>]*>Dismiss<\/button>/u)
+    expect(actions[2]).not.toContain('Mark answered')
+    expect(actions[2]).not.toContain('ghost')
     expect(markup).toContain('<p class="seen">Unseen · awaiting answer · <span class="provenance">from bmn ask</span></p>')
     expect(markup).toContain('awaiting answer · <span class="provenance">from Claude PermissionRequest</span>')
     expect(markup).toContain('update · <span class="provenance">from the terminal (OSC 9)</span>')
