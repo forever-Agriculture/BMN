@@ -125,7 +125,8 @@ export const NAMED = {
       'apps/desktop/src/utility/agents-roster.test.ts': rosterFixture,
       'apps/desktop/src/utility/agents-rules.test.ts': rosterFixture,
       'apps/desktop/src/utility/agents-team-ask.test.ts': rosterFixture,
-      'scripts/test/agents-rules-visual.mjs': rosterFixture
+      'scripts/test/agents-rules-visual.mjs': rosterFixture,
+      'scripts/test/button-screens.mjs': rosterFixture
     }
   },
   [GEM]: {
