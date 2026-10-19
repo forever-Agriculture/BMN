@@ -7,7 +7,7 @@ export { NEXT_STEP, Refusal, firstLine, listDirectory, namesWebTool, optionalNam
  * Harness versions whose destination precedence BMN's tests were written against (Epic 60 spike,
  * 2026-10-09; OpenCode 2.0.28 on 2026-10-14, whose `opencode debug config` read the model from the
  * same global file, and 2.0.29 the same day, on which the helper form was measured, Story 70.1). Any installed version is supported (owner decision 2026-10-10: the apps
- * update faster than BMN can test them); this list only decides the word a receipt and Rules ›
+ * update faster than BMN can test them); this list only decides the word a receipt and Integrations ›
  * Health carry beside the version. The destination itself is resolved and checked at every
  * dispatch, and for OpenCode at every inspection.
  */

@@ -353,7 +353,7 @@ session shows a card with **Allow here** (that provider, that workspace only) an
 blocked**. Claude Code and Codex take that answer through their prompt hook; that your installed
 versions obey has not been tested live yet, and the card says so. OpenCode is not covered.
 
-Rules → **Skills** gives every agent app the skills you keep in one folder: a link, or a copy
+Integrations → **Skills** gives every agent app the skills you keep in one folder: a link, or a copy
 where the app does not follow links, which BMN installs by itself after an approval, after its own
 test of an app passed and at its start, as one step you can undo; it leaves an entry it did not
 write as it is. A
@@ -363,7 +363,7 @@ for an app until its own test, on the installed version, showed where it reads s
 test you run yourself sends one prompt and shows whether the app hands a skill to its model; it
 has not run on a live app yet.
 
-Rules → **Tools** keeps one list of MCP tools and sets each up in every agent app's own settings:
+Integrations → **Tools** keeps one list of MCP tools and sets each up in every agent app's own settings:
 only the tool's entry changes there, every other byte of the file stays, BMN installs by itself as
 it does the skills, and an install is undone as one step. A tool names environment variables and never holds their values. It reaches every
 app, some apps, or only the runs of some agents. Once a tool is on the list, the check before a
@@ -392,12 +392,12 @@ OpenCode folder (OpenCode's `auth export` and `auth import`, the Go entry alone)
 touch your own OpenCode folders or history.
 
 An agent's context limit, set on its page, is added to each run BMN or dev-auto starts with it
-and checked before the run leaves. Rules → **Health** also shows each app's default limit for the
+and checked before the run leaves. Integrations → **Health** also shows each app's default limit for the
 sessions you start yourself and can change it, one line of the app's own settings file, after
 showing the difference. Both work for Codex and Claude Code, and only on an app version where
 BMN's own test there showed that the app takes the setting; until then the limit is kept but not applied.
 
-Rules → **Health** › **Pushes and merges** says what your sessions may push or merge without asking you, by
+Integrations → **Health** › **Pushes and merges** says what your sessions may push or merge without asking you, by
 repository owner: each account or organisation your sessions work in, or that `gh` is signed in as, starts denied
 and gets a switch, and an owner you allowed or a repository you raised stays listed after its last session closes; under an allowed owner each repository has three steps, **PRs only** (push other branches and
 write pull requests, with no label or comment that triggers a deployment or a bot), **Merge when green** (also merge a pull request whose required checks are all green) and

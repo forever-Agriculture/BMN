@@ -143,9 +143,9 @@ function decimalParts(token) {
  * this from the shape of the token was the previous version of this guard, and it was wrong in
  * both directions.
  *
- * Node hands the reviver the literal source from 21 on. `bin/bmn` runs under whatever node the
- * machine has, so where that is missing this finds nothing and `install` behaves as it always did
- * - it is a guard on a rare file, never something `check` depends on.
+ * Node hands the reviver the literal source from 21 on, and BMN requires Node 24 (package.json) or
+ * runs `bin/bmn` on its own runtime, so the source is always there. It is a guard on a rare file,
+ * never something `check` depends on.
  */
 export function rewrittenNumbers(text) {
   const changed = []
