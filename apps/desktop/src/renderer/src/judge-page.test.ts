@@ -144,7 +144,7 @@ describe('Agents › Team with a judge (65.1 AC5, AC7)', () => {
     const proposals = teamProposals(BEFORE, { lunaListed: false, researchers: null })
     expect(proposals?.data).toEqual(DATA)
     const markup = renderToStaticMarkup(createElement(TeamPreferences, { team: team(BEFORE), page: { name: 'agents' }, go: noop, proposals }))
-    expect(words(markup)).toContain('BMN proposes 1 change to your team. Nothing changes until you approve it. Jev as Judge, with its two providers OpenCode Zen and TypeSafe AI, which may both see private work, as you chose')
+    expect(words(markup)).toContain('BMN proposes 1 change to your team. Nothing changes until you approve it. Jev as Judge, with its two providers OpenCode Zen and TypeSafe AI, which may both see private work, as you chose.')
     expect(markup).toMatch(/<div class="page-note with-action" role="status" data-proposals="1">.*?>Approve…<\/button>/)
     expect(teamProposals(DATA, { lunaListed: false, researchers: null })).toBeNull()
     expect(pageMarkup({ name: 'agents' })).not.toMatch(/Use proposal|BMN proposes/)

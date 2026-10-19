@@ -921,7 +921,8 @@ export function UpdateSheet(props: {
   // One line each: what Update now does, the other way, and the test to run again (docs/design.md W2).
   const afterwards = [
     ...(props.onRun ? ['Update now opens a session, types the command at its prompt and presses Enter; you see and answer what the updater asks.',
-      `Or run it in any terminal. BMN reads the version and where ${name} sends data again at each prompt and on Health.`]
+      `BMN rereads ${name}'s version and where it sends data whenever that session's shell is at its prompt, and on Health.`,
+      'Or run the command in any terminal yourself.']
       : [`Run the command in a terminal. Back on Health, BMN reads the version and where ${name} sends data again.`]),
     ...(props.hasTest ? ['A loading test made before the update needs to be run again.'] : [])
   ]
@@ -945,11 +946,17 @@ export function UpdateSheet(props: {
         <span>Command</span><span className="mono wrap">{command ?? 'no program found'}</span>
         <span>Open in BMN</span><span>{sessionsWords(name, props.sessions)}</span>
         <span>Afterwards</span>
-        <span>{afterwards.map((line) => <span key={line}>{line}</span>)}</span>
+        {/* The lines take the gap a review's lines have, so each reads as its own fact (docs/design.md W2). */}
+        <span><span className="review">{afterwards.map((line) => <span key={line}>{line}</span>)}</span></span>
       </div>
       <p className="preferences-help">The updater decides what it downloads and replaces, and may ask; BMN cannot see it first or undo it.</p>
       <p className="preferences-help">BMN does not know whether a newer version exists.</p>
-      {props.onRun ? <p className="preferences-help">A question that a start-up file asks with line editing looks like the prompt to BMN and would get the command.</p> : null}
+      {props.onRun ? (
+        <>
+          <p className="preferences-help">BMN knows the prompt by the sign the shell&apos;s line editor gives.</p>
+          <p className="preferences-help">A question a start-up file asks with line editing gives the same sign and would get the command as its answer.</p>
+        </>
+      ) : null}
       {props.result ? <p role="status">{props.result}</p> : null}
       {said ? <p role="status">{said}</p> : null}
       <div className="inline">
@@ -1289,8 +1296,8 @@ function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
           BMN&apos;s own skill <b>{left.name}</b> is not BMN&apos;s here: {left.state === 'removed' ? 'you removed it, so BMN does not add it back' : left.state === 'foreign' ? `${left.detail}; remove it and BMN adds its own at the next start` : left.detail}.
         </p>
       ))}
-      <p className="preferences-help">A skill reaches every app unless you keep it to some; an app that gets public work only gets just the Public skills.</p>
-      <p className="preferences-help">A change takes effect on approval; BMN then installs it in each app, and at every start what an app lacks.</p>
+      <p className="preferences-help">A skill reaches every app unless you keep it to some; an app held to public work gets only the Public skills.</p>
+      <p className="preferences-help">A change takes effect on approval; BMN then installs it in each app, and at every start installs what an app lacks.</p>
 
       <details className="advanced">
         <summary>Earlier installs</summary>
@@ -1615,7 +1622,7 @@ function ToolsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Ele
       ) : null}
       <p className="preferences-help">A tool names environment variables and never holds their values.</p>
       <p className="preferences-help">It reaches every app unless you keep it to some apps, or to the runs of some agents.</p>
-      <p className="preferences-help">A change takes effect on approval; BMN then installs it in each app&apos;s settings, and at every start what an app lacks.</p>
+      <p className="preferences-help">A change takes effect on approval and goes into each app&apos;s settings; at every start BMN installs what an app lacks.</p>
 
       <details className="advanced">
         <summary>Earlier installs</summary>
@@ -1783,7 +1790,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
         )
       })}
       {pending?.kind === 'test' ? <PendingSheet rules={rules} /> : null}
-      <p className="preferences-help">A loading test starts the app once with the rules in one prompt; BMN runs it itself after an update or a rules change.</p>
+      <p className="preferences-help">A loading test starts the app once with the rules in one prompt; BMN runs it by itself after updates and rules changes.</p>
       {withheld.length > 0 ? <p className="preferences-help">{`It is off for ${named(withheld)}, which ${withheld.length === 1 ? 'gets' : 'get'} only the public sections.`}</p> : null}
 
       <h4 className="group-head">Agent apps<span className="caption">the program BMN finds, its version and where it sends data</span></h4>

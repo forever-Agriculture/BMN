@@ -420,7 +420,7 @@ export function OpenCodeSignInNote(props: { team: TeamState; state: OpenCodeGoSt
   return (
     <div className="page-note with-action" role="status">
       <Dot label="Needs you" />
-      <div className="note-text"><div>{openCodeSignInWords(team.snapshot?.approved?.data)}</div><div>{OPEN_CODE_COPY_WORDS}</div></div>
+      <div className="note-text review"><div>{openCodeSignInWords(team.snapshot?.approved?.data)}</div><div>{OPEN_CODE_COPY_WORDS}</div></div>
       <button type="button" className="small" disabled={state.copying} onClick={state.copy}>{state.copying ? 'Copying…' : 'Copy sign-in'}</button>
     </div>
   )
@@ -475,7 +475,7 @@ function proposalsWords(proposals: TeamProposals, nothingInEffect: string | null
   const count = proposals.clauses.length
   const head = nothingInEffect !== null ? [nothingInEffect, `BMN's proposal${count === 1 ? ' is' : 's are'} included:`]
     : [`BMN proposes ${count} change${count === 1 ? '' : 's'} to your team. Nothing changes until you approve it.`]
-  return [...head, ...proposals.clauses, ...(proposals.notes ?? [])]
+  return [...head, ...proposals.clauses.map((clause) => `${clause}.`), ...(proposals.notes ?? [])]
 }
 
 /**
@@ -493,7 +493,8 @@ function ProposalsCard(props: { team: TeamState; proposals: TeamProposals | null
   return (
     <div className="page-note with-action" role="status" data-proposals={proposals.clauses.length}>
       <Dot label="Needs you" />
-      <div className="note-text">{words.map((line) => <div key={line}>{line}</div>)}</div>
+      {/* Each line apart, with a review's gap between lines, so the head and each proposal read as separate facts (W2). */}
+      <div className="note-text review">{words.map((line) => <div key={line}>{line}</div>)}</div>
       <button type="button" className="primary small" disabled={team.busy} onClick={() => void team.approveProposals(proposals.data, { title, action: 'Approve' })}>Approve…</button>
     </div>
   )
@@ -524,7 +525,7 @@ function AgentsPage(props: { team: TeamState; data: RosterDataShape; proposals: 
       {team.snapshot?.file.link ? (
         <div className="page-note">
           <dl className="kv"><dt>Team file</dt><dd className="path" title={team.snapshot.file.link}><bdi>{displayPath(team.snapshot.file.link, team.snapshot.home)}</bdi></dd></dl>
-          <p className="preferences-help">The team file is a link. Saving here replaces the link with a regular file; the file it points to stays as it is.</p>
+          <p className="preferences-help">The team file is a link. Saving here replaces the link with a regular file; the linked file is untouched.</p>
         </div>
       ) : null}
       {team.outside.groups.length > 0 ? <OutsideHead team={team} /> : null}

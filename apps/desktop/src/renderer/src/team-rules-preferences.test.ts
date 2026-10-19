@@ -254,8 +254,10 @@ describe('Team › a team file that still names Cursor (Epic 71, 71.2 AC3)', () 
     expect(proposals?.clauses[0]).toBe('Cursor was retired on 14 Oct 2026, so Composer, the Cursor route and the Cursor provider are taken out of the team file')
     const markup = renderToStaticMarkup(createElement(TeamPreferences, { team: state, page: { name: 'agents' }, go: noop, proposals }))
     // A head line, then each proposal on a line of its own (docs/design.md W2).
-    expect(words(markup).replace(/\s+/g, ' ')).toContain(`BMN proposes ${proposals?.clauses.length} changes to your team. Nothing changes until you approve it. Cursor was retired on 14 Oct 2026, so Composer, the Cursor route and the Cursor provider are taken out of the team file `)
-    expect(markup).toContain('<div>Cursor was retired on 14 Oct 2026, so Composer, the Cursor route and the Cursor provider are taken out of the team file</div>')
+    expect(words(markup).replace(/\s+/g, ' ')).toContain(`BMN proposes ${proposals?.clauses.length} changes to your team. Nothing changes until you approve it. Cursor was retired on 14 Oct 2026, so Composer, the Cursor route and the Cursor provider are taken out of the team file. `)
+    // Each proposal ends with a full stop, and the lines keep a review's gap between them (Fable's review of 80.5).
+    expect(markup).toContain('<div class="note-text review"><div>BMN proposes')
+    expect(markup).toContain('<div>Cursor was retired on 14 Oct 2026, so Composer, the Cursor route and the Cursor provider are taken out of the team file.</div>')
     expect(markup).toContain('>Approve…</button>')
     expect(proposals?.data.agents.map((entry) => entry.id)).not.toContain('composer')
     // The agent is still shown as the file has it.
@@ -409,7 +411,7 @@ describe('Agents › Roles and Changes (60.5 AC5, AC6)', () => {
 
   it('says a linked team file would be replaced by a regular file before any change is saved', () => {
     const markup = words(pageMarkup({ name: 'agents' }, team({ snapshot: { ...SNAPSHOT, file: { ...SNAPSHOT.file, link: '/home/synthetic/dotfiles/roster.md' } } }))).replace(/\s+/g, ' ')
-    expect(markup).toContain('Team file ~/dotfiles/roster.md The team file is a link. Saving here replaces the link with a regular file; the file it points to stays as it is.')
+    expect(markup).toContain('Team file ~/dotfiles/roster.md The team file is a link. Saving here replaces the link with a regular file; the linked file is untouched.')
     // The path is a key/value row, cut at its head with the whole path in its title, so no word of the note sits alone on a line (80.1).
     expect(pageMarkup({ name: 'agents' }, team({ snapshot: { ...SNAPSHOT, file: { ...SNAPSHOT.file, link: '/home/synthetic/dotfiles/roster.md' } } })))
       .toContain('<dl class="kv"><dt>Team file</dt><dd class="path" title="/home/synthetic/dotfiles/roster.md"><bdi>~/dotfiles/roster.md</bdi></dd></dl>')
@@ -880,7 +882,7 @@ describe('Integrations › Health (60.6 AC4)', () => {
   it('offers no Test…: Test again… only after a failure or once BMN stopped trying, and only where the app may receive private work (Story 75.8)', () => {
     expect(markup).not.toContain('Test…')
     expect(markup).not.toMatch(/aria-label="Test [A-Za-z ]+ again"/)
-    expect(markup).toContain('<p class="preferences-help">A loading test starts the app once with the rules in one prompt; BMN runs it itself after an update or a rules change.</p><p class="preferences-help">It is off for OpenCode, which gets only the public sections.</p>')
+    expect(markup).toContain('<p class="preferences-help">A loading test starts the app once with the rules in one prompt; BMN runs it by itself after updates and rules changes.</p><p class="preferences-help">It is off for OpenCode, which gets only the public sections.</p>')
     const allPublic = RULES.health.state === 'checked' ? { ...RULES.health, targets: RULES.health.targets.map((target) => ({ ...target, kind: 'public' as const })) } : RULES.health
     expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, health: allPublic } })))).toContain('It is off for Claude Code, Codex and OpenCode, which get only the public sections.')
     const after = rulesMarkup('health', rules({ snapshot: { ...RULES,
@@ -962,9 +964,10 @@ describe('Integrations › Health: Update… (60.6: the app\'s own updater, show
     const offered = sheet(1, { onRun: async (name, command) => { typed.push([name, command]); return 'typed' } })
     expect([...offered.matchAll(/<button type="button"( class="primary")?[^>]*>([^<]+)<\/button>/g)].map((match) => [match[2], match[1] !== undefined]))
       .toEqual([['Update now', true], ['Copy command', false], ['Close', false]])
-    expect(words(offered).replace(/\s+/g, ' ')).toContain('Afterwards Update now opens a session, types the command at its prompt and presses Enter; you see and answer what the updater asks. Or run it in any terminal. BMN reads the version and where Codex sends data again at each prompt and on Health.')
+    expect(words(offered).replace(/\s+/g, ' ')).toContain('Afterwards Update now opens a session, types the command at its prompt and presses Enter; you see and answer what the updater asks. BMN rereads Codex&#x27;s version and where it sends data whenever that session&#x27;s shell is at its prompt, and on Health. Or run the command in any terminal yourself.')
+    expect(offered).toContain('<span class="review"><span>Update now opens')
     // What BMN takes for the prompt, and the one case where that is not the prompt, are said before the press.
-    const limit = 'A question that a start-up file asks with line editing looks like the prompt to BMN and would get the command.'
+    const limit = 'BMN knows the prompt by the sign the shell&#x27;s line editor gives. A question a start-up file asks with line editing gives the same sign and would get the command as its answer.'
     expect(words(offered).replace(/\s+/g, ' ')).toContain(`BMN does not know whether a newer version exists. ${limit}`)
     expect(sheet(1)).not.toContain('line editing')
     // Rendering offers; nothing runs until the press.
@@ -1264,7 +1267,7 @@ describe('skills (60.11 AC5)', () => {
   it('offers no Install…: what is not installed yet is said in the head, and BMN installs it (Story 75.9); a skill it cannot read stays out of reach', () => {
     expect(page).toContain('<span class="faint">3 skills · 1 not installed yet</span>')
     expect(page).not.toContain('Install…')
-    expect(words(page)).toContain('A change takes effect on approval; BMN then installs it in each app, and at every start what an app lacks.')
+    expect(words(page)).toContain('A change takes effect on approval; BMN then installs it in each app, and at every start installs what an app lacks.')
     expect(page).toContain('<b class="mono">Bad_Name</b><span class="faint">the name must be lowercase letters, digits and hyphens</span>')
     expect(page).toMatch(/aria-label="Bad_Name is public" disabled=""/)
   })
@@ -1584,9 +1587,9 @@ describe('Agents › Models (60.10, first release)', () => {
     // Each is offered with its class's piece before its name, as on the Team pages.
     expect(offered(page)).toEqual(['Knight Sol:false', 'Rook Fable:true', 'Pawn Luna:false'])
     // One line each: what the researcher gets, then each agent that cannot research and why (docs/design.md W2).
-    expect(page).toContain('<p class="preferences-help">Gets only your model names and the source list, never your files. Runs in an empty folder with web tools only.</p><p class="preferences-help">Glm cannot research: its provider gets public work only.</p><p class="preferences-help">Kimi cannot research: the fence test has not run for this version of OpenCode yet.</p>')
+    expect(page).toContain('<p class="preferences-help">Gets only your model names and the source list, never your files.</p><p class="preferences-help">Runs in an empty folder with web tools only.</p><p class="preferences-help">Glm cannot research: its provider gets public work only.</p><p class="preferences-help">Kimi cannot research: the fence test has not run for this version of OpenCode yet.</p>')
     expect(page).not.toContain('synthetic')
-    expect(researcherHint({ harness: 'claude' })).toEqual(['Gets only your model names and the source list, never your files. Runs in an empty folder with web tools only.'])
+    expect(researcherHint({ harness: 'claude' })).toEqual(['Gets only your model names and the source list, never your files.', 'Runs in an empty folder with web tools only.'])
     expect(page).toContain('<ol class="sources"><li>Provider pages</li><li>Other sites</li></ol>')
     expect(words(page)).not.toMatch(SCHEMA_WORDS)
   })
@@ -1599,7 +1602,7 @@ describe('Agents › Models (60.10, first release)', () => {
       const hint = researcherHint(sol)
       expect(hint).toEqual(['Gets only your model names and the source list, never your files.', 'Runs in an empty folder, with a Codex folder of its own and web search.',
         'Codex also offers exec (a script tool that reaches apply_patch and web__run), spawn_agent, request_user_input and wait; this Codex version\'s fence test showed none of them reads or writes your files.'])
-      expect(hint[0]).toBe(researcherHint({ harness: 'claude' })[0]!.split(' Runs')[0])
+      expect(hint[0]).toBe(researcherHint({ harness: 'claude' })[0])
       expect(withSnapshot({ researcher: 'sol' })).toContain(hint.map((line) => `<p class="preferences-help">${line.replace(/'/g, '&#x27;')}</p>`).join(''))
       // Until the tools were compared under the provider's own model list, the first research says what it does first (AC6).
       expect(researcherHint({ ...sol, fence: { tools: FENCE_TOOLS, compared: false } })).toContain('Its first research repeats the fence test under the provider\'s model list; another tool list stops it before any answer.')
@@ -1695,7 +1698,8 @@ describe('Agents › Models (60.10, first release)', () => {
       expect(words(page)).toContain('OpenCode fence test')
       expect(words(page).replace(/\s+/g, ' ')).toContain('Kimi researches only where this test passed for exactly the installed OpenCode: the fence test has not run for this version of OpenCode yet. BMN runs it by itself when OpenCode')
       expect(words(withSnapshot({ researchers: RESEARCH.researchers.filter((entry) => entry.harness !== 'opencode') }))).not.toContain('OpenCode fence test')
-      expect(words(untested)).toContain('Sol cannot research: the fence test has not run for this version of Codex yet.')
+      // Agents held back for one reason share one line (Fable's review of 80.5).
+      expect(words(untested)).toContain('Sol and Luna cannot research: the fence test has not run for this version of Codex yet.')
       expect(offered(untested)).toEqual(['Rook Fable:true'])
       expect(words(withSnapshot({ researchers: closed, fenceTest: { running: true, ended: null, last: [] } }))).toContain('Testing…')
     })

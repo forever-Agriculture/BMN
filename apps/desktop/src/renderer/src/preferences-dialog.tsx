@@ -1013,7 +1013,8 @@ export function PreferencesDialog(props: {
               <details className="advanced">
                 <summary>What is checked, and what it cannot see</summary>
                 <div className="advanced-body">
-                  <dl className="kv" aria-label="Alerts at">
+                  <p>Alerts at these fixed limits:</p>
+                  <dl className="kv" aria-label="Alerts at these fixed limits">
                     <dt>CPU</dt><dd>{HEALTH_LIMITS.cpuCritical} °C on one reading, or {HEALTH_LIMITS.cpuHot} °C on {HEALTH_LIMITS.cpuHotReadings} in a row</dd>
                     <dt>NVIDIA GPU</dt><dd>{HEALTH_LIMITS.nvidiaGpu} °C</dd>
                     <dt>Integrated GPU</dt><dd>{HEALTH_LIMITS.integratedGpu} °C</dd>
@@ -1022,7 +1023,6 @@ export function PreferencesDialog(props: {
                     <dt>Mains</dt><dd>power lost</dd>
                     <dt>CPU reading</dt><dd>cannot be read</dd>
                   </dl>
-                  <p>These are the alert limits; they are fixed.</p>
                   <p>A message holds the time, this machine&apos;s name, each problem with one line of advice, and all readings.</p>
                   <p>While a problem stays, it repeats every {HEALTH_LIMITS.repeatMinutes} minutes; one &ldquo;Back to normal&rdquo; follows when it ends.</p>
                   <p>It only reads and reports: BMN never stops, slows or suspends anything. A sleeping NVIDIA card is not woken to be asked.</p>

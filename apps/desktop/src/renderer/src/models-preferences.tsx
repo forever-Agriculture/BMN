@@ -148,7 +148,7 @@ export function researchedModels(snapshot: ResearchSnapshot | null): { models: r
  */
 export function researcherHint(researcher: Pick<ResearcherView, 'harness' | 'fence'> | undefined): string[] {
   const gets = 'Gets only your model names and the source list, never your files.'
-  if (researcher?.harness !== 'codex') return [`${gets} Runs in an empty folder with web tools only.`]
+  if (researcher?.harness !== 'codex') return [gets, 'Runs in an empty folder with web tools only.']
   const first = researcher.fence?.compared === false ? ["Its first research repeats the fence test under the provider's model list; another tool list stops it before any answer."] : []
   return [gets, 'Runs in an empty folder, with a Codex folder of its own and web search.', codexToolsLine(researcher.fence?.tools ?? []), ...first]
 }
@@ -243,8 +243,14 @@ function Facts(props: { model: ResearchModelView; teamHas?: string | undefined }
 }
 
 /** The agents that cannot research now, each with why in a few plain words; the check's own message stays in `bmn roster check`. */
+/** Who cannot research and why: agents with one reason share one line ("Sol, Astra and Luna cannot research: …"). */
 function notOffered(unable: readonly ResearcherView[]): string[] {
-  return unable.map((entry) => `${entry.name} cannot research${entry.why ? `: ${entry.why}` : ''}.`)
+  const reasons = [...new Set(unable.map((entry) => entry.why ?? ''))]
+  return reasons.map((why) => {
+    const names = unable.filter((entry) => (entry.why ?? '') === why).map((entry) => entry.name)
+    const who = names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`
+    return `${who} cannot research${why ? `: ${why}` : ''}.`
+  })
 }
 
 function FoundLine(props: { model: ResearchModelView; provider: string; add(): void }): React.JSX.Element {
@@ -386,7 +392,7 @@ export function ModelsPage(props: {
       </Row>
       {codex.length > 0 ? <FenceRow harness="codex" researchers={codex} snapshot={snapshot} research={research} locked={testing || running || research.busy} /> : null}
       {openCode.length > 0 ? <FenceRow harness="opencode" researchers={openCode} snapshot={snapshot} research={research} locked={testing || running || research.busy} /> : null}
-      <Row label="Sources" hint="Provider pages first; other sites are cited, never override. BMN reads each cited page and marks what it cannot confirm.">
+      <Row label="Sources" hint={['Provider pages first; other sites are cited and never override them.', 'BMN reads each cited page and marks what it cannot confirm.']}>
         <ol className="sources"><li>Provider pages</li><li>Other sites</li></ol>
       </Row>
       {applying && changes.length > 0 ? (

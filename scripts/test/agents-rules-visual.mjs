@@ -1466,7 +1466,8 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     await radioOf(researcher).click()
     await radioOf(researcher).and(main.locator('[aria-checked="true"]')).waitFor()
     if (researcher.name !== able[0]) assert.equal(JSON.parse(readFileSync(join(stateDir, 'research/settings.json'), 'utf8')).researcher, researcher.id)
-    await main.getByText('Gets only your model names and the source list, never your files. Runs in an empty folder with web tools only.', { exact: false }).waitFor()
+    await main.getByText('Gets only your model names and the source list, never your files.', { exact: true }).first().waitFor()
+    await main.getByText('Runs in an empty folder with web tools only.', { exact: true }).waitFor()
     assert.deepEqual(await main.locator('.sources li').allTextContents(), ['Provider pages', 'Other sites'])
     await shot('models-empty-1280.png')
 
@@ -1863,7 +1864,8 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     await who.waitFor()
     // Nothing is on record for this Codex: no Codex agent is offered, each is named with why, and the page offers the test.
     assert.deepEqual(fenceRecord(), [])
-    for (const name of codexNames) await main.getByText(new RegExp(`${name} cannot research: ${untested}\\.`)).waitFor()
+    // Agents held back for one reason share one line (Fable's review of 80.5): each name is in it.
+    for (const name of codexNames) await main.getByText(new RegExp(`\\b${name}\\b[^:]* cannot research: ${untested}\\.`)).waitFor()
     assert.equal((await offeredNow()).some((name) => codexNames.includes(name)), false, 'a Codex agent is offered with no fence test on record')
     await fenceRow.getByText(`${inWords(codexNames)} research only where this test passed for exactly the installed Codex: ${untested}.`, { exact: false }).waitFor()
     // A team from before the choice: it offers what it offered, both Opus among them, and the page says the choice waits for him.
@@ -1910,11 +1912,10 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     assert.deepEqual(approved().agents.filter((agent) => agent.researcher === true).map((agent) => agent.id), proposedIds)
     const namedClaude = proposedIds.filter((id) => teamWithTwo.agents.find((agent) => agent.id === id).harness === 'claude').map(nameOf).sort()
     // Only the named agents are spoken of at all: one Opus, and no line for Astra or the second Opus; the pick that fell away is said once.
-    await main.getByText(new RegExp(`Sol cannot research: ${untested}\\.`)).waitFor()
-    await main.getByText(new RegExp(`Luna cannot research: ${untested}\\.`)).waitFor()
+    await main.getByText(new RegExp(`^Sol and Luna cannot research: ${untested}\\.$`)).waitFor()
     assert.deepEqual(await offeredNow(), namedClaude)
     assert.equal(await who.getByRole('radio', { name: 'Knight Opus', exact: true }).count(), 1, 'the Opus the team names is not the one offered')
-    assert.equal(await main.getByText(/Astra cannot research|Kimi cannot research/).count(), 0, 'an agent the team does not name is still spoken of')
+    assert.equal(await main.getByText(/\b(Astra|Kimi)\b[^:]* cannot research/).count(), 0, 'an agent the team does not name is still spoken of')
     await main.getByText(/^Astra is no longer one of your team's researchers, so no researcher is picked\. Pick one below\.$/).waitFor()
     // Nobody stands in for the pick that fell away: none is selected, and Research now waits for his pick.
     assert.equal(await who.locator('[role="radio"][aria-checked="true"]').count(), 0, 'another agent was picked in place of the one that fell away')
@@ -1984,7 +1985,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
       await go('Team')
       const waits = main.locator('.page-note.with-action[data-proposals]')
       assert.deepEqual(await waits.locator('.note-text > div').allTextContents(), ['BMN proposes 1 change to your team. Nothing changes until you approve it.',
-        'Jev as Judge, with its two providers OpenCode Zen and TypeSafe AI, which may both see private work, as you chose'])
+        'Jev as Judge, with its two providers OpenCode Zen and TypeSafe AI, which may both see private work, as you chose.'])
       await shot('judge-proposal-1280.png')
       const beforeProposal = { roster: rosterHash(), state: stateHash() }
       // Approve… stages Jev and opens the approval at once; the card goes, as nothing is left to propose.

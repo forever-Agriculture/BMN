@@ -117,7 +117,9 @@ describe('Health alerts row (Story 62.2)', () => {
     expect(help).toContain('<dt>NVIDIA GPU</dt><dd>87 °C</dd><dt>Integrated GPU</dt><dd>95 °C</dd><dt>Drive</dt><dd>80 °C</dd>')
     expect(help).toContain('<dt>Battery</dt><dd>outside 3.0–4.45 V per cell, or no longer detected</dd>')
     expect(help).toContain('<dt>Mains</dt><dd>power lost</dd><dt>CPU reading</dt><dd>cannot be read</dd>')
-    expect(help).toContain('These are the alert limits; they are fixed.')
+    // The rows are led by what they are; no sentence trails after them (Fable's review of 80.5). No visual state opens this disclosure, so this render is their check.
+    expect(help).toContain('<p>Alerts at these fixed limits:</p><dl class="kv" aria-label="Alerts at these fixed limits"><dt>CPU</dt>')
+    expect(help).not.toContain('These are the alert limits')
     expect(help).toContain('A message holds the time, this machine&#x27;s name, each problem with one line of advice, and all readings.')
     expect(help).toContain('repeats every 10 minutes')
     expect(help).toContain('It runs only while BMN is open. It cannot see smoke, a swelling battery, or a machine that has died.')
