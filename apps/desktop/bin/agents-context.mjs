@@ -6,6 +6,7 @@ import { dirname } from 'node:path'
 import { APP_NAMES, RosterError, agentState, agentsDirectory, appName, sha256 } from './agents-roster.mjs'
 import { absoluteUncollapsed, jsonIndent, pathState, replaceFileSafely, resolvedPath } from './safe-config-write.mjs'
 import { unifiedDiff } from './text-diff.mjs'
+import { thousands } from './shared-helpers.mjs'
 
 /**
  * An agent's `context_limit` is how large its conversation may grow; `compact_at` is where the app
@@ -47,10 +48,6 @@ export class ContextError extends Error {
     this.name = 'ContextError'
     this.code = code
   }
-}
-
-function thousands(value) {
-  return String(value).replace(/\B(?=(\d{3})+$)/g, ' ')
 }
 
 /** A whole number of tokens as TOML or an environment value writes it, or null. */

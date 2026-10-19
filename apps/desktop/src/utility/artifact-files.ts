@@ -214,7 +214,7 @@ function sameFile(left: Stats, right: Stats): boolean {
   )
 }
 
-async function ensurePrivateDirectory(path: string): Promise<void> {
+async function ensurePrivateDirectoryAsync(path: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 })
   await chmod(path, 0o700)
 }
@@ -565,7 +565,7 @@ export class ArtifactFileStore {
     this.inFlightStaging.add(name)
     let staging: FileHandle | undefined
     try {
-      await ensurePrivateDirectory(this.stagingRoot)
+      await ensurePrivateDirectoryAsync(this.stagingRoot)
       staging = await open(stagingPath, 'wx', 0o600)
       const copied = await write(staging)
       await staging.close()
@@ -591,7 +591,7 @@ export class ArtifactFileStore {
   private async install(stagingPath: string, artifactId: string, sha256: string): Promise<string> {
     const storedPath = this.storedPathFor(artifactId, sha256)
     const directory = dirname(storedPath)
-    await ensurePrivateDirectory(this.root)
+    await ensurePrivateDirectoryAsync(this.root)
     await mkdir(directory, { recursive: true, mode: 0o700 })
     if (await lstatOrUndefined(storedPath)) {
       // A retried import of identical bytes is idempotent; anything else would replace an immutable original.

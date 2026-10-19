@@ -7,7 +7,7 @@ import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, CONTEXT_
 import { OPENCODE_ASK_AGENTS, OPENCODE_HELPER_AGENT, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
 import { Refusal, optionalNames, optionalText, traceRead } from './agents-check-base.mjs'
 import { CODEX_ACCESS_KEYS, CODEX_NEUTRAL_KEYS, CODEX_ROUTE_KEYS, dispatchEnvironment, parseDispatch, readCodexConfig, tomlKeyPath, unquoteToml } from './agents-check-argv.mjs'
-import { isObject } from './agents-check-workspace.mjs'
+import { isObject, spellings } from './shared-helpers.mjs'
 
 export { inspectOpenCode }
 
@@ -30,16 +30,6 @@ const NO_HOME = 'the command runs without HOME, so BMN cannot tell which setting
 
 /** The config.toml keys that say where Codex sends data. */
 const CODEX_DESTINATION_KEYS = ['model_provider', 'profile', 'openai_base_url', 'chatgpt_base_url']
-
-/** A folder as it was written and, when a link leads elsewhere, as it really is: an app may walk up from either. */
-function spellings(folder) {
-  try {
-    const real = realpathSync(folder)
-    return real === folder ? [folder] : [folder, real]
-  } catch {
-    return [folder]
-  }
-}
 
 /** Each folder from `start` up to the root. */
 function foldersAbove(start) {

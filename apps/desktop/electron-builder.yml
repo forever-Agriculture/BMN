@@ -32,6 +32,9 @@ extraResources:
     to: bin/safe-config-write.mjs
   - from: bin/text-diff.mjs
     to: bin/text-diff.mjs
+  # Story 80.15: the small helpers the bin modules share, bmn.mjs's own isObject among them.
+  - from: bin/shared-helpers.mjs
+    to: bin/shared-helpers.mjs
   # Epic 60: the roster, approval-state reader, dispatch check and rules master that bmn.mjs imports.
   - from: bin/agents-roster.mjs
     to: bin/agents-roster.mjs

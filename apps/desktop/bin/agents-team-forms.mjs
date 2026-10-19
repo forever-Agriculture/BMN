@@ -4,6 +4,7 @@ import { closeSync, existsSync, lstatSync, openSync, readSync, realpathSync, sta
 import { dirname, join } from 'node:path'
 import { openCodeAskConfig, openCodeEnvironment, openCodeFolder } from './agents-opencode.mjs'
 import { BROWSER_SERVER, browserServer, browserTools } from './agents-team-browser.mjs'
+import { realOrNull } from './shared-helpers.mjs'
 
 /**
  * A teammate's ask runs its app in that app's own read-only mode, with all the tools the mode keeps
@@ -69,14 +70,6 @@ export const CLAUDE_ASK_TOOLS = Object.freeze(['--restricted', '--tools', 'Read,
 /** PATH without BMN's own wrappers, so the app found is the one the owner installed. */
 export function appSearchPath(environment = process.env) {
   return (environment.PATH ?? '').split(':').filter((entry) => entry !== '' && !entry.includes('/resources/bin') && !entry.endsWith('/apps/desktop/bin')).join(':')
-}
-
-function realOrNull(path) {
-  try {
-    return realpathSync(path)
-  } catch {
-    return null
-  }
 }
 
 function onPath(name, path) {

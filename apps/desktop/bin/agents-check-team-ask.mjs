@@ -11,8 +11,9 @@ import { OPENCODE_ASK_AGENTS, openCodeAskConfig } from './agents-opencode.mjs'
 import { NEXT_STEP, Refusal, TESTED_HARNESS_VERSIONS, readText, refuse } from './agents-check-base.mjs'
 import { dispatchEnvironment, parseDispatch, parseOpenCode } from './agents-check-argv.mjs'
 import { inspectOpenCode, resolveClaudeRoute, resolveCodexRoute, resolveOpenCodeRoute } from './agents-check-routes.mjs'
-import { canonicalDirectory, committedBlob, destinationOf, harnessVersion, hashFile, isObject, privateWorkAnswer, readReceiptFile, receiptHash, workspaceVisibility } from './agents-check-workspace.mjs'
+import { canonicalDirectory, committedBlob, destinationOf, harnessVersion, hashFile, privateWorkAnswer, readReceiptFile, receiptHash, workspaceVisibility } from './agents-check-workspace.mjs'
 import { activeAgent, checkModelAndEffort, checkRoleEffort, evaluate, evaluateResearch, matchedDestination, receiptAnswer, receiptRoute, versionStanding } from './agents-check-evaluate.mjs'
+import { isObject } from './shared-helpers.mjs'
 
 // ---------------------------------------------------------------------------------------------
 // A teammate's ask (Epic 72)

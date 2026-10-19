@@ -22,7 +22,7 @@ const PARKED = /\bpark(?:ed|s)?\b/iu
 
 const sha256 = (data) => createHash('sha256').update(data).digest('hex')
 const slugOf = (title) => title.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 48) || 'epic'
-const pad = (number) => String(number).padStart(3, '0')
+const pad3 = (number) => String(number).padStart(3, '0')
 
 /** Every file under a folder, without following links; a link is listed as a link. */
 function filesUnder(root, base = root) {
@@ -211,7 +211,7 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
   const { segments } = segmentEpics(epicsText)
   const board = parseBoard(boardText)
   const epics = segments.filter((segment) => segment.kind === 'epic')
-  const epicFile = new Map(epics.map((epic) => [epic.number, `epics/${pad(epic.number)}-${slugOf(epic.title)}.md`]))
+  const epicFile = new Map(epics.map((epic) => [epic.number, `epics/${pad3(epic.number)}-${slugOf(epic.title)}.md`]))
   const sharedNames = new Set()
   const sharedFile = (segment) => {
     let name = segment.kind === 'front' ? 'front-matter.md' : `${slugOf(segment.title.replace(/^Extension:?\s*/iu, ''))}.md`

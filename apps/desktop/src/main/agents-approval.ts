@@ -1,7 +1,7 @@
 // MODULE: agents-approval.ts - Epic 60.2: the only writer of approved roster generations, used by the Agents panel
 import { randomBytes } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { appendFileSync, closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
 import {
   ID_PATTERN, RESERVED_SECTIONS, RosterError, SHARED_SECTIONS, agentsDirectory, choiceEnded, collisionWords, outsideYamlBlocks, parseRoster, projectChoiceCollisions, projectChoiceProblem, resolvedDirectory, rewriteRoster, rosterPath, sha256,
@@ -13,6 +13,7 @@ import {
 } from '../../bin/agents-state.mjs'
 import { pathState, replaceFileSafely, type PathState } from '../../bin/safe-config-write.mjs'
 import { canonicalProject, mainWorktree } from '../../bin/agents-team-inputs.mjs'
+import { ensurePrivateDirectory } from '../../bin/shared-helpers.mjs'
 
 /**
  * Approval is workflow protection against same-user processes, not an OS boundary
@@ -76,11 +77,6 @@ function linuxStartIdentity(pid: number): string | null {
   } catch {
     return null
   }
-}
-
-function ensurePrivateDirectory(path: string): void {
-  mkdirSync(path, { recursive: true, mode: 0o700 })
-  chmodSync(path, 0o700)
 }
 
 /** Writes `text` so a crash leaves either the old file or the whole new one: temp, fsync, rename, fsync the folder. */

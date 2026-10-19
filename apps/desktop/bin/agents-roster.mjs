@@ -1,7 +1,9 @@
 // MODULE: agents-roster.mjs - Epic 60: parse, validate and print the owner's typed agent roster (~/.config/bmn/agents/roster.md)
-import { createHash } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { isObject, sha256 } from './shared-helpers.mjs'
+// The roster module still exports sha256: its callers import it from here.
+export { sha256 }
 
 /**
  * The roster is Markdown: a `## <section>` per agent and per table, each holding exactly one fenced
@@ -58,7 +60,7 @@ export function appRefusal(app, words) {
  */
 const CALLED_BY_BMN = 'bmn'
 const CALLED_WORDS = 'called by BMN'
-/** Whether an agent is called by BMN itself instead of running in an agent app. */
+/** Whether an agent is called by BMN itself instead of running in an agent app. Mirrored in renderer roster-staging.ts, which cannot load bin modules. */
 export function isCalled(agent) {
   return agent?.harness === CALLED_BY_BMN
 }
@@ -133,12 +135,13 @@ export const ROLE_FIELDS = ['description', 'candidates', 'then', 'recheck', 'sma
 /**
  * Whether BMN proposes to hold a role to read-only (63.2): every role whose name ends in `reviewer`,
  * and the consultant. A proposal only: a role is held once the approved team marks it `read_only`.
+ * Mirrored in renderer roster-staging.ts (the renderer cannot load bin modules); team-rules-preferences.test.ts compares the two.
  */
 export function readOnlyProposed(roleId) {
   return /reviewer$/.test(roleId) || roleId === 'consultant'
 }
 
-/** The roles of a team that BMN proposes to hold to read-only and that are not held yet. */
+/** The roles of a team that BMN proposes to hold to read-only and that are not held yet. Mirrored in renderer roster-staging.ts, which cannot load bin modules. */
 export function readOnlyProposal(data) {
   return (data?.roles ?? []).filter((role) => role.read_only !== true && readOnlyProposed(role.id)).map((role) => role.id)
 }
@@ -151,7 +154,7 @@ export const RESEARCH_APPS = ['claude', 'codex', 'opencode']
  * mark, in which no agent carries it at all: that team keeps offering every agent that can
  * research. A team that carries the mark has made its choice and names exactly the agents marked
  * `true`: none at all where every mark is `false`, so taking the last researcher away leaves
- * nobody researching, never everybody again.
+ * nobody researching, never everybody again. Mirrored in renderer roster-staging.ts, which cannot load bin modules.
  */
 export function namedResearchers(data) {
   const agents = data?.agents ?? []
@@ -201,6 +204,7 @@ export const JUDGE_PROPOSAL = {
  * already holds an agent called by BMN or a role judge (the choice is the owner's from then on), or
  * an agent or role of another kind already uses the proposal's names. A proposal only: nothing can
  * be asked until the owner approves it like every team change.
+ * Mirrored in renderer roster-staging.ts (the renderer cannot load bin modules); judge-page.test.ts compares the two.
  */
 export function judgeProposal(data) {
   if (!data || data.agents.some(isCalled) || data.roles.some((role) => role.id === JUDGE_ROLE) || data.agents.some((agent) => agent.id === JUDGE_PROPOSAL.agent.id)) return null
@@ -354,10 +358,6 @@ export function canonicalJson(value) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`
   }
   return JSON.stringify(value)
-}
-
-export function sha256(text) {
-  return createHash('sha256').update(text).digest('hex')
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -632,10 +632,6 @@ function isString(value, max) {
   return typeof value === 'string' && value.length > 0 && value.length <= max && ![...value].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f)
 }
 
-function isMap(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
 function isDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const date = new Date(`${value}T00:00:00Z`)
@@ -646,6 +642,7 @@ function distinctList(max, each) {
   return (value) => Array.isArray(value) && value.length <= max && value.every(each) && new Set(value).size === value.length
 }
 
+// Mirrored in renderer roster-staging.ts, which cannot load bin modules.
 function parseCandidate(text) {
   const match = CANDIDATE_PATTERN.exec(String(text))
   if (!match) return null
@@ -742,7 +739,7 @@ export function parseRoster(text, { now = new Date() } = {}) {
   const roleIds = new Set(roles.map((role) => role.id))
   // A role judge that is written but wrong has its own error already.
   const rolesBlock = blocks.get('roles')
-  const judgeWritten = isMap(rolesBlock?.value) && Object.hasOwn(rolesBlock.value, JUDGE_ROLE)
+  const judgeWritten = isObject(rolesBlock?.value) && Object.hasOwn(rolesBlock.value, JUDGE_ROLE)
   for (const agent of agentById.values()) {
     const entry = blocks.get(agent.id)
     if (isRetired(agent.harness)) warn('APP_RETIRED', entry.lines.get('harness'), `${agent.id} runs in ${retiredWords(agent.harness)}; nothing runs on it, and BMN proposes removing it on Team`)
@@ -788,7 +785,7 @@ function checkFields(entry, allowed, where, add) {
 }
 
 function priceProblem(price) {
-  if (!isMap(price)) return 'a map of input and output (USD per million tokens), optionally cached_input, source and as_of'
+  if (!isObject(price)) return 'a map of input and output (USD per million tokens), optionally cached_input, source and as_of'
   const unknown = Object.keys(price).filter((key) => !PRICE_FIELDS.includes(key))
   if (unknown.length > 0) return `unknown field ${unknown.join(', ')}; a price holds ${PRICE_FIELDS.join(', ')}`
   const amount = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1_000_000
@@ -942,7 +939,7 @@ function validateProviders(entry, add) {
       add('INVALID_VALUE', line, `## providers: provider id ${id} must match [a-z0-9-]{1,32}`)
       continue
     }
-    if (!isMap(provider)) {
+    if (!isObject(provider)) {
       add('INVALID_VALUE', line, `## providers.${id} must be a map of name, hosts and private_work`)
       continue
     }
@@ -984,7 +981,7 @@ function validateRoutes(entry, providerIds, add, warn) {
       add('UNKNOWN_FIELD', line, `## harness-routes: unknown harness ${harness}`)
       continue
     }
-    if (!isMap(route)) {
+    if (!isObject(route)) {
       add('INVALID_VALUE', line, `## harness-routes.${harness} must be a map of provider and basis`)
       continue
     }
@@ -1030,7 +1027,7 @@ function validateRoles(entry, agentById, agentIds, add, warnings, schema) {
       add('INVALID_VALUE', line, `## roles: role id ${id} must match [a-z0-9-]{1,32}`)
       continue
     }
-    if (!isMap(role)) {
+    if (!isObject(role)) {
       add('INVALID_VALUE', line, `## roles.${id} must be a map with candidates and then`)
       continue
     }
@@ -1089,7 +1086,7 @@ function validateRoles(entry, agentById, agentIds, add, warnings, schema) {
     }
     if (Object.hasOwn(role, 'recheck')) {
       const recheck = role.recheck
-      if (!isMap(recheck)) {
+      if (!isObject(recheck)) {
         fail('INVALID_VALUE', { key: 'recheck', text: 'recheck must be a map: same_reviewer plus agent: effort overrides' })
       } else {
         if (typeof recheck.same_reviewer !== 'boolean') fail('INVALID_VALUE', { key: 'recheck', text: 'recheck.same_reviewer must be true or false' })
@@ -1134,7 +1131,7 @@ function validateJudge(role, entry, agentById, agentIds, add, warnings, schema) 
     fail('SCHEMA_VERSION', 'candidates', `the role ${JUDGE_ROLE} needs schema_version: 3 in ## roster, and this file says ${schema}; ${SCHEMA_3_CHANGES}`)
     return null
   }
-  if (!isMap(role)) {
+  if (!isObject(role)) {
     fail('INVALID_VALUE', 'candidates', 'must be a map with candidates and then')
     return null
   }
@@ -1195,7 +1192,7 @@ function validateExceptions(entry, providerIds, add, warn) {
       add('INVALID_VALUE', line, `## exceptions: id ${id} must match [a-z0-9-]{1,32}`)
       continue
     }
-    if (!isMap(exception)) {
+    if (!isObject(exception)) {
       add('INVALID_VALUE', line, `## exceptions.${id} must be a map of provider and folder`)
       continue
     }
@@ -1241,7 +1238,7 @@ function validateExceptions(entry, providerIds, add, warn) {
  * grants nothing: private work, tools and reach stay the team's.
  */
 function validateProjectChoices(entry, add, warn) {
-  if (!entry || !isMap(entry.value)) return {}
+  if (!entry || !isObject(entry.value)) return {}
   const choices = []
   const taken = new Map()
   const ids = Object.keys(entry.value)
@@ -1253,7 +1250,7 @@ function validateProjectChoices(entry, add, warn) {
       add('INVALID_VALUE', line, `## project-choices: id ${id} must match [a-z0-9-]{1,32}`)
       continue
     }
-    if (!isMap(choice)) {
+    if (!isObject(choice)) {
       add('INVALID_VALUE', line, `${where} must be a map of project, role, agent and optionally effort and ends`)
       continue
     }
@@ -1324,6 +1321,7 @@ export function privateWorkOf(data, agent) {
  * The two parties of an agent called by BMN, each with its private-work answer, and the one
  * sentence that says what follows: private work only where both allow it, otherwise public work
  * only, with who holds it back.
+ * Mirrored in renderer roster-staging.ts (the renderer cannot load bin modules); judge-page.test.ts compares the two.
  */
 export function calledParties(data, agent) {
   const party = (id) => {
@@ -1524,7 +1522,7 @@ function validateSkills(entry, add, warn) {
   } else {
     for (const name of open) mark(name).public = true
   }
-  if (!isMap(only)) {
+  if (!isObject(only)) {
     add('INVALID_VALUE', entry.lines.get('only') ?? where, '## skills: only must be a map of skill name to a list of apps')
   } else {
     for (const [name, apps] of Object.entries(only)) {
@@ -1583,7 +1581,7 @@ function validateTools(entry, agentIds, add, warn) {
       add('INVALID_VALUE', line, `## tools: tool id ${id} must be lowercase letters, digits, - or _, at most 40`)
       continue
     }
-    if (!isMap(tool)) {
+    if (!isObject(tool)) {
       add('INVALID_VALUE', line, `## tools.${id} must be a map of name and command or url`)
       continue
     }
@@ -1606,7 +1604,7 @@ function validateTools(entry, agentIds, add, warn) {
     }
     const out = { id, name: tool.name, ...(local ? { command: tool.command } : {}), ...(remote ? { url: tool.url } : {}) }
     if (Object.hasOwn(tool, 'args')) {
-      const fine = (arg) => plainText(arg, 400) || arg === '' || (isMap(arg) && Object.keys(arg).length === 1 && typeof arg.env === 'string' && ENV_NAME_PATTERN.test(arg.env))
+      const fine = (arg) => plainText(arg, 400) || arg === '' || (isObject(arg) && Object.keys(arg).length === 1 && typeof arg.env === 'string' && ENV_NAME_PATTERN.test(arg.env))
       if (!local) fail('INVALID_VALUE', 'args', 'args belong to a command, not to a url')
       else if (!Array.isArray(tool.args) || tool.args.length > 40 || !tool.args.every(fine)) fail('INVALID_VALUE', 'args', 'args must be a list of at most 40 texts, or {env: NAME} for a value kept in an environment variable')
       else if (tool.args.length > 0) out.args = tool.args
@@ -1616,7 +1614,7 @@ function validateTools(entry, agentIds, add, warn) {
       const map = tool[key]
       if (key === 'headers' && !remote) fail('INVALID_VALUE', key, 'headers belong to a url, not to a command')
       else if (key === 'env' && !local) fail('INVALID_VALUE', key, 'env belongs to a command, not to a url')
-      else if (!isMap(map) || Object.keys(map).length > max || !Object.entries(map).every(([name, variable]) => pattern.test(name) && typeof variable === 'string' && ENV_NAME_PATTERN.test(variable))) {
+      else if (!isObject(map) || Object.keys(map).length > max || !Object.entries(map).every(([name, variable]) => pattern.test(name) && typeof variable === 'string' && ENV_NAME_PATTERN.test(variable))) {
         fail('INVALID_VALUE', key, `${key} must map ${what} to the name of an environment variable (never its value), at most ${max}`)
       } else if (Object.keys(map).length > 0) out[key] = Object.fromEntries(Object.entries(map).sort(([a], [b]) => (a < b ? -1 : 1)))
     }
@@ -1651,7 +1649,7 @@ function toolsYaml(data) {
 
 /** The tools part of machine data read back from a block's parsed value, the way `validateTools` builds it. */
 function toolsFromBlock(value, agentIds) {
-  if (!isMap(value)) return undefined
+  if (!isObject(value)) return undefined
   const issues = []
   const out = validateTools({ value, lines: new Map(), block: { startLine: 0 } }, agentIds, (code) => issues.push(code))
   return issues.length > 0 ? undefined : out.tools ?? []
@@ -1671,7 +1669,7 @@ function skillsYaml(data) {
 
 /** The skills part of machine data read back from a block's parsed value, the way `validateSkills` builds it. */
 function skillsFromBlock(value) {
-  if (!isMap(value)) return undefined
+  if (!isObject(value)) return undefined
   const issues = []
   const out = validateSkills({ value, lines: new Map(), block: { startLine: 0 } }, (code) => issues.push(code))
   return issues.length > 0 ? undefined : { skills: out.skills ?? [], source: out.skills_source ?? null }
@@ -1760,7 +1758,7 @@ function blockValue(section) {
 }
 
 function agentFromBlock(id, value) {
-  if (!isMap(value)) return undefined
+  if (!isObject(value)) return undefined
   const agent = { id }
   for (const key of Object.keys(value)) agent[key] = value[key]
   if (isCalled(agent) && !Object.hasOwn(agent, 'efforts')) agent.efforts = []
@@ -1769,8 +1767,8 @@ function agentFromBlock(id, value) {
 
 /** A keyed block read back the way `keyedYaml` wrote it. */
 function keyedFromBlock(value, keyField) {
-  if (!isMap(value)) return undefined
-  return Object.entries(value).map(([key, entry]) => ({ [keyField]: key, ...(isMap(entry) ? entry : { invalid: entry }) }))
+  if (!isObject(value)) return undefined
+  return Object.entries(value).map(([key, entry]) => ({ [keyField]: key, ...(isObject(entry) ? entry : { invalid: entry }) }))
 }
 
 function same(a, b) {

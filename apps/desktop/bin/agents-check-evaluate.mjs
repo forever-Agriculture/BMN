@@ -10,7 +10,8 @@ import { OPENCODE_FOLDER_SHA256, OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OP
 import { NEXT_STEP, OPENCODE_NEXT_STEP, RESEARCH_FENCE_VERSIONS, RESUME_TESTED_VERSIONS, Refusal, TESTED_HARNESS_VERSIONS, WEB_NEXT_STEP, WEB_TOOLS_NOTE, listDirectory, namesWebTool, reachedForWeb, readText, refuse } from './agents-check-base.mjs'
 import { dispatchEnvironment, harnessOf, parseDispatch } from './agents-check-argv.mjs'
 import { resolveClaudeRoute, resolveCodexRoute, resolveOpenCodeRoute } from './agents-check-routes.mjs'
-import { boundSession, canonicalDirectory, committedBlob, destinationOf, ensurePrivateDirectory, harnessVersion, hashFile, inside, isObject, isString, packetManifest, privateWorkAnswer, readReceiptFile, receiptHash, sessionRecord, stricter, workspaceRoot, workspaceVisibility, writeState } from './agents-check-workspace.mjs'
+import { boundSession, canonicalDirectory, committedBlob, destinationOf, harnessVersion, hashFile, inside, isString, packetManifest, privateWorkAnswer, readReceiptFile, receiptHash, sessionRecord, stricter, workspaceRoot, workspaceVisibility, writeState } from './agents-check-workspace.mjs'
+import { ensurePrivateDirectory, isObject } from './shared-helpers.mjs'
 
 export { activeAgent, checkModelAndEffort, checkRoleEffort, matchedDestination, receiptAnswer, receiptRoute }
 

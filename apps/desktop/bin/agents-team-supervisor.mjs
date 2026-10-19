@@ -1,12 +1,12 @@
 // MODULE: agents-team-supervisor.mjs - Epic 72: the supervisor of one teammate's ask. Started by the asking command inside its own restrictions, it outlives that command, holds the deadline and Stop, and runs the app in a systemd user scope of its own that ends with it
 import { spawn, spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { closeSync, existsSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { constants, homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { processLives, processStart } from './agents-supervised.mjs'
 import { ASK_SCOPE_PREFIX, scopeAsk } from './agents-team-nested.mjs'
+import { readJson, sha256 } from './shared-helpers.mjs'
 
 /**
  * An ask can run for many minutes, and the command, tool call or window that asked may close long
@@ -76,9 +76,6 @@ export function writeWhole(path, text) {
   writeFileSync(temporary, text, { mode: 0o600 })
   renameSync(temporary, path)
 }
-
-const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'))
-const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 
 /** The environment systemd-run needs to reach the owner's own systemd: his runtime folder and session bus, nothing else of the asker's. */
 function scopeEnvironment(environment = process.env) {

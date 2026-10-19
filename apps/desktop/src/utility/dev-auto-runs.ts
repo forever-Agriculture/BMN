@@ -1,8 +1,9 @@
 import { realpath, stat } from 'node:fs/promises'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { isAbsolute, join, relative } from 'node:path'
 import type { AttentionRecord, DevAutoRun, DevAutoRunsResult, SessionRecord, WorkspaceRecord } from '@bmn/protocol'
 import { readFileReference } from './file-reference-reader'
 import { FORMAT, PlanError, boardProblems, readBoard, resolvePlan } from '../../bin/plan-board.mjs'
+import { insideDirectory } from '../../bin/shared-helpers.mjs'
 import { inspectRepositoryIdentity } from './repository-identity'
 import { repositoryGit, repositoryGitError } from './repository-git'
 
@@ -17,10 +18,6 @@ async function textReadSlot(): Promise<() => void> {
     if (next) next()
     else activeTextReads--
   }
-}
-function insideDirectory(root: string, path: string): boolean {
-  const part = relative(root, path)
-  return part === '' || (!isAbsolute(part) && part !== '..' && !part.startsWith(`..${sep}`))
 }
 
 export async function worktreeText(root: string, path: string, maxBytes: number): Promise<

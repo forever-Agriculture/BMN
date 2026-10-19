@@ -12,6 +12,7 @@ import { maskCredentials, maskedNames } from './agents-team-inputs.mjs'
 import { browserRecord, browserTemporary } from './agents-team-browser.mjs'
 import { askSettings } from './agents-team-places.mjs'
 import { RUN_FILES, requestStop, runState, startTeamSupervisor, writeWhole } from './agents-team-supervisor.mjs'
+import { readJson, readJsonOrNull } from './shared-helpers.mjs'
 
 /**
  * An ask starts only as it was judged (R72-FR3, 72.3 AC1): the approved team, the app's program and
@@ -50,14 +51,6 @@ export class StartRefusal extends Error {
   }
 }
 
-const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'))
-const readJsonOrNull = (path) => {
-  try {
-    return readJson(path)
-  } catch {
-    return null
-  }
-}
 const fileHash = (path) => {
   try {
     return sha256(readFileSync(path))

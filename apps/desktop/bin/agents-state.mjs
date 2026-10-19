@@ -4,6 +4,7 @@ import { access, readdir } from 'node:fs/promises'
 import {
   AGENT_FIELDS, FREE_TEXT_FIELDS, ROLE_FIELDS, OLDEST_SCHEMA_VERSION, PROJECT_CHOICE_FIELDS, RosterError, TOOL_FIELDS, agentsDirectory, canonicalJson, parseRoster, rosterPath, schemaSupported, sha256
 } from './agents-roster.mjs'
+import { isObject } from './shared-helpers.mjs'
 
 /**
  * Approved state lives in `~/.config/bmn/agents/state/`: one JSON file per generation under
@@ -64,10 +65,6 @@ export function readValidRoster(path = rosterPath()) {
       { errors: parsed.errors, warnings: parsed.warnings })
   }
   return { ...file, ...parsed }
-}
-
-function isObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 /** Shape check of approved data: hashes guard against corruption, this against a reader crashing on garbage. */

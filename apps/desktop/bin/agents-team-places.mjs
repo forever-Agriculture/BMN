@@ -1,6 +1,6 @@
 // MODULE: agents-team-places.mjs - Epic 72: many asks, safely: a key, the request's hash and a capacity place reserved together before an ask starts, runs recovered after a crash (their scope ended, their record finished) and never started again, and records kept for their retention
-import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { takeLock } from './agents-research.mjs'
 import { processLives, processStart } from './agents-supervised.mjs'
@@ -8,6 +8,7 @@ import { ASK_RUN_FILES } from './agents-team-forms.mjs'
 import { AskRefusal } from './agents-team-resolve.mjs'
 import { TRANSIENT, finishRun } from './agents-team-run.mjs'
 import { RUN_FILES, endScope, runState, scopeUnit, writeWhole } from './agents-team-supervisor.mjs'
+import { readJsonOrNull, sha256 } from './shared-helpers.mjs'
 
 /**
  * An asker may retry: its command, tool call or session can end at any moment, and a retry must
@@ -35,14 +36,6 @@ const DAY_MS = 86_400_000
 const RUN_ID = /^\d{8}T\d{6}-[0-9a-f]{8}$/u
 const LOCK_WAIT_MS = 10_000
 
-const readJsonOrNull = (path) => {
-  try {
-    return JSON.parse(readFileSync(path, 'utf8'))
-  } catch {
-    return null
-  }
-}
-const sha256 = (text) => createHash('sha256').update(text).digest('hex')
 const ownIdentity = () => ({ pid: process.pid, start: processStart(process.pid) })
 
 // ---------------------------------------------------------------------------------------------

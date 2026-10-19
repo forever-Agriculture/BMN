@@ -1,13 +1,14 @@
 // MODULE: agents-check-workspace.mjs - the dispatch check (Epic 60.3) behind agents-check.mjs: harness versions, workspaces and their public status, destinations, receipts and session bindings
 import { execFileSync } from 'node:child_process'
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, writeSync } from 'node:fs'
+import { closeSync, fsyncSync, openSync, readFileSync, realpathSync, renameSync, statSync, writeSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { RosterError, canonicalJson, resolvedDirectory, sha256 } from './agents-roster.mjs'
 import { stateDirectory } from './agents-state.mjs'
 import { OPENCODE_SESSION_ID } from './agents-opencode.mjs'
 import { BINDING_WINDOW_MS, VISIBILITY_MAX_AGE_MS, firstLine, listDirectory, readBytes, readText, refuse, traceRead } from './agents-check-base.mjs'
+import { ensurePrivateDirectory, isObject } from './shared-helpers.mjs'
 
-export { boundSession, canonicalDirectory, committedBlob, ensurePrivateDirectory, hashFile, inside, isObject, isString, packetManifest, readReceiptFile, stricter, writeState }
+export { boundSession, canonicalDirectory, committedBlob, hashFile, inside, isString, packetManifest, readReceiptFile, stricter, writeState }
 
 /**
  * `<harness> --version`, the only thing BMN runs. It is asked afresh for every decision and
@@ -156,17 +157,8 @@ export function workspaceVisibility(workspace, now = new Date()) {
   return { public: true, reason: `GitHub reports ${record.origin} public`, record }
 }
 
-function isObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
 function isString(value) {
   return typeof value === 'string' && value !== ''
-}
-
-function ensurePrivateDirectory(path) {
-  mkdirSync(path, { recursive: true, mode: 0o700 })
-  chmodSync(path, 0o700)
 }
 
 /** BMN-managed state, written whole and private: temp, fsync, rename, read back (R60-NFR2). */

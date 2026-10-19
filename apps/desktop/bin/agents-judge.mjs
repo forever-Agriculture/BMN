@@ -9,6 +9,7 @@ import { readApproved, stateDirectory } from './agents-state.mjs'
 import { workspaceRoot, workspaceVisibility } from './agents-check.mjs'
 import { isPublicAddress, publicHostName, resolveHost, takeLock } from './agents-research.mjs'
 import { writePrivate } from './agents-rules.mjs'
+import { isObject, pause } from './shared-helpers.mjs'
 
 /**
  * Jev writes no text. One call carries a text (`state`) and a map of typed questions about it, and
@@ -58,7 +59,6 @@ const QUESTION_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
 
 export const EXIT = { ok: 0, usage: 2, refusal: 10, timeout: 11, failed: 12, shape: 13 }
 
-const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const bytes = (text) => Buffer.byteLength(text, 'utf8')
 const words = (value, most) => typeof value === 'string' && value.trim() !== '' && bytes(value) <= most
 const unit = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
@@ -594,7 +594,6 @@ export function setJudgeLimit({ on, usd }) {
 }
 
 const RECORD_WAIT_MS = 5000
-const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
 
 /**
  * Writes one call down: one writer at a time across processes, the kept file replaced whole, the

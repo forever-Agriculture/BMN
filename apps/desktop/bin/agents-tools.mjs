@@ -1,13 +1,13 @@
 // MODULE: agents-tools.mjs - Story 60.12: one list of MCP tools for every agent app: each app's own settings entry, one state per app and tool, install and undo as one transaction, import of what the apps already hold, and the tools of one agent's run
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { appendFileSync, chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute } from 'node:path'
 import { APP_NAMES, HARNESSES, RosterError, TOOL_PATTERN, agentsDirectory, appName, appRefusal, canonicalJson, harnessPrivateWork, publicOnlyReasons, sha256 } from './agents-roster.mjs'
 import { approvedIfAny } from './agents-state.mjs'
 import { ToolFileError, editJsonEntry, editTomlEntry, readJsonEntries, readTomlEntries, renderTomlEntry } from './agents-tool-files.mjs'
 import { ConfigWriteError, pathState, replaceFileSafely } from './safe-config-write.mjs'
+import { home, isObject, spellings } from './shared-helpers.mjs'
 
 /**
  * The owner keeps one list of MCP tools in the team file (`## tools`). A tool reaches every app
@@ -28,10 +28,6 @@ class ToolsError extends Error {
     super(message)
     this.code = code
   }
-}
-
-function home(environment) {
-  return environment.HOME || homedir()
 }
 
 /**
@@ -157,8 +153,6 @@ export function appTools(harness, { version, tests = toolsTests() }) {
 // ---------------------------------------------------------------------------------------------
 // A tool as each app writes it, and an app's entry read back
 
-const isMap = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
-
 /** What a tool is, apart from who gets it: the program or the address, and the variables it names. */
 function definitionOf(tool) {
   return tool.url !== undefined
@@ -178,10 +172,10 @@ export function renderTool(tool, harness, { variable = false, argument = false, 
   const app = APP_NAMES[harness]
   const definition = definitionOf(tool)
   if (Object.keys(definition.env ?? {}).length > 0 && !variable) return { blocked: `BMN has not seen ${app} pass an environment variable to a tool on this version` }
-  if (harness !== 'codex' && (definition.args ?? []).some(isMap) && !argument) return { blocked: `BMN has not seen ${app} give a tool an argument from an environment variable on this version` }
+  if (harness !== 'codex' && (definition.args ?? []).some(isObject) && !argument) return { blocked: `BMN has not seen ${app} give a tool an argument from an environment variable on this version` }
   if (Object.keys(definition.headers ?? {}).length > 0 && !header) return { blocked: `BMN has no test yet that shows ${app} sending a header from an environment variable` }
   if (harness === 'codex') {
-    if ((definition.args ?? []).some(isMap)) return { blocked: 'Codex has no way to pass an environment variable as an argument' }
+    if ((definition.args ?? []).some(isObject)) return { blocked: 'Codex has no way to pass an environment variable as an argument' }
     const renamed = Object.entries(definition.env ?? {}).find(([name, from]) => name !== from)
     if (renamed !== undefined) return { blocked: `Codex passes a variable only under its own name: ${renamed[0]} cannot come from ${renamed[1]}` }
     return {
@@ -191,7 +185,7 @@ export function renderTool(tool, harness, { variable = false, argument = false, 
     }
   }
   const references = (map) => Object.fromEntries(Object.entries(map).map(([name, from]) => [name, spec.reference(from)]))
-  const args = (definition.args ?? []).map((arg) => (isMap(arg) ? spec.reference(arg.env) : arg))
+  const args = (definition.args ?? []).map((arg) => (isObject(arg) ? spec.reference(arg.env) : arg))
   if (harness === 'opencode') {
     return {
       entry: definition.url !== undefined
@@ -279,7 +273,7 @@ function addressHoldsValue(text) {
  * Null when the entry is not an MCP entry BMN recognises.
  */
 export function neutralOf(value, harness) {
-  if (!isMap(value)) return null
+  if (!isObject(value)) return null
   const spec = TOOL_APPS[harness]
   const secrets = []
   const extras = []
@@ -287,7 +281,7 @@ export function neutralOf(value, harness) {
   const bindings = (map, field) => {
     const out = {}
     if (map === undefined) return out
-    if (!isMap(map)) {
+    if (!isObject(map)) {
       extras.push(field)
       return out
     }
@@ -319,14 +313,14 @@ export function neutralOf(value, harness) {
   if (harness === 'codex') {
     known = ['command', 'args', 'env_vars', 'env', 'url', 'env_http_headers', 'http_headers']
     if (typeof value.url === 'string') {
-      const headers = isMap(value.env_http_headers) && Object.values(value.env_http_headers).every((name) => typeof name === 'string') ? value.env_http_headers : {}
+      const headers = isObject(value.env_http_headers) && Object.values(value.env_http_headers).every((name) => typeof name === 'string') ? value.env_http_headers : {}
       if (value.env_http_headers !== undefined && headers !== value.env_http_headers) extras.push('env_http_headers')
-      for (const name of Object.keys(isMap(value.http_headers) ? value.http_headers : {})) secrets.push(`headers.${name}`)
+      for (const name of Object.keys(isObject(value.http_headers) ? value.http_headers : {})) secrets.push(`headers.${name}`)
       definition = { url: value.url, headers }
     } else if (typeof value.command === 'string') {
       const forwarded = Array.isArray(value.env_vars) && value.env_vars.every((name) => typeof name === 'string') ? value.env_vars : []
       if (value.env_vars !== undefined && forwarded !== value.env_vars) extras.push('env_vars')
-      for (const name of Object.keys(isMap(value.env) ? value.env : {})) secrets.push(`env.${name}`)
+      for (const name of Object.keys(isObject(value.env) ? value.env : {})) secrets.push(`env.${name}`)
       definition = { command: value.command, args: literalArgs(value.args, 'args'), env: Object.fromEntries(forwarded.map((name) => [name, name])) }
     } else return null
   } else if (harness === 'opencode') {
@@ -361,16 +355,16 @@ export function maskedEntry(value, harness) {
   const walk = (item, path) => {
     if (hidden.has(path)) return MASK
     if (Array.isArray(item)) return item.map((entry, index) => walk(entry, `${path}[${index}]`))
-    if (isMap(item)) return Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, walk(entry, path === '' ? key : `${path}.${key}`)]))
+    if (isObject(item)) return Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, walk(entry, path === '' ? key : `${path}.${key}`)]))
     // An inline value under another name than the definition's (Codex http_headers, a setting BMN does not write) is
     // masked unless it is plainly not one; a variable's name, with or without its scheme word, is shown.
     return typeof item === 'string' && !plainArgument(item) && !NAMED_VARIABLE.test(item) ? MASK : item
   }
   const masked = walk(value, '')
-  if (isMap(masked) && harness === 'codex') {
-    for (const key of ['env', 'http_headers']) if (isMap(masked[key])) masked[key] = Object.fromEntries(Object.keys(masked[key]).map((name) => [name, MASK]))
+  if (isObject(masked) && harness === 'codex') {
+    for (const key of ['env', 'http_headers']) if (isObject(masked[key])) masked[key] = Object.fromEntries(Object.keys(masked[key]).map((name) => [name, MASK]))
   }
-  if (isMap(masked) && harness === 'opencode' && Array.isArray(masked.command)) masked.command = masked.command.map((part, index) => (hidden.has(`command[${index - 1}]`) ? MASK : part))
+  if (isObject(masked) && harness === 'opencode' && Array.isArray(masked.command)) masked.command = masked.command.map((part, index) => (hidden.has(`command[${index - 1}]`) ? MASK : part))
   return masked
 }
 
@@ -430,7 +424,7 @@ function edited(harness, text, id, value, raw) {
 function written() {
   try {
     const value = JSON.parse(readFileSync(writtenPath(), 'utf8'))
-    return isMap(value) ? value : {}
+    return isObject(value) ? value : {}
   } catch (error) {
     if (error.code === 'ENOENT') return {}
     throw new RosterError('STATE_CORRUPT', `${writtenPath()} cannot be read`)
@@ -446,7 +440,7 @@ function eligible(tool, harness, kind) {
   return kind === 'full' || tool.public === true
 }
 
-/** A tool's program or address in a few words, never an argument: an argument may be long or private. */
+/** A tool's program or address in a few words, never an argument: an argument may be long or private. Mirrored in renderer tools-view.ts, which cannot load bin modules. */
 export function transportWords(tool) {
   if (tool.url !== undefined) {
     try {
@@ -984,7 +978,7 @@ function claudeArgvTools(parsed) {
   if (parsed.mcpConfig === undefined) return parsed.strictMcp ? { reset: true, listed: false, entries: {} } : null
   try {
     const servers = JSON.parse(parsed.mcpConfig)?.mcpServers
-    if (!isMap(servers)) return { reset: parsed.strictMcp === true, unresolved: '--mcp-config is not a list of tools BMN can read (a file path is not followed)' }
+    if (!isObject(servers)) return { reset: parsed.strictMcp === true, unresolved: '--mcp-config is not a list of tools BMN can read (a file path is not followed)' }
     return { reset: parsed.strictMcp === true, entries: servers }
   } catch {
     return { reset: parsed.strictMcp === true, unresolved: '--mcp-config is not a list of tools BMN can read (a file path is not followed)' }
@@ -1000,16 +994,6 @@ function present(path) {
     return true
   } catch (error) {
     return error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR'
-  }
-}
-
-/** A folder as it is named and as it really is, where the two differ: the check reads a run's settings under both. */
-function spellings(folder) {
-  try {
-    const real = realpathSync(folder)
-    return real === folder ? [folder] : [folder, real]
-  } catch {
-    return [folder]
   }
 }
 
@@ -1034,10 +1018,10 @@ function pluginsIn(text) {
   } catch {
     return 'cannot be read'
   }
-  if (!isMap(data)) return 'cannot be read'
+  if (!isObject(data)) return 'cannot be read'
   const plugins = data.enabledPlugins
   if (plugins === undefined) return null
-  if (!isMap(plugins) || Object.values(plugins).some((value) => typeof value !== 'boolean')) return 'plug-ins BMN cannot read as on or off'
+  if (!isObject(plugins) || Object.values(plugins).some((value) => typeof value !== 'boolean')) return 'plug-ins BMN cannot read as on or off'
   return Object.values(plugins).some((value) => value) ? 'plug-ins switched on' : null
 }
 
@@ -1219,7 +1203,7 @@ function standInNotes(log) {
   for (const line of text.split('\n')) {
     try {
       const note = JSON.parse(line)
-      if (isMap(note)) notes.push(note)
+      if (isObject(note)) notes.push(note)
     } catch {
       // A torn line is no note.
     }
@@ -1251,7 +1235,7 @@ export function claudeRunSeen(result, notes) {
     }
     if (event?.type === 'system' && event.subtype === 'init') {
       const servers = event.mcp_servers
-      const reads = Array.isArray(servers) && servers.every((server) => isMap(server) && typeof server.name === 'string' && typeof server.status === 'string')
+      const reads = Array.isArray(servers) && servers.every((server) => isObject(server) && typeof server.name === 'string' && typeof server.status === 'string')
       // A name counts against the run even on a line that does not say what became of it.
       for (const server of Array.isArray(servers) ? servers : []) if (typeof server?.name === 'string') seen.named.add(server.name)
       if (seen.line || !reads) {

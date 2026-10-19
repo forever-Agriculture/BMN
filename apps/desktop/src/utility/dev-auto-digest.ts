@@ -34,6 +34,7 @@ interface DigestDependencies {
   send(text: string): Promise<void>
 }
 const emptyState = (): DigestState => ({ version: 1, day: null, runs: [] })
+// The same as agents-roster.mjs localDay; kept here because this file imports nothing from bin (Story 80.15).
 function localDay(now: Date): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }

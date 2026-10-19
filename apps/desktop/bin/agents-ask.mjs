@@ -12,6 +12,7 @@ import {
   runOnce, settledResearcher, takeLock, takeResearchLock
 } from './agents-research.mjs'
 import { writePrivate } from './agents-rules.mjs'
+import { isObject, onlyKeys, pause } from './shared-helpers.mjs'
 
 /**
  * A web question is a research run BMN itself prepares (R64-NFR1): BMN's folder, BMN's prompt, the
@@ -42,8 +43,6 @@ const ADDRESS_CHARS = 2000
 /** What BMN's own read of a cited page showed. */
 export const MARKS = { found: 'passage found on the page', missing: 'page read, passage not found', unreadable: 'page not readable' }
 
-const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
-const onlyKeys = (value, keys) => Object.keys(value).every((key) => keys.includes(key))
 const text = (value, least, most) => typeof value === 'string' && value.trim().length >= least && value.length <= most
 
 // ---------------------------------------------------------------------------------------------
@@ -305,17 +304,18 @@ const DAY_LIMIT_WORDS = `${ASK_PER_DAY} web questions were asked today, which is
 /** Thrown by a write that would reserve a place past the day's limit; nothing is written. */
 class DayLimitReached extends Error {}
 
-const localDay = (date) => `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
+/** The local day unpadded ("2026-1-5"): the form the day count and the end files keep on disk. */
+const unpaddedLocalDay = (date) => `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
 /** Whether local day `one` lies after local day `other`. */
 const dayAfter = (one, other) => {
   const [a, b] = [one, other].map((day) => day.split('-').map(Number))
   return a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b[1] : a[2] > b[2]
 }
-const askedOn = (questions, day) => questions.filter((entry) => entry.outcome !== 'refused' && localDay(new Date(entry.at)) === day).length
+const askedOn = (questions, day) => questions.filter((entry) => entry.outcome !== 'refused' && unpaddedLocalDay(new Date(entry.at)) === day).length
 
 /** How many questions in a list started on `now`'s local day. A question refused before it started does not count. */
 export function askedToday(questions, now = new Date()) {
-  return askedOn(questions, localDay(now))
+  return askedOn(questions, unpaddedLocalDay(now))
 }
 
 /**
@@ -326,7 +326,7 @@ export function askedToday(questions, now = new Date()) {
  * and an end whose question the check refused gives its one back to the day it was counted on.
  */
 function dayCount({ kept, fresh }, now, reserve = 0) {
-  const today = localDay(now)
+  const today = unpaddedLocalDay(now)
   const day = kept.asked !== null && dayAfter(kept.asked.day, today) ? kept.asked.day : today
   const stored = kept.asked !== null && kept.asked.day === day ? kept.asked.count : 0
   const back = fresh.filter((end) => end.refund && end.day === day).length
@@ -337,7 +337,7 @@ function dayCount({ kept, fresh }, now, reserve = 0) {
 export function askedCount(now = new Date()) {
   const all = readAll()
   const { day, count } = dayCount(all, now)
-  return day === localDay(now) ? count : 0
+  return day === unpaddedLocalDay(now) ? count : 0
 }
 
 /** A run's folder under BMN's research runs, by the id a question's record keeps; null for anything that is not such an id. */
@@ -355,8 +355,6 @@ function lastKept(questions) {
     return false
   })
 }
-
-const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms) })
 
 /**
  * Changes the kept questions: one writer at a time across the app and the command line, the file
@@ -383,7 +381,7 @@ async function changeQuestions(change, { reserve = 0, limit = Infinity, now = ne
     const all = readAll()
     if (reserve > 0) {
       const counted = dayCount(all, now)
-      if ((counted.day === localDay(now) ? counted.count : 0) + reserve > limit) throw new DayLimitReached(DAY_LIMIT_WORDS)
+      if ((counted.day === unpaddedLocalDay(now) ? counted.count : 0) + reserve > limit) throw new DayLimitReached(DAY_LIMIT_WORDS)
     }
     const before = withInterrupted(withEnds(all.kept.questions, all.fresh))
     const after = lastKept(change(before))
@@ -519,7 +517,7 @@ function markCounts(claims) {
 // ---------------------------------------------------------------------------------------------
 // Who answers
 
-/** What research needs, said where no agent on the team can research now: the words Models uses (models-preferences.tsx noResearcherWords). */
+/** What research needs, said where no agent on the team can research now: the words Models uses (mirrored by models-preferences.tsx noResearcherWords, since the renderer cannot load bin modules). */
 export function noResearcherWords(named) {
   const where = 'on Claude Code, or on Codex or OpenCode where its fence test passed, whose provider may see private work'
   if (named === null) return `Research needs an active agent ${where}.`
@@ -632,7 +630,7 @@ export async function runAsk({
     try {
       // The end is on the disk before the caller hears of it, whoever holds the kept file. A question
       // the check refused after all is not one of the day's: its end gives the count back.
-      writePrivate(`${endsDirectory()}/${id}.json`, `${JSON.stringify({ version: 1, record: kept, day: localDay(started), refund: outcome === 'refused' })}\n`)
+      writePrivate(`${endsDirectory()}/${id}.json`, `${JSON.stringify({ version: 1, record: kept, day: unpaddedLocalDay(started), refund: outcome === 'refused' })}\n`)
     } catch (error) {
       // The caller gets what happened; the list shows this question as one that never got its record.
       result.note = `${result.note === undefined ? '' : `${result.note} `}BMN could not write this question's record: ${error instanceof Error ? error.message : String(error)}.`

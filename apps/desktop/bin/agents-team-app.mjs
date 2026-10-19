@@ -11,6 +11,7 @@ import { RETENTION_DAYS, askSettings, placePath, recordInterrupted, removeRun, r
 import { ANSWER_LIMIT, StartRefusal, askOutcome, exportAsk, stopAsk } from './agents-team-run.mjs'
 import { RUN_FILES } from './agents-team-supervisor.mjs'
 import { BROWSER_LIMITS, BROWSER_LIMIT_WORDS } from './agents-team-browser.mjs'
+import { readJsonOrNull } from './shared-helpers.mjs'
 
 /**
  * The app reads the same run folders `bmn team ask` writes, and the owner sees them all: an ask
@@ -24,14 +25,6 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const QUESTION_LINE = 300
 /** The states of a run that has not ended yet, whatever its supervisor calls them. */
 const GOING = new Set(['accepted', 'starting', 'running', 'finishing'])
-
-function readJson(path) {
-  try {
-    return JSON.parse(readFileSync(path, 'utf8'))
-  } catch {
-    return null
-  }
-}
 
 /** A file's text when it is there, a file, and at most `limit` bytes; else null. */
 function readText(path, limit) {
@@ -138,14 +131,14 @@ function askLine(folder, names = new Map(), now = new Date()) {
     recordInterrupted(folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')
   } else if (before.state === 'accepted' && !existsSync(join(folder, ASK_RUN_FILES.outcome))) {
     // Before its supervisor, the command that reserved the run holds it while it lives (agents-team-places.mjs runHolds).
-    const place = readJson(placePath(dirname(folder), basename(folder)))
+    const place = readJsonOrNull(placePath(dirname(folder), basename(folder)))
     if (place !== null) runHolds(dirname(folder), basename(folder), place.holder, now.getTime())
   }
-  const request = readJson(join(folder, ASK_RUN_FILES.request)) ?? {}
-  const manifest = readJson(join(folder, ASK_RUN_FILES.manifest))
+  const request = readJsonOrNull(join(folder, ASK_RUN_FILES.request)) ?? {}
+  const manifest = readJsonOrNull(join(folder, ASK_RUN_FILES.manifest))
   const outcome = askOutcome(folder)
-  const state = readJson(join(folder, RUN_FILES.state)) ?? {}
-  const launch = readJson(join(folder, RUN_FILES.launch))
+  const state = readJsonOrNull(join(folder, RUN_FILES.state)) ?? {}
+  const launch = readJsonOrNull(join(folder, RUN_FILES.launch))
   const question = questionOf(folder)
   const agent = text(request.agent, 64)
   const ended = text(outcome.ended_at, 40)
@@ -226,9 +219,9 @@ function runFolder(runs, id) {
 export function appAskDetail(id, { runs = teamRunsDirectory(), now = new Date() } = {}) {
   const folder = runFolder(runs, id)
   const line = askLine(folder, teamNames(), now)
-  const request = readJson(join(folder, ASK_RUN_FILES.request)) ?? {}
-  const manifest = readJson(join(folder, ASK_RUN_FILES.manifest)) ?? {}
-  const receipt = readJson(join(folder, ASK_RUN_FILES.receipt)) ?? {}
+  const request = readJsonOrNull(join(folder, ASK_RUN_FILES.request)) ?? {}
+  const manifest = readJsonOrNull(join(folder, ASK_RUN_FILES.manifest)) ?? {}
+  const receipt = readJsonOrNull(join(folder, ASK_RUN_FILES.receipt)) ?? {}
   const outcome = askOutcome(folder)
   const question = questionOf(folder)
   const observed = outcome.observed !== null && typeof outcome.observed === 'object' ? outcome.observed : {}
@@ -257,7 +250,7 @@ export function appAskDetail(id, { runs = teamRunsDirectory(), now = new Date() 
 function browserView(folder, request) {
   const origin = text(request.browser?.origin, 64)
   if (origin === null) return null
-  const record = readJson(join(folder, ASK_RUN_FILES.browserRecord)) ?? {}
+  const record = readJsonOrNull(join(folder, ASK_RUN_FILES.browserRecord)) ?? {}
   const list = (value, limit) => (Array.isArray(value) ? value.slice(0, limit) : [])
   const pageView = (page) => {
     const url = text(page?.url, BROWSER_LIMITS.url)

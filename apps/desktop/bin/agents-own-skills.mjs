@@ -1,11 +1,12 @@
 // MODULE: agents-own-skills.mjs - Story 77.4: BMN's own skills (plan, team-ask, team-page, web-question, jev-judge) install themselves into the skills folder as BMN's entries, pointing at a copy that stays readable with BMN closed
 import { randomBytes } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { agentsDirectory } from './agents-roster.mjs'
 import { copyTree, entryOf, treeHash } from './agents-skills.mjs'
+import { realOrNull } from './shared-helpers.mjs'
 
 /**
  * BMN ships a few skills of its own, listed in `skills/manifest.json` beside them (in the repository, and in a
@@ -61,10 +62,6 @@ function writeRecord(record) {
   const temporary = `${path}.${process.pid}-${randomBytes(3).toString('hex')}.tmp`
   writeFileSync(temporary, `${JSON.stringify({ version: OWN_SKILLS_RECORD_VERSION, ...record }, null, 2)}\n`, { mode: 0o600 })
   renameSync(temporary, path)
-}
-
-function realOrNull(path) {
-  try { return realpathSync(path) } catch { return null }
 }
 
 /** A link's target that lies in a BMN checkout (`<repo>/skills/<name>` beside `apps/desktop/bin/bmn`) or a BMN install (`resources/skills/<name>` beside `bin/bmn.mjs`). */

@@ -10,6 +10,7 @@ import { CODEX_RESEARCH_HOME, CODEX_RESEARCH_TOOLS_SEEN, CODEX_SIGN_IN, OPENCODE
 import { OPENCODE_HELPER_AGENT, installOpenCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
 import { researchArgv } from './agents-research.mjs'
 import { NOTHING_STARTED, startSupervised } from './agents-supervised.mjs'
+import { isObject, listed } from './shared-helpers.mjs'
 
 /**
  * The fence test shows, for exactly the installed Codex, that a research run sends its provider
@@ -471,11 +472,6 @@ function printed(outputs, id, label) {
   }
 }
 
-/** A list of names in a sentence. */
-function listed(names) {
-  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
-}
-
 /**
  * The fence test of one model, in a planted home folder of its own: the main run, in which the
  * stand-in calls every offered tool, three short runs that each try one tool no research run has,
@@ -493,9 +489,9 @@ async function testModel({ agent, root, environment, argvOf, catalog, expected, 
     let canary = null
     let unseeable = null
     if (catalog !== null) {
-      const own = Array.isArray(catalog.models) ? catalog.models.find((entry) => isRecord(entry) && entry.slug === agent.model) : undefined
-      const messages = isRecord(own) && isRecord(own.model_messages) && typeof own.model_messages.instructions_template === 'string' ? own.model_messages : null
-      if (!isRecord(own) || (typeof own.base_instructions !== 'string' && messages === null)) unseeable = 'the model list gives this model no entry BMN can follow into the run, so nothing was compared under it'
+      const own = Array.isArray(catalog.models) ? catalog.models.find((entry) => isObject(entry) && entry.slug === agent.model) : undefined
+      const messages = isObject(own) && isObject(own.model_messages) && typeof own.model_messages.instructions_template === 'string' ? own.model_messages : null
+      if (!isObject(own) || (typeof own.base_instructions !== 'string' && messages === null)) unseeable = 'the model list gives this model no entry BMN can follow into the run, so nothing was compared under it'
       else {
         canary = `FENCE-LIST-${randomBytes(6).toString('hex')}`
         const marked = {
@@ -578,7 +574,7 @@ async function testModel({ agent, root, environment, argvOf, catalog, expected, 
     const inner = printed(outputs, 'script-names', 'FENCE-NAMES ')
     const report = printed(outputs, 'script-attempts', 'FENCE-RESULTS ')
     // What the script got from each tool it reaches, and which of them gave back a marker anywhere in a result.
-    const attempts = isRecord(report) && isRecord(report.results) && Array.isArray(report.leaks) ? report.results : null
+    const attempts = isObject(report) && isObject(report.results) && Array.isArray(report.leaks) ? report.results : null
     const leaked = attempts === null ? [] : report.leaks.filter((name) => typeof name === 'string')
     const tools = [...offered, ...(Array.isArray(inner) ? inner.map((name) => `exec:${name}`) : [])].sort()
 
@@ -602,8 +598,8 @@ async function testModel({ agent, root, environment, argvOf, catalog, expected, 
     const written = changedFiles(before, after)
     if (written.length > 0) reasons.push(`written during the run: ${listed(written.slice(0, 6))}${written.length > 6 ? ` and ${written.length - 6} more` : ''}`)
     if (existsSync(join(root, 'hook-ran.log'))) reasons.push('a hook ran')
-    const uncalled = offered.filter((tool) => (tool === 'custom:functions.exec' ? !Array.isArray(inner) || !isRecord(attempts) : !outputs.has(`offered-${tool}`)))
-    if (Array.isArray(inner) && isRecord(attempts)) uncalled.push(...inner.filter((name) => !Array.isArray(attempts[name]) || attempts[name].length === 0).map((name) => `exec:${name}`))
+    const uncalled = offered.filter((tool) => (tool === 'custom:functions.exec' ? !Array.isArray(inner) || !isObject(attempts) : !outputs.has(`offered-${tool}`)))
+    if (Array.isArray(inner) && isObject(attempts)) uncalled.push(...inner.filter((name) => !Array.isArray(attempts[name]) || attempts[name].length === 0).map((name) => `exec:${name}`))
     if (uncalled.length > 0 && blind.length === 0) reasons.push(`offered but not called: ${listed(uncalled)}`)
     const telling = [...new Set([...raw.filter((output) => markersIn(output.text, planted.markers).length > 0 || output.text.includes(';base64,')).map((output) => output.call_id), ...leaked.map((name) => `exec:${name}`)])]
     if (telling.length > 0) reasons.push(`a tool gave back a planted file: ${listed(telling)}`)
@@ -622,10 +618,6 @@ async function testModel({ agent, root, environment, argvOf, catalog, expected, 
     await standIn.close()
     rmSync(root, { recursive: true, force: true })
   }
-}
-
-function isRecord(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -969,7 +961,7 @@ export async function providerModelList({ environment = process.env, limitMs = 6
     } catch {
       return { ok: false, reason: 'Codex did not get the provider\'s model list' }
     }
-    if (!isRecord(kept) || typeof kept.fetched_at !== 'string' || !Array.isArray(kept.models)) return { ok: false, reason: 'Codex kept the provider\'s model list in a shape BMN does not know' }
+    if (!isObject(kept) || typeof kept.fetched_at !== 'string' || !Array.isArray(kept.models)) return { ok: false, reason: 'Codex kept the provider\'s model list in a shape BMN does not know' }
     return { ok: true, models: kept.models }
   } finally {
     rmSync(folder, { recursive: true, force: true })
@@ -1002,7 +994,7 @@ export async function compareUnderProviderList({ agent, environment = process.en
   if (signal?.aborted) return stopped
   if (left() <= 0) return late
   if (!list.ok) return { ok: false, reason: `${list.reason}, so its tool list could not be compared with the tested one` }
-  const entry = list.models.find((model) => isRecord(model) && model.slug === agent.model)
+  const entry = list.models.find((model) => isObject(model) && model.slug === agent.model)
   if (entry === undefined) return { ok: false, reason: `the provider's model list does not name ${agent.model}, so its tool list could not be compared with the tested one` }
   const hash = sha256(canonicalJson(entry)).slice(0, 16)
   if (standing.live !== null && standing.live.same && standing.live.entry === hash) return { ok: true, compared: false }
@@ -1079,7 +1071,7 @@ export async function runFenceCommand(argv) {
       if (!list.ok) entry = { ...entry, verdict: 'inconclusive', reasons: [`${list.reason}, so nothing was compared under it`] }
       else {
         const hashes = Object.fromEntries(subjects.flatMap((agent) => {
-          const found = list.models.find((model) => isRecord(model) && model.slug === agent.model)
+          const found = list.models.find((model) => isObject(model) && model.slug === agent.model)
           return found === undefined ? [] : [[agent.model, sha256(canonicalJson(found)).slice(0, 16)]]
         }))
         entry = await runFenceTest({ agents: subjects.filter((agent) => hashes[agent.model] !== undefined), catalog: { models: list.models }, entries: hashes, renewal: false,

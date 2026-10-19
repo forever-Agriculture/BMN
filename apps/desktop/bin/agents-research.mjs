@@ -12,6 +12,7 @@ import { contextItems, provenControls } from './agents-context.mjs'
 import { openCodeAnswer, openCodeResearchArgv, openCodeSession } from './agents-opencode.mjs'
 import { writePrivate } from './agents-rules.mjs'
 import { NOTHING_STARTED, processLives, processStart, startSupervised } from './agents-supervised.mjs'
+import { isObject, onlyKeys } from './shared-helpers.mjs'
 
 export { processStart }
 
@@ -302,9 +303,7 @@ export function forgetDroppedResearcher() {
 // ---------------------------------------------------------------------------------------------
 // The answer: one typed object, or the run failed
 
-const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const amount = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1_000_000
-const onlyKeys = (value, keys) => Object.keys(value).every((key) => keys.includes(key))
 
 function sourceProblem(value, today) {
   if (typeof value.source !== 'string' || value.source.length > 200 || !/^https:\/\/\S+$/.test(value.source)) return 'a source must be an https address of at most 200 characters'

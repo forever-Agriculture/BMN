@@ -2,6 +2,7 @@
 import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, agentState, appName, canonicalJson, classRefusal, harnessPrivateWork, isCalled, namedResearchers, projectChoiceCollisions, projectChoiceFor, projectChoiceProblem, publicOnlyReasons } from './agents-roster.mjs'
 import { canonicalProject } from './agents-team-inputs.mjs'
 import { RUN_TEST_APPS } from './agents-tools.mjs'
+import { listed, thousands } from './shared-helpers.mjs'
 
 // ---------------------------------------------------------------------------------------------
 // Consequences of an approval, in words (60.5 AC7; shared with `roster status` and `roster explain`)
@@ -30,14 +31,6 @@ function firstEligible(data, role) {
     if (agent !== undefined && states.get(agent) === 'active') return agent
   }
   return null
-}
-
-function listed(names) {
-  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
-}
-
-function thousands(value) {
-  return String(value).replace(/\B(?=(\d{3})+$)/g, ' ')
 }
 
 /**

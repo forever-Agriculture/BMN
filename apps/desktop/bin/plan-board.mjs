@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
+import { insideDirectory } from './shared-helpers.mjs'
 
 /**
  * A plan is found the same way by every reader (R77-FR3, FR6): the enclosing product repository first, also
@@ -53,11 +54,6 @@ function rowEpic(key) {
 function rowStory(key) {
   const match = /^(\d+)-(\d+)(?:-|$)/u.exec(key)
   return match ? `${Number(match[1])}.${Number(match[2])}` : null
-}
-
-function insideDirectory(root, path) {
-  const part = relative(root, path)
-  return part === '' || (!isAbsolute(part) && part !== '..' && !part.startsWith(`..${sep}`))
 }
 
 function git(cwd, args) {

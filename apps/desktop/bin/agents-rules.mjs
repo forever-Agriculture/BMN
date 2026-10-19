@@ -12,6 +12,7 @@ import { readApproved } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { absoluteUncollapsed, pathState, replaceFileSafely, resolvedPath, restorePathState, sameState } from './safe-config-write.mjs'
 import { unifiedDiff } from './text-diff.mjs'
+import { canonicalRoute } from './shared-helpers.mjs'
 
 /**
  * The owner edits one file, `~/.config/bmn/agents/global-rules.md`. BMN renders it per app and
@@ -241,7 +242,8 @@ export function writePrivate(path, text) {
   renameSync(temporary, path)
 }
 
-function readJson(path, fallback) {
+/** The JSON in a file: `fallback` when the file is missing, a RosterError (STATE_CORRUPT) when it cannot be read or parsed. */
+function readJsonMissingAs(path, fallback) {
   try {
     return JSON.parse(readFileSync(path, 'utf8'))
   } catch (error) {
@@ -251,7 +253,7 @@ function readJson(path, fallback) {
 }
 
 function lastWritten() {
-  return readJson(lastWrittenPath(), {})
+  return readJsonMissingAs(lastWrittenPath(), {})
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -351,7 +353,7 @@ function readHistoryIndex() {
   ensurePrivate(folder)
   let index
   try {
-    index = readJson(`${folder}/index.json`, { revisions: [] })
+    index = readJsonMissingAs(`${folder}/index.json`, { revisions: [] })
   } catch {
     throw new RosterError('HISTORY_UNAVAILABLE', 'the master history index cannot be read; nothing was written')
   }
@@ -724,7 +726,7 @@ export function listTransactions() {
   }
   // Newest first by the time each records: an id ends in a process id, so two written in one second do not sort by name.
   return names.sort().reverse().map((id) => {
-    const manifest = readJson(`${transactionsDirectory()}/${id}/manifest.json`, null)
+    const manifest = readJsonMissingAs(`${transactionsDirectory()}/${id}/manifest.json`, null)
     return manifest === null ? { id, valid: false } : {
       id, valid: true, created_at: manifest.created_at, state: manifest.state, reason: manifest.reason ?? 'install', targets: [...new Set(manifest.targets.map((target) => target.harness))],
       ...(manifest.master === undefined ? {} : { master: true })
@@ -741,7 +743,7 @@ function leftLines(result) {
 export async function restoreTransaction(id, { yes = false, asJson = false, planOnly = false, expectedPlanHash } = {}) {
   if (!/^[0-9TZ-]+-\d+$/.test(id)) return { code: 'NOT_FOUND', message: `no transaction ${id}` }
   const folder = `${transactionsDirectory()}/${id}`
-  const manifest = readJson(`${folder}/manifest.json`, null)
+  const manifest = readJsonMissingAs(`${folder}/manifest.json`, null)
   if (manifest === null) return { code: 'NOT_FOUND', message: `no transaction ${id}` }
   // A target in an app BMN retired is left as it is and named: an undo never writes into that app's folder (Epic 71).
   const left = manifest.targets.filter((target) => isRetired(target.harness)).map((target) => ({ harness: target.harness, path: target.path, reason: retiredWords(target.harness) }))
@@ -984,10 +986,6 @@ export async function probeInspector(environment = process.env) {
     version: harnessVersion(PROBE_COMMANDS[harness], environment),
     host: inspectRoute({ harness }, null, environment, environment.HOME || homedir()).host ?? null
   })
-}
-
-function canonicalRoute(decision) {
-  return decision.route === null ? 'none' : `${decision.route.provider}/${decision.route.basis}/${decision.kind}`
 }
 
 function hashInText(text, hash) {
