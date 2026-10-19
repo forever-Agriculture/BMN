@@ -4,6 +4,7 @@ import {
   grantShortName,
   grantTermLabel,
   type GrantActionTerm,
+  type GrantCarried,
   type GrantChoice,
   type GrantPeriod,
   type GrantReport,
@@ -82,9 +83,9 @@ function roundOutcomeWords(boundary: string, round: number, report: GrantReport)
 
 /**
  * One run's row: BMN's record on its one line, then every line opened with its source. Rounds count as `bmn grant` counts
- * them, over the kept periods up to this one; times and outcomes are this period's.
+ * them, over the periods up to this one and the rounds carried from those no longer kept; times and outcomes are this period's.
  */
-function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPeriod[], now: Date): { row: AwayGrantRow; granted: boolean } {
+function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPeriod[], carried: readonly GrantCarried[], now: Date): { row: AwayGrantRow; granted: boolean } {
   const lines: AwayGrantLine[] = []
   const add = (label: string, text: string, source: AwayGrantSource): void => { lines.push({ label, text, source }) }
   const answer = run.answer
@@ -116,7 +117,10 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
   // Rounds per boundary: BMN's record of each use, then the agent's step-back and outcome reports.
   const roundUses = uses.filter((use): use is GrantUse & { boundary: string } => use.kind === 'round' && use.boundary !== null)
   const boundaries = [...new Set(roundUses.map((use) => use.boundary))]
-  const before = (boundary: string): number => earlier.reduce((sum, other) => sum + other.uses.filter((use) => use.runId === run.runId && use.kind === 'round' && use.boundary === boundary).length, 0)
+  const earlierUses = (other: GrantPeriod, boundary: string): number => other.uses.filter((use) => use.runId === run.runId && use.kind === 'round' && use.boundary === boundary).length
+  const carriedFor = (boundary: string): number => carried.filter((entry) => entry.runId === run.runId && entry.boundary === boundary).reduce((sum, entry) => sum + entry.rounds, 0)
+  const before = (boundary: string): number => carriedFor(boundary) + earlier.reduce((sum, other) => sum + earlierUses(other, boundary), 0)
+  const periodsBefore = (boundary: string): number => (carriedFor(boundary) > 0 ? 2 : 0) + earlier.filter((other) => earlierUses(other, boundary) > 0).length
   const roundNumber = new Map<string, number>()
   for (const boundary of boundaries) {
     const earlierCount = before(boundary)
@@ -127,7 +131,7 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
     const mine = roundUses.filter((use) => use.boundary === boundary)
     const used = before(boundary) + mine.length
     const left = Math.max(0, rounds - used)
-    const earlierWords = before(boundary) > 0 ? ` · ${before(boundary)} in an earlier period` : ''
+    const earlierWords = before(boundary) > 0 ? ` · ${before(boundary)} in ${periodsBefore(boundary) > 1 ? 'earlier periods' : 'an earlier period'}` : ''
     add('Rounds', `${boundary}: ${used} of ${rounds} used${left > 0 ? `, ${left} left` : ''} · ${mine.map((use) => clock(use.at)).join(', ')}${earlierWords}`, AWAY_GRANT_RECORD)
     summaryParts.push(`${summaryParts.length === 0 ? 'Rounds ' : ''}${used} of ${rounds} at ${boundary}`)
   }
@@ -215,12 +219,12 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
  * Once one run holds a grant, every run that asked is listed, so what was asked and not granted shows too. `periods` are
  * the kept grant periods, oldest first; `null` is a grant record BMN could not read, which the section says.
  */
-export function awayGrantSection(periods: readonly GrantPeriod[] | null, periodId: string | null, now: Date): AwayGrantSection | null {
+export function awayGrantSection(periods: readonly GrantPeriod[] | null, periodId: string | null, now: Date, carried: readonly GrantCarried[] = []): AwayGrantSection | null {
   if (periods === null) return { count: 0, rows: [], more: null, empty: 'Grant records could not be read.' }
   const index = periods.findIndex((period) => period.periodId === periodId)
   if (index < 0) return null
   const period = periods[index]!
-  const built = period.runs.map((run) => grantRow(run, period, periods.slice(0, index), now))
+  const built = period.runs.map((run) => grantRow(run, period, periods.slice(0, index), carried, now))
   const count = built.filter((item) => item.granted).length
   if (count === 0) return null
   return {

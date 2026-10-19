@@ -24,17 +24,19 @@ grant ask    The run's card for this departure, as JSON on standard input, for e
                   "headSha": "3f2a9c1", "upTo": 2, "proposed": "pr", "reason": "checks green at 22:20"},
                  {"kind": "push-default", "repository": "OWNER/NAME", "branch": "dev-auto/epic-81",
                   "proposed": "yes", "reason": "this repository takes no PRs"},
-                 {"kind": "pr-elsewhere", "repository": "OWNER/NAME", "proposed": "yes", "reason": "..."}]}
+                 {"kind": "pr-elsewhere", "repository": "OWNER/NAME", "branch": "fix/skill",
+                  "proposed": "yes", "reason": "..."}]}
              rounds: 2, 3 or 4 extra repair rounds per boundary, when a boundary is ahead. merge
              offers "pr" (this PR at headSha) and/or "green" (up to upTo of this run's PRs, each when
-             its required checks are green); "no" is always offered. count (1-10, default 1) bounds
-             a push or a PR. Ask only what the remaining work needs, each term with its reason. Asking
+             its required checks are green); "no" is always offered. pr-elsewhere names its PR's
+             branch, its pr number, or both. count (1-10, default 1) bounds a push or a PR. Ask only what the remaining work needs, each term with its reason. Asking
              again with other terms makes a new revision; his earlier answer holds until he answers
              it. --nothing says the run needs nothing. Never on a card: force pushes, deletions,
              releases, publishes, killing BMN, credentials and acceptance changes.
 grant use    Records one extra round at a boundary (--boundary) or one use of a granted item
              (--item), before the step runs. The same --use-id returns the first record, so a retry
-             after an uncertain outcome reuses it. A refused use means the step waits.
+             after an uncertain outcome reuses it; after he is back, a retried action waits. A
+             refused use means the step waits.
 grant report Tells BMN what happened, for his morning summary; it grants nothing. --use-id with
              --result: a round passed, failed or blocked (parked BLOCKED), an action done or
              refused (by GitHub or a guard; --text says why), or uncertain while you read the

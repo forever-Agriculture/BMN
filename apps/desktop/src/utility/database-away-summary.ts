@@ -129,7 +129,7 @@ export function awaySummaryData(database: DatabaseConnection, call: AwaySummaryC
   const grantRead = readGrantRow(database)
   const kept = grantRead.state === 'read' ? grantRead.record.periods : []
   const upTo = kept.findIndex((period) => period.periodId === call.periodId)
-  const grants = grantRead.state === 'unknown' ? null : { periods: upTo < 0 ? [] : kept.slice(0, upTo + 1) }
+  const grants = grantRead.state === 'unknown' ? null : { periods: upTo < 0 ? [] : kept.slice(0, upTo + 1), carried: grantRead.record.carried }
   return { sessions, order: sessions.map((session) => session.sessionId), decisions, activity: result, artifactNames, grants }
 }
 

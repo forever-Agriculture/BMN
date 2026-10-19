@@ -4,7 +4,7 @@ import { awayDurationWords, awayMomentWords, awayPeriodWords, type DecisionRecor
 import type { AttentionKind, AttentionRecord } from './companion'
 import type { DevAutoRunsResult } from './dev-auto'
 import { awayGrantSection, type AwayGrantSection } from './away-grant-summary'
-import type { GrantPeriod } from './grant'
+import type { GrantCarried, GrantPeriod } from './grant'
 
 /** Fable's bounds (Story 76.1 §4–5). */
 export const AWAY_SUMMARY_LIMITS = Object.freeze({
@@ -116,10 +116,10 @@ export interface AwaySummaryPayload {
   /** Names of the published files that decision references point at and BMN found. */
   artifactNames: Record<string, string>
   /**
-   * The kept grant periods up to this one, oldest first (Story 84.7); null when the grant record could not be read. Absent
-   * from a host that predates Epic 84, which reads as no grant.
+   * The kept grant periods up to this one, oldest first, and the rounds carried from periods no longer kept (Story 84.7);
+   * null when the grant record could not be read. Absent from a host that predates Epic 84, which reads as no grant.
    */
-  grants?: { periods: GrantPeriod[] } | null
+  grants?: { periods: GrantPeriod[]; carried?: GrantCarried[] } | null
 }
 
 export interface AwaySummaryInput extends AwaySummaryPayload {
@@ -503,7 +503,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     waiting,
     stuck,
     finished,
-    granted: awayGrantSection(input.grants === undefined ? [] : input.grants === null ? null : input.grants.periods, away.periodId, now),
+    granted: awayGrantSection(input.grants === undefined ? [] : input.grants === null ? null : input.grants.periods, away.periodId, now, input.grants?.carried ?? []),
     wentOn,
     decided,
     activity: activityView

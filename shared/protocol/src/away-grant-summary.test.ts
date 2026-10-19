@@ -154,6 +154,11 @@ describe('awayGrantSection (Story 84.7 AC1)', () => {
     expect(row.lines.find((line) => line.label === 'Rounds')!.text).toBe('80.3-review: 2 of 3 used, 1 left · 23:05 · 1 in an earlier period')
     expect(row.lines[0]!.text).toBe('Thu 22:01 here')
     expect(row.lines.find((line) => line.label === 'Missing')!.text).toBe('80.3-review, round 2: no outcome reported yet')
+    // Rounds of a period no longer kept are carried in the record and still count (R84-FR3).
+    const carried = awayGrantSection(record.periods.slice(1), 'p-2', new Date(2026, 9, 16, 0, 0), [{ runId: 'run-80', boundary: '80.3-review', rounds: 1 }])!.rows[0]!
+    expect(carried.lines.find((line) => line.label === 'Rounds')!.text).toBe('80.3-review: 2 of 3 used, 1 left · 23:05 · 1 in earlier periods')
+    const both = awayGrantSection(record.periods, 'p-2', new Date(2026, 9, 16, 0, 0), [{ runId: 'run-80', boundary: '80.3-review', rounds: 1 }])!.rows[0]!
+    expect(both.lines.find((line) => line.label === 'Rounds')!.text).toBe('80.3-review: 3 of 3 used · 23:05 · 2 in earlier periods')
   })
 
   it('keeps its bounds: 10 refusals per run, then "N more"; 20 runs, then "N more · dev-auto runs…"', () => {

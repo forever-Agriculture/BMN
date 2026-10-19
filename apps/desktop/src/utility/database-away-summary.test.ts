@@ -119,7 +119,12 @@ describe('awaySummaryData (Story 76.6 AC1-AC2)', () => {
     expect(answerGrantCard(database, { periodId: asked.periodId, runId: 'run-80', cardRevision: 1, choices: { rounds: 3 }, via: 'telegram', operationKey: 'k' }, IN).outcome).toBe('granted')
     const data = awaySummaryData(database, call({ periodId: period.periodId!, until: null, now: IN }))
     expect(data.grants!.periods.map((item) => [item.periodId, item.runs[0]!.answer!.choices])).toEqual([[asked.periodId, { rounds: 3 }]])
-    expect(awaySummaryData(database, call({ periodId: 'another' })).grants).toEqual({ periods: [] })
+    expect(awaySummaryData(database, call({ periodId: 'another' })).grants).toEqual({ periods: [], carried: [] })
+    // Rounds carried from periods no longer kept come with them, so the summary counts them as `bmn grant` does.
+    const stored = database.prepare("SELECT value_json FROM app_setting WHERE key = 'night-grant-v1'").get() as { value_json: string }
+    const carried = [{ runId: 'run-80', boundary: '80.3-review', rounds: 2 }]
+    database.prepare("UPDATE app_setting SET value_json = ? WHERE key = 'night-grant-v1'").run(JSON.stringify({ ...JSON.parse(stored.value_json), carried }))
+    expect(awaySummaryData(database, call({ periodId: period.periodId!, until: null, now: IN })).grants!.carried).toEqual(carried)
     database.prepare("UPDATE app_setting SET value_json = '{' WHERE key = 'night-grant-v1'").run()
     expect(awaySummaryData(database, call({ periodId: period.periodId! })).grants).toBeNull()
   })

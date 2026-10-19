@@ -17,6 +17,7 @@ import {
   grantStatus,
   grantStatusLines,
   grantTermChoices,
+  grantTermLabel,
   markDepartureTold,
   openGrantPeriod,
   parseGrantCardInput,
@@ -93,8 +94,9 @@ describe('readGrantRecord (84.3 AC4: a malformed row is no grant)', () => {
 
 describe('parseGrantCardInput (R84-FR1, FR8; 84.6 AC5)', () => {
   it('takes rounds and the fixed action kinds, numbering items without an id', () => {
-    const parsed = card({ terms: [{ kind: 'pr-elsewhere', repository: 'o/dev-auto', proposed: 'no', reason: 'a skill fix' }, { kind: 'rounds', proposed: 2, reason: 'one boundary' }] })
+    const parsed = card({ terms: [{ kind: 'pr-elsewhere', repository: 'o/dev-auto', branch: 'fix/skill', proposed: 'no', reason: 'a skill fix' }, { kind: 'rounds', proposed: 2, reason: 'one boundary' }] })
     expect(parsed.terms.map((term) => term.id)).toEqual(['item-1', 'rounds'])
+    expect(parsed.terms[0]).toMatchObject({ kind: 'pr-elsewhere', branch: 'fix/skill', pr: null })
     expect(card().terms[1]).toMatchObject({ repository: 'forever-agriculture/bmn', headSha: '3f2a9c1', upTo: 2 })
   })
 
@@ -107,6 +109,9 @@ describe('parseGrantCardInput (R84-FR1, FR8; 84.6 AC5)', () => {
     [{ terms: [{ kind: 'merge', repository: 'o/r', pr: 3, headSha: '3f2a9c1', proposed: 'green', reason: 'r' }] }, 'choices the term offers'],
     [{ terms: [{ kind: 'push-default', repository: 'o/r', branch: '../main', proposed: 'yes', reason: 'r' }] }, 'branch'],
     [{ terms: [{ kind: 'pr-elsewhere', repository: 'not a repo', proposed: 'yes', reason: 'r' }] }, 'OWNER/NAME'],
+    [{ terms: [{ kind: 'pr-elsewhere', repository: 'o/r', proposed: 'yes', reason: 'r' }] }, 'names its branch, its PR number, or both'],
+    [{ terms: [{ kind: 'pr-elsewhere', repository: 'o/r', branch: '../main', proposed: 'yes', reason: 'r' }] }, 'the PR\'s branch'],
+    [{ terms: [{ kind: 'pr-elsewhere', repository: 'o/r', pr: 0, proposed: 'yes', reason: 'r' }] }, 'the pull request\'s number'],
     [{ terms: [{ kind: 'rounds', proposed: 3, reason: 'line\u0007bell' }] }, 'reason'],
     [{ terms: [] }, 'at least one term'],
     [{ nothing: true }, 'asks no terms'],
@@ -336,6 +341,47 @@ describe('useGrant (R84-FR3, FR8)', () => {
     expect(status.active && status.grant.roundsUsed).toEqual({ '80.3-review': 2 })
     expect(useGrant(read(record), second, round('u3'), T2)).toMatchObject({ outcome: 'recorded', left: 0 })
   })
+
+  it('still counts the rounds of a period no longer kept, carried in the record (R84-FR3)', () => {
+    const night = (record: GrantRecord, id: string, before: AwayRecord): { record: GrantRecord; away: AwayRecord; back: AwayRecord } => {
+      const awayNow = { ...AWAY, periodId: id }
+      let next = startDeparture(record, { source: 'agent', agentSessionId: 's', periodId: id }, 'back', T2).record
+      next = askGrant(next, { runId: 'run-80', sessionId: 's', agentCli: 'claude', card: card() }, T2).record
+      next = followAwayChange(next, before, awayNow, { to: 'away', source: 'agent', outcome: 'changed' }, T2).record
+      next = answerGrant(next, { periodId: id, runId: 'run-80', cardRevision: 1, choices: all, via: 'app', operationKey: `op-${id}` }, T2).record
+      return { record: next, away: awayNow, back: { ...BACK, periodId: id } }
+    }
+    const end = (record: GrantRecord, from: AwayRecord, to: AwayRecord): GrantRecord => followAwayChange(record, from, to, { to: 'back', source: 'app', outcome: 'changed' }, T2).record
+    let record = granted(away(asked()), all)
+    record = useGrant(read(record), AWAY, round('u1'), T1).record
+    record = useGrant(read(record), AWAY, round('u2'), T1).record
+    record = end(record, AWAY, BACK)
+    const second = night(record, 'p-2', BACK)
+    record = useGrant(read(second.record), second.away, round('u3'), T2).record
+    record = end(record, second.away, second.back)
+    const third = night(record, 'p-3', second.back)
+    expect(third.record.periods.map((period) => period.periodId)).toEqual(['p-2', 'p-3'])
+    expect(third.record.carried).toEqual([{ runId: 'run-80', boundary: '80.3-review', rounds: 2 }])
+    const status = grantStatus(read(third.record), third.away, 'run-80')
+    expect(status.active && status.grant.roundsUsed).toEqual({ '80.3-review': 3 })
+    expect(useGrant(read(third.record), third.away, round('u4'), T2)).toMatchObject({ outcome: 'refused', reason: 'none left' })
+    expect(readGrantRecord(JSON.stringify(third.record))).toEqual({ state: 'read', record: third.record })
+    for (const carried of [[{ runId: 'run-80', boundary: '80.3-review', rounds: 0 }], [{ runId: 'run-80', rounds: 2 }], 'x']) {
+      expect(readGrantRecord(JSON.stringify({ ...third.record, carried }))).toMatchObject({ state: 'unknown', reason: 'the grant record has carried rounds it cannot read' })
+    }
+  })
+
+  it('refuses an action retried under its use id after Back, and keeps a running round (R84-FR7)', () => {
+    let record = granted(away(asked()), all)
+    record = useGrant(read(record), AWAY, round('r1'), T1).record
+    record = useGrant(read(record), AWAY, { runId: 'run-80', sessionId: 's', id: 'm1', kind: 'action', item: 'merge-12' }, T1).record
+    expect(useGrant(read(record), AWAY, { runId: 'run-80', sessionId: 's', id: 'm1', kind: 'action', item: 'merge-12' }, T1)).toMatchObject({ outcome: 'repeated', left: 0 })
+    record = followAwayChange(record, AWAY, BACK, { to: 'back', source: 'app', outcome: 'changed' }, T2).record
+    const retried = useGrant(read(record), BACK, { runId: 'run-80', sessionId: 's', id: 'm1', kind: 'action', item: 'merge-12' }, T2)
+    expect(retried).toMatchObject({ outcome: 'refused', reason: expect.stringMatching(/^the owner is back since .*; a retry waits$/) })
+    expect(retried.record.periods.at(-1)!.refusals.at(-1)).toMatchObject({ runId: 'run-80', kind: 'action', item: 'merge-12', at: T2 })
+    expect(useGrant(read(record), BACK, round('r1'), T2)).toMatchObject({ outcome: 'repeated', left: 0 })
+  })
 })
 
 describe('the card\'s words (the notes §1)', () => {
@@ -363,6 +409,16 @@ describe('named actions for the night (Story 84.6)', () => {
     expect(lines).toContain('  Item merge-12: merge PR 12 in forever-agriculture/bmn, only at head 3f2a9c1; another head waits; 1 of 1 left.')
     expect(lines).toContain('  Item push-81: push dev-auto/epic-81 to the default branch of forever-agriculture/dev-auto, never forced; 1 of 1 left.')
     expect(lines).toContain('  Every item: no admin bypass; a PR that changes CI or workflows, or deploys, still asks; a different target, run or condition waits.')
+    const elsewhere = granted(away(asked(leaving(), { terms: [
+      { kind: 'pr-elsewhere', id: 'pr-a', repository: 'octo/skills', branch: 'fix/grant', proposed: 'yes', reason: 'the skill fix' },
+      { kind: 'pr-elsewhere', id: 'pr-b', repository: 'octo/skills', pr: 7, count: 2, proposed: 'yes', reason: 'its review fixes' }
+    ] })), { 'pr-a': 'yes', 'pr-b': 'yes' })
+    const elsewhereLines = grantStatusLines('run-80', grantStatus(read(elsewhere), AWAY, 'run-80'))
+    expect(elsewhereLines).toContain('  Item pr-a: open or update a PR from fix/grant in octo/skills; another PR or branch waits; 1 of 1 left.')
+    expect(elsewhereLines).toContain('  Item pr-b: update PR 7 in octo/skills; another PR or branch waits; 2 of 2 left.')
+    const [prA, prB] = openGrantPeriod(elsewhere)!.runs[0]!.card.terms
+    expect([grantTermLabel(prA!), grantTermLabel(prB!)]).toEqual(['Open or update a PR from fix/grant in octo/skills', 'Update PR 7 in octo/skills'])
+    expect(grantAnswerWords([prA!, prB!], { 'pr-a': 'yes', 'pr-b': 'no' })).toEqual({ granted: ['a PR from fix/grant in skills'], notGranted: ['update PR 7 in skills'] })
     const green = granted(away(asked()), { ...all, 'merge-12': 'green' })
     expect(grantStatusLines('run-80', grantStatus(read(green), AWAY, 'run-80'))).toContain(
       '  Item merge-12: merge this run\'s PRs in forever-agriculture/bmn, each only when its required checks are all green; 2 of 2 left.')

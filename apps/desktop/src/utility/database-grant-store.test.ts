@@ -30,7 +30,7 @@ const ask = (runId = 'run-80') => askGrantCard(database, { runId, sessionId: 's-
 
 describe('grant store (Story 84.3)', () => {
   it('starts with no row, and starts a departure whose period id Away then carries (AC1)', () => {
-    expect(getGrants(database).read).toEqual({ state: 'read', record: { version: 1, revision: 0, periods: [], operations: [] } })
+    expect(getGrants(database).read).toEqual({ state: 'read', record: { version: 1, revision: 0, periods: [], carried: [], operations: [] } })
     expect(ask()).toMatchObject({ outcome: 'no-departure' })
     expect(raw(database, GRANT_RECORD_KEY)).toBeUndefined()
     const left = leaveAway(database, { source: 'agent', agentSessionId: 's-builder' }, T0)

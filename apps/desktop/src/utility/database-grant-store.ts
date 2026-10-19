@@ -42,7 +42,7 @@ export function readGrantRow(database: DatabaseConnection): GrantRead {
 
 /** The record a change starts from: an unreadable row holds no authority, so a change starts afresh over it. */
 export function grantBase(read: GrantRead): GrantRecord {
-  return read.state === 'read' ? read.record : { version: 1, revision: 0, periods: [], operations: [] }
+  return read.state === 'read' ? read.record : { version: 1, revision: 0, periods: [], carried: [], operations: [] }
 }
 
 export function writeGrantRow(database: DatabaseConnection, record: GrantRecord, now: string): void {

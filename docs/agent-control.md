@@ -1033,7 +1033,7 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   shows it): a title, the remaining scope and terms, each with its reason. A term is extra repair rounds per
   boundary (2, 3 or 4) or one of three named actions with its target: merge a pull request (this PR at a head SHA,
   or up to N of this run's PRs when their required checks are green), push a branch to the default branch, or open
-  or update a pull request in another repository. `--nothing` says the run needs nothing. BMN binds the asking
+  or update a pull request in another repository (from a named branch, or a named PR). `--nothing` says the run needs nothing. BMN binds the asking
   session itself. A second ask for the same run is a new revision, and his earlier answer holds until he answers
   it. Never on a card: force pushes, deletions, releases, publishes, killing BMN, credentials and acceptance
   changes.
@@ -1045,7 +1045,8 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   is left, or "No grant" and why (none answered, Back, a new period, a malformed row, an unreadable store). Read
   it right before each step that uses it; a grant never comes from a handoff. `bmn grant use --run ID --use-id U
   (--boundary B | --item I)` records one extra round or one use before the step runs; the same use id returns the
-  first record, and a refused use means the step waits.
+  first record (after Back, a retried action is refused and waits), and a refused use means the step waits. Rounds
+  count per boundary across every period: those of periods no longer kept are carried in the record.
 - **Reporting what happened.** `bmn grant report --run ID` keeps what the agent saw for his morning summary, and
   grants nothing: `--use-id U --result R` gives a recorded use's outcome (a round passed, failed or blocked; an
   action done, refused, with `--text` saying why, or uncertain while the agent reads the target's state; the latest

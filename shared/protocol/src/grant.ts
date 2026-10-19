@@ -11,7 +11,7 @@ export const GRANT_RECORD_KEY = 'night-grant-v1'
 /** Bounds: text is refused past them, never cut; lists keep their newest entries. */
 export const GRANT_LIMITS = Object.freeze({
   runId: 120, title: 120, scope: 300, reason: 300, terms: 8, itemId: 40, runs: 32, told: 64, uses: 500, operations: 500,
-  boundary: 120, useId: 120, count: 10, periods: 2, reports: 500
+  boundary: 120, useId: 120, count: 10, periods: 2, reports: 500, carried: 200
 })
 
 /** The extra repair rounds a card may offer per boundary (owner 2026-10-18: "2-4 by default"); 0 is No. */
@@ -33,7 +33,8 @@ export interface GrantMergeTerm {
   proposed: 'no' | 'pr' | 'green'; reason: string
 }
 export interface GrantPushTerm { id: string; kind: 'push-default'; repository: string; branch: string; count: number; proposed: 'no' | 'yes'; reason: string }
-export interface GrantPrTerm { id: string; kind: 'pr-elsewhere'; repository: string; count: number; proposed: 'no' | 'yes'; reason: string }
+/** Its target is the PR's branch, the PR, or both (R84-FR8: "repository and PR or branch"). */
+export interface GrantPrTerm { id: string; kind: 'pr-elsewhere'; repository: string; branch: string | null; pr: number | null; count: number; proposed: 'no' | 'yes'; reason: string }
 export type GrantTerm = GrantRoundsTerm | GrantMergeTerm | GrantPushTerm | GrantPrTerm
 export type GrantActionTerm = Exclude<GrantTerm, GrantRoundsTerm>
 
@@ -143,15 +144,20 @@ export interface GrantPeriod {
   reports: GrantReport[]
 }
 
+/** A boundary's rounds from periods no longer kept, so they still count (R84-FR3: across Away periods). */
+export interface GrantCarried { runId: string; boundary: string; rounds: number }
+
 export interface GrantRecord {
   version: 1
   revision: number
   /** The current period last; at most the current and the previous one are kept. */
   periods: GrantPeriod[]
+  /** Rounds per run and boundary from the periods dropped before these, newest last. */
+  carried: GrantCarried[]
   operations: Array<{ key: string; revision: number; unchanged?: true }>
 }
 
-export const EMPTY_GRANT_RECORD: GrantRecord = Object.freeze({ version: 1, revision: 0, periods: [], operations: [] }) as GrantRecord
+export const EMPTY_GRANT_RECORD: GrantRecord = Object.freeze({ version: 1, revision: 0, periods: [], carried: [], operations: [] }) as GrantRecord
 
 export type GrantRead = { state: 'read'; record: GrantRecord } | { state: 'unknown'; reason: string }
 
@@ -225,11 +231,17 @@ export function parseGrantTerms(raw: unknown): { terms: GrantTerm[] } | { proble
     const count = term.count === undefined ? 1 : isCount(term.count, GRANT_LIMITS.count) ? term.count : null
     if (count === null) return { problem: `${where}: count must be 1 to ${GRANT_LIMITS.count}` }
     if (term.proposed !== 'no' && term.proposed !== 'yes') return { problem: `${where}: proposed must be no or yes` }
+    const isBranch = (value: unknown): value is string => isText(value) && BRANCH.test(value) && !value.includes('..')
     if (term.kind === 'push-default') {
-      if (!isText(term.branch) || !BRANCH.test(term.branch) || term.branch.includes('..')) return { problem: `${where}: branch must be the branch to push` }
+      if (!isBranch(term.branch)) return { problem: `${where}: branch must be the branch to push` }
       terms.push({ id, kind: 'push-default', repository, branch: term.branch, count, proposed: term.proposed, reason })
     } else {
-      terms.push({ id, kind: 'pr-elsewhere', repository, count, proposed: term.proposed, reason })
+      const branch = term.branch === undefined || term.branch === null ? null : isBranch(term.branch) ? term.branch : undefined
+      if (branch === undefined) return { problem: `${where}: branch must be the PR's branch` }
+      const pr = term.pr === undefined || term.pr === null ? null : Number.isSafeInteger(term.pr) && (term.pr as number) >= 1 ? term.pr as number : undefined
+      if (pr === undefined) return { problem: `${where}: pr must be the pull request's number` }
+      if (branch === null && pr === null) return { problem: `${where}: a PR in another repository names its branch, its PR number, or both` }
+      terms.push({ id, kind: 'pr-elsewhere', repository, branch, pr, count, proposed: term.proposed, reason })
     }
   }
   return { terms }
@@ -383,7 +395,16 @@ export function readGrantRecord(raw: string | undefined): GrantRead {
   const operations = row.operations.filter((item): item is { key: string; revision: number; unchanged?: true } =>
     typeof item === 'object' && item !== null && isText((item as { key: unknown }).key) && Number.isSafeInteger((item as { revision: unknown }).revision))
     .map((item) => ({ key: item.key, revision: item.revision, ...(item.unchanged === true ? { unchanged: true as const } : {}) }))
-  return { state: 'read', record: { version: 1, revision: row.revision as number, periods: periods.slice(-GRANT_LIMITS.periods), operations } }
+  // Carried rounds limit what is left, so a carried count that cannot be read is no grant, never a smaller count.
+  const carried: GrantCarried[] = []
+  for (const item of row.carried === undefined ? [] : Array.isArray(row.carried) ? row.carried : [null]) {
+    const entry = item as Record<string, unknown> | null
+    const runId = grantIdentifier(entry?.runId, GRANT_LIMITS.runId)
+    const boundary = grantIdentifier(entry?.boundary, GRANT_LIMITS.boundary)
+    if (runId === null || boundary === null || !isCount(entry!.rounds, Number.MAX_SAFE_INTEGER)) return { state: 'unknown', reason: 'the grant record has carried rounds it cannot read' }
+    carried.push({ runId, boundary, rounds: entry!.rounds as number })
+  }
+  return { state: 'read', record: carry({ version: 1, revision: row.revision as number, periods, carried, operations }) }
 }
 
 /** The period still open (leaving or away), if any: always the last one. */
@@ -392,11 +413,26 @@ export function openGrantPeriod(record: GrantRecord): GrantPeriod | null {
   return last !== undefined && (last.state === 'leaving' || last.state === 'away') ? last : null
 }
 
+/** Keeps the newest periods, adding the rounds of each one dropped to `carried`, so they still count. */
+function carry(record: GrantRecord): GrantRecord {
+  const dropped = record.periods.slice(0, -GRANT_LIMITS.periods)
+  if (dropped.length === 0) return record
+  const carried = [...record.carried]
+  for (const use of dropped.flatMap((period) => period.uses)) {
+    if (use.kind !== 'round' || use.boundary === null) continue
+    const at = carried.findIndex((entry) => entry.runId === use.runId && entry.boundary === use.boundary)
+    const rounds = at < 0 ? 1 : carried[at]!.rounds + 1
+    if (at >= 0) carried.splice(at, 1)
+    carried.push({ runId: use.runId, boundary: use.boundary, rounds })
+  }
+  return { ...record, periods: record.periods.slice(-GRANT_LIMITS.periods), carried: carried.slice(-GRANT_LIMITS.carried) }
+}
+
 function withPeriod(record: GrantRecord, period: GrantPeriod): GrantRecord {
   const periods = record.periods.some((other) => other.periodId === period.periodId)
     ? record.periods.map((other) => other.periodId === period.periodId ? period : other)
     : [...record.periods, period]
-  return { ...record, revision: record.revision + 1, periods: periods.slice(-GRANT_LIMITS.periods) }
+  return carry({ ...record, revision: record.revision + 1, periods })
 }
 
 function remember(record: GrantRecord, key: string | undefined, unchanged = false): GrantRecord {
@@ -588,7 +624,7 @@ export interface ActiveGrant {
   via: GrantAnswerSource
   /** Granted extra rounds per boundary; 0 when not granted. */
   rounds: number
-  /** Rounds already recorded per boundary, over the kept periods (R84-FR3: counted across periods). */
+  /** Rounds already recorded per boundary, over every period (R84-FR3: counted across periods). */
   roundsUsed: Record<string, number>
   items: Array<{ term: GrantActionTerm; choice: GrantChoice; count: number; used: number; left: number }>
   notGranted: GrantActionTerm[]
@@ -603,6 +639,7 @@ const itemCount = (term: GrantActionTerm, choice: GrantChoice): number =>
 
 function roundsUsed(record: GrantRecord, runId: string): Record<string, number> {
   const used: Record<string, number> = {}
+  for (const entry of record.carried) if (entry.runId === runId) used[entry.boundary] = (used[entry.boundary] ?? 0) + entry.rounds
   for (const period of record.periods) {
     for (const use of period.uses) if (use.runId === runId && use.kind === 'round' && use.boundary !== null) used[use.boundary] = (used[use.boundary] ?? 0) + 1
   }
@@ -673,12 +710,6 @@ export function useGrant(read: GrantRead, away: Pick<AwayRecord, 'state' | 'peri
   const record = read.record
   const previous = record.periods.flatMap((period) => period.uses).find((other) => other.id === use.id)
   const status = grantStatus(read, away, use.runId)
-  if (previous !== undefined) {
-    if (previous.runId !== use.runId || previous.kind !== use.kind || (use.kind === 'round' ? previous.boundary !== use.boundary : previous.item !== use.item)) {
-      return { outcome: 'refused', record, reason: 'that use id was recorded for another use' }
-    }
-    return { outcome: 'repeated', record, left: status.active ? leftFor(status.grant, use) : 0 }
-  }
   const open = openGrantPeriod(record)
   // After Back the refusal is kept with the period that ended, when the run had a card there, so the morning shows it.
   const last = record.periods.at(-1)
@@ -687,6 +718,14 @@ export function useGrant(read: GrantRead, away: Pick<AwayRecord, 'state' | 'peri
     if (holder === null) return { outcome: 'refused', record, reason }
     const refusal: GrantRefusal = { runId: use.runId, kind: use.kind, boundary: use.kind === 'round' ? use.boundary : null, item: use.kind === 'action' ? use.item : null, reason, at: now }
     return { outcome: 'refused', record: withPeriod(record, { ...holder, refusals: [...holder.refusals, refusal].slice(-GRANT_LIMITS.uses) }), reason }
+  }
+  if (previous !== undefined) {
+    if (previous.runId !== use.runId || previous.kind !== use.kind || (use.kind === 'round' ? previous.boundary !== use.boundary : previous.item !== use.item)) {
+      return { outcome: 'refused', record, reason: 'that use id was recorded for another use' }
+    }
+    // A round already running finishes (R84-FR7); an action retried under its use id did not happen, so after Back it waits.
+    if (use.kind === 'action' && !status.active) return refuse(`${status.reason}; a retry waits`)
+    return { outcome: 'repeated', record, left: status.active ? leftFor(status.grant, use) : 0 }
   }
   if (!status.active || open === null) return refuse(status.active ? 'no open period' : status.reason)
   if (open.uses.length >= GRANT_LIMITS.uses) return refuse('this period holds as many uses as BMN keeps')
@@ -770,7 +809,13 @@ export function grantTermLabel(term: GrantTerm): string {
   if (term.kind === 'rounds') return 'Extra repair rounds per boundary'
   if (term.kind === 'merge') return `Merge in ${term.repository}`
   if (term.kind === 'push-default') return `Push ${term.branch} to the default branch in ${term.repository}`
-  return `Open or update a PR in ${term.repository}`
+  const words = prElsewhereWords(term, term.repository)
+  return `${words[0]!.toUpperCase()}${words.slice(1)}`
+}
+
+/** "open or update a PR from BRANCH in REPOSITORY", or "update PR 12 [from BRANCH] in REPOSITORY". */
+function prElsewhereWords(term: GrantPrTerm, repository: string): string {
+  return term.pr === null ? `open or update a PR from ${term.branch} in ${repository}` : `update PR ${term.pr}${term.branch === null ? '' : ` from ${term.branch}`} in ${repository}`
 }
 
 /** One choice's words on its button: "No", "3", "PR 12 at 3f2a9c1", "Up to 2 when green", "Yes", "Up to 3". */
@@ -789,7 +834,7 @@ export function grantShortName(term: GrantTerm, choice: GrantChoice): string {
     return choice === 'green' ? `merge up to ${term.upTo ?? 1} of this run's PRs when green` : `merge PR ${term.pr}${term.headSha === null ? '' : ` at ${term.headSha.slice(0, 7)}`}`
   }
   if (term.kind === 'push-default') return `push to the default branch in ${repository}`
-  return `a PR in ${repository}`
+  return term.pr === null ? `a PR from ${term.branch} in ${repository}` : `update PR ${term.pr} in ${repository}`
 }
 
 /** "Proposed 3 · " before a rounds term's or a two-way merge's reason; nothing before a yes/no action's. */
@@ -885,7 +930,7 @@ function grantItemWords(term: GrantActionTerm, choice: GrantChoice): string {
       : `merge PR ${term.pr} in ${term.repository}, only at head ${term.headSha ?? '(none)'}; another head waits`
   }
   if (term.kind === 'push-default') return `push ${term.branch} to the default branch of ${term.repository}, never forced`
-  return `open or update a PR in ${term.repository}`
+  return `${prElsewhereWords(term, term.repository)}; another PR or branch waits`
 }
 
 /** One run's status as `bmn grant` prints it, for the CLI and dev-auto's check (84.3 AC4, 84.5 AC2). */
