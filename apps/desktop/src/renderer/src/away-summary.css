@@ -18,3 +18,10 @@
 .away-decision dd { overflow: visible; white-space: pre-line; text-overflow: clip; overflow-wrap: anywhere; }
 .app-dialog .away-link { min-height: 0; padding: 0; border: 0; border-radius: 0; background: none; color: var(--muted); font: inherit; text-decoration: underline; }
 .away-more { display: block; margin-top: 4px; color: var(--muted); font-size: 11.5px; }
+/* Granted (Story 84.7): a third, muted column names each line's source; at narrow width it sits under its value. */
+.session-messages-dialog .kv.away-grant-detail { grid-template-columns: 112px minmax(0, 1fr) max-content; }
+.away-grant-detail .away-grant-source { color: var(--muted); font-size: 11.5px; }
+@media (max-width: 640px) {
+  .session-messages-dialog .kv.away-grant-detail { grid-template-columns: 112px minmax(0, 1fr); }
+  .away-grant-detail .away-grant-source { grid-column: 2; margin-top: -3px; }
+}

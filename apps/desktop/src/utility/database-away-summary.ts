@@ -9,6 +9,7 @@ import {
   type AwaySummarySession
 } from '@bmn/protocol'
 import { listPeriodDecisions } from './database-decision-store'
+import { readGrantRow } from './database-grant-store'
 import type { DatabaseConnection } from './database-initialization'
 
 /** The most rows each source reads for one period; a source cut there says so. */
@@ -29,8 +30,9 @@ const HANDOFF_KEY = 'handoff-message:'
 /**
  * Story 76.6 AC1–AC2: what BMN holds for one period, read in one transaction so no source moves under another: the
  * period's decision records, per session the turns that ended, the files it published, the messages and handoffs it
- * sent with where each stands, and the exits a record proves; with the sessions the summary may name, in sidebar order.
- * Each source is bounded and says when it was cut or is no longer retained; counts are never summed past a cut.
+ * sent with where each stands, and the exits a record proves; with the sessions the summary may name, in sidebar order,
+ * and the kept grant periods up to this one (Story 84.7). Each source is bounded and says when it was cut or is no longer
+ * retained; counts are never summed past a cut.
  */
 export function awaySummaryData(database: DatabaseConnection, call: AwaySummaryCall): Omit<AwaySummaryPayload, 'away' | 'wentOn'> {
   const until = call.until ?? call.now
@@ -124,7 +126,11 @@ export function awaySummaryData(database: DatabaseConnection, call: AwaySummaryC
   ).all() as Array<{ session_id: string; name: string; archived_at: string | null; workspace: string }>
   const sessions: AwaySummarySession[] = sessionRows.map((row) => ({ sessionId: row.session_id, name: row.name, workspace: row.workspace, archivedAt: row.archived_at }))
   const result: AwayPeriodActivity = { sessions: [...activity.values()], gaps }
-  return { sessions, order: sessions.map((session) => session.sessionId), decisions, activity: result, artifactNames }
+  const grantRead = readGrantRow(database)
+  const kept = grantRead.state === 'read' ? grantRead.record.periods : []
+  const upTo = kept.findIndex((period) => period.periodId === call.periodId)
+  const grants = grantRead.state === 'unknown' ? null : { periods: upTo < 0 ? [] : kept.slice(0, upTo + 1) }
+  return { sessions, order: sessions.map((session) => session.sessionId), decisions, activity: result, artifactNames, grants }
 }
 
 /** Every session's name by id, archived ones included, for the `/back` reply's Waiting on you. */

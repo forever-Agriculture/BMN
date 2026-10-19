@@ -21,6 +21,7 @@ import {
   openGrantPeriod,
   parseGrantCardInput,
   readGrantRecord,
+  reportGrant,
   startDeparture,
   useGrant,
   type GrantRecord,
@@ -376,5 +377,59 @@ describe('named actions for the night (Story 84.6)', () => {
       const parsed = parseGrantCardInput({ ...CARD, terms: [{ kind, id: 'x', repository: 'octo/widgets', proposed: 'yes', reason: 'tonight' }] })
       expect(parsed).toMatchObject({ problem: expect.stringContaining('are never on a card') })
     }
+  })
+})
+
+describe('the agent\'s report (Story 84.7)', () => {
+  const read = (record: GrantRecord) => ({ state: 'read' as const, record })
+  const used = (): GrantRecord => {
+    let record = granted(away(asked()), all)
+    record = useGrant(read(record), AWAY, { runId: 'run-80', sessionId: 's-builder', id: 'r1', kind: 'round', boundary: '80.3-review' }, T1).record
+    return useGrant(read(record), AWAY, { runId: 'run-80', sessionId: 's-builder', id: 'm1', kind: 'action', item: 'merge-12' }, T1).record
+  }
+
+  it('keeps an outcome bound to the run\'s own recorded use, with a result its kind allows, once', () => {
+    const record = used()
+    const passed = reportGrant(read(record), { runId: 'run-80', sessionId: 's-builder', kind: 'outcome', useId: 'r1', result: 'passed', text: null }, T1)
+    expect(passed.outcome).toBe('recorded')
+    expect(passed.record.periods.at(-1)!.reports).toEqual([
+      { runId: 'run-80', sessionId: 's-builder', kind: 'outcome', useId: 'r1', boundary: '80.3-review', item: null, result: 'passed', text: null, at: T1 }
+    ])
+    expect(reportGrant(read(passed.record), { runId: 'run-80', sessionId: 's-builder', kind: 'outcome', useId: 'r1', result: 'passed', text: null }, T2).outcome).toBe('repeated')
+    expect(reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', useId: 'r1', result: 'done', text: null }, T1))
+      .toMatchObject({ outcome: 'refused', reason: 'a round reports passed, failed, blocked, uncertain' })
+    expect(reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', useId: 'm1', result: 'passed', text: null }, T1)).toMatchObject({ outcome: 'refused' })
+    expect(reportGrant(read(record), { runId: 'run-81', sessionId: 's', kind: 'outcome', useId: 'm1', result: 'done', text: null }, T1))
+      .toMatchObject({ outcome: 'refused', reason: 'that use id was recorded for another run' })
+    expect(reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', useId: 'nope', result: 'done', text: null }, T1))
+      .toMatchObject({ outcome: 'refused', reason: 'no use was recorded under that use id' })
+    expect(reportGrant({ state: 'unknown', reason: 'the grant record is not valid JSON' }, { runId: 'run-80', sessionId: 's', kind: 'outcome', useId: 'r1', result: 'passed', text: null }, T1).outcome).toBe('refused')
+  })
+
+  it('takes a later outcome for the same use, after Back too, since a running step finishes', () => {
+    let record = used()
+    record = reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', useId: 'm1', result: 'uncertain', text: 'the merge call timed out' }, T1).record
+    record = followAwayChange(record, AWAY, BACK, { to: 'back', source: 'app', outcome: 'changed' }, T2).record
+    const done = reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', useId: 'm1', result: 'done', text: 'Merged at 3f2a9c1' }, T2)
+    expect(done.outcome).toBe('recorded')
+    expect(done.record.periods.at(-1)!.reports.map((report) => report.result)).toEqual(['uncertain', 'done'])
+  })
+
+  it('keeps a step-back option and a refused step for the run\'s own card only', () => {
+    const record = used()
+    expect(reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'step-back', boundary: '80.3-review', text: 'a different design' }, T1).outcome).toBe('recorded')
+    expect(reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'refused', item: 'merge-12', text: 'changes .github/workflows, so it asked you' }, T1).outcome).toBe('recorded')
+    expect(reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'refused', item: 'merge-99', text: 'x' }, T1))
+      .toMatchObject({ outcome: 'refused', reason: 'that item is not on this run\'s card' })
+    expect(reportGrant(read(record), { runId: 'run-81', sessionId: 's', kind: 'step-back', boundary: 'b', text: 'x' }, T1))
+      .toMatchObject({ outcome: 'refused', reason: 'this run has no card in this departure' })
+  })
+
+  it('keeps a use refused after Back with the period that ended, for the morning', () => {
+    const record = followAwayChange(used(), AWAY, BACK, { to: 'back', source: 'app', outcome: 'changed' }, T2).record
+    const refused = useGrant(read(record), BACK, { runId: 'run-80', sessionId: 's', id: 'r9', kind: 'round', boundary: '80.3-review' }, T2)
+    expect(refused).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('the owner is back since') })
+    expect(refused.record.periods.at(-1)!.refusals.at(-1)).toMatchObject({ runId: 'run-80', kind: 'round', boundary: '80.3-review', at: T2 })
+    expect(useGrant(read(record), BACK, { runId: 'run-77', sessionId: 's', id: 'x', kind: 'round', boundary: 'b' }, T2).record).toBe(record)
   })
 })

@@ -397,6 +397,10 @@ cards' only place; you grant all, some or none, and a run that needs nothing say
 are back; an unanswered card grants nothing, a run that asks again cannot change what you granted until you answer
 again, and **Not leaving** withdraws the open cards. The same cards reach Telegram once you are away
 ([telegram.md](telegram.md)); agents read their grant with `bmn grant` ([agent-control.md](agent-control.md#the-away-grant)).
+In the morning, **While you were away** adds **Granted** after Finished when a run held a grant: one row per run
+that asked, used, unused or none, with one line of what it used; open a row for what you granted and not, the
+rounds per boundary, each action's uses, what was refused and any step with no outcome, each line marked
+"BMN's record" or "the agent's report".
 
 Preferences → Integrations › **Rules** keeps one rules text and writes it into each agent app's own rules file
 (Claude Code, Codex and OpenCode), shows each file's difference before it writes, and can

@@ -8,6 +8,7 @@ import {
   markDepartureTold,
   parseAwayRecord,
   readGrantRecord,
+  reportGrant,
   setGrantPhone,
   startDeparture,
   useGrant,
@@ -19,6 +20,8 @@ import {
   type GrantLifecycleResult,
   type GrantRead,
   type GrantRecord,
+  type GrantReportInput,
+  type GrantReportOutcome,
   type GrantRun,
   type GrantTerm,
   type GrantUseResult
@@ -89,6 +92,14 @@ export function useGrantRecord(database: DatabaseConnection, use: Parameters<typ
   return result
 }
 
+/** An agent's report of a step (Story 84.7): kept for the morning; an unreadable record is never written over by one. */
+export function reportGrantRecord(database: DatabaseConnection, report: GrantReportInput, now: string): GrantReportOutcome {
+  const read = readGrantRow(database)
+  const result = reportGrant(read, report, now)
+  if (read.state === 'read' && result.outcome === 'recorded') writeGrantRow(database, result.record, now)
+  return result
+}
+
 export function markGrantTold(database: DatabaseConnection, periodId: string, sessionId: string, now: string): GrantLifecycleResult {
   const read = readGrantRow(database)
   if (read.state === 'unknown') return { outcome: 'unchanged', record: grantBase(read) }
@@ -105,4 +116,4 @@ export function setGrantPhoneMessage(database: DatabaseConnection, periodId: str
   return result
 }
 
-export const GRANT_OPERATIONS = Object.freeze({ getGrants, leaveAway, askGrantCard, answerGrantCard, useGrantRecord, markGrantTold, setGrantPhoneMessage })
+export const GRANT_OPERATIONS = Object.freeze({ getGrants, leaveAway, askGrantCard, answerGrantCard, useGrantRecord, reportGrantRecord, markGrantTold, setGrantPhoneMessage })

@@ -7,9 +7,14 @@ import {
   AGENT_ATTENTION_ORIGINS,
   DECISION_LIMITS,
   DECISION_REFERENCE_KINDS,
+  GRANT_ACTION_RESULTS,
   GRANT_LIMITS,
+  GRANT_ROUND_RESULTS,
   grantIdentifier,
+  grantReportText,
   parseGrantCardInput,
+  type GrantReportInput,
+  type GrantReportResult,
   type GrantTerm,
   type DecisionPayload,
   type DecisionReferenceKind,
@@ -270,6 +275,7 @@ export interface ControlHandlers {
   grantStatus(p: { scope: ControlScope; runId?: string }): Promise<unknown>
   /** R84-FR3, FR8: one round or one item use, recorded before the step it pays for. */
   useGrant(p: { sessionId: string; runId: string; useId: string; boundary?: string; item?: string }): Promise<unknown>
+  reportGrant(p: GrantReportInput): Promise<unknown>
 }
 
 export interface ReceiptRecord {
@@ -1590,6 +1596,35 @@ export class ControlServer {
         const item = params.item === undefined ? undefined : grantIdentifier(params.item, GRANT_LIMITS.itemId)
         if (boundary === null || item === null || (boundary === undefined) === (item === undefined)) throw invalid('A use names either one boundary (a round) or one item')
         return handlers.useGrant({ sessionId: scope.sessionId, runId, useId, ...(boundary === undefined ? {} : { boundary }), ...(item === undefined ? {} : { item }) })
+      }
+      case 'grant.report': {
+        // Story 84.7: what the agent saw happen, kept apart from BMN's record for the morning; it grants nothing.
+        const params = closedParams(rawParams, ['runId', 'useId', 'result', 'boundary', 'stepBack', 'item', 'text'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session\'s agent reports a step of its run')
+        const runId = grantIdentifier(params.runId, GRANT_LIMITS.runId)
+        if (runId === null) throw invalid('runId is an identifier: letters, digits and . _ : / -')
+        const sessionId = scope.sessionId
+        const text = (required: boolean): string | null => {
+          const read = grantReportText(params.text, required)
+          if ('problem' in read) throw invalid(read.problem)
+          return read.text
+        }
+        if (params.useId !== undefined) {
+          const useId = grantIdentifier(params.useId, GRANT_LIMITS.useId)
+          if (useId === null || params.stepBack !== undefined || params.boundary !== undefined || params.item !== undefined) throw invalid('An outcome names one use id and its result')
+          const result = params.result
+          if (![...GRANT_ROUND_RESULTS, ...GRANT_ACTION_RESULTS].includes(result as GrantReportResult)) throw invalid('result is passed, failed or blocked for a round; done, uncertain or refused for an action')
+          return handlers.reportGrant({ runId, sessionId, kind: 'outcome', useId, result: result as GrantReportResult, text: text(result === 'refused') })
+        }
+        if (params.result !== undefined) throw invalid('A result goes with --use-id')
+        if (params.stepBack === true) {
+          const boundary = grantIdentifier(params.boundary, GRANT_LIMITS.boundary)
+          if (boundary === null || params.item !== undefined) throw invalid('A step back names its boundary')
+          return handlers.reportGrant({ runId, sessionId, kind: 'step-back', boundary, text: text(true) as string })
+        }
+        const item = grantIdentifier(params.item, GRANT_LIMITS.itemId)
+        if (item === null || params.boundary !== undefined || params.stepBack !== undefined) throw invalid('A report names a use id, a step back at a boundary, or a refused item')
+        return handlers.reportGrant({ runId, sessionId, kind: 'refused', item, text: text(true) as string })
       }
       // Story 84.3 AC3: only the owner answers a card, in the window or on Telegram; no token reaching this socket can,
       // the owner's CLI token included, since agents can read it (the reason Telegram answers stay in-process, 8ee22dd).

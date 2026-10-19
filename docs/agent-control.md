@@ -1046,6 +1046,14 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   it right before each step that uses it; a grant never comes from a handoff. `bmn grant use --run ID --use-id U
   (--boundary B | --item I)` records one extra round or one use before the step runs; the same use id returns the
   first record, and a refused use means the step waits.
+- **Reporting what happened.** `bmn grant report --run ID` keeps what the agent saw for his morning summary, and
+  grants nothing: `--use-id U --result R` gives a recorded use's outcome (a round passed, failed or blocked; an
+  action done, refused, with `--text` saying why, or uncertain while the agent reads the target's state; the latest
+  report counts); `--boundary B --step-back --text T` gives the step-back consult's option before a boundary's last
+  granted round; `--item I --text T` names a granted step that GitHub, the command guard or a rule refused before
+  any use. Reports are taken after Back too, since a running step finishes. The summary's **Granted** section shows
+  them as "the agent's report", apart from "BMN's record" (his answer, each use, each refusal BMN made, a use with
+  no outcome, the end).
 
 A granted merge or push is a named one-night action above the repository's level in `bmn policy`; the standing
 levels do not change, every merge still has no admin bypass, and GitHub's rules and the command guard still hold.

@@ -1,10 +1,11 @@
-// MODULE: away-summary-dialog.tsx - "While you were away": one period's summary, read-only; every row only navigates (Story 76.6; Fable's redesign 2026-10-18: Needs you, Stuck, Finished, then the record)
+// MODULE: away-summary-dialog.tsx - "While you were away": one period's summary, read-only; every row only navigates (Story 76.6; Fable's redesign 2026-10-18: Needs you, Stuck, Finished, Granted (Story 84.7), then the record)
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import {
   buildAwaySummary,
   withCompletedAsks,
   type AttentionRecord,
   type AwayDecisionRow,
+  type AwayGrantLine,
   type AwaySummaryPayload,
   type AwaySummaryView,
   type DevAutoRunsResult,
@@ -104,6 +105,50 @@ function RunSection(props: { label: string; section: AwaySummaryView['stuck']; o
   )
 }
 
+/** An opened grant row: label, value and its source, the label once per group; at narrow width the source sits under its value. */
+function GrantDetail(props: { lines: readonly AwayGrantLine[] }): React.JSX.Element {
+  return (
+    <dl className="kv away-decision away-grant-detail">
+      {props.lines.map((line, index) => (
+        <div key={index} className="away-kv-row">
+          <dt>{index > 0 && props.lines[index - 1]!.label === line.label ? '' : line.label}</dt>
+          <dd>{line.text}</dd>
+          <dd className="away-grant-source">{line.source}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+/** Granted (Story 84.7): one row per run that asked, its count muted, since nothing here needs him. */
+function GrantSection(props: { section: NonNullable<AwaySummaryView['granted']>; openKey: string | null; setOpenKey(key: string | null): void }): React.JSX.Element {
+  const { section } = props
+  return (
+    <section className="inspector-section" aria-label="Granted">
+      <h3><span>Granted</span><span className="away-count">{section.count}</span></h3>
+      {section.empty !== null ? <p className="dialog-note">{section.empty}</p> : (
+        <ul className="message-list">
+          {section.rows.map((row) => {
+            const id = `grant ${row.key}`
+            const open = props.openKey === id
+            return (
+              <li key={id}>
+                <button type="button" className="message-row away-run-row" aria-expanded={open} onClick={() => props.setOpenKey(open ? null : id)}>
+                  <span className="route" title={row.title}>{row.title}</span>
+                  <span className="state">{row.state}</span>
+                  <span className="first-line" title={row.text}>{row.text}</span>
+                </button>
+                {open ? <GrantDetail lines={row.lines} /> : null}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {section.more !== null ? <small className="away-more">{section.more}</small> : null}
+    </section>
+  )
+}
+
 export function AwaySummaryDialog(props: {
   /** The period the dialog was opened for; a newer away closes it. */
   away: OwnerAwayView
@@ -192,6 +237,7 @@ export function AwaySummaryDialog(props: {
 
           <RunSection label="Stuck" section={view.stuck} openKey={openKey} setOpenKey={setOpenKey} links={links} />
           <RunSection label="Finished" section={view.finished} openKey={openKey} setOpenKey={setOpenKey} links={links} />
+          {view.granted !== null ? <GrantSection section={view.granted} openKey={openKey} setOpenKey={setOpenKey} /> : null}
 
           {view.wentOn.count > 0 ? (
             <section className="inspector-section" aria-label="Closed without you">

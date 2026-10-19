@@ -147,13 +147,15 @@ enforces the policy: GitHub's repository rules and the hook's deny-only command 
 
 **The Away grant is the owner's answer; agents only ask and read it (Epic 84).** One `app_setting` row,
 `night-grant-v1`, keeps the current and the previous departure: its state (leaving, away, ended or cancelled), each
-run's latest card, the owner's answer bound to the card revision and terms he saw, and each use. It changes in the
+run's latest card, the owner's answer bound to the card revision and terms he saw, each use, each refusal BMN made
+(after Back too, with the period that ended) and each agent report of a step's outcome. It changes in the
 same database-worker transaction as `owner-away-v1`, whose shape is unchanged: a departure made by `bmn away
 --leaving` creates the period id that Away then carries, and Back ends the period. Agents ask and read through the
-socket (`grant.ask`, `grant.status`, `grant.use`); `grant.answer` there refuses every caller, and answers come only
+socket (`grant.ask`, `grant.status`, `grant.use`, `grant.report`); `grant.answer` there refuses every caller, and answers come only
 from the window, through preload and main, and from Telegram taps handled inside the utility. A row that cannot be
 read grants nothing and is never written over by a use. The departure notice rides the hook answer beside the away
-notice, once per conversation and period.
+notice, once per conversation and period. The away summary reads the kept periods up to its own in the same
+transaction as its other sources (Story 84.7).
 
 **Palette file search is an on-demand directory read.** It uses the selected session's live launch
 directory (or stored directory after exit), or the workspace's default directory when no session

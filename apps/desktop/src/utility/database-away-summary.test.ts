@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { changeAway } from './database-away-store'
 import { AWAY_ACTIVITY_LIMITS, awaySummaryData, type AwaySummaryCall } from './database-away-summary'
 import { recordDecision } from './database-decision-store'
+import { answerGrantCard, askGrantCard, leaveAway } from './database-grant-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
 
@@ -107,4 +108,20 @@ describe('awaySummaryData (Story 76.6 AC1-AC2)', () => {
     expect(data.artifactNames).toEqual({ a1: 'report.md' })
     expect(data.activity!.sessions[0]!.turnsEnded).toBe(1)
   })
+
+  it('reads the kept grant periods up to this one in the same read, and none when the grant record cannot be read (Story 84.7)', () => {
+    leaveAway(database, { source: 'agent', agentSessionId: 's1' }, T0)
+    const card = { title: 'Epic 80', scope: 'Stories 80.2-80.6', nothing: false, terms: [{ id: 'rounds' as const, kind: 'rounds' as const, proposed: 3, reason: 'two boundaries ahead' }] }
+    const asked = askGrantCard(database, { runId: 'run-80', sessionId: 's1', agentCli: 'claude', card }, T0)
+    if (asked.outcome === 'no-departure') throw new Error(asked.reason)
+    const period = changeAway(database, { to: 'away', source: 'app' }, T0).record
+    expect(period.periodId).toBe(asked.periodId)
+    expect(answerGrantCard(database, { periodId: asked.periodId, runId: 'run-80', cardRevision: 1, choices: { rounds: 3 }, via: 'telegram', operationKey: 'k' }, IN).outcome).toBe('granted')
+    const data = awaySummaryData(database, call({ periodId: period.periodId!, until: null, now: IN }))
+    expect(data.grants!.periods.map((item) => [item.periodId, item.runs[0]!.answer!.choices])).toEqual([[asked.periodId, { rounds: 3 }]])
+    expect(awaySummaryData(database, call({ periodId: 'another' })).grants).toEqual({ periods: [] })
+    database.prepare("UPDATE app_setting SET value_json = '{' WHERE key = 'night-grant-v1'").run()
+    expect(awaySummaryData(database, call({ periodId: period.periodId! })).grants).toBeNull()
+  })
 })
+

@@ -1,11 +1,11 @@
-/* global document, getComputedStyle */
-// MODULE: away-grant-live.mjs - Story 84.3 on the running build: a departure said with `bmn away --leaving`, two runs' cards and one "needs nothing", the gold count in the head, Before you go at both widths, an answer with the keyboard, a re-ask while open, and Not leaving withdrawing the rest
+/* global document, getComputedStyle, window */
+// MODULE: away-grant-live.mjs - Stories 84.3 and 84.7 on the running build: a departure said with `bmn away --leaving`, two runs' cards and one "needs nothing", the gold count in the head, Before you go at both widths, an answer with the keyboard, a re-ask while open, Not leaving withdrawing the rest; then a night whose session records uses and reports, and the morning's Granted section at both widths
 // The app runs in test mode with a temporary HOME and XDG folders (removed at the end) and stand-in `claude`, `codex` and
 // `opencode` programs. The cards are asked with the owner's CLI token over the app's own socket; no agent runs, nothing leaves
 // the machine, Telegram is off and no file of the owner's is read. Prints one JSON report, PASS or FAIL per check.
 // Usage: node scripts/test/away-grant-live.mjs [report.json] [shots-folder]   (needs `pnpm --filter @bmn/desktop build` first)
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
@@ -175,6 +175,84 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     const ended = bmn(['grant', '--run', 'run-80'])
     check('Not leaving withdraws the open card, ends the departure, and every grant with it (AC1, AC4)',
       after.startsWith('No departure') && ended.startsWith('No grant for run run-80'), { after: after.trim(), ended: ended.trim() })
+
+    phase('a night with a grant (Story 84.7)')
+    bmn(['away', '--leaving'])
+    ask('run-80', 'Epic 80 · clean up ai slop', TERMS)
+    ask('run-81', 'Epic 81 · harness doctor', [TERMS[0]], 'Story 81.2')
+    const view = await until(async () => {
+      const grant = await page.evaluate(() => window.aiTerminal.getGrant())
+      return grant.period?.runs.length === 2 ? grant : null
+    }, 'two cards in the new departure')
+    const periodId = view.period.periodId
+    await page.evaluate((answer) => window.aiTerminal.answerGrant(answer), { periodId, runId: 'run-80', cardRevision: 1, choices: { rounds: 3, 'merge-12': 'pr', 'push-81': 'no' }, operationKey: 'live-80' })
+    await page.evaluate((answer) => window.aiTerminal.answerGrant(answer), { periodId, runId: 'run-81', cardRevision: 1, choices: { rounds: 0 }, operationKey: 'live-81' })
+    await page.evaluate(() => window.aiTerminal.setAway('away'))
+    // The night's agent: one session records each use before its step and reports what happened, as the skill says.
+    const seeded = join(root, 'night-seeded')
+    const night = join(root, 'night.sh')
+    writeFileSync(night, `B() { '${process.execPath}' '${cli}' "$@"; }
+G() { B grant "$@" > /dev/null; }
+G use --run run-80 --use-id r1 --boundary 80.3-review
+G report --run run-80 --use-id r1 --result failed
+G use --run run-80 --use-id r2 --boundary 80.3-review
+G report --run run-80 --use-id r2 --result failed
+G use --run run-80 --use-id m1 --item merge-12
+G report --run run-80 --use-id m1 --result done --text 'Merged at 3f2a9c1'
+G report --run run-80 --boundary 80.3-review --step-back --text 'a different design, the record written apart from the summary'
+G use --run run-80 --use-id r3 --boundary 80.3-review
+G report --run run-80 --use-id r3 --result passed
+B grant use --run run-80 --use-id r4 --boundary 80.3-review > /dev/null 2>&1
+B grant use --run run-80 --use-id p1 --item push-81 > /dev/null 2>&1
+G report --run run-80 --item merge-12 --text 'PR 15 changes .github/workflows, so it asked you'
+G use --run run-80 --use-id r5 --boundary 80.5-acceptance
+touch '${seeded}'
+`)
+    const started = await page.evaluate(async ({ cwd, argv }) => {
+      const [workspace] = await window.aiTerminal.listWorkspaces(false)
+      return (await window.aiTerminal.createSession({ workspaceId: workspace.workspaceId, name: 'Night', cwd, executable: '/bin/bash', argv, cols: 100, rows: 24, backgroundChoice: 'stop' })).session.sessionId
+    }, { cwd: folder, argv: ['--noprofile', '--norc', '-c', `bash '${night}'; exec bash --noprofile --norc -i`] })
+    await until(async () => existsSync(seeded), 'the night\'s uses and reports recorded', 30_000)
+    const nightGrant = bmn(['grant', '--run', 'run-80'])
+    await page.evaluate(() => window.aiTerminal.setAway('back'))
+    const summary = page.locator('dialog.away-summary-dialog')
+    await summary.waitFor()
+    const granted = summary.locator('section[aria-label="Granted"]')
+    await granted.waitFor()
+    const order = await summary.locator('section[aria-label]').evaluateAll((sections) => sections.map((section) => section.getAttribute('aria-label')))
+    const count = await granted.locator('h3 .away-count').evaluate((node) => ({ text: node.textContent, color: getComputedStyle(node).color, weight: getComputedStyle(node).fontWeight, on: node.classList.contains('away-count-on') }))
+    const rows = await granted.locator('button.away-run-row').evaluateAll((buttons) => buttons.map((button) => [...button.querySelectorAll('span')].map((span) => span.textContent)))
+    check('Back opens the summary with Granted after Finished and before Closed without you; its count is the runs with a grant, muted, never gold (84.7 AC1, the notes §4)',
+      order.indexOf('Granted') === order.indexOf('Finished') + 1 && count.text === '1' && !count.on && Number(count.weight) < 600 && started !== undefined, { order, count })
+    check('each run that asked is one row: its title, used or none, and one line of BMN\'s record (84.7 AC1)',
+      JSON.stringify(rows) === JSON.stringify([
+        ['Epic 80 · clean up ai slop', 'used', 'Rounds 3 of 3 at 80.3-review, 1 of 3 at 80.5-acceptance · merge PR 12 at 3f2a9c1 used · 2 refused · 1 missing'],
+        ['Epic 81 · harness doctor', 'none', 'You granted none']
+      ]), { rows, nightGrant: nightGrant.trim() })
+    await granted.locator('button.away-run-row').first().click()
+    const detail = granted.locator('dl.away-grant-detail')
+    await detail.waitFor()
+    const lines = await detail.locator('.away-kv-row').evaluateAll((rowsShown) => rowsShown.map((row) => [...row.children].map((cell) => cell.textContent)))
+    const labelled = (label) => lines.filter(([shown]) => shown === label)
+    const sourceOf = (text) => lines.find(([, value]) => value.startsWith(text))?.[2]
+    check('the opened row names each line\'s source: his answer, uses, refusals BMN made, the missing outcome and the end are BMN\'s record; outcomes, the step back, the merge\'s result and the refusal it met are the agent\'s report (84.7 AC1)',
+      sourceOf('80.3-review: 3 of 3 used') === 'BMN\'s record' && sourceOf('80.3-review passed after round 3') === 'the agent\'s report'
+        && sourceOf('80.3-review, before round 3: a different design') === 'the agent\'s report' && sourceOf('Merged at 3f2a9c1') === 'the agent\'s report'
+        && sourceOf('80.3-review, a 4th round: none left') === 'BMN\'s record' && sourceOf('Push to the default branch: not on the card') === 'BMN\'s record'
+        && sourceOf('Merge PR 12: PR 15 changes .github/workflows') === 'the agent\'s report' && sourceOf('80.5-acceptance, round 1: no outcome reported') === 'BMN\'s record'
+        && labelled('Ended').length === 1 && labelled('Granted').length === 1, { lines })
+    await shot('morning-granted-1280.png')
+    await resize(540)
+    await sleep(400)
+    const narrow = await summary.evaluate((node) => {
+      const source = node.querySelector('dl.away-grant-detail .away-grant-source')
+      const value = source?.previousElementSibling
+      return { scroll: node.scrollWidth, client: node.clientWidth, under: source && value ? source.getBoundingClientRect().top >= value.getBoundingClientRect().bottom - 1 : false }
+    })
+    check('at 540 px the summary fits without sideways scrolling and each source sits under its value (the notes §4 Opened)',
+      narrow.scroll <= narrow.client + 1 && narrow.under, narrow)
+    await shot('morning-granted-540.png')
+    await resize(1280)
   } catch (error) {
     check('the run completed', false, { error: error instanceof Error ? error.message : String(error) })
     await shot('failure.png').catch(() => undefined)

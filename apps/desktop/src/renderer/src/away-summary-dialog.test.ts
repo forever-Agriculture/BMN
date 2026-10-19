@@ -38,6 +38,16 @@ describe('awaySummaryView (Story 76.6 AC1, AC3)', () => {
   })
 })
 
+describe('Granted (Story 84.7)', () => {
+  it('passes the host\'s grant periods through to the view, and none leaves the summary as before', () => {
+    const before = awaySummaryView(sources(), [], workspaces, new Date(2026, 9, 15, 7, 41))
+    expect(before.granted).toBeNull()
+    const unread = awaySummaryView(sources({ payload: { ...sources().payload, grants: null } }), [], workspaces, new Date(2026, 9, 15, 7, 41))
+    expect(unread.granted?.empty).toBe('Grant records could not be read.')
+    expect(unread.couldNotRead).toBe('Not fully read: grant records · counts there may be low.')
+  })
+})
+
 describe('sessionWords (Fable\'s redesign 2026-10-18)', () => {
   it('shows a session by its own name and app, without the workspace path or archive stamp', () => {
     expect(sessionWords('PICHE › Q-Automations · Claude Code')).toBe('Q-Automations · Claude Code')

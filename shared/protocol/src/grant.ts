@@ -11,7 +11,7 @@ export const GRANT_RECORD_KEY = 'night-grant-v1'
 /** Bounds: text is refused past them, never cut; lists keep their newest entries. */
 export const GRANT_LIMITS = Object.freeze({
   runId: 120, title: 120, scope: 300, reason: 300, terms: 8, itemId: 40, runs: 32, told: 64, uses: 500, operations: 500,
-  boundary: 120, useId: 120, count: 10, periods: 2
+  boundary: 120, useId: 120, count: 10, periods: 2, reports: 500
 })
 
 /** The extra repair rounds a card may offer per boundary (owner 2026-10-18: "2-4 by default"); 0 is No. */
@@ -101,6 +101,28 @@ export interface GrantRefusal {
   at: string
 }
 
+/** What an agent may report of a round (passed, failed, parked BLOCKED, uncertain) or of an action (done, uncertain, refused). */
+export type GrantReportResult = 'passed' | 'failed' | 'blocked' | 'done' | 'uncertain' | 'refused'
+export const GRANT_ROUND_RESULTS: readonly GrantReportResult[] = Object.freeze(['passed', 'failed', 'blocked', 'uncertain'])
+export const GRANT_ACTION_RESULTS: readonly GrantReportResult[] = Object.freeze(['done', 'uncertain', 'refused'])
+
+/**
+ * What an agent told BMN about the world, kept apart from BMN's own record (Story 84.7, the notes §4 "the agent's report"):
+ * the outcome of a recorded use, the step-back consult's option before a boundary's last round, or a step GitHub, Epic 83's
+ * guard or a rule refused before any use.
+ */
+export interface GrantReport {
+  runId: string
+  sessionId: string
+  kind: 'outcome' | 'step-back' | 'refused'
+  useId: string | null
+  boundary: string | null
+  item: string | null
+  result: GrantReportResult | null
+  text: string | null
+  at: string
+}
+
 export type GrantPeriodState = 'leaving' | 'away' | 'ended' | 'cancelled'
 
 export interface GrantPeriod {
@@ -118,6 +140,7 @@ export interface GrantPeriod {
   runs: GrantRun[]
   uses: GrantUse[]
   refusals: GrantRefusal[]
+  reports: GrantReport[]
 }
 
 export interface GrantRecord {
@@ -313,12 +336,23 @@ function readPeriod(value: unknown): GrantPeriod | null {
       ['round', 'action', 'answer'].includes((item as GrantRefusal).kind) && isText((item as GrantRefusal).reason) && isIso((item as GrantRefusal).at))
       .map((item) => ({ runId: item.runId, kind: item.kind, boundary: isText(item.boundary) ? item.boundary : null, item: isText(item.item) ? item.item : null, reason: item.reason, at: item.at }))
     : []
+  // A report that cannot be read is dropped, never trusted: it carries no authority, only the morning's words.
+  const reports: GrantReport[] = Array.isArray(row.reports)
+    ? row.reports.filter((item): item is GrantReport => typeof item === 'object' && item !== null && isText((item as GrantReport).runId) &&
+      isText((item as GrantReport).sessionId) && ['outcome', 'step-back', 'refused'].includes((item as GrantReport).kind) && isIso((item as GrantReport).at))
+      .map((item) => ({
+        runId: item.runId, sessionId: item.sessionId, kind: item.kind, useId: isText(item.useId) ? item.useId : null,
+        boundary: isText(item.boundary) ? item.boundary : null, item: isText(item.item) ? item.item : null,
+        result: [...GRANT_ROUND_RESULTS, ...GRANT_ACTION_RESULTS].includes(item.result as GrantReportResult) ? item.result : null,
+        text: isText(item.text) ? item.text : null, at: item.at
+      }))
+    : []
   return {
     periodId: row.periodId, state: row.state as GrantPeriodState, startedAt: row.startedAt, startedBy: row.startedBy as AwaySource,
     agentSessionId: isText(row.agentSessionId) ? row.agentSessionId : null, awayAt: isIso(row.awayAt) ? row.awayAt : null,
     endedAt: isIso(row.endedAt) ? row.endedAt : null,
     endedBy: ['app', 'cli', 'agent', 'telegram'].includes(row.endedBy as string) ? row.endedBy as AwaySource : null,
-    told: row.told.filter(isText).slice(-GRANT_LIMITS.told), runs, uses, refusals
+    told: row.told.filter(isText).slice(-GRANT_LIMITS.told), runs, uses, refusals, reports
   }
 }
 
@@ -383,7 +417,7 @@ function closePeriod(period: GrantPeriod, state: 'ended' | 'cancelled', source: 
 function newPeriod(periodId: string, state: 'leaving' | 'away', source: AwaySource, agentSessionId: string | null, now: string): GrantPeriod {
   return {
     periodId, state, startedAt: now, startedBy: source, agentSessionId, awayAt: state === 'away' ? now : null, endedAt: null, endedBy: null,
-    told: [], runs: [], uses: [], refusals: []
+    told: [], runs: [], uses: [], refusals: [], reports: []
   }
 }
 
@@ -646,10 +680,13 @@ export function useGrant(read: GrantRead, away: Pick<AwayRecord, 'state' | 'peri
     return { outcome: 'repeated', record, left: status.active ? leftFor(status.grant, use) : 0 }
   }
   const open = openGrantPeriod(record)
+  // After Back the refusal is kept with the period that ended, when the run had a card there, so the morning shows it.
+  const last = record.periods.at(-1)
+  const holder = open ?? (last?.runs.some((run) => run.runId === use.runId) ? last : null)
   const refuse = (reason: string): GrantUseResult => {
-    if (open === null) return { outcome: 'refused', record, reason }
+    if (holder === null) return { outcome: 'refused', record, reason }
     const refusal: GrantRefusal = { runId: use.runId, kind: use.kind, boundary: use.kind === 'round' ? use.boundary : null, item: use.kind === 'action' ? use.item : null, reason, at: now }
-    return { outcome: 'refused', record: withPeriod(record, { ...open, refusals: [...open.refusals, refusal].slice(-GRANT_LIMITS.uses) }), reason }
+    return { outcome: 'refused', record: withPeriod(record, { ...holder, refusals: [...holder.refusals, refusal].slice(-GRANT_LIMITS.uses) }), reason }
   }
   if (!status.active || open === null) return refuse(status.active ? 'no open period' : status.reason)
   if (open.uses.length >= GRANT_LIMITS.uses) return refuse('this period holds as many uses as BMN keeps')
@@ -661,6 +698,64 @@ export function useGrant(read: GrantRead, away: Pick<AwayRecord, 'state' | 'peri
   const next = withPeriod(record, { ...open, uses: [...open.uses, recorded] })
   const after = grantStatus({ state: 'read', record: next }, away, use.runId)
   return { outcome: 'recorded', record: next, left: after.active ? leftFor(after.grant, use) : 0 }
+}
+
+export type GrantReportInput =
+  | { runId: string; sessionId: string; kind: 'outcome'; useId: string; result: GrantReportResult; text: string | null }
+  | { runId: string; sessionId: string; kind: 'step-back'; boundary: string; text: string }
+  | { runId: string; sessionId: string; kind: 'refused'; item: string; text: string }
+
+export type GrantReportOutcome =
+  | { outcome: 'recorded' | 'repeated'; record: GrantRecord }
+  | { outcome: 'refused'; record: GrantRecord; reason: string }
+
+/**
+ * `bmn grant report` (Story 84.7): what an agent tells BMN about a step, kept for the morning as the agent's report. It
+ * grants nothing and is accepted after Back too, since a round or action running then finishes (R84-FR7). An outcome names
+ * a use this run recorded; a step-back or a refused step names the run's card in the open or last period. The same report
+ * again is not repeated.
+ */
+export function reportGrant(read: GrantRead, report: GrantReportInput, now: string): GrantReportOutcome {
+  if (read.state === 'unknown') return { outcome: 'refused', record: EMPTY_GRANT_RECORD, reason: `${read.reason}, so nothing was kept` }
+  const record = read.record
+  const refuse = (reason: string): GrantReportOutcome => ({ outcome: 'refused', record, reason })
+  let period: GrantPeriod | undefined
+  let entry: GrantReport
+  if (report.kind === 'outcome') {
+    period = record.periods.find((candidate) => candidate.uses.some((use) => use.id === report.useId))
+    const use = period?.uses.find((candidate) => candidate.id === report.useId)
+    if (period === undefined || use === undefined) return refuse('no use was recorded under that use id')
+    if (use.runId !== report.runId) return refuse('that use id was recorded for another run')
+    const results = use.kind === 'round' ? GRANT_ROUND_RESULTS : GRANT_ACTION_RESULTS
+    if (!results.includes(report.result)) return refuse(`a ${use.kind === 'round' ? 'round' : 'use of an item'} reports ${results.join(', ')}`)
+    entry = { runId: report.runId, sessionId: report.sessionId, kind: 'outcome', useId: use.id, boundary: use.boundary, item: use.item, result: report.result, text: report.text, at: now }
+  } else {
+    const last = record.periods.at(-1)
+    period = openGrantPeriod(record) ?? last
+    const run = period?.runs.find((candidate) => candidate.runId === report.runId)
+    if (period === undefined || run === undefined) return refuse('this run has no card in this departure')
+    if (report.kind === 'refused') {
+      const terms = [...run.card.terms, ...(run.answer?.terms ?? [])]
+      if (!terms.some((term) => term.id === report.item && term.kind !== 'rounds')) return refuse('that item is not on this run\'s card')
+      entry = { runId: report.runId, sessionId: report.sessionId, kind: 'refused', useId: null, boundary: null, item: report.item, result: 'refused', text: report.text, at: now }
+    } else {
+      entry = { runId: report.runId, sessionId: report.sessionId, kind: 'step-back', useId: null, boundary: report.boundary, item: null, result: null, text: report.text, at: now }
+    }
+  }
+  const same = (other: GrantReport): boolean => other.runId === entry.runId && other.kind === entry.kind && other.useId === entry.useId &&
+    other.boundary === entry.boundary && other.item === entry.item && other.result === entry.result && other.text === entry.text
+  // Only the latest report for a use counts, so a retry of the same words is the same report.
+  const latest = entry.kind === 'outcome' ? period.reports.filter((other) => other.kind === 'outcome' && other.useId === entry.useId).at(-1) : period.reports.find(same)
+  if (latest !== undefined && same(latest)) return { outcome: 'repeated', record }
+  if (period.reports.length >= GRANT_LIMITS.reports) return refuse('this period holds as many reports as BMN keeps')
+  return { outcome: 'recorded', record: withPeriod(record, { ...period, reports: [...period.reports, entry] }) }
+}
+
+/** The report's words, one line of plain text, or why not. */
+export function grantReportText(value: unknown, required: boolean): { text: string | null } | { problem: string } {
+  if (value === undefined || value === null) return required ? { problem: 'this report needs --text' } : { text: null }
+  const text = grantWords(value, GRANT_LIMITS.reason)
+  return text === null || text === '' ? { problem: `--text must be plain text of at most ${GRANT_LIMITS.reason} characters` } : { text }
 }
 
 function leftFor(grant: ActiveGrant, use: { kind: 'round'; boundary: string } | { kind: 'action'; item: string }): number {
@@ -752,7 +847,7 @@ export function grantRefusalWords(reason: GrantRefusalReason, detail: { at?: str
  * What an agent is handed once per conversation and departure (84.3 AC1, R84-FR1): he is leaving, and a run may ask on
  * one card for what its remaining night needs, or say it needs nothing.
  */
-export const GRANT_DEPARTURE_AGENT_TEXT = 'Before he goes, a run with authorised work left for the night asks him once, on one card, for only what that work needs: extra repair rounds per boundary (2, 3 or 4, when a review or gate boundary is ahead) and named actions with their targets (merge a PR, push a branch to the default branch, open or update a PR in another repository). Compose it from the remaining scope, each term with its reason, and pipe it as JSON to `bmn grant ask --run <run id> --card-file -` (`bmn grant --help` gives the shape); a run that needs nothing says so with `bmn grant ask --run <run id> --nothing`. A session with no such run does nothing. Only the owner answers, in the BMN window or on Telegram; an unanswered card grants nothing, and every grant ends when he is back. Read `bmn grant --run <run id>` right before each step that would use it.'
+export const GRANT_DEPARTURE_AGENT_TEXT = 'Before he goes, a run with authorised work left for the night asks him once, on one card, for only what that work needs: extra repair rounds per boundary (2, 3 or 4, when a review or gate boundary is ahead) and named actions with their targets (merge a PR, push a branch to the default branch, open or update a PR in another repository). Compose it from the remaining scope, each term with its reason, and pipe it as JSON to `bmn grant ask --run <run id> --card-file -` (`bmn grant --help` gives the shape); a run that needs nothing says so with `bmn grant ask --run <run id> --nothing`. A session with no such run does nothing. Only the owner answers, in the BMN window or on Telegram; an unanswered card grants nothing, and every grant ends when he is back. Read `bmn grant --run <run id>` right before each step that would use it, record the use first, and report what the step did with `bmn grant report` for his morning summary.'
 
 /** The departure notice's first line, like the away stamp. */
 export function grantDepartureStamp(state: 'leaving' | 'away', at: string, now: Date = new Date()): string {

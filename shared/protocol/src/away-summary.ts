@@ -3,6 +3,8 @@ import { ROSTER_APP_NAMES, type RosterHarness, type TeamAskLine } from './agents
 import { awayDurationWords, awayMomentWords, awayPeriodWords, type DecisionRecord, type OwnerAwayView } from './away'
 import type { AttentionKind, AttentionRecord } from './companion'
 import type { DevAutoRunsResult } from './dev-auto'
+import { awayGrantSection, type AwayGrantSection } from './away-grant-summary'
+import type { GrantPeriod } from './grant'
 
 /** Fable's bounds (Story 76.1 §4–5). */
 export const AWAY_SUMMARY_LIMITS = Object.freeze({
@@ -11,12 +13,12 @@ export const AWAY_SUMMARY_LIMITS = Object.freeze({
 })
 
 /** The sources the summary reads; each says on its own whether it was read in full. */
-export type AwaySourceName = 'requests' | 'went-on' | 'decisions' | 'turns' | 'changes' | 'files' | 'messages' | 'asks' | 'exits' | 'dev-auto'
+export type AwaySourceName = 'requests' | 'went-on' | 'decisions' | 'turns' | 'changes' | 'files' | 'messages' | 'asks' | 'exits' | 'dev-auto' | 'grants'
 const SOURCE_WORDS: Readonly<Record<AwaySourceName, string>> = Object.freeze({
   requests: 'requests', 'went-on': 'requests closed without you', decisions: 'decision records', turns: 'turn endings', changes: 'turn changes', files: 'published files', messages: 'messages',
-  asks: 'teammate asks', exits: 'session exits', 'dev-auto': 'dev-auto runs'
+  asks: 'teammate asks', exits: 'session exits', 'dev-auto': 'dev-auto runs', grants: 'grant records'
 })
-const SOURCE_ORDER: readonly AwaySourceName[] = Object.freeze(['requests', 'went-on', 'decisions', 'turns', 'changes', 'files', 'messages', 'asks', 'exits', 'dev-auto'])
+const SOURCE_ORDER: readonly AwaySourceName[] = Object.freeze(['requests', 'went-on', 'decisions', 'turns', 'changes', 'files', 'messages', 'asks', 'exits', 'dev-auto', 'grants'])
 
 /** Why a source was not read in full: missing, unreadable, partial, truncated or no longer retained are told apart. */
 export type AwaySourceGap =
@@ -113,6 +115,11 @@ export interface AwaySummaryPayload {
   activity: AwayPeriodActivity | null
   /** Names of the published files that decision references point at and BMN found. */
   artifactNames: Record<string, string>
+  /**
+   * The kept grant periods up to this one, oldest first (Story 84.7); null when the grant record could not be read. Absent
+   * from a host that predates Epic 84, which reads as no grant.
+   */
+  grants?: { periods: GrantPeriod[] } | null
 }
 
 export interface AwaySummaryInput extends AwaySummaryPayload {
@@ -165,6 +172,8 @@ export interface AwaySummaryView {
   stuck: { rows: AwayRunRow[]; more: string | null; empty: string | null }
   /** Runs that finished in this period; older finished runs are not news. */
   finished: { rows: AwayRunRow[]; more: string | null; empty: string | null }
+  /** What each run's card granted and what the night used of it; null in a period with no grant (Story 84.7 AC2). */
+  granted: AwayGrantSection | null
   activity: { rows: AwayActivityRow[]; more: string | null; empty: string | null }
 }
 
@@ -306,6 +315,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   if (input.decisions === null) gaps.decisions = { kind: 'unreadable' }
   else if (!input.decisions.complete) gaps.decisions = { kind: 'truncated', at: input.decisions.decisions.length }
   if (input.activity === null) for (const source of ['turns', 'files', 'messages', 'exits'] as const) gaps[source] = { kind: 'unreadable' }
+  if (input.grants === null) gaps.grants = { kind: 'unreadable' }
   if (input.devAuto === null) gaps['dev-auto'] = { kind: 'unreadable' }
   else {
     // A folder that is not a Git repository holds no run, and a run whose board cannot be read is still read whole (the
@@ -493,6 +503,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     waiting,
     stuck,
     finished,
+    granted: awayGrantSection(input.grants === undefined ? [] : input.grants === null ? null : input.grants.periods, away.periodId, now),
     wentOn,
     decided,
     activity: activityView

@@ -867,6 +867,11 @@ export class CompanionService {
           if (result.outcome === 'refused') throw new HostControlError(ERROR_CODES.invalidArgument, `Not recorded: ${result.reason}; the step waits`)
           return { outcome: result.outcome, left: result.left }
         }),
+        reportGrant: (p) => this.controlCall(async () => {
+          const result = await this.options.database.companion('reportGrantRecord', p, this.iso())
+          if (result.outcome === 'refused') throw new HostControlError(ERROR_CODES.invalidArgument, `Not kept: ${result.reason}`)
+          return { outcome: result.outcome }
+        }),
         observeConversation: (p) => this.controlCall(async () => {
           if (p.agentCli === 'claude' || p.agentCli === 'codex') {
             const previous = this.producers.stamp(p.sessionId, p.incarnationId)

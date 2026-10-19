@@ -160,7 +160,8 @@ function fakeHandlers(current: Map<string, string>) {
     leaveAway: vi.fn<ControlHandlers['leaveAway']>(async () => ({ outcome: 'changed', state: 'leaving', periodId: 'p-1' })),
     askGrant: vi.fn<ControlHandlers['askGrant']>(async (p) => ({ outcome: 'opened', runId: p.runId, cardRevision: 1, state: 'open' })),
     grantStatus: vi.fn<ControlHandlers['grantStatus']>(async () => ({ departure: null, runs: [] })),
-    useGrant: vi.fn(async (): Promise<unknown> => ({ outcome: 'recorded', left: 2 }))
+    useGrant: vi.fn(async (): Promise<unknown> => ({ outcome: 'recorded', left: 2 })),
+    reportGrant: vi.fn(async (): Promise<unknown> => ({ outcome: 'recorded' }))
   } satisfies ControlHandlers
 }
 
@@ -1769,6 +1770,36 @@ describe('Away grant (Story 84.3)', () => {
     expectError(await agent.request('grant.use', { runId: 'r', useId: 'u2', boundary: 'b', item: 'i' }), ERROR_CODES.invalidArgument)
     expectError(await agent.request('grant.use', { runId: 'r', useId: 'u2' }), ERROR_CODES.invalidArgument)
     expect(fixture.handlers.useGrant).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a report from a session only, in one of its three forms, with plain words (Story 84.7)', async () => {
+    const fixture = await serverFixture()
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    for (const params of [
+      { runId: 'r', useId: 'u1', result: 'passed' },
+      { runId: 'r', useId: 'm1', result: 'refused', text: 'head changed to 9b1e004' },
+      { runId: 'r', boundary: '80.3-review', stepBack: true, text: 'a different design' },
+      { runId: 'r', item: 'merge-15', text: 'changes .github/workflows, so it asked you' }
+    ]) expect((await agent.request('grant.report', params)).error).toBeUndefined()
+    expect(fixture.handlers.reportGrant.mock.calls.map((call) => (call as unknown[])[0])).toEqual([
+      { runId: 'r', sessionId: expect.any(String), kind: 'outcome', useId: 'u1', result: 'passed', text: null },
+      { runId: 'r', sessionId: expect.any(String), kind: 'outcome', useId: 'm1', result: 'refused', text: 'head changed to 9b1e004' },
+      { runId: 'r', sessionId: expect.any(String), kind: 'step-back', boundary: '80.3-review', text: 'a different design' },
+      { runId: 'r', sessionId: expect.any(String), kind: 'refused', item: 'merge-15', text: 'changes .github/workflows, so it asked you' }
+    ])
+    expectError(await owner.request('grant.report', { runId: 'r', useId: 'u1', result: 'passed' }), ERROR_CODES.unauthorized)
+    for (const params of [
+      { runId: 'r', useId: 'u1', result: 'merged' },
+      { runId: 'r', useId: 'm1', result: 'refused' },
+      { runId: 'r', useId: 'u1', result: 'passed', item: 'i' },
+      { runId: 'r', result: 'passed', item: 'i', text: 't' },
+      { runId: 'r', boundary: 'b', stepBack: true },
+      { runId: 'r', item: 'i', text: 'one\u0007bell' },
+      { runId: 'r', item: 'i', text: 'x'.repeat(301) },
+      { runId: 'r' }
+    ]) expectError(await agent.request('grant.report', params), ERROR_CODES.invalidArgument)
+    expect(fixture.handlers.reportGrant).toHaveBeenCalledTimes(4)
   })
 })
 
