@@ -169,7 +169,7 @@ Exit status: 0 success, 1 remote or connection error, 2 usage error
 ### Long text from standard input
 
 Long or multi-line text breaks inside one shell-quoted argument: quotes, backticks and `$( )` in it
-get read by the shell. Five options read their field from standard input instead, so an agent can
+get read by the shell. Six options read their field from standard input instead, so an agent can
 pipe it or use a quoted heredoc:
 
 ```bash
@@ -183,6 +183,7 @@ cat notes.md | bmn handoff <destination-session-id> --text-file - --key result-2
 | Option | Field | Limit |
 | --- | --- | --- |
 | `ask … --body-file -` | request body | 8,000 characters |
+| `ask … --choices-file -` | the choices' JSON | 24 KiB |
 | `progress … --detail-file -` | progress detail | 2,000 characters |
 | `send --text-file -` | pasted text | 64 KiB |
 | `handoff … --text-file -` | handoff text | 16 KiB |
@@ -190,7 +191,8 @@ cat notes.md | bmn handoff <destination-session-id> --text-file - --key result-2
 
 Only `-` is accepted; to send a file, `cat` it into `bmn`. A field takes exactly one source, so
 `--body` with `--body-file`, `--text` or `-- text` with `--text-file`, and `send` text with
-`--text-file` are refused. Standard input that is a terminal is refused ("needs piped input")
+`--text-file` are refused, and so is `ask` with both `--body-file -` and `--choices-file -`, since a call has
+one standard input. Standard input that is a terminal is refused ("needs piped input")
 instead of waiting for typing. Text over the limit, counted the way the app counts that field, or
 that is not valid UTF-8 is refused before anything is sent. One trailing newline, which a heredoc
 always adds, is dropped; every other byte is kept.
@@ -246,14 +248,6 @@ bmn send --owner --session <session-id> --submit -- "git status"
 
 `--key` makes a publish, send, handoff or tell idempotent: repeating the same call with the same key does
 not repeat the effect. A handoff requires the key.
-
-**The page for finished work.** The repository holds a skill, `skills/team-page/`: when a piece of work is
-complete (dev-auto ends every completed epic with one), the agent writes one HTML page in the owner's
-fixed structure (why, what changes with one example, optional safety and money, how it was checked, known
-limits, what was decided for him, what waits on him, an honest opinion) from its `template.html`, checks
-it with `check.py` (PASS/FAIL per rule) and publishes it privately: Claude Code as an Artifact, any other
-app with `bmn publish`, a new key per revision. BMN puts it into your skills folder by itself
-(BMN's own skills, below).
 
 ## Handoffs
 
@@ -495,6 +489,19 @@ using the same executable may not reveal a change inside it. These identities st
 including owner snapshots, omit producer bindings. Repeat-watch notices belong to
 BMN and their cleanup does not retire the agent's conversation.
 
+BMN shows a desktop notification for a new request unless you are looking at that session. Telegram
+gets it only while you are away from the desk (a minute without keyboard or mouse input), only if it
+is still open and unseen after 15 seconds (a finished-turn notice after 60), and each request only
+once however often the agent repeats it. A request that fell due while you were at the desk is still
+sent if you leave within 10 minutes of it opening. Session exits, when chosen, are sent only while
+you are away. If BMN cannot read idle time, Telegram gets requests as if you were away.
+
+While you are at the desk and looking at the session, BMN tells the agent its terminal has focus;
+after a minute without input it reports the focus lost, so Claude Code sends its own mobile
+notifications while you are away. A Claude session connected to Remote Control is never sent to
+Telegram: the Claude app already notifies your phone. The hook reads that from Claude Code's
+`~/.claude/sessions/<pid>.json` (or `$CLAUDE_CONFIG_DIR/sessions`), which needs `/proc`.
+
 ### Cursor, retired
 
 Cursor was retired on 2026-10-14 (Epic 71, owner decision). BMN's support for its terminal agent, as
@@ -549,12 +556,8 @@ Each hook event also records itself, whether or not it changed anything: the com
 **Hook events…** for the selected session, a read-only list of what the harness reported, with the event, the tool it ran and
 what it changed. That list is the answer to "why is there no request for this?". It is kept in
 memory for this run, at most 30 events per session, and is never shown to another session.
-The owner dialog separately labels earlier host runs from an owner-only metadata snapshot: at most
-30 rows per session, 1,024 globally and 1 MiB, evicting the oldest first. It has no age expiry and
-keeps retained archives; deletion removes the session's rows. Unknown event/source/tool labels
-become `other`; payloads, prompts, answers, tool input/output, model/API-host data and configuration
-are excluded. Coalesced recent events can be lost before a completed atomic save, including on
-crash. History never replays requests or observations and is excluded from backups. It has no
+The owner dialog separately labels earlier host runs from an owner-only metadata snapshot, whose limits and
+what it keeps and leaves out are in [features.md](features.md#how-agents-reach-the-app). It has no
 control-socket method and appears only in the owner window; a history failure leaves live events working.
 
 ### Model origin flag
@@ -609,11 +612,6 @@ of the comparison, so a relabelled retry still counts.
 An agent passes its environment to agents it starts from a tool call (`claude -p`), so the hook
 also checks that the agent above it holds the terminal; nested, non-interactive agents are ignored.
 
-Typing, pasting or dictating into a session answers its open prompts and notices, the way agterm
-clears a session's status on a keystroke, so they leave **Needs you** as soon as you respond, even
-when the agent sends no hook for it (a denied permission, or Esc). Review requests, and handoff requests
-stored before Story 75.5, stay open.
-
 ### Plan use
 
 BMN shows how much of each plan window Claude Code and Codex have used, from what they already write
@@ -631,26 +629,6 @@ bmn statusline uninstall   # put your command back exactly as it was
 Your command is kept byte for byte and prints what it printed. Outside a BMN session, or without
 `bmn` on `PATH`, the added line does nothing. A settings file without a `statusLine` command is left
 alone. Readings are kept in memory only; BMN makes no network call and shows no costs.
-
-### Dev servers
-
-A server a session starts (`pnpm dev`, a preview, `python3 -m http.server`) shows as a plate such as
-**localhost:5173** in the session's pane header, with the full list under **Session details → Ports**
-and an **Open localhost:5173 — session** entry in the palette. A click opens the address in your
-default browser and does nothing to the process. A server bound to one other address, such as
-`192.168.1.10` or `127.0.1.1`, shows and opens at that address. The sidebar shows nothing new.
-
-BMN finds the ports in `/proc`: a listening TCP socket counts for a session when you created it, the
-process holding it is yours and its environment carries that session's `BMN_SESSION_ID`, the variable
-every child inherits. That includes a server an agent left running in the background after its shell exited; it
-stays listed under its session, marked "still running after the session stopped". A program that
-clears or replaces its environment is not attributed. Ports 22, 80 and 443 are never shown. BMN reads
-`/proc` every 5 seconds while a session is printing, every 30 seconds otherwise, and half a second
-after a line such as `Local: http://localhost:5173/` (at most once every 5 seconds); it starts no
-process and reads nothing when no session is running, so what it last found stays listed until a
-session runs again. After its first read, each read spends at most a few milliseconds looking through
-programs' open files, so while tests open and close servers, or when a long-running program opens a
-new port, that port can take a read or two more to appear.
 
 ### Resume for any program
 
@@ -924,6 +902,30 @@ Story 83.4, `"AskUserQuestion"`, reads as `wired (older wording)`: `install` and
 its group holds only BMN's entry, and leave a group that also holds one of yours as it is. Any other matcher on
 BMN's entry reads as gated.
 
+For Codex, the same entries with `bmn hook codex` go in `~/.codex/hooks.json` for `PreToolUse`,
+`PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` and `Interrupt`. Codex must
+then trust them once with `/hooks`, which no command can do for you. `PreToolUse` is required for
+queued `request_user_input_async` questions because Codex has no `Notification` hook event. Add
+`PermissionRequest` only without Auto Review: Codex fires it before Auto Review decides whether you
+must approve, so it would flag tools that never need you, and `install` therefore never adds it.
+
+Session details shows when a session's conversation was compacted ("Compacted: 16:10 (2 times this
+run)", or "No compaction observed in this run"), and the Hook events list reads such an event as
+"Conversation compacted". It is information only: nothing opens in Needs you or goes to Telegram,
+and a new run starts from none. Claude Code reports compaction as `SessionStart` with source
+`compact`, OpenCode as `session.compacted` (a subagent's is logged, not counted). Codex 0.157.1,
+measured on a disposable profile on 2026-09-28, sends `SessionStart` with source `compact` after an
+automatic compaction (with `PreCompact`/`PostCompact`, trigger `auto`), but its manual `/compact`
+sends only `PreCompact` and `PostCompact` with trigger `manual`. `PostCompact` is therefore an
+optional Codex entry, reported by `check` and never installed: add it to see manual compactions too;
+BMN counts its `manual` trigger only, so an automatic compaction still counts once. Codex runs the same
+`PreCompact`/`PostCompact` hooks and the same automatic call site whichever way it compacts (locally or
+on OpenAI's side), but only the local path was measured, so whether `SessionStart` with source
+`compact` also follows an automatic compaction on OpenAI's side is not yet known. OpenCode's compactions
+count for the session the plugin holds as yours: the first one it hears from, or the one you last
+selected in its session list. A compaction in any other session is logged as a subagent's and not
+counted, so the line can undercount but never invents one.
+
 ### The push policy
 
 `bmn policy [--repo OWNER/NAME] [--json]` prints what the owner's policy authorizes in a repository (Epic 83). Agents
@@ -986,43 +988,6 @@ A false match only asks: a commit message that merely mentions `git push --force
 stop an agent that hides a command on purpose (encoded text, a script it writes first); GitHub's own repository
 rules are the hard guard there. It runs only where BMN's hook entry runs, which is in agents started inside a BMN
 session; deploys in general, CI changes and secrets stay the agents' own rule.
-
-For Codex, the same entries with `bmn hook codex` go in `~/.codex/hooks.json` for `PreToolUse`,
-`PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` and `Interrupt`. Codex must
-then trust them once with `/hooks`, which no command can do for you. `PreToolUse` is required for
-queued `request_user_input_async` questions because Codex has no `Notification` hook event. Add
-`PermissionRequest` only without Auto Review: Codex fires it before Auto Review decides whether you
-must approve, so it would flag tools that never need you, and `install` therefore never adds it.
-
-Session details shows when a session's conversation was compacted ("Compacted: 16:10 (2 times this
-run)", or "No compaction observed in this run"), and the Hook events list reads such an event as
-"Conversation compacted". It is information only: nothing opens in Needs you or goes to Telegram,
-and a new run starts from none. Claude Code reports compaction as `SessionStart` with source
-`compact`, OpenCode as `session.compacted` (a subagent's is logged, not counted). Codex 0.157.1,
-measured on a disposable profile on 2026-09-28, sends `SessionStart` with source `compact` after an
-automatic compaction (with `PreCompact`/`PostCompact`, trigger `auto`), but its manual `/compact`
-sends only `PreCompact` and `PostCompact` with trigger `manual`. `PostCompact` is therefore an
-optional Codex entry, reported by `check` and never installed: add it to see manual compactions too;
-BMN counts its `manual` trigger only, so an automatic compaction still counts once. Codex runs the same
-`PreCompact`/`PostCompact` hooks and the same automatic call site whichever way it compacts (locally or
-on OpenAI's side), but only the local path was measured, so whether `SessionStart` with source
-`compact` also follows an automatic compaction on OpenAI's side is not yet known. OpenCode's compactions
-count for the session the plugin holds as yours: the first one it hears from, or the one you last
-selected in its session list. A compaction in any other session is logged as a subagent's and not
-counted, so the line can undercount but never invents one.
-
-BMN shows a desktop notification for a new request unless you are looking at that session. Telegram
-gets it only while you are away from the desk (a minute without keyboard or mouse input), only if it
-is still open and unseen after 15 seconds (a finished-turn notice after 60), and each request only
-once however often the agent repeats it. A request that fell due while you were at the desk is still
-sent if you leave within 10 minutes of it opening. Session exits, when chosen, are sent only while
-you are away. If BMN cannot read idle time, Telegram gets requests as if you were away.
-
-While you are at the desk and looking at the session, BMN tells the agent its terminal has focus;
-after a minute without input it reports the focus lost, so Claude Code sends its own mobile
-notifications while you are away. A Claude session connected to Remote Control is never sent to
-Telegram: the Claude app already notifies your phone. The hook reads that from Claude Code's
-`~/.claude/sessions/<pid>.json` (or `$CLAUDE_CONFIG_DIR/sessions`), which needs `/proc`.
 
 ### The Away grant
 
@@ -1619,7 +1584,16 @@ under `resources/skills`): `plan` (the project's planning, [planning.md](plannin
 `~/.local/share/bmn/skills/<name>`, which stays readable with BMN closed and is refreshed when an
 update brings a new version (the link stays, the copy changes). The skills install then carries them
 into Codex and OpenCode with the same ownership, route and eligibility checks as any other skill; they
-count as public, as BMN's repository is, unless the team file marks them otherwise.
+count as public, as BMN's repository is, unless the team file marks them otherwise. Integrations › Skills lists
+them like every other skill; a pointer to one in your global rules is your own edit.
+
+`team-page` is the page for finished work: when a piece of work is complete (dev-auto ends every completed epic
+with one), the agent writes one HTML page in the owner's fixed structure (why, what changes with one example,
+optional safety and money, how it was checked, known limits, what was decided for him, what waits on him, an
+honest opinion) from its `template.html`, checks it with `check.py` (PASS/FAIL per rule) and publishes it
+privately: Claude Code as an Artifact, any other app with `bmn publish`, a new key per revision. The other four
+are described where their commands are: `plan` in [planning.md](planning.md), `team-ask` under Asking a
+teammate, `web-question` and `jev-judge` under Models.
 
 - A link of the same name into a BMN checkout or install (how `web-question` and `jev-judge` were
   linked by hand) is taken over: it becomes a link to BMN's copy.
@@ -2261,9 +2235,7 @@ A lone `-` (`… | bmn research ask -`) says "standard input" out loud and chang
 - **The skill.** The repository holds a skill, `skills/web-question/`: when a web question is the
   right tool, what never goes into one (code, file contents, anything from a private repository
   beyond public names, names of people or customers, credentials), how to read the three marks,
-  and that a claim marked "not found" is not evidence. BMN puts it into your skills folder by itself
-  (BMN's own skills, under Skills); it shows on Integrations › Skills like every other skill. A
-  pointer in your global rules is your own edit.
+  and that a claim marked "not found" is not evidence. It is one of BMN's own skills (under Skills).
 - **Switched off.** With "Agents may ask the web" off (Agents › Models), an agent's question is
   refused with `ASKING_OFF`, told so and told to ask you; your own Ask still works.
 - **On Models.** Agents › Models ends with "Web questions". The switch "Agents may ask the web" is
@@ -2393,9 +2365,8 @@ printf '%s\n' 'All 12 tests passed.' | bmn judge ask --state-file - --questions-
 - **Advice only.** Nothing in BMN grants, accepts, stops, spends or hides anything because of
   an answer, and nothing in BMN but the command and the judge's page asks or reads one. The
   skill `skills/jev-judge/` in the repository says what Jev proved good at and what it must
-  never decide; BMN puts it into your skills folder by itself (BMN's own skills, under Skills) and
-  it shows on Integrations › Skills like every other skill. A new use
-  is measured in `~/code/jev-eval`, on labelled cases, before anything acts on it.
+  never decide; it is one of BMN's own skills (under Skills). A new use is measured in
+  `~/code/jev-eval`, on labelled cases, before anything acts on it.
 
 ### The prompt guard
 
@@ -3014,17 +2985,13 @@ after they end.
 
 ### How agents learn it
 
-- **Help and brief.** `bmn help` lists `team ask` and `bmn team ask --help` gives every option;
-  `bmn help agents` gives it three lines: when to ask, that it works in your repository and takes
-  files, that the answer is advice and that a refusal is reported, never worked around, with `--key`.
-- **The skill.** The repository holds a skill, `skills/team-ask/`: when an ask is the right tool and
-  when the owner decides instead, what each app's mode reads, pictures, the key, the exits, reading the
-  answer as advice, and that a refusal is reported, never worked around. BMN puts it into your
-  skills folder by itself (BMN's own skills, under Skills), and it shows on Integrations › Skills like
-  every other skill; the skills install then gives it to the apps that need a copy.
-- **Auto mode.** Claude Code's auto mode, as the owner runs it, let `bmn team ask` command lines run
-  when 72.1 measured them (2026-10-15), so BMN offers no permission rule for it. Should a later
-  Claude Code refuse it, the narrowest rule is `Bash(bmn team ask:*)`, installed only by the owner.
+`bmn help` lists `team ask`, `bmn team ask --help` gives every option, and `bmn help agents` gives it three
+lines ([A brief for agents](#a-brief-for-agents)). The skill `skills/team-ask/`, one of BMN's own skills (under
+Skills), says when an ask is the right tool and when the owner decides instead, what each app's mode reads,
+pictures, the key, the exits, reading the answer as advice, and that a refusal is reported, never worked around.
+Claude Code's auto mode, as the owner runs it, let `bmn team ask` command lines run when 72.1 measured them
+(2026-10-15), so BMN offers no permission rule for it; should a later Claude Code refuse it, the narrowest rule is `Bash(bmn team ask:*)`, installed only
+by the owner.
 
 ### Measured (72.9)
 
@@ -3334,8 +3301,10 @@ merge only at the level it prints; run git push and gh pr as commands of their o
   its previous process published: the rule is about the session, not the process.
 - Explicitly navigating to a session withdraws its open notices with “Opened in BMN; reminder cleared”.
   Blocking requests stay open until answered or explicitly dismissed, withdrawn or expired. The session
-  request card retains cleared notice details until navigation elsewhere. Typing resolves questions,
-  permissions and notices, except reviews or handoffs.
+  request card retains cleared notice details until navigation elsewhere. Typing, pasting or dictating into a
+  session resolves its questions, permissions and notices, so they leave **Needs you** as soon as you respond,
+  even when the agent sends no hook for it (a denied permission, or Esc); review requests, and handoff requests
+  stored before Story 75.5, stay open.
 
 These checks separate sessions from each other inside the app. They are not a sandbox against a
 malicious program that already runs as your user and can read your files.
@@ -3348,15 +3317,12 @@ bmn ask synthetic-checkpoint "Continue the synthetic check?" --choices-json \
   '{"options":[{"label":"Continue","description":null},{"label":"Wait","description":"Keep it pending"}]}'
 ```
 
-`--choices-file -` reads the same JSON from stdin, with only one stdin field per
-invocation. Choices apply only to question and permission asks. Other is automatic.
-Desktop request cards show choices read-only; answer in the terminal. Telegram
-taps/Other send a bounded ordinary message naming the request and decision to its
-freshly attributed foreground conversation, including agents launched in a shell.
-Without that stamp, the new route stays unavailable/draft-only. A manual permission
-needs **Answer permissions** enabled and conveys an owner decision as text; native
-Allow, Auto Review and command execution remain separate. No submitted/uncertain
-attempt is replayed. Text-only asks retain their existing behavior.
+`--choices-file -` reads the same JSON from standard input (Long text from standard input, above). Choices
+apply only to a question or permission ask with no native prompt, and Other is automatic. Desktop request cards
+show choices read-only; answer in the terminal. How a Telegram tap or Other answers one, what a manual permission
+needs, and that nothing submitted or uncertain is replayed:
+[remote-answers.md](remote-answers.md#explicit-manual-checkpoints-epics-5052). Text-only asks retain their
+existing behavior.
 
 Live question ownership is scoped to the foreground agent and current PTY incarnation,
 separate from durable Resume binding. Native Codex Default cards without observed
