@@ -1,6 +1,7 @@
-// MODULE: retired-references.mjs - Epic 71 (71.2 AC5): every place the repository still names the retired app, against a short allowlist
-// Run it to list them: `node scripts/lib/retired-references.mjs`. scripts/tests/retired-references.test.mjs keeps the list
-// and the allowlist the same, so a new reference fails until it is named here with its reason.
+// MODULE: retired-references.mjs - Epic 71 (71.2 AC5), Story 80.20: every place the repository still names the retired app, or
+// one of three more apps it no longer runs or never ran, against a short allowlist per name
+// Run it to list them: `node scripts/lib/retired-references.mjs`. scripts/tests/retired-references.test.mjs keeps each list
+// and its allowlist the same, so a new reference fails until it is named here with its reason (and, for the three, its class).
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -62,11 +63,105 @@ export const ALLOWED = {
   'shared/protocol/src/attention-prompt.test.ts': 'an old question card'
 }
 
-/** Folders whose files are other projects' or generated, never this repository's own text. */
-const SKIPPED = /^(plan|\.dev-auto|node_modules)\/|\.(png|jpe?g|ico|icns|woff2?|ttf)$/
+// Story 80.20: three more names, each with Story 80.1's pattern (plan/references/reference-80-slop-cleanup/retired-names.mjs) and
+// the class 80.1 gave each line after reading it. An obsolete line is removed, never listed. Built from parts, like the name above.
+const Z = ['G', 'LM'].join('')
+const GEM = ['Gem', 'ini'].join('')
+const AID = ['Ai', 'der'].join('')
+const z = Z.toLowerCase()
+const gem = GEM.toLowerCase()
+const aid = AID.toLowerCase()
+/** A name not preceded by a letter or digit, in any case: `.claude-x`, `x-5.3` and `X_ANSWER` count, `prefixx` does not. */
+const standalone = (name, prefix = '') => new RegExp(`(?<![A-Za-z0-9])${prefix}${name}`, 'i')
 
-/** Each line naming the retired app, in every file git tracks under `root`. */
-export function findReferences(root) {
+const CURRENT = 'current behaviour'
+const COMPATIBILITY = 'compatibility'
+const EVIDENCE = 'evidence'
+/** What a listed line may be: what BMN does today, an old record read as saved, or a record of a past measurement. */
+export const CLASSES = Object.freeze([CURRENT, COMPATIBILITY, EVIDENCE])
+
+const unknownApp = { class: CURRENT, reason: 'a test: an app or agent BMN does not know is refused' }
+const rosterFixture = { class: CURRENT, reason: `a test fixture: ${Z} as the team's switched-off, public-only Z.ai agent (roster-example.md)` }
+const hookTest = { class: CURRENT, reason: `a test of a hook from \`claude ${z}\`: its config folder, its model or its origin through api.z.ai` }
+const folderTest = { class: CURRENT, reason: `a test of the \`.claude-${z}\` folder BMN learns and writes` }
+const configFolder = { class: CURRENT, reason: `\`claude ${z}\`: a Claude Code config folder of its own (history label "${Z}"; context use only, no plan windows)` }
+const originTable = (flag) => ({ class: CURRENT, reason: `the model origin table: such a model reads ${flag}` })
+
+/** Each further name: its pattern, why it is still named, and where: file -> its class and its reason. */
+export const NAMED = {
+  [Z]: {
+    status: 'switched off on the team, not retired (dev-auto references/models.md:10, owner 2026-09-30; Epic 80, owner 2026-10-19)',
+    patterns: [standalone(z, '(?:chat)?')],
+    allowed: {
+      'apps/desktop/bin/bmn-hooks.mjs': configFolder,
+      'apps/desktop/src/renderer/src/plan-use-view.tsx': configFolder,
+      'apps/desktop/src/renderer/src/session-presentation.ts': configFolder,
+      'apps/desktop/src/utility/agent-history.ts': configFolder,
+      'apps/desktop/src/utility/companion-service.ts': configFolder,
+      'shared/protocol/src/companion.ts': configFolder,
+      'shared/protocol/src/model-origin.ts': originTable('🇨🇳'),
+      'shared/protocol/src/model-origin.test.ts': originTable('🇨🇳'),
+      'docs/agent-control.md': { class: CURRENT, reason: `the model origin rule: Z.ai serves ${Z} behind Claude model names` },
+      'docs/agent-history.md': configFolder,
+      'docs/features.md': { class: CURRENT, reason: `the model origin flag, and \`claude ${z}\` getting the history limit as its own setting` },
+      'docs/usage-sources.md': { class: EVIDENCE, reason: `Story 37.1's measurement of \`claude ${z}\` (2026-09-28), and the one current line it set: no plan windows` },
+      'apps/desktop/src/main/agent-history-self-test.ts': folderTest,
+      'apps/desktop/src/main/self-test/runner.ts': folderTest,
+      'apps/desktop/src/utility/agent-history.test.ts': folderTest,
+      'apps/desktop/src/utility/database-archive-purge.test.ts': folderTest,
+      'apps/desktop/src/renderer/src/session-presentation.test.ts': hookTest,
+      'apps/desktop/src/utility/companion-service.test.ts': hookTest,
+      'apps/desktop/src/utility/control-cli.test.ts': hookTest,
+      'apps/desktop/src/utility/control-server.test.ts': hookTest,
+      'apps/desktop/src/utility/test-fixtures/agents/roster-example.md': rosterFixture,
+      'apps/desktop/src/main/agents-approval.test.ts': rosterFixture,
+      'apps/desktop/src/main/agents-ipc.test.ts': rosterFixture,
+      'apps/desktop/src/renderer/src/model-suggestions.test.ts': rosterFixture,
+      'apps/desktop/src/renderer/src/roster-staging.test.ts': rosterFixture,
+      'apps/desktop/src/renderer/src/team-rules-preferences.test.ts': rosterFixture,
+      'apps/desktop/src/utility/agents-check.test.ts': rosterFixture,
+      'apps/desktop/src/utility/agents-project-choices.test.ts': rosterFixture,
+      'apps/desktop/src/utility/agents-research.test.ts': rosterFixture,
+      'apps/desktop/src/utility/agents-roster.test.ts': rosterFixture,
+      'apps/desktop/src/utility/agents-rules.test.ts': rosterFixture,
+      'apps/desktop/src/utility/agents-team-ask.test.ts': rosterFixture,
+      'scripts/test/agents-rules-visual.mjs': rosterFixture
+    }
+  },
+  [GEM]: {
+    status: 'never supported as an agent app; what is left names a command or a model family BMN still meets',
+    patterns: [standalone(gem)],
+    allowed: {
+      'apps/desktop/bin/agents-team-inputs.mjs': { class: CURRENT, reason: `\`~/.${gem}\` is a credential location: never an ask input or project` },
+      'apps/desktop/src/renderer/src/session-presentation.ts': { class: CURRENT, reason: `the tag a session running \`${gem}\` gets; it runs as a plain terminal` },
+      'docs/features.md': { class: CURRENT, reason: 'the launcher note: the commands BMN tags, and which of them it integrates' },
+      'shared/protocol/src/model-origin.ts': originTable('🇺🇸'),
+      'shared/protocol/src/model-origin.test.ts': originTable('🇺🇸'),
+      'apps/desktop/src/utility/agents-rules.test.ts': unknownApp,
+      'apps/desktop/src/utility/control-cli.test.ts': unknownApp,
+      'apps/desktop/src/utility/control-server.test.ts': unknownApp,
+      'apps/desktop/src/utility/store-schema.test.ts': unknownApp,
+      'shared/protocol/src/attention-prompt.test.ts': unknownApp
+    }
+  },
+  [AID]: {
+    status: 'never supported as an agent app; a session running its command is still tagged',
+    patterns: [standalone(aid)],
+    allowed: {
+      'apps/desktop/src/renderer/src/session-presentation.ts': { class: CURRENT, reason: `the tag a session running \`${aid}\` gets; it runs as a plain terminal` },
+      'docs/features.md': { class: CURRENT, reason: 'the launcher note: the commands BMN tags, and which of them it integrates' }
+    }
+  }
+}
+
+/**
+ * Folders whose files are other projects' or generated, never this repository's own text; and the lockfile, whose
+ * integrity hashes can hold any three letters after a `+` or `/`.
+ */
+const SKIPPED = /^(plan|\.dev-auto|node_modules)\/|(^|\/)pnpm-lock\.yaml$|\.(png|jpe?g|ico|icns|woff2?|ttf)$/
+
+/** Each line naming the retired app (or, given `patterns`, another name), in every file git tracks under `root`. */
+export function findReferences(root, patterns = PATTERNS) {
   const files = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\0').filter(Boolean)
   const found = []
   for (const file of files) {
@@ -78,13 +173,13 @@ export function findReferences(root) {
       continue
     }
     text.split('\n').forEach((line, index) => {
-      if (PATTERNS.some((pattern) => pattern.test(line))) found.push({ file, line: index + 1, text: line.trim() })
+      if (patterns.some((pattern) => pattern.test(line))) found.push({ file, line: index + 1, text: line.trim() })
     })
   }
   return found
 }
 
-/** Files that name it without an entry, and entries that no longer name it. */
+/** Files that name it without an entry, and entries that no longer name it (`allowed`: one name's file -> entry). */
 export function compareWithAllowed(found, allowed = ALLOWED) {
   const named = new Set(found.map((entry) => entry.file))
   return {
@@ -95,11 +190,15 @@ export function compareWithAllowed(found, allowed = ALLOWED) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-  const found = findReferences(root)
-  for (const entry of found) console.log(`${entry.file}:${entry.line}: ${entry.text}`)
-  const { unexpected, stale } = compareWithAllowed(found)
-  for (const file of unexpected) console.log(`NOT ALLOWED: ${file}`)
-  for (const file of stale) console.log(`STALE ENTRY: ${file}`)
-  console.log(`${found.length} lines in ${new Set(found.map((entry) => entry.file)).size} files; ${unexpected.length} not allowed, ${stale.length} stale`)
-  process.exitCode = unexpected.length + stale.length === 0 ? 0 : 1
+  let failures = 0
+  for (const [name, { patterns, allowed }] of [[NAME, { patterns: PATTERNS, allowed: ALLOWED }], ...Object.entries(NAMED)]) {
+    const found = findReferences(root, patterns)
+    for (const entry of found) console.log(`${name}: ${entry.file}:${entry.line}: ${entry.text}`)
+    const { unexpected, stale } = compareWithAllowed(found, allowed)
+    for (const file of unexpected) console.log(`NOT ALLOWED (${name}): ${file}`)
+    for (const file of stale) console.log(`STALE ENTRY (${name}): ${file}`)
+    console.log(`${name}: ${found.length} lines in ${new Set(found.map((entry) => entry.file)).size} files; ${unexpected.length} not allowed, ${stale.length} stale`)
+    failures += unexpected.length + stale.length
+  }
+  process.exitCode = failures === 0 ? 0 : 1
 }
