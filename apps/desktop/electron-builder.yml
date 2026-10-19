@@ -41,6 +41,20 @@ extraResources:
     to: bin/agents-cli.mjs
   - from: bin/agents-check.mjs
     to: bin/agents-check.mjs
+  - from: bin/agents-check-base.mjs
+    to: bin/agents-check-base.mjs
+  - from: bin/agents-check-argv.mjs
+    to: bin/agents-check-argv.mjs
+  - from: bin/agents-check-routes.mjs
+    to: bin/agents-check-routes.mjs
+  - from: bin/agents-check-workspace.mjs
+    to: bin/agents-check-workspace.mjs
+  - from: bin/agents-check-consequences.mjs
+    to: bin/agents-check-consequences.mjs
+  - from: bin/agents-check-evaluate.mjs
+    to: bin/agents-check-evaluate.mjs
+  - from: bin/agents-check-team-ask.mjs
+    to: bin/agents-check-team-ask.mjs
   - from: bin/agents-rules.mjs
     to: bin/agents-rules.mjs
   # The prompt guard and the context, skills and tools commands; agents-check.mjs imports two of them,
