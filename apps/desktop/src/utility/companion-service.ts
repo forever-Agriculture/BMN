@@ -869,6 +869,8 @@ export class CompanionService {
         }),
         reportGrant: (p) => this.controlCall(async () => {
           const result = await this.options.database.companion('reportGrantRecord', p, this.iso())
+          // The window's view is this cache; a report it never hears of stays missing there (matrix full-3).
+          if (result.outcome === 'recorded') this.grantChanged({ state: 'read', record: result.record })
           if (result.outcome === 'refused') throw new HostControlError(ERROR_CODES.invalidArgument, `Not kept: ${result.reason}`)
           return { outcome: result.outcome }
         }),
@@ -1463,7 +1465,8 @@ export class CompanionService {
   /** Story 84.3 AC2–AC3: the owner's answer from the window or Telegram, the only two callers. */
   private async answerGrant(answer: { periodId: string; runId: string; cardRevision: number; choices: Record<string, unknown>; via: 'app' | 'telegram'; operationKey: string }): Promise<GrantAnswerResult> {
     const result = await this.options.database.companion('answerGrantCard', answer, this.iso())
-    if (result.outcome === 'granted') this.grantChanged({ state: 'read', record: result.record })
+    // A refused answer is kept too; an unreadable record (reason 'invalid') stays unknown in the cache.
+    if (result.outcome === 'granted' || (result.outcome === 'refused' && result.reason !== 'invalid')) this.grantChanged({ state: 'read', record: result.record })
     return result
   }
 

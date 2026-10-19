@@ -4267,12 +4267,17 @@ describe('Away (Story 76.3)', () => {
     await expect(service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-80', cardRevision: 1, choices: { rounds: 3 } })).rejects.toThrow('required')
     expect(await service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-80', cardRevision: 2, choices: { rounds: 3 }, operationKey: 'press-0' }))
       .toMatchObject({ outcome: 'refused', reason: 'changed' })
+    // The window reads this view: his refused answer is in it at once, kept for the morning.
+    expect(service.grantForOwner().period?.refusals).toMatchObject([{ runId: 'run-80', kind: 'answer', reason: 'changed', via: 'app' }])
     expect(await service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-80', cardRevision: 1, choices: { rounds: 3 }, operationKey: 'press-1' }))
       .toMatchObject({ outcome: 'granted', view: { openCards: 0 } })
     const status = await handlers.grantStatus({ scope: agent, runId: 'run-80' }) as { runs: Array<{ active: boolean; lines: string[] }> }
     expect(status.runs[0]!.active).toBe(true)
     expect(status.runs[0]!.lines[1]).toBe('  Extra repair rounds: 3 per boundary; none used.')
     expect(await handlers.useGrant({ sessionId: 's1', runId: 'run-80', useId: 'u1', boundary: '80.3-review' })).toEqual({ outcome: 'recorded', left: 2 })
+    // matrix full-3: a report with no use after it was missing from the window's view.
+    expect(await handlers.reportGrant({ runId: 'run-80', sessionId: 's1', kind: 'outcome', useId: 'u1', result: 'blocked', text: null })).toEqual({ outcome: 'recorded' })
+    expect(service.grantForOwner().period?.reports).toMatchObject([{ useId: 'u1', result: 'blocked' }])
 
     // A restart reads the record back: the grant still holds, and no handoff is needed for it.
     service = new CompanionService(service['options']); await service.start()
