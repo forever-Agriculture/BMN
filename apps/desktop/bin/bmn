@@ -6,7 +6,6 @@ import { AGENT_BRIEF, GLOBAL_OPTIONS, HANDOFF_OUTLINE, TERMINAL_BRIEF, USAGE } f
 import { COMMANDS, CliError, UsageError, call, commandUsage, parseArguments, readCredentials, requireNonEmpty } from './bmn-commands.mjs'
 import { describeResult, resumeCommandRequest, takePipedField, tellRequest, usageFailure } from './bmn-results.mjs'
 import { runHooks } from './bmn-hooks.mjs'
-import { reportStatusLine, statusLineCommand } from './bmn-statusline.mjs'
 import { runHook } from './bmn-hook-runtime.mjs'
 
 async function main(argv) {
@@ -46,9 +45,11 @@ async function main(argv) {
       throw error
     }
   }
-  // The status line's background report prints nothing and always exits 0, like a hook.
+  // The status line's background report prints nothing and always exits 0, like a hook. Loaded only here (Story
+  // 80.17), so `bmn hook`, which runs on every hook event, does not read it.
   if (argv[0] === 'statusline') {
-    return argv[1] === 'report' && argv.length === 2 ? reportStatusLine().catch(() => 0) : statusLineCommand(argv.slice(1))
+    const statusLine = await import('./bmn-statusline.mjs')
+    return argv[1] === 'report' && argv.length === 2 ? statusLine.reportStatusLine().catch(() => 0) : statusLine.statusLineCommand(argv.slice(1))
   }
   let request
   let parsed
