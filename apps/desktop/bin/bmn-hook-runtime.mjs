@@ -374,7 +374,7 @@ function hookApiHost(agent) {
   const variable = agent === 'claude' ? 'ANTHROPIC_BASE_URL' : agent === 'codex' ? 'OPENAI_BASE_URL' : null
   const value = variable === null ? undefined : process.env[variable]
   if (typeof value !== 'string' || value.trim() === '') return null
-  let hostname = ''
+  let hostname
   try {
     hostname = new URL(value.trim()).hostname
   } catch {

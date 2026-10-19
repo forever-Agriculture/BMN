@@ -28,12 +28,14 @@ function clip(text, max) {
 
 /** One line without control characters, as the control server requires of a title. */
 function titleText(value, fallback) {
+  // eslint-disable-next-line no-control-regex
   const text = typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim() : ''
   return clip(text || fallback, 200)
 }
 
 function bodyText(value) {
   if (typeof value !== 'string') return undefined
+  // eslint-disable-next-line no-control-regex
   const text = value.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim()
   return text === '' ? undefined : clip(text, HOOK_BODY_MAX)
 }
@@ -181,6 +183,7 @@ function permissionPrompt(harness, shape, tool, command, ids, cwd, description) 
     toolUseId: promptId(ids.toolUseId),
     tool: name,
     command: exact,
+    // eslint-disable-next-line no-control-regex
     cwd: typeof cwd === 'string' && cwd.startsWith('/') && cwd.length <= PROMPT_LIMITS.cwd && !/[\u0000-\u001f]/.test(cwd) ? cwd : null,
     ...(description === undefined ? {} : {
       description: typeof description === 'string' && description.length <= PROMPT_LIMITS.description

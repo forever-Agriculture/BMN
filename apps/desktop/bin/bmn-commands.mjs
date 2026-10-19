@@ -22,7 +22,7 @@ function commandUsage(command) {
   const kept = []
   let inside = false
   for (const line of lines) {
-    const entry = /^  (\S+)/.exec(line)
+    const entry = /^ {2}(\S+)/.exec(line)
     if (entry) inside = names.includes(entry[1])
     else if (!/^\s{4,}\S/.test(line)) inside = false
     if (inside) kept.push(line)
@@ -48,6 +48,7 @@ function cliManualChoices(json, kind, title, requestKey) {
   data = { options: data.options.map((option) => typeof option === 'string' ? { label: option, description: null }
     : isObject(option) ? { label: option.label, description: option.description ?? null } : option) }
   const labels = new Set()
+  // eslint-disable-next-line no-control-regex
   const safe = value => typeof value === 'string' && !/[\u0000-\u001f\u007f-\u009f\p{Cf}]/u.test(value)
   for (const option of data.options) {
     if (!isObject(option) || !safe(option.label) || !option.label.trim() || option.label.length > 200 || labels.has(option.label) ||
