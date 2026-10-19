@@ -94,7 +94,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   })
   const page = await application.firstWindow()
   page.setDefaultTimeout(20_000)
-  const resize = (width) => application.evaluate(({ BrowserWindow }, size) => { const window = BrowserWindow.getAllWindows()[0]; window.setMinimumSize(0, 0); window.show(); window.setContentSize(size, 860) }, width)
+  // A packaged BMN may open maximized, where a size set without unmaximizing first is ignored.
+  const resize = (width) => application.evaluate(({ BrowserWindow }, size) => { const window = BrowserWindow.getAllWindows()[0]; window.setMinimumSize(0, 0); if (window.isMaximized()) window.unmaximize(); window.show(); window.setContentSize(size, 860) }, width)
   const shot = async (name) => { if (shots) await page.screenshot({ path: join(shots, name) }) }
   const head = page.locator('.away-check button.away-grant')
   const dialog = page.locator('dialog.before-you-go-dialog')
@@ -151,7 +152,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await firstCard.locator('.segmented').nth(1).locator('[role="radio"]', { hasText: /^No$/ }).click()
     // Another run's change refreshes every card; his unsent choice must stay (the epic review, finding 1).
     const other = bmn(['grant', 'ask', '--run', 'run-77', '--nothing', '--title', 'Epic 77 · refresh'])
-    await until(async () => (await dialog.locator('.grant-nothing').innerText()).includes('Epic 77'), 'the refresh drawn')
+    await until(async () => (await dialog.locator('.grant-nothing', { hasText: 'Epic 77' }).count()) === 1, 'the refresh drawn')
     const kept = await firstCard.locator('.segmented').nth(1).locator('[role="radio"][aria-checked="true"]').innerText()
     check('an unsent choice stays when another run\'s change refreshes the cards (AC2)', other.startsWith('Recorded: run run-77 needs nothing') && kept === 'No', { other: other.trim(), kept })
     const words = await firstCard.locator('.actions button.primary').innerText()
