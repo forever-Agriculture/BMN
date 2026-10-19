@@ -85,6 +85,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   "repo view") case "$3" in
     octo-probe/widgets) echo '{"owner":{"login":"octo-probe"},"isInOrganization":false,"defaultBranchRef":{"name":"main"},"name":"widgets"}';;
     acme-probe/api) echo '{"owner":{"login":"acme-probe"},"isInOrganization":true,"defaultBranchRef":{"name":"trunk"},"name":"api"}';;
+    octo-probe/gizmo-old|octo-probe/gizmo) echo '{"owner":{"login":"octo-probe"},"isInOrganization":false,"defaultBranchRef":{"name":"main"},"name":"gizmo"}';;
     *) echo "HTTP 404" >&2; exit 1;;
   esac;;
   *) exit 1;;
@@ -97,11 +98,12 @@ esac`)
     BMN_LAUNCH_CWD: widgets,
     ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
   }
-  const policy = (...args) => {
+  const policyIn = (cwd, ...args) => {
     try {
-      return execFileSync(process.execPath, [cli, 'policy', ...args, '--owner', '--socket', socket], { encoding: 'utf8', env: { ...environment, PATH: `${stubs}:${process.env.PATH}` }, cwd: root })
+      return execFileSync(process.execPath, [cli, 'policy', ...args, '--owner', '--socket', socket], { encoding: 'utf8', env: { ...environment, PATH: `${stubs}:${process.env.PATH}` }, cwd })
     } catch (error) { return `exit ${error.status}: ${error.stderr}` }
   }
+  const policy = (...args) => policyIn(root, ...args)
   const launch = () => electron.launch({
     executablePath: tested.executablePath,
     args: [...tested.appArgs, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
@@ -211,12 +213,66 @@ esac`)
     check('the rules Save that adds the pointer puts the policy in force, in Health and in `bmn policy` (83.5 AC1)',
       inForceNote === '' && inForce.includes('Push policy: in force (revision 3).') && inForce.includes('- push main, never forced'), { inForce, inForceNote })
     await shot(page, 'health-policy-in-force-1280.png')
+
+    // The epic review (2026-10-19): a repository renamed on GitHub, one checkout's remote still naming it by its old name.
+    phase('a renamed repository, two checkouts')
+    const gizmoOld = repository('gizmo-old', 'git@github.com:octo-probe/gizmo-old.git')
+    const gizmo = repository('gizmo', 'git@github.com:octo-probe/gizmo.git')
+    const gizmoSpaces = await page.evaluate(async (folders) => Promise.all(folders.map((folder, index) =>
+      window.aiTerminal.createWorkspace({ name: `gizmo-${index}`, defaultCwd: folder }))), [gizmoOld, gizmo])
+    const level = (main, name) => main.locator('.policy-repository', { has: page.locator('.mono', { hasText: new RegExp(`^${name}$`) }) })
+    await openEditor(page)
+    main = await openHealth(page)
+    await level(main, 'gizmo').waitFor()
+    const gizmoRows = (await repositories(main)).filter((row) => row.name.startsWith('gizmo'))
+    await level(main, 'gizmo').locator('[role="radio"]', { hasText: /^Merge and push main$/ }).click()
+    await until(async () => (await repositories(main)).find((row) => row.name === 'gizmo')?.level === 'Merge and push main', 'gizmo raised')
+    const raisedOld = policyIn(gizmoOld)
+    await level(main, 'gizmo').locator('[role="radio"]', { hasText: /^PRs only$/ }).click()
+    await until(async () => (await repositories(main)).find((row) => row.name === 'gizmo')?.level === 'PRs only', 'gizmo lowered')
+    const loweredOld = policyIn(gizmoOld)
+    check('a repository renamed on GitHub is listed once by its own name, and raising and lowering it there is what `bmn policy` reads through the old remote (epic review)',
+      JSON.stringify(gizmoRows) === JSON.stringify([{ name: 'gizmo', level: 'PRs only' }])
+        && raisedOld.includes('Repository octo-probe/gizmo: Merge and push main (default branch main).') && raisedOld.includes('- push main, never forced')
+        && loweredOld.includes('Repository octo-probe/gizmo: PRs only (default branch main).') && !loweredOld.includes('- push main, never forced'),
+      { gizmoRows, raisedOld, loweredOld })
+    await page.evaluate(async (spaces) => { for (const space of spaces) await window.aiTerminal.updateWorkspace({ workspaceId: space.workspaceId, expectedRevision: space.revision, archived: true }) }, gizmoSpaces)
+
+    // The epic review (2026-10-19): a grant whose last workspace went away stays listed, so it can still be revoked.
+    phase('a grant whose workspace went away')
+    await owner(main, 'acme-probe').getByRole('switch', { name: 'Allow acme-probe' }).click()
+    await until(async () => (await ownerText(main, 'acme-probe')) === 'acme-probe Org Allowed', 'acme allowed')
+    await level(main, 'api').locator('[role="radio"]', { hasText: /^Merge when green$/ }).click()
+    await until(async () => (await repositories(main)).find((row) => row.name === 'api')?.level === 'Merge when green', 'api raised')
+    await page.evaluate(async () => {
+      for (const space of await window.aiTerminal.listWorkspaces()) {
+        if (space.name === 'api') await window.aiTerminal.updateWorkspace({ workspaceId: space.workspaceId, expectedRevision: space.revision, archived: true })
+      }
+    })
+    await openEditor(page)
+    main = await openHealth(page)
+    await owner(main, 'acme-probe').waitFor()
+    const keptOwner = await ownerText(main, 'acme-probe')
+    const keptRow = (await level(main, 'api').innerText()).replace(/\s+/g, ' ').trim()
+    const gizmoGone = (await repositories(main)).every((row) => !row.name.startsWith('gizmo'))
+    const beforeDeny = policy('--repo', 'acme-probe/api')
+    await owner(main, 'acme-probe').getByRole('switch', { name: 'Allow acme-probe' }).click()
+    await until(async () => (await ownerText(main, 'acme-probe')).startsWith('acme-probe Org Denied'), 'acme denied')
+    const afterDeny = policy('--repo', 'acme-probe/api')
+    check('an allowed owner and a raised repository stay listed after their workspace is archived, and denying the owner there makes `bmn policy` authorize nothing in it; a lowered repository is not kept (epic review)',
+      keptOwner === 'acme-probe Org Allowed' && keptRow.includes('No session works in it now') && gizmoGone
+        && beforeDeny.includes('- merge a pull request whose current head has every required check green')
+        && afterDeny.includes('Not authorized here: the owner acme-probe is not allowed in Health.'),
+      { keptOwner, keptRow, gizmoGone, beforeDeny, afterDeny })
+    await shot(page, 'health-policy-kept-grant-1280.png')
     editor = (await openEditor(page)).locator('.rules-editor textarea')
     const earlier = rules.locator('details.advanced', { has: page.locator('summary', { hasText: 'Earlier versions' }) })
     await earlier.locator('summary').click()
     await earlier.getByRole('button', { name: /^Undo the save of/ }).first().click()
     await rules.locator('.sheet').getByRole('button', { name: 'Undo', exact: true }).click()
     await until(async () => (await editor.inputValue()) === MASTER, 'the rules put back')
+
+
     const undone = policy('--repo', 'octo-probe/widgets')
     check('after Rules Undo the next read authorizes nothing (Decisions, Undo)', undone.includes('authorizes nothing: the rules master does not carry the policy pointer'), { undone })
   } catch (error) {
