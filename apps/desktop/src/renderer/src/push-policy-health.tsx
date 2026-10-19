@@ -92,7 +92,7 @@ export function PushPolicyHealth(): React.JSX.Element {
           </div>
         )
       })}
-      <p className="preferences-help">The list is the owners and repositories your sessions work in. Each owner starts denied; each repository starts at PRs only.</p>
+      <p className="preferences-help">The list is the owners and repositories your sessions work in. Owners start denied; repositories start at PRs only.</p>
     </>
   )
 }

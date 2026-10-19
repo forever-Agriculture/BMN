@@ -774,7 +774,7 @@ describe('Integrations › Rules (60.6 AC1–AC3)', () => {
     const plan = { ok: true, code: 'OK', planHash: 'h', targets: [{ harness: 'codex' as const, path: '/home/synthetic/.agents/skills/alpha', kind: 'link', change: 'link', diff: '' }] }
     const sheet = words(rulesMarkup('skills', rules({ snapshot, pending: { kind: 'undo', transaction: 't7', plan } }))).replace(/\s+/g, ' ')
     expect(sheet).toContain('Undo this install')
-    expect(sheet).toContain('Each file goes back to what it was before that install. BMN installs again at its next start or approval what your list still gives an app; keep the skill from that app to keep it out.')
+    expect(sheet).toContain('Each file goes back to what it was before that install. BMN installs again at its next start or approval what your list gives an app; keep the skill from it to keep it out.')
     const rulesInstall = { ...RULES, transactions: [{ ...snapshot.transactions[0]!, reason: 'install' }] }
     const plain = words(rulesMarkup('editor', rules({ snapshot: rulesInstall, pending: { kind: 'undo', transaction: 't7', plan } }))).replace(/\s+/g, ' ')
     expect(plain).toContain('Each file goes back to what it was before that install.')
@@ -875,7 +875,7 @@ describe('Integrations › Health (60.6 AC4)', () => {
   it('offers no Test…: Test again… only after a failure or once BMN stopped trying, and only where the app may receive private work (Story 75.8)', () => {
     expect(markup).not.toContain('Test…')
     expect(markup).not.toMatch(/aria-label="Test [A-Za-z ]+ again"/)
-    expect(markup).toContain('A loading test starts the app once and sends it the rules in one prompt. BMN runs it by itself after an app update or a change to the rules. It is off for OpenCode, which gets only the public sections.')
+    expect(markup).toContain('<p class="preferences-help">A loading test starts the app once with the rules in one prompt; BMN runs it itself after an update or a rules change.</p><p class="preferences-help">It is off for OpenCode, which gets only the public sections.</p>')
     const allPublic = RULES.health.state === 'checked' ? { ...RULES.health, targets: RULES.health.targets.map((target) => ({ ...target, kind: 'public' as const })) } : RULES.health
     expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, health: allPublic } })))).toContain('It is off for Claude Code, Codex and OpenCode, which get only the public sections.')
     const after = rulesMarkup('health', rules({ snapshot: { ...RULES,
@@ -943,9 +943,9 @@ describe('Integrations › Health: Update… (60.6: the app\'s own updater, show
     expect(claude).toContain('<b>Update Claude Code</b><span class="muted">Claude Code&#x27;s own updater does this, not BMN.</span>')
     const read = words(claude).replace(/\s+/g, ' ')
     expect(read).toContain('Installed 2.1.295 Program ~/.local/bin/claude A link to ~/.local/share/claude/versions/2.1.295 Command /home/synthetic/.local/bin/claude update')
-    expect(read).toContain('Open in BMN BMN currently recognises 2 Claude Code sessions. Restart them to use the updated installation; their running versions are not checked.')
-    expect(read).toContain('Afterwards Run the command in a terminal. When you come back to Health, BMN reads the version and where Claude Code sends data again. A loading test made before the update needs to be run again.')
-    expect(read).toContain('The updater decides what it downloads and replaces, and may ask questions; BMN does not see that in advance and cannot undo it. BMN does not know whether a newer version exists.')
+    expect(read).toContain('Open in BMN BMN recognises 2 Claude Code sessions. Restart them to use the update; their running versions are not checked.')
+    expect(read).toContain('Afterwards Run the command in a terminal. Back on Health, BMN reads the version and where Claude Code sends data again. A loading test made before the update needs to be run again.')
+    expect(read).toContain('The updater decides what it downloads and replaces, and may ask; BMN cannot see it first or undo it. BMN does not know whether a newer version exists.')
     expect([...claude.matchAll(/<button type="button"[^>]*>([^<]+)<\/button>/g)].map((match) => match[1])).toEqual(['Copy command', 'Close'])
     // Nothing on the sheet starts the updater: the only action on the command is a copy.
     expect(read).not.toMatch(/\bRun update\b|\bUpdate now\b|\bStart\b/)
@@ -957,11 +957,11 @@ describe('Integrations › Health: Update… (60.6: the app\'s own updater, show
     const offered = sheet(1, { onRun: async (name, command) => { typed.push([name, command]); return 'typed' } })
     expect([...offered.matchAll(/<button type="button"( class="primary")?[^>]*>([^<]+)<\/button>/g)].map((match) => [match[2], match[1] !== undefined]))
       .toEqual([['Update now', true], ['Copy command', false], ['Close', false]])
-    expect(words(offered).replace(/\s+/g, ' ')).toContain('Afterwards Update now opens a new session and, once its shell shows its prompt, types the command there and presses Enter; you see what the updater does and answer what it asks. Or run it in any terminal. BMN reads the version and where Codex sends data again each time that session&#x27;s shell is back at its prompt, and whenever you come back to Health.')
+    expect(words(offered).replace(/\s+/g, ' ')).toContain('Afterwards Update now opens a session, types the command at its prompt and presses Enter; you see and answer what the updater asks. Or run it in any terminal. BMN reads the version and where Codex sends data again at each prompt and on Health.')
     // What BMN takes for the prompt, and the one case where that is not the prompt, are said before the press.
-    const limit = 'BMN knows the prompt by the sign the shell&#x27;s line editor gives; a question that one of your shell&#x27;s start-up files asks with line editing gives the same sign and would get the command as its answer.'
+    const limit = 'A question that a start-up file asks with line editing looks like the prompt to BMN and would get the command.'
     expect(words(offered).replace(/\s+/g, ' ')).toContain(`BMN does not know whether a newer version exists. ${limit}`)
-    expect(sheet(1)).not.toContain('line editor')
+    expect(sheet(1)).not.toContain('line editing')
     // Rendering offers; nothing runs until the press.
     expect(typed).toEqual([])
     expect(offered).not.toContain('role="status"')
@@ -983,7 +983,7 @@ describe('Integrations › Health: Update… (60.6: the app\'s own updater, show
     expect(buttons(at('failed'))).toEqual([['Update now', true, false], ['Copy command', false, false]])
     expect(at('failed')).toContain('<p role="status">BMN could not open a session, so nothing ran. Press Update now again, or copy the command.</p>')
     expect(buttons(at('not-reading'))).toEqual([['Update now', false, true], ['Copy command', true, false]])
-    expect(at('not-reading')).toContain('<p role="status">The shell in Update Codex did not get ready for a command, so BMN typed nothing there. Copy the command and run it yourself.</p>')
+    expect(at('not-reading')).toContain('<p role="status">The shell in Update Codex did not get ready for a command, so BMN typed nothing. Copy the command and run it yourself.</p>')
   })
 
   it('watches an update BMN starts afresh, and knows a reading made before an update command ended', () => {
@@ -1030,8 +1030,8 @@ describe('Integrations › Health: Update… (60.6: the app\'s own updater, show
 
   it('counts only the sessions BMN recognises and never claims their versions', () => {
     expect(sessionsWords('Codex', 0)).toBe('BMN recognises no Codex session right now. A session it cannot recognise keeps running what it started with.')
-    expect(sessionsWords('Codex', 1)).toBe('BMN currently recognises 1 Codex session. Restart it to use the updated installation; its running version is not checked.')
-    expect(sessionsWords('Codex', 3)).toBe('BMN currently recognises 3 Codex sessions. Restart them to use the updated installation; their running versions are not checked.')
+    expect(sessionsWords('Codex', 1)).toBe('BMN recognises 1 Codex session. Restart it to use the update; its running version is not checked.')
+    expect(sessionsWords('Codex', 3)).toBe('BMN recognises 3 Codex sessions. Restart them to use the update; their running versions are not checked.')
   })
 
   it('after a check it says only what the program reports now and before, never that an update succeeded', () => {
@@ -1047,7 +1047,7 @@ describe('Integrations › Health: Update… (60.6: the app\'s own updater, show
 describe('Integrations › Health: when the shell\'s settings could not be read', () => {
   it('says so above the apps, with the reason, and says nothing when they were read', () => {
     const page = rulesMarkup('health', rules({ snapshot: { ...RULES, ownEnvironment: 'bash did not answer in 5 seconds' } }))
-    expect(words(page).replace(/\s+/g, ' ')).toContain('BMN could not read your shell&#x27;s settings (bash did not answer in 5 seconds), so it looked for the apps with its own. A session may find a program that BMN does not.')
+    expect(words(page).replace(/\s+/g, ' ')).toContain('BMN could not read your shell&#x27;s settings (bash did not answer in 5 seconds), so it looked for the apps with its own; a session may find more.')
     expect(page).toMatch(/<p class="page-note" role="status"><span[^>]*aria-label="Needs you"/)
     expect(rulesMarkup('health')).not.toContain('could not read your shell')
   })
@@ -1178,7 +1178,7 @@ describe('context limits (60.9 AC3, AC4)', () => {
   it('has no switch: BMN tests by itself, and the help says what a test starts and costs (63.1 AC4; Story 75.8 AC3)', () => {
     expect(markup).not.toContain('context-auto-test')
     expect(markup).not.toContain('Test context limits after an app update')
-    expect(markup).toContain('Claude Code is asked for its context report, Codex gets one short request to its provider; nothing of yours is in it.')
+    expect(markup).toContain('Claude Code is asked for its context report; Codex sends one short request to its provider. Nothing of yours is in it.')
     expect(markup).toContain('an agent&#x27;s own limit waits for the next automatic test')
   })
 
@@ -1857,7 +1857,7 @@ describe('read-only roles on Team and Health (63.2 AC4)', () => {
     expect(notHeldWords(null)).toBeNull()
     expect(notHeldWords({ held: [], proposed: [] })).toBeNull()
     expect(notHeldWords({ held: ['consultant'], proposed: ['epic-reviewer'] })).toBeNull()
-    const said = "No role is held to read-only yet, so the check passes a reviewer started with write access. BMN's proposal on Agents › Team holds Epic reviewer and Consultant to read-only."
+    const said = "No role is held to read-only yet, so a reviewer with write access passes. Agents › Team proposes it for Epic reviewer and Consultant."
     expect(notHeldWords({ held: [], proposed: ['epic-reviewer', 'consultant'] })).toBe(said)
     expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, readOnlyRoles: { held: [], proposed: ['epic-reviewer', 'consultant'] } } })))).toContain(said.replace("'", '&#x27;'))
     expect(words(rulesMarkup('health'))).not.toContain('held to read-only')

@@ -758,7 +758,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       `if [ -f '${updaterDone}' ]; then echo "codex-cli 0.174.0"; else echo "codex-cli 0.161.0"; fi`].join('\n'))
     const updateRuns = () => existsSync(calls) ? readFileSync(calls, 'utf8').split('\n').filter((entry) => entry === 'update').length : 0
     await updateButton.click()
-    await update.getByText('Update now opens a new session and, once its shell shows its prompt, types the command there and presses Enter; you see what the updater does and answer what it asks.', { exact: false }).waitFor()
+    await update.getByText('Update now opens a session, types the command at its prompt and presses Enter; you see and answer what the updater asks.', { exact: false }).waitFor()
     await update.getByText("a question that one of your shell's start-up files asks with line editing gives the same sign and would get the command as its answer.", { exact: false }).waitFor()
     await shot('health-update-type-1280.png')
     // Opening the sheet starts nothing: only the press does.
@@ -840,7 +840,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await updateButton.click()
     await update.getByRole('button', { name: 'Update now' }).click()
     await update.getByText('Opening Update Codex and waiting for its shell…', { exact: true }).waitFor()
-    await update.getByText('The shell in Update Codex did not get ready for a command, so BMN typed nothing there. Copy the command and run it yourself.', { exact: true }).waitFor({ timeout: 30_000 })
+    await update.getByText('The shell in Update Codex did not get ready for a command, so BMN typed nothing. Copy the command and run it yourself.', { exact: true }).waitFor({ timeout: 30_000 })
     assert.equal(await dialog.isVisible(), true, 'Preferences stepped aside though nothing runs')
     assert.equal(await update.getByRole('button', { name: 'Update now' }).isDisabled(), true, 'Update now can be pressed again into a shell that is not ready')
     assert.deepEqual(await update.locator('button.primary').allTextContents(), ['Copy command'], 'the copy is not the main action where nothing was typed')
@@ -1130,7 +1130,7 @@ done`)
     const PROPOSED = ['Focused reviewer', 'Pre reviewer', 'Epic reviewer', 'Project pre reviewer', 'Final reviewer', 'Consultant']
     // A team from before the mark: nothing is held, Health says so, and a reviewer started with write access passes as it did.
     await go('Rules', 'Health')
-    await main.locator('.page-note').getByText('No role is held to read-only yet, so the check passes a reviewer started with write access. BMN\'s proposal on Agents › Team holds Focused reviewer, Pre reviewer, Epic reviewer, Project pre reviewer, Final reviewer and Consultant to read-only.', { exact: true }).waitFor()
+    await main.locator('.page-note').getByText('No role is held to read-only yet, so a reviewer with write access passes. Agents › Team proposes it for Focused reviewer, Pre reviewer, Epic reviewer, Project pre reviewer, Final reviewer and Consultant.', { exact: true }).waitFor()
     assert.deepEqual(reviewCheck('--sandbox', 'workspace-write'), { verdict: 'PASS', seen: 'nothing' })
     await go('Team', 'Roles')
     await main.getByText('No role is held to read-only yet; BMN\'s proposal is on Team.', { exact: true }).waitFor()

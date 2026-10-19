@@ -607,11 +607,12 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
       const master = pending.plan.master
       // Skills and tools install themselves (Story 75.9): what the list still gives an app comes back, which the sheet says.
       const reason = rules.snapshot?.transactions.find((entry) => entry.id === pending.transaction)?.reason
-      const again = reason === SKILLS_INSTALL || reason === TOOLS_INSTALL
-        ? ` BMN installs again at its next start or approval what your list still gives an app; keep the ${reason === SKILLS_INSTALL ? 'skill' : 'tool'} from that app to keep it out.` : ''
+      const again = reason === SKILLS_INSTALL ? 'BMN installs again at its next start or approval what your list gives an app; keep the skill from it to keep it out.'
+        : reason === TOOLS_INSTALL ? 'BMN installs again at its next start or approval what your list gives an app; keep the tool from it to keep it out.' : null
       return (
         <Sheet {...common} title={master ? 'Undo this save' : 'Undo this install'} action="Undo" ready={pending.plan.planHash !== null}
-          note={master ? 'The rules and each file go back to what they were before that save. Nothing is installed again.' : `Each file goes back to what it was before that install.${again}`}>
+          note={master ? 'The rules and each file go back to what they were before that save. Nothing is installed again.' : 'Each file goes back to what it was before that install.'}>
+          {again ? <p className="preferences-help">{again}</p> : null}
           {master ? (
             <details className="target">
               <summary><span>The rules</span><span className="target-file"><span className="path mono" title={master.path}>{displayPath(master.path, home)}</span><span className="muted">{diffSummary(master.diff)}</span></span><span className="muted" /></summary>
@@ -803,8 +804,8 @@ export function updateCommand(app: Pick<AgentAppView, 'harness' | 'program'>): s
 /** What BMN can say about sessions of an app while it is updated: only the ones it recognises, and never their versions. */
 export function sessionsWords(name: string, count: number): string {
   if (count === 0) return `BMN recognises no ${name} session right now. A session it cannot recognise keeps running what it started with.`
-  return count === 1 ? `BMN currently recognises 1 ${name} session. Restart it to use the updated installation; its running version is not checked.`
-    : `BMN currently recognises ${count} ${name} sessions. Restart them to use the updated installation; their running versions are not checked.`
+  return count === 1 ? `BMN recognises 1 ${name} session. Restart it to use the update; its running version is not checked.`
+    : `BMN recognises ${count} ${name} sessions. Restart them to use the update; their running versions are not checked.`
 }
 
 /** What a check after an update read, said as only that: what the selected program reports now and before. */
@@ -869,7 +870,7 @@ function updateRunEnded(): void {
 /** What the sheet says about a press on Update now that did not run the command; null while there is nothing to say. */
 function pressWords(press: CommandPress, session: string): string | null {
   if (press === 'opening') return `Opening ${session} and waiting for its shell…`
-  if (press === 'not-reading') return `The shell in ${session} did not get ready for a command, so BMN typed nothing there. Copy the command and run it yourself.`
+  if (press === 'not-reading') return `The shell in ${session} did not get ready for a command, so BMN typed nothing. Copy the command and run it yourself.`
   return press === 'failed' ? 'BMN could not open a session, so nothing ran. Press Update now again, or copy the command.' : null
 }
 
@@ -917,6 +918,13 @@ export function UpdateSheet(props: {
     void props.onRun(`Update ${name}`, command, leaving.current.signal).then(stands, () => stands('failed'))
   }
   const said = pressWords(press, `Update ${name}`)
+  // One line each: what Update now does, the other way, and the test to run again (docs/design.md W2).
+  const afterwards = [
+    ...(props.onRun ? ['Update now opens a session, types the command at its prompt and presses Enter; you see and answer what the updater asks.',
+      `Or run it in any terminal. BMN reads the version and where ${name} sends data again at each prompt and on Health.`]
+      : [`Run the command in a terminal. Back on Health, BMN reads the version and where ${name} sends data again.`]),
+    ...(props.hasTest ? ['A loading test made before the update needs to be run again.'] : [])
+  ]
   const copy = (): void => {
     if (command === null) return
     props.onCopied()
@@ -937,11 +945,11 @@ export function UpdateSheet(props: {
         <span>Command</span><span className="mono wrap">{command ?? 'no program found'}</span>
         <span>Open in BMN</span><span>{sessionsWords(name, props.sessions)}</span>
         <span>Afterwards</span>
-        <span>{props.onRun
-          ? `Update now opens a new session and, once its shell shows its prompt, types the command there and presses Enter; you see what the updater does and answer what it asks. Or run it in any terminal. BMN reads the version and where ${name} sends data again each time that session's shell is back at its prompt, and whenever you come back to Health.`
-          : `Run the command in a terminal. When you come back to Health, BMN reads the version and where ${name} sends data again.`}{props.hasTest ? ' A loading test made before the update needs to be run again.' : ''}</span>
+        <span>{afterwards.map((line) => <span key={line}>{line}</span>)}</span>
       </div>
-      <p className="preferences-help">The updater decides what it downloads and replaces, and may ask questions; BMN does not see that in advance and cannot undo it. BMN does not know whether a newer version exists.{props.onRun ? ' BMN knows the prompt by the sign the shell\'s line editor gives; a question that one of your shell\'s start-up files asks with line editing gives the same sign and would get the command as its answer.' : ''}</p>
+      <p className="preferences-help">The updater decides what it downloads and replaces, and may ask; BMN cannot see it first or undo it.</p>
+      <p className="preferences-help">BMN does not know whether a newer version exists.</p>
+      {props.onRun ? <p className="preferences-help">A question that a start-up file asks with line editing looks like the prompt to BMN and would get the command.</p> : null}
       {props.result ? <p role="status">{props.result}</p> : null}
       {said ? <p role="status">{said}</p> : null}
       <div className="inline">
@@ -1022,7 +1030,7 @@ export function contextStateWords(row: Pick<ContextLimitView, 'harness' | 'limit
  */
 export function notHeldWords(roles: RulesSnapshot['readOnlyRoles']): string | null {
   if (roles === null || roles.held.length > 0 || roles.proposed.length === 0) return null
-  return `No role is held to read-only yet, so the check passes a reviewer started with write access. BMN's proposal on Agents › Team holds ${listedRoles(roles.proposed)} to read-only.`
+  return `No role is held to read-only yet, so a reviewer with write access passes. Agents › Team proposes it for ${listedRoles(roles.proposed)}.`
 }
 
 /** What becomes of an agent's own limit in a run BMN checks, in one line (63.1 AC4). */
@@ -1138,15 +1146,20 @@ function ContextLimits(props: { rules: RulesState; action: AppAction | null; set
             ))}
             {action?.kind === 'context-test' && action.harness === row.harness ? (
               <Sheet title={`Test whether ${name} takes a context limit`} action="Run test" busy={rules.busy} onCancel={() => props.setAction(null)}
-                note={`Starts ${name} once in an empty folder under your home folder and asks it for an unusual size. It may send one short request to its provider; nothing of yours is in it. The result is kept for this version.`}
-                onConfirm={() => void rules.run(() => window.aiTerminal.testContextLimit(row.harness)).then(() => props.setAction(null))} />
+                note={`Starts ${name} once in an empty folder under your home folder and asks it for an unusual size.`}
+                onConfirm={() => void rules.run(() => window.aiTerminal.testContextLimit(row.harness)).then(() => props.setAction(null))}>
+                <p className="preferences-help">It may send one short request to its provider, with nothing of yours in it. The result is kept for this version.</p>
+              </Sheet>
             ) : null}
             {action?.kind === 'context-change' && action.harness === row.harness
               ? <ContextSheet row={row} home={snapshot.home} busy={rules.busy} run={rules.run} onDone={() => props.setAction(null)} /> : null}
           </div>
         )
       })}
-      <p className="preferences-help">When an app has a new version and an agent on it has a limit of its own, BMN tests the app by itself, once in an empty folder: Claude Code is asked for its context report, Codex gets one short request to its provider; nothing of yours is in it. BMN changes a limit only on an app version whose test passed, and an agent's own limit waits for the next automatic test. An agent's own limit, set on its page, is added to each run BMN or dev-auto starts with it, on a version whose test passed.</p>
+      <p className="preferences-help">When an agent has a limit of its own, BMN tests each new version of its app by itself, once, in an empty folder.</p>
+      <p className="preferences-help">Claude Code is asked for its context report; Codex sends one short request to its provider. Nothing of yours is in it.</p>
+      <p className="preferences-help">A limit changes only on a version whose test passed; an agent&apos;s own limit waits for the next automatic test.</p>
+      <p className="preferences-help">An agent&apos;s own limit, set on its page, is added to each run BMN or dev-auto starts with it on a tested version.</p>
     </>
   )
 }
@@ -1755,13 +1768,12 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
         )
       })}
       {pending?.kind === 'test' ? <PendingSheet rules={rules} /> : null}
-      <p className="preferences-help">
-        A loading test starts the app once and sends it the rules in one prompt. BMN runs it by itself after an app update or a change to the rules.{withheld.length > 0 ? ` It is off for ${named(withheld)}, which ${withheld.length === 1 ? 'gets' : 'get'} only the public sections.` : ''}
-      </p>
+      <p className="preferences-help">A loading test starts the app once with the rules in one prompt; BMN runs it itself after an update or a rules change.</p>
+      {withheld.length > 0 ? <p className="preferences-help">{`It is off for ${named(withheld)}, which ${withheld.length === 1 ? 'gets' : 'get'} only the public sections.`}</p> : null}
 
       <h4 className="group-head">Agent apps<span className="caption">the program BMN finds, its version and where it sends data</span></h4>
       {snapshot.ownEnvironment ? (
-        <p className="page-note" role="status"><Dot label="Needs you" />BMN could not read your shell's settings ({snapshot.ownEnvironment}), so it looked for the apps with its own. A session may find a program that BMN does not.</p>
+        <p className="page-note" role="status"><Dot label="Needs you" />BMN could not read your shell's settings ({snapshot.ownEnvironment}), so it looked for the apps with its own; a session may find more.</p>
       ) : null}
       {snapshot.apps.map((app) => {
         const name = ROSTER_APP_NAMES[app.harness]
@@ -1818,7 +1830,8 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
           </div>
         )
       })}
-      <p className="preferences-help">Tested versions are the ones BMN was checked against. Every installed version is supported: BMN works out where an app sends data the same way on each and notes the version with every check.</p>
+      <p className="preferences-help">Tested versions are the ones BMN was checked against. Every installed version is supported.</p>
+      <p className="preferences-help">BMN works out where an app sends data the same way on each version, and notes the version with every check.</p>
 
       <SkillsHealth rules={rules} action={action} setAction={setAction} />
 
@@ -1861,9 +1874,10 @@ function HooksHealth(props: { hooks: HooksAtStart | null; home: string | null })
             )
           })}
       {hooks === null ? null : (
-        <p className="preferences-help">
-          Checked at start, {clockTime(hooks.checkedAt)}. BMN adds an entry only where an event has none of its own; an entry it did not write, changed, or inside a matcher is left as it is.
-        </p>
+        <>
+          <p className="preferences-help">Checked at start, {clockTime(hooks.checkedAt)}. BMN adds an entry only where an event has none of its own.</p>
+          <p className="preferences-help">An entry it did not write, a changed one, or one inside a matcher is left as it is.</p>
+        </>
       )}
     </>
   )
