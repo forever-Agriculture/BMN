@@ -161,6 +161,30 @@ describe('awayGrantSection (Story 84.7 AC1)', () => {
     expect(both.lines.find((line) => line.label === 'Rounds')!.text).toBe('80.3-review: 3 of 3 used · 23:05 · 2 in earlier periods')
   })
 
+  it('reads each use against the answer it was made under, keeps an earlier answer, and shows his refused answers (the epic review, findings 5 and 6)', () => {
+    let record = night({ 'run-80': { rounds: 3, 'merge-12': 'pr', 'push-81': 'no' } })
+    record = use(record, 'm1', { item: 'merge-12' }, at(15, 1, 0))
+    record = report(record, { kind: 'outcome', useId: 'm1', result: 'done', text: null }, at(15, 1, 1))
+    const moved = [TERMS[0], { ...TERMS[1], pr: 13 }, TERMS[2]]
+    record = askGrant(record, { runId: 'run-80', sessionId: 's1', agentCli: 'claude', card: card(moved, 'Run run-80') }, at(15, 2, 0)).record
+    const stale = answerGrant(record, { periodId: 'p-1', runId: 'run-80', cardRevision: 1, choices: {}, via: 'telegram', operationKey: 'op-stale' }, at(15, 2, 5))
+    expect(stale.outcome).toBe('refused')
+    record = answerGrant(stale.record, { periodId: 'p-1', runId: 'run-80', cardRevision: 2, choices: { rounds: 0, 'merge-12': 'no', 'push-81': 'no' }, via: 'app', operationKey: 'op-none' }, at(15, 2, 10)).record
+    const row = awayGrantSection(back(record).periods, 'p-1', NOW)!.rows[0]!
+    const text = (label: string) => row.lines.filter((line) => line.label === label).map((line) => line.text)
+    expect(text('Granted')).toEqual(['Wed 22:34 from Telegram · card revision 1', '3 extra rounds per boundary', 'Merge PR 12 in forever-agriculture/bmn at 3f2a9c1', '02:10 here · none · card revision 2'])
+    expect(text('Merge PR 12')).toEqual(['Used 1 of 1 · 01:00', 'Merged · 01:01'])
+    expect(text('Refused')).toEqual(['Your answer from Telegram at 02:05: the card had changed'])
+    expect(row.lines.find((line) => line.text.startsWith('Your answer'))!.source).toBe('BMN\'s record')
+    expect(row.state).toBe('used')
+  })
+
+  it('names a PR-elsewhere item\'s target on its Granted line', () => {
+    const elsewhere = [{ kind: 'pr-elsewhere', id: 'pr-a', repository: 'octo/skills', branch: 'fix/grant', count: 2, proposed: 'yes', reason: 'the skill fix' }]
+    const row = awayGrantSection(back(night({ 'run-80': { 'pr-a': 'yes' } }, { 'run-80': elsewhere })).periods, 'p-1', NOW)!.rows[0]!
+    expect(row.lines.filter((line) => line.label === 'Granted').map((line) => line.text)).toContain('Open or update a PR from fix/grant in octo/skills, up to 2')
+  })
+
   it('keeps its bounds: 10 refusals per run, then "N more"; 20 runs, then "N more · dev-auto runs…"', () => {
     let record = night({ 'run-80': { rounds: 2, 'merge-12': 'no', 'push-81': 'no' } })
     for (let index = 0; index < 12; index += 1) record = useGrant(read(record), AWAY, { runId: 'run-80', sessionId: 's1', id: `x${index}`, kind: 'action', item: 'push-81' }, at(15, 1, index)).record

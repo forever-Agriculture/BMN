@@ -1034,19 +1034,24 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   boundary (2, 3 or 4) or one of three named actions with its target: merge a pull request (this PR at a head SHA,
   or up to N of this run's PRs when their required checks are green), push a branch to the default branch, or open
   or update a pull request in another repository (from a named branch, or a named PR). `--nothing` says the run needs nothing. BMN binds the asking
-  session itself. A second ask for the same run is a new revision, and his earlier answer holds until he answers
+  session itself; it does not check that a session owns the run id it names, so a new lead resuming the run
+  asks and uses under that id. A second ask for the same run is a new revision, and his earlier answer holds until he answers
   it. Never on a card: force pushes, deletions, releases, publishes, killing BMN, credentials and acceptance
   changes.
 - **The answer.** Only the window and Telegram answer; `grant.answer` on the socket refuses every token, the
   owner's CLI token included. An answer is bound to the period, the run, the terms shown and the card's revision;
-  a changed, withdrawn, already answered or earlier-period card is refused and nothing changes, and the same
-  operation key returns the first answer.
+  a changed, withdrawn, already answered or earlier-period card is refused and no grant changes (his refused
+  answer is kept for the morning as BMN's record, a tap on Telegram that only moves through a card is not), and
+  the same operation key returns the first answer.
 - **Reading and using it.** `bmn grant --run ID` reads the grant fresh each time: its terms, the period and what
   is left, or "No grant" and why (none answered, Back, a new period, a malformed row, an unreadable store). Read
   it right before each step that uses it; a grant never comes from a handoff. `bmn grant use --run ID --use-id U
   (--boundary B | --item I)` records one extra round or one use before the step runs; the same use id returns the
-  first record (after Back, a retried action is refused and waits), and a refused use means the step waits. Rounds
-  count per boundary across every period: those of periods no longer kept are carried in the record.
+  first record (after Back, a retried action is refused and waits), and a refused use means the step waits. A use id
+  is the run's own within its period: another run may use the same id, and an id from an earlier period is a new use
+  under the grant in force. An item counts its uses under the answer in force, so his answer to a new revision is a
+  new grant; his earlier answers stay as history. Rounds count per boundary across every period: those of periods no
+  longer kept are carried in the record and never dropped; past its ceiling, a new round is refused.
 - **Reporting what happened.** `bmn grant report --run ID` keeps what the agent saw for his morning summary, and
   grants nothing: `--use-id U --result R` gives a recorded use's outcome (a round passed, failed or blocked; an
   action done, refused, with `--text` saying why, or uncertain while the agent reads the target's state; the latest

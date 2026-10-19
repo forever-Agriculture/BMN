@@ -149,6 +149,11 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     phase('answer with the keyboard')
     const firstCard = dialog.locator('article.grant-card.request').first()
     await firstCard.locator('.segmented').nth(1).locator('[role="radio"]', { hasText: /^No$/ }).click()
+    // Another run's change refreshes every card; his unsent choice must stay (the epic review, finding 1).
+    const other = bmn(['grant', 'ask', '--run', 'run-77', '--nothing', '--title', 'Epic 77 · refresh'])
+    await until(async () => (await dialog.locator('.grant-nothing').innerText()).includes('Epic 77'), 'the refresh drawn')
+    const kept = await firstCard.locator('.segmented').nth(1).locator('[role="radio"][aria-checked="true"]').innerText()
+    check('an unsent choice stays when another run\'s change refreshes the cards (AC2)', other.startsWith('Recorded: run run-77 needs nothing') && kept === 'No', { other: other.trim(), kept })
     const words = await firstCard.locator('.actions button.primary').innerText()
     await firstCard.locator('.actions button.primary').click()
     await until(async () => (await dialog.locator('article.grant-card.request').count()) === 1, 'the first card answered')

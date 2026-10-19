@@ -160,7 +160,7 @@ export function grantEnding(period: GrantPeriod, run: GrantRun, now: Date): stri
 export class TelegramGrantCards {
   private readonly drawn = new Map<string, Drawn>()
   private readonly tokens = new Map<string, { at: string; revision: number; action: Action }>()
-  private readonly stale = new Map<string, { at: string; revision: number }>()
+  private readonly stale = new Map<string, { at: string; revision: number; action: Action }>()
   private chain: Promise<void> = Promise.resolve()
   private wake: NodeJS.Timeout | null = null
   private disposed = false
@@ -340,7 +340,7 @@ export class TelegramGrantCards {
     for (const token of card.tokens) {
       const entry = this.tokens.get(token)
       this.tokens.delete(token)
-      if (keepStale && entry !== undefined) this.stale.set(token, { at: entry.at, revision: entry.revision })
+      if (keepStale && entry !== undefined) this.stale.set(token, { at: entry.at, revision: entry.revision, action: entry.action })
     }
     card.tokens = []
     for (const token of this.stale.keys()) {
@@ -368,12 +368,22 @@ export class TelegramGrantCards {
     }
     const { period, run } = found
     this.retire(card, false)
+    // A grant or a choice tapped on a card that changed or closed was his answer: BMN refuses it and keeps the refusal
+    // for the morning (the notes §4); a tap that only moves through the card is not an answer.
+    const tapped = entry ?? old
+    const refused = async (): Promise<void> => {
+      if (tapped?.action === undefined || (tapped.action.type !== 'grant' && tapped.action.type !== 'pick')) return
+      const choices = tapped.action.type === 'grant' ? tapped.action.choices : {}
+      await this.deps.answer({ periodId: period.periodId, runId: run.runId, cardRevision: tapped.revision, choices, via: 'telegram', operationKey: `telegram:${tap.callbackId}` }).catch(() => undefined)
+    }
     if (!isOpenPeriod(period) || run.card.state !== 'open') {
+      await refused()
       await toast('This button is no longer active.')
       await this.end(connector, card, period, run)
       return
     }
     if (entry === undefined || entry.revision !== run.card.revision) {
+      await refused()
       await this.changed(connector, card, run, tap)
       return
     }

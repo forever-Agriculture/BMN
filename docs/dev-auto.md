@@ -21,6 +21,25 @@ identity, never by text, and only while the record is in the list. Lines without
 are known only by their text; a line that kept only `(bmn: KEY)` proves no record and shows apart. dev-auto reads the away state with `bmn away --status --json`, which
 gives an agent the state, since and revision, never your note.
 
+## The Away grant
+
+When you say you are leaving, or press Away, BMN tells each running session once. A dev-auto run with
+authorised work left for the night then asks you on one card, with `bmn grant ask`, for only what that
+work needs: extra repair rounds per boundary (2, 3 or 4) and named actions with their targets, such as
+merging one of its PRs. A run that needs nothing says so. You answer in the window or on Telegram; an
+unanswered card grants nothing, and every grant ends when you are back.
+
+The skill's `references/away-grant.md` says how a run uses it. Right before each step a grant would pay
+for, it reads the grant fresh (`scripts/check.py grant`, which reads `bmn grant --run`), never from the
+handoff. It records the use first with `bmn grant use`; a refused use means the step waits as it would
+without a grant. A granted round at a parked boundary still needs new evidence and a method the consultant
+agrees, recorded first. Before the last granted round the run puts the whole boundary to the consultant
+once (the step back), and when the rounds are used the boundary parks BLOCKED with that consult's options.
+Rounds count per boundary across resumes, new leads and Away periods. After each step the run reports
+what it did with `bmn grant report`, and the morning summary shows those reports apart from BMN's own
+record. What code enforces (who answers, expiry, the counts it records) and what is the run's rule are in
+[agent-control.md](agent-control.md), "The Away grant".
+
 
 ## Morning digest
 

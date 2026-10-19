@@ -92,6 +92,23 @@ describe('readGrantRecord (84.3 AC4: a malformed row is no grant)', () => {
   })
 })
 
+describe('stored authority read strictly (the epic review, finding 2)', () => {
+  it('reads a choice its own term does not offer, or a use with no boundary, item or revision, as no grant', () => {
+    const fixed = granted(away(asked(leaving(), { terms: [{ kind: 'merge', id: 'merge-12', repository: 'o/r', pr: 12, headSha: '3f2a9c1', proposed: 'pr', reason: 'r' }] })), { 'merge-12': 'pr' })
+    const green = JSON.parse(JSON.stringify(fixed)) as { periods: Array<{ runs: Array<{ answer: { choices: Record<string, unknown> } }> }> }
+    green.periods[0]!.runs[0]!.answer.choices['merge-12'] = 'green'
+    expect(readGrantRecord(JSON.stringify(green)).state).toBe('unknown')
+    const used = useGrant({ state: 'read', record: granted(away(asked()), all) }, AWAY, { runId: 'run-80', sessionId: 's', id: 'u1', kind: 'round', boundary: '80.3-review' }, T1).record
+    expect(used.periods[0]!.uses[0]).toMatchObject({ boundary: '80.3-review', cardRevision: 1 })
+    const damages: Array<(use: Record<string, unknown>) => void> = [(use) => { delete use.boundary }, (use) => { use.boundary = 7 }, (use) => { delete use.cardRevision }, (use) => { use.kind = 'action' }]
+    for (const damage of damages) {
+      const copy = JSON.parse(JSON.stringify(used)) as { periods: Array<{ uses: Array<Record<string, unknown>> }> }
+      damage(copy.periods[0]!.uses[0]!)
+      expect(readGrantRecord(JSON.stringify(copy)).state).toBe('unknown')
+    }
+  })
+})
+
 describe('parseGrantCardInput (R84-FR1, FR8; 84.6 AC5)', () => {
   it('takes rounds and the fixed action kinds, numbering items without an id', () => {
     const parsed = card({ terms: [{ kind: 'pr-elsewhere', repository: 'o/dev-auto', branch: 'fix/skill', proposed: 'no', reason: 'a skill fix' }, { kind: 'rounds', proposed: 2, reason: 'one boundary' }] })
@@ -245,7 +262,11 @@ describe('answerGrant (84.3 AC2–AC3)', () => {
     expect(answer({ choices: { ...all, rounds: 5 } })).toMatchObject({ outcome: 'refused', reason: 'invalid' })
     expect(answer({ choices: { ...all, extra: 'yes' } })).toMatchObject({ outcome: 'refused', reason: 'invalid' })
     expect(answer({ periodId: 'p-0' })).toMatchObject({ outcome: 'refused', reason: 'no-card' })
-    for (const refused of [answer({ cardRevision: 2 }), answer({ periodId: 'p-0' })]) expect(refused.record).toBe(open)
+    // A refused answer of his is kept for the morning and changes no grant; one with no card to bind to keeps nothing.
+    const stale = answer({ cardRevision: 2 })
+    expect(stale.record.periods.at(-1)!.refusals).toEqual([{ runId: 'run-80', kind: 'answer', boundary: null, item: null, reason: 'changed', via: 'app', at: T1 }])
+    expect(stale.record.periods.at(-1)!.runs).toEqual(open.periods.at(-1)!.runs)
+    expect(answer({ periodId: 'p-0' }).record).toBe(open)
   })
 
   it('refuses an answer after Back or after a cancelled departure', () => {
@@ -307,7 +328,7 @@ describe('useGrant (R84-FR3, FR8)', () => {
     }
     const refused = useGrant(read(record), AWAY, round('u4'), T1)
     expect(refused).toMatchObject({ outcome: 'refused', reason: 'none left' })
-    expect(refused.record.periods.at(-1)!.refusals).toEqual([{ runId: 'run-80', kind: 'round', boundary: '80.3-review', item: null, reason: 'none left', at: T1 }])
+    expect(refused.record.periods.at(-1)!.refusals).toEqual([{ runId: 'run-80', kind: 'round', boundary: '80.3-review', item: null, reason: 'none left', via: null, at: T1 }])
     expect(useGrant(read(record), AWAY, round('u5', '80.5-acceptance'), T1)).toMatchObject({ outcome: 'recorded', left: 2 })
   })
 
@@ -369,6 +390,50 @@ describe('useGrant (R84-FR3, FR8)', () => {
     for (const carried of [[{ runId: 'run-80', boundary: '80.3-review', rounds: 0 }], [{ runId: 'run-80', rounds: 2 }], 'x']) {
       expect(readGrantRecord(JSON.stringify({ ...third.record, carried }))).toMatchObject({ state: 'unknown', reason: 'the grant record has carried rounds it cannot read' })
     }
+  })
+
+  it('reads a use id as the run\'s own within its period: an earlier period\'s id needs the grant in force, two runs may share one (the epic review, finding 3)', () => {
+    const merge = (id: string) => ({ runId: 'run-80', sessionId: 's', id, kind: 'action' as const, item: 'merge-12' })
+    let record = granted(away(asked()), all)
+    record = useGrant(read(record), AWAY, merge('m1'), T1).record
+    record = followAwayChange(record, AWAY, BACK, { to: 'back', source: 'app', outcome: 'changed' }, T2).record
+    record = startDeparture(record, { source: 'agent', agentSessionId: 's', periodId: 'p-2' }, 'back', T2).record
+    record = askGrant(record, { runId: 'run-80', sessionId: 's', agentCli: 'claude', card: card() }, T2).record
+    const second = { ...AWAY, periodId: 'p-2' }
+    record = followAwayChange(record, BACK, second, { to: 'away', source: 'agent', outcome: 'changed' }, T2).record
+    const answer = (choices: Record<string, unknown>) => answerGrant(record, { periodId: 'p-2', runId: 'run-80', cardRevision: 1, choices, via: 'app', operationKey: 'op-p2' }, T2).record
+    expect(useGrant(read(answer({ ...all, 'merge-12': 'no', 'push-81': 'no' })), second, merge('m1'), T2)).toMatchObject({ outcome: 'refused', reason: 'not on the card' })
+    const retried = useGrant(read(answer(all)), second, merge('m1'), T2)
+    expect(retried).toMatchObject({ outcome: 'recorded', left: 0 })
+    expect(useGrant(read(retried.record), second, merge('m2'), T2)).toMatchObject({ outcome: 'refused', reason: 'none left' })
+    const both = granted(granted(away(asked(asked(leaving()), {}, 'run-81')), all), all, 'run-81', 'op-81')
+    const first = useGrant(read(both), AWAY, round('80.3-review:round-1'), T1)
+    expect(first.outcome).toBe('recorded')
+    expect(useGrant(read(first.record), AWAY, { ...round('80.3-review:round-1'), runId: 'run-81' }, T1)).toMatchObject({ outcome: 'recorded', left: 2 })
+    expect(reportGrant(read(first.record), { runId: 'run-81', sessionId: 's', kind: 'outcome', useId: '80.3-review:round-1', result: 'passed', text: null }, T1))
+      .toMatchObject({ outcome: 'refused', reason: 'that use id was recorded for another run' })
+  })
+
+  it('never drops a carried round count, and past its ceiling refuses new rounds (the epic review, finding 4)', () => {
+    const record = granted(away(asked()), all)
+    const carried = [{ runId: 'run-80', boundary: '80.3-review', rounds: 3 }, ...Array.from({ length: 1999 }, (_, index) => ({ runId: `other-${index}`, boundary: 'b', rounds: 1 }))]
+    const full = { ...record, carried }
+    expect(readGrantRecord(JSON.stringify(full))).toEqual({ state: 'read', record: full })
+    const status = grantStatus(read(full), AWAY, 'run-80')
+    expect(status.active && status.grant.roundsUsed).toEqual({ '80.3-review': 3 })
+    expect(useGrant(read(full), AWAY, round('u1', '80.5-acceptance'), T1)).toMatchObject({ outcome: 'refused', reason: 'BMN holds as many carried round counts as it keeps' })
+  })
+
+  it('counts an item\'s uses under the answer in force: his answer to a new revision is a new grant, the earlier answer kept (the epic review, finding 5)', () => {
+    let record = granted(away(asked()), all)
+    record = useGrant(read(record), AWAY, { runId: 'run-80', sessionId: 's', id: 'm1', kind: 'action', item: 'merge-12' }, T1).record
+    record = asked(record, { terms: [{ ...CARD.terms[1], pr: 13 }] })
+    record = granted(record, { 'merge-12': 'pr' }, 'run-80', 'op-2')
+    const status = grantStatus(read(record), AWAY, 'run-80')
+    expect(status.active && status.grant.items.map((item) => [item.term.id, item.term.kind === 'merge' ? item.term.pr : null, item.left])).toEqual([['merge-12', 13, 1]])
+    const run = openGrantPeriod(record)!.runs[0]!
+    expect([run.earlier.map((answer) => answer.cardRevision), run.answer!.cardRevision]).toEqual([[1], 2])
+    expect(readGrantRecord(JSON.stringify(record))).toEqual({ state: 'read', record })
   })
 
   it('refuses an action retried under its use id after Back, and keeps a running round (R84-FR7)', () => {

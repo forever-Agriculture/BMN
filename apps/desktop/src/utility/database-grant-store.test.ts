@@ -49,22 +49,27 @@ describe('grant store (Story 84.3)', () => {
     expect(readGrantRow(database)).toMatchObject({ state: 'read', record: { periods: [{ periodId: away.record.periodId, state: 'away', startedBy: 'app' }] } })
   })
 
-  it('stores an answer only from the owner\'s call, bound to period, run and revision; refusals leave the row as it was (AC2, AC3)', () => {
+  it('stores an answer only from the owner\'s call, bound to period, run and revision; a refusal changes no grant (AC2, AC3)', () => {
     const periodId = leaveAway(database, { source: 'agent', agentSessionId: 's-builder' }, T0).record.periods[0]!.periodId
     expect(ask().outcome).toBe('opened')
     const answer = (over: Record<string, unknown> = {}) => answerGrantCard(database, {
       periodId, runId: 'run-80', cardRevision: 1, choices: { rounds: 3 }, via: 'app', operationKey: 'op-1', ...over
     }, T1)
-    for (const over of [{ cardRevision: 2 }, { periodId: 'p-0' }, { choices: { rounds: 9 } }]) {
-      const before = raw(database, GRANT_RECORD_KEY)
-      expect(answer(over).outcome).toBe('refused')
-      expect(raw(database, GRANT_RECORD_KEY)).toBe(before)
-    }
+    // No card to bind to: nothing is kept. His refused answers on this card are kept for the morning, granting nothing.
+    const before = raw(database, GRANT_RECORD_KEY)
+    expect(answer({ periodId: 'p-0' }).outcome).toBe('refused')
+    expect(raw(database, GRANT_RECORD_KEY)).toBe(before)
+    for (const over of [{ cardRevision: 2 }, { choices: { rounds: 9 } }]) expect(answer(over).outcome).toBe('refused')
+    const kept = getGrants(database).read
+    expect(kept.state === 'read' && kept.record.periods[0]!.refusals.map((item) => [item.kind, item.reason, item.via])).toEqual([['answer', 'changed', 'app'], ['answer', 'invalid', 'app']])
+    expect(kept.state === 'read' && kept.record.periods[0]!.runs[0]!.answer).toBeNull()
     expect(answer().outcome).toBe('granted')
     const after = raw(database, GRANT_RECORD_KEY)
     expect(answer().outcome).toBe('repeated')
     expect(answer({ operationKey: 'op-2', via: 'telegram' })).toMatchObject({ outcome: 'refused', reason: 'answered' })
-    expect(raw(database, GRANT_RECORD_KEY)).toBe(after)
+    const later = JSON.parse(raw(database, GRANT_RECORD_KEY)!) as { periods: Array<{ runs: unknown[]; refusals: unknown[] }> }
+    expect(later.periods[0]!.runs).toEqual((JSON.parse(after!) as typeof later).periods[0]!.runs)
+    expect(later.periods[0]!.refusals.at(-1)).toMatchObject({ kind: 'answer', reason: 'answered', via: 'telegram' })
   })
 
   it('ends the grants at Back and withdraws open cards; a later answer is refused (AC4)', () => {

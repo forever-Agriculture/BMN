@@ -53,8 +53,9 @@ function GrantCard(props: {
   const [choices, setChoices] = useState<Record<string, GrantChoice>>(() => grantProposedChoices(card.terms))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // A new revision draws the card again from its own proposals (the notes §1, changed while open).
-  useEffect(() => { setChoices(grantProposedChoices(card.terms)); setError(null) }, [run.runId, card.revision, card.terms])
+  // A new revision draws the card again from its own proposals (the notes §1, changed while open). Every refresh reads the
+  // terms anew, so only the period, run and revision say it is another card: his unsent choices stay through the rest.
+  useEffect(() => { setChoices(grantProposedChoices(card.terms)); setError(null) }, [props.periodId, run.runId, card.revision])
   const open = card.state === 'open'
   const place = card.sessionId === null ? { workspace: 'BMN', session: 'bmn grant' } : props.place(card.sessionId)
   const asker = card.sessionId === null ? 'the owner\'s CLI' : props.sessionName(card.sessionId) ?? 'a session'

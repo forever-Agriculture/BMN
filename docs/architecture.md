@@ -147,8 +147,10 @@ enforces the policy: GitHub's repository rules and the hook's deny-only command 
 
 **The Away grant is the owner's answer; agents only ask and read it (Epic 84).** One `app_setting` row,
 `night-grant-v1`, keeps the current and the previous departure: its state (leaving, away, ended or cancelled), each
-run's latest card, the owner's answer bound to the card revision and terms he saw, each use, each refusal BMN made
-(after Back too, with the period that ended) and each agent report of a step's outcome. It changes in the
+run's latest card, the owner's answer bound to the card revision and terms he saw (his earlier answers that period
+kept as history), each use with the revision it was used under, each refusal BMN made (of a use or of his answer;
+after Back too, with the period that ended) and each agent report of a step's outcome. The rounds of a departure no
+longer kept are carried as counts per run and boundary, never dropped. It changes in the
 same database-worker transaction as `owner-away-v1`, whose shape is unchanged: a departure made by `bmn away
 --leaving` creates the period id that Away then carries, and Back ends the period. Agents ask and read through the
 socket (`grant.ask`, `grant.status`, `grant.use`, `grant.report`); `grant.answer` there refuses every caller, and answers come only

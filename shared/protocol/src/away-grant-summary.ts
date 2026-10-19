@@ -6,7 +6,9 @@ import {
   type GrantActionTerm,
   type GrantCarried,
   type GrantChoice,
+  type GrantAnswer,
   type GrantPeriod,
+  type GrantRefusal,
   type GrantReport,
   type GrantRun,
   type GrantTerm,
@@ -47,7 +49,7 @@ function grantedWords(term: GrantTerm, choice: GrantChoice): string {
       : `Merge PR ${term.pr} in ${term.repository}${term.headSha === null ? '' : ` at ${term.headSha.slice(0, 7)}`}`
   }
   if (term.kind === 'push-default') return `Push ${term.branch} to the default branch in ${term.repository}${term.count > 1 ? `, up to ${term.count}` : ''}`
-  return `Open or update a PR in ${term.repository}${term.count > 1 ? `, up to ${term.count}` : ''}`
+  return `${grantTermLabel(term)}${term.count > 1 ? `, up to ${term.count}` : ''}`
 }
 
 /** An action item's own label: "Merge PR 12", "Merge when green", "Push to the default branch", "PR in NAME". */
@@ -73,6 +75,15 @@ export function awayGrantRefusalWords(reason: string): string {
   return reason
 }
 
+/** A refused answer of his own, in the notes' words: "Your answer from Telegram at 22:39: the card had changed". */
+function answerRefusalWords(refusal: GrantRefusal): string {
+  const why = refusal.reason === 'changed' ? 'the card had changed'
+    : refusal.reason === 'withdrawn-back' ? 'you were back'
+      : refusal.reason === 'withdrawn-not-leaving' ? 'you did not leave'
+        : refusal.reason === 'answered' ? 'it was already answered' : 'BMN could not save it'
+  return `Your answer ${refusal.via === 'telegram' ? 'from Telegram' : 'here'} at ${clock(refusal.at)}: ${why}`
+}
+
 /** The round outcome the agent reported, as the notes word it. */
 function roundOutcomeWords(boundary: string, round: number, report: GrantReport): string {
   const words = report.result === 'passed' ? `${boundary} passed after round ${round}`
@@ -88,27 +99,39 @@ function roundOutcomeWords(boundary: string, round: number, report: GrantReport)
 function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPeriod[], carried: readonly GrantCarried[], now: Date): { row: AwayGrantRow; granted: boolean } {
   const lines: AwayGrantLine[] = []
   const add = (label: string, text: string, source: AwayGrantSource): void => { lines.push({ label, text, source }) }
+  // Every answer he gave this period, oldest first: a use is read against the answer it was recorded under.
+  const answers: GrantAnswer[] = [...run.earlier, ...(run.answer === null ? [] : [run.answer])]
   const answer = run.answer
+  const roundsOf = (given: GrantAnswer): number => given.terms.some((term) => term.kind === 'rounds') && typeof given.choices.rounds === 'number' ? given.choices.rounds : 0
+  const itemsOf = (given: GrantAnswer): GrantActionTerm[] => given.terms.filter((term): term is GrantActionTerm => term.kind !== 'rounds' && !isNo(given.choices[term.id]))
+  const grants = (given: GrantAnswer): boolean => roundsOf(given) > 0 || itemsOf(given).length > 0
   const terms = answer?.terms ?? run.card.terms
   const choices = answer?.choices ?? {}
-  const roundsTerm = terms.find((term) => term.kind === 'rounds')
-  const rounds = answer !== null && roundsTerm !== undefined && typeof choices.rounds === 'number' ? choices.rounds : 0
-  const items = terms.filter((term): term is GrantActionTerm => term.kind !== 'rounds' && answer !== null && !isNo(choices[term.id]))
+  const roundsTerm = terms.find((term) => term.kind === 'rounds') ?? answers.flatMap((given) => given.terms).find((term) => term.kind === 'rounds')
+  const rounds = answer === null ? 0 : roundsOf(answer)
+  const roundsShown = Math.max(0, ...answers.map(roundsOf))
   const notGranted = terms.filter((term) => answer === null || (term.kind === 'rounds' ? rounds === 0 : isNo(choices[term.id])))
-  const granted = rounds > 0 || items.length > 0
+  const granted = answers.some(grants)
   const uses = period.uses.filter((use) => use.runId === run.runId)
   const reports = period.reports.filter((report) => report.runId === run.runId)
   const refusals = period.refusals.filter((refusal) => refusal.runId === run.runId)
-  const termOf = (id: string | null): GrantActionTerm | undefined => terms.find((term): term is GrantActionTerm => term.kind !== 'rounds' && term.id === id)
+  const answerFor = (revision: number | undefined): GrantAnswer | undefined => answers.find((given) => given.cardRevision === revision)
+  const termOf = (id: string | null, revision?: number): GrantActionTerm | undefined =>
+    [answerFor(revision)?.terms ?? [], terms, ...answers.map((given) => given.terms).reverse()].flat()
+      .find((term): term is GrantActionTerm => term.kind !== 'rounds' && term.id === id)
+  const choiceOf = (id: string | null, revision?: number): GrantChoice | undefined => id === null ? undefined : (answerFor(revision) ?? answer)?.choices[id]
 
-  // Granted, or why nothing was: his answer with when and where, or the card's state.
-  if (answer !== null) {
-    add('Granted', `${awayMomentWords(answer.at, now)} ${answer.via === 'telegram' ? 'from Telegram' : 'here'}${granted ? '' : ' · none'}`, AWAY_GRANT_RECORD)
-    if (rounds > 0) add('Granted', grantedWords(roundsTerm!, rounds), AWAY_GRANT_RECORD)
-    for (const term of items) add('Granted', grantedWords(term, choices[term.id]!), AWAY_GRANT_RECORD)
-  } else if (run.card.state === 'nothing') {
+  // Granted, or why nothing was: each answer with when and where, or the card's state.
+  for (const given of answers) {
+    const revision = answers.length > 1 ? ` · card revision ${given.cardRevision}` : ''
+    add('Granted', `${awayMomentWords(given.at, now)} ${given.via === 'telegram' ? 'from Telegram' : 'here'}${grants(given) ? '' : ' · none'}${revision}`, AWAY_GRANT_RECORD)
+    const rounds = given.terms.find((term) => term.kind === 'rounds')
+    if (roundsOf(given) > 0) add('Granted', grantedWords(rounds!, roundsOf(given)), AWAY_GRANT_RECORD)
+    for (const term of itemsOf(given)) add('Granted', grantedWords(term, given.choices[term.id]!), AWAY_GRANT_RECORD)
+  }
+  if (answers.length === 0 && run.card.state === 'nothing') {
     add('Granted', 'Nothing asked: the run needed nothing for the night', AWAY_GRANT_RECORD)
-  } else {
+  } else if (answers.length === 0) {
     const withdrawn = run.card.state === 'withdrawn' ? `; withdrawn ${run.card.withdrawnFor === 'not-leaving' ? 'when you did not leave' : 'at back'}` : ''
     add('Granted', `Nothing: card unanswered${withdrawn}`, AWAY_GRANT_RECORD)
   }
@@ -132,8 +155,8 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
     const used = before(boundary) + mine.length
     const left = Math.max(0, rounds - used)
     const earlierWords = before(boundary) > 0 ? ` · ${before(boundary)} in ${periodsBefore(boundary) > 1 ? 'earlier periods' : 'an earlier period'}` : ''
-    add('Rounds', `${boundary}: ${used} of ${rounds} used${left > 0 ? `, ${left} left` : ''} · ${mine.map((use) => clock(use.at)).join(', ')}${earlierWords}`, AWAY_GRANT_RECORD)
-    summaryParts.push(`${summaryParts.length === 0 ? 'Rounds ' : ''}${used} of ${rounds} at ${boundary}`)
+    add('Rounds', `${boundary}: ${used} of ${roundsShown} used${left > 0 ? `, ${left} left` : ''} · ${mine.map((use) => clock(use.at)).join(', ')}${earlierWords}`, AWAY_GRANT_RECORD)
+    summaryParts.push(`${summaryParts.length === 0 ? 'Rounds ' : ''}${used} of ${roundsShown} at ${boundary}`)
   }
   if (boundaries.length > AWAY_GRANT_LIMITS.boundaries) add('Rounds', `${boundaries.length - AWAY_GRANT_LIMITS.boundaries} more boundaries`, AWAY_GRANT_RECORD)
   const roundsPart = summaryParts.join(', ')
@@ -150,31 +173,36 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
   // Each granted item: BMN's record of its uses, then what the agent reported each one did.
   const actionUses = uses.filter((use) => use.kind === 'action')
   const itemParts: string[] = []
-  for (const term of items) {
-    const label = itemLabel(term, term.id, choices[term.id])
-    const mine = actionUses.filter((use) => use.item === term.id)
-    const count = term.kind === 'merge' ? (choices[term.id] === 'green' ? term.upTo ?? 1 : 1) : term.count
-    if (mine.length === 0) continue
-    add(label, `Used ${mine.length} of ${count} · ${mine.map((use) => clock(use.at)).join(', ')}`, AWAY_GRANT_RECORD)
-    for (const use of mine) {
-      const report = latest(use)
-      if (report?.result === 'done') add(label, `${report.text ?? doneWords(term)} · ${clock(report.at)}`, AWAY_GRANT_REPORT)
+  for (const given of answers) {
+    for (const term of itemsOf(given)) {
+      const choice = given.choices[term.id]!
+      const label = itemLabel(term, term.id, choice)
+      const mine = actionUses.filter((use) => use.item === term.id && use.cardRevision === given.cardRevision)
+      const count = term.kind === 'merge' ? (choice === 'green' ? term.upTo ?? 1 : 1) : term.count
+      if (mine.length === 0) continue
+      add(label, `Used ${mine.length} of ${count} · ${mine.map((use) => clock(use.at)).join(', ')}`, AWAY_GRANT_RECORD)
+      for (const use of mine) {
+        const report = latest(use)
+        if (report?.result === 'done') add(label, `${report.text ?? doneWords(term)} · ${clock(report.at)}`, AWAY_GRANT_REPORT)
+      }
+      itemParts.push(`${grantShortName(term, choice)} used${count > 1 ? ` ${mine.length} of ${count}` : ''}`)
     }
-    itemParts.push(`${grantShortName(term, choices[term.id]!)} used${count > 1 ? ` ${mine.length} of ${count}` : ''}`)
   }
 
   // Refused: BMN's refusals and the steps the agent reported refused, oldest first.
   const refused: Array<{ at: string; text: string; source: AwayGrantSource }> = []
   for (const refusal of refusals) {
+    if (refusal.kind === 'answer') { refused.push({ at: refusal.at, text: answerRefusalWords(refusal), source: AWAY_GRANT_RECORD }); continue }
     const what = refusal.kind === 'round' && refusal.boundary !== null
       ? `${refusal.boundary}, a ${ordinal(before(refusal.boundary) + roundUses.filter((use) => use.boundary === refusal.boundary && use.at <= refusal.at).length + 1)} round`
-      : itemLabel(termOf(refusal.item), refusal.item, refusal.item === null ? undefined : choices[refusal.item])
+      : itemLabel(termOf(refusal.item), refusal.item, choiceOf(refusal.item))
     refused.push({ at: refusal.at, text: `${what}: ${awayGrantRefusalWords(refusal.reason)} · ${clock(refusal.at)}`, source: AWAY_GRANT_RECORD })
   }
   for (const report of reports) {
     const outcomeRefused = report.kind === 'outcome' && report.result === 'refused' && actionUses.some((use) => use.id === report.useId && latest(use) === report)
     if (report.kind !== 'refused' && !outcomeRefused) continue
-    refused.push({ at: report.at, text: `${itemLabel(termOf(report.item), report.item, report.item === null ? undefined : choices[report.item])}: ${report.text ?? 'refused'} · ${clock(report.at)}`, source: AWAY_GRANT_REPORT })
+    const used = report.useId === null ? undefined : actionUses.find((use) => use.id === report.useId)
+    refused.push({ at: report.at, text: `${itemLabel(termOf(report.item, used?.cardRevision), report.item, choiceOf(report.item, used?.cardRevision))}: ${report.text ?? 'refused'} · ${clock(report.at)}`, source: AWAY_GRANT_REPORT })
   }
   refused.sort((a, b) => a.at.localeCompare(b.at))
   for (const item of refused.slice(0, AWAY_GRANT_LIMITS.refusals)) add('Refused', item.text, item.source)
@@ -187,7 +215,7 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
     const report = latest(use)
     if (report !== undefined && report.result !== 'uncertain') continue
     missing += 1
-    const what = use.kind === 'round' && use.boundary !== null ? `${use.boundary}, round ${roundNumber.get(use.id)}` : itemLabel(termOf(use.item), use.item, use.item === null ? undefined : choices[use.item])
+    const what = use.kind === 'round' && use.boundary !== null ? `${use.boundary}, round ${roundNumber.get(use.id)}` : itemLabel(termOf(use.item, use.cardRevision), use.item, choiceOf(use.item, use.cardRevision))
     add('Missing', `${what}: ${report === undefined ? `no outcome reported${open ? ' yet' : ''}` : 'outcome uncertain'}`, AWAY_GRANT_RECORD)
   }
   if (period.state === 'ended' && period.endedAt !== null) add('Ended', `${awayMomentWords(period.endedAt, now)} at back`, AWAY_GRANT_RECORD)
@@ -195,7 +223,8 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
   // The row's one line is BMN's record only, so it needs no label (the notes §4 Row).
   let text: string
   let state: AwayGrantRow['state']
-  if (answer === null) {
+  const shown = [...answers].reverse().find(grants)
+  if (answers.length === 0) {
     state = 'none'
     text = run.card.state === 'nothing' ? 'Needed nothing'
       : run.card.state === 'withdrawn' ? `Card unanswered; withdrawn ${run.card.withdrawnFor === 'not-leaving' ? 'when you did not leave' : 'at back'}` : 'Card unanswered'
@@ -204,7 +233,7 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
     text = 'You granted none'
   } else if (uses.length === 0) {
     state = 'unused'
-    text = `${[...(rounds > 0 ? [grantShortName(roundsTerm!, rounds)] : []), ...items.map((term) => grantShortName(term, choices[term.id]!))].join(', ')} granted; none used`
+    text = `${[...(roundsOf(shown!) > 0 ? [grantShortName(roundsTerm!, roundsOf(shown!))] : []), ...itemsOf(shown!).map((term) => grantShortName(term, shown!.choices[term.id]!))].join(', ')} granted; none used`
   } else {
     state = 'used'
     text = [roundsPart, ...itemParts].filter(Boolean).join(' · ')

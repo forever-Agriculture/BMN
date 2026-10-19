@@ -399,7 +399,8 @@ again, and **Not leaving** withdraws the open cards. The same cards reach Telegr
 ([telegram.md](telegram.md)); agents read their grant with `bmn grant` ([agent-control.md](agent-control.md#the-away-grant)).
 In the morning, **While you were away** adds **Granted** after Finished when a run held a grant: one row per run
 that asked, used, unused or none, with one line of what it used; open a row for what you granted and not, the
-rounds per boundary, each action's uses, what was refused and any step with no outcome, each line marked
+rounds per boundary, each action's uses, what was refused (an answer of yours a changed card refused too) and any
+step with no outcome, each line marked
 "BMN's record" or "the agent's report".
 
 Preferences → Integrations › **Rules** keeps one rules text and writes it into each agent app's own rules file

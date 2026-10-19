@@ -80,7 +80,8 @@ export function answerGrantCard(database: DatabaseConnection, answer: {
   const read = readGrantRow(database)
   if (read.state === 'unknown') return { outcome: 'refused', record: grantBase(read), reason: 'invalid', detail: read.reason, run: null }
   const result = answerGrant(read.record, answer, now)
-  if (result.outcome === 'granted') writeGrantRow(database, result.record, now)
+  // A refused answer of his is kept for the morning; a replay changes nothing.
+  if (result.outcome !== 'repeated' && result.record !== read.record) writeGrantRow(database, result.record, now)
   return result
 }
 

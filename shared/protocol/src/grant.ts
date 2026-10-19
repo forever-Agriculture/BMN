@@ -11,7 +11,7 @@ export const GRANT_RECORD_KEY = 'night-grant-v1'
 /** Bounds: text is refused past them, never cut; lists keep their newest entries. */
 export const GRANT_LIMITS = Object.freeze({
   runId: 120, title: 120, scope: 300, reason: 300, terms: 8, itemId: 40, runs: 32, told: 64, uses: 500, operations: 500,
-  boundary: 120, useId: 120, count: 10, periods: 2, reports: 500, carried: 200
+  boundary: 120, useId: 120, count: 10, periods: 2, reports: 500, carried: 2000, answers: 8
 })
 
 /** The extra repair rounds a card may offer per boundary (owner 2026-10-18: "2-4 by default"); 0 is No. */
@@ -77,6 +77,8 @@ export interface GrantRun {
   /** The latest card; an earlier revision's answer stays in force until he answers this one (the notes' question 3). */
   card: GrantCard
   answer: GrantAnswer | null
+  /** His answers to earlier revisions in this period, oldest first: history for the morning, with no authority. */
+  earlier: GrantAnswer[]
   /** The phone message drawing this run's card, once sent. */
   phone: { messageId: number; cardRevision: number } | null
 }
@@ -89,6 +91,8 @@ export interface GrantUse {
   kind: 'round' | 'action'
   boundary: string | null
   item: string | null
+  /** The answered card revision in force when it was recorded: the terms it was used under. */
+  cardRevision: number
   at: string
 }
 
@@ -98,7 +102,10 @@ export interface GrantRefusal {
   kind: 'round' | 'action' | 'answer'
   boundary: string | null
   item: string | null
+  /** For a use, BMN's words; for one of his answers, its GrantRefusalReason. */
   reason: string
+  /** Where a refused answer of his came from. */
+  via: GrantAnswerSource | null
   at: string
 }
 
@@ -309,9 +316,11 @@ function readAnswer(value: unknown, card: GrantCard): GrantAnswer | null | undef
   if (typeof answer.choices !== 'object' || answer.choices === null || !Array.isArray(answer.terms)) return undefined
   const terms = answer.terms.map(readTerm)
   if (terms.some((term) => term === null)) return undefined
+  // A stored choice is authority: each must be one its own term offers, never just any choice's value.
   const choices: Record<string, GrantChoice> = {}
   for (const [id, choice] of Object.entries(answer.choices as Record<string, unknown>)) {
-    if (!(typeof choice === 'number' && GRANT_ROUND_CHOICES.includes(choice)) && !['no', 'pr', 'green', 'yes'].includes(choice as string)) return undefined
+    const term = (terms as GrantTerm[]).find((candidate) => candidate.id === id)
+    if (term === undefined || !grantTermChoices(term).includes(choice as GrantChoice)) return undefined
     choices[id] = choice as GrantChoice
   }
   return { cardRevision: answer.cardRevision as number, terms: terms as GrantTerm[], choices, at: answer.at, via: answer.via, operationKey: answer.operationKey }
@@ -331,22 +340,31 @@ function readPeriod(value: unknown): GrantPeriod | null {
     if (runId === null || card === null || !isText(run.title) || runs.some((other) => other.runId === runId)) return null
     const answer = readAnswer(run.answer, card)
     if (answer === undefined) return null
+    const earlier = run.earlier === undefined ? [] : Array.isArray(run.earlier) ? run.earlier.map((item) => readAnswer(item, card)) : [undefined]
+    if (earlier.some((item) => item === undefined || item === null)) return null
     const phone = typeof run.phone === 'object' && run.phone !== null && Number.isSafeInteger((run.phone as { messageId?: unknown }).messageId) &&
       Number.isSafeInteger((run.phone as { cardRevision?: unknown }).cardRevision)
       ? { messageId: (run.phone as { messageId: number }).messageId, cardRevision: (run.phone as { cardRevision: number }).cardRevision }
       : null
-    runs.push({ runId, title: run.title, card, answer, phone })
+    runs.push({ runId, title: run.title, card, answer, earlier: earlier as GrantAnswer[], phone })
   }
   const uses: GrantUse[] = []
   for (const item of row.uses) {
     const use = item as Record<string, unknown>
     if (!isText(use?.id) || !isText(use.runId) || !isText(use.sessionId) || (use.kind !== 'round' && use.kind !== 'action') || !isIso(use.at)) return null
-    uses.push({ id: use.id, runId: use.runId, sessionId: use.sessionId, kind: use.kind, boundary: isText(use.boundary) ? use.boundary : null, item: isText(use.item) ? use.item : null, at: use.at })
+    // A round counts against its boundary and an action against its item: a use missing either would be counted nowhere.
+    const boundary = use.kind === 'round' ? grantIdentifier(use.boundary, GRANT_LIMITS.boundary) : null
+    const itemId = use.kind === 'action' ? grantIdentifier(use.item, GRANT_LIMITS.itemId) : null
+    if ((use.kind === 'round' ? boundary : itemId) === null || !isCount(use.cardRevision, Number.MAX_SAFE_INTEGER)) return null
+    uses.push({ id: use.id, runId: use.runId, sessionId: use.sessionId, kind: use.kind, boundary, item: itemId, cardRevision: use.cardRevision as number, at: use.at })
   }
   const refusals: GrantRefusal[] = Array.isArray(row.refusals)
     ? row.refusals.filter((item): item is GrantRefusal => typeof item === 'object' && item !== null && isText((item as GrantRefusal).runId) &&
       ['round', 'action', 'answer'].includes((item as GrantRefusal).kind) && isText((item as GrantRefusal).reason) && isIso((item as GrantRefusal).at))
-      .map((item) => ({ runId: item.runId, kind: item.kind, boundary: isText(item.boundary) ? item.boundary : null, item: isText(item.item) ? item.item : null, reason: item.reason, at: item.at }))
+      .map((item) => ({
+        runId: item.runId, kind: item.kind, boundary: isText(item.boundary) ? item.boundary : null, item: isText(item.item) ? item.item : null, reason: item.reason,
+        via: item.via === 'app' || item.via === 'telegram' ? item.via : null, at: item.at
+      }))
     : []
   // A report that cannot be read is dropped, never trusted: it carries no authority, only the morning's words.
   const reports: GrantReport[] = Array.isArray(row.reports)
@@ -425,7 +443,8 @@ function carry(record: GrantRecord): GrantRecord {
     if (at >= 0) carried.splice(at, 1)
     carried.push({ runId: use.runId, boundary: use.boundary, rounds })
   }
-  return { ...record, periods: record.periods.slice(-GRANT_LIMITS.periods), carried: carried.slice(-GRANT_LIMITS.carried) }
+  // Never cut: a counter dropped here would hand its boundary a fresh allowance. New rounds stop at the ceiling instead.
+  return { ...record, periods: record.periods.slice(-GRANT_LIMITS.periods), carried }
 }
 
 function withPeriod(record: GrantRecord, period: GrantPeriod): GrantRecord {
@@ -560,7 +579,7 @@ export function askGrant(record: GrantRecord, ask: {
     nothing: ask.card.nothing, terms: ask.card.terms, state: ask.card.nothing ? 'nothing' : 'open',
     change: existing === undefined ? null : grantChangeWords(existing.card, ask.card), withdrawnFor: null
   }
-  const run: GrantRun = { runId: ask.runId, title: ask.card.title, card, answer: existing?.answer ?? null, phone: existing?.phone ?? null }
+  const run: GrantRun = { runId: ask.runId, title: ask.card.title, card, answer: existing?.answer ?? null, earlier: existing?.earlier ?? [], phone: existing?.phone ?? null }
   const period = { ...open, runs: existing === undefined ? [...open.runs, run] : open.runs.map((other) => other.runId === ask.runId ? run : other) }
   const next = remember(withPeriod(record, period), ask.operationKey)
   return { outcome: existing === undefined ? 'opened' : 'replaced', record: next, run, periodId: open.periodId }
@@ -582,7 +601,12 @@ export function answerGrant(record: GrantRecord, answer: {
 }, now: string): GrantAnswerResult {
   const period = record.periods.find((other) => other.periodId === answer.periodId)
   const run = period?.runs.find((other) => other.runId === answer.runId) ?? null
-  const refuse = (reason: GrantRefusalReason, detail: string): GrantAnswerResult => ({ outcome: 'refused', record, reason, detail, run })
+  // A refused answer of his is kept for the morning as BMN's record (the notes §4); it grants nothing and changes no grant.
+  const refuse = (reason: GrantRefusalReason, detail: string): GrantAnswerResult => {
+    if (period === undefined || run === null || reason === 'no-card') return { outcome: 'refused', record, reason, detail, run }
+    const refusal: GrantRefusal = { runId: run.runId, kind: 'answer', boundary: null, item: null, reason, via: answer.via, at: now }
+    return { outcome: 'refused', record: withPeriod(record, { ...period, refusals: [...period.refusals, refusal].slice(-GRANT_LIMITS.uses) }), reason, detail, run }
+  }
   if (period === undefined || run === null) return refuse('no-card', 'There is no such card in this departure')
   if (run.answer?.operationKey === answer.operationKey) return { outcome: 'repeated', record, run }
   if (period.state === 'ended' || run.card.withdrawnFor === 'back') return refuse('withdrawn-back', 'you are back, so this card was withdrawn')
@@ -599,7 +623,8 @@ export function answerGrant(record: GrantRecord, answer: {
   if (Object.keys(answer.choices).some((id) => !run.card.terms.some((term) => term.id === id))) return refuse('invalid', 'the answer names a term the card does not show')
   const answered: GrantRun = {
     ...run, card: { ...run.card, state: 'answered' },
-    answer: { cardRevision: run.card.revision, terms: run.card.terms, choices, at: now, via: answer.via, operationKey: answer.operationKey }
+    answer: { cardRevision: run.card.revision, terms: run.card.terms, choices, at: now, via: answer.via, operationKey: answer.operationKey },
+    earlier: run.answer === null ? run.earlier : [...run.earlier, run.answer].slice(-GRANT_LIMITS.answers)
   }
   const next = withPeriod(record, { ...period, runs: period.runs.map((other) => other.runId === run.runId ? answered : other) })
   return { outcome: 'granted', record: next, run: answered }
@@ -680,7 +705,8 @@ export function grantStatus(read: GrantRead, away: Pick<AwayRecord, 'state' | 'p
     const choice = run.answer.choices[term.id] ?? 'no'
     if (isNo(choice)) { notGranted.push(term); continue }
     const count = itemCount(term, choice)
-    const used = open.uses.filter((use) => use.runId === runId && use.kind === 'action' && use.item === term.id).length
+    // A newly answered revision is a new grant: only the uses under the answer in force count against its items.
+    const used = open.uses.filter((use) => use.runId === runId && use.kind === 'action' && use.item === term.id && use.cardRevision === run.answer!.cardRevision).length
     items.push({ term, choice, count, used, left: Math.max(0, count - used) })
   }
   const anything = granted > 0 || items.length > 0
@@ -708,15 +734,17 @@ export function useGrant(read: GrantRead, away: Pick<AwayRecord, 'state' | 'peri
   runId: string; sessionId: string; id: string; kind: 'round'; boundary: string } | { runId: string; sessionId: string; id: string; kind: 'action'; item: string }, now: string): GrantUseResult {
   if (read.state === 'unknown') return { outcome: 'refused', record: EMPTY_GRANT_RECORD, reason: `${read.reason}, so nothing is granted` }
   const record = read.record
-  const previous = record.periods.flatMap((period) => period.uses).find((other) => other.id === use.id)
   const status = grantStatus(read, away, use.runId)
   const open = openGrantPeriod(record)
   // After Back the refusal is kept with the period that ended, when the run had a card there, so the morning shows it.
   const last = record.periods.at(-1)
   const holder = open ?? (last?.runs.some((run) => run.runId === use.runId) ? last : null)
+  // A use id is the run's own within one period: the same id from another run, or from an earlier period, is a new use
+  // and needs the grant in force now; only a retry within the period that recorded it is the same use.
+  const previous = holder?.uses.find((other) => other.runId === use.runId && other.id === use.id)
   const refuse = (reason: string): GrantUseResult => {
     if (holder === null) return { outcome: 'refused', record, reason }
-    const refusal: GrantRefusal = { runId: use.runId, kind: use.kind, boundary: use.kind === 'round' ? use.boundary : null, item: use.kind === 'action' ? use.item : null, reason, at: now }
+    const refusal: GrantRefusal = { runId: use.runId, kind: use.kind, boundary: use.kind === 'round' ? use.boundary : null, item: use.kind === 'action' ? use.item : null, reason, via: null, at: now }
     return { outcome: 'refused', record: withPeriod(record, { ...holder, refusals: [...holder.refusals, refusal].slice(-GRANT_LIMITS.uses) }), reason }
   }
   if (previous !== undefined) {
@@ -729,10 +757,11 @@ export function useGrant(read: GrantRead, away: Pick<AwayRecord, 'state' | 'peri
   }
   if (!status.active || open === null) return refuse(status.active ? 'no open period' : status.reason)
   if (open.uses.length >= GRANT_LIMITS.uses) return refuse('this period holds as many uses as BMN keeps')
+  if (use.kind === 'round' && record.carried.length >= GRANT_LIMITS.carried) return refuse('BMN holds as many carried round counts as it keeps')
   if (leftFor(status.grant, use) < 1) return refuse(use.kind === 'round' ? 'none left' : status.grant.items.some((item) => item.term.id === use.item) ? 'none left' : 'not on the card')
   const recorded: GrantUse = {
     id: use.id, runId: use.runId, sessionId: use.sessionId, kind: use.kind, boundary: use.kind === 'round' ? use.boundary : null,
-    item: use.kind === 'action' ? use.item : null, at: now
+    item: use.kind === 'action' ? use.item : null, cardRevision: status.grant.cardRevision, at: now
   }
   const next = withPeriod(record, { ...open, uses: [...open.uses, recorded] })
   const after = grantStatus({ state: 'read', record: next }, away, use.runId)
@@ -761,10 +790,11 @@ export function reportGrant(read: GrantRead, report: GrantReportInput, now: stri
   let period: GrantPeriod | undefined
   let entry: GrantReport
   if (report.kind === 'outcome') {
-    period = record.periods.find((candidate) => candidate.uses.some((use) => use.id === report.useId))
-    const use = period?.uses.find((candidate) => candidate.id === report.useId)
-    if (period === undefined || use === undefined) return refuse('no use was recorded under that use id')
-    if (use.runId !== report.runId) return refuse('that use id was recorded for another run')
+    period = [...record.periods].reverse().find((candidate) => candidate.uses.some((use) => use.id === report.useId && use.runId === report.runId))
+    const use = period?.uses.find((candidate) => candidate.id === report.useId && candidate.runId === report.runId)
+    if (period === undefined || use === undefined) {
+      return refuse(record.periods.some((candidate) => candidate.uses.some((other) => other.id === report.useId)) ? 'that use id was recorded for another run' : 'no use was recorded under that use id')
+    }
     const results = use.kind === 'round' ? GRANT_ROUND_RESULTS : GRANT_ACTION_RESULTS
     if (!results.includes(report.result)) return refuse(`a ${use.kind === 'round' ? 'round' : 'use of an item'} reports ${results.join(', ')}`)
     entry = { runId: report.runId, sessionId: report.sessionId, kind: 'outcome', useId: use.id, boundary: use.boundary, item: use.item, result: report.result, text: report.text, at: now }

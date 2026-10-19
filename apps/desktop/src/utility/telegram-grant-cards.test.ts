@@ -70,7 +70,8 @@ function harness(start: GrantRecord, options: { atDesk?: boolean; quiet?: Partia
       answers.push(answer)
       if (options.failAnswer === true) throw new Error('database is locked')
       const result = answerGrant(record, answer, T1)
-      if (result.outcome === 'granted') record = result.record
+      // A refused answer of his is kept too, as the store keeps it.
+      if (result.outcome !== 'repeated') record = result.record
       return result
     },
     keep: async (periodId, runId, phone) => { record = setGrantPhone(record, periodId, runId, phone).record }
@@ -171,7 +172,10 @@ describe('TelegramGrantCards (Story 84.3, the notes 84.2 §1 On Telegram)', () =
     expect(h.edits.at(-1)!.messageId).toBe(h.sent[0]!.messageId)
     expect(h.edits.at(-1)!.text).toMatch(/^⚠ Changed at .*: rounds 3 → 4\./)
     await h.tap(old)
-    expect(h.answers).toHaveLength(0)
+    // The stale Grant all was his answer: BMN refuses it for its old revision and keeps the refusal for the morning.
+    expect(h.answers).toEqual([expect.objectContaining({ cardRevision: 1, via: 'telegram' })])
+    expect(h.record.periods.at(-1)!.refusals).toEqual([expect.objectContaining({ runId: 'run-80', kind: 'answer', reason: 'changed', via: 'telegram' })])
+    expect(h.record.periods.at(-1)!.runs[0]!.answer).toBeNull()
     expect(h.toasts.at(-1)).toBe('This card changed. Look again.')
     expect(h.edits.at(-1)!.text).toContain('Nothing was granted.')
     expect(h.sent.at(-1)).toMatchObject({ text: 'Nothing was granted: the card changed. Look again.', replyTo: h.sent[0]!.messageId })
