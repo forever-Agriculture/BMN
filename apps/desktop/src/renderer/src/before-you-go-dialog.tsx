@@ -47,6 +47,8 @@ function GrantCard(props: {
   sessionName(sessionId: string): string | null
   onAnswer(answer: { periodId: string; runId: string; cardRevision: number; choices: Record<string, GrantChoice> }): Promise<GrantAnswerReply>
   onAnswered(): void
+  /** The first open card's Grant is the screen's one primary (B2); the others are plates. */
+  primary: boolean
 }): React.JSX.Element {
   const { run } = props
   const card = run.card
@@ -119,7 +121,7 @@ function GrantCard(props: {
       {card.state === 'withdrawn' ? <p className="grant-answered">{card.withdrawnFor === 'back' ? 'Withdrawn: you are back.' : 'Withdrawn: you did not leave.'}</p> : null}
       {open && error !== null ? <p className="inline-error" role="alert">{error}</p> : null}
       {open ? <div className="actions">
-        <button type="button" className="primary" disabled={saving} onClick={() => send(choices)}>
+        <button type="button" className={props.primary ? 'primary' : undefined} disabled={saving} onClick={() => send(choices)}>
           {saving ? 'Granting…' : grantButtonWords(card.terms, choices)}
         </button>
         <button type="button" className="ghost" disabled={saving} onClick={() => send(grantNoChoices(card.terms))}>Grant none</button>
@@ -174,7 +176,7 @@ export function BeforeYouGoDialog(props: {
         {props.grant.read === 'unknown' ? <p className="inline-error" role="alert">Grant records could not be read, so nothing is granted.</p> : null}
         {open.length === 0 && answered.length === 0 && nothing.length === 0 ? <p className="grant-empty">No card yet. A run that needs nothing asks nothing.</p> : null}
         {[...open, ...answered].map((run) => (
-          <GrantCard key={`${run.runId}:${run.card.revision}`} run={run} periodId={period!.periodId} now={props.now} place={props.place}
+          <GrantCard key={`${run.runId}:${run.card.revision}`} run={run} primary={run === open[0]} periodId={period!.periodId} now={props.now} place={props.place}
             sessionName={props.sessionName} onAnswer={props.onAnswer} onAnswered={() => setFocusNext((count) => count + 1)} />
         ))}
         {nothing.map((run) => <p key={run.runId} className="grant-nothing">{run.title} needs nothing.</p>)}

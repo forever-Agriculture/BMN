@@ -161,7 +161,7 @@ export function FileReferenceDialog(props: {
             onChange={(event) => setEntered(event.target.value)}
           />
         </label>
-        <button type="submit" className="primary" disabled={busy}>Open</button>
+        <button type="submit" className={sendPreview ? undefined : 'primary'} disabled={busy}>Open</button>
       </form>
       <dl className="file-reference-meta">
         <dt>{request.workspaceId ? 'Workspace' : 'Session'}</dt>

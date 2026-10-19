@@ -1,8 +1,10 @@
 // MODULE: before-you-go-dialog.test.ts - the head's departure words and Before you go's told line (Story 84.3, the notes 84.2 §2)
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { askGrant, EMPTY_GRANT_RECORD, ownerGrantView, parseGrantCardInput, startDeparture, type GrantRecord } from '@bmn/protocol'
 import { awayGrantWords } from './away-check'
-import { toldWords } from './before-you-go-dialog'
+import { BeforeYouGoDialog, toldWords } from './before-you-go-dialog'
 
 const T0 = new Date(2026, 9, 19, 22, 31).toISOString()
 const now = new Date(2026, 9, 19, 22, 40)
@@ -47,5 +49,21 @@ describe('toldWords', () => {
     expect(toldWords(['s-builder'], name)).toBe('told Builder')
     expect(toldWords(['s-builder', 's-night'], name)).toBe('told Builder and Night')
     expect(toldWords(['s-builder', 's-night', 'x', 'y', 'z'], name)).toBe('told Builder, Night, a session and 2 more')
+  })
+})
+
+describe('the dialog\'s buttons (docs/design.md B2)', () => {
+  it('makes only the first open card\'s Grant the primary; the next card\'s Grant is a plate', () => {
+    const record = asked(asked(leaving(), 'run-80', 's-builder'), 'run-81', 's-night')
+    const markup = renderToStaticMarkup(createElement(BeforeYouGoDialog, {
+      grant: ownerGrantView({ state: 'read', record }), now, sessionName: name,
+      place: () => ({ workspace: 'Work', session: 'Builder' }),
+      onAnswer: async () => ({ outcome: 'granted' as const }), onAwayNow: () => undefined, onNotLeaving: () => undefined, onClose: () => undefined
+    }))
+    const cards = [...markup.matchAll(/<div class="actions">(.*?)<\/div>/gu)].map((match) => match[1]!)
+    expect(cards).toHaveLength(2)
+    expect(cards[0]).toMatch(/^<button type="button" class="primary">Grant<\/button>/u)
+    expect(cards[1]).toMatch(/^<button type="button">Grant<\/button>/u)
+    expect(markup.match(/class="primary"/gu)).toHaveLength(1)
   })
 })
