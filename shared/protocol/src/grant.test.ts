@@ -1,6 +1,7 @@
 // MODULE: grant.test.ts - the Away grant record: departures, cards, answers, uses and the words every surface shares (Story 84.3)
 import { describe, expect, it } from 'vitest'
 import { EMPTY_AWAY_RECORD, type AwayRecord } from './away'
+import { awayGrantSection } from './away-grant-summary'
 import {
   EMPTY_GRANT_RECORD,
   GRANT_RECORD_KEY,
@@ -32,6 +33,7 @@ import {
 const T0 = '2026-10-19T19:31:00.000Z'
 const T1 = '2026-10-19T19:40:00.000Z'
 const T2 = '2026-10-20T04:40:00.000Z'
+const T3 = '2026-10-21T04:40:00.000Z'
 const empty = (): GrantRecord => ({ ...EMPTY_GRANT_RECORD, periods: [], operations: [] })
 const awayRecord = (over: Partial<AwayRecord>): AwayRecord => ({ ...EMPTY_AWAY_RECORD, operations: [], ...over })
 const AWAY = awayRecord({ state: 'away', revision: 1, periodId: 'p-1', since: T1, source: 'agent' })
@@ -410,7 +412,7 @@ describe('useGrant (R84-FR3, FR8)', () => {
     const first = useGrant(read(both), AWAY, round('80.3-review:round-1'), T1)
     expect(first.outcome).toBe('recorded')
     expect(useGrant(read(first.record), AWAY, { ...round('80.3-review:round-1'), runId: 'run-81' }, T1)).toMatchObject({ outcome: 'recorded', left: 2 })
-    expect(reportGrant(read(first.record), { runId: 'run-81', sessionId: 's', kind: 'outcome', useId: '80.3-review:round-1', result: 'passed', text: null }, T1))
+    expect(reportGrant(read(first.record), { runId: 'run-81', sessionId: 's', kind: 'outcome', periodId: 'p-1', useId: '80.3-review:round-1', result: 'passed', text: null }, T1))
       .toMatchObject({ outcome: 'refused', reason: 'that use id was recorded for another run' })
   })
 
@@ -446,6 +448,43 @@ describe('useGrant (R84-FR3, FR8)', () => {
     expect(retried).toMatchObject({ outcome: 'refused', reason: expect.stringMatching(/^the owner is back since .*; a retry waits$/) })
     expect(retried.record.periods.at(-1)!.refusals.at(-1)).toMatchObject({ runId: 'run-80', kind: 'action', item: 'merge-12', at: T2 })
     expect(useGrant(read(record), BACK, round('r1'), T2)).toMatchObject({ outcome: 'repeated', left: 0 })
+  })
+
+  it('replays an action only under the answer it was recorded under; a new answer that drops or moves it makes the retry wait (the epic recheck, finding 3)', () => {
+    const merge = (id: string) => ({ runId: 'run-80', sessionId: 's', id, kind: 'action' as const, item: 'merge-12' })
+    const base = useGrant(read(granted(away(asked()), all)), AWAY, merge('m1'), T1)
+    expect(base).toMatchObject({ outcome: 'recorded', left: 0, periodId: 'p-1' })
+    // His unchanged answer: the retry is the same use, though the item has none left.
+    expect(useGrant(read(base.record), AWAY, merge('m1'), T1)).toMatchObject({ outcome: 'repeated', left: 0, periodId: 'p-1' })
+    expect(useGrant(read(base.record), AWAY, merge('m2'), T1)).toMatchObject({ outcome: 'refused', reason: 'none left' })
+    // A newer card he has not answered leaves the earlier answer in force.
+    const pending = asked(base.record, { terms: [CARD.terms[0]] })
+    expect(useGrant(read(pending), AWAY, merge('m1'), T1)).toMatchObject({ outcome: 'repeated' })
+    // His answer to a revision without the merge, or with merge-12 moved to PR 13: the old use does not replay.
+    const dropped = granted(pending, { rounds: 3 }, 'run-80', 'op-2')
+    const moved = granted(asked(base.record, { terms: [{ ...CARD.terms[1], pr: 13 }] }), { 'merge-12': 'pr' }, 'run-80', 'op-2')
+    for (const record of [dropped, moved]) {
+      const retried = useGrant(read(record), AWAY, merge('m1'), T1)
+      expect(retried).toMatchObject({ outcome: 'refused', reason: 'his answer changed since this use; a retry waits' })
+      expect(retried.record.periods.at(-1)!.refusals.at(-1)).toMatchObject({ runId: 'run-80', kind: 'action', item: 'merge-12' })
+    }
+    // Under the moved answer a new use id is a new use, counted afresh against PR 13's allowance.
+    expect(useGrant(read(moved), AWAY, merge('m3'), T1)).toMatchObject({ outcome: 'recorded', left: 0 })
+    // A running round finishes whatever his new answer says (R84-FR7).
+    const ran = useGrant(read(granted(away(asked()), all)), AWAY, round('r1'), T1).record
+    const changed = granted(asked(ran, { terms: [{ ...CARD.terms[0], proposed: 2 }] }), { rounds: 2 }, 'run-80', 'op-2')
+    expect(useGrant(read(changed), AWAY, round('r1'), T1)).toMatchObject({ outcome: 'repeated' })
+  })
+
+  it('keeps every answered revision, read back the same, and the morning still shows the first one\'s merge (the epic recheck, finding 5)', () => {
+    let record = useGrant(read(granted(away(asked()), all)), AWAY, { runId: 'run-80', sessionId: 's', id: 'm1', kind: 'action', item: 'merge-12' }, T1).record
+    record = reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', periodId: 'p-1', useId: 'm1', result: 'done', text: null }, T1).record
+    for (let revision = 2; revision <= 10; revision++) record = granted(asked(record, { terms: [{ ...CARD.terms[0], proposed: revision % 2 === 0 ? 2 : 3 }] }), { rounds: revision % 2 === 0 ? 2 : 3 }, 'run-80', `op-${revision}`)
+    const run = openGrantPeriod(record)!.runs[0]!
+    expect([run.earlier.map((answer) => answer.cardRevision), run.answer!.cardRevision]).toEqual([[1, 2, 3, 4, 5, 6, 7, 8, 9], 10])
+    expect(readGrantRecord(JSON.stringify(record))).toEqual({ state: 'read', record })
+    const ended = followAwayChange(record, AWAY, BACK, { to: 'back', source: 'app', outcome: 'changed' }, T2).record
+    expect(JSON.stringify(awayGrantSection(ended.periods, 'p-1', new Date(T2), ended.carried))).toMatch(/merge PR 12 at 3f2a9c1/)
   })
 })
 
@@ -511,29 +550,60 @@ describe('the agent\'s report (Story 84.7)', () => {
 
   it('keeps an outcome bound to the run\'s own recorded use, with a result its kind allows, once', () => {
     const record = used()
-    const passed = reportGrant(read(record), { runId: 'run-80', sessionId: 's-builder', kind: 'outcome', useId: 'r1', result: 'passed', text: null }, T1)
+    const passed = reportGrant(read(record), { runId: 'run-80', sessionId: 's-builder', kind: 'outcome', periodId: 'p-1', useId: 'r1', result: 'passed', text: null }, T1)
     expect(passed.outcome).toBe('recorded')
     expect(passed.record.periods.at(-1)!.reports).toEqual([
       { runId: 'run-80', sessionId: 's-builder', kind: 'outcome', useId: 'r1', boundary: '80.3-review', item: null, result: 'passed', text: null, at: T1 }
     ])
-    expect(reportGrant(read(passed.record), { runId: 'run-80', sessionId: 's-builder', kind: 'outcome', useId: 'r1', result: 'passed', text: null }, T2).outcome).toBe('repeated')
-    expect(reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', useId: 'r1', result: 'done', text: null }, T1))
+    expect(reportGrant(read(passed.record), { runId: 'run-80', sessionId: 's-builder', kind: 'outcome', periodId: 'p-1', useId: 'r1', result: 'passed', text: null }, T2).outcome).toBe('repeated')
+    expect(reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', periodId: 'p-1', useId: 'r1', result: 'done', text: null }, T1))
       .toMatchObject({ outcome: 'refused', reason: 'a round reports passed, failed, blocked, uncertain' })
-    expect(reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', useId: 'm1', result: 'passed', text: null }, T1)).toMatchObject({ outcome: 'refused' })
-    expect(reportGrant(read(record), { runId: 'run-81', sessionId: 's', kind: 'outcome', useId: 'm1', result: 'done', text: null }, T1))
+    expect(reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', periodId: 'p-1', useId: 'm1', result: 'passed', text: null }, T1)).toMatchObject({ outcome: 'refused' })
+    expect(reportGrant(read(record), { runId: 'run-81', sessionId: 's', kind: 'outcome', periodId: 'p-1', useId: 'm1', result: 'done', text: null }, T1))
       .toMatchObject({ outcome: 'refused', reason: 'that use id was recorded for another run' })
-    expect(reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', useId: 'nope', result: 'done', text: null }, T1))
-      .toMatchObject({ outcome: 'refused', reason: 'no use was recorded under that use id' })
-    expect(reportGrant({ state: 'unknown', reason: 'the grant record is not valid JSON' }, { runId: 'run-80', sessionId: 's', kind: 'outcome', useId: 'r1', result: 'passed', text: null }, T1).outcome).toBe('refused')
+    expect(reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', periodId: 'p-1', useId: 'nope', result: 'done', text: null }, T1))
+      .toMatchObject({ outcome: 'refused', reason: 'no use was recorded under that use id in that departure' })
+    expect(reportGrant({ state: 'unknown', reason: 'the grant record is not valid JSON' }, { runId: 'run-80', sessionId: 's', kind: 'outcome', periodId: 'p-1', useId: 'r1', result: 'passed', text: null }, T1).outcome).toBe('refused')
   })
 
   it('takes a later outcome for the same use, after Back too, since a running step finishes', () => {
     let record = used()
-    record = reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', useId: 'm1', result: 'uncertain', text: 'the merge call timed out' }, T1).record
+    record = reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', periodId: 'p-1', useId: 'm1', result: 'uncertain', text: 'the merge call timed out' }, T1).record
     record = followAwayChange(record, AWAY, BACK, { to: 'back', source: 'app', outcome: 'changed' }, T2).record
-    const done = reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', useId: 'm1', result: 'done', text: 'Merged at 3f2a9c1' }, T2)
+    const done = reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', periodId: 'p-1', useId: 'm1', result: 'done', text: 'Merged at 3f2a9c1' }, T2)
     expect(done.outcome).toBe('recorded')
     expect(done.record.periods.at(-1)!.reports.map((report) => report.result)).toEqual(['uncertain', 'done'])
+  })
+
+  it('files an outcome under the period its use was recorded in, never the newest one with that id (the epic recheck)', () => {
+    const merge = (id: string) => ({ runId: 'run-80', sessionId: 's', id, kind: 'action' as const, item: 'merge-12' })
+    const nightTwo = (record: GrantRecord, periodId: string, after: AwayRecord, at: string): { record: GrantRecord; away: AwayRecord } => {
+      let next = followAwayChange(record, after, { ...after, state: 'back', endedAt: at, endedBy: 'app' }, { to: 'back', source: 'app', outcome: 'changed' }, at).record
+      next = startDeparture(next, { source: 'agent', agentSessionId: 's', periodId }, 'back', at).record
+      next = askGrant(next, { runId: 'run-80', sessionId: 's', agentCli: 'claude', card: card() }, at).record
+      const away2 = awayRecord({ state: 'away', revision: after.revision + 2, periodId, since: at, source: 'agent' })
+      next = followAwayChange(next, { ...after, state: 'back' }, away2, { to: 'away', source: 'agent', outcome: 'changed' }, at).record
+      next = answerGrant(next, { periodId, runId: 'run-80', cardRevision: 1, choices: all, via: 'app', operationKey: `op-${periodId}` }, at).record
+      return { record: next, away: away2 }
+    }
+    let record = useGrant(read(granted(away(asked()), all)), AWAY, merge('m1'), T1).record
+    const two = nightTwo(record, 'p-2', AWAY, T2)
+    // The same id again in night two (as d686cb5 allowed): two uses, one per period.
+    record = useGrant(read(two.record), two.away, merge('m1'), T2).record
+    expect(record.periods.map((period) => [period.periodId, period.uses.map((use) => use.id)])).toEqual([['p-1', ['m1']], ['p-2', ['m1']]])
+    // Night one's late report lands in night one; night two's use still has no outcome.
+    record = reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', periodId: 'p-1', useId: 'm1', result: 'done', text: 'night one' }, T2).record
+    expect(record.periods.map((period) => period.reports.map((item) => item.text))).toEqual([['night one'], []])
+    record = reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', periodId: 'p-2', useId: 'm1', result: 'uncertain', text: 'night two' }, T2).record
+    expect(record.periods.map((period) => period.reports.map((item) => item.text))).toEqual([['night one'], ['night two']])
+    expect(reportGrant(read(record), { runId: 'run-80', sessionId: 's', kind: 'outcome', periodId: 'p-2', useId: 'm9', result: 'done', text: null }, T2))
+      .toMatchObject({ outcome: 'refused', reason: 'no use was recorded under that use id in that departure' })
+    // A third night drops night one (two periods kept): its late report is refused, never filed under a newer night.
+    const three = nightTwo(record, 'p-3', two.away, T3)
+    expect(three.record.periods.map((period) => period.periodId)).toEqual(['p-2', 'p-3'])
+    const late = useGrant(read(three.record), three.away, merge('m1'), T3).record
+    expect(reportGrant(read(late), { runId: 'run-80', sessionId: 's', kind: 'outcome', periodId: 'p-1', useId: 'm1', result: 'done', text: 'night one, again' }, T3))
+      .toMatchObject({ outcome: 'refused', reason: 'that departure is not one BMN keeps, so its use cannot be found' })
   })
 
   it('keeps a step-back option and a refused step for the run\'s own card only', () => {

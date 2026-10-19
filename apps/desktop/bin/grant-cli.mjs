@@ -7,7 +7,7 @@ export const GRANT_USAGE = `Usage: bmn grant [--run ID] [--json]
        bmn grant ask --run ID --card-file - [--key K] [--json]
        bmn grant ask --run ID --nothing [--title T] [--scope S] [--key K] [--json]
        bmn grant use --run ID --use-id U (--boundary B | --item I) [--json]
-       bmn grant report --run ID (--use-id U --result R | --boundary B --step-back | --item I) [--text T] [--json]
+       bmn grant report --run ID (--period P --use-id U --result R | --boundary B --step-back | --item I) [--text T] [--json]
 
 The Away grant (Epic 84). Before the owner leaves (BMN tells your session he is leaving or away), a
 run with authorised work left for the night asks him once, on one card, for only what that work
@@ -34,11 +34,13 @@ grant ask    The run's card for this departure, as JSON on standard input, for e
              it. --nothing says the run needs nothing. Never on a card: force pushes, deletions,
              releases, publishes, killing BMN, credentials and acceptance changes.
 grant use    Records one extra round at a boundary (--boundary) or one use of a granted item
-             (--item), before the step runs. The same --use-id returns the first record, so a retry
-             after an uncertain outcome reuses it; after he is back, a retried action waits. A
-             refused use means the step waits.
-grant report Tells BMN what happened, for his morning summary; it grants nothing. --use-id with
-             --result: a round passed, failed or blocked (parked BLOCKED), an action done or
+             (--item), before the step runs, and prints the period it is recorded in: keep it with
+             the use for its report. The same --use-id returns the first record, so a retry after an
+             uncertain outcome reuses it; once his answer has changed, or after he is back, a retried
+             action waits. A refused use means the step waits.
+grant report Tells BMN what happened, for his morning summary; it grants nothing. --period with
+             --use-id and --result (the period grant use printed, also after Back): a round passed,
+             failed or blocked (parked BLOCKED), an action done or
              refused (by GitHub or a guard; --text says why), or uncertain while you read the
              target's state. --boundary B --step-back --text: the step-back consult's option,
              before the boundary's last granted round. --item I --text: a granted step that a rule
@@ -47,7 +49,7 @@ grant report Tells BMN what happened, for his morning summary; it grants nothing
 Exit 0 printed or recorded, 1 refused or BMN unreachable (then nothing is granted), 2 usage.`
 
 const CARD_LIMIT_BYTES = 32_768
-const VALUE_OPTIONS = new Set(['--run', '--card-file', '--key', '--title', '--scope', '--use-id', '--boundary', '--item', '--result', '--text', '--socket', '--token-file'])
+const VALUE_OPTIONS = new Set(['--run', '--card-file', '--key', '--title', '--scope', '--period', '--use-id', '--boundary', '--item', '--result', '--text', '--socket', '--token-file'])
 
 function usage(message) {
   process.stderr.write(`bmn: ${message}\n${GRANT_USAGE}\n`)
@@ -96,7 +98,7 @@ export function describeStatus(result, runId) {
 
 export function describeUse(result, use) {
   const what = use.boundary !== undefined ? `one extra round at ${use.boundary}` : `one use of item ${use.item}`
-  return `Recorded ${what} for run ${use.runId}${result?.outcome === 'repeated' ? ' (already recorded under this use id; not repeated)' : ''}; ${result?.left ?? 0} left.`
+  return `Recorded ${what} for run ${use.runId} in period ${result?.periodId}${result?.outcome === 'repeated' ? ' (already recorded under this use id; not repeated)' : ''}; ${result?.left ?? 0} left. Report its outcome with --period ${result?.periodId}.`
 }
 
 export function describeReport(result, runId) {
@@ -123,7 +125,7 @@ export async function runGrantCommand(argv, { readCredentials, call }) {
   }
   const allowed = action === 'ask' ? ['run', 'card-file', 'key', 'title', 'scope', 'nothing', 'json']
     : action === 'use' ? ['run', 'use-id', 'boundary', 'item', 'json']
-      : action === 'report' ? ['run', 'use-id', 'result', 'boundary', 'step-back', 'item', 'text', 'json'] : ['run', 'json']
+      : action === 'report' ? ['run', 'period', 'use-id', 'result', 'boundary', 'step-back', 'item', 'text', 'json'] : ['run', 'json']
   const stray = Object.keys(options).find((name) => !allowed.includes(name))
   if (stray !== undefined) return usage(`grant${action === null ? '' : ` ${action}`} does not take --${stray}`)
   let method
@@ -151,11 +153,12 @@ export async function runGrantCommand(argv, { readCredentials, call }) {
     const forms = [options['use-id'] !== undefined, options['step-back'] === true, options['use-id'] === undefined && options['step-back'] !== true && options.item !== undefined]
     if (forms.filter(Boolean).length !== 1) return usage('grant report takes --use-id with --result, --boundary with --step-back, or --item')
     if ((options['use-id'] !== undefined) !== (options.result !== undefined)) return usage('--result goes with --use-id')
+    if ((options['use-id'] !== undefined) !== (options.period !== undefined)) return usage('--period (the period grant use printed) goes with --use-id')
     if (options['step-back'] === true && options.boundary === undefined) return usage('--step-back needs --boundary')
     method = 'grant.report'
     params = {
       runId: options.run,
-      ...(options['use-id'] === undefined ? {} : { useId: options['use-id'], result: options.result }),
+      ...(options['use-id'] === undefined ? {} : { periodId: options.period, useId: options['use-id'], result: options.result }),
       ...(options['step-back'] === true ? { stepBack: true, boundary: options.boundary } : {}),
       ...(options.item === undefined ? {} : { item: options.item }),
       ...(options.boundary !== undefined && options['step-back'] !== true ? { boundary: options.boundary } : {}),

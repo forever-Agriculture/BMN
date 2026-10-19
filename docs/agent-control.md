@@ -1046,14 +1046,16 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
 - **Reading and using it.** `bmn grant --run ID` reads the grant fresh each time: its terms, the period and what
   is left, or "No grant" and why (none answered, Back, a new period, a malformed row, an unreadable store). Read
   it right before each step that uses it; a grant never comes from a handoff. `bmn grant use --run ID --use-id U
-  (--boundary B | --item I)` records one extra round or one use before the step runs; the same use id returns the
-  first record (after Back, a retried action is refused and waits), and a refused use means the step waits. A use id
-  is the run's own within its period: another run may use the same id, and an id from an earlier period is a new use
-  under the grant in force. An item counts its uses under the answer in force, so his answer to a new revision is a
-  new grant; his earlier answers stay as history. Rounds count per boundary across every period: those of periods no
+  (--boundary B | --item I)` records one extra round or one use before the step runs and prints the period it is
+  recorded in; the same use id returns the first record, and a refused use means the step waits. A retried action
+  runs only under the answer it was recorded under: once he answers a revision, or after Back, it is refused and
+  waits; a running round finishes. A use id is the run's own within its period: another run may use the same id,
+  and an id from an earlier period is a new use under the grant in force. An item counts its uses under the answer
+  in force, so his answer to a new revision is a new grant; every answer he gave stays as history. Rounds count per boundary across every period: those of periods no
   longer kept are carried in the record and never dropped; past its ceiling, a new round is refused.
 - **Reporting what happened.** `bmn grant report --run ID` keeps what the agent saw for his morning summary, and
-  grants nothing: `--use-id U --result R` gives a recorded use's outcome (a round passed, failed or blocked; an
+  grants nothing: `--period P --use-id U --result R` gives a recorded use's outcome, in the period `grant use`
+  printed, read exactly (a period BMN no longer keeps is refused) (a round passed, failed or blocked; an
   action done, refused, with `--text` saying why, or uncertain while the agent reads the target's state; the latest
   report counts); `--boundary B --step-back --text T` gives the step-back consult's option before a boundary's last
   granted round; `--item I --text T` names a granted step that GitHub, the command guard or a rule refused before

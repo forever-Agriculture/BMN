@@ -116,7 +116,7 @@ async function cliFixture() {
     leaveAway: vi.fn<ControlHandlers['leaveAway']>(async () => ({ outcome: 'changed', state: 'leaving', periodId: 'p-1', since: '2026-10-19T19:31:00.000Z' })),
     askGrant: vi.fn<ControlHandlers['askGrant']>(async (p) => ({ outcome: 'opened', periodId: 'p-1', runId: p.runId, cardRevision: 1, state: p.card.nothing ? 'nothing' : 'open' })),
     grantStatus: vi.fn<ControlHandlers['grantStatus']>(async () => ({ departure: null, runs: [] })),
-    useGrant: vi.fn<ControlHandlers['useGrant']>(async () => ({ outcome: 'recorded', left: 2 })),
+    useGrant: vi.fn<ControlHandlers['useGrant']>(async () => ({ outcome: 'recorded', left: 2, periodId: 'p-1' })),
     reportGrant: vi.fn<ControlHandlers['reportGrant']>(async () => ({ outcome: 'recorded' }))
   } satisfies ControlHandlers
   const server = new ControlServer({ socketPath, auth, handlers, receipts: new MemoryReceiptStore() })
@@ -5876,18 +5876,18 @@ describe('bmn away --leaving and bmn grant (Story 84.3)', () => {
     const mine = await runCli(['grant'], { env: fixture.sessionEnv })
     expect(mine.stdout).toMatch(/^The owner is away since 2026-10-19T19:31:00.000Z \(period p-1\)\.\n/)
     const used = await runCli(['grant', 'use', '--run', 'dev-auto-80', '--use-id', 'u1', '--boundary', '80.3-review'], { env: fixture.sessionEnv })
-    expect(used.stdout).toBe('Recorded one extra round at 80.3-review for run dev-auto-80; 2 left.\n')
+    expect(used.stdout).toBe('Recorded one extra round at 80.3-review for run dev-auto-80 in period p-1; 2 left. Report its outcome with --period p-1.\n')
     expect(fixture.handlers.useGrant).toHaveBeenLastCalledWith({ sessionId: 'session-1', runId: 'dev-auto-80', useId: 'u1', boundary: '80.3-review' })
   })
 
   it('keeps an outcome, a step back and a refused step as the agent\'s report, and says so (Story 84.7)', async () => {
     const fixture = await cliFixture()
-    const outcome = await runCli(['grant', 'report', '--run', 'dev-auto-80', '--use-id', 'u1', '--result', 'passed'], { env: fixture.sessionEnv })
+    const outcome = await runCli(['grant', 'report', '--run', 'dev-auto-80', '--period', 'p-1', '--use-id', 'u1', '--result', 'passed'], { env: fixture.sessionEnv })
     expect(outcome).toEqual({ code: 0, stdout: 'Kept as the agent\'s report for run dev-auto-80; it grants nothing.\n', stderr: '' })
     await runCli(['grant', 'report', '--run', 'dev-auto-80', '--boundary', '80.3-review', '--step-back', '--text', 'a different design'], { env: fixture.sessionEnv })
     await runCli(['grant', 'report', '--run', 'dev-auto-80', '--item', 'merge-15', '--text', 'changes CI, so it asked'], { env: fixture.sessionEnv })
     expect(fixture.handlers.reportGrant.mock.calls.map(([call]) => call)).toEqual([
-      { runId: 'dev-auto-80', sessionId: 'session-1', kind: 'outcome', useId: 'u1', result: 'passed', text: null },
+      { runId: 'dev-auto-80', sessionId: 'session-1', kind: 'outcome', periodId: 'p-1', useId: 'u1', result: 'passed', text: null },
       { runId: 'dev-auto-80', sessionId: 'session-1', kind: 'step-back', boundary: '80.3-review', text: 'a different design' },
       { runId: 'dev-auto-80', sessionId: 'session-1', kind: 'refused', item: 'merge-15', text: 'changes CI, so it asked' }
     ])
@@ -5896,7 +5896,10 @@ describe('bmn away --leaving and bmn grant (Story 84.3)', () => {
       ['grant', 'report', '--run', 'r', '--use-id', 'u1'],
       ['grant', 'report', '--run', 'r', '--step-back', '--text', 't'],
       ['grant', 'report', '--run', 'r', '--use-id', 'u1', '--result', 'passed', '--step-back', '--boundary', 'b'],
-      ['grant', 'report', '--use-id', 'u1', '--result', 'passed']
+      ['grant', 'report', '--use-id', 'u1', '--result', 'passed'],
+      // The epic recheck: an outcome names the period its use was recorded in, and only an outcome does.
+      ['grant', 'report', '--run', 'r', '--use-id', 'u1', '--result', 'passed'],
+      ['grant', 'report', '--run', 'r', '--period', 'p-1', '--item', 'merge-15', '--text', 't']
     ]) expect((await runCli(args, { env: fixture.sessionEnv })).code).toBe(2)
     expect(fixture.handlers.reportGrant).toHaveBeenCalledTimes(3)
   })

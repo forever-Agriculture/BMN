@@ -56,7 +56,8 @@ function night(answers: Record<string, Record<string, unknown> | null>, asks: Re
 const use = (record: GrantRecord, id: string, step: { boundary: string } | { item: string }, when: string, runId = 'run-80'): GrantRecord =>
   useGrant(read(record), AWAY, 'boundary' in step ? { runId, sessionId: 's1', id, kind: 'round', boundary: step.boundary } : { runId, sessionId: 's1', id, kind: 'action', item: step.item }, when).record
 const report = (record: GrantRecord, input: Omit<GrantReportInput, 'runId' | 'sessionId'> & Record<string, unknown>, when: string): GrantRecord => {
-  const result = reportGrant(read(record), { runId: 'run-80', sessionId: 's1', ...input } as GrantReportInput, when)
+  // An outcome names its use's period (the epic recheck); this night is p-1 unless a test says otherwise.
+  const result = reportGrant(read(record), { runId: 'run-80', sessionId: 's1', ...(input.kind === 'outcome' ? { periodId: 'p-1' } : {}), ...input } as GrantReportInput, when)
   expect(result.outcome).toBe('recorded')
   return result.record
 }

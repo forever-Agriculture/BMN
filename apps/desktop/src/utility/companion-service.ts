@@ -865,7 +865,7 @@ export class CompanionService {
           const result = await this.options.database.companion('useGrantRecord', use, this.iso())
           if (result.outcome !== 'repeated') this.grantChanged({ state: 'read', record: result.record })
           if (result.outcome === 'refused') throw new HostControlError(ERROR_CODES.invalidArgument, `Not recorded: ${result.reason}; the step waits`)
-          return { outcome: result.outcome, left: result.left }
+          return { outcome: result.outcome, left: result.left, periodId: result.periodId }
         }),
         reportGrant: (p) => this.controlCall(async () => {
           const result = await this.options.database.companion('reportGrantRecord', p, this.iso())

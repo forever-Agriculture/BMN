@@ -1599,7 +1599,7 @@ export class ControlServer {
       }
       case 'grant.report': {
         // Story 84.7: what the agent saw happen, kept apart from BMN's record for the morning; it grants nothing.
-        const params = closedParams(rawParams, ['runId', 'useId', 'result', 'boundary', 'stepBack', 'item', 'text'])
+        const params = closedParams(rawParams, ['runId', 'periodId', 'useId', 'result', 'boundary', 'stepBack', 'item', 'text'])
         if (scope.kind !== 'session') throw unauthorized('Only a session\'s agent reports a step of its run')
         const runId = grantIdentifier(params.runId, GRANT_LIMITS.runId)
         if (runId === null) throw invalid('runId is an identifier: letters, digits and . _ : / -')
@@ -1612,11 +1612,14 @@ export class ControlServer {
         if (params.useId !== undefined) {
           const useId = grantIdentifier(params.useId, GRANT_LIMITS.useId)
           if (useId === null || params.stepBack !== undefined || params.boundary !== undefined || params.item !== undefined) throw invalid('An outcome names one use id and its result')
+          // The departure the use was recorded in, as `grant use` returned it: a use id may come again in a later one.
+          const periodId = grantIdentifier(params.periodId, GRANT_LIMITS.periodId)
+          if (periodId === null) throw invalid('An outcome names the period its use was recorded in (periodId, as grant use returned it)')
           const result = params.result
           if (![...GRANT_ROUND_RESULTS, ...GRANT_ACTION_RESULTS].includes(result as GrantReportResult)) throw invalid('result is passed, failed or blocked for a round; done, uncertain or refused for an action')
-          return handlers.reportGrant({ runId, sessionId, kind: 'outcome', useId, result: result as GrantReportResult, text: text(result === 'refused') })
+          return handlers.reportGrant({ runId, sessionId, kind: 'outcome', periodId, useId, result: result as GrantReportResult, text: text(result === 'refused') })
         }
-        if (params.result !== undefined) throw invalid('A result goes with --use-id')
+        if (params.result !== undefined || params.periodId !== undefined) throw invalid('A result and its period go with --use-id')
         if (params.stepBack === true) {
           const boundary = grantIdentifier(params.boundary, GRANT_LIMITS.boundary)
           if (boundary === null || params.item !== undefined) throw invalid('A step back names its boundary')

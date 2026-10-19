@@ -199,15 +199,15 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     const night = join(root, 'night.sh')
     writeFileSync(night, `B() { '${process.execPath}' '${cli}' "$@"; }
 G() { B grant "$@" > /dev/null; }
-G use --run run-80 --use-id r1 --boundary 80.3-review
-G report --run run-80 --use-id r1 --result failed
+P=$(B grant use --run run-80 --use-id r1 --boundary 80.3-review --json | sed -n 's/.*"periodId": "\\(.*\\)".*/\\1/p')
+G report --run run-80 --period "$P" --use-id r1 --result failed
 G use --run run-80 --use-id r2 --boundary 80.3-review
-G report --run run-80 --use-id r2 --result failed
+G report --run run-80 --period "$P" --use-id r2 --result failed
 G use --run run-80 --use-id m1 --item merge-12
-G report --run run-80 --use-id m1 --result done --text 'Merged at 3f2a9c1'
+G report --run run-80 --period "$P" --use-id m1 --result done --text 'Merged at 3f2a9c1'
 G report --run run-80 --boundary 80.3-review --step-back --text 'a different design, the record written apart from the summary'
 G use --run run-80 --use-id r3 --boundary 80.3-review
-G report --run run-80 --use-id r3 --result passed
+G report --run run-80 --period "$P" --use-id r3 --result passed
 B grant use --run run-80 --use-id r4 --boundary 80.3-review > /dev/null 2>&1
 B grant use --run run-80 --use-id p1 --item push-81 > /dev/null 2>&1
 G report --run run-80 --item merge-12 --text 'PR 15 changes .github/workflows, so it asked you'

@@ -11,7 +11,7 @@ export const GRANT_RECORD_KEY = 'night-grant-v1'
 /** Bounds: text is refused past them, never cut; lists keep their newest entries. */
 export const GRANT_LIMITS = Object.freeze({
   runId: 120, title: 120, scope: 300, reason: 300, terms: 8, itemId: 40, runs: 32, told: 64, uses: 500, operations: 500,
-  boundary: 120, useId: 120, count: 10, periods: 2, reports: 500, carried: 2000, answers: 8
+  boundary: 120, useId: 120, count: 10, periods: 2, reports: 500, carried: 2000, periodId: 64
 })
 
 /** The extra repair rounds a card may offer per boundary (owner 2026-10-18: "2-4 by default"); 0 is No. */
@@ -624,7 +624,8 @@ export function answerGrant(record: GrantRecord, answer: {
   const answered: GrantRun = {
     ...run, card: { ...run.card, state: 'answered' },
     answer: { cardRevision: run.card.revision, terms: run.card.terms, choices, at: now, via: answer.via, operationKey: answer.operationKey },
-    earlier: run.answer === null ? run.earlier : [...run.earlier, run.answer].slice(-GRANT_LIMITS.answers)
+    // Every answered revision stays: its uses name the revision they were recorded under (the epic recheck, finding 5).
+    earlier: run.answer === null ? run.earlier : [...run.earlier, run.answer]
   }
   const next = withPeriod(record, { ...period, runs: period.runs.map((other) => other.runId === run.runId ? answered : other) })
   return { outcome: 'granted', record: next, run: answered }
@@ -722,7 +723,7 @@ export function grantStatus(read: GrantRead, away: Pick<AwayRecord, 'state' | 'p
 }
 
 export type GrantUseResult =
-  | { outcome: 'recorded' | 'repeated'; record: GrantRecord; left: number }
+  | { outcome: 'recorded' | 'repeated'; record: GrantRecord; left: number; periodId: string }
   | { outcome: 'refused'; record: GrantRecord; reason: string }
 
 /**
@@ -753,7 +754,12 @@ export function useGrant(read: GrantRead, away: Pick<AwayRecord, 'state' | 'peri
     }
     // A round already running finishes (R84-FR7); an action retried under its use id did not happen, so after Back it waits.
     if (use.kind === 'action' && !status.active) return refuse(`${status.reason}; a retry waits`)
-    return { outcome: 'repeated', record, left: status.active ? leftFor(status.grant, use) : 0 }
+    // A retried action runs under the answer it was recorded under; his answer to a new revision is a new grant, so a retry
+    // waits once that answer is in force (the epic recheck, finding 3). An unanswered newer card leaves the answer in force.
+    if (use.kind === 'action' && status.active && (status.grant.cardRevision !== previous.cardRevision || !status.grant.items.some((item) => item.term.id === use.item))) {
+      return refuse('his answer changed since this use; a retry waits')
+    }
+    return { outcome: 'repeated', record, left: status.active ? leftFor(status.grant, use) : 0, periodId: holder!.periodId }
   }
   if (!status.active || open === null) return refuse(status.active ? 'no open period' : status.reason)
   if (open.uses.length >= GRANT_LIMITS.uses) return refuse('this period holds as many uses as BMN keeps')
@@ -765,11 +771,11 @@ export function useGrant(read: GrantRead, away: Pick<AwayRecord, 'state' | 'peri
   }
   const next = withPeriod(record, { ...open, uses: [...open.uses, recorded] })
   const after = grantStatus({ state: 'read', record: next }, away, use.runId)
-  return { outcome: 'recorded', record: next, left: after.active ? leftFor(after.grant, use) : 0 }
+  return { outcome: 'recorded', record: next, left: after.active ? leftFor(after.grant, use) : 0, periodId: open.periodId }
 }
 
 export type GrantReportInput =
-  | { runId: string; sessionId: string; kind: 'outcome'; useId: string; result: GrantReportResult; text: string | null }
+  | { runId: string; sessionId: string; kind: 'outcome'; periodId: string; useId: string; result: GrantReportResult; text: string | null }
   | { runId: string; sessionId: string; kind: 'step-back'; boundary: string; text: string }
   | { runId: string; sessionId: string; kind: 'refused'; item: string; text: string }
 
@@ -780,8 +786,9 @@ export type GrantReportOutcome =
 /**
  * `bmn grant report` (Story 84.7): what an agent tells BMN about a step, kept for the morning as the agent's report. It
  * grants nothing and is accepted after Back too, since a round or action running then finishes (R84-FR7). An outcome names
- * a use this run recorded; a step-back or a refused step names the run's card in the open or last period. The same report
- * again is not repeated.
+ * a use this run recorded and the period it was recorded in, read exactly, never the newest period with that id (the epic
+ * recheck); a step-back or a refused step names the run's card in the open or last period. The same report again is not
+ * repeated.
  */
 export function reportGrant(read: GrantRead, report: GrantReportInput, now: string): GrantReportOutcome {
   if (read.state === 'unknown') return { outcome: 'refused', record: EMPTY_GRANT_RECORD, reason: `${read.reason}, so nothing was kept` }
@@ -790,10 +797,11 @@ export function reportGrant(read: GrantRead, report: GrantReportInput, now: stri
   let period: GrantPeriod | undefined
   let entry: GrantReport
   if (report.kind === 'outcome') {
-    period = [...record.periods].reverse().find((candidate) => candidate.uses.some((use) => use.id === report.useId && use.runId === report.runId))
-    const use = period?.uses.find((candidate) => candidate.id === report.useId && candidate.runId === report.runId)
-    if (period === undefined || use === undefined) {
-      return refuse(record.periods.some((candidate) => candidate.uses.some((other) => other.id === report.useId)) ? 'that use id was recorded for another run' : 'no use was recorded under that use id')
+    period = record.periods.find((candidate) => candidate.periodId === report.periodId)
+    if (period === undefined) return refuse('that departure is not one BMN keeps, so its use cannot be found')
+    const use = period.uses.find((candidate) => candidate.id === report.useId && candidate.runId === report.runId)
+    if (use === undefined) {
+      return refuse(period.uses.some((other) => other.id === report.useId) ? 'that use id was recorded for another run' : 'no use was recorded under that use id in that departure')
     }
     const results = use.kind === 'round' ? GRANT_ROUND_RESULTS : GRANT_ACTION_RESULTS
     if (!results.includes(report.result)) return refuse(`a ${use.kind === 'round' ? 'round' : 'use of an item'} reports ${results.join(', ')}`)

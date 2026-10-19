@@ -4274,9 +4274,9 @@ describe('Away (Story 76.3)', () => {
     const status = await handlers.grantStatus({ scope: agent, runId: 'run-80' }) as { runs: Array<{ active: boolean; lines: string[] }> }
     expect(status.runs[0]!.active).toBe(true)
     expect(status.runs[0]!.lines[1]).toBe('  Extra repair rounds: 3 per boundary; none used.')
-    expect(await handlers.useGrant({ sessionId: 's1', runId: 'run-80', useId: 'u1', boundary: '80.3-review' })).toEqual({ outcome: 'recorded', left: 2 })
+    expect(await handlers.useGrant({ sessionId: 's1', runId: 'run-80', useId: 'u1', boundary: '80.3-review' })).toEqual({ outcome: 'recorded', left: 2, periodId })
     // matrix full-3: a report with no use after it was missing from the window's view.
-    expect(await handlers.reportGrant({ runId: 'run-80', sessionId: 's1', kind: 'outcome', useId: 'u1', result: 'blocked', text: null })).toEqual({ outcome: 'recorded' })
+    expect(await handlers.reportGrant({ runId: 'run-80', sessionId: 's1', kind: 'outcome', periodId, useId: 'u1', result: 'blocked', text: null })).toEqual({ outcome: 'recorded' })
     expect(service.grantForOwner().period?.reports).toMatchObject([{ useId: 'u1', result: 'blocked' }])
 
     // A restart reads the record back: the grant still holds, and no handoff is needed for it.
