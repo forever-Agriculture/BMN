@@ -99,7 +99,8 @@ Commands:
                                             --reported says whether OpenCode accepted the reply to request R
   hook <agent>                              Turn an agent hook event on stdin into Needs you requests;
                                             agent is one of claude|codex|opencode; always exits 0. It
-                                            prints only a prompt guard stop or a message for its own agent
+                                            prints only BMN's answers to its own agent: a guard's hold, the
+                                            away refusal, a brief, notice or message, a phone decision
   hooks print opencode                     Print the shipped OpenCode TypeScript plugin
   hooks check [agent] [--file PATH]         Say which of BMN's hook entries each agent's own hook file
                                             carries: wired, wired (older wording) or missing
