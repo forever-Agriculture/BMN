@@ -78,10 +78,11 @@ export function PushPolicyHealth(): React.JSX.Element {
                   <span className="health-state">
                     <span id={id} className="mono">{repository.name}</span>
                     {repository.unread === null ? null : <span className="faint"><Dot label="Not read" />{sentence(repository.unread)}</span>}
+                    {repository.note === undefined ? null : <span className="faint">{sentence(repository.note)}</span>}
                   </span>
                   {view.state === 'unknown' ? <span className="faint">unknown</span> : (
                     <Segmented<PushLevel> labelledBy={id} options={PUSH_LEVELS} value={repository.level} fit
-                      disabled={repository.unread !== null}
+                      disabled={repository.unread !== null && repository.level === 'prs-only'}
                       optionLabel={(level) => PUSH_LEVEL_WORDS[level]}
                       onChange={(level) => change({ kind: 'level', repository: repository.repository, level })} />
                   )}

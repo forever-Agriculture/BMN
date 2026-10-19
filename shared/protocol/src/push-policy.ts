@@ -19,6 +19,7 @@ export const PUSH_POLICY_STILL_ASKS: readonly string[] = Object.freeze([
   'closing, killing or restarting packaged BMN (queuing update:desktop does not ask)',
   'CI and workflow changes, including scripts and actions CI runs and such changes arriving through a merged PR',
   'a push to a branch that triggers a deployment',
+  'a pull-request label or comment that triggers a deployment or a bot (a slash command, a deploy or merge label)',
   'a push to the default branch, or a merge, above the repository\'s level',
   'repository settings, protection, collaborators, secrets, visibility, transfer, archive and deletion',
   'deleting branches or tags, force pushes and history rewrites',
@@ -154,8 +155,10 @@ export interface PushPolicyRepositoryView {
   level: PushLevel
   /** The default branch GitHub reports; null with `unread` when it could not be read. */
   defaultBranch: string | null
-  /** Why the owner or default branch could not be read; such a repository counts as PRs only. */
+  /** Why the owner or default branch could not be read; Health shows it, and `bmn policy` reads the repository itself. */
   unread: string | null
+  /** Why a raised repository is listed that no session works in: it stays in sight until he lowers it. */
+  note?: string
 }
 
 export interface PushPolicyOwnerView {

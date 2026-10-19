@@ -925,14 +925,14 @@ from the folder's `origin`. The repository's owner and default branch come from 
 - **In force** only while at least one owner is allowed and the rules master carries the pointer `bmn policy
   --repo`. Otherwise, and when BMN is closed or its store cannot be read, it prints why and authorizes nothing:
   every push, merge and pull-request write asks the owner.
-- **PRs only**, a repository's level until he raises it, and the level of a repository Health does not list or
-  GitHub cannot read: push branches other than the default one (never forced, never deleting) and create, edit,
-  mark ready and comment on pull requests.
+- **PRs only**, a repository's level until he raises it, and the level of a repository the agent's `gh` cannot
+  read: push branches other than the default one (never forced, never deleting) and create, edit, mark ready and
+  comment on pull requests, with no label or comment that triggers a deployment or a bot.
 - **Merge when green**: also merge a pull request whose current head has every required check green, at least
   one, with no `--admin`, `--auto` or `--delete-branch`.
 - **Merge and push main**: also push the default branch, never forced, once the work passed its acceptance.
 - **Still asks**, at every level: the list `bmn policy` prints (deploys, releases and tags, CI changes, repository
-  settings, force pushes and deletions, publishing, secrets, a merge without green required checks, a merge or a
+  settings, force pushes and deletions, publishing, secrets, PR labels or comments that trigger a deployment or a bot, a merge without green required checks, a merge or a
   push of the default branch before the work passed its acceptance, anything in a repository of a denied or
   unknown owner, and more). The policy removes the ask; it never makes work ready.
 

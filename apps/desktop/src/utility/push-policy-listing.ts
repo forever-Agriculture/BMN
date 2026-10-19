@@ -4,9 +4,11 @@ import { promisify } from 'node:util'
 import {
   githubRepositoryFromRemote,
   pushPolicyLogin,
+  pushPolicyRepository,
   pushPolicyStanding,
   type PushPolicyOwnerView,
   type PushPolicyRead,
+  type PushPolicyRepositoryView,
   type PushPolicyView
 } from '@bmn/protocol'
 
@@ -17,13 +19,14 @@ const CACHE_MS = 10 * 60_000
 /** At most this many repositories are looked up on GitHub, which bounds what one Health read can cost; the rest are still listed. */
 export const REPOSITORY_LIMIT = 64
 
-export type RepositoryFacts = { owner: string; organisation: boolean; defaultBranch: string } | { unread: string }
+/** `repository` is GitHub's own `owner/name`, which a checkout's remote may still name by an old name after a rename. */
+export type RepositoryFacts = { repository: string; owner: string; organisation: boolean; defaultBranch: string } | { unread: string }
 
 /** The reads the listing needs; tests give their own. */
 export interface PolicyReader {
   /** The `owner/name` of the checkout's GitHub remote, or null when it has none. */
   remote(directory: string): Promise<string | null>
-  /** The repository's owner, whether it is an organisation, and its default branch, as GitHub says. */
+  /** The repository's own name, its owner, whether that is an organisation, and its default branch, as GitHub says. */
   repository(repository: string): Promise<RepositoryFacts>
   /** The accounts signed in with `gh` on this computer; they only name rows. */
   signedIn(): Promise<string[]>
@@ -59,13 +62,16 @@ export function systemPolicyReader(masterHasPointer: () => Promise<boolean | nul
       const kept = cache.get(repository)
       if (kept !== undefined && Date.now() - kept.at < CACHE_MS) return kept.facts
       const view = async (token?: string): Promise<RepositoryFacts> => {
-        const text = await run('gh', ['repo', 'view', repository, '--json', 'owner,isInOrganization,defaultBranchRef'], ghEnvironment(token))
-        const value = JSON.parse(text) as { owner?: { login?: unknown }; isInOrganization?: unknown; defaultBranchRef?: { name?: unknown } }
+        const text = await run('gh', ['repo', 'view', repository, '--json', 'owner,name,isInOrganization,defaultBranchRef'], ghEnvironment(token))
+        const value = JSON.parse(text) as { owner?: { login?: unknown }; name?: unknown; isInOrganization?: unknown; defaultBranchRef?: { name?: unknown } }
         const owner = pushPolicyLogin(value.owner?.login)
         const branch = typeof value.defaultBranchRef?.name === 'string' && value.defaultBranchRef.name !== '' ? value.defaultBranchRef.name : null
         if (owner === null) return { unread: 'GitHub named no owner' }
+        // The same name `bmn policy` reads (policy-cli.mjs githubFacts), so Health and the CLI mean one repository.
+        const own = typeof value.name === 'string' ? pushPolicyRepository(`${owner}/${value.name}`) : null
+        if (own === null) return { unread: 'GitHub named no repository name' }
         if (branch === null) return { unread: 'GitHub named no default branch' }
-        return { owner, organisation: value.isInOrganization === true, defaultBranch: branch }
+        return { repository: own, owner, organisation: value.isInOrganization === true, defaultBranch: branch }
       }
       let facts: RepositoryFacts
       try {
@@ -98,8 +104,9 @@ export function systemPolicyReader(masterHasPointer: () => Promise<boolean | nul
 }
 
 /**
- * Health's view: every owner of a repository a session works in, and every signed-in account, each with the stored decision
- * (denied unless he allowed it); under each, its repositories at their stored level, an unreadable one at PRs only with why.
+ * Health's view: every owner of a repository a session works in, every signed-in account and every allowed owner, each with
+ * the stored decision (denied unless he allowed it); under each, its repositories at their stored level, an unreadable one
+ * with why, and a raised one no session works in any more, so every grant stays in sight and can be taken back.
  */
 export async function pushPolicyView(read: PushPolicyRead, directories: readonly string[], reader: PolicyReader): Promise<PushPolicyView> {
   const [masterHasPointer, signedIn] = await Promise.all([reader.masterHasPointer(), reader.signedIn()])
@@ -124,18 +131,34 @@ export async function pushPolicyView(read: PushPolicyRead, directories: readonly
     return row
   }
   for (const login of signedIn) ownerRow(login).kind = 'account'
+  const listed = new Set<string>()
+  const storedLevel = (repository: string) => record?.levels.find((entry) => entry.repository === repository)?.level ?? 'prs-only'
   for (const { repository, facts: found } of facts) {
-    // A repository GitHub could not confirm is listed under the owner its remote names, at PRs only, with the reason.
+    // A repository GitHub could not confirm is listed under the owner its remote names, with the reason; it keeps its stored
+    // level, so a raised one can still be lowered.
     const owner = 'unread' in found ? repository.split('/')[0]! : found.owner
+    const confirmed = 'unread' in found ? repository : found.repository
+    // Two checkouts of one repository, or a remote still naming it by its old name, list it once, by GitHub's own name.
+    if (listed.has(confirmed)) continue
+    listed.add(confirmed)
     const row = ownerRow(owner)
     if (!('unread' in found)) row.kind = found.organisation ? 'organisation' : 'account'
-    const confirmed = 'unread' in found ? repository : `${found.owner}/${repository.split('/')[1]}`
     row.repositories.push({
-      repository: confirmed, name: confirmed.split('/')[1]!,
-      level: 'unread' in found ? 'prs-only' : record?.levels.find((entry) => entry.repository === confirmed)?.level ?? 'prs-only',
+      repository: confirmed, name: confirmed.split('/')[1]!, level: storedLevel(confirmed),
       defaultBranch: 'unread' in found ? null : found.defaultBranch,
       unread: 'unread' in found ? found.unread : null
     })
+  }
+  // A grant whose last session or workspace went away stays listed, so it can be revoked (the epic review, 2026-10-19).
+  for (const owner of record?.owners ?? []) if (owner.allowed) ownerRow(owner.login)
+  for (const entry of record?.levels ?? []) {
+    if (entry.level === 'prs-only' || listed.has(entry.repository)) continue
+    listed.add(entry.repository)
+    const kept: PushPolicyRepositoryView = {
+      repository: entry.repository, name: entry.repository.split('/')[1]!, level: entry.level, defaultBranch: null, unread: null,
+      note: 'no session works in it now'
+    }
+    ownerRow(entry.repository.split('/')[0]!).repositories.push(kept)
   }
   const list = [...owners.values()].sort((a, b) => Number(b.signedIn) - Number(a.signedIn) || a.login.localeCompare(b.login))
   for (const row of list) row.repositories.sort((a, b) => a.name.localeCompare(b.name))

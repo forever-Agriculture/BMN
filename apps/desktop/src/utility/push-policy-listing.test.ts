@@ -7,8 +7,8 @@ const REMOTES: Record<string, string | null> = {
   '/work/widgets': 'octo/widgets', '/work/widgets-2': 'octo/widgets', '/work/api': 'acme/api', '/work/gone': 'octo/gone', '/work/plain': null
 }
 const FACTS: Record<string, RepositoryFacts> = {
-  'octo/widgets': { owner: 'octo', organisation: false, defaultBranch: 'main' },
-  'acme/api': { owner: 'acme', organisation: true, defaultBranch: 'trunk' },
+  'octo/widgets': { repository: 'octo/widgets', owner: 'octo', organisation: false, defaultBranch: 'main' },
+  'acme/api': { repository: 'acme/api', owner: 'acme', organisation: true, defaultBranch: 'trunk' },
   'octo/gone': { unread: 'GitHub did not answer for this repository' }
 }
 const reader = (pointer: boolean | null = true): PolicyReader => ({
@@ -31,7 +31,7 @@ describe('Health\'s push policy listing (Story 83.3)', () => {
     ])
   })
 
-  it('shows the stored decisions and levels, and a repository GitHub could not confirm at PRs only with why', async () => {
+  it('shows the stored decisions and levels, and a repository GitHub could not confirm at its stored level with why', async () => {
     const view = await pushPolicyView(stored({
       owners: [{ login: 'acme', allowed: true, changedAt: '2026-10-18T19:00:00.000Z' }],
       levels: [{ repository: 'acme/api', level: 'merge-and-push-main', changedAt: '2026-10-18T19:00:00.000Z' }, { repository: 'octo/gone', level: 'merge-when-green', changedAt: '2026-10-18T19:00:00.000Z' }]
@@ -40,7 +40,7 @@ describe('Health\'s push policy listing (Story 83.3)', () => {
     const acme = view.owners.find((owner) => owner.login === 'acme')!
     expect(acme).toMatchObject({ allowed: true, repositories: [{ repository: 'acme/api', level: 'merge-and-push-main', defaultBranch: 'trunk', unread: null }] })
     const gone = view.owners.find((owner) => owner.login === 'octo')!.repositories.find((r) => r.name === 'gone')!
-    expect(gone).toEqual({ repository: 'octo/gone', name: 'gone', level: 'prs-only', defaultBranch: null, unread: 'GitHub did not answer for this repository' })
+    expect(gone).toEqual({ repository: 'octo/gone', name: 'gone', level: 'merge-when-green', defaultBranch: null, unread: 'GitHub did not answer for this repository' })
   })
 
   it('looks up at most the limit on GitHub and still lists every repository past it, unread, under its remote\'s owner', async () => {
@@ -49,12 +49,46 @@ describe('Health\'s push policy listing (Story 83.3)', () => {
     const view = await pushPolicyView(readPushPolicy(undefined), [...many, '/work/zz'], {
       ...reader(),
       remote: async (directory) => directory === '/work/zz' ? 'zeta-org/last' : `octo/${directory.split('/').pop()}`,
-      repository: async (repository) => { asked.push(repository); return { owner: repository.split('/')[0]!, organisation: false, defaultBranch: 'main' } }
+      repository: async (repository) => {
+        asked.push(repository)
+        return { repository, owner: repository.split('/')[0]!, organisation: false, defaultBranch: 'main' }
+      }
     })
     expect(asked).toHaveLength(REPOSITORY_LIMIT)
     expect(view.owners.find((owner) => owner.login === 'octo')!.repositories).toHaveLength(REPOSITORY_LIMIT + 2)
     expect(view.owners.find((owner) => owner.login === 'zeta-org')!.repositories).toEqual([
       { repository: 'zeta-org/last', name: 'last', level: 'prs-only', defaultBranch: null, unread: `not looked up: Health reads at most ${REPOSITORY_LIMIT} repositories from GitHub` }
+    ])
+  })
+
+  it('keeps an allowed owner and a raised repository listed after the last session in them went away, so both can be revoked', async () => {
+    const view = await pushPolicyView(stored({
+      owners: [{ login: 'octo', allowed: false, changedAt: '2026-10-18T19:00:00.000Z' }, { login: 'far-org', allowed: true, changedAt: '2026-10-18T19:00:00.000Z' }],
+      levels: [{ repository: 'far-org/tool', level: 'merge-and-push-main', changedAt: '2026-10-18T19:00:00.000Z' }]
+    }), [], { ...reader(), signedIn: async () => ['octo'] })
+    expect(view.standing.authorizes).toBe(true)
+    expect(view.owners.map((owner) => [owner.login, owner.allowed])).toEqual([['octo', false], ['far-org', true]])
+    expect(view.owners[1]!.repositories).toEqual([
+      { repository: 'far-org/tool', name: 'tool', level: 'merge-and-push-main', defaultBranch: null, unread: null, note: 'no session works in it now' }
+    ])
+    // When discovery fails outright, the same holds.
+    const failing = await pushPolicyView(stored({ owners: [{ login: 'far-org', allowed: true, changedAt: '2026-10-18T19:00:00.000Z' }] }),
+      ['/work/widgets'], { ...reader(), remote: async () => null, signedIn: async () => [] })
+    expect(failing.owners.map((owner) => [owner.login, owner.allowed])).toEqual([['far-org', true]])
+  })
+
+  it('names a repository by GitHub\'s own name when a checkout\'s remote still has its old name, once for two checkouts', async () => {
+    const renamed: RepositoryFacts = { repository: 'octo/gadgets', owner: 'octo', organisation: false, defaultBranch: 'main' }
+    const view = await pushPolicyView(stored({
+      owners: [{ login: 'octo', allowed: true, changedAt: '2026-10-18T19:00:00.000Z' }],
+      levels: [{ repository: 'octo/gadgets', level: 'merge-and-push-main', changedAt: '2026-10-18T19:00:00.000Z' }]
+    }), ['/old', '/new'], {
+      ...reader(),
+      remote: async (directory) => directory === '/old' ? 'octo/widgets-old' : 'octo/gadgets',
+      repository: async () => renamed
+    })
+    expect(view.owners.find((owner) => owner.login === 'octo')!.repositories).toEqual([
+      { repository: 'octo/gadgets', name: 'gadgets', level: 'merge-and-push-main', defaultBranch: 'main', unread: null }
     ])
   })
 

@@ -58,6 +58,14 @@ const HELD: Array<[string, string]> = [
   ['killall bmn', 'stopping BMN'],
   ['kill $(pgrep -f /opt/BMN/bmn)', 'stopping BMN'],
   ['pgrep -f linux-unpacked/bmn | xargs kill -9', 'stopping BMN'],
+  // Ordinary forms the epic review found passing (2026-10-19): a continued line, a repository flag before the subcommand, an
+  // attached field.
+  ['git push origin \\\n  --force main', 'force'],
+  ['git push \\\r\n  --delete origin old', 'deletion'],
+  ['gh -R octo/widgets pr merge 7 --admin --squash', 'merge'],
+  ['gh --repo octo/widgets pr merge 7 --auto', 'merge'],
+  ['gh api -X POST repos/octo/widgets/rulesets -fname=rule', 'repository, its rulesets'],
+  ['gh api repos/octo/widgets -Fvisibility=private', 'repository, its rulesets'],
   // The accepted cost: text that only mentions a held command is held too.
   ['git commit -m "never git push --force to main"', 'force'],
   ["git commit -m 'docs: explain npm publish'", 'publishing']
@@ -90,6 +98,9 @@ const LEFT: string[] = [
   'kill %1',
   'bmn plan status --json',
   'git push origin feature && git branch -D merged',
+  'git push origin \\\n  feature-x',
+  'gh -R octo/widgets pr merge 7 --squash',
+  'gh -R octo/widgets api repos/octo/widgets/issues/1/comments -fbody=x',
   ''
 ]
 

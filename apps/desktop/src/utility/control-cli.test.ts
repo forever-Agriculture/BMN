@@ -4961,6 +4961,14 @@ describe('bmn policy (Story 83.3)', () => {
     expect(result.stdout).toContain('- a merge or a push of the default branch before the work passed its acceptance (its tests and reviews): the policy removes the ask, it never makes work ready')
   })
 
+  it('lets pull requests be written only without a label or comment that triggers a deployment or a bot, and says so (R83-FR1)', async () => {
+    const fixture = await cliFixture()
+    fixture.handlers.policyStatus.mockImplementation(async () => ({ ...inForce(), stillAsks: [...PUSH_POLICY_STILL_ASKS] }))
+    const result = await runCli(['policy', '--repo', 'octo/widgets'], { env: { ...fixture.sessionEnv, PATH: await fakeGh(fixture.root, widgets) } })
+    expect(result.stdout).toContain('- create, edit, mark ready and comment on pull requests, with no label or comment that triggers a deployment or a bot')
+    expect(result.stdout).toContain('- a pull-request label or comment that triggers a deployment or a bot (a slash command, a deploy or merge label)')
+  })
+
   it('counts an unlisted repository of an allowed owner as PRs only, and a denied, moved or unreadable one as nothing', async () => {
     const fixture = await cliFixture()
     fixture.handlers.policyStatus.mockImplementation(async () => inForce())

@@ -381,8 +381,8 @@ BMN's own test there showed that the app takes the setting; until then the limit
 
 Rules → **Health** › **Pushes and merges** says what your sessions may push or merge without asking you, by
 repository owner: each account or organisation your sessions work in, or that `gh` is signed in as, starts denied
-and gets a switch; under an allowed owner each repository has three steps, **PRs only** (push other branches and
-write pull requests), **Merge when green** (also merge a pull request whose required checks are all green) and
+and gets a switch, and an owner you allowed or a repository you raised stays listed after its last session closes; under an allowed owner each repository has three steps, **PRs only** (push other branches and
+write pull requests, with no label or comment that triggers a deployment or a bot), **Merge when green** (also merge a pull request whose required checks are all green) and
 **Merge and push main** (also push the default branch, never forced, once the work passed its acceptance).
 Agents read it with `bmn policy --repo` before each push, merge or pull-request write, as your rules master tells them; it is in force only while that
 master carries the pointer, so Rules › Undo of that save turns it off, and so does denying every owner. Deploys,

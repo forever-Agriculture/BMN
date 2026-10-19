@@ -60,7 +60,7 @@ async function githubFacts(repository) {
 
 /** What one repository's level lets an agent do without asking, when the policy authorizes it there. */
 function mayWords(level, branch) {
-  const words = [`push branches other than ${branch}, never forced and never deleting a branch or tag`, 'create, edit, mark ready and comment on pull requests']
+  const words = [`push branches other than ${branch}, never forced and never deleting a branch or tag`, 'create, edit, mark ready and comment on pull requests, with no label or comment that triggers a deployment or a bot']
   if (level !== 'prs-only') words.push('merge a pull request whose current head has every required check green (at least one), with no --admin, --auto or --delete-branch')
   if (level === 'merge-and-push-main') words.push(`push ${branch}, never forced, once the work passed its acceptance`)
   return words

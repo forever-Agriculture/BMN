@@ -30,7 +30,7 @@ const API_PATH = /^\/?repos\/[^/\s]+\/[^/\s?]+(\/?$|\/rulesets(\/|$)|\/branches\
 
 /** A `gh api` call that writes to a repository's own path, its rulesets or its branch protection. */
 function apiHold(segment) {
-  const at = segment.search(/\bgh\s+api\b/)
+  const at = segment.search(/\bgh\b.*?\bapi\b/)
   if (at < 0) return null
   const list = words(segment.slice(at))
   let method = null
@@ -40,7 +40,7 @@ function apiHold(segment) {
     const joined = /^(-X|--method)=?(.*)$/.exec(word)
     if (joined) method = (joined[2] || list[index + 1] || '').toUpperCase()
     else if (/^-X[A-Za-z]+$/.test(word)) method = word.slice(2).toUpperCase()
-    if (/^(-f|-F|--field|--raw-field|--input)(=|$)/.test(word)) fields = true
+    if (/^-[fF]/.test(word) || /^--(field|raw-field|input)(=|$)/.test(word)) fields = true
   }
   const writes = method === null ? fields : ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
   return writes && list.some((word) => API_PATH.test(word.split('?')[0])) ? 'a change to a repository, its rulesets or its branch protection' : null
@@ -48,7 +48,7 @@ function apiHold(segment) {
 
 /** A `gh pr merge` that bypasses checks, merges later by itself or deletes the branch. */
 function mergeHold(segment) {
-  const at = segment.search(/\bgh\s+pr\s+merge\b/)
+  const at = segment.search(/\bgh\b.*?\bpr\s+merge\b/)
   if (at < 0) return null
   return words(segment.slice(at)).some((word) => /^--(admin|auto|delete-branch)(=|$)/.test(word) || shortFlags(word, 'd'))
     ? 'a pull request merge with --admin, --auto or --delete-branch' : null
@@ -70,7 +70,8 @@ const SEGMENT_RULES = [
  */
 export function heldCommand(command) {
   if (typeof command !== 'string' || command === '') return null
-  for (const segment of command.split(SEPARATORS)) {
+  // A backslash at a line's end continues the command on the next line, so `git push origin \` then `--force main` is one push.
+  for (const segment of command.replace(/\\\r?\n/g, ' ').split(SEPARATORS)) {
     for (const rule of SEGMENT_RULES) {
       const held = rule(segment)
       if (held !== null) return held
