@@ -15,7 +15,6 @@ import {
   type AttentionRecord,
   type ConversationBindingState,
   isReportedResumePreview,
-  type SessionResumePreview,
   type ExplicitConversationBinding,
   type InputDraftRecord,
   type HookOriginRecord,
@@ -51,7 +50,7 @@ import { rememberRecentSession } from './recent-sessions'
 import { WorkspacePinsDialog } from './workspace-pins-dialog'
 import { restoreArchive, type ArchiveUndoTarget } from './archive-undo'
 import { conversationBindingPresentation, reportedResumeLine, resumeAvailable } from './conversation-resume'
-import { FileReferenceDialog, type FileReferenceRequest, type FileReferenceSendTarget } from './file-reference-dialog'
+import { FileReferenceDialog, type FileReferenceSendTarget } from './file-reference-dialog'
 import { QuickLook, type QuickLookRequest } from './quick-look'
 import { RECENT_SCROLLBACK_BYTES, RECENT_SCROLLBACK_ROWS, folderName, printedReferences, quickLookSourceFor, selectedReference } from './quick-look-open'
 import { FilesPanel } from './files-panel'
@@ -95,7 +94,7 @@ import { TurnChangesDialog } from './turn-changes-dialog'
 import { dismissAttentionReminder, noticesWhenNavigating, applyAttentionWithdrawal } from './attention-actions'
 import { PopupMenu, type MenuAnchor, type MenuEntry } from './popup-menu'
 import { paneMenu, readOnlyViewCommands, sessionMenu, workspaceMenu } from './shell-menus'
-import { PreferencesDialog, type PreferencesPlace } from './preferences-dialog'
+import { PreferencesDialog } from './preferences-dialog'
 import { reportedModels, sessionsByApp } from './model-suggestions'
 import {
   ACTIVITY_TICK_MS,
@@ -172,58 +171,7 @@ import {
   type TreeSessionAction,
   type WorkspaceTreeState
 } from './workspace-tree'
-
-type ShellDialog =
-  | { kind: 'palette' }
-  | { kind: 'recent-sessions'; sessionIds: string[] }
-  | { kind: 'workspace-pins'; workspaceId: string; openedFromWorkspaceId: string | null }
-  /** Chooses the session for a second pane beside `sessionId`. */
-  | { kind: 'split-picker'; sessionId: string | null }
-  | { kind: 'preferences'; page?: PreferencesPlace }
-  | { kind: 'workspace-results'; workspace: WorkspaceRecord; openedFromWorkspaceId: string | null }
-  /** The owner's reading of one workspace's messages between sessions (Epic 66). */
-  | { kind: 'workspace-messages'; workspaceId: string; openedFromWorkspaceId: string | null }
-  /** Read-only: a session's kept turns, one opened to its files and a file's difference (Story 69.5). */
-  | { kind: 'turn-changes'; sessionId: string }
-  | { kind: 'new-workspace' }
-  | { kind: 'dev-auto-runs'; workspaceId?: string }
-  | { kind: 'rename-workspace'; workspace: WorkspaceRecord }
-  | { kind: 'locate'; session: SessionRecord; binding: ConversationBindingState }
-  | { kind: 'stop'; session: SessionRecord }
-  /** Shows the exact command before Resume starts anything. */
-  | { kind: 'resume'; session: SessionRecord; preview: SessionResumePreview }
-  | { kind: 'file-reference'; request: FileReferenceRequest }
-  /** Quick look (Epic 67); focus goes back to `returnTo`'s terminal when it closes. */
-  | { kind: 'quick-look'; request: QuickLookRequest; returnTo: string | null; openedFromWorkspaceId: string | null }
-  /** The one offer to resume what an update or a quit stopped; every row shows its command. */
-  | { kind: 'resume-interrupted'; cohort: InterruptedSessionCohort }
-  /** Read-only: what this session's harness reported, for a request that did or did not arrive. */
-  | { kind: 'hook-events'; session: SessionRecord }
-  | { kind: 'plan-use' }
-  /** Story 76.3: "I'm away…": the palette's second mode, a note for himself or just Enter. */
-  | { kind: 'away-note' }
-  /** Story 76.6: "While you were away", the current period's summary, read-only. */
-  | { kind: 'away-summary' }
-  /** Story 84.3: Before you go, the departure's cards, answered only here or on Telegram. */
-  | { kind: 'before-you-go' }
-  /**
-   * Read-only: one progress observation and the published files it points at. The observation is
-   * captured when the detail opens, so a newer report cannot swap itself in under the owner.
-   */
-  | {
-      kind: 'progress-evidence'
-      session: SessionRecord
-      opened: ProgressPresentation
-      reportedIncarnationId: string | null
-      /** The process the observation belonged to; a different one closes the detail. */
-      incarnationId: string | null
-    }
-
-type SidePanel = 'files' | 'details' | 'new' | null
-
-const APP_EVENT_REFRESH_MS = 15_000
-/** How long a new session's shell gets to read its first command line before BMN types nothing into it. */
-const SHELL_READY_WAIT_MS = 10_000
+import { APP_EVENT_REFRESH_MS, SHELL_READY_WAIT_MS, type ShellDialog, type SidePanel } from './app-shell'
 
 function App(): React.JSX.Element {
   const controllers = useRef(new Map<string, TerminalController>())
