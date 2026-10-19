@@ -1001,10 +1001,8 @@ export function PreferencesDialog(props: {
                   {healthTestBusy ? 'Sending…' : 'Send test'}
                 </button>
               </div>
-              <p className="preferences-help">
-                Checks temperatures, battery and mains every minute while BMN is open, and tells your phone when something is wrong and when it is over.
-                Leave the time empty to keep watching; a time already past means that time tomorrow.
-              </p>
+              <p className="preferences-help">Checks temperatures, battery and mains every minute while BMN is open; your phone hears when a problem starts and ends.</p>
+              <p className="preferences-help">Leave the time empty to keep watching; a time already past means that time tomorrow.</p>
               {!canSendTest && (
                 <p className="preferences-help" role="status">
                   {telegramEnabled ? 'Telegram is not connected; nothing will be sent until it is.' : 'Telegram is off; nothing will be sent. Enable and connect Telegram to be told.'}
@@ -1015,13 +1013,18 @@ export function PreferencesDialog(props: {
               <details className="advanced">
                 <summary>What is checked, and what it cannot see</summary>
                 <div className="advanced-body">
-                  <p>
-                    Alerts at: CPU {HEALTH_LIMITS.cpuCritical} °C on one reading or {HEALTH_LIMITS.cpuHot} °C on {HEALTH_LIMITS.cpuHotReadings} in a row;
-                    NVIDIA GPU {HEALTH_LIMITS.nvidiaGpu} °C; integrated GPU {HEALTH_LIMITS.integratedGpu} °C; a drive {HEALTH_LIMITS.drive} °C;
-                    battery voltage outside {HEALTH_LIMITS.cellVoltsMin.toFixed(1)}–{HEALTH_LIMITS.cellVoltsMax} V per cell; the battery no longer detected; mains power lost;
-                    a CPU temperature that cannot be read. The limits are fixed.
-                  </p>
-                  <p>A message holds the time, this machine&apos;s name, each problem with one line of advice, and all readings. While a problem stays, it repeats every {HEALTH_LIMITS.repeatMinutes} minutes; one &ldquo;Back to normal&rdquo; follows when it ends.</p>
+                  <dl className="kv" aria-label="Alerts at">
+                    <dt>CPU</dt><dd>{HEALTH_LIMITS.cpuCritical} °C on one reading, or {HEALTH_LIMITS.cpuHot} °C on {HEALTH_LIMITS.cpuHotReadings} in a row</dd>
+                    <dt>NVIDIA GPU</dt><dd>{HEALTH_LIMITS.nvidiaGpu} °C</dd>
+                    <dt>Integrated GPU</dt><dd>{HEALTH_LIMITS.integratedGpu} °C</dd>
+                    <dt>Drive</dt><dd>{HEALTH_LIMITS.drive} °C</dd>
+                    <dt>Battery</dt><dd>outside {HEALTH_LIMITS.cellVoltsMin.toFixed(1)}–{HEALTH_LIMITS.cellVoltsMax} V per cell, or no longer detected</dd>
+                    <dt>Mains</dt><dd>power lost</dd>
+                    <dt>CPU reading</dt><dd>cannot be read</dd>
+                  </dl>
+                  <p>These are the alert limits; they are fixed.</p>
+                  <p>A message holds the time, this machine&apos;s name, each problem with one line of advice, and all readings.</p>
+                  <p>While a problem stays, it repeats every {HEALTH_LIMITS.repeatMinutes} minutes; one &ldquo;Back to normal&rdquo; follows when it ends.</p>
                   <p>It only reads and reports: BMN never stops, slows or suspends anything. A sleeping NVIDIA card is not woken to be asked.</p>
                   <p>It runs only while BMN is open. It cannot see smoke, a swelling battery, or a machine that has died.</p>
                 </div>
@@ -1124,7 +1127,7 @@ export function PreferencesDialog(props: {
               <details className="advanced">
                 <summary>How quiet hours work</summary>
                 <div className="advanced-body">
-                  <p>When quiet hours end, Telegram gets one summary with session names, request kinds and titles, then each request that is still waiting.</p>
+                  <p>When quiet hours end, Telegram gets one summary (session names, request kinds, titles), then each request still waiting.</p>
                   <p>Session dots stay current throughout.</p>
                   <p>The kinds and sessions you let through still arrive immediately.</p>
                 </div>

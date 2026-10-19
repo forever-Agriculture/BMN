@@ -75,7 +75,7 @@ describe('Morning digest and Quiet hours rows', () => {
 
   it('says held messages arrive as a summary and then each waiting request', () => {
     const markup = dialog(true, true)
-    expect(markup).toContain('one summary with session names, request kinds and titles, then each request that is still waiting')
+    expect(markup).toContain('one summary (session names, request kinds, titles), then each request still waiting')
     expect(markup).toContain('Each workspace with its checkout name, epics, Status, Decided-for-you entries and owner-item titles.')
     expect(markup).not.toMatch(/arrive as one summary/)
   })
@@ -112,10 +112,12 @@ describe('Health alerts row (Story 62.2)', () => {
 
   it('names what is checked, the limits, what a message holds and what the watch cannot do', () => {
     const help = row(dialog(settings(true, null)))
-    expect(help).toContain('CPU 100 °C on one reading or 95 °C on 3 in a row')
-    expect(help).toContain('NVIDIA GPU 87 °C; integrated GPU 95 °C; a drive 80 °C')
-    expect(help).toContain('battery voltage outside 3.0–4.45 V per cell')
-    expect(help).toContain('mains power lost')
+    // The limits are rows of a key and its value (docs/design.md W2), never one paragraph joined with semicolons.
+    expect(help).toContain('<dt>CPU</dt><dd>100 °C on one reading, or 95 °C on 3 in a row</dd>')
+    expect(help).toContain('<dt>NVIDIA GPU</dt><dd>87 °C</dd><dt>Integrated GPU</dt><dd>95 °C</dd><dt>Drive</dt><dd>80 °C</dd>')
+    expect(help).toContain('<dt>Battery</dt><dd>outside 3.0–4.45 V per cell, or no longer detected</dd>')
+    expect(help).toContain('<dt>Mains</dt><dd>power lost</dd><dt>CPU reading</dt><dd>cannot be read</dd>')
+    expect(help).toContain('These are the alert limits; they are fixed.')
     expect(help).toContain('A message holds the time, this machine&#x27;s name, each problem with one line of advice, and all readings.')
     expect(help).toContain('repeats every 10 minutes')
     expect(help).toContain('It runs only while BMN is open. It cannot see smoke, a swelling battery, or a machine that has died.')
