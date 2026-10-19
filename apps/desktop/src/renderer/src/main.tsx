@@ -1,4 +1,6 @@
 // MODULE: main.tsx - Chancel application shell: header, workspace tree, session panes, side panels, dialogs and keyboard map
+// It stays one file over 2,000 lines (owner, 2026-10-19; Story 80.19): App's blocks read its state through the closure,
+// so moving one out is a props or hook refactor, not a move.
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
