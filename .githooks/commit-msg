@@ -1,0 +1,56 @@
+#!/usr/bin/env node
+// MODULE: commit-msg - refuses a commit whose subject line is over 100 characters (Story 80.10, R80-FR6)
+// Dependency-free on purpose: it runs in every worktree before any install. Characters are Unicode code
+// points of the first non-comment, non-blank line with trailing spaces removed; the Conventional prefix
+// counts. Bodies are free, and merge ("Merge ") and revert ('Revert "') subjects are exempt.
+import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+
+const LIMIT = 100
+const EXEMPT_PREFIXES = ['Merge ', 'Revert "']
+
+/** Git's comment marker: the last core.commentChar or core.commentString set, else "#" ("auto" reads as "#"). */
+function commentMarker() {
+  const result = spawnSync('git', ['config', '--get-regexp', '^core\\.comment(char|string)$'], { encoding: 'utf8' })
+  if (result.status !== 0 || !result.stdout) return '#'
+  const last = result.stdout.split('\n').filter(Boolean).at(-1) ?? ''
+  const space = last.indexOf(' ')
+  const value = space === -1 ? '' : last.slice(space + 1)
+  return value && value !== 'auto' ? value : '#'
+}
+
+function subjectLine(message, marker) {
+  for (const line of message.split('\n')) {
+    if (line.startsWith(marker)) continue
+    const trimmed = line.trimEnd()
+    if (trimmed === '') continue
+    return trimmed
+  }
+  return ''
+}
+
+const messageFile = process.argv[2]
+if (!messageFile) process.exit(0)
+
+let message
+try {
+  message = readFileSync(messageFile, 'utf8')
+} catch (error) {
+  console.error(`commit-msg: could not read ${messageFile} (${error.code ?? error.message}); not checked.`)
+  process.exit(0)
+}
+
+const subject = subjectLine(message, commentMarker())
+if (EXEMPT_PREFIXES.some((prefix) => subject.startsWith(prefix))) process.exit(0)
+
+const length = [...subject].length
+if (length > LIMIT) {
+  console.error(
+    [
+      `commit-msg: the subject line is ${length} characters; the limit is ${LIMIT}.`,
+      'Move the detail into the body (after a blank line) and commit again.',
+      'To remove this hook: git config --unset core.hooksPath'
+    ].join('\n')
+  )
+  process.exit(1)
+}
