@@ -1583,7 +1583,7 @@ question). The test passes only when no marker but the prompt's reached the stan
 was sent, nothing was written in the home folder, BMN's folder is still exactly BMN's, no plugin
 loaded and no MCP server started, no tool fetched the local page, every offered tool was called
 and gave back no marker, and every offered tool is one BMN has looked at
-(`OPENCODE_RESEARCH_TOOLS_SEEN` in `apps/desktop/bin/agents-check.mjs`: only `websearch`). A run
+(`OPENCODE_RESEARCH_TOOLS_SEEN` in `apps/desktop/bin/agents-check-evaluate.mjs`: only `websearch`). A run
 that asked to reach any other host than the search service showed nothing. Each test is appended
 to `state/fence-tests.jsonl` with the OpenCode version, the model and a mark of the research form,
 which takes in BMN's whole OpenCode folder: a change to the folder's files starts closed.
