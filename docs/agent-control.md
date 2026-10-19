@@ -1470,10 +1470,10 @@ a live run.
 
 #### Checking an OpenCode helper run
 
-`bmn roster check` reads one OpenCode command, the form 70.1 measured, and refuses every other
-(Story 70.2). `bmn roster role <role> --json` hands a lead its parts for each OpenCode candidate
-(`opencode`: `env`, `argv`, then `-m` and `--title`, the prompt on standard input) and, for a role
-with one, puts BMN's folder in order first. The command, with the lead's model, effort and title:
+`bmn roster check` reads one OpenCode command and refuses every other (Story 70.2). `bmn roster role <role> --json`
+hands a lead its parts for each OpenCode candidate (`opencode`: `env`, `argv`, then `-m` and `--title`, the prompt on
+standard input) and, for a role with one, puts BMN's folder in order first. The command, with the lead's model, effort
+and title:
 
 ```
 env -i HOME=<f>/home XDG_CONFIG_HOME=<f>/config XDG_DATA_HOME=<f>/data XDG_STATE_HOME=<f>/state
@@ -1483,69 +1483,43 @@ env -i HOME=<f>/home XDG_CONFIG_HOME=<f>/config XDG_DATA_HOME=<f>/data XDG_STATE
   --title <title> < <prompt file>
 ```
 
-`<f>` is BMN's folder for OpenCode runs, `~/.config/bmn/agents/state/opencode`, never your own
-OpenCode folders. Its configuration holds exactly two files, `opencode.json` (no update, no
-sharing, no snapshots; no provider, model or MCP server) and `agents/bmn-helper.md` (every action
-denied, then reading inside the project allowed), and its home folder is empty. The check refuses
-a run while the configuration holds anything else at any depth, a link, a changed byte of either
-file, or anything in the home folder, and says that `bmn roster role` puts the folder back.
+`<f>` is BMN's folder for OpenCode runs, `~/.config/bmn/agents/state/opencode`, never your own OpenCode folders. Its
+configuration holds exactly `opencode.json` (no update, sharing or snapshots; no provider, model or MCP server) and
+`agents/bmn-helper.md` (every action denied, then reading inside the project allowed); its home folder is empty. A run is
+refused while the configuration holds anything else at any depth, a link or a changed byte, or the home folder holds
+anything; `bmn roster role` puts the folder back.
 
-What the check reads and refuses:
+- **The form.** `env -i` with exactly these names and values (only `PATH` is yours), `run`, `--standalone`, `--format
+  json` and `--agent bmn-helper`. Refused, with the reason: no `env -i`, a missing or different name (another
+  `OPENCODE_CONFIG…` is "another OpenCode configuration"; without `OPENCODE_DISABLE_PROJECT_CONFIG=1` the repository's
+  configuration replaces BMN's agent), `--auto`, `--session`, `--continue`, `--fork`, `--server`, `--file`, any other
+  flag, a prompt on the command line, any other subcommand.
+- **Model and effort**, from `-m provider/model#variant`: an agent's model is `provider/model` (`opencode-go/kimi-k3` for
+  model `kimi-k3` and provider `opencode-go`), another is `MODEL_MISMATCH`; no `#variant`, or one outside the agent's
+  (and role's) efforts, is `EFFORT_UNSUPPORTED`. The variants a model takes are OpenCode's (on 2.0.29
+  `opencode-go/gpt-6-luna` none to max, `opencode-go/kimi-k3` only max); an agent's efforts should name those.
+- **The destination** is the provider of `-m` at its default address and must be the agent's (`HOST_MISMATCH`): BMN's
+  folder names no provider and the run takes OpenCode's built-in model list (with `OPENCODE_DISABLE_MODELS_FETCH=1`, no
+  call to `models.opencode.ai`; a newer model waits for an OpenCode update; a model list planted in the run's cache did
+  not move OpenCode Go's address, `plan/references/reference-70-opencode-helpers/RESULT.md`), so `-m` alone decides,
+  and a team whose own OpenCode is unrecorded or unknown in `## harness-routes` can still hold an OpenCode helper.
+  Without `--title` it is unknown (`HOST_UNKNOWN`): OpenCode would title the session with a model the command does not
+  name. Private work follows that provider's answer.
+- **Binding.** The first JSON event of a run names its session (`ses_` and 26 characters); `bmn roster bind --receipt
+  <file> --session <ses_…>` takes that shape for an OpenCode receipt, inside the same ten minutes as for Codex, and no
+  other. A research run on OpenCode binds the one session id its events name to its question (`session`), so its usage
+  can be read by it; where it cannot, the answer stands and its note says why.
 
-- **The form.** `env -i` with exactly these names and values (only PATH is yours), `run`,
-  `--standalone`, `--format json` and `--agent bmn-helper`. Refused with the reason: no `env -i`,
-  a missing or different name (another `OPENCODE_CONFIG…` is "another OpenCode configuration";
-  without `OPENCODE_DISABLE_PROJECT_CONFIG=1` the repository's own configuration replaces BMN's
-  agent), `--auto`, `--session`, `--continue`, `--fork`, `--server`, `--file`, any other flag, a
-  prompt on the command line, and any other subcommand.
-- **Model and effort.** From `-m provider/model#variant`. An OpenCode agent's model is
-  `provider/model` (`opencode-go/kimi-k3` for an agent whose model is `kimi-k3` and provider
-  `opencode-go`); another one is `MODEL_MISMATCH`, no `#variant` or one outside the agent's (and
-  role's) efforts is `EFFORT_UNSUPPORTED`. Which variants a model takes is OpenCode's: on 2.0.29
-  `opencode-go/gpt-6-luna` takes none, low, medium, high, xhigh and max, and `opencode-go/kimi-k3`
-  only max, so an agent's efforts should name what its model takes.
-- **The destination.** The provider of `-m` at its default address, which must be the agent's
-  provider (`HOST_MISMATCH`). BMN's folder names no provider and the run takes the model list
-  built into OpenCode, so `-m` alone decides; where your own OpenCode sends data, which
-  `## harness-routes` records, plays no part in a run from BMN's folder (Story 70.4: a team with
-  no OpenCode destination recorded, or whose own OpenCode reads as unknown, can still hold an
-  OpenCode helper). Without `--title` the destination is unknown (`HOST_UNKNOWN`), because
-  OpenCode would then name the session with a title model the command does not name. Private
-  work follows that provider's answer.
-- **The model list.** With `OPENCODE_DISABLE_MODELS_FETCH=1` a run takes its models from the list
-  built into OpenCode, which holds OpenCode Go's models on 2.0.29, and makes no call to
-  `models.opencode.ai`. A model newer than the installed OpenCode waits for an OpenCode update. A
-  model list planted in the run's cache did not move OpenCode Go's address in either mode
-  (the 70.2 probe at the end of the 70.1 record, `plan/references/reference-70-opencode-helpers/RESULT.md`).
-- **Binding.** The first JSON event of a run names its session (`ses_` and 26 characters);
-  `bmn roster bind --receipt <file> --session <ses_…>` takes that shape for an OpenCode receipt,
-  inside the same ten minutes as for Codex, and no other. A research run on OpenCode binds its
-  own session to its check: BMN reads the one session id its events name and keeps it with the
-  question (`session`), so its usage can be read by that id. Where it cannot be bound, the answer
-  stands and its note says why. Any other receipt is refused in the words it had before OpenCode.
+Tested by `apps/desktop/src/utility/agents-check.test.ts` and, with `BMN_OPENCODE_REAL=1`, a run of the installed
+OpenCode through the checked command: only reading tools were offered, a read outside the project was refused, nothing
+was written or started and no outside address asked for.
 
-Tested: the check's cases in `apps/desktop/src/utility/agents-check.test.ts`, and, with
-`BMN_OPENCODE_REAL=1`, one run of the installed OpenCode through the checked command against a
-stand-in model on this computer, with your kind of files in the home folder, a file outside the
-project and a repository that tries to loosen BMN's agent and start a plugin: only reading tools
-were offered, writing, editing, the shell, the web and sub-agents were refused, as was the read
-outside the project; nothing was written or started, no address outside this computer was asked
-for, and only the project file the model asked to read reached it.
-
-**Limits.**
-
-- *Sign-in.* BMN's folder holds the OpenCode Go sign-in BMN copied there when you approved an
-  agent on OpenCode Go (see [Luna through OpenCode Go](#luna-through-opencode-go)); helper
-  sessions stay out of your OpenCode history.
-- *Time.* A provider answering with a server error is retried without end and without an event;
-  the lead gives a dispatch its own time limit.
-- *Usage.* Tokens and cost are not printed; `opencode session export <id> --standalone` with the
-  same environment gives them.
-- *Versions.* The form was measured on 2.0.29; on another version the check says so in its steps.
-- *BMN's terminal plugin.* `opencode run` does not load it, so a helper run never reaches `bmn hook` as if it
-  were your session.
-- *Your own OpenCode.* None of this changes what BMN writes into your own OpenCode configuration:
-  it still gets the public rules only.
+**Limits.** *Sign-in:* BMN's folder holds the OpenCode Go sign-in it copied when you approved an agent on OpenCode Go
+([Luna through OpenCode Go](#luna-through-opencode-go)); helper sessions stay out of your history. *Time:* a provider's
+server error is retried without end or event, so the lead gives a dispatch its own time limit. *Usage:* tokens and cost
+are not printed; `opencode session export <id> --standalone` with the same environment gives them. *Versions:* measured
+on 2.0.29; on another the check says so in its steps. *BMN's terminal plugin:* `opencode run` does not load it, so a
+helper run never reaches `bmn hook` as your session. *Your own OpenCode* still gets the public rules only.
 
 #### Luna through OpenCode Go
 
@@ -1625,10 +1599,9 @@ the owner's plugin loaded and his MCP server started.
 
 #### Asking the web a question
 
-`bmn research ask` puts one question of your own, or of an agent working for you, to the web
-through a researcher your team names. It is a research run like the one above: BMN makes the
-run's folder, writes the prompt, builds the same command and asks the same check, and the app
-starts only on PASS. A refusal starts nothing and is given in the check's own words.
+`bmn research ask` puts one question of your own, or of an agent working for you, to the web through a researcher your
+team names. It is a research run like the one above (BMN makes the folder, writes the prompt, builds the same command
+and asks the same check), and the app starts only on PASS; a refusal starts nothing and is given in the check's words.
 
 ```bash
 bmn research ask <<'EOF'
@@ -1639,214 +1612,136 @@ bmn research ask --question-file question.txt --agent luna --json
 
 A lone `-` (`… | bmn research ask -`) says "standard input" out loud and changes nothing.
 
-- **What leaves.** The prompt is a fixed frame and your question, nothing else: no file, folder,
-  rule, skill, tool or name of yours. The question's words go further than a dispatch does: the
-  researcher uses them as search terms, so they reach the search sites.
-- **What a question may not be.** It is refused before anything is made when it is empty, longer
-  than 2,000 characters, holds a word shaped like a key or a password, or names a path inside
-  your home folder (the account's own, also where the command was started with another `HOME`
-  or none). The refusal says which and quotes nothing; such a text is not kept. An answer whose
-  claim cites an address with a sign-in part is no usable answer, and that address is not kept.
-- **Who answers.** The researcher picked on Models, or the one named with `--agent` where your
-  team names it a researcher. Where nobody can research now, the command says why in the words
-  Models uses.
-- **The answer.** A few sentences, then each claim with the page it rests on and a short passage
-  copied from that page. BMN reads each cited page itself and marks every claim: "passage found
-  on the page", "page read, passage not found" or "page not readable". Only the first is
-  evidence. A passage is found only whole, as it was written: BMN takes nothing away from it
-  before comparing. An agent app shows its model a page as markdown, so a passage can come back
-  with marks the page does not show (a heading's `#`, bold, a link's address, a table's bars)
-  and then reads "passage not found" although its words are there; the frame asks the
-  researcher for the page's visible words. An answer that is not the asked shape comes back as
-  "no usable answer" with the run's id; BMN never repairs one.
-- **The limits.** One research at a time, Models research included: a second one is refused
-  with "a research is running", never queued. One lock holds this across the app and the
-  command line. It is a row of small files, `research/lock.1`, `lock.2` and so on, and the one
-  with the highest number is the lock as it stands: a holder that is done writes "released" into
-  its own file, the next holder makes the file one number higher, and nobody ever removes the
-  highest one. So taking over from a process that has ended never removes a file another process
-  may just have made its own. A lock BMN cannot read counts as held. The researcher app never
-  runs as a child of BMN alone: BMN starts a small supervisor of its own
-  (`bin/agents-supervised.mjs`), writes the supervisor's process into the lock, and only then
-  lets it start the app. The supervisor ends the app and everything the app started when BMN's
-  process ends, however it ends, at the time limit, and on Stop; and the lock counts as held for
-  as long as BMN's process or that supervisor lives. A command that is killed outright therefore
-  leaves no researcher running, with nobody asking again, and nobody starts a second research
-  beside one that is still ending. The comparison a Codex researcher's first run waits for runs
-  the same way. A process the app starts that leaves the app's process group is outside this, as
-  it is outside Stop. A question ends after 10 minutes with what it has. 20 questions may start
-  in one local day; a refused one does not count. The day's count is kept beside the list and
-  apart from it, so a question that left the list (removed, or pushed out by newer records)
-  stays counted; it belongs to its day, and a question that ends after midnight neither brings
-  the old day's count back nor takes from the new one. The researcher runs at its lowest effort.
-  Ctrl-C, or the end of its terminal, ends the run. These limits bind this command and Models'
-  own Ask only: the web search inside your own Claude Code and Codex sessions is not touched.
-- **What is kept.** One record per question in `~/.config/bmn/agents/state/research/questions.json`,
-  the last 200: when, who asked (the BMN session and its app, the session's shell, or "from a
-  shell"), the researcher, the exact question, the outcome, the claims with their marks and how
-  long it took. No key, and no page text beyond the quoted passages. A question that is still
-  running is one of the 200 and is never pushed out; the oldest ended ones go first. A question
-  whose process ended before its record was written reads as interrupted. The file has one
-  writer at a time across the app and the command line (a lock of the same kind,
-  `questions.json.writing.<n>`): a second writer waits up to five seconds without holding up its
-  own process and then gives up without writing, and a question whose first record cannot be
-  written is not asked (`RECORD_BUSY`). A question's end waits for nobody: it is written whole
-  to a small file of its own under `research/question-ends/` before the caller hears of it, and
-  everything that reads the questions lays these ends over the file. The next change of the
-  file takes each end in, names it in the same write, and only then removes the end's file, so
-  an end is taken in exactly once, also when a process ends between the two. Beside the record,
-  the run's folder under `research/runs/` holds BMN's prompt with the question; a researcher's
-  raw answer is never kept there, and the folder goes when the question leaves the list.
-- **With BMN closed** the command works by itself. Exit 0 answered; 1 no usable answer, failed,
-  stopped or out of time; 2 usage; 10 refused.
-- **Not here.** Research across many steps, pages behind a sign-in, attached files, a researcher
-  your team does not name. A real question is yours to ask first.
-- **How an agent learns of it.** A dispatch that reaches for the web another way is told this
-  one, and nothing the check refuses or passes changes for it. A command refused for
-  `--allowedTools`, or for a Codex argument or setting that switches web search on, keeps its
-  verdict and code (`ROUTE_UNSUPPORTED`), and its `next` now starts "to search the web, ask with
-  `bmn research ask`". A Claude Code command that passes with WebSearch or WebFetch in `--tools`
-  outside a research run still passes, with one more line: the app may deny those tools in this
-  form, and `bmn research ask` is the checked way. The line is printed after `PASS`, on standard
-  error with `--json` (standard output stays the receipt alone, and the receipt is unchanged),
-  and as the last step of `bmn roster explain`. `bmn roster role helper` and `bmn roster role
-  browser` carry a `web:` line (`web_question` with `--json`), and `bmn help agents` names the
-  command.
-- **The skill.** The repository holds a skill, `skills/web-question/`: when a web question is the
-  right tool, what never goes into one (code, file contents, anything from a private repository
-  beyond public names, names of people or customers, credentials), how to read the three marks,
-  and that a claim marked "not found" is not evidence. It is one of BMN's own skills (under Skills).
-- **Switched off.** With "Agents may ask the web" off (Agents › Models), an agent's question is
-  refused with `ASKING_OFF`, told so and told to ask you; your own Ask still works.
-- **On Models.** Agents › Models ends with "Web questions". The switch "Agents may ask the web" is
-  on until you switch it off, with the day's count beside it. **Ask** sends a question of your
-  own by the same route, to the researcher picked above (Ctrl+Enter or the button; Enter makes a
-  new line); a refusal is shown under the field in the command's own words, and what you typed
-  stays. A question under way is shown with who asked and a **Stop** that ends it whoever started
-  it: your own by BMN itself, an agent's by the signal Ctrl-C sends to its `bmn research ask`,
-  and to nothing else. While one runs, "Research now" waits and says why. Below are the kept
-  questions, newest first: the first line, when, who asked whom (a session by the name it has
-  now), what its claims are worth and the outcome. Opening one shows the whole question, the
-  answer, the claims that are evidence on a plate and the others under "Not evidence", each with
-  its page as a link that opens in your browser, what was looked for and not found, and how
-  long it took. BMN hands the browser only an https address with no sign-in part, written as a
-  public name, that leads to public addresses when BMN looks it up at that moment; one that
-  leads to this computer or your network, or nowhere, is not opened. What the browser does from
-  there (its own lookup, a redirect the site sends) is the browser's. **Remove** deletes one
-  record with its text and its run's folder, **Remove all…** every one after a confirmation in
-  place. Removing gives no question of the day back: the day's limit counts what
-  was asked, not what is still listed. The limit is decided at the moment a question takes its
-  place in the kept file, under the mark that lets one process write at a time: questions asked
-  from several processes at once cannot pass it together.
+- **What leaves.** A fixed frame and your question: no file, folder, rule, skill, tool or name of yours. The researcher
+  uses the question's words as search terms, so they reach the search sites.
+- **What a question may not be.** Refused before anything is made: empty, longer than 2,000 characters, holding a word
+  shaped like a key or a password, or naming a path inside your home folder (the account's own, also under another
+  `HOME` or none). The refusal says which and quotes nothing; such a text is not kept. A claim citing an address with a
+  sign-in part makes the answer unusable, and that address is not kept.
+- **Who answers.** The researcher picked on Models, or the one named with `--agent` where your team names it a
+  researcher; where nobody can research now, the command says why in Models' words.
+- **The answer.** A few sentences, then each claim with its page and a short passage copied from it. BMN reads each cited
+  page and marks every claim "passage found on the page", "page read, passage not found" or "page not readable"; only
+  the first is evidence. A passage is found only whole, as written, so one that comes back with markdown the page does
+  not show reads "not found" (the frame asks for the page's visible words). An answer not in the asked shape is "no
+  usable answer" with the run's id; BMN never repairs one.
+- **The limits.** One research at a time, Models research included: a second is refused with "a research is running",
+  never queued. One lock holds this across the app and the command line, a row of files `research/lock.1`, `lock.2` …
+  whose highest is the lock as it stands: a holder that is done writes "released" into its own file, the next makes one
+  number higher, and nobody removes the highest, so no takeover removes a file another process just made; an unreadable
+  lock counts as held. The app runs under BMN's supervisor (`bin/agents-supervised.mjs`), written into the lock before
+  the app starts, which ends the app and all it started when BMN's process ends however it ends, at the time limit and on
+  Stop, and the lock counts as held while either lives: a killed command leaves no researcher and no second research
+  beside one still ending (a Codex researcher's first comparison runs the same way; a process that leaves the app's
+  process group is outside this, as outside Stop). A question ends after 10 minutes with what it has. 20 questions may
+  start in one local day; a refused one does not count, and the day's count is kept apart from the list, so a question
+  that left the list stays counted on its own day. The researcher runs at its lowest effort; Ctrl-C, or the end of its
+  terminal, ends the run. These limits bind this command and Models' own Ask, not the web search inside your own
+  sessions.
+- **What is kept.** One record per question in `~/.config/bmn/agents/state/research/questions.json`, the last 200 (a
+  running one is never pushed out): when, who asked (the BMN session and its app, the session's shell, or "from a
+  shell"), the researcher, the exact question, the outcome, the claims with their marks and how long it took; no key and
+  no page text beyond the quoted passages. One whose process ended before its record was written reads as interrupted.
+  One writer at a time holds the file (`questions.json.writing.<n>`, a lock of the same kind); a second waits up to five
+  seconds without holding up its process, then gives up without writing, and a question whose first record cannot be
+  written is not asked (`RECORD_BUSY`). A question's end is written whole under `research/question-ends/` before the
+  caller hears of it, read over the file by every reader and taken in exactly once. The run's folder under
+  `research/runs/` holds BMN's prompt with the question, never the raw answer, and goes when the question leaves the list.
+- **With BMN closed** the command works by itself. Exit 0 answered; 1 no usable answer, failed, stopped or out of time;
+  2 usage; 10 refused.
+- **Not here.** Research across many steps, pages behind a sign-in, attached files, a researcher your team does not
+  name. A real question is yours to ask first.
+- **How an agent learns of it.** A command refused for `--allowedTools`, or for a Codex argument or setting that switches
+  web search on, keeps its verdict and code (`ROUTE_UNSUPPORTED`), and its `next` starts "to search the web, ask with
+  `bmn research ask`". A Claude Code command that passes with WebSearch or WebFetch in `--tools` outside a research run
+  still passes, with one more line after `PASS` (on standard error with `--json`, the receipt unchanged; the last step
+  of `bmn roster explain`) saying the app may deny those tools and `bmn research ask` is the checked way. `bmn roster
+  role helper` and `browser` carry a `web:` line (`web_question` with `--json`), `bmn help agents` names the command, and
+  BMN's own skill `web-question` says what never goes into a question (code, file contents, anything from a private
+  repository beyond public names, names of people or customers, credentials) and that "not found" is not evidence.
+- **Switched off.** With "Agents may ask the web" off (Agents › Models), an agent's question is refused with
+  `ASKING_OFF`, told to ask you; your own Ask still works.
+- **On Models.** "Web questions" ends the page: the switch "Agents may ask the web" (on until you switch it off) with the
+  day's count, and **Ask** (Ctrl+Enter or the button), your own question by the same route to the picked researcher; a
+  refusal shows under the field in the command's words and what you typed stays. A question under way shows who asked
+  and a **Stop** that ends it whoever started it (an agent's by the signal Ctrl-C sends to its `bmn research ask`, and
+  nothing else); meanwhile "Research now" waits and says why. Kept questions are listed newest first; one opened shows
+  the question, the answer, the claims that are evidence and the others under "Not evidence", each page a link: BMN hands
+  the browser only an https address without a sign-in part, written as a public name, that leads to public addresses
+  when BMN looks it up then. **Remove** deletes one record with its text and run folder, **Remove all…** every one after
+  a confirmation; removing gives no question of the day back. The day's limit is decided as a question takes its place in
+  the kept file, one process at a time, so questions from several processes cannot pass it together.
 
 #### The judge
 
-`bmn judge ask` asks the team's judge typed questions about one text and prints its numbers with
-BMN's reading of each. The judge on BMN's proposal is Jev (`jev-1.13`), TypeSafe AI's "System
-One" model, reached through OpenCode's gateway: it writes no text, answers in about a second and
-costs $0.042 per million input tokens. BMN itself makes the call; no agent app is started, and
-the command works with BMN closed.
+`bmn judge ask` asks the team's judge typed questions about one text and prints its numbers with BMN's reading of each.
+The judge on BMN's proposal is Jev (`jev-1.13`), TypeSafe AI's "System One" model through OpenCode's gateway: it writes
+no text, answers in about a second and costs $0.042 per million input tokens. BMN makes the call itself; no agent app is
+started, and the command works with BMN closed.
 
 ```sh
 bmn judge ask --state-file report.txt --questions-file questions.json --data public --purpose dev-auto
 printf '%s\n' 'All 12 tests passed.' | bmn judge ask --state-file - --questions-file questions.json --data public --json
 ```
 
-- **The questions file** is Jev's own map of question id to question: a `noul` (a statement that
-  is true or false of the text), a `choice` (with `criteria`, a map of 2 to 255 labels to what
-  each means) or a `score` (with `criteria`, a list of 2 to 10 levels from the lowest up). BMN
-  checks the shape and the sizes before any request, and a wrong file names the question and the
-  fault (`QUESTIONS_INVALID: question second: a score takes 2 to 10 levels, and this one has 1`).
-  One call takes at most 64 questions, a text with its longest question of at most 24,000 bytes,
-  and 48,000 bytes in all: counted in bytes, so it stays well inside the model's 64,000 tokens
-  in any language.
-- **What is checked before anything is sent.** No request is made unless the approved team
-  holds an active, switched-on judge (`NO_JUDGE`, `JUDGE_PROPOSED`, `JUDGE_DISABLED`,
-  `NOT_A_JUDGE` for `--agent`); the model is the agent's own (`MODEL_NOT_OWN`) and does not end
-  in `-free` (`FREE_MODEL`: the paid model only, checked in code); the host is one the agent's
-  provider lists (`HOST_NOT_APPROVED`); the text is declared with `--data public|private`
-  (`DATA_UNDECLARED`), and either private work is allowed for both providers, or the text is
-  declared public and the workspace named with `--workspace`, where one is named, is one BMN
-  holds public (`PRIVATE_NOT_ALLOWED`, `WORKSPACE_PRIVATE`); the team records the model's price
-  (`NO_PRICE`), the record of the calls can be read whole (`RECORD_UNREADABLE`) and so can the
-  limit's setting (`LIMIT_UNREADABLE`), since nothing is asked whose cost BMN could not count or
-  whose limit it could not judge; a monthly limit you switched on is not reached
-  (`LIMIT_REACHED`); and OpenCode is signed in on this computer (`NO_KEY`). Each refusal has its
-  code, plain words and a `next`, and exit code 10.
-- **The request** is one https POST to the approved host, path `/zen/v1/systemone`, with the
-  model, the text and the questions. It waits 5 seconds unless `--timeout` says otherwise (30 at
-  most), follows no redirect, is not repeated after a 4xx (also one whose body breaks off: the
-  status that came stands), and is repeated once after a network error, a 5xx or a 200 whose
-  body breaks off, while time is left. The host's name must lead to public addresses. A host
-  under `.test` is no site: it is the stand-in server of BMN's own tests on this computer, and
-  it is sent only a key that starts `sk-synthetic-`, as every test's key does and no key a
-  service gave out. With any other key nothing is sent there.
-- **The key** is OpenCode's own: BMN reads it from OpenCode's sign-in file
-  (`~/.local/share/opencode/auth.json`, or under `$XDG_DATA_HOME`) for that one request, holds
-  it in memory and writes it nowhere. It is in no output, record or error, also when a server
-  sends it back: BMN passes on nothing a server said except Jev's numbers, each under a name
-  the caller chose (a choice's own labels) or a level's words or number (a score); an answer
-  with any other name in it is not Jev's shape.
-- **The reading** is the one rule the proof tested (`~/code/jev-eval`): a `noul` of 0.90 or more
-  reads "yes"; a `choice` whose confidence and winning probability are both 0.90 or more reads
-  its label; a `score` with a confidence of 0.90 or more reads its number, marked sure.
-  Everything else reads "no answer". A low `noul` is not read as "no": the proof did not measure
-  that. An answer within 0.02 of the line is marked "near the line". The caller gets Jev's
-  numbers unchanged beside the reading (`--json` for the whole result).
-- **`--twice`** asks twice and keeps a reading only where both calls agree; it is counted as two
-  requests.
-- **No answer.** A timeout (exit 11), a failed request (12) or an answer that is not Jev's shape
-  for these questions (13) reads "no answer" for every question. Nothing is guessed.
-- **The record.** Every call adds one line to `~/.config/bmn/agents/state/judge/calls.json`
-  (private, the last 200 calls): when, who asked (the BMN session and its app, or "from a
-  shell"), the purpose word of `--purpose`, input tokens, the cost at the agent's price, how
-  long it took and the outcome, with a hash of the text and no text, no answer and no key. Month
-  totals, in all and per purpose word, are kept beside the list and count every call that made
-  a request; a refused call costs nothing and is counted apart.
-  - *A call made while another process holds the record* waits five seconds for it and then
-    writes its line to a file of its own under `judge/waiting/`. Every reader counts the waiting
-    lines, the limit included, and the next call that gets the record takes them in, once.
-  - *A request the gateway gave no count of tokens for* (a 200 with no usage or with a count
-    above 1,000,000, which no call can hold, one that broke off
-    or is not Jev's shape, a request still out at the deadline, or one that left this computer
-    and got no status back) may have been charged. A request that never left, and one answered
-    with a 3xx, 4xx or 5xx, is not counted. BMN
-    counts it by the bytes it sent plus 256, marks the call `tokens_estimated`, says "about …
-    input tokens (estimated …)" and counts it toward the limit: never as free.
-  - *A part of the record that is there and cannot be read whole* (the kept file, the folder
-    of waiting lines or one line in it: not readable, not JSON, or one entry or number that is
-    not what BMN writes) is never taken for an empty one, never mended and never written over
-    or removed. No number in it is read as zero: the sums are then not known, every call is
-    refused with `RECORD_UNREADABLE` and the path, with the limit on or off, and the judge's
-    page shows the path in place of the sums and the calls, until you mend that file or move it
-    away. The same holds for the limit's setting (`judge/settings.json`): one that is there
-    and cannot be read is never taken for "off"; every call is refused with `LIMIT_UNREADABLE`
-    until you set the limit again on the judge's page (switch it on, or press **Keep it off**).
-  - *A call that already made its request when a part of the record stops being readable* keeps
-    its own line in a waiting file and says so (`record_pending` with the path, a line on
-    standard error, "Kept beside the record" on Try it): it is counted once the record is
-    mended.
-  - *A call BMN could not write down at all* still gives its answer; the result says
-    `recorded: false` with the reason in `note`, the command says it on standard error, and Try
-    it says "Not counted" in place of "Counted in the calls below".
-- **The monthly limit** is off until you switch it on, on the judge's page. With it on, a call
-  is refused once the month's recorded cost reaches it, from the page and from every shell
-  alike, until next month or a higher limit. Calls that start at the same moment are each
-  judged on what is recorded by then.
-- **On Team.** The judge's page shows calls, input tokens and dollars for this month and the
-  last, in all and per purpose (with how many calls are estimates, and the record's path in
-  place of the sums where it cannot be read), the last 20 calls (when, who, purpose, outcome),
-  the limit, and
-  **Try it**: paste a text and one statement, say whether the text is private (it starts as
-  private), and press Ask. It goes by the same route, is refused by the same rules in the
-  command's own words and is counted like every call, under the purpose `try-it`. Agents › Models
-  shows the price your team records for the model with its page and date where research found
-  none.
-- **Advice only.** Nothing in BMN grants, accepts, stops, spends or hides anything because of
-  an answer, and nothing in BMN but the command and the judge's page asks or reads one. The
-  skill `skills/jev-judge/` in the repository says what Jev proved good at and what it must
-  never decide; it is one of BMN's own skills (under Skills). A new use is measured in
-  `~/code/jev-eval`, on labelled cases, before anything acts on it.
+- **The questions file** is Jev's map of question id to question: a `noul` (a statement true or false of the text), a
+  `choice` (`criteria`: 2 to 255 labels with their meaning) or a `score` (`criteria`: 2 to 10 levels, lowest first).
+  Shape and sizes are checked before any request, a wrong file naming the question and the fault (`QUESTIONS_INVALID:
+  question second: a score takes 2 to 10 levels, and this one has 1`). One call takes at most 64 questions, a text with
+  its longest question of at most 24,000 bytes, and 48,000 bytes in all.
+- **Checked before anything is sent**, each refusal with its code, plain words, a `next` and exit 10: an active,
+  switched-on judge in the approved team (`NO_JUDGE`, `JUDGE_PROPOSED`, `JUDGE_DISABLED`, `NOT_A_JUDGE` for `--agent`);
+  the agent's own model (`MODEL_NOT_OWN`), not one ending in `-free` (`FREE_MODEL`); a host its provider lists
+  (`HOST_NOT_APPROVED`); `--data public|private` declared (`DATA_UNDECLARED`), and private work allowed for both
+  providers, or the text public and a named `--workspace` one BMN holds public (`PRIVATE_NOT_ALLOWED`,
+  `WORKSPACE_PRIVATE`); a recorded price (`NO_PRICE`); a record of the calls and a limit setting that read whole
+  (`RECORD_UNREADABLE`, `LIMIT_UNREADABLE`); a monthly limit you switched on not reached (`LIMIT_REACHED`); OpenCode
+  signed in on this computer (`NO_KEY`).
+- **The request** is one https POST to the approved host, path `/zen/v1/systemone`, with the model, the text and the
+  questions. It waits 5 seconds unless `--timeout` says otherwise (30 at most), follows no redirect, is not repeated
+  after a 4xx (also one whose body breaks off), and is repeated once after a network error, a 5xx or a 200 whose body
+  breaks off, while time is left. The host's name must lead to public addresses; a host under `.test` is the stand-in of
+  BMN's own tests, sent only a key starting `sk-synthetic-`.
+- **The key** is OpenCode's own, read from `~/.local/share/opencode/auth.json` (or under `$XDG_DATA_HOME`) for that one
+  request, held in memory and written nowhere: in no output, record or error, also when a server sends it back, as BMN
+  passes on nothing a server said but Jev's numbers under names the caller chose (a choice's labels, a level).
+- **The reading** is the one rule the proof tested (`~/code/jev-eval`): a `noul` of 0.90 or more reads "yes"; a `choice`
+  whose confidence and winning probability are both 0.90 or more reads its label; a `score` with a confidence of 0.90 or
+  more reads its number, marked sure. Everything else reads "no answer"; a low `noul` is not a "no". Within 0.02 of the
+  line is marked "near the line". Jev's numbers come unchanged beside the reading (`--json` for the whole result).
+  **`--twice`** asks twice and keeps a reading only where both agree, counted as two requests. A timeout (exit 11), a
+  failed request (12) or an answer not in Jev's shape (13) reads "no answer" for every question; nothing is guessed.
+- **The record.** Every call adds one line to `~/.config/bmn/agents/state/judge/calls.json` (private, the last 200
+  calls): when, who asked (the BMN session and its app, or "from a shell"), the `--purpose` word, input tokens, the cost
+  at the agent's price, how long it took and the outcome, with a hash of the text and no text, answer or key. Month
+  totals, in all and per purpose, count every call that made a request; a refused call costs nothing, counted apart.
+  - A call made while another process holds the record waits five seconds, then writes its line under
+    `judge/waiting/`; every reader counts waiting lines, the limit included, and the next call that gets the record
+    takes them in, once.
+  - A request the gateway gave no token count for (a 200 without usage or with more than 1,000,000, one that broke off
+    or is not Jev's shape, one out at the deadline or that left and got no status) may have been charged: it is counted
+    by the bytes sent plus 256, marked `tokens_estimated` ("about … input tokens (estimated …)") and counted toward the
+    limit. A request that never left, and a 3xx, 4xx or 5xx, is not counted.
+  - A part of the record that is there and cannot be read whole (the kept file, the waiting folder or one line in it)
+    is never taken for empty, mended, overwritten or removed, nor any number in it for zero: every call is refused with
+    `RECORD_UNREADABLE` and the path, the limit on or off, and the judge's page shows the path in place of the sums,
+    until you mend or move it. A limit setting (`judge/settings.json`) that cannot be read is never taken for "off":
+    calls are refused with `LIMIT_UNREADABLE` until you set the limit again on the page (switch it on, or **Keep it
+    off**).
+  - A call that made its request when the record stops being readable keeps its line in a waiting file and says so
+    (`record_pending` with the path, a line on standard error, "Kept beside the record" on Try it), counted once the
+    record is mended. A call BMN could not write down at all still answers, with `recorded: false` and the reason in
+    `note`, a line on standard error, and "Not counted" on Try it.
+- **The monthly limit** is off until you switch it on, on the judge's page; then a call is refused once the month's
+  recorded cost reaches it, from the page and every shell alike, until next month or a higher limit. Calls starting
+  together are each judged on what is recorded by then.
+- **On Team** the judge's page shows calls, input tokens and dollars this month and last, in all and per purpose (with
+  how many are estimates, or the record's path where it cannot be read), the last 20 calls, the limit, and **Try it**:
+  a text and one statement, private unless you say otherwise, asked by the same route and rules and counted under the
+  purpose `try-it`. Agents › Models shows the price your team records for the model where research found none.
+- **Advice only.** Nothing in BMN grants, accepts, stops, spends or hides anything because of an answer, and nothing but
+  the command and the judge's page asks or reads one. BMN's own skill `jev-judge` says what Jev proved good at and what
+  it must never decide; a new use is measured in `~/code/jev-eval`, on labelled cases, before anything acts on it.
 
 ### The prompt guard
 
