@@ -1796,101 +1796,59 @@ session's first prompt was not stopped for want of its saved record in that test
 
 ### What the team file and rules do not enforce
 
-- The prompt guard covers sessions started in BMN, because the hook entry runs `bmn` only there;
-  the same app started in another terminal is not checked. It is workflow protection like the
-  rest: removing the hook entry, or starting the app with its hooks disabled, removes the guard.
-  It reads how the app was started and its settings once per prompt, and an app that changed
-  where it sends work mid-session without either changing would not be noticed. A Claude Code
-  flag other than `--settings`, and a Codex `-c` key other than `model_provider`,
-  `model_providers`, `profile`, `profiles`, `openai_base_url` and `chatgpt_base_url`, is taken
-  not to say where work goes.
-
-- Skills are checked only in the user-level folders the test found. Skills inside a project
-  folder, plugins, and sessions already running are outside what BMN installs or checks. The
-  listing test asks the app which skills it lists; the loading test shows, for one test skill in
-  one run, that the app put its text before the model. Neither shows that a model follows a
-  skill.
-- The tools of a Codex run are not judged. Listing a tool keeps Claude Code runs to their own
-  set; a Codex run starts with whatever its command and Codex's own settings, apps and plug-ins
-  give it, and its receipt says its tools were not checked. A Codex run checked with `--packet`
-  is refused instead, since nothing shows it carries none.
-- A new Codex session is known to the guard only by the record Codex saves for it. Whether that
-  record exists by the time the first prompt is sent has not been measured on a live app; where
-  it does not, that prompt is stopped and the line says so.
-- A context limit is checked from the run's command and the named settings, like the destination;
-  what the app does with it afterwards is the app's. The test proves the setting on one version
-  in one empty folder with a short prompt; it does not prove where summarising starts, and BMN
+- **The prompt guard** covers sessions started in BMN, where the hook entry runs `bmn`; the same app started in another
+  terminal, with its hooks disabled or without the entry is not checked. It reads how the app was started and its
+  settings once per prompt, so a change of destination mid-session without either changing is not noticed. A Claude
+  Code flag other than `--settings`, and a Codex `-c` key other than `model_provider`, `model_providers`, `profile`,
+  `profiles`, `openai_base_url` and `chatgpt_base_url`, is taken not to say where work goes. A new Codex session is
+  known only by the record Codex saves for it; whether that exists by the first prompt is not measured, and where it
+  does not, that prompt is stopped and the line says so.
+- **Skills** are checked only in the user-level folders the test found; skills in a project folder, plugins and running
+  sessions are outside. The listing test shows the app lists a skill, the loading test that the app put one test
+  skill's text before the model in one run; neither shows that a model follows a skill.
+- **The tools of a Codex run are not judged:** it starts with whatever its command and Codex's own settings, apps and
+  plug-ins give it, and its receipt says so; a Codex run checked with `--packet` is refused instead.
+- **A context limit** is checked from the run's command and named settings; what the app does with it is the app's. The
+  test proves the setting on one version in one empty folder with a short prompt, not where summarising starts, and BMN
   does not rank a size a project's own Codex configuration sets against yours.
-- Approval is workflow protection against processes running as your user, not an operating-system
-  boundary: such a process can edit the state folder as easily as the team file. It makes a
-  change take effect only after you saw it in BMN; it does not stop a hostile program.
-- The check governs only dispatches that call it; a dispatch that skips it, from a lead or any
-  other tool, is not checked.
-- Between a PASS and the command starting there is a short window in which a configuration file,
-  the packet or the stdin file could change. Run the check immediately before the dispatch, feed
-  exactly the checked stdin file, never reuse a receipt, and use `--verify` after the fact when
-  in doubt.
-- Public renderings govern only the global rules files BMN writes. Project files, skills or other
-  context an app reads inside a workspace are outside them, and a prompt the lead writes is the
-  lead's responsibility.
-- A visibility record says what GitHub reported when it was written. A repository made private
-  afterwards counts as public until the record is refreshed or turns seven days old.
-- A test proves loading only in the context it ran (that app version, that folder, that
-  destination). Sessions started before an install keep the rules they started with.
-- Approvals are serialized by an operating-system advisory lock on `state/approve.lock`, held for
-  the whole approval; a second approval meanwhile is refused (exit-7 semantics) and a holder that
-  dies releases it with its process. The lock binds only programs that take it: another program
-  writing the state folder directly is not stopped.
-- BMN asks an app for its version afresh at every decision and keeps none. A launcher or an
-  environment that changes between that question and the command starting is not detected.
-- **Revert** changes only what lies between a section's `yaml` fences, and adds back a section the
-  file lost after the end of the file. A revert that would have to remove or insert text
-  elsewhere (a section the file added, a repeated section, a section without its block) is
-  refused and writes nothing, as is one that would leave a valid file invalid.
-- BMN's reading of where an app sends data was tested against Claude Code 2.1.295, Codex
-  0.161.0 and OpenCode 2.0.28. It reads the same named settings on every later version and refuses a changed or
-  unknown destination as before, but a version that starts to take its destination from a setting
-  BMN does not read would not be noticed. For OpenCode BMN reads only its own configuration
-  folder, and only where it understands all of what it reads: the model's provider prefix. Every model
-  the configuration names gets the conversation, so the title model (`small_model`) and each agent's,
-  mode's or command's (`agent`, `agents`, `mode`, `command`, `commands`, and the `model` in the front
-  matter of the files, at any depth, in `agent/`, `agents/`, `mode/`, `modes/`, `command/` and
-  `commands/`) must name the same provider, each as `<provider>/<model>` read as OpenCode reads it (the
-  model up to the first `#`, a variant neither empty nor holding `#`). BMN reads the configuration as
-  JSON with comments and trailing commas, both only outside strings (a `//` comment ends at a line feed
-  or a carriage return, as in OpenCode), and a front matter that opens with `---`, `---yaml` or `---yml`
-  and closes on the next line starting with `---`, in the team file's YAML (no anchors, aliases, tags,
-  block scalars, complex keys, directives, repeated keys, or escapes other than `\"`, `\\`, `\n`, `\t`
-  and `\/`), with `model` only at its top. Anything else makes the destination unknown, because not
-  finding a model does not prove OpenCode finds none: a front matter in JSON or JavaScript, one that
-  never closes or closes on another `---` line, a carriage return alone in it (OpenCode's YAML reader
-  breaks lines there too), a space character YAML does not count as one (a no-break space, say), an
-  unquoted value holding `:` (when its first reading fails, OpenCode reads such a line again with its
-  comment; quote the value), a key written twice or named `__proto__`, a map of another shape, a file or
-  folder BMN cannot read, and `opencode.json` beside `opencode.jsonc` (OpenCode reads both). It is
-  unknown when the models name more than one provider, when `OPENCODE_CONFIG` or
-  `OPENCODE_CONFIG_CONTENT` is set where BMN runs, or when the provider entry, the named model's entry or
-  one of its variants, under `provider` or `providers`, carries its own runtime (`api`, `npm`, `package`,
-  `canonical`), `variants` other than a map, or a `settings` (OpenCode 2) or `options` (OpenCode 1) field
-  other than those that cannot move a request, each with its documented values: for a provider
-  `compaction`, `transport`, `encoding`, `timeout`, `headerTimeout`, `chunkTimeout`, `reasoningEffort`
-  and OpenCode 1's `apiKey`; for a model or variant `compaction` and `reasoningEffort`. A settings field
-  belongs to the provider's package, so `baseURL`, Azure's `resourceName` or a region, and any field BMN
-  does not know, count as an address of their own. A project's `opencode.json`, the `.opencode`,
-  `.claude` and `.agents` folders OpenCode reads in and above the project (your home's included), the
-  machine-wide `/etc/opencode`, plugins, and the environment of the shell you start OpenCode in are not
-  read. Tools receive text the model writes, and they are outside this reading for OpenCode as for Claude
-  Code and Codex: OpenCode's web search providers and MCP servers can see private material from a
-  conversation whatever its destination reads. That reading names OpenCode's destination on Health and
-  in the team file; it never earns OpenCode the full rules. OpenCode 2 also converts older
-  configuration shapes the reading does not follow (a model entry's own `provider`, a variant's
-  settings written directly in it, a provider renamed on loading such as `azure-cognitive-services`),
-  any of which can give the conversation another address (Astra's fifth review, 2026-10-14), so
-  OpenCode stays on public rules (owner decision 2026-10-14).
-- A packet for a public-only destination relies on Claude Code's `--safe-mode` to keep your rules
-  file, memory, skills and hooks out of the call. BMN does not test that itself; run one packet
-  with a marker line in your rules before you turn on a public-only agent. `accepted_versions` in a team file written under the
-  earlier rule is still valid and decides nothing any more; Integrations › Health removes it with its ×.
+- **Approval** is workflow protection against processes running as your user, not an operating-system boundary: such a
+  process can edit the state folder as easily as the team file. It makes a change take effect only after you saw it in
+  BMN; it does not stop a hostile program. Approvals are serialized by an advisory lock on `state/approve.lock`, held for
+  the whole approval: a second approval meanwhile is refused (exit-7 semantics), a holder that dies releases it, and a
+  program writing the state folder directly is not stopped.
+- **The check** governs only dispatches that call it. Between a PASS and the command starting, a configuration file, the
+  packet or the stdin file could change: run the check immediately before the dispatch, feed exactly the checked stdin
+  file, never reuse a receipt, and use `--verify` afterwards when in doubt. BMN asks an app for its version afresh at
+  every decision; a launcher or environment that changes between that question and the start is not detected.
+- **Public renderings** govern only the global rules files BMN writes. Project files, skills or other context an app
+  reads in a workspace are outside them, and a prompt the lead writes is the lead's. A visibility record says what
+  GitHub reported when written: a repository made private afterwards counts as public until the record is refreshed or
+  turns seven days old. A loading test proves loading only in its context (app version, folder, destination); sessions
+  started before an install keep the rules they started with.
+- **Revert** changes only what lies between a section's `yaml` fences, and adds back a section the file lost after the
+  end of the file. A revert that would remove or insert text elsewhere (a section the file added, a repeated section, a
+  section without its block), or leave a valid file invalid, is refused and writes nothing.
+- **A packet** for a public-only destination relies on Claude Code's `--safe-mode` to keep your rules file, memory,
+  skills and hooks out of the call; BMN does not test that, so run one packet with a marker line in your rules before you
+  turn on a public-only agent. `accepted_versions` in a team file written under the earlier rule is still valid and
+  decides nothing; Integrations › Health removes it with its ×.
+- **Where an app sends data** was tested against Claude Code 2.1.295, Codex 0.161.0 and OpenCode 2.0.28. BMN reads the
+  same named settings on every later version and refuses a changed or unknown destination, but a version that takes its
+  destination from a setting BMN does not read would not be noticed. Tools receive text the model writes and are outside
+  this reading in every app: OpenCode's web search providers and MCP servers can see private material whatever its
+  destination reads. For OpenCode, BMN reads only its own configuration folder, and only where it understands all of it:
+
+| OpenCode | What BMN does |
+| --- | --- |
+| Reads | `opencode.json` or `opencode.jsonc` as JSON with comments and trailing commas outside strings (a `//` comment ends at a line feed or carriage return); front matter opening with `---`, `---yaml` or `---yml` and closing on the next line starting `---`, in the team file's YAML (no anchors, aliases, tags, block scalars, complex keys, directives, repeated keys, or escapes other than `\"`, `\\`, `\n`, `\t` and `\/`), with `model` only at its top |
+| Must name the same provider | every model the configuration names, as each gets the conversation: the title model (`small_model`) and each agent's, mode's or command's (`agent`, `agents`, `mode`, `command`, `commands`, and `model` in the front matter of files at any depth in `agent/`, `agents/`, `mode/`, `modes/`, `command/` and `commands/`), each as `<provider>/<model>` read as OpenCode reads it (the model up to the first `#`, a variant neither empty nor holding `#`) |
+| Unknown destination | models naming more than one provider; `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT` set where BMN runs; `opencode.json` beside `opencode.jsonc`; a front matter in JSON or JavaScript, never closing or closing on another `---` line, holding a lone carriage return or a space YAML does not count (a no-break space), or an unquoted value holding `:` (quote it); a key written twice or named `__proto__`; a map of another shape; a file or folder BMN cannot read; a provider, model or variant entry (under `provider` or `providers`) carrying its own runtime (`api`, `npm`, `package`, `canonical`), `variants` other than a map, or `settings` (OpenCode 2) or `options` (OpenCode 1) beyond those that cannot move a request: for a provider `compaction`, `transport`, `encoding`, `timeout`, `headerTimeout`, `chunkTimeout`, `reasoningEffort` and OpenCode 1's `apiKey`; for a model or variant `compaction` and `reasoningEffort`, each with its documented values (so `baseURL`, Azure's `resourceName`, a region or an unknown field count as an address) |
+| Not read | a project's `opencode.json`; the `.opencode`, `.claude` and `.agents` folders in and above the project (your home's included); `/etc/opencode`; plugins; the environment of the shell you start OpenCode in |
+
+That reading names OpenCode's destination on Health and in the team file; it never earns OpenCode the full rules,
+because OpenCode 2 also converts older configuration shapes the reading does not follow (a model entry's own `provider`,
+a variant's settings written directly in it, a provider renamed on loading such as `azure-cognitive-services`), any of
+which can send the conversation elsewhere (owner decision 2026-10-14).
 
 ## Asking a teammate: `bmn team ask`
 
