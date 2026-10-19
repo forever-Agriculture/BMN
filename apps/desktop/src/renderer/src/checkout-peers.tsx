@@ -247,10 +247,13 @@ export function CheckoutPeerWarning({ report, loading }: {
 }): React.JSX.Element | null {
   if (loading) return <p role="status">Checking selected launch directories for live checkout peers…</p>
   if (!report || (report.peers.length === 0 && !report.incomplete)) return null
-  return <p className="inline-warning" role="status">
-    {report.peers.length > 0 ? <>Selected launch directories share this checkout with live BMN sessions: {
-      report.peers.map((peer) => `${peer.workspaceName} / ${peer.sessionName}`).join(', ')
-    }. These sessions may edit the same files. Current shell directories and activity are not checked. </> : null}
-    {report.incomplete ? <>Checkout peer check incomplete; review existing sessions before starting.</> : null}
-  </p>
+  return <div role="status">
+    {report.peers.length > 0 ? <>
+      <p className="inline-warning">Selected launch directories share this checkout with live BMN sessions: {
+        report.peers.map((peer) => `${peer.workspaceName} / ${peer.sessionName}`).join(', ')
+      }. They may edit the same files.</p>
+      <p className="inline-warning">Only launch directories were compared; current shell directories and activity are not checked.</p>
+    </> : null}
+    {report.incomplete ? <p className="inline-warning">Checkout peer check incomplete; review existing sessions before starting.</p> : null}
+  </div>
 }

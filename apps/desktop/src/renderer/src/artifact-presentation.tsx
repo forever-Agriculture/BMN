@@ -220,7 +220,7 @@ function LoadedImageViewport(props: {
           }
         />
         {!naturalSize ? <p className={`files-preview-message${decodeError ? ' files-preview-error' : ''}`} role="status">
-          {decodeError ? 'This image could not be decoded. No image is loaded; zoom is unavailable. Select it again to retry, or save the original.' : 'Loading image… Zoom is available when the image loads.'}
+          {decodeError ? 'This image could not be decoded: nothing is loaded, so no zoom. Select it again to retry, or save the original.' : 'Loading image… Zoom is available when the image loads.'}
         </p> : null}
       </div>
       <div className="files-image-toolbar">

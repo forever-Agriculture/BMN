@@ -153,7 +153,7 @@ export function SessionMessagesDialog(props: {
           <dt>New ones</dt>
           <dd>{listing ? messagePauseWords(listing, props.now) : '…'}</dd>
           <dt>By its own hook</dt>
-          <dd title={`A working agent gets a waiting message after a tool call: ${handover}. A message to a session running anything else is refused.`}>{handover}</dd>
+          <dd title={`A working agent gets a waiting message after a tool call: ${handover}. A session running anything else refuses it.`}>{handover}</dd>
         </dl>
         {SESSION_MESSAGES_HELP.map((line) => <small key={line}>{line}</small>)}
       </section>

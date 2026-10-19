@@ -2507,7 +2507,7 @@ function App(): React.JSX.Element {
                   </label>
                   <p className="field-help">{effectiveTerminalGraphics(sessionForm.terminalGraphics) === 'sixel'
                     ? 'Sixel images on.' : 'Standard terminal.'} For SSH, sudo or containers without BMN terminfo,
-                    choose Off or run the command with <code>TERM=xterm-256color</code>.</p>
+                    choose Off or run with <code>TERM=xterm-256color</code>.</p>
                 </div>
               </details>
               {formError ? <span className="inline-error" role="alert">{formError}</span> : null}

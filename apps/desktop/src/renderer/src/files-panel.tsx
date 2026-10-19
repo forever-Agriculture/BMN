@@ -253,7 +253,7 @@ export function FilesPanel(props: {
                     if (!session) return
                     void run(`deliver:${artifactId}`, async () => {
                       const result = await window.aiTerminal.deliverArtifact(artifactId, session.sessionId, props.sessionIncarnationId!)
-                      outcome(`deliver:${artifactId}`, `Recorded paste at ${formatClock(result.pastedAt)}: ${result.path} into ${sessionDescription(session.sessionId)}. This file is pasted once while this process stays open. Not submitted; press Enter separately.`)
+                      outcome(`deliver:${artifactId}`, `Recorded paste at ${formatClock(result.pastedAt)}: ${result.path} into ${sessionDescription(session.sessionId)}. Pasted once while this process runs; not submitted, so press Enter yourself.`)
                     }, 'Could not deliver the file')
                   }}
                 >

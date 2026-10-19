@@ -8,7 +8,7 @@ import {
 describe('renderer terminal output flow', () => {
   it('turns typed no-view loss into an explicit Saved Output notice', () => {
     expect(undeliveredOutputLossNotice(12_345)).toBe(
-      '12,345 bytes of terminal output produced without a view were dropped. Earlier output remains available only in Saved Output.'
+      '12,345 bytes of terminal output made without a view were dropped. Earlier output is only in Saved Output.'
     )
   })
   it('disconnects slow and sequence-invalid flows and ignores callbacks from the abandoned view', () => {

@@ -15,7 +15,7 @@ export function awaySourceWords(view: Pick<OwnerAwayView, 'source' | 'agentSessi
 /** The tooltip: what the check does, or since when, who set it, his note, and how it ends. */
 export function awayTooltip(view: OwnerAwayView | null, now: Date, sessionName: (sessionId: string) => string | null): string {
   if (view?.state !== 'away' || view.since === null) {
-    return 'Away: every agent is told, decides what is ordinary and leaves what is yours as cards.\nUncheck, bmn back or /back when you return.'
+    return ['Away: every agent is told, decides what is ordinary and leaves what is yours as cards.', 'Uncheck, bmn back or /back when you return.'].join('\n')
   }
   return [
     `${awaySinceWords(view.since, now)} · ${awaySourceWords(view, sessionName)}`,

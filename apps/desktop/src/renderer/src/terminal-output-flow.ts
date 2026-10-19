@@ -51,7 +51,7 @@ function terminalViewDisconnectNotice(reason: TerminalViewDisconnectReason): str
 }
 
 export function undeliveredOutputLossNotice(droppedBytes: number): string {
-  return `${droppedBytes.toLocaleString('en-US')} bytes of terminal output produced without a view were dropped. Earlier output remains available only in Saved Output.`
+  return `${droppedBytes.toLocaleString('en-US')} bytes of terminal output made without a view were dropped. Earlier output is only in Saved Output.`
 }
 
 export class TerminalOutputFlow {

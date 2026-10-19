@@ -47,8 +47,8 @@ function guardCaveat(stop: GuardStop): string {
   const app = ROSTER_APP_NAMES[stop.agent]
   const measured = GUARD_MEASURED[stop.agent]
   return measured === undefined
-    ? `BMN told ${app} to stop this prompt. No test has yet shown that this version of ${app} obeys, so check that the agent did not answer.`
-    : `BMN told ${app} to stop this prompt. A live test showed ${app} ${measured} obeys; on another version, check that the agent did not answer.`
+    ? `BMN told ${app} to stop this prompt. No test has shown that this version of ${app} obeys; check that it did not answer.`
+    : `BMN told ${app} to stop this prompt. A live test showed ${app} ${measured} obeys; on another version, check that it did not answer.`
 }
 
 export function SessionGuardCard(props: {

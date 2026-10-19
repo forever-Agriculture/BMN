@@ -48,12 +48,10 @@ export function HookEventsDialog(props: {
 
   return (
     <Dialog label={`Hook events — ${props.sessionName}`} onClose={props.onClose} className="hook-events-dialog">
-      <p className="dialog-note">
-        What {props.sessionName}&rsquo;s harness reported to BMN, newest last. Earlier-run history keeps
-        approved metadata only: up to 30 entries per session, 1,024 globally and 1 MiB. Oldest entries
-        leave first; there is no age expiry. Recent events can be lost before a completed save,
-        including on crash. History never changes this run&apos;s state and is excluded from backups.
-      </p>
+      <p className="dialog-note">What {props.sessionName}&rsquo;s harness reported to BMN, newest last.</p>
+      <p className="dialog-note">Earlier runs keep approved metadata only: 30 entries per session, 1,024 in all, 1 MiB; oldest leave first, never by age.</p>
+      <p className="dialog-note">Recent events can be lost before a completed save, crash included. History never changes this run&apos;s state.</p>
+      <p className="dialog-note">History is excluded from backups.</p>
       {view?.historyUnavailable ? <p className="dialog-note" role="status">Recent history was unavailable. Live events continue; coalesced events can be lost before a completed save.</p> : null}
       {view && view.earlier.length > 0 ? <>
         <h3>Earlier host run · history</h3>
