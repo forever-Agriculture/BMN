@@ -1252,9 +1252,9 @@ privately, Claude Code as an Artifact and any other app with `bmn publish`, a ne
 
 ### Tools (MCP)
 
-You keep one list of MCP tools in the team file's `## tools` section, and BMN sets each one up in
-the settings of every agent app that may have it. Integrations › **Tools** lists each tool with what it
-runs, who gets it and its state in each app; `bmn tools check` prints the same.
+You keep one list of MCP tools in the team file's `## tools` section, and BMN sets each up in the settings of every
+agent app that may have it. Integrations › **Tools** lists each tool with what it runs, who gets it and its state in each
+app; `bmn tools check` prints the same.
 
 ```yaml
 docs: {name: Docs, url: "https://docs.example.com/mcp", headers: {Authorization: DOCS_TOKEN}, public: true}
@@ -1262,58 +1262,30 @@ files: {name: Files, command: files-tool, args: ["--root", /srv/files], env: {FI
 browser: {name: Browser, command: npx, args: ["@playwright/mcp@0.0.75"], agents: [luna]}
 ```
 
-A tool is a program (`command`, `args`) or an address (`url`). **It names environment variables
-and never holds their values:** `env` maps an entry the program receives to the variable it comes
-from, `headers` does the same for a request header, and an argument may be `{env: NAME}`. BMN
-keeps no value anywhere, not in the team file, its state, a plan or an undo. A tool reaches every
-app, unless `apps` keeps it to some, or `agents` keeps it to the runs of some agents. `public:
-true` lets an app that gets public work only have it. At most 64 tools; an id is lowercase
-letters, digits, `-` and `_`.
+A tool is a program (`command`, `args`) or an address (`url`). **It names environment variables and never holds their
+values:** `env` maps an entry the program receives to the variable it comes from, `headers` does the same for a request
+header, and an argument may be `{env: NAME}`. BMN keeps no value anywhere: not in the team file, its state, a plan or an
+undo. A tool reaches every app, unless `apps` keeps it to some or `agents` to the runs of some agents; `public: true`
+lets an app that gets public work only have it. At most 64 tools; an id is lowercase letters, digits, `-` and `_`.
 
-**What counts as a value.** In an entry BMN did not write, an argument is taken for a value
-unless it is plainly not one: a flag, a number, a name, a package, a path, `host:port`, a plain
-`http(s)` address or `name=value` under a name that is not a key's. Whatever follows a flag named
-like a key, token, password, header or cookie is a value, and so is a variable written together
-with other text, except after `Bearer`, `Basic` or `Token`. BMN errs on this side: a harmless
-argument it takes for a value only makes the entry read `blocked` until you move it into an
-environment variable. An entry that is exactly the tool you approved, as BMN writes it, is never
-taken to hold a value.
+**What counts as a value.** In an entry BMN did not write, an argument is a value unless it is plainly not one: a flag, a
+number, a name, a package, a path, `host:port`, a plain `http(s)` address or `name=value` under a name that is not a
+key's. Whatever follows a flag named like a key, token, password, header or cookie is a value, and so is a variable
+written with other text, except after `Bearer`, `Basic` or `Token`. A harmless argument taken for a value only makes the
+entry read `blocked` until you move it into an environment variable; the tool you approved, as BMN writes it, never
+counts as holding one. Whatever BMN shows of an entry it did not write has values masked.
 
-**Where an app reads tools is tested, not assumed.** Until `bmn tools test <app>`, which BMN runs
-by itself on a first install and on each new version, passed on exactly the installed version, an app's tools are "not supported
-yet" and nothing is written for it. The test starts the app in an empty home folder with no
-sign-in, so no prompt can be answered there; BMN does not watch what the app itself sends when
-it starts. It writes one stand-in tool into the app's settings file the way BMN would, asks the
-app which tools it sees, and records whether the app named the tool, whether it passed the named
-variable and an argument taken from a variable, and whether the app's own add and remove
-commands change the same file. Each result says what it rests on: a tool the app was seen
-starting, or only the app's own listing. A listing that ends with an error proves nothing and
-the test is inconclusive.
-
-Whether a run can be kept to its own tools is taken only from a run, never from a listing, and
-by two signs that must agree. The stand-in is a small tool of BMN's own that notes each time it
-is started, and under which name; and a Claude Code run prints a line once it has started its
-tools that says of each whether it connected. A tool counts as active in a run only when that
-line reports it connected and the tool's own note says it was started, and a run counts only
-when it came to its end: the app finished by itself, every line it printed reads, and it reported
-its end. A run cut short by the time limit, a report that is cut off, and a tool the app named
-without starting it show nothing.
-
-The test starts up to three short runs: one with nothing shut out, which must show the stand-ins
-from its settings active (and, where Claude Code takes them up, from its settings for the folder
-and the folder's `.mcp.json`); one told to take only its own, which must name and start that one
-alone; one told to take none, which must name and start none. A place counts as shut out only
-when a tool from there was first seen active. The record names the signs it was judged by and the
-places seen shut out; a record made before both signs were used grants nothing, so run the test
-again after an update of BMN. The form of that line was read on Claude Code 2.1.296 (2026-10-11,
-in an empty home folder without a sign-in); the test itself has not yet been run on a live app.
-
-A Codex run reports nothing about the tools it started with, in what it prints or in the record
-it saves (Codex 0.162.0, one run, 2026-10-11); only a tool's own note shows it was started. Codex
-also takes tools from its apps and plug-ins, both switched on unless you switch them off, and BMN
-has no way to stage one of those in a test. So no test of BMN's can show a Codex run kept to
-exactly its own tools, and Codex, like OpenCode, is never recorded as keeping a run to
-them. The check therefore does not judge a Codex run's tools (below).
+**Where an app reads tools is tested.** Until `bmn tools test <app>`, which BMN runs on a first install and each new
+version, passed on exactly the installed version, an app's tools are "not supported yet" and nothing is written for it.
+In an empty home folder with no sign-in the test writes one stand-in tool as BMN would, asks which tools the app sees,
+and records whether it named the tool, passed the named variable and an argument taken from one, and whether the app's
+own add and remove commands change the same file; a listing that ends in an error proves nothing. Whether a run can be
+kept to its own tools comes only from finished runs, by two signs that must agree (the stand-in notes each start and its
+name; Claude Code prints whether each tool connected): one run with nothing shut out, one told to take only its own,
+one told to take none. A place counts as shut out only once a tool from there was seen active; a record made before
+both signs were used grants nothing. The line's form was read on Claude Code 2.1.296; the test has not yet run on a live
+app. A Codex run reports nothing of its tools and also takes tools from its apps and plug-ins, which no test can stage,
+so Codex, like OpenCode, is never recorded as keeping a run to its own tools.
 
 | App | Settings file | Entries under | A variable is written as | Tested on a live app |
 | --- | --- | --- | --- | --- |
@@ -1321,16 +1293,10 @@ them. The check therefore does not judge a Codex run's tools (below).
 | Codex | `~/.codex/config.toml` | `[mcp_servers.<id>]` | `env_vars = ["NAME"]`, `env_http_headers` | not yet |
 | OpenCode | `~/.config/opencode/opencode.jsonc` | `mcp` | `{env:NAME}` | not yet |
 
-Codex passes a variable only under its own name and has none for an argument; a tool that needs
-either reads `blocked` for Codex, with the reason. A tool that names a variable is written only
-where the test saw that app version pass one, and an argument taken from a variable only where
-the test saw that too. **A header taken from a variable reads `blocked` in every app for now:**
-the test starts no remote tool, so BMN has not seen any app send one.
-
-A settings file BMN cannot be sure of is unreadable for tools, and nothing is written to it: one
-that names the same section twice, or a Codex file that writes `mcp_servers` as one inline value.
-
-**One state per app and tool.**
+Codex passes a variable only under its own name and has none for an argument, so a tool that needs either reads
+`blocked` for Codex. A variable, or an argument from one, is written only where the test saw that app version pass it.
+**A header taken from a variable reads `blocked` in every app for now:** the test starts no remote tool. A settings file
+BMN cannot be sure of (a section named twice, a Codex `mcp_servers` written as one inline value) is never written.
 
 | State | Meaning |
 | --- | --- |
@@ -1344,274 +1310,163 @@ that names the same section twice, or a Codex file that writes `mcp_servers` as 
 | `excluded` | the app is not meant to have the tool, and does not |
 | `exposed` | the app holds a tool it may not have |
 
-When the approved team cannot be read (a damaged or missing approval, once a team was approved),
-the check, the install, the import and the Tools page report that and change nothing.
+Entries an app holds that are not on your list are named too (`unmanaged`, or `exposed` where the app gets public work
+only). `bmn tools check` exits 0 only when at least one app is supported, every tool is `current` or `excluded` in every
+supported app, and nothing is exposed. When the approved team cannot be read (once a team was approved), the check, the
+install, the import and the Tools page say so and change nothing.
 
-Entries an app holds that are not on your list are named too: `unmanaged`, or `exposed` where the
-app gets public work only. `bmn tools check` exits 0 only when at least one app is supported,
-every tool is `current` or `excluded` in every supported app, and nothing is exposed.
+**Install.** BMN runs `bmn tools install --absent` by itself, as for skills, leaving and naming an entry it did not write
+or one changed outside it; `bmn tools install [app…]` by hand shows every entry it would add, replace or remove and
+writes after you confirm. BMN never rewrites an app's settings file: it changes only the named entries in the file as
+it is at that moment, every other byte and comment kept, and refuses when an entry's exact text changed since you saw
+it, when the file now sits in another folder than the one shown, and when it is a link. Entries not on your list stay
+until you ask for their removal (`--remove-unlisted`). It is one transaction, each entry's prior text noted before each
+write, so **Undo…** (or `bmn rules restore --transaction <id>`) knows every entry the install wrote, even after a crash,
+and puts one back only while it still reads exactly as the install left it, else stops and names it. An entry that
+holds a value inline is never replaced or removed: move the value into an environment variable first.
 
-**Install.** BMN installs the tools by itself, as it does the skills (Story 75.9): after an approval,
-after its own test of an app passed, and at its start, with `bmn tools install --absent`, which
-leaves an entry BMN did not write, or one changed outside it, and names it as not changed.
-`bmn tools install [app…]` by hand shows every entry it would add, replace or remove and writes
-after you confirm. An app rewrites its own settings file
-all the time (`~/.claude.json` holds much besides tools), so BMN never rewrites the file: it
-changes only the named entries in the file as it is at that moment and leaves every other byte,
-comments included. It refuses when an entry's exact text changed since you saw it (a comment
-inside it counts), when the file now sits in another folder than the one shown, and when the
-settings file is a link. Entries that are not on your list stay until you ask for their removal
-(`--remove-unlisted`). It is one transaction; what each entry held is kept as that entry's own
-text, never the file. Before each write BMN notes the exact text it is about to leave, so
-**Undo…** (or `bmn rules restore --transaction <id>`) knows an entry the install wrote
-even when the install ended right after. Undo puts an entry back, in the file as it is then,
-only while the entry still reads exactly as the install left it; a comment changed inside it
-counts, and Undo then stops and names the entry. An entry that holds a value inline is never replaced or
-removed, because putting it back would need the value: move the value into an environment
-variable first. Whatever BMN shows of an entry it did not write has such values masked.
+**Import.** `bmn tools import` proposes the apps' entries as tools: one where the apps agree on what it runs and the
+variables it names, separate ones where they differ, each kept to the apps that hold it and none Public. A value held
+inline is left out and named, never stored or printed. `--yes` adds the proposals to the team file; nothing reaches an
+app until you approve them in BMN. On the Tools page **Add tool**, **Edit** and **From your apps…** are staged like any
+team change, the footer naming the apps reached; **Remove them from the apps…** shows each unlisted entry first; Health
+→ Tools has one row per app (file, state, Full or Public tools only, last test).
 
-**Import.** `bmn tools import` proposes the entries the apps already hold as tools: one tool
-where the apps agree on what it runs and the variables it names, separate proposals where they
-differ, each kept to the apps that hold it and none Public. A value held inline is left out and
-named ("move this value into an environment variable"), never stored or printed. `--yes` adds
-the proposals to the team file; nothing reaches an app until you approve them in BMN.
+**Which tools a run starts with.** While your team lists no tools the check leaves them unjudged. From the first tool on,
+every checked Claude Code run must be kept to exactly its own set (the tools for every app, for its app and for its
+agent, or only the Public ones where the run's destination gets public work only). That destination is the agent's own
+provider at its approved host, so an agent with a private-work destination keeps its tools in an app whose default
+destination may not; the approval says so when the first tool is added. `bmn roster role <role> --json` gives each
+candidate a `tools` entry with the items for exactly that set, also when it is empty.
 
-**On the Tools page.** **Add tool** and **Edit** are plain rows: a name, a program with its
-arguments (one per line, `$NAME` for a variable) or an address with its headers, who it is for
-and Public. **From your apps…** shows the same proposals as `bmn tools import` and adds the ones
-you confirm. Either is a staged change like any other on Team: the footer names the apps it
-would reach, and nothing is in effect before **Approve**. A reason an app cannot take a tool is
-written under that tool's row. Entries your apps hold that are not on your list are named
-below the list; **Remove them from the apps…** shows each one before it removes any. Health →
-Tools has one row per app: its settings file, its state, Full or Public tools only, and the
-last test.
-
-**Which tools a run starts with.** While your team lists no tools, the check leaves a run's
-tools unjudged, as it did before. From the first tool on the list, every checked Claude Code run
-must be kept to exactly its own set: the tools for every app, the tools for its app and the tools kept to
-its agent (`agents`), or only the Public ones where the run's destination gets public work only.
-That destination is the agent's own: its provider at its approved host, which the check holds
-every run of it to. An app's default destination decides only for an agent that uses it, so an
-agent with a destination of its own that may see private work keeps its tools in an app whose
-default destination may not. The approval says so when the first tool is added. `bmn roster role <role> --json` gives each
-candidate a `tools` entry with the items for exactly that set, also when the set is empty.
-
-- **Claude Code.** The items are `--strict-mcp-config --mcp-config '<json>'`: the first shuts out
-  what Claude Code would take from its settings, the second names the run's own tools. The check
-  passes only on a version whose tools test saw a run kept to the tools its command names (and,
-  for an agent with none, a run that started with none); otherwise `ROUTE_UNSUPPORTED`. It then
-  compares what the command names with the approved set and refuses a missing, additional,
-  altered or unreadable tool, or a command without those two items, with `TOOL_MISMATCH`. The
-  receipt binds the tools and a hash of their definitions.
-- **Codex.** No test of BMN's can show which tools a Codex run starts with (see the test above),
-  so the check does not judge them (owner's decision, 2026-10-11; this narrows 60.12 AC5 for
-  Codex). A checked Codex run passes as it did before your team listed tools, whatever tools its
-  command names and its settings hold; its steps say `tools: not checked`, and its receipt
-  carries `"tools": {"checked": false}`, so it never reads as a run kept to a set. `bmn roster
-  role` gives a Codex candidate no items (`not-supported-yet`, with the reason), and a tool kept
-  to a Codex agent waits: BMN does not hand it out. Whoever starts the run decides its tools, as
-  dev-auto does today with `-c 'mcp_servers={}'`. One Codex run is refused: a run checked with
-  `--packet`. A packet run carries no tools, BMN cannot show that of a Codex run, and so, once
-  your team lists a tool, the check answers `ROUTE_UNSUPPORTED` whatever the command names.
-- **OpenCode.** A checked `opencode run` starts from BMN's own configuration folder, which names
-  no MCP server, with the repository's own configuration switched off and BMN's agent allowing
-  only reading. The check does not judge its tools as it does Claude Code's: its steps say `tools:
-  not checked` and its receipt carries `"tools": {"checked": false}`, as for Codex. A tool on your
-  list is not handed to an OpenCode helper.
-- **Cursor (retired).** A `cursor-agent` dispatch, or an agent a team file still names on Cursor, is
-  refused with the retirement line ([Cursor, retired](#cursor-retired)).
-- **Places the test did not cover.** A Claude Code run is refused when it could take tools from a
-  place the test did not see shut out: a `.mcp.json` in a folder above the run's; a plug-in
-  switched on (`enabledPlugins`) in any settings the check reads for the run, which are Claude
-  Code's own file, the files of the run's folder and the folders above it, and the command's own
-  `--settings`, given as text or as a file; a policy file under `/etc/claude-code`
-  (`managed-mcp.json`, `managed-settings.json`, or anything in `managed-settings.d`); or the
-  folder's own entries where the test did not cover them. A plug-in that is switched off brings
-  nothing and refuses nothing. Settings BMN cannot read, and a plug-in list it cannot read as on
-  or off, refuse the run. The refusal names the place.
-- A resumed run and a run with a profile are refused: BMN has not seen either kept to its tools.
-  A packet run carries no tools at all, and a research run none either.
+- **Claude Code.** The items are `--strict-mcp-config --mcp-config '<json>'`. The check passes only on a version whose
+  tools test saw a run kept to the tools its command names (and, for an agent with none, a run with none), else
+  `ROUTE_UNSUPPORTED`; a missing, additional, altered or unreadable tool, or a command without those items, is
+  `TOOL_MISMATCH`. The receipt binds the tools and a hash of their definitions. A resumed run and a run with a profile
+  are refused, as is one that could take tools from a place the test did not see shut out, naming it: a `.mcp.json`
+  above the run's folder; a plug-in switched on (`enabledPlugins`) in any settings the check reads for the run (Claude
+  Code's own, those of the run's folder and above, the command's `--settings` as text or file); a policy file under
+  `/etc/claude-code` (`managed-mcp.json`, `managed-settings.json`, anything in `managed-settings.d`); or the folder's
+  own entries the test did not cover. Settings or a plug-in list BMN cannot read refuse the run.
+- **Codex.** The check does not judge a Codex run's tools (owner's decision, 2026-10-11): it passes whatever its command
+  and settings hold, its steps say `tools: not checked` and its receipt carries `"tools": {"checked": false}`. `bmn
+  roster role` gives a Codex candidate no items (`not-supported-yet`), a tool kept to a Codex agent is not handed out,
+  and whoever starts the run decides its tools (dev-auto: `-c 'mcp_servers={}'`). Once your team lists a tool, a Codex
+  run checked with `--packet` is refused (`ROUTE_UNSUPPORTED`): nothing shows it carries none.
+- **OpenCode.** A checked `opencode run` starts from BMN's folder, which names no MCP server, with the repository's
+  configuration off and BMN's agent only reading; it is `tools: not checked` as for Codex, and no tool on your list is
+  handed to an OpenCode helper.
+- **Cursor (retired).** A `cursor-agent` dispatch, or an agent a team file still names on Cursor, is refused with the
+  retirement line ([Cursor, retired](#cursor-retired)).
 
 ### Models: what research found
 
-Agents › **Models** asks one of your own agents to look up what your team's models cost and how much
-they hold, and shows each value with the page it was read on. Research changes nothing by itself.
+Agents › **Models** asks one of your own agents to look up what your team's models cost and how much they hold, and
+shows each value with the page it was read on. Research changes nothing by itself.
 
-**Who researches.** Who researches is part of your team: an agent's page has a **Researcher**
-switch (`researcher: true` in the team file), staged and approved like any other change. The
-**Researcher** row on Models offers the approved, active agents your team names a researcher
-whose provider may see private work and whose research run the check would pass. An agent your
-team does not name is not shown at all, and `bmn roster check --research` refuses its command
-with `NOT_A_RESEARCHER`. So where your team holds two agents on one model (Opus the knight and
-Opus the queen), only the one you named is offered.
+**Who researches** is part of your team: an agent's **Researcher** switch (`researcher: true`), staged and approved like
+any change. Models offers the approved, active researchers whose provider may see private work and whose research run
+the check would pass; `bmn roster check --research` refuses any other agent's command with `NOT_A_RESEARCHER`, so of two
+agents on one model only the named one is offered. Switching the last researcher off leaves `researcher: false`: nobody
+is offered and every research is refused (the approval says so first); it never goes back to offering everyone by itself.
+Only a team file with no mark at all counts as one from before the choice: it keeps offering every agent that can
+research, and BMN's proposal (the active knights and pawns on Claude Code and Codex whose provider may see private work,
+the first of each model) waits in the [one proposals card](#bmns-proposals-one-card). A picked researcher your team no
+longer names falls back to none, and **Research now** waits until you pick again.
 
-A team that has made this choice keeps it. Switching the last researcher off leaves the mark on
-that agent as `researcher: false`: your team then names no researcher, nobody is offered, every
-research is refused, and the approval says so before you approve. It never goes back to offering
-everyone by itself. Only a team file in which no agent carries the mark at all counts as a team
-from before the choice; if you delete the last mark by hand, the approval says that every agent
-that can research would be offered again.
+Research runs in Claude Code, Codex and OpenCode, with a command that names its limits (below), checked before it starts.
+For Claude Code no live run has yet measured that the app keeps to them; Codex and OpenCode must pass a fence test per
+version (below). An agent whose provider gets public work only researches only on an app version whose limits were
+tested. When no agent can research the page says so; a price can still be written in the team file.
 
-A team from before this choice names nobody. It keeps offering what it offered (every agent that
-can research), and Models says the choice waits for you, with BMN's proposal: the active knights
-and pawns on Claude Code and Codex whose provider may see private work, the first of each model.
-That proposal waits in the [one proposals card](#bmns-proposals-one-card) on Agents › Team, and
-Models says so; nothing changes until you approve. A researcher you had picked that
-your team no longer names falls back to none picked: Models says so, selects nobody in its place,
-and **Research now** waits until you pick again.
-
-Research runs in Claude Code, in Codex and in OpenCode. BMN starts the run with a command that
-names its limits (the table below) and checks the command. For Claude Code no test has yet
-measured on a live run that the app keeps to them. For Codex and OpenCode one has to, per version:
-see **Codex behind its fence** and **OpenCode behind its fence** below. An agent whose provider
-gets public work only researches only on an app version whose limits were tested. When
-no agent can research the page says so, and a price can still be written in the team file.
-
-**What leaves BMN.** BMN writes the prompt itself: your team's model names, grouped by provider,
-each provider's own sites from the team file (`sites`) as the first source, and the shape of the
-answer. No agent names, notes, rules, prices, folders or keys are in it. One run is started per
-provider (eight models at most in a run), one after another, each only after
-`bmn roster check --research` passed for exactly that command, in an empty folder BMN made, with
-only the home folder and the program path in its environment, at the lowest effort the agent has:
+**What leaves BMN.** BMN writes the prompt: your team's model names by provider, each provider's own sites (`sites`) as
+the first source, and the shape of the answer; no agent names, notes, rules, prices, folders or keys. One run per
+provider (at most eight models), one after another, each only after `bmn roster check --research` passed for exactly
+that command, in an empty folder, with only the home folder and the program path in its environment, at the agent's
+lowest effort:
 
 | App | The run |
 | --- | --- |
 | Claude Code | `claude -p --safe-mode --tools WebSearch,WebFetch`, no MCP servers, no saved session |
 | Codex | `codex exec --ephemeral --sandbox read-only --strict-config` with a Codex folder of its own (`CODEX_HOME`), web search on, no MCP servers, and every switch of the fence below |
-| OpenCode | `opencode run --standalone --format json --agent bmn-researcher -m <provider>/<model>#<effort> --title "BMN research"`, started like a helper run from BMN's own OpenCode folder (its home, settings, data, state and cache in place of yours); the agent allows web search and nothing else |
+| OpenCode | `opencode run --standalone --format json --agent bmn-researcher -m <provider>/<model>#<effort> --title "BMN research"`, started like a helper run from BMN's own OpenCode folder; the agent allows web search and nothing else |
 
-The page shows how far it is ("3 of 9 models") and **Stop**. Stop, or the 20-minute limit, ends
-the run that is going with everything it started, and the reading of cited pages too; what the
-finished providers answered is kept and the research is marked not finished. A research that found nothing is reported and not kept.
+The page shows progress ("3 of 9 models") and **Stop**. Stop, or the 20-minute limit, ends the run with everything it
+started and the reading of cited pages; finished providers' answers are kept and the research is marked not finished. A
+research that found nothing is reported and not kept.
 
-**What BMN accepts.** One JSON object per run and nothing else: each asked model once, up to
-twenty other models the same providers publish (across the whole research), and for each a price
-in US dollars per million tokens (input, cached input, output) and a context window in tokens,
-each with the address of the page that shows it and the date, or `unavailable`. An answer with any
-other field, a model that was not asked for, or more listed models than asked fails that
-provider's run; the other providers' answers stay.
+**What BMN accepts.** One JSON object per run: each asked model once, up to twenty other models the same providers
+publish (in the whole research), each with a price in US dollars per million tokens (input, cached input, output) and a
+context window in tokens, each with its page and date, or `unavailable`. Any other field, a model not asked for or too
+many listed models fail that provider's run; the others stay.
 
-**BMN reads each cited page itself**, once, before a value counts: a plain `https` request with no
-cookies and no sign-in, to a public address only (never this machine or a private network, also
-after a redirect), ten seconds and two megabytes at most, 24 pages per run; finding the address
-has the same ten seconds. It asks for the page as a reader's browser does and names no other
-kind of text, so a site that keeps a short text form of its pages for programs sends BMN the
-page the reader sees. A price is counted when the page shows both amounts in dollars after
-that model's name, before the next model's name, says the unit is a million tokens, and each
-amount stands with its own word (input, output, cached). Two amounts in a row without those
-words are not counted, whatever their order. A context window is counted when the number stands there beside the word
-context; a number beside "output" or "max tokens" is not one. The model is found on the page by
-its id, or by a published name only when that name is the id's own words. Anything else is shown
-as **unverified** with the reason on it, is never offered by Apply prices and is never filled
-into a new agent. Whether a page is a provider's own is decided from its address, never from the
-answer.
+**BMN reads each cited page itself**, once, before a value counts: a plain `https` request without cookies or sign-in, to
+a public address only (never this machine or a private network, also after a redirect), ten seconds (and ten for finding
+the address) and two megabytes at most, 24 pages per run, asking as a reader's browser does. A price counts when the page
+shows both amounts in dollars after the model's name and before the next, says the unit is a million tokens, and each
+amount stands with its own word (input, output, cached); a context window when the number stands beside the word context
+(not "output" or "max tokens"). The model is found by its id, or a published name that is the id's own words. Anything
+else is **unverified**, with the reason, never offered by Apply prices or filled into a new agent. Whether a page is a
+provider's own is decided from its address, never from the answer.
 
-**What you can do with it.** Each is staged and approved like any team change:
-
-- **Apply prices…** lists every agent whose model has a verified price that differs from the one
-  your team records (or none), with both prices and the page; staging changes each agent's `price`
-  and nothing else.
-- **Add to team…** on a model your team does not have opens New agent with the name, and the
-  price and capacity BMN verified; one **Undo** takes it all back. It never picks a class.
-- **Look up** on New agent researches the one name you typed and fills the verified price and
-  capacity the same way. When you changed the model, app or host while it was looking, nothing is
-  filled in and the row says so.
-- The **Model** field offers the names research found under "Found in research". BMN does not
-  check that an app takes such a name.
-
-Scores, cost per task and a suggested effort are not part of this page yet. The run against a
-live app is the owner's to start: BMN's own tests use a stand-in app and pages in a test folder.
+**What you can do with it**, each staged and approved like any team change: **Apply prices…** stages each agent's
+`price`, and nothing else, where its model's verified price differs from your team's (both shown, with the page); **Add
+to team…** opens New agent with the name and the verified price and capacity (one **Undo** takes it back; it never
+picks a class); **Look up** on New agent researches the one name you typed and fills it alike, or nothing if you changed
+the model, app or host meanwhile; the **Model** field offers names "Found in research", which BMN does not check an app
+takes. Scores, cost per task and a suggested effort are not part of this page yet; a run against a live app is the
+owner's to start.
 
 #### Codex behind its fence
 
-Codex has no setting that keeps a run to web tools, and none that stops it sending the rules file
-of its own folder (`~/.codex/AGENTS.md`) to its provider. So BMN does not rely on a setting: it
-builds the run a fence and tests, for each Codex version, that the fence holds.
+Codex has no setting that keeps a run to web tools, and none that stops it sending its own rules file
+(`~/.codex/AGENTS.md`) to its provider, so BMN builds the run a fence and tests, per Codex version, that it holds.
 
-**The fence.** For each research run BMN makes a Codex folder inside the run's own folder
-(`…/research/<run>/codex`) that holds one thing: a link named `auth.json` to your sign-in file.
-BMN never reads that file; it only makes the link. The run is pointed at the folder with
-`CODEX_HOME`, so Codex finds no rules file, memory, history, skills, hooks or settings of yours.
-The command also carries `--strict-config` (a setting this Codex does not know stops the run
-instead of being skipped), `--disable` for `view_image`, `goals`, `image_generation`,
-`sleep_tool` and `hooks`, and thirteen `-c` settings: the seven a research run had before (no MCP
-servers, web search live, no shell, command, sub-agent, app or plugin tools) and six more that
-keep skills, app and collaboration instructions, the description of your machine and any project
-rules file out of what is sent. `bmn roster check --research` passes a Codex command only in
-exactly that form: another Codex folder, a folder that holds anything but the link, a missing
-switch or an extra one is refused. When Codex renews your sign-in during a run, the renewal goes
-through the link into your real file and the link stays a link. The run's Codex folder is removed
-when the run ends, and one a crash left behind is removed at the next research.
+**The fence.** Each research run gets a Codex folder inside its own folder (`…/research/<run>/codex`) holding only a link
+named `auth.json` to your sign-in file, which BMN never reads; `CODEX_HOME` points the run there, so Codex finds no rules
+file, memory, history, skills, hooks or settings of yours. The command also carries `--strict-config` (an unknown
+setting stops the run), `--disable` for `view_image`, `goals`, `image_generation`, `sleep_tool` and `hooks`, and
+thirteen `-c` settings: no MCP servers, web search live, no shell, command, sub-agent, app or plugin tools, and no
+skills, app or collaboration instructions, machine description or project rules file in what is sent. `bmn roster check
+--research` passes a Codex command only in exactly that form (another folder, one holding anything but the link, a
+missing or extra switch are refused). A sign-in Codex renews goes through the link into your file. The folder is removed
+when the run ends, and one a crash left behind at the next research.
 
-**The test.** `bmn roster fence`, which BMN runs by itself for each new version, research form and
-researcher model (never beside a research; Models shows the last result read-only and offers **Test
-again** after a failure or three tries that showed nothing), runs the very command a research run
-is, against a stand-in for the provider on this computer. No provider is called. It builds a
-throwaway home folder and plants thirteen markers where Codex could pick something up: its rules
-file, memory, prompt history, an earlier session, skills in two places, files and rules files in
-the home folder and beside the run's folder, a hook, the settings file and the prompt. A
-fourteenth sits on a page the stand-in serves on this computer, which nothing but a tool that
-reaches this computer by itself would ask for. The stand-in then asks Codex to call every tool it
-offers, with arguments that try to read the planted files, write a file, and reach this computer.
-The test passes for a model only when
+**The test.** `bmn roster fence`, which BMN runs by itself for each new version, research form and researcher model
+(never beside a research; Models shows the last result and offers **Test again** after a failure or three tries that
+showed nothing), runs the very research command against a stand-in provider on this computer; no provider is called.
+In a throwaway home folder it plants thirteen markers where Codex could pick something up (rules file, memory, prompt
+history, an earlier session, skills in two places, files and rules files in the home folder and beside the run, a hook,
+the settings file, the prompt) and a fourteenth on a page served locally, then asks Codex to call every tool it offers,
+trying to read the planted files, write a file and reach this computer. A model passes only when no marker but the
+prompt's reached the stand-in and no picture was sent; nothing was written in the home folder or beside the run and no
+hook ran; no tool asked for the local page; every tool offered in any request of the test's runs (the sign-in renewal's
+included) was called and gave back no marker, plainly or in base64; the tools offered are among those BMN's record names
+(`CODEX_RESEARCH_TOOLS_SEEN` in `apps/desktop/bin/agents-check-evaluate.mjs`, looked at on Codex 0.162.1); and a renewed
+sign-in landed in the file behind the link, the link still a link.
 
-- no marker but the prompt's reached the stand-in, and no picture was sent;
-- nothing was written in the home folder or beside the run;
-- no hook ran;
-- no tool asked for the page on this computer;
-- every tool Codex offered, in any request of any of the test's runs (the one that renews the
-  sign-in among them) and not only the first, was called and gave back no marker anywhere in its
-  result, however long the result is, plainly or inside base64;
-- the tools offered are among the ones BMN's record for Codex names (`CODEX_RESEARCH_TOOLS_SEEN`
-  in `apps/desktop/bin/agents-check.mjs`, looked at on Codex 0.162.1); and
-- a renewed sign-in landed in the file behind the link, with the link still a link.
+A tool new since the record fails the test, so a Codex update that adds one closes the offer until BMN's code adds it. A
+test that could not finish opens nothing. Each test is appended to `state/fence-tests.jsonl` with the Codex version, the
+model, the tools seen and a mark of the research form; a Codex agent is offered, and its research passes the check, only
+where the latest test of exactly the installed version, that model and today's form passed. On Codex 0.162.1 the form
+still offers `exec` (a script tool reaching `apply_patch`, `web__run`, a clock and three MCP resource tools), `wait`,
+`request_user_input` and six sub-agent tools; the test showed none reads or writes your files under the fence, and
+Models names them on a Codex researcher's row.
 
-A tool that is new since the record fails the test, so a Codex update that adds one closes the
-offer until someone has looked at the tool and the record is changed in BMN's code. A test that
-could not finish says it showed nothing and opens nothing. Each test is appended to
-`state/fence-tests.jsonl` with the Codex version, the model, the tools seen and a mark of the
-research form it tested. A Codex agent is offered, and its research passes the check, only where
-the latest test of exactly the installed version, that model and today's form passed. A new
-Codex version, or a change of the form in BMN, therefore starts closed. The test takes about a
-minute and runs only when you start it.
+**Under the provider's own model list.** The tools Codex offers a model also depend on the model list its provider
+sends. Before a Codex agent's first research BMN asks the provider for that list (through Codex, signed in by the link;
+no question to a model), and where the model's entry differs from the one compared, repeats the fence test with the
+stand-in serving that list and compares the tools exactly. A difference stops the research before any answer is used,
+is recorded and closes the offer (`ROUTE_UNSUPPORTED`) until a later test under the list passes. A comparison counts
+only where Codex was seen to use the served list (a made-up line in the model's instructions must come back); one that
+could not be made stops that research and opens or closes nothing. **Stop** and the time limit hold during it: a Codex
+run under way is ended, none starts after, nothing of it is recorded and no research run starts. `bmn roster fence
+--live` does the same comparison on request. The first research with a real Codex agent is yours to start.
 
-**What the tools are.** On Codex 0.162.1 the form still offers `exec` (a script tool through
-which `apply_patch`, `web__run`, a clock and three MCP resource tools are reached), `wait`,
-`request_user_input`, and six tools for sub-agents. The test showed that none of them reads or
-writes your files under the fence: writing is refused by the read-only sandbox, there is no MCP
-server to read from, and a sub-agent gets the same fence. Models names them on a Codex
-researcher's row.
-
-**Under the provider's own model list.** Which tools Codex offers a model also depends on the
-model list its provider sends, and the test above uses the list Codex was built with. So before
-a Codex agent's first research BMN asks the provider for that list (through Codex, signed in by
-the link: a call to the provider, no question to a model), and where the model's entry differs
-from the one already compared, repeats the fence test with the stand-in serving that list and
-compares the tools with the recorded ones exactly. A difference stops the research before any
-answer is used, is recorded, and closes the offer (`ROUTE_UNSUPPORTED`) until a later test under
-the list passes; Models shows the closed researcher and why as soon as that research ends. A
-comparison counts only where Codex was seen to use the served list in that very run: the
-stand-in adds one made-up line to the model's instructions in the list, and the line has to come
-back in what Codex sends. A Codex that did not ask for the list, or asked and went on with the
-list it was built with, compared nothing. A comparison that could not be made stops that research
-and neither opens nor closes anything. **Stop** and the research's time limit hold during the
-comparison too. The limit is one moment for the whole comparison: a Codex run under way is ended
-at it, none is started after it, nothing of a comparison cut short is recorded, and no research
-run starts.
-`bmn roster fence --live` does the same comparison on request. The first research with a real
-Codex agent is yours to start.
-
-**What the fence does not cover.**
-
-- Another Codex version than the tested one: it is closed, not assumed alike.
-- What the provider's servers do with the prompt, and tools a provider could switch on for your
-  account between the comparison and the run: the comparison is made once per changed list entry,
-  not before every run.
-- The web: a researcher can open any public page, and what it reads there is not trusted. BMN
-  reads each cited page itself before a value counts.
-- The sign-in itself: Codex needs it to reach its provider, so the run can use it as Codex does.
-- Claude Code researchers: their limits are in the command and checked, and not yet tested this
-  way on a live run.
+**Not covered:** another Codex version (closed, not assumed alike); what the provider's servers do with the prompt, or
+tools switched on for your account between the comparison and the run; the web (BMN reads each cited page itself); the
+sign-in, which the run can use as Codex does; and Claude Code researchers, checked in the command but not yet tested on
+a live run.
 
 #### Checking an OpenCode helper run
 
